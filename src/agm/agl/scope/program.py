@@ -1,9 +1,9 @@
-"""Graph-aware scope resolver for the AgL module system.
+"""Program-level scope resolver for the AgL module system.
 
-This module provides :func:`resolve_graph`, which runs the scope-resolution
+This module provides :func:`resolve_program`, which runs the scope-resolution
 pass over an entire :class:`~agm.agl.modules.loader.ModuleGraph`, producing
-a :class:`ResolvedModuleGraph` that contains per-module :class:`ResolvedModule`
-results plus whole-graph pre-pass tables.
+a :class:`ResolvedProgram` that contains per-module :class:`ResolvedModule`
+results plus whole-program pre-pass tables.
 
 Design
 ------
@@ -12,7 +12,7 @@ Design
   body is resolved.
 - **ImportEnv per module**: built from each module's import declarations against
   the already-loaded graph (no re-reading files).
-- **Whole-graph pre-pass tables**: ``all_public_funcs`` and ``all_public_types``
+- **Whole-program pre-pass tables**: ``all_public_funcs`` and ``all_public_types``
   collected BEFORE resolving any body, enabling cross-module mutual recursion.
 - **Declaration-only enforcement**: non-entry modules may only contain
   declarations (``def``, ``record``, ``enum``, ``type``, ``infixl``/``infixr``,
@@ -44,7 +44,7 @@ from agm.agl.scope.symbols import (
     AglScopeError,
     BinderKind,
     ConstructorRef,
-    ResolvedProgram,
+    ModuleResolution,
     ScopeNode,
 )
 from agm.agl.syntax.nodes import (
@@ -74,7 +74,7 @@ def _mid_sort_key(m: ModuleId) -> tuple[str, ...]:
 
 @dataclass(frozen=True, slots=True)
 class ResolvedModule:
-    """Per-module output of the graph resolver.
+    """Per-module output of the program resolver.
 
     ``module_id``
         The :class:`~agm.agl.modules.ids.ModuleId` of this module.
@@ -91,15 +91,15 @@ class ResolvedModule:
     """
 
     module_id: ModuleId
-    resolved: ResolvedProgram
+    resolved: ModuleResolution
     import_env: ImportEnv
     exports: dict[str, QName]
     source_text: str
 
 
 @dataclass(frozen=True, slots=True)
-class ResolvedModuleGraph:
-    """Output of :func:`resolve_graph`.
+class ResolvedProgram:
+    """Output of :func:`resolve_program`.
 
     ``modules``
         Maps each :class:`~agm.agl.modules.ids.ModuleId` to its
@@ -107,11 +107,11 @@ class ResolvedModuleGraph:
     ``entry_id``
         Always :data:`~agm.agl.modules.ids.ENTRY_ID`.
     ``all_public_funcs``
-        Whole-graph pre-pass table mapping ``(ModuleId, name)`` to the
+        Whole-program pre-pass table mapping ``(ModuleId, name)`` to the
         :class:`~agm.agl.syntax.nodes.FuncDef` node.  Contains only
         non-private top-level functions across all modules.
     ``all_public_types``
-        Whole-graph pre-pass table mapping ``(ModuleId, name)`` to the
+        Whole-program pre-pass table mapping ``(ModuleId, name)`` to the
         type declaration node (``RecordDef | EnumDef | TypeAlias``).
     ``entry_agents``
         Agent declarations from the entry module (name → ``AgentDecl``).
@@ -212,7 +212,7 @@ def _resolve_reexports(
     all_targets: dict[int, ImportTarget],
     graph: ModuleGraph,
 ) -> None:
-    """Fixed-point resolution of explicit export declarations across the graph.
+    """Fixed-point resolution of explicit export declarations across the program.
 
     Iterates until no new re-exported names are added.  For each ``ExportDecl``,
     this function propagates the target module's exported names into the
@@ -287,7 +287,7 @@ def _compute_reexport_additions(
 
 def _decl_to_import_target(
     decl: ImportDecl | ExportDecl,
-    graph_modules: Mapping[ModuleId, object],
+    loaded_modules: Mapping[ModuleId, object],
 ) -> ImportTarget:
     """Map an import/export declaration to an ImportTarget using the loaded graph.
 
@@ -301,9 +301,7 @@ def _decl_to_import_target(
     # Wildcard: all loaded modules whose segments start with decl.module_path
     prefix = tuple(decl.module_path)
     matched = frozenset(
-        mid
-        for mid in graph_modules
-        if not mid.is_entry and mid.segments[: len(prefix)] == prefix
+        mid for mid in loaded_modules if not mid.is_entry and mid.segments[: len(prefix)] == prefix
     )
     return WildcardTarget(modules=matched)
 
@@ -325,7 +323,7 @@ _PrivateInfo = dict[tuple[ModuleId, str], bool]
 # ---------------------------------------------------------------------------
 
 
-def resolve_graph(
+def resolve_program(
     graph: ModuleGraph,
     *,
     ambient_agents: frozenset[str] = frozenset(),
@@ -333,7 +331,7 @@ def resolve_graph(
     entry_ambient_type_names: frozenset[str] = frozenset(),
     entry_parent_scope: ScopeNode | None = None,
     entry_repl_session_scope: ScopeNode | None = None,
-) -> ResolvedModuleGraph:
+) -> ResolvedProgram:
     """Run the full scope-resolution pass over a :class:`~agm.agl.modules.loader.ModuleGraph`.
 
     Parameters
@@ -355,12 +353,12 @@ def resolve_graph(
         mode).
     entry_repl_session_scope:
         When given, passed to the entry resolver so ``::name`` self-references
-        can fall back to prior session bindings (REPL graph mode).
+        can fall back to prior session bindings (REPL program context).
 
     Returns
     -------
-    ResolvedModuleGraph
-        The resolved graph with per-module resolution tables and whole-graph
+    ResolvedProgram
+        The resolved graph with per-module resolution tables and whole-program
         pre-pass tables.
 
     Raises
@@ -405,7 +403,7 @@ def resolve_graph(
         import_envs[mid] = build_import_env(mid, decls, module_targets, export_maps)
 
     # ------------------------------------------------------------------
-    # Step 5: Whole-graph pre-pass — collect public funcs/types and
+    # Step 5: Whole-program pre-pass — collect public funcs/types and
     # build decl_info for cross-module BindingRef construction.
     # ------------------------------------------------------------------
     all_public_funcs: dict[tuple[ModuleId, str], FuncDef] = {}
@@ -499,7 +497,7 @@ def resolve_graph(
         if is_entry:
             entry_agents = dict(resolved.declared_agents)
 
-    return ResolvedModuleGraph(
+    return ResolvedProgram(
         modules=resolved_modules,
         entry_id=graph.entry_id,
         all_public_funcs=all_public_funcs,

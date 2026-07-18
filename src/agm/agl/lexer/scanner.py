@@ -103,22 +103,39 @@ from agm.util.text import normalize_newlines
 # operator's first character.  A leading ``"`` or ``'`` (or one after
 # whitespace) still starts a string template because the identifier-start
 # predicate requires a letter or ``_``.
-_IDENT_STOP: frozenset[str] = frozenset({
-    # whitespace
-    " ", "\t", "\n", "\r",
-    # structural punctuators / operators that stay standalone delimiters.
-    # String quotes (" and ') and the operator characters + * are NOT stop
-    # characters: they may appear inside an identifier (e.g. ``foo"bar``,
-    # ``a+b``, ``n*x``).  A leading " or ' (or one after whitespace) still
-    # starts a string template because the identifier-start predicate requires
-    # a letter or _.
-    # @ is a stop character so that @pos/@std/@named lex as two tokens (AT NAME)
-    # rather than gluing into the preceding identifier.
-    # = is a stop character so that ``a=b`` lexes as NAME EQ NAME, not a single
-    # identifier — required for no-space named-arg syntax (``f(x=1)``).
-    "(", ")", "[", "]", "{", "}",
-    ":", ",", ".", "|", ";", "/", "@", "=",
-})
+_IDENT_STOP: frozenset[str] = frozenset(
+    {
+        # whitespace
+        " ",
+        "\t",
+        "\n",
+        "\r",
+        # structural punctuators / operators that stay standalone delimiters.
+        # String quotes (" and ') and the operator characters + * are NOT stop
+        # characters: they may appear inside an identifier (e.g. ``foo"bar``,
+        # ``a+b``, ``n*x``).  A leading " or ' (or one after whitespace) still
+        # starts a string template because the identifier-start predicate requires
+        # a letter or _.
+        # @ is a stop character so that @pos/@std/@named lex as two tokens (AT NAME)
+        # rather than gluing into the preceding identifier.
+        # = is a stop character so that ``a=b`` lexes as NAME EQ NAME, not a single
+        # identifier — required for no-space named-arg syntax (``f(x=1)``).
+        "(",
+        ")",
+        "[",
+        "]",
+        "{",
+        "}",
+        ":",
+        ",",
+        ".",
+        "|",
+        ";",
+        "/",
+        "@",
+        "=",
+    }
+)
 
 _TAB_LEN = 4
 
@@ -126,6 +143,7 @@ _TAB_LEN = 4
 def _is_ascii_digit(ch: str) -> bool:
     """Return True iff *ch* is an ASCII digit (``0``–``9``)."""
     return "0" <= ch <= "9"
+
 
 # Single-char operator table (must not overlap with maximal-munch multi-char ops).
 # NOTE: "-" is intentionally absent — it is handled in the multi-char operator
@@ -179,6 +197,7 @@ def _is_operator_name_char(ch: str) -> bool:
     if ch == "" or ch.isspace() or ch in _OPERATOR_NAME_EXCLUDED_CHARS:
         return False
     return unicodedata.category(ch)[0] in ("P", "S")
+
 
 # JSON escape decoding table (excluding \uXXXX and \$, handled separately)
 _JSON_ESCAPES: dict[str, str] = {
@@ -274,8 +293,7 @@ class _Scanner:
         self._tab_warnings.append(
             Diagnostic(
                 message=(
-                    f"TAB character at column {col} is not allowed;"
-                    " use spaces for indentation"
+                    f"TAB character at column {col} is not allowed; use spaces for indentation"
                 ),
                 line=self._line,
                 column=col,
@@ -441,9 +459,7 @@ class _Scanner:
                     span = SourceSpan(
                         esc_line, esc_col, self._line, self._col, esc_offset, self._pos
                     )
-                    raise LexError(
-                        f"Invalid hex digit in \\uXXXX escape: {d!r}", span=span
-                    )
+                    raise LexError(f"Invalid hex digit in \\uXXXX escape: {d!r}", span=span)
                 hex_digits += d
             return chr(int(hex_digits, 16))
         span = SourceSpan(esc_line, esc_col, self._line, self._col, esc_offset, self._pos)
@@ -502,9 +518,7 @@ class _Scanner:
                 )
                 quote_pos, quote_line, quote_col = self._pos, self._line, self._col
                 self._advance()
-                yield self._make_token(
-                    TEMPLATE_END, quote, quote_pos, quote_line, quote_col
-                )
+                yield self._make_token(TEMPLATE_END, quote, quote_pos, quote_line, quote_col)
                 return
             if ch == "\n":
                 span = SourceSpan(
@@ -528,9 +542,7 @@ class _Scanner:
                     frag_start_line,
                     frag_start_col,
                 )
-                yield self._make_token(
-                    INTERP_START, "${", interp_pos, interp_line, interp_col
-                )
+                yield self._make_token(INTERP_START, "${", interp_pos, interp_line, interp_col)
                 buf = []
                 yield from self._scan_interp_code()
                 frag_start_pos = self._pos
@@ -562,9 +574,7 @@ class _Scanner:
                 span = SourceSpan(
                     self._line, self._col, self._line, self._col, self._pos, self._pos
                 )
-                raise LexError(
-                    "newline is not allowed inside an interpolation", span=span
-                )
+                raise LexError("newline is not allowed inside an interpolation", span=span)
             if self._peek() == "{":
                 depth += 1
                 start_pos = self._pos
@@ -581,9 +591,7 @@ class _Scanner:
                     end_line = self._line
                     end_col = self._col
                     self._advance()
-                    yield self._make_token(
-                        INTERP_END, "}", end_pos, end_line, end_col
-                    )
+                    yield self._make_token(INTERP_END, "}", end_pos, end_line, end_col)
                     return
                 start_pos = self._pos
                 start_line = self._line
@@ -692,9 +700,7 @@ class _Scanner:
         # is a hole (e.g. "  ${x}") is treated as non-blank.  The probe is
         # used ONLY for measuring indentation — never for reassembly — so a
         # placeholder collision with literal content is irrelevant.
-        indent_probe = "".join(
-            seg.text if isinstance(seg, _LitSeg) else "X" for seg in segments
-        )
+        indent_probe = "".join(seg.text if isinstance(seg, _LitSeg) else "X" for seg in segments)
         # Apply the same step-1 (leading-newline drop) that
         # _apply_triple_dedent_with_map applies, so the line split matches.
         probe_body = indent_probe[1:] if indent_probe.startswith("\n") else indent_probe
@@ -796,10 +802,10 @@ class _Scanner:
                 self._advance()  # '.'
                 while not self._at_end() and _is_ascii_digit(self._peek()):
                     self._advance()
-                value = self._src[start_pos:self._pos]
+                value = self._src[start_pos : self._pos]
                 yield self._make_token(DECIMAL, value, start_pos, start_line, start_col)
             else:
-                value = self._src[start_pos:self._pos]
+                value = self._src[start_pos : self._pos]
                 yield self._make_token(INT, value, start_pos, start_line, start_col)
             return
 
@@ -816,7 +822,7 @@ class _Scanner:
                 self._advance()
             yield self._make_token(
                 PLACEHOLDER_NUM,
-                self._src[start_pos:self._pos],
+                self._src[start_pos : self._pos],
                 start_pos,
                 start_line,
                 start_col,
@@ -826,7 +832,7 @@ class _Scanner:
         if _is_operator_name_char(ch):
             while not self._at_end() and _is_operator_name_char(self._peek()):
                 self._advance()
-            value = self._src[start_pos:self._pos]
+            value = self._src[start_pos : self._pos]
             reserved_type = _RESERVED_OPERATOR_NAMES.get(value)
             if reserved_type is not None:
                 yield self._make_token(reserved_type, value, start_pos, start_line, start_col)

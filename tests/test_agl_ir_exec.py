@@ -100,7 +100,7 @@ def test_t1_text_exec() -> None:
 
 def test_t2_typed_exec_json() -> None:
     """exec() with int annotation: output is parsed as JSON int."""
-    source = "let n: int = exec(\"echo 42\")\nn"
+    source = 'let n: int = exec("echo 42")\nn'
     commands = {"echo 42": _ok("42\n")}
     ir = evaluate_ir_with_shell(source, commands)
     from agm.agl.semantics.values import IntValue
@@ -115,7 +115,7 @@ def test_t2_typed_exec_json() -> None:
 
 def test_t3_structured_exec() -> None:
     """exec() returning ExecResult: non-zero exit is data, not an error."""
-    source = "let r: ExecResult = exec(\"exit 1\")\nr"
+    source = 'let r: ExecResult = exec("exit 1")\nr'
     commands = {"exit 1": _fail(1, stdout="", stderr="error msg")}
     ir = evaluate_ir_with_shell(source, commands)
     from agm.agl.semantics.values import IntValue, RecordValue
@@ -190,7 +190,7 @@ def test_t7_retry_success() -> None:
             return _ok("not_a_number\n")
         return _ok("99\n")
 
-    source = "let n: int = exec(\"cmd\", on_parse_error = Retry(n = 1))\nn"
+    source = 'let n: int = exec("cmd", on_parse_error = Retry(n = 1))\nn'
     from tests.agl.ir_harness import _run_ir_exec
 
     caps = shell_caps()
@@ -214,7 +214,7 @@ def test_t8_retry_exhaustion() -> None:
     Routes through evaluate_ir_raises_with_shell; asserts the IR pipeline raises
     AgentParseError.
     """
-    source = "let n: int = exec(\"cmd\", on_parse_error = Retry(n = 2))\nn"
+    source = 'let n: int = exec("cmd", on_parse_error = Retry(n = 2))\nn'
     commands = {"cmd": _ok("not_a_number\n")}
     ir_exc = evaluate_ir_raises_with_shell(source, commands)
     assert ir_exc.display_name == "AgentParseError"
@@ -227,11 +227,7 @@ def test_t8_retry_exhaustion() -> None:
 
 def test_t9_exec_inside_function() -> None:
     """exec() inside a function body lowers and evaluates correctly."""
-    source = (
-        'def get_output() -> text = exec("echo from_fn")\n'
-        "let result: text = get_output()\n"
-        "()"
-    )
+    source = 'def get_output() -> text = exec("echo from_fn")\nlet result: text = get_output()\n()'
     commands = {"echo from_fn": _ok("from_fn\n")}
     ir = evaluate_ir_with_shell(source, commands)
     from agm.agl.semantics.values import TextValue
@@ -247,17 +243,17 @@ def test_t9_exec_inside_function() -> None:
 def test_t10_golden_lowering() -> None:
     """Lowering exec() produces an IrExec node and populates dry_run_inventory."""
     from agm.agl.ir.nodes import IrBind, IrExec
-    from agm.agl.lower import lower_program
+    from agm.agl.lower import lower_module
     from agm.agl.parser import parse_program
-    from agm.agl.scope import resolve
-    from agm.agl.typecheck import check
+    from agm.agl.scope import resolve_module
+    from agm.agl.typecheck import check_module
 
     source = 'let result = exec("echo hi")\nresult'
     caps = shell_caps()
     program = parse_program(source)
-    resolved = resolve(program)
-    checked = check(resolved, caps)
-    executable = lower_program(
+    resolved = resolve_module(program)
+    checked = check_module(resolved, caps)
+    executable = lower_module(
         _compiled_checked(checked),
         source_text=source,
         source_label="<test>",
@@ -307,6 +303,7 @@ def test_t11_exec_empty_parse_failure_raises_agent_parse_error() -> None:
     source_id = SourceId(0)
 
     from agm.agl.ir.ids import Location
+
     loc = Location(
         source_id=source_id,
         start_offset=0,
@@ -351,11 +348,10 @@ def test_t11_exec_empty_parse_failure_raises_agent_parse_error() -> None:
         spawn_errno=None,
     )
     from agm.agl.runtime.codec import ParseResult
+
     empty_failure = ParseResult(ok=False, value=None, error_msg="", errors=())
 
-    with unittest.mock.patch(
-        "agm.core.process.run_capture_result", return_value=ok_result
-    ):
+    with unittest.mock.patch("agm.core.process.run_capture_result", return_value=ok_result):
         with unittest.mock.patch(
             "agm.agl.eval.ir_interpreter._parse_contract_output", return_value=empty_failure
         ):
@@ -387,7 +383,7 @@ def test_t12_retry_then_nonzero_exit() -> None:
             return _ok("not_a_number\n")
         return _fail(1, stdout="", stderr="retry failed")
 
-    source = "let n: int = exec(\"cmd\", on_parse_error = Retry(n = 1))\nn"
+    source = 'let n: int = exec("cmd", on_parse_error = Retry(n = 1))\nn'
     from agm.agl.semantics.exceptions import AglRaise
     from agm.agl.semantics.values import ExceptionValue
     from tests.agl.ir_harness import _run_ir_exec

@@ -190,6 +190,10 @@ class TestRunBehavior:
         result = rt.run("let x = 1\nx")
         assert result.ok is True
 
+    def test_run_uses_the_standard_library_program(self) -> None:
+        result = PipelineDriver().run("Option::Some(value = 1)")
+        assert result.ok is True
+
     def test_static_error_not_ok(self) -> None:
         rt = PipelineDriver()
         result = rt.run("let x = undefined_name")
@@ -936,31 +940,21 @@ class TestWarningsThreadedOnFailurePaths:
 
     def test_warning_and_missing_param_both_visible(self, monkeypatch: pytest.MonkeyPatch) -> None:
         # Inject a checker warning through the
-        # CheckedProgram the runtime threads from ``check``.  This exercises the
+        # CheckedModule the runtime threads from ``check``.  This exercises the
         # real failure path (missing param) while a warning is present.
-        import agm.agl.typecheck as tc_mod
-        from agm.agl.diagnostics import Diagnostic
-        from agm.agl.typecheck.env import CheckedProgram
+        from dataclasses import replace
 
-        real_check = tc_mod.check
+        import agm.agl.typecheck.program as tc_mod
+        from agm.agl.diagnostics import Diagnostic
+
+        real_check = tc_mod.check_program
         warning = Diagnostic(message="a checker warning", line=1, severity="warning")
 
-        def check_with_warning(resolved: object, caps: object) -> CheckedProgram:
+        def check_with_warning(resolved: object, caps: object) -> object:
             checked = real_check(resolved, caps)
-            return CheckedProgram(
-                resolved=checked.resolved,
-                node_types=checked.node_types,
-                contract_specs=checked.contract_specs,
-                call_sites=checked.call_sites,
-                warnings=(*checked.warnings, warning),
-                type_env=checked.type_env,
-                function_signatures=checked.function_signatures,
-                cast_specs=checked.cast_specs,
-                argument_bindings=checked.argument_bindings,
-                partial_calls=checked.partial_calls,
-            )
+            return replace(checked, warnings=(*checked.warnings, warning))
 
-        monkeypatch.setattr(tc_mod, "check", check_with_warning)
+        monkeypatch.setattr(tc_mod, "check_program", check_with_warning)
 
         rt = PipelineDriver()
         result = rt.run("param msg\nprint msg", param_values={})
@@ -1437,7 +1431,7 @@ class TestRenderValue:
     # ------------------------------------------------------------------
 
     def test_enum_with_payload(self) -> None:
-        'Enum with payload renders as ``TypeName::Variant(field = value)``.'
+        "Enum with payload renders as ``TypeName::Variant(field = value)``."
         from agm.agl.runtime.render import render_value
         from agm.agl.semantics.values import EnumValue, IntValue
 
@@ -1447,10 +1441,10 @@ class TestRenderValue:
             variant="Partial",
             fields={"left": IntValue(2)},
         )
-        assert render_value(v) == 'Outcome::Partial(left = 2)'
+        assert render_value(v) == "Outcome::Partial(left = 2)"
 
     def test_enum_nullary_variant(self) -> None:
-        'Nullary enum variant renders as ``TypeName::Variant`` (no parens).'
+        "Nullary enum variant renders as ``TypeName::Variant`` (no parens)."
         from agm.agl.runtime.render import render_value
         from agm.agl.semantics.values import EnumValue
 
@@ -1460,7 +1454,7 @@ class TestRenderValue:
             variant="Done",
             fields={},
         )
-        assert render_value(v) == 'Outcome::Done'
+        assert render_value(v) == "Outcome::Done"
 
     def test_enum_multi_field_payload(self) -> None:
         """Enum with multiple payload fields renders them in stored order."""
@@ -1473,7 +1467,7 @@ class TestRenderValue:
             variant="V",
             fields={"a": IntValue(1), "b": IntValue(2), "c": IntValue(3)},
         )
-        assert render_value(v) == 'E::V(a = 1, b = 2, c = 3)'
+        assert render_value(v) == "E::V(a = 1, b = 2, c = 3)"
 
     # ------------------------------------------------------------------
     # exception: record-style with all fields incl. trace_id
@@ -1880,12 +1874,12 @@ class TestRuntimeErrorPaths:
 
     def test_generic_parse_exception_covered(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Generic (non-AglSyntaxError) exception in parse step → ok=False."""
-        import agm.agl.parser as parser_mod
+        import agm.agl.modules.loader as parser_mod
 
-        def bad_parse(source: str) -> object:
+        def bad_parse(*args: object, **kwargs: object) -> object:
             raise RuntimeError("unexpected parse error")
 
-        monkeypatch.setattr(parser_mod, "parse_program", bad_parse)
+        monkeypatch.setattr(parser_mod, "parse_program_seeded", bad_parse)
         rt = PipelineDriver()
         result = rt.run("let x = 1")
         assert result.ok is False
@@ -1905,12 +1899,12 @@ class TestRuntimeErrorPaths:
 
     def test_generic_scope_exception_covered(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Generic (non-AglScopeError) exception in scope step → ok=False."""
-        import agm.agl.scope as scope_mod
+        import agm.agl.scope.program as scope_mod
 
         def bad_resolve(program: object) -> object:
             raise RuntimeError("unexpected scope error")
 
-        monkeypatch.setattr(scope_mod, "resolve", bad_resolve)
+        monkeypatch.setattr(scope_mod, "resolve_program", bad_resolve)
         rt = PipelineDriver()
         result = rt.run("let x = 1")
         assert result.ok is False
@@ -1918,12 +1912,12 @@ class TestRuntimeErrorPaths:
 
     def test_generic_typecheck_exception_covered(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Generic (non-AglTypeError) exception in typecheck step → ok=False."""
-        import agm.agl.typecheck as tc_mod
+        import agm.agl.typecheck.program as tc_mod
 
         def bad_check(resolved: object, caps: object) -> object:
             raise RuntimeError("unexpected type error")
 
-        monkeypatch.setattr(tc_mod, "check", bad_check)
+        monkeypatch.setattr(tc_mod, "check_program", bad_check)
         rt = PipelineDriver()
         result = rt.run("let x = 1")
         assert result.ok is False
@@ -2212,9 +2206,7 @@ class TestRuntimeErrorPaths:
         msg = str(exc_info.value)
         assert "set" in msg  # type name named
 
-    def test_decimal_native_in_list_end_to_end(
-        self, capsys: pytest.CaptureFixture[str]
-    ) -> None:
+    def test_decimal_native_in_list_end_to_end(self, capsys: pytest.CaptureFixture[str]) -> None:
         """E2e: param xs: list[decimal] with Decimal values binds and prints."""
         import decimal as _decimal
 
@@ -3176,24 +3168,24 @@ class TestV2AskWithAgentValue:
 
 
 # ---------------------------------------------------------------------------
-# PreparedGraph / prepare_program / run_prepared_graph / discover_params_graph
+# PreparedProgram / prepare_program / run_prepared / discover_params
 # ---------------------------------------------------------------------------
 
 
 class TestPrepareProgram:
-    """PipelineDriver.prepare_program: graph-mode front-end."""
+    """PipelineDriver.prepare_program: program front-end."""
 
-    def test_prepare_program_no_imports_returns_prepared_graph(
+    def test_prepare_program_no_imports_returns_prepared_program(
         self, tmp_path: pathlib.Path
     ) -> None:
-        """A single-file program with no imports produces a valid PreparedGraph."""
+        """A module program with no imports produces a valid PreparedProgram."""
         from agm.agl.modules.roots import RootSet
-        from agm.agl.pipeline import PreparedGraph
+        from agm.agl.pipeline import PreparedProgram
 
         roots = RootSet(roots=frozenset({_STDLIB_ROOT}))
         prepared = PipelineDriver.prepare_program("let x = 1\nx", entry_path=None, roots=roots)
-        assert isinstance(prepared, PreparedGraph)
-        assert prepared.resolved_graph is not None
+        assert isinstance(prepared, PreparedProgram)
+        assert prepared.resolved is not None
         assert prepared.diagnostics == ()
 
     def test_prepare_program_syntax_error_captured(self, tmp_path: pathlib.Path) -> None:
@@ -3202,7 +3194,7 @@ class TestPrepareProgram:
 
         roots = RootSet(roots=frozenset({_STDLIB_ROOT}))
         prepared = PipelineDriver.prepare_program("let x = !!!", entry_path=None, roots=roots)
-        assert prepared.resolved_graph is None
+        assert prepared.resolved is None
         assert len(prepared.diagnostics) >= 1
 
     def test_prepare_program_missing_import_captured(self, tmp_path: pathlib.Path) -> None:
@@ -3215,7 +3207,7 @@ class TestPrepareProgram:
             entry_path=None,
             roots=roots,
         )
-        assert prepared.resolved_graph is None
+        assert prepared.resolved is None
         assert len(prepared.diagnostics) >= 1
         assert "nonexistent.module" in prepared.diagnostics[0].message
 
@@ -3230,7 +3222,7 @@ class TestPrepareProgram:
         roots = RootSet(roots=frozenset({lib_dir, _STDLIB_ROOT}))
         entry = "import mymod\nlet r = add(2, 3)\nr"
         prepared = PipelineDriver.prepare_program(entry, entry_path=None, roots=roots)
-        assert prepared.resolved_graph is not None
+        assert prepared.resolved is not None
         assert prepared.diagnostics == ()
 
     def test_prepare_program_declared_agents_from_entry(self, tmp_path: pathlib.Path) -> None:
@@ -3243,7 +3235,7 @@ class TestPrepareProgram:
             entry_path=None,
             roots=roots,
         )
-        assert prepared.resolved_graph is not None
+        assert prepared.resolved is not None
         assert any(d.name == "reviewer" for d in prepared.declared_agents)
 
     def test_prepare_program_failure_returns_empty_declared_agents(
@@ -3256,8 +3248,8 @@ class TestPrepareProgram:
         prepared = PipelineDriver.prepare_program(
             "let x = undefined_name", entry_path=None, roots=roots
         )
-        # scope error → resolved_graph is None
-        assert prepared.resolved_graph is None
+        # scope error → resolved is None
+        assert prepared.resolved is None
         assert prepared.declared_agents == ()
 
     def test_prepare_program_captures_syntax_error(self) -> None:
@@ -3265,24 +3257,22 @@ class TestPrepareProgram:
         from agm.agl.modules.roots import RootSet
 
         roots = RootSet(roots=frozenset({_STDLIB_ROOT}))
-        prepared = PipelineDriver.prepare_program(
-            "let x = = =", entry_path=None, roots=roots
-        )
-        assert prepared.resolved_graph is None
+        prepared = PipelineDriver.prepare_program("let x = = =", entry_path=None, roots=roots)
+        assert prepared.resolved is None
         assert prepared.diagnostics
 
 
-class TestRunPreparedGraph:
-    """PipelineDriver.run_prepared_graph: graph execution."""
+class TestRunPreparedProgram:
+    """PipelineDriver.run_prepared: graph execution."""
 
     def test_single_entry_graph_behaves_like_run(self, tmp_path: pathlib.Path) -> None:
-        """A single-file program via run_prepared_graph returns same result as run()."""
+        """A module program via run_prepared returns same result as run()."""
         from agm.agl.modules.roots import RootSet
 
         rt = PipelineDriver()
         roots = RootSet(roots=frozenset({_STDLIB_ROOT}))
         prepared = PipelineDriver.prepare_program("let x = 1\nx", entry_path=None, roots=roots)
-        result = rt.run_prepared_graph(prepared)
+        result = rt.run_prepared(prepared)
         assert result.ok is True
         assert result.error is None
 
@@ -3298,12 +3288,12 @@ class TestRunPreparedGraph:
         entry = "import mymod\nlet r = add(2, 3)\nr"
         prepared = PipelineDriver.prepare_program(entry, entry_path=None, roots=roots)
         rt = PipelineDriver()
-        result = rt.run_prepared_graph(prepared)
+        result = rt.run_prepared(prepared)
         assert result.ok is True
         assert result.error is None
 
     def test_graph_failure_propagated(self, tmp_path: pathlib.Path) -> None:
-        """When the load phase captured a scope error, run_prepared_graph reports it."""
+        """When the load phase captured a scope error, run_prepared reports it."""
         from agm.agl.modules.roots import RootSet
 
         roots = RootSet(roots=frozenset({_STDLIB_ROOT}))
@@ -3311,13 +3301,13 @@ class TestRunPreparedGraph:
             "let x = undefined_name", entry_path=None, roots=roots
         )
         rt = PipelineDriver()
-        result = rt.run_prepared_graph(prepared)
+        result = rt.run_prepared(prepared)
         assert result.ok is False
         assert result.error is None
         assert len(result.diagnostics) >= 1
 
     def test_graph_missing_import_propagated(self, tmp_path: pathlib.Path) -> None:
-        """A missing import error from prepare_program flows through run_prepared_graph."""
+        """A missing import error from prepare_program flows through run_prepared."""
         from agm.agl.modules.roots import RootSet
 
         roots = RootSet(roots=frozenset({_STDLIB_ROOT}))
@@ -3325,7 +3315,7 @@ class TestRunPreparedGraph:
             "import missing.module\nlet x = 1\nx", entry_path=None, roots=roots
         )
         rt = PipelineDriver()
-        result = rt.run_prepared_graph(prepared)
+        result = rt.run_prepared(prepared)
         assert result.ok is False
         assert "missing.module" in result.diagnostics[0].message
 
@@ -3337,7 +3327,7 @@ class TestRunPreparedGraph:
         prepared = PipelineDriver.prepare_program("let x = 1\nx", entry_path=None, roots=roots)
         rt = PipelineDriver()
         rt.register_agent("reviewer", lambda req: "resp")  # type: ignore[arg-type]
-        result = rt.run_prepared_graph(prepared)
+        result = rt.run_prepared(prepared)
         assert result.ok is False
         assert any("reviewer" in d.message for d in result.diagnostics)
 
@@ -3350,7 +3340,7 @@ class TestRunPreparedGraph:
             'let r = ask("hello")\nprint r', entry_path=None, roots=roots
         )
         rt = PipelineDriver(default_agent=lambda req: "x")  # type: ignore[arg-type]
-        result = rt.run_prepared_graph(prepared, check_only=True)
+        result = rt.run_prepared(prepared, check_only=True)
         assert result.ok is True
         assert len(result.call_sites) >= 1
 
@@ -3370,7 +3360,7 @@ class TestRunPreparedGraph:
         entry = 'import utils.*\nlet n = add(2, 3)\nlet g = greet("World")\nprint n\nprint g\n'
         prepared = PipelineDriver.prepare_program(entry, entry_path=None, roots=roots)
         rt = PipelineDriver()
-        result = rt.run_prepared_graph(prepared, check_only=True)
+        result = rt.run_prepared(prepared, check_only=True)
         assert result.ok is True
 
     def test_multimodule_qualified_import(self, tmp_path: pathlib.Path) -> None:
@@ -3385,26 +3375,26 @@ class TestRunPreparedGraph:
         entry = "import calc qualified\nlet r = calc::square(5)\nr"
         prepared = PipelineDriver.prepare_program(entry, entry_path=None, roots=roots)
         rt = PipelineDriver()
-        result = rt.run_prepared_graph(prepared)
+        result = rt.run_prepared(prepared)
         assert result.ok is True
 
 
 class TestDiscoverParamsGraph:
-    """PipelineDriver.discover_params_graph: typed param discovery."""
+    """PipelineDriver.discover_params: typed param discovery."""
 
     def test_discover_params_no_params(self, tmp_path: pathlib.Path) -> None:
-        """discover_params_graph returns empty params for a program with no params."""
+        """discover_params returns empty params for a program with no params."""
         from agm.agl.modules.roots import RootSet
 
         roots = RootSet(roots=frozenset({_STDLIB_ROOT}))
         prepared = PipelineDriver.prepare_program("let x = 1\nx", entry_path=None, roots=roots)
         rt = PipelineDriver()
-        discovery = rt.discover_params_graph(prepared)
+        discovery = rt.discover_params(prepared)
         assert discovery.diagnostics == ()
         assert discovery.params == ()
 
     def test_discover_params_with_declared_param(self, tmp_path: pathlib.Path) -> None:
-        """discover_params_graph discovers typed param declarations."""
+        """discover_params discovers typed param declarations."""
         from agm.agl.modules.roots import RootSet
 
         roots = RootSet(roots=frozenset({_STDLIB_ROOT}))
@@ -3414,13 +3404,13 @@ class TestDiscoverParamsGraph:
             roots=roots,
         )
         rt = PipelineDriver()
-        discovery = rt.discover_params_graph(prepared)
+        discovery = rt.discover_params(prepared)
         assert discovery.diagnostics == ()
         assert len(discovery.params) == 1
         assert discovery.params[0].name == "name"
 
     def test_discover_params_failure_returns_diagnostics(self, tmp_path: pathlib.Path) -> None:
-        """discover_params_graph returns diagnostics when the prepare phase failed."""
+        """discover_params returns diagnostics when the prepare phase failed."""
         from agm.agl.modules.roots import RootSet
 
         roots = RootSet(roots=frozenset({_STDLIB_ROOT}))
@@ -3428,7 +3418,7 @@ class TestDiscoverParamsGraph:
             "import no_such_module\nlet x = 1", entry_path=None, roots=roots
         )
         rt = PipelineDriver()
-        discovery = rt.discover_params_graph(prepared)
+        discovery = rt.discover_params(prepared)
         assert len(discovery.diagnostics) >= 1
 
 
@@ -3437,49 +3427,49 @@ class TestDiscoverParamsGraph:
 # ---------------------------------------------------------------------------
 
 
-class TestPreparedGraphDefensivePaths:
-    """Edge-case coverage for PreparedGraph properties and prepare_program error paths."""
+class TestPreparedProgramDefensivePaths:
+    """Edge-case coverage for PreparedProgram properties and prepare_program error paths."""
 
     def test_program_name_no_entry_module_in_graph(self, tmp_path: pathlib.Path) -> None:
-        """program_name returns None when resolved_graph has no ENTRY_ID module."""
+        """program_name returns None when resolved has no ENTRY_ID module."""
         from unittest.mock import MagicMock
 
         from agm.agl.modules.roots import RootSet
-        from agm.agl.pipeline import PreparedGraph
+        from agm.agl.pipeline import PreparedProgram
 
         fake_graph = MagicMock()
         fake_graph.modules = {}
 
         roots = RootSet(roots=frozenset({_STDLIB_ROOT}))
-        pg = PreparedGraph(
+        pg = PreparedProgram(
             source="let x = 1",
             entry_path=None,
             roots=roots,
-            resolved_graph=fake_graph,
+            resolved=fake_graph,
             diagnostics=(),
             warnings=(),
         )
         assert pg.program_name is None
 
     def test_prepare_single_program_agl_error_retains_related_notes(self) -> None:
-        """The single-file parse path uses AglError.to_diagnostic()."""
+        """The module parse path uses AglError.to_diagnostic()."""
         from unittest.mock import patch
 
         related = SourceSpan(2, 1, 2, 2, 2, 3)
         error = AglError("parse failed", related=(("constraint", related),))
-        with patch("agm.agl.parser.parse_program", side_effect=error):
-            prepared = PipelineDriver.prepare("let x = 1")
+        with patch("agm.agl.modules.loader.parse_program_seeded", side_effect=error):
+            prepared = PipelineDriver.prepare_program("let x = 1")
 
         assert prepared.diagnostics[0].related[0].message == "constraint"
 
     def test_prepare_single_scope_agl_error_retains_related_notes(self) -> None:
-        """The single-file scope path uses AglError.to_diagnostic()."""
+        """The module scope path uses AglError.to_diagnostic()."""
         from unittest.mock import patch
 
         related = SourceSpan(2, 1, 2, 2, 2, 3)
         error = AglError("scope failed", related=(("constraint", related),))
-        with patch("agm.agl.scope.resolve", side_effect=error):
-            prepared = PipelineDriver.prepare("let x = 1")
+        with patch("agm.agl.scope.program.resolve_program", side_effect=error):
+            prepared = PipelineDriver.prepare_program("let x = 1")
 
         assert prepared.diagnostics[0].related[0].message == "constraint"
 
@@ -3508,7 +3498,7 @@ class TestPreparedGraphDefensivePaths:
         roots = RootSet(roots=frozenset({tmp_path.resolve(), _STDLIB_ROOT}))
         related = SourceSpan(2, 1, 2, 2, 2, 3)
         error = AglError("scope failed", related=(("constraint", related),))
-        with patch("agm.agl.scope.graph.resolve_graph", side_effect=error):
+        with patch("agm.agl.scope.program.resolve_program", side_effect=error):
             prepared = PipelineDriver.prepare_program("let x = 1", entry_path=None, roots=roots)
 
         assert prepared.diagnostics[0].related[0].message == "constraint"
@@ -3526,14 +3516,14 @@ class TestPreparedGraphDefensivePaths:
         assert "boom" in prepared.diagnostics[0].message
 
     def test_prepare_program_generic_exception_during_resolve(self, tmp_path: pathlib.Path) -> None:
-        """A non-AglScopeError exception during resolve_graph is captured."""
+        """A non-AglScopeError exception during resolve_program is captured."""
         from unittest.mock import patch
 
         from agm.agl.modules.roots import RootSet
 
         roots = RootSet(roots=frozenset({tmp_path.resolve(), _STDLIB_ROOT}))
         with patch(
-            "agm.agl.scope.graph.resolve_graph",
+            "agm.agl.scope.program.resolve_program",
             side_effect=RuntimeError("resolve fail"),
         ):
             prepared = PipelineDriver.prepare_program("let x = 1\nx", entry_path=None, roots=roots)
@@ -3542,12 +3532,10 @@ class TestPreparedGraphDefensivePaths:
 
 
 class TestDiscoverParamsDefensivePaths:
-    """Edge-case coverage for discover_params_graph and discover_params."""
+    """Edge-case coverage for discover_params and discover_params."""
 
-    def test_discover_params_graph_missing_entry_in_checked_graph(
-        self, tmp_path: pathlib.Path
-    ) -> None:
-        """discover_params_graph returns diagnostic when checked graph has no entry module."""
+    def test_discover_params_missing_entry_in_checked(self, tmp_path: pathlib.Path) -> None:
+        """discover_params returns diagnostic when checked graph has no entry module."""
         from unittest.mock import MagicMock, patch
 
         from agm.agl.modules.roots import RootSet
@@ -3555,12 +3543,12 @@ class TestDiscoverParamsDefensivePaths:
         roots = RootSet(roots=frozenset({_STDLIB_ROOT}))
         prepared = PipelineDriver.prepare_program("let x = 1\nx", entry_path=None, roots=roots)
         rt = PipelineDriver()
-        # Patch check_graph to return a graph with no ENTRY_ID.
-        fake_checked_graph = MagicMock()
-        fake_checked_graph.modules = {}
+        # Patch check_program to return a graph with no ENTRY_ID.
+        fake_checked = MagicMock()
+        fake_checked.modules = {}
 
-        with patch("agm.agl.typecheck.graph.check_graph", return_value=fake_checked_graph):
-            discovery = rt.discover_params_graph(prepared)
+        with patch("agm.agl.typecheck.program.check_program", return_value=fake_checked):
+            discovery = rt.discover_params(prepared)
         assert len(discovery.diagnostics) >= 1
         assert "Entry module not found" in discovery.diagnostics[0].message
 
@@ -3570,95 +3558,99 @@ class TestDiscoverParamsDefensivePaths:
 
         from agm.agl.typecheck import AglTypeError
 
-        prepared = PipelineDriver.prepare('def f(x: int) -> text = "bad"\nlet r = f(1)\nprint r')
+        prepared = PipelineDriver.prepare_program(
+            'def f(x: int) -> text = "bad"\nlet r = f(1)\nprint r'
+        )
         rt = PipelineDriver()
-        with patch("agm.agl.typecheck.check", side_effect=AglTypeError("type error")):
+        with patch(
+            "agm.agl.typecheck.program.check_program", side_effect=AglTypeError("type error")
+        ):
             discovery = rt.discover_params(prepared)
         assert discovery.checked is None
         assert len(discovery.diagnostics) >= 1
 
     def test_discover_params_typecheck_agl_error_retains_related_notes(self) -> None:
-        """The single-file typecheck boundary uses AglError.to_diagnostic()."""
+        """The module typecheck boundary uses AglError.to_diagnostic()."""
         from unittest.mock import patch
 
-        prepared = PipelineDriver.prepare("let x = 1")
+        prepared = PipelineDriver.prepare_program("let x = 1")
         related = SourceSpan(2, 1, 2, 2, 2, 3)
         error = AglError("type failed", related=(("constraint", related),))
-        with patch("agm.agl.typecheck.check", side_effect=error):
+        with patch("agm.agl.typecheck.program.check_program", side_effect=error):
             discovery = PipelineDriver().discover_params(prepared)
 
         assert discovery.diagnostics[0].related[0].message == "constraint"
 
-    def test_run_typecheck_graph_agl_error_retains_related_notes(
+    def test_run_typecheck_program_agl_error_retains_related_notes(
         self, tmp_path: pathlib.Path
     ) -> None:
         """The graph typecheck boundary uses AglError.to_diagnostic()."""
         from unittest.mock import MagicMock, patch
 
         from agm.agl.modules.roots import RootSet
-        from agm.agl.pipeline import PreparedGraph
+        from agm.agl.pipeline import PreparedProgram
 
         roots = RootSet(roots=frozenset({_STDLIB_ROOT}))
-        prepared = PreparedGraph(
+        prepared = PreparedProgram(
             source="let x = 1",
             entry_path=None,
             roots=roots,
-            resolved_graph=MagicMock(),
+            resolved=MagicMock(),
             diagnostics=(),
             warnings=(),
         )
         related = SourceSpan(2, 1, 2, 2, 2, 3)
         error = AglError("type failed", related=(("constraint", related),))
-        with patch("agm.agl.typecheck.graph.check_graph", side_effect=error):
-            discovery = PipelineDriver().discover_params_graph(prepared)
+        with patch("agm.agl.typecheck.program.check_program", side_effect=error):
+            discovery = PipelineDriver().discover_params(prepared)
 
         assert discovery.diagnostics[0].related[0].message == "constraint"
 
-    def test_run_typecheck_graph_generic_exception_captured(self, tmp_path: pathlib.Path) -> None:
-        """_run_typecheck_graph captures generic exceptions as diagnostics."""
+    def test_run_typecheck_program_generic_exception_captured(self, tmp_path: pathlib.Path) -> None:
+        """_run_typecheck_program captures generic exceptions as diagnostics."""
         from unittest.mock import MagicMock, patch
 
         from agm.agl.modules.roots import RootSet
-        from agm.agl.pipeline import PreparedGraph
+        from agm.agl.pipeline import PreparedProgram
 
         roots = RootSet(roots=frozenset({_STDLIB_ROOT}))
-        # Build a PreparedGraph with a fake resolved_graph so we reach check_graph.
+        # Build a PreparedProgram with a fake resolved so we reach check_program.
         fake_rg = MagicMock()
         fake_rg.warnings = ()
         fake_rg.modules = {}
 
-        pg = PreparedGraph(
+        pg = PreparedProgram(
             source="let x = 1",
             entry_path=None,
             roots=roots,
-            resolved_graph=fake_rg,
+            resolved=fake_rg,
             diagnostics=(),
             warnings=(),
         )
         rt = PipelineDriver()
         with patch(
-            "agm.agl.typecheck.graph.check_graph",
+            "agm.agl.typecheck.program.check_program",
             side_effect=RuntimeError("graph type crash"),
         ):
-            # discover_params_graph will call _run_typecheck_graph internally.
-            discovery = rt.discover_params_graph(pg)
+            # discover_params will call _run_typecheck_program internally.
+            discovery = rt.discover_params(pg)
         assert len(discovery.diagnostics) >= 1
         assert "graph type crash" in discovery.diagnostics[0].message
 
 
 class TestRunPreparedDefensivePaths:
-    """Edge-case coverage for run_prepared (single-file) and run_prepared_graph."""
+    """Edge-case coverage for run_prepared (module) and run_prepared."""
 
     def test_run_prepared_with_precomputed_compiled(self) -> None:
         """run_prepared skips static passes when a compiled artifact is passed."""
         from agm.agl.matchcompile import MatchCompiledProgram, compile_program_matches
-        from agm.agl.typecheck import check
+        from agm.agl.typecheck.program import check_program
 
-        prepared = PipelineDriver.prepare("let x = 1\nx")
+        prepared = PipelineDriver.prepare_program("let x = 1\nx")
         assert prepared.resolved is not None
         rt = PipelineDriver()
         env = rt.host_environment()
-        precomputed = check(prepared.resolved, env.capabilities)
+        precomputed = check_program(prepared.resolved, env.capabilities)
         match_result = compile_program_matches(precomputed)
         assert isinstance(match_result.compiled, MatchCompiledProgram)
         result = rt.run_prepared(prepared, compiled=match_result.compiled)
@@ -3670,58 +3662,15 @@ class TestRunPreparedDefensivePaths:
 
         from agm.agl.typecheck import AglTypeError
 
-        prepared = PipelineDriver.prepare("let x = 1\nx")
+        prepared = PipelineDriver.prepare_program("let x = 1\nx")
         rt = PipelineDriver()
-        with patch("agm.agl.typecheck.check", side_effect=AglTypeError("tc fail")):
+        with patch("agm.agl.typecheck.program.check_program", side_effect=AglTypeError("tc fail")):
             result = rt.run_prepared(prepared)
         assert result.ok is False
         assert any("tc fail" in d.message for d in result.diagnostics)
 
     def test_run_prepared_custom_contract_error(self) -> None:
-        """run_prepared exits early when custom pre-lower contract materialization fails."""
-        from unittest.mock import patch
-
-        from agm.agl.runtime.codec import TextCodec
-
-        class BadCodec(TextCodec):
-            @property
-            def name(self) -> str:
-                return "bad"
-
-        prepared = PipelineDriver.prepare('let r = ask("hi", format = "bad")\nr')
-        rt = PipelineDriver(default_agent=lambda req: "ok")
-        rt.register_codec(BadCodec())
-        with patch("agm.agl.runtime.contract.materialize_contract", side_effect=ValueError("bad")):
-            result = rt.run_prepared(prepared)
-        assert result.ok is False
-        assert any("Contract error" in d.message for d in result.diagnostics)
-
-    def test_run_prepared_graph_contract_error(self, tmp_path: pathlib.Path) -> None:
-        """run_prepared_graph exits early when an IR contract is invalid."""
-        from unittest.mock import patch
-
-        from agm.agl.modules.roots import RootSet
-
-        roots = RootSet(roots=frozenset({_STDLIB_ROOT}))
-        # Use ask() so the checked graph has at least one contract_spec to materialize.
-        prepared = PipelineDriver.prepare_program(
-            'let r = ask("hi")\nprint r', entry_path=None, roots=roots
-        )
-        rt = PipelineDriver(default_agent=lambda req: "ok")  # type: ignore[arg-type]
-        with patch(
-            "agm.agl.pipeline._materialize_ir_contracts",
-            return_value=(
-                {},
-                [Diagnostic(message="Contract error: bad contract", line=1)],
-            ),
-        ):
-            result = rt.run_prepared_graph(prepared)
-        # A contract error yields a RunResult with ok=False and a contract diagnostic.
-        assert result.ok is False
-        assert any("Contract error" in d.message for d in result.diagnostics)
-
-    def test_run_prepared_graph_custom_contract_error(self) -> None:
-        """run_prepared_graph exits early when custom pre-lower materialization fails."""
+        """run_prepared exits early when custom pre-lower materialization fails."""
         from unittest.mock import patch
 
         from agm.agl.modules.roots import RootSet
@@ -3739,17 +3688,17 @@ class TestRunPreparedDefensivePaths:
         rt = PipelineDriver(default_agent=lambda req: "ok")
         rt.register_codec(BadCodec())
         with patch("agm.agl.runtime.contract.materialize_contract", side_effect=ValueError("bad")):
-            result = rt.run_prepared_graph(prepared)
+            result = rt.run_prepared(prepared)
         assert result.ok is False
         assert any("Contract error" in d.message for d in result.diagnostics)
 
-    def test_run_prepared_graph_with_precompiled_graph_decodes_param_from_ir(
+    def test_run_prepared_with_precompiled_decodes_param_from_ir(
         self, tmp_path: pathlib.Path
     ) -> None:
         """A precompiled graph executes supplied params through IR metadata."""
-        from agm.agl.matchcompile import MatchCompiledModuleGraph, compile_graph_matches
+        from agm.agl.matchcompile import MatchCompiledProgram, compile_program_matches
         from agm.agl.modules.roots import RootSet
-        from agm.agl.typecheck.graph import check_graph as real_check_graph
+        from agm.agl.typecheck.program import check_program as real_check_program
 
         roots = RootSet(roots=frozenset({_STDLIB_ROOT}))
         prepared = PipelineDriver.prepare_program(
@@ -3757,11 +3706,9 @@ class TestRunPreparedDefensivePaths:
         )
         rt = PipelineDriver()
         env = rt.host_environment()
-        assert prepared.resolved_graph is not None
-        checked_graph = real_check_graph(prepared.resolved_graph, env.capabilities)
-        match_result = compile_graph_matches(checked_graph)
-        assert isinstance(match_result.compiled, MatchCompiledModuleGraph)
-        result = rt.run_prepared_graph(
-            prepared, param_values={"n": 7}, compiled_graph=match_result.compiled
-        )
+        assert prepared.resolved is not None
+        checked = real_check_program(prepared.resolved, env.capabilities)
+        match_result = compile_program_matches(checked)
+        assert isinstance(match_result.compiled, MatchCompiledProgram)
+        result = rt.run_prepared(prepared, param_values={"n": 7}, compiled=match_result.compiled)
         assert result.ok

@@ -2,9 +2,9 @@
 
 Public API
 ----------
-- :func:`resolve` — full static name-resolution pass: ``Program →
-  ResolvedProgram``.
-- :class:`ResolvedProgram` — frozen dataclass carrying the ``Program`` plus
+- :func:`resolve_module` — per-module static name-resolution pass: ``Program →
+  ModuleResolution``.
+- :class:`ModuleResolution` — frozen dataclass carrying the ``Program`` plus
   side tables keyed by ``node_id``.
 - :class:`BindingRef` — resolved reference to a scope binding.
 - :class:`BuiltinKind` — enum classifying contextual built-in Call nodes.
@@ -14,12 +14,13 @@ Public API
 
 from __future__ import annotations
 
-from agm.agl.scope.resolver import resolve
+from agm.agl.scope.program import ResolvedModule, ResolvedProgram, resolve_program
+from agm.agl.scope.resolver import resolve_module
 from agm.agl.scope.symbols import (
     AglScopeError,
     BindingRef,
     BuiltinKind,
-    ResolvedProgram,
+    ModuleResolution,
     ScopeNode,
 )
 
@@ -27,7 +28,10 @@ __all__ = [
     "AglScopeError",
     "BindingRef",
     "BuiltinKind",
+    "ModuleResolution",
+    "ResolvedModule",
     "ResolvedProgram",
     "ScopeNode",
-    "resolve",
+    "resolve_module",
+    "resolve_program",
 ]

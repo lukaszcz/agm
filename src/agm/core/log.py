@@ -94,9 +94,7 @@ def resolve_log_decision(
     return LogDecision(enabled=resolved_enabled, explicit_path=resolved_path)
 
 
-def prepare_trace_log_from_decision(
-    decision: LogDecision, *, command_name: str
-) -> Path | None:
+def prepare_trace_log_from_decision(decision: LogDecision, *, command_name: str) -> Path | None:
     """Prepare the trace file for an already-resolved :class:`LogDecision`.
 
     The two commands that support the full ``--log``/``--no-log``/``--log-file``
@@ -142,9 +140,7 @@ class LiveTracePathResolver:
         if log_file is None and self._auto_path is not None:
             path = self._auto_path
         else:
-            path = _log_file_path(
-                command_name=self._command_name, log_file=log_file, unique=True
-            )
+            path = _log_file_path(command_name=self._command_name, log_file=log_file, unique=True)
             if log_file is None:
                 self._auto_path = path
         mkdir(path.parent, parents=True, exist_ok=True)

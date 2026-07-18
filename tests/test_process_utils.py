@@ -217,9 +217,7 @@ class TestTerminateProcess:
     def test_handles_process_that_exits_quickly_after_sigterm(self) -> None:
         # A process that responds quickly to SIGTERM
         sigterm_script = (
-            "import signal, time;"
-            " signal.signal(signal.SIGTERM, lambda *a: exit(0));"
-            " time.sleep(30)"
+            "import signal, time; signal.signal(signal.SIGTERM, lambda *a: exit(0)); time.sleep(30)"
         )
         proc = subprocess.Popen(
             [sys.executable, "-c", sigterm_script],
@@ -341,9 +339,7 @@ class TestKillProcessGroup:
         # Should not raise
         _kill_process_group(proc)
 
-    def test_handles_process_lookup_error_on_killpg(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_handles_process_lookup_error_on_killpg(self, monkeypatch: pytest.MonkeyPatch) -> None:
         class FakeProcess:
             pid = 99999
 
@@ -381,9 +377,7 @@ class TestKillProcessGroup:
         assert signal.SIGTERM in signals_sent
         assert signal.SIGKILL in signals_sent
 
-    def test_handles_process_lookup_error_on_sigkill(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_handles_process_lookup_error_on_sigkill(self, monkeypatch: pytest.MonkeyPatch) -> None:
         call_count = 0
 
         class FakeProcess:
@@ -409,13 +403,7 @@ class TestKillProcessGroup:
     def test_sends_sigkill_to_group_when_process_already_exited(self, tmp_path: Path) -> None:
         """When the main process has already exited, still kill orphaned group members."""
         child_pid_file = tmp_path / "child.pid"
-        script = (
-            "#!/bin/bash\n"
-            "(sleep 30) &\n"
-            'printf "%s\\n" "$!" > "'
-            + str(child_pid_file)
-            + '"\n'
-        )
+        script = '#!/bin/bash\n(sleep 30) &\nprintf "%s\\n" "$!" > "' + str(child_pid_file) + '"\n'
         script_file = tmp_path / "parent.sh"
         script_file.write_text(script)
         script_file.chmod(script_file.stat().st_mode | 0o111)
@@ -493,9 +481,7 @@ class TestRunCleanupCommand:
         sentinel = tmp_path / "env_ok"
         custom_env = os.environ.copy()
         custom_env["_AGM_TEST_VAR"] = "yes"
-        script = (
-            f"import os; open('{sentinel}', 'w').write(os.environ.get('_AGM_TEST_VAR', ''))"
-        )
+        script = f"import os; open('{sentinel}', 'w').write(os.environ.get('_AGM_TEST_VAR', ''))"
         _run_cleanup_command(
             [sys.executable, "-c", script],
             env=custom_env,
@@ -604,9 +590,7 @@ class TestRunSubprocess:
         assert result.stderr == "err\n"
 
     def test_returns_non_zero_returncode(self) -> None:
-        result = run_subprocess(
-            [sys.executable, "-c", "raise SystemExit(7)"], capture_output=True
-        )
+        result = run_subprocess([sys.executable, "-c", "raise SystemExit(7)"], capture_output=True)
         assert result.returncode == 7
 
     def test_stdout_callback_is_called_with_chunks(self) -> None:
@@ -652,9 +636,7 @@ class TestRunSubprocess:
         run_subprocess(["echo"], isolate_process_group=True)
         assert popen_kwargs["start_new_session"] is True
 
-    def test_no_process_group_isolation_by_default(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_no_process_group_isolation_by_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
         popen_kwargs: dict[str, Any] = {}
 
         class FakeProcess:
@@ -1112,12 +1094,12 @@ class TestEmptyDecodedTextContinue:
         """When a UTF-8 multi-byte char is split across pipe chunks,
         the first partial decode returns empty string and is skipped."""
         script = (
-            'import sys, time\n'
+            "import sys, time\n"
             'sys.stdout.buffer.write(b"\\xc3")\n'
-            'sys.stdout.buffer.flush()\n'
-            'time.sleep(0.1)\n'
+            "sys.stdout.buffer.flush()\n"
+            "time.sleep(0.1)\n"
             'sys.stdout.buffer.write(b"\\xa9")\n'
-            'sys.stdout.buffer.flush()\n'
+            "sys.stdout.buffer.flush()\n"
         )
         result = run_subprocess(
             [sys.executable, "-c", script],
@@ -1135,11 +1117,7 @@ class TestFinalDecoderFlush:
         output is both appended to stream_data and sent to the callback."""
         chunks: list[str] = []
 
-        script = (
-            'import sys\n'
-            'sys.stdout.buffer.write(b"\\xc3")\n'
-            'sys.stdout.buffer.flush()\n'
-        )
+        script = 'import sys\nsys.stdout.buffer.write(b"\\xc3")\nsys.stdout.buffer.flush()\n'
         result = run_subprocess(
             [sys.executable, "-c", script],
             capture_output=True,
@@ -1154,11 +1132,7 @@ class TestFinalDecoderFlush:
         """Final decoder flush on stderr with capture_output and callback."""
         chunks: list[str] = []
 
-        script = (
-            'import sys\n'
-            'sys.stderr.buffer.write(b"\\xc3")\n'
-            'sys.stderr.buffer.flush()\n'
-        )
+        script = 'import sys\nsys.stderr.buffer.write(b"\\xc3")\nsys.stderr.buffer.flush()\n'
         result = run_subprocess(
             [sys.executable, "-c", script],
             capture_output=True,
@@ -1170,11 +1144,7 @@ class TestFinalDecoderFlush:
 
     def test_final_flush_with_no_pending_data(self) -> None:
         """When decoder has no buffered data at flush, no extra text is emitted."""
-        script = (
-            "import sys\n"
-            "sys.stdout.write('hello\\n')\n"
-            "sys.stdout.flush()\n"
-        )
+        script = "import sys\nsys.stdout.write('hello\\n')\nsys.stdout.flush()\n"
         result = run_subprocess(
             [sys.executable, "-c", script],
             capture_output=True,
@@ -1184,9 +1154,7 @@ class TestFinalDecoderFlush:
 
 
 class TestRunSubprocessIdleTimeoutExact:
-    def test_idle_timeout_expired_triggers_kill(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_idle_timeout_expired_triggers_kill(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """When remaining <= 0, queue.Empty is raised which triggers process kill."""
         with pytest.raises(SystemExit) as exc_info:
             run_subprocess(
@@ -1197,9 +1165,7 @@ class TestRunSubprocessIdleTimeoutExact:
             )
         assert exc_info.value.code == 124
 
-    def test_idle_timeout_non_isolate_process_group(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_idle_timeout_non_isolate_process_group(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Idle timeout also works without isolate_process_group."""
         with pytest.raises(SystemExit) as exc_info:
             run_subprocess(
@@ -1214,11 +1180,7 @@ class TestRunSubprocessIdleTimeoutExact:
 class TestRunSubprocessEmptyDecodedText:
     def test_empty_decoded_text_is_skipped(self) -> None:
         """When decoder.decode returns empty string, it's skipped via continue."""
-        script = (
-            "import sys; "
-            "sys.stdout.buffer.write(b'ok'); "
-            "sys.stdout.flush()"
-        )
+        script = "import sys; sys.stdout.buffer.write(b'ok'); sys.stdout.flush()"
         result = run_subprocess(
             [sys.executable, "-c", script],
             capture_output=True,
@@ -1271,11 +1233,7 @@ class TestRunSubprocessFinalDecoderFlush:
         chunks: list[str] = []
         # Write just the first byte of a 2-byte UTF-8 character (0xc3) and exit.
         # The streaming decoder buffers it; final flush produces the replacement.
-        script = (
-            "import sys; "
-            "sys.stdout.buffer.write(b'\\xc3'); "
-            "sys.stdout.flush()"
-        )
+        script = "import sys; sys.stdout.buffer.write(b'\\xc3'); sys.stdout.flush()"
         run_subprocess(
             [sys.executable, "-c", script],
             capture_output=False,
@@ -1290,11 +1248,7 @@ class TestRunSubprocessFinalDecoderFlush:
         # Write partial UTF-8 to stderr and exit.  capture_output=True creates
         # both pipes.  stderr_callback is None, so the final-flush loop visits
         # stderr with a None callback and continues to the next decoder entry.
-        script = (
-            "import sys; "
-            "sys.stderr.buffer.write(b'\\xc3'); "
-            "sys.stderr.flush()"
-        )
+        script = "import sys; sys.stderr.buffer.write(b'\\xc3'); sys.stderr.flush()"
         result = run_subprocess(
             [sys.executable, "-c", script],
             capture_output=True,
@@ -1455,12 +1409,7 @@ class TestDrainLoopTimeoutSentinel:
     def test_idle_timeout_with_output_before_silence(self) -> None:
         """When idle timeout fires after the process produced some output, the
         post-timeout sentinel drain loop runs (some sentinels may already be queued)."""
-        script = (
-            "import sys, time\n"
-            "print('initial')\n"
-            "sys.stdout.flush()\n"
-            "time.sleep(60)\n"
-        )
+        script = "import sys, time\nprint('initial')\nsys.stdout.flush()\ntime.sleep(60)\n"
         result = run_capture_result(
             [sys.executable, "-c", script],
             idle_timeout=0.3,

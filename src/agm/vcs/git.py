@@ -32,9 +32,12 @@ def _git_args(repo_dir: Path | None = None) -> list[str]:
 def is_git_repo(path: Path) -> bool:
     """Return whether *path* is inside a git work tree."""
 
-    return run_capture(
-        ["git", "-C", str(path), "rev-parse", "--is-inside-work-tree"],
-    )[0] == 0
+    return (
+        run_capture(
+            ["git", "-C", str(path), "rev-parse", "--is-inside-work-tree"],
+        )[0]
+        == 0
+    )
 
 
 def checkout_root(cwd: Path | None = None) -> Path:
@@ -337,9 +340,7 @@ def remote_branch_exists(repo_dir: Path, branch: str, *, env: dict[str, str] | N
     )
 
 
-def default_remote_branch_ref(
-    repo_dir: Path, *, env: dict[str, str] | None = None
-) -> str:
+def default_remote_branch_ref(repo_dir: Path, *, env: dict[str, str] | None = None) -> str:
     """Return the local remote-tracking ref for origin's default branch."""
 
     default_ref = symbolic_ref(repo_dir, "refs/remotes/origin/HEAD", env=env)
@@ -402,9 +403,7 @@ def ls_remote_head(repo_url: str, *, env: dict[str, str] | None = None) -> str:
     return require_capture(["git", "ls-remote", "--symref", repo_url, "HEAD"], env=env)
 
 
-def default_branch_from_remote(
-    repo_url: str, *, env: dict[str, str] | None = None
-) -> str:
+def default_branch_from_remote(repo_url: str, *, env: dict[str, str] | None = None) -> str:
     """Return the default branch for a remote repository URL."""
 
     output = ls_remote_head(repo_url, env=env)
@@ -417,9 +416,7 @@ def default_branch_from_remote(
     raise SystemExit(1)
 
 
-def default_branch_from_repo(
-    repo_path: Path, *, env: dict[str, str] | None = None
-) -> str:
+def default_branch_from_repo(repo_path: Path, *, env: dict[str, str] | None = None) -> str:
     """Return the default branch for a local repository."""
 
     returncode, stdout, _ = run_capture(

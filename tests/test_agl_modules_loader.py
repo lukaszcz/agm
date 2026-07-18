@@ -104,9 +104,7 @@ class TestEntrySourceId:
         entry_file = tmp_path / "prog.agl"
         entry_file.write_text(_MINIMAL)
         root = tmp_path
-        graph = load_graph(
-            _MINIMAL, entry_path=entry_file, roots=_roots(root)
-        )
+        graph = load_graph(_MINIMAL, entry_path=entry_file, roots=_roots(root))
         entry = graph.modules[ENTRY_ID]
         assert entry.source.label == str(entry_file.resolve())
 
@@ -419,9 +417,7 @@ class TestWildcardImportInLoader:
         with pytest.raises(ModulePrefixNotFound):
             load_graph("import noprefix.*", entry_path=None, roots=_roots(root))
 
-    def test_wildcard_already_loaded_module_not_duplicated(
-        self, tmp_path: Path
-    ) -> None:
+    def test_wildcard_already_loaded_module_not_duplicated(self, tmp_path: Path) -> None:
         """Wildcard expansion encountering an already-loaded module (via
         a transitive import) must skip it, not re-queue or duplicate it."""
         root = tmp_path / "r"
@@ -480,16 +476,12 @@ class TestDeterminism:
 
         # Sort SCCs for comparison
         def _norm(sccs: tuple[tuple[ModuleId, ...], ...]) -> list[tuple[ModuleId, ...]]:
-            normalized = [
-                tuple(sorted(scc, key=lambda m: m.segments)) for scc in sccs
-            ]
+            normalized = [tuple(sorted(scc, key=lambda m: m.segments)) for scc in sccs]
             return sorted(normalized, key=lambda s: tuple(m.segments for m in s))
 
         assert _norm(graph1.sccs) == _norm(graph2.sccs)
 
-    def test_graph_keys_ordered_identically_under_distinct_fs_layouts(
-        self, tmp_path: Path
-    ) -> None:
+    def test_graph_keys_ordered_identically_under_distinct_fs_layouts(self, tmp_path: Path) -> None:
         """load_graph yields the same ordered module-id list regardless of
         filesystem discovery order (controlled via wildcard imports).
 
@@ -575,9 +567,7 @@ class TestFileBasedEntry:
         assert lib_mod.source.label == str(mod_path.resolve())
         assert lib_mod.path == mod_path.resolve()
 
-    def test_all_modules_have_non_none_path_except_inline_entry(
-        self, tmp_path: Path
-    ) -> None:
+    def test_all_modules_have_non_none_path_except_inline_entry(self, tmp_path: Path) -> None:
         root = tmp_path / "r"
         root.mkdir()
         _write_module(root, "mod")
@@ -744,9 +734,7 @@ class TestBuildReplGraph:
         entry_file.write_text("import entry\n()")
         program = _parse_for_repl("import entry\n()")
         with pytest.raises(ImportEntryError):
-            build_repl_graph(
-                program, 0, path=entry_file, cached={}, roots=_roots(tmp_path)
-            )
+            build_repl_graph(program, 0, path=entry_file, cached={}, roots=_roots(tmp_path))
 
     def test_wildcard_skips_already_cached_modules(self, tmp_path: Path) -> None:
         """Wildcard expansion skips modules already present in *cached* or *modules*."""

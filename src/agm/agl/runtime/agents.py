@@ -190,9 +190,8 @@ def _raise_agent_call_error(agent_name: str, err: AgentCallHostError) -> None:
         "stderr_tail": err.stderr_tail,
         "elapsed": err.elapsed,
     }
-    message = (
-        f"Agent {agent_name!r} failed: {err.cause}"
-        + (f" (exit {err.exit_code})" if err.exit_code is not None else "")
+    message = f"Agent {agent_name!r} failed: {err.cause}" + (
+        f" (exit {err.exit_code})" if err.exit_code is not None else ""
     )
 
     exc_val = ExceptionValue(
@@ -254,7 +253,7 @@ def runner_backed_agent_factory(
             message_parts.append(contract.format_instructions)
 
         if request.attempt >= 1:
-            # 
+            #
             validation_lines: list[str] = []
             for ve in request.validation_errors:
                 validation_lines.append(f"- {ve.message}")

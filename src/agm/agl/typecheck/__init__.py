@@ -2,15 +2,14 @@
 
 Public API
 ----------
-- :func:`check` — single-module type pass:
+- :func:`check_module` — per-module type pass:
+  ``ModuleResolution × HostCapabilities → CheckedModule``.
+- :func:`check_program` — whole-program type pass:
   ``ResolvedProgram × HostCapabilities → CheckedProgram``.
-- :func:`check_graph` — graph-wide type pass:
-  ``ResolvedModuleGraph × HostCapabilities → CheckedModuleGraph``.
-- :class:`CheckedProgram` — frozen dataclass with ``node_types``,
+- :class:`CheckedModule` — frozen dataclass with ``node_types``,
   ``contract_specs``, ``warnings``, and ``function_signatures``.
-- :class:`CheckedModuleGraph` — graph output: per-module ``CheckedModule`` dict
-  plus shared ``graph_type_table``.
-- :class:`CheckedModule` — per-module analogue of ``CheckedProgram``.
+- :class:`CheckedProgram` — program output: per-module ``CheckedModule`` dict
+  plus shared ``program_type_table``.
 - :class:`OutputContractSpec` — per-call codec + target-type record.
 - :class:`AglTypeError` — fatal type error (span-aware ``AglError`` subclass).
 """
@@ -40,11 +39,11 @@ from agm.agl.semantics.types import (
     free_type_vars,
     substitute,
 )
-from agm.agl.typecheck.checker import check
+from agm.agl.typecheck.checker import check_module
 from agm.agl.typecheck.env import (
     AglTypeError,
     CallSiteRecord,
-    CheckedProgram,
+    CheckedModule,
     ConstructorSignature,
     FunctionSignature,
     GenericTypeDef,
@@ -52,13 +51,12 @@ from agm.agl.typecheck.env import (
     ParamSpec,
     PartialCallSpec,
     TypeEnvironment,
-    assert_checked_program_closed,
+    assert_checked_module_closed,
 )
-from agm.agl.typecheck.graph import (
-    CheckedModule,
-    CheckedModuleGraph,
-    assert_checked_module_graph_closed,
-    check_graph,
+from agm.agl.typecheck.program import (
+    CheckedProgram,
+    assert_checked_program_closed,
+    check_program,
 )
 
 __all__ = [
@@ -68,7 +66,6 @@ __all__ = [
     "BottomType",
     "CallSiteRecord",
     "CheckedModule",
-    "CheckedModuleGraph",
     "CheckedProgram",
     "ConstructorSignature",
     "DecimalType",
@@ -94,11 +91,11 @@ __all__ = [
     "TypeTemplateMatch",
     "TypeVarType",
     "UnitType",
-    "assert_checked_module_graph_closed",
     "assert_checked_program_closed",
-    "check",
+    "assert_checked_module_closed",
+    "check_module",
     "contains_type_var",
     "free_type_vars",
     "substitute",
-    "check_graph",
+    "check_program",
 ]

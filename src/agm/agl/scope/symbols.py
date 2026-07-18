@@ -9,7 +9,7 @@ Data model
 - ``ScopeNode`` — a node in the scope tree (one per scope-introducing
   construct).  The root ``ScopeNode`` is always present; nested scopes form a
   tree for visibility analysis.
-- ``ResolvedProgram`` — the frozen output of the scope pass: the original
+- ``ModuleResolution`` — the frozen output of the scope pass: the original
   ``Program`` plus side tables.
 - ``BuiltinKind`` — enum classifying a built-in Call node.
 - ``AglScopeError`` — fatal scope error raised by the resolver.
@@ -33,7 +33,7 @@ from agm.agl.syntax.spans import SourceSpan
 class BuiltinKind(enum.Enum):
     """Classification of a resolved built-in call.
 
-    Attached to ``Call.node_id`` in ``ResolvedProgram.builtin_calls`` when the
+    Attached to ``Call.node_id`` in ``ModuleResolution.builtin_calls`` when the
     callee is one of the special built-in names.
 
     ``PRINT``
@@ -171,9 +171,9 @@ class BindingRef:
         ``let``.
     ``module_id``
         The :class:`~agm.agl.modules.ids.ModuleId` of the module that owns
-        this binding.  For single-program resolution (``resolve()``) and all
+        this binding.  For module resolution (``resolve()``) and all
         local bindings, this is always :data:`~agm.agl.modules.ids.ENTRY_ID`.
-        For cross-module resolution via ``resolve_graph()``, cross-module
+        For cross-module resolution via ``resolve_program()``, cross-module
         references carry the owning library module's id.
     """
 
@@ -222,12 +222,12 @@ class ScopeNode:
 
 
 # ---------------------------------------------------------------------------
-# ResolvedProgram — output of the scope pass
+# ModuleResolution — output of the scope pass
 # ---------------------------------------------------------------------------
 
 
 @dataclass(frozen=True, slots=True)
-class ResolvedProgram:
+class ModuleResolution:
     """Immutable output of the scope resolution pass.
 
     ``program``

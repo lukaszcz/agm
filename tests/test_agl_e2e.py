@@ -132,9 +132,7 @@ def _run_program(
             )
         )
         prepared = PipelineDriver.prepare_program(source, entry_path=None, roots=roots)
-        result = runtime.run_prepared_graph(
-            prepared, param_values=scenario.get("params", {})
-        )
+        result = runtime.run_prepared(prepared, param_values=scenario.get("params", {}))
     elif program.is_relative_to(EXTERNS_PROGRAMS_DIR):
         # Three branches, in order: `module_roots` above builds a graph from
         # explicit roots (multi-module fixtures); this branch also runs
@@ -146,17 +144,13 @@ def _run_program(
 
         roots = RootSet(roots=frozenset({program.parent.resolve(), REPO_STDLIB_ROOT}))
         prepared = PipelineDriver.prepare_program(source, entry_path=program, roots=roots)
-        result = runtime.run_prepared_graph(
-            prepared, param_values=scenario.get("params", {})
-        )
+        result = runtime.run_prepared(prepared, param_values=scenario.get("params", {}))
     else:
         result = runtime.run(source, param_values=scenario.get("params", {}))
     return result, agents
 
 
-def _assert_host_error(
-    result: Any, agents: dict[str, ScriptedAgent], spec: dict[str, Any]
-) -> None:
+def _assert_host_error(result: Any, agents: dict[str, ScriptedAgent], spec: dict[str, Any]) -> None:
     assert not result.ok, "expected the run to fail param validation"
     assert result.error is None, "param validation failure is not an AgL exception"
     messages = " | ".join(d.message for d in result.diagnostics)
@@ -204,8 +198,7 @@ def _assert_output(out: str, expect: dict[str, Any]) -> None:
 def _schema_contains(schema: Any, needle: str) -> bool:
     if isinstance(schema, dict):
         return any(
-            str(key) == needle or _schema_contains(value, needle)
-            for key, value in schema.items()
+            str(key) == needle or _schema_contains(value, needle) for key, value in schema.items()
         )
     if isinstance(schema, list):
         return any(_schema_contains(item, needle) for item in schema)

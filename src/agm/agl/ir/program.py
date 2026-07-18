@@ -135,7 +135,6 @@ class SourceFile:
     normalized_text: str
 
 
-
 @dataclass(frozen=True, slots=True)
 class IrFunctionBody:
     """Ordinary function implementation: an AgL expression evaluated per call."""

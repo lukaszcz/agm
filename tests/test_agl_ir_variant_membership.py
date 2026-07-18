@@ -1,6 +1,4 @@
-"""IR evaluation tests for `is` / `is not` enum-variant membership (IrVariantIs).
-
-"""
+"""IR evaluation tests for `is` / `is not` enum-variant membership (IrVariantIs)."""
 
 from __future__ import annotations
 
@@ -25,10 +23,10 @@ from tests.agl.ir_harness import _compiled_checked, evaluate_ir
 def _lower(source: str) -> ExecutableProgram:
     """Parse → check → lower the source; return ExecutableProgram."""
     from agm.agl.capabilities import HostCapabilities
-    from agm.agl.lower import lower_program
+    from agm.agl.lower import lower_module
     from agm.agl.parser import parse_program
-    from agm.agl.scope import resolve
-    from agm.agl.typecheck import check
+    from agm.agl.scope import resolve_module
+    from agm.agl.typecheck import check_module
 
     caps = HostCapabilities(
         agent_names=frozenset(),
@@ -36,15 +34,13 @@ def _lower(source: str) -> ExecutableProgram:
         supports_shell_exec=False,
         codec_kinds={
             "text": frozenset({"text"}),
-            "json": frozenset(
-                {"json", "record", "enum", "list", "dict", "int", "decimal", "bool"}
-            ),
+            "json": frozenset({"json", "record", "enum", "list", "dict", "int", "decimal", "bool"}),
         },
     )
     prog = parse_program(source)
-    resolved = resolve(prog)
-    checked = check(resolved, caps)
-    return lower_program(
+    resolved = resolve_module(prog)
+    checked = check_module(resolved, caps)
+    return lower_module(
         _compiled_checked(checked),
         source_text=source,
         source_label="<test>",

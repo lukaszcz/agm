@@ -58,9 +58,7 @@ class AglRaise(Exception):
     available (e.g. binary-op arithmetic errors).
     """
 
-    def __init__(
-        self, exc: ExceptionValue, *, span: Location | None = None
-    ) -> None:
+    def __init__(self, exc: ExceptionValue, *, span: Location | None = None) -> None:
         super().__init__(exc.display_name)
         self.exc = exc
         self.span = span

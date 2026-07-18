@@ -262,28 +262,21 @@ def _emit_body(typ: Type, type_table: TypeTable, plan: _SchemaPlan) -> dict[str,
     if isinstance(typ, AgentType):
         raise TypeError("AgentType has no JSON Schema; agent values are not wire-serialised.")
     if isinstance(typ, FunctionType):
-        raise TypeError(
-            "FunctionType has no JSON Schema; function values are not wire-serialised."
-        )
+        raise TypeError("FunctionType has no JSON Schema; function values are not wire-serialised.")
     if isinstance(typ, BottomType):
         raise TypeError("BottomType has no JSON Schema; bottom type is not wire-serialised.")
     if isinstance(typ, TypeVarType):
-        raise TypeError(
-            "TypeVarType has no JSON Schema; type variables are not wire-serialised."
-        )
+        raise TypeError("TypeVarType has no JSON Schema; type variables are not wire-serialised.")
     if isinstance(typ, InferenceVarType):
         raise TypeError("InferenceVarType is internal and has no JSON Schema.")
     assert_never(typ)  # pragma: no cover
 
 
-def _record_schema(
-    typ: RecordType, type_table: TypeTable, plan: _SchemaPlan
-) -> dict[str, object]:
+def _record_schema(typ: RecordType, type_table: TypeTable, plan: _SchemaPlan) -> dict[str, object]:
     """Derive the JSON Schema for a record type."""
     fields = type_table.record_fields(typ)
     properties: dict[str, object] = {
-        field_name: _emit(field_type, type_table, plan)
-        for field_name, field_type in fields.items()
+        field_name: _emit(field_type, type_table, plan) for field_name, field_type in fields.items()
     }
     return {
         "type": "object",
@@ -356,7 +349,7 @@ def _plan_types(types: Iterable[Type], type_table: TypeTable) -> _SchemaPlan:
     a recursive instantiation shared across them is assigned a single
     ``$defs``/``defs`` key (and one shared body) rather than one per occurrence.
     """
-    order, adjacency = _instantiation_graph(types, type_table)
+    order, adjacency = _build_instantiation_plan(types, type_table)
     if not adjacency:
         return _SchemaPlan(recursive=frozenset(), order=())
     components = sccs(adjacency, key=_instantiation_sort_key)
@@ -374,7 +367,7 @@ def _plan_types(types: Iterable[Type], type_table: TypeTable) -> _SchemaPlan:
     )
 
 
-def _instantiation_graph(
+def _build_instantiation_plan(
     roots: Iterable[Type], type_table: TypeTable
 ) -> tuple[tuple[Instantiation, ...], dict[Instantiation, frozenset[Instantiation]]]:
     """Breadth-first expand the concrete record/enum instantiation graph reachable from *roots*.
@@ -627,10 +620,7 @@ def build_param_decoder(typ: Type, type_table: TypeTable) -> ParamDecoder:
 def build_format_instructions(schema: dict[str, object]) -> str:
     """Build agent instructions embedding the authoritative JSON schema."""
     if not schema:
-        return (
-            "Return exactly one JSON value.\n"
-            "Do not include Markdown, prose, or code fences."
-        )
+        return "Return exactly one JSON value.\nDo not include Markdown, prose, or code fences."
     schema_text = json.dumps(schema, indent=2, ensure_ascii=False)
     return (
         "Return exactly one JSON value conforming to the following JSON Schema.\n"
@@ -760,9 +750,7 @@ def _emit_boundary_body(typ: Type, type_table: TypeTable, plan: "_SchemaPlan") -
     if isinstance(typ, InferenceVarType):
         raise TypeError("InferenceVarType is internal and cannot cross the extern boundary.")
     if isinstance(typ, AgentType):
-        raise TypeError(
-            "AgentType cannot cross the extern boundary; banned in extern signatures."
-        )
+        raise TypeError("AgentType cannot cross the extern boundary; banned in extern signatures.")
     if isinstance(typ, FunctionType):
         raise TypeError(
             "FunctionType cannot cross the extern boundary; banned in extern signatures."

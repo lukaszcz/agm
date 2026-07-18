@@ -280,7 +280,7 @@ def test_use_selector_mode_is_disabled_by_config_no_selector(
 ) -> None:
     home = tmp_path / "home"
     (home / ".agm").mkdir(parents=True)
-    (home / ".agm" / "config.toml").write_text('[loop]\nno_selector = true\n')
+    (home / ".agm" / "config.toml").write_text("[loop]\nno_selector = true\n")
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.chdir(tmp_path)
 
@@ -355,12 +355,12 @@ class TestResolvePromptSource:
             prompt_file=None,
             selector_prompt=None,
             selector_prompt_file=None,
-        extra_prompt=None,
-        extra_prompt_file=None,
-        extra_selector_prompt=None,
-        extra_selector_prompt_file=None,
-        timeout=None,
-    )
+            extra_prompt=None,
+            extra_prompt_file=None,
+            extra_selector_prompt=None,
+            extra_selector_prompt_file=None,
+            timeout=None,
+        )
         assert loop_prompt_source(args) is None
 
     def test_returns_prompt_text_from_cli(
@@ -383,12 +383,12 @@ class TestResolvePromptSource:
             prompt_file=None,
             selector_prompt=None,
             selector_prompt_file=None,
-        extra_prompt=None,
-        extra_prompt_file=None,
-        extra_selector_prompt=None,
-        extra_selector_prompt_file=None,
-        timeout=None,
-    )
+            extra_prompt=None,
+            extra_prompt_file=None,
+            extra_selector_prompt=None,
+            extra_selector_prompt_file=None,
+            timeout=None,
+        )
         result = loop_prompt_source(args)
         assert result == "do the thing"
 
@@ -412,12 +412,12 @@ class TestResolvePromptSource:
             prompt_file="/path/to/prompt.md",
             selector_prompt=None,
             selector_prompt_file=None,
-        extra_prompt=None,
-        extra_prompt_file=None,
-        extra_selector_prompt=None,
-        extra_selector_prompt_file=None,
-        timeout=None,
-    )
+            extra_prompt=None,
+            extra_prompt_file=None,
+            extra_selector_prompt=None,
+            extra_selector_prompt_file=None,
+            timeout=None,
+        )
         result = loop_prompt_source(args)
         assert result == Path("/path/to/prompt.md")
 
@@ -443,12 +443,12 @@ class TestResolvePromptSource:
             prompt_file="prompts/prompt.md",
             selector_prompt=None,
             selector_prompt_file=None,
-        extra_prompt=None,
-        extra_prompt_file=None,
-        extra_selector_prompt=None,
-        extra_selector_prompt_file=None,
-        timeout=None,
-    )
+            extra_prompt=None,
+            extra_prompt_file=None,
+            extra_selector_prompt=None,
+            extra_selector_prompt_file=None,
+            timeout=None,
+        )
         result = loop_prompt_source(args)
         assert result == work / "prompts" / "prompt.md"
 
@@ -472,12 +472,12 @@ class TestResolvePromptSource:
             prompt_file="/path/to/prompt.md",
             selector_prompt=None,
             selector_prompt_file=None,
-        extra_prompt=None,
-        extra_prompt_file=None,
-        extra_selector_prompt=None,
-        extra_selector_prompt_file=None,
-        timeout=None,
-    )
+            extra_prompt=None,
+            extra_prompt_file=None,
+            extra_selector_prompt=None,
+            extra_selector_prompt_file=None,
+            timeout=None,
+        )
         result = loop_prompt_source(args)
         assert result == "inline text"
 
@@ -503,12 +503,12 @@ class TestResolvePromptSource:
             prompt_file=None,
             selector_prompt=None,
             selector_prompt_file=None,
-        extra_prompt=None,
-        extra_prompt_file=None,
-        extra_selector_prompt=None,
-        extra_selector_prompt_file=None,
-        timeout=None,
-    )
+            extra_prompt=None,
+            extra_prompt_file=None,
+            extra_selector_prompt=None,
+            extra_selector_prompt_file=None,
+            timeout=None,
+        )
         result = loop_prompt_source(args)
         assert result == "config prompt"
 
@@ -517,9 +517,7 @@ class TestResolvePromptSource:
     ) -> None:
         home = tmp_path / "home"
         (home / ".agm").mkdir(parents=True)
-        (home / ".agm" / "config.toml").write_text(
-            '[loop]\nprompt_file = "my-prompt.md"\n'
-        )
+        (home / ".agm" / "config.toml").write_text('[loop]\nprompt_file = "my-prompt.md"\n')
         monkeypatch.setenv("HOME", str(home))
         monkeypatch.chdir(tmp_path)
 
@@ -536,12 +534,12 @@ class TestResolvePromptSource:
             prompt_file=None,
             selector_prompt=None,
             selector_prompt_file=None,
-        extra_prompt=None,
-        extra_prompt_file=None,
-        extra_selector_prompt=None,
-        extra_selector_prompt_file=None,
-        timeout=None,
-    )
+            extra_prompt=None,
+            extra_prompt_file=None,
+            extra_selector_prompt=None,
+            extra_selector_prompt_file=None,
+            timeout=None,
+        )
         result = loop_prompt_source(args)
         assert result == tmp_path / "my-prompt.md"
 
@@ -567,12 +565,12 @@ class TestResolvePromptSource:
             prompt_file=None,
             selector_prompt=None,
             selector_prompt_file=None,
-        extra_prompt=None,
-        extra_prompt_file=None,
-        extra_selector_prompt=None,
-        extra_selector_prompt_file=None,
-        timeout=None,
-    )
+            extra_prompt=None,
+            extra_prompt_file=None,
+            extra_selector_prompt=None,
+            extra_selector_prompt_file=None,
+            timeout=None,
+        )
         result = loop_prompt_source(args)
         assert result == "cli text"
 
@@ -582,9 +580,7 @@ class TestPreparePromptFromSource:
         temp_files: list[Path] = []
         env = {"MY_VAR": "hello"}
 
-        resolved = prepare_prompt_from_source(
-            "greet $MY_VAR world", temp_files=temp_files, env=env
-        )
+        resolved = prepare_prompt_from_source("greet $MY_VAR world", temp_files=temp_files, env=env)
 
         assert isinstance(resolved.source, str)
         assert resolved.source == "greet $MY_VAR world"
@@ -597,9 +593,7 @@ class TestPreparePromptFromSource:
         temp_files: list[Path] = []
         env: dict[str, str] = {}
 
-        resolved = prepare_prompt_from_source(
-            "no vars here", temp_files=temp_files, env=env
-        )
+        resolved = prepare_prompt_from_source("no vars here", temp_files=temp_files, env=env)
 
         assert isinstance(resolved.source, str)
         assert resolved.effective_file.read_text(encoding="utf-8") == "no vars here"
@@ -613,9 +607,7 @@ class TestPreparePromptFromSource:
         temp_files: list[Path] = []
         env = {"TASK_VAR": "testing"}
 
-        resolved = prepare_prompt_from_source(
-            prompt_path, temp_files=temp_files, env=env
-        )
+        resolved = prepare_prompt_from_source(prompt_path, temp_files=temp_files, env=env)
 
         assert resolved.source == prompt_path
         assert resolved.effective_file.read_text(encoding="utf-8") == "task: testing"
@@ -628,9 +620,7 @@ class TestPreparePromptFromSource:
         temp_files: list[Path] = []
         env: dict[str, str] = {}
 
-        resolved = prepare_prompt_from_source(
-            prompt_path, temp_files=temp_files, env=env
-        )
+        resolved = prepare_prompt_from_source(prompt_path, temp_files=temp_files, env=env)
 
         assert resolved.source == prompt_path
         assert resolved.effective_file == prompt_path
@@ -655,9 +645,7 @@ class TestPreparePromptFromSource:
         temp_files: list[Path] = []
         env = loop_env(Path("/tmp/tasks"))
 
-        resolved = prepare_prompt_from_source(
-            prompt_path, temp_files=temp_files, env=env
-        )
+        resolved = prepare_prompt_from_source(prompt_path, temp_files=temp_files, env=env)
 
         assert resolved.effective_file.read_text(encoding="utf-8") == "dir=/tmp/tasks"
 
@@ -704,12 +692,12 @@ class TestResolveSelectorPromptSource:
             prompt_file=None,
             selector_prompt=None,
             selector_prompt_file=None,
-        extra_prompt=None,
-        extra_prompt_file=None,
-        extra_selector_prompt=None,
-        extra_selector_prompt_file=None,
-        timeout=None,
-    )
+            extra_prompt=None,
+            extra_prompt_file=None,
+            extra_selector_prompt=None,
+            extra_selector_prompt_file=None,
+            timeout=None,
+        )
         assert selector_prompt_source(args) is None
 
     def test_returns_selector_prompt_text_from_cli(
@@ -732,12 +720,12 @@ class TestResolveSelectorPromptSource:
             prompt_file=None,
             selector_prompt="custom selector prompt",
             selector_prompt_file=None,
-        extra_prompt=None,
-        extra_prompt_file=None,
-        extra_selector_prompt=None,
-        extra_selector_prompt_file=None,
-        timeout=None,
-    )
+            extra_prompt=None,
+            extra_prompt_file=None,
+            extra_selector_prompt=None,
+            extra_selector_prompt_file=None,
+            timeout=None,
+        )
         result = selector_prompt_source(args)
         assert result == "custom selector prompt"
 
@@ -792,12 +780,12 @@ class TestResolveSelectorPromptSource:
             prompt_file=None,
             selector_prompt=None,
             selector_prompt_file="prompts/selector.md",
-        extra_prompt=None,
-        extra_prompt_file=None,
-        extra_selector_prompt=None,
-        extra_selector_prompt_file=None,
-        timeout=None,
-    )
+            extra_prompt=None,
+            extra_prompt_file=None,
+            extra_selector_prompt=None,
+            extra_selector_prompt_file=None,
+            timeout=None,
+        )
         result = selector_prompt_source(args)
         assert result == work / "prompts" / "selector.md"
 
@@ -854,12 +842,12 @@ class TestResolveSelectorPromptSource:
             prompt_file=None,
             selector_prompt=None,
             selector_prompt_file=None,
-        extra_prompt=None,
-        extra_prompt_file=None,
-        extra_selector_prompt=None,
-        extra_selector_prompt_file=None,
-        timeout=None,
-    )
+            extra_prompt=None,
+            extra_prompt_file=None,
+            extra_selector_prompt=None,
+            extra_selector_prompt_file=None,
+            timeout=None,
+        )
         result = selector_prompt_source(args)
         assert result == "config selector prompt"
 
@@ -887,12 +875,12 @@ class TestResolveSelectorPromptSource:
             prompt_file=None,
             selector_prompt=None,
             selector_prompt_file=None,
-        extra_prompt=None,
-        extra_prompt_file=None,
-        extra_selector_prompt=None,
-        extra_selector_prompt_file=None,
-        timeout=None,
-    )
+            extra_prompt=None,
+            extra_prompt_file=None,
+            extra_selector_prompt=None,
+            extra_selector_prompt_file=None,
+            timeout=None,
+        )
         result = selector_prompt_source(args)
         assert result == tmp_path / "my-selector-prompt.md"
 
@@ -920,12 +908,12 @@ class TestResolveSelectorPromptSource:
             prompt_file=None,
             selector_prompt="cli selector text",
             selector_prompt_file=None,
-        extra_prompt=None,
-        extra_prompt_file=None,
-        extra_selector_prompt=None,
-        extra_selector_prompt_file=None,
-        timeout=None,
-    )
+            extra_prompt=None,
+            extra_prompt_file=None,
+            extra_selector_prompt=None,
+            extra_selector_prompt_file=None,
+            timeout=None,
+        )
         result = selector_prompt_source(args)
         assert result == "cli selector text"
 
@@ -953,12 +941,12 @@ class TestResolveSelectorPromptSource:
             prompt_file=None,
             selector_prompt=None,
             selector_prompt_file=None,
-        extra_prompt=None,
-        extra_prompt_file=None,
-        extra_selector_prompt=None,
-        extra_selector_prompt_file=None,
-        timeout=None,
-    )
+            extra_prompt=None,
+            extra_prompt_file=None,
+            extra_selector_prompt=None,
+            extra_selector_prompt_file=None,
+            timeout=None,
+        )
         result = selector_prompt_source(args)
         assert result == Path("/absolute/selector-prompt.md")
 
@@ -988,12 +976,12 @@ class TestPrepareProgressInvocationSelectorPrompt:
             prompt_file=None,
             selector_prompt="custom selector $TASKS_DIR",
             selector_prompt_file=None,
-        extra_prompt=None,
-        extra_prompt_file=None,
-        extra_selector_prompt=None,
-        extra_selector_prompt_file=None,
-        timeout=None,
-    )
+            extra_prompt=None,
+            extra_prompt_file=None,
+            extra_selector_prompt=None,
+            extra_selector_prompt_file=None,
+            timeout=None,
+        )
         env = {"TASKS_DIR": "/tmp/tasks"}
 
         invocation = prepare_select_invocation(args, temp_files=[], env=env)
@@ -1069,12 +1057,12 @@ class TestPrepareProgressInvocationSelectorPrompt:
             prompt_file=None,
             selector_prompt=None,
             selector_prompt_file=None,
-        extra_prompt=None,
-        extra_prompt_file=None,
-        extra_selector_prompt=None,
-        extra_selector_prompt_file=None,
-        timeout=None,
-    )
+            extra_prompt=None,
+            extra_prompt_file=None,
+            extra_selector_prompt=None,
+            extra_selector_prompt_file=None,
+            timeout=None,
+        )
         env = {"TASKS_DIR": "/default/tasks"}
 
         invocation = prepare_select_invocation(args, temp_files=[], env=env)
@@ -1083,6 +1071,7 @@ class TestPrepareProgressInvocationSelectorPrompt:
         assert invocation.effective_prompt_file.read_text(encoding="utf-8") == (
             "default update /default/tasks\n"
         )
+
 
 class TestSplitCommandEmpty:
     def test_empty_command_exits(self) -> None:
@@ -1184,9 +1173,7 @@ class TestCommandWithPromptTarget:
 
     def test_replaces_prompt_file_placeholder(self) -> None:
 
-        result = command_with_prompt_target(
-            ["runner", "%{PROMPT_FILE}"], Path("/tmp/prompt.md")
-        )
+        result = command_with_prompt_target(["runner", "%{PROMPT_FILE}"], Path("/tmp/prompt.md"))
         assert result == ["runner", "/tmp/prompt.md"]
 
     def test_appends_at_target_when_no_placeholder(self) -> None:
@@ -1444,9 +1431,7 @@ class TestRunCommandOutputAssemblyFull:
                 stdout_callback("hello")
             return (0, "", "")
 
-        monkeypatch.setattr(
-            "agm.agent.runner.run_capture", fake_run_capture
-        )
+        monkeypatch.setattr("agm.agent.runner.run_capture", fake_run_capture)
 
         output = run_prompt_command(
             ["runner"], target, env={}, stdout_callback=lambda c: captured_stdout.append(c)
@@ -1472,9 +1457,7 @@ class TestRunCommandOutputAssemblyFull:
         ) -> tuple[int, str, str]:
             return (0, "just-stdout", "")
 
-        monkeypatch.setattr(
-            "agm.agent.runner.run_capture", fake_run_capture
-        )
+        monkeypatch.setattr("agm.agent.runner.run_capture", fake_run_capture)
 
         output = run_prompt_command(["runner"], target, env={})
         assert output == "just-stdout"
@@ -1497,9 +1480,7 @@ class TestRunCommandOutputAssemblyFull:
         ) -> tuple[int, str, str]:
             return (0, "the-stdout", "the-stderr")
 
-        monkeypatch.setattr(
-            "agm.agent.runner.run_capture", fake_run_capture
-        )
+        monkeypatch.setattr("agm.agent.runner.run_capture", fake_run_capture)
 
         output = run_prompt_command(["runner"], target, env={})
         assert output == "the-stdoutthe-stderr"
@@ -1562,12 +1543,12 @@ class TestRunCommandStderrCallback:
                 stderr_callback("error chunk")
             return (0, "", "")
 
-        monkeypatch.setattr(
-            "agm.agent.runner.run_capture", fake_run_capture
-        )
+        monkeypatch.setattr("agm.agent.runner.run_capture", fake_run_capture)
 
         output = run_prompt_command(
-            ["runner"], target, env={},
+            ["runner"],
+            target,
+            env={},
             stderr_callback=lambda c: captured_stderr.append(c),
         )
         assert output == "error chunk"
@@ -1740,6 +1721,7 @@ class TestPrepareSelectInvocationMissingDefault:
 # project/layout.py – current_project_dir and current_workspace
 # ---------------------------------------------------------------------------
 
+
 class TestResolveExtraPromptSource:
     def test_returns_none_when_no_extra_prompt_specified(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -1864,7 +1846,6 @@ class TestResolveExtraPromptSource:
         assert result == "inline extra"
 
 
-
 class TestResolveExtraSelectorPromptSource:
     def test_returns_none_when_no_extra_selector_prompt(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -1929,18 +1910,14 @@ class TestResolveExtraSelectorPromptSource:
 
 
 class TestAppendExtraPrompt:
-    def test_appends_inline_text_to_prompt_file(
-        self, tmp_path: Path
-    ) -> None:
+    def test_appends_inline_text_to_prompt_file(self, tmp_path: Path) -> None:
         from agm.agent.runner import append_extra_prompt
 
         prompt = tmp_path / "prompt.md"
         prompt.write_text("Original content", encoding="utf-8")
 
         temp_files: list[Path] = []
-        result = append_extra_prompt(
-            prompt, "Extra instructions", temp_files=temp_files, env={}
-        )
+        result = append_extra_prompt(prompt, "Extra instructions", temp_files=temp_files, env={})
 
         assert result != prompt
         assert result.read_text(encoding="utf-8") == (
@@ -1949,9 +1926,7 @@ class TestAppendExtraPrompt:
         assert result in temp_files
         result.unlink()
 
-    def test_appends_file_content_to_prompt_file(
-        self, tmp_path: Path
-    ) -> None:
+    def test_appends_file_content_to_prompt_file(self, tmp_path: Path) -> None:
         from agm.agent.runner import append_extra_prompt
 
         prompt = tmp_path / "prompt.md"
@@ -1961,9 +1936,7 @@ class TestAppendExtraPrompt:
         extra_file.write_text("Extra from file", encoding="utf-8")
 
         temp_files: list[Path] = []
-        result = append_extra_prompt(
-            prompt, extra_file, temp_files=temp_files, env={}
-        )
+        result = append_extra_prompt(prompt, extra_file, temp_files=temp_files, env={})
 
         assert result != prompt
         assert result.read_text(encoding="utf-8") == (
@@ -1972,9 +1945,7 @@ class TestAppendExtraPrompt:
         assert result in temp_files
         result.unlink()
 
-    def test_expands_env_vars_in_inline_text(
-        self, tmp_path: Path
-    ) -> None:
+    def test_expands_env_vars_in_inline_text(self, tmp_path: Path) -> None:
         from agm.agent.runner import append_extra_prompt
 
         prompt = tmp_path / "prompt.md"
@@ -1988,9 +1959,7 @@ class TestAppendExtraPrompt:
         assert result.read_text(encoding="utf-8") == "Original" + chr(10) + "See /tasks"
         result.unlink()
 
-    def test_expands_env_vars_in_extra_file_content(
-        self, tmp_path: Path
-    ) -> None:
+    def test_expands_env_vars_in_extra_file_content(self, tmp_path: Path) -> None:
         from agm.agent.runner import append_extra_prompt
 
         prompt = tmp_path / "prompt.md"
@@ -2007,9 +1976,7 @@ class TestAppendExtraPrompt:
         assert result.read_text(encoding="utf-8") == "Original" + chr(10) + "See /tasks"
         result.unlink()
 
-    def test_missing_extra_prompt_file_exits(
-        self, tmp_path: Path
-    ) -> None:
+    def test_missing_extra_prompt_file_exits(self, tmp_path: Path) -> None:
         from agm.agent.runner import append_extra_prompt
 
         prompt = tmp_path / "prompt.md"
@@ -2029,9 +1996,7 @@ class TestResolveExtraPromptSourceConfig:
 
         home = tmp_path / "home"
         (home / ".agm").mkdir(parents=True)
-        (home / ".agm" / "config.toml").write_text(
-            '[loop]\nextra_prompt = "config extra prompt"\n'
-        )
+        (home / ".agm" / "config.toml").write_text('[loop]\nextra_prompt = "config extra prompt"\n')
         monkeypatch.setenv("HOME", str(home))
         monkeypatch.chdir(tmp_path)
 
@@ -2064,9 +2029,7 @@ class TestResolveExtraPromptSourceConfig:
 
         home = tmp_path / "home"
         (home / ".agm").mkdir(parents=True)
-        (home / ".agm" / "config.toml").write_text(
-            '[loop]\nextra_prompt_file = "my-extra.md"\n'
-        )
+        (home / ".agm" / "config.toml").write_text('[loop]\nextra_prompt_file = "my-extra.md"\n')
         monkeypatch.setenv("HOME", str(home))
         monkeypatch.chdir(tmp_path)
 
@@ -2099,9 +2062,7 @@ class TestResolveExtraPromptSourceConfig:
 
         home = tmp_path / "home"
         (home / ".agm").mkdir(parents=True)
-        (home / ".agm" / "config.toml").write_text(
-            '[loop]\nextra_prompt = "config extra"\n'
-        )
+        (home / ".agm" / "config.toml").write_text('[loop]\nextra_prompt = "config extra"\n')
         monkeypatch.setenv("HOME", str(home))
         monkeypatch.chdir(tmp_path)
 

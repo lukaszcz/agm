@@ -3,7 +3,7 @@
 ``_TypeBuilder`` collects ``record``/``enum``/``exception``/alias declarations
 and registers them into a ``TypeEnvironment``.  It was extracted from
 ``typecheck/checker.py`` (where it lived as the first pass of the
-bidirectional type checker) so that ``typecheck/graph.py`` can import it
+bidirectional type checker) so that ``typecheck/program.py`` can import it
 without pulling in the full ``_Checker``.
 
 Nominal types (``RecordType``/``EnumType``/``ExceptionType``) are lightweight
@@ -136,8 +136,8 @@ class _TypeBuilder:
         buildable (an uninhabited ``extends`` cycle is always caught by the
         inhabitation pass first).
 
-        *check_inhabitation* is ``False`` only for the graph-mode per-module
-        re-check (``typecheck/graph.py``), whose whole-graph pre-pass has
+        *check_inhabitation* is ``False`` only for the program per-module
+        re-check (``typecheck/program.py``), whose whole-program pre-pass has
         already run inhabitation over every module's declarations before any
         module's body is individually re-checked; re-running it per module
         would be redundant.
@@ -161,7 +161,7 @@ class _TypeBuilder:
     def collect_shells_only(self, program: Program) -> None:
         """Register phase-1 declarations: names, handles, and alias targets.
 
-        Public interface for the graph pre-pass (``graph.py``) which needs to
+        Public interface for the program pre-pass (``program.py``) which needs to
         register every module's declarations before resolving any body.
         Non-generic records/enums/exceptions get their FINAL handle
         registered directly (a handle carries no shape, so there is nothing
@@ -194,9 +194,7 @@ class _TypeBuilder:
                 self._env.unregister_name(item.name)
                 self._env.register_alias(item.name, item.type_expr, type_params=item.type_params)
 
-    def _register_record_or_enum_handle(
-        self, item: RecordDef | EnumDef, *, is_enum: bool
-    ) -> None:
+    def _register_record_or_enum_handle(self, item: RecordDef | EnumDef, *, is_enum: bool) -> None:
         module_id = self._owning_module_id(item.is_builtin)
         if item.type_params:
             type_args = tuple(TypeVarType(p) for p in item.type_params)
@@ -226,7 +224,7 @@ class _TypeBuilder:
     def build_record(self, name: str) -> None:
         """Resolve and register the named record's body.
 
-        Public entry point for the graph pre-pass, which resolves every
+        Public entry point for the program pre-pass, which resolves every
         module's declarations in a fixed order (no dependency ordering —
         see the module docstring).
         """
@@ -303,8 +301,7 @@ class _TypeBuilder:
             for fd in vd.fields:
                 if fd.name in seen_vfields:
                     raise AglTypeError(
-                        f"Duplicate field '{fd.name}' in variant "
-                        f"'{stmt.name}.{vd.name}'.",
+                        f"Duplicate field '{fd.name}' in variant '{stmt.name}.{vd.name}'.",
                         span=fd.span,
                     )
                 seen_vfields[fd.name] = fd.span
@@ -315,9 +312,7 @@ class _TypeBuilder:
             kind="enum",
             name=stmt.name,
             module_id=module_id,
-            variants=tuple(
-                (vname, tuple(vfields.items())) for vname, vfields in variants.items()
-            ),
+            variants=tuple((vname, tuple(vfields.items())) for vname, vfields in variants.items()),
         )
         self._validate_builtin_shape(stmt, typedef, BUILTIN_PRELUDE_TYPE_DEFS)
         self._env.type_table.register(typedef)
@@ -389,7 +384,7 @@ class _TypeBuilder:
         docstring).  A cyclic ``extends`` chain has no independent evidence to
         ever become inhabited (see :meth:`_check_inhabitation`), so it is
         always rejected before this post-pass runs — either here (single-
-        module) or by the graph pre-pass (``typecheck/graph.py``) before
+        module) or by the program pre-pass (``typecheck/program.py``) before
         Phase 3 re-checks this module at all — and
         :meth:`~agm.agl.semantics.type_table.TypeTable.exception_fields` never
         hits its internal cycle guard here.

@@ -1,6 +1,6 @@
 """Pure result data types for one REPL entry evaluation (`EntryResult`, `EntryKind`).
 
-Shared by the session and its graph-mode collaborator.
+Shared by the session and its program collaborator.
 """
 
 from __future__ import annotations

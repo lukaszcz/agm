@@ -53,6 +53,7 @@ class _CountingAgent:
         self.calls += 1
         return AgentResponse(content=self._reply)
 
+
 # ---------------------------------------------------------------------------
 # Driver helper
 # ---------------------------------------------------------------------------
@@ -241,9 +242,7 @@ class TestMultiline:
         assert is_incomplete(f"let text = {quote}first\n\nsecond{quote}") is False
 
     @pytest.mark.parametrize("quote", ['"""', "'''"])
-    def test_triple_quoted_string_continues_through_blank_lines(
-        self, quote: str
-    ) -> None:
+    def test_triple_quoted_string_continues_through_blank_lines(self, quote: str) -> None:
         # Pressing Enter on a blank line inside an open triple-quoted string
         # inserts another newline instead of force-submitting the broken entry.
         output = drive(f"let text = {quote}first\r\rsecond{quote}\rtext\r\x04")
@@ -302,7 +301,7 @@ class TestHasRunnableStatements:
 class TestLexer:
     def test_styles_a_sample_line(self) -> None:
         lexer = AglPromptLexer()
-        fragments = lexer.lex_document(Document('let x = 1 + foo'))(0)
+        fragments = lexer.lex_document(Document("let x = 1 + foo"))(0)
         styles = {style for style, _text in fragments}
         assert "class:agl.keyword" in styles  # let
         assert "class:agl.operator" in styles  # = / +
@@ -589,9 +588,7 @@ class TestCompleter:
         assert _completions(completer, "${") == []
 
     @pytest.mark.parametrize("quote", ['"""', "'''"])
-    def test_no_completion_inside_unterminated_triple_quoted_string(
-        self, quote: str
-    ) -> None:
+    def test_no_completion_inside_unterminated_triple_quoted_string(self, quote: str) -> None:
         completer = AglCompleter(ReplSession())
         assert _completions(completer, f"let prompt = {quote}le") == []
         assert _completions(completer, f"let prompt = {quote}first\n\nle") == []
@@ -680,9 +677,7 @@ class TestDryRun:
 class TestMetaThroughLoop:
     def test_set_echo_off_suppresses_then_on_restores(self) -> None:
         # echo off → the binding is not echoed; echo on → the next binding is.
-        output = drive(
-            ":set echo off\rlet a = 1\r:set echo on\rlet b = 2\r\x04"
-        )
+        output = drive(":set echo off\rlet a = 1\r:set echo on\rlet b = 2\r\x04")
         assert "a : int = 1" not in output  # suppressed while echo off
         assert "b : int = 2" in output  # restored after echo on
 
@@ -776,18 +771,14 @@ class TestConfirmCallback:
         assert any(long_prompt in line for line in printed)
 
 
-def _confirming_session(
-    *answers: str, reply: str = "agent-reply"
-) -> tuple[ReplSession, "object"]:
+def _confirming_session(*answers: str, reply: str = "agent-reply") -> tuple[ReplSession, "object"]:
     """A session whose default agent is a ConfirmingAgent with a scripted confirm."""
     from agm.agl.repl.agentmode import AgentMode
     from agm.agl.repl.agents import ConfirmingAgent
     from agm.agl.repl.console import make_console_confirm
 
     replies = iter(answers)
-    confirm = make_console_confirm(
-        reader=lambda _prompt: next(replies), printer=lambda _s: None
-    )
+    confirm = make_console_confirm(reader=lambda _prompt: next(replies), printer=lambda _s: None)
     mode = AgentMode(mode="confirm")
     underlying = _CountingAgent(reply)
     wrapper = ConfirmingAgent(underlying, mode, confirm=confirm)
@@ -809,9 +800,7 @@ class TestConfirmFlowThroughLoop:
         assert isinstance(underlying, _CountingAgent)
         # Decline the agent call, then run a plain entry to prove the REPL keeps
         # looping after the abort.
-        output = drive(
-            'let g = ask """ask"""\rlet ok = 1\r\x04', session=session
-        )
+        output = drive('let g = ask """ask"""\rlet ok = 1\r\x04', session=session)
         assert underlying.calls == 0
         assert "cancelled" in output.lower()
         # The aborted entry promoted nothing; the later entry succeeded.
@@ -1021,9 +1010,7 @@ class TestThemeThroughLoop:
         assert saved == []
 
     def test_multiple_theme_switches_all_saved(self) -> None:
-        _, saved = self._drive_with_save_tracking(
-            ":theme light\r:theme dark\r:theme auto\r\x04"
-        )
+        _, saved = self._drive_with_save_tracking(":theme light\r:theme dark\r:theme auto\r\x04")
         assert saved == ["light", "dark", "auto"]
 
     def test_unknown_theme_does_not_trigger_save(self) -> None:
@@ -1048,9 +1035,7 @@ class TestThemeThroughLoop:
         from agm.agl.repl.themes import DARK_THEME
 
         with create_pipe_input() as pipe:
-            ps = build_prompt_session(
-                ReplSession(), theme="dark", input=pipe, output=DummyOutput()
-            )
+            ps = build_prompt_session(ReplSession(), theme="dark", input=pipe, output=DummyOutput())
         assert ps.style is DARK_THEME
 
     def test_build_prompt_session_light_theme(self) -> None:

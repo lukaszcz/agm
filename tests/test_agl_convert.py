@@ -273,9 +273,7 @@ class TestCleanValidationMessage:
         assert _clean_validation_message(err) == "3.5 is not of type 'integer'"
 
     def test_multiple_decimal_reprs_stripped(self) -> None:
-        err = self._make_error(
-            "Decimal('1.5') and Decimal('2.5') are not integers"
-        )
+        err = self._make_error("Decimal('1.5') and Decimal('2.5') are not integers")
         assert _clean_validation_message(err) == "1.5 and 2.5 are not integers"
 
 
@@ -352,9 +350,7 @@ class TestDecodeValueHappy:
             ),
         )
         result = decode_value(schema, {"$case": "Red"})
-        assert result == EnumValue(
-            nominal=nominal, display_name="Color", variant="Red", fields={}
-        )
+        assert result == EnumValue(nominal=nominal, display_name="Color", variant="Red", fields={})
 
     def test_enum_with_payload(self) -> None:
         nominal = NominalId(ENTRY_ID, "Result")

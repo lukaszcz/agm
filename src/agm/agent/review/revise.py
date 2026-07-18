@@ -53,9 +53,7 @@ def _exit_if_lone_revise_command_name(args: ReviseArgs) -> None:
     )
 
 
-def prepare_revise(
-    args: ReviseArgs, *, temp_files: list[Path] | None = None
-) -> PreparedPromptRun:
+def prepare_revise(args: ReviseArgs, *, temp_files: list[Path] | None = None) -> PreparedPromptRun:
     owned_temp_files: list[Path] = [] if temp_files is None else temp_files
     _exit_if_lone_revise_command_name(args)
     context = current_config_context()

@@ -115,7 +115,12 @@ class TestProcessCaptureResultDataclass:
 
     def test_is_frozen(self) -> None:
         result = ProcessCaptureResult(
-            returncode=0, stdout="", stderr="", elapsed=0.1, timed_out=False, spawn_error=None,
+            returncode=0,
+            stdout="",
+            stderr="",
+            elapsed=0.1,
+            timed_out=False,
+            spawn_error=None,
             spawn_errno=None,
         )
         with pytest.raises((AttributeError, TypeError)):
@@ -141,7 +146,12 @@ class TestProcessCaptureResultDataclass:
 
     def test_spawn_error_none_by_default(self) -> None:
         result = ProcessCaptureResult(
-            returncode=0, stdout="", stderr="", elapsed=0.0, timed_out=False, spawn_error=None,
+            returncode=0,
+            stdout="",
+            stderr="",
+            elapsed=0.0,
+            timed_out=False,
+            spawn_error=None,
             spawn_errno=None,
         )
         assert result.spawn_error is None
@@ -160,7 +170,12 @@ class TestProcessCaptureResultDataclass:
 
     def test_spawn_errno_none_when_no_spawn_error(self) -> None:
         result = ProcessCaptureResult(
-            returncode=0, stdout="", stderr="", elapsed=0.0, timed_out=False, spawn_error=None,
+            returncode=0,
+            stdout="",
+            stderr="",
+            elapsed=0.0,
+            timed_out=False,
+            spawn_error=None,
             spawn_errno=None,
         )
         assert result.spawn_errno is None

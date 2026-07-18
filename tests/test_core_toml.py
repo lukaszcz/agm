@@ -24,7 +24,7 @@ DEPS_OLD = '[deps]\nmylib = "old"\n'
 DEPS_EXISTING = '[deps]\nexisting = "branch"\n'
 SECTION_DEPS = '[section]\nkey = "value"\n\n[deps]\nlib = "branch"\n'
 DEPS_COMMENT = '[deps]  # dependencies\nmylib = "main"\n'
-SIMPLE_KEY = 'key = 42\n'
+SIMPLE_KEY = "key = 42\n"
 
 
 class TestTomlDict:
@@ -177,8 +177,6 @@ class TestHigherLevelConfigLoaderErrors:
         agm_dir = home / ".agm"
         agm_dir.mkdir(parents=True)
         (agm_dir / "config.toml").write_text("not = valid = toml = [", encoding="utf-8")
-        monkeypatch.setattr(
-            "agm.config.general.agm_installation_prefix", lambda: None
-        )
+        monkeypatch.setattr("agm.config.general.agm_installation_prefix", lambda: None)
         with pytest.raises(ParseError):
             load_run_config(home=home, proj_dir=None, cwd=tmp_path)

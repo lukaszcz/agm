@@ -178,9 +178,7 @@ class TestMergeSettings:
         assert result["network"] == {"mode": "open"}
 
     def test_filesystem_lists_are_merged_and_deduplicated(self) -> None:
-        home: JsonDict = {
-            "filesystem": {"allowWrite": ["/home", "/shared"], "denyWrite": ["/etc"]}
-        }
+        home: JsonDict = {"filesystem": {"allowWrite": ["/home", "/shared"], "denyWrite": ["/etc"]}}
         local: JsonDict = {
             "filesystem": {"allowWrite": ["/shared", "/local"], "denyWrite": ["/etc"]}
         }
@@ -886,12 +884,8 @@ class TestResolveSettingsPath:
         cwd_sandbox.mkdir()
         home_settings_data: JsonDict = {"enabled": True, "network": {"allowedDomains": ["a.com"]}}
         cwd_settings_data: JsonDict = {"enabled": False}
-        (home_sandbox / "default.json").write_text(
-            json.dumps(home_settings_data), encoding="utf-8"
-        )
-        (cwd_sandbox / "default.json").write_text(
-            json.dumps(cwd_settings_data), encoding="utf-8"
-        )
+        (home_sandbox / "default.json").write_text(json.dumps(home_settings_data), encoding="utf-8")
+        (cwd_sandbox / "default.json").write_text(json.dumps(cwd_settings_data), encoding="utf-8")
         temp_files: list[Path] = []
         result = _resolve_settings_path(
             cwd=cwd,
@@ -1028,6 +1022,7 @@ class TestPrintDryRun:
         assert "myapp" in captured.out
         assert "srt" in captured.out
 
+
 class TestSrtDryRun:
     def test_print_dry_run_with_explicit_settings_file(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
@@ -1117,8 +1112,7 @@ class TestSrtDryRun:
 
         detail_calls = [c for c in dry_run_calls if "detail" in c]
         assert any(
-            d["detail"][0] == "settings source" and d["detail"][1] == "merged"
-            for d in detail_calls
+            d["detail"][0] == "settings source" and d["detail"][1] == "merged" for d in detail_calls
         )
 
     def test_run_sandboxed_dry_run_calls_print_dry_run(
@@ -1184,9 +1178,7 @@ class TestSrtKeyboardInterrupt:
         monkeypatch.setattr(srt, "track_bwrap_artifacts", lambda settings, cwd: [])
         monkeypatch.setattr(srt, "patch_for_proj_dir", lambda data, proj_dir: data)
         monkeypatch.setattr(srt, "load_settings", lambda path: {})
-        monkeypatch.setattr(
-            srt, "_cleanup", lambda temp_files, tracked_artifacts: None
-        )
+        monkeypatch.setattr(srt, "_cleanup", lambda temp_files, tracked_artifacts: None)
 
         with pytest.raises(SystemExit) as exc_info:
             srt.run_sandboxed(

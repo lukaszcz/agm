@@ -352,7 +352,12 @@ class TestContextCompletion:
             RecordType("Box", (variable,)), RecordType("Other", (IntType(),)), _origin(engine, 5)
         )
         engine.complete_from_context(
-            EnumType("Option", (variable,)), EnumType("Option", (),), _origin(engine, 6)
+            EnumType("Option", (variable,)),
+            EnumType(
+                "Option",
+                (),
+            ),
+            _origin(engine, 6),
         )
         engine.complete_from_context(
             EnumType("One", (engine.fresh("V"),)),

@@ -42,8 +42,8 @@ from agm.agl.matchcompile.normalize import (
 )
 from agm.agl.modules.ids import ENTRY_ID, ModuleId
 from agm.agl.parser import parse_program
-from agm.agl.scope import resolve
-from agm.agl.scope.graph import resolve_graph
+from agm.agl.scope import resolve_module
+from agm.agl.scope.program import resolve_program
 from agm.agl.semantics.type_table import TypeDef
 from agm.agl.semantics.types import (
     AgentType,
@@ -68,7 +68,7 @@ from agm.agl.semantics.values import DecimalValue, EnumValue, TextValue
 from agm.agl.syntax.nodes import Case, ConstructorPattern, Pattern
 from agm.agl.syntax.spans import SourceSpan
 from agm.agl.syntax.visitor import walk
-from agm.agl.typecheck import CheckedProgram, check, check_graph
+from agm.agl.typecheck import CheckedModule, check_module, check_program
 from tests.agl.ir_harness import make_graph_from_files
 from tests.agl.match_reference import reference_action
 
@@ -78,15 +78,13 @@ _CAPS = HostCapabilities(
     supports_shell_exec=True,
     codec_kinds={
         "text": frozenset({"text"}),
-        "json": frozenset(
-            {"json", "record", "enum", "list", "dict", "int", "decimal", "bool"}
-        ),
+        "json": frozenset({"json", "record", "enum", "list", "dict", "int", "decimal", "bool"}),
     },
 )
 
 
-def _check(source: str) -> CheckedProgram:
-    return check(resolve(parse_program(source)), _CAPS)
+def _check(source: str) -> CheckedModule:
+    return check_module(resolve_module(parse_program(source)), _CAPS)
 
 
 def _only_case(program: object) -> Case:
@@ -212,10 +210,7 @@ def test_normalize_case_preserves_priority_actions_and_binder_provenance() -> No
 
 
 def test_numeric_literals_share_runtime_equality_canonical_form() -> None:
-    checked = _check(
-        "let value: decimal = 1\n"
-        "case value of | 1 => 10 | 1.0 => 20 | _ => 30"
-    )
+    checked = _check("let value: decimal = 1\ncase value of | 1 => 10 | 1.0 => 20 | _ => 30")
     normalized = normalize_case(_only_case(checked.resolved.program), checked)
 
     first = normalized.rows[0].cells[0]
@@ -229,10 +224,7 @@ def test_numeric_literals_share_runtime_equality_canonical_form() -> None:
 
 
 def test_fractional_decimal_arm_is_omitted_for_int_but_integral_decimal_is_retained() -> None:
-    checked = _check(
-        "let value: int = 1\n"
-        "case value of | 1.5 => 15 | 1.0 => 10 | _ => 0"
-    )
+    checked = _check("let value: int = 1\ncase value of | 1.5 => 15 | 1.0 => 10 | _ => 0")
     case = _only_case(checked.resolved.program)
 
     normalized = normalize_case(case, checked)
@@ -245,9 +237,7 @@ def test_fractional_decimal_arm_is_omitted_for_int_but_integral_decimal_is_retai
     ]
     integral = normalized.rows[0].cells[0]
     assert isinstance(integral, ConstructorCell)
-    assert integral.constructor == LiteralConstructor(
-        LiteralKind.NUMERIC, decimal.Decimal("1.0")
-    )
+    assert integral.constructor == LiteralConstructor(LiteralKind.NUMERIC, decimal.Decimal("1.0"))
 
 
 def test_nested_uninhabited_constructor_omits_only_its_source_row() -> None:
@@ -273,11 +263,7 @@ def test_nested_uninhabited_constructor_omits_only_its_source_row() -> None:
 
 
 def test_constructor_inhabitation_is_total_over_current_constructor_and_type_unions() -> None:
-    checked = _check(
-        "enum Choice\n  | none\n"
-        "let value: Choice = none\n"
-        "case value of | none => 0"
-    )
+    checked = _check("enum Choice\n  | none\nlet value: Choice = none\ncase value of | none => 0")
     normalized = normalize_case(_only_case(checked.resolved.program), checked)
     enum_cell = normalized.rows[0].cells[0]
     assert isinstance(enum_cell, ConstructorCell)
@@ -412,7 +398,7 @@ def test_bare_nullary_variant_uses_resolver_classification() -> None:
     assert isinstance(normalized.rows[1].cells[0], ConstructorCell)
 
 
-def test_imported_generic_enum_normalizes_from_checked_graph_metadata(tmp_path: Path) -> None:
+def test_imported_generic_enum_normalizes_from_checked_metadata(tmp_path: Path) -> None:
     graph = make_graph_from_files(
         tmp_path,
         {
@@ -426,8 +412,8 @@ def test_imported_generic_enum_normalizes_from_checked_graph_metadata(tmp_path: 
             ),
         },
     )
-    checked_graph = check_graph(resolve_graph(graph), _CAPS)
-    checked = checked_graph.modules[ENTRY_ID]
+    checked = check_program(resolve_program(graph), _CAPS)
+    checked = checked.modules[ENTRY_ID]
     case = _only_case(checked.resolved.program)
 
     normalized = normalize_case(case, checked)
@@ -436,9 +422,7 @@ def test_imported_generic_enum_normalizes_from_checked_graph_metadata(tmp_path: 
     assert isinstance(constructor_cell, ConstructorCell)
     constructor = constructor_cell.constructor
     assert isinstance(constructor, EnumConstructor)
-    assert constructor.enum_type == EnumType(
-        "Choice", (IntType(),), ModuleId.from_dotted("lib")
-    )
+    assert constructor.enum_type == EnumType("Choice", (IntType(),), ModuleId.from_dotted("lib"))
     assert [(field.name, field.type) for field in constructor.fields] == [
         ("value", IntType()),
         ("note", TextType()),
@@ -451,16 +435,16 @@ def test_imported_generic_enum_normalizes_from_checked_graph_metadata(tmp_path: 
 
 def test_text_and_null_literals_retain_distinct_typed_canonical_keys() -> None:
     text_checked = _check('let value = "x"\ncase value of | "x" => 1 | _ => 0')
-    text_cell = normalize_case(
-        _only_case(text_checked.resolved.program), text_checked
-    ).rows[0].cells[0]
+    text_cell = (
+        normalize_case(_only_case(text_checked.resolved.program), text_checked).rows[0].cells[0]
+    )
     assert isinstance(text_cell, ConstructorCell)
     assert text_cell.constructor == LiteralConstructor(LiteralKind.TEXT, "x")
 
     null_checked = _check("let value: json = null\ncase value of | null => 1 | _ => 0")
-    null_cell = normalize_case(
-        _only_case(null_checked.resolved.program), null_checked
-    ).rows[0].cells[0]
+    null_cell = (
+        normalize_case(_only_case(null_checked.resolved.program), null_checked).rows[0].cells[0]
+    )
     assert isinstance(null_cell, ConstructorCell)
     assert null_cell.constructor == LiteralConstructor(LiteralKind.NULL, None)
 
@@ -632,8 +616,7 @@ def test_malformed_checked_literal_and_bare_variant_metadata_raise_invariants() 
 
 def test_bare_variant_normalization_rejects_missing_and_wrong_owner_metadata() -> None:
     checked = _check(
-        "enum Choice\n  | none\n"
-        "let value: Choice = none\ncase value of | none => 0 | _ => 1"
+        "enum Choice\n  | none\nlet value: Choice = none\ncase value of | none => 0 | _ => 1"
     )
     case = _only_case(checked.resolved.program)
     pattern = case.branches[0].pattern
@@ -731,28 +714,37 @@ def test_source_reference_matcher_preserves_priority_and_partial_constructor_fie
     assert isinstance(enum_type, EnumType)
     nominal = NominalId(enum_type.module_id, enum_type.name)
 
-    assert reference_action(
-        case,
-        checked,
-        EnumValue(
-            nominal,
-            "Choice",
-            "present",
-            {"value": DecimalValue(decimal.Decimal("1.0")), "note": TextValue("x")},
-        ),
-    ) == case.branches[0].node_id
-    assert reference_action(
-        case,
-        checked,
-        EnumValue(
-            nominal,
-            "Choice",
-            "present",
-            {"value": DecimalValue(decimal.Decimal("2")), "note": TextValue("x")},
-        ),
-    ) == case.branches[1].node_id
-    assert reference_action(
-        case,
-        checked,
-        EnumValue(nominal, "Choice", "absent", {}),
-    ) == case.branches[2].node_id
+    assert (
+        reference_action(
+            case,
+            checked,
+            EnumValue(
+                nominal,
+                "Choice",
+                "present",
+                {"value": DecimalValue(decimal.Decimal("1.0")), "note": TextValue("x")},
+            ),
+        )
+        == case.branches[0].node_id
+    )
+    assert (
+        reference_action(
+            case,
+            checked,
+            EnumValue(
+                nominal,
+                "Choice",
+                "present",
+                {"value": DecimalValue(decimal.Decimal("2")), "note": TextValue("x")},
+            ),
+        )
+        == case.branches[1].node_id
+    )
+    assert (
+        reference_action(
+            case,
+            checked,
+            EnumValue(nominal, "Choice", "absent", {}),
+        )
+        == case.branches[2].node_id
+    )

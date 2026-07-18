@@ -42,7 +42,8 @@ def run(args: DepNewArgs) -> None:
             config_branch=config_branch,
         )
         commit_config_dir_changes(
-            project_dir, f"chore: add dependency {dep}",
+            project_dir,
+            f"chore: add dependency {dep}",
             add_paths=[config_toml_file(project_dir, config_branch)],
         )
     except SystemExit:

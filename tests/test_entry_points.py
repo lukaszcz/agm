@@ -38,9 +38,7 @@ from agm.core import dry_run as dry_run_module
 
 
 class TestTmuxCloseRun:
-    def test_closes_named_session_in_dry_run(
-        self, capsys: pytest.CaptureFixture[str]
-    ) -> None:
+    def test_closes_named_session_in_dry_run(self, capsys: pytest.CaptureFixture[str]) -> None:
         dry_run_module.set_enabled(True)
 
         tmux_close_cmd.run(TmuxCloseArgs(session_name="mysession"))
@@ -77,9 +75,7 @@ class TestTmuxOpenRun:
 
 
 class TestTmuxLayoutRun:
-    def test_applies_layout_to_resolved_window(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_applies_layout_to_resolved_window(self, monkeypatch: pytest.MonkeyPatch) -> None:
         commands: list[list[str]] = []
 
         def fake_require_capture(cmd: list[str]) -> str:
@@ -117,9 +113,7 @@ class TestWorktreeNewRun:
         monkeypatch.chdir(repo)
 
         worktrees_dir = tmp_path / "external-worktrees"
-        worktree_new_cmd.run(
-            WorktreeNewArgs(branch="feature", worktrees_dir=str(worktrees_dir))
-        )
+        worktree_new_cmd.run(WorktreeNewArgs(branch="feature", worktrees_dir=str(worktrees_dir)))
 
         assert (worktrees_dir / "feature" / "README.md").is_file()
 
@@ -160,9 +154,7 @@ class TestWorktreeNewRun:
             "ensure_worktree",
             lambda **kw: tmp_path / "standalone-worktree",
         )
-        monkeypatch.setattr(
-            worktree_new_cmd, "discover_current_project_dir", lambda *a, **kw: None
-        )
+        monkeypatch.setattr(worktree_new_cmd, "discover_current_project_dir", lambda *a, **kw: None)
 
         def fail_commit(*_args: object, **_kwargs: object) -> None:
             raise AssertionError("commit should not run outside an AGM project")

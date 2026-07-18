@@ -58,9 +58,7 @@ def recorded_runs(monkeypatch: pytest.MonkeyPatch) -> list[object]:
 
 
 class TestReplArgsParsing:
-    def test_bare_repl_defaults(
-        self, runner: CliRunner, recorded_runs: list[object]
-    ) -> None:
+    def test_bare_repl_defaults(self, runner: CliRunner, recorded_runs: list[object]) -> None:
         result = invoke(runner, ["repl"])
         assert result.exit_code == 0
         args = recorded_runs[0]
@@ -71,52 +69,36 @@ class TestReplArgsParsing:
         assert getattr(args, "no_log") is False
         assert getattr(args, "log_file") is None
 
-    def test_input_option_removed(
-        self, runner: CliRunner, recorded_runs: list[object]
-    ) -> None:
+    def test_input_option_removed(self, runner: CliRunner, recorded_runs: list[object]) -> None:
         # --input has been removed from agm repl.
         result = invoke(runner, ["repl", "--input", "a=1"])
         assert result.exit_code != 0  # unknown option
 
-    def test_strict_json_flag(
-        self, runner: CliRunner, recorded_runs: list[object]
-    ) -> None:
+    def test_strict_json_flag(self, runner: CliRunner, recorded_runs: list[object]) -> None:
         assert invoke(runner, ["repl", "--strict-json"]).exit_code == 0
         assert getattr(recorded_runs[0], "strict_json") is True
 
-    def test_no_strict_json_flag(
-        self, runner: CliRunner, recorded_runs: list[object]
-    ) -> None:
+    def test_no_strict_json_flag(self, runner: CliRunner, recorded_runs: list[object]) -> None:
         assert invoke(runner, ["repl", "--no-strict-json"]).exit_code == 0
         assert getattr(recorded_runs[0], "strict_json") is False
 
-    def test_runner_flag(
-        self, runner: CliRunner, recorded_runs: list[object]
-    ) -> None:
+    def test_runner_flag(self, runner: CliRunner, recorded_runs: list[object]) -> None:
         assert invoke(runner, ["repl", "--runner", "claude -p"]).exit_code == 0
         assert getattr(recorded_runs[0], "runner") == "claude -p"
 
-    def test_confirm_agents_flag(
-        self, runner: CliRunner, recorded_runs: list[object]
-    ) -> None:
+    def test_confirm_agents_flag(self, runner: CliRunner, recorded_runs: list[object]) -> None:
         assert invoke(runner, ["repl", "--confirm-agents"]).exit_code == 0
         assert getattr(recorded_runs[0], "confirm_agents") is True
 
-    def test_quiet_flag(
-        self, runner: CliRunner, recorded_runs: list[object]
-    ) -> None:
+    def test_quiet_flag(self, runner: CliRunner, recorded_runs: list[object]) -> None:
         assert invoke(runner, ["repl", "--quiet"]).exit_code == 0
         assert getattr(recorded_runs[0], "quiet") is True
 
-    def test_log_file_flag(
-        self, runner: CliRunner, recorded_runs: list[object]
-    ) -> None:
+    def test_log_file_flag(self, runner: CliRunner, recorded_runs: list[object]) -> None:
         assert invoke(runner, ["repl", "--log-file", "/tmp/r.log"]).exit_code == 0
         assert getattr(recorded_runs[0], "log_file") == "/tmp/r.log"
 
-    def test_no_log_flag(
-        self, runner: CliRunner, recorded_runs: list[object]
-    ) -> None:
+    def test_no_log_flag(self, runner: CliRunner, recorded_runs: list[object]) -> None:
         assert invoke(runner, ["repl", "--no-log"]).exit_code == 0
         assert getattr(recorded_runs[0], "no_log") is True
 
@@ -406,7 +388,7 @@ class TestReplRun:
         home = _isolated_home(monkeypatch, tmp_path)
         agm_dir = home / ".agm"
         agm_dir.mkdir(parents=True, exist_ok=True)
-        (agm_dir / "config.toml").write_text("[exec]\ntimeout = 30\nrunner = \"echo agent\"\n")
+        (agm_dir / "config.toml").write_text('[exec]\ntimeout = 30\nrunner = "echo agent"\n')
         repl_command.run(_args())
         assert len(fake_console) == 1
 
@@ -421,9 +403,7 @@ class TestReplRun:
         home = _isolated_home(monkeypatch, tmp_path)
         agm_dir = home / ".agm"
         agm_dir.mkdir(parents=True, exist_ok=True)
-        (agm_dir / "config.toml").write_text(
-            '[exec]\ntimeout = 0.0000001\nrunner = "echo agent"\n'
-        )
+        (agm_dir / "config.toml").write_text('[exec]\ntimeout = 0.0000001\nrunner = "echo agent"\n')
 
         repl_command.run(_args())
         session = fake_console[0]["session"]
@@ -501,7 +481,7 @@ class TestReplParamsConfigLoader:
         session = fake_console[0]["session"]
         assert isinstance(session, ReplSession)
         # Params with defaults resolve eagerly (no pre-seed needed).
-        r = session.eval_entry("param greeting = \"hi\"")
+        r = session.eval_entry('param greeting = "hi"')
         assert r.ok
 
     def test_params_config_loader_invoked_on_program_decl(
@@ -542,14 +522,10 @@ class TestReplParamsConfigLoader:
         lib_dir = tmp_path / "mylib"
         lib_dir.mkdir()
         # Put a minimal module in lib_dir so we can verify it is importable.
-        (lib_dir / "mymod.agl").write_text(
-            'def greet() -> text = "hello"\n', encoding="utf-8"
-        )
+        (lib_dir / "mymod.agl").write_text('def greet() -> text = "hello"\n', encoding="utf-8")
         agm_home = home / ".agm"
         agm_home.mkdir(parents=True, exist_ok=True)
-        (agm_home / "config.toml").write_text(
-            f"[modules]\nlib_root = {str(lib_dir)!r}\n"
-        )
+        (agm_home / "config.toml").write_text(f"[modules]\nlib_root = {str(lib_dir)!r}\n")
         repl_command.run(_args())
         session = fake_console[0]["session"]
         assert isinstance(session, ReplSession)
@@ -587,18 +563,13 @@ class TestReplTrace:
         assert session.eval_entry("import std.config").ok
         assert session.eval_entry('std.config::runner := "echo replacement"').ok
         live_trace = tmp_path / "live.jsonl"
-        assert session.eval_entry(
-            f'std.config::log-file := Some("{live_trace}")'
-        ).ok
+        assert session.eval_entry(f'std.config::log-file := Some("{live_trace}")').ok
         assert session.eval_entry('print "traced"').ok
         assert session.eval_entry("std.config::log := false").ok
         assert session.eval_entry('print "disabled"').ok
         assert session.eval_entry("std.config::log-file := None").ok
 
-        records = [
-            json.loads(line)
-            for line in live_trace.read_text(encoding="utf-8").splitlines()
-        ]
+        records = [json.loads(line) for line in live_trace.read_text(encoding="utf-8").splitlines()]
         rendered = [record.get("rendered") for record in records]
         assert "traced" in rendered
         assert "disabled" not in rendered
@@ -620,7 +591,7 @@ class TestReplTrace:
             "import std.config\n"
             "let previous = std.config::runner\n"
             "try\n"
-            "  std.config::runner := \"'\"\n"
+            '  std.config::runner := "\'"\n'
             "catch Exception as error => ()\n"
             "std.config::runner == previous"
         )

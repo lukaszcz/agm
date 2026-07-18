@@ -142,7 +142,7 @@ class TestEnsureWorkspaceShell:
         # The self-heal block embeds each rc body via a heredoc.
         assert "AGM_EOF" in text
         assert "cat > " in text
-        assert ". \"$HOME/.bashrc\"" in text
+        assert '. "$HOME/.bashrc"' in text
 
 
 class TestRegenerateWorkspaceShell:
@@ -235,7 +235,7 @@ class TestShPathDoesNotRecurse:
         bin_dir.mkdir()
         # The user's original $ENV startup file — must be sourced exactly once.
         user_env = home / ".userenv"
-        user_env.write_text('export USERENV_RAN=1\n', encoding="utf-8")
+        user_env.write_text("export USERENV_RAN=1\n", encoding="utf-8")
         agm = bin_dir / "agm"
         agm.write_text(
             "\n".join(
@@ -335,7 +335,7 @@ class TestNestedOpen:
         monkeypatch.setenv("XDG_CACHE_HOME", str(cache))
         home.mkdir()
         bin_dir.mkdir()
-        (home / ".bashrc").write_text('export USERRC_RAN=1\n', encoding="utf-8")
+        (home / ".bashrc").write_text("export USERRC_RAN=1\n", encoding="utf-8")
         _fake_agm(bin_dir)
 
         outer = ensure_workspace_shell("outer", env={"SHELL": bash})
@@ -379,7 +379,7 @@ class TestNestedOpen:
         bin_dir.mkdir()
         # The user's original $ENV startup file — the sh "rc".
         user_env = home / ".userenv"
-        user_env.write_text('export USERENV_RAN=1\n', encoding="utf-8")
+        user_env.write_text("export USERENV_RAN=1\n", encoding="utf-8")
         _fake_agm(bin_dir)
 
         outer = ensure_workspace_shell("outer", env={"SHELL": sh})
@@ -436,9 +436,7 @@ class TestZshCustomZdotdir:
             pytest.param(
                 "zsh",
                 "custom:1 home:0",
-                marks=pytest.mark.skipif(
-                    shutil.which("zsh") is None, reason="zsh not available"
-                ),
+                marks=pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh not available"),
             ),
         ],
     )
@@ -467,19 +465,19 @@ class TestZshCustomZdotdir:
         extra_run_env: dict[str, str] = {}
 
         if shell_name == "bash":
-            (home / ".bashrc").write_text('export CUSTOMRC_RAN=1\n', encoding="utf-8")
+            (home / ".bashrc").write_text("export CUSTOMRC_RAN=1\n", encoding="utf-8")
             input_cmd = 'printf "ran:%s\\n" "${CUSTOMRC_RAN:-0}"\nexit\n'
         elif shell_name == "sh":
             user_env_file = home / ".userenv"
-            user_env_file.write_text('export CUSTOMRC_RAN=1\n', encoding="utf-8")
+            user_env_file.write_text("export CUSTOMRC_RAN=1\n", encoding="utf-8")
             extra_run_env["ENV"] = str(user_env_file)
             input_cmd = 'printf "ran:%s\\n" "${CUSTOMRC_RAN:-0}"\nexit\n'
         else:  # zsh — ZDOTDIR save/replay branch
             zdot = home / "zdot"
             zdot.mkdir()
             # Custom ZDOTDIR's rc; $HOME/.zshrc must NOT be sourced.
-            (zdot / ".zshrc").write_text('export CUSTOMRC_RAN=1\n', encoding="utf-8")
-            (home / ".zshrc").write_text('export HOMERC_RAN=1\n', encoding="utf-8")
+            (zdot / ".zshrc").write_text("export CUSTOMRC_RAN=1\n", encoding="utf-8")
+            (home / ".zshrc").write_text("export HOMERC_RAN=1\n", encoding="utf-8")
             extra_run_env["ZDOTDIR"] = str(zdot)
             input_cmd = (
                 'printf "custom:%s home:%s\\n" "${CUSTOMRC_RAN:-0}" "${HOMERC_RAN:-0}"\nexit\n'
@@ -522,7 +520,7 @@ class TestSelfHealE2E:
         monkeypatch.setenv("XDG_CACHE_HOME", str(cache))
         home.mkdir()
         bin_dir.mkdir()
-        (home / ".bashrc").write_text('export USERRC_RAN=1\n', encoding="utf-8")
+        (home / ".bashrc").write_text("export USERRC_RAN=1\n", encoding="utf-8")
         agm = bin_dir / "agm"
         agm.write_text(
             "\n".join(

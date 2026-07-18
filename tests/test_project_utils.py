@@ -451,9 +451,7 @@ def test_current_workspace_ignores_repo_dir_outside_project(
     assert result.workspace_dir == repo_dir
 
 
-def test_current_workspace_ignores_missing_repo_dir(
-    tmp_path: Path, env: dict[str, str]
-) -> None:
+def test_current_workspace_ignores_missing_repo_dir(tmp_path: Path, env: dict[str, str]) -> None:
     project = tmp_path / "proj"
     repo_dir = project / "repo"
     repo_dir.mkdir(parents=True)

@@ -145,9 +145,7 @@ def _reject_constant(c: str) -> object:
     ``Infinity``, and ``-Infinity`` are rejected even when they appear nested
     inside containers such as ``[NaN]`` or ``{"x": Infinity}``.
     """
-    raise StrictJsonParseError(
-        f"Non-standard JSON constant {c!r} is not permitted in strict mode"
-    )
+    raise StrictJsonParseError(f"Non-standard JSON constant {c!r} is not permitted in strict mode")
 
 
 def parse_json_strict(text: str) -> object:
@@ -177,9 +175,7 @@ def parse_json_strict(text: str) -> object:
         #
         # parse_constant=_reject_constant ensures NaN/Infinity/-Infinity raise
         # StrictJsonParseError even when nested inside containers like [NaN].
-        obj: object = json.loads(
-            stripped, parse_float=Decimal, parse_constant=_reject_constant
-        )
+        obj: object = json.loads(stripped, parse_float=Decimal, parse_constant=_reject_constant)
     except StrictJsonParseError:
         raise
     except ValueError as exc:
@@ -261,9 +257,7 @@ def decode_value(
                 if fname not in obj:
                     raise ValueError(f"Missing field {fname!r}")
                 record_fields[fname] = decode_value(fschema, obj[fname], defs)
-            return RecordValue(
-                nominal=nominal, display_name=display_name, fields=record_fields
-            )
+            return RecordValue(nominal=nominal, display_name=display_name, fields=record_fields)
         case EnumDecode(nominal=nominal, display_name=display_name, variants=variants):
             if not isinstance(obj, dict):
                 raise ValueError(f"Expected object for enum, got {type(obj).__name__}")
@@ -279,9 +273,7 @@ def decode_value(
             payload: dict[str, Value] = {}
             for fname, fschema in variant.fields:
                 if fname not in obj:
-                    raise ValueError(
-                        f"Enum variant {case_val!r} is missing field {fname!r}"
-                    )
+                    raise ValueError(f"Enum variant {case_val!r} is missing field {fname!r}")
                 payload[fname] = decode_value(fschema, obj[fname], defs)
             return EnumValue(
                 nominal=nominal,

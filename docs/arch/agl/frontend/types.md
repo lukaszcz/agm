@@ -31,4 +31,4 @@ A checked-output validation walk covers every type-bearing side table before any
 - `src/agm/agl/semantics/` — the value model, semantic types, `TypeTable`, whole-table analyses, and exceptions.
 - `src/agm/agl/typecheck/` — the checker, built-in typing rules, the inference solver, and argument binding.
 - `src/agm/agl/type_schema.py` — compile-time JSON schema and format-instruction derivation.
-- Tests: `tests/test_agl_typecheck.py`, `tests/test_agl_types.py`, `tests/test_agl_type_table.py`, `tests/test_agl_inference.py`, `tests/test_agl_arguments.py`, `tests/test_agl_typecheck_graph.py`.
+- Tests: `tests/test_agl_typecheck.py`, `tests/test_agl_types.py`, `tests/test_agl_type_table.py`, `tests/test_agl_inference.py`, `tests/test_agl_arguments.py`, `tests/test_agl_typecheck_program.py`.

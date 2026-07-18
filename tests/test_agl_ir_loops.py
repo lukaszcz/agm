@@ -77,16 +77,14 @@ _DUMMY_LOC = Location(
 
 def _lower(source: str) -> ExecutableProgram:
     """Parse → resolve → check → lower *source*; return the ExecutableProgram."""
-    from agm.agl.lower import lower_program
+    from agm.agl.lower import lower_module
     from agm.agl.parser import parse_program
-    from agm.agl.scope import resolve
-    from agm.agl.typecheck import check
+    from agm.agl.scope import resolve_module
+    from agm.agl.typecheck import check_module
     from tests.agl.ir_harness import _compiled_checked, base_caps
 
-    checked = check(resolve(parse_program(source)), base_caps())
-    return lower_program(
-        _compiled_checked(checked), source_text=source, source_label="<test>"
-    )
+    checked = check_module(resolve_module(parse_program(source)), base_caps())
+    return lower_module(_compiled_checked(checked), source_text=source, source_label="<test>")
 
 
 def _make_minimal_program(
@@ -167,39 +165,21 @@ def _make_counter_program(body_items: tuple) -> tuple[ExecutableProgram, SymbolI
 
 def test_loop_terminates_explicit_limit() -> None:
     """do[10] body until cond — terminates after body mutates var; yields unit."""
-    source = (
-        "var counter = 0\n"
-        "do[10]\n"
-        "  counter := counter + 1\n"
-        "until counter >= 3\n"
-        "counter\n"
-    )
+    source = "var counter = 0\ndo[10]\n  counter := counter + 1\nuntil counter >= 3\ncounter\n"
     ir = evaluate_ir(source)
     assert ir["counter"] == IntValue(3)
 
 
 def test_loop_body_bindings_visible_to_condition() -> None:
     """Condition reads a var declared before the loop; body updates it."""
-    source = (
-        "var x = 0\n"
-        "do[5]\n"
-        "  x := x + 2\n"
-        "until x >= 4\n"
-        "x\n"
-    )
+    source = "var x = 0\ndo[5]\n  x := x + 2\nuntil x >= 4\nx\n"
     ir = evaluate_ir(source)
     assert ir["x"] == IntValue(4)
 
 
 def test_loop_no_explicit_limit_terminates() -> None:
     """do body until cond (no explicit limit) — unbounded, terminates via until."""
-    source = (
-        "var n = 0\n"
-        "do\n"
-        "  n := n + 1\n"
-        "until n >= 5\n"
-        "n\n"
-    )
+    source = "var n = 0\ndo\n  n := n + 1\nuntil n >= 5\nn\n"
     ir = evaluate_ir(source)
     assert ir["n"] == IntValue(5)
 
@@ -222,12 +202,7 @@ def test_loop_exhaustion_raises() -> None:
 
 def test_condition_source_slice_complex() -> None:
     """Condition source text captures the exact condition expression text."""
-    source = (
-        "var i = 0\n"
-        "do[2]\n"
-        "  i := i + 1\n"
-        "until i > 10\n"
-    )
+    source = "var i = 0\ndo[2]\n  i := i + 1\nuntil i > 10\n"
     ir_exc = evaluate_ir_raises(source)
 
     cond_field = ir_exc.fields.get("condition")
@@ -237,13 +212,7 @@ def test_condition_source_slice_complex() -> None:
 
 def test_loop_succeeds_at_exact_limit() -> None:
     """do[3] until counter>=3 succeeds at exactly the limit (no MaxIterationsExceeded)."""
-    source = (
-        "var counter = 0\n"
-        "do[3]\n"
-        "  counter := counter + 1\n"
-        "until counter >= 3\n"
-        "counter\n"
-    )
+    source = "var counter = 0\ndo[3]\n  counter := counter + 1\nuntil counter >= 3\ncounter\n"
     ir = evaluate_ir(source)
     assert ir["counter"] == IntValue(3)
 
@@ -251,11 +220,7 @@ def test_loop_succeeds_at_exact_limit() -> None:
 def test_loop_exhausts_one_short_of_condition() -> None:
     """do[2] until counter>=3 needs 3 iterations but limit is 2 → MaxIterationsExceeded."""
     exc = evaluate_ir_raises(
-        "var counter = 0\n"
-        "do[2]\n"
-        "  counter := counter + 1\n"
-        "until counter >= 3\n"
-        "counter\n"
+        "var counter = 0\ndo[2]\n  counter := counter + 1\nuntil counter >= 3\ncounter\n"
     )
     assert exc.display_name == "MaxIterationsExceeded"
     assert exc.fields.get("limit") == IntValue(2)
@@ -713,12 +678,7 @@ def test_for_loop_list_iteration_accumulates_sum() -> None:
 def test_for_loop_list_empty_skips_body() -> None:
     """for x in empty list do body done — body never executes."""
     source = (
-        "let xs: list[int] = []\n"
-        "var total = 0\n"
-        "for x in xs do\n"
-        "  total := total + 1\n"
-        "done\n"
-        "total\n"
+        "let xs: list[int] = []\nvar total = 0\nfor x in xs do\n  total := total + 1\ndone\ntotal\n"
     )
     result = evaluate_ir(source)
     assert result["total"] == IntValue(0)
@@ -727,11 +687,7 @@ def test_for_loop_list_empty_skips_body() -> None:
 def test_for_loop_dict_iterates_keys() -> None:
     """for k in dict do body done — iterates over dict keys."""
     source = (
-        "var count = 0\n"
-        'for k in {"a": 1, "b": 2, "c": 3} do\n'
-        "  count := count + 1\n"
-        "done\n"
-        "count\n"
+        'var count = 0\nfor k in {"a": 1, "b": 2, "c": 3} do\n  count := count + 1\ndone\ncount\n'
     )
     result = evaluate_ir(source)
     assert result["count"] == IntValue(3)
@@ -739,26 +695,14 @@ def test_for_loop_dict_iterates_keys() -> None:
 
 def test_for_loop_text_iterates_characters() -> None:
     """for c in text do body done — iterates over individual characters."""
-    source = (
-        "var count = 0\n"
-        'for c in "hello" do\n'
-        "  count := count + 1\n"
-        "done\n"
-        "count\n"
-    )
+    source = 'var count = 0\nfor c in "hello" do\n  count := count + 1\ndone\ncount\n'
     result = evaluate_ir(source)
     assert result["count"] == IntValue(5)
 
 
 def test_for_loop_var_accessible_in_body() -> None:
     """The iteration variable is in scope inside the loop body."""
-    source = (
-        "var last = \"\"\n"
-        'for ch in "abc" do\n'
-        "  last := ch\n"
-        "done\n"
-        "last\n"
-    )
+    source = 'var last = ""\nfor ch in "abc" do\n  last := ch\ndone\nlast\n'
     result = evaluate_ir(source)
     assert result["last"] == TextValue("c")
 
@@ -766,10 +710,7 @@ def test_for_loop_var_accessible_in_body() -> None:
 def test_for_loop_list_bound_limits_iterations() -> None:
     """for x in list do[bound] body until false — bound raises MaxIterationsExceeded."""
     source = (
-        "var total = 0\n"
-        "for x in [10, 20, 30, 40, 50] do[3]\n"
-        "  total := total + x\n"
-        "until false\n"
+        "var total = 0\nfor x in [10, 20, 30, 40, 50] do[3]\n  total := total + x\nuntil false\n"
     )
     exc = evaluate_ir_raises(source)
     assert exc.display_name == "MaxIterationsExceeded"
@@ -783,26 +724,14 @@ def test_for_loop_list_bound_limits_iterations() -> None:
 
 def test_while_loop_runs_while_condition_true() -> None:
     """while cond do body done — body runs as long as condition holds."""
-    source = (
-        "var n = 0\n"
-        "while n < 5 do\n"
-        "  n := n + 1\n"
-        "done\n"
-        "n\n"
-    )
+    source = "var n = 0\nwhile n < 5 do\n  n := n + 1\ndone\nn\n"
     result = evaluate_ir(source)
     assert result["n"] == IntValue(5)
 
 
 def test_while_loop_false_condition_skips_body() -> None:
     """while false do body done — condition already false; body never runs."""
-    source = (
-        "var n = 0\n"
-        "while false do\n"
-        "  n := n + 1\n"
-        "done\n"
-        "n\n"
-    )
+    source = "var n = 0\nwhile false do\n  n := n + 1\ndone\nn\n"
     result = evaluate_ir(source)
     assert result["n"] == IntValue(0)
 
@@ -833,10 +762,10 @@ def test_for_loop_non_iterable_bool_raises_type_error() -> None:
     source = "for x in true do\n  ()\ndone\n"
     with pytest.raises(AglTypeError):
         from agm.agl.parser import parse_program
-        from agm.agl.scope import resolve
-        from agm.agl.typecheck import check
+        from agm.agl.scope import resolve_module
+        from agm.agl.typecheck import check_module
 
-        check(resolve(parse_program(source)), base_caps())
+        check_module(resolve_module(parse_program(source)), base_caps())
 
 
 def test_for_loop_int_collection_raises_type_error() -> None:
@@ -847,10 +776,10 @@ def test_for_loop_int_collection_raises_type_error() -> None:
     source = "for x in 42 do\n  ()\ndone\n"
     with pytest.raises(AglTypeError):
         from agm.agl.parser import parse_program
-        from agm.agl.scope import resolve
-        from agm.agl.typecheck import check
+        from agm.agl.scope import resolve_module
+        from agm.agl.typecheck import check_module
 
-        check(resolve(parse_program(source)), base_caps())
+        check_module(resolve_module(parse_program(source)), base_caps())
 
 
 # ---------------------------------------------------------------------------

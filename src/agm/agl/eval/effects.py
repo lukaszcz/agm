@@ -95,17 +95,13 @@ class EffectHandlers:
         """
         fn = self._ctx._extern_registry.resolve(module_id, extern.name)
         trace_id = self._ctx._trace.new_event_id()
-        return self._ctx._extern_registry.invoke(
-            extern.name, extern.contract, fn, args, trace_id
-        )
+        return self._ctx._extern_registry.invoke(extern.name, extern.contract, fn, args, trace_id)
 
     # ------------------------------------------------------------------
     # Agent call helpers
     # ------------------------------------------------------------------
 
-    def _dispatch_agent(
-        self, agent_name: str, request: AgentRequest, node: IrAsk
-    ) -> AgentResponse:
+    def _dispatch_agent(self, agent_name: str, request: AgentRequest, node: IrAsk) -> AgentResponse:
         """Dispatch an agent call, annotating cancellation with the ask span.
 
         ``AgentCancelled`` (and a bare ``KeyboardInterrupt`` from an unwrapped
@@ -124,9 +120,7 @@ class EffectHandlers:
             exc.span = node.location
             raise
         except KeyboardInterrupt as exc:
-            raise AgentCancelled(
-                agent_name, "interrupted", span=node.location
-            ) from exc
+            raise AgentCancelled(agent_name, "interrupted", span=node.location) from exc
 
     @staticmethod
     def _classify_parse_errors(result: ParseResult) -> tuple[ReqValidationError, ...]:
@@ -340,9 +334,7 @@ class EffectHandlers:
     # Exec call helper
     # ------------------------------------------------------------------
 
-    def _run_exec_shell(
-        self, cmd: str, location: Location
-    ) -> tuple[str, str, int | None]:
+    def _run_exec_shell(self, cmd: str, location: Location) -> tuple[str, str, int | None]:
         """Run *cmd* via the shell; raise ``ExecError`` on spawn failure or timeout.
 
         Returns ``(stdout, stderr, returncode)`` — a non-zero exit code is NOT

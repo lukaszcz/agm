@@ -223,9 +223,7 @@ def convert_param_value(
     try:
         return decode_param_value(decoder, raw)
     except (StrictJsonParseError, ValueError) as exc:
-        raise ValueError(
-            f"Param {name!r}: could not parse as {type_obj!r}: {exc}"
-        ) from exc
+        raise ValueError(f"Param {name!r}: could not parse as {type_obj!r}: {exc}") from exc
 
 
 def convert_config_value(

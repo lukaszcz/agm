@@ -173,7 +173,7 @@ satisfies `TypeLookup` and is passed to `render_value`. `convert_value`
 `render_value`; its two callers (`interpreter.py:1406,1425`) pass
 `self._checked.type_env`.
 
-The REPL has no persistent `CheckedProgram`; it owns a persistent `_type_env`.
+The REPL has no persistent `CheckedModule`; it owns a persistent `_type_env`.
 `ReplSession` therefore exposes a read-only `TypeLookup` facade backed by that
 environment. The console echo path, `:load`, `:bindings`, and `:params` pass
 this facade through `render_entry_result`, `_render_echo`, and

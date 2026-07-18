@@ -1,5 +1,5 @@
-"""IR evaluation tests for multi-module linking.
-"""
+"""IR evaluation tests for multi-module linking."""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -81,9 +81,7 @@ let r1 = even::is_even(4)
 let r2 = even::is_even(3)
 ()
 """
-    r = evaluate_ir_graph(
-        entry_source, {"even": even_source, "odd": odd_source}, tmp_path
-    )
+    r = evaluate_ir_graph(entry_source, {"even": even_source, "odd": odd_source}, tmp_path)
     assert r["r1"] == BoolValue(True)
     assert r["r2"] == BoolValue(False)
 
@@ -161,9 +159,7 @@ let first_value = mod_a::get_first(p1)
 let second_value = mod_b::get_first(p2)
 ()
 """
-    r = evaluate_ir_graph(
-        entry_source, {"mod_a": mod_a_source, "mod_b": mod_b_source}, tmp_path
-    )
+    r = evaluate_ir_graph(entry_source, {"mod_a": mod_a_source, "mod_b": mod_b_source}, tmp_path)
     assert r["first_value"] == IntValue(1)
     assert r["second_value"] == TextValue("hello")
 

@@ -144,8 +144,10 @@ def open_workspace(
     if branch is not None:
         env = load_workspace_env(proj_dir, branch, workspace_dir=repo_path)
         commit_config_dir_changes(
-            proj_dir, f"chore: update config for {branch}",
-            add_paths=[project_config_dir(proj_dir) / branch], env=env,
+            proj_dir,
+            f"chore: update config for {branch}",
+            add_paths=[project_config_dir(proj_dir) / branch],
+            env=env,
         )
     create_configured_workspace_session(
         detached=detached,
@@ -186,8 +188,10 @@ def create_workspace(
         env=env,
     )
     commit_config_dir_changes(
-        proj_dir, f"chore: add config for {branch}",
-        add_paths=[project_config_dir(proj_dir) / branch], env=env,
+        proj_dir,
+        f"chore: add config for {branch}",
+        add_paths=[project_config_dir(proj_dir) / branch],
+        env=env,
     )
     queue_setup_and_focus_workspace_session(
         detached=detached,
@@ -226,8 +230,10 @@ def checkout_workspace(
         env=env,
     )
     commit_config_dir_changes(
-        proj_dir, f"chore: add config for {branch}",
-        add_paths=[project_config_dir(proj_dir) / branch], env=env,
+        proj_dir,
+        f"chore: add config for {branch}",
+        add_paths=[project_config_dir(proj_dir) / branch],
+        env=env,
     )
     queue_setup_and_focus_workspace_session(
         detached=detached,

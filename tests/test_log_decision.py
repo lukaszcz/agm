@@ -251,13 +251,9 @@ class TestResolveLogFileNewShape:
         with patch("agm.core.log.datetime") as mock_dt, patch("agm.core.log.os.getpid") as mock_pid:
             mock_dt.now.return_value = fixed
             mock_pid.return_value = 11111
-            path_a = resolve_log_file(
-                command_name="exec", enabled=True, log_file=None, unique=True
-            )
+            path_a = resolve_log_file(command_name="exec", enabled=True, log_file=None, unique=True)
             mock_pid.return_value = 22222
-            path_b = resolve_log_file(
-                command_name="exec", enabled=True, log_file=None, unique=True
-            )
+            path_b = resolve_log_file(command_name="exec", enabled=True, log_file=None, unique=True)
         assert path_a != path_b
 
 
@@ -399,9 +395,7 @@ class TestReplLogFlagParsing:
         monkeypatch.setattr(repl_command, "run", fake_run)
         return calls
 
-    def test_log_flag_sets_log_true(
-        self, runner: CliRunner, recorded_runs: list[object]
-    ) -> None:
+    def test_log_flag_sets_log_true(self, runner: CliRunner, recorded_runs: list[object]) -> None:
         result = invoke(runner, ["repl", "--log"])
         assert result.exit_code == 0
         assert getattr(recorded_runs[0], "log") is True
@@ -420,9 +414,7 @@ class TestReplLogFlagParsing:
         assert result.exit_code != 0
         assert recorded_runs == []
 
-    def test_default_log_is_false(
-        self, runner: CliRunner, recorded_runs: list[object]
-    ) -> None:
+    def test_default_log_is_false(self, runner: CliRunner, recorded_runs: list[object]) -> None:
         result = invoke(runner, ["repl"])
         assert result.exit_code == 0
         assert getattr(recorded_runs[0], "log") is False
@@ -469,9 +461,7 @@ class TestIntegrationDefaultNoTrace:
 class TestIntegrationLogFlagWritesTrace:
     """--log flag causes a trace file to be written."""
 
-    def test_log_flag_creates_trace(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_log_flag_creates_trace(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         _isolated_home(monkeypatch, tmp_path)
         monkeypatch.chdir(tmp_path)
         monkeypatch.setattr("agm.core.log.git_helpers.containing_root", lambda _: None)
@@ -517,9 +507,7 @@ class TestIntegrationConfigLogTrue:
         home.mkdir()
         (home / ".agm").mkdir()
         log_path = tmp_path / "config_trace.jsonl"
-        (home / ".agm" / "config.toml").write_text(
-            f"[exec]\nlog-file = {str(log_path)!r}\n"
-        )
+        (home / ".agm" / "config.toml").write_text(f"[exec]\nlog-file = {str(log_path)!r}\n")
         monkeypatch.setenv("HOME", str(home))
         monkeypatch.delenv("AGM_PROJECT_DIR", raising=False)
         exec_command.run(_exec_args('print "hello"'))

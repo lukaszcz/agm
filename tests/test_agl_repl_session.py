@@ -287,16 +287,14 @@ class TestRedefinition:
 class TestRecursiveTypesAcrossEntries:
     """A recursive type declared in one entry is usable in later entries.
 
-    The REPL (graph mode) re-validates the accumulated table on every entry;
+    The REPL (program context) re-validates the accumulated table on every entry;
     this is idempotent for a declaration that already passed inhabitation in
     the entry that declared it.
     """
 
     def test_recursive_enum_constructed_and_matched_in_later_entries(self) -> None:
         s = ReplSession()
-        declare = s.eval_entry(
-            "enum Tree\n  | Leaf\n  | Node(value: int, left: Tree, right: Tree)"
-        )
+        declare = s.eval_entry("enum Tree\n  | Leaf\n  | Node(value: int, left: Tree, right: Tree)")
         assert declare.ok
 
         build = s.eval_entry(
@@ -305,11 +303,7 @@ class TestRecursiveTypesAcrossEntries:
         )
         assert build.ok
 
-        match = s.eval_entry(
-            "case t of\n"
-            "  | Leaf() => 0\n"
-            "  | Node(value, left, right) => value"
-        )
+        match = s.eval_entry("case t of\n  | Leaf() => 0\n  | Node(value, left, right) => value")
         assert match.ok
         assert match.value is not None
 
@@ -367,19 +361,16 @@ class TestRecursiveTypesAcrossEntries:
         the decode side supported ``$defs``/``RefDecode``, ``build_decode_schema``
         recursed forever on a finite recursive type and crashed lowering.
         """
-        agent = CountingAgent('{"$case": "Node", "value": 1, "left": {"$case": "Leaf"}, '
-                               '"right": {"$case": "Leaf"}}')
-        s = ReplSession(default_agent=agent)
-        declare = s.eval_entry(
-            "enum Tree\n  | Leaf\n  | Node(value: int, left: Tree, right: Tree)"
+        agent = CountingAgent(
+            '{"$case": "Node", "value": 1, "left": {"$case": "Leaf"}, "right": {"$case": "Leaf"}}'
         )
+        s = ReplSession(default_agent=agent)
+        declare = s.eval_entry("enum Tree\n  | Leaf\n  | Node(value: int, left: Tree, right: Tree)")
         assert declare.ok
         asked = s.eval_entry('let t: Tree = ask """build a tree"""')
         assert asked.ok
         assert agent.calls == 1
-        match = s.eval_entry(
-            "case t of\n  | Leaf() => 0\n  | Node(value, left, right) => value"
-        )
+        match = s.eval_entry("case t of\n  | Leaf() => 0\n  | Node(value, left, right) => value")
         assert match.ok
         assert match.value == IntValue(1)
 
@@ -475,8 +466,7 @@ class TestTypeOf:
         s.eval_entry("let r = Ok(value = 1)")
 
         assert (
-            s.type_of("r")
-            == "enum Result\n  | Ok(value: int)\n  | Err(message: text)\n  | Unknown"
+            s.type_of("r") == "enum Result\n  | Ok(value: int)\n  | Err(message: text)\n  | Unknown"
         )
 
     def test_type_of_resolves_prior_entry_constructor(self) -> None:
@@ -539,14 +529,14 @@ class TestInferenceBoundaries:
         assert s.eval_entry("def id[T](x: T) -> T = x").ok
         assert s.eval_entry("def app[T](f: T -> T, x: T) -> T = f(x)").ok
 
-        graph_result = s.eval_entry("let result = app(id, 0)")
+        program_result = s.eval_entry("let result = app(id, 0)")
 
-        assert graph_result.ok, graph_result.diagnostics
-        assert graph_result.value == IntValue(0)
-        assert isinstance(graph_result.value_type, IntType)
-        assert render_entry_result(graph_result, echo=True) == "result : int = 0"
-        # ``eval_entry`` uses the graph pipeline, while ``:type`` checks the
-        # same persisted declarations through the single-module session path.
+        assert program_result.ok, program_result.diagnostics
+        assert program_result.value == IntValue(0)
+        assert isinstance(program_result.value_type, IntType)
+        assert render_entry_result(program_result, echo=True) == "result : int = 0"
+        # ``eval_entry`` and ``:type`` both use the program pipeline against
+        # the same persisted declarations.
         assert s.type_of("app(id, 0)") == "int"
 
     def test_failed_generic_entries_leave_next_entry_fresh_and_render_diagnostic_notes(
@@ -1743,10 +1733,7 @@ class TestFuncDef:
     def test_typed_nullary_constructor_call_as_juxt_arg(self) -> None:
         s = ReplSession()
         r = s.eval_entry(
-            "enum Opt[T]\n"
-            "  | None\n"
-            "def f(x: Opt[int]) -> bool = false\n"
-            'f Opt[int]::None()'
+            "enum Opt[T]\n  | None\ndef f(x: Opt[int]) -> bool = false\nf Opt[int]::None()"
         )
         assert r.ok, r.diagnostics
         assert isinstance(r.value, BoolValue)
@@ -1917,7 +1904,7 @@ class TestImports:
         assert _int(r.value) == 10
 
     def test_self_ref_colon_colon(self, tmp_path: Path) -> None:
-        # ::name should resolve to a prior session binding in graph mode
+        # ::name should resolve to a prior session binding in program context
         s = self._make_session_with_root(tmp_path)
         s.eval_entry("let x = 42")
         lib = tmp_path / "refs.agl"
@@ -1927,24 +1914,22 @@ class TestImports:
         assert _int(r.value) == 42
 
     def test_self_qualifier_in_repl_returns_session_binding(self, tmp_path: Path) -> None:
-        # Regression: ::x in the REPL (graph mode) must return the
+        # Regression: ::x in the REPL (program context) must return the
         # session-level binding, not a same-named lexical param.
-        # A dummy lib import is used to trigger graph mode so ::name resolves correctly.
+        # A dummy lib import is used to trigger program context so ::name resolves correctly.
         lib = tmp_path / "dummy.agl"
         lib.write_text("def noop(n: int) -> int = n\n")
         s = self._make_session_with_root(tmp_path)
         r1 = s.eval_entry("let x = 100")
         assert r1.ok, r1.diagnostics
-        # Import forces graph mode; ::x must still resolve to x=100, not the param.
+        # Import forces program context; ::x must still resolve to x=100, not the param.
         r2 = s.eval_entry("import dummy\ndef shadow(x: int) -> int = ::x\nshadow(7)")
         assert r2.ok, r2.diagnostics
         from agm.agl.semantics.values import IntValue
 
         assert r2.value == IntValue(100), f"Expected 100, got {r2.value}"
 
-    def test_graph_entry_type_body_can_reference_prior_repl_type(
-        self, tmp_path: Path
-    ) -> None:
+    def test_graph_entry_type_body_can_reference_prior_repl_type(self, tmp_path: Path) -> None:
         lib = tmp_path / "dummy.agl"
         lib.write_text("def noop(n: int) -> int = n\n")
         s = self._make_session_with_root(tmp_path)
@@ -2064,8 +2049,8 @@ class TestImports:
         assert _int(r2.value) == 42
 
     def test_scope_error_in_graph_mode(self, tmp_path: Path) -> None:
-        # Declaring a reserved built-in name as an agent in graph mode
-        # triggers AglScopeError during resolve_graph.
+        # Declaring a reserved built-in name as an agent in program context
+        # triggers AglScopeError during resolve_program.
         lib = tmp_path / "mylib.agl"
         lib.write_text("def add(a: int, b: int) -> int = a + b\n")
         s = self._make_session_with_root(tmp_path)
@@ -2074,7 +2059,7 @@ class TestImports:
         assert r.diagnostics
 
     def test_check_only_graph_mode(self, tmp_path: Path) -> None:
-        # check_only=True in graph mode returns a check result without evaluating.
+        # check_only=True in program context returns a check result without evaluating.
         lib = tmp_path / "mylib.agl"
         lib.write_text("def add(a: int, b: int) -> int = a + b\n")
         s = self._make_session_with_root(tmp_path)
@@ -2083,15 +2068,9 @@ class TestImports:
         # check_only does not promote session state.
         assert s.bindings() == []
 
-    def test_check_only_graph_mode_rejects_invalid_unreachable_import(
-        self, tmp_path: Path
-    ) -> None:
+    def test_check_only_graph_mode_rejects_invalid_unreachable_import(self, tmp_path: Path) -> None:
         lib = tmp_path / "invalid.agl"
-        lib.write_text(
-            "def dormant(x: bool) -> int =\n"
-            "  case x of\n"
-            "    | true => 1\n"
-        )
+        lib.write_text("def dormant(x: bool) -> int =\n  case x of\n    | true => 1\n")
         s = self._make_session_with_root(tmp_path)
 
         r = s.eval_entry("import invalid\n()", check_only=True)
@@ -2102,9 +2081,7 @@ class TestImports:
         assert [
             (
                 diagnostic.severity,
-                Path(diagnostic.source_label).name
-                if diagnostic.source_label is not None
-                else None,
+                Path(diagnostic.source_label).name if diagnostic.source_label is not None else None,
                 diagnostic.line,
             )
             for diagnostic in r.diagnostics
@@ -2112,7 +2089,7 @@ class TestImports:
         assert s.bindings() == []
 
     def test_agent_decl_in_graph_mode(self, tmp_path: Path) -> None:
-        # Declaring an agent in graph mode installs it in the entry scope.
+        # Declaring an agent in program context installs it in the entry scope.
         lib = tmp_path / "mylib.agl"
         lib.write_text("def id_fn(n: int) -> int = n\n")
         s = self._make_session_with_root(tmp_path)
@@ -2121,7 +2098,7 @@ class TestImports:
         assert r.ok, r.diagnostics
 
     def test_agl_raise_in_graph_mode(self, tmp_path: Path) -> None:
-        # An AglRaise exception during graph-mode evaluation aborts the entry.
+        # An AglRaise exception during program evaluation aborts the entry.
         lib = tmp_path / "mylib.agl"
         lib.write_text('def boom() -> int = raise Abort(message = "boom")\n')
         s = self._make_session_with_root(tmp_path)
@@ -2196,7 +2173,7 @@ class TestImports:
     def test_contract_error_in_graph_mode(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        # A ValueError from materialize_contract during graph-mode execution
+        # A ValueError from materialize_contract during program execution
         # returns a failed entry with a "Contract error:" diagnostic.
         import agm.agl.runtime.contract as contract_mod
 
@@ -2222,20 +2199,20 @@ class TestImports:
         assert any("Contract error" in d.message for d in r.diagnostics)
 
     def test_program_decl_conflict_in_graph_mode(self, tmp_path: Path) -> None:
-        # _pre_eval_param_check returning non-None in graph mode:
+        # _pre_eval_param_check returning non-None in program context:
         # setting a different program name when one is already set.
         lib = tmp_path / "mylib.agl"
         lib.write_text("def add(a: int, b: int) -> int = a + b\n")
         s = self._make_session_with_root(tmp_path)
         r1 = s.eval_entry("program first\n1")
         assert r1.ok, r1.diagnostics
-        # Now in graph mode, try to declare a different program name.
+        # Now in program context, try to declare a different program name.
         r2 = s.eval_entry("import mylib\nprogram second\nadd(1, 2)")
         assert not r2.ok
         assert "Program name already set" in r2.diagnostics[0].message
 
     def test_cancellation_in_graph_mode(self, tmp_path: Path) -> None:
-        # AgentCancelled during graph-mode execution aborts the entry.
+        # AgentCancelled during program execution aborts the entry.
         lib = tmp_path / "mylib.agl"
         lib.write_text("def noop(n: int) -> int = n\n")
         s = self._make_session_with_root(tmp_path)
@@ -2295,7 +2272,7 @@ class TestImports:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         # Covers the last-resort ``except Exception`` fallback in
-        # ``_eval_entry_graph_mode``: a generic error from the graph loader
+        # ``_eval_entry``: a generic error from the graph loader
         # (not an AglSyntaxError or module error) must still surface as a
         # failed entry with a diagnostic rather than an uncaught exception.
         import agm.agl.modules.loader as loader_mod
@@ -2496,11 +2473,7 @@ class TestExternRepl:
         s = self._make_session_with_root(tmp_path)
         s.eval_entry("import extlib")
         r = s.eval_entry(
-            "let r = try\n"
-            "  boom()\n"
-            "catch ExternError as e =>\n"
-            "  print(e.function)\n"
-            "  -1\n"
+            "let r = try\n  boom()\ncatch ExternError as e =>\n  print(e.function)\n  -1\n"
         )
         assert r.ok, r.diagnostics
         assert _int(r.value) == -1
@@ -2767,9 +2740,7 @@ class TestBareTypeEntry:
             == "<type:\nenum std.core::Option[T]\n  | None\n  | Some(value: T)\n>"
         )
 
-    def test_builtin_type_entry_works_when_graph_env_is_unavailable(
-        self, tmp_path: Path
-    ) -> None:
+    def test_builtin_type_entry_works_when_graph_env_is_unavailable(self, tmp_path: Path) -> None:
         from agm.agl.repl.render import render_entry_result
 
         s = ReplSession(stdlib_root=tmp_path / "missing-stdlib")
@@ -2798,7 +2769,7 @@ class TestBareTypeEntry:
             template=RecordType(name="Box", module_id=right),
         )
         env = TypeEnvironment(
-            graph_generic_table={(left, "Box"): left_def, (right, "Box"): right_def},
+            program_generic_table={(left, "Box"): left_def, (right, "Box"): right_def},
             import_env=ImportEnv(
                 unqualified={"Box": frozenset({(left, "Box"), (right, "Box")})},
                 qualified={},
@@ -2840,7 +2811,7 @@ class TestBareTypeEntry:
             is None
         )
 
-        graph_env = TypeEnvironment(graph_generic_table={(ENTRY_ID, "Box"): local_def})
+        graph_env = TypeEnvironment(program_generic_table={(ENTRY_ID, "Box"): local_def})
         assert graph_env.resolve_qualified_unapplied_generic_type(
             local_expr.module_qualifier,
             "Box",
@@ -2851,7 +2822,7 @@ class TestBareTypeEntry:
         assert isinstance(qualified_expr, NameT)
         assert qualified_expr.module_qualifier is not None
         no_handle_env = TypeEnvironment(
-            graph_generic_table={},
+            program_generic_table={},
             import_env=ImportEnv(unqualified={}, qualified={}),
         )
         assert (
@@ -2863,7 +2834,7 @@ class TestBareTypeEntry:
         )
 
         no_name_env = TypeEnvironment(
-            graph_generic_table={},
+            program_generic_table={},
             import_env=ImportEnv(unqualified={}, qualified={("missing",): {}}),
         )
         assert (
@@ -2875,7 +2846,7 @@ class TestBareTypeEntry:
         )
 
         no_generic_env = TypeEnvironment(
-            graph_generic_table={},
+            program_generic_table={},
             import_env=ImportEnv(
                 unqualified={},
                 qualified={("missing",): {"Box": (lib, "Box")}},

@@ -346,9 +346,7 @@ def complete_pane_count(incomplete: str) -> list[str]:
         return []
 
 
-def complete_path_argument(
-    ctx: click.Context, args: list[str], incomplete: str
-) -> list[str]:
+def complete_path_argument(ctx: click.Context, args: list[str], incomplete: str) -> list[str]:
     del ctx, args
     try:
         return _path_candidates(incomplete)
@@ -356,9 +354,7 @@ def complete_path_argument(
         return []
 
 
-def complete_dir_argument(
-    ctx: click.Context, args: list[str], incomplete: str
-) -> list[str]:
+def complete_dir_argument(ctx: click.Context, args: list[str], incomplete: str) -> list[str]:
     """Complete directory paths (directories only, for options like ``-I/--module-path``)."""
     del ctx, args
     try:
@@ -374,16 +370,10 @@ def _configured_command_names(
     table = merged.get(section)
     if not isinstance(table, dict):
         return set()
-    return {
-        key
-        for key, value in table.items()
-        if isinstance(key, str) and isinstance(value, dict)
-    }
+    return {key for key, value in table.items() if isinstance(key, str) and isinstance(value, dict)}
 
 
-def complete_agl_file(
-    ctx: click.Context, args: list[str], incomplete: str
-) -> list[str]:
+def complete_agl_file(ctx: click.Context, args: list[str], incomplete: str) -> list[str]:
     """Complete ``.agl`` file paths for the ``agm exec FILE`` argument."""
     del ctx, args
     try:

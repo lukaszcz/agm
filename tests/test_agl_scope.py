@@ -5,7 +5,7 @@ or construct AST nodes directly for cases that are clearer to express
 at the AST level.
 
 Tests assert on user-visible behavior: ``AglScopeError`` diagnostics and
-observable side-table behavior via the public ``ResolvedProgram`` API.  They
+observable side-table behavior via the public ``ModuleResolution`` API.  They
 deliberately do *not* pin internal implementation details.
 """
 
@@ -19,8 +19,8 @@ from agm.agl.parser import parse_program
 from agm.agl.scope import (
     AglScopeError,
     BuiltinKind,
-    ResolvedProgram,
-    resolve,
+    ModuleResolution,
+    resolve_module,
 )
 from agm.agl.scope.symbols import BinderKind, BindingRef
 from agm.agl.syntax.nodes import (
@@ -66,9 +66,9 @@ from agm.agl.syntax.types import IntT
 # ---------------------------------------------------------------------------
 
 
-def parse_and_resolve(source: str) -> ResolvedProgram:
+def parse_and_resolve(source: str) -> ModuleResolution:
     """Parse *source* and run the scope resolution pass."""
-    return resolve(parse_program(source))
+    return resolve_module(parse_program(source))
 
 
 def reject_scope(source: str) -> AglScopeError:
@@ -191,7 +191,7 @@ def _find_varref(program: object, name: str, occurrence: int = -1) -> VarRef:
     return results[occurrence]
 
 
-def _ref(r: ResolvedProgram, name: str, occurrence: int = -1) -> BindingRef:
+def _ref(r: ModuleResolution, name: str, occurrence: int = -1) -> BindingRef:
     """Return the BindingRef for the VarRef named *name* (at *occurrence*) in *r.program*."""
     vr = _find_varref(r.program, name, occurrence)
     return r.resolution[vr.node_id]
@@ -212,8 +212,12 @@ def _nid() -> int:
 
 def _sp(line: int = 1) -> SourceSpan:
     return SourceSpan(
-        start_line=line, start_col=1, end_line=line, end_col=2,
-        start_offset=0, end_offset=1,
+        start_line=line,
+        start_col=1,
+        end_line=line,
+        end_col=2,
+        start_offset=0,
+        end_offset=1,
     )
 
 
@@ -264,9 +268,9 @@ def _make_program(*items: Item) -> Program:
     return Program(body=block, span=_sp(), node_id=_nid())
 
 
-def resolve_program(*items: Item) -> ResolvedProgram:
+def resolve_program(*items: Item) -> ModuleResolution:
     """Construct and resolve a Program from the given top-level items."""
-    return resolve(_make_program(*items))
+    return resolve_module(_make_program(*items))
 
 
 def reject_program(*items: Item) -> AglScopeError:
@@ -309,19 +313,11 @@ class TestAcceptance:
         assert _ref(r, "x").kind == BinderKind.let_binding
 
     def test_let_with_interpolation(self) -> None:
-        r = parse_and_resolve(
-            "param name\n"
-            'let greeting = "Hello ${name}"\n'
-            "greeting"
-        )
+        r = parse_and_resolve('param name\nlet greeting = "Hello ${name}"\ngreeting')
         assert _ref(r, "greeting").kind == BinderKind.let_binding
 
     def test_multiple_inputs(self) -> None:
-        r = parse_and_resolve(
-            "param spec\n"
-            "param max_severity: int\n"
-            "spec"
-        )
+        r = parse_and_resolve("param spec\nparam max_severity: int\nspec")
         assert _ref(r, "spec").kind == BinderKind.param_binding
 
     def test_unit_lit(self) -> None:
@@ -368,26 +364,14 @@ class TestBlockScoping:
 
     def test_block_local_binding_does_not_escape(self) -> None:
         """A binding in a branch block is not visible outside."""
-        err = reject_scope(
-            "if true =>\n"
-            "  let inner = 1\n"
-            "| else =>\n"
-            "  ()\n"
-            "inner\n"
-        )
+        err = reject_scope("if true =>\n  let inner = 1\n| else =>\n  ()\ninner\n")
         line, msg = diag(err)
         assert line == 5
         assert "inner" in msg
 
     def test_outer_binding_visible_in_nested_block(self) -> None:
         """A binding from an outer scope is visible in nested blocks."""
-        r = parse_and_resolve(
-            "let outer = 42\n"
-            "if true =>\n"
-            "  outer\n"
-            "| else =>\n"
-            "  outer\n"
-        )
+        r = parse_and_resolve("let outer = 42\nif true =>\n  outer\n| else =>\n  outer\n")
         # Both VarRefs to "outer" (in then-branch and else-branch) resolve to the let_binding.
         assert _ref(r, "outer", occurrence=0).kind == BinderKind.let_binding
         assert _ref(r, "outer", occurrence=1).kind == BinderKind.let_binding
@@ -460,24 +444,14 @@ class TestAssignErrors:
         assert "declared with 'let'" not in msg
 
     def test_assign_to_catch_binder_names_catch(self) -> None:
-        err = reject_scope(
-            "try\n"
-            "  ()\n"
-            "catch _ as err =>\n"
-            "  err := 1\n"
-        )
+        err = reject_scope("try\n  ()\ncatch _ as err =>\n  err := 1\n")
         line, msg = diag(err)
         assert line == 4
         assert "catch binder" in msg
         assert "declared with 'let'" not in msg
 
     def test_assign_to_pattern_binding_names_pattern(self) -> None:
-        err = reject_scope(
-            "let v = 1\n"
-            "case v of\n"
-            "  | n =>\n"
-            "    n := 2\n"
-        )
+        err = reject_scope("let v = 1\ncase v of\n  | n =>\n    n := 2\n")
         line, msg = diag(err)
         assert line == 4
         assert "pattern binding" in msg
@@ -492,8 +466,12 @@ class TestAssignErrors:
         sp = _sp()
         int_t = IntTNode(span=sp, node_id=_nid())
         param = Param(
-            name="n", type_expr=int_t, kind=ParamKind.STANDARD, default=None,
-            span=sp, node_id=_nid()
+            name="n",
+            type_expr=int_t,
+            kind=ParamKind.STANDARD,
+            default=None,
+            span=sp,
+            node_id=_nid(),
         )
         assign_n = _make_assign("n", _make_intlit(2))
         funcdef = FuncDef(
@@ -669,23 +647,13 @@ class TestReservedNames:
         assert "print" in msg
 
     def test_reserve_ask_catch_binder(self) -> None:
-        err = reject_scope(
-            "try\n"
-            "  ()\n"
-            "catch _ as ask =>\n"
-            "  ()\n"
-        )
+        err = reject_scope("try\n  ()\ncatch _ as ask =>\n  ()\n")
         _, msg = diag(err)
         assert "ask" in msg
         assert "reserved" in msg.lower() or "contextual" in msg.lower()
 
     def test_reserve_exec_catch_binder(self) -> None:
-        err = reject_scope(
-            "try\n"
-            "  ()\n"
-            "catch _ as exec =>\n"
-            "  ()\n"
-        )
+        err = reject_scope("try\n  ()\ncatch _ as exec =>\n  ()\n")
         _, msg = diag(err)
         assert "exec" in msg
 
@@ -699,6 +667,7 @@ class TestReservedNames:
             node_id=_nid(),
         )
         from agm.agl.syntax.nodes import Case
+
         case_node = Case(
             subject=_make_varref("x"),
             branches=(branch,),
@@ -746,14 +715,14 @@ class TestBuiltinVarPlacement:
 
 class TestBuiltinCallClassification:
     def test_print_call_classified(self) -> None:
-        r = parse_and_resolve('let x = 1\nprint x')
+        r = parse_and_resolve("let x = 1\nprint x")
         # find the Call node in the block
         call_item = r.program.body.items[1]
         assert isinstance(call_item, Call)
         assert r.builtin_calls[call_item.node_id] == BuiltinKind.PRINT
 
     def test_render_call_classified(self) -> None:
-        r = parse_and_resolve('let x = render 1\nx')
+        r = parse_and_resolve("let x = render 1\nx")
         let_node = r.program.body.items[0]
         assert isinstance(let_node, LetDecl)
         assert isinstance(let_node.value, Call)
@@ -808,7 +777,7 @@ class TestBuiltinCallClassification:
         # ``ask-request`` is a reserved contextual keyword: a bare reference
         # (not in call position) is rejected.
         with pytest.raises(AglScopeError) as exc_info:
-            parse_and_resolve('let x = ask-request\nx')
+            parse_and_resolve("let x = ask-request\nx")
         msg = str(exc_info.value)
         assert "built-in" in msg.lower() or "reserved" in msg.lower()
 
@@ -873,10 +842,7 @@ class TestPlaceholderCallResolution:
 
     def test_nested_placeholder_calls_resolve_without_diagnostics(self) -> None:
         r = parse_and_resolve(
-            "def f(x: int, y: int) -> int = x\n"
-            "def g(x: int) -> int = x\n"
-            "let h = f(g(?), ?)\n"
-            "h"
+            "def f(x: int, y: int) -> int = x\ndef g(x: int) -> int = x\nlet h = f(g(?), ?)\nh"
         )
         assert _ref(r, "f").kind == BinderKind.function_binding
         assert _ref(r, "g").kind == BinderKind.function_binding
@@ -891,11 +857,7 @@ class TestPlaceholderCallResolution:
 class TestCallResolution:
     def test_call_named_arg_value_resolved(self) -> None:
         """Named-arg values in a call are resolved."""
-        r = parse_and_resolve(
-            "agent reviewer\n"
-            'let x = ask("Q", agent = reviewer)\n'
-            "x"
-        )
+        r = parse_and_resolve('agent reviewer\nlet x = ask("Q", agent = reviewer)\nx')
         let_node = r.program.body.items[1]
         assert isinstance(let_node, LetDecl)
         call = let_node.value
@@ -911,11 +873,7 @@ class TestCallResolution:
 
     def test_user_call_positional_args_resolved(self) -> None:
         r = parse_and_resolve(
-            "def add(a: int, b: int) -> int = a\n"
-            "let x = 1\n"
-            "let y = 2\n"
-            "let z = add(x, y)\n"
-            "z"
+            "def add(a: int, b: int) -> int = a\nlet x = 1\nlet y = 2\nlet z = add(x, y)\nz"
         )
         let_z = r.program.body.items[3]
         assert isinstance(let_z, LetDecl)
@@ -939,8 +897,7 @@ class TestFuncDefMutualRecursion:
 
     def test_def_self_recursion(self) -> None:
         r = parse_and_resolve(
-            "def fact(n: int) -> int = if n <= 1 => 1 | else => n * fact(n - 1)\n"
-            "fact(5)"
+            "def fact(n: int) -> int = if n <= 1 => 1 | else => n * fact(n - 1)\nfact(5)"
         )
         assert _ref(r, "fact").kind == BinderKind.function_binding
 
@@ -958,9 +915,7 @@ class TestFuncDefMutualRecursion:
     def test_def_forward_reference(self) -> None:
         """A def can call another def declared AFTER it (pre-pass collects all)."""
         r = parse_and_resolve(
-            "def caller(n: int) -> int = callee(n)\n"
-            "def callee(n: int) -> int = n\n"
-            "caller(1)"
+            "def caller(n: int) -> int = callee(n)\ndef callee(n: int) -> int = n\ncaller(1)"
         )
         assert _ref(r, "caller").kind == BinderKind.function_binding
 
@@ -1004,11 +959,7 @@ class TestFuncDefMutualRecursion:
 
     def test_def_param_default_resolved_in_enclosing_scope(self) -> None:
         """Parameter defaults are resolved in the DEFINITION scope (outer)."""
-        r = parse_and_resolve(
-            "let base = 10\n"
-            "def f(x: int = base) -> int = x\n"
-            "f()"
-        )
+        r = parse_and_resolve("let base = 10\ndef f(x: int = base) -> int = x\nf()")
         assert _ref(r, "base").kind == BinderKind.let_binding
 
     def test_return_allowed_in_def_body(self) -> None:
@@ -1099,11 +1050,7 @@ class TestAgentValueBindings:
 
     def test_agent_ref_in_ask_named_arg_resolves(self) -> None:
         """An agent name used as a VarRef in ask(agent:) resolves to the binding."""
-        r = parse_and_resolve(
-            "agent reviewer\n"
-            'let x = ask("Q", agent = reviewer)\n'
-            "x"
-        )
+        r = parse_and_resolve('agent reviewer\nlet x = ask("Q", agent = reviewer)\nx')
         let_node = r.program.body.items[1]
         assert isinstance(let_node, LetDecl)
         call = let_node.value
@@ -1159,26 +1106,14 @@ class TestAgentValueBindings:
 class TestDoScoping:
     def test_do_body_binding_visible_in_until(self) -> None:
         """A binding defined in the do body is visible in the until condition."""
-        r = parse_and_resolve(
-            "var n = 0\n"
-            "do[2]\n"
-            "  let probe = n\n"
-            "  n := probe\n"
-            "until n >= 1\n"
-            "n"
-        )
+        r = parse_and_resolve("var n = 0\ndo[2]\n  let probe = n\n  n := probe\nuntil n >= 1\nn")
         ref = _ref(r, "n")
         assert ref.kind == BinderKind.var_binding
         assert ref.mutable
 
     def test_do_body_binding_not_visible_after_loop(self) -> None:
         """A binding from the do body is not visible after the loop."""
-        err = reject_scope(
-            "do[2]\n"
-            "  let inner = 1\n"
-            "until true\n"
-            "inner\n"
-        )
+        err = reject_scope("do[2]\n  let inner = 1\nuntil true\ninner\n")
         line, msg = diag(err)
         assert line == 4
         assert "inner" in msg
@@ -1204,31 +1139,15 @@ class TestDoScoping:
 
 class TestIfScoping:
     def test_if_condition_resolved(self) -> None:
-        r = parse_and_resolve(
-            "let x = true\n"
-            "if x => 1 | else => 2\n"
-        )
+        r = parse_and_resolve("let x = true\nif x => 1 | else => 2\n")
         assert _ref(r, "x").kind == BinderKind.let_binding
 
     def test_if_branch_body_local(self) -> None:
-        r = parse_and_resolve(
-            "let x = 1\n"
-            "if true =>\n"
-            "  let y = x\n"
-            "  y\n"
-            "| else =>\n"
-            "  x\n"
-        )
+        r = parse_and_resolve("let x = 1\nif true =>\n  let y = x\n  y\n| else =>\n  x\n")
         assert _ref(r, "y").kind == BinderKind.let_binding
 
     def test_if_inner_not_visible_outside(self) -> None:
-        err = reject_scope(
-            "if true =>\n"
-            "  let inner = 1\n"
-            "| else =>\n"
-            "  ()\n"
-            "inner\n"
-        )
+        err = reject_scope("if true =>\n  let inner = 1\n| else =>\n  ()\ninner\n")
         line, msg = diag(err)
         assert line == 5
         assert "inner" in msg
@@ -1245,30 +1164,17 @@ class TestIfScoping:
 
 class TestCaseScoping:
     def test_case_var_pattern_visible_in_body(self) -> None:
-        r = parse_and_resolve(
-            "let x = 1\n"
-            "case x of\n"
-            "  | n => n\n"
-        )
+        r = parse_and_resolve("let x = 1\ncase x of\n  | n => n\n")
         assert _ref(r, "n").kind == BinderKind.pattern_binding
 
     def test_case_pattern_not_visible_outside(self) -> None:
-        err = reject_scope(
-            "let x = 1\n"
-            "case x of\n"
-            "  | n => n\n"
-            "n\n"
-        )
+        err = reject_scope("let x = 1\ncase x of\n  | n => n\nn\n")
         line, msg = diag(err)
         assert line == 4
         assert "n" in msg
 
     def test_case_wildcard_pattern(self) -> None:
-        r = parse_and_resolve(
-            "let x = 1\n"
-            "case x of\n"
-            "  | _ => 0\n"
-        )
+        r = parse_and_resolve("let x = 1\ncase x of\n  | _ => 0\n")
         assert _ref(r, "x").kind == BinderKind.let_binding
 
 
@@ -1279,32 +1185,15 @@ class TestCaseScoping:
 
 class TestTryScoping:
     def test_try_body_resolved(self) -> None:
-        r = parse_and_resolve(
-            "try\n"
-            "  let x = 1\n"
-            "  x\n"
-            "catch _ =>\n"
-            "  0\n"
-        )
+        r = parse_and_resolve("try\n  let x = 1\n  x\ncatch _ =>\n  0\n")
         assert _ref(r, "x").kind == BinderKind.let_binding
 
     def test_catch_binder_visible_in_catch_body(self) -> None:
-        r = parse_and_resolve(
-            "try\n"
-            "  1\n"
-            "catch _ as err =>\n"
-            "  err\n"
-        )
+        r = parse_and_resolve("try\n  1\ncatch _ as err =>\n  err\n")
         assert _ref(r, "err").kind == BinderKind.catch_binder
 
     def test_catch_binder_not_visible_outside(self) -> None:
-        err = reject_scope(
-            "try\n"
-            "  1\n"
-            "catch _ as err =>\n"
-            "  err\n"
-            "err\n"
-        )
+        err = reject_scope("try\n  1\ncatch _ as err =>\n  err\nerr\n")
         line, msg = diag(err)
         assert line == 5
         assert "err" in msg
@@ -1323,7 +1212,7 @@ class TestParentScopeSeam:
     def test_reference_resolves_into_parent(self) -> None:
         """A VarRef to a parent-scope binding resolves through the parent."""
         session = parse_and_resolve("let x = 1\nx")
-        entry = resolve(parse_program("print x"), parent_scope=session.root_scope)
+        entry = resolve_module(parse_program("print x"), parent_scope=session.root_scope)
         # The print's arg VarRef resolved to the session's let binding.
         call_item = entry.program.body.items[0]
         assert isinstance(call_item, Call)
@@ -1335,7 +1224,7 @@ class TestParentScopeSeam:
     def test_redeclaring_parent_name_shadows_without_error(self) -> None:
         """Redeclaring a parent-visible name shadows without error."""
         session = parse_and_resolve("let x = 1\nx")
-        entry = resolve(parse_program("let x = 2\nx"), parent_scope=session.root_scope)
+        entry = resolve_module(parse_program("let x = 2\nx"), parent_scope=session.root_scope)
         let_stmt = entry.program.body.items[0]
         assert isinstance(let_stmt, LetDecl)
         assert "x" in entry.root_scope.bindings
@@ -1344,7 +1233,7 @@ class TestParentScopeSeam:
     def test_assign_to_parent_mutable_resolves(self) -> None:
         """``:=`` of a parent var binding resolves through the parent."""
         session = parse_and_resolve("var n: int = 0\nn")
-        entry = resolve(parse_program("n := 1"), parent_scope=session.root_scope)
+        entry = resolve_module(parse_program("n := 1"), parent_scope=session.root_scope)
         assign_stmt = entry.program.body.items[0]
         assert isinstance(assign_stmt, AssignStmt)
         ref = entry.resolution[assign_stmt.node_id]
@@ -1354,12 +1243,12 @@ class TestParentScopeSeam:
     def test_assign_to_parent_immutable_still_errors(self) -> None:
         session = parse_and_resolve("let k = 1\nk")
         with pytest.raises(AglScopeError) as exc_info:
-            resolve(parse_program("k := 2"), parent_scope=session.root_scope)
+            resolve_module(parse_program("k := 2"), parent_scope=session.root_scope)
         assert "Cannot assign" in str(exc_info.value)
 
     def test_ambient_agents(self) -> None:
         """An ambient agent resolves without an in-source declaration."""
-        r = resolve(
+        r = resolve_module(
             parse_program('let x = ask("Q", agent = session_bot)\nx'),
             ambient_agents=frozenset({"session_bot"}),
         )
@@ -1379,12 +1268,13 @@ class TestParentScopeSeam:
         prior = parse_and_resolve("enum Review\n  | Pass\n  | Fail\nPass()")
         session_scope = prior.root_scope
         # No ambient_constructor_candidates passed → candidates is empty for 'Pass'.
-        entry = resolve(
+        entry = resolve_module(
             parse_program("Pass()"),
             parent_scope=session_scope,
         )
         # Scope resolution succeeds but does NOT populate constructor_refs.
         from agm.agl.syntax.nodes import Call as _Call
+
         call_node = entry.program.body.items[0]
         assert isinstance(call_node, _Call)
         assert isinstance(call_node.callee, VarRef)
@@ -1403,13 +1293,14 @@ class TestParentScopeSeam:
         }
         # New entry references Pass() with a parent scope that has the constructor binding.
         session_scope = prior.root_scope
-        entry = resolve(
+        entry = resolve_module(
             parse_program("Pass()"),
             parent_scope=session_scope,
             ambient_constructor_candidates=ambient,
         )
         # The VarRef/Call for Pass() must be in constructor_refs.
         from agm.agl.syntax.nodes import Call as _Call
+
         call_node = entry.program.body.items[0]
         assert isinstance(call_node, _Call)
         assert isinstance(call_node.callee, VarRef)
@@ -1426,6 +1317,7 @@ class TestParentScopeSeam:
         entry = parse_and_resolve(source)
         from agm.agl.syntax.nodes import FieldAccess as _FA
         from agm.agl.syntax.nodes import FuncDef as _FD
+
         fn_node = entry.program.body.items[1]
         assert isinstance(fn_node, _FD)
         fa_node = fn_node.body
@@ -1443,14 +1335,15 @@ class TestParentScopeSeam:
         }
         ambient_type_names = prior.declared_type_names
         session_scope = prior.root_scope
-        entry = resolve(
-            parse_program('Review::Pass()'),
+        entry = resolve_module(
+            parse_program("Review::Pass()"),
             parent_scope=session_scope,
             ambient_constructor_candidates=ambient_candidates,
             ambient_type_names=ambient_type_names,
         )
         from agm.agl.syntax.nodes import Call as _Call
         from agm.agl.syntax.nodes import VarRef as _VarRef
+
         call_node = entry.program.body.items[0]
         assert isinstance(call_node, _Call)
         assert isinstance(call_node.callee, _VarRef)
@@ -1494,6 +1387,7 @@ class TestResolutionSideTable:
         tmpl = let_q.value
         assert isinstance(tmpl, Template)
         from agm.agl.syntax.nodes import InterpSegment
+
         interp = next(s for s in tmpl.segments if isinstance(s, InterpSegment))
         assert isinstance(interp.expr, VarRef)
         ref = r.resolution[interp.expr.node_id]
@@ -1706,9 +1600,7 @@ class TestDirectASTConstruction:
     def test_field_access_on_varref(self) -> None:
         let_x = _make_let("x", _make_intlit(1))
         x_ref = _make_varref("x")
-        field_expr = FieldAccess(
-            obj=x_ref, field="f", span=_sp(), node_id=_nid()
-        )
+        field_expr = FieldAccess(obj=x_ref, field="f", span=_sp(), node_id=_nid())
         r = resolve_program(let_x, field_expr)
         assert r.resolution[x_ref.node_id].kind == BinderKind.let_binding
 
@@ -1745,6 +1637,7 @@ class TestDirectASTConstruction:
             node_id=_nid(),
         )
         from agm.agl.syntax.nodes import Case
+
         case_node = Case(
             subject=_make_varref("x"),
             branches=(branch,),
@@ -1769,6 +1662,7 @@ class TestDirectASTConstruction:
             node_id=_nid(),
         )
         from agm.agl.syntax.nodes import Case
+
         case_node = Case(
             subject=_make_varref("x"),
             branches=(branch,),
@@ -1785,16 +1679,17 @@ class TestDirectASTConstruction:
         pf1 = PatternField(name="a", pattern=sub1, span=_sp(5), node_id=_nid())
         pf2 = PatternField(name="b", pattern=sub2, span=_sp(5), node_id=_nid())
         ctor_pat = ConstructorPattern(
-            qualifier=None, name="Pair", positional=(), named=(pf1, pf2),
-            span=_sp(5), node_id=_nid()
+            qualifier=None,
+            name="Pair",
+            positional=(),
+            named=(pf1, pf2),
+            span=_sp(5),
+            node_id=_nid(),
         )
-        branch = CaseBranch(
-            pattern=ctor_pat, body=_make_unitlit(), span=_sp(5), node_id=_nid()
-        )
+        branch = CaseBranch(pattern=ctor_pat, body=_make_unitlit(), span=_sp(5), node_id=_nid())
         from agm.agl.syntax.nodes import Case
-        case_node = Case(
-            subject=_make_varref("x"), branches=(branch,), span=_sp(5), node_id=_nid()
-        )
+
+        case_node = Case(subject=_make_varref("x"), branches=(branch,), span=_sp(5), node_id=_nid())
         err = reject_program(let_x, case_node)
         assert "dup" in err.to_diagnostic().message
 
@@ -1803,13 +1698,10 @@ class TestDirectASTConstruction:
         let_x = _make_let("x", _make_intlit(1))
         pv = VarPattern(name="v", span=_sp(), node_id=_nid())
         v_in_branch = _make_varref("v")
-        branch = CaseBranch(
-            pattern=pv, body=v_in_branch, span=_sp(), node_id=_nid()
-        )
+        branch = CaseBranch(pattern=pv, body=v_in_branch, span=_sp(), node_id=_nid())
         from agm.agl.syntax.nodes import Case
-        case_node = Case(
-            subject=_make_varref("x"), branches=(branch,), span=_sp(), node_id=_nid()
-        )
+
+        case_node = Case(subject=_make_varref("x"), branches=(branch,), span=_sp(), node_id=_nid())
         r = resolve_program(let_outer, let_x, case_node)
         # The inner VarRef resolves to the pattern_binding, not the outer let "v"
         assert r.resolution[v_in_branch.node_id].kind == BinderKind.pattern_binding
@@ -1818,35 +1710,19 @@ class TestDirectASTConstruction:
     # --- Type declarations outside root rejected ---
 
     def test_record_not_at_root_rejected(self) -> None:
-        err = reject_scope(
-            "if true =>\n"
-            "  record R\n"
-            "    n: int\n"
-            "| else =>\n"
-            "  ()\n"
-        )
+        err = reject_scope("if true =>\n  record R\n    n: int\n| else =>\n  ()\n")
         line, msg = diag(err)
         assert line == 2
         assert "top" in msg.lower() or "top-level" in msg.lower() or "program root" in msg.lower()
 
     def test_enum_not_at_root_rejected(self) -> None:
-        err = reject_scope(
-            "do[2]\n"
-            "  enum E\n"
-            "    | A\n"
-            "until true\n"
-        )
+        err = reject_scope("do[2]\n  enum E\n    | A\nuntil true\n")
         line, msg = diag(err)
         assert line == 2
         assert "top" in msg.lower() or "top-level" in msg.lower() or "program root" in msg.lower()
 
     def test_type_alias_not_at_root_rejected(self) -> None:
-        err = reject_scope(
-            "try\n"
-            "  type T = text\n"
-            "catch _ =>\n"
-            "  ()\n"
-        )
+        err = reject_scope("try\n  type T = text\ncatch _ =>\n  ()\n")
         line, msg = diag(err)
         assert line == 2
         assert "top" in msg.lower() or "top-level" in msg.lower() or "program root" in msg.lower()
@@ -1854,12 +1730,7 @@ class TestDirectASTConstruction:
     # --- param not at root ---
 
     def test_param_inside_if_rejected(self) -> None:
-        err = reject_scope(
-            "if true =>\n"
-            "  param late\n"
-            "| else =>\n"
-            "  ()\n"
-        )
+        err = reject_scope("if true =>\n  param late\n| else =>\n  ()\n")
         line, msg = diag(err)
         assert line == 2
         assert "param" in msg.lower()
@@ -1917,8 +1788,12 @@ class TestDirectASTConstruction:
         sp = _sp()
         int_t = IntT(span=sp, node_id=_nid())
         param = Param(
-            name="x", type_expr=int_t, kind=ParamKind.STANDARD, default=None,
-            span=sp, node_id=_nid()
+            name="x",
+            type_expr=int_t,
+            kind=ParamKind.STANDARD,
+            default=None,
+            span=sp,
+            node_id=_nid(),
         )
         x_in_body = _make_varref("x")
         funcdef = FuncDef(
@@ -1938,8 +1813,12 @@ class TestDirectASTConstruction:
         sp = _sp()
         int_t = IntT(span=sp, node_id=_nid())
         param = Param(
-            name="p", type_expr=int_t, kind=ParamKind.STANDARD, default=None,
-            span=sp, node_id=_nid()
+            name="p",
+            type_expr=int_t,
+            kind=ParamKind.STANDARD,
+            default=None,
+            span=sp,
+            node_id=_nid(),
         )
         funcdef = FuncDef(
             name="g",
@@ -1959,8 +1838,12 @@ class TestDirectASTConstruction:
         sp = _sp()
         int_t = IntT(span=sp, node_id=_nid())
         param = Param(
-            name="x", type_expr=int_t, kind=ParamKind.STANDARD, default=None,
-            span=sp, node_id=_nid()
+            name="x",
+            type_expr=int_t,
+            kind=ParamKind.STANDARD,
+            default=None,
+            span=sp,
+            node_id=_nid(),
         )
         x_in_lam = _make_varref("x")
         lam = Lambda(
@@ -1981,8 +1864,12 @@ class TestDirectASTConstruction:
         sp = _sp()
         int_t = IntT(span=sp, node_id=_nid())
         param = Param(
-            name="x", type_expr=int_t, kind=ParamKind.STANDARD, default=None,
-            span=sp, node_id=_nid()
+            name="x",
+            type_expr=int_t,
+            kind=ParamKind.STANDARD,
+            default=None,
+            span=sp,
+            node_id=_nid(),
         )
         lam = Lambda(
             params=(param,),
@@ -1998,7 +1885,7 @@ class TestDirectASTConstruction:
 
 
 # ---------------------------------------------------------------------------
-# ResolvedProgram.declared_functions
+# ModuleResolution.declared_functions
 # ---------------------------------------------------------------------------
 
 
@@ -2024,7 +1911,6 @@ class TestDeclaredFunctions:
         err = reject_scope("def foo(x: int) -> int = x\nagent foo\nfoo(1)")
         _, msg = diag(err)
         assert "foo" in msg
-
 
 
 # ---------------------------------------------------------------------------
@@ -2068,7 +1954,7 @@ class TestAmbientAgentBindingEdgeCases:
         session = parse_and_resolve("let session_bot = 1\nsession_bot")
         # Pass ambient_agents — the name is already in parent scope via lookup,
         # so the ambient binding definition is skipped.
-        entry = resolve(
+        entry = resolve_module(
             parse_program("let x = 1\nx"),
             parent_scope=session.root_scope,
             ambient_agents=frozenset({"session_bot"}),
@@ -2080,7 +1966,7 @@ class TestAmbientAgentBindingEdgeCases:
     def test_ambient_agent_already_declared_locally_skipped(self) -> None:
         """If an ambient agent name is also declared locally, local takes precedence."""
         # Declare 'bot' locally AND pass it as ambient — should not double-define.
-        r = resolve(
+        r = resolve_module(
             parse_program("agent bot\nlet x = bot\nx"),
             ambient_agents=frozenset({"bot"}),
         )
@@ -2097,7 +1983,7 @@ class TestAmbientAgentBindingEdgeCases:
         already-defined check.
         """
         with pytest.raises(AglScopeError) as exc_info:
-            resolve(
+            resolve_module(
                 parse_program("def foo(x: int) -> int = x\nfoo(1)"),
                 ambient_agents=frozenset({"foo"}),
             )
@@ -2117,12 +2003,20 @@ class TestLambdaDuplicateParam:
 
         int_t = IntTNode(span=sp, node_id=_nid())
         p1 = Param(
-            name="x", type_expr=int_t, kind=ParamKind.STANDARD, default=None,
-            span=sp, node_id=_nid()
+            name="x",
+            type_expr=int_t,
+            kind=ParamKind.STANDARD,
+            default=None,
+            span=sp,
+            node_id=_nid(),
         )
         p2 = Param(
-            name="x", type_expr=int_t, kind=ParamKind.STANDARD, default=None,
-            span=_sp(2), node_id=_nid()
+            name="x",
+            type_expr=int_t,
+            kind=ParamKind.STANDARD,
+            default=None,
+            span=_sp(2),
+            node_id=_nid(),
         )
         lam = Lambda(
             params=(p1, p2),
@@ -2140,10 +2034,9 @@ class TestLambdaDuplicateParam:
 # Constructor value bindings (generics:  / scope pass)
 # ---------------------------------------------------------------------------
 
+
 # Helper: build a RecordDef with optional type_params
-def _make_record(
-    name: str, *, type_params: tuple[str, ...] = (), line: int = 1
-) -> RecordDef:
+def _make_record(name: str, *, type_params: tuple[str, ...] = (), line: int = 1) -> RecordDef:
     from agm.agl.syntax.nodes import Param, ParamKind
     from agm.agl.syntax.types import IntT as IntTNode
 
@@ -2157,9 +2050,7 @@ def _make_record(
         span=sp,
         node_id=_nid(),
     )
-    return RecordDef(
-        name=name, fields=(fd,), type_params=type_params, span=sp, node_id=_nid()
-    )
+    return RecordDef(name=name, fields=(fd,), type_params=type_params, span=sp, node_id=_nid())
 
 
 # Helper: build an EnumDef with variants
@@ -2190,12 +2081,7 @@ class TestConstructorBindings:
 
     def test_record_constructor_resolves_as_value(self) -> None:
         """A record constructor (record name) resolves as a constructor_binding."""
-        r = parse_and_resolve(
-            "record Box\n"
-            "  value: int\n"
-            "let b = Box(value = 1)\n"
-            "b\n"
-        )
+        r = parse_and_resolve("record Box\n  value: int\nlet b = Box(value = 1)\nb\n")
         # The callee VarRef("Box") should be in constructor_refs
         # and the constructor candidate is for 'Box'
         assert "Box" in r.constructor_candidates
@@ -2206,35 +2092,19 @@ class TestConstructorBindings:
 
     def test_record_constructor_lowercase_resolves(self) -> None:
         """Lowercase record names work identically (no capitalization rule)."""
-        r = parse_and_resolve(
-            "record box\n"
-            "  value: int\n"
-            "let b = box(value = 1)\n"
-            "b\n"
-        )
+        r = parse_and_resolve("record box\n  value: int\nlet b = box(value = 1)\nb\n")
         assert "box" in r.constructor_candidates
         assert r.constructor_candidates["box"][0].owner_name == "box"
 
     def test_enum_variant_resolves_as_value(self) -> None:
         """Enum variants resolve as constructor_bindings."""
-        r = parse_and_resolve(
-            "enum Option\n"
-            "  | none\n"
-            "  | some\n"
-            "none\n"
-        )
+        r = parse_and_resolve("enum Option\n  | none\n  | some\nnone\n")
         assert "none" in r.constructor_candidates
         assert "some" in r.constructor_candidates
 
     def test_nullary_variant_bare_ref_resolves(self) -> None:
         """A bare VarRef to a nullary enum variant resolves as a constructor."""
-        r = parse_and_resolve(
-            "enum Option\n"
-            "  | none\n"
-            "  | some\n"
-            "let x = none\n"
-            "x\n"
-        )
+        r = parse_and_resolve("enum Option\n  | none\n  | some\nlet x = none\nx\n")
         # The VarRef("none") in the let should be in constructor_refs
         let_decl = r.program.body.items[1]
         assert isinstance(let_decl, LetDecl)
@@ -2247,13 +2117,7 @@ class TestConstructorBindings:
 
     def test_payload_variant_callee_resolves(self) -> None:
         """A payload variant used as a call callee resolves as a constructor."""
-        r = parse_and_resolve(
-            "enum Option\n"
-            "  | none\n"
-            "  | some\n"
-            "let x = some()\n"
-            "x\n"
-        )
+        r = parse_and_resolve("enum Option\n  | none\n  | some\nlet x = some()\nx\n")
         let_decl = r.program.body.items[1]
         assert isinstance(let_decl, LetDecl)
         call = let_decl.value
@@ -2265,12 +2129,7 @@ class TestConstructorBindings:
 
     def test_record_constructor_callee_resolves(self) -> None:
         """A record constructor used as a call callee resolves."""
-        r = parse_and_resolve(
-            "record Box\n"
-            "  value: int\n"
-            "let b = Box(value = 1)\n"
-            "b\n"
-        )
+        r = parse_and_resolve("record Box\n  value: int\nlet b = Box(value = 1)\nb\n")
         let_decl = r.program.body.items[1]
         assert isinstance(let_decl, LetDecl)
         call = let_decl.value
@@ -2286,22 +2145,12 @@ class TestConstructorBindings:
 
     def test_generic_record_constructor_has_type_params(self) -> None:
         """A generic record constructor carries its type_params in the ConstructorRef."""
-        r = parse_and_resolve(
-            "record Box[T]\n"
-            "  value: int\n"
-            "let b = Box(value = 1)\n"
-            "b\n"
-        )
+        r = parse_and_resolve("record Box[T]\n  value: int\nlet b = Box(value = 1)\nb\n")
         assert r.constructor_candidates["Box"][0].type_params == ("T",)
 
     def test_generic_enum_variant_has_type_params(self) -> None:
         """An enum variant from a generic enum carries the enum's type_params."""
-        r = parse_and_resolve(
-            "enum Option[T]\n"
-            "  | none\n"
-            "  | some\n"
-            "none\n"
-        )
+        r = parse_and_resolve("enum Option[T]\n  | none\n  | some\nnone\n")
         assert r.constructor_candidates["none"][0].type_params == ("T",)
         assert r.constructor_candidates["some"][0].type_params == ("T",)
 
@@ -2309,14 +2158,7 @@ class TestConstructorBindings:
 
     def test_unique_variant_resolves_unambiguously(self) -> None:
         """A unique variant name (one enum) resolves to a single constructor_ref."""
-        r = parse_and_resolve(
-            "enum A\n"
-            "  | foo\n"
-            "  | bar\n"
-            "enum B\n"
-            "  | baz\n"
-            "foo\n"
-        )
+        r = parse_and_resolve("enum A\n  | foo\n  | bar\nenum B\n  | baz\nfoo\n")
         last_item = r.program.body.items[2]
         assert isinstance(last_item, VarRef)
         assert last_item.node_id in r.constructor_refs
@@ -2337,13 +2179,7 @@ class TestConstructorBindings:
 
     def test_ambiguous_bare_varref_raises(self) -> None:
         """Unqualified use of an ambiguous variant name raises an ambiguity error."""
-        err = reject_scope(
-            "enum A\n"
-            "  | some\n"
-            "enum B\n"
-            "  | some\n"
-            "some\n"
-        )
+        err = reject_scope("enum A\n  | some\nenum B\n  | some\nsome\n")
         msg = err.to_diagnostic().message
         assert "some" in msg
         assert "ambiguous" in msg.lower()
@@ -2353,13 +2189,7 @@ class TestConstructorBindings:
 
     def test_ambiguous_call_raises(self) -> None:
         """Calling an ambiguous constructor name also raises ambiguity."""
-        err = reject_scope(
-            "enum A\n"
-            "  | some\n"
-            "enum B\n"
-            "  | some\n"
-            "some()\n"
-        )
+        err = reject_scope("enum A\n  | some\nenum B\n  | some\nsome()\n")
         msg = err.to_diagnostic().message
         assert "ambiguous" in msg.lower()
         assert "A" in msg
@@ -2367,13 +2197,7 @@ class TestConstructorBindings:
 
     def test_ambiguous_mentions_qualification(self) -> None:
         """Ambiguity error tells the user to qualify the reference."""
-        err = reject_scope(
-            "enum Option\n"
-            "  | some\n"
-            "enum Other\n"
-            "  | some\n"
-            "some\n"
-        )
+        err = reject_scope("enum Option\n  | some\nenum Other\n  | some\nsome\n")
         msg = err.to_diagnostic().message
         # Should suggest qualification like 'Option::some'
         assert "." in msg or "qualify" in msg.lower()
@@ -2457,7 +2281,7 @@ class TestConstructorBindings:
             "enum Other[T]\n"
             "  | nope\n"
             "  | some(value: T)\n"
-            'Option::some(value = 1)\n'
+            "Option::some(value = 1)\n"
         )
         call_node = r.program.body.items[2]
         assert isinstance(call_node, Call)
@@ -2479,13 +2303,7 @@ class TestConstructorBindings:
 
     def test_qualified_constructor_recorded(self) -> None:
         """Qualified access Owner::member is recorded in qualified_constructor_refs."""
-        r = parse_and_resolve(
-            "enum Option\n"
-            "  | none\n"
-            "  | some\n"
-            'let x = Option::some\n'
-            "x\n"
-        )
+        r = parse_and_resolve("enum Option\n  | none\n  | some\nlet x = Option::some\nx\n")
         let_decl = r.program.body.items[1]
         assert isinstance(let_decl, LetDecl)
         fa = let_decl.value
@@ -2497,12 +2315,7 @@ class TestConstructorBindings:
 
     def test_qualified_access_does_not_raise_undefined_for_owner(self) -> None:
         "Option::some does NOT raise 'Option is not defined'."
-        r = parse_and_resolve(
-            "enum Option\n"
-            "  | none\n"
-            "  | some\n"
-            'Option::some\n'
-        )
+        r = parse_and_resolve("enum Option\n  | none\n  | some\nOption::some\n")
         last = r.program.body.items[1]
         assert isinstance(last, VarRef)
         assert last.node_id in r.qualified_constructor_refs
@@ -2510,13 +2323,8 @@ class TestConstructorBindings:
         assert owner == "Option" and member == "some"
 
     def test_qualified_access_none_variant(self) -> None:
-        'Option::none is recorded in qualified_constructor_refs.'
-        r = parse_and_resolve(
-            "enum Option\n"
-            "  | none\n"
-            "  | some\n"
-            'Option::none\n'
-        )
+        "Option::none is recorded in qualified_constructor_refs."
+        r = parse_and_resolve("enum Option\n  | none\n  | some\nOption::none\n")
         last = r.program.body.items[1]
         assert isinstance(last, VarRef)
         assert last.node_id in r.qualified_constructor_refs
@@ -2525,11 +2333,7 @@ class TestConstructorBindings:
         assert variant_name == "none"
 
     def test_dot_access_with_type_name_is_rejected(self) -> None:
-        err = reject_scope(
-            "record Box\n"
-            "  value: int\n"
-            "Box.value\n"
-        )
+        err = reject_scope("record Box\n  value: int\nBox.value\n")
         assert "type name" in str(err).lower()
         assert "::" in str(err)
 
@@ -2537,35 +2341,20 @@ class TestConstructorBindings:
 
     def test_def_same_name_as_constructor_raises(self) -> None:
         """A def with the same name as an enum variant raises a duplicate error."""
-        err = reject_scope(
-            "enum Option\n"
-            "  | some\n"
-            "def some(x: int) -> int = x\n"
-            "some(1)\n"
-        )
+        err = reject_scope("enum Option\n  | some\ndef some(x: int) -> int = x\nsome(1)\n")
         msg = err.to_diagnostic().message
         assert "some" in msg
         assert "already declared" in msg.lower() or "duplicate" in msg.lower()
 
     def test_agent_same_name_as_constructor_raises(self) -> None:
         """An agent with the same name as a variant raises a duplicate error."""
-        err = reject_scope(
-            "enum Option\n"
-            "  | myagent\n"
-            "agent myagent\n"
-            "()\n"
-        )
+        err = reject_scope("enum Option\n  | myagent\nagent myagent\n()\n")
         msg = err.to_diagnostic().message
         assert "myagent" in msg
 
     def test_constructor_same_name_as_def_raises(self) -> None:
         """An enum variant named after an existing def raises a duplicate error."""
-        err = reject_scope(
-            "def some(x: int) -> int = x\n"
-            "enum Option\n"
-            "  | some\n"
-            "some(1)\n"
-        )
+        err = reject_scope("def some(x: int) -> int = x\nenum Option\n  | some\nsome(1)\n")
         msg = err.to_diagnostic().message
         assert "some" in msg
 
@@ -2576,13 +2365,7 @@ class TestConstructorBindings:
         while a VarRef in another branch resolves to the constructor.
         """
         r = parse_and_resolve(
-            "enum Option\n"
-            "  | some\n"
-            "if true =>\n"
-            "  let some = 42\n"
-            "  some\n"
-            "| else =>\n"
-            "  some\n"
+            "enum Option\n  | some\nif true =>\n  let some = 42\n  some\n| else =>\n  some\n"
         )
         inner = _find_varref(r.program, "some", occurrence=0)
         outer = _find_varref(r.program, "some", occurrence=1)
@@ -2593,12 +2376,7 @@ class TestConstructorBindings:
 
     def test_let_at_root_conflicts_with_constructor(self) -> None:
         """At root, 'let some' conflicts with the constructor 'some'."""
-        err = reject_scope(
-            "enum Option\n"
-            "  | some\n"
-            "let some = 1\n"
-            "some\n"
-        )
+        err = reject_scope("enum Option\n  | some\nlet some = 1\nsome\n")
         msg = err.to_diagnostic().message
         assert "some" in msg
 
@@ -2606,25 +2384,14 @@ class TestConstructorBindings:
 
     def test_enum_name_used_as_value_is_undefined(self) -> None:
         """The enum name itself is NOT a value binding — only its variants are."""
-        err = reject_scope(
-            "enum Option\n"
-            "  | none\n"
-            "  | some\n"
-            "let x = Option\n"
-            "x\n"
-        )
+        err = reject_scope("enum Option\n  | none\n  | some\nlet x = Option\nx\n")
         msg = err.to_diagnostic().message
         assert "Option" in msg
         assert "not defined" in msg.lower()
 
     def test_uppercase_enum_name_not_value(self) -> None:
         """Enum name 'Option' (uppercase) is still not a value binding."""
-        err = reject_scope(
-            "enum Option\n"
-            "  | None\n"
-            "  | Some\n"
-            "Option\n"
-        )
+        err = reject_scope("enum Option\n  | None\n  | Some\nOption\n")
         msg = err.to_diagnostic().message
         assert "Option" in msg
 
@@ -2632,18 +2399,8 @@ class TestConstructorBindings:
 
     def test_lowercase_constructor_resolves_same_as_uppercase(self) -> None:
         "Lowercase 'option::none' and uppercase 'Option::None' behave identically."
-        r_lower = parse_and_resolve(
-            "enum option\n"
-            "  | none\n"
-            "  | some\n"
-            'option::none\n'
-        )
-        r_upper = parse_and_resolve(
-            "enum Option\n"
-            "  | None\n"
-            "  | Some\n"
-            'Option::None\n'
-        )
+        r_lower = parse_and_resolve("enum option\n  | none\n  | some\noption::none\n")
+        r_upper = parse_and_resolve("enum Option\n  | None\n  | Some\nOption::None\n")
         # Both should have a single qualified_constructor_ref
         assert len(r_lower.qualified_constructor_refs) == 1
         assert len(r_upper.qualified_constructor_refs) == 1
@@ -2651,12 +2408,7 @@ class TestConstructorBindings:
     def test_no_capitalization_rule_for_constructor_lookup(self) -> None:
         """Neither lowercase nor uppercase variants require capitalization to resolve."""
         r = parse_and_resolve(
-            "enum option\n"
-            "  | none\n"
-            "  | someVal\n"
-            "let a = none\n"
-            "let b = someVal\n"
-            "a\n"
+            "enum option\n  | none\n  | someVal\nlet a = none\nlet b = someVal\na\n"
         )
         assert "none" in r.constructor_candidates
         assert "someVal" in r.constructor_candidates
@@ -2665,40 +2417,26 @@ class TestConstructorBindings:
 
     def test_duplicate_type_param_in_def_raises(self) -> None:
         """Duplicate type parameter in a def declaration raises AglScopeError."""
-        err = reject_scope(
-            "def id[T, T](x: int) -> int = x\n"
-            "id(1)\n"
-        )
+        err = reject_scope("def id[T, T](x: int) -> int = x\nid(1)\n")
         msg = err.to_diagnostic().message
         assert "T" in msg
         assert "duplicate" in msg.lower() or "Duplicate" in msg
 
     def test_duplicate_type_param_in_record_raises(self) -> None:
         """Duplicate type parameter in a record declaration raises AglScopeError."""
-        err = reject_scope(
-            "record Box[T, T]\n"
-            "  value: int\n"
-            "()\n"
-        )
+        err = reject_scope("record Box[T, T]\n  value: int\n()\n")
         msg = err.to_diagnostic().message
         assert "T" in msg
 
     def test_duplicate_type_param_in_enum_raises(self) -> None:
         """Duplicate type parameter in an enum declaration raises AglScopeError."""
-        err = reject_scope(
-            "enum Option[T, T]\n"
-            "  | none\n"
-            "()\n"
-        )
+        err = reject_scope("enum Option[T, T]\n  | none\n()\n")
         msg = err.to_diagnostic().message
         assert "T" in msg
 
     def test_duplicate_type_param_in_type_alias_raises(self) -> None:
         """Duplicate type parameter in a type alias raises AglScopeError."""
-        err = reject_scope(
-            "type Pair[A, A] = int\n"
-            "()\n"
-        )
+        err = reject_scope("type Pair[A, A] = int\n()\n")
         msg = err.to_diagnostic().message
         assert "A" in msg
 
@@ -2728,19 +2466,12 @@ class TestConstructorBindings:
 
     def test_unique_type_params_accepted(self) -> None:
         """Unique type parameters in a def are accepted."""
-        r = parse_and_resolve(
-            "def id[T](x: int) -> int = x\n"
-            "id(1)\n"
-        )
+        r = parse_and_resolve("def id[T](x: int) -> int = x\nid(1)\n")
         assert _ref(r, "id").kind == BinderKind.function_binding
 
     def test_multiple_type_params_unique_accepted(self) -> None:
         """Multiple unique type params in a record are accepted."""
-        r = parse_and_resolve(
-            "record Pair[A, B]\n"
-            "  value: int\n"
-            "()\n"
-        )
+        r = parse_and_resolve("record Pair[A, B]\n  value: int\n()\n")
         lookup_pair = r.root_scope.lookup("Pair")
         assert lookup_pair is not None
         assert lookup_pair.kind == BinderKind.constructor_binding
@@ -2851,6 +2582,7 @@ class TestCastScope:
         r = parse_and_resolve('let s = "hello"\nparse_json(s)')
         # The call to parse_json should be classified as PARSE_JSON builtin
         from agm.agl.scope.symbols import BuiltinKind
+
         assert BuiltinKind.PARSE_JSON in r.builtin_calls.values()
 
 

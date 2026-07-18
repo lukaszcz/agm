@@ -84,12 +84,7 @@ class TestIdleTimeout:
 
     def test_idle_timeout_disabled_by_default(self) -> None:
         """Without idle_timeout, a slow-but-producing process completes normally."""
-        script = (
-            "import time\n"
-            "print('chunk1')\n"
-            "time.sleep(0.3)\n"
-            "print('chunk2')\n"
-        )
+        script = "import time\nprint('chunk1')\ntime.sleep(0.3)\nprint('chunk2')\n"
         returncode, stdout, stderr = run_capture(
             [sys.executable, "-c", script],
         )
@@ -117,12 +112,7 @@ class TestIdleTimeout:
 
     def test_idle_timeout_kills_after_output_stops(self) -> None:
         """Process that outputs then goes silent should be killed after timeout."""
-        script = (
-            "import time, sys\n"
-            "print('initial output')\n"
-            "sys.stdout.flush()\n"
-            "time.sleep(60)\n"
-        )
+        script = "import time, sys\nprint('initial output')\nsys.stdout.flush()\ntime.sleep(60)\n"
         start = time.monotonic()
         with pytest.raises(SystemExit) as exc_info:
             run_capture(
@@ -136,10 +126,7 @@ class TestIdleTimeout:
 
     def test_idle_timeout_with_isolate_process_group(self) -> None:
         """Idle timeout works with isolate_process_group=True."""
-        script = (
-            "import time\n"
-            "time.sleep(60)\n"
-        )
+        script = "import time\ntime.sleep(60)\n"
         start = time.monotonic()
         with pytest.raises(SystemExit) as exc_info:
             run_capture(
@@ -153,10 +140,7 @@ class TestIdleTimeout:
 
     def test_idle_timeout_without_isolate_terminates_process(self) -> None:
         """When idle timeout fires without isolate_process_group, _terminate_process is used."""
-        script = (
-            "import time\n"
-            "time.sleep(60)\n"
-        )
+        script = "import time\ntime.sleep(60)\n"
         start = time.monotonic()
         with pytest.raises(SystemExit) as exc_info:
             run_subprocess(
@@ -242,7 +226,7 @@ class TestLoopTimeoutConfig:
 
         home = tmp_path / "home"
         (home / ".agm").mkdir(parents=True)
-        (home / ".agm" / "config.toml").write_text('[loop]\ntimeout = 1800\n')
+        (home / ".agm" / "config.toml").write_text("[loop]\ntimeout = 1800\n")
 
         config = load_loop_config(home=home, proj_dir=None, cwd=tmp_path / "work")
         assert config.timeout == 1800.0
@@ -272,7 +256,7 @@ class TestLoopTimeoutConfig:
 
         home = tmp_path / "home"
         (home / ".agm").mkdir(parents=True)
-        (home / ".agm" / "config.toml").write_text('[loop]\ntimeout = 0\n')
+        (home / ".agm" / "config.toml").write_text("[loop]\ntimeout = 0\n")
 
         config = load_loop_config(home=home, proj_dir=None, cwd=tmp_path / "work")
         assert config.timeout is None
@@ -287,6 +271,9 @@ class TestLoopTimeoutConfig:
         )
 
         config = load_loop_config(
-            home=home, proj_dir=None, cwd=tmp_path / "work", command_name="codex",
+            home=home,
+            proj_dir=None,
+            cwd=tmp_path / "work",
+            command_name="codex",
         )
         assert config.timeout == 3600.0

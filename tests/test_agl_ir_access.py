@@ -276,10 +276,12 @@ xss[0][1] := 99
 ()
 """
     ir = evaluate_ir(source)
-    assert ir["xss"] == ListValue((
-        ListValue((IntValue(1), IntValue(99))),
-        ListValue((IntValue(3), IntValue(4))),
-    ))
+    assert ir["xss"] == ListValue(
+        (
+            ListValue((IntValue(1), IntValue(99))),
+            ListValue((IntValue(3), IntValue(4))),
+        )
+    )
 
 
 def test_indexed_assignment_dict_of_list() -> None:
@@ -290,9 +292,11 @@ m["a"][0] := 99
 ()
 """
     ir = evaluate_ir(source)
-    assert ir["m"] == DictValue({
-        "a": ListValue((IntValue(99), IntValue(2))),
-    })
+    assert ir["m"] == DictValue(
+        {
+            "a": ListValue((IntValue(99), IntValue(2))),
+        }
+    )
 
 
 def test_indexed_assignment_list_of_dict() -> None:
@@ -303,9 +307,7 @@ m[0]["x"] := 99
 ()
 """
     ir = evaluate_ir(source)
-    assert ir["m"] == ListValue((
-        DictValue({"x": IntValue(99)}),
-    ))
+    assert ir["m"] == ListValue((DictValue({"x": IntValue(99)}),))
 
 
 def test_indexed_assignment_depth3_list_of_list_of_list() -> None:
@@ -316,16 +318,22 @@ xsss[0][1][0] := 99
 ()
 """
     ir = evaluate_ir(source)
-    assert ir["xsss"] == ListValue((
-        ListValue((
-            ListValue((IntValue(1), IntValue(2))),
-            ListValue((IntValue(99), IntValue(4))),
-        )),
-        ListValue((
-            ListValue((IntValue(5), IntValue(6))),
-            ListValue((IntValue(7), IntValue(8))),
-        )),
-    ))
+    assert ir["xsss"] == ListValue(
+        (
+            ListValue(
+                (
+                    ListValue((IntValue(1), IntValue(2))),
+                    ListValue((IntValue(99), IntValue(4))),
+                )
+            ),
+            ListValue(
+                (
+                    ListValue((IntValue(5), IntValue(6))),
+                    ListValue((IntValue(7), IntValue(8))),
+                )
+            ),
+        )
+    )
 
 
 def test_indexed_assignment_oob_raises() -> None:
@@ -430,10 +438,10 @@ xss[0][1] := 99
 def _lower(source: str) -> "ExecutableProgram":
     """Parse → check → lower the source; return ExecutableProgram."""
     from agm.agl.capabilities import HostCapabilities
-    from agm.agl.lower import lower_program
+    from agm.agl.lower import lower_module
     from agm.agl.parser import parse_program
-    from agm.agl.scope import resolve
-    from agm.agl.typecheck import check
+    from agm.agl.scope import resolve_module
+    from agm.agl.typecheck import check_module
 
     caps = HostCapabilities(
         agent_names=frozenset(),
@@ -441,15 +449,13 @@ def _lower(source: str) -> "ExecutableProgram":
         supports_shell_exec=True,
         codec_kinds={
             "text": frozenset({"text"}),
-            "json": frozenset(
-                {"json", "record", "enum", "list", "dict", "int", "decimal", "bool"}
-            ),
+            "json": frozenset({"json", "record", "enum", "list", "dict", "int", "decimal", "bool"}),
         },
     )
     prog = parse_program(source)
-    resolved = resolve(prog)
-    checked = check(resolved, caps)
-    return lower_program(
+    resolved = resolve_module(prog)
+    checked = check_module(resolved, caps)
+    return lower_module(
         _compiled_checked(checked),
         source_text=source,
         source_label="<test>",
@@ -464,6 +470,7 @@ def test_golden_field_access_lowers_to_ir_field() -> None:
     The IrField node is also tested directly in test_agl_ir_interpreter.py::TestIrField.
     """
     from agm.agl.ir.nodes import IrBind, IrField
+
     source = """\
 record Point
   x: int
@@ -485,6 +492,7 @@ let px = p.x
 def test_golden_index_access_lowers_to_ir_index() -> None:
     """IndexAccess lowers to IrIndex with correct kind."""
     from agm.agl.ir.nodes import IrBind, IrIndex
+
     source = """\
 let xs = [10, 20, 30]
 let x = xs[1]
@@ -503,6 +511,7 @@ let x = xs[1]
 def test_golden_template_lowers_to_ir_render_template() -> None:
     """Template lowers to IrRenderTemplate."""
     from agm.agl.ir.nodes import IrBind, IrRenderTemplate, IrTemplateText, IrTemplateValue
+
     source = 'let x: text = "val: ${42}"\n()'
     prog = _lower(source)
     entry = prog.modules[prog.entry_module]
@@ -521,6 +530,7 @@ def test_golden_template_lowers_to_ir_render_template() -> None:
 def test_golden_indexed_assign_lowers_to_ir_assign_with_path() -> None:
     """Indexed assignment lowers to IrAssign with non-empty path."""
     from agm.agl.ir.nodes import IrAssign
+
     source = """\
 var xs = [1, 2, 3]
 xs[0] := 99

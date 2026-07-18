@@ -8,7 +8,7 @@ Covers everything from a checked program/graph to the linked
 - default expressions lower to ``IrExpr``s on the descriptor's params.
 - direct and first-class (indirect) calls to an extern lower through the
   same machinery as calls to an ordinary function.
-- whole-graph lowering keeps ids consistent between an extern-bearing
+- whole-program lowering keeps ids consistent between an extern-bearing
   library module and the entry module that calls it.
 - the dry-run inventory carries a row per extern call site.
 - ``validate_ir`` accepts the unified function table and rejects dangling
@@ -59,19 +59,18 @@ from agm.agl.ir.contracts import (
     ScalarKind,
 )
 from agm.agl.ir.validate import InvalidIrError, validate_ir
-from agm.agl.lower import lower_program
-from agm.agl.lower.graph import lower_graph
+from agm.agl.lower import lower_module
+from agm.agl.lower.program import lower_program
 from agm.agl.modules.ids import ModuleId
 from agm.agl.modules.roots import RootSet
 from agm.agl.parser import parse_program
 from agm.agl.pipeline import PipelineDriver
-from agm.agl.scope import resolve
-from agm.agl.scope.graph import resolve_graph
-from agm.agl.typecheck import check
-from agm.agl.typecheck.graph import check_graph
+from agm.agl.scope import resolve_module
+from agm.agl.scope.program import resolve_program
+from agm.agl.typecheck import check_module
+from agm.agl.typecheck.program import check_program
 from tests.agl.ir_harness import (
     _compiled_checked,
-    _compiled_checked_graph,
     make_graph_from_files,
     write_companion_file,
     write_module_file,
@@ -90,9 +89,7 @@ _CAPS = HostCapabilities(
     supports_extern=True,
     codec_kinds={
         "text": frozenset({"text"}),
-        "json": frozenset(
-            {"json", "record", "enum", "list", "dict", "int", "decimal", "bool"}
-        ),
+        "json": frozenset({"json", "record", "enum", "list", "dict", "int", "decimal", "bool"}),
     },
 )
 
@@ -103,9 +100,9 @@ def _roots(*paths: Path) -> RootSet:
 
 def _lower_source(source: str) -> ExecutableProgram:
     """Parse + resolve (file-backed, so `extern def` is allowed) + check + lower."""
-    resolved = resolve(parse_program(source), origin_path=_PATH)
-    checked = check(resolved, _CAPS)
-    return lower_program(
+    resolved = resolve_module(parse_program(source), origin_path=_PATH)
+    checked = check_module(resolved, _CAPS)
+    return lower_module(
         _compiled_checked(checked),
         source_text=source,
         source_label="<extern-lowering-test>",
@@ -141,9 +138,7 @@ class TestExternDescriptor:
         executable = _lower_source("extern def f(x: int) -> int\nf(1)")
         desc = _only_extern(executable)
         contract = _extern_impl(desc).contract
-        assert contract.params == (
-            ExternParamSchema(schema=BoundaryScalar(ScalarKind.INT)),
-        )
+        assert contract.params == (ExternParamSchema(schema=BoundaryScalar(ScalarKind.INT)),)
         assert contract.result == BoundaryScalar(ScalarKind.INT)
 
     def test_private_extern_is_unexported_but_lowers_the_same(self) -> None:
@@ -190,7 +185,7 @@ class TestExternCalls:
 
 
 # ---------------------------------------------------------------------------
-# Whole-graph lowering
+# Whole-program lowering
 # ---------------------------------------------------------------------------
 
 
@@ -207,8 +202,8 @@ class TestGraphLowering:
                 "lib.mod": "extern def f(x: int) -> int",
             },
         )
-        checked = check_graph(resolve_graph(graph), _CAPS)
-        executable = lower_graph(_compiled_checked_graph(checked))
+        checked = check_program(resolve_program(graph), _CAPS)
+        executable = lower_program(_compiled_checked(checked))
 
         lib_mid = ModuleId.from_dotted("lib.mod")
         desc = _only_extern(executable)
@@ -251,7 +246,7 @@ class TestDryRunInventory:
             roots=_roots(root),
             default_stdlib=False,
         )
-        result = driver.run_prepared_graph(prepared, check_only=True)
+        result = driver.run_prepared(prepared, check_only=True)
         assert result.ok is True
         assert len(result.call_sites) == 1
         assert result.call_sites[0].callee == "f"
@@ -304,9 +299,7 @@ def _extern_desc(
         function_symbol=function_symbol,
         module_id=module_id,
         params=(
-            params
-            if params is not None
-            else (IrFunctionParam(symbol=SYM_EXT_PARAM, default=None),)
+            params if params is not None else (IrFunctionParam(symbol=SYM_EXT_PARAM, default=None),)
         ),
         impl=ExternFunctionBody(
             name="f",
@@ -439,9 +432,7 @@ class TestValidatorNegatives:
 
     def test_boundaryref_cycle_is_rejected(self) -> None:
         # A defs key that only refs itself never reaches a body.
-        contract = _extern_contract(
-            result=BoundaryRef("a"), defs=(("a", BoundaryRef("a")),)
-        )
+        contract = _extern_contract(result=BoundaryRef("a"), defs=(("a", BoundaryRef("a")),))
         with pytest.raises(InvalidIrError, match="cycle"):
             validate_ir(_make_program(functions={FN_EXT: _extern_desc(contract=contract)}))
 

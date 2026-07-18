@@ -29,7 +29,8 @@ AGENT_FILES_GITIGNORE_ENTRY = ".agent-files"
 def looks_like_repo_url(value: str) -> bool:
     return (
         "://" in value
-        or value.startswith("git@") and ":" in value
+        or value.startswith("git@")
+        and ":" in value
         or "github.com:" in value
         or "github.com/" in value
         or value.endswith(".git")
@@ -141,7 +142,8 @@ def configure_project_dir(
     chmod(setup_path, setup_mode)
     if not skip_config_git:
         commit_config_dir_changes(
-            project_dir, "chore: initialize config",
+            project_dir,
+            "chore: initialize config",
             add_paths=[config_dir],
         )
 

@@ -212,9 +212,7 @@ def test_load_loop_config_resolves_relative_prompt_file_against_config_dir(tmp_p
     home = tmp_path / "home"
     (home / ".agm").mkdir(parents=True)
     (home / ".agm" / "prompt.md").write_text("home prompt")
-    (home / ".agm" / "config.toml").write_text(
-        '[loop]\nprompt_file = "prompt.md"\n'
-    )
+    (home / ".agm" / "config.toml").write_text('[loop]\nprompt_file = "prompt.md"\n')
 
     cwd = tmp_path / "work"
     cwd.mkdir()
@@ -228,9 +226,7 @@ def test_load_loop_config_resolves_relative_prompt_file_falls_back_to_cwd(tmp_pa
     home = tmp_path / "home"
     (home / ".agm").mkdir(parents=True)
     # prompt.md does NOT exist in home/.agm/, so cwd fallback applies
-    (home / ".agm" / "config.toml").write_text(
-        '[loop]\nprompt_file = "prompt.md"\n'
-    )
+    (home / ".agm" / "config.toml").write_text('[loop]\nprompt_file = "prompt.md"\n')
 
     cwd = tmp_path / "work"
     cwd.mkdir()
@@ -247,9 +243,7 @@ def test_load_loop_config_resolves_relative_selector_prompt_file_against_config_
     home = tmp_path / "home"
     (home / ".agm").mkdir(parents=True)
     (home / ".agm" / "select.md").write_text("home selector")
-    (home / ".agm" / "config.toml").write_text(
-        '[loop]\nselector_prompt_file = "select.md"\n'
-    )
+    (home / ".agm" / "config.toml").write_text('[loop]\nselector_prompt_file = "select.md"\n')
 
     cwd = tmp_path / "work"
     cwd.mkdir()
@@ -263,9 +257,7 @@ def test_load_loop_config_resolves_relative_tasks_dir_against_config_dir(tmp_pat
     home = tmp_path / "home"
     (home / ".agm").mkdir(parents=True)
     (home / ".agm" / "custom" / "tasks").mkdir(parents=True)
-    (home / ".agm" / "config.toml").write_text(
-        '[loop]\ntasks_dir = "custom/tasks"\n'
-    )
+    (home / ".agm" / "config.toml").write_text('[loop]\ntasks_dir = "custom/tasks"\n')
 
     cwd = tmp_path / "work"
     cwd.mkdir()
@@ -279,9 +271,7 @@ def test_load_loop_config_resolves_relative_tasks_dir_falls_back_to_cwd(tmp_path
     home = tmp_path / "home"
     (home / ".agm").mkdir(parents=True)
     # custom/tasks does NOT exist in home/.agm/, so cwd fallback applies
-    (home / ".agm" / "config.toml").write_text(
-        '[loop]\ntasks_dir = "custom/tasks"\n'
-    )
+    (home / ".agm" / "config.toml").write_text('[loop]\ntasks_dir = "custom/tasks"\n')
 
     cwd = tmp_path / "work"
     cwd.mkdir()
@@ -293,7 +283,8 @@ def test_load_loop_config_resolves_relative_tasks_dir_falls_back_to_cwd(tmp_path
 
 
 def test_load_loop_config_expands_env_vars_in_prompt_file(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     custom_dir = tmp_path / "custom"
     custom_dir.mkdir()
@@ -302,9 +293,7 @@ def test_load_loop_config_expands_env_vars_in_prompt_file(
 
     home = tmp_path / "home"
     (home / ".agm").mkdir(parents=True)
-    (home / ".agm" / "config.toml").write_text(
-        '[loop]\nprompt_file = "$AGM_TEST_DIR/prompt.md"\n'
-    )
+    (home / ".agm" / "config.toml").write_text('[loop]\nprompt_file = "$AGM_TEST_DIR/prompt.md"\n')
 
     cwd = tmp_path / "work"
     cwd.mkdir()
@@ -315,15 +304,14 @@ def test_load_loop_config_expands_env_vars_in_prompt_file(
 
 
 def test_load_loop_config_expands_env_vars_in_tasks_dir(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("MY_TASKS", "/opt/tasks")
 
     home = tmp_path / "home"
     (home / ".agm").mkdir(parents=True)
-    (home / ".agm" / "config.toml").write_text(
-        '[loop]\ntasks_dir = "$MY_TASKS"\n'
-    )
+    (home / ".agm" / "config.toml").write_text('[loop]\ntasks_dir = "$MY_TASKS"\n')
 
     cwd = tmp_path / "work"
     cwd.mkdir()
@@ -342,9 +330,7 @@ def test_load_loop_config_project_config_relative_paths_resolve_against_project_
     project = tmp_path / "project"
     agm_dir = project / ".agm"
     (agm_dir / "config").mkdir(parents=True)
-    (agm_dir / "config" / "config.toml").write_text(
-        '[loop]\nprompt_file = "proj-prompt.md"\n'
-    )
+    (agm_dir / "config" / "config.toml").write_text('[loop]\nprompt_file = "proj-prompt.md"\n')
     (agm_dir / "config" / "proj-prompt.md").write_text("project prompt")
 
     cwd = tmp_path / "work"
@@ -358,9 +344,7 @@ def test_load_loop_config_project_config_relative_paths_resolve_against_project_
 def test_load_loop_config_keeps_absolute_paths_unchanged(tmp_path: Path) -> None:
     home = tmp_path / "home"
     (home / ".agm").mkdir(parents=True)
-    (home / ".agm" / "config.toml").write_text(
-        '[loop]\nprompt_file = "/absolute/path/prompt.md"\n'
-    )
+    (home / ".agm" / "config.toml").write_text('[loop]\nprompt_file = "/absolute/path/prompt.md"\n')
 
     cwd = tmp_path / "work"
     cwd.mkdir()
@@ -551,7 +535,8 @@ def test_load_review_config_allows_optional_missing_named_section(tmp_path: Path
 
 
 def test_load_loop_config_expands_braced_env_vars(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("PROJ_DIR", str(tmp_path / "myproject"))
     (tmp_path / "myproject").mkdir()
@@ -578,9 +563,7 @@ def test_load_loop_config_resolves_command_specific_relative_paths_against_confi
     home = tmp_path / "home"
     (home / ".agm").mkdir(parents=True)
     (home / ".agm" / "codex-prompt.md").write_text("codex prompt")
-    (home / ".agm" / "config.toml").write_text(
-        '[loop.codex]\nprompt_file = "codex-prompt.md"\n'
-    )
+    (home / ".agm" / "config.toml").write_text('[loop.codex]\nprompt_file = "codex-prompt.md"\n')
 
     cwd = tmp_path / "work"
     cwd.mkdir()
@@ -593,9 +576,7 @@ def test_load_loop_config_resolves_command_specific_relative_paths_against_confi
 def test_load_loop_config_expands_user_tilde_in_prompt_file(tmp_path: Path) -> None:
     home = tmp_path / "home"
     (home / ".agm").mkdir(parents=True)
-    (home / ".agm" / "config.toml").write_text(
-        '[loop]\nprompt_file = "~/prompts/prompt.md"\n'
-    )
+    (home / ".agm" / "config.toml").write_text('[loop]\nprompt_file = "~/prompts/prompt.md"\n')
 
     cwd = tmp_path / "work"
     cwd.mkdir()
@@ -674,7 +655,7 @@ def test_load_refine_config_no_max_steps(tmp_path: Path) -> None:
     home = tmp_path / "home"
     (home / ".agm").mkdir(parents=True)
     (home / ".agm" / "config.toml").write_text(
-        '[refine]\nno_max_steps = true\n',
+        "[refine]\nno_max_steps = true\n",
         encoding="utf-8",
     )
     cwd = tmp_path / "work"

@@ -44,17 +44,15 @@ from tests.agl.ir_harness import evaluate_ir, evaluate_ir_raises
 
 
 def _lower(source: str):
-    from agm.agl.lower import lower_program
+    from agm.agl.lower import lower_module
     from agm.agl.parser import parse_program
-    from agm.agl.scope import resolve
-    from agm.agl.typecheck import check
+    from agm.agl.scope import resolve_module
+    from agm.agl.typecheck import check_module
     from tests.agl.ir_harness import _compiled_checked, base_caps
 
     prog = parse_program(source)
-    checked = check(resolve(prog), base_caps())
-    return lower_program(
-        _compiled_checked(checked), source_text=source, source_label="<test>"
-    )
+    checked = check_module(resolve_module(prog), base_caps())
+    return lower_module(_compiled_checked(checked), source_text=source, source_label="<test>")
 
 
 # ---------------------------------------------------------------------------
@@ -282,9 +280,7 @@ def test_golden_widen_and_render_and_tojson_strategies() -> None:
 
 
 def test_golden_nested_decode_schema_shape() -> None:
-    value = _bound_value(
-        'let x = "{\\"k\\": [1, 2]}" as dict[text, list[int]]\n()\n', "x"
-    )
+    value = _bound_value('let x = "{\\"k\\": [1, 2]}" as dict[text, list[int]]\n()\n', "x")
     assert isinstance(value, IrConvert)
     assert value.recipe.decode == DictDecode(ListDecode(ScalarDecode(ScalarKind.INT)))
 
@@ -369,13 +365,9 @@ def test_decode_error_branches(schema, obj, message: str) -> None:
 
 
 def test_decode_nested_record_and_enum_success() -> None:
-    rec = _decode(
-        RecordDecode(_FOO, "Foo", (("a", ScalarDecode(ScalarKind.INT)),)), {"a": 3}
-    )
+    rec = _decode(RecordDecode(_FOO, "Foo", (("a", ScalarDecode(ScalarKind.INT)),)), {"a": 3})
     assert rec == RecordValue(nominal=_FOO, display_name="Foo", fields={"a": IntValue(3)})
-    enum_val = _decode(
-        EnumDecode(_RED, "Color", (VariantDecode("Red", ()),)), {"$case": "Red"}
-    )
+    enum_val = _decode(EnumDecode(_RED, "Color", (VariantDecode("Red", ()),)), {"$case": "Red"})
     assert enum_val == EnumValue(nominal=_RED, display_name="Color", variant="Red", fields={})
     lst = _decode(ListDecode(ScalarDecode(ScalarKind.INT)), [1, 2])
     assert lst == ListValue((IntValue(1), IntValue(2)))

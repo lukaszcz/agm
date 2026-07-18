@@ -15,7 +15,7 @@ The guiding rule is to test user workflows and observable behavior, not implemen
 Some tests guard architectural properties rather than feature behavior:
 
 - **Package layering.** A dependency-contract test asserts the AgL package boundaries — `semantics` as the shared semantic foundation, match compilation importing no IR/lowering/evaluator/runtime code, the IR importing no frontend or match-compiler code, the evaluator never importing the frontend, the runtime staying eval-free, and the pipeline on top.
-- **End-to-end acceptance.** Whole-program suites for single-file and multi-file AgL programs are part of the standing gate and must stay green.
+- **End-to-end acceptance.** Whole-program suites for module and multi-file AgL programs are part of the standing gate and must stay green.
 - **Coverage.** The project maintains 100% test coverage of `src/` and 100% command coverage in end-to-end tests.
 
 ## AgL Self-Validation
@@ -33,6 +33,6 @@ Real agents (claude, codex, and other runners) are never invoked in tests; agent
 - `tests/` — all tests; AgL pass suites are `tests/test_agl_*.py`, command suites are named per command.
 - `tests/test_agl_dependencies.py` — the package-layering contract.
 - `tests/test_agl_self_validation.py` — the self-validation gating contract; `src/agm/agl/self_validation.py` — the toggle.
-- `tests/test_agl_e2e.py` and `tests/agl/programs/` — single-file end-to-end acceptance; `tests/test_agl_multifile.py` with `tests/agl/multi_file/` — multi-file acceptance.
+- `tests/test_agl_e2e.py` and `tests/agl/programs/` — module end-to-end acceptance; `tests/test_agl_multifile.py` with `tests/agl/multi_file/` — multi-file acceptance.
 - `tests/conftest.py`, `tests/_agl_helpers.py`, `tests/_proc_helpers.py` — shared fixtures and helpers.
 - `justfile` — the `test`, `lint`, `typecheck`, and `check` gates that run the suite.

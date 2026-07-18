@@ -31,20 +31,13 @@ class TestListWorkspaces:
         repo_dir = project_dir / "repo"
         repo_dir.mkdir(parents=True)
 
+        monkeypatch.setattr(list_cmd, "require_current_project_dir", lambda cwd=None: project_dir)
+        monkeypatch.setattr(list_cmd, "project_repo_dir", lambda pd: repo_dir)
+        monkeypatch.setattr(list_cmd.git_helpers, "current_branch", lambda p, env=None: "main")
+        monkeypatch.setattr(list_cmd.git_helpers, "worktree_list", lambda p, env=None: [])
         monkeypatch.setattr(
-            list_cmd, "require_current_project_dir", lambda cwd=None: project_dir
-        )
-        monkeypatch.setattr(
-            list_cmd, "project_repo_dir", lambda pd: repo_dir
-        )
-        monkeypatch.setattr(
-            list_cmd.git_helpers, "current_branch", lambda p, env=None: "main"
-        )
-        monkeypatch.setattr(
-            list_cmd.git_helpers, "worktree_list", lambda p, env=None: []
-        )
-        monkeypatch.setattr(
-            list_cmd, "current_workspace",
+            list_cmd,
+            "current_workspace",
             lambda pd, cwd=None, env=None: None,
         )
 
@@ -66,20 +59,13 @@ class TestListWorkspaces:
         repo_dir = project_dir / "repo"
         repo_dir.mkdir(parents=True)
 
+        monkeypatch.setattr(list_cmd, "require_current_project_dir", lambda cwd=None: project_dir)
+        monkeypatch.setattr(list_cmd, "project_repo_dir", lambda pd: repo_dir)
+        monkeypatch.setattr(list_cmd.git_helpers, "current_branch", lambda p, env=None: "main")
+        monkeypatch.setattr(list_cmd.git_helpers, "worktree_list", lambda p, env=None: [])
         monkeypatch.setattr(
-            list_cmd, "require_current_project_dir", lambda cwd=None: project_dir
-        )
-        monkeypatch.setattr(
-            list_cmd, "project_repo_dir", lambda pd: repo_dir
-        )
-        monkeypatch.setattr(
-            list_cmd.git_helpers, "current_branch", lambda p, env=None: "main"
-        )
-        monkeypatch.setattr(
-            list_cmd.git_helpers, "worktree_list", lambda p, env=None: []
-        )
-        monkeypatch.setattr(
-            list_cmd, "current_workspace",
+            list_cmd,
+            "current_workspace",
             lambda pd, cwd=None, env=None: None,
         )
 
@@ -106,15 +92,9 @@ class TestListWorkspaces:
         feat_path.mkdir(parents=True)
         fix_path.mkdir(parents=True)
 
-        monkeypatch.setattr(
-            list_cmd, "require_current_project_dir", lambda cwd=None: project_dir
-        )
-        monkeypatch.setattr(
-            list_cmd, "project_repo_dir", lambda pd: repo_dir
-        )
-        monkeypatch.setattr(
-            list_cmd.git_helpers, "current_branch", lambda p, env=None: "main"
-        )
+        monkeypatch.setattr(list_cmd, "require_current_project_dir", lambda cwd=None: project_dir)
+        monkeypatch.setattr(list_cmd, "project_repo_dir", lambda pd: repo_dir)
+        monkeypatch.setattr(list_cmd.git_helpers, "current_branch", lambda p, env=None: "main")
         monkeypatch.setattr(
             list_cmd.git_helpers,
             "worktree_list",
@@ -125,7 +105,8 @@ class TestListWorkspaces:
             ],
         )
         monkeypatch.setattr(
-            list_cmd, "current_workspace",
+            list_cmd,
+            "current_workspace",
             lambda pd, cwd=None, env=None: None,
         )
 
@@ -157,15 +138,9 @@ class TestListWorkspaces:
         feat_path.mkdir(parents=True)
         fix_path.mkdir(parents=True)
 
-        monkeypatch.setattr(
-            list_cmd, "require_current_project_dir", lambda cwd=None: project_dir
-        )
-        monkeypatch.setattr(
-            list_cmd, "project_repo_dir", lambda pd: repo_dir
-        )
-        monkeypatch.setattr(
-            list_cmd.git_helpers, "current_branch", lambda p, env=None: "main"
-        )
+        monkeypatch.setattr(list_cmd, "require_current_project_dir", lambda cwd=None: project_dir)
+        monkeypatch.setattr(list_cmd, "project_repo_dir", lambda pd: repo_dir)
+        monkeypatch.setattr(list_cmd.git_helpers, "current_branch", lambda p, env=None: "main")
         monkeypatch.setattr(
             list_cmd.git_helpers,
             "worktree_list",
@@ -176,7 +151,8 @@ class TestListWorkspaces:
             ],
         )
         monkeypatch.setattr(
-            list_cmd, "current_workspace",
+            list_cmd,
+            "current_workspace",
             lambda pd, cwd=None, env=None: None,
         )
 
@@ -207,15 +183,9 @@ class TestListWorkspaces:
 
         from agm.project.layout import CurrentWorkspace
 
-        monkeypatch.setattr(
-            list_cmd, "require_current_project_dir", lambda cwd=None: project_dir
-        )
-        monkeypatch.setattr(
-            list_cmd, "project_repo_dir", lambda pd: repo_dir
-        )
-        monkeypatch.setattr(
-            list_cmd.git_helpers, "current_branch", lambda p, env=None: "main"
-        )
+        monkeypatch.setattr(list_cmd, "require_current_project_dir", lambda cwd=None: project_dir)
+        monkeypatch.setattr(list_cmd, "project_repo_dir", lambda pd: repo_dir)
+        monkeypatch.setattr(list_cmd.git_helpers, "current_branch", lambda p, env=None: "main")
         monkeypatch.setattr(
             list_cmd.git_helpers,
             "worktree_list",
@@ -225,9 +195,12 @@ class TestListWorkspaces:
             ],
         )
         monkeypatch.setattr(
-            list_cmd, "current_workspace",
+            list_cmd,
+            "current_workspace",
             lambda pd, cwd=None, env=None: CurrentWorkspace(
-                workspace_dir=feat_path, branch="feat", is_main=False,
+                workspace_dir=feat_path,
+                branch="feat",
+                is_main=False,
             ),
         )
 
@@ -255,15 +228,9 @@ class TestListWorkspaces:
 
         from agm.project.layout import CurrentWorkspace
 
-        monkeypatch.setattr(
-            list_cmd, "require_current_project_dir", lambda cwd=None: project_dir
-        )
-        monkeypatch.setattr(
-            list_cmd, "project_repo_dir", lambda pd: repo_dir
-        )
-        monkeypatch.setattr(
-            list_cmd.git_helpers, "current_branch", lambda p, env=None: "main"
-        )
+        monkeypatch.setattr(list_cmd, "require_current_project_dir", lambda cwd=None: project_dir)
+        monkeypatch.setattr(list_cmd, "project_repo_dir", lambda pd: repo_dir)
+        monkeypatch.setattr(list_cmd.git_helpers, "current_branch", lambda p, env=None: "main")
         monkeypatch.setattr(
             list_cmd.git_helpers,
             "worktree_list",
@@ -272,9 +239,12 @@ class TestListWorkspaces:
             ],
         )
         monkeypatch.setattr(
-            list_cmd, "current_workspace",
+            list_cmd,
+            "current_workspace",
             lambda pd, cwd=None, env=None: CurrentWorkspace(
-                workspace_dir=repo_dir, branch=None, is_main=True,
+                workspace_dir=repo_dir,
+                branch=None,
+                is_main=True,
             ),
         )
 
@@ -296,15 +266,9 @@ class TestListWorkspaces:
         repo_dir = project_dir / "repo"
         repo_dir.mkdir(parents=True)
 
-        monkeypatch.setattr(
-            list_cmd, "require_current_project_dir", lambda cwd=None: project_dir
-        )
-        monkeypatch.setattr(
-            list_cmd, "project_repo_dir", lambda pd: repo_dir
-        )
-        monkeypatch.setattr(
-            list_cmd.git_helpers, "current_branch", lambda p, env=None: "main"
-        )
+        monkeypatch.setattr(list_cmd, "require_current_project_dir", lambda cwd=None: project_dir)
+        monkeypatch.setattr(list_cmd, "project_repo_dir", lambda pd: repo_dir)
+        monkeypatch.setattr(list_cmd.git_helpers, "current_branch", lambda p, env=None: "main")
         monkeypatch.setattr(
             list_cmd.git_helpers,
             "worktree_list",
@@ -313,7 +277,8 @@ class TestListWorkspaces:
             ],
         )
         monkeypatch.setattr(
-            list_cmd, "current_workspace",
+            list_cmd,
+            "current_workspace",
             lambda pd, cwd=None, env=None: None,
         )
 
@@ -335,15 +300,9 @@ class TestListWorkspaces:
         repo_dir = project_dir / "repo"
         repo_dir.mkdir(parents=True)
 
-        monkeypatch.setattr(
-            list_cmd, "require_current_project_dir", lambda cwd=None: project_dir
-        )
-        monkeypatch.setattr(
-            list_cmd, "project_repo_dir", lambda pd: repo_dir
-        )
-        monkeypatch.setattr(
-            list_cmd.git_helpers, "current_branch", lambda p, env=None: "develop"
-        )
+        monkeypatch.setattr(list_cmd, "require_current_project_dir", lambda cwd=None: project_dir)
+        monkeypatch.setattr(list_cmd, "project_repo_dir", lambda pd: repo_dir)
+        monkeypatch.setattr(list_cmd.git_helpers, "current_branch", lambda p, env=None: "develop")
         # No worktrees from git (including main repo not in the list)
         monkeypatch.setattr(
             list_cmd.git_helpers,
@@ -351,7 +310,8 @@ class TestListWorkspaces:
             lambda p, env=None: [],
         )
         monkeypatch.setattr(
-            list_cmd, "current_workspace",
+            list_cmd,
+            "current_workspace",
             lambda pd, cwd=None, env=None: None,
         )
 
@@ -373,15 +333,9 @@ class TestListWorkspaces:
         repo_dir = project_dir / "repo"
         repo_dir.mkdir(parents=True)
 
-        monkeypatch.setattr(
-            list_cmd, "require_current_project_dir", lambda cwd=None: project_dir
-        )
-        monkeypatch.setattr(
-            list_cmd, "project_repo_dir", lambda pd: repo_dir
-        )
-        monkeypatch.setattr(
-            list_cmd.git_helpers, "current_branch", lambda p, env=None: "develop"
-        )
+        monkeypatch.setattr(list_cmd, "require_current_project_dir", lambda cwd=None: project_dir)
+        monkeypatch.setattr(list_cmd, "project_repo_dir", lambda pd: repo_dir)
+        monkeypatch.setattr(list_cmd.git_helpers, "current_branch", lambda p, env=None: "develop")
         # No worktrees from git (including main repo not in the list)
         monkeypatch.setattr(
             list_cmd.git_helpers,
@@ -389,7 +343,8 @@ class TestListWorkspaces:
             lambda p, env=None: [],
         )
         monkeypatch.setattr(
-            list_cmd, "current_workspace",
+            list_cmd,
+            "current_workspace",
             lambda pd, cwd=None, env=None: None,
         )
 
@@ -411,20 +366,13 @@ class TestListWorkspaces:
         project_dir = tmp_path / "proj"
         project_dir.mkdir()
 
+        monkeypatch.setattr(list_cmd, "require_current_project_dir", lambda cwd=None: project_dir)
+        monkeypatch.setattr(list_cmd, "project_repo_dir", lambda pd: pd)
+        monkeypatch.setattr(list_cmd.git_helpers, "current_branch", lambda p, env=None: "main")
+        monkeypatch.setattr(list_cmd.git_helpers, "worktree_list", lambda p, env=None: [])
         monkeypatch.setattr(
-            list_cmd, "require_current_project_dir", lambda cwd=None: project_dir
-        )
-        monkeypatch.setattr(
-            list_cmd, "project_repo_dir", lambda pd: pd
-        )
-        monkeypatch.setattr(
-            list_cmd.git_helpers, "current_branch", lambda p, env=None: "main"
-        )
-        monkeypatch.setattr(
-            list_cmd.git_helpers, "worktree_list", lambda p, env=None: []
-        )
-        monkeypatch.setattr(
-            list_cmd, "current_workspace",
+            list_cmd,
+            "current_workspace",
             lambda pd, cwd=None, env=None: None,
         )
 
@@ -450,20 +398,13 @@ class TestRun:
         repo_dir = project_dir / "repo"
         repo_dir.mkdir(parents=True)
 
+        monkeypatch.setattr(list_cmd, "require_current_project_dir", lambda cwd=None: project_dir)
+        monkeypatch.setattr(list_cmd, "project_repo_dir", lambda pd: repo_dir)
+        monkeypatch.setattr(list_cmd.git_helpers, "current_branch", lambda p, env=None: "main")
+        monkeypatch.setattr(list_cmd.git_helpers, "worktree_list", lambda p, env=None: [])
         monkeypatch.setattr(
-            list_cmd, "require_current_project_dir", lambda cwd=None: project_dir
-        )
-        monkeypatch.setattr(
-            list_cmd, "project_repo_dir", lambda pd: repo_dir
-        )
-        monkeypatch.setattr(
-            list_cmd.git_helpers, "current_branch", lambda p, env=None: "main"
-        )
-        monkeypatch.setattr(
-            list_cmd.git_helpers, "worktree_list", lambda p, env=None: []
-        )
-        monkeypatch.setattr(
-            list_cmd, "current_workspace",
+            list_cmd,
+            "current_workspace",
             lambda pd, cwd=None, env=None: None,
         )
 
@@ -488,13 +429,9 @@ class TestDetachedWorktree:
         repo_dir.mkdir(parents=True)
         detached_path.mkdir(parents=True)
 
-        monkeypatch.setattr(
-            list_cmd, "require_current_project_dir", lambda cwd=None: project_dir
-        )
+        monkeypatch.setattr(list_cmd, "require_current_project_dir", lambda cwd=None: project_dir)
         monkeypatch.setattr(list_cmd, "project_repo_dir", lambda pd: repo_dir)
-        monkeypatch.setattr(
-            list_cmd.git_helpers, "current_branch", lambda p, env=None: "main"
-        )
+        monkeypatch.setattr(list_cmd.git_helpers, "current_branch", lambda p, env=None: "main")
         # Branch worktree listed before main repo to exercise the
         # line-44 False branch (wt.path != repo_dir).
         monkeypatch.setattr(
@@ -505,9 +442,7 @@ class TestDetachedWorktree:
                 WorktreeInfo(path=repo_dir, branch="main"),
             ],
         )
-        monkeypatch.setattr(
-            list_cmd, "current_workspace", lambda pd, cwd=None, env=None: None
-        )
+        monkeypatch.setattr(list_cmd, "current_workspace", lambda pd, cwd=None, env=None: None)
 
         list_cmd.list_workspaces()
 
@@ -520,9 +455,7 @@ class TestDetachedWorktree:
 class TestListCommandViaCli:
     """workspace list CLI entry point dispatches correctly."""
 
-    def test_list_cmd_via_cli(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_list_cmd_via_cli(self, monkeypatch: pytest.MonkeyPatch) -> None:
         runner = CliRunner()
         calls: list[object] = []
 

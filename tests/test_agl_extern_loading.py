@@ -29,8 +29,8 @@ from agm.agl.modules.loader import load_graph
 from agm.agl.modules.roots import RootSet
 from agm.agl.pipeline import PipelineDriver, _wire_extern_registry
 from agm.agl.runtime.externs import ExternImportError, ExternRegistry, ExternResolutionError
-from agm.agl.scope.graph import resolve_graph
-from agm.agl.typecheck.graph import CheckedModuleGraph, check_graph
+from agm.agl.scope.program import resolve_program
+from agm.agl.typecheck.program import CheckedProgram, check_program
 from tests.agl.ir_harness import write_companion_file, write_module_file
 
 _CAPS = HostCapabilities(
@@ -39,9 +39,7 @@ _CAPS = HostCapabilities(
     supports_extern=True,
     codec_kinds={
         "text": frozenset({"text"}),
-        "json": frozenset(
-            {"json", "record", "enum", "list", "dict", "int", "decimal", "bool"}
-        ),
+        "json": frozenset({"json", "record", "enum", "list", "dict", "int", "decimal", "bool"}),
     },
 )
 
@@ -50,13 +48,13 @@ def _roots(*paths: Path) -> RootSet:
     return RootSet(roots=frozenset(paths))
 
 
-def _build_checked_graph(
+def _build_checked(
     tmp_path: Path, modules: dict[str, str], capabilities: HostCapabilities = _CAPS
-) -> tuple[CheckedModuleGraph, dict[ModuleId, Path | None]]:
+) -> tuple[CheckedProgram, dict[ModuleId, Path | None]]:
     """Load + resolve + check a multi-module graph without lowering or running it.
 
     Returns the checked graph and the module-id-to-companion-path map the
-    loader recorded, mirroring what ``PreparedGraph.companion_paths`` carries.
+    loader recorded, mirroring what ``PreparedProgram.companion_paths`` carries.
     """
     root = tmp_path / "root"
     for dotted, source in modules.items():
@@ -65,8 +63,8 @@ def _build_checked_graph(
     graph = load_graph(
         modules.get("entry", "()"), entry_path=None, roots=_roots(root), default_stdlib=False
     )
-    resolved = resolve_graph(graph)
-    checked = check_graph(resolved, capabilities)
+    resolved = resolve_program(graph)
+    checked = check_program(resolved, capabilities)
     companion_paths = {mid: lm.companion_path for mid, lm in graph.modules.items()}
     return checked, companion_paths
 
@@ -139,7 +137,7 @@ class TestCompanionPathDerivation:
             )
         assert "lib.mod" in str(excinfo.value)
 
-    def test_missing_companion_becomes_prepared_graph_diagnostic(self, tmp_path: Path) -> None:
+    def test_missing_companion_becomes_prepared_program_diagnostic(self, tmp_path: Path) -> None:
         root = tmp_path / "root"
         write_module_file(root, "lib.mod", "extern def f(x: int) -> int")
         prepared = PipelineDriver.prepare_program(
@@ -148,7 +146,7 @@ class TestCompanionPathDerivation:
             roots=_roots(root),
             default_stdlib=False,
         )
-        assert prepared.resolved_graph is None
+        assert prepared.resolved is None
         assert len(prepared.diagnostics) == 1
         assert "lib.mod" in prepared.diagnostics[0].message
 
@@ -293,7 +291,7 @@ class TestExternRegistryLoadAndResolve:
 class TestCapabilityGate:
     def test_extern_program_rejected_when_capability_off(self, tmp_path: Path) -> None:
         write_companion_file(tmp_path / "root", "lib.mod", "def f(x):\n    return x\n")
-        checked, companion_paths = _build_checked_graph(
+        checked, companion_paths = _build_checked(
             tmp_path,
             {
                 "entry": "import lib.mod\nlib.mod::f(1)",
@@ -302,7 +300,7 @@ class TestCapabilityGate:
         )
         caps_off = HostCapabilities(supports_extern=False)
         diagnostics = _wire_extern_registry(
-            checked_graph=checked,
+            checked=checked,
             capabilities=caps_off,
             registry=ExternRegistry(),
             companion_paths=companion_paths,
@@ -310,12 +308,12 @@ class TestCapabilityGate:
         assert len(diagnostics) == 1
 
     def test_non_extern_program_unaffected_by_capability_off(self, tmp_path: Path) -> None:
-        checked, companion_paths = _build_checked_graph(
+        checked, companion_paths = _build_checked(
             tmp_path, {"entry": "def f(x: int) -> int = x\nf(1)"}
         )
         caps_off = HostCapabilities(supports_extern=False)
         diagnostics = _wire_extern_registry(
-            checked_graph=checked,
+            checked=checked,
             capabilities=caps_off,
             registry=ExternRegistry(),
             companion_paths=companion_paths,
@@ -324,7 +322,7 @@ class TestCapabilityGate:
 
     def test_extern_program_accepted_when_capability_on(self, tmp_path: Path) -> None:
         write_companion_file(tmp_path / "root", "lib.mod", "def f(x):\n    return x\n")
-        checked, companion_paths = _build_checked_graph(
+        checked, companion_paths = _build_checked(
             tmp_path,
             {
                 "entry": "import lib.mod\nlib.mod::f(1)",
@@ -332,7 +330,7 @@ class TestCapabilityGate:
             },
         )
         diagnostics = _wire_extern_registry(
-            checked_graph=checked,
+            checked=checked,
             capabilities=_CAPS,
             registry=ExternRegistry(),
             companion_paths=companion_paths,
@@ -341,11 +339,9 @@ class TestCapabilityGate:
 
 
 class TestFailFastDiagnostics:
-    def test_missing_attribute_diagnostic_names_module_and_function(
-        self, tmp_path: Path
-    ) -> None:
+    def test_missing_attribute_diagnostic_names_module_and_function(self, tmp_path: Path) -> None:
         write_companion_file(tmp_path / "root", "lib.mod", "def wrong_name(x):\n    return x\n")
-        checked, companion_paths = _build_checked_graph(
+        checked, companion_paths = _build_checked(
             tmp_path,
             {
                 "entry": "import lib.mod\nlib.mod::f(1)",
@@ -353,7 +349,7 @@ class TestFailFastDiagnostics:
             },
         )
         diagnostics = _wire_extern_registry(
-            checked_graph=checked,
+            checked=checked,
             capabilities=_CAPS,
             registry=ExternRegistry(),
             companion_paths=companion_paths,
@@ -364,7 +360,7 @@ class TestFailFastDiagnostics:
 
     def test_non_callable_attribute_is_a_diagnostic(self, tmp_path: Path) -> None:
         write_companion_file(tmp_path / "root", "lib.mod", "f = 5\n")
-        checked, companion_paths = _build_checked_graph(
+        checked, companion_paths = _build_checked(
             tmp_path,
             {
                 "entry": "import lib.mod\nlib.mod::f(1)",
@@ -372,7 +368,7 @@ class TestFailFastDiagnostics:
             },
         )
         diagnostics = _wire_extern_registry(
-            checked_graph=checked,
+            checked=checked,
             capabilities=_CAPS,
             registry=ExternRegistry(),
             companion_paths=companion_paths,
@@ -389,7 +385,7 @@ class TestFailFastDiagnostics:
             "def f(x):\n    return COUNTER\n"
             "def g(x):\n    return COUNTER\n",
         )
-        checked, companion_paths = _build_checked_graph(
+        checked, companion_paths = _build_checked(
             tmp_path,
             {
                 "entry": "import lib.mod\nlib.mod::f(1)\nlib.mod::g(1)",
@@ -398,7 +394,7 @@ class TestFailFastDiagnostics:
         )
         registry = ExternRegistry()
         diagnostics = _wire_extern_registry(
-            checked_graph=checked,
+            checked=checked,
             capabilities=_CAPS,
             registry=registry,
             companion_paths=companion_paths,
@@ -412,7 +408,7 @@ class TestFailFastDiagnostics:
         self, tmp_path: Path
     ) -> None:
         write_companion_file(tmp_path / "root", "lib.mod", "raise RuntimeError('boom')\n")
-        checked, companion_paths = _build_checked_graph(
+        checked, companion_paths = _build_checked(
             tmp_path,
             {
                 "entry": "import lib.mod\nlib.mod::f(1)\nlib.mod::g(1)",
@@ -420,14 +416,14 @@ class TestFailFastDiagnostics:
             },
         )
         diagnostics = _wire_extern_registry(
-            checked_graph=checked,
+            checked=checked,
             capabilities=_CAPS,
             registry=ExternRegistry(),
             companion_paths=companion_paths,
         )
         assert len(diagnostics) == 1
 
-    def test_diagnostics_via_run_prepared_graph_before_lowering(self, tmp_path: Path) -> None:
+    def test_diagnostics_via_run_prepared_before_lowering(self, tmp_path: Path) -> None:
         """The same wiring runs from the real pipeline entry point, cleanly (no crash)."""
         write_module_file(tmp_path / "root", "lib.mod", "extern def f(x: int) -> int")
         write_companion_file(tmp_path / "root", "lib.mod", "def wrong_name(x):\n    return x\n")
@@ -438,7 +434,7 @@ class TestFailFastDiagnostics:
             roots=_roots(tmp_path / "root"),
             default_stdlib=False,
         )
-        result = driver.run_prepared_graph(prepared)
+        result = driver.run_prepared(prepared)
         assert result.ok is False
         assert len(result.diagnostics) == 1
         assert "lib.mod" in result.diagnostics[0].message
@@ -452,8 +448,7 @@ class TestOrdering:
         write_companion_file(
             tmp_path / "root",
             "lib.mod",
-            f"open({str(marker)!r}, 'w').write('imported')\n"
-            "def wrong_name(x):\n    return x\n",
+            f"open({str(marker)!r}, 'w').write('imported')\ndef wrong_name(x):\n    return x\n",
         )
         driver = PipelineDriver()
         prepared = PipelineDriver.prepare_program(
@@ -462,7 +457,7 @@ class TestOrdering:
             roots=_roots(tmp_path / "root"),
             default_stdlib=False,
         )
-        result = driver.run_prepared_graph(prepared)
+        result = driver.run_prepared(prepared)
         assert result.ok is False
         assert any("operand" in d.message.lower() for d in result.diagnostics)
         assert not marker.exists()
@@ -475,12 +470,11 @@ class TestOrdering:
         write_companion_file(
             tmp_path / "root",
             "lib.mod",
-            f"open({str(marker)!r}, 'w').write('imported')\n"
-            "def f(x):\n    return x\n",
+            f"open({str(marker)!r}, 'w').write('imported')\ndef f(x):\n    return x\n",
         )
         monkeypatch.setattr(
-            "agm.agl.pipeline._materialize_graph_custom_contract_payloads",
-            lambda checked_graph, codecs: (
+            "agm.agl.pipeline._materialize_program_custom_contract_payloads",
+            lambda checked, codecs: (
                 {},
                 [Diagnostic(message="Contract error: bad contract", line=1)],
             ),
@@ -492,7 +486,7 @@ class TestOrdering:
             roots=_roots(tmp_path / "root"),
             default_stdlib=False,
         )
-        result = driver.run_prepared_graph(prepared)
+        result = driver.run_prepared(prepared)
         assert result.ok is False
         assert any("Contract error" in d.message for d in result.diagnostics)
         assert not marker.exists()
@@ -511,25 +505,21 @@ class TestRegistryPopulatedViaPipeline:
             roots=_roots(tmp_path / "root"),
             default_stdlib=False,
         )
-        discovery = driver.discover_params_graph(prepared)
-        assert discovery.checked_graph is not None
+        discovery = driver.discover_params(prepared)
+        assert discovery.checked is not None
 
         diagnostics = _wire_extern_registry(
-            checked_graph=discovery.checked_graph,
+            checked=discovery.checked,
             capabilities=driver.host_environment().capabilities,
             registry=driver.host_environment().extern_registry,
             companion_paths=prepared.companion_paths,
         )
         assert diagnostics == []
-        fn = driver.host_environment().extern_registry.resolve(
-            ModuleId.from_dotted("lib.mod"), "f"
-        )
+        fn = driver.host_environment().extern_registry.resolve(ModuleId.from_dotted("lib.mod"), "f")
         assert fn(1) == 2
 
-    def test_run_prepared_graph_wires_the_registry_before_evaluation(
-        self, tmp_path: Path
-    ) -> None:
-        """``run_prepared_graph`` itself performs real-run extern wiring."""
+    def test_run_prepared_wires_the_registry_before_evaluation(self, tmp_path: Path) -> None:
+        """``run_prepared`` itself performs real-run extern wiring."""
         write_module_file(tmp_path / "root", "lib.mod", "extern def f(x: int) -> int")
         write_companion_file(tmp_path / "root", "lib.mod", "def f(x):\n    return x + 1\n")
         driver = PipelineDriver()
@@ -539,9 +529,7 @@ class TestRegistryPopulatedViaPipeline:
             roots=_roots(tmp_path / "root"),
             default_stdlib=False,
         )
-        result = driver.run_prepared_graph(prepared)
+        result = driver.run_prepared(prepared)
         assert result.ok is True
-        fn = driver.host_environment().extern_registry.resolve(
-            ModuleId.from_dotted("lib.mod"), "f"
-        )
+        fn = driver.host_environment().extern_registry.resolve(ModuleId.from_dotted("lib.mod"), "f")
         assert fn(1) == 2

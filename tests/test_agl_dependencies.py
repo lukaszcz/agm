@@ -21,9 +21,7 @@ def _agl_imports(package: str) -> list[tuple[Path, str]]:
                     imports.append((path, node.module))
             elif isinstance(node, ast.Import):
                 imports.extend(
-                    (path, alias.name)
-                    for alias in node.names
-                    if alias.name.startswith("agm.agl.")
+                    (path, alias.name) for alias in node.names if alias.name.startswith("agm.agl.")
                 )
     return imports
 
@@ -41,7 +39,7 @@ def _agm_imports(package: str) -> list[tuple[Path, str]]:
                         module_parts if path.name == "__init__.py" else module_parts[:-1]
                     )
                     keep = len(package_parts) - (node.level - 1)
-                    imported_parts = (() if node.module is None else tuple(node.module.split(".")))
+                    imported_parts = () if node.module is None else tuple(node.module.split("."))
                     module = ".".join((*package_parts[:keep], *imported_parts))
                 else:
                     module = node.module
@@ -132,9 +130,7 @@ def _is_allowed(module: str, prefixes: tuple[str, ...]) -> bool:
         ),
     ],
 )
-def test_execution_package_dependency_contract(
-    package: str, allowed: tuple[str, ...]
-) -> None:
+def test_execution_package_dependency_contract(package: str, allowed: tuple[str, ...]) -> None:
     violations = [
         f"{path.relative_to(AGL_ROOT)} imports {module}"
         for path, module in _agl_imports(package)

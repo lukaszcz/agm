@@ -179,7 +179,7 @@ def _heredoc_lines(path: str, body: str) -> list[str]:
     delimiter = "AGM_EOF"
     assert delimiter not in body
     return [
-        f"mkdir -p \"$(dirname {path})\"",
+        f'mkdir -p "$(dirname {path})"',
         f"cat > {path} <<'{delimiter}'",
         body,
         delimiter,
@@ -208,18 +208,10 @@ def _wrapper_content(
     zshrc_body = _zshrc_body()
     bashrc_body = _bashrc_body()
     shrc_body = _shrc_body()
-    self_heal_lines += _heredoc_lines(
-        '"$AGM_WORKSPACE_SHELL_DIR/zsh/.zshenv"', zshenv_body
-    )
-    self_heal_lines += _heredoc_lines(
-        '"$AGM_WORKSPACE_SHELL_DIR/zsh/.zshrc"', zshrc_body
-    )
-    self_heal_lines += _heredoc_lines(
-        '"$AGM_WORKSPACE_SHELL_DIR/bash/bashrc"', bashrc_body
-    )
-    self_heal_lines += _heredoc_lines(
-        '"$AGM_WORKSPACE_SHELL_DIR/sh/shrc"', shrc_body
-    )
+    self_heal_lines += _heredoc_lines('"$AGM_WORKSPACE_SHELL_DIR/zsh/.zshenv"', zshenv_body)
+    self_heal_lines += _heredoc_lines('"$AGM_WORKSPACE_SHELL_DIR/zsh/.zshrc"', zshrc_body)
+    self_heal_lines += _heredoc_lines('"$AGM_WORKSPACE_SHELL_DIR/bash/bashrc"', bashrc_body)
+    self_heal_lines += _heredoc_lines('"$AGM_WORKSPACE_SHELL_DIR/sh/shrc"', shrc_body)
     self_heal_lines += ["fi"]
 
     return "\n".join(
@@ -233,7 +225,7 @@ def _wrapper_content(
                 'if [ -z "${AGM_REAL_SHELL:-}" ] '
                 '|| [ "$AGM_REAL_SHELL" = "$AGM_WORKSPACE_SHELL" ]; then'
             ),
-            f'  AGM_REAL_SHELL={shlex_quote(real_shell)}',
+            f"  AGM_REAL_SHELL={shlex_quote(real_shell)}",
             "fi",
             "export AGM_REAL_SHELL",
             'case "$(basename "$AGM_REAL_SHELL")" in',

@@ -46,15 +46,11 @@ class TestGetStyle:
     def test_light_returns_light_theme(self) -> None:
         assert get_style("light") is LIGHT_THEME
 
-    def test_auto_resolves_to_dark_when_env_absent(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_auto_resolves_to_dark_when_env_absent(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("COLORFGBG", raising=False)
         assert get_style("auto") is DARK_THEME
 
-    def test_auto_resolves_to_light_when_env_set(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_auto_resolves_to_light_when_env_set(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("COLORFGBG", "0;15")
         assert get_style("auto") is LIGHT_THEME
 

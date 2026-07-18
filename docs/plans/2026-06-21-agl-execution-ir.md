@@ -17,7 +17,7 @@ or `node_types`/`binding_types` table. Every implicit coercion, every binding/ca
 operator/pattern/assignment target, and every cross-module reference is **resolved before
 evaluation**.
 
-This makes `CheckedProgram` no longer an execution format, fixes the cross-module source-slicing
+This makes `CheckedModule` no longer an execution format, fixes the cross-module source-slicing
 and missing-binding-type defects structurally, and gives a principled, general, extensible
 execution layer. `agm.agl.eval` must not import from `agm.agl.typecheck`, `agm.agl.scope`, or
 `agm.agl.syntax.nodes`.
@@ -154,7 +154,7 @@ src/agm/agl/values.py  # runtime Value union shared by eval/runtime; no frontend
 src/agm/agl/lower/
   __init__.py
   lowerer.py        # single-module checked → IR lowering (expression-directed match dispatch)
-  graph.py          # whole-graph lowering + linking (ID allocation, cross-module wiring)
+  graph.py          # whole-program lowering + linking (ID allocation, cross-module wiring)
   coercions.py      # compile_coercion(source, target) -> Coercion | None  (last place Type is read)
   conversions.py    # CastSpec + source/target → ConversionRecipe
   captures.py       # free-variable / capture-mode analysis for lambdas (D5)
@@ -304,7 +304,7 @@ Coercion selection is centralized in `compile_coercion(source, target) -> Coerci
 identity returns `None`. First implementation prefers a **uniform `IrCoerce`** representation over
 pushing coercions into children.
 
-**Whole-graph linking** (`graph.py`), only after the full graph type-checks:
+**Whole-program linking** (`graph.py`), only after the full graph type-checks:
 1. Allocate `SymbolId`, `FunctionId`, `SourceId`, and `NominalId` for all modules.
 2. Lower each module using its own checked side tables.
 3. Resolve cross-module references directly to allocated IDs.
@@ -312,7 +312,7 @@ pushing coercions into children.
 5. Store every module's normalized source under its `SourceId`.
 6. When explicitly requested, run `validate_ir`.
 
-The public lowering boundary is `lower_graph(..., validate: bool = False)`. Production callers use
+The public lowering boundary is `lower_program(..., validate: bool = False)`. Production callers use
 the default. Lowering tests use a fixture that passes `validate=True` by default; focused validator
 tests may call `validate_ir` directly. Validation activation never depends on Python's `__debug__`,
 optimization flags, or ambient environment variables.
@@ -325,7 +325,7 @@ mutual recursion are represented by IDs allocated **before** body lowering. This
 
 New `Interpreter` (rewrite of `eval/`), constructed with `program`,
 `registry`, `contracts`, `loop_limit`, `strict_json`, `shell_exec_timeout`, `trace`,
-`max_call_depth`, `param_values: Mapping[SymbolId, Value]`. **Absent:** `CheckedProgram`,
+`max_call_depth`, `param_values: Mapping[SymbolId, Value]`. **Absent:** `CheckedModule`,
 `TypeEnvironment`, source AST, source string, node-type/binding tables, signatures, cast specs.
 
 - **Frames/cells (D5):** a runtime frame is `dict[SymbolId, Slot]` per function invocation. A
@@ -394,7 +394,7 @@ per milestone with per-task review; the orchestrator owns design and verifies di
   `IrIndirectCall`; add the AST-free linked closure/constructor value forms to `agm.agl.values`;
   mutual recursion via pre-allocated IDs. Pin the D5 canonical loop-closure program
   (`fns[0]()==0`) and the mutable capture program as regression e2e tests.
-- **M5 — Module linking.** Whole-graph lowering/linking (`graph.py`); replace `execute_graph` table
+- **M5 — Module linking.** Whole-program lowering/linking (`graph.py`); replace `execute_graph` table
   merge. Regression tests: imported functions with local bindings, cross-module mutual recursion,
   same-named functions/types (NominalId collisions), library-failure source excerpts.
 - **M6 — Host preparation as metadata.** Compile `ContractRequest`s + `ParamDecoder`s during
@@ -455,7 +455,7 @@ The migration is complete only when:
 5. Runtime diagnostics and traces use the correct source for every module.
 6. Params, output contracts, casts, constructors, patterns, and catches execute from runtime
    identities/descriptors rather than checker types or display-name identity.
-7. Single-file, graph, dry-run, and non-transactional REPL behavior matches the approved semantics.
+7. Module, graph, dry-run, and non-transactional REPL behavior matches the approved semantics.
 8. Legacy AST execution and migration-oracle code are deleted, architecture docs describe the final
    pipeline, and `just check` passes at required coverage.
 

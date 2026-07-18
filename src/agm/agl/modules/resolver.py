@@ -174,9 +174,7 @@ def expand_wildcard(
             raise AmbiguousModule(mid, candidates, span=span)
 
     # Build the result dict ordered by ModuleId (lexicographic on segments).
-    pairs: list[tuple[ModuleId, Path]] = [
-        (mid, next(iter(canons))) for mid, canons in hits.items()
-    ]
+    pairs: list[tuple[ModuleId, Path]] = [(mid, next(iter(canons))) for mid, canons in hits.items()]
 
     def _sort_key(pair: tuple[ModuleId, Path]) -> tuple[str, ...]:
         return pair[0].segments

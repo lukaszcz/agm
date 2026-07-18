@@ -5,7 +5,7 @@ Covers:
   --max-iters, --runner, --log-file, --no-log flags into ExecArgs
 - Missing file exits with code 1 and prints to stderr
 - Unreadable file exits with code 1 and prints error to stderr
-- Valid programs execute through the graph pipeline; static failures and uncaught
+- Valid programs execute through the program pipeline; static failures and uncaught
   AgL exceptions use their documented exit codes.
 """
 
@@ -240,9 +240,7 @@ class TestExecCommandArgParsing:
 class TestExecCommandInline:
     """Behavior tests for executing an inline -c/--command program."""
 
-    def _command_args(
-        self, command: str, *, param_tokens: list[str] | None = None
-    ) -> ExecArgs:
+    def _command_args(self, command: str, *, param_tokens: list[str] | None = None) -> ExecArgs:
         return ExecArgs(
             file=None,
             command=command,
@@ -254,30 +252,22 @@ class TestExecCommandInline:
             log_file=None,
         )
 
-    def test_inline_command_runs_and_prints(
-        self, capsys: pytest.CaptureFixture[str]
-    ) -> None:
+    def test_inline_command_runs_and_prints(self, capsys: pytest.CaptureFixture[str]) -> None:
         assert exec_command.run(self._command_args('print "hello"')) is None
         assert capsys.readouterr().out == "hello\n"
 
-    def test_inline_command_with_params(
-        self, capsys: pytest.CaptureFixture[str]
-    ) -> None:
+    def test_inline_command_with_params(self, capsys: pytest.CaptureFixture[str]) -> None:
         args = self._command_args("param msg\nprint msg", param_tokens=["--msg", "hi"])
         assert exec_command.run(args) is None
         assert capsys.readouterr().out == "hi\n"
 
-    def test_inline_command_static_error_exits_1(
-        self, capsys: pytest.CaptureFixture[str]
-    ) -> None:
+    def test_inline_command_static_error_exits_1(self, capsys: pytest.CaptureFixture[str]) -> None:
         with pytest.raises(SystemExit) as exc_info:
             exec_command.run(self._command_args("let x = undefined_name"))
         assert exc_info.value.code == 1
         assert capsys.readouterr().err
 
-    def test_neither_file_nor_command_exits_1(
-        self, capsys: pytest.CaptureFixture[str]
-    ) -> None:
+    def test_neither_file_nor_command_exits_1(self, capsys: pytest.CaptureFixture[str]) -> None:
         """Calling run() with neither source set fails cleanly (defensive guard)."""
         args = ExecArgs(
             file=None,
@@ -314,7 +304,7 @@ class TestExecDynamicHelp:
         self, capsys: pytest.CaptureFixture[str]
     ) -> None:
         with pytest.raises(SystemExit) as exc_info:
-            cli._exec_print_help(file=None, command='param count: int = 1\nprint count')
+            cli._exec_print_help(file=None, command="param count: int = 1\nprint count")
 
         assert exc_info.value.code == 0
         assert "--count" in capsys.readouterr().out
@@ -625,7 +615,7 @@ class TestExecExitCodeMapping:
 
         import agm.agl.pipeline as pipeline_mod
 
-        monkeypatch.setattr(pipeline_mod.PipelineDriver, "run_prepared_graph", fake_run)
+        monkeypatch.setattr(pipeline_mod.PipelineDriver, "run_prepared", fake_run)
 
         with pytest.raises(SystemExit) as exc_info:
             exec_command.run(_exec_args(agl_file))
@@ -676,7 +666,7 @@ class TestExecCommandWarnings:
 
         import agm.agl.pipeline as pipeline_mod
 
-        monkeypatch.setattr(pipeline_mod.PipelineDriver, "run_prepared_graph", fake_run)
+        monkeypatch.setattr(pipeline_mod.PipelineDriver, "run_prepared", fake_run)
 
         # ok=True even with a warning: returns normally (exit 0).
         assert exec_command.run(_exec_args(agl_file)) is None
@@ -763,13 +753,11 @@ class TestExecCommandWarnings:
         ) -> RunResult:
             if check_only:
                 return RunResult(ok=True, diagnostics=[], error=None)
-            return RunResult(
-                ok=False, diagnostics=[error], error=None, warnings=[warning]
-            )
+            return RunResult(ok=False, diagnostics=[error], error=None, warnings=[warning])
 
         import agm.agl.pipeline as pipeline_mod
 
-        monkeypatch.setattr(pipeline_mod.PipelineDriver, "run_prepared_graph", fake_run)
+        monkeypatch.setattr(pipeline_mod.PipelineDriver, "run_prepared", fake_run)
 
         with pytest.raises(SystemExit) as exc_info:
             exec_command.run(_exec_args(agl_file))
@@ -792,10 +780,10 @@ class TestExecParsesSourceOnce:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         import agm.agl.modules.loader as loader_mod
-        import agm.agl.scope.graph as scope_graph_mod
+        import agm.agl.scope.program as scope_graph_mod
         from agm.agl.modules.loader import ModuleGraph
         from agm.agl.modules.roots import RootSet
-        from agm.agl.scope.graph import ResolvedModuleGraph
+        from agm.agl.scope.program import ResolvedProgram
         from agm.core import dry_run
 
         agl_file = tmp_path / "prog.agl"
@@ -804,9 +792,9 @@ class TestExecParsesSourceOnce:
         agl_file.write_text('agent impl\nask("do it", agent = impl)\n')
 
         real_load = loader_mod.load_graph
-        real_resolve_graph = scope_graph_mod.resolve_graph
+        real_resolve_program = scope_graph_mod.resolve_program
         load_calls = 0
-        resolve_graph_calls = 0
+        resolve_program_calls = 0
 
         def counting_load(
             entry_source: str,
@@ -824,24 +812,24 @@ class TestExecParsesSourceOnce:
                 default_stdlib=default_stdlib,
             )
 
-        def counting_resolve_graph(
+        def counting_resolve_program(
             graph: ModuleGraph,
             *,
             ambient_agents: frozenset[str] = frozenset(),
-        ) -> ResolvedModuleGraph:
-            nonlocal resolve_graph_calls
-            resolve_graph_calls += 1
-            return real_resolve_graph(graph, ambient_agents=ambient_agents)
+        ) -> ResolvedProgram:
+            nonlocal resolve_program_calls
+            resolve_program_calls += 1
+            return real_resolve_program(graph, ambient_agents=ambient_agents)
 
         monkeypatch.setattr(loader_mod, "load_graph", counting_load)
-        monkeypatch.setattr(scope_graph_mod, "resolve_graph", counting_resolve_graph)
+        monkeypatch.setattr(scope_graph_mod, "resolve_program", counting_resolve_program)
         # Dry-run drives the full static pipeline (parse → scope → typecheck →
         # reconcile) without executing any agent.
         monkeypatch.setattr(dry_run, "_ENABLED", True)
 
         assert exec_command.run(_exec_args(agl_file)) is None
         assert load_calls == 1
-        assert resolve_graph_calls == 1
+        assert resolve_program_calls == 1
 
 
 class TestExecLowersGraphOnce:
@@ -854,19 +842,19 @@ class TestExecLowersGraphOnce:
     """
 
     def _count_lowerings(self, monkeypatch: pytest.MonkeyPatch) -> list[object]:
-        """Record one entry per ``lower_graph`` call while still lowering for real."""
+        """Record one entry per ``lower_program`` call while still lowering for real."""
         import agm.agl.lower as lower_mod
         from agm.agl.ir.program import ExecutableProgram
 
-        real_lower_graph = lower_mod.lower_graph
+        real_lower_program = lower_mod.lower_program
         lowerings: list[object] = []
 
-        def counting_lower_graph(*args: Any, **kwargs: Any) -> ExecutableProgram:
-            executable = real_lower_graph(*args, **kwargs)
+        def counting_lower_program(*args: Any, **kwargs: Any) -> ExecutableProgram:
+            executable = real_lower_program(*args, **kwargs)
             lowerings.append(executable)
             return executable
 
-        monkeypatch.setattr(lower_mod, "lower_graph", counting_lower_graph)
+        monkeypatch.setattr(lower_mod, "lower_program", counting_lower_program)
         return lowerings
 
     def test_exec_lowers_graph_once_and_still_runs_the_program(
@@ -876,11 +864,9 @@ class TestExecLowersGraphOnce:
         capsys: pytest.CaptureFixture[str],
     ) -> None:
         lowerings = self._count_lowerings(monkeypatch)
-        (tmp_path / "helper.agl").write_text("def greet(who: text) -> text = \"hi ${who}\"\n")
+        (tmp_path / "helper.agl").write_text('def greet(who: text) -> text = "hi ${who}"\n')
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text(
-            'import helper\nparam who: text = "world"\nprint helper::greet(who)\n'
-        )
+        agl_file.write_text('import helper\nparam who: text = "world"\nprint helper::greet(who)\n')
 
         assert exec_command.run(_exec_args(agl_file, param_tokens=["--who", "agl"])) is None
 
@@ -985,14 +971,12 @@ class TestExecCommandExitCodes:
         """A resolved parameter value can be written into a std.config engine setting."""
         agl_file = tmp_path / "test.agl"
         agl_file.write_text(
-            'import std.config\nparam chosen: text\nstd.config::runner := chosen\nprint chosen\n'
+            "import std.config\nparam chosen: text\nstd.config::runner := chosen\nprint chosen\n"
         )
 
         assert exec_command.run(_exec_args(agl_file, param_tokens=["--chosen", "echo"])) is None
 
-    def test_declared_agents_with_std_config_preserve_params(
-        self, tmp_path: Path
-    ) -> None:
+    def test_declared_agents_with_std_config_preserve_params(self, tmp_path: Path) -> None:
         agl_file = tmp_path / "test.agl"
         agl_file.write_text(
             "import std.config\nagent worker\nstd.config::log := false\n"
@@ -1053,9 +1037,7 @@ class TestExecCommandExitCodes:
 
         home = tmp_path / "home"
         (home / ".agm").mkdir(parents=True)
-        (home / ".agm" / "config.toml").write_text(
-            "\n".join(["[demo]", 'typo = "ignored"'])
-        )
+        (home / ".agm" / "config.toml").write_text("\n".join(["[demo]", 'typo = "ignored"']))
         agl_file = tmp_path / "test.agl"
         agl_file.write_text('program demo\nparam msg: text = "ok"\nprint msg\n')
         monkeypatch.setattr(
@@ -1091,6 +1073,7 @@ class TestExecCommandExitCodes:
             no_log=True,
             log_file=None,
         )
+
         # Patch the runner factory to return an agent that raises AgentCallHostError
         # (simulating a subprocess that fails), which exec.py surfaces as exit 2.
         def failing_agent(req: object) -> str:
@@ -1168,10 +1151,7 @@ class TestExecCommandExitCodes:
         monkeypatch.setattr(dry_run, "_ENABLED", True)
         agl_file = tmp_path / "prog.agl"
         agl_file.write_text(
-            "def dormant(x: bool) -> int =\n"
-            "  case x of\n"
-            "    | true => 1\n"
-            'print "unreachable"\n'
+            'def dormant(x: bool) -> int =\n  case x of\n    | true => 1\nprint "unreachable"\n'
         )
         args = ExecArgs(
             file=str(agl_file),
@@ -1251,9 +1231,7 @@ class TestExecConfigWiring:
     def _config_home(self, tmp_path: Path) -> Path:
         home = tmp_path / "home"
         (home / ".agm").mkdir(parents=True)
-        (home / ".agm" / "config.toml").write_text(
-            "[exec]\nstrict-json = true\nmax-iters = 9\n"
-        )
+        (home / ".agm" / "config.toml").write_text("[exec]\nstrict-json = true\nmax-iters = 9\n")
         return home
 
     def test_config_values_reach_runtime_constructor(
@@ -1669,12 +1647,10 @@ class TestExecFFI:
         agl_file = tmp_path / "prog.agl"
         agl_file.write_text("import mylib\nmylib::run()\n")
         (tmp_path / "mylib.agl").write_text(
-            "extern def from_lib(x: int) -> int\n"
-            "def run() -> int = from_lib(1)\n"
+            "extern def from_lib(x: int) -> int\ndef run() -> int = from_lib(1)\n"
         )
         (tmp_path / "mylib.py").write_text(
-            f"open({str(marker)!r}, 'a').write('imported')\n"
-            "def from_lib(x):\n    return x\n"
+            f"open({str(marker)!r}, 'a').write('imported')\ndef from_lib(x):\n    return x\n"
         )
 
         assert exec_command.run(_exec_args(agl_file)) is None
@@ -1695,13 +1671,10 @@ class TestExecFFI:
         marker = tmp_path / "marker.txt"
         agl_file = tmp_path / "prog.agl"
         agl_file.write_text(
-            "extern def chosen(x: int) -> int\n"
-            "def choose() -> int -> int = chosen\n"
-            "choose()(1)\n"
+            "extern def chosen(x: int) -> int\ndef choose() -> int -> int = chosen\nchoose()(1)\n"
         )
         (tmp_path / "prog.py").write_text(
-            f"open({str(marker)!r}, 'a').write('imported')\n"
-            "def chosen(x):\n    return x\n"
+            f"open({str(marker)!r}, 'a').write('imported')\ndef chosen(x):\n    return x\n"
         )
 
         assert exec_command.run(_exec_args(agl_file)) is None
@@ -1728,8 +1701,7 @@ class TestExecFFI:
             "h()(1)\n"
         )
         (tmp_path / "prog.py").write_text(
-            f"open({str(marker)!r}, 'a').write('imported')\n"
-            "def chosen(x):\n    return x\n"
+            f"open({str(marker)!r}, 'a').write('imported')\ndef chosen(x):\n    return x\n"
         )
 
         assert exec_command.run(_exec_args(agl_file)) is None
@@ -1745,11 +1717,7 @@ class TestJsonParamsCLI:
     def test_record_param_parsed_from_json_string(self, tmp_path: Path) -> None:
         """A record-typed param provided as a JSON string is parsed and usable."""
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text(
-            'record Point\n  x: int\n  y: int\n'
-            'param pt: Point\n'
-            'print pt.x\n'
-        )
+        agl_file.write_text("record Point\n  x: int\n  y: int\nparam pt: Point\nprint pt.x\n")
         from agm.cli_support.args import ExecArgs
 
         args = ExecArgs(
@@ -1777,10 +1745,7 @@ class TestJsonParamsCLI:
     def test_decimal_param_parsed_from_json_string(self, tmp_path: Path) -> None:
         """A decimal-typed param provided as a JSON string is accepted."""
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text(
-            'param price: decimal\n'
-            'print price\n'
-        )
+        agl_file.write_text("param price: decimal\nprint price\n")
         from agm.cli_support.args import ExecArgs
 
         args = ExecArgs(
@@ -1808,10 +1773,7 @@ class TestJsonParamsCLI:
     def test_list_param_parsed_from_json_string(self, tmp_path: Path) -> None:
         """A list-typed param provided as a JSON array string is accepted."""
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text(
-            'param tags: list[text]\n'
-            'print tags\n'
-        )
+        agl_file.write_text("param tags: list[text]\nprint tags\n")
         from agm.cli_support.args import ExecArgs
 
         args = ExecArgs(
@@ -1841,11 +1803,7 @@ class TestJsonParamsCLI:
     def test_record_param_invalid_json_exits_1(self, tmp_path: Path) -> None:
         """A record-typed param with invalid JSON exits 1."""
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text(
-            'record Point\n  x: int\n  y: int\n'
-            'param pt: Point\n'
-            'print pt.x\n'
-        )
+        agl_file.write_text("record Point\n  x: int\n  y: int\nparam pt: Point\nprint pt.x\n")
         from agm.cli_support.args import ExecArgs
 
         args = ExecArgs(
@@ -1878,6 +1836,7 @@ class TestUncaughtExceptionOutputFormat:
 
     def _exec_args_nolog(self, agl_file: Path) -> "ExecArgs":
         from agm.cli_support.args import ExecArgs
+
         return ExecArgs(
             file=str(agl_file),
             param_tokens=[],
@@ -1913,6 +1872,7 @@ class TestUncaughtExceptionOutputFormat:
         agl_file = tmp_path / "prog.agl"
         agl_file.write_text('let x: int = exec "echo not-an-int"\nx\n')
         from agm.cli_support.args import ExecArgs
+
         args = ExecArgs(
             file=str(agl_file),
             param_tokens=[],
@@ -1928,7 +1888,7 @@ class TestUncaughtExceptionOutputFormat:
         captured = capsys.readouterr()
         err = captured.err
         # The trace_id is a UUID hex string (32 chars); it should appear in stderr.
-        assert re.search(r'[0-9a-f]{32}', err), (
+        assert re.search(r"[0-9a-f]{32}", err), (
             f"Expected trace_id (hex string) in stderr, got: {err!r}"
         )
 
@@ -1956,20 +1916,20 @@ class TestUncaughtExceptionOutputFormat:
             ),
         )
         with patch("agm.commands.exec.PipelineDriver") as mock_rt:
-            # prepare_program() must return a fake PreparedGraph with no resolved
+            # prepare_program() must return a fake PreparedProgram with no resolved
             # graph so the static-config-resolution logic does not choke on
             # MagicMock values.
             fake_prepared = MagicMock()
-            fake_prepared.resolved_graph = None
+            fake_prepared.resolved = None
             fake_prepared.declared_agents = ()
             mock_rt.prepare_program.return_value = fake_prepared
-            mock_rt.return_value.discover_params_graph.return_value = MagicMock(
+            mock_rt.return_value.discover_params.return_value = MagicMock(
                 diagnostics=(), warnings=(), params=(), checked=MagicMock(), program_name=None
             )
-            mock_rt.return_value.preflight_params_graph.return_value = MagicMock(
+            mock_rt.return_value.preflight_params.return_value = MagicMock(
                 result=RunResult(ok=True, diagnostics=[], error=None), executable=MagicMock()
             )
-            mock_rt.return_value.run_prepared_graph.return_value = fake_result
+            mock_rt.return_value.run_prepared.return_value = fake_result
             with pytest.raises(SystemExit) as exc_info:
                 exec_command.run(args)
         assert exc_info.value.code == 2
@@ -2272,9 +2232,7 @@ class TestExecMalformedQuotingRunner:
 # ---------------------------------------------------------------------------
 
 
-def _install_marker_runner(
-    directory: Path, env: dict[str, str], *, name: str, marker: str
-) -> Path:
+def _install_marker_runner(directory: Path, env: dict[str, str], *, name: str, marker: str) -> Path:
     """Install a fake runner *name* that echoes *marker* plus the prompt-file path.
 
     The script prints two lines: the marker (identifying WHICH runner ran) and
@@ -2316,11 +2274,7 @@ def _install_argv_echo_runner(
     directory.mkdir(parents=True, exist_ok=True)
     runner = directory / name
     runner.write_text(
-        "#!/bin/bash\n"
-        f'echo "{marker}"\n'
-        'for arg in "$@"; do\n'
-        '  echo "arg=$arg"\n'
-        "done\n"
+        f'#!/bin/bash\necho "{marker}"\nfor arg in "$@"; do\n  echo "arg=$arg"\ndone\n'
     )
     runner.chmod(runner.stat().st_mode | stat.S_IEXEC)
     if str(directory) not in env["PATH"].split(":"):
@@ -2426,8 +2380,7 @@ class TestExecAgentPrecedence:
         config_dir = tmp_path / ".agm"
         config_dir.mkdir()
         (config_dir / "config.toml").write_text(
-            '[exec]\nrunner = "default-runner"\n\n'
-            '[exec.agents]\na = "config-a %{PROMPT_FILE}"\n'
+            '[exec]\nrunner = "default-runner"\n\n[exec.agents]\na = "config-a %{PROMPT_FILE}"\n'
         )
 
         result = self._run_agm_exec([str(agl_file), "--no-log"], env=env, cwd=tmp_path)
@@ -2593,34 +2546,34 @@ class TestExecTimeoutAndLogFileFlags:
         from collections.abc import Mapping
 
         from agm.agl.ir.program import ExecutableProgram
-        from agm.agl.matchcompile import MatchCompiledModuleGraph
+        from agm.agl.matchcompile import MatchCompiledProgram
         from agm.agl.pipeline import PipelineDriver as RealRuntime
-        from agm.agl.pipeline import PreparedGraph, RunResult
+        from agm.agl.pipeline import PreparedProgram, RunResult
         from agm.agl.runtime.host_settings import HostSettingsPolicy
         from agm.agl.semantics.values import Value
 
         captured: dict[str, object] = {}
 
         class CapturingRuntime(RealRuntime):
-            def run_prepared_graph(
+            def run_prepared(
                 self,
-                prepared: PreparedGraph,
+                prepared: PreparedProgram,
                 *,
                 param_values: Mapping[str, object] | None = None,
                 check_only: bool = False,
                 log_file: Path | None = None,
-                compiled_graph: MatchCompiledModuleGraph | None = None,
+                compiled: MatchCompiledProgram | None = None,
                 executable: ExecutableProgram | None = None,
                 host_settings_policy: HostSettingsPolicy | None = None,
                 builtin_host_settings: Mapping[str, Value] | None = None,
             ) -> RunResult:
                 captured["shell_exec_timeout"] = self._shell_exec_timeout
-                return super().run_prepared_graph(
+                return super().run_prepared(
                     prepared,
                     param_values=param_values,
                     check_only=check_only,
                     log_file=log_file,
-                    compiled_graph=compiled_graph,
+                    compiled=compiled,
                     executable=executable,
                     host_settings_policy=host_settings_policy,
                     builtin_host_settings=builtin_host_settings,
@@ -2719,9 +2672,7 @@ class TestExecTimeoutAndLogFileFlags:
             lambda: ConfigContext(home=home, proj_dir=None, cwd=tmp_path),
         )
 
-        exec_command.run(
-            _exec_args_no_log(agl_file, no_log=False, no_log_file=True)
-        )
+        exec_command.run(_exec_args_no_log(agl_file, no_log=False, no_log_file=True))
 
         assert capsys.readouterr().out == "Option::None\n"
         assert trace_path.exists()
@@ -2883,11 +2834,7 @@ class TestExecSourceConfigPrecedence:
         ``for x in [1,2,3,4]``.
         """
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text(
-            "var s = 0\n"
-            "for x in [1, 2, 3, 4, 5] do s := s + x done\n"
-            "print s\n"
-        )
+        agl_file.write_text("var s = 0\nfor x in [1, 2, 3, 4, 5] do s := s + x done\nprint s\n")
         result = exec_command.run(_exec_args_no_log(agl_file, max_iters=3))
         assert result is None  # exit 0
         assert capsys.readouterr().out == "15\n"
@@ -2901,29 +2848,15 @@ class TestExecSourceConfigPrecedence:
         safety valve must not cut it short.
         """
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text(
-            "var i = 0\n"
-            "do[10]\n"
-            "  i := i + 1\n"
-            "until i >= 5\n"
-            "print i\n"
-        )
+        agl_file.write_text("var i = 0\ndo[10]\n  i := i + 1\nuntil i >= 5\nprint i\n")
         result = exec_command.run(_exec_args_no_log(agl_file, max_iters=3))
         assert result is None  # exit 0
         assert capsys.readouterr().out == "5\n"
 
-    def test_max_iters_caps_unbounded_do_until_loop(
-        self, tmp_path: Path
-    ) -> None:
+    def test_max_iters_caps_unbounded_do_until_loop(self, tmp_path: Path) -> None:
         """``--max-iters`` caps an unguarded ``do…until`` loop (no [n], no for)."""
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text(
-            "var i = 0\n"
-            "do\n"
-            "  i := i + 1\n"
-            "until i >= 1000\n"
-            "print i\n"
-        )
+        agl_file.write_text("var i = 0\ndo\n  i := i + 1\nuntil i >= 1000\nprint i\n")
         with pytest.raises(SystemExit) as exc_info:
             exec_command.run(_exec_args_no_log(agl_file, max_iters=3))
         assert exc_info.value.code == 2
@@ -2941,13 +2874,7 @@ class TestExecSourceConfigPrecedence:
     def test_max_iters_five_enables_valve(self, tmp_path: Path) -> None:
         """An explicit positive CLI limit consistently enables the valve."""
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text(
-            "var i = 0\n"
-            "do\n"
-            "  i := i + 1\n"
-            "until i >= 1000\n"
-            "print i\n"
-        )
+        agl_file.write_text("var i = 0\ndo\n  i := i + 1\nuntil i >= 1000\nprint i\n")
         with pytest.raises(SystemExit) as exc_info:
             exec_command.run(_exec_args_no_log(agl_file, max_iters=5))
         assert exc_info.value.code == 2
@@ -3083,9 +3010,7 @@ class TestExecSourceConfigPrecedence:
         # overrides it at runtime when it executes.
         assert captured["shell_exec_timeout"] == pytest.approx(999.0)
 
-    def test_source_timeout_invalid_string_raises_runtime_error(
-        self, tmp_path: Path
-    ) -> None:
+    def test_source_timeout_invalid_string_raises_runtime_error(self, tmp_path: Path) -> None:
         """A source timeout string that type-checks but fails parse_timeout raises
         a clean AgL-level ValueError at the assignment point (exit 2).
 
@@ -3205,7 +3130,7 @@ class TestExecSourceConfigPrecedence:
             "import std.config\n"
             "let previous = std.config::runner\n"
             "try\n"
-            "  std.config::runner := \"'\"\n"
+            '  std.config::runner := "\'"\n'
             "catch Exception as error => ()\n"
             "print(std.config::runner == previous)\n"
         )
@@ -3237,7 +3162,7 @@ def _exec_args_inline_no_log(
 
 
 class TestExecModuleRoots:
-    """``agm exec`` uses graph pipeline and module roots.
+    """``agm exec`` uses program pipeline and module roots.
 
     Tests verify that:
     - ``agm exec <file>`` uses the file's directory as invocation root.
@@ -3252,9 +3177,7 @@ class TestExecModuleRoots:
     ) -> None:
         """``agm exec file.agl`` can import a sibling module in the same directory."""
         lib_dir = tmp_path
-        (lib_dir / "mylib.agl").write_text(
-            "def answer() -> int = 42\n"
-        )
+        (lib_dir / "mylib.agl").write_text("def answer() -> int = 42\n")
         entry = lib_dir / "entry.agl"
         entry.write_text("import mylib\nlet r = answer()\nprint r\n")
 
@@ -3286,7 +3209,7 @@ class TestExecModuleRoots:
         # Write a lib module to a tmp dir
         lib_dir = tmp_path / "libdir"
         lib_dir.mkdir()
-        (lib_dir / "util.agl").write_text("def greet() -> text = \"Hi!\"\n")
+        (lib_dir / "util.agl").write_text('def greet() -> text = "Hi!"\n')
         entry_source = "import util\nlet r = greet()\nprint r\n"
 
         # Patch current_config_context as imported in exec_command
@@ -3390,20 +3313,14 @@ class TestExecModuleRoots:
         """``import pkg.*`` wildcard imports two sibling modules and both are callable.
 
         Verifies that the wildcard import path works end-to-end through the
-        exec_command pipeline (discover_params_graph + run_prepared_graph).
+        exec_command pipeline (discover_params + run_prepared).
         """
         pkg_dir = tmp_path / "pkg"
         pkg_dir.mkdir()
         (pkg_dir / "add.agl").write_text("def add(a: int, b: int) -> int = a + b\n")
         (pkg_dir / "mul.agl").write_text("def mul(a: int, b: int) -> int = a * b\n")
         entry = tmp_path / "prog.agl"
-        entry.write_text(
-            "import pkg.*\n"
-            "let s = add(3, 4)\n"
-            "let p = mul(3, 4)\n"
-            "print s\n"
-            "print p\n"
-        )
+        entry.write_text("import pkg.*\nlet s = add(3, 4)\nlet p = mul(3, 4)\nprint s\nprint p\n")
 
         exec_command.run(_exec_args_no_log(entry))
         captured = capsys.readouterr()
@@ -3419,11 +3336,7 @@ class TestExecModuleRoots:
         """
         (tmp_path / "mathlib.agl").write_text("def square(n: int) -> int = n * n\n")
         entry = tmp_path / "prog.agl"
-        entry.write_text(
-            "import mathlib qualified\n"
-            "let r = mathlib::square(7)\n"
-            "print r\n"
-        )
+        entry.write_text("import mathlib qualified\nlet r = mathlib::square(7)\nprint r\n")
 
         exec_command.run(_exec_args_no_log(entry))
         captured = capsys.readouterr()
@@ -3444,8 +3357,7 @@ class TestExecModuleRoots:
         from agm.agl.runtime.request import AgentRequest, AgentResponse
 
         (tmp_path / "greeter.agl").write_text(
-            "def greet(prompt: text, bot: agent) -> text =\n"
-            "  ask(prompt, agent = bot)\n"
+            "def greet(prompt: text, bot: agent) -> text =\n  ask(prompt, agent = bot)\n"
         )
         entry = tmp_path / "entry.agl"
         entry.write_text(
@@ -3464,9 +3376,7 @@ class TestExecModuleRoots:
             # Patch runner_backed_agent_factory so both the default agent and
             # the registered 'mybot' agent use our mock (matching the pattern
             # in test_ask_program_dispatches_to_runner_backed_agent above).
-            monkeypatch.setattr(
-                exec_mod, "runner_backed_agent_factory", lambda **_: mock_agent
-            )
+            monkeypatch.setattr(exec_mod, "runner_backed_agent_factory", lambda **_: mock_agent)
             exec_command.run(_exec_args_no_log(entry))
             out, _ = capsys.readouterr()
             return out
@@ -3533,9 +3443,7 @@ class TestExecCliModulePaths:
         entry_dir = tmp_path / "entry"
         entry_dir.mkdir()
         entry = entry_dir / "prog.agl"
-        entry.write_text(
-            "import mod_a\nimport mod_b\nlet r = va() + vb()\nprint r\n"
-        )
+        entry.write_text("import mod_a\nimport mod_b\nlet r = va() + vb()\nprint r\n")
 
         args = ExecArgs(
             file=str(entry),
@@ -3590,7 +3498,7 @@ class TestExecCliModulePaths:
         """``-c`` inline exec resolves imports from a -I root."""
         lib_root = tmp_path / "inlinelibs"
         lib_root.mkdir()
-        (lib_root / "util.agl").write_text("def greet() -> text = \"Hello!\"\n")
+        (lib_root / "util.agl").write_text('def greet() -> text = "Hello!"\n')
 
         # cwd is irrelevant — helper is not reachable from cwd; only via -I
         entry_dir = tmp_path / "work"
@@ -3688,7 +3596,7 @@ class TestReservedFileStem:
 
 
 class TestF1StemVsProgramNameBug:
-    """ regression: file stem != program NAME decl must not split engine/param key."""
+    """regression: file stem != program NAME decl must not split engine/param key."""
 
     def test_program_name_decl_used_for_engine_timeout(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -3702,9 +3610,9 @@ class TestF1StemVsProgramNameBug:
         from collections.abc import Mapping
 
         from agm.agl.ir.program import ExecutableProgram
-        from agm.agl.matchcompile import MatchCompiledModuleGraph
+        from agm.agl.matchcompile import MatchCompiledProgram
         from agm.agl.pipeline import PipelineDriver as RealRuntime
-        from agm.agl.pipeline import PreparedGraph, RunResult
+        from agm.agl.pipeline import PreparedProgram, RunResult
         from agm.agl.runtime.host_settings import HostSettingsPolicy
         from agm.agl.semantics.values import Value
         from agm.config.context import ConfigContext
@@ -3728,25 +3636,25 @@ class TestF1StemVsProgramNameBug:
         captured: dict[str, object] = {}
 
         class CapturingRuntime(RealRuntime):
-            def run_prepared_graph(
+            def run_prepared(
                 self,
-                prepared: PreparedGraph,
+                prepared: PreparedProgram,
                 *,
                 param_values: Mapping[str, object] | None = None,
                 check_only: bool = False,
                 log_file: Path | None = None,
-                compiled_graph: MatchCompiledModuleGraph | None = None,
+                compiled: MatchCompiledProgram | None = None,
                 executable: ExecutableProgram | None = None,
                 host_settings_policy: HostSettingsPolicy | None = None,
                 builtin_host_settings: Mapping[str, Value] | None = None,
             ) -> RunResult:
                 captured["shell_exec_timeout"] = self._shell_exec_timeout
-                return super().run_prepared_graph(
+                return super().run_prepared(
                     prepared,
                     param_values=param_values,
                     check_only=check_only,
                     log_file=log_file,
-                    compiled_graph=compiled_graph,
+                    compiled=compiled,
                     executable=executable,
                     host_settings_policy=host_settings_policy,
                     builtin_host_settings=builtin_host_settings,
@@ -3765,9 +3673,7 @@ class TestF1StemVsProgramNameBug:
 class TestProgramLogFilePathResolution:
     """[<program>].log-file relative path is anchored to the config directory."""
 
-    def test_program_log_file_relative_resolved_to_config_dir(
-        self, tmp_path: Path
-    ) -> None:
+    def test_program_log_file_relative_resolved_to_config_dir(self, tmp_path: Path) -> None:
         from agm.config.general import load_merged_config, program_config_from_merged
 
         home = tmp_path / "home"

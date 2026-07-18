@@ -150,7 +150,7 @@ from agm.agl.matchcompile import (
     EnumConstructor,
     FieldOccurrenceProvenance,
     LiteralKind,
-    MatchCompiledProgram,
+    MatchCompiledModule,
     Occurrence,
     OccurrenceId,
 )
@@ -250,15 +250,14 @@ from agm.agl.type_schema import (
     derive_schema_and_decode,
 )
 from agm.agl.typecheck.env import (
-    CheckedProgram,
+    CheckedModule,
     FunctionSignature,
     OutputContractSpec,
     PartialCallSpec,
 )
-from agm.agl.typecheck.graph import CheckedModule
 from agm.util.text import normalize_newlines
 
-__all__ = ["_LinkState", "lower_program"]
+__all__ = ["_LinkState", "lower_module"]
 
 
 def _contract_has_schema(
@@ -315,7 +314,7 @@ def _add_builtin_nominals(
 
 
 # ---------------------------------------------------------------------------
-# Internal lowerer state (one instance per lower_program call)
+# Internal lowerer state (one instance per lower_module call)
 # ---------------------------------------------------------------------------
 
 
@@ -354,7 +353,7 @@ class _Lowerer:
 
     def __init__(
         self,
-        checked: CheckedProgram | CheckedModule,
+        checked: CheckedModule | CheckedModule,
         link: _LinkState,
         module_id: ModuleId,
         source_id: SourceId,
@@ -1233,9 +1232,7 @@ class _Lowerer:
             # Case expression
             # ----------------------------------------------------------
             case Case(subject=subject_expr, branches=branches, span=span, node_id=nid):
-                return self._lower_case(
-                    nid, subject_expr, branches, span, self._node_type(nid)
-                )
+                return self._lower_case(nid, subject_expr, branches, span, self._node_type(nid))
 
             # ----------------------------------------------------------
             # loop expression → IrLoop (desugared by _lower_loop)
@@ -2594,9 +2591,7 @@ class _Lowerer:
 
         collect_binders(compiled.root)
         binder_symbols = {
-            node_id: self._alloc_sym(
-                node_id, name=name, mutable=False, public=False
-            )
+            node_id: self._alloc_sym(node_id, name=name, mutable=False, public=False)
             for node_id, name in binder_names.items()
         }
         for action_id, action in actions.items():
@@ -2604,9 +2599,7 @@ class _Lowerer:
             assert source_branch.body.node_id == action.body_node_id, (
                 "compiler bug: decision action does not identify its source body"
             )
-            action_body_memo[action_id] = self.lower_coerced(
-                source_branch.body, result_type
-            )
+            action_body_memo[action_id] = self.lower_coerced(source_branch.body, result_type)
 
         def case_key(constructor: Constructor) -> IrCaseKey:
             if isinstance(constructor, EnumConstructor):
@@ -2645,9 +2638,7 @@ class _Lowerer:
                     for assignment in decision.binder_assignments
                 )
                 body = action_body_memo[decision.action_id]
-                lowered_leaf: IrExpr = (
-                    IrSequence(location, (*bindings, body)) if bindings else body
-                )
+                lowered_leaf: IrExpr = IrSequence(location, (*bindings, body)) if bindings else body
                 decision_memo[id(decision)] = lowered_leaf
                 return lowered_leaf
 
@@ -2668,9 +2659,7 @@ class _Lowerer:
                         symbol_for_occurrence(occurrence.id),
                     )
                     for occurrence in demanded_children
-                    if isinstance(
-                        occurrence.provenance, FieldOccurrenceProvenance
-                    )
+                    if isinstance(occurrence.provenance, FieldOccurrenceProvenance)
                 )
                 arms.append(
                     IrCaseArm(
@@ -2679,9 +2668,7 @@ class _Lowerer:
                         lower_decision(child),
                     )
                 )
-            default = (
-                lower_decision(switch.default) if switch.default is not None else None
-            )
+            default = lower_decision(switch.default) if switch.default is not None else None
             lowered_switch = IrCase(
                 location,
                 IrLoad(location, symbol_for_occurrence(switch.occurrence.id)),
@@ -2913,7 +2900,7 @@ class _Lowerer:
 
             case ParamDecl() as param_decl:
                 # Param declarations are only lowered for the entry module.
-                # graph.py guards ensure this branch is only called for entry items,
+                # program.py guards ensure this branch is only called for entry items,
                 # so _lower_param_decl is always applicable here.
                 self._lower_param_decl(param_decl)
                 return None
@@ -3238,8 +3225,8 @@ class _Lowerer:
 # ---------------------------------------------------------------------------
 
 
-def lower_program(
-    compiled: MatchCompiledProgram,
+def lower_module(
+    compiled: MatchCompiledModule,
     *,
     source_text: str,
     source_label: str,

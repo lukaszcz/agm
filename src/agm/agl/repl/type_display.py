@@ -53,9 +53,7 @@ def format_type_text_echo_for_repl(rendered: str) -> str:
     return f"<type: {rendered}>"
 
 
-def format_generic_type_def_for_repl(
-    name: str, gdef: GenericTypeDef, table: TypeTable
-) -> str:
+def format_generic_type_def_for_repl(name: str, gdef: GenericTypeDef, table: TypeTable) -> str:
     """Return a declaration-like display for an unapplied generic type definition."""
     display_name = f"{name}[{', '.join(gdef.type_params)}]"
     template = gdef.template
@@ -73,10 +71,7 @@ def _format_record_type_with_name(typ: RecordType, name: str, table: TypeTable) 
     if not fields:
         return f"record {name}()"
     lines = [f"record {name}"]
-    lines.extend(
-        f"  {field_name}: {field_type!r}"
-        for field_name, field_type in fields.items()
-    )
+    lines.extend(f"  {field_name}: {field_type!r}" for field_name, field_type in fields.items())
     return "\n".join(lines)
 
 

@@ -92,7 +92,7 @@ class TestTraceFileCreated:
         """RunResult.trace_path is the Path of the written JSONL file."""
         log_path = tmp_path / "trace.jsonl"
         rt = PipelineDriver()
-        result = rt.run('let x = 1\nx', log_file=log_path)
+        result = rt.run("let x = 1\nx", log_file=log_path)
         assert result.ok
         assert result.trace_path == log_path
 
@@ -439,9 +439,7 @@ class TestExceptionRecord:
         assert rec_trace_id == agl_trace_id
         assert isinstance(rec_trace_id, str) and rec_trace_id
 
-    def test_caught_exception_does_not_produce_exception_record(
-        self, tmp_path: Path
-    ) -> None:
+    def test_caught_exception_does_not_produce_exception_record(self, tmp_path: Path) -> None:
         """An exception caught by try/catch is NOT written as an 'exception' record
         (it was handled in-language and did not escape the program)."""
         log_path = tmp_path / "trace.jsonl"
@@ -453,12 +451,12 @@ class TestExceptionRecord:
         rt.register_agent("impl", agent)
         # The AgentParseError is caught and the result is a fallback string.
         result = rt.run(
-            'agent impl\n'
-            'try\n'
+            "agent impl\n"
+            "try\n"
             '  let x: int = ask("get int", agent = impl)\n'
-            '  x\n'
-            'catch AgentParseError as e =>\n'
-            '  0\n',
+            "  x\n"
+            "catch AgentParseError as e =>\n"
+            "  0\n",
             log_file=log_path,
         )
         assert result.ok
@@ -478,9 +476,7 @@ class TestBuiltinExceptionTraceId:
     MaxIterationsExceeded, ExecError) must carry a non-empty ``trace_id`` that
     matches their ``exception`` trace record — mirroring AgentParseError."""
 
-    def test_arithmetic_error_trace_id_non_empty_with_logging(
-        self, tmp_path: Path
-    ) -> None:
+    def test_arithmetic_error_trace_id_non_empty_with_logging(self, tmp_path: Path) -> None:
         log_path = tmp_path / "trace.jsonl"
         rt = PipelineDriver()
         # Uncaught division by zero → ArithmeticError escapes the program.
@@ -517,8 +513,8 @@ class TestBuiltinExceptionTraceId:
             "case 5 of\n"
             "  | 0 => ()\n"
             "  | _ =>\n"
-            "      raise MatchError(message = \"no match\", "
-            "scrutinee_type = \"int\", scrutinee = 5)\n",
+            '      raise MatchError(message = "no match", '
+            'scrutinee_type = "int", scrutinee = 5)\n',
             log_file=None,
         )
         assert not result.ok
@@ -945,8 +941,12 @@ class TestTraceStoreProperties:
         p = tmp_path / "t.jsonl"
         ts = TraceStore(path=p)
         span = SourceSpan(
-            start_line=5, start_col=3, end_line=5, end_col=10,
-            start_offset=40, end_offset=47,
+            start_line=5,
+            start_col=3,
+            end_line=5,
+            end_col=10,
+            start_offset=40,
+            end_offset=47,
         )
         ts.exception(type_name="Abort", message="stop", trace_id="abc", span=span)
 
@@ -966,9 +966,7 @@ class TestUnparseableFeedback:
     retry attempt must carry the failure reason as a ValidationError, and the
     parse_result trace record must have a non-empty error_summary."""
 
-    def test_retry_request_carries_reason_when_totally_unparseable(
-        self, tmp_path: Path
-    ) -> None:
+    def test_retry_request_carries_reason_when_totally_unparseable(self, tmp_path: Path) -> None:
         """Second attempt's validation_errors is non-empty with the parse reason."""
         log_path = tmp_path / "trace.jsonl"
         rt = PipelineDriver(default_strict_json=True)
@@ -998,13 +996,11 @@ class TestUnparseableFeedback:
             "retry request.validation_errors must be non-empty when output was unparseable"
         )
         # The category must be "invalid_json" (the extension for unparseable output).
-        assert any(
-            e.category == "invalid_json" for e in second_request.validation_errors
-        ), f"Expected category 'invalid_json', got: {second_request.validation_errors}"
+        assert any(e.category == "invalid_json" for e in second_request.validation_errors), (
+            f"Expected category 'invalid_json', got: {second_request.validation_errors}"
+        )
 
-    def test_parse_result_error_summary_non_empty_when_unparseable(
-        self, tmp_path: Path
-    ) -> None:
+    def test_parse_result_error_summary_non_empty_when_unparseable(self, tmp_path: Path) -> None:
         """parse_result trace record's error_summary is non-empty for unparseable output."""
         log_path = tmp_path / "trace.jsonl"
         rt = PipelineDriver(default_strict_json=True)
@@ -1044,9 +1040,7 @@ class TestUnparseableFeedback:
         rt.register_agent("impl", agent)
         # Patch the IR output parser to return a failure with no details at all.
         bare_fail = ParseResult(ok=False, value=None, error_msg="", errors=())
-        with patch(
-            "agm.agl.eval.ir_interpreter._parse_contract_output", return_value=bare_fail
-        ):
+        with patch("agm.agl.eval.ir_interpreter._parse_contract_output", return_value=bare_fail):
             result = rt.run(
                 'agent impl\nlet x: int = ask("q", agent = impl, on_parse_error = Abort())\nx'
             )
@@ -1089,9 +1083,7 @@ class TestPrepareTraceLogTruncates:
             "prepare_trace_log must truncate the file so each run starts from a clean slate"
         )
 
-    def test_prepare_trace_log_subsequent_record_is_only_content(
-        self, tmp_path: Path
-    ) -> None:
+    def test_prepare_trace_log_subsequent_record_is_only_content(self, tmp_path: Path) -> None:
         """After truncation, only records written in the current run appear in the file."""
         from agm.core.log import append_jsonl, prepare_trace_log
 

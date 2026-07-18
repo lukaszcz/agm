@@ -176,17 +176,13 @@ def _body_inhabited(
 ) -> bool:
     if typedef.kind == "enum":
         return any(
-            all(
-                _template_inhabited(t, env, inhabited, defs, stack=stack)
-                for _fname, t in vfields
-            )
+            all(_template_inhabited(t, env, inhabited, defs, stack=stack) for _fname, t in vfields)
             for _vname, vfields in typedef.variants
         )
     if typedef.kind == "exception":
         return _exception_decl_inhabited(typedef, env, inhabited, defs, stack=stack)
     return all(
-        _template_inhabited(t, env, inhabited, defs, stack=stack)
-        for _fname, t in typedef.fields
+        _template_inhabited(t, env, inhabited, defs, stack=stack) for _fname, t in typedef.fields
     )
 
 
@@ -224,8 +220,7 @@ def _exception_fields_inhabited(
     extends_stack: frozenset[DeclKey],
 ) -> bool:
     own_ok = all(
-        _template_inhabited(t, env, inhabited, defs, stack=stack)
-        for _fname, t in typedef.fields
+        _template_inhabited(t, env, inhabited, defs, stack=stack) for _fname, t in typedef.fields
     )
     if not own_ok:
         return False
@@ -833,9 +828,7 @@ def _param_occurrences(
             for p in params:
                 merged = _merge_growing(
                     merged,
-                    _param_occurrences(
-                        p, growing=True, defs=defs, relevant_params=relevant_params
-                    ),
+                    _param_occurrences(p, growing=True, defs=defs, relevant_params=relevant_params),
                 )
             merged = _merge_growing(
                 merged,

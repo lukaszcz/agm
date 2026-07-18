@@ -411,7 +411,5 @@ def dispatch_meta(line: str, ctx: MetaContext) -> MetaOutcome:
 
     command = _command_index().get(name)
     if command is None:
-        return MetaOutcome(
-            text=f"Unknown command ':{name}'. Type :help for the command list."
-        )
+        return MetaOutcome(text=f"Unknown command ':{name}'. Type :help for the command list.")
     return command.handler(arg, ctx)

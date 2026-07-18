@@ -116,9 +116,7 @@ def run(args: ReplArgs) -> None:
     from agm.agl.repl.console import make_console_confirm, run_console
 
     confirm_agent_call = make_console_confirm()
-    confirming_agent = ConfirmingAgent(
-        runner_agent, agent_mode, confirm=confirm_agent_call
-    )
+    confirming_agent = ConfirmingAgent(runner_agent, agent_mode, confirm=confirm_agent_call)
 
     def _build_runner(command: str) -> AgentFn:
         parse_command(command, kind="runner")
@@ -135,13 +133,9 @@ def run(args: ReplArgs) -> None:
     )
 
     def _params_config_loader(program_name: str) -> dict[str, object]:
-        return load_program_config(
-            program_name, home=ctx.home, proj_dir=ctx.proj_dir, cwd=ctx.cwd
-        )
+        return load_program_config(program_name, home=ctx.home, proj_dir=ctx.proj_dir, cwd=ctx.cwd)
 
-    mod_roots_cfg = load_module_roots(
-        home=ctx.home, proj_dir=ctx.proj_dir, cwd=ctx.cwd
-    )
+    mod_roots_cfg = load_module_roots(home=ctx.home, proj_dir=ctx.proj_dir, cwd=ctx.cwd)
     stdlib_root = resolve_stdlib_root(home=ctx.home)
     lib_root = resolve_lib_root(mod_roots_cfg, home=ctx.home)
 

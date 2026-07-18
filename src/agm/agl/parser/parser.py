@@ -123,20 +123,14 @@ def _parse_tree(
     try:
         return parser.parse(text)
     except LexError as exc:
-        _reraise_stamped(
-            syntax_error_from_lark(exc, filename=filename, source_text=text), source
-        )
+        _reraise_stamped(syntax_error_from_lark(exc, filename=filename, source_text=text), source)
     except (UnexpectedToken, UnexpectedCharacters, UnexpectedEOF) as exc:
-        _reraise_stamped(
-            syntax_error_from_lark(exc, filename=filename, source_text=text), source
-        )
+        _reraise_stamped(syntax_error_from_lark(exc, filename=filename, source_text=text), source)
     except LarkError as exc:  # pragma: no cover
         # Any other lark-level error (ParseError, GrammarError, etc.) is a
         # genuine syntax/parse problem.  Narrowing to LarkError lets internal
         # bugs (AssertionError and the like) surface instead of being masked.
-        _reraise_stamped(
-            syntax_error_from_lark(exc, filename=filename, source_text=text), source
-        )
+        _reraise_stamped(syntax_error_from_lark(exc, filename=filename, source_text=text), source)
 
 
 def _transform_tree(
@@ -253,8 +247,7 @@ def is_incomplete_source(text: str) -> bool:
         token: Token = exc.token
         if token.type == "$END":
             typed_call_without_call = (
-                exc.expected == {"LPAR"}
-                and _TYPED_CALL_WITHOUT_CALL_RE.search(text) is not None
+                exc.expected == {"LPAR"} and _TYPED_CALL_WITHOUT_CALL_RE.search(text) is not None
             )
             result = not typed_call_without_call
         else:
@@ -412,8 +405,6 @@ def parse_type_expr(
         On any lex or parse error.
     """
     tree = _parse_tree(_type_parser(), text, filename=filename, source=source)
-    result, _next_id = _transform_tree(
-        tree, start_id=start_id, filename=filename, source=source
-    )
+    result, _next_id = _transform_tree(tree, start_id=start_id, filename=filename, source=source)
     assert isinstance(result, syntax.TypeExpr)
     return result

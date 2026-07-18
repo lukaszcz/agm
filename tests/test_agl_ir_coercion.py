@@ -1,7 +1,7 @@
 """IR evaluation tests for coercion round-trips.
 
 Each test evaluates a source program through the IR pipeline
-(lower_program → IrInterpreter) and asserts the final binding snapshots.
+(lower_module → IrInterpreter) and asserts the final binding snapshots.
 
 Where noted, a test also structurally asserts that the lowered IR contains
 the expected ``IrCoerce``/``Coercion`` node (complementing the golden
@@ -36,9 +36,9 @@ import decimal
 from agm.agl.ir.nodes import IrBind, IrCoerce, IrMakeDict, IrMakeList
 from agm.agl.ir.operations import IntToDecimal, ToJson
 from agm.agl.ir.program import ExecutableProgram
-from agm.agl.lower import lower_program
+from agm.agl.lower import lower_module
 from agm.agl.parser import parse_program
-from agm.agl.scope import resolve
+from agm.agl.scope import resolve_module
 from agm.agl.semantics.values import (
     DecimalValue,
     DictValue,
@@ -48,7 +48,7 @@ from agm.agl.semantics.values import (
     TextValue,
     Value,
 )
-from agm.agl.typecheck import check
+from agm.agl.typecheck import check_module
 from tests.agl.ir_harness import _compiled_checked, base_caps, evaluate_ir
 
 # ---------------------------------------------------------------------------
@@ -57,10 +57,8 @@ from tests.agl.ir_harness import _compiled_checked, base_caps, evaluate_ir
 
 
 def _lower(source: str) -> ExecutableProgram:
-    checked = check(resolve(parse_program(source)), base_caps())
-    return lower_program(
-        _compiled_checked(checked), source_text=source, source_label="<test>"
-    )
+    checked = check_module(resolve_module(parse_program(source)), base_caps())
+    return lower_module(_compiled_checked(checked), source_text=source, source_label="<test>")
 
 
 # ---------------------------------------------------------------------------
@@ -472,12 +470,7 @@ def test_coercion_evaluates_operand_once() -> None:
     We exercise this with a multi-step program where each binding's RHS is a
     constant; the IR pipeline must produce the correct value for each binding.
     """
-    source = (
-        "let a: decimal = 10\n"
-        "let b: decimal = 20\n"
-        "let c: list[decimal] = [a, b]\n"
-        "()"
-    )
+    source = "let a: decimal = 10\nlet b: decimal = 20\nlet c: list[decimal] = [a, b]\n()"
     ir = evaluate_ir(source)
     assert ir["a"] == DecimalValue(decimal.Decimal(10))
     assert ir["b"] == DecimalValue(decimal.Decimal(20))

@@ -28,7 +28,7 @@ from agm.agl.matchcompile.model import (
 )
 from agm.agl.matchcompile.normalize import normalize_case
 from agm.agl.parser import parse_program
-from agm.agl.scope import resolve
+from agm.agl.scope import resolve_module
 from agm.agl.semantics.values import (
     BoolValue,
     DecimalValue,
@@ -40,7 +40,7 @@ from agm.agl.semantics.values import (
 )
 from agm.agl.syntax.nodes import Case
 from agm.agl.syntax.visitor import walk
-from agm.agl.typecheck import CheckedProgram, check
+from agm.agl.typecheck import CheckedModule, check_module
 from tests.agl.match_reference import (
     canonical_cell_matches,
     matrix_action,
@@ -60,8 +60,8 @@ _CAPS = HostCapabilities(
 
 def _matrix(
     source: str,
-) -> tuple[CheckedProgram, Case, PatternMatrix, OccurrenceAllocator]:
-    checked = check(resolve(parse_program(source)), _CAPS)
+) -> tuple[CheckedModule, Case, PatternMatrix, OccurrenceAllocator]:
+    checked = check_module(resolve_module(parse_program(source)), _CAPS)
     cases: list[Case] = []
 
     def collect(node: object) -> None:
@@ -215,7 +215,7 @@ def _head_arguments(
 
 
 def _assert_decomposition_partition(
-    checked: CheckedProgram,
+    checked: CheckedModule,
     case: Case,
     matrix: PatternMatrix,
     allocator: OccurrenceAllocator,
@@ -274,9 +274,7 @@ def test_boolean_and_enum_decompositions_partition_complete_finite_domains() -> 
     subjects = tuple(
         EnumValue(nominal, enum_type.name, variant, {}) for variant in ("red", "green", "blue")
     )
-    _assert_decomposition_partition(
-        enum_checked, enum_case, enum_matrix, enum_allocator, subjects
-    )
+    _assert_decomposition_partition(enum_checked, enum_case, enum_matrix, enum_allocator, subjects)
 
 
 @pytest.mark.parametrize(

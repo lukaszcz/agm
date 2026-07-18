@@ -69,12 +69,7 @@ class TestReadDepsFromToml:
     def test_skips_empty_string_values(self, tmp_path: Path) -> None:
         config_file = tmp_path / "config.toml"
         config_file.write_text(
-            "[deps]"
-            + "\n"
-            + 'mylib = ""'
-            + "\n"
-            + 'other = "dev"'
-            + "\n",
+            "[deps]" + "\n" + 'mylib = ""' + "\n" + 'other = "dev"' + "\n",
             encoding="utf-8",
         )
         result = read_deps_table(config_file)
@@ -90,7 +85,7 @@ class TestReadDepsFromToml:
 
     def test_raises_on_unreadable_file(self, tmp_path: Path) -> None:
         config_file = tmp_path / "config.toml"
-        config_file.write_text("[deps]\nmylib = \"main\"\n", encoding="utf-8")
+        config_file.write_text('[deps]\nmylib = "main"\n', encoding="utf-8")
         config_file.chmod(0)
         try:
             with pytest.raises(OSError):
@@ -244,12 +239,8 @@ class TestListDepsCurrentWorkspace:
         (deps_dir / "mylib" / "feature").mkdir(parents=True)
         (deps_dir / "other" / "main").mkdir(parents=True)
 
-        monkeypatch.setattr(
-            dep_list_cmd, "require_current_project_dir", lambda: project_dir
-        )
-        monkeypatch.setattr(
-            dep_list_cmd, "project_deps_dir", lambda pd: project_dir / "deps"
-        )
+        monkeypatch.setattr(dep_list_cmd, "require_current_project_dir", lambda: project_dir)
+        monkeypatch.setattr(dep_list_cmd, "project_deps_dir", lambda pd: project_dir / "deps")
         monkeypatch.setattr(
             dep_list_cmd,
             "config_toml_file",
@@ -259,9 +250,7 @@ class TestListDepsCurrentWorkspace:
                 else project_dir / "config" / "config.toml"
             ),
         )
-        monkeypatch.setattr(
-            dep_list_cmd, "current_config_branch", lambda pd: "feature"
-        )
+        monkeypatch.setattr(dep_list_cmd, "current_config_branch", lambda pd: "feature")
 
         dep_list_cmd.list_deps()
 
@@ -289,12 +278,8 @@ class TestListDepsCurrentWorkspace:
         deps_dir = project_dir / "deps"
         (deps_dir / "mylib" / "main").mkdir(parents=True)
 
-        monkeypatch.setattr(
-            dep_list_cmd, "require_current_project_dir", lambda: project_dir
-        )
-        monkeypatch.setattr(
-            dep_list_cmd, "project_deps_dir", lambda pd: project_dir / "deps"
-        )
+        monkeypatch.setattr(dep_list_cmd, "require_current_project_dir", lambda: project_dir)
+        monkeypatch.setattr(dep_list_cmd, "project_deps_dir", lambda pd: project_dir / "deps")
         monkeypatch.setattr(
             dep_list_cmd,
             "config_toml_file",
@@ -304,9 +289,7 @@ class TestListDepsCurrentWorkspace:
                 else project_dir / "config" / "config.toml"
             ),
         )
-        monkeypatch.setattr(
-            dep_list_cmd, "current_config_branch", lambda pd: None
-        )
+        monkeypatch.setattr(dep_list_cmd, "current_config_branch", lambda pd: None)
 
         dep_list_cmd.list_deps()
 
@@ -333,12 +316,8 @@ class TestListDepsCurrentWorkspace:
         deps_dir = project_dir / "deps"
         (deps_dir / "mylib" / "main").mkdir(parents=True)
 
-        monkeypatch.setattr(
-            dep_list_cmd, "require_current_project_dir", lambda: project_dir
-        )
-        monkeypatch.setattr(
-            dep_list_cmd, "project_deps_dir", lambda pd: project_dir / "deps"
-        )
+        monkeypatch.setattr(dep_list_cmd, "require_current_project_dir", lambda: project_dir)
+        monkeypatch.setattr(dep_list_cmd, "project_deps_dir", lambda pd: project_dir / "deps")
         monkeypatch.setattr(
             dep_list_cmd,
             "config_toml_file",
@@ -348,9 +327,7 @@ class TestListDepsCurrentWorkspace:
                 else project_dir / "config" / "config.toml"
             ),
         )
-        monkeypatch.setattr(
-            dep_list_cmd, "current_config_branch", lambda pd: None
-        )
+        monkeypatch.setattr(dep_list_cmd, "current_config_branch", lambda pd: None)
 
         dep_list_cmd.list_deps(verbose=True)
 
@@ -373,12 +350,8 @@ class TestListDepsCurrentWorkspace:
         config_file = config_dir / "config.toml"
         config_file.write_text("", encoding="utf-8")
 
-        monkeypatch.setattr(
-            dep_list_cmd, "require_current_project_dir", lambda: project_dir
-        )
-        monkeypatch.setattr(
-            dep_list_cmd, "project_deps_dir", lambda pd: project_dir / "deps"
-        )
+        monkeypatch.setattr(dep_list_cmd, "require_current_project_dir", lambda: project_dir)
+        monkeypatch.setattr(dep_list_cmd, "project_deps_dir", lambda pd: project_dir / "deps")
         monkeypatch.setattr(
             dep_list_cmd,
             "config_toml_file",
@@ -388,9 +361,7 @@ class TestListDepsCurrentWorkspace:
                 else project_dir / "config" / "config.toml"
             ),
         )
-        monkeypatch.setattr(
-            dep_list_cmd, "current_config_branch", lambda pd: None
-        )
+        monkeypatch.setattr(dep_list_cmd, "current_config_branch", lambda pd: None)
 
         dep_list_cmd.list_deps()
 
@@ -420,12 +391,8 @@ class TestListDepsAll:
         (deps_dir / "other" / "develop").mkdir(parents=True)
         _init_git_repo(deps_dir / "other" / "develop")
 
-        monkeypatch.setattr(
-            dep_list_cmd, "require_current_project_dir", lambda: project_dir
-        )
-        monkeypatch.setattr(
-            dep_list_cmd, "project_deps_dir", lambda pd: project_dir / "deps"
-        )
+        monkeypatch.setattr(dep_list_cmd, "require_current_project_dir", lambda: project_dir)
+        monkeypatch.setattr(dep_list_cmd, "project_deps_dir", lambda pd: project_dir / "deps")
 
         dep_list_cmd.list_deps(all_checkouts=True)
 
@@ -448,12 +415,8 @@ class TestListDepsAll:
         (deps_dir / "mylib" / "main").mkdir(parents=True)
         _init_git_repo(deps_dir / "mylib" / "main")
 
-        monkeypatch.setattr(
-            dep_list_cmd, "require_current_project_dir", lambda: project_dir
-        )
-        monkeypatch.setattr(
-            dep_list_cmd, "project_deps_dir", lambda pd: project_dir / "deps"
-        )
+        monkeypatch.setattr(dep_list_cmd, "require_current_project_dir", lambda: project_dir)
+        monkeypatch.setattr(dep_list_cmd, "project_deps_dir", lambda pd: project_dir / "deps")
 
         dep_list_cmd.list_deps(verbose=True, all_checkouts=True)
 
@@ -474,12 +437,8 @@ class TestListDepsAll:
         deps_dir = project_dir / "deps"
         deps_dir.mkdir()
 
-        monkeypatch.setattr(
-            dep_list_cmd, "require_current_project_dir", lambda: project_dir
-        )
-        monkeypatch.setattr(
-            dep_list_cmd, "project_deps_dir", lambda pd: project_dir / "deps"
-        )
+        monkeypatch.setattr(dep_list_cmd, "require_current_project_dir", lambda: project_dir)
+        monkeypatch.setattr(dep_list_cmd, "project_deps_dir", lambda pd: project_dir / "deps")
 
         dep_list_cmd.list_deps(all_checkouts=True)
 
@@ -495,12 +454,8 @@ class TestListDepsAll:
         project_dir = tmp_path / "project"
         project_dir.mkdir()
 
-        monkeypatch.setattr(
-            dep_list_cmd, "require_current_project_dir", lambda: project_dir
-        )
-        monkeypatch.setattr(
-            dep_list_cmd, "project_deps_dir", lambda pd: project_dir / "deps"
-        )
+        monkeypatch.setattr(dep_list_cmd, "require_current_project_dir", lambda: project_dir)
+        monkeypatch.setattr(dep_list_cmd, "project_deps_dir", lambda pd: project_dir / "deps")
 
         dep_list_cmd.list_deps(all_checkouts=True)
 
@@ -532,12 +487,8 @@ class TestRun:
         deps_dir = project_dir / "deps"
         (deps_dir / "mylib" / "main").mkdir(parents=True)
 
-        monkeypatch.setattr(
-            dep_list_cmd, "require_current_project_dir", lambda: project_dir
-        )
-        monkeypatch.setattr(
-            dep_list_cmd, "project_deps_dir", lambda pd: project_dir / "deps"
-        )
+        monkeypatch.setattr(dep_list_cmd, "require_current_project_dir", lambda: project_dir)
+        monkeypatch.setattr(dep_list_cmd, "project_deps_dir", lambda pd: project_dir / "deps")
         monkeypatch.setattr(
             dep_list_cmd,
             "config_toml_file",
@@ -547,9 +498,7 @@ class TestRun:
                 else project_dir / "config" / "config.toml"
             ),
         )
-        monkeypatch.setattr(
-            dep_list_cmd, "current_config_branch", lambda pd: None
-        )
+        monkeypatch.setattr(dep_list_cmd, "current_config_branch", lambda pd: None)
 
         dep_list_cmd.run()
 

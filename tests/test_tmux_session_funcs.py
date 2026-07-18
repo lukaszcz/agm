@@ -131,9 +131,7 @@ class TestFocusTmuxSession:
         assert "switch-client" in out
         assert "mysession" in out
 
-    def test_live_calls_subprocess(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_live_calls_subprocess(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         calls: list[list[str]] = []
 
         class FakeResult:
@@ -164,9 +162,7 @@ class TestFocusTmuxSession:
 
         # focus_tmux_session uses subprocess.run directly: interactive TTY takeover
         monkeypatch.setattr(session_module.subprocess, "run", fake_run)
-        rc = focus_tmux_session(
-            session_name="s1", cwd=tmp_path, env={"TMUX": "/run/tmux.sock"}
-        )
+        rc = focus_tmux_session(session_name="s1", cwd=tmp_path, env={"TMUX": "/run/tmux.sock"})
         assert rc == 0
         assert "switch-client" in calls[0]
 
@@ -187,9 +183,7 @@ class TestKillTmuxSession:
         assert "kill-session" in out
         assert "to-kill" in out
 
-    def test_live_calls_subprocess(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_live_calls_subprocess(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         calls: list[list[str]] = []
 
         def fake_foreground(cmd: list[str], **kwargs: Any) -> int:
@@ -302,9 +296,7 @@ class TestQueueCommandInSession:
         )
         assert result is None
 
-    def test_live_calls_subprocess(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_live_calls_subprocess(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         calls: list[list[str]] = []
 
         def fake_foreground(cmd: list[str], **kwargs: Any) -> int:
@@ -321,9 +313,7 @@ class TestQueueCommandInSession:
         assert "send-keys" in calls[0]
         assert "s1:0.0" in calls[0]
 
-    def test_live_raises_on_failure(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_live_raises_on_failure(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(session_module, "run_foreground", lambda *a, **kw: 5)
         with pytest.raises(SystemExit) as exc_info:
             queue_command_in_session(
@@ -334,9 +324,7 @@ class TestQueueCommandInSession:
             )
         assert exc_info.value.code == 5
 
-    def test_command_is_shell_quoted(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_command_is_shell_quoted(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         calls: list[list[str]] = []
 
         def fake_foreground(cmd: list[str], **kwargs: Any) -> int:

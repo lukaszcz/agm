@@ -119,9 +119,7 @@ def _extract_imports(program: syntax.Program) -> tuple[ImportDecl, ...]:
     imports inside nested blocks are not valid and are ignored here
     (the scope pass enforces the restriction).
     """
-    return tuple(
-        item for item in program.body.items if isinstance(item, ImportDecl)
-    )
+    return tuple(item for item in program.body.items if isinstance(item, ImportDecl))
 
 
 def _extract_exports(program: syntax.Program) -> tuple[ExportDecl, ...]:
@@ -131,9 +129,7 @@ def _extract_exports(program: syntax.Program) -> tuple[ExportDecl, ...]:
     exports inside nested blocks are not valid and are ignored here (the scope
     pass enforces the restriction).
     """
-    return tuple(
-        item for item in program.body.items if isinstance(item, ExportDecl)
-    )
+    return tuple(item for item in program.body.items if isinstance(item, ExportDecl))
 
 
 def _companion_path_for(
@@ -152,11 +148,7 @@ def _companion_path_for(
     """
     if path is None:
         return None
-    externs = [
-        item
-        for item in program.body.items
-        if isinstance(item, FuncDef) and item.is_extern
-    ]
+    externs = [item for item in program.body.items if isinstance(item, FuncDef) and item.is_extern]
     if not externs:
         return None
     companion_path = path.with_suffix(".py")
@@ -322,7 +314,7 @@ def _load_into_graph(
             start_id=next_id,
             source=file_source_id,
         )
-        if default_stdlib:
+        if default_stdlib and mid != STD_CORE_ID:
             program = _with_default_stdlib_import(program, import_node_id=next_id)
             next_id += 1
         loaded = LoadedModule(
@@ -340,7 +332,7 @@ def _load_into_graph(
         _resolve_dependencies(mid, (*loaded.imports, *loaded.export_decls))
 
     # Seeded (cached) modules are reused as-is and were never re-walked above;
-    # record their adjacency so SCCs cover the whole graph.  Their import targets
+    # record their adjacency so SCCs cover the whole program.  Their import targets
     # were all loaded when they were first discovered, so nothing new is queued.
     for mid, loaded in modules.items():
         if mid not in adj:
@@ -391,9 +383,7 @@ def load_graph(
         When any module's source text fails to parse.
     """
     # Canonical entry path for rejection checks.
-    canonical_entry_path: Path | None = (
-        entry_path.resolve() if entry_path is not None else None
-    )
+    canonical_entry_path: Path | None = entry_path.resolve() if entry_path is not None else None
     label = str(canonical_entry_path) if canonical_entry_path is not None else "<command>"
     entry_source_id = SourceId(label=label)
 

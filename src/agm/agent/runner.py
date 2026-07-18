@@ -152,9 +152,7 @@ def append_extra_prompt(
                 file=sys.stderr,
             )
             raise SystemExit(1)
-        extra_content = expand_prompt_env_vars(
-            extra_path.read_text(encoding="utf-8"), env=env
-        )
+        extra_content = expand_prompt_env_vars(extra_path.read_text(encoding="utf-8"), env=env)
     combined = original_content + "\n" + extra_content
     with NamedTemporaryFile("w", encoding="utf-8", delete=False, suffix=".md") as handle:
         handle.write(combined)

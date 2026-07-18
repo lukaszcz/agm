@@ -356,22 +356,16 @@ def encode_boundary_value(
             }
         case BoundaryRecord(display_name=display_name, fields=fields):
             if not isinstance(value, RecordValue):
-                raise BoundaryViolation(
-                    f"expected record {display_name!r}, got {_typename(value)}"
-                )
+                raise BoundaryViolation(f"expected record {display_name!r}, got {_typename(value)}")
             return _encode_boundary_fields(fields, value.fields, seals, defs, vault)
         case BoundaryEnum(display_name=display_name, variants=variants):
             if not isinstance(value, EnumValue):
                 raise BoundaryViolation(f"expected enum {display_name!r}, got {_typename(value)}")
             variant = next((v for v in variants if v.name == value.variant), None)
             if variant is None:
-                raise BoundaryViolation(
-                    f"enum {display_name!r}: unknown variant {value.variant!r}"
-                )
+                raise BoundaryViolation(f"enum {display_name!r}: unknown variant {value.variant!r}")
             result: dict[str, object] = {"$case": value.variant}
-            result.update(
-                _encode_boundary_fields(variant.fields, value.fields, seals, defs, vault)
-            )
+            result.update(_encode_boundary_fields(variant.fields, value.fields, seals, defs, vault))
             return result
         case BoundaryException(display_name=display_name, fields=fields):
             if not isinstance(value, ExceptionValue):
@@ -474,9 +468,7 @@ def decode_boundary_value(
             try:
                 return ListValue(
                     tuple(
-                        decode_boundary_value(
-                            elem_schema, e, seals, defs, vault, active_containers
-                        )
+                        decode_boundary_value(elem_schema, e, seals, defs, vault, active_containers)
                         for e in items
                     )
                 )
@@ -506,9 +498,7 @@ def decode_boundary_value(
                 record_fields = _decode_boundary_fields(
                     fields, obj_fields, seals, defs, vault, active_containers
                 )
-                return RecordValue(
-                    nominal=nominal, display_name=display_name, fields=record_fields
-                )
+                return RecordValue(nominal=nominal, display_name=display_name, fields=record_fields)
             finally:
                 active_containers.remove(marker)
         case BoundaryEnum(nominal=nominal, display_name=display_name, variants=variants):
@@ -541,9 +531,7 @@ def decode_boundary_value(
                 exc_fields = _decode_boundary_fields(
                     fields, obj_fields, seals, defs, vault, active_containers
                 )
-                return ExceptionValue(
-                    nominal=nominal, display_name=display_name, fields=exc_fields
-                )
+                return ExceptionValue(nominal=nominal, display_name=display_name, fields=exc_fields)
             finally:
                 active_containers.remove(marker)
         case BoundarySealVar(var=var):
@@ -583,8 +571,7 @@ def _check_exact_fields(
     actual = set(obj_fields)
     if actual != expected:
         raise BoundaryViolation(
-            f"{display_name!r}: field mismatch (expected {sorted(expected)}, "
-            f"got {sorted(actual)})"
+            f"{display_name!r}: field mismatch (expected {sorted(expected)}, got {sorted(actual)})"
         )
 
 
@@ -684,8 +671,7 @@ def _is_json_shaped(obj: object, active: set[int] | None = None) -> bool:
         active.add(marker)
         try:
             return all(
-                isinstance(k, str) and _is_json_shaped(v, active)
-                for k, v in mapping.items()
+                isinstance(k, str) and _is_json_shaped(v, active) for k, v in mapping.items()
             )
         finally:
             active.remove(marker)

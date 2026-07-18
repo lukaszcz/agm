@@ -187,9 +187,7 @@ class TestMainDepRepo:
         repo_b.mkdir(parents=True)
         (repo_b / ".git").mkdir()
 
-        monkeypatch.setattr(
-            dep_common.git_helpers, "is_git_repo", lambda p: p in {repo_a, repo_b}
-        )
+        monkeypatch.setattr(dep_common.git_helpers, "is_git_repo", lambda p: p in {repo_a, repo_b})
         # sorted order: alpha < beta → should return alpha
         assert main_dep_repo(dep_dir) == repo_a
 
@@ -243,10 +241,12 @@ class TestDepRemoveRun:
         monkeypatch.setattr(dep_remove, "project_deps_dir", lambda pd: project_dir / "deps")
         monkeypatch.setattr(dep_remove, "main_dep_repo", lambda d: repo_path)
         monkeypatch.setattr(
-            dep_remove.git_helpers, "worktree_list", lambda p: [
+            dep_remove.git_helpers,
+            "worktree_list",
+            lambda p: [
                 WorktreeInfo(path=repo_path, branch="main"),
                 linked_wt,
-            ]
+            ],
         )
 
         removed: list[Path] = []
@@ -254,9 +254,7 @@ class TestDepRemoveRun:
         monkeypatch.setattr(
             dep_remove.git_helpers, "worktree_remove", lambda r, p: removed.append(p)
         )
-        monkeypatch.setattr(
-            dep_remove.git_helpers, "branch_delete", lambda r, b: deleted.append(b)
-        )
+        monkeypatch.setattr(dep_remove.git_helpers, "branch_delete", lambda r, b: deleted.append(b))
 
         args = DepRemoveArgs(all=False, target="mylib/feature")
         dep_remove.run(args)
@@ -290,9 +288,7 @@ class TestDepRemoveRun:
         monkeypatch.setattr(
             dep_remove.git_helpers, "worktree_remove", lambda r, p: removed.append(p)
         )
-        monkeypatch.setattr(
-            dep_remove.git_helpers, "branch_delete", lambda r, b: deleted.append(b)
-        )
+        monkeypatch.setattr(dep_remove.git_helpers, "branch_delete", lambda r, b: deleted.append(b))
 
         dep_remove.run(DepRemoveArgs(all=False, target="mylib/feat/x"))
 
@@ -312,10 +308,12 @@ class TestDepRemoveRun:
         monkeypatch.setattr(dep_remove, "project_deps_dir", lambda pd: project_dir / "deps")
         monkeypatch.setattr(dep_remove, "main_dep_repo", lambda d: repo_path)
         monkeypatch.setattr(
-            dep_remove.git_helpers, "worktree_list", lambda p: [
+            dep_remove.git_helpers,
+            "worktree_list",
+            lambda p: [
                 WorktreeInfo(path=repo_path, branch="main"),
                 linked_wt,
-            ]
+            ],
         )
 
         removed: list[Path] = []
@@ -323,9 +321,7 @@ class TestDepRemoveRun:
         monkeypatch.setattr(
             dep_remove.git_helpers, "worktree_remove", lambda r, p: removed.append(p)
         )
-        monkeypatch.setattr(
-            dep_remove.git_helpers, "branch_delete", lambda r, b: deleted.append(b)
-        )
+        monkeypatch.setattr(dep_remove.git_helpers, "branch_delete", lambda r, b: deleted.append(b))
 
         args = DepRemoveArgs(all=True, target="mylib")
         dep_remove.run(args)
@@ -347,10 +343,12 @@ class TestDepRemoveRun:
         monkeypatch.setattr(dep_remove, "project_deps_dir", lambda pd: project_dir / "deps")
         monkeypatch.setattr(dep_remove, "main_dep_repo", lambda d: repo_path)
         monkeypatch.setattr(
-            dep_remove.git_helpers, "worktree_list", lambda p: [
+            dep_remove.git_helpers,
+            "worktree_list",
+            lambda p: [
                 WorktreeInfo(path=repo_path, branch="main"),
                 detached_wt,
-            ]
+            ],
         )
 
         args = DepRemoveArgs(all=True, target="mylib")
@@ -411,10 +409,12 @@ class TestDepRemoveRun:
         monkeypatch.setattr(dep_remove, "project_deps_dir", lambda pd: project_dir / "deps")
         monkeypatch.setattr(dep_remove, "main_dep_repo", lambda d: repo_path)
         monkeypatch.setattr(
-            dep_remove.git_helpers, "worktree_list", lambda p: [
+            dep_remove.git_helpers,
+            "worktree_list",
+            lambda p: [
                 WorktreeInfo(path=repo_path, branch="main"),
                 linked_wt,
-            ]
+            ],
         )
 
         args = DepRemoveArgs(all=False, target="mylib/repo")
@@ -430,9 +430,11 @@ class TestDepRemoveRun:
         monkeypatch.setattr(dep_remove, "project_deps_dir", lambda pd: project_dir / "deps")
         monkeypatch.setattr(dep_remove, "main_dep_repo", lambda d: repo_path)
         monkeypatch.setattr(
-            dep_remove.git_helpers, "worktree_list", lambda p: [
+            dep_remove.git_helpers,
+            "worktree_list",
+            lambda p: [
                 WorktreeInfo(path=repo_path, branch="main"),
-            ]
+            ],
         )
 
         args = DepRemoveArgs(all=False, target="mylib/repo")
@@ -451,10 +453,12 @@ class TestDepRemoveRun:
         monkeypatch.setattr(dep_remove, "project_deps_dir", lambda pd: project_dir / "deps")
         monkeypatch.setattr(dep_remove, "main_dep_repo", lambda d: repo_path)
         monkeypatch.setattr(
-            dep_remove.git_helpers, "worktree_list", lambda p: [
+            dep_remove.git_helpers,
+            "worktree_list",
+            lambda p: [
                 WorktreeInfo(path=repo_path, branch="main"),
                 WorktreeInfo(path=other_path, branch="other"),
-            ]
+            ],
         )
 
         args = DepRemoveArgs(all=False, target="mylib/nonexistent")
@@ -475,10 +479,12 @@ class TestDepRemoveRun:
         monkeypatch.setattr(dep_remove, "project_deps_dir", lambda pd: project_dir / "deps")
         monkeypatch.setattr(dep_remove, "main_dep_repo", lambda d: repo_path)
         monkeypatch.setattr(
-            dep_remove.git_helpers, "worktree_list", lambda p: [
+            dep_remove.git_helpers,
+            "worktree_list",
+            lambda p: [
                 WorktreeInfo(path=repo_path, branch="main"),
                 linked_wt,
-            ]
+            ],
         )
 
         removed: list[Path] = []
@@ -486,9 +492,7 @@ class TestDepRemoveRun:
         monkeypatch.setattr(
             dep_remove.git_helpers, "worktree_remove", lambda r, p: removed.append(p)
         )
-        monkeypatch.setattr(
-            dep_remove.git_helpers, "branch_delete", lambda r, b: deleted.append(b)
-        )
+        monkeypatch.setattr(dep_remove.git_helpers, "branch_delete", lambda r, b: deleted.append(b))
 
         # Target is "feat-a" which matches by path
         args = DepRemoveArgs(all=False, target="mylib/feat-a")
@@ -510,10 +514,12 @@ class TestDepRemoveRun:
         monkeypatch.setattr(dep_remove, "project_deps_dir", lambda pd: project_dir / "deps")
         monkeypatch.setattr(dep_remove, "main_dep_repo", lambda d: repo_path)
         monkeypatch.setattr(
-            dep_remove.git_helpers, "worktree_list", lambda p: [
+            dep_remove.git_helpers,
+            "worktree_list",
+            lambda p: [
                 WorktreeInfo(path=repo_path, branch="main"),
                 linked_wt,
-            ]
+            ],
         )
 
         removed: list[Path] = []
@@ -560,9 +566,7 @@ class TestDepRemoveRun:
         monkeypatch.setattr(
             dep_remove.git_helpers, "worktree_remove", lambda r, p: removed.append(p)
         )
-        monkeypatch.setattr(
-            dep_remove.git_helpers, "branch_delete", lambda r, b: deleted.append(b)
-        )
+        monkeypatch.setattr(dep_remove.git_helpers, "branch_delete", lambda r, b: deleted.append(b))
 
         dep_remove.run(DepRemoveArgs(all=False, target="mylib/second"))
 
@@ -762,9 +766,7 @@ class TestDepSwitchRun:
 
         worktree_add_calls: list[dict[str, object]] = []
 
-        def fake_worktree_add(
-            repo: Path, path: Path, branch: str, **kwargs: object
-        ) -> None:
+        def fake_worktree_add(repo: Path, path: Path, branch: str, **kwargs: object) -> None:
             worktree_add_calls.append({"path": path, "branch": branch, **kwargs})
 
         monkeypatch.setattr(dep_switch.git_helpers, "worktree_add", fake_worktree_add)
@@ -805,9 +807,7 @@ class TestDepSwitchRun:
 
         worktree_add_calls: list[dict[str, object]] = []
 
-        def fake_worktree_add(
-            repo: Path, path: Path, branch: str, **kwargs: object
-        ) -> None:
+        def fake_worktree_add(repo: Path, path: Path, branch: str, **kwargs: object) -> None:
             worktree_add_calls.append({"path": path, "branch": branch, **kwargs})
 
         monkeypatch.setattr(dep_switch.git_helpers, "worktree_add", fake_worktree_add)

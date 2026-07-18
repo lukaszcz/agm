@@ -17,22 +17,22 @@ import pytest
 
 from agm.agl.ir.program import ExecutableProgram
 from agm.agl.ir.validate import InvalidIrError, validate_ir
-from agm.agl.lower import LinkImage, lower_graph, lower_program, lower_repl_entry
+from agm.agl.lower import LinkImage, lower_module, lower_program, lower_repl_entry
 from agm.agl.lower.lowerer import _Lowerer
 from agm.agl.matchcompile import (
-    MatchCompiledModuleGraph,
+    MatchCompiledModule,
     MatchCompiledProgram,
-    compile_graph_matches,
+    compile_module_matches,
     compile_program_matches,
 )
 from agm.agl.matchcompile.normalize import MatchCompileInvariantError
 from agm.agl.modules.ids import ENTRY_ID
 from agm.agl.parser import parse_program
-from agm.agl.scope import resolve
-from agm.agl.scope.graph import resolve_graph
+from agm.agl.scope import resolve_module
+from agm.agl.scope.program import resolve_program
 from agm.agl.self_validation import self_validation_enabled
-from agm.agl.typecheck import check
-from agm.agl.typecheck.graph import check_graph
+from agm.agl.typecheck import check_module
+from agm.agl.typecheck.program import check_program
 from tests.agl.ir_harness import base_caps, make_graph_from_files
 
 _SOURCE = "let x = 1\nx"
@@ -51,14 +51,16 @@ _MATCH_SOURCE = (
 )
 
 
-def _compiled_program(source: str) -> MatchCompiledProgram:
-    result = compile_program_matches(check(resolve(parse_program(source)), base_caps()))
-    assert isinstance(result.compiled, MatchCompiledProgram)
+def _compiled_program(source: str) -> MatchCompiledModule:
+    result = compile_module_matches(
+        check_module(resolve_module(parse_program(source)), base_caps())
+    )
+    assert isinstance(result.compiled, MatchCompiledModule)
     return result.compiled
 
 
 def _lower(source: str) -> ExecutableProgram:
-    return lower_program(
+    return lower_module(
         _compiled_program(source),
         source_text=source,
         source_label="<test>",
@@ -89,7 +91,7 @@ def test_disabled_validation_accepts_a_corrupt_artifact(
     # The artifact boundary does not re-check itself in production: a case whose
     # reachable-action set no longer matches its decision DAG is accepted rather
     # than rejected with ``MatchCompileInvariantError``.
-    artifact = MatchCompiledProgram(compiled.checked, {case_id: corrupt})
+    artifact = MatchCompiledModule(compiled.checked, {case_id: corrupt})
 
     assert artifact.cases[case_id].reachable_action_ids == ()
 
@@ -99,8 +101,8 @@ def test_graph_lowering_trusts_the_artifact_that_already_validated_itself(
 ) -> None:
     """A match-compiled graph is validated once, where it is built — not again per consumer."""
     graph = make_graph_from_files(tmp_path, {"entry": "case true of | true => 1 | false => 2"})
-    compiled = compile_graph_matches(check_graph(resolve_graph(graph), base_caps())).compiled
-    assert isinstance(compiled, MatchCompiledModuleGraph)
+    compiled = compile_program_matches(check_program(resolve_program(graph), base_caps())).compiled
+    assert isinstance(compiled, MatchCompiledProgram)
     entry_cases = compiled.cases_by_module[ENTRY_ID]
     (case_id,) = tuple(entry_cases)
 
@@ -112,11 +114,11 @@ def test_graph_lowering_trusts_the_artifact_that_already_validated_itself(
     }
     corrupt[ENTRY_ID][case_id] = replace(entry_cases[case_id], reachable_action_ids=())
     with pytest.raises(MatchCompileInvariantError, match="reachable action ids"):
-        MatchCompiledModuleGraph(compiled.checked_graph, corrupt)
+        MatchCompiledProgram(compiled.checked, corrupt)
 
     # ... and not re-checked by lowering, which never repeats the check.
     object.__setattr__(compiled, "cases_by_module", corrupt)
-    assert lower_graph(compiled).symbols
+    assert lower_program(compiled).symbols
 
 
 def test_program_lowering_trusts_the_artifact_that_already_validated_itself() -> None:
@@ -130,11 +132,11 @@ def test_program_lowering_trusts_the_artifact_that_already_validated_itself() ->
     # Constructing the artifact is the checkpoint, so corruption applied behind
     # its back afterwards is rejected there ...
     with pytest.raises(MatchCompileInvariantError, match="reachable action ids"):
-        MatchCompiledProgram(compiled.checked, corrupt)
+        MatchCompiledModule(compiled.checked, corrupt)
 
     # ... and not re-checked by lowering, which never repeats the check.
     object.__setattr__(compiled, "cases", corrupt)
-    assert lower_program(compiled, source_text=source, source_label="<test>").symbols
+    assert lower_module(compiled, source_text=source, source_label="<test>").symbols
 
 
 def test_repl_entry_lowering_trusts_the_artifact_that_already_validated_itself() -> None:
@@ -146,7 +148,7 @@ def test_repl_entry_lowering_trusts_the_artifact_that_already_validated_itself()
     corrupt[case_id] = replace(compiled.cases[case_id], reachable_action_ids=())
 
     with pytest.raises(MatchCompileInvariantError, match="reachable action ids"):
-        MatchCompiledProgram(compiled.checked, corrupt)
+        MatchCompiledModule(compiled.checked, corrupt)
 
     object.__setattr__(compiled, "cases", corrupt)
     entry = lower_repl_entry(
@@ -198,23 +200,23 @@ def test_production_match_compilation_takes_the_unvalidated_path(
     """Compiling and lowering with the flag off skips every optional check.
 
     This drives each guarded site — the matrix operations, both artifact
-    boundaries, the rejected stage result, and whole-graph lowering — down its
+    boundaries, the rejected stage result, and whole-program lowering — down its
     production branch, where the compiler's own output is trusted as produced.
     """
     program_artifact = _compiled_program(_MATCH_SOURCE)
     assert program_artifact.cases
 
-    rejected = compile_program_matches(
-        check(resolve(parse_program("case true of | true => 1")), base_caps())
+    rejected = compile_module_matches(
+        check_module(resolve_module(parse_program("case true of | true => 1")), base_caps())
     )
     assert rejected.compiled is None
     assert rejected.issues != ()
 
     graph = make_graph_from_files(tmp_path, {"entry": _MATCH_SOURCE})
-    graph_result = compile_graph_matches(check_graph(resolve_graph(graph), base_caps()))
-    assert isinstance(graph_result.compiled, MatchCompiledModuleGraph)
+    program_result = compile_program_matches(check_program(resolve_program(graph), base_caps()))
+    assert isinstance(program_result.compiled, MatchCompiledProgram)
 
-    lowered = lower_graph(graph_result.compiled)
+    lowered = lower_program(program_result.compiled)
     assert lowered.symbols
 
 

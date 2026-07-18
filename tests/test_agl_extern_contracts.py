@@ -31,7 +31,7 @@ from agm.agl.ir.contracts import (
     ScalarKind,
 )
 from agm.agl.parser import parse_program
-from agm.agl.scope import resolve
+from agm.agl.scope import resolve_module
 from agm.agl.semantics.type_table import create_seeded_type_table
 from agm.agl.semantics.types import (
     AgentType,
@@ -41,7 +41,7 @@ from agm.agl.semantics.types import (
 )
 from agm.agl.syntax.nodes import ParamKind
 from agm.agl.type_schema import build_extern_contract
-from agm.agl.typecheck import ParamSpec, check
+from agm.agl.typecheck import ParamSpec, check_module
 from agm.agl.typecheck.env import AglTypeError, FunctionSignature
 
 _PATH = Path("/virtual/extern_contracts.agl")
@@ -52,17 +52,15 @@ _CAPS = HostCapabilities(
     supports_shell_exec=True,
     codec_kinds={
         "text": frozenset({"text"}),
-        "json": frozenset(
-            {"json", "record", "enum", "list", "dict", "int", "decimal", "bool"}
-        ),
+        "json": frozenset({"json", "record", "enum", "list", "dict", "int", "decimal", "bool"}),
     },
 )
 
 
 def build_contract(source: str, fn_name: str = "f") -> ExternContract:
     """Parse + resolve (file-backed) + check *source*, compiling ``fn_name``'s contract."""
-    resolved = resolve(parse_program(source), origin_path=_PATH)
-    cp = check(resolved, _CAPS)
+    resolved = resolve_module(parse_program(source), origin_path=_PATH)
+    cp = check_module(resolved, _CAPS)
     sig = cp.function_signatures[fn_name]
     return build_extern_contract(sig, cp.type_env.type_table)
 
@@ -75,9 +73,7 @@ def build_contract(source: str, fn_name: str = "f") -> ExternContract:
 class TestScalarsAndContainers:
     def test_int(self) -> None:
         contract = build_contract("extern def f(x: int) -> int\n0")
-        assert contract.params == (
-            ExternParamSchema(schema=BoundaryScalar(ScalarKind.INT)),
-        )
+        assert contract.params == (ExternParamSchema(schema=BoundaryScalar(ScalarKind.INT)),)
         assert contract.result == BoundaryScalar(ScalarKind.INT)
 
     def test_decimal(self) -> None:
@@ -230,9 +226,7 @@ class TestTypeParams:
         assert contract.result == BoundaryList(BoundarySealVar("T"))
 
     def test_two_type_variables_stay_distinct(self) -> None:
-        contract = build_contract(
-            "extern def pair[A, B](a: A, b: B) -> A\n0", fn_name="pair"
-        )
+        contract = build_contract("extern def pair[A, B](a: A, b: B) -> A\n0", fn_name="pair")
         assert contract.type_params == ("A", "B")
         assert contract.params[0].schema == BoundarySealVar("A")
         assert contract.params[1].schema == BoundarySealVar("B")
@@ -246,10 +240,7 @@ class TestTypeParams:
 
 class TestGenericNominalInstantiation:
     def test_generic_record_instantiated_at_concrete_type(self) -> None:
-        source = (
-            "record Box[T]\n  value: T\n"
-            "extern def f(b: Box[int]) -> int\n0"
-        )
+        source = "record Box[T]\n  value: T\nextern def f(b: Box[int]) -> int\n0"
         contract = build_contract(source)
         schema = contract.params[0].schema
         assert isinstance(schema, BoundaryRecord)
@@ -257,8 +248,7 @@ class TestGenericNominalInstantiation:
 
     def test_generic_enum_instantiated_at_concrete_type(self) -> None:
         source = (
-            "enum Holder[T]\n  | empty\n  | full(value: T)\n"
-            "extern def f(h: Holder[text]) -> int\n0"
+            "enum Holder[T]\n  | empty\n  | full(value: T)\nextern def f(h: Holder[text]) -> int\n0"
         )
         contract = build_contract(source)
         schema = contract.params[0].schema
@@ -298,8 +288,7 @@ class TestRecursiveTypes:
     def test_recursive_record_crosses_as_boundary_ref(self) -> None:
         # A self-referential record (finite via the possibly-empty child list).
         source = (
-            "record Node\n  value: int\n  children: list[Node]\n"
-            "extern def f(n: Node) -> int\n0"
+            "record Node\n  value: int\n  children: list[Node]\nextern def f(n: Node) -> int\n0"
         )
         contract = build_contract(source)
         schema = contract.params[0].schema
@@ -408,9 +397,7 @@ class TestFunctionAgentTypeBan:
     def test_agent_typed_param_rejected(self) -> None:
         sig = FunctionSignature(
             params=(
-                ParamSpec(
-                    name="a", type=AgentType(), kind=ParamKind.STANDARD, has_default=False
-                ),
+                ParamSpec(name="a", type=AgentType(), kind=ParamKind.STANDARD, has_default=False),
             ),
             result=TextType(),
         )

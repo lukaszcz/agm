@@ -1,6 +1,6 @@
-"""Whole-graph module lowering for the AgL typeless execution IR.
+"""Whole-program module lowering for the AgL typeless execution IR.
 
-``lower_graph`` links a match-compiled module graph into a single
+``lower_program`` links a match-compiled program into a single
 :class:`~agm.agl.ir.program.ExecutableProgram` with one shared
 symbol/function/nominal table and per-module initializer sequences.
 """
@@ -28,42 +28,42 @@ from agm.agl.lower.lowerer import (
     _LinkState,
     _Lowerer,
 )
-from agm.agl.matchcompile import MatchCompiledModuleGraph
+from agm.agl.matchcompile import MatchCompiledProgram
 from agm.agl.modules.ids import STD_CORE_ID, ModuleId
 from agm.agl.self_validation import self_validation_enabled
 from agm.agl.semantics.types import EnumType, ExceptionType, RecordType
 from agm.agl.syntax.nodes import AgentDecl, FuncDef
 from agm.util.text import normalize_newlines
 
-__all__ = ["lower_graph"]
+__all__ = ["lower_program"]
 
 
-def lower_graph(
-    compiled_graph: MatchCompiledModuleGraph,
+def lower_program(
+    compiled: MatchCompiledProgram,
     *,
     _link: _LinkState | None = None,
     _already_linked: frozenset[ModuleId] = frozenset(),
     _entry_source_text: str | None = None,
     contract_payloads: Mapping[int, ContractPayload] | None = None,
 ) -> ExecutableProgram:
-    """Lower a whole-graph match-compiled artifact to an
+    """Lower a whole-program match-compiled artifact to an
     :class:`~agm.agl.ir.program.ExecutableProgram`.
 
-    :param compiled_graph: the statically match-compiled module graph to lower.
+    :param compiled: the statically match-compiled program to lower.
     :returns: the linked ``ExecutableProgram`` ready for evaluation.
     """
-    # ``compiled_graph`` validated itself when it was constructed; lowering adds
+    # ``compiled`` validated itself when it was constructed; lowering adds
     # the IR self-check over its own output below.
-    checked_graph = compiled_graph.checked_graph
+    checked = compiled.checked
     link = _link if _link is not None else _LinkState()
 
     # Every per-module TypeEnvironment shares one TypeTable instance (built
     # during checking); pick the entry module's env to reach it.
-    type_table = checked_graph.modules[checked_graph.entry_id].type_env.type_table
+    type_table = checked.modules[checked.entry_id].type_env.type_table
 
     # Step 1: Register a SourceFile for every module.
     module_source_ids: dict[ModuleId, SourceId] = {}
-    for mid, cm in checked_graph.modules.items():
+    for mid, cm in checked.modules.items():
         if mid in _already_linked or mid == STD_CORE_ID:
             continue
         source_id = SourceId(link.next_source)
@@ -81,8 +81,8 @@ def lower_graph(
         )
         module_source_ids[mid] = source_id
 
-    # Step 2: Build nominals from graph_type_table + builtins.
-    for (mid, name), typ in checked_graph.graph_type_table.items():
+    # Step 2: Build nominals from program_type_table + builtins.
+    for (mid, name), typ in checked.program_type_table.items():
         # Skip type aliases: only register the canonical declaration site.
         # A type alias `type Foo = Bar` creates an entry (mid, "Foo") -> RecordType(Bar)
         # where Bar's name differs from "Foo"; skipping it avoids a spurious nominal.
@@ -126,11 +126,11 @@ def lower_graph(
 
     _add_builtin_nominals(link.nominals, type_table)
 
-    # Generic declarations live outside graph_type_table. Runtime nominal
+    # Generic declarations live outside program_type_table. Runtime nominal
     # identity erases type arguments, so register each generic template once.
     # Field/variant NAMES are read directly off the registered TypeDef (never
     # instantiated — a generic template has no concrete type_args).
-    for cm in checked_graph.modules.values():
+    for cm in checked.modules.values():
         for name, generic in cm.type_env.all_generic_types().items():
             typ = generic.template
             nominal = NominalId(typ.module_id, name)
@@ -159,7 +159,7 @@ def lower_graph(
     # Step 3: Phase 1 — pre-allocate FunctionId + symbol for every FuncDef
     # across ALL modules before any body is lowered (enables cross-module calls).
     module_lowerers: dict[ModuleId, _Lowerer] = {}
-    for mid, cm in checked_graph.modules.items():
+    for mid, cm in checked.modules.items():
         if mid in _already_linked or mid == STD_CORE_ID:
             continue
         source_id = module_source_ids[mid]
@@ -171,7 +171,7 @@ def lower_graph(
             _entry_source_text
             if mid.is_entry and _entry_source_text is not None
             else cm.source_text,
-            compiled_graph.cases_by_module[mid],
+            compiled.cases_by_module[mid],
             contract_payloads=contract_payloads,
         )
         module_lowerers[mid] = lowerer
@@ -191,15 +191,15 @@ def lower_graph(
     # Step 4: Phase 2 — lower bodies.
     # Library modules first, entry last, so the insertion order of
     # executable_modules matches dependency order (Python dicts preserve order).
-    ordered_mids = [mid for mid in checked_graph.modules if not mid.is_entry and mid != STD_CORE_ID]
+    ordered_mids = [mid for mid in checked.modules if not mid.is_entry and mid != STD_CORE_ID]
     ordered_mids = [mid for mid in ordered_mids if mid not in _already_linked]
-    ordered_mids.append(checked_graph.entry_id)
+    ordered_mids.append(checked.entry_id)
 
     executable_modules: dict[ModuleId, ExecutableModule] = {
         mid: ExecutableModule(module_id=mid, initializers=()) for mid in _already_linked
     }
     for mid in ordered_mids:
-        cm = checked_graph.modules[mid]
+        cm = checked.modules[mid]
         lowerer = module_lowerers[mid]
         body = cm.resolved.program.body
         function_initializers: list[IrExpr] = []
@@ -218,10 +218,10 @@ def lower_graph(
         )
 
     # Collect entry-module params (only the entry module contributes params).
-    entry_lowerer = module_lowerers[checked_graph.entry_id]
+    entry_lowerer = module_lowerers[checked.entry_id]
     payloads = contract_payloads if contract_payloads is not None else {}
     dry_run_entries: list[DryRunEntry] = []
-    for cm in checked_graph.modules.values():
+    for cm in checked.modules.values():
         for csr in cm.call_sites:
             dry_run_entries.append(
                 DryRunEntry(
@@ -239,7 +239,7 @@ def lower_graph(
             )
     dry_run_inventory = tuple(dry_run_entries)
     program = ExecutableProgram(
-        entry_module=checked_graph.entry_id,
+        entry_module=checked.entry_id,
         modules=executable_modules,
         symbols=dict(link.symbols),
         nominals=dict(link.nominals),

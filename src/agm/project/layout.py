@@ -234,16 +234,12 @@ def current_workspace(
     if workspace_dir is None:
         current = Path.cwd() if cwd is None else cwd.resolve()
         current_project = discover_current_project_dir(current, env=resolved_env)
-        if (
-            current_project is None
-            or current_project.resolve(strict=False) != resolved_project_dir
-        ):
+        if current_project is None or current_project.resolve(strict=False) != resolved_project_dir:
             return None
 
         if not git_helpers.is_git_repo(current):
-            if (
-                current.resolve(strict=False) == resolved_project_dir
-                and git_helpers.is_git_repo(repo_dir)
+            if current.resolve(strict=False) == resolved_project_dir and git_helpers.is_git_repo(
+                repo_dir
             ):
                 workspace_dir = repo_dir
             else:

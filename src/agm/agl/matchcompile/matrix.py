@@ -245,9 +245,7 @@ def _build_column_profiles(matrix: PatternMatrix) -> tuple[_ColumnProfile, ...]:
     """Classify every cell once for head lookup, qba scoring, and specialization."""
     width = len(matrix.occurrences)
     heads: list[list[Constructor]] = [[] for _ in range(width)]
-    constructor_rows: list[dict[_ConstructorKey, list[int]]] = [
-        {} for _ in range(width)
-    ]
+    constructor_rows: list[dict[_ConstructorKey, list[int]]] = [{} for _ in range(width)]
     wildcard_rows: list[list[int]] = [[] for _ in range(width)]
     leading_prefixes = [0] * width
     prefix_open = [True] * width
@@ -273,10 +271,7 @@ def _build_column_profiles(matrix: PatternMatrix) -> tuple[_ColumnProfile, ...]:
         _ColumnProfile(
             heads=tuple(heads[column]),
             constructor_rows=MappingProxyType(
-                {
-                    key: tuple(row_indices)
-                    for key, row_indices in constructor_rows[column].items()
-                }
+                {key: tuple(row_indices) for key, row_indices in constructor_rows[column].items()}
             ),
             wildcard_rows=tuple(wildcard_rows[column]),
             leading_constructor_prefix=leading_prefixes[column],

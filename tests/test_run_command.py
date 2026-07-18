@@ -349,9 +349,7 @@ def test_run_no_swap_limit_omits_memory_swap_max_property(
     assert captured["interrupt_cleanup_cmd"] is not None
 
 
-def test_run_zero_memory_limit_still_wraps(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
+def test_run_zero_memory_limit_still_wraps(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     env = {"HOME": str(tmp_path / "home"), "PATH": "/bin"}
     (tmp_path / "home").mkdir()
 

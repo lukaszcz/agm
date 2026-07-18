@@ -23,8 +23,8 @@ from agm.agl.lexer import tokenize
 from agm.agl.modules.loader import build_repl_graph, load_graph
 from agm.agl.modules.roots import RootSet
 from agm.agl.parser import AglSyntaxError, parse_program, parse_program_seeded
-from agm.agl.scope import AglScopeError, resolve
-from agm.agl.scope.graph import resolve_graph
+from agm.agl.scope import AglScopeError, resolve_module
+from agm.agl.scope.program import resolve_program
 from agm.agl.syntax.nodes import FuncDef
 from tests.agl.ir_harness import make_graph_from_files, write_companion_file
 
@@ -38,7 +38,7 @@ def first(source: str) -> object:
 
 def parse_and_resolve(source: str, *, origin_path: Path | None = None) -> object:
     """Parse *source* and run scope resolution, threading *origin_path*."""
-    return resolve(parse_program(source.strip()), origin_path=origin_path)
+    return resolve_module(parse_program(source.strip()), origin_path=origin_path)
 
 
 def reject_scope(source: str, *, origin_path: Path | None = None) -> AglScopeError:
@@ -87,9 +87,7 @@ class TestGrammarAndTransformer:
         assert fd.is_extern is True
 
     def test_extern_def_with_zones_and_defaults(self) -> None:
-        fd = first(
-            "extern def f(a: int, /, b: int, @named, c: int = 1) -> int"
-        )
+        fd = first("extern def f(a: int, /, b: int, @named, c: int = 1) -> int")
         assert isinstance(fd, FuncDef)
         kinds = [p.kind.value for p in fd.params]
         assert kinds == ["positional_only", "standard", "named_only"]
@@ -144,32 +142,21 @@ class TestScope:
     _PATH = Path("/virtual/mod.agl")
 
     def test_extern_collected_and_callable(self) -> None:
-        resolved = parse_and_resolve(
-            "extern def f(x: int) -> int", origin_path=self._PATH
-        )
+        resolved = parse_and_resolve("extern def f(x: int) -> int", origin_path=self._PATH)
         assert "f" in resolved.declared_functions
 
     def test_extern_forward_reference_mutual_recursion(self) -> None:
-        source = (
-            "def f(x: int) -> int = helper(x)\n"
-            "extern def helper(x: int) -> int\n"
-        )
+        source = "def f(x: int) -> int = helper(x)\nextern def helper(x: int) -> int\n"
         resolved = parse_and_resolve(source, origin_path=self._PATH)
         assert set(resolved.declared_functions) == {"f", "helper"}
 
     def test_extern_cannot_reuse_reserved_builtin_name(self) -> None:
-        err = reject_scope(
-            "extern def print(x: int) -> int", origin_path=self._PATH
-        )
+        err = reject_scope("extern def print(x: int) -> int", origin_path=self._PATH)
         msg = str(err).lower()
         assert "built-in" in msg or "reserved" in msg
 
     def test_non_root_extern_def_rejected(self) -> None:
-        source = (
-            "def f() -> int =\n"
-            "  extern def g(x: int) -> int\n"
-            "  g(1)\n"
-        )
+        source = "def f() -> int =\n  extern def g(x: int) -> int\n  g(1)\n"
         err = reject_scope(source, origin_path=self._PATH)
         assert "root" in str(err).lower()
 
@@ -182,7 +169,7 @@ class TestScope:
                 "lib.mod": "extern def f(x: int) -> int",
             },
         )
-        resolved = resolve_graph(graph)
+        resolved = resolve_program(graph)
         assert any(name == "f" for (_mid, name) in resolved.all_public_funcs)
 
     def test_private_extern_not_exported(self, tmp_path: Path) -> None:
@@ -195,7 +182,7 @@ class TestScope:
                 "lib.mod": "private extern def secret(x: int) -> int",
             },
         )
-        resolved = resolve_graph(graph)
+        resolved = resolve_program(graph)
         assert all(name != "secret" for (_mid, name) in resolved.all_public_funcs)
 
 
@@ -215,9 +202,7 @@ class TestPlacement:
         )
         assert "f" in resolved.declared_functions
 
-    def test_graph_resolution_of_file_backed_entry_accepts_extern(
-        self, tmp_path: Path
-    ) -> None:
+    def test_graph_resolution_of_file_backed_entry_accepts_extern(self, tmp_path: Path) -> None:
         entry_path = tmp_path / "entry.agl"
         (tmp_path / "entry.py").write_text("def f(x):\n    return x\n")
         graph = load_graph(
@@ -226,7 +211,7 @@ class TestPlacement:
             roots=RootSet(roots=frozenset()),
             default_stdlib=False,
         )
-        resolved = resolve_graph(graph)
+        resolved = resolve_program(graph)
         assert "f" in resolved.modules[graph.entry_id].resolved.declared_functions
 
     def test_graph_resolution_of_inline_entry_rejects_extern(self) -> None:
@@ -237,12 +222,10 @@ class TestPlacement:
             default_stdlib=False,
         )
         with pytest.raises(AglScopeError):
-            resolve_graph(graph)
+            resolve_program(graph)
 
     def test_repl_graph_entry_rejects_extern(self) -> None:
-        program, next_id = parse_program_seeded(
-            "extern def f(x: int) -> int", start_id=0
-        )
+        program, next_id = parse_program_seeded("extern def f(x: int) -> int", start_id=0)
         graph, _next_id, _newly_loaded = build_repl_graph(
             program,
             next_id,
@@ -251,7 +234,7 @@ class TestPlacement:
             roots=RootSet(roots=frozenset({_STDLIB_ROOT})),
         )
         with pytest.raises(AglScopeError):
-            resolve_graph(graph)
+            resolve_program(graph)
 
     def test_extern_in_library_module_accepts(self, tmp_path: Path) -> None:
         # A library module loaded from disk always carries a real path.
@@ -263,5 +246,5 @@ class TestPlacement:
                 "lib.mod": "extern def f(x: int) -> int",
             },
         )
-        resolved = resolve_graph(graph)
+        resolved = resolve_program(graph)
         assert resolved is not None

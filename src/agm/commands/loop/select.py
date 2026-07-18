@@ -37,8 +37,7 @@ def run(args: LoopSelectArgs) -> None:
 
     if not use_selector_mode(args):
         print(
-            "Error: agm loop select requires selector mode. "
-            "Remove --no-selector to enable it.",
+            "Error: agm loop select requires selector mode. Remove --no-selector to enable it.",
             file=sys.stderr,
         )
         raise SystemExit(1)

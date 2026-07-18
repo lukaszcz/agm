@@ -522,9 +522,7 @@ class Loop:
     ) -> None:
         if bound is None and limit is not None:
             bound = (
-                IntLit(value=limit, span=span, node_id=node_id)
-                if isinstance(limit, int)
-                else limit
+                IntLit(value=limit, span=span, node_id=node_id) if isinstance(limit, int) else limit
             )
         if until_cond is None and condition is not None:
             until_cond = condition

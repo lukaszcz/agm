@@ -35,6 +35,7 @@ def _make_git_project(tmp_path: Path, env: dict[str, str]) -> Path:
     subprocess.run(["git", "commit", "-m", "initial"], cwd=repo, env=env, check=True)
     return project
 
+
 # ===========================================================================
 # validate_pane_count
 # ===========================================================================
@@ -55,9 +56,7 @@ class TestValidatePaneCount:
         with pytest.raises(SystemExit):
             validate_pane_count("0")
 
-    def test_re_raises_when_exit_code_is_not_one(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_re_raises_when_exit_code_is_not_one(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Cover the re-raise when exc.code != 1."""
 
         def _raise_exit_2(cmd: list[str], pane_count: str | None) -> int:
@@ -124,7 +123,6 @@ class TestQueueSetupAndFocusSession:
         assert "tmux send-keys -t s:0.0 'agm workspace setup' C-m" in out
         assert out.index("tmux new-session") < out.index("agm workspace setup")
         assert "tmux attach-session -t s" in out
-
 
 
 class TestEnsureWorkspaceShell:
@@ -219,9 +217,7 @@ class TestEnsureWorkspaceShell:
 
         _cache, home, bin_dir, _shell_dir = self._setup(tmp_path, monkeypatch)
         self._fake_agm(bin_dir)
-        (home / ".bashrc").write_text(
-            'export USERRC_RAN=1\nexport HOLDIR=user\n', encoding="utf-8"
-        )
+        (home / ".bashrc").write_text("export USERRC_RAN=1\nexport HOLDIR=user\n", encoding="utf-8")
         wrapper = ensure_workspace_shell("s", env={"SHELL": bash})
 
         result = subprocess.run(
@@ -260,7 +256,7 @@ class TestEnsureWorkspaceShell:
 
         _cache, home, bin_dir, _shell_dir = self._setup(tmp_path, monkeypatch)
         self._fake_agm(bin_dir)
-        (home / ".bashrc").write_text('export USERRC_RAN=1\n', encoding="utf-8")
+        (home / ".bashrc").write_text("export USERRC_RAN=1\n", encoding="utf-8")
         wrapper = ensure_workspace_shell("s", env={"SHELL": bash})
 
         result = subprocess.run(
@@ -306,7 +302,7 @@ class TestEnsureWorkspaceShell:
 
         _cache, home, bin_dir, shell_dir = self._setup(tmp_path, monkeypatch)
         self._fake_agm(bin_dir)
-        (home / ".bashrc").write_text('export USERRC_RAN=1\n', encoding="utf-8")
+        (home / ".bashrc").write_text("export USERRC_RAN=1\n", encoding="utf-8")
         wrapper = ensure_workspace_shell("s", env={"SHELL": bash})
 
         # Simulate partial deletion from inside a running pane: the rc
@@ -431,8 +427,7 @@ class TestOpenSession:
         # commit_config_dir_changes. If the env were dropped, the git subprocess would
         # inherit the process env ("Process Env") and the assertion below would fail.
         (feature_config / "env.sh").write_text(
-            'export GIT_AUTHOR_NAME="Worktree Env"\n'
-            'export GIT_COMMITTER_NAME="Worktree Env"\n',
+            'export GIT_AUTHOR_NAME="Worktree Env"\nexport GIT_COMMITTER_NAME="Worktree Env"\n',
             encoding="utf-8",
         )
         feat_path = project / "worktrees" / "feature"
@@ -448,6 +443,7 @@ class TestOpenSession:
         monkeypatch.setenv("GIT_AUTHOR_EMAIL", "worktree@test.com")
         monkeypatch.setenv("GIT_COMMITTER_EMAIL", "worktree@test.com")
         monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
+
         # create_configured_workspace_session is the tmux boundary — suppress it.
         def _noop_session(
             *,
@@ -489,9 +485,7 @@ class TestNewSession:
         dry_run.set_enabled(True)
         project = _make_git_project(tmp_path, env)
 
-        create_workspace(
-            detached=True, pane_count=None, parent=None, branch="feature", cwd=project
-        )
+        create_workspace(detached=True, pane_count=None, parent=None, branch="feature", cwd=project)
 
         out = capsys.readouterr().out
         assert "dry-run: agm mkdir" in out
@@ -742,9 +736,7 @@ class TestOpenRun:
         monkeypatch.chdir(project)
         monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
 
-        open_module.run(
-            OpenArgs(detached=True, pane_count=None, parent=None, branch="main")
-        )
+        open_module.run(OpenArgs(detached=True, pane_count=None, parent=None, branch="main"))
 
         out = capsys.readouterr().out
         repo_dir = project / "repo"

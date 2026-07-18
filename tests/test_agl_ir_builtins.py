@@ -104,7 +104,7 @@ def test_print_enum_variant() -> None:
         ()
     """)
     out = evaluate_ir_output(source)
-    assert out == 'Color::Green\n'
+    assert out == "Color::Green\n"
 
 
 def test_print_multiple_calls() -> None:
@@ -186,7 +186,7 @@ def test_parse_json_success_array() -> None:
 
 def test_parse_json_success_string() -> None:
     """parse_json succeeds for a JSON string."""
-    source = 'let j = parse_json(\'\"hello\"\')\n()'
+    source = "let j = parse_json('\"hello\"')\n()"
     ir = evaluate_ir(source)
     assert isinstance(ir["j"], JsonValue)
 
@@ -307,9 +307,7 @@ def test_param_referenced_in_expression() -> None:
         let product = x * y
         ()
     """)
-    ir = evaluate_ir(
-        source, param_values={"x": IntValue(3), "y": IntValue(4)}
-    )
+    ir = evaluate_ir(source, param_values={"x": IntValue(3), "y": IntValue(4)})
     assert ir["sum"] == IntValue(7)
     assert ir["product"] == IntValue(12)
 

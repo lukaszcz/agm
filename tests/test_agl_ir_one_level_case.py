@@ -73,9 +73,7 @@ def _color_descriptor() -> NominalDescriptor:
 
 
 def _private_symbol(symbol: SymbolId = _PAYLOAD) -> SymbolDescriptor:
-    return SymbolDescriptor(
-        symbol, mutable=False, public_name=None, owner=ENTRY_ID, synthetic=True
-    )
+    return SymbolDescriptor(symbol, mutable=False, public_name=None, owner=ENTRY_ID, synthetic=True)
 
 
 def _literal_case(*arms: IrCaseArm, default: IrConstInt | None = None) -> IrCase:
@@ -313,11 +311,7 @@ def test_direct_malformed_no_match_raises_invalid_ir_not_match_error() -> None:
     case = IrCase(
         _LOC,
         IrConstText(_LOC, "no"),
-        (
-            IrCaseArm(
-                IrLiteralCaseKey(IrLiteralKind.TEXT, "yes"), (), IrConstInt(_LOC, 1)
-            ),
-        ),
+        (IrCaseArm(IrLiteralCaseKey(IrLiteralKind.TEXT, "yes"), (), IrConstInt(_LOC, 1)),),
         None,
     )
     with pytest.raises(InvalidIrError):
@@ -349,9 +343,7 @@ def test_direct_enum_dispatch_copies_fields_and_rejects_missing_payload() -> Non
         _PAYLOAD: _private_symbol(),
         _RESULT: SymbolDescriptor(_RESULT, False, "result", ENTRY_ID),
     }
-    assert IrInterpreter(_program(result, symbols=symbols)).run() == {
-        "result": IntValue(42)
-    }
+    assert IrInterpreter(_program(result, symbols=symbols)).run() == {"result": IntValue(42)}
 
     missing_field_subject = IrMakeEnum(_LOC, _COLOR, "Color", "With", ())
     malformed = IrCase(

@@ -153,7 +153,7 @@ Merge & conflict policy:
 
 ### D8 — Cyclic imports
 - **Allowed** (= cross-file mutual recursion; safe because modules are declaration-only).
-- Loader uses **load-all-reachable-then-resolve**, with whole-graph resolve/typecheck pre-passes.
+- Loader uses **load-all-reachable-then-resolve**, with whole-program resolve/typecheck pre-passes.
   (Survey-confirmed: cycles are clean in whole-unit, no-import-execution models —
   Java/C#/Rust-intra-crate — and hazardous only under import-time execution (Python) or separate
   compilation (Go/Haskell-boot), neither of which applies here.)
@@ -202,20 +202,20 @@ Grounded in `src/agm/agl/`:
   (parse graph, dedup, cycles, node-id seeding).
 - `scope/resolver.py`, `scope/symbols.py` — per-module symbol tables, exports/`private`, import
   semantics (single + wildcard + merge), open-by-default, clash-on-use, `::name`, declaration-only
-  & entry-only enforcement, whole-graph pre-passes; `BindingRef` gains owning ModuleId;
-  `ResolvedProgram` → graph form.
+  & entry-only enforcement, whole-program pre-passes; `BindingRef` gains owning ModuleId;
+  `ModuleResolution` → graph form.
 - `typecheck/checker.py`, `typecheck/env.py`, `typecheck/types.py` — module-qualified type
-  identity, whole-graph type pre-pass, qualified type refs.
+  identity, whole-program type pre-pass, qualified type refs.
 - `eval/interpreter.py`, `eval/scope.py` — per-module top-level frames, statically-resolved
   cross-module references, mutual recursion across files.
-- `runtime/agents.py`, `runtime/runtime.py` — program-owned agent handling across the graph-aware
+- `runtime/agents.py`, `runtime/runtime.py` — program-owned agent handling across the program-level
   runtime; new load-and-prepare entrypoint (entry source + entry path + roots).
 - `repl/session.py` — imports in the REPL (load from cwd root); `::name` = REPL main module.
 - `src/agm/config/` — lib-root + extra-roots configuration.
 - `src/agm/commands/` (exec), `src/agm/cli.py`, `src/agm/completion.py` — `-I/--module-path`
   option + completion.
 - Docs: `docs/agl/reference/` for user-facing language semantics, `docs/arch/agl.md` for the
-  graph-aware implementation architecture, `docs/agl-grammar.md`, `README.md` (brief),
+  program-level implementation architecture, `docs/agl-grammar.md`, `README.md` (brief),
   `docs/commands.md` (full), and help texts. Update the relevant reference and architecture docs
   in the milestone that changes them; M6 performs the final consistency review.
 
@@ -267,7 +267,7 @@ ref_name     : VAR_NAME | TYPE_NAME
   modules use their canonical path identity; inline command and REPL sources use synthetic
   identities. Diagnostics and runtime errors derive their displayed source from the span, so
   attribution survives every pipeline stage without formatter-side inference.
-- Keep single-file parse → a `Module` node (imports + body). Loader assembles a `ModuleGraph`
+- Keep module parse → a `Module` node (imports + body). Loader assembles a `ModuleGraph`
   (`{ModuleId: Module}` + entry id + SCC/topo info) consumed downstream.
 
 ## 6. Module loader (new `modules/` package)
@@ -309,19 +309,19 @@ ref_name     : VAR_NAME | TYPE_NAME
     Multiple distinct open-import candidates are retained and produce an *ambiguous reference*
     diagnostic only at an unqualified use-site, listing disambiguating qualifiers. An own
     declaration therefore shadows an imported name; the import remains available qualified.
-- **Whole-graph pre-passes** collect every module's functions and types, plus the entry program's
+- **Whole-program pre-passes** collect every module's functions and types, plus the entry program's
   agents, before resolving any body → cross-file mutual recursion (D8).
 - **Enforcement**: declaration-only in non-entry modules (D4); `program`/`config`/`param`/`agent`
   entry-only (D6); imports top-level and header-only (D4); `private` boundary (D5);
   duplicate-alias / alias-root collision static errors (D3).
-- `BindingRef` gains owning `ModuleId`; `ResolvedProgram` becomes a graph-shaped
-  `ResolvedModuleGraph` preserving per-node side tables keyed by global node IDs.
+- `BindingRef` gains owning `ModuleId`; `ModuleResolution` becomes a graph-shaped
+  `ResolvedProgram` preserving per-node side tables keyed by global node IDs.
 
 ## 8. Typecheck & eval
 
 ### 8.1 Typecheck
 - Type identity is **module-qualified**: `RecordType`/`EnumType` carry their owning `ModuleId`
-  (distinct `foo::Color` vs `bar::Color`). Whole-graph type pre-pass collects all type decls
+  (distinct `foo::Color` vs `bar::Color`). Whole-program type pre-pass collects all type decls
   (cycles allowed), then checks bodies. Qualified type refs resolve via S.
 - Agent typing remains program-owned and unqualified; imported functions may accept agent-typed
   arguments without declaring or importing agents.
@@ -337,7 +337,7 @@ ref_name     : VAR_NAME | TYPE_NAME
 ## 9. Host integration, config, CLI
 
 - New entrypoint, e.g. `PipelineDriver.prepare_program(entry_source, *, entry_path, roots)`:
-  loader → resolve → typecheck/eval. Existing single-file callers (no imports) behave identically.
+  loader → resolve → typecheck/eval. Existing module callers (no imports) behave identically.
 - `agm exec <file>`: file's dir is a root; entry id = `main`. `agm exec -c <code>`: cwd is a root;
   entry id = `main`.
 - Lib root default `~/.agm/lib`, configurable; extra roots via config and repeatable
@@ -370,7 +370,7 @@ Write failing tests first; implement to green. Group test files by module/catego
   errors; `::name`; `private` boundary; declaration-only & entry-only enforcement; wildcard
   subtree expansion + re-rooting, including compatible/conflicting overlaps; cross-file mutual
   recursion.
-- **Typecheck**: distinct module-qualified type identity; qualified type refs; whole-graph
+- **Typecheck**: distinct module-qualified type identity; qualified type refs; whole-program
   pre-pass with cycles.
 - **Eval**: qualified value dispatch; cross-module + mutually-recursive calls; passing
   entry-program agent values into imported functions.
@@ -393,9 +393,9 @@ task, Fable review per milestone; fix every reviewer finding.
   tests with fixture roots; update `docs/arch/agl.md` for graph loading and source-aware spans.
 - **M3 — Name resolution**: per-module symbol tables, exports/`private`, full import semantics
   (single + wildcard + merge), open-by-default, clash-on-use, `::name`, declaration-only &
-  entry-only enforcement, duplicate/collision errors, whole-graph pre-passes. Resolver tests;
+  entry-only enforcement, duplicate/collision errors, whole-program pre-passes. Resolver tests;
   update module, visibility, import, and scope reference docs plus resolver architecture.
-- **M4 — Typecheck**: module-qualified type identity, qualified type refs, whole-graph type
+- **M4 — Typecheck**: module-qualified type identity, qualified type refs, whole-program type
   pre-pass; update type reference and typechecker architecture docs.
 - **M5 — Eval & host**: per-module frames, qualified/mutually-recursive dispatch, program-owned
   agent registry, `agm exec` module loading. Eval tests + first multi-file e2e (multi-scenario);

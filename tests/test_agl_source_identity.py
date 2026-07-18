@@ -76,8 +76,12 @@ class TestUnknownSource:
 class TestSourceSpanSourceField:
     def _make_span(self, **kwargs: object) -> SourceSpan:
         defaults: dict[str, int] = {
-            "start_line": 1, "start_col": 1, "end_line": 1, "end_col": 2,
-            "start_offset": 0, "end_offset": 1,
+            "start_line": 1,
+            "start_col": 1,
+            "end_line": 1,
+            "end_col": 2,
+            "start_offset": 0,
+            "end_offset": 1,
         }
         defaults.update(kwargs)  # type: ignore[arg-type]
         return SourceSpan(**defaults)  # type: ignore[arg-type]
@@ -89,8 +93,12 @@ class TestSourceSpanSourceField:
     def test_custom_source(self) -> None:
         sid = SourceId(label="/foo/bar.agl")
         span = SourceSpan(
-            start_line=1, start_col=1, end_line=1, end_col=2,
-            start_offset=0, end_offset=1,
+            start_line=1,
+            start_col=1,
+            end_line=1,
+            end_col=2,
+            start_offset=0,
+            end_offset=1,
             source=sid,
         )
         assert span.source == sid
@@ -100,13 +108,21 @@ class TestSourceSpanSourceField:
         sid_a = SourceId(label="a.agl")
         sid_b = SourceId(label="b.agl")
         span_a = SourceSpan(
-            start_line=1, start_col=1, end_line=1, end_col=2,
-            start_offset=0, end_offset=1,
+            start_line=1,
+            start_col=1,
+            end_line=1,
+            end_col=2,
+            start_offset=0,
+            end_offset=1,
             source=sid_a,
         )
         span_b = SourceSpan(
-            start_line=1, start_col=1, end_line=1, end_col=2,
-            start_offset=0, end_offset=1,
+            start_line=1,
+            start_col=1,
+            end_line=1,
+            end_col=2,
+            start_offset=0,
+            end_offset=1,
             source=sid_b,
         )
         assert span_a == span_b
@@ -116,13 +132,21 @@ class TestSourceSpanSourceField:
         sid_a = SourceId(label="a.agl")
         sid_b = SourceId(label="b.agl")
         span_a = SourceSpan(
-            start_line=1, start_col=1, end_line=1, end_col=2,
-            start_offset=0, end_offset=1,
+            start_line=1,
+            start_col=1,
+            end_line=1,
+            end_col=2,
+            start_offset=0,
+            end_offset=1,
             source=sid_a,
         )
         span_b = SourceSpan(
-            start_line=1, start_col=1, end_line=1, end_col=2,
-            start_offset=0, end_offset=1,
+            start_line=1,
+            start_col=1,
+            end_line=1,
+            end_col=2,
+            start_offset=0,
+            end_offset=1,
             source=sid_b,
         )
         assert hash(span_a) == hash(span_b)
@@ -255,8 +279,12 @@ class TestDiagnosticSourceLabel:
     def test_diagnostic_from_span_populates_source_label(self) -> None:
         sid = SourceId(label="/src/mymodule.agl")
         span = SourceSpan(
-            start_line=3, start_col=5, end_line=3, end_col=10,
-            start_offset=20, end_offset=25,
+            start_line=3,
+            start_col=5,
+            end_line=3,
+            end_col=10,
+            start_offset=20,
+            end_offset=25,
             source=sid,
         )
         d = diagnostic_from_span("something broke", span)
@@ -265,8 +293,12 @@ class TestDiagnosticSourceLabel:
     def test_diagnostic_from_span_unknown_source_gives_none_label(self) -> None:
         """UNKNOWN_SOURCE yields None source_label (falls back to caller's source_name)."""
         span = SourceSpan(
-            start_line=1, start_col=1, end_line=1, end_col=2,
-            start_offset=0, end_offset=1,
+            start_line=1,
+            start_col=1,
+            end_line=1,
+            end_col=2,
+            start_offset=0,
+            end_offset=1,
         )
         d = diagnostic_from_span("err", span)
         assert d.source_label is None
@@ -292,7 +324,11 @@ class TestDiagnosticSourceLabel:
     def test_format_diagnostic_uses_span_label(self) -> None:
         """format_diagnostic uses span-sourced label."""
         d = Diagnostic(
-            message="some error", line=3, column=5, end_line=3, end_column=9,
+            message="some error",
+            line=3,
+            column=5,
+            end_line=3,
+            end_column=9,
             source_label="/path/to/file.agl",
         )
         result = format_diagnostic(d)
@@ -313,7 +349,11 @@ class TestDiagnosticSourceLabel:
     def test_format_diagnostic_location_range_with_file_label(self) -> None:
         """Range formatting works correctly with a file-sourced label."""
         d = Diagnostic(
-            message="err", line=3, column=5, end_line=3, end_column=9,
+            message="err",
+            line=3,
+            column=5,
+            end_line=3,
+            end_column=9,
             source_label="/a/b.agl",
         )
         assert format_diagnostic_location(d) == "/a/b.agl:3:5-8"
@@ -343,8 +383,7 @@ class TestRelatedDiagnostics:
         ).to_diagnostic()
 
         assert format_diagnostic(diagnostic) == (
-            "/main.agl:1:1: error: type mismatch\n"
-            "  /main.agl:4:5-8: note: expected here"
+            "/main.agl:1:1: error: type mismatch\n  /main.agl:4:5-8: note: expected here"
         )
 
     def test_multiple_related_locations_preserve_input_order(self) -> None:
@@ -402,8 +441,12 @@ class TestBackwardCompatibility:
     def test_span_without_source_arg_still_works(self) -> None:
         """Constructing SourceSpan without source= keeps working."""
         span = SourceSpan(
-            start_line=1, start_col=1, end_line=1, end_col=2,
-            start_offset=0, end_offset=1,
+            start_line=1,
+            start_col=1,
+            end_line=1,
+            end_col=2,
+            start_offset=0,
+            end_offset=1,
         )
         assert span.start_line == 1
 
@@ -421,8 +464,12 @@ class TestBackwardCompatibility:
     def test_agl_error_to_diagnostic_backward_compat(self) -> None:
         """AglError.to_diagnostic() still produces a valid diagnostic."""
         span = SourceSpan(
-            start_line=2, start_col=1, end_line=2, end_col=5,
-            start_offset=10, end_offset=14,
+            start_line=2,
+            start_col=1,
+            end_line=2,
+            end_col=5,
+            start_offset=10,
+            end_offset=14,
         )
         err = AglError("test error", span=span)
         d = err.to_diagnostic()

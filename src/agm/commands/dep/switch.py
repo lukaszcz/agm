@@ -67,7 +67,8 @@ def run(args: DepSwitchArgs) -> None:
             config_branch=config_branch,
         )
         commit_config_dir_changes(
-            project_dir, f"chore: switch dependency {args.dep}",
+            project_dir,
+            f"chore: switch dependency {args.dep}",
             add_paths=[config_toml_file(project_dir, config_branch)],
         )
         return
@@ -98,6 +99,7 @@ def run(args: DepSwitchArgs) -> None:
         config_branch=config_branch,
     )
     commit_config_dir_changes(
-        project_dir, f"chore: switch dependency {args.dep}",
+        project_dir,
+        f"chore: switch dependency {args.dep}",
         add_paths=[config_toml_file(project_dir, config_branch)],
     )

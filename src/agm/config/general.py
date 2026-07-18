@@ -29,9 +29,7 @@ class ConfigCommandNotFound(ValueError):
     def __init__(self, *, section_name: str, command_name: str) -> None:
         self.section_name = section_name
         self.command_name = command_name
-        super().__init__(
-            f"{section_name} subcommand {command_name!r} is not defined in config"
-        )
+        super().__init__(f"{section_name} subcommand {command_name!r} is not defined in config")
 
 
 # Known path-like fields per config section.  Values for these fields are
@@ -690,9 +688,7 @@ def load_refine_config(
     )
 
 
-def program_config_from_merged(
-    merged: TomlDict, program_name: str
-) -> dict[str, object]:
+def program_config_from_merged(merged: TomlDict, program_name: str) -> dict[str, object]:
     """Return the top-level ``[<program_name>]`` table from an already-merged config.
 
     Returns an empty dict when the section is absent or not a table.  Both

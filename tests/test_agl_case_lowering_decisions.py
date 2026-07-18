@@ -16,36 +16,34 @@ from agm.agl.ir import (
     IrLiteralKind,
     IrSequence,
 )
-from agm.agl.lower import lower_program
+from agm.agl.lower import lower_module
 from agm.agl.matchcompile import (
-    MatchCompiledProgram,
-    compile_program_matches,
+    MatchCompiledModule,
+    compile_module_matches,
 )
 from agm.agl.matchcompile.model import Occurrence, OccurrenceId, PathDecomposition
 from agm.agl.parser import parse_program
-from agm.agl.scope import resolve
+from agm.agl.scope import resolve_module
 from agm.agl.syntax.nodes import (
     ConstructorPattern,
     LiteralPattern,
     VarPattern,
     WildcardPattern,
 )
-from agm.agl.typecheck import check
+from agm.agl.typecheck import check_module
 
 
 def _lower(source: str) -> ExecutableProgram:
     capabilities = HostCapabilities(
         codec_kinds={
             "text": frozenset({"text"}),
-            "json": frozenset(
-                {"json", "record", "enum", "list", "dict", "int", "decimal", "bool"}
-            ),
+            "json": frozenset({"json", "record", "enum", "list", "dict", "int", "decimal", "bool"}),
         }
     )
-    checked = check(resolve(parse_program(source)), capabilities)
-    result = compile_program_matches(checked)
-    assert isinstance(result.compiled, MatchCompiledProgram)
-    return lower_program(
+    checked = check_module(resolve_module(parse_program(source)), capabilities)
+    result = compile_module_matches(checked)
+    assert isinstance(result.compiled, MatchCompiledModule)
+    return lower_module(
         result.compiled,
         source_text=source,
         source_label="<test>",
@@ -98,9 +96,7 @@ def test_enum_arm_binds_only_demanded_immediate_field_for_nested_switch() -> Non
     ("source", "expected_kind", "expected_scalar"),
     [
         (
-            "let value = true\n"
-            "let result = case value of | true => 1 | false => 0\n"
-            "()",
+            "let value = true\nlet result = case value of | true => 1 | false => 0\n()",
             IrLiteralKind.BOOL,
             True,
         ),
@@ -115,9 +111,7 @@ def test_enum_arm_binds_only_demanded_immediate_field_for_nested_switch() -> Non
             "x",
         ),
         (
-            "let value: json = null\n"
-            "let result = case value of | null => 1 | _ => 0\n"
-            "()",
+            "let value: json = null\nlet result = case value of | null => 1 | _ => 0\n()",
             IrLiteralKind.NULL,
             None,
         ),

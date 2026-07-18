@@ -352,9 +352,7 @@ def _parse_loop_args(
     command_name = remaining[0]
     runner_args = run_command.normalize_run_command(remaining[1:])
     if no_log and log_file is not None:
-        exit_with_usage_error(
-            command_path, "error: --no-log and --log-file are mutually exclusive"
-        )
+        exit_with_usage_error(command_path, "error: --no-log and --log-file are mutually exclusive")
     return LoopArgs(
         command_name=command_name,
         runner=runner,
@@ -548,8 +546,7 @@ def _validate_refine_prompt_options(
     if prompt is not None and prompt_file is not None:
         exit_with_usage_error(
             command_path,
-            f"error: --{prompt_name}-prompt and --{prompt_name}-prompt-file "
-            "are mutually exclusive",
+            f"error: --{prompt_name}-prompt and --{prompt_name}-prompt-file are mutually exclusive",
         )
     if extra_prompt is not None and extra_prompt_file is not None:
         exit_with_usage_error(
@@ -559,9 +556,7 @@ def _validate_refine_prompt_options(
         )
 
 
-def _parse_max_steps(
-    value: str | None, *, command_path: Sequence[str], name: str
-) -> int | None:
+def _parse_max_steps(value: str | None, *, command_path: Sequence[str], name: str) -> int | None:
     if value is None:
         return None
     if value.strip().lower() == "unlimited":
@@ -1159,22 +1154,16 @@ def exec_cmd(
             param_tokens.insert(0, file)
             file = None
         else:
-            exit_with_usage_error(
-                ["exec"], "error: argument FILE not allowed with -c/--command"
-            )
+            exit_with_usage_error(["exec"], "error: argument FILE not allowed with -c/--command")
     if command is None and file is None:
-        exit_with_usage_error(
-            ["exec"], "error: one of the arguments FILE -c/--command is required"
-        )
+        exit_with_usage_error(["exec"], "error: one of the arguments FILE -c/--command is required")
     _check_log_flags_exclusive("exec", no_log=no_log, log=log, log_file=log_file)
     if log_file is not None and no_log_file:
         exit_with_usage_error(
             ["exec"], "error: --log-file and --no-log-file are mutually exclusive"
         )
     if timeout is not None and no_timeout:
-        exit_with_usage_error(
-            ["exec"], "error: --timeout and --no-timeout are mutually exclusive"
-        )
+        exit_with_usage_error(["exec"], "error: --timeout and --no-timeout are mutually exclusive")
     # Imported lazily: pulls in the AgL DSL (runtime, codec, jsonschema), which
     # would otherwise slow every non-AgL ``agm`` invocation's startup.
     import agm.commands.exec as exec_command
@@ -1398,9 +1387,7 @@ def dep_switch(
         _missing_arguments(["dep", "switch"], ["dep", "branch"])
     assert dep is not None
     assert branch is not None
-    dep_switch_command.run(
-        DepSwitchArgs(dep=dep, branch=branch, create_branch=create_branch)
-    )
+    dep_switch_command.run(DepSwitchArgs(dep=dep, branch=branch, create_branch=create_branch))
 
 
 @dep_app.command(name="rm")
@@ -1771,16 +1758,12 @@ def loop(
         return
     if raw_args[0] == "run":
         loop_run_command.run(
-            _parse_loop_args(
-                raw_args[1:], command_path=["loop", "run"], command_optional=True
-            )
+            _parse_loop_args(raw_args[1:], command_path=["loop", "run"], command_optional=True)
         )
         return
     if raw_args[0] == "step":
         loop_step_command.run(
-            _parse_loop_args(
-                raw_args[1:], command_path=["loop", "step"], command_optional=True
-            )
+            _parse_loop_args(raw_args[1:], command_path=["loop", "step"], command_optional=True)
         )
         return
     loop_command.run(_parse_loop_args(raw_args, command_path=["loop"]))
@@ -1853,9 +1836,7 @@ def run(
     no_sandbox: bool = typer.Option(
         False, "--no-sandbox", help="Run the command directly without srt sandboxing."
     ),
-    no_patch: bool = typer.Option(
-        False, "--no-patch", help="Skip filesystem allowWrite patching."
-    ),
+    no_patch: bool = typer.Option(False, "--no-patch", help="Skip filesystem allowWrite patching."),
     settings_file: Path | None = typer.Option(
         None,
         "-f",

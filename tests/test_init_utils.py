@@ -145,9 +145,7 @@ class TestDeriveProjectName:
         with pytest.raises(SystemExit):
             derive_project_name("///")
 
-    def test_error_message_contains_repo_url(
-        self, capsys: pytest.CaptureFixture[str]
-    ) -> None:
+    def test_error_message_contains_repo_url(self, capsys: pytest.CaptureFixture[str]) -> None:
         with pytest.raises(SystemExit):
             derive_project_name(".git")
         captured = capsys.readouterr()
@@ -217,9 +215,7 @@ class TestEnsureGitignoreEntry:
         content = gitignore.read_text(encoding="utf-8")
         assert content == "*.pyc\n.agm\n"
 
-    def test_appends_directly_when_file_already_ends_with_newline(
-        self, tmp_path: Path
-    ) -> None:
+    def test_appends_directly_when_file_already_ends_with_newline(self, tmp_path: Path) -> None:
         gitignore = tmp_path / ".gitignore"
         gitignore.write_text("*.pyc\n", encoding="utf-8")
         ensure_gitignore_entry(gitignore, ".agm")
@@ -231,9 +227,7 @@ class TestEnsureGitignoreEntry:
         ensure_gitignore_entry(gitignore, ".agm")
         assert gitignore.read_text(encoding="utf-8").endswith("\n")
 
-    def test_does_not_duplicate_when_entry_with_trailing_slash_exists(
-        self, tmp_path: Path
-    ) -> None:
+    def test_does_not_duplicate_when_entry_with_trailing_slash_exists(self, tmp_path: Path) -> None:
         gitignore = tmp_path / ".gitignore"
         gitignore.write_text(".agent-files/\n*.pyc\n", encoding="utf-8")
         ensure_gitignore_entry(gitignore, ".agent-files")
@@ -359,9 +353,7 @@ class TestConfigureProjectDirWorkspace:
         lines = (project_dir / "repo" / ".gitignore").read_text(encoding="utf-8").splitlines()
         assert ".agent-files" in lines
 
-    def test_creates_config_files(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_creates_config_files(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(init_module, "require_success", lambda _cmd, **_kw: None)
         monkeypatch.setattr(git_helpers, "is_git_repo", lambda _p: False)
 
@@ -371,9 +363,7 @@ class TestConfigureProjectDirWorkspace:
         assert (project_dir / "config" / "env.sh").is_file()
         assert (project_dir / "config" / "setup.sh").is_file()
 
-    def test_setup_sh_is_executable(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_setup_sh_is_executable(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(init_module, "require_success", lambda _cmd, **_kw: None)
         monkeypatch.setattr(git_helpers, "is_git_repo", lambda _p: False)
 
@@ -588,17 +578,13 @@ class TestRunArgumentValidation:
         with pytest.raises(SystemExit):
             run(args)
 
-    def test_clone_without_repo_url_exits(
-        self, capsys: pytest.CaptureFixture[str]
-    ) -> None:
+    def test_clone_without_repo_url_exits(self, capsys: pytest.CaptureFixture[str]) -> None:
         args = make_args(["myproject"], clone=True)
         with pytest.raises(SystemExit):
             run(args)
         assert "REPO_URL" in capsys.readouterr().err
 
-    def test_branch_without_repo_url_exits(
-        self, capsys: pytest.CaptureFixture[str]
-    ) -> None:
+    def test_branch_without_repo_url_exits(self, capsys: pytest.CaptureFixture[str]) -> None:
         args = make_args(["myproject"], branch="feat")
         with pytest.raises(SystemExit):
             run(args)
@@ -874,9 +860,9 @@ class TestConfigureProjectDirAlternatives:
         project_dir = tmp_path / "proj"
         configure_project_dir(project_dir, embedded=False)
 
-        assert (project_dir / "repo" / ".gitignore").read_text(
-            encoding="utf-8"
-        ).splitlines() == [".agent-files"]
+        assert (project_dir / "repo" / ".gitignore").read_text(encoding="utf-8").splitlines() == [
+            ".agent-files"
+        ]
 
     def test_no_repo_git_skips_workspace_repo_git_init(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -981,9 +967,7 @@ class TestConfigureProjectDirAlternatives:
 
 
 class TestConfigureProjectDirRealGit:
-    def test_split_layout_creates_real_git_repos(
-        self, tmp_path: Path, env: dict[str, str]
-    ) -> None:
+    def test_split_layout_creates_real_git_repos(self, tmp_path: Path, env: dict[str, str]) -> None:
         old_env: dict[str, str | None] = {}
         for k, v in env.items():
             old_env[k] = os.environ.get(k)

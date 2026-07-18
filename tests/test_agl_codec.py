@@ -46,7 +46,7 @@ from agm.agl.runtime.agents import AgentFn, AgentRegistry
 from agm.agl.runtime.codec import JsonCodec, ParseResult, TextCodec
 from agm.agl.runtime.contract import OutputContract, materialize_contract, materialize_ir_contract
 from agm.agl.runtime.request import AgentRequest
-from agm.agl.scope import resolve
+from agm.agl.scope import resolve_module
 from agm.agl.semantics.exceptions import AglRaise
 from agm.agl.semantics.type_table import TypeDef, TypeTable
 from agm.agl.semantics.types import (
@@ -83,8 +83,8 @@ from agm.agl.syntax.nodes import (
 )
 from agm.agl.syntax.spans import SourceSpan
 from agm.agl.type_schema import build_decode_schema, derive_schema
-from agm.agl.typecheck import check
-from agm.agl.typecheck.env import CheckedProgram, OutputContractSpec
+from agm.agl.typecheck import check_module
+from agm.agl.typecheck.env import CheckedModule, OutputContractSpec
 from tests._agl_helpers import ambient_agents_for, enum_type, record_type, type_table_for
 
 # ---------------------------------------------------------------------------
@@ -203,14 +203,14 @@ def _ensure_expr_tail(body: tuple[Item, ...]) -> tuple[Item, ...]:
     return body
 
 
-def _check_program_with_json(body: tuple[Item, ...]) -> CheckedProgram:
+def _check_program_with_json(body: tuple[Item, ...]) -> CheckedModule:
     """Run *body* through real resolve + check with both text and json codecs."""
     program = ast.Program(
         body=ast.Block(items=_ensure_expr_tail(body), span=_sp(), node_id=_nid()),
         span=_sp(),
         node_id=_nid(),
     )
-    resolved = resolve(program, ambient_agents=ambient_agents_for(program))
+    resolved = resolve_module(program, ambient_agents=ambient_agents_for(program))
     caps = HostCapabilities(
         agent_names=frozenset(),
         has_default_agent=True,
@@ -219,7 +219,7 @@ def _check_program_with_json(body: tuple[Item, ...]) -> CheckedProgram:
             "json": frozenset({"json", "record", "enum", "list", "dict", "int", "decimal", "bool"}),
         },
     )
-    return check(resolved, caps)
+    return check_module(resolved, caps)
 
 
 class _Bindings(dict[str, object]):
@@ -236,7 +236,7 @@ def _run_with_json_codec(
 ) -> _Bindings:
     """Build + resolve + check + execute *body* with JsonCodec registered."""
     from agm.agl.eval.ir_interpreter import IrInterpreter
-    from agm.agl.lower import lower_program
+    from agm.agl.lower import lower_module
     from agm.agl.runtime.codec import JsonCodec, OutputCodec, TextCodec
     from agm.agl.runtime.params import _materialize_ir_contracts
     from tests.agl.ir_harness import _compiled_checked
@@ -249,7 +249,7 @@ def _run_with_json_codec(
         json_codec.name: json_codec,
     }
     registry = AgentRegistry(named=named or {}, default_agent=default_agent)
-    executable = lower_program(
+    executable = lower_module(
         _compiled_checked(checked),
         source_text="<direct-ast>",
         source_label="<test>",
@@ -708,9 +708,7 @@ class TestRecursiveSchemaDerivation:
                     "type": "object",
                     "additionalProperties": False,
                     "required": ["children"],
-                    "properties": {
-                        "children": {"type": "array", "items": {"$ref": "#/$defs/R"}}
-                    },
+                    "properties": {"children": {"type": "array", "items": {"$ref": "#/$defs/R"}}},
                 }
             },
         }
@@ -3418,7 +3416,7 @@ class TestRegisterCodec:
         rt = PipelineDriver(default_agent=lambda req: "unused")
         rt.register_codec(SchemaTextCodec())
 
-        result = rt.run_prepared_graph(prepared, check_only=True)
+        result = rt.run_prepared(prepared, check_only=True)
 
         assert result.ok is True
         assert len(result.call_sites) == 1
@@ -3689,11 +3687,7 @@ class TestRegisterCodec:
 
         rt = PipelineDriver(default_agent=lambda req: "5")
         rt.register_codec(ShapeCodec())
-        result = rt.run(
-            "record Box\n  value: int\n"
-            'let box: Box = ask("Q", format = "shape")\n'
-            "box"
-        )
+        result = rt.run('record Box\n  value: int\nlet box: Box = ask("Q", format = "shape")\nbox')
 
         assert result.ok is True
         assert result.bindings["box"] == RecordValue(

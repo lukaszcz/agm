@@ -16,6 +16,4 @@ import decimal
 #: Pinned decimal context for all AgL arithmetic.
 #:
 #: Used by ``agm.agl.eval.ir_interpreter`` for stable numeric semantics.
-AGL_DECIMAL_CONTEXT: decimal.Context = decimal.Context(
-    prec=28, rounding=decimal.ROUND_HALF_EVEN
-)
+AGL_DECIMAL_CONTEXT: decimal.Context = decimal.Context(prec=28, rounding=decimal.ROUND_HALF_EVEN)

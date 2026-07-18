@@ -179,8 +179,7 @@ def _render(value: Value, *, pretty: bool, quote_strings: bool, top_level: bool,
 
     if isinstance(value, ListValue):
         items = [
-            _render_child(element, pretty=pretty, level=level + 1)
-            for element in value.elements
+            _render_child(element, pretty=pretty, level=level + 1) for element in value.elements
         ]
         return _render_sequence("[", "]", items, level=level, pretty=pretty)
 
@@ -196,9 +195,7 @@ def _render(value: Value, *, pretty: bool, quote_strings: bool, top_level: bool,
             f"{name} = {_render_child(child, pretty=pretty, level=level + 1)}"
             for name, child in value.fields.items()
         ]
-        return _render_sequence(
-            f"{value.display_name}(", ")", items, level=level, pretty=pretty
-        )
+        return _render_sequence(f"{value.display_name}(", ")", items, level=level, pretty=pretty)
 
     if isinstance(value, (EnumValue, ExceptionValue)):
         prefix = (

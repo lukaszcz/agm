@@ -85,9 +85,7 @@ class TestRenderEntryResult:
 
     def test_expression_echo_quotes_text(self) -> None:
         # Strings are shown quoted in the REPL echo (interpolation is unaffected).
-        result = _result(
-            kind="expression", value=TextValue("aaa"), value_type=TextType(), ok=True
-        )
+        result = _result(kind="expression", value=TextValue("aaa"), value_type=TextType(), ok=True)
         assert render_mod.render_entry_result(result, echo=True) == '"aaa"'
 
     def test_standalone_ask_echo_does_not_quote_text(self) -> None:
@@ -198,9 +196,7 @@ class TestRenderEntryResult:
         assert render_mod.render_entry_result(result, echo=False, check_only=True) is None
 
     def test_echo_off_suppresses_success(self) -> None:
-        result = _result(
-            kind="expression", value=TextValue("hi"), value_type=TextType(), ok=True
-        )
+        result = _result(kind="expression", value=TextValue("hi"), value_type=TextType(), ok=True)
         assert render_mod.render_entry_result(result, echo=False) is None
 
     def test_warnings_are_always_rendered(self) -> None:
@@ -489,8 +485,18 @@ class TestHelpFullSet:
     def test_help_lists_full_command_set(self) -> None:
         out = meta_mod.dispatch_meta(":help", _session_ctx()).text
         assert out is not None
-        for cmd in (":reset", ":type", ":bindings", ":env", ":agents", ":params",
-                    ":set", ":agent", ":load", ":save"):
+        for cmd in (
+            ":reset",
+            ":type",
+            ":bindings",
+            ":env",
+            ":agents",
+            ":params",
+            ":set",
+            ":agent",
+            ":load",
+            ":save",
+        ):
             assert cmd in out
 
 
@@ -865,21 +871,21 @@ class TestNominalRenderingEcho:
 
         s = ReplSession()
         s.eval_entry("enum Outcome\n  | Partial(left: int)\n  | Done")
-        r = s.eval_entry('let o = Outcome::Partial(left = 7)')
+        r = s.eval_entry("let o = Outcome::Partial(left = 7)")
         assert r.ok
         rendered = render_entry_result(r, echo=True)
-        assert rendered == 'o : Outcome = Outcome::Partial(\n  left = 7\n)'
+        assert rendered == "o : Outcome = Outcome::Partial(\n  left = 7\n)"
 
     def test_enum_nullary_variant_echo(self) -> None:
         from agm.agl.repl.render import render_entry_result
 
         s = ReplSession()
         s.eval_entry("enum Outcome\n  | Partial(left: int)\n  | Done")
-        r = s.eval_entry('let d = Outcome::Done')
+        r = s.eval_entry("let d = Outcome::Done")
         assert r.ok
         rendered = render_entry_result(r, echo=True)
         assert rendered is not None
-        assert 'Outcome::Done' in rendered
+        assert "Outcome::Done" in rendered
 
     def test_top_level_text_stays_quoted(self) -> None:
         from agm.agl.repl.render import render_entry_result
@@ -925,9 +931,7 @@ class TestNominalRenderingEcho:
     def test_load_meta_renders_record_nominal(self, tmp_path: Path) -> None:
         # :load must render record bindings in AgL form (type_lookup threaded).
         src = tmp_path / "rec.agl"
-        src.write_text(
-            "record Point\n  y: int\n  x: int\nlet p = Point(x = 1, y = 2)\n"
-        )
+        src.write_text("record Point\n  y: int\n  x: int\nlet p = Point(x = 1, y = 2)\n")
         s = ReplSession()
         outcome = meta_mod.dispatch_meta(f":load {src}", _session_ctx(s))
         assert outcome.text is not None

@@ -8,7 +8,7 @@ import pytest
 
 from agm.agl import PipelineDriver
 from agm.agl.modules.roots import RootSet
-from agm.agl.pipeline import ParamDiscovery, PreparedGraph, PreparedProgram, RunResult
+from agm.agl.pipeline import ParamDiscovery, PreparedProgram, RunResult
 from agm.agl.repl.session import EntryResult, ReplSession
 
 _FAILING_SOURCE = (
@@ -28,7 +28,7 @@ _CACHED_SOURCE = (
 )
 
 
-def _prepare_graph(source: str) -> PreparedGraph:
+def _prepare_graph(source: str) -> PreparedProgram:
     stdlib = Path(__file__).resolve().parent.parent / "stdlib"
     return PipelineDriver.prepare_program(
         source,
@@ -60,15 +60,15 @@ def test_single_run_preserves_checker_warning_before_match_failure(check_only: b
 
 def test_single_discovery_preserves_checker_warning_before_match_failure() -> None:
     runtime = PipelineDriver(default_agent=lambda _request: "")
-    result = runtime.discover_params(runtime.prepare(_FAILING_SOURCE))
+    result = runtime.discover_params(runtime.prepare_program(_FAILING_SOURCE))
 
     assert result.compiled is None
     _assert_warning_then_match_error(result)
 
 
 @pytest.mark.parametrize("check_only", [False, True])
-def test_graph_run_preserves_checker_warning_before_match_failure(check_only: bool) -> None:
-    result = PipelineDriver(default_agent=lambda _request: "").run_prepared_graph(
+def test_program_run_preserves_checker_warning_before_match_failure(check_only: bool) -> None:
+    result = PipelineDriver(default_agent=lambda _request: "").run_prepared(
         _prepare_graph(_FAILING_SOURCE),
         check_only=check_only,
     )
@@ -77,12 +77,12 @@ def test_graph_run_preserves_checker_warning_before_match_failure(check_only: bo
     _assert_warning_then_match_error(result)
 
 
-def test_graph_discovery_preserves_checker_warning_before_match_failure() -> None:
-    result = PipelineDriver(default_agent=lambda _request: "").discover_params_graph(
+def test_program_discovery_preserves_checker_warning_before_match_failure() -> None:
+    result = PipelineDriver(default_agent=lambda _request: "").discover_params(
         _prepare_graph(_FAILING_SOURCE)
     )
 
-    assert result.compiled_graph is None
+    assert result.compiled is None
     _assert_warning_then_match_error(result)
 
 
@@ -100,7 +100,7 @@ def test_repl_preserves_checker_warning_before_match_failure(check_only: bool) -
 @pytest.mark.parametrize("check_only", [False, True])
 def test_single_cached_run_does_not_duplicate_checker_warnings(check_only: bool) -> None:
     runtime = PipelineDriver(default_agent=lambda _request: "")
-    prepared: PreparedProgram = runtime.prepare(_CACHED_SOURCE)
+    prepared: PreparedProgram = runtime.prepare_program(_CACHED_SOURCE)
     discovery = runtime.discover_params(prepared)
     assert discovery.compiled is not None
 
@@ -120,16 +120,16 @@ def test_single_cached_run_does_not_duplicate_checker_warnings(check_only: bool)
 def test_graph_cached_consumers_do_not_duplicate_checker_warnings() -> None:
     runtime = PipelineDriver(default_agent=lambda _request: "")
     prepared = _prepare_graph(_CACHED_SOURCE)
-    discovery = runtime.discover_params_graph(prepared)
-    assert discovery.compiled_graph is not None
+    discovery = runtime.discover_params(prepared)
+    assert discovery.compiled is not None
 
-    rediscovery = runtime.discover_params_graph(
+    rediscovery = runtime.discover_params(
         prepared,
-        compiled_graph=discovery.compiled_graph,
+        compiled=discovery.compiled,
     )
-    run = runtime.run_prepared_graph(
+    run = runtime.run_prepared(
         prepared,
-        compiled_graph=discovery.compiled_graph,
+        compiled=discovery.compiled,
         check_only=True,
     )
 

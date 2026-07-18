@@ -19,6 +19,7 @@ def run(args: WorktreeNewArgs) -> None:
     project_dir = discover_current_project_dir(worktree_path)
     if project_dir is not None:
         commit_config_dir_changes(
-            project_dir, f"chore: add config for {args.branch}",
+            project_dir,
+            f"chore: add config for {args.branch}",
             add_paths=[project_config_dir(project_dir) / args.branch],
         )

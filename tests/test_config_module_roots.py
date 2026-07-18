@@ -32,9 +32,7 @@ class TestModuleRootsConfigConstruction:
 
 
 class TestLoadModuleRootsDefaults:
-    def test_no_config_files_returns_none_lib_root_and_empty_extra(
-        self, tmp_path: Path
-    ) -> None:
+    def test_no_config_files_returns_none_lib_root_and_empty_extra(self, tmp_path: Path) -> None:
         home = tmp_path / "home"
         home.mkdir()
         cfg = load_module_roots(home=home, proj_dir=None, cwd=tmp_path)
@@ -54,7 +52,7 @@ class TestLoadModuleRootsFromHomeConfig:
         home = tmp_path / "home"
         (home / ".agm").mkdir(parents=True)
         config_file = home / ".agm" / "config.toml"
-        config_file.write_text("[modules]\nlib_root = \"/usr/local/agm/lib\"\n")
+        config_file.write_text('[modules]\nlib_root = "/usr/local/agm/lib"\n')
         cfg = load_module_roots(home=home, proj_dir=None, cwd=tmp_path)
         assert cfg.lib_root is not None
         raw, origin = cfg.lib_root
@@ -66,9 +64,7 @@ class TestLoadModuleRootsFromHomeConfig:
         home = tmp_path / "home"
         (home / ".agm").mkdir(parents=True)
         config_file = home / ".agm" / "config.toml"
-        config_file.write_text(
-            "[modules]\nroots = [\"/extra/lib1\", \"/extra/lib2\"]\n"
-        )
+        config_file.write_text('[modules]\nroots = ["/extra/lib1", "/extra/lib2"]\n')
         cfg = load_module_roots(home=home, proj_dir=None, cwd=tmp_path)
         assert len(cfg.extra) == 2
         raw0, origin0 = cfg.extra[0]
@@ -82,7 +78,7 @@ class TestLoadModuleRootsFromHomeConfig:
         home = tmp_path / "home"
         (home / ".agm").mkdir(parents=True)
         config_file = home / ".agm" / "config.toml"
-        config_file.write_text("[modules]\nlib_root = \"mylib\"\n")
+        config_file.write_text('[modules]\nlib_root = "mylib"\n')
         cfg = load_module_roots(home=home, proj_dir=None, cwd=tmp_path)
         assert cfg.lib_root is not None
         raw, origin = cfg.lib_root
@@ -94,7 +90,7 @@ class TestLoadModuleRootsFromHomeConfig:
         home = tmp_path / "home"
         (home / ".agm").mkdir(parents=True)
         config_file = home / ".agm" / "config.toml"
-        config_file.write_text("[modules]\nroots = [\"./local_lib\"]\n")
+        config_file.write_text('[modules]\nroots = ["./local_lib"]\n')
         cfg = load_module_roots(home=home, proj_dir=None, cwd=tmp_path)
         assert len(cfg.extra) == 1
         raw, origin = cfg.extra[0]
@@ -110,7 +106,7 @@ class TestLoadModuleRootsFromProjectConfig:
         config_dir = proj_dir / "config"
         config_dir.mkdir(parents=True)
         config_file = config_dir / "config.toml"
-        config_file.write_text("[modules]\nlib_root = \"/proj/lib\"\n")
+        config_file.write_text('[modules]\nlib_root = "/proj/lib"\n')
         cfg = load_module_roots(home=home, proj_dir=proj_dir, cwd=tmp_path)
         assert cfg.lib_root is not None
         raw, origin = cfg.lib_root
@@ -120,31 +116,25 @@ class TestLoadModuleRootsFromProjectConfig:
     def test_project_config_overrides_home_lib_root(self, tmp_path: Path) -> None:
         home = tmp_path / "home"
         (home / ".agm").mkdir(parents=True)
-        (home / ".agm" / "config.toml").write_text(
-            "[modules]\nlib_root = \"/home/lib\"\n"
-        )
+        (home / ".agm" / "config.toml").write_text('[modules]\nlib_root = "/home/lib"\n')
         proj_dir = tmp_path / "proj"
         config_dir = proj_dir / "config"
         config_dir.mkdir(parents=True)
-        (config_dir / "config.toml").write_text(
-            "[modules]\nlib_root = \"/proj/lib\"\n"
-        )
+        (config_dir / "config.toml").write_text('[modules]\nlib_root = "/proj/lib"\n')
         cfg = load_module_roots(home=home, proj_dir=proj_dir, cwd=tmp_path)
         # Project overrides home (same key, last-write-wins via merge)
         assert cfg.lib_root is not None
         raw, _ = cfg.lib_root
         assert raw == "/proj/lib"
 
-    def test_project_extra_roots_use_project_config_dir_as_origin(
-        self, tmp_path: Path
-    ) -> None:
+    def test_project_extra_roots_use_project_config_dir_as_origin(self, tmp_path: Path) -> None:
         home = tmp_path / "home"
         home.mkdir()
         proj_dir = tmp_path / "proj"
         config_dir = proj_dir / "config"
         config_dir.mkdir(parents=True)
         config_file = config_dir / "config.toml"
-        config_file.write_text("[modules]\nroots = [\"../extra\"]\n")
+        config_file.write_text('[modules]\nroots = ["../extra"]\n')
         cfg = load_module_roots(home=home, proj_dir=proj_dir, cwd=tmp_path)
         assert len(cfg.extra) == 1
         raw, origin = cfg.extra[0]
@@ -159,22 +149,20 @@ class TestLoadModuleRootsFromCwdConfig:
         agm_dir = tmp_path / ".agm"
         agm_dir.mkdir()
         config_file = agm_dir / "config.toml"
-        config_file.write_text("[modules]\nlib_root = \"/cwd/lib\"\n")
+        config_file.write_text('[modules]\nlib_root = "/cwd/lib"\n')
         cfg = load_module_roots(home=home, proj_dir=None, cwd=tmp_path)
         assert cfg.lib_root is not None
         raw, origin = cfg.lib_root
         assert raw == "/cwd/lib"
         assert origin == agm_dir
 
-    def test_cwd_config_extra_roots_use_agm_dir_as_origin(
-        self, tmp_path: Path
-    ) -> None:
+    def test_cwd_config_extra_roots_use_agm_dir_as_origin(self, tmp_path: Path) -> None:
         home = tmp_path / "home"
         home.mkdir()
         agm_dir = tmp_path / ".agm"
         agm_dir.mkdir()
         config_file = agm_dir / "config.toml"
-        config_file.write_text("[modules]\nroots = [\"local_lib\"]\n")
+        config_file.write_text('[modules]\nroots = ["local_lib"]\n')
         cfg = load_module_roots(home=home, proj_dir=None, cwd=tmp_path)
         assert len(cfg.extra) == 1
         raw, origin = cfg.extra[0]
@@ -187,15 +175,11 @@ class TestLoadModuleRootsLayering:
         """Extra roots from home + project configs are both included."""
         home = tmp_path / "home"
         (home / ".agm").mkdir(parents=True)
-        (home / ".agm" / "config.toml").write_text(
-            "[modules]\nroots = [\"/home/lib\"]\n"
-        )
+        (home / ".agm" / "config.toml").write_text('[modules]\nroots = ["/home/lib"]\n')
         proj_dir = tmp_path / "proj"
         config_dir = proj_dir / "config"
         config_dir.mkdir(parents=True)
-        (config_dir / "config.toml").write_text(
-            "[modules]\nroots = [\"/proj/lib\"]\n"
-        )
+        (config_dir / "config.toml").write_text('[modules]\nroots = ["/proj/lib"]\n')
         cfg = load_module_roots(home=home, proj_dir=proj_dir, cwd=tmp_path)
         raws = [r for r, _ in cfg.extra]
         assert "/home/lib" in raws
@@ -204,7 +188,7 @@ class TestLoadModuleRootsLayering:
     def test_no_modules_section_gives_no_roots(self, tmp_path: Path) -> None:
         home = tmp_path / "home"
         (home / ".agm").mkdir(parents=True)
-        (home / ".agm" / "config.toml").write_text("[exec]\nrunner = \"claude\"\n")
+        (home / ".agm" / "config.toml").write_text('[exec]\nrunner = "claude"\n')
         cfg = load_module_roots(home=home, proj_dir=None, cwd=tmp_path)
         assert cfg.lib_root is None
         assert cfg.extra == ()
@@ -220,9 +204,7 @@ class TestLoadModuleRootsLayering:
         """A roots entry that is whitespace-only is ignored, same as an empty string."""
         home = tmp_path / "home"
         (home / ".agm").mkdir(parents=True)
-        (home / ".agm" / "config.toml").write_text(
-            "[modules]\nroots = [\"  \", \"/real/path\"]\n"
-        )
+        (home / ".agm" / "config.toml").write_text('[modules]\nroots = ["  ", "/real/path"]\n')
         cfg = load_module_roots(home=home, proj_dir=None, cwd=tmp_path)
         # Only the non-whitespace entry survives
         assert len(cfg.extra) == 1

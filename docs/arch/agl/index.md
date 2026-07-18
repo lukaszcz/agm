@@ -44,9 +44,9 @@ The firewall is *semantic*, not an I/O boundary: it isolates the static passes f
 
 AgL has no separate statement category. Every construct — bindings, assignment, `print`, loops, `if` without `else` — is an expression with a type, and a block yields the value of its last item. Built-ins such as `print`, `exec`, and `ask` are ordinary calls classified during resolution rather than special syntax. This uniformity is why the AST has a single call node and why the type system carries a unit type for side-effecting expressions.
 
-## Single-File and Graph Modes
+## Programs and Modules
 
-AgL supports file-based modules. A single-file program runs through the single-module passes; a program with imports runs through graph-aware variants of scope, typecheck, match compilation, and lowering that operate over the whole module graph at once. The two modes share the same AST, value model, and evaluator. Module loading and the graph passes are described in [modules.md](agl/modules.md).
+A **program** is the entry module together with its transitive imports, including the standard-library prelude. The production pipeline always loads that program and runs program-level scope, typecheck, match compilation, and lowering passes. A **module** is one compilation unit within the program; the corresponding module passes are workers used by those program passes and useful as white-box test seams. `ModuleGraph` remains the loader's data structure. Module loading and program passes are described in [modules.md](agl/modules.md).
 
 ## Package Map
 
@@ -73,7 +73,7 @@ Package layering is enforced by a dependency-contract test (`tests/test_agl_depe
 
 - Read [frontend/index.md](agl/frontend/index.md) for the static passes — lexer, parser, AST, scope, typecheck, and match compilation.
 - Read [execution/index.md](agl/execution/index.md) for lowering, the IR, the evaluator, value rendering, and the host runtime.
-- Read [modules.md](agl/modules.md) for the file-based module system and the graph-aware passes.
+- Read [modules.md](agl/modules.md) for the file-based module system and the program-level passes.
 - Read [repl.md](agl/repl.md) for the incremental REPL session, `agm exec` parameter/agent wiring, and engine settings.
 
 The language grammar and surface syntax are documented from the user's perspective in the AgL reference (`docs/agl/reference/grammar.md` and `docs/agl/reference/lexical-structure.md`). The implementation-level token contract — the canonical token-type names and the lexer's merge/disambiguation passes — lives in `src/agm/agl/lexer/tokens.py` (declared the single source of truth) and the pass docstrings in `src/agm/agl/lexer/lexer.py`.

@@ -184,7 +184,7 @@ class TypeTable:
         declaration is built exactly once per module, so this raises
         ``AssertionError`` rather than a user-facing diagnostic. Re-checking
         the identical declaration again (e.g. the REPL re-checking a promoted
-        entry against a fresh environment, or the graph pre-pass and the
+        entry against a fresh environment, or the program pre-pass and the
         per-module check both building the same module) is expected and is
         silently accepted.
         """
@@ -316,7 +316,7 @@ class TypeTable:
         ``(module_id, name)``. Raises ``AssertionError`` if the registered
         def's ``kind`` is not ``"exception"``, or if the base chain contains
         a cycle — an internal-invariant violation, since the inhabitation
-        check (single-module builder post-pass or graph pre-pass) rejects
+        check (single-module builder post-pass or program pre-pass) rejects
         ``extends`` cycles as uninhabitable before this can fire in
         production; this guard is for internal robustness, not a user
         diagnostic.
@@ -408,7 +408,7 @@ class TypeTable:
         return typedef
 
     def entries(self) -> tuple[TypeDef, ...]:
-        """Return all registered ``TypeDef``s (used for REPL and graph table sharing)."""
+        """Return all registered ``TypeDef``s (used for REPL and program table sharing)."""
         return tuple(self._defs.values())
 
     def has_no_value_equality(self, handle: RecordType | EnumType | ExceptionType) -> bool:
@@ -587,9 +587,7 @@ class TypeTable:
             return canonical.type_args
         relevant = caps.relevant_params.get((t.module_id, t.name), frozenset())
         result = [
-            arg
-            for pname, arg in zip(typedef.type_params, canonical.type_args)
-            if pname in relevant
+            arg for pname, arg in zip(typedef.type_params, canonical.type_args) if pname in relevant
         ]
         if len(canonical.type_args) > len(typedef.type_params):
             result.extend(canonical.type_args[len(typedef.type_params) :])
@@ -624,10 +622,14 @@ class TypeTable:
         culprit = self.first_infinite_declaration(t)
         if culprit is None:
             return None
-        is_own_declaration = isinstance(t, (RecordType, EnumType, ExceptionType)) and (
-            t.module_id,
-            t.name,
-        ) == culprit
+        is_own_declaration = (
+            isinstance(t, (RecordType, EnumType, ExceptionType))
+            and (
+                t.module_id,
+                t.name,
+            )
+            == culprit
+        )
         if is_own_declaration:
             return (
                 f"type '{t!r}' cannot be used as {use}: its recursive instantiations "

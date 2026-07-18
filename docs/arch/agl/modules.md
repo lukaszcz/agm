@@ -1,6 +1,6 @@
 # AgL Modules
 
-AgL has a file-based module system. A program with `import` declarations is compiled as a *module graph* rather than a single file: loading discovers the transitive set of modules, and graph-aware variants of scope, typecheck, match compilation, and lowering operate over the whole graph at once. Single-file programs bypass this machinery entirely and use the single-module passes. The two modes share the same AST, value model, and evaluator (see [index.md](agl/index.md)).
+AgL has a file-based module system. Every production program is loaded into a `ModuleGraph`: the entry module, its transitive imports, and the standard-library prelude. Program-level scope, typecheck, match compilation, and lowering passes orchestrate per-module workers over that loaded program. The AST, value model, and evaluator are shared throughout (see [index.md](agl/index.md)).
 
 ## Module Identity and Roots
 
@@ -12,14 +12,14 @@ The loader parses the entry source, then does a breadth-first traversal of trans
 
 A module declaring an `extern def` (Python FFI) needs a companion Python file at its own path with a `.py` suffix. The companion path is derived from the module's canonical path, not searched, so root-ambiguity rules never apply to it; the loader records it and verifies it exists during graph loading, while the import itself happens in the execution layer ([execution/evaluator.md](agl/execution/evaluator.md)).
 
-## Graph-Aware Passes
+## Program Passes
 
-The graph passes generalize the single-module passes to whole-graph operation while preserving cross-module forward references and mutual recursion:
+Program passes coordinate the module workers while preserving cross-module forward references and mutual recursion:
 
-- **Scope.** A whole-graph pre-pass computes per-module export maps — each public name mapped to its originating module, with re-export chains resolved to their origin — and collects all public declarations before any body is resolved. Unqualified references that clash across modules are an error at the reference site; qualified (`module::name`), self (`::name`), and module-qualified constructor references resolve to specific modules. Non-entry modules are restricted to declarations (no top-level statements, agents, or params).
+- **Scope.** A whole-program pre-pass computes per-module export maps — each public name mapped to its originating module, with re-export chains resolved to their origin — and collects all public declarations before any body is resolved. Unqualified references that clash across modules are an error at the reference site; qualified (`module::name`), self (`::name`), and module-qualified constructor references resolve to specific modules. Non-entry modules are restricted to declarations (no top-level statements, agents, or params).
 - **Typecheck.** Type identity becomes module-qualified, so same-named types in different modules are distinct. Because nominal types are shape-free handles ([frontend/types.md](agl/frontend/types.md)), declarations resolve in a fixed order with no dependency ordering — forward references and type cycles spanning modules work exactly like same-module ones, while alias cycles remain illegal. The whole-table analyses run once over the shared `TypeTable`, and function schemes are keyed by globally unique declaration node id, so cross-file mutual recursion is order-independent.
-- **Match compilation.** Every source case in every checked module is compiled, including cases entry code never calls. The graph artifact carries a total per-module mapping; any coverage or redundancy issue prevents lowering and is reported with its originating source label.
-- **Lowering.** The graph links into one executable program; library initializers run in dependency order with the entry module last, and cross-module calls use linked ids directly, never resolver or checker side tables.
+- **Match compilation.** Every source case in every checked module is compiled, including cases entry code never calls. The program artifact carries a total per-module mapping; any coverage or redundancy issue prevents lowering and is reported with its originating source label.
+- **Lowering.** The program links into one executable program; library initializers run in dependency order with the entry module last, and cross-module calls use linked ids directly, never resolver or checker side tables.
 
 ## Source Attribution
 
@@ -28,6 +28,6 @@ Every source span carries a source id identifying its origin file, so multi-file
 ## Code Entry Points
 
 - `src/agm/agl/modules/` — module identity, root sets, resolver, and the BFS loader.
-- `src/agm/agl/scope/`, `src/agm/agl/typecheck/`, `src/agm/agl/matchcompile/`, `src/agm/agl/lower/` — the graph-aware pass variants alongside their single-module counterparts.
+- `src/agm/agl/scope/`, `src/agm/agl/typecheck/`, `src/agm/agl/matchcompile/`, `src/agm/agl/lower/` — program passes and their per-module workers.
 - `src/agm/config/module_roots.py` — module-root configuration.
-- Tests: `tests/test_agl_modules_*.py`, `tests/test_agl_scope_graph.py`, `tests/test_agl_scope_imports.py`, `tests/test_agl_typecheck_graph.py`, `tests/test_agl_multifile.py` (fixtures under `tests/agl/multi_file/`).
+- Tests: `tests/test_agl_modules_*.py`, `tests/test_agl_scope_program.py`, `tests/test_agl_scope_imports.py`, `tests/test_agl_typecheck_program.py`, `tests/test_agl_multifile.py` (fixtures under `tests/agl/multi_file/`).

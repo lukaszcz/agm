@@ -203,9 +203,7 @@ def test_is_embedded_project_true_for_git_repo_with_agm_dir(
     assert is_embedded_project(agm_dir) is True
 
 
-def test_is_embedded_project_false_without_agm_dir(
-    tmp_path: Path, env: dict[str, str]
-) -> None:
+def test_is_embedded_project_false_without_agm_dir(tmp_path: Path, env: dict[str, str]) -> None:
     project = tmp_path / "proj"
     project.mkdir()
     subprocess.run(["git", "init", "-b", "main"], cwd=project, env=env, check=True)
@@ -243,9 +241,7 @@ def test_is_project_dir_true_for_workspace_with_git_repo(
     assert is_project_dir(project) is True
 
 
-def test_is_project_dir_true_for_embedded_project(
-    tmp_path: Path, env: dict[str, str]
-) -> None:
+def test_is_project_dir_true_for_embedded_project(tmp_path: Path, env: dict[str, str]) -> None:
     project = tmp_path / "proj"
     project.mkdir()
     agm_dir = project / ".agm"
@@ -1008,9 +1004,7 @@ def test_copy_config_merges_dotenv_files_with_config_env_precedence(tmp_path: Pa
 
     copy_config(project_dir=project, target=target, branch="feat", cwd=None)
 
-    assert (target / ".env").read_text(encoding="utf-8") == (
-        "BASE_ONLY=base\nSHARED=base-env\n"
-    )
+    assert (target / ".env").read_text(encoding="utf-8") == ("BASE_ONLY=base\nSHARED=base-env\n")
     target_local = (target / ".env.local").read_text(encoding="utf-8")
     assert "BASE_ONLY=base" in target_local
     assert "LOCAL_ONLY=base-local" in target_local
@@ -1161,9 +1155,7 @@ def test_current_workspace_or_project_root_uses_proj_dir_env_with_agm_dir(
     agm_dir = project / ".agm"
     agm_dir.mkdir(parents=True)
 
-    assert current_workspace_or_project_root(
-        tmp_path, env={"PROJ_DIR": str(agm_dir)}
-    ) == agm_dir
+    assert current_workspace_or_project_root(tmp_path, env={"PROJ_DIR": str(agm_dir)}) == agm_dir
 
 
 def test_discover_current_project_dir_uses_proj_dir_env_with_agm_dir(
@@ -1174,9 +1166,7 @@ def test_discover_current_project_dir_uses_proj_dir_env_with_agm_dir(
     agm_dir.mkdir(parents=True)
     subprocess.run(["git", "init", "-b", "main"], cwd=project, env=env, check=True)
 
-    assert discover_current_project_dir(
-        tmp_path, env={"PROJ_DIR": str(agm_dir)}
-    ) == agm_dir
+    assert discover_current_project_dir(tmp_path, env={"PROJ_DIR": str(agm_dir)}) == agm_dir
 
 
 def test_current_workspace_or_project_root_falls_back_to_git_checkout_root(
@@ -1235,9 +1225,7 @@ class TestCurrentProjectDirFallbackPaths:
 
 
 class TestCurrentWorkspace:
-    def test_returns_none_when_cwd_not_in_project(
-        self, tmp_path: Path
-    ) -> None:
+    def test_returns_none_when_cwd_not_in_project(self, tmp_path: Path) -> None:
         project = tmp_path / "proj"
         (project / "repo").mkdir(parents=True)
         other = tmp_path / "other"
@@ -1270,9 +1258,7 @@ class TestCurrentWorkspace:
         def fake_is_git_repo(p: Path) -> bool:
             return True
 
-        def fake_project_dir(
-            cwd: Path | None = None, *, env: dict[str, str] | None = None
-        ) -> Path:
+        def fake_project_dir(cwd: Path | None = None, *, env: dict[str, str] | None = None) -> Path:
             del env
             return project
 
@@ -1305,9 +1291,7 @@ class TestCurrentWorkspace:
         def fake_is_git_repo(p: Path) -> bool:
             return True
 
-        def fake_project_dir(
-            cwd: Path | None = None, *, env: dict[str, str] | None = None
-        ) -> Path:
+        def fake_project_dir(cwd: Path | None = None, *, env: dict[str, str] | None = None) -> Path:
             del env
             return project
 
@@ -1513,9 +1497,7 @@ class TestCurrentWorkspaceWithRepoDirEnv:
         assert result.branch == "feat"
         assert result.is_main is False
 
-    def test_repo_dir_env_var_points_to_repo_dir(
-        self, tmp_path: Path, env: dict[str, str]
-    ) -> None:
+    def test_repo_dir_env_var_points_to_repo_dir(self, tmp_path: Path, env: dict[str, str]) -> None:
         """When REPO_DIR points to the main repo_dir, checkout is main."""
         project = tmp_path / "proj"
         repo = project / "repo"
@@ -1554,9 +1536,7 @@ class TestCurrentProjectDirGitCommonDirFindsProject:
 
 
 class TestCurrentWorkspaceCwdNotInProject:
-    def test_returns_none_when_cwd_not_in_project(
-        self, tmp_path: Path
-    ) -> None:
+    def test_returns_none_when_cwd_not_in_project(self, tmp_path: Path) -> None:
         """current_workspace returns None when cwd is not inside project."""
         project = tmp_path / "proj"
         (project / "repo").mkdir(parents=True)
@@ -1695,9 +1675,7 @@ def test_project_name_reads_from_config_toml(tmp_path: Path) -> None:
     (project / "repo").mkdir()
     config_dir = project / "config"
     config_dir.mkdir()
-    (config_dir / "config.toml").write_text(
-        '[project]\nname = "custom-name"\n', encoding="utf-8"
-    )
+    (config_dir / "config.toml").write_text('[project]\nname = "custom-name"\n', encoding="utf-8")
 
     assert project_name(project) == "custom-name"
 
@@ -1708,9 +1686,7 @@ def test_project_name_ignores_empty_name_in_config(tmp_path: Path) -> None:
     (project / "repo").mkdir()
     config_dir = project / "config"
     config_dir.mkdir()
-    (config_dir / "config.toml").write_text(
-        '[project]\nname = ""\n', encoding="utf-8"
-    )
+    (config_dir / "config.toml").write_text('[project]\nname = ""\n', encoding="utf-8")
 
     assert project_name(project) == "myproj"
 
@@ -1721,16 +1697,12 @@ def test_project_name_ignores_non_string_name_in_config(tmp_path: Path) -> None:
     (project / "repo").mkdir()
     config_dir = project / "config"
     config_dir.mkdir()
-    (config_dir / "config.toml").write_text(
-        '[project]\nname = 42\n', encoding="utf-8"
-    )
+    (config_dir / "config.toml").write_text("[project]\nname = 42\n", encoding="utf-8")
 
     assert project_name(project) == "myproj"
 
 
-def test_project_name_for_embedded_project(
-    tmp_path: Path, env: dict[str, str]
-) -> None:
+def test_project_name_for_embedded_project(tmp_path: Path, env: dict[str, str]) -> None:
     project = tmp_path / "myproj"
     project.mkdir()
     agm_dir = project / ".agm"

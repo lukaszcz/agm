@@ -377,8 +377,7 @@ def run_subprocess(
         )
         if timed_out:
             print(
-                f"Idle timeout ({idle_timeout}s) exceeded, "
-                "process terminated.",
+                f"Idle timeout ({idle_timeout}s) exceeded, process terminated.",
                 file=sys.stderr,
             )
             raise SystemExit(124)
@@ -456,8 +455,7 @@ def run_capture(
         raise spawn_exc
     if result.timed_out:
         print(
-            f"Idle timeout ({idle_timeout}s) exceeded, "
-            "process terminated.",
+            f"Idle timeout ({idle_timeout}s) exceeded, process terminated.",
             file=sys.stderr,
         )
         raise SystemExit(124)

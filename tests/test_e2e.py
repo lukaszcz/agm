@@ -1110,9 +1110,9 @@ class TestConfigEnv:
         result = run_agm(["config", "env"], env=env, cwd=str(project))
 
         assert result.returncode == 0
-        assert any(
-            line == f"export PROJ_DIR={project}" for line in result.stdout.splitlines()
-        ), f"Expected 'export PROJ_DIR={project}' in output; got:\n{result.stdout}"
+        assert any(line == f"export PROJ_DIR={project}" for line in result.stdout.splitlines()), (
+            f"Expected 'export PROJ_DIR={project}' in output; got:\n{result.stdout}"
+        )
 
 
 # ── agm config update ───────────────────────────────────────────────────────
@@ -1854,9 +1854,7 @@ class TestWorkspaceShellRegen:
         # Start empty: only the directory exists.
         assert not (shell_dir / "shell").exists()
 
-        result = run_agm(
-            ["workspace", "shell-regen", str(shell_dir)], env=env, cwd=str(tmp_path)
-        )
+        result = run_agm(["workspace", "shell-regen", str(shell_dir)], env=env, cwd=str(tmp_path))
 
         assert result.returncode == 0
         assert (shell_dir / "shell").is_file()
@@ -1864,14 +1862,14 @@ class TestWorkspaceShellRegen:
         assert (shell_dir / "bash" / "bashrc").is_file()
         assert (shell_dir / "sh" / "shrc").is_file()
 
-    def test_errors_when_dir_missing(
-        self, tmp_path: Path, env: dict[str, str]
-    ) -> None:
+    def test_errors_when_dir_missing(self, tmp_path: Path, env: dict[str, str]) -> None:
         env["XDG_CACHE_HOME"] = str(tmp_path / "cache")
         shell_dir = _workspace_shell_path(env, "proj/missing").parent
         result = run_agm(
             ["workspace", "shell-regen", str(shell_dir)],
-            env=env, cwd=str(tmp_path), check=False,
+            env=env,
+            cwd=str(tmp_path),
+            check=False,
         )
         assert result.returncode != 0
 
@@ -2003,9 +2001,7 @@ class TestClose:
         run_agm(["open", "-d", "feat/keep-workspace"], env=env, cwd=str(project))
         wrapper = _workspace_shell_path(env, "proj/feat/keep-workspace")
 
-        run_agm(
-            ["close", "--keep-workspace", "feat/keep-workspace"], env=env, cwd=str(project)
-        )
+        run_agm(["close", "--keep-workspace", "feat/keep-workspace"], env=env, cwd=str(project))
 
         assert worktree.is_dir()
         assert workspace_config.is_dir()
@@ -2077,9 +2073,7 @@ class TestWorkspaceOpenClose:
     end-to-end using the fake-tmux harness, mirroring ``TestOpen``/``TestClose``.
     """
 
-    def test_workspace_open_creates_tmux_session(
-        self, tmp_path: Path, env: dict[str, str]
-    ) -> None:
+    def test_workspace_open_creates_tmux_session(self, tmp_path: Path, env: dict[str, str]) -> None:
         """``agm workspace open BRANCH`` creates a detached tmux session."""
         bare = make_bare_repo(tmp_path / "origin.git", env)
         project = _make_project(tmp_path, bare, env, name="myproj")
@@ -2109,9 +2103,7 @@ class TestWorkspaceOpenClose:
         wrapper = _workspace_shell_path(env, "proj/feat/wsp-close")
         assert wrapper.exists()
 
-        result = run_agm(
-            ["workspace", "close", "feat/wsp-close"], env=env, cwd=str(project)
-        )
+        result = run_agm(["workspace", "close", "feat/wsp-close"], env=env, cwd=str(project))
 
         assert not worktree.exists()
         assert not wrapper.exists()
@@ -4788,9 +4780,7 @@ class TestLoop:
         (work / ".agent-files" / "tasks").mkdir(parents=True)
         (work / ".agent-files" / "tasks" / "PROGRESS.md").write_text("started\n")
 
-        (home / ".agm" / "config.toml").write_text(
-            '[loop.claude]\nno_selector = true\n'
-        )
+        (home / ".agm" / "config.toml").write_text("[loop.claude]\nno_selector = true\n")
 
         result = run_agm(
             ["loop", "--no-selector", "claude", "-p", "--model", "sonnet"], env=env, cwd=str(work)
@@ -4874,9 +4864,7 @@ class TestLoop:
         (work / ".agent-files" / "tasks").mkdir(parents=True)
         (work / ".agent-files" / "tasks" / "PROGRESS.md").write_text("started\n")
 
-        (home / ".agm" / "config.toml").write_text(
-            '[loop.claude]\nno_selector = true\n'
-        )
+        (home / ".agm" / "config.toml").write_text("[loop.claude]\nno_selector = true\n")
 
         result = run_agm(
             ["loop", "--no-selector", "claude", "--", "-p", "%%"], env=env, cwd=str(work)
@@ -5625,9 +5613,7 @@ class TestLoop:
         (work / ".agent-files" / "tasks").mkdir(parents=True)
         (work / ".agent-files" / "tasks" / "PROGRESS.md").write_text("started\n")
 
-        (home / ".agm" / "config.toml").write_text(
-            '[loop.claude]\nno_selector = true\n'
-        )
+        (home / ".agm" / "config.toml").write_text("[loop.claude]\nno_selector = true\n")
 
         result = run_agm(["loop", "--no-selector", "claude", "--no-log"], env=env, cwd=str(work))
 
@@ -6955,8 +6941,7 @@ class TestTmuxOpenSession:
         # (logged as a single CMD entry with ';' separators) must not
         # contain display-message as a direct subcommand.
         compound_lines = [
-            line for line in log.splitlines()
-            if line.startswith("CMD:") and ";" in line
+            line for line in log.splitlines() if line.startswith("CMD:") and ";" in line
         ]
         for line in compound_lines:
             assert "display-message" not in line, (
@@ -7823,9 +7808,7 @@ class TestListCommand:
         # Branch worktrees are sorted alphabetically after the main repo.
         assert lines[1:] == ["  feat/alpha", "  feat/beta"]
 
-    def test_verbose_includes_worktree_paths(
-        self, tmp_path: Path, env: dict[str, str]
-    ) -> None:
+    def test_verbose_includes_worktree_paths(self, tmp_path: Path, env: dict[str, str]) -> None:
         project = _make_workspace_project(tmp_path, env)
         run_agm(["wt", "new", "feat/x"], env=env, cwd=str(project / "repo"))
 
@@ -7870,9 +7853,7 @@ class TestDepListCommand:
         assert result.returncode == 0
         assert "lib/main" in result.stdout.splitlines()
 
-    def test_verbose_includes_checkout_path(
-        self, tmp_path: Path, env: dict[str, str]
-    ) -> None:
+    def test_verbose_includes_checkout_path(self, tmp_path: Path, env: dict[str, str]) -> None:
         bare_main = make_bare_repo(tmp_path / "main.git", env)
         bare_dep = make_bare_repo(tmp_path / "lib.git", env)
         project = _make_project(tmp_path, bare_main, env)
@@ -7884,9 +7865,7 @@ class TestDepListCommand:
         dep_path = project / "deps" / "lib" / "main"
         assert f"lib/main  {dep_path}" in result.stdout
 
-    def test_all_lists_every_checkout_on_disk(
-        self, tmp_path: Path, env: dict[str, str]
-    ) -> None:
+    def test_all_lists_every_checkout_on_disk(self, tmp_path: Path, env: dict[str, str]) -> None:
         bare_main = make_bare_repo(tmp_path / "main.git", env)
         bare_dep = make_bare_repo(tmp_path / "lib.git", env)
         project = _make_project(tmp_path, bare_main, env)
@@ -7904,9 +7883,7 @@ class TestDepListCommand:
         assert "lib/main" in lines
         assert "lib/feat/api" in lines
 
-    def test_empty_project_prints_nothing(
-        self, tmp_path: Path, env: dict[str, str]
-    ) -> None:
+    def test_empty_project_prints_nothing(self, tmp_path: Path, env: dict[str, str]) -> None:
         project = _make_workspace_project(tmp_path, env)
 
         result = run_agm(["dep", "list"], env=env, cwd=str(project / "repo"))
@@ -7942,24 +7919,18 @@ class TestExecCommand:
         assert result.returncode == 0
         assert result.stdout.strip() == "inline ok"
 
-    def test_exec_passes_named_param_to_program(
-        self, tmp_path: Path, env: dict[str, str]
-    ) -> None:
+    def test_exec_passes_named_param_to_program(self, tmp_path: Path, env: dict[str, str]) -> None:
         work = tmp_path / "work"
         work.mkdir()
         program = work / "greet.agl"
-        program.write_text(
-            "param name\nprint \"hi \"\nprint name\n", encoding="utf-8"
-        )
+        program.write_text('param name\nprint "hi "\nprint name\n', encoding="utf-8")
 
         result = run_agm(["exec", str(program), "--name", "world"], env=env, cwd=str(work))
 
         assert result.returncode == 0
         assert result.stdout.splitlines() == ["hi ", "world"]
 
-    def test_exec_missing_file_argument_errors(
-        self, tmp_path: Path, env: dict[str, str]
-    ) -> None:
+    def test_exec_missing_file_argument_errors(self, tmp_path: Path, env: dict[str, str]) -> None:
         work = tmp_path / "work"
         work.mkdir()
 
@@ -7989,7 +7960,7 @@ class TestExecCommand:
         work.mkdir()
         program = work / "ask.agl"
         program.write_text(
-            "agent reviewer\nlet r = ask(\"ping\", agent = reviewer)\nprint r\n",
+            'agent reviewer\nlet r = ask("ping", agent = reviewer)\nprint r\n',
             encoding="utf-8",
         )
         # Install a fake runner named ``claude`` (the built-in default) that
@@ -8048,7 +8019,7 @@ class TestExecCommand:
             'count=$(cat "$IMPL_COUNT" 2>/dev/null || echo 0)\n'
             'count=$((count + 1)); echo "$count" > "$IMPL_COUNT"\n'
             "if [[ $count -eq 1 ]]; then printf 'v1'; "
-            "else printf '{\"$case\":\"Complete\",\"output\":\"v2\"}'; fi\n"
+            'else printf \'{"$case":"Complete","output":"v2"}\'; fi\n'
         )
         review_runner = bin_dir / "review-runner"
         review_runner.write_text(
@@ -8056,8 +8027,8 @@ class TestExecCommand:
             'count=$(cat "$REVIEW_COUNT" 2>/dev/null || echo 0)\n'
             'count=$((count + 1)); echo "$count" > "$REVIEW_COUNT"\n'
             "if [[ $count -eq 1 ]]; then "
-            "printf '{\"$case\":\"Fail\",\"issues\":[{\"description\":\"add tests\"}]}'; "
-            "else printf '{\"$case\":\"Pass\"}'; fi\n"
+            'printf \'{"$case":"Fail","issues":[{"description":"add tests"}]}\'; '
+            'else printf \'{"$case":"Pass"}\'; fi\n'
         )
         for runner in (impl_runner, review_runner):
             runner.chmod(runner.stat().st_mode | stat.S_IEXEC)
@@ -8103,7 +8074,7 @@ class TestExecCommand:
             'count=$((count + 1)); echo "$count" > "$COUNT_FILE"\n'
             'for arg in "$@"; do [[ "$arg" == @* ]] && cat "${arg#@}" >> "$PROMPT_LOG"; done\n'
             "if [[ $count -eq 1 ]]; then printf 'not json'; "
-            "else printf '{\"$case\":\"Pass\"}'; fi\n"
+            'else printf \'{"$case":"Pass"}\'; fi\n'
         )
         runner.chmod(runner.stat().st_mode | stat.S_IEXEC)
         env["PATH"] = f"{bin_dir}:{env['PATH']}"
@@ -8158,14 +8129,10 @@ class TestReplCommand:
         # The evaluated expression yields exactly 3 on a standalone output line.
         assert any(line.split()[-1:] == ["3"] for line in result.stdout.splitlines())
 
-    def test_repl_help_lists_meta_commands(
-        self, tmp_path: Path, env: dict[str, str]
-    ) -> None:
+    def test_repl_help_lists_meta_commands(self, tmp_path: Path, env: dict[str, str]) -> None:
         work = tmp_path / "work"
         work.mkdir()
-        result = run_agm(
-            ["repl"], env=env, cwd=str(work), input=":help\n:quit\n"
-        )
+        result = run_agm(["repl"], env=env, cwd=str(work), input=":help\n:quit\n")
 
         assert result.returncode == 0
         assert ":help" in result.stdout
@@ -8198,21 +8165,13 @@ class TestReplCommand:
             ["repl"],
             env=env,
             cwd=str(work),
-            input=(
-                "var n = 1\n"
-                "n := 5\n"
-                "def double(x: int) -> int = x * 2\n"
-                "double(n)\n"
-                ":quit\n"
-            ),
+            input=("var n = 1\nn := 5\ndef double(x: int) -> int = x * 2\ndouble(n)\n:quit\n"),
         )
 
         assert result.returncode == 0
         assert any(line.split()[-1:] == ["10"] for line in result.stdout.splitlines())
 
-    def test_repl_with_configured_lib_root(
-        self, tmp_path: Path, env: dict[str, str]
-    ) -> None:
+    def test_repl_with_configured_lib_root(self, tmp_path: Path, env: dict[str, str]) -> None:
         """A configured [modules] lib_root is resolved and used by the REPL."""
         home = Path(env["HOME"])
         agm_home = home / ".agm"
@@ -8222,9 +8181,7 @@ class TestReplCommand:
         lib_dir.mkdir()
         (lib_dir / "math.agl").write_text("def double(n: int) -> int = n * 2\n")
         # Write a config.toml with a lib_root pointing to our lib dir.
-        (agm_home / "config.toml").write_text(
-            f"[modules]\nlib_root = {str(lib_dir)!r}\n"
-        )
+        (agm_home / "config.toml").write_text(f"[modules]\nlib_root = {str(lib_dir)!r}\n")
         work = tmp_path / "work"
         work.mkdir()
         result = run_agm(
@@ -8269,9 +8226,7 @@ class TestReviewCommand:
         assert len(saved) == 1
         assert saved[0].read_text() == "review body\n"
 
-    def test_no_review_file_disables_saving(
-        self, tmp_path: Path, env: dict[str, str]
-    ) -> None:
+    def test_no_review_file_disables_saving(self, tmp_path: Path, env: dict[str, str]) -> None:
         fake_runner = tmp_path / "bin" / "reviewer"
         fake_runner.parent.mkdir(parents=True)
         fake_runner.write_text("#!/bin/bash\nprintf 'out\\n'\n")
@@ -8305,7 +8260,7 @@ class TestReviewCommand:
         fake_runner.parent.mkdir(parents=True)
         # Echo the received prompt file path so we can assert the custom
         # prompt file was forwarded to the runner as @TARGET.
-        fake_runner.write_text("#!/bin/bash\ncat \"${1#@}\"\n")
+        fake_runner.write_text('#!/bin/bash\ncat "${1#@}"\n')
         fake_runner.chmod(fake_runner.stat().st_mode | stat.S_IEXEC)
         env["PATH"] = f"{fake_runner.parent}:{env['PATH']}"
 
@@ -8317,8 +8272,10 @@ class TestReviewCommand:
         result = run_agm(
             [
                 "review",
-                "--runner", "reviewer",
-                "--prompt-file", str(custom_prompt),
+                "--runner",
+                "reviewer",
+                "--prompt-file",
+                str(custom_prompt),
                 "--no-review-file",
             ],
             env=env,
@@ -8328,9 +8285,7 @@ class TestReviewCommand:
         assert result.returncode == 0
         assert "custom review prompt" in result.stdout
 
-    def test_missing_runner_errors_cleanly(
-        self, tmp_path: Path, env: dict[str, str]
-    ) -> None:
+    def test_missing_runner_errors_cleanly(self, tmp_path: Path, env: dict[str, str]) -> None:
         home = Path(env["HOME"])
         prompt_dir = home / ".agm" / "prompts"
         prompt_dir.mkdir(parents=True)
@@ -8349,12 +8304,10 @@ class TestReviewCommand:
         assert result.returncode != 0
         assert "not installed" in result.stderr.lower()
 
-    def test_inline_prompt_is_used(
-        self, tmp_path: Path, env: dict[str, str]
-    ) -> None:
+    def test_inline_prompt_is_used(self, tmp_path: Path, env: dict[str, str]) -> None:
         fake_runner = tmp_path / "bin" / "reviewer"
         fake_runner.parent.mkdir(parents=True)
-        fake_runner.write_text("#!/bin/bash\ncat \"${1#@}\"\n")
+        fake_runner.write_text('#!/bin/bash\ncat "${1#@}"\n')
         fake_runner.chmod(fake_runner.stat().st_mode | stat.S_IEXEC)
         env["PATH"] = f"{fake_runner.parent}:{env['PATH']}"
 
@@ -8364,8 +8317,10 @@ class TestReviewCommand:
         result = run_agm(
             [
                 "review",
-                "--runner", "reviewer",
-                "--prompt", "inline review text",
+                "--runner",
+                "reviewer",
+                "--prompt",
+                "inline review text",
                 "--no-review-file",
             ],
             env=env,
@@ -8384,7 +8339,7 @@ class TestReviseCommand:
     ) -> None:
         fake_runner = tmp_path / "bin" / "reviser"
         fake_runner.parent.mkdir(parents=True)
-        fake_runner.write_text("#!/bin/bash\ncat \"${1#@}\"\n")
+        fake_runner.write_text('#!/bin/bash\ncat "${1#@}"\n')
         fake_runner.chmod(fake_runner.stat().st_mode | stat.S_IEXEC)
         env["PATH"] = f"{fake_runner.parent}:{env['PATH']}"
 
@@ -8409,9 +8364,7 @@ class TestReviseCommand:
         # revise.md prompt references the review file via $REVIEW_FILE.
         assert "revise prompt" in result.stdout
 
-    def test_missing_prompt_file_errors_cleanly(
-        self, tmp_path: Path, env: dict[str, str]
-    ) -> None:
+    def test_missing_prompt_file_errors_cleanly(self, tmp_path: Path, env: dict[str, str]) -> None:
         home = Path(env["HOME"])
         prompt_dir = home / ".agm" / "prompts"
         prompt_dir.mkdir(parents=True)
@@ -8430,8 +8383,10 @@ class TestReviseCommand:
         result = run_agm(
             [
                 "revise",
-                "--runner", "reviser",
-                "--prompt-file", str(work / "nonexistent-prompt.md"),
+                "--runner",
+                "reviser",
+                "--prompt-file",
+                str(work / "nonexistent-prompt.md"),
                 str(review_file),
             ],
             env=env,
@@ -8442,12 +8397,10 @@ class TestReviseCommand:
         assert result.returncode != 0
         assert "not found" in result.stderr.lower()
 
-    def test_inline_prompt_overrides_default(
-        self, tmp_path: Path, env: dict[str, str]
-    ) -> None:
+    def test_inline_prompt_overrides_default(self, tmp_path: Path, env: dict[str, str]) -> None:
         fake_runner = tmp_path / "bin" / "reviser"
         fake_runner.parent.mkdir(parents=True)
-        fake_runner.write_text("#!/bin/bash\ncat \"${1#@}\"\n")
+        fake_runner.write_text('#!/bin/bash\ncat "${1#@}"\n')
         fake_runner.chmod(fake_runner.stat().st_mode | stat.S_IEXEC)
         env["PATH"] = f"{fake_runner.parent}:{env['PATH']}"
 
@@ -8459,8 +8412,10 @@ class TestReviseCommand:
         result = run_agm(
             [
                 "revise",
-                "--runner", "reviser",
-                "--prompt", "inline revise text",
+                "--runner",
+                "reviser",
+                "--prompt",
+                "inline revise text",
                 str(review_file),
             ],
             env=env,
@@ -8485,14 +8440,14 @@ class TestRefineCommand:
         fake_runner.write_text(
             "#!/bin/bash\n"
             f'state_file="{state_file}"\n'
-            "role=\"$1\"\n"  # first arg distinguishes the role (passed via runner alias)
-            'count=0\n'
+            'role="$1"\n'  # first arg distinguishes the role (passed via runner alias)
+            "count=0\n"
             'if [[ -f "$state_file" ]]; then count="$(cat "$state_file")"; fi\n'
-            'count=$((count + 1))\n'
+            "count=$((count + 1))\n"
             'printf "%s" "$count" > "$state_file"\n'
             'case "$count" in\n'
-            '  1) printf "issues found\\n" ;;\n'      # review output
-            '  *) printf "COMPLETE\\n" ;;\n'           # revise output
+            '  1) printf "issues found\\n" ;;\n'  # review output
+            '  *) printf "COMPLETE\\n" ;;\n'  # revise output
             "esac\n"
         )
         fake_runner.chmod(fake_runner.stat().st_mode | stat.S_IEXEC)
@@ -8533,15 +8488,15 @@ class TestRefineCommand:
         fake_runner.write_text(
             "#!/bin/bash\n"
             f'state_file="{state_file}"\n'
-            'count=0\n'
+            "count=0\n"
             'if [[ -f "$state_file" ]]; then count="$(cat "$state_file")"; fi\n'
-            'count=$((count + 1))\n'
+            "count=$((count + 1))\n"
             'printf "%s" "$count" > "$state_file"\n'
             'case "$count" in\n'
-            '  1) printf "review-1\\n" ;;\n'     # review step 1
-            '  2) printf "CONTINUE\\n" ;;\n'      # revise step 1 → redo review
-            '  3) printf "review-2\\n" ;;\n'     # review step 2
-            '  *) printf "COMPLETE\\n" ;;\n'       # revise step 2 → done
+            '  1) printf "review-1\\n" ;;\n'  # review step 1
+            '  2) printf "CONTINUE\\n" ;;\n'  # revise step 1 → redo review
+            '  3) printf "review-2\\n" ;;\n'  # review step 2
+            '  *) printf "COMPLETE\\n" ;;\n'  # revise step 2 → done
             "esac\n"
         )
         fake_runner.chmod(fake_runner.stat().st_mode | stat.S_IEXEC)
@@ -8569,9 +8524,7 @@ class TestRefineCommand:
         assert "review-2" in result.stdout
         assert "COMPLETE" in result.stdout
 
-    def test_refine_respects_max_steps_limit(
-        self, tmp_path: Path, env: dict[str, str]
-    ) -> None:
+    def test_refine_respects_max_steps_limit(self, tmp_path: Path, env: dict[str, str]) -> None:
         # The reviser never returns COMPLETE; refine must stop after max_steps.
         fake_runner = tmp_path / "bin" / "runner"
         fake_runner.parent.mkdir(parents=True)

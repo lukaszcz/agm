@@ -319,9 +319,7 @@ class TestWriteStream:
 
 
 class TestPrintDryRunCommand:
-    def test_prints_labeled_command_to_stdout(
-        self, capsys: pytest.CaptureFixture[str]
-    ) -> None:
+    def test_prints_labeled_command_to_stdout(self, capsys: pytest.CaptureFixture[str]) -> None:
         _print_dry_run_command("runner", ["myrunner", "--verbose"])
         out, _ = capsys.readouterr()
         assert "command [runner]:" in out
@@ -335,16 +333,12 @@ class TestPrintDryRunCommand:
 
 
 class TestPrintDryRunPrompt:
-    def test_prints_formatted_prompt_line(
-        self, capsys: pytest.CaptureFixture[str]
-    ) -> None:
+    def test_prints_formatted_prompt_line(self, capsys: pytest.CaptureFixture[str]) -> None:
         _print_dry_run_prompt("loop", "/path/to/loop.md")
         out, _ = capsys.readouterr()
         assert out.strip() == "dry-run: prompt [loop]: /path/to/loop.md"
 
-    def test_includes_label_in_output(
-        self, capsys: pytest.CaptureFixture[str]
-    ) -> None:
+    def test_includes_label_in_output(self, capsys: pytest.CaptureFixture[str]) -> None:
         _print_dry_run_prompt("bootstrap", "some text")
         out, _ = capsys.readouterr()
         assert "[bootstrap]" in out
@@ -379,17 +373,13 @@ class TestPreparePrompt:
         effective = tmp_path / "loop.md.tmp"
         captured: dict[str, object] = {}
 
-        def fake_preprocess(
-            path: Path, *, temp_files: list[Path], env: dict[str, str]
-        ) -> Path:
+        def fake_preprocess(path: Path, *, temp_files: list[Path], env: dict[str, str]) -> Path:
             captured["path"] = path
             captured["temp_files"] = temp_files
             captured["env"] = env
             return effective
 
-        monkeypatch.setattr(
-            "agm.commands.loop.step.preprocess_prompt_file", fake_preprocess
-        )
+        monkeypatch.setattr("agm.commands.loop.step.preprocess_prompt_file", fake_preprocess)
         env = {"MY_VAR": "value"}
         _prepare_prompt("bootstrap", source, temp_files=[], env=env)
         assert captured["path"] == source
@@ -413,9 +403,7 @@ class TestPreparePrompt:
 
 
 class TestPrepareRuntime:
-    def _setup_home_with_prompts(
-        self, tmp_path: Path, prompts: list[str] | None = None
-    ) -> Path:
+    def _setup_home_with_prompts(self, tmp_path: Path, prompts: list[str] | None = None) -> Path:
         if prompts is None:
             prompts = ["loop.md", "select.md", "implement.md"]
         home = tmp_path / "home"
@@ -808,7 +796,9 @@ class TestExecuteSingleStep:
             selector_command=["fake-selector"],
         )
         runtime = _make_runtime(
-            tmp_path, select_invocation=invocation, loop_prompt=None,
+            tmp_path,
+            select_invocation=invocation,
+            loop_prompt=None,
             implement_prompt_file=tmp_path / "implement.md",
         )
 
@@ -889,9 +879,7 @@ class TestExecuteSingleStep:
         task_file.write_text("do task\n", encoding="utf-8")
 
         implement_file = tmp_path / "implement.md"
-        implement_file.write_text(
-            "Implement the task at ${TASK_FILE}.\n", encoding="utf-8"
-        )
+        implement_file.write_text("Implement the task at ${TASK_FILE}.\n", encoding="utf-8")
 
         invocation = PreparedSelectInvocation(
             source_prompt_file=prompt_file,
@@ -1136,9 +1124,7 @@ class TestCleanupRuntime:
 
 
 class TestStepRun:
-    def _stub_prepare(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> LoopStepRuntime:
+    def _stub_prepare(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> LoopStepRuntime:
         runtime = _make_runtime(tmp_path)
 
         def fake_prepare(args: LoopArgs) -> LoopStepRuntime:
@@ -1215,9 +1201,7 @@ class TestStepRun:
         runtime = _make_runtime(tmp_path)
         cleanup_called = [False]
 
-        monkeypatch.setattr(
-            "agm.commands.loop.step.prepare_runtime", lambda args: runtime
-        )
+        monkeypatch.setattr("agm.commands.loop.step.prepare_runtime", lambda args: runtime)
         monkeypatch.setattr("agm.commands.loop.step.dry_run.enabled", lambda: False)
 
         def fake_execute(r: LoopStepRuntime, *, step_number: int) -> bool:
@@ -1321,9 +1305,7 @@ class TestNextRun:
         home = tmp_path / "home"
         monkeypatch.setenv("HOME", str(home))
         monkeypatch.chdir(tmp_path)
-        monkeypatch.setattr(
-            "agm.commands.loop.select.use_selector_mode", lambda args: False
-        )
+        monkeypatch.setattr("agm.commands.loop.select.use_selector_mode", lambda args: False)
 
         args = _make_loop_select_args(no_selector=True)
         with pytest.raises(SystemExit) as exc_info:
@@ -1340,9 +1322,7 @@ class TestNextRun:
         monkeypatch.chdir(tmp_path)
 
         invocation = self._make_invocation(tmp_path)
-        monkeypatch.setattr(
-            "agm.commands.loop.select.use_selector_mode", lambda args: True
-        )
+        monkeypatch.setattr("agm.commands.loop.select.use_selector_mode", lambda args: True)
         monkeypatch.setattr(
             "agm.commands.loop.select.prepare_select_invocation",
             lambda args, temp_files, env: invocation,
@@ -1380,9 +1360,7 @@ class TestNextRun:
         monkeypatch.chdir(tmp_path)
 
         invocation = self._make_invocation(tmp_path)
-        monkeypatch.setattr(
-            "agm.commands.loop.select.use_selector_mode", lambda args: True
-        )
+        monkeypatch.setattr("agm.commands.loop.select.use_selector_mode", lambda args: True)
         monkeypatch.setattr(
             "agm.commands.loop.select.prepare_select_invocation",
             lambda args, temp_files, env: invocation,
@@ -1410,9 +1388,7 @@ class TestNextRun:
         monkeypatch.chdir(tmp_path)
 
         invocation = self._make_invocation(tmp_path)
-        monkeypatch.setattr(
-            "agm.commands.loop.select.use_selector_mode", lambda args: True
-        )
+        monkeypatch.setattr("agm.commands.loop.select.use_selector_mode", lambda args: True)
         monkeypatch.setattr(
             "agm.commands.loop.select.prepare_select_invocation",
             lambda args, temp_files, env: invocation,
@@ -1422,9 +1398,9 @@ class TestNextRun:
         monkeypatch.setattr("agm.commands.loop.select.loop_env", lambda d: {})
         monkeypatch.setattr(
             "agm.commands.loop.select.run_prompt_command",
-            lambda command, target, *, env, idle_timeout=None: (
-                _ for _ in ()
-            ).throw(KeyboardInterrupt),
+            lambda command, target, *, env, idle_timeout=None: (_ for _ in ()).throw(
+                KeyboardInterrupt
+            ),
         )
 
         args = _make_loop_select_args()
@@ -1440,9 +1416,7 @@ class TestNextRun:
         monkeypatch.chdir(tmp_path)
 
         invocation = self._make_invocation(tmp_path)
-        monkeypatch.setattr(
-            "agm.commands.loop.select.use_selector_mode", lambda args: True
-        )
+        monkeypatch.setattr("agm.commands.loop.select.use_selector_mode", lambda args: True)
         monkeypatch.setattr(
             "agm.commands.loop.select.prepare_select_invocation",
             lambda args, temp_files, env: invocation,
@@ -1474,16 +1448,10 @@ class TestNextRun:
 
 
 class TestLoopRun:
-    def _stub_prepare(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> LoopStepRuntime:
+    def _stub_prepare(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> LoopStepRuntime:
         runtime = _make_runtime(tmp_path)
-        monkeypatch.setattr(
-            "agm.commands.loop.run.step_command.prepare_runtime", lambda a: runtime
-        )
-        monkeypatch.setattr(
-            "agm.commands.loop.run.step_command.cleanup_runtime", lambda r: None
-        )
+        monkeypatch.setattr("agm.commands.loop.run.step_command.prepare_runtime", lambda a: runtime)
+        monkeypatch.setattr("agm.commands.loop.run.step_command.cleanup_runtime", lambda r: None)
         return runtime
 
     def test_loops_until_execute_returns_true(
@@ -1546,12 +1514,8 @@ class TestLoopRun:
             execute_called[0] = True
             return True
 
-        monkeypatch.setattr(
-            "agm.commands.loop.run.step_command.print_dry_run", fake_print_dry_run
-        )
-        monkeypatch.setattr(
-            "agm.commands.loop.run.step_command.execute_single_step", fake_execute
-        )
+        monkeypatch.setattr("agm.commands.loop.run.step_command.print_dry_run", fake_print_dry_run)
+        monkeypatch.setattr("agm.commands.loop.run.step_command.execute_single_step", fake_execute)
 
         args = _make_loop_args()
         loop_run(args)
@@ -1577,26 +1541,20 @@ class TestLoopRun:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         runtime = _make_runtime(tmp_path)
-        monkeypatch.setattr(
-            "agm.commands.loop.run.step_command.prepare_runtime", lambda a: runtime
-        )
+        monkeypatch.setattr("agm.commands.loop.run.step_command.prepare_runtime", lambda a: runtime)
         monkeypatch.setattr("agm.commands.loop.run.dry_run.enabled", lambda: False)
 
         def fake_execute(r: LoopStepRuntime, *, step_number: int) -> bool:
             raise RuntimeError("step failed")
 
-        monkeypatch.setattr(
-            "agm.commands.loop.run.step_command.execute_single_step", fake_execute
-        )
+        monkeypatch.setattr("agm.commands.loop.run.step_command.execute_single_step", fake_execute)
 
         cleanup_called = [False]
 
         def fake_cleanup(r: LoopStepRuntime) -> None:
             cleanup_called[0] = True
 
-        monkeypatch.setattr(
-            "agm.commands.loop.run.step_command.cleanup_runtime", fake_cleanup
-        )
+        monkeypatch.setattr("agm.commands.loop.run.step_command.cleanup_runtime", fake_cleanup)
 
         args = _make_loop_args()
         with pytest.raises(RuntimeError):
@@ -1899,9 +1857,7 @@ class TestExecuteSingleStepWithResolvedPrompt:
         loop_file.write_text("loop\n", encoding="utf-8")
 
         resolved_prompt = ResolvedPrompt(source="inline", effective_file=resolved_file)
-        loop_prompt = PreparedPrompt(
-            label="loop", source_file=loop_file, effective_file=loop_file
-        )
+        loop_prompt = PreparedPrompt(label="loop", source_file=loop_file, effective_file=loop_file)
 
         runtime = _make_runtime(
             tmp_path,
@@ -1964,14 +1920,10 @@ class TestExecuteSingleStepExpandsTaskFileInPrompt:
 
         # Prompt file with ${TASK_FILE} placeholder
         prompt_file_path = tmp_path / "loop.md"
-        prompt_file_path.write_text(
-            "Work on ${TASK_FILE}\n", encoding="utf-8"
-        )
+        prompt_file_path.write_text("Work on ${TASK_FILE}\n", encoding="utf-8")
 
         # Simulate how prepare_runtime builds resolved_prompt + loop_prompt
-        resolved_prompt = ResolvedPrompt(
-            source=prompt_file_path, effective_file=prompt_file_path
-        )
+        resolved_prompt = ResolvedPrompt(source=prompt_file_path, effective_file=prompt_file_path)
         loop_prompt = PreparedPrompt(
             label="loop", source_file=prompt_file_path, effective_file=prompt_file_path
         )
@@ -2035,6 +1987,7 @@ class TestExecuteSingleStepExpandsTaskFileInPrompt:
         # Inline prompt text with ${TASK_FILE} placeholder
         inline_text = "Work on ${TASK_FILE}\n"
         from agm.agent.loop import loop_env
+
         env_no_task = loop_env(tmp_path / "tasks")
         resolved_prompt = ResolvedPrompt(source=inline_text, effective_file=tmp_path / "stub")
         loop_prompt = PreparedPrompt(
@@ -2108,12 +2061,11 @@ class TestCleanupRuntimeViaStep:
 # ---------------------------------------------------------------------------
 
 
-
-
 # ---------------------------------------------------------------------------
 # ---------------------------------------------------------------------------
 # project/layout.py – current_workspace with REPO_DIR env var
 # ---------------------------------------------------------------------------
+
 
 class TestPrepareRuntimeExtraPromptSource:
     def test_extra_prompt_applied_to_loop_prompt(
@@ -2165,9 +2117,7 @@ class TestPrepareRuntimeExtraPromptSource:
         )
         runtime = prepare_runtime(args)
         assert runtime.select_invocation is not None
-        effective_text = runtime.select_invocation.effective_prompt_file.read_text(
-            encoding="utf-8"
-        )
+        effective_text = runtime.select_invocation.effective_prompt_file.read_text(encoding="utf-8")
         assert "extra selector stuff" in effective_text
         cleanup_runtime(runtime)
 
@@ -2250,9 +2200,7 @@ class TestExecuteSingleStepWithExtraPrompt:
             runner_command=["fake-runner"],
             selector_command=["fake-selector"],
         )
-        resolved_prompt = ResolvedPrompt(
-            source=custom_prompt, effective_file=custom_prompt
-        )
+        resolved_prompt = ResolvedPrompt(source=custom_prompt, effective_file=custom_prompt)
         runtime = _make_runtime(
             tmp_path,
             select_invocation=invocation,
@@ -2309,9 +2257,7 @@ class TestNextRunWithExtraSelectorPrompt:
             runner_command=["fake-runner"],
             selector_command=["fake-selector"],
         )
-        monkeypatch.setattr(
-            "agm.commands.loop.select.use_selector_mode", lambda args: True
-        )
+        monkeypatch.setattr("agm.commands.loop.select.use_selector_mode", lambda args: True)
         monkeypatch.setattr(
             "agm.commands.loop.select.prepare_select_invocation",
             lambda args, temp_files, env: invocation,

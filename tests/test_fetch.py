@@ -33,9 +33,7 @@ class TestFetchRepo:
 
         monkeypatch.setattr(fetch_cmd, "worktree_prune", lambda p: None)
         monkeypatch.setattr(fetch_cmd, "fetch_prune_all", lambda p: fetched.append(p))
-        monkeypatch.setattr(
-            fetch_cmd, "sync_remote_tracking_branches", lambda p: synced.append(p)
-        )
+        monkeypatch.setattr(fetch_cmd, "sync_remote_tracking_branches", lambda p: synced.append(p))
 
         monkeypatch.chdir(project_dir)
         fetch_cmd._fetch_repo(project_dir, project_dir)
@@ -91,18 +89,14 @@ class TestFetchRepo:
 
         monkeypatch.setattr(fetch_cmd, "worktree_prune", lambda p: None)
         monkeypatch.setattr(fetch_cmd, "fetch_prune_all", lambda p: fetched.append(p))
-        monkeypatch.setattr(
-            fetch_cmd, "sync_remote_tracking_branches", lambda p: synced.append(p)
-        )
+        monkeypatch.setattr(fetch_cmd, "sync_remote_tracking_branches", lambda p: synced.append(p))
 
         fetch_cmd._fetch_repo(project_dir, repo_dir)
 
         assert fetched == [repo_dir]
         assert synced == [repo_dir]
 
-    def test_prunes_stale_worktrees(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_prunes_stale_worktrees(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """_fetch_repo prunes stale worktree registrations so later steps never
         operate on a worktree directory git already considers gone."""
         project_dir = tmp_path / "proj"

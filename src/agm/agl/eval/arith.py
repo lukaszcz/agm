@@ -89,9 +89,7 @@ def order(op: CmpOp, left: Value, right: Value) -> bool:
         return _cmp(op, left.value, right.value)
     if isinstance(left, TextValue) and isinstance(right, TextValue):
         return _cmp(op, left.value, right.value)
-    raise AssertionError(
-        f"order: cannot compare {type(left).__name__} and {type(right).__name__}"
-    )
+    raise AssertionError(f"order: cannot compare {type(left).__name__} and {type(right).__name__}")
 
 
 def contains(kind: ContainsKind, item: Value, container: Value) -> bool:
@@ -113,9 +111,7 @@ def contains(kind: ContainsKind, item: Value, container: Value) -> bool:
             return False
         case ContainsKind.TEXT:
             if not isinstance(container, TextValue) or not isinstance(item, TextValue):
-                raise AssertionError(
-                    "contains TEXT: expected TextValue+TextValue"
-                )
+                raise AssertionError("contains TEXT: expected TextValue+TextValue")
             return item.value in container.value
         case _ as unreachable:  # pragma: no cover
             assert_never(unreachable)
@@ -220,9 +216,7 @@ def negate(kind: NumericKind, value: Value) -> Value:
     match kind:
         case NumericKind.INT:
             if not isinstance(value, IntValue):
-                raise AssertionError(
-                    f"negate INT: expected IntValue, got {type(value).__name__}"
-                )
+                raise AssertionError(f"negate INT: expected IntValue, got {type(value).__name__}")
             return IntValue(-value.value)
         case NumericKind.DECIMAL:
             if not isinstance(value, DecimalValue):
@@ -237,7 +231,5 @@ def negate(kind: NumericKind, value: Value) -> Value:
 def logical_not(value: Value) -> BoolValue:
     """Logical NOT: BoolValue → BoolValue."""
     if not isinstance(value, BoolValue):
-        raise AssertionError(
-            f"logical_not: expected BoolValue, got {type(value).__name__}"
-        )
+        raise AssertionError(f"logical_not: expected BoolValue, got {type(value).__name__}")
     return BoolValue(not value.value)

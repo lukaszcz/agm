@@ -126,9 +126,7 @@ def _format_diagnostic_location(
     ``source_name``; the latter is used for source-less diagnostics.
     """
     effective_source: str | None = source_label if source_label is not None else source_name
-    prefix = (
-        f"{display_path(Path(effective_source))}:" if effective_source is not None else ""
-    )
+    prefix = f"{display_path(Path(effective_source))}:" if effective_source is not None else ""
     if column is None:
         return f"{prefix}{line}"
     if end_line is None or end_column is None:
@@ -154,9 +152,7 @@ def format_diagnostic_location(
     )
 
 
-def format_diagnostic(
-    diagnostic: Diagnostic, *, source_name: str | None = "<agl>"
-) -> str:
+def format_diagnostic(diagnostic: Diagnostic, *, source_name: str | None = "<agl>") -> str:
     """Return a user-visible primary diagnostic followed by its related notes."""
     primary = (
         f"{format_diagnostic_location(diagnostic, source_name=source_name)}: "

@@ -171,6 +171,7 @@ class _PatternFieldsSplit:
     positional: tuple[syntax.Pattern, ...]
     named: tuple[syntax.PatternField, ...]
 
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -179,13 +180,26 @@ _Args = list[object]  # Rule children after transformation (tokens + AST nodes)
 _NAME_TOKEN_TYPES = frozenset({"NAME", "OP_NAME"})
 
 _ALL_TYPE_EXPRS = (
-    TextT, JsonT, BoolT, IntT, DecimalT, NameT, ListT, DictT, UnitT, AgentT, FuncT, AppliedT
+    TextT,
+    JsonT,
+    BoolT,
+    IntT,
+    DecimalT,
+    NameT,
+    ListT,
+    DictT,
+    UnitT,
+    AgentT,
+    FuncT,
+    AppliedT,
 )
 
 # The concrete pattern AST node types (used to pick a sub-pattern out of rule children).
 _PATTERN_NODE_TYPES = (
-    syntax.WildcardPattern, syntax.LiteralPattern,
-    syntax.VarPattern, syntax.ConstructorPattern,
+    syntax.WildcardPattern,
+    syntax.LiteralPattern,
+    syntax.VarPattern,
+    syntax.ConstructorPattern,
 )
 
 _BUILTIN_INFIX_PRIORITIES: dict[str, int] = {
@@ -240,7 +254,7 @@ class AstBuilder(Transformer):
 
     The ``node_id`` counter is monotonically increasing and starts at
     ``start_id`` (default ``0``).  Each ``parse_program`` call creates a fresh
-    builder, so node IDs within a single program are deterministic (assigned
+    builder, so node IDs within a module source are deterministic (assigned
     in tree-walk order — root first, depth-first left-to-right).  Incremental
     sessions seed ``start_id`` from a prior parse's ``next_node_id`` so ids
     stay globally unique across entries.
@@ -333,11 +347,7 @@ class AstBuilder(Transformer):
         SEMICOLON tokens are %declare'd and appear in tree — drop them.
         items are Declaration | Binder | Expr (all are AST nodes, not Tokens).
         """
-        items = tuple(
-            cast(_RawItem, a)
-            for a in args
-            if a is not None and not isinstance(a, Token)
-        )
+        items = tuple(cast(_RawItem, a) for a in args if a is not None and not isinstance(a, Token))
         return syntax.Block(
             items=cast(tuple[syntax.Item, ...], items),
             span=self._span_from_meta(meta),
@@ -373,9 +383,7 @@ class AstBuilder(Transformer):
 
     def agent_decl(self, meta: Meta, args: _Args) -> syntax.AgentDecl:
         # Grammar: AGENT name (EQ template)?
-        name_tok = next(
-            a for a in args if _is_name_token(a)
-        )
+        name_tok = next(a for a in args if _is_name_token(a))
         runner_node = next(
             (a for a in args if isinstance(a, (syntax.StringLit, syntax.Template))),
             None,
@@ -385,8 +393,7 @@ class AstBuilder(Transformer):
             if runner_node is None
             else _require_literal_string(
                 runner_node,
-                "agent runner string must be a literal string with no "
-                "interpolation.",
+                "agent runner string must be a literal string with no interpolation.",
             ).value
         )
         span = self._span_from_meta(meta)
@@ -503,8 +510,7 @@ class AstBuilder(Transformer):
         zone = _AT_ZONE.get(label_name)
         if zone is None:
             raise AglSyntaxError(
-                f"unknown parameter marker '@{label_name}'; "
-                "valid markers are @pos, @std, @named.",
+                f"unknown parameter marker '@{label_name}'; valid markers are @pos, @std, @named.",
                 span=span,
             )
         return _ParamMarker(zone=zone, label=f"@{label_name}", span=span)
@@ -517,9 +523,7 @@ class AstBuilder(Transformer):
         # Grammar: param_marker? _INDENT block_entry (_NEWLINE block_entry)* _NEWLINE? _DEDENT
         # block_entry is ?field_def | ?param_marker — collect all in order, then resolve.
         # Records are always named-only by default.
-        entries: _RawEntries = tuple(
-            a for a in args if isinstance(a, (syntax.Param, _ParamMarker))
-        )
+        entries: _RawEntries = tuple(a for a in args if isinstance(a, (syntax.Param, _ParamMarker)))
         return _resolve_params(entries, default_kind=syntax.ParamKind.NAMED_ONLY)
 
     def record_paren_body(self, meta: Meta, args: _Args) -> tuple[syntax.Param, ...]:
@@ -605,9 +609,7 @@ class AstBuilder(Transformer):
                 raw = cast(_RawEntries, a)
                 param_count = sum(1 for x in raw if isinstance(x, syntax.Param))
                 default_kind = (
-                    syntax.ParamKind.STANDARD
-                    if param_count == 1
-                    else syntax.ParamKind.NAMED_ONLY
+                    syntax.ParamKind.STANDARD if param_count == 1 else syntax.ParamKind.NAMED_ONLY
                 )
                 return _resolve_params(raw, default_kind=default_kind)
         return ()
@@ -617,9 +619,7 @@ class AstBuilder(Transformer):
         # ?field_entry is transparent: Param (from field_inline/field_def) and
         # _ParamMarker (from param_marker) arrive directly as children.
         # Return the raw interleaving; zone resolution happens in the owning builder.
-        return tuple(
-            a for a in args if isinstance(a, (syntax.Param, _ParamMarker))
-        )
+        return tuple(a for a in args if isinstance(a, (syntax.Param, _ParamMarker)))
 
     # Grammar: field_name COLON type_expr — identical shape to ``field_def``.
     field_inline = field_def
@@ -737,9 +737,7 @@ class AstBuilder(Transformer):
         Collects the full marker/param interleaving and resolves zones.
         def/lambda parameters default to STANDARD when no markers are present.
         """
-        entries: _RawEntries = tuple(
-            a for a in args if isinstance(a, (syntax.Param, _ParamMarker))
-        )
+        entries: _RawEntries = tuple(a for a in args if isinstance(a, (syntax.Param, _ParamMarker)))
         return _resolve_params(entries, default_kind=syntax.ParamKind.STANDARD)
 
     def param_def(self, meta: Meta, args: _Args) -> syntax.Param:
@@ -775,9 +773,7 @@ class AstBuilder(Transformer):
     def func_inline_seq(self, meta: Meta, args: _Args) -> syntax.Block:
         """func_inline_seq: binder (SEMICOLON binder)* SEMICOLON expr."""
         items = tuple(
-            cast(syntax.Item, a)
-            for a in args
-            if a is not None and not isinstance(a, Token)
+            cast(syntax.Item, a) for a in args if a is not None and not isinstance(a, Token)
         )
         return syntax.Block(
             items=items,
@@ -891,15 +887,16 @@ class AstBuilder(Transformer):
 
     def applied_type(self, meta: Meta, args: _Args) -> TypeExpr:
         """name type_lsqb type_arg_list RSQB — applied generic type."""
-        name_tok = next(
-            a for a in args if _is_name_token(a)
-        )
+        name_tok = next(a for a in args if _is_name_token(a))
         name = str(name_tok)
         type_args: tuple[TypeExpr, ...] = cast(
             tuple[TypeExpr, ...],
             next(
-                (a for a in args if isinstance(a, tuple) and len(a) > 0
-                 and isinstance(a[0], _ALL_TYPE_EXPRS)),
+                (
+                    a
+                    for a in args
+                    if isinstance(a, tuple) and len(a) > 0 and isinstance(a[0], _ALL_TYPE_EXPRS)
+                ),
                 (),
             ),
         )
@@ -931,9 +928,7 @@ class AstBuilder(Transformer):
                 (
                     a
                     for a in args
-                    if isinstance(a, tuple)
-                    and len(a) > 0
-                    and isinstance(a[0], _ALL_TYPE_EXPRS)
+                    if isinstance(a, tuple) and len(a) > 0 and isinstance(a[0], _ALL_TYPE_EXPRS)
                 ),
                 (),
             ),
@@ -959,19 +954,18 @@ class AstBuilder(Transformer):
         return cast(
             tuple[str, ...],
             next(
-                (a for a in args
-                 if isinstance(a, tuple) and len(a) > 0
-                 and all(isinstance(x, str) for x in a)),
+                (
+                    a
+                    for a in args
+                    if isinstance(a, tuple) and len(a) > 0 and all(isinstance(x, str) for x in a)
+                ),
                 (),
             ),
         )
 
     def type_param_list(self, meta: Meta, args: _Args) -> tuple[str, ...]:
         """type_param_list: name (COMMA name)*"""
-        return tuple(
-            str(a) for a in args
-            if _is_name_token(a)
-        )
+        return tuple(str(a) for a in args if _is_name_token(a))
 
     def func_type(self, meta: Meta, args: _Args) -> FuncT:
         """LPAR type_list? RPAR THIN_ARROW type_expr — function type (A, B) -> C."""
@@ -1087,14 +1081,10 @@ class AstBuilder(Transformer):
         )
 
     def lit_true(self, meta: Meta, args: _Args) -> syntax.BoolLit:
-        return syntax.BoolLit(
-            value=True, span=self._span_from_meta(meta), node_id=self._next_id()
-        )
+        return syntax.BoolLit(value=True, span=self._span_from_meta(meta), node_id=self._next_id())
 
     def lit_false(self, meta: Meta, args: _Args) -> syntax.BoolLit:
-        return syntax.BoolLit(
-            value=False, span=self._span_from_meta(meta), node_id=self._next_id()
-        )
+        return syntax.BoolLit(value=False, span=self._span_from_meta(meta), node_id=self._next_id())
 
     def lit_null(self, meta: Meta, args: _Args) -> syntax.NullLit:
         return syntax.NullLit(span=self._span_from_meta(meta), node_id=self._next_id())
@@ -1315,9 +1305,7 @@ class AstBuilder(Transformer):
             if isinstance(arg, _RawPlaceholder):
                 placeholders.append(arg)
         for named_arg in named_args:
-            if isinstance(named_arg, _RawNamedArg) and isinstance(
-                named_arg.value, _RawPlaceholder
-            ):
+            if isinstance(named_arg, _RawNamedArg) and isinstance(named_arg.value, _RawPlaceholder):
                 placeholders.append(named_arg.value)
 
         self._validate_placeholders(placeholders, call_span=call_span)
@@ -1404,9 +1392,7 @@ class AstBuilder(Transformer):
     # Call arguments
     # ------------------------------------------------------------------
 
-    def arg_list(
-        self, meta: Meta, args: _Args
-    ) -> _RawArgLists:
+    def arg_list(self, meta: Meta, args: _Args) -> _RawArgLists:
         """arg_list: arg (COMMA arg)* COMMA?
 
         Returns (pos_args, named_args) pair for the call builder.
@@ -1622,23 +1608,28 @@ class AstBuilder(Transformer):
         cond = cast(syntax.Expr, args[0])
         body = _find_expr(args[1:])
         return syntax.IfBranch(
-            cond=cond, body=body,
-            span=self._span_from_meta(meta), node_id=self._next_id(),
+            cond=cond,
+            body=body,
+            span=self._span_from_meta(meta),
+            node_id=self._next_id(),
         )
 
     def if_else_branch(self, meta: Meta, args: _Args) -> syntax.IfBranch:
         """if_else_branch: PIPE? "else" ARROW branch_body"""
         body = _find_expr(args)
         return syntax.IfBranch(
-            cond=ELSE, body=body,
-            span=self._span_from_meta(meta), node_id=self._next_id(),
+            cond=ELSE,
+            body=body,
+            span=self._span_from_meta(meta),
+            node_id=self._next_id(),
         )
 
     def if_expr(self, meta: Meta, args: _Args) -> syntax.If:
         branches = tuple(a for a in args if isinstance(a, syntax.IfBranch))
         return syntax.If(
             branches=branches,
-            span=self._span_from_meta(meta), node_id=self._next_id(),
+            span=self._span_from_meta(meta),
+            node_id=self._next_id(),
         )
 
     # ------------------------------------------------------------------
@@ -1651,8 +1642,10 @@ class AstBuilder(Transformer):
         body = _find_expr([a for a in args if not isinstance(a, _PATTERN_NODE_TYPES)])
         assert isinstance(pat, _PATTERN_NODE_TYPES)
         return syntax.CaseBranch(
-            pattern=pat, body=body,
-            span=self._span_from_meta(meta), node_id=self._next_id(),
+            pattern=pat,
+            body=body,
+            span=self._span_from_meta(meta),
+            node_id=self._next_id(),
         )
 
     def first_case_branch(self, meta: Meta, args: _Args) -> syntax.CaseBranch:
@@ -1672,8 +1665,10 @@ class AstBuilder(Transformer):
         subject = cast(syntax.Expr, args[0])
         branches = _find_case_branch_tuple(args[1:])
         return syntax.Case(
-            subject=subject, branches=branches,
-            span=self._span_from_meta(meta), node_id=self._next_id(),
+            subject=subject,
+            branches=branches,
+            span=self._span_from_meta(meta),
+            node_id=self._next_id(),
         )
 
     # ------------------------------------------------------------------
@@ -1709,9 +1704,7 @@ class AstBuilder(Transformer):
         """range_by: BY or_expr — return the step expression."""
         return cast(syntax.Expr, _find_non_token(args))
 
-    def range_tail(
-        self, meta: Meta, args: _Args
-    ) -> tuple[bool, syntax.Expr, syntax.Expr | None]:
+    def range_tail(self, meta: Meta, args: _Args) -> tuple[bool, syntax.Expr, syntax.Expr | None]:
         """range_tail: range_dir or_expr range_by?
 
         Returns (is_downto, to_bound_expr, by_step_expr_or_None).
@@ -1766,9 +1759,7 @@ class AstBuilder(Transformer):
         return cast(syntax.Expr, _find_non_token(args))
 
     # Type alias for the extended for_clause result tuple.
-    _ForClauseResult = tuple[
-        str, syntax.Expr, "syntax.Expr | None", bool, "syntax.Expr | None"
-    ]
+    _ForClauseResult = tuple[str, syntax.Expr, "syntax.Expr | None", bool, "syntax.Expr | None"]
 
     def loop_clauses(
         self,
@@ -1786,17 +1777,15 @@ class AstBuilder(Transformer):
         """
         # for_clause returns a 5-tuple (str, Expr, Expr|None, bool, Expr|None).
         # while_clause returns an Expr.  Distinguish by the 5-tuple signature.
-        for_result: (
-            tuple[str, syntax.Expr, syntax.Expr | None, bool, syntax.Expr | None] | None
-        ) = next(
-            (
-                cast(
-                    "tuple[str, syntax.Expr, syntax.Expr | None, bool, syntax.Expr | None]", a
-                )
-                for a in args
-                if isinstance(a, tuple) and len(a) == 5 and isinstance(a[0], str)
-            ),
-            None,
+        for_result: tuple[str, syntax.Expr, syntax.Expr | None, bool, syntax.Expr | None] | None = (
+            next(
+                (
+                    cast("tuple[str, syntax.Expr, syntax.Expr | None, bool, syntax.Expr | None]", a)
+                    for a in args
+                    if isinstance(a, tuple) and len(a) == 5 and isinstance(a[0], str)
+                ),
+                None,
+            )
         )
         while_result: syntax.Expr | None = next(
             (cast(syntax.Expr, a) for a in args if _is_expr_node(a)),
@@ -1824,9 +1813,7 @@ class AstBuilder(Transformer):
         Build a Block from the inline items (or_exprs and binders).
         """
         items = tuple(
-            cast(syntax.Item, a)
-            for a in args
-            if a is not None and not isinstance(a, Token)
+            cast(syntax.Item, a) for a in args if a is not None and not isinstance(a, Token)
         )
         return syntax.Block(
             items=items,
@@ -1940,9 +1927,7 @@ class AstBuilder(Transformer):
 
         Handles any NAME. Wildcard is "_" (NAME).
         """
-        name_toks = [
-            a for a in args if _is_name_token(a)
-        ]
+        name_toks = [a for a in args if _is_name_token(a)]
         if not name_toks:  # pragma: no cover
             return (None, None)
         first_name = str(name_toks[0])
@@ -1965,8 +1950,10 @@ class AstBuilder(Transformer):
         body: syntax.Expr | None = None
         for a in args:
             if isinstance(a, tuple):
-                if len(a) == 2 and (a[0] is None or isinstance(a[0], str)) and (
-                    a[1] is None or isinstance(a[1], str)
+                if (
+                    len(a) == 2
+                    and (a[0] is None or isinstance(a[0], str))
+                    and (a[1] is None or isinstance(a[1], str))
                 ):
                     exc_type, binding = cast(tuple[str | None, str | None], a)
                 elif a is not None:  # pragma: no cover
@@ -1978,21 +1965,26 @@ class AstBuilder(Transformer):
                 body = cast(syntax.Expr, a)
         assert body is not None, "catch_clause: no body"
         return syntax.CatchClause(
-            exc_type=exc_type, binding=binding, body=body,
-            span=self._span_from_meta(meta), node_id=self._next_id(),
+            exc_type=exc_type,
+            binding=binding,
+            body=body,
+            span=self._span_from_meta(meta),
+            node_id=self._next_id(),
         )
 
     def try_expr(self, meta: Meta, args: _Args) -> syntax.Try:
         """try_expr: "try" try_body (catch_clause)+"""
         handlers = [a for a in args if isinstance(a, syntax.CatchClause)]
         try_body = next(
-            a for a in args
+            a
+            for a in args
             if a is not None and not isinstance(a, Token) and not isinstance(a, syntax.CatchClause)
         )
         return syntax.Try(
             body=cast(syntax.Expr, try_body),
             handlers=tuple(handlers),
-            span=self._span_from_meta(meta), node_id=self._next_id(),
+            span=self._span_from_meta(meta),
+            node_id=self._next_id(),
         )
 
     # ------------------------------------------------------------------
@@ -2039,9 +2031,7 @@ class AstBuilder(Transformer):
 
     def pat_constructor(self, meta: Meta, args: _Args) -> syntax.ConstructorPattern:
         """pat_constructor: name LPAR pattern_fields? RPAR"""
-        name_toks = [
-            a for a in args if _is_name_token(a)
-        ]
+        name_toks = [a for a in args if _is_name_token(a)]
         assert len(name_toks) >= 1, "pat_constructor: expected name token"
         name = str(name_toks[0])
         positional: tuple[syntax.Pattern, ...] = ()
@@ -2051,13 +2041,20 @@ class AstBuilder(Transformer):
                 positional = a.positional
                 named = a.named
         return syntax.ConstructorPattern(
-            qualifier=None, name=name, positional=positional, named=named,
-            span=_span_from_meta(meta), node_id=self._next_id(),
+            qualifier=None,
+            name=name,
+            positional=positional,
+            named=named,
+            span=_span_from_meta(meta),
+            node_id=self._next_id(),
         )
 
     def _literal_pattern(
         self,
-        literal: syntax.IntLit | syntax.DecimalLit | syntax.BoolLit | syntax.StringLit
+        literal: syntax.IntLit
+        | syntax.DecimalLit
+        | syntax.BoolLit
+        | syntax.StringLit
         | syntax.NullLit,
         meta: Meta,
     ) -> syntax.LiteralPattern:
@@ -2078,20 +2075,17 @@ class AstBuilder(Transformer):
         assert isinstance(tok, Token)
         lit = syntax.DecimalLit(
             value=decimal.Decimal(str(tok)),
-            span=self._span_from_meta(meta), node_id=self._next_id(),
+            span=self._span_from_meta(meta),
+            node_id=self._next_id(),
         )
         return self._literal_pattern(lit, meta)
 
     def pat_lit_true(self, meta: Meta, args: _Args) -> syntax.LiteralPattern:
-        lit = syntax.BoolLit(
-            value=True, span=self._span_from_meta(meta), node_id=self._next_id()
-        )
+        lit = syntax.BoolLit(value=True, span=self._span_from_meta(meta), node_id=self._next_id())
         return self._literal_pattern(lit, meta)
 
     def pat_lit_false(self, meta: Meta, args: _Args) -> syntax.LiteralPattern:
-        lit = syntax.BoolLit(
-            value=False, span=self._span_from_meta(meta), node_id=self._next_id()
-        )
+        lit = syntax.BoolLit(value=False, span=self._span_from_meta(meta), node_id=self._next_id())
         return self._literal_pattern(lit, meta)
 
     def pat_lit_null(self, meta: Meta, args: _Args) -> syntax.LiteralPattern:
@@ -2129,8 +2123,10 @@ class AstBuilder(Transformer):
         assert pat is not None
         assert isinstance(pat, _PATTERN_NODE_TYPES)
         return syntax.PatternField(
-            name=str(name_tok), pattern=pat,
-            span=self._span_from_meta(meta), node_id=self._next_id(),
+            name=str(name_tok),
+            pattern=pat,
+            span=self._span_from_meta(meta),
+            node_id=self._next_id(),
         )
 
     def pat_field_positional(self, meta: Meta, args: _Args) -> syntax.Pattern:
@@ -2196,9 +2192,7 @@ class AstBuilder(Transformer):
         tok = next(a for a in args if _is_name_token(a))
         return str(tok)
 
-    def _hiding_items(
-        self, meta: Meta, args: _Args
-    ) -> tuple[syntax.ImportItem, ...]:
+    def _hiding_items(self, meta: Meta, args: _Args) -> tuple[syntax.ImportItem, ...]:
         """Build hiding ImportItem tuples from the names in a HIDING clause."""
         hiding_names = [str(a) for a in args if _is_name_token(a)]
         return tuple(
@@ -2286,9 +2280,7 @@ class AstBuilder(Transformer):
         """export_decl_wildcard: EXPORT MODPATH DOT STAR export_clause?"""
         return self._export_decl_from_args(meta, args, wildcard=True)
 
-    def _export_hiding_items(
-        self, meta: Meta, args: _Args
-    ) -> tuple[syntax.ExportItem, ...]:
+    def _export_hiding_items(self, meta: Meta, args: _Args) -> tuple[syntax.ExportItem, ...]:
         """Build hiding ExportItem tuples from the names in a HIDING clause."""
         hiding_names = [str(a) for a in args if _is_name_token(a)]
         return tuple(
@@ -2631,9 +2623,7 @@ class AstBuilder(Transformer):
     def lit_list(self, meta: Meta, args: _Args) -> syntax.ListLit:
         """lit_list: LSQB (expr (COMMA expr)* COMMA?)? RSQB"""
         elements = tuple(
-            cast(syntax.Expr, a)
-            for a in args
-            if a is not None and not isinstance(a, Token)
+            cast(syntax.Expr, a) for a in args if a is not None and not isinstance(a, Token)
         )
         return syntax.ListLit(
             elements=elements,
@@ -2653,9 +2643,7 @@ class AstBuilder(Transformer):
     def dict_entry_str(self, meta: Meta, args: _Args) -> syntax.DictEntry:
         """dict_entry: template COLON expr — quoted string key."""
         non_tokens = [a for a in args if a is not None and not isinstance(a, Token)]
-        assert len(non_tokens) >= 2, (
-            f"dict_entry_str: expected key + expr, got {args!r}"
-        )
+        assert len(non_tokens) >= 2, f"dict_entry_str: expected key + expr, got {args!r}"
         key_lit = _require_literal_string(
             non_tokens[0],
             "dict keys must be literal strings (no interpolation).",
@@ -2724,9 +2712,7 @@ def _is_field_tuple(a: object) -> bool:
     Markers may appear at position 0 in the raw entries returned by ``field_list``
     before zone resolution, so ``_ParamMarker`` is accepted here too.
     """
-    return isinstance(a, tuple) and (
-        len(a) == 0 or isinstance(a[0], (syntax.Param, _ParamMarker))
-    )
+    return isinstance(a, tuple) and (len(a) == 0 or isinstance(a[0], (syntax.Param, _ParamMarker)))
 
 
 def _find_field_tuple(args: _Args) -> tuple[syntax.Param, ...]:
@@ -2756,11 +2742,7 @@ def _resolve_params(
     markers = [e for e in entries if isinstance(e, _ParamMarker)]
     if not markers:
         # No marker: apply the per-context default to every param.
-        return tuple(
-            replace(p, kind=default_kind)
-            for p in entries
-            if isinstance(p, syntax.Param)
-        )
+        return tuple(replace(p, kind=default_kind) for p in entries if isinstance(p, syntax.Param))
 
     # Validate: markers must be strictly increasing by zone.
     last_order = -1
@@ -2774,16 +2756,13 @@ def _resolve_params(
         last_order = order
 
     # Validate: @pos must be leading (no Param may precede it in entries).
-    pos_marker = next(
-        (m for m in markers if m.zone == syntax.ParamKind.POSITIONAL_ONLY), None
-    )
+    pos_marker = next((m for m in markers if m.zone == syntax.ParamKind.POSITIONAL_ONLY), None)
     if pos_marker is not None:
         # Find the index of pos_marker in entries (by identity).
         pos_idx = next(i for i, e in enumerate(entries) if e is pos_marker)
         if any(isinstance(e, syntax.Param) for e in entries[:pos_idx]):
             raise AglSyntaxError(
-                f"positional-only marker {pos_marker.label!r} must lead "
-                "the parameter list.",
+                f"positional-only marker {pos_marker.label!r} must lead the parameter list.",
                 span=pos_marker.span,
             )
 
@@ -2808,9 +2787,7 @@ def _resolve_params(
 
 
 def _is_variant_tuple(a: object) -> bool:
-    return isinstance(a, tuple) and (
-        len(a) == 0 or isinstance(a[0], syntax.VariantDef)
-    )
+    return isinstance(a, tuple) and (len(a) == 0 or isinstance(a[0], syntax.VariantDef))
 
 
 def _find_variant_tuple(args: _Args) -> tuple[syntax.VariantDef, ...]:
@@ -2821,9 +2798,7 @@ def _find_variant_tuple(args: _Args) -> tuple[syntax.VariantDef, ...]:
 
 
 def _is_case_branch_tuple(a: object) -> bool:
-    return isinstance(a, tuple) and (
-        len(a) == 0 or isinstance(a[0], syntax.CaseBranch)
-    )
+    return isinstance(a, tuple) and (len(a) == 0 or isinstance(a[0], syntax.CaseBranch))
 
 
 def _find_case_branch_tuple(args: _Args) -> tuple[syntax.CaseBranch, ...]:
@@ -2950,6 +2925,7 @@ def _operator_table_from_decls(
     for name, (priority, assoc) in resolve_infix_fixity(user_decls, ambient).items():
         table[name] = (priority, assoc, None)
     return table
+
 
 def _rewrite_block_infix(
     block: syntax.Block,
@@ -3258,8 +3234,7 @@ def _make_infix_node(
             _is_nonassoc_binary(left) or _is_nonassoc_binary(right)
         ):
             raise AglSyntaxError(
-                "Comparisons are non-associative; parenthesize explicitly, "
-                "e.g. `(x == y) == z`.",
+                "Comparisons are non-associative; parenthesize explicitly, e.g. `(x == y) == z`.",
                 span=op.span,
             )
         return syntax.BinaryOp(

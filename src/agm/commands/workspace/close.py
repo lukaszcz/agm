@@ -35,8 +35,10 @@ def _remove_workspace_config(*, proj_dir: Path, branch: str, env: dict[str, str]
         fs.unlink(workspace_config_dir)
 
     commit_config_dir_changes(
-        proj_dir, f"chore: remove config for {branch}",
-        add_paths=[workspace_config_dir], env=env,
+        proj_dir,
+        f"chore: remove config for {branch}",
+        add_paths=[workspace_config_dir],
+        env=env,
     )
 
 

@@ -20,27 +20,27 @@ _STDLIB = Path(__file__).resolve().parent.parent / "stdlib"
 def _run(source: str, *, default_loop_limit: int | None = None) -> RunResult:
     """Run a single-module *source* (no imports) through prepare + run_prepared."""
     rt = PipelineDriver(default_loop_limit=default_loop_limit)
-    prepared = rt.prepare(source)
+    prepared = rt.prepare_program(source)
     result = rt.run_prepared(prepared)
     assert isinstance(result, RunResult)
     return result
 
 
-def _run_graph(
+def _run_program(
     source: str,
     *,
     extra_roots: frozenset[Path] = frozenset(),
     default_loop_limit: int | None = None,
     shell_exec_timeout: float | None = None,
 ) -> RunResult:
-    """Run *source* (with imports) through the graph pipeline against the stdlib."""
+    """Run *source* (with imports) through the program pipeline against the stdlib."""
     roots = RootSet(roots=frozenset({_STDLIB}) | extra_roots)
     rt = PipelineDriver(
         default_loop_limit=default_loop_limit,
         shell_exec_timeout=shell_exec_timeout,
     )
     prepared = rt.prepare_program(source, entry_path=None, roots=roots)
-    result = rt.run_prepared_graph(prepared)
+    result = rt.run_prepared(prepared)
     assert isinstance(result, RunResult)
     return result
 
@@ -57,7 +57,7 @@ def _run_with_std_config(source: str, std_config: str, root: Path) -> RunResult:
         roots=RootSet(roots=frozenset({root})),
         default_stdlib=False,
     )
-    result = rt.run_prepared_graph(prepared)
+    result = rt.run_prepared(prepared)
     assert isinstance(result, RunResult)
     return result
 
@@ -69,17 +69,14 @@ def _run_with_std_config(source: str, std_config: str, root: Path) -> RunResult:
 
 class TestBuiltinVarRegisters:
     def test_read_reflects_write(self) -> None:
-        result = _run_graph(
-            "import std.config\n"
-            "std.config::max-iters := 3\n"
-            "let n = std.config::max-iters\n"
-            "print n"
+        result = _run_program(
+            "import std.config\nstd.config::max-iters := 3\nlet n = std.config::max-iters\nprint n"
         )
         assert result.ok, f"expected success but got: {result.error!r}"
         assert result.bindings["n"] == IntValue(3)
 
     def test_strict_json_write_then_read(self) -> None:
-        result = _run_graph(
+        result = _run_program(
             "import std.config\n"
             "std.config::strict-json := true\n"
             "let b = std.config::strict-json\n"
@@ -89,30 +86,25 @@ class TestBuiltinVarRegisters:
         assert result.bindings["b"] == BoolValue(True)
 
     def test_runner_default_reads_the_shared_agent_floor(self) -> None:
-        result = _run_graph(
-            "import std.config\nlet r = std.config::runner\nprint r"
-        )
+        result = _run_program("import std.config\nlet r = std.config::runner\nprint r")
         assert result.ok
         assert result.bindings["r"] == TextValue(DEFAULT_AGENT_RUNNER)
 
     def test_runner_write_then_read(self) -> None:
-        result = _run_graph(
-            "import std.config\n"
-            'std.config::runner := "codex"\n'
-            "let r = std.config::runner\n"
-            "print r"
+        result = _run_program(
+            'import std.config\nstd.config::runner := "codex"\nlet r = std.config::runner\nprint r'
         )
         assert result.ok
         assert result.bindings["r"] == TextValue("codex")
 
     def test_log_default_reads_false(self) -> None:
-        result = _run_graph("import std.config\nlet l = std.config::log\nprint l")
+        result = _run_program("import std.config\nlet l = std.config::log\nprint l")
         assert result.ok
         assert result.bindings["l"] == BoolValue(False)
 
     def test_max_iters_default_reads_disabled_state(self) -> None:
         """A read reports zero when the host safety valve is off."""
-        result = _run_graph(
+        result = _run_program(
             "import std.config\nlet n = std.config::max-iters\nprint n",
             default_loop_limit=None,
         )
@@ -152,18 +144,14 @@ class TestBuiltinVarGate:
 
     def test_nested_declaration_rejected(self) -> None:
         """``builtin var`` is root-only, like ``builtin def``/``def``."""
-        result = _run(
-            "def f() -> text =\n  builtin var runner: text\n  \"x\"\nprint f()"
-        )
+        result = _run('def f() -> text =\n  builtin var runner: text\n  "x"\nprint f()')
         assert not result.ok
         assert result.diagnostics
 
     def test_arbitrary_library_declaration_rejected(self, tmp_path: Path) -> None:
         """A regular library cannot expose a register-backed declaration."""
-        (tmp_path / "mylib.agl").write_text(
-            "builtin var max-iters: int\n", encoding="utf-8"
-        )
-        result = _run_graph(
+        (tmp_path / "mylib.agl").write_text("builtin var max-iters: int\n", encoding="utf-8")
+        result = _run_program(
             "import mylib\nprint 1",
             extra_roots=frozenset({tmp_path}),
         )
@@ -178,17 +166,14 @@ class TestBuiltinVarGate:
 
 class TestStdConfigQualified:
     def test_qualified_read_reflects_write(self) -> None:
-        result = _run_graph(
-            "import std.config\n"
-            "std.config::max-iters := 3\n"
-            "let n = std.config::max-iters\n"
-            "print n"
+        result = _run_program(
+            "import std.config\nstd.config::max-iters := 3\nlet n = std.config::max-iters\nprint n"
         )
         assert result.ok, f"expected success but got: {result.error!r}"
         assert result.bindings["n"] == IntValue(3)
 
     def test_qualified_strict_json(self) -> None:
-        result = _run_graph(
+        result = _run_program(
             "import std.config\n"
             "std.config::strict-json := true\n"
             "let b = std.config::strict-json\n"
@@ -198,14 +183,12 @@ class TestStdConfigQualified:
         assert result.bindings["b"] == BoolValue(True)
 
     def test_qualified_runner_default(self) -> None:
-        result = _run_graph(
-            "import std.config\nlet r = std.config::runner\nprint r"
-        )
+        result = _run_program("import std.config\nlet r = std.config::runner\nprint r")
         assert result.ok
         assert result.bindings["r"] == TextValue(DEFAULT_AGENT_RUNNER)
 
     def test_max_iters_zero_disables_valve(self) -> None:
-        result = _run_graph(
+        result = _run_program(
             "import std.config\n"
             "std.config::max-iters := 0\n"
             "var i = 0\n"
@@ -219,9 +202,9 @@ class TestStdConfigQualified:
         assert result.bindings["i"] == IntValue(6)
 
     def test_log_file_some_round_trips(self) -> None:
-        result = _run_graph(
+        result = _run_program(
             "import std.config\n"
-            "std.config::log-file := Some(\"x\")\n"
+            'std.config::log-file := Some("x")\n'
             "let f = std.config::log-file\n"
             "print f"
         )
@@ -232,18 +215,16 @@ class TestStdConfigQualified:
         assert bound.fields["value"] == TextValue("x")
 
     def test_timeout_default_reads_none(self) -> None:
-        result = _run_graph(
-            "import std.config\nlet t = std.config::timeout\nprint t"
-        )
+        result = _run_program("import std.config\nlet t = std.config::timeout\nprint t")
         assert result.ok
         bound = result.bindings["t"]
         assert isinstance(bound, EnumValue)
         assert bound.variant == "None"
 
     def test_timeout_write_then_read_is_some(self) -> None:
-        result = _run_graph(
+        result = _run_program(
             "import std.config\n"
-            "std.config::timeout := Some(\"2m\")\n"
+            'std.config::timeout := Some("2m")\n'
             "let t = std.config::timeout\n"
             "print t"
         )
@@ -254,7 +235,7 @@ class TestStdConfigQualified:
         assert isinstance(bound.fields["value"], TextValue)
 
     def test_timeout_write_none_clears_the_shell_timeout(self) -> None:
-        result = _run_graph(
+        result = _run_program(
             "import std.config\n"
             'std.config::timeout := Some("2m")\n'
             "std.config::timeout := None\n"
@@ -267,7 +248,7 @@ class TestStdConfigQualified:
         assert bound.variant == "None"
 
     def test_timeout_preserves_raw_text_through_tiny_self_assignment(self) -> None:
-        result = _run_graph(
+        result = _run_program(
             "import std.config\n"
             'std.config::timeout := Some("0.0001s")\n'
             "std.config::timeout := std.config::timeout\n"
@@ -281,7 +262,7 @@ class TestStdConfigQualified:
         assert bound.fields["value"] == TextValue("0.0001s")
 
     def test_tiny_host_timeout_can_be_assigned_back(self) -> None:
-        result = _run_graph(
+        result = _run_program(
             "import std.config\n"
             "std.config::timeout := std.config::timeout\n"
             "let t = std.config::timeout\n"
@@ -295,7 +276,7 @@ class TestStdConfigQualified:
         assert bound.fields["value"] == TextValue("0.0000001s")
 
     def test_disabled_max_iters_round_trips_without_enabling_valve(self) -> None:
-        result = _run_graph(
+        result = _run_program(
             "import std.config\n"
             "std.config::max-iters := std.config::max-iters\n"
             "var i = 0\n"
@@ -325,7 +306,7 @@ class TestEffectAtBinding:
             "  i := i + 1\n"
             "until i >= 2\n"
         )
-        result = _run_graph(source, default_loop_limit=1)
+        result = _run_program(source, default_loop_limit=1)
         assert result.ok, f"expected success but got: {result.error!r}"
 
     def test_loop_before_write_uses_initial_limit(self) -> None:
@@ -338,7 +319,7 @@ class TestEffectAtBinding:
             "until i >= 5\n"
             "std.config::max-iters := 3\n"
         )
-        result = _run_graph(source, default_loop_limit=1)
+        result = _run_program(source, default_loop_limit=1)
         assert not result.ok
         assert result.error is not None
         assert result.error.type_name == "MaxIterationsExceeded"
@@ -352,29 +333,21 @@ class TestEffectAtBinding:
 class TestBareCrossModuleAssign:
     def test_bare_write_reflected_by_bare_read(self) -> None:
         """An open import makes a setting assignable and readable without a qualifier."""
-        result = _run_graph(
-            "import std.config\n"
-            "max-iters := 3\n"
-            "let n = max-iters\n"
-            "print n"
-        )
+        result = _run_program("import std.config\nmax-iters := 3\nlet n = max-iters\nprint n")
         assert result.ok, f"expected success but got: {result.error!r}"
         assert result.bindings["n"] == IntValue(3)
 
     def test_bare_write_reflected_by_qualified_read(self) -> None:
         """Bare and qualified targets denote the same binding."""
-        result = _run_graph(
-            "import std.config\n"
-            "max-iters := 4\n"
-            "let n = std.config::max-iters\n"
-            "print n"
+        result = _run_program(
+            "import std.config\nmax-iters := 4\nlet n = std.config::max-iters\nprint n"
         )
         assert result.ok, f"expected success but got: {result.error!r}"
         assert result.bindings["n"] == IntValue(4)
 
     def test_bare_write_takes_effect_on_loop_limit(self) -> None:
         """A bare write changes engine behavior, not just the readable value."""
-        result = _run_graph(
+        result = _run_program(
             "import std.config\nvar i: int = 0\nmax-iters := 3\ndo\n  i := i + 1\nuntil i >= 2\n",
             default_loop_limit=1,
         )
@@ -382,14 +355,14 @@ class TestBareCrossModuleAssign:
 
     def test_bare_write_to_non_open_import_rejected(self, tmp_path: Path) -> None:
         """A qualified-only import does not expose the name for bare assignment."""
-        result = _run_graph("import std.config qualified as cfg\nmax-iters := 3\nprint 1")
+        result = _run_program("import std.config qualified as cfg\nmax-iters := 3\nprint 1")
         assert not result.ok
         assert result.diagnostics
 
     def test_bare_write_to_immutable_import_rejected(self, tmp_path: Path) -> None:
         """An open-imported ``def`` is still not a valid assignment target."""
         (tmp_path / "mylib.agl").write_text("def foo() -> int = 1\n", encoding="utf-8")
-        result = _run_graph(
+        result = _run_program(
             "import mylib\nfoo := 3\nprint 1",
             extra_roots=frozenset({tmp_path}),
         )
@@ -411,14 +384,14 @@ class TestQualifiedAssignRejections:
 
     def test_self_ref_qualified_assign_rejected(self) -> None:
         """``::name := expr`` is not a valid mutable target."""
-        result = _run_graph("import std.config\n::x := 1\nprint 1")
+        result = _run_program("import std.config\n::x := 1\nprint 1")
         assert not result.ok
         assert result.diagnostics
 
     def test_immutable_cross_module_assign_rejected(self, tmp_path: Path) -> None:
         """Assigning a non-``builtin var`` cross-module binding is rejected."""
         (tmp_path / "mylib.agl").write_text("def foo() -> int = 1\n", encoding="utf-8")
-        result = _run_graph(
+        result = _run_program(
             "import mylib\nmylib::foo := 3\nprint 1",
             extra_roots=frozenset({tmp_path}),
         )

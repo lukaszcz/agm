@@ -75,9 +75,7 @@ def compile_recipe(
             else:
                 # cast_classification only yields FALLIBLE for decimal→int or a
                 # text/json source; the remaining case is a json source.
-                assert isinstance(source, JsonType), (
-                    f"unexpected fallible cast source {source!r}"
-                )
+                assert isinstance(source, JsonType), f"unexpected fallible cast source {source!r}"
                 strategy = ConversionStrategy.DECODE_JSON
             schema, decode_plan = derive_schema_and_decode(target, type_table)
             return ConversionRecipe(

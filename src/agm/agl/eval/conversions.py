@@ -52,9 +52,7 @@ class AglCastConversion(Exception):
     build an identical exception value.
     """
 
-    def __init__(
-        self, message: str, *, source_label: str, target_label: str, raw: str
-    ) -> None:
+    def __init__(self, message: str, *, source_label: str, target_label: str, raw: str) -> None:
         super().__init__(message)
         self.message = message
         self.source_label = source_label

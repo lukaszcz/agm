@@ -60,22 +60,19 @@ def _branch_exists(repo_dir: Path, branch: str, env: dict[str, str]) -> bool:
     return result.returncode == 0
 
 
-def _install_fake_tmux(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, path: str
-) -> Path:
+def _install_fake_tmux(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, path: str) -> Path:
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     log_path = tmp_path / "tmux.log"
     tmux = bin_dir / "tmux"
     tmux.write_text(
-        "#!/bin/sh\n"
-        f"printf '%s\\n' \"$*\" >> {log_path}\n"
-        "exit 0\n",
+        f"#!/bin/sh\nprintf '%s\\n' \"$*\" >> {log_path}\nexit 0\n",
         encoding="utf-8",
     )
     tmux.chmod(0o755)
     monkeypatch.setenv("PATH", f"{bin_dir}:{path}")
     return log_path
+
 
 # ===========================================================================
 # close_workspace workspace config removal
@@ -91,9 +88,7 @@ class TestCloseSessionRemovesWorkspaceConfig:
         (proj_dir / "config").mkdir(parents=True)
         repo_dir.mkdir()
 
-        monkeypatch.setattr(
-            close_module, "require_current_project_dir", lambda cwd=None: proj_dir
-        )
+        monkeypatch.setattr(close_module, "require_current_project_dir", lambda cwd=None: proj_dir)
         monkeypatch.setattr(close_module, "project_repo_dir", lambda pd: repo_dir)
         monkeypatch.setattr(close_module.git_helpers, "current_branch", lambda repo: "main")
         monkeypatch.setattr(
@@ -182,13 +177,9 @@ class TestCloseSession:
         repo_dir = proj_dir / "repo"
         repo_dir.mkdir(parents=True)
 
-        monkeypatch.setattr(
-            close_module, "require_current_project_dir", lambda cwd=None: proj_dir
-        )
+        monkeypatch.setattr(close_module, "require_current_project_dir", lambda cwd=None: proj_dir)
         monkeypatch.setattr(close_module, "project_repo_dir", lambda pd: repo_dir)
-        monkeypatch.setattr(
-            close_module.git_helpers, "current_branch", lambda repo, **kw: "main"
-        )
+        monkeypatch.setattr(close_module.git_helpers, "current_branch", lambda repo, **kw: "main")
         monkeypatch.setattr(
             close_module, "is_main_workspace_branch", lambda pd, branch, repo_branch: is_main
         )
@@ -229,9 +220,7 @@ class TestCloseSession:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         branch = "rocq-9.2"
-        project_dir, repo_dir, worktree_dir = _make_git_close_project(
-            tmp_path, env, branch=branch
-        )
+        project_dir, repo_dir, worktree_dir = _make_git_close_project(tmp_path, env, branch=branch)
         tmux_log = _install_fake_tmux(tmp_path, monkeypatch, path=env["PATH"])
 
         close_workspace(branch=branch, cwd=project_dir)
@@ -254,9 +243,7 @@ class TestCloseSession:
         env: dict[str, str],
         capsys: pytest.CaptureFixture[str],
     ) -> None:
-        project_dir, repo_dir, worktree_dir = _make_git_close_project(
-            tmp_path, env, unmerged=True
-        )
+        project_dir, repo_dir, worktree_dir = _make_git_close_project(tmp_path, env, unmerged=True)
 
         with pytest.raises(SystemExit) as exc_info:
             close_workspace(branch="feature", cwd=project_dir)
@@ -302,9 +289,7 @@ class TestCloseSession:
         env: dict[str, str],
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        project_dir, repo_dir, worktree_dir = _make_git_close_project(
-            tmp_path, env, unmerged=True
-        )
+        project_dir, repo_dir, worktree_dir = _make_git_close_project(tmp_path, env, unmerged=True)
         _install_fake_tmux(tmp_path, monkeypatch, path=env["PATH"])
 
         close_workspace(branch="feature", force_delete=True, cwd=project_dir)
@@ -318,9 +303,7 @@ class TestCloseSession:
         env: dict[str, str],
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        project_dir, repo_dir, worktree_dir = _make_git_close_project(
-            tmp_path, env, dirty=True
-        )
+        project_dir, repo_dir, worktree_dir = _make_git_close_project(tmp_path, env, dirty=True)
         _install_fake_tmux(tmp_path, monkeypatch, path=env["PATH"])
 
         close_workspace(branch="feature", force=True, force_delete=False, cwd=project_dir)
@@ -334,9 +317,7 @@ class TestCloseSession:
         env: dict[str, str],
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        project_dir, repo_dir, worktree_dir = _make_git_close_project(
-            tmp_path, env, unmerged=True
-        )
+        project_dir, repo_dir, worktree_dir = _make_git_close_project(tmp_path, env, unmerged=True)
         _install_fake_tmux(tmp_path, monkeypatch, path=env["PATH"])
 
         close_workspace(branch="feature", keep_branch=True, cwd=project_dir)
@@ -350,9 +331,7 @@ class TestCloseSession:
         env: dict[str, str],
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        project_dir, repo_dir, worktree_dir = _make_git_close_project(
-            tmp_path, env, unmerged=True
-        )
+        project_dir, repo_dir, worktree_dir = _make_git_close_project(tmp_path, env, unmerged=True)
         tmux_log = _install_fake_tmux(tmp_path, monkeypatch, path=env["PATH"])
         workspace_config = project_dir / "config" / "feature"
         workspace_config.mkdir()
@@ -371,17 +350,13 @@ class TestCloseSession:
 
 
 class TestCloseRun:
-    def _setup_force_sensitive_close(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> Path:
+    def _setup_force_sensitive_close(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
         proj_dir = tmp_path / "proj"
         repo_dir = proj_dir / "repo"
         repo_dir.mkdir(parents=True)
         (proj_dir / "config").mkdir()
 
-        monkeypatch.setattr(
-            close_module, "require_current_project_dir", lambda cwd=None: proj_dir
-        )
+        monkeypatch.setattr(close_module, "require_current_project_dir", lambda cwd=None: proj_dir)
         monkeypatch.setattr(close_module, "project_repo_dir", lambda pd: repo_dir)
         monkeypatch.setattr(close_module.git_helpers, "current_branch", lambda repo: "main")
         monkeypatch.setattr(

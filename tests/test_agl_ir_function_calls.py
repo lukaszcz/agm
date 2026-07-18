@@ -19,12 +19,12 @@ import decimal
 import pytest
 
 from agm.agl.eval.ir_interpreter import IrInterpreter
-from agm.agl.lower import lower_program
+from agm.agl.lower import lower_module
 from agm.agl.parser import parse_program
-from agm.agl.scope import resolve
+from agm.agl.scope import resolve_module
 from agm.agl.semantics.exceptions import AglRaise
 from agm.agl.semantics.values import BoolValue, DecimalValue, IntValue, TextValue
-from agm.agl.typecheck import check
+from agm.agl.typecheck import check_module
 from tests.agl.ir_harness import _compiled_checked, base_caps, evaluate_ir
 
 # ---------------------------------------------------------------------------
@@ -52,9 +52,7 @@ def test_named_args_reordered() -> None:
 def test_default_arg_used() -> None:
     """Call where the second arg uses its default."""
     source = (
-        "def inc(x: int, step: int = 1) -> int = x + step\n"
-        "let a = inc(10)\n"
-        "let b = inc(10, 5)\n()"
+        "def inc(x: int, step: int = 1) -> int = x + step\nlet a = inc(10)\nlet b = inc(10, 5)\n()"
     )
     ir = evaluate_ir(source)
     assert ir["a"] == IntValue(11)
@@ -91,11 +89,7 @@ def test_generic_explicit_arg_coercion_uses_instantiated_param_type() -> None:
 
 def test_provisional_generic_function_value_call_is_lowered_after_argument_inference() -> None:
     """A value call can solve a generic callee result from its own argument."""
-    source = (
-        "def maker[T]() -> T -> T = fn(value: T) => value\n"
-        "let result = maker()(7)\n"
-        "()"
-    )
+    source = "def maker[T]() -> T -> T = fn(value: T) => value\nlet result = maker()(7)\n()"
     ir = evaluate_ir(source)
     assert ir["result"] == IntValue(7)
 
@@ -140,12 +134,10 @@ def test_call_depth_guard_ir_only() -> None:
 
     source = "def inf(n: int) -> int = inf(n + 1)\nlet result = inf(0)\n()"
     program = parse_program(source)
-    resolved = resolve(program)
+    resolved = resolve_module(program)
     caps = base_caps()
-    checked = check(resolved, caps)
-    executable = lower_program(
-        _compiled_checked(checked), source_text=source, source_label="<test>"
-    )
+    checked = check_module(resolved, caps)
+    executable = lower_module(_compiled_checked(checked), source_text=source, source_label="<test>")
     interp = IrInterpreter(executable, max_call_depth=10)
     with pytest.raises(AglRaise) as exc_info:
         interp.run()
@@ -240,10 +232,10 @@ def test_function_with_unary_in_body() -> None:
 def test_function_with_named_args_in_body_call() -> None:
     """Function body calling another function with named args (exercises named_args walk)."""
     source = (
-        "def greet(name: text, greeting: text = \"Hi\") -> text =\n"
-        "  greeting + \", \" + name + \"!\"\n"
-        "def greet_world(g: text) -> text = greet(name = \"World\", greeting = g)\n"
-        "let result = greet_world(\"Hello\")\n()"
+        'def greet(name: text, greeting: text = "Hi") -> text =\n'
+        '  greeting + ", " + name + "!"\n'
+        'def greet_world(g: text) -> text = greet(name = "World", greeting = g)\n'
+        'let result = greet_world("Hello")\n()'
     )
     ir = evaluate_ir(source)
     assert ir["result"] == TextValue("Hello, World!")
@@ -279,8 +271,7 @@ def test_function_with_field_access_in_body() -> None:
 def test_function_with_cast_in_body() -> None:
     """Function body with cast (exercises _walk_for_captures for Cast)."""
     source = (
-        "def cast_to_decimal(x: int) -> decimal = x as decimal\n"
-        "let result = cast_to_decimal(7)\n()"
+        "def cast_to_decimal(x: int) -> decimal = x as decimal\nlet result = cast_to_decimal(7)\n()"
     )
     ir = evaluate_ir(source)
     assert ir["result"] == DecimalValue(decimal.Decimal("7"))
@@ -289,8 +280,8 @@ def test_function_with_cast_in_body() -> None:
 def test_function_with_template_in_body() -> None:
     """Function body containing a template literal (exercises _walk_for_captures for Template)."""
     source = (
-        "let prefix = \"Item\"\n"
-        "def label(n: int) -> text = \"${prefix} #${n}\"\n"
+        'let prefix = "Item"\n'
+        'def label(n: int) -> text = "${prefix} #${n}"\n'
         "let result = label(5)\n()"
     )
     ir = evaluate_ir(source)
@@ -363,7 +354,7 @@ def test_function_with_raise_in_body() -> None:
     source = (
         "def checked_inc(n: int) -> int =\n"
         "  if n < 0 =>\n"
-        "    raise Abort(message = \"negative\")\n"
+        '    raise Abort(message = "negative")\n'
         "  else =>\n"
         "    n + 1\n"
         "let result = checked_inc(5)\n()"
@@ -387,7 +378,7 @@ def test_function_with_dict_literal_and_capture() -> None:
     """Function body with dict literal capturing outer variable."""
     source = (
         "let base = 10\n"
-        "def make_dict(x: int) -> dict[text, int] = {\"a\": base + x, \"b\": x}\n"
+        'def make_dict(x: int) -> dict[text, int] = {"a": base + x, "b": x}\n'
         "let result = make_dict(5)\n()"
     )
     from agm.agl.semantics.values import DictValue
@@ -410,11 +401,7 @@ def test_function_with_is_test_and_capture() -> None:
 
 def test_function_captures_mutable_outer_var() -> None:
     """Function captures a mutable outer var (by_cell=True capture path)."""
-    source = (
-        "var counter = 0\n"
-        "def get_counter() -> int = counter\n"
-        "let result = get_counter()\n()"
-    )
+    source = "var counter = 0\ndef get_counter() -> int = counter\nlet result = get_counter()\n()"
     ir = evaluate_ir(source)
     assert ir["result"] == IntValue(0)
 
@@ -433,13 +420,7 @@ def test_index_target_capture() -> None:
     """
     from agm.agl.semantics.values import ListValue
 
-    source = (
-        "var arr = [0, 0, 0]\n"
-        "let k = 1\n"
-        "def setit() -> unit =\n"
-        "  arr[k] := 99\n"
-        "setit()\n()"
-    )
+    source = "var arr = [0, 0, 0]\nlet k = 1\ndef setit() -> unit =\n  arr[k] := 99\nsetit()\n()"
     ir = evaluate_ir(source)
     assert ir["arr"] == ListValue((IntValue(0), IntValue(99), IntValue(0)))
 
@@ -457,24 +438,13 @@ def test_assignment_as_function_result_yields_unit() -> None:
 
     # Index-target assignment as the function body / return value.
     index_source = (
-        "var arr = [0, 0, 0]\n"
-        "let k = 1\n"
-        "def setit() -> unit =\n"
-        "  arr[k] := 99\n"
-        "let z = setit()\n"
-        "()"
+        "var arr = [0, 0, 0]\nlet k = 1\ndef setit() -> unit =\n  arr[k] := 99\nlet z = setit()\n()"
     )
     ir = evaluate_ir(index_source)
     assert ir["z"] == UnitValue()
 
     # Name-target assignment as the function body / return value.
-    name_source = (
-        "var counter = 0\n"
-        "def reset() -> unit =\n"
-        "  counter := 5\n"
-        "let z = reset()\n"
-        "()"
-    )
+    name_source = "var counter = 0\ndef reset() -> unit =\n  counter := 5\nlet z = reset()\n()"
     ir2 = evaluate_ir(name_source)
     assert ir2["z"] == UnitValue()
 
@@ -486,12 +456,7 @@ def test_name_target_only_assign_capture() -> None:
     READ inside the function.  Before the fix the NameTarget was not walked and the
     capture was missed, causing IrAssign to fail at runtime.
     """
-    source = (
-        "var counter = 0\n"
-        "def reset() -> unit =\n"
-        "  counter := 5\n"
-        "reset()\n()"
-    )
+    source = "var counter = 0\ndef reset() -> unit =\n  counter := 5\nreset()\n()"
     ir = evaluate_ir(source)
     assert ir["counter"] == IntValue(5)
 
@@ -511,8 +476,8 @@ def test_capture_through_nested_positions_and_pattern_locals() -> None:
         "  case s of\n"
         "    | Circle(radius = r) => r * multiplier\n"
         "    | Square(side = sd) => sd * multiplier\n"
-        'let c = describe(Shape::Circle(radius = 4))\n'
-        'let sq = describe(Shape::Square(side = 5))\n()'
+        "let c = describe(Shape::Circle(radius = 4))\n"
+        "let sq = describe(Shape::Square(side = 5))\n()"
     )
     ir = evaluate_ir(source)
     assert ir["c"] == IntValue(12)
@@ -567,12 +532,12 @@ def test_bare_variant_pattern_in_function_body() -> None:
     """
     source = (
         "enum Flag | On | Off\n"
-        'let flag = Flag::On()\n'
-        "def check(f: Flag) -> int =\n"
+        "let flag = Flag::On()\n"
+        "def check_module(f: Flag) -> int =\n"
         "  case f of\n"
         "    | On => 1\n"
         "    | Off => 0\n"
-        "let r = check(flag)\n()"
+        "let r = check_module(flag)\n()"
     )
     ir = evaluate_ir(source)
     assert ir["r"] == IntValue(1)

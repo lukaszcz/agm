@@ -9,9 +9,7 @@ import agm.config.context as context_module
 from agm.config.context import current_config_context
 
 
-def test_current_config_context_uses_explicit_proj_dir(
-    tmp_path: Path, env: dict[str, str]
-) -> None:
+def test_current_config_context_uses_explicit_proj_dir(tmp_path: Path, env: dict[str, str]) -> None:
     home = Path(env["HOME"])
     project = tmp_path / "project"
     repo_dir = project / "repo"
@@ -89,9 +87,7 @@ def test_current_config_context_resolves_implicit_cwd(
     link = tmp_path / "link"
     link.symlink_to(target, target_is_directory=True)
     monkeypatch.chdir(link)
-    monkeypatch.setattr(
-        context_module, "discover_current_project_dir", lambda cwd, env=None: cwd
-    )
+    monkeypatch.setattr(context_module, "discover_current_project_dir", lambda cwd, env=None: cwd)
 
     context = current_config_context(env={"HOME": str(home)})
 

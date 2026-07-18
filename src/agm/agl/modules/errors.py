@@ -32,10 +32,7 @@ class ModuleNotFound(AglError):
         span: SourceSpan | None = None,
     ) -> None:
         roots_str = ", ".join(str(r) for r in searched_roots)
-        msg = (
-            f"module '{module_id.display()}' not found; "
-            f"searched roots: [{roots_str}]"
-        )
+        msg = f"module '{module_id.display()}' not found; searched roots: [{roots_str}]"
         super().__init__(msg, span=span)
         self.module_id = module_id
         self.searched_roots = searched_roots
@@ -128,10 +125,7 @@ class ImportEntryError(AglError):
         *,
         span: SourceSpan | None = None,
     ) -> None:
-        msg = (
-            f"cannot import '{module_id.display()}': "
-            f"it resolves to the entry file '{entry_path}'"
-        )
+        msg = f"cannot import '{module_id.display()}': it resolves to the entry file '{entry_path}'"
         super().__init__(msg, span=span)
         self.module_id = module_id
         self.entry_path = entry_path

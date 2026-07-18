@@ -1,8 +1,8 @@
 """Type-checking pass for AgL.
 
-``check(resolved, capabilities)`` performs a bidirectional type pass over the
-``ResolvedProgram``, using the ``HostCapabilities`` to validate codec and
-renderer names, and returns a ``CheckedProgram``.
+``check_module(resolved, capabilities)`` performs a bidirectional type pass over the
+``ModuleResolution``, using the ``HostCapabilities`` to validate codec and
+renderer names, and returns a ``CheckedModule``.
 
 Rules implemented
 -----------------
@@ -54,7 +54,7 @@ from agm.agl.scope.symbols import (
     BindingRef,
     BuiltinKind,
     ConstructorRef,
-    ResolvedProgram,
+    ModuleResolution,
 )
 from agm.agl.semantics.type_table import TypeTable, comparable_types
 from agm.agl.semantics.types import (
@@ -161,13 +161,13 @@ from agm.agl.typecheck.env import (
     AglTypeError,
     ArgumentBindings,
     CallSiteRecord,
-    CheckedProgram,
+    CheckedModule,
     FunctionSignature,
     OutputContractSpec,
     ParamSpec,
     PartialCallSpec,
     TypeEnvironment,
-    assert_checked_program_closed,
+    assert_checked_module_closed,
 )
 from agm.agl.typecheck.inference import (
     ConstraintRole,
@@ -415,7 +415,7 @@ class _Checker:
     def __init__(
         self,
         env: TypeEnvironment,
-        resolved: ResolvedProgram,
+        resolved: ModuleResolution,
         capabilities: HostCapabilities,
     ) -> None:
         self._env = env
@@ -532,7 +532,7 @@ class _Checker:
         that can never marshal across the FFI), and a type with no finite schema
         (its recursive instantiations never close, so its boundary schema — like
         its JSON schema — cannot be built). A finite recursive type is allowed:
-        it crosses as a ``BoundaryRef`` graph.
+        it crosses as a ``BoundaryRef`` structure.
         """
         for p, spec in zip(node.params, sig.params):
             self._reject_uncrossable_extern_type(
@@ -619,7 +619,7 @@ class _Checker:
     # Program-level check
     # ------------------------------------------------------------------
 
-    def check_program(self, program: Program) -> None:
+    def check_module(self, program: Program) -> None:
         """Type-check the entire program."""
         # Pre-pass: register all FuncDef signatures before any body is checked,
         # so a call may reference any top-level function regardless of
@@ -678,7 +678,7 @@ class _Checker:
         if isinstance(item, ProgramDecl):
             return UnitType()
         if isinstance(item, (ImportDecl, ExportDecl, InfixDecl)):
-            return UnitType()  # The graph module-system pass processes imports/exports.
+            return UnitType()  # The program module-system pass processes imports/exports.
         # --- Binders ---
         if isinstance(item, (LetDecl, VarDecl)):
             return self._check_binding(item)
@@ -721,7 +721,7 @@ class _Checker:
         evaluated as ordinary AgL expressions.
         """
         # Signatures are declaration schemes, not name-keyed templates. In
-        # graph mode an imported declaration may use the same spelling as this
+        # program context an imported declaration may use the same spelling as this
         # local unannotated definition; only this declaration's node id can
         # determine whether its signature was pre-registered.
         sig = self._env.get_function_signature_by_node_id(node.node_id)
@@ -918,13 +918,10 @@ class _Checker:
                 f"Unknown builtin var '{node.name}'.",
                 span=node.span,
             )
-        declared = self._env.resolve_type_expr(
-            node.type_ann, span=node.span, type_vars=frozenset()
-        )
+        declared = self._env.resolve_type_expr(node.type_ann, span=node.span, type_vars=frozenset())
         if declared != key_type:
             raise AglTypeError(
-                f"builtin var '{node.name}' must have type '{key_type!r}', "
-                f"got '{declared!r}'.",
+                f"builtin var '{node.name}' must have type '{key_type!r}', got '{declared!r}'.",
                 span=node.span,
             )
         self._env.set_binding_type(node.node_id, key_type)
@@ -1117,9 +1114,7 @@ class _Checker:
         assert self._inference_region is not None
         self._inference_region.finalization_obligations.append(obligation)
 
-    def _register_extern_call_obligation(
-        self, node: Call, callee: str, target_type: Type
-    ) -> None:
+    def _register_extern_call_obligation(self, node: Call, callee: str, target_type: Type) -> None:
         """Queue typed extern inventory metadata in source registration order."""
         assert self._inference_region is not None
         self._inference_region.finalization_obligations.append(
@@ -1601,9 +1596,7 @@ class _Checker:
         self._record_side_table_addition("cast_specs", self._cast_specs, node_id)
         self._cast_specs[node_id] = spec
 
-    def _record_function_call_binding(
-        self, node_id: int, binding: tuple[Expr | None, ...]
-    ) -> None:
+    def _record_function_call_binding(self, node_id: int, binding: tuple[Expr | None, ...]) -> None:
         """Store a region-owned declared-call argument binding."""
         self._record_side_table_addition(
             "function_call_bindings", self._function_call_bindings, node_id
@@ -2012,7 +2005,7 @@ class _Checker:
         hole_indices: Mapping[int, int],
     ) -> Type:
         # Use the node-id-keyed lookup populated by the function-signature pre-pass
-        # (graph mode) and by _preregister_funcdef (single-program mode).  Keying
+        # (program context) and by _preregister_funcdef (module mode).  Keying
         # by the callee's globally-unique decl_node_id avoids the same-name collision
         # where two modules define functions with identical names but different
         # signatures, which would cause the name-keyed table to return the wrong
@@ -2049,7 +2042,7 @@ class _Checker:
             )
 
         # Calls to a known extern are recorded like ask/exec call sites, for
-        # own-module AND imported (graph-mode) externs alike. A partial call
+        # own-module AND imported (program) externs alike. A partial call
         # only builds a function value, so carry extern provenance forward and
         # record the eventual invocation site instead.
         if self._env.is_extern_node_id(callee_ref.decl_node_id):
@@ -2353,7 +2346,7 @@ class _Checker:
             exc_type: ExceptionType = EXCEPTION_BASE
         else:
             # resolve_named_type is used instead of get_type so that open-imported
-            # exception types (cross-module graph mode) are found as well.
+            # exception types (cross-module program context) are found as well.
             resolved = self._env.resolve_named_type(clause.exc_type)
             if resolved is None or not isinstance(resolved, ExceptionType):
                 raise AglTypeError(
@@ -2797,9 +2790,7 @@ class _Checker:
             if not module_qualifier.segments
             else EnumOwnerFormKind.QUALIFIED_IMPORT
         )
-        form = self._env.resolve_enum_owner_form(
-            kind, enum_name, module_qualifier.segments
-        )
+        form = self._env.resolve_enum_owner_form(kind, enum_name, module_qualifier.segments)
         if form is not None:
             owner = (
                 f"::{enum_name}"
@@ -2809,8 +2800,7 @@ class _Checker:
             self._require_enum_owner_match(form, enum_type, owner, span)
             return
         raise AglTypeError(
-            f"'{'.'.join(module_qualifier.segments)}::{enum_name}' "
-            "is not a known enum type.",
+            f"'{'.'.join(module_qualifier.segments)}::{enum_name}' is not a known enum type.",
             span=span,
         )
 
@@ -3259,8 +3249,8 @@ class _Checker:
     # Result
     # ------------------------------------------------------------------
 
-    def result(self, resolved: ResolvedProgram) -> CheckedProgram:
-        return CheckedProgram(
+    def result(self, resolved: ModuleResolution) -> CheckedModule:
+        return CheckedModule(
             resolved=resolved,
             node_types=self._node_types,
             contract_specs=self._contract_specs,
@@ -3276,7 +3266,6 @@ class _Checker:
                 constructor_patterns=self._constructor_pattern_bindings,
             ),
             partial_calls=self._partial_calls,
-            capabilities=self._caps,
         )
 
 
@@ -3285,17 +3274,17 @@ class _Checker:
 # ---------------------------------------------------------------------------
 
 
-def check_prepared(
-    resolved: ResolvedProgram,
+def _check_prepared_module(
+    resolved: ModuleResolution,
     capabilities: HostCapabilities,
     *,
     env: TypeEnvironment,
     module_id: ModuleId = ENTRY_ID,
     check_inhabitation: bool = True,
-) -> CheckedProgram:
+) -> CheckedModule:
     """Check using a prepared environment and return only finalized annotations.
 
-    Both single-module and graph callers enter here after preparing the
+    Both single-module and program callers enter here after preparing the
     namespace appropriate to their mode.  ``_Checker`` owns expression-region
     close/finalize validation, so this boundary never returns provisional
     inference state.
@@ -3304,9 +3293,9 @@ def check_prepared(
     builder.collect(resolved.program, check_inhabitation=check_inhabitation)
 
     checker = _Checker(env=env, resolved=resolved, capabilities=capabilities)
-    checker.check_program(resolved.program)
+    checker.check_module(resolved.program)
     checked = checker.result(resolved)
-    assert_checked_program_closed(checked)
+    assert_checked_module_closed(checked)
     return checked
 
 
@@ -3315,12 +3304,12 @@ def check_prepared(
 # ---------------------------------------------------------------------------
 
 
-def check(
-    resolved: ResolvedProgram,
+def check_module(
+    resolved: ModuleResolution,
     capabilities: HostCapabilities,
     *,
     seed_env: TypeEnvironment | None = None,
-) -> CheckedProgram:
+) -> CheckedModule:
     """Run the full type-checking pass.
 
     Parameters
@@ -3335,7 +3324,7 @@ def check(
 
     Returns
     -------
-    CheckedProgram
+    CheckedModule
         The annotated program with type side tables and contract specs.
 
     Raises
@@ -3346,4 +3335,4 @@ def check(
     env = TypeEnvironment()
     if seed_env is not None:
         env.seed_from(seed_env)
-    return check_prepared(resolved, capabilities, env=env)
+    return _check_prepared_module(resolved, capabilities, env=env)

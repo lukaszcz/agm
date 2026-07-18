@@ -13,12 +13,12 @@ from agm.agl.capabilities import HostCapabilities
 from agm.agl.eval.ir_interpreter import IrInterpreter
 from agm.agl.ir.ids import SymbolId
 from agm.agl.ir.program import ExecutableProgram, ExternFunctionBody
-from agm.agl.lower import lower_program
-from agm.agl.lower.graph import lower_graph
+from agm.agl.lower import lower_module
+from agm.agl.lower.program import lower_program
 from agm.agl.matchcompile import (
-    MatchCompiledModuleGraph,
+    MatchCompiledModule,
     MatchCompiledProgram,
-    compile_graph_matches,
+    compile_module_matches,
     compile_program_matches,
 )
 from agm.agl.modules.ids import ModuleId
@@ -28,36 +28,34 @@ from agm.agl.parser import parse_program
 from agm.agl.runtime.agents import AgentFn, AgentRegistry
 from agm.agl.runtime.externs import ExternRegistry
 from agm.agl.runtime.request import AgentRequest, AgentResponse
-from agm.agl.scope import resolve
-from agm.agl.scope.graph import resolve_graph
+from agm.agl.scope import resolve_module
+from agm.agl.scope.program import resolve_program
 from agm.agl.semantics.exceptions import AglRaise
 from agm.agl.semantics.values import ExceptionValue, Value
-from agm.agl.typecheck import check
-from agm.agl.typecheck.graph import CheckedModuleGraph, check_graph
+from agm.agl.typecheck import check_module
+from agm.agl.typecheck.program import CheckedProgram, check_program
 from agm.core.process import ProcessCaptureResult
 
 _REPO_STDLIB_ROOT = Path(__file__).resolve().parents[2] / "stdlib"
 
 
-def _compiled_program(source: str, *, caps: HostCapabilities | None = None) -> MatchCompiledProgram:
-    checked = check(resolve(parse_program(source)), caps or base_caps())
-    result = compile_program_matches(checked)
-    assert isinstance(result.compiled, MatchCompiledProgram)
+def _compiled_program(source: str, *, caps: HostCapabilities | None = None) -> MatchCompiledModule:
+    checked = check_module(resolve_module(parse_program(source)), caps or base_caps())
+    result = compile_module_matches(checked)
+    assert isinstance(result.compiled, MatchCompiledModule)
     return result.compiled
 
 
-def _compiled_checked(checked: object) -> MatchCompiledProgram:
-    from agm.agl.typecheck import CheckedProgram
+def _compiled_checked(checked: object) -> MatchCompiledModule | MatchCompiledProgram:
+    from agm.agl.typecheck import CheckedModule
 
+    if isinstance(checked, CheckedModule):
+        result = compile_module_matches(checked)
+        assert isinstance(result.compiled, MatchCompiledModule)
+        return result.compiled
     assert isinstance(checked, CheckedProgram)
     result = compile_program_matches(checked)
     assert isinstance(result.compiled, MatchCompiledProgram)
-    return result.compiled
-
-
-def _compiled_checked_graph(checked: CheckedModuleGraph) -> MatchCompiledModuleGraph:
-    result = compile_graph_matches(checked)
-    assert isinstance(result.compiled, MatchCompiledModuleGraph)
     return result.compiled
 
 
@@ -69,9 +67,7 @@ def base_caps() -> HostCapabilities:
     return HostCapabilities(
         codec_kinds={
             "text": frozenset({"text"}),
-            "json": frozenset(
-                {"json", "record", "enum", "list", "dict", "int", "decimal", "bool"}
-            ),
+            "json": frozenset({"json", "record", "enum", "list", "dict", "int", "decimal", "bool"}),
         }
     )
 
@@ -96,21 +92,15 @@ def _run_ir(
     registry: AgentRegistry | None = None,
 ) -> tuple[dict[str, Value], str]:
     compiled = _compiled_program(source, caps=caps)
-    executable = lower_program(
-        compiled, source_text=source, source_label="<ir-test>"
-    )
+    executable = lower_module(compiled, source_text=source, source_label="<ir-test>")
     params = _build_ir_param_values(executable, param_values) if param_values else None
     output = io.StringIO()
     with contextlib.redirect_stdout(output):
-        result = IrInterpreter(
-            executable, registry=registry, param_values=params
-        ).run()
+        result = IrInterpreter(executable, registry=registry, param_values=params).run()
     return result, output.getvalue()
 
 
-def evaluate_ir(
-    source: str, param_values: dict[str, Value] | None = None
-) -> dict[str, Value]:
+def evaluate_ir(source: str, param_values: dict[str, Value] | None = None) -> dict[str, Value]:
     result, _ = _run_ir(source, param_values)
     return result
 
@@ -121,9 +111,7 @@ def evaluate_ir_output(source: str, param_values: dict[str, Value] | None = None
     return output
 
 
-def evaluate_ir_raises(
-    source: str, param_values: dict[str, Value] | None = None
-) -> ExceptionValue:
+def evaluate_ir_raises(source: str, param_values: dict[str, Value] | None = None) -> ExceptionValue:
     try:
         _run_ir(source, param_values)
     except AglRaise as exc:
@@ -171,9 +159,9 @@ def _prepare_extern_program(
     companion_path = tmp_path / "entry.py"
     companion_path.write_text(companion_source)
 
-    resolved = resolve(parse_program(source), origin_path=entry_path)
-    checked = check(resolved, caps or extern_caps())
-    executable = lower_program(
+    resolved = resolve_module(parse_program(source), origin_path=entry_path)
+    checked = check_module(resolved, caps or extern_caps())
+    executable = lower_module(
         _compiled_checked(checked),
         source_text=source,
         source_label="<extern-ir-test>",
@@ -204,9 +192,7 @@ def evaluate_ir_with_externs(
     params = _build_ir_param_values(executable, param_values) if param_values else None
     output = io.StringIO()
     with contextlib.redirect_stdout(output):
-        result = IrInterpreter(
-            executable, param_values=params, extern_registry=registry
-        ).run()
+        result = IrInterpreter(executable, param_values=params, extern_registry=registry).run()
     return result, output.getvalue()
 
 
@@ -241,22 +227,20 @@ def make_graph_from_files(tmp_path: Path, modules: dict[str, str]) -> ModuleGrap
     return load_graph(entry_source, entry_path=None, roots=_roots(root))
 
 
-def _checked_graph(
-    entry_source: str, modules: dict[str, str], tmp_path: Path
-) -> CheckedModuleGraph:
+def _checked(entry_source: str, modules: dict[str, str], tmp_path: Path) -> CheckedProgram:
     root = tmp_path / "root"
     root.mkdir(parents=True, exist_ok=True)
     for dotted, source in modules.items():
         write_module_file(root, dotted, source)
     graph = load_graph(entry_source, entry_path=None, roots=_roots(root))
-    return check_graph(resolve_graph(graph), base_caps())
+    return check_program(resolve_program(graph), base_caps())
 
 
 def evaluate_ir_graph(
     entry_source: str, modules: dict[str, str], tmp_path: Path
 ) -> dict[str, Value]:
-    checked = _checked_graph(entry_source, modules, tmp_path)
-    executable = lower_graph(_compiled_checked_graph(checked))
+    checked = _checked(entry_source, modules, tmp_path)
+    executable = lower_program(_compiled_checked(checked))
     result = IrInterpreter(executable).run()
     return result
 
@@ -264,8 +248,8 @@ def evaluate_ir_graph(
 def evaluate_ir_graph_raises(
     entry_source: str, modules: dict[str, str], tmp_path: Path
 ) -> ExceptionValue:
-    checked = _checked_graph(entry_source, modules, tmp_path)
-    executable = lower_graph(_compiled_checked_graph(checked))
+    checked = _checked(entry_source, modules, tmp_path)
+    executable = lower_program(_compiled_checked(checked))
     try:
         IrInterpreter(executable).run()
     except AglRaise as exc:
@@ -300,9 +284,7 @@ def _make_scripted_registry(
 
     named = {name: make_agent(name, responses) for name, responses in scripts.items()}
     default = (
-        make_agent("__default__", default_responses)
-        if default_responses is not None
-        else None
+        make_agent("__default__", default_responses) if default_responses is not None else None
     )
     return AgentRegistry(named=named, default_agent=default)
 

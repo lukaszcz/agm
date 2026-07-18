@@ -43,9 +43,7 @@ class TestParametricUtilitiesAtSeveralInstantiations:
 
     def test_reverse_at_text(self, tmp_path: Path) -> None:
         source = (
-            "extern def reverse[T](xs: list[T]) -> list[T]\n"
-            'let r = reverse(["a", "b", "c"])\n'
-            "r\n"
+            'extern def reverse[T](xs: list[T]) -> list[T]\nlet r = reverse(["a", "b", "c"])\nr\n'
         )
         companion = "def reverse(xs):\n    return list(reversed(xs))\n"
         result, _ = evaluate_ir_with_externs(source, companion, tmp_path)
@@ -153,17 +151,13 @@ class TestHandleEqualityHashReprInPython:
             (TextValue("apple"), TextValue("banana"), TextValue("cherry"))
         )
 
-    def test_companion_counts_distinct_log_entries_built_from_reprs(
-        self, tmp_path: Path
-    ) -> None:
+    def test_companion_counts_distinct_log_entries_built_from_reprs(self, tmp_path: Path) -> None:
         """Reprs render the wrapped AgL value for debugging but expose no
         other surface; assert the observable count of distinct entries, never
         the rendered text itself."""
         source = "extern def log_count[T](xs: list[T]) -> int\nlet r = log_count([1, 2, 1])\nr\n"
         companion = (
-            "def log_count(xs):\n"
-            "    log = [repr(x) for x in xs]\n"
-            "    return len(set(log))\n"
+            "def log_count(xs):\n    log = [repr(x) for x in xs]\n    return len(set(log))\n"
         )
         result, _ = evaluate_ir_with_externs(source, companion, tmp_path)
         assert result["r"] == IntValue(2)
@@ -195,9 +189,7 @@ class TestHandleEqualityHashReprInPython:
 
 
 class TestSealingViolations:
-    def test_forged_raw_value_at_a_type_var_return_position_rejected(
-        self, tmp_path: Path
-    ) -> None:
+    def test_forged_raw_value_at_a_type_var_return_position_rejected(self, tmp_path: Path) -> None:
         exc = evaluate_ir_raises_with_externs(
             "extern def identity[T](x: T) -> T\nidentity(1)\n()\n",
             "def identity(x):\n    return 999\n",
@@ -254,17 +246,13 @@ class TestSealingViolations:
 
     def test_partial_forgery_inside_a_returned_dict_rejected(self, tmp_path: Path) -> None:
         source = (
-            "extern def process[T](d: dict[text, T]) -> dict[text, T]\n"
-            "process({a: 1, b: 2})\n"
-            "()\n"
+            "extern def process[T](d: dict[text, T]) -> dict[text, T]\nprocess({a: 1, b: 2})\n()\n"
         )
         companion = "def process(d):\n    return {'a': d['a'], 'b': 999}\n"
         exc = evaluate_ir_raises_with_externs(source, companion, tmp_path)
         assert exc.display_name == "ExternError"
 
-    def test_companion_minted_handle_from_public_helpers_is_rejected(
-        self, tmp_path: Path
-    ) -> None:
+    def test_companion_minted_handle_from_public_helpers_is_rejected(self, tmp_path: Path) -> None:
         source = "extern def forge[T]() -> T\nforge::[int]()\n()\n"
         companion = (
             "from agm.agl.ir.contracts import BoundarySealVar\n"

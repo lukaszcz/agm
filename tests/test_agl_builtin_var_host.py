@@ -65,9 +65,7 @@ class _StepClock:
 def _trace_kinds_and_prints(path: Path) -> tuple[list[str], list[str]]:
     """Return the record kinds and the rendered ``print`` outputs of a trace file."""
     records = [
-        json.loads(line)
-        for line in path.read_text(encoding="utf-8").splitlines()
-        if line.strip()
+        json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()
     ]
     kinds = [rec["kind"] for rec in records]
     rendered = [rec["rendered"] for rec in records if rec["kind"] == "print"]
@@ -102,9 +100,7 @@ class TestRunnerReconfiguration:
     def test_runner_write_reconfigures_default_agent(self, tmp_path: Path) -> None:
         """A ``runner :=`` before an ``ask`` dispatches through the new command."""
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text(
-            'import std.config\nstd.config::runner := "codex-runner"\nask("hi")\n'
-        )
+        agl_file.write_text('import std.config\nstd.config::runner := "codex-runner"\nask("hi")\n')
 
         received: list[list[str]] = []
         with (
@@ -249,10 +245,7 @@ class TestTraceReconfiguration:
         monkeypatch.setattr("agm.core.log.default_agent_files_dir", lambda: tmp_path)
         agl_file = tmp_path / "prog.agl"
         agl_file.write_text(
-            "import std.config\n"
-            'print "before"\n'
-            "std.config::log := true\n"
-            'print "after"\n'
+            'import std.config\nprint "before"\nstd.config::log := true\nprint "after"\n'
         )
 
         with patch("agm.core.log.datetime", _StepClock()):
@@ -299,10 +292,7 @@ class TestTraceReconfiguration:
         trace_path = tmp_path / "explicit.jsonl"
         agl_file = tmp_path / "prog.agl"
         agl_file.write_text(
-            "import std.config\n"
-            'print "before"\n'
-            "std.config::log := true\n"
-            'print "after"\n'
+            'import std.config\nprint "before"\nstd.config::log := true\nprint "after"\n'
         )
 
         with patch("agm.core.log.datetime", _StepClock()):
@@ -331,16 +321,14 @@ class _RecordingPolicy:
         return None
 
 
-def _run_graph_with_policy(
+def _run_program_with_policy(
     source: str, *, policy: HostSettingsPolicy, seed: dict[str, Value] | None = None
 ) -> RunResult:
     rt = PipelineDriver()
     prepared = rt.prepare_program(
         source, entry_path=None, roots=RootSet(roots=frozenset({_STDLIB}))
     )
-    result = rt.run_prepared_graph(
-        prepared, host_settings_policy=policy, builtin_host_settings=seed
-    )
+    result = rt.run_prepared(prepared, host_settings_policy=policy, builtin_host_settings=seed)
     assert isinstance(result, RunResult)
     return result
 
@@ -358,7 +346,7 @@ class TestReconfigureHooks:
             'std.config::log-file := Some("out.jsonl")\n'
             "print 1\n"
         )
-        result = _run_graph_with_policy(source, policy=policy)
+        result = _run_program_with_policy(source, policy=policy)
 
         assert result.ok, f"expected success but got: {result.error!r}"
         assert recorder.runner_commands == ["codex"]
@@ -374,7 +362,7 @@ class TestReconfigureHooks:
             build_runner=failing_build, resolve_trace_path=lambda enabled, log_file: None
         )
         source = 'import std.config\nstd.config::runner := "boom"\nprint 1\n'
-        result = _run_graph_with_policy(source, policy=policy)
+        result = _run_program_with_policy(source, policy=policy)
 
         assert not result.ok
         assert result.error is not None
@@ -395,7 +383,7 @@ class TestReconfigureHooks:
             "let retained = std.config::runner\n"
             "retained\n"
         )
-        result = _run_graph_with_policy(source, policy=policy)
+        result = _run_program_with_policy(source, policy=policy)
 
         assert result.ok
         assert result.bindings["retained"] == TextValue(DEFAULT_AGENT_RUNNER)
@@ -420,7 +408,7 @@ class TestReconfigureHooks:
             build_runner=recorder.build_runner,
             resolve_trace_path=fail_then_recover,
         )
-        result = _run_graph_with_policy(
+        result = _run_program_with_policy(
             "import std.config\n"
             'std.config::log-file := Some("nested/one.jsonl")\n'
             'std.config::log-file := Some("nested/two.jsonl")\n'

@@ -156,15 +156,12 @@ def _call_make_contract(
     except (TypeError, ValueError):
         return codec.make_contract(type_ref, type_table)
     positional = [
-        param
-        for param in params
-        if param.kind.name in {"POSITIONAL_ONLY", "POSITIONAL_OR_KEYWORD"}
+        param for param in params if param.kind.name in {"POSITIONAL_ONLY", "POSITIONAL_OR_KEYWORD"}
     ]
     has_varargs = any(param.kind.name == "VAR_POSITIONAL" for param in params)
     has_varkw = any(param.kind.name == "VAR_KEYWORD" for param in params)
     accepts_type_table_kw = has_varkw or any(
-        param.name == "type_table"
-        and param.kind.name in {"KEYWORD_ONLY", "POSITIONAL_OR_KEYWORD"}
+        param.name == "type_table" and param.kind.name in {"KEYWORD_ONLY", "POSITIONAL_OR_KEYWORD"}
         for param in params
     )
     if accepts_type_table_kw:

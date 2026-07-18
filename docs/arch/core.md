@@ -20,7 +20,7 @@ Dry-run is a global, cross-cutting mode set from the `--dry-run` CLI flag. The p
 
 ## Generic Utilities
 
-`util/` is a dependency-free leaf: pure algorithms and string helpers with zero `agm` imports, deliberately usable from any layer without creating a cycle. It provides generic graph algorithms (Tarjan strongly-connected components and Kahn topological sort), used by AgL module loading and the graph-aware passes for deterministic dependency ordering ([agl/modules.md](agl/modules.md)), and universal-newline normalization shared by the AgL lexer and runtime diagnostics so both index source text identically.
+`util/` is a dependency-free leaf: pure algorithms and string helpers with zero `agm` imports, deliberately usable from any layer without creating a cycle. It provides generic graph algorithms (Tarjan strongly-connected components and Kahn topological sort), used by AgL module loading and the program-level passes for deterministic dependency ordering ([agl/modules.md](agl/modules.md)), and universal-newline normalization shared by the AgL lexer and runtime diagnostics so both index source text identically.
 
 ## Code Entry Points
 

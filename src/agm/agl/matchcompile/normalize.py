@@ -42,8 +42,7 @@ from agm.agl.syntax.nodes import (
     VarPattern,
     WildcardPattern,
 )
-from agm.agl.typecheck.env import CheckedProgram
-from agm.agl.typecheck.graph import CheckedModule
+from agm.agl.typecheck.env import CheckedModule
 
 from .model import (
     BinderProvenance,
@@ -70,7 +69,7 @@ from .model import (
     WildcardCell,
 )
 
-CheckedPatternOwner = CheckedProgram | CheckedModule
+CheckedPatternOwner = CheckedModule | CheckedModule
 
 
 class MatchCompileInvariantError(RuntimeError):
@@ -110,9 +109,7 @@ def _bare_enum_constructors(
     return frozenset(result)
 
 
-def _enum_constructor(
-    enum_type: EnumType, variant: str, table: TypeTable
-) -> EnumConstructor:
+def _enum_constructor(enum_type: EnumType, variant: str, table: TypeTable) -> EnumConstructor:
     try:
         variants = table.enum_variants(enum_type)
     except (KeyError, AssertionError) as exc:
@@ -149,10 +146,7 @@ def constructor_inhabits_type(constructor: Constructor, subject_type: Type) -> b
         case BoolType():
             return isinstance(constructor, BoolConstructor)
         case EnumType() as enum_type:
-            return (
-                isinstance(constructor, EnumConstructor)
-                and constructor.enum_type == enum_type
-            )
+            return isinstance(constructor, EnumConstructor) and constructor.enum_type == enum_type
         case IntType():
             return (
                 isinstance(constructor, LiteralConstructor)
@@ -170,18 +164,14 @@ def constructor_inhabits_type(constructor: Constructor, subject_type: Type) -> b
             )
         case TextType():
             return (
-                isinstance(constructor, LiteralConstructor)
-                and constructor.kind is LiteralKind.TEXT
+                isinstance(constructor, LiteralConstructor) and constructor.kind is LiteralKind.TEXT
             )
         case JsonType():
             return (
-                isinstance(constructor, LiteralConstructor)
-                and constructor.kind is LiteralKind.NULL
+                isinstance(constructor, LiteralConstructor) and constructor.kind is LiteralKind.NULL
             )
         case InferenceVarType():
-            raise MatchCompileInvariantError(
-                "flexible inference type escaped checked output"
-            )
+            raise MatchCompileInvariantError("flexible inference type escaped checked output")
         case (
             TypeVarType()
             | ListType()
@@ -209,9 +199,7 @@ def pattern_cell_inhabits_type(cell: PatternCell, subject_type: Type) -> bool:
     if isinstance(cell.constructor, EnumConstructor):
         return all(
             pattern_cell_inhabits_type(argument, field.type)
-            for field, argument in zip(
-                cell.constructor.fields, cell.arguments, strict=True
-            )
+            for field, argument in zip(cell.constructor.fields, cell.arguments, strict=True)
         )
     return True
 
@@ -270,9 +258,7 @@ def signature_for_type(subject_type: Type, table: TypeTable) -> Signature:
         case EnumType() as enum_type:
             return _enum_signature(enum_type, table)
         case InferenceVarType():
-            raise MatchCompileInvariantError(
-                "flexible inference type escaped checked output"
-            )
+            raise MatchCompileInvariantError("flexible inference type escaped checked output")
         case BottomType():
             return ClosedSignature(())
         case (
@@ -366,9 +352,7 @@ def normalize_pattern(
                 raise MatchCompileInvariantError(
                     "checked constructor pattern has a non-enum occurrence type"
                 )
-            constructor = _enum_constructor(
-                subject_type, variant, checked.type_env.type_table
-            )
+            constructor = _enum_constructor(subject_type, variant, checked.type_env.type_table)
             supplied_pairs = checked.argument_bindings.constructor_patterns.get(pattern.node_id)
             if supplied_pairs is None:
                 raise MatchCompileInvariantError(

@@ -110,13 +110,9 @@ items
         scripts={"lister": ['["alpha", "beta", "gamma"]']},
     )
     assert isinstance(ir["items"], ListValue)
-    assert ir["items"].elements == (
-        TextValue("alpha"), TextValue("beta"), TextValue("gamma")
-    )
+    assert ir["items"].elements == (TextValue("alpha"), TextValue("beta"), TextValue("gamma"))
     assert isinstance(ir["items"], ListValue)
-    assert ir["items"].elements == (
-        TextValue("alpha"), TextValue("beta"), TextValue("gamma")
-    )
+    assert ir["items"].elements == (TextValue("alpha"), TextValue("beta"), TextValue("gamma"))
 
 
 # ---------------------------------------------------------------------------
@@ -424,11 +420,18 @@ def test_enum_bad_case_raises_agent_parse_error() -> None:
     )
     schema = {
         "oneOf": [
-            {"type": "object", "additionalProperties": False,
-             "required": ["$case"], "properties": {"$case": {"const": "Ok"}}},
-            {"type": "object", "additionalProperties": False,
-             "required": ["$case", "msg"],
-             "properties": {"$case": {"const": "Err"}, "msg": {"type": "string"}}},
+            {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["$case"],
+                "properties": {"$case": {"const": "Ok"}},
+            },
+            {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["$case", "msg"],
+                "properties": {"$case": {"const": "Err"}, "msg": {"type": "string"}},
+            },
         ]
     }
     contract = ContractRequest(
@@ -499,9 +502,7 @@ def test_validate_ir_ask_missing_contract() -> None:
     from agm.agl.modules.ids import ENTRY_ID
 
     src_id = SourceId(0)
-    dummy_loc = Location(
-        source_id=src_id, start_offset=0, end_offset=1, start_line=1, start_col=0
-    )
+    dummy_loc = Location(source_id=src_id, start_offset=0, end_offset=1, start_line=1, start_col=0)
     bad_cid = ContractId(999)
     ask_node = IrAsk(
         location=dummy_loc,
@@ -533,9 +534,7 @@ def test_validate_ir_ask_max_attempts_zero() -> None:
     from agm.agl.modules.ids import ENTRY_ID
 
     src_id = SourceId(0)
-    dummy_loc = Location(
-        source_id=src_id, start_offset=0, end_offset=1, start_line=1, start_col=0
-    )
+    dummy_loc = Location(source_id=src_id, start_offset=0, end_offset=1, start_line=1, start_col=0)
     cid = ContractId(0)
     req = ContractRequest(
         codec_name="text",
@@ -577,9 +576,7 @@ def test_validate_contract_request_json_missing_schema() -> None:
     from agm.agl.modules.ids import ENTRY_ID
 
     src_id = SourceId(0)
-    dummy_loc = Location(
-        source_id=src_id, start_offset=0, end_offset=1, start_line=1, start_col=0
-    )
+    dummy_loc = Location(source_id=src_id, start_offset=0, end_offset=1, start_line=1, start_col=0)
     cid = ContractId(0)
     bad_req = ContractRequest(
         codec_name="json",
@@ -766,12 +763,14 @@ def test_parse_agent_output_required_field_error() -> None:
     from agm.agl.runtime.codec import _parse_contract_output
 
     nom = IrNominalId(PRELUDE_ID, "Point")
-    schema = _json.dumps({
-        "type": "object",
-        "additionalProperties": False,
-        "required": ["x", "y"],
-        "properties": {"x": {"type": "integer"}, "y": {"type": "integer"}},
-    })
+    schema = _json.dumps(
+        {
+            "type": "object",
+            "additionalProperties": False,
+            "required": ["x", "y"],
+            "properties": {"x": {"type": "integer"}, "y": {"type": "integer"}},
+        }
+    )
     decode = RecordDecode(
         nominal=nom,
         display_name="Point",
@@ -802,12 +801,14 @@ def test_parse_agent_output_additional_properties_error() -> None:
     from agm.agl.runtime.codec import _parse_contract_output
 
     nom = NominalId(PRELUDE_ID, "Point")
-    schema = _json.dumps({
-        "type": "object",
-        "additionalProperties": False,
-        "required": ["x"],
-        "properties": {"x": {"type": "integer"}},
-    })
+    schema = _json.dumps(
+        {
+            "type": "object",
+            "additionalProperties": False,
+            "required": ["x"],
+            "properties": {"x": {"type": "integer"}},
+        }
+    )
     decode = RecordDecode(
         nominal=nom,
         display_name="Point",
@@ -899,14 +900,24 @@ def test_enum_instance_not_dict_bad_case() -> None:
         display_name="Flag",
         variants=(VariantDecode(name="On", fields=()), VariantDecode(name="Off", fields=())),
     )
-    schema = _json.dumps({
-        "oneOf": [
-            {"type": "object", "additionalProperties": False,
-             "required": ["$case"], "properties": {"$case": {"const": "On"}}},
-            {"type": "object", "additionalProperties": False,
-             "required": ["$case"], "properties": {"$case": {"const": "Off"}}},
-        ]
-    })
+    schema = _json.dumps(
+        {
+            "oneOf": [
+                {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "required": ["$case"],
+                    "properties": {"$case": {"const": "On"}},
+                },
+                {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "required": ["$case"],
+                    "properties": {"$case": {"const": "Off"}},
+                },
+            ]
+        }
+    )
     contract = ContractRequest(
         codec_name="json",
         strict_json=None,
@@ -939,14 +950,24 @@ def test_enum_no_case_tag_bad_case() -> None:
         display_name="Flag",
         variants=(VariantDecode(name="On", fields=()), VariantDecode(name="Off", fields=())),
     )
-    schema = _json.dumps({
-        "oneOf": [
-            {"type": "object", "additionalProperties": False,
-             "required": ["$case"], "properties": {"$case": {"const": "On"}}},
-            {"type": "object", "additionalProperties": False,
-             "required": ["$case"], "properties": {"$case": {"const": "Off"}}},
-        ]
-    })
+    schema = _json.dumps(
+        {
+            "oneOf": [
+                {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "required": ["$case"],
+                    "properties": {"$case": {"const": "On"}},
+                },
+                {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "required": ["$case"],
+                    "properties": {"$case": {"const": "Off"}},
+                },
+            ]
+        }
+    )
     contract = ContractRequest(
         codec_name="json",
         strict_json=None,
@@ -970,12 +991,18 @@ def test_enum_bad_case_no_decode_schema() -> None:
     from agm.agl.ir.contracts import ContractRequest
     from agm.agl.runtime.codec import _parse_contract_output
 
-    schema = _json.dumps({
-        "oneOf": [
-            {"type": "object", "additionalProperties": False,
-             "required": ["$case"], "properties": {"$case": {"const": "On"}}},
-        ]
-    })
+    schema = _json.dumps(
+        {
+            "oneOf": [
+                {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "required": ["$case"],
+                    "properties": {"$case": {"const": "On"}},
+                },
+            ]
+        }
+    )
     # decode=None: _find_enum_decode_at_path returns None.
     contract = ContractRequest(
         codec_name="json",
@@ -1197,7 +1224,6 @@ def test_find_enum_decode_at_path_end_at_scalar() -> None:
     assert result is None
 
 
-
 def test_enum_known_case_with_additional_props_error() -> None:
     """_classify_enum_failure: known case but extra field → unknown_field."""
     from agm.agl.ir.contracts import (
@@ -1219,15 +1245,24 @@ def test_enum_known_case_with_additional_props_error() -> None:
             VariantDecode(name="Err", fields=(("msg", ScalarDecode(ScalarKind.TEXT)),)),
         ),
     )
-    schema = _json.dumps({
-        "oneOf": [
-            {"type": "object", "additionalProperties": False,
-             "required": ["$case"], "properties": {"$case": {"const": "Ok"}}},
-            {"type": "object", "additionalProperties": False,
-             "required": ["$case", "msg"],
-             "properties": {"$case": {"const": "Err"}, "msg": {"type": "string"}}},
-        ]
-    })
+    schema = _json.dumps(
+        {
+            "oneOf": [
+                {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "required": ["$case"],
+                    "properties": {"$case": {"const": "Ok"}},
+                },
+                {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "required": ["$case", "msg"],
+                    "properties": {"$case": {"const": "Err"}, "msg": {"type": "string"}},
+                },
+            ]
+        }
+    )
     contract = ContractRequest(
         codec_name="json",
         strict_json=None,
@@ -1261,9 +1296,7 @@ def test_validate_ir_ask_request_missing_contract() -> None:
     from agm.agl.modules.ids import ENTRY_ID
 
     src_id = SourceId(0)
-    dummy_loc = Location(
-        source_id=src_id, start_offset=0, end_offset=1, start_line=1, start_col=0
-    )
+    dummy_loc = Location(source_id=src_id, start_offset=0, end_offset=1, start_line=1, start_col=0)
     bad_cid = ContractId(999)
     node = IrAskRequest(
         location=dummy_loc,
@@ -1295,9 +1328,7 @@ def test_validate_ir_ask_request_max_attempts_zero() -> None:
     from agm.agl.modules.ids import ENTRY_ID
 
     src_id = SourceId(0)
-    dummy_loc = Location(
-        source_id=src_id, start_offset=0, end_offset=1, start_line=1, start_col=0
-    )
+    dummy_loc = Location(source_id=src_id, start_offset=0, end_offset=1, start_line=1, start_col=0)
     cid = ContractId(0)
     req = ContractRequest(
         codec_name="text",
@@ -1339,9 +1370,7 @@ def test_validate_contract_request_json_missing_decode() -> None:
     from agm.agl.modules.ids import ENTRY_ID
 
     src_id = SourceId(0)
-    dummy_loc = Location(
-        source_id=src_id, start_offset=0, end_offset=1, start_line=1, start_col=0
-    )
+    dummy_loc = Location(source_id=src_id, start_offset=0, end_offset=1, start_line=1, start_col=0)
     cid = ContractId(0)
     bad_req = ContractRequest(
         codec_name="json",
@@ -1380,9 +1409,7 @@ def test_validate_contract_request_json_decode_check_nominals() -> None:
     from agm.agl.modules.ids import ENTRY_ID
 
     src_id = SourceId(0)
-    dummy_loc = Location(
-        source_id=src_id, start_offset=0, end_offset=1, start_line=1, start_col=0
-    )
+    dummy_loc = Location(source_id=src_id, start_offset=0, end_offset=1, start_line=1, start_col=0)
     cid = ContractId(0)
     req = ContractRequest(
         codec_name="json",
@@ -1435,9 +1462,7 @@ def test_validate_contract_request_recursive_decode_defs() -> None:
     from agm.agl.modules.ids import ENTRY_ID
 
     src_id = SourceId(0)
-    dummy_loc = Location(
-        source_id=src_id, start_offset=0, end_offset=1, start_line=1, start_col=0
-    )
+    dummy_loc = Location(source_id=src_id, start_offset=0, end_offset=1, start_line=1, start_col=0)
     tree_nominal = NominalId(ENTRY_ID, "Tree")
     tree_body = EnumDecode(
         nominal=tree_nominal,
@@ -1502,9 +1527,7 @@ def test_validate_contract_request_recursive_decode_unknown_defs_key() -> None:
     from agm.agl.modules.ids import ENTRY_ID
 
     src_id = SourceId(0)
-    dummy_loc = Location(
-        source_id=src_id, start_offset=0, end_offset=1, start_line=1, start_col=0
-    )
+    dummy_loc = Location(source_id=src_id, start_offset=0, end_offset=1, start_line=1, start_col=0)
     cid = ContractId(0)
     req = ContractRequest(
         codec_name="json",
@@ -1556,9 +1579,7 @@ def test_ir_ask_non_text_prompt_renders_to_string() -> None:
     from agm.agl.runtime.request import AgentRequest, AgentResponse
 
     src_id = SourceId(0)
-    dummy_loc = Location(
-        source_id=src_id, start_offset=0, end_offset=1, start_line=1, start_col=0
-    )
+    dummy_loc = Location(source_id=src_id, start_offset=0, end_offset=1, start_line=1, start_col=0)
     cid = ContractId(0)
     sym = SymbolId(0)
     req = ContractRequest(
@@ -1638,9 +1659,7 @@ def test_ir_ask_request_non_text_prompt() -> None:
     from agm.agl.runtime.agents import AgentRegistry
 
     src_id = SourceId(0)
-    dummy_loc = Location(
-        source_id=src_id, start_offset=0, end_offset=1, start_line=1, start_col=0
-    )
+    dummy_loc = Location(source_id=src_id, start_offset=0, end_offset=1, start_line=1, start_col=0)
     cid = ContractId(0)
     sym = SymbolId(0)
     req = ContractRequest(
@@ -1757,9 +1776,7 @@ def test_validate_ir_ask_deep_valid_contract() -> None:
     from agm.agl.modules.ids import ENTRY_ID
 
     src_id = SourceId(0)
-    dummy_loc = Location(
-        source_id=src_id, start_offset=0, end_offset=1, start_line=1, start_col=0
-    )
+    dummy_loc = Location(source_id=src_id, start_offset=0, end_offset=1, start_line=1, start_col=0)
     cid = ContractId(0)
     req = ContractRequest(
         codec_name="text",
@@ -1800,9 +1817,7 @@ def test_validate_ir_ask_request_deep_valid_contract() -> None:
     from agm.agl.modules.ids import ENTRY_ID
 
     src_id = SourceId(0)
-    dummy_loc = Location(
-        source_id=src_id, start_offset=0, end_offset=1, start_line=1, start_col=0
-    )
+    dummy_loc = Location(source_id=src_id, start_offset=0, end_offset=1, start_line=1, start_col=0)
     cid = ContractId(0)
     req = ContractRequest(
         codec_name="text",
@@ -1874,9 +1889,7 @@ def test_ir_ask_no_errors_when_failed_covers_else_branch() -> None:
     from agm.agl.runtime.request import AgentRequest, AgentResponse
 
     src_id = SourceId(0)
-    dummy_loc = Location(
-        source_id=src_id, start_offset=0, end_offset=1, start_line=1, start_col=0
-    )
+    dummy_loc = Location(source_id=src_id, start_offset=0, end_offset=1, start_line=1, start_col=0)
     cid = ContractId(0)
     req = ContractRequest(
         codec_name="json",
@@ -1914,6 +1927,7 @@ def test_ir_ask_no_errors_when_failed_covers_else_branch() -> None:
     empty_failure = ParseResult(ok=False, value=None, error_msg="", errors=())
     with patch("agm.agl.eval.ir_interpreter._parse_contract_output", return_value=empty_failure):
         from agm.agl.semantics.exceptions import AglRaise
+
         with pytest.raises(AglRaise):
             interp.run()
 
@@ -1944,9 +1958,7 @@ def test_validate_ir_ask_shallow_does_not_check_contracts() -> None:
     from agm.agl.modules.ids import ENTRY_ID
 
     src_id = SourceId(0)
-    dummy_loc = Location(
-        source_id=src_id, start_offset=0, end_offset=1, start_line=1, start_col=0
-    )
+    dummy_loc = Location(source_id=src_id, start_offset=0, end_offset=1, start_line=1, start_col=0)
     bad_cid = ContractId(999)
     node = IrAsk(
         location=dummy_loc,
@@ -1976,9 +1988,7 @@ def test_validate_ir_ask_request_shallow_does_not_check_contracts() -> None:
     from agm.agl.modules.ids import ENTRY_ID
 
     src_id = SourceId(0)
-    dummy_loc = Location(
-        source_id=src_id, start_offset=0, end_offset=1, start_line=1, start_col=0
-    )
+    dummy_loc = Location(source_id=src_id, start_offset=0, end_offset=1, start_line=1, start_col=0)
     bad_cid = ContractId(999)
     node = IrAskRequest(
         location=dummy_loc,
@@ -2009,9 +2019,7 @@ def test_validate_contract_request_json_is_unit_decode_none() -> None:
     from agm.agl.modules.ids import ENTRY_ID
 
     src_id = SourceId(0)
-    dummy_loc = Location(
-        source_id=src_id, start_offset=0, end_offset=1, start_line=1, start_col=0
-    )
+    dummy_loc = Location(source_id=src_id, start_offset=0, end_offset=1, start_line=1, start_col=0)
     cid = ContractId(0)
     # json codec, is_unit=True, decode=None → 800 skipped, 804 skipped, 808 decode is None
     req = ContractRequest(
@@ -2177,18 +2185,22 @@ def test_enum_required_field_loop_partial_coverage() -> None:
         ),
     )
     # Schema requiring both 'a' and 'b'.
-    schema = _json.dumps({
-        "oneOf": [{
-            "type": "object",
-            "additionalProperties": False,
-            "required": ["$case", "a", "b"],
-            "properties": {
-                "$case": {"const": "Both"},
-                "a": {"type": "integer"},
-                "b": {"type": "integer"},
-            },
-        }]
-    })
+    schema = _json.dumps(
+        {
+            "oneOf": [
+                {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "required": ["$case", "a", "b"],
+                    "properties": {
+                        "$case": {"const": "Both"},
+                        "a": {"type": "integer"},
+                        "b": {"type": "integer"},
+                    },
+                }
+            ]
+        }
+    )
     contract = ContractRequest(
         codec_name="json",
         strict_json=None,
@@ -2299,14 +2311,18 @@ def test_classify_enum_sub_error_type_only_fallback() -> None:
         ),
     )
     # Schema WITHOUT additionalProperties: False → sub-errors will be 'const' and 'type' only.
-    schema = _json.dumps({
-        "oneOf": [
-            {"type": "object", "required": ["$case"],
-             "properties": {"$case": {"const": "Ok"}}},
-            {"type": "object", "required": ["$case", "msg"],
-             "properties": {"$case": {"const": "Err"}, "msg": {"type": "string"}}},
-        ]
-    })
+    schema = _json.dumps(
+        {
+            "oneOf": [
+                {"type": "object", "required": ["$case"], "properties": {"$case": {"const": "Ok"}}},
+                {
+                    "type": "object",
+                    "required": ["$case", "msg"],
+                    "properties": {"$case": {"const": "Err"}, "msg": {"type": "string"}},
+                },
+            ]
+        }
+    )
     contract = ContractRequest(
         codec_name="json",
         strict_json=None,
@@ -2475,8 +2491,7 @@ status
     ir_first = ir_errors_val.raw[0]
     assert isinstance(ir_first, dict)
     assert ir_first.get("message") == msg, (
-        "Message mismatch:\n"
-        f"  reference: {ir_first.get('message')!r}\n  actual: {msg!r}"
+        f"Message mismatch:\n  reference: {ir_first.get('message')!r}\n  actual: {msg!r}"
     )
     assert ir_first.get("field") == first_err.get("field")
 
@@ -2524,7 +2539,6 @@ status
     ir_first = ir_errors_val.raw[0]
     assert isinstance(ir_first, dict)
     assert ir_first.get("message") == msg, (
-        "Message mismatch:\n"
-        f"  reference: {ir_first.get('message')!r}\n  actual: {msg!r}"
+        f"Message mismatch:\n  reference: {ir_first.get('message')!r}\n  actual: {msg!r}"
     )
     assert ir_first.get("field") == first_err.get("field")

@@ -15,12 +15,12 @@ import agm.agl.matchcompile.compiler as compiler_module
 import agm.agl.matchcompile.stage as stage_module
 from agm.agl.matchcompile import (
     MatchCompilationResult,
-    MatchCompiledModuleGraph,
+    MatchCompiledModule,
     MatchCompiledProgram,
     MatchIssue,
     NonExhaustiveIssue,
     RedundantArmIssue,
-    compile_graph_matches,
+    compile_module_matches,
     compile_program_matches,
     diagnostic_from_match_issue,
     diagnostics_from_match_issues,
@@ -47,17 +47,16 @@ from agm.agl.modules.roots import RootSet
 from agm.agl.parser import parse_program
 from agm.agl.pipeline import (
     PipelineDriver,
-    PreparedGraph,
-    _run_matchcompile,
-    _run_matchcompile_graph,
+    PreparedProgram,
+    _run_matchcompile_program,
 )
-from agm.agl.scope import resolve
-from agm.agl.scope.graph import resolve_graph
+from agm.agl.scope import resolve_module
+from agm.agl.scope.program import resolve_program
 from agm.agl.syntax.nodes import Case
 from agm.agl.syntax.visitor import walk
-from agm.agl.typecheck import EnumOwnerForm, check
-from agm.agl.typecheck.env import CheckedProgram
-from agm.agl.typecheck.graph import CheckedModule, CheckedModuleGraph, check_graph
+from agm.agl.typecheck import EnumOwnerForm, check_module
+from agm.agl.typecheck.env import CheckedModule
+from agm.agl.typecheck.program import CheckedProgram, check_program
 from tests.agl.ir_harness import base_caps, make_graph_from_files
 
 
@@ -78,8 +77,8 @@ def test_matchcompile_public_exports_are_narrow_and_stable() -> None:
         "LiteralWitness",
         "MatchCompilationResult",
         "MatchCompiledArtifact",
-        "MatchCompiledModuleGraph",
         "MatchCompiledProgram",
+        "MatchCompiledModule",
         "MatchIssue",
         "MatchWitness",
         "NonExhaustiveIssue",
@@ -89,13 +88,13 @@ def test_matchcompile_public_exports_are_narrow_and_stable() -> None:
         "RedundantArmIssue",
         "WildcardWitness",
         "WitnessField",
-        "compile_graph_matches",
         "compile_program_matches",
+        "compile_module_matches",
         "diagnostic_from_match_issue",
         "diagnostics_from_match_issues",
         "render_witness",
-        "validate_match_compiled_graph",
         "validate_match_compiled_program",
+        "validate_match_compiled_module",
     }
     assert not hasattr(matchcompile, "EnumOwnerForm")
     assert not hasattr(matchcompile, "EnumOwnerFormKind")
@@ -103,17 +102,17 @@ def test_matchcompile_public_exports_are_narrow_and_stable() -> None:
     assert matchcompile.EnumWitnessQualification is not EnumOwnerForm
 
 
-def _checked(source: str) -> CheckedProgram:
-    return check(resolve(parse_program(source)), base_caps())
+def _checked(source: str) -> CheckedModule:
+    return check_module(resolve_module(parse_program(source)), base_caps())
 
 
-def _compiled(source: str) -> MatchCompiledProgram:
-    result = compile_program_matches(_checked(source))
-    assert isinstance(result.compiled, MatchCompiledProgram)
+def _compiled(source: str) -> MatchCompiledModule:
+    result = compile_module_matches(_checked(source))
+    assert isinstance(result.compiled, MatchCompiledModule)
     return result.compiled
 
 
-def _prepared_graph(source: str, *, roots: frozenset[Path] = frozenset()) -> PreparedGraph:
+def _prepared_program(source: str, *, roots: frozenset[Path] = frozenset()) -> PreparedProgram:
     return PipelineDriver.prepare_program(
         source,
         entry_path=None,
@@ -122,7 +121,7 @@ def _prepared_graph(source: str, *, roots: frozenset[Path] = frozenset()) -> Pre
     )
 
 
-def _first_case(checked: CheckedProgram | CheckedModule) -> Case:
+def _first_case(checked: CheckedModule | CheckedModule) -> Case:
     cases: list[Case] = []
 
     def collect(node: object) -> None:
@@ -288,7 +287,7 @@ def test_source_issues_are_all_sorted_adapted_and_prevent_artifact() -> None:
     checked = _checked(
         "case true of\n  | true => 1\n  | true => 2\ncase false of\n  | false => 3\n"
     )
-    result = compile_program_matches(checked)
+    result = compile_module_matches(checked)
 
     assert result.compiled is None
     assert len(result.issues) == 3
@@ -306,31 +305,27 @@ def test_source_issues_are_all_sorted_adapted_and_prevent_artifact() -> None:
 
 def test_program_match_compilation_orders_issues_by_source_location() -> None:
     checked = _checked(
-        "case true of\n"
-        "  | true => 1\n"
-        "  | true => 2\n"
-        "case false of\n"
-        "  | false => 3\n"
+        "case true of\n  | true => 1\n  | true => 2\ncase false of\n  | false => 3\n"
     )
 
-    result = compile_program_matches(checked)
+    result = compile_module_matches(checked)
 
     assert len(result.issues) > 1
     assert list(result.issues) == sorted(result.issues, key=issue_sort_key)
 
 
 def test_match_compilation_yields_an_artifact_or_issues_but_never_both(tmp_path: Path) -> None:
-    accepted = compile_program_matches(_checked("case true of | true => 1 | false => 2"))
+    accepted = compile_module_matches(_checked("case true of | true => 1 | false => 2"))
     assert accepted.compiled is not None
     assert accepted.issues == ()
 
-    rejected = compile_program_matches(_checked("case true of | true => 1"))
+    rejected = compile_module_matches(_checked("case true of | true => 1"))
     assert rejected.compiled is None
     assert rejected.issues != ()
 
-    accepted_graph = compile_graph_matches(
-        check_graph(
-            resolve_graph(
+    accepted_graph = compile_program_matches(
+        check_program(
+            resolve_program(
                 make_graph_from_files(tmp_path / "ok", {"entry": "case true of | _ => 1"})
             ),
             base_caps(),
@@ -339,9 +334,9 @@ def test_match_compilation_yields_an_artifact_or_issues_but_never_both(tmp_path:
     assert accepted_graph.compiled is not None
     assert accepted_graph.issues == ()
 
-    rejected_graph = compile_graph_matches(
-        check_graph(
-            resolve_graph(
+    rejected_graph = compile_program_matches(
+        check_program(
+            resolve_program(
                 make_graph_from_files(tmp_path / "bad", {"entry": "case true of | true => 1"})
             ),
             base_caps(),
@@ -366,7 +361,7 @@ def test_rejected_match_compilation_still_validates_the_cases_it_discards(
     monkeypatch.setattr(stage_module, "compile_case", corrupting_compile_case)
 
     with pytest.raises(MatchCompileInvariantError, match="reachable action ids"):
-        compile_program_matches(_checked("case true of | true => 1"))
+        compile_module_matches(_checked("case true of | true => 1"))
 
 
 def test_graph_issues_are_aggregated_and_sorted_across_module_sources(tmp_path: Path) -> None:
@@ -375,22 +370,14 @@ def test_graph_issues_are_aggregated_and_sorted_across_module_sources(tmp_path: 
         {
             "entry": "import beta\nimport alpha\n()",
             "alpha": (
-                "def alpha(x: bool) -> int =\n"
-                "  case x of\n"
-                "    | true => 1\n"
-                "    | true => 2\n"
+                "def alpha(x: bool) -> int =\n  case x of\n    | true => 1\n    | true => 2\n"
             ),
-            "beta": (
-                "def beta(x: bool) -> int =\n"
-                "  case x of\n"
-                "    | true => 1\n"
-                "    | true => 2\n"
-            ),
+            "beta": ("def beta(x: bool) -> int =\n  case x of\n    | true => 1\n    | true => 2\n"),
         },
     )
-    checked_graph = check_graph(resolve_graph(graph), base_caps())
+    checked = check_program(resolve_program(graph), base_caps())
 
-    result = compile_graph_matches(checked_graph)
+    result = compile_program_matches(checked)
 
     assert result.compiled is None
     assert [type(issue) for issue in result.issues] == [
@@ -405,9 +392,12 @@ def test_graph_issues_are_aggregated_and_sorted_across_module_sources(tmp_path: 
         "beta.agl",
         "beta.agl",
     ]
-    assert [
-        (issue.span.start_line, issue.span.start_col) for issue in result.issues
-    ] == [(2, 3), (4, 7), (2, 3), (4, 7)]
+    assert [(issue.span.start_line, issue.span.start_col) for issue in result.issues] == [
+        (2, 3),
+        (4, 7),
+        (2, 3),
+        (4, 7),
+    ]
     assert list(result.issues) == sorted(result.issues, key=issue_sort_key)
 
     diagnostics = diagnostics_from_match_issues(result.issues)
@@ -432,16 +422,16 @@ def test_program_artifact_rejects_missing_extra_mismatched_and_cross_program_cas
     case_id, compiled_case = next(iter(first.cases.items()))
 
     with pytest.raises(MatchCompileInvariantError, match="missing"):
-        MatchCompiledProgram(first.checked, {})
+        MatchCompiledModule(first.checked, {})
     with pytest.raises(MatchCompileInvariantError, match="extra"):
-        MatchCompiledProgram(first.checked, {case_id: compiled_case, 999: compiled_case})
+        MatchCompiledModule(first.checked, {case_id: compiled_case, 999: compiled_case})
 
     mismatched = replace(
         compiled_case,
         normalized=replace(compiled_case.normalized, case_node_id=case_id + 1),
     )
     with pytest.raises(MatchCompileInvariantError, match="does not match"):
-        MatchCompiledProgram(first.checked, {case_id: mismatched})
+        MatchCompiledModule(first.checked, {case_id: mismatched})
 
     wrong_span = replace(
         compiled_case,
@@ -454,17 +444,17 @@ def test_program_artifact_rejects_missing_extra_mismatched_and_cross_program_cas
         ),
     )
     with pytest.raises(MatchCompileInvariantError, match="source provenance"):
-        MatchCompiledProgram(first.checked, {case_id: wrong_span})
+        MatchCompiledModule(first.checked, {case_id: wrong_span})
 
     second_checked = _checked("case true of | true => 1 | false => 2")
     with pytest.raises(MatchCompileInvariantError, match="different checked program"):
-        MatchCompiledProgram(second_checked, first.cases)
+        MatchCompiledModule(second_checked, first.cases)
 
     invalid_checked = _checked("case true of | true => 1")
     invalid_case = _first_case(invalid_checked)
     invalid_compiled = compile_case(normalize_case(invalid_case, invalid_checked))
     with pytest.raises(MatchCompileInvariantError, match="contains issues"):
-        MatchCompiledProgram(invalid_checked, {invalid_case.node_id: invalid_compiled})
+        MatchCompiledModule(invalid_checked, {invalid_case.node_id: invalid_compiled})
 
 
 def test_program_artifact_rejects_compiled_case_semantic_corruption() -> None:
@@ -503,14 +493,14 @@ def test_program_artifact_rejects_compiled_case_semantic_corruption() -> None:
         cases = dict(compiled.cases)
         cases[first_id] = corrupted
         with pytest.raises(MatchCompileInvariantError):
-            MatchCompiledProgram(compiled.checked, cases)
+            MatchCompiledModule(compiled.checked, cases)
 
     invalid_checked = _checked("case true of | true => 1")
     invalid_case = _first_case(invalid_checked)
     invalid_compiled = compile_case(normalize_case(invalid_case, invalid_checked))
     stripped = replace(invalid_compiled, issues=())
     with pytest.raises(MatchCompileInvariantError):
-        MatchCompiledProgram(invalid_checked, {invalid_case.node_id: stripped})
+        MatchCompiledModule(invalid_checked, {invalid_case.node_id: stripped})
 
 
 def test_program_artifact_replays_source_semantics_against_every_decision_edge() -> None:
@@ -518,12 +508,12 @@ def test_program_artifact_replays_source_semantics_against_every_decision_edge()
     case_ids = tuple(compiled.cases)
     cases = tuple(compiled.cases.values())
 
-    MatchCompiledProgram(compiled.checked, compiled.cases)
+    MatchCompiledModule(compiled.checked, compiled.cases)
     for _, case_index, corrupted_case in _semantic_replay_corruptions(cases):
         corrupted_cases = dict(compiled.cases)
         corrupted_cases[case_ids[case_index]] = corrupted_case
         with pytest.raises(MatchCompileInvariantError, match="semantic replay"):
-            MatchCompiledProgram(compiled.checked, corrupted_cases)
+            MatchCompiledModule(compiled.checked, corrupted_cases)
 
 
 def test_semantic_replay_rejects_terminal_and_ledger_rule_corruption() -> None:
@@ -603,7 +593,7 @@ def test_valid_shared_dag_passes_strong_compiled_case_validation() -> None:
 
     assert right.default is left.default
     validate_compiled_case(compiled_case)
-    MatchCompiledProgram(compiled.checked, compiled.cases)
+    MatchCompiledModule(compiled.checked, compiled.cases)
 
 
 def test_valid_shared_dag_passes_graph_semantic_replay_validation(tmp_path: Path) -> None:
@@ -618,9 +608,9 @@ def test_valid_shared_dag_passes_graph_semantic_replay_validation(tmp_path: Path
             )
         },
     )
-    checked_graph = check_graph(resolve_graph(graph), base_caps())
-    result = compile_graph_matches(checked_graph)
-    assert isinstance(result.compiled, MatchCompiledModuleGraph)
+    checked = check_program(resolve_program(graph), base_caps())
+    result = compile_program_matches(checked)
+    assert isinstance(result.compiled, MatchCompiledProgram)
     compiled = result.compiled
     compiled_case = next(iter(compiled.cases_by_module[ENTRY_ID].values()))
     root = cast(DecisionSwitch, compiled_case.root)
@@ -628,7 +618,7 @@ def test_valid_shared_dag_passes_graph_semantic_replay_validation(tmp_path: Path
     right = cast(DecisionSwitch, left.keyed_children[0].decision)
 
     assert right.default is left.default
-    MatchCompiledModuleGraph(checked_graph, compiled.cases_by_module)
+    MatchCompiledProgram(checked, compiled.cases_by_module)
 
 
 def test_duplicate_source_case_ids_are_rejected_by_compilation_and_validation(
@@ -646,7 +636,7 @@ def test_duplicate_source_case_ids_are_rejected_by_compilation_and_validation(
     with pytest.raises(MatchCompileInvariantError, match="duplicate"):
         stage_module._source_cases(checked.resolved.program)
     with pytest.raises(MatchCompileInvariantError, match="duplicate"):
-        compile_program_matches(checked)
+        compile_module_matches(checked)
 
 
 def test_graph_compiles_imported_cases_and_rejects_wrong_module_provenance(
@@ -659,16 +649,16 @@ def test_graph_compiles_imported_cases_and_rejects_wrong_module_provenance(
             "lib": "def f(x: bool) -> int =\n  case x of | true => 1 | false => 2",
         },
     )
-    checked_graph = check_graph(resolve_graph(graph), base_caps())
-    result = compile_graph_matches(checked_graph)
-    assert isinstance(result.compiled, MatchCompiledModuleGraph)
-    compiled_graph = result.compiled
+    checked = check_program(resolve_program(graph), base_caps())
+    result = compile_program_matches(checked)
+    assert isinstance(result.compiled, MatchCompiledProgram)
+    compiled = result.compiled
 
     with pytest.raises(MatchCompileInvariantError, match="module mismatch"):
-        MatchCompiledModuleGraph(checked_graph, {})
+        MatchCompiledProgram(checked, {})
 
-    library_id = next(module_id for module_id in checked_graph.modules if module_id != ENTRY_ID)
-    library_cases = compiled_graph.cases_by_module[library_id]
+    library_id = next(module_id for module_id in checked.modules if module_id != ENTRY_ID)
+    library_cases = compiled.cases_by_module[library_id]
     assert len(library_cases) == 1
     case_id, compiled_case = next(iter(library_cases.items()))
     wrong_context = replace(compiled_case.normalized.case_context, module_id=ENTRY_ID)
@@ -676,10 +666,10 @@ def test_graph_compiles_imported_cases_and_rejects_wrong_module_provenance(
         compiled_case,
         normalized=replace(compiled_case.normalized, case_context=wrong_context),
     )
-    corrupted = dict(compiled_graph.cases_by_module)
+    corrupted = dict(compiled.cases_by_module)
     corrupted[library_id] = {case_id: wrong_case}
     with pytest.raises(MatchCompileInvariantError, match="belongs to module"):
-        MatchCompiledModuleGraph(checked_graph, corrupted)
+        MatchCompiledProgram(checked, corrupted)
 
 
 def test_graph_artifact_rejects_compiled_case_semantic_corruption(tmp_path: Path) -> None:
@@ -691,9 +681,9 @@ def test_graph_artifact_rejects_compiled_case_semantic_corruption(tmp_path: Path
             )
         },
     )
-    checked_graph = check_graph(resolve_graph(graph), base_caps())
-    result = compile_graph_matches(checked_graph)
-    assert isinstance(result.compiled, MatchCompiledModuleGraph)
+    checked = check_program(resolve_program(graph), base_caps())
+    result = compile_program_matches(checked)
+    assert isinstance(result.compiled, MatchCompiledProgram)
     compiled = result.compiled
     entry_cases = compiled.cases_by_module[ENTRY_ID]
     first_id, second_id = tuple(entry_cases)
@@ -731,20 +721,20 @@ def test_graph_artifact_rejects_compiled_case_semantic_corruption(tmp_path: Path
         }
         corrupted_modules[ENTRY_ID][first_id] = corrupted_case
         with pytest.raises(MatchCompileInvariantError):
-            MatchCompiledModuleGraph(checked_graph, corrupted_modules)
+            MatchCompiledProgram(checked, corrupted_modules)
 
     invalid_graph = make_graph_from_files(
         tmp_path / "invalid",
         {"entry": "case true of | true => 1"},
     )
-    invalid_checked_graph = check_graph(resolve_graph(invalid_graph), base_caps())
-    invalid_owner = invalid_checked_graph.modules[ENTRY_ID]
+    invalid_checked = check_program(resolve_program(invalid_graph), base_caps())
+    invalid_owner = invalid_checked.modules[ENTRY_ID]
     invalid_case = _first_case(invalid_owner)
     invalid_compiled = compile_case(normalize_case(invalid_case, invalid_owner))
     stripped = replace(invalid_compiled, issues=())
     with pytest.raises(MatchCompileInvariantError):
-        MatchCompiledModuleGraph(
-            invalid_checked_graph,
+        MatchCompiledProgram(
+            invalid_checked,
             {ENTRY_ID: {invalid_case.node_id: stripped}},
         )
 
@@ -753,15 +743,15 @@ def test_graph_artifact_replays_source_semantics_against_every_decision_edge(
     tmp_path: Path,
 ) -> None:
     graph = make_graph_from_files(tmp_path, {"entry": _SEMANTIC_REPLAY_SOURCE})
-    checked_graph = check_graph(resolve_graph(graph), base_caps())
-    result = compile_graph_matches(checked_graph)
-    assert isinstance(result.compiled, MatchCompiledModuleGraph)
+    checked = check_program(resolve_program(graph), base_caps())
+    result = compile_program_matches(checked)
+    assert isinstance(result.compiled, MatchCompiledProgram)
     compiled = result.compiled
     entry_cases = compiled.cases_by_module[ENTRY_ID]
     case_ids = tuple(entry_cases)
     cases = tuple(entry_cases.values())
 
-    MatchCompiledModuleGraph(checked_graph, compiled.cases_by_module)
+    MatchCompiledProgram(checked, compiled.cases_by_module)
     for _, case_index, corrupted_case in _semantic_replay_corruptions(cases):
         corrupted_modules = {
             module_id: dict(module_cases)
@@ -769,7 +759,7 @@ def test_graph_artifact_replays_source_semantics_against_every_decision_edge(
         }
         corrupted_modules[ENTRY_ID][case_ids[case_index]] = corrupted_case
         with pytest.raises(MatchCompileInvariantError, match="semantic replay"):
-            MatchCompiledModuleGraph(checked_graph, corrupted_modules)
+            MatchCompiledProgram(checked, corrupted_modules)
 
 
 def test_graph_reports_error_from_unexecuted_imported_module(tmp_path: Path) -> None:
@@ -780,8 +770,8 @@ def test_graph_reports_error_from_unexecuted_imported_module(tmp_path: Path) -> 
             "lib": "def f(x: bool) -> int =\n  case x of | true => 1",
         },
     )
-    checked_graph = check_graph(resolve_graph(graph), base_caps())
-    result = compile_graph_matches(checked_graph)
+    checked = check_program(resolve_program(graph), base_caps())
+    result = compile_program_matches(checked)
     assert result.compiled is None
     assert len(result.issues) == 1
 
@@ -791,43 +781,33 @@ def test_pipeline_nonraising_helpers_defend_against_wrong_artifact_kind(
 ) -> None:
     single = _compiled("let x = 1\nx")
     graph = make_graph_from_files(tmp_path, {"entry": "()"})
-    checked_graph = check_graph(resolve_graph(graph), base_caps())
-    graph_result = compile_graph_matches(checked_graph)
-    assert isinstance(graph_result.compiled, MatchCompiledModuleGraph)
-
-    monkeypatch.setattr(
-        "agm.agl.matchcompile.compile_program_matches", lambda _checked: graph_result
-    )
-    compiled, diagnostics = _run_matchcompile(single.checked)
-    assert compiled is None
-    assert "graph artifact" in diagnostics[0].message
-
+    checked = check_program(resolve_program(graph), base_caps())
     single_result = MatchCompilationResult(compiled=single, issues=())
     monkeypatch.setattr(
-        "agm.agl.matchcompile.compile_graph_matches", lambda _checked: single_result
+        "agm.agl.matchcompile.compile_program_matches", lambda _checked: single_result
     )
-    compiled_graph, diagnostics = _run_matchcompile_graph(checked_graph)
-    assert compiled_graph is None
-    assert "single-program artifact" in diagnostics[0].message
+    compiled, diagnostics = _run_matchcompile_program(checked)
+    assert compiled is None
+    assert "module artifact" in diagnostics[0].message
 
 
-def test_single_and_graph_discovery_surface_match_errors() -> None:
+def test_single_and_program_discovery_surface_match_errors() -> None:
     runtime = PipelineDriver()
     discovery = runtime.discover_params(
-        runtime.prepare("param n: int = 1\ncase true of | true => n")
+        runtime.prepare_program("param n: int = 1\ncase true of | true => n")
     )
     assert discovery.compiled is None
     assert any("Non-exhaustive" in item.message for item in discovery.diagnostics)
 
-    prepared_graph = PipelineDriver.prepare_program(
+    prepared_program = PipelineDriver.prepare_program(
         "case true of | true => ()",
         entry_path=None,
         roots=RootSet(roots=frozenset()),
         default_stdlib=False,
     )
-    graph_discovery = runtime.discover_params_graph(prepared_graph)
-    assert graph_discovery.compiled_graph is None
-    assert any("Non-exhaustive" in item.message for item in graph_discovery.diagnostics)
+    program_discovery = runtime.discover_params(prepared_program)
+    assert program_discovery.compiled is None
+    assert any("Non-exhaustive" in item.message for item in program_discovery.diagnostics)
 
 
 @pytest.mark.parametrize("check_only", [False, True])
@@ -846,9 +826,8 @@ def test_single_discovery_and_cached_run_compile_matches_once(
         counted_compile,
     )
     runtime = PipelineDriver()
-    prepared = runtime.prepare(
-        "param selected: bool = true\n"
-        "case selected of | true => 1 | false => 0"
+    prepared = runtime.prepare_program(
+        "param selected: bool = true\ncase selected of | true => 1 | false => 0"
     )
 
     discovery = runtime.discover_params(prepared)
@@ -864,31 +843,30 @@ def test_single_discovery_and_cached_run_compile_matches_once(
 
 
 @pytest.mark.parametrize("check_only", [False, True])
-def test_graph_discovery_and_cached_run_compile_matches_once(
+def test_program_discovery_and_cached_run_compile_matches_once(
     monkeypatch: pytest.MonkeyPatch, check_only: bool
 ) -> None:
     compile_count = 0
 
-    def counted_compile(checked_graph: CheckedModuleGraph) -> MatchCompilationResult:
+    def counted_compile(checked: CheckedProgram) -> MatchCompilationResult:
         nonlocal compile_count
         compile_count += 1
-        return compile_graph_matches(checked_graph)
+        return compile_program_matches(checked)
 
     monkeypatch.setattr(
-        "agm.agl.matchcompile.compile_graph_matches",
+        "agm.agl.matchcompile.compile_program_matches",
         counted_compile,
     )
     runtime = PipelineDriver()
-    prepared = _prepared_graph(
-        "param selected: bool = true\n"
-        "case selected of | true => 1 | false => 0"
+    prepared = _prepared_program(
+        "param selected: bool = true\ncase selected of | true => 1 | false => 0"
     )
 
-    discovery = runtime.discover_params_graph(prepared)
-    assert discovery.compiled_graph is not None
-    result = runtime.run_prepared_graph(
+    discovery = runtime.discover_params(prepared)
+    assert discovery.compiled is not None
+    result = runtime.run_prepared(
         prepared,
-        compiled_graph=discovery.compiled_graph,
+        compiled=discovery.compiled,
         check_only=check_only,
     )
 
@@ -901,23 +879,23 @@ def test_discovery_and_execution_reuse_one_graph_match_compilation(
 ) -> None:
     compile_count = 0
 
-    def counted_compile(checked_graph: CheckedModuleGraph) -> MatchCompilationResult:
+    def counted_compile(checked: CheckedProgram) -> MatchCompilationResult:
         nonlocal compile_count
         compile_count += 1
-        return compile_graph_matches(checked_graph)
+        return compile_program_matches(checked)
 
     monkeypatch.setattr(
-        "agm.agl.matchcompile.compile_graph_matches",
+        "agm.agl.matchcompile.compile_program_matches",
         counted_compile,
     )
     runtime = PipelineDriver()
-    prepared = _prepared_graph("case true of | true => 1 | false => 0")
+    prepared = _prepared_program("case true of | true => 1 | false => 0")
 
-    discovery = runtime.discover_params_graph(prepared)
-    assert discovery.compiled_graph is not None
-    result = runtime.run_prepared_graph(
+    discovery = runtime.discover_params(prepared)
+    assert discovery.compiled is not None
+    result = runtime.run_prepared(
         prepared,
-        compiled_graph=discovery.compiled_graph,
+        compiled=discovery.compiled,
     )
 
     assert result.ok, result.diagnostics
@@ -926,10 +904,7 @@ def test_discovery_and_execution_reuse_one_graph_match_compilation(
 
 def test_match_invalid_unreachable_case_fails_single_dry_run() -> None:
     result = PipelineDriver().run(
-        "def dormant(x: bool) -> int =\n"
-        "  case x of\n"
-        "    | true => 1\n"
-        "()",
+        "def dormant(x: bool) -> int =\n  case x of\n    | true => 1\n()",
         check_only=True,
     )
 
@@ -943,16 +918,14 @@ def test_match_invalid_unreachable_case_fails_single_dry_run() -> None:
 
 def test_match_invalid_unreachable_import_fails_graph_check_only(tmp_path: Path) -> None:
     (tmp_path / "invalid.agl").write_text(
-        "def dormant(x: bool) -> int =\n"
-        "  case x of\n"
-        "    | true => 1\n"
+        "def dormant(x: bool) -> int =\n  case x of\n    | true => 1\n"
     )
-    prepared = _prepared_graph(
+    prepared = _prepared_program(
         "import invalid\n()",
         roots=frozenset({tmp_path}),
     )
 
-    result = PipelineDriver().run_prepared_graph(prepared, check_only=True)
+    result = PipelineDriver().run_prepared(prepared, check_only=True)
 
     assert not result.ok
     assert result.error is None
@@ -960,9 +933,7 @@ def test_match_invalid_unreachable_import_fails_graph_check_only(tmp_path: Path)
     assert [
         (
             diagnostic.severity,
-            Path(diagnostic.source_label).name
-            if diagnostic.source_label is not None
-            else None,
+            Path(diagnostic.source_label).name if diagnostic.source_label is not None else None,
             diagnostic.line,
         )
         for diagnostic in result.diagnostics

@@ -104,9 +104,7 @@ class TestWorktreeNew:
         assert calls[0].worktrees_dir == "/custom"
         assert calls[0].branch == "feat/z"
 
-    def test_wt_new_with_dir_long(
-        self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_wt_new_with_dir_long(self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch) -> None:
         calls = make_recorder(monkeypatch, cli.worktree_new_command)
         result = invoke(runner, ["wt", "new", "--dir", "/custom", "feat/z"])
         assert result.exit_code == 0
@@ -131,9 +129,7 @@ class TestWorktreeNew:
 
 
 class TestWorkspace:
-    def test_workspace_setup(
-        self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_workspace_setup(self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch) -> None:
         calls: list[None] = []
 
         def record() -> None:
@@ -160,9 +156,7 @@ class TestWorkspace:
         assert result.exit_code != 0
         assert "No such command" in result.output
 
-    def test_workspace_list(
-        self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_workspace_list(self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch) -> None:
         calls: list[bool] = []
 
         def record(*, verbose: bool = False) -> None:
@@ -188,9 +182,7 @@ class TestWorkspace:
         assert result.exit_code == 0
         assert calls == ["/tmp/agm-shell-dir"]
 
-    def test_wsp_shell_regen(
-        self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_wsp_shell_regen(self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch) -> None:
         calls: list[str] = []
 
         def record(*, shell_dir: str) -> None:
@@ -202,9 +194,7 @@ class TestWorkspace:
         assert result.exit_code == 0
         assert calls == ["/tmp/agm-shell-dir"]
 
-    def test_wsp_list_verbose(
-        self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_wsp_list_verbose(self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch) -> None:
         calls: list[bool] = []
 
         def record(*, verbose: bool = False) -> None:
@@ -221,9 +211,7 @@ class TestWorkspace:
         assert result.exit_code != 0
         assert "No such command" in result.output
 
-    def test_workspace_open(
-        self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_workspace_open(self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch) -> None:
         calls = make_recorder(monkeypatch, cli.workspace_open_command)
         result = invoke(runner, ["workspace", "open", "-n", "6", "repo"])
         assert result.exit_code == 0
@@ -293,9 +281,7 @@ class TestDep:
         assert calls[0].repo_url == "https://github.com/org/repo.git"
         assert calls[0].branch is None
 
-    def test_dep_new_with_branch(
-        self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_dep_new_with_branch(self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch) -> None:
         calls = make_recorder(monkeypatch, cli.dep_new_command)
         result = invoke(runner, ["dep", "new", "-b", "main", "https://github.com/org/repo.git"])
         assert result.exit_code == 0
@@ -323,9 +309,7 @@ class TestDep:
         assert calls[0].branch == "feat/x"
         assert calls[0].create_branch is False
 
-    def test_dep_switch_create(
-        self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_dep_switch_create(self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch) -> None:
         calls = make_recorder(monkeypatch, cli.dep_switch_command)
         result = invoke(runner, ["dep", "switch", "-b", "mylib", "feat/x"])
         assert result.exit_code == 0
@@ -473,9 +457,7 @@ class TestReviewReviseRefine:
         assert calls[0].review_file == "review.md"
         assert calls[0].no_review_file is False
 
-    def test_review_rejects_no_review_file_with_review_file(
-        self, runner: CliRunner
-    ) -> None:
+    def test_review_rejects_no_review_file_with_review_file(self, runner: CliRunner) -> None:
         result = invoke(
             runner,
             ["review", "--no-review-file", "--review-file", "review.md"],
@@ -499,9 +481,7 @@ class TestReviewReviseRefine:
         assert result.exit_code != 0
         assert "mutually exclusive" in result.output
 
-    def test_review_rejects_extra_prompt_with_extra_prompt_file(
-        self, runner: CliRunner
-    ) -> None:
+    def test_review_rejects_extra_prompt_with_extra_prompt_file(self, runner: CliRunner) -> None:
         result = invoke(
             runner,
             ["review", "--extra-prompt", "text", "--extra-prompt-file", "file.md"],
@@ -559,9 +539,7 @@ class TestReviewReviseRefine:
         assert calls[0].command_name is None
         assert calls[0].review_file == "review.md"
 
-    def test_revise_unknown_option_usage_has_distinct_positionals(
-        self, runner: CliRunner
-    ) -> None:
+    def test_revise_unknown_option_usage_has_distinct_positionals(self, runner: CliRunner) -> None:
         result = invoke(runner, ["revise", "--unknown"])
 
         assert result.exit_code != 0
@@ -671,9 +649,7 @@ class TestReviewReviseRefine:
         assert result.exit_code != 0
         assert "mutually exclusive" in result.output
 
-    def test_refine_rejects_review_prompt_with_review_prompt_file(
-        self, runner: CliRunner
-    ) -> None:
+    def test_refine_rejects_review_prompt_with_review_prompt_file(self, runner: CliRunner) -> None:
         result = invoke(
             runner,
             ["refine", "--review-prompt", "text", "--review-prompt-file", "file.md"],
@@ -749,9 +725,7 @@ class TestDryRun:
 
 
 class TestInit:
-    def test_init_project_and_url(
-        self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_init_project_and_url(self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch) -> None:
         calls = make_recorder(monkeypatch, cli.init_command)
         result = invoke(runner, ["init", "myproj", "https://github.com/org/repo.git"])
         assert result.exit_code == 0
@@ -769,9 +743,7 @@ class TestInit:
         assert calls[0].positional == ["https://github.com/org/repo.git"]
         assert calls[0].clone is False
 
-    def test_init_with_clone(
-        self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_init_with_clone(self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch) -> None:
         calls = make_recorder(monkeypatch, cli.init_command)
         result = invoke(runner, ["init", "--clone", "https://github.com/org/repo.git"])
         assert result.exit_code == 0
@@ -797,9 +769,7 @@ class TestInit:
         assert calls[0].branch == "dev"
         assert calls[0].positional == ["myproj"]
 
-    def test_init_with_embedded(
-        self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_init_with_embedded(self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch) -> None:
         calls = make_recorder(monkeypatch, cli.init_command)
         result = invoke(runner, ["init", "--embedded", "myproj"])
         assert result.exit_code == 0
@@ -807,9 +777,7 @@ class TestInit:
         assert calls[0].embedded is True
         assert calls[0].positional == ["myproj"]
 
-    def test_init_with_split(
-        self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_init_with_split(self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch) -> None:
         calls = make_recorder(monkeypatch, cli.init_command)
         result = invoke(runner, ["init", "--split", "myproj"])
         assert result.exit_code == 0
@@ -832,9 +800,7 @@ class TestInit:
         assert result.exit_code != 0
         assert "No such option" in result.output
 
-    def test_init_without_args(
-        self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_init_without_args(self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch) -> None:
         calls = make_recorder(monkeypatch, cli.init_command)
         result = invoke(runner, ["init"])
         assert result.exit_code == 0
@@ -865,9 +831,7 @@ class TestOpen:
         assert len(calls) == 1
         assert calls[0].branch == "feat/x"
 
-    def test_open_with_pane_count(
-        self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_open_with_pane_count(self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch) -> None:
         calls = make_recorder(monkeypatch, cli.workspace_open_command)
         result = invoke(runner, ["open", "-n", "6", "repo"])
         assert result.exit_code == 0
@@ -920,9 +884,7 @@ class TestOpen:
         assert calls[0].detached is True
         assert calls[0].branch == "feat/y"
 
-    def test_open_detach_long(
-        self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_open_detach_long(self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch) -> None:
         calls = make_recorder(monkeypatch, cli.workspace_open_command)
         result = invoke(runner, ["open", "--detach", "feat/y"])
         assert result.exit_code == 0
@@ -1124,9 +1086,7 @@ class TestLoop:
         assert calls[0].selector is None
         assert calls[0].no_selector is False
 
-    def test_loop_with_runner(
-        self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_loop_with_runner(self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch) -> None:
         calls = make_recorder(monkeypatch, cli.loop_command)
         result = invoke(runner, ["loop", "--runner", "opencode prompt", "claude"])
         assert result.exit_code == 0
@@ -1144,9 +1104,7 @@ class TestLoop:
         assert calls[0].command_name == "claude"
         assert calls[0].runner_args == ["-p", "--model", "sonnet"]
 
-    def test_loop_with_selector(
-        self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_loop_with_selector(self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch) -> None:
         calls = make_recorder(monkeypatch, cli.loop_command)
         result = invoke(runner, ["loop", "--selector", "claude -p", "codex"])
         assert result.exit_code == 0
@@ -1175,9 +1133,7 @@ class TestLoop:
         assert "mutually exclusive" in result.output
         assert len(calls) == 0
 
-    def test_loop_with_tasks_dir(
-        self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_loop_with_tasks_dir(self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch) -> None:
         calls = make_recorder(monkeypatch, cli.loop_command)
         result = invoke(runner, ["loop", "--tasks-dir", "custom/tasks", "codex"])
         assert result.exit_code == 0
@@ -1214,9 +1170,7 @@ class TestLoop:
         assert calls[0].runner_args == ["--no-log"]
         assert calls[0].no_log is False
 
-    def test_loop_with_log_file(
-        self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_loop_with_log_file(self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch) -> None:
         calls = make_recorder(monkeypatch, cli.loop_command)
         result = invoke(runner, ["loop", "--log-file", "custom/loop.log", "claude"])
         assert result.exit_code == 0
@@ -1358,9 +1312,7 @@ class TestLoop:
         assert calls[0].command_name == "claude"
         assert calls[0].no_selector is True
 
-    def test_loop_with_prompt(
-        self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_loop_with_prompt(self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch) -> None:
         calls = make_recorder(monkeypatch, cli.loop_command)
         result = invoke(runner, ["loop", "--prompt", "fix the bug", "claude"])
         assert result.exit_code == 0
@@ -1384,16 +1336,12 @@ class TestLoop:
         self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         calls = make_recorder(monkeypatch, cli.loop_command)
-        result = invoke(
-            runner, ["loop", "--prompt", "text", "--prompt-file", "file.md", "claude"]
-        )
+        result = invoke(runner, ["loop", "--prompt", "text", "--prompt-file", "file.md", "claude"])
         assert result.exit_code != 0
         assert "mutually exclusive" in result.output
         assert len(calls) == 0
 
-    def test_loop_run_with_prompt(
-        self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_loop_run_with_prompt(self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch) -> None:
         calls = make_recorder(monkeypatch, cli.loop_run_command)
         result = invoke(runner, ["loop", "run", "--prompt", "hello", "claude"])
         assert result.exit_code == 0
@@ -1435,9 +1383,7 @@ class TestLoop:
         self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         calls = make_recorder(monkeypatch, cli.loop_select_command)
-        result = invoke(
-            runner, ["loop", "select", "--prompt", "text", "--prompt-file", "file.md"]
-        )
+        result = invoke(runner, ["loop", "select", "--prompt", "text", "--prompt-file", "file.md"])
         assert result.exit_code != 0
         assert "mutually exclusive" in result.output
         assert len(calls) == 0
@@ -1457,9 +1403,7 @@ class TestLoop:
         self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         calls = make_recorder(monkeypatch, cli.loop_command)
-        result = invoke(
-            runner, ["loop", "--selector-prompt-file", "/tmp/selector.md", "claude"]
-        )
+        result = invoke(runner, ["loop", "--selector-prompt-file", "/tmp/selector.md", "claude"])
         assert result.exit_code == 0
         assert len(calls) == 1
         assert calls[0].command_name == "claude"
@@ -1489,9 +1433,7 @@ class TestLoop:
         self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         calls = make_recorder(monkeypatch, cli.loop_run_command)
-        result = invoke(
-            runner, ["loop", "run", "--selector-prompt", "select task", "claude"]
-        )
+        result = invoke(runner, ["loop", "run", "--selector-prompt", "select task", "claude"])
         assert result.exit_code == 0
         assert len(calls) == 1
         assert calls[0].selector_prompt == "select task"
@@ -1501,9 +1443,7 @@ class TestLoop:
         self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         calls = make_recorder(monkeypatch, cli.loop_step_command)
-        result = invoke(
-            runner, ["loop", "step", "--selector-prompt-file", "sel.md", "claude"]
-        )
+        result = invoke(runner, ["loop", "step", "--selector-prompt-file", "sel.md", "claude"])
         assert result.exit_code == 0
         assert len(calls) == 1
         assert calls[0].selector_prompt is None
@@ -1523,9 +1463,7 @@ class TestLoop:
         self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         calls = make_recorder(monkeypatch, cli.loop_select_command)
-        result = invoke(
-            runner, ["loop", "select", "--selector-prompt-file", "selector.md"]
-        )
+        result = invoke(runner, ["loop", "select", "--selector-prompt-file", "selector.md"])
         assert result.exit_code == 0
         assert len(calls) == 1
         assert calls[0].selector_prompt is None
@@ -1561,9 +1499,7 @@ class TestTmuxOpen:
         assert calls[0].pane_count is None
         assert calls[0].session_name is None
 
-    def test_tmux_open_with_all(
-        self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_tmux_open_with_all(self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch) -> None:
         calls = make_recorder(monkeypatch, cli.tmux_open_command)
         result = invoke(runner, ["tmux", "open", "-d", "-n", "8", "mysession"])
         assert result.exit_code == 0
@@ -1758,9 +1694,7 @@ class TestHelpTextCoverage:
         )
         documented = set(re.findall(r"`agm (\w+)", doc_text))
         missing = cli_commands - documented
-        assert not missing, (
-            f"docs/commands/ is missing entries for CLI commands: {sorted(missing)}"
-        )
+        assert not missing, f"docs/commands/ is missing entries for CLI commands: {sorted(missing)}"
 
 
 class TestCommandPathFromContext:
@@ -1806,9 +1740,7 @@ class TestPrintContextHelp:
         captured = capsys.readouterr()
         assert "agm - Agent Management Framework" in captured.out
 
-    def test_prints_command_help_for_subcommand(
-        self, capsys: pytest.CaptureFixture[str]
-    ) -> None:
+    def test_prints_command_help_for_subcommand(self, capsys: pytest.CaptureFixture[str]) -> None:
         root = click.Context(click.Command("agm"))
         root.parent = None
         sub = click.Context(click.Command("open"), parent=root, info_name="open")
@@ -1820,28 +1752,20 @@ class TestPrintContextHelp:
 
 class TestParseLoopArgs:
     def test_runner_flag(self) -> None:
-        args = cli._parse_loop_args(
-            ["--runner", "my-runner", "cmd"], command_path=["loop"]
-        )
+        args = cli._parse_loop_args(["--runner", "my-runner", "cmd"], command_path=["loop"])
         assert args.runner == "my-runner"
         assert args.command_name == "cmd"
 
     def test_selector_flag(self) -> None:
-        args = cli._parse_loop_args(
-            ["--selector", "my-selector", "cmd"], command_path=["loop"]
-        )
+        args = cli._parse_loop_args(["--selector", "my-selector", "cmd"], command_path=["loop"])
         assert args.selector == "my-selector"
 
     def test_tasks_dir_flag(self) -> None:
-        args = cli._parse_loop_args(
-            ["--tasks-dir", "custom/tasks", "cmd"], command_path=["loop"]
-        )
+        args = cli._parse_loop_args(["--tasks-dir", "custom/tasks", "cmd"], command_path=["loop"])
         assert args.tasks_dir == "custom/tasks"
 
     def test_timeout_flag(self) -> None:
-        args = cli._parse_loop_args(
-            ["--timeout", "2m", "cmd"], command_path=["loop"]
-        )
+        args = cli._parse_loop_args(["--timeout", "2m", "cmd"], command_path=["loop"])
         assert args.timeout == 120
 
     def test_invalid_timeout_exits(self) -> None:
@@ -1849,16 +1773,12 @@ class TestParseLoopArgs:
             cli._parse_loop_args(["--timeout", "bad", "cmd"], command_path=["loop"])
 
     def test_prompt_flag(self) -> None:
-        args = cli._parse_loop_args(
-            ["--prompt", "do the thing", "cmd"], command_path=["loop"]
-        )
+        args = cli._parse_loop_args(["--prompt", "do the thing", "cmd"], command_path=["loop"])
         assert args.prompt == "do the thing"
         assert args.prompt_file is None
 
     def test_prompt_file_flag(self) -> None:
-        args = cli._parse_loop_args(
-            ["--prompt-file", "/tmp/task.md", "cmd"], command_path=["loop"]
-        )
+        args = cli._parse_loop_args(["--prompt-file", "/tmp/task.md", "cmd"], command_path=["loop"])
         assert args.prompt_file == "/tmp/task.md"
         assert args.prompt is None
 
@@ -2121,9 +2041,7 @@ class TestParseLoopSelectArgsMisc:
 class TestConfigCopyCommand:
     """The 'config copy' CLI command function dispatches correctly."""
 
-    def test_config_copy_via_cli(
-        self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_config_copy_via_cli(self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch) -> None:
         calls: list[object] = []
 
         def record(args: object) -> None:
@@ -2138,9 +2056,7 @@ class TestConfigCopyCommand:
 class TestMainEntryPoint:
     """main() entry point delegates to app()."""
 
-    def test_main_calls_app_and_shows_help(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_main_calls_app_and_shows_help(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """main() calls app() which shows the overview help."""
         # Monkeypatch sys.argv so app() sees ["agm", "--help"] and exits
         monkeypatch.setattr("sys.argv", ["agm", "--help"])
@@ -2245,7 +2161,6 @@ class TestParseLoopSelectArgsExtraPromptFlags:
         assert args.extra_selector_prompt_file == "/tmp/sel.md"
 
 
-
 class TestExecModulePathOption:
     """Parser-contract tests for the -I/--module-path repeatable option."""
 
@@ -2315,20 +2230,14 @@ class TestExecEngineFlagExclusivity:
     ) -> None:
         agl_file = tmp_path / "prog.agl"
         agl_file.write_text("let x = 1\n")
-        result = invoke(
-            runner, ["exec", str(agl_file), "--log-file", "out.log", "--no-log-file"]
-        )
+        result = invoke(runner, ["exec", str(agl_file), "--log-file", "out.log", "--no-log-file"])
         assert result.exit_code != 0
         assert "mutually exclusive" in result.output
 
-    def test_exec_rejects_timeout_with_no_timeout(
-        self, runner: CliRunner, tmp_path: Path
-    ) -> None:
+    def test_exec_rejects_timeout_with_no_timeout(self, runner: CliRunner, tmp_path: Path) -> None:
         agl_file = tmp_path / "prog.agl"
         agl_file.write_text("let x = 1\n")
-        result = invoke(
-            runner, ["exec", str(agl_file), "--timeout", "30s", "--no-timeout"]
-        )
+        result = invoke(runner, ["exec", str(agl_file), "--timeout", "30s", "--no-timeout"])
         assert result.exit_code != 0
         assert "mutually exclusive" in result.output
 

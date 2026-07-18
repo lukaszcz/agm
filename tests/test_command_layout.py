@@ -225,9 +225,9 @@ def test_e2e_command_coverage() -> None:
     # cast: the local stub types typer.Typer differently from typer.main.Typer,
     # but they are the same class at runtime.
     root_cmd: Command = get_command(cast(MainTyper, app))
-    assert hasattr(root_cmd, "list_commands") and hasattr(
-        root_cmd, "get_command"
-    ), "agm CLI root must be a Click group"
+    assert hasattr(root_cmd, "list_commands") and hasattr(root_cmd, "get_command"), (
+        "agm CLI root must be a Click group"
+    )
     root = cast(Group, root_cmd)
 
     # 1. Collect every raw leaf path from the live Click tree.

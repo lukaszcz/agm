@@ -63,9 +63,6 @@ def branch_exists(repo_dir: Path, branch: str, *, env: dict[str, str] | None = N
     ) or git_helpers.remote_branch_exists(repo_dir, branch, env=env)
 
 
-
-
-
 def ensure_worktree(
     *,
     new_branch: str | None,

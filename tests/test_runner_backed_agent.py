@@ -212,9 +212,7 @@ class TestRunPreparedPromptResult:
     def test_spawn_failure_returned_structured(self) -> None:
         from agm.agent.runner import PreparedPromptRun, run_prepared_prompt_result
 
-        mock_result = _make_process_result(
-            returncode=None, spawn_error="No such file or directory"
-        )
+        mock_result = _make_process_result(returncode=None, spawn_error="No such file or directory")
         prepared = PreparedPromptRun(
             command=["nonexistent_xyz"],
             effective_file=Path("/tmp/p.md"),
@@ -524,8 +522,12 @@ class TestRunnerBackedAgentCommandResolution:
             patch(
                 "agm.agent.runner.run_prepared_prompt_result",
                 return_value=MagicMock(
-                    returncode=0, stdout="ok", stderr="", elapsed=0.1,
-                    timed_out=False, spawn_error=None
+                    returncode=0,
+                    stdout="ok",
+                    stderr="",
+                    elapsed=0.1,
+                    timed_out=False,
+                    spawn_error=None,
                 ),
             ),
             patch("agm.agent.runner.cleanup_temp_files"),
@@ -564,8 +566,12 @@ class TestRunnerBackedAgentCommandResolution:
             patch(
                 "agm.agent.runner.run_prepared_prompt_result",
                 return_value=MagicMock(
-                    returncode=0, stdout="ok", stderr="", elapsed=0.1,
-                    timed_out=False, spawn_error=None
+                    returncode=0,
+                    stdout="ok",
+                    stderr="",
+                    elapsed=0.1,
+                    timed_out=False,
+                    spawn_error=None,
                 ),
             ),
             patch("agm.agent.runner.cleanup_temp_files"),
@@ -604,8 +610,12 @@ class TestRunnerBackedAgentCommandResolution:
             patch(
                 "agm.agent.runner.run_prepared_prompt_result",
                 return_value=MagicMock(
-                    returncode=0, stdout="ok", stderr="", elapsed=0.1,
-                    timed_out=False, spawn_error=None
+                    returncode=0,
+                    stdout="ok",
+                    stderr="",
+                    elapsed=0.1,
+                    timed_out=False,
+                    spawn_error=None,
                 ),
             ),
             patch("agm.agent.runner.cleanup_temp_files"),
@@ -668,8 +678,12 @@ class TestRunnerBackedAgentFailureMapping:
             )
 
         run_mock = MagicMock(
-            returncode=None, stdout="", stderr="no such file", elapsed=0.0,
-            timed_out=False, spawn_error="No such file or directory"
+            returncode=None,
+            stdout="",
+            stderr="no such file",
+            elapsed=0.0,
+            timed_out=False,
+            spawn_error="No such file or directory",
         )
         factory_fn = runner_backed_agent_factory(
             default_runner_cmd="echo", per_agent_cmds={}, idle_timeout=None
@@ -696,8 +710,7 @@ class TestRunnerBackedAgentFailureMapping:
             )
 
         run_mock = MagicMock(
-            returncode=124, stdout="", stderr="", elapsed=30.0,
-            timed_out=True, spawn_error=None
+            returncode=124, stdout="", stderr="", elapsed=30.0, timed_out=True, spawn_error=None
         )
         factory_fn = runner_backed_agent_factory(
             default_runner_cmd="echo", per_agent_cmds={}, idle_timeout=30.0
@@ -724,8 +737,12 @@ class TestRunnerBackedAgentFailureMapping:
             )
 
         run_mock = MagicMock(
-            returncode=2, stdout="", stderr="error output", elapsed=0.5,
-            timed_out=False, spawn_error=None
+            returncode=2,
+            stdout="",
+            stderr="error output",
+            elapsed=0.5,
+            timed_out=False,
+            spawn_error=None,
         )
         factory_fn = runner_backed_agent_factory(
             default_runner_cmd="echo", per_agent_cmds={}, idle_timeout=None
@@ -763,8 +780,7 @@ class TestStderrTail:
             )
 
         run_mock = MagicMock(
-            returncode=1, stdout="", stderr=stderr, elapsed=0.1,
-            timed_out=False, spawn_error=None
+            returncode=1, stdout="", stderr=stderr, elapsed=0.1, timed_out=False, spawn_error=None
         )
         factory_fn = runner_backed_agent_factory(
             default_runner_cmd="echo", per_agent_cmds={}, idle_timeout=None
@@ -820,8 +836,7 @@ class TestRetryFeedbackValidationErrors:
             default_runner_cmd="echo", per_agent_cmds={}, idle_timeout=None
         )
         run_mock = MagicMock(
-            returncode=0, stdout="ok", stderr="", elapsed=0.1,
-            timed_out=False, spawn_error=None
+            returncode=0, stdout="ok", stderr="", elapsed=0.1, timed_out=False, spawn_error=None
         )
         req = AgentRequest(
             agent="ask",
@@ -923,8 +938,12 @@ class TestRunnerMessageComposition:
             patch(
                 "agm.agent.runner.run_prepared_prompt_result",
                 return_value=MagicMock(
-                    returncode=0, stdout="response", stderr="", elapsed=0.1,
-                    timed_out=False, spawn_error=None
+                    returncode=0,
+                    stdout="response",
+                    stderr="",
+                    elapsed=0.1,
+                    timed_out=False,
+                    spawn_error=None,
                 ),
             ),
             patch("agm.agent.runner.cleanup_temp_files"),
@@ -1013,9 +1032,7 @@ class TestRunnerMessageComposition:
 class TestAgentCallErrorViaRuntime:
     """AgentCallError is catchable in AgL programs when runner fails."""
 
-    def _make_failing_default_agent(
-        self, *, cause: str, exit_code: int | None = 1
-    ) -> object:
+    def _make_failing_default_agent(self, *, cause: str, exit_code: int | None = 1) -> object:
         from agm.agl.runtime.agents import AgentCallHostError
 
         def agent(req: object) -> str:
@@ -1031,9 +1048,7 @@ class TestAgentCallErrorViaRuntime:
     def test_uncaught_agent_call_error_exits_2(self) -> None:
         from agm.agl import PipelineDriver
 
-        rt = PipelineDriver(
-            default_agent=self._make_failing_default_agent(cause="nonzero_exit")
-        )
+        rt = PipelineDriver(default_agent=self._make_failing_default_agent(cause="nonzero_exit"))
         result = rt.run('let x = ask("hi")\nx')
         assert result.ok is False
         assert result.error is not None
@@ -1042,32 +1057,16 @@ class TestAgentCallErrorViaRuntime:
     def test_caught_agent_call_error_run_succeeds(self) -> None:
         from agm.agl import PipelineDriver
 
-        program = (
-            "try\n"
-            "  ask(\"hi\")\n"
-            "  ()\n"
-            "catch AgentCallError as e =>\n"
-            "  print(e.cause)\n"
-        )
-        rt = PipelineDriver(
-            default_agent=self._make_failing_default_agent(cause="nonzero_exit")
-        )
+        program = 'try\n  ask("hi")\n  ()\ncatch AgentCallError as e =>\n  print(e.cause)\n'
+        rt = PipelineDriver(default_agent=self._make_failing_default_agent(cause="nonzero_exit"))
         result = rt.run(program)
         assert result.ok is True
         assert result.error is None
 
-    def test_cause_field_accessible_in_catch(
-        self, capsys: pytest.CaptureFixture[str]
-    ) -> None:
+    def test_cause_field_accessible_in_catch(self, capsys: pytest.CaptureFixture[str]) -> None:
         from agm.agl import PipelineDriver
 
-        program = (
-            "try\n"
-            "  ask(\"hi\")\n"
-            "  ()\n"
-            "catch AgentCallError as e =>\n"
-            "  print(e.cause)\n"
-        )
+        program = 'try\n  ask("hi")\n  ()\ncatch AgentCallError as e =>\n  print(e.cause)\n'
         rt = PipelineDriver(
             default_agent=self._make_failing_default_agent(cause="spawn_failure", exit_code=None)
         )
@@ -1094,9 +1093,7 @@ class TestAgentCallErrorViaRuntime:
 
         def counting_agent(req: object) -> str:
             call_count[0] += 1
-            raise AgentCallHostError(
-                cause="nonzero_exit", exit_code=1, stderr_tail="", elapsed=0.0
-            )
+            raise AgentCallHostError(cause="nonzero_exit", exit_code=1, stderr_tail="", elapsed=0.0)
 
         from agm.agl import PipelineDriver
 
@@ -1168,8 +1165,12 @@ class TestPipelineDriverRunnerWiring:
                 rt_mod.PipelineDriver,
                 "run",
                 return_value=MagicMock(
-                    ok=True, diagnostics=[], error=None, warnings=[],
-                    call_sites=(), bindings={},
+                    ok=True,
+                    diagnostics=[],
+                    error=None,
+                    warnings=[],
+                    call_sites=(),
+                    bindings={},
                 ),
             ),
         ):
@@ -1200,9 +1201,9 @@ def _install_fake_runner(directory: Path, env: dict[str, str]) -> Path:
     runner.write_text(
         "#!/bin/bash\n"
         "# Read the prompt file path from args (last @<path> arg or --file arg)\n"
-        "for arg in \"$@\"; do\n"
-        "  if [[ \"$arg\" == @* ]]; then\n"
-        "    prompt_file=\"${arg#@}\"\n"
+        'for arg in "$@"; do\n'
+        '  if [[ "$arg" == @* ]]; then\n'
+        '    prompt_file="${arg#@}"\n'
         "  fi\n"
         "done\n"
         "# Echo canned response\n"
@@ -1217,11 +1218,7 @@ def _install_nonzero_runner(directory: Path, env: dict[str, str]) -> Path:
     """Create a runner that always exits nonzero."""
     directory.mkdir(parents=True, exist_ok=True)
     runner = directory / "fail-runner"
-    runner.write_text(
-        "#!/bin/bash\n"
-        "echo 'error output' >&2\n"
-        "exit 2\n"
-    )
+    runner.write_text("#!/bin/bash\necho 'error output' >&2\nexit 2\n")
     runner.chmod(runner.stat().st_mode | stat.S_IEXEC)
     env["PATH"] = str(directory) + ":" + env["PATH"]
     return runner
@@ -1262,9 +1259,7 @@ class TestCliRunnerIntegration:
 
         config_dir = tmp_path / ".agm"
         config_dir.mkdir()
-        (config_dir / "config.toml").write_text(
-            '[exec]\nrunner = "fake-runner"\n'
-        )
+        (config_dir / "config.toml").write_text('[exec]\nrunner = "fake-runner"\n')
 
         result = self._run_agm_exec(
             [str(agl_file), "--no-log"],
@@ -1284,9 +1279,7 @@ class TestCliRunnerIntegration:
 
         config_dir = tmp_path / ".agm"
         config_dir.mkdir()
-        (config_dir / "config.toml").write_text(
-            '[exec]\nrunner = "fail-runner"\n'
-        )
+        (config_dir / "config.toml").write_text('[exec]\nrunner = "fail-runner"\n')
 
         result = self._run_agm_exec(
             [str(agl_file), "--no-log"],
@@ -1303,18 +1296,12 @@ class TestCliRunnerIntegration:
 
         agl_file = tmp_path / "prog.agl"
         agl_file.write_text(
-            "try\n"
-            "  ask(\"hi\")\n"
-            "  ()\n"
-            "catch AgentCallError as e =>\n"
-            "  print(e.cause)\n"
+            'try\n  ask("hi")\n  ()\ncatch AgentCallError as e =>\n  print(e.cause)\n'
         )
 
         config_dir = tmp_path / ".agm"
         config_dir.mkdir()
-        (config_dir / "config.toml").write_text(
-            '[exec]\nrunner = "fail-runner"\n'
-        )
+        (config_dir / "config.toml").write_text('[exec]\nrunner = "fail-runner"\n')
 
         result = self._run_agm_exec(
             [str(agl_file), "--no-log"],
@@ -1351,8 +1338,7 @@ class TestCliRunnerIntegration:
         config_dir = tmp_path / ".agm"
         config_dir.mkdir()
         (config_dir / "config.toml").write_text(
-            '[exec]\nrunner = "fake-runner"\n\n'
-            '[exec.agents]\nmyagent = "fake-runner"\n'
+            '[exec]\nrunner = "fake-runner"\n\n[exec.agents]\nmyagent = "fake-runner"\n'
         )
 
         result = self._run_agm_exec(

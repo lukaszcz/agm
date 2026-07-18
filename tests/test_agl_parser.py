@@ -220,12 +220,11 @@ class TestConflictGuard:
         log_output = stream.getvalue()
         # Any line containing "Shift/Reduce" or "Reduce/Reduce" is a conflict.
         conflict_lines = [
-            line for line in log_output.splitlines()
+            line
+            for line in log_output.splitlines()
             if "Shift/Reduce" in line or "Reduce/Reduce" in line
         ]
-        assert conflict_lines == [], (
-            "LALR(1) conflicts detected:\n" + "\n".join(conflict_lines)
-        )
+        assert conflict_lines == [], "LALR(1) conflicts detected:\n" + "\n".join(conflict_lines)
 
 
 # ---------------------------------------------------------------------------
@@ -456,11 +455,13 @@ class TestTypeExpressions:
 
     def test_list_wrong_arg_count_raises(self) -> None:
         from agm.agl.parser.errors import AglSyntaxError
+
         with pytest.raises(AglSyntaxError, match="exactly one"):
             parse("let x: list[int, text] = []")
 
     def test_dict_wrong_arg_count_raises(self) -> None:
         from agm.agl.parser.errors import AglSyntaxError
+
         with pytest.raises(AglSyntaxError, match="exactly two"):
             parse("let d: dict[int] = {}")
 
@@ -468,6 +469,7 @@ class TestTypeExpressions:
         # dict key type must be text; a complex key triggers _type_expr_spelling fallback
         # (ListT → "list", covering the cls[:-1].lower() branch).
         from agm.agl.parser.errors import AglSyntaxError
+
         with pytest.raises(AglSyntaxError, match="text"):
             parse("let d: dict[list[int], int] = {}")
 
@@ -475,6 +477,7 @@ class TestTypeExpressions:
         # dict key type must be text; a named type key triggers the NameT branch
         # in _type_expr_spelling, which returns its name in the error message.
         from agm.agl.parser.errors import AglSyntaxError
+
         with pytest.raises(AglSyntaxError, match="Review"):
             parse("let d: dict[Review, int] = {}")
 
@@ -733,44 +736,52 @@ class TestParseTypeExpr:
 
     def test_int(self) -> None:
         from agm.agl.syntax.types import IntT
+
         result = parse_type_expr("int")
         assert isinstance(result, IntT)
 
     def test_text(self) -> None:
         from agm.agl.syntax.types import TextT
+
         result = parse_type_expr("text")
         assert isinstance(result, TextT)
 
     def test_bool(self) -> None:
         from agm.agl.syntax.types import BoolT
+
         result = parse_type_expr("bool")
         assert isinstance(result, BoolT)
 
     def test_decimal(self) -> None:
         from agm.agl.syntax.types import DecimalT
+
         result = parse_type_expr("decimal")
         assert isinstance(result, DecimalT)
 
     def test_list_int(self) -> None:
         from agm.agl.syntax.types import IntT, ListT
+
         result = parse_type_expr("list[int]")
         assert isinstance(result, ListT)
         assert isinstance(result.elem, IntT)
 
     def test_dict_text_int(self) -> None:
         from agm.agl.syntax.types import DictT, IntT
+
         result = parse_type_expr("dict[text, int]")
         assert isinstance(result, DictT)
         assert isinstance(result.value, IntT)
 
     def test_named_type(self) -> None:
         from agm.agl.syntax.types import NameT
+
         result = parse_type_expr("MyRecord")
         assert isinstance(result, NameT)
         assert result.name == "MyRecord"
 
     def test_applied_generic(self) -> None:
         from agm.agl.syntax.types import AppliedT, IntT
+
         result = parse_type_expr("Option[int]")
         assert isinstance(result, AppliedT)
         assert result.name == "Option"
@@ -779,6 +790,7 @@ class TestParseTypeExpr:
 
     def test_func_type(self) -> None:
         from agm.agl.syntax.types import FuncT, IntT, TextT
+
         result = parse_type_expr("(int) -> text")
         assert isinstance(result, FuncT)
         assert len(result.params) == 1
@@ -787,6 +799,7 @@ class TestParseTypeExpr:
 
     def test_unparenthesized_func_type(self) -> None:
         from agm.agl.syntax.types import FuncT, IntT, TextT
+
         result = parse_type_expr("int -> text")
         assert isinstance(result, FuncT)
         assert len(result.params) == 1
@@ -795,6 +808,7 @@ class TestParseTypeExpr:
 
     def test_unparenthesized_func_type_chain(self) -> None:
         from agm.agl.syntax.types import BoolT, FuncT, IntT, TextT
+
         result = parse_type_expr("int -> text -> bool")
         assert isinstance(result, FuncT)
         assert isinstance(result.params[0], IntT)
@@ -804,16 +818,19 @@ class TestParseTypeExpr:
 
     def test_unit_type(self) -> None:
         from agm.agl.syntax.types import UnitT
+
         result = parse_type_expr("unit")
         assert isinstance(result, UnitT)
 
     def test_agent_type(self) -> None:
         from agm.agl.syntax.types import AgentT
+
         result = parse_type_expr("agent")
         assert isinstance(result, AgentT)
 
     def test_qualified_named_type(self) -> None:
         from agm.agl.syntax.types import AppliedT
+
         # mod::Box[int] — qualified applied type
         result = parse_type_expr("mymod::Box[int]")
         assert isinstance(result, AppliedT)
@@ -833,6 +850,7 @@ class TestParseTypeExpr:
         """start_id offsets the first assigned node_id."""
         result = parse_type_expr("int", start_id=100)
         from agm.agl.syntax.types import IntT
+
         assert isinstance(result, IntT)
         # Node id is ≥ start_id (offset applied)
         assert result.node_id >= 100
@@ -844,56 +862,56 @@ class TestParseTypeExpr:
 
 
 class TestProgramDeclScopeSideTables:
-    """Parse a 'program NAME' source and assert the side tables on ResolvedProgram."""
+    """Parse a 'program NAME' source and assert the side tables on ModuleResolution."""
 
     def _parse_and_resolve(self, source: str) -> object:
-        from agm.agl.scope import resolve
-        return resolve(parse_program(source))
+        from agm.agl.scope import resolve_module
+
+        return resolve_module(parse_program(source))
 
     def test_program_name_set_in_resolved_program(self) -> None:
-        """Parsing 'program myapp' sets program_name on ResolvedProgram."""
+        """Parsing 'program myapp' sets program_name on ModuleResolution."""
         r = self._parse_and_resolve("program myapp\n()")
-        from agm.agl.scope.symbols import ResolvedProgram
-        assert isinstance(r, ResolvedProgram)
+        from agm.agl.scope.symbols import ModuleResolution
+
+        assert isinstance(r, ModuleResolution)
         assert r.program_name == "myapp"
 
     def test_no_program_decl_gives_none(self) -> None:
         """No 'program' declaration → program_name is None."""
         r = self._parse_and_resolve("()")
-        from agm.agl.scope.symbols import ResolvedProgram
-        assert isinstance(r, ResolvedProgram)
+        from agm.agl.scope.symbols import ModuleResolution
+
+        assert isinstance(r, ModuleResolution)
         assert r.program_name is None
 
     def test_builtin_calls_populated_for_print(self) -> None:
         """A 'print' call is classified in builtin_calls."""
         r = self._parse_and_resolve('print "hello"')
         from agm.agl.scope import BuiltinKind
-        from agm.agl.scope.symbols import ResolvedProgram
-        assert isinstance(r, ResolvedProgram)
+        from agm.agl.scope.symbols import ModuleResolution
+
+        assert isinstance(r, ModuleResolution)
         assert BuiltinKind.PRINT in r.builtin_calls.values()
 
     def test_builtin_calls_populated_for_exec(self) -> None:
         """An 'exec' call is classified in builtin_calls."""
         r = self._parse_and_resolve('let x = exec "ls"\nx')
         from agm.agl.scope import BuiltinKind
-        from agm.agl.scope.symbols import ResolvedProgram
-        assert isinstance(r, ResolvedProgram)
+        from agm.agl.scope.symbols import ModuleResolution
+
+        assert isinstance(r, ModuleResolution)
         assert BuiltinKind.EXEC in r.builtin_calls.values()
 
     def test_bare_variant_patterns_populated(self) -> None:
         """A bare name in a case pattern that names a constructor is in bare_variant_patterns."""
         source = (
-            "enum Status\n"
-            "  | Ok\n"
-            "  | Fail\n"
-            "let s = Ok()\n"
-            "case s of\n"
-            "  | Ok => 1\n"
-            "  | Fail => 0\n"
+            "enum Status\n  | Ok\n  | Fail\nlet s = Ok()\ncase s of\n  | Ok => 1\n  | Fail => 0\n"
         )
         r = self._parse_and_resolve(source)
-        from agm.agl.scope.symbols import ResolvedProgram
-        assert isinstance(r, ResolvedProgram)
+        from agm.agl.scope.symbols import ModuleResolution
+
+        assert isinstance(r, ModuleResolution)
         # At least one VarPattern node_id was recognised as a bare-variant constructor.
         assert len(r.bare_variant_patterns) >= 1
 
@@ -1091,9 +1109,7 @@ class TestMarkerParams:
 
     def test_enum_variant_with_slash(self) -> None:
         """Multi-field variant with / — first pos-only, rest standard."""
-        en = first(parse(
-            "enum R\n  | A(x: int, /, y: int)\n  | B"
-        ))
+        en = first(parse("enum R\n  | A(x: int, /, y: int)\n  | B"))
         assert isinstance(en, EnumDef)
         a = en.variants[0]
         assert a.fields[0].kind == ParamKind.POSITIONAL_ONLY
@@ -1469,8 +1485,8 @@ class TestCalls:
         assert inner.callee.name == "classify"
 
     def test_juxt_call_with_qualified_constructor_call_argument(self) -> None:
-        'f Opt::Some(x = 1) desugars to f(Opt::Some(x = 1)).'
-        call = first(parse('f Opt::Some(x = 1)'))
+        "f Opt::Some(x = 1) desugars to f(Opt::Some(x = 1))."
+        call = first(parse("f Opt::Some(x = 1)"))
         assert isinstance(call, Call)
         assert isinstance(call.callee, VarRef)
         assert call.callee.name == "f"
@@ -1613,7 +1629,7 @@ class TestTypedCalls:
         assert len(call.type_args) == 1
 
     def test_typed_call_allowed_as_juxt_argument(self) -> None:
-        prog = parse('f Opt[int]::None()')
+        prog = parse("f Opt[int]::None()")
         call = first(prog)
         assert isinstance(call, Call)
         assert isinstance(call.callee, VarRef)
@@ -1689,7 +1705,7 @@ class TestFieldAccessAndConstructors:
             parse("Issue{title: x, severity: 1}")
 
     def test_qualified_constructor(self) -> None:
-        c = first(parse('Review::Pass'))
+        c = first(parse("Review::Pass"))
         assert isinstance(c, VarRef)
         assert c.name == "Pass"
         assert c.module_qualifier is not None
@@ -1866,7 +1882,7 @@ class TestBinaryOperators:
         assert e.negated
 
     def test_is_qualified(self) -> None:
-        e = first(parse('x is Review::Pass'))
+        e = first(parse("x is Review::Pass"))
         assert isinstance(e, IsTest)
         assert e.module_qualifier is not None
         assert e.module_qualifier.segments == ("Review",)
@@ -1887,6 +1903,7 @@ class TestBinaryOperators:
         """'==' is the equality operator and is valid in expressions."""
         e = first(parse("let b = a == b"))
         from agm.agl.syntax.nodes import LetDecl
+
         assert isinstance(e, LetDecl)
 
     @pytest.mark.parametrize(
@@ -1907,8 +1924,7 @@ class TestBinaryOperators:
         with pytest.raises(AglSyntaxError) as exc_info:
             parse("x == y == z")
         assert str(exc_info.value) == (
-            "Comparisons are non-associative; parenthesize explicitly, "
-            "e.g. `(x == y) == z`."
+            "Comparisons are non-associative; parenthesize explicitly, e.g. `(x == y) == z`."
         )
 
 
@@ -2203,7 +2219,7 @@ class TestPatterns:
         assert pat.positional[0].name == "title"
 
     def test_qualified_constructor_pattern(self) -> None:
-        src = 'case r of | Review::Pass => ok | Review::Fail => err'
+        src = "case r of | Review::Pass => ok | Review::Fail => err"
         e = first(parse(src))
         assert isinstance(e, Case)
         pat = e.branches[0].pattern
@@ -2252,14 +2268,7 @@ class TestTemplates:
 class TestMultiLineBranches:
     def test_multiline_if_suite_bodies(self) -> None:
         """if with suite bodies (indented blocks after =>)."""
-        src = (
-            "if n > 0 =>\n"
-            "  pos\n"
-            "| n < 0 =>\n"
-            "  neg\n"
-            "| else =>\n"
-            "  zero"
-        )
+        src = "if n > 0 =>\n  pos\n| n < 0 =>\n  neg\n| else =>\n  zero"
         e = first(parse(src))
         assert isinstance(e, If)
         assert len(e.branches) == 3
@@ -2280,13 +2289,7 @@ class TestMultiLineBranches:
 
     def test_multiline_case_suite_bodies(self) -> None:
         """case with suite bodies."""
-        src = (
-            "case x of\n"
-            "| Pass =>\n"
-            "  ok\n"
-            "| Fail =>\n"
-            "  err"
-        )
+        src = "case x of\n| Pass =>\n  ok\n| Fail =>\n  err"
         e = first(parse(src))
         assert isinstance(e, Case)
         assert len(e.branches) == 2
@@ -2294,11 +2297,7 @@ class TestMultiLineBranches:
 
     def test_multiline_try(self) -> None:
         """try with catch on new lines via catch-continuation."""
-        src = (
-            "try x\n"
-            "catch AgentCallError => e1\n"
-            "catch _ => e2"
-        )
+        src = "try x\ncatch AgentCallError => e1\ncatch _ => e2"
         e = first(parse(src))
         assert isinstance(e, Try)
         assert len(e.handlers) == 2
@@ -2432,7 +2431,7 @@ class TestFullPrograms:
             "agent planner\n"
             'let s = ask "Hello?"\n'
             'let r = ask("Review", agent = reviewer)\n'
-            'print r'
+            "print r"
         )
         prog = parse(src)
         assert len(items(prog)) == 5
@@ -2447,11 +2446,7 @@ class TestFullPrograms:
         assert call.named_args[0].name == "agent"
 
     def test_factorial_recursion(self) -> None:
-        src = (
-            "def fact(n: int) -> int =\n"
-            "  if n <= 1 => 1\n"
-            "  | else => n"
-        )
+        src = "def fact(n: int) -> int =\n  if n <= 1 => 1\n  | else => n"
         prog = parse(src)
         fd = first(prog)
         assert isinstance(fd, FuncDef)
@@ -2463,11 +2458,7 @@ class TestFullPrograms:
         assert isinstance(let.type_ann, FuncT)
 
     def test_exec_result_program(self) -> None:
-        src = (
-            'let res = exec "ls -la"\n'
-            "print(res.stdout)\n"
-            "if res.exit_code != 0 => print(x)"
-        )
+        src = 'let res = exec "ls -la"\nprint(res.stdout)\nif res.exit_code != 0 => print(x)'
         prog = parse(src)
         assert len(items(prog)) == 3
 
@@ -2507,8 +2498,8 @@ class TestBinaryOperatorsCoverage:
         assert e.op == BinOp.DIV
 
     def test_is_not_qualified(self) -> None:
-        'x is not Review::Pass produces a negated, qualified IsTest.'
-        e = first(parse('x is not Review::Pass'))
+        "x is not Review::Pass produces a negated, qualified IsTest."
+        e = first(parse("x is not Review::Pass"))
         assert isinstance(e, IsTest)
         assert e.module_qualifier is not None
         assert e.module_qualifier.segments == ("Review",)
@@ -2985,7 +2976,7 @@ class TestCaseNeutralNamesParser:
         assert c.callee.name == "Some"
 
     def test_qualified_access_becomes_var_ref(self) -> None:
-        prog = parse('Option::some')
+        prog = parse("Option::some")
         ref = first(prog)
         assert isinstance(ref, VarRef)
         assert ref.name == "some"
@@ -2993,7 +2984,7 @@ class TestCaseNeutralNamesParser:
         assert ref.module_qualifier.segments == ("Option",)
 
     def test_qualified_call_becomes_call_with_var_ref(self) -> None:
-        prog = parse('Option::some(value = 1)')
+        prog = parse("Option::some(value = 1)")
         c = first(prog)
         assert isinstance(c, Call)
         assert isinstance(c.callee, VarRef)
@@ -3049,7 +3040,7 @@ class TestCaseNeutralPatterns:
         assert pat.name == "None"
 
     def test_qualified_constructor_pattern(self) -> None:
-        prog = parse('case x of | Option::none => 1')
+        prog = parse("case x of | Option::none => 1")
         case = first(prog)
         assert isinstance(case, Case)
         pat = case.branches[0].pattern
@@ -3422,6 +3413,7 @@ class TestImportDecl:
         assert decl.mode == syntax.ImportMode.USING
         assert decl.items[0].name == "x"
 
+
 class TestExportDecl:
     """Tests for export declaration parsing."""
 
@@ -3568,7 +3560,7 @@ class TestQualifiedRefs:
         assert callee.module_qualifier is not None
 
     def test_qual_enum_variant_access(self) -> None:
-        prog = parse('m::Color::Red')
+        prog = parse("m::Color::Red")
         (expr,) = items(prog)
         assert isinstance(expr, syntax.VarRef)
         assert expr.name == "Red"
@@ -3619,7 +3611,7 @@ class TestQualifiedTypeRefs:
         assert decl.type_ann.module_qualifier.segments == ("m",)
 
     def test_qualified_enum_constructor_with_type_args(self) -> None:
-        prog = parse('Option[int]::some(value = 1)')
+        prog = parse("Option[int]::some(value = 1)")
         (call,) = items(prog)
         assert isinstance(call, syntax.Call)
         assert isinstance(call.callee, syntax.VarRef)
@@ -3671,7 +3663,7 @@ class TestQualifiedTypeRefs:
 
     def test_qual_pattern_enum_variant(self) -> None:
         # Qualified enum variant: m::Color::Red (type qualifier after qual_prefix)
-        prog = parse('case x of | m::Color::Red => 1')
+        prog = parse("case x of | m::Color::Red => 1")
         (expr,) = items(prog)
         assert isinstance(expr, Case)
         pat = expr.branches[0].pattern
@@ -3716,10 +3708,7 @@ class TestPrivateDecls:
         assert len(decl.params) == 1
 
     def test_private_record_def(self) -> None:
-        prog = parse(
-            "private record Foo\n"
-            "    bar: text"
-        )
+        prog = parse("private record Foo\n    bar: text")
         (decl,) = items(prog)
         assert isinstance(decl, RecordDef)
         assert decl.is_private is True

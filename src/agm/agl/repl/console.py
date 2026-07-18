@@ -89,6 +89,7 @@ def format_banner(agent_mode: "AgentMode | None" = None) -> str:
             lines.append("  Agent-call mode: confirm (you approve each live agent call).")
     return "\n".join(lines)
 
+
 # AgL keywords offered by the completer (the reserved-word set, sorted for a
 # stable suggestion order).
 _KEYWORDS: tuple[str, ...] = tuple(sorted(KEYWORDS))
@@ -114,9 +115,30 @@ _STRING_TOKENS: frozenset[str] = frozenset(
 _NUMBER_TOKENS: frozenset[str] = frozenset({"INT", "DECIMAL"})
 _OPERATOR_TOKENS: frozenset[str] = frozenset(
     {
-        "ARROW", "EQ", "NEQ", "LE", "GE", "LT", "GT", "PLUS", "MINUS", "STAR",
-        "SLASH", "LPAR", "RPAR", "LSQB", "RSQB", "LBRACE", "RBRACE", "COLON",
-        "COMMA", "DOT", "PIPE", "SEMICOLON", "EQ_EQ", "PLACEHOLDER",
+        "ARROW",
+        "EQ",
+        "NEQ",
+        "LE",
+        "GE",
+        "LT",
+        "GT",
+        "PLUS",
+        "MINUS",
+        "STAR",
+        "SLASH",
+        "LPAR",
+        "RPAR",
+        "LSQB",
+        "RSQB",
+        "LBRACE",
+        "RBRACE",
+        "COLON",
+        "COMMA",
+        "DOT",
+        "PIPE",
+        "SEMICOLON",
+        "EQ_EQ",
+        "PLACEHOLDER",
         "PLACEHOLDER_NUM",
     }
 )
@@ -173,8 +195,6 @@ def _style_class_for(
     return None
 
 
-
-
 class AglPromptLexer(Lexer):
     """A prompt_toolkit lexer that drives the real AgL lexer for highlighting.
 
@@ -192,9 +212,7 @@ class AglPromptLexer(Lexer):
     def __init__(self, session: "ReplSession | None" = None) -> None:
         self._session = session
 
-    def lex_document(
-        self, document: Document
-    ) -> Callable[[int], StyleAndTextTuples]:
+    def lex_document(self, document: Document) -> Callable[[int], StyleAndTextTuples]:
         type_names = self._session.type_names() if self._session is not None else frozenset()
         constructor_names = (
             self._session.constructor_names() if self._session is not None else frozenset()
@@ -270,12 +288,8 @@ def _styled_spans(
     except Exception:
         open_string_start = _open_string_start(text)
         if open_string_start is not None:
-            prefix_spans = _styled_spans(
-                text[:open_string_start], type_names, constructor_names
-            )
-            return prefix_spans + [
-                (open_string_start, len(text), "class:agl.string")
-            ]
+            prefix_spans = _styled_spans(text[:open_string_start], type_names, constructor_names)
+            return prefix_spans + [(open_string_start, len(text), "class:agl.string")]
         return []
 
     forced, local_types, local_constructors = _decl_site_styles(text, tokens)
@@ -449,9 +463,7 @@ def _line_start_offsets(text: str) -> list[int]:
     return offsets
 
 
-def _fragments_for_line(
-    line: str, spans: list[tuple[int, int, str]]
-) -> StyleAndTextTuples:
+def _fragments_for_line(line: str, spans: list[tuple[int, int, str]]) -> StyleAndTextTuples:
     """Turn a line and its styled spans into ordered ``(style, text)`` fragments."""
     if not spans:
         return [("", line)]
@@ -635,9 +647,7 @@ def build_prompt_session(
     )
 
 
-def _prompt_continuation(
-    width: int, line_number: int, wrap_count: int
-) -> StyleAndTextTuples:
+def _prompt_continuation(width: int, line_number: int, wrap_count: int) -> StyleAndTextTuples:
     """Render the ``...> `` continuation prompt for multiline entries."""
     del width, line_number, wrap_count
     return [("class:agl.prompt", CONTINUATION)]
@@ -783,8 +793,6 @@ def run_console(
             continue
 
         result = session.eval_entry(entry, check_only=check_only)
-        rendered = render_mod.render_entry_result(
-            result, echo=ctx.echo, check_only=check_only
-        )
+        rendered = render_mod.render_entry_result(result, echo=ctx.echo, check_only=check_only)
         if rendered is not None:
             print(rendered)

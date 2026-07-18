@@ -16,11 +16,11 @@ from agm.agl.matchcompile.matrix import (
 )
 from agm.agl.matchcompile.normalize import normalize_case
 from agm.agl.parser import parse_program
-from agm.agl.scope import resolve
+from agm.agl.scope import resolve_module
 from agm.agl.semantics.types import BoolType, EnumType
 from agm.agl.syntax.nodes import Case
 from agm.agl.syntax.visitor import walk
-from agm.agl.typecheck import CheckedProgram, check
+from agm.agl.typecheck import CheckedModule, check_module
 
 _CAPS = HostCapabilities(
     agent_names=frozenset(),
@@ -33,8 +33,8 @@ _CAPS = HostCapabilities(
 )
 
 
-def _normalized(source: str) -> tuple[CheckedProgram, Case]:
-    checked = check(resolve(parse_program(source)), _CAPS)
+def _normalized(source: str) -> tuple[CheckedModule, Case]:
+    checked = check_module(resolve_module(parse_program(source)), _CAPS)
     cases: list[Case] = []
 
     def collect(node: object) -> None:
@@ -52,13 +52,9 @@ def test_specializing_many_heads_only_classifies_source_rows_once(
 ) -> None:
     head_count = 80
     variants = "\n".join(f"  | v{index}" for index in range(head_count))
-    branches = "\n".join(
-        f"  | v{index}() => {index}" for index in range(head_count)
-    )
+    branches = "\n".join(f"  | v{index}() => {index}" for index in range(head_count))
     checked, case = _normalized(
-        f"enum Wide\n{variants}\n"
-        "let subject = v0()\n"
-        f"case subject of\n{branches}"
+        f"enum Wide\n{variants}\nlet subject = v0()\ncase subject of\n{branches}"
     )
     normalized = normalize_case(case, checked)
     matrix = matrix_from_normalized(normalized)

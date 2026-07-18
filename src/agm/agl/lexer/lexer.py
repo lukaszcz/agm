@@ -82,8 +82,8 @@ _INDEX_PREDECESSORS = frozenset(
 # active, ``AglLexer.lex`` deposits the scan's TAB advisories into it so the
 # caller (e.g. ``PipelineDriver.prepare``) can surface them alongside parse
 # diagnostics.  A ``ContextVar`` keeps nested/reentrant parses isolated.
-_TAB_WARNING_SINK: contextvars.ContextVar[list[Diagnostic] | None] = (
-    contextvars.ContextVar("agl_tab_warning_sink", default=None)
+_TAB_WARNING_SINK: contextvars.ContextVar[list[Diagnostic] | None] = contextvars.ContextVar(
+    "agl_tab_warning_sink", default=None
 )
 
 
@@ -127,9 +127,14 @@ _ITEM_START_TYPES = frozenset({"_NEWLINE", "_INDENT", "_DEDENT", "SEMICOLON"})
 def _retype(tok: Token, new_type: str) -> Token:
     """Return a copy of *tok* with a new token type, preserving value and span."""
     return Token(
-        new_type, str(tok),
-        start_pos=tok.start_pos, line=tok.line, column=tok.column,
-        end_line=tok.end_line, end_column=tok.end_column, end_pos=tok.end_pos,
+        new_type,
+        str(tok),
+        start_pos=tok.start_pos,
+        line=tok.line,
+        column=tok.column,
+        end_line=tok.end_line,
+        end_column=tok.end_column,
+        end_pos=tok.end_pos,
     )
 
 
@@ -215,11 +220,7 @@ def _merge_modpath(tokens: list[Token]) -> list[Token]:
             j = i
             seg_parts: list[str] = [str(tokens[j])]
             j += 1
-            while (
-                j + 1 < n
-                and tokens[j].type == DOT
-                and tokens[j + 1].type == NAME
-            ):
+            while j + 1 < n and tokens[j].type == DOT and tokens[j + 1].type == NAME:
                 seg_parts.append(str(tokens[j + 1]))
                 j += 2
             modpath_value = ".".join(seg_parts)
@@ -327,11 +328,7 @@ def _remap_adjacent_brackets(tokens: list[Token]) -> list[Token]:
     result: list[Token] = []
     previous: Token | None = None
     for tok in tokens:
-        if (
-            tok.type == LSQB
-            and previous is not None
-            and previous.type == "DO"
-        ):
+        if tok.type == LSQB and previous is not None and previous.type == "DO":
             tok = _retype(tok, DO_LSQB)
         elif (
             tok.type == LSQB
@@ -426,9 +423,7 @@ class AglLexer(Lexer):
         scanner = _Scanner(source)
         try:
             after_remap = list(_remap(layout(scanner.scan())))
-            tokens = _mark_typearg_lsqb(
-                _remap_adjacent_brackets(apply_module_passes(after_remap))
-            )
+            tokens = _mark_typearg_lsqb(_remap_adjacent_brackets(apply_module_passes(after_remap)))
         finally:
             sink = _TAB_WARNING_SINK.get()
             if sink is not None:

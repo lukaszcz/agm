@@ -18,7 +18,7 @@ Design decisions implemented
 - Unified namespace: any top-level non-private ``FuncDef``, ``RecordDef``,
   ``EnumDef``, or ``TypeAlias`` name may appear in ``using``/``hiding``.
 
-The :class:`ImportEnv` produced here is consumed by graph resolution and
+The :class:`ImportEnv` produced here is consumed by program resolution and
 typechecking so both layers agree on import semantics.
 """
 
@@ -136,8 +136,7 @@ def _compute_s(
                 # Single import: the name MUST be exported.
                 if item.name not in module_exports:
                     raise AglScopeError(
-                        f"name {item.name!r} is not exported by module"
-                        f" {_module_dotted(module)!r}",
+                        f"name {item.name!r} is not exported by module {_module_dotted(module)!r}",
                         span=decl.span,
                     )
                 result.add(item.name)
@@ -152,8 +151,7 @@ def _compute_s(
         else:
             if item.name not in module_exports:
                 raise AglScopeError(
-                    f"name {item.name!r} is not exported by module"
-                    f" {_module_dotted(module)!r}",
+                    f"name {item.name!r} is not exported by module {_module_dotted(module)!r}",
                     span=decl.span,
                 )
             hidden.add(item.name)
@@ -257,9 +255,7 @@ def _check_alias_root_collision(
         return target.modules
 
     # root_segment → list of (target_ids, is_alias, decl) triples sharing that root
-    root_entries: dict[str, list[tuple[frozenset[ModuleId], bool, ImportDecl]]] = defaultdict(
-        list
-    )
+    root_entries: dict[str, list[tuple[frozenset[ModuleId], bool, ImportDecl]]] = defaultdict(list)
 
     for decl in decls:
         target = targets[decl.node_id]
@@ -381,9 +377,7 @@ def build_import_env(
             _process_single(decl, target.module, exports, unqualified_acc, qualified_acc)
         else:
             # WildcardTarget
-            _process_wildcard(
-                decl, target.modules, exports, unqualified_acc, qualified_acc
-            )
+            _process_wildcard(decl, target.modules, exports, unqualified_acc, qualified_acc)
 
     # Freeze and return.
     frozen_unqualified: dict[str, frozenset[QName]] = {

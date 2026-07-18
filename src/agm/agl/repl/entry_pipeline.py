@@ -1,9 +1,9 @@
-"""Multi-module REPL graph-mode pipeline collaborator.
+"""Multi-module REPL program pipeline collaborator.
 
-Implements the build_repl_graph → resolve_graph → check_graph → match
+Implements the build_repl_graph → resolve_program → check_program → match
 compilation → incremental link/exec pipeline for REPL entries that contain
 import declarations or have cached library modules from prior entries. Driven
-by ``ReplSession`` via the narrow ``GraphSessionCtx`` Protocol. Must NOT import
+by ``ReplSession`` via the narrow ``EntryPipelineCtx`` Protocol. Must NOT import
 ``session`` (no cycle).
 """
 
@@ -23,7 +23,7 @@ if TYPE_CHECKING:
     from agm.agl.ir.ids import Location, NominalId
     from agm.agl.ir.program import NominalDescriptor
     from agm.agl.lower import LinkImage
-    from agm.agl.matchcompile import MatchCompiledModuleGraph
+    from agm.agl.matchcompile import MatchCompiledProgram
     from agm.agl.modules.ids import ModuleId
     from agm.agl.modules.loader import LoadedModule
     from agm.agl.modules.roots import RootSet
@@ -35,8 +35,8 @@ if TYPE_CHECKING:
     from agm.agl.semantics.values import EnumValue, Frame, Value
     from agm.agl.syntax.nodes import ImportDecl, Program
     from agm.agl.syntax.spans import SourceSpan
-    from agm.agl.typecheck.env import CheckedProgram, TypeEnvironment
-    from agm.agl.typecheck.graph import CheckedModule, CheckedModuleGraph
+    from agm.agl.typecheck.env import CheckedModule, TypeEnvironment
+    from agm.agl.typecheck.program import CheckedProgram
 
 
 # ---------------------------------------------------------------------------
@@ -44,8 +44,8 @@ if TYPE_CHECKING:
 # ---------------------------------------------------------------------------
 
 
-class GraphSessionCtx(Protocol):
-    """The minimal ReplSession surface the graph-mode pipeline needs."""
+class EntryPipelineCtx(Protocol):
+    """The minimal ReplSession surface the program pipeline needs."""
 
     _loaded_lib_modules: dict[ModuleId, LoadedModule]
     _accumulated_imports: list[ImportDecl]
@@ -71,11 +71,11 @@ class GraphSessionCtx(Protocol):
     def _fail(self, diagnostics: list[Diagnostic], warnings: list[Diagnostic]) -> EntryResult: ...
 
     def _build_check_only_result(
-        self, program: Program, checked: CheckedProgram, warnings: list[Diagnostic]
+        self, program: Program, checked: CheckedModule, warnings: list[Diagnostic]
     ) -> EntryResult: ...
 
     def _pre_eval_param_check(
-        self, program: Program, checked: CheckedProgram, warnings: list[Diagnostic]
+        self, program: Program, checked: CheckedModule, warnings: list[Diagnostic]
     ) -> tuple[EntryResult | None, dict[str, Value], str | None, dict[str, object]]: ...
 
     def _update_engine_settings(
@@ -91,7 +91,7 @@ class GraphSessionCtx(Protocol):
         *,
         text: str,
         program: Program,
-        checked: CheckedProgram,
+        checked: CheckedModule,
         next_start_id: int,
         entry_program_name: str | None,
         entry_active_config: dict[str, object],
@@ -102,7 +102,7 @@ class GraphSessionCtx(Protocol):
     def _classify(self, program: Program) -> tuple[EntryKind, str | None]: ...
 
     def _echo_data_ir(
-        self, program: Program, checked: CheckedProgram, captured: Value | None
+        self, program: Program, checked: CheckedModule, captured: Value | None
     ) -> tuple[Value | None, Type | None]: ...
 
     def _quote_strings_for_entry(self, program: Program) -> bool: ...
@@ -113,17 +113,17 @@ class GraphSessionCtx(Protocol):
 # ---------------------------------------------------------------------------
 
 
-class GraphSession:
-    """Graph-mode pipeline collaborator for ``ReplSession``.
+class EntryPipeline:
+    """Program pipeline collaborator for ``ReplSession``.
 
-    Instantiated once per ``ReplSession`` (``self._graph_session``).  Holds
-    no state of its own — all session state is borrowed via ``GraphSessionCtx``.
+    Instantiated once per ``ReplSession`` (``self._entry_pipeline``).  Holds
+    no state of its own — all session state is borrowed via ``EntryPipelineCtx``.
     """
 
-    def __init__(self, ctx: GraphSessionCtx) -> None:
+    def __init__(self, ctx: EntryPipelineCtx) -> None:
         self._ctx = ctx
 
-    def eval_entry_graph_mode(
+    def eval_entry(
         self,
         *,
         text: str,
@@ -134,7 +134,7 @@ class GraphSession:
         next_start_id: int,
         check_only: bool,
     ) -> EntryResult:
-        """Graph-mode pipeline for REPL entries that have imports or cached lib modules.
+        """Program pipeline for REPL entries that have imports or cached lib modules.
 
         Builds the module graph from the already-parsed *pipeline_program*, runs
         the full scope/typecheck/match-compilation passes with the session
@@ -152,9 +152,9 @@ class GraphSession:
         from agm.agl.modules.loader import build_repl_graph
         from agm.agl.parser import AglSyntaxError
         from agm.agl.scope import AglScopeError
-        from agm.agl.scope.graph import resolve_graph
+        from agm.agl.scope.program import resolve_program
         from agm.agl.typecheck import AglTypeError
-        from agm.agl.typecheck.graph import check_graph
+        from agm.agl.typecheck.program import check_program
 
         roots = self._ctx._ensure_roots()
 
@@ -186,7 +186,7 @@ class GraphSession:
             return self._ctx._fail([Diagnostic(message=str(exc), line=1)], tab_warnings)
 
         try:
-            rgraph = resolve_graph(
+            resolved_program = resolve_program(
                 graph,
                 ambient_agents=self._ctx._ambient_agents(host_env),
                 entry_ambient_constructor_candidates=self._ctx._ambient_constructor_candidates,
@@ -198,32 +198,32 @@ class GraphSession:
             return self._ctx._fail([exc.to_diagnostic()], tab_warnings)
 
         try:
-            cgraph = check_graph(
-                rgraph, host_env.capabilities, entry_seed_env=self._ctx._type_env
+            checked_program = check_program(
+                resolved_program, host_env.capabilities, entry_seed_env=self._ctx._type_env
             )
         except AglTypeError as exc:
             return self._ctx._fail([exc.to_diagnostic()], tab_warnings)
 
-        entry_cm = cgraph.modules[ENTRY_ID]
+        entry_cm = checked_program.modules[ENTRY_ID]
 
         # Collect warnings from all passes.
         warnings: list[Diagnostic] = [
             *tab_warnings,
-            *rgraph.warnings,
-            *cgraph.warnings,
+            *resolved_program.warnings,
+            *checked_program.warnings,
         ]
 
-        from agm.agl.matchcompile import compile_graph_matches, diagnostics_from_match_issues
+        from agm.agl.matchcompile import compile_program_matches, diagnostics_from_match_issues
 
-        match_result = compile_graph_matches(cgraph)
+        match_result = compile_program_matches(checked_program)
         if match_result.compiled is None:
             return self._ctx._fail(
                 list(diagnostics_from_match_issues(match_result.issues)), warnings
             )
-        compiled_graph = match_result.compiled
-        from agm.agl.matchcompile import MatchCompiledModuleGraph
+        compiled = match_result.compiled
+        from agm.agl.matchcompile import MatchCompiledProgram
 
-        assert isinstance(compiled_graph, MatchCompiledModuleGraph)
+        assert isinstance(compiled, MatchCompiledProgram)
 
         checked = self._checked_program_from_module(entry_cm)
         if check_only:
@@ -235,22 +235,22 @@ class GraphSession:
         if pre_eval_result is not None:
             return pre_eval_result
 
-        from agm.agl.pipeline import _materialize_graph_custom_contract_payloads
+        from agm.agl.pipeline import _materialize_program_custom_contract_payloads
 
-        contract_payloads, contract_errors = _materialize_graph_custom_contract_payloads(
-            cgraph,
+        contract_payloads, contract_errors = _materialize_program_custom_contract_payloads(
+            checked_program,
             host_env.codecs,
         )
         if contract_errors:
             return self._ctx._fail(contract_errors, warnings)
 
-        return self._evaluate_ir_graph_mode(
+        return self._evaluate_ir_program(
             text=text,
             orig_program=orig_program,
             checked=checked,
             entry_cm=entry_cm,
-            cgraph=cgraph,
-            compiled_graph=compiled_graph,
+            checked_program=checked_program,
+            compiled=compiled,
             host_env=host_env,
             warnings=warnings,
             new_next_id=new_next_id,
@@ -262,11 +262,11 @@ class GraphSession:
         )
 
     @staticmethod
-    def _checked_program_from_module(entry: CheckedModule) -> CheckedProgram:
+    def _checked_program_from_module(entry: CheckedModule) -> CheckedModule:
         """Adapt entry-module checker output for REPL static-state promotion."""
-        from agm.agl.typecheck.env import CheckedProgram
+        from agm.agl.typecheck.env import CheckedModule
 
-        return CheckedProgram(
+        return CheckedModule(
             resolved=entry.resolved,
             node_types=entry.node_types,
             contract_specs=entry.contract_specs,
@@ -282,7 +282,7 @@ class GraphSession:
     def _inject_accumulated_imports(self, program: Program) -> Program:
         """Return a new program with accumulated session imports prepended.
 
-        Prior graph-mode entries may have imported modules via open import.
+        Prior program entries may have imported modules via open import.
         To make those imports persist across entries, we prepend the stored
         ``ImportDecl`` nodes to the current entry's program items.  Nodes
         with already-present module_paths are de-duplicated (if the current
@@ -317,15 +317,15 @@ class GraphSession:
         )
         return Program(body=new_block, span=program.span, node_id=program.node_id)
 
-    def _evaluate_ir_graph_mode(
+    def _evaluate_ir_program(
         self,
         *,
         text: str,
         orig_program: Program,
-        checked: CheckedProgram,
+        checked: CheckedModule,
         entry_cm: CheckedModule,
-        cgraph: CheckedModuleGraph,
-        compiled_graph: MatchCompiledModuleGraph,
+        checked_program: CheckedProgram,
+        compiled: MatchCompiledProgram,
         host_env: HostEnvironment,
         warnings: list[Diagnostic],
         new_next_id: int,
@@ -335,9 +335,9 @@ class GraphSession:
         entry_active_config: dict[str, object],
         contract_payloads: Mapping[int, "ContractPayload"],
     ) -> EntryResult:
-        """Lower and execute one graph-mode entry in the persistent IR image."""
+        """Lower and execute one program entry in the persistent IR image."""
         from agm.agl.eval.ir_interpreter import IrInterpreter
-        from agm.agl.lower import lower_repl_graph
+        from agm.agl.lower import lower_repl_program
         from agm.agl.pipeline import _wire_extern_registry, exception_value_to_run_error
         from agm.agl.runtime.params import _materialize_ir_contracts
         from agm.agl.runtime.request import AgentCancelled
@@ -345,7 +345,7 @@ class GraphSession:
         from agm.agl.semantics.exceptions import AglRaise
         from agm.agl.syntax.nodes import ImportDecl
 
-        # Companion paths for every module the checked graph can reach: prior
+        # Companion paths for every module the checked program can reach: prior
         # entries' cached library modules plus this entry's newly linked ones.
         # ``_wire_extern_registry`` imports/resolves only what is not already
         # cached on ``host_env.extern_registry`` (mutated in place), so a
@@ -355,7 +355,7 @@ class GraphSession:
         }
         companion_paths.update({mid: lm.companion_path for mid, lm in new_modules.items()})
         extern_diagnostics = _wire_extern_registry(
-            checked_graph=cgraph,
+            checked=checked_program,
             capabilities=host_env.capabilities,
             registry=host_env.extern_registry,
             companion_paths=companion_paths,
@@ -364,8 +364,8 @@ class GraphSession:
             return self._ctx._fail(extern_diagnostics, warnings)
 
         nominal_snapshot = self._ctx._link_image.snapshot_nominals()
-        lowered = lower_repl_graph(
-            compiled_graph,
+        lowered = lower_repl_program(
+            compiled,
             image=self._ctx._link_image,
             source_text=text,
             contract_payloads=contract_payloads,
@@ -463,9 +463,7 @@ class GraphSession:
                 name=name,
                 value=None,
                 value_type=None,
-                diagnostics=[
-                    Diagnostic(message="Agent call cancelled — entry aborted.", line=1)
-                ],
+                diagnostics=[Diagnostic(message="Agent call cancelled — entry aborted.", line=1)],
                 warnings=warnings,
                 error=None,
                 ok=False,
@@ -487,13 +485,11 @@ class GraphSession:
             failure_span=None,
         )
         entry_imports = tuple(
-            item
-            for item in orig_program.body.items
-            if isinstance(item, ImportDecl)
+            item for item in orig_program.body.items if isinstance(item, ImportDecl)
         )
         self._ctx._loaded_lib_modules.update(new_modules)
         self._ctx._link_image.mark_linked(
-            mid for mid in cgraph.modules if not mid.is_entry
+            mid for mid in checked_program.modules if not mid.is_entry
         )
         import_indexes = {
             (tuple(item.module_path), item.wildcard): index
@@ -529,9 +525,7 @@ class GraphSession:
             type_table=checked.type_env.type_table,
         )
 
-    def _persist_interpreter_settings(
-        self, interp: "IrInterpreter", trace: "TraceStore"
-    ) -> None:
+    def _persist_interpreter_settings(self, interp: "IrInterpreter", trace: "TraceStore") -> None:
         """Persist completed setting writes and the live trace destination."""
         self._ctx._update_engine_settings(
             strict_json=interp.strict_json,
@@ -563,8 +557,6 @@ class GraphSession:
             NominalId(ENTRY_ID, item.name)
             for item in program.body.items
             if isinstance(item, (RecordDef, EnumDef, ExceptionDef))
-            and not (
-                failure_span is not None and item.span.end_offset <= failure_span.start_offset
-            )
+            and not (failure_span is not None and item.span.end_offset <= failure_span.start_offset)
         )
         self._ctx._link_image.restore_nominals(nominal_snapshot, nominal_ids)

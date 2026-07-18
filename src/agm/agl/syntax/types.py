@@ -172,6 +172,16 @@ class AppliedT:
 
 # Closed union of all type-expression nodes.
 TypeExpr = (
-    TextT | JsonT | BoolT | IntT | DecimalT | NameT
-    | ListT | DictT | UnitT | AgentT | FuncT | AppliedT
+    TextT
+    | JsonT
+    | BoolT
+    | IntT
+    | DecimalT
+    | NameT
+    | ListT
+    | DictT
+    | UnitT
+    | AgentT
+    | FuncT
+    | AppliedT
 )

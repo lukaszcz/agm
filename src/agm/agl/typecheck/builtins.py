@@ -116,18 +116,18 @@ class BuiltinCheckCtx(Protocol):
 
     _env: TypeEnvironment
     _caps: HostCapabilities
+
     def _record_contract_spec(self, node_id: int, spec: OutputContractSpec) -> None: ...
 
     def _append_call_site(self, call_site: CallSiteRecord) -> None: ...
 
     def _append_warning(self, warning: Diagnostic) -> None: ...
+
     _current_type_vars: frozenset[str]
 
     def _check_expr(self, expr: Expr, *, expected: Type | None) -> Type: ...
 
-    def _assert_assignable(
-        self, value_type: Type, target_type: Type, span: SourceSpan
-    ) -> None: ...
+    def _assert_assignable(self, value_type: Type, target_type: Type, span: SourceSpan) -> None: ...
 
     def _type_is_wire_serializable(self, typ: Type) -> bool: ...
 
@@ -205,8 +205,8 @@ class BuiltinCallChecker:
     def check_ask(self, node: Call, *, expected: Type | None) -> Type:
         # Target type: explicit type argument overrides context.
         explicit = self._resolve_explicit_target(node, "ask")
-        target_type: Type = explicit if explicit is not None else (
-            expected if expected is not None else TextType()
+        target_type: Type = (
+            explicit if explicit is not None else (expected if expected is not None else TextType())
         )
         self._reject_type_var_target(target_type, node.span)
         self._register_ask_like_obligation(
@@ -350,9 +350,7 @@ class BuiltinCallChecker:
 
     def _warn_noop_parse_error_on_text(self, obligation: PendingBuiltinObligation) -> None:
         """Warn when ``on_parse_error`` is set on a text target, where it can never fire."""
-        if not (
-            obligation.has_parse_error_option and isinstance(obligation.target_type, TextType)
-        ):
+        if not (obligation.has_parse_error_option and isinstance(obligation.target_type, TextType)):
             return
         self._ctx._append_warning(
             Diagnostic(
@@ -388,9 +386,7 @@ class BuiltinCallChecker:
 
     def check_exec(self, node: Call, *, expected: Type | None) -> Type:
         if not self._ctx._caps.supports_shell_exec:
-            raise AglTypeError(
-                "The host does not support 'exec' (shell) calls.", span=node.span
-            )
+            raise AglTypeError("The host does not support 'exec' (shell) calls.", span=node.span)
 
         exec_result_type = self._ctx._env.get_type("ExecResult")
         target_type: Type
@@ -497,9 +493,7 @@ class BuiltinCallChecker:
 
     # --- shared parse-option handling (ask / exec) ---
 
-    def _parse_options(
-        self, named: dict[str, NamedArg]
-    ) -> tuple[str | None, bool | None, str]:
+    def _parse_options(self, named: dict[str, NamedArg]) -> tuple[str | None, bool | None, str]:
         """Validate static option syntax without selecting a target-dependent codec."""
         format_name: str | None = None
         if "format" in named:
@@ -573,9 +567,7 @@ class BuiltinCallChecker:
                     "apply only when parsing stdout into a typed value.",
                     span=offending_span,
                 )
-            spec = OutputContractSpec(
-                obligation.target_type, "text", None, structured_exec=True
-            )
+            spec = OutputContractSpec(obligation.target_type, "text", None, structured_exec=True)
             assert not contains_inference_var(spec.target_type)
             self._ctx._record_contract_spec(obligation.node_id, spec)
             parse_policy = "default"
@@ -599,14 +591,13 @@ class BuiltinCallChecker:
             return self._extract_parse_policy_variant(arg.callee.name, arg.named_args, span)
         # Bare VarRef: ``Abort`` or ``ParsePolicy::Abort`` (no parens) is also accepted.
         if isinstance(arg, VarRef) and arg.name == "Abort":
-            if (
-                arg.module_qualifier is None
-                or arg.module_qualifier.segments in ((), ("ParsePolicy",))
+            if arg.module_qualifier is None or arg.module_qualifier.segments in (
+                (),
+                ("ParsePolicy",),
             ):
                 return "abort"
         raise AglTypeError(
-            "'on_parse_error' must be a static ParsePolicy constructor "
-            "(Abort or Retry(n: <int>)).",
+            "'on_parse_error' must be a static ParsePolicy constructor (Abort or Retry(n: <int>)).",
             span=span,
         )
 
@@ -632,8 +623,7 @@ class BuiltinCallChecker:
                 )
             return f"retry[{n_arg.value.value}]"
         raise AglTypeError(
-            "'on_parse_error' must be a static ParsePolicy constructor "
-            "(Abort or Retry(n: <int>)).",
+            "'on_parse_error' must be a static ParsePolicy constructor (Abort or Retry(n: <int>)).",
             span=span,
         )
 
@@ -650,14 +640,11 @@ class BuiltinCallChecker:
             span=span,
         )
 
-    def _validate_format_option(
-        self, format_name: str, target_type: Type, span: SourceSpan
-    ) -> str:
+    def _validate_format_option(self, format_name: str, target_type: Type, span: SourceSpan) -> str:
         if format_name not in self._ctx._caps.codec_kinds:
             known = sorted(self._ctx._caps.codec_kinds)
             raise AglTypeError(
-                f"Unknown codec '{format_name}' in 'format' option. "
-                f"Known codecs: {known}.",
+                f"Unknown codec '{format_name}' in 'format' option. Known codecs: {known}.",
                 span=span,
             )
         supported_kinds = self._ctx._caps.codec_kinds[format_name]

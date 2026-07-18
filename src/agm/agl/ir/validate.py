@@ -217,21 +217,15 @@ class _Context:
 def _check_location_cheap(loc: Location) -> None:
     """Validate local structural invariants on a ``Location``."""
     if loc.start_offset < 0:
-        raise InvalidIrError(
-            f"Location has negative start_offset={loc.start_offset!r}"
-        )
+        raise InvalidIrError(f"Location has negative start_offset={loc.start_offset!r}")
     if loc.start_offset > loc.end_offset:
         raise InvalidIrError(
             f"Location has start_offset={loc.start_offset!r} > end_offset={loc.end_offset!r}"
         )
     if loc.start_line < 1:
-        raise InvalidIrError(
-            f"Location has start_line={loc.start_line!r} (must be >= 1)"
-        )
+        raise InvalidIrError(f"Location has start_line={loc.start_line!r} (must be >= 1)")
     if loc.start_col < 0:
-        raise InvalidIrError(
-            f"Location has negative start_col={loc.start_col!r}"
-        )
+        raise InvalidIrError(f"Location has negative start_col={loc.start_col!r}")
 
 
 def _check_location_deep(loc: Location, ctx: _Context) -> None:
@@ -315,8 +309,7 @@ def _check_recipe_consistency(
         )
     if not needs_decode and (json_schema is not None or decode is not None or defs):
         raise InvalidIrError(
-            f"ConversionRecipe strategy {strategy.value!r} must not carry "
-            "json_schema/decode/defs"
+            f"ConversionRecipe strategy {strategy.value!r} must not carry json_schema/decode/defs"
         )
 
 
@@ -483,9 +476,7 @@ def _collect_boundary_seal_vars(schema: BoundarySchema, out: set[str]) -> None:
             assert_never(unreachable)
 
 
-def _validate_extern_contract(
-    fn_key: FunctionId, contract: ExternContract, ctx: _Context
-) -> None:
+def _validate_extern_contract(fn_key: FunctionId, contract: ExternContract, ctx: _Context) -> None:
     """Validate one extern's boundary contract (deep tier).
 
     Every nominal referenced by a param/result schema (or a shared ``defs``
@@ -498,8 +489,7 @@ def _validate_extern_contract(
     for key, _entry in contract.defs:
         if key in seen_keys:
             raise InvalidIrError(
-                f"FunctionDescriptor for {fn_key!r}: contract has duplicate"
-                f" defs key {key!r}"
+                f"FunctionDescriptor for {fn_key!r}: contract has duplicate defs key {key!r}"
             )
         seen_keys.add(key)
     defs_map = dict(contract.defs)
@@ -533,8 +523,7 @@ def _resolve_callable_params(
     if fn_desc is not None:
         return fn_desc.params
     raise InvalidIrError(
-        f"{node_desc} references function_id={fn_id!r} which is not in"
-        " program.functions"
+        f"{node_desc} references function_id={fn_id!r} which is not in program.functions"
     )
 
 
@@ -601,9 +590,7 @@ def _validate_case_arm(arm: IrCaseArm, ctx: _Context) -> None:
                         " which is not in program.nominals"
                     )
                 if descriptor.kind is not NominalKind.ENUM:
-                    raise InvalidIrError(
-                        f"IrEnumCaseKey references non-enum nominal {nominal!r}"
-                    )
+                    raise InvalidIrError(f"IrEnumCaseKey references non-enum nominal {nominal!r}")
                 variant_descriptor = next(
                     (item for item in descriptor.variants if item.name == variant), None
                 )
@@ -636,9 +623,7 @@ def _validate_case_arm(arm: IrCaseArm, ctx: _Context) -> None:
             )
         binding_symbols.add(symbol)
         if valid_fields is not None and field_name not in valid_fields:
-            raise InvalidIrError(
-                f"IrCaseArm binds unknown immediate field {field_name!r}"
-            )
+            raise InvalidIrError(f"IrCaseArm binds unknown immediate field {field_name!r}")
         if ctx.deep:
             symbol_descriptor = ctx.program.symbols.get(symbol)
             if symbol_descriptor is None:
@@ -687,9 +672,7 @@ def _validate_case(node: IrCase, ctx: _Context) -> None:
         _validate_expr(node.default, ctx)
     elif family == ("literal", IrLiteralKind.BOOL):
         bool_keys = {
-            arm.key.scalar_value
-            for arm in node.arms
-            if isinstance(arm.key, IrLiteralCaseKey)
+            arm.key.scalar_value for arm in node.arms if isinstance(arm.key, IrLiteralCaseKey)
         }
         if bool_keys != {True, False}:
             raise InvalidIrError("IrCase has an incomplete boolean domain without a default")
@@ -697,9 +680,7 @@ def _validate_case(node: IrCase, ctx: _Context) -> None:
         nominal = family[1]
         assert isinstance(nominal, NominalId)
         descriptor = ctx.program.nominals[nominal]
-        enum_keys = {
-            arm.key.variant for arm in node.arms if isinstance(arm.key, IrEnumCaseKey)
-        }
+        enum_keys = {arm.key.variant for arm in node.arms if isinstance(arm.key, IrEnumCaseKey)}
         if enum_keys != {variant.name for variant in descriptor.variants}:
             raise InvalidIrError("IrCase has an incomplete enum domain without a default")
     elif family is None or family[0] == "literal":
@@ -846,14 +827,10 @@ def _validate_expr_node(node: IrExpr, ctx: _Context) -> None:
             _validate_location(node.location, ctx)
             # TEXT kind is only valid with ADD
             if kind is ArithKind.TEXT and op is not ArithOp.ADD:
-                raise InvalidIrError(
-                    f"IrArith: TEXT kind is only valid with ADD, got op={op!r}"
-                )
+                raise InvalidIrError(f"IrArith: TEXT kind is only valid with ADD, got op={op!r}")
             # DIV op requires DECIMAL kind (DIV always returns decimal)
             if op is ArithOp.DIV and kind is not ArithKind.DECIMAL:
-                raise InvalidIrError(
-                    f"IrArith: DIV op requires DECIMAL kind, got kind={kind!r}"
-                )
+                raise InvalidIrError(f"IrArith: DIV op requires DECIMAL kind, got kind={kind!r}")
             _validate_expr(lhs, ctx)
             _validate_expr(rhs, ctx)
 
@@ -867,8 +844,7 @@ def _validate_expr_node(node: IrExpr, ctx: _Context) -> None:
             # Ordering ops (LT/LE/GT/GE) require a non-STRUCTURAL kind
             if op in (CmpOp.LT, CmpOp.LE, CmpOp.GT, CmpOp.GE) and kind is CompareKind.STRUCTURAL:
                 raise InvalidIrError(
-                    f"IrCompare: ordering op {op!r} requires INT/DECIMAL/TEXT kind,"
-                    f" got STRUCTURAL"
+                    f"IrCompare: ordering op {op!r} requires INT/DECIMAL/TEXT kind, got STRUCTURAL"
                 )
             _validate_expr(lhs, ctx)
             _validate_expr(rhs, ctx)
@@ -892,13 +868,9 @@ def _validate_expr_node(node: IrExpr, ctx: _Context) -> None:
             _validate_location(node.location, ctx)
             # NOT requires kind=None; NEG requires kind set
             if op is UnaryOp.NOT and kind is not None:
-                raise InvalidIrError(
-                    f"IrUnary NOT: kind must be None, got kind={kind!r}"
-                )
+                raise InvalidIrError(f"IrUnary NOT: kind must be None, got kind={kind!r}")
             if op is UnaryOp.NEG and kind is None:
-                raise InvalidIrError(
-                    "IrUnary NEG: kind must not be None"
-                )
+                raise InvalidIrError("IrUnary NEG: kind must not be None")
             _validate_expr(val, ctx)
 
         case IrField(value=val):
@@ -1151,16 +1123,13 @@ def _validate_program_tables(ctx: _Context) -> None:
 
     # 1. entry_module
     if program.entry_module not in program.modules:
-        raise InvalidIrError(
-            f"entry_module={program.entry_module!r} is not in program.modules"
-        )
+        raise InvalidIrError(f"entry_module={program.entry_module!r} is not in program.modules")
 
     # 1b. module key/id consistency
     for key, em in program.modules.items():
         if em.module_id != key:
             raise InvalidIrError(
-                f"program.modules entry keyed by {key!r} has"
-                f" module_id={em.module_id!r} (mismatch)"
+                f"program.modules entry keyed by {key!r} has module_id={em.module_id!r} (mismatch)"
             )
 
     # 2. symbol descriptor consistency
@@ -1274,9 +1243,7 @@ def _validate_contract_request(
     has_decode_fields = req.json_schema is not None or req.decode is not None or bool(req.defs)
     if req.is_unit or req.codec_name == "text":
         if has_decode_fields:
-            raise InvalidIrError(
-                f"ContractRequest {cid!r} must not carry json_schema/decode/defs"
-            )
+            raise InvalidIrError(f"ContractRequest {cid!r} must not carry json_schema/decode/defs")
         return
     if req.codec_name == "json":
         if req.json_schema is None:

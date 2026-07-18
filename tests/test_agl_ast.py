@@ -129,8 +129,12 @@ from agm.agl.syntax import (
 
 def span(sl: int = 1, sc: int = 0, el: int = 1, ec: int = 1) -> SourceSpan:
     return SourceSpan(
-        start_line=sl, start_col=sc, end_line=el, end_col=ec,
-        start_offset=0, end_offset=1,
+        start_line=sl,
+        start_col=sc,
+        end_line=el,
+        end_col=ec,
+        start_offset=0,
+        end_offset=1,
     )
 
 
@@ -142,11 +146,16 @@ def nid(n: int = 1) -> int:
 # SourceSpan
 # ---------------------------------------------------------------------------
 
+
 class TestSourceSpan:
     def test_construction_positional_fields(self) -> None:
         s = SourceSpan(
-            start_line=1, start_col=0, end_line=1, end_col=10,
-            start_offset=0, end_offset=10,
+            start_line=1,
+            start_col=0,
+            end_line=1,
+            end_col=10,
+            start_offset=0,
+            end_offset=10,
         )
         assert s.start_line == 1
         assert s.start_col == 0
@@ -170,6 +179,7 @@ class TestSourceSpan:
         # Import lazily to avoid triggering the full agm.agl pipeline (which is
         # temporarily broken while downstream stages are being updated).
         from agm.agl.syntax.spans import SourceSpan as SpansSourceSpan
+
         assert SourceSpan is SpansSourceSpan
 
     def test_offsets_are_required(self) -> None:
@@ -182,6 +192,7 @@ class TestSourceSpan:
 # ---------------------------------------------------------------------------
 # TypeExpr hierarchy
 # ---------------------------------------------------------------------------
+
 
 class TestTypeExprs:
     def _s(self) -> SourceSpan:
@@ -296,15 +307,29 @@ class TestTypeExprs:
 
     def test_type_expr_union_contains_all_types(self) -> None:
         import typing
+
         args = typing.get_args(TypeExpr)
-        for tp in (TextT, JsonT, BoolT, IntT, DecimalT, NameT,
-                   ListT, DictT, UnitT, AgentT, FuncT, AppliedT):
+        for tp in (
+            TextT,
+            JsonT,
+            BoolT,
+            IntT,
+            DecimalT,
+            NameT,
+            ListT,
+            DictT,
+            UnitT,
+            AgentT,
+            FuncT,
+            AppliedT,
+        ):
             assert tp in args, f"{tp.__name__} missing from TypeExpr union"
 
 
 # ---------------------------------------------------------------------------
 # Literal nodes
 # ---------------------------------------------------------------------------
+
 
 class TestLiterals:
     def _s(self) -> SourceSpan:
@@ -383,6 +408,7 @@ class TestLiterals:
 # Template nodes
 # ---------------------------------------------------------------------------
 
+
 class TestTemplate:
     def _s(self) -> SourceSpan:
         return span()
@@ -414,6 +440,7 @@ class TestTemplate:
 # Expression nodes
 # ---------------------------------------------------------------------------
 
+
 class TestExpressions:
     def _s(self) -> SourceSpan:
         return span()
@@ -442,9 +469,21 @@ class TestExpressions:
         assert node.op is BinOp.ADD
 
     def test_all_binary_ops_exist(self) -> None:
-        ops = {BinOp.EQ, BinOp.NEQ, BinOp.LT, BinOp.LE, BinOp.GT, BinOp.GE,
-               BinOp.IN, BinOp.AND, BinOp.OR, BinOp.ADD, BinOp.SUB,
-               BinOp.MUL, BinOp.DIV}
+        ops = {
+            BinOp.EQ,
+            BinOp.NEQ,
+            BinOp.LT,
+            BinOp.LE,
+            BinOp.GT,
+            BinOp.GE,
+            BinOp.IN,
+            BinOp.AND,
+            BinOp.OR,
+            BinOp.ADD,
+            BinOp.SUB,
+            BinOp.MUL,
+            BinOp.DIV,
+        }
         assert ops == set(BinOp)
 
     def test_unary_not(self) -> None:
@@ -492,6 +531,7 @@ class TestExpressions:
 # ---------------------------------------------------------------------------
 # Current expression nodes
 # ---------------------------------------------------------------------------
+
 
 class TestCallNode:
     def _s(self) -> SourceSpan:
@@ -547,8 +587,9 @@ class TestParamNode:
 
     def test_param_required(self) -> None:
         t = IntT(span=self._s(), node_id=2)
-        p = Param(name="x", type_expr=t, kind=ParamKind.STANDARD, default=None,
-                  span=self._s(), node_id=1)
+        p = Param(
+            name="x", type_expr=t, kind=ParamKind.STANDARD, default=None, span=self._s(), node_id=1
+        )
         assert p.name == "x"
         assert p.type_expr is t
         assert p.default is None
@@ -556,23 +597,42 @@ class TestParamNode:
     def test_param_with_default(self) -> None:
         t = IntT(span=self._s(), node_id=2)
         default = IntLit(value=0, span=self._s(), node_id=3)
-        p = Param(name="n", type_expr=t, kind=ParamKind.STANDARD, default=default,
-                  span=self._s(), node_id=1)
+        p = Param(
+            name="n",
+            type_expr=t,
+            kind=ParamKind.STANDARD,
+            default=default,
+            span=self._s(),
+            node_id=1,
+        )
         assert p.default is default
 
     def test_param_equality_ignores_span_node_id(self) -> None:
         t1 = IntT(span=span(1, 0, 1, 3), node_id=10)
         t2 = IntT(span=span(5, 0, 5, 3), node_id=20)
-        a = Param(name="x", type_expr=t1, kind=ParamKind.STANDARD, default=None,
-                  span=span(1, 0, 1, 5), node_id=1)
-        b = Param(name="x", type_expr=t2, kind=ParamKind.STANDARD, default=None,
-                  span=span(9, 0, 9, 5), node_id=99)
+        a = Param(
+            name="x",
+            type_expr=t1,
+            kind=ParamKind.STANDARD,
+            default=None,
+            span=span(1, 0, 1, 5),
+            node_id=1,
+        )
+        b = Param(
+            name="x",
+            type_expr=t2,
+            kind=ParamKind.STANDARD,
+            default=None,
+            span=span(9, 0, 9, 5),
+            node_id=99,
+        )
         assert a == b
 
     def test_param_frozen(self) -> None:
         t = IntT(span=span(), node_id=2)
-        p = Param(name="x", type_expr=t, kind=ParamKind.STANDARD, default=None,
-                  span=span(), node_id=1)
+        p = Param(
+            name="x", type_expr=t, kind=ParamKind.STANDARD, default=None, span=span(), node_id=1
+        )
         with pytest.raises((FrozenInstanceError, AttributeError)):
             setattr(p, "name", "y")
 
@@ -623,12 +683,20 @@ class TestFuncDefNode:
         ret = IntT(span=span(1, 0, 1, 3), node_id=10)
         body = IntLit(value=1, span=span(1, 0, 1, 1), node_id=11)
         a = FuncDef(
-            name="f", params=(), return_type=ret, body=body,
-            span=span(1, 0, 1, 20), node_id=1,
+            name="f",
+            params=(),
+            return_type=ret,
+            body=body,
+            span=span(1, 0, 1, 20),
+            node_id=1,
         )
         b = FuncDef(
-            name="f", params=(), return_type=ret, body=body,
-            span=span(9, 0, 9, 20), node_id=99,
+            name="f",
+            params=(),
+            return_type=ret,
+            body=body,
+            span=span(9, 0, 9, 20),
+            node_id=99,
         )
         assert a == b
 
@@ -810,10 +878,17 @@ class TestLoopNode:
     def test_loop_no_bound(self) -> None:
         body = UnitLit(span=self._s(), node_id=2)
         node = Loop(
-            for_var=None, for_iter=None,
-            for_range_to=None, for_range_down=False, for_range_by=None,
-            while_cond=None, bound=None, body=body, until_cond=None,
-            span=self._s(), node_id=1,
+            for_var=None,
+            for_iter=None,
+            for_range_to=None,
+            for_range_down=False,
+            for_range_by=None,
+            while_cond=None,
+            bound=None,
+            body=body,
+            until_cond=None,
+            span=self._s(),
+            node_id=1,
         )
         assert node.bound is None
         assert node.body is body
@@ -824,10 +899,17 @@ class TestLoopNode:
         cond = BoolLit(value=False, span=self._s(), node_id=3)
         bound = IntLit(value=10, span=self._s(), node_id=4)
         node = Loop(
-            for_var=None, for_iter=None,
-            for_range_to=None, for_range_down=False, for_range_by=None,
-            while_cond=None, bound=bound, body=body, until_cond=cond,
-            span=self._s(), node_id=1,
+            for_var=None,
+            for_iter=None,
+            for_range_to=None,
+            for_range_down=False,
+            for_range_by=None,
+            while_cond=None,
+            bound=bound,
+            body=body,
+            until_cond=cond,
+            span=self._s(),
+            node_id=1,
         )
         assert node.bound is bound
 
@@ -836,10 +918,17 @@ class TestLoopNode:
         body = Block(items=(UnitLit(span=self._s(), node_id=3),), span=self._s(), node_id=2)
         cond = BoolLit(value=True, span=self._s(), node_id=4)
         node = Loop(
-            for_var=None, for_iter=None,
-            for_range_to=None, for_range_down=False, for_range_by=None,
-            while_cond=None, bound=None, body=body, until_cond=cond,
-            span=self._s(), node_id=1,
+            for_var=None,
+            for_iter=None,
+            for_range_to=None,
+            for_range_down=False,
+            for_range_by=None,
+            while_cond=None,
+            bound=None,
+            body=body,
+            until_cond=cond,
+            span=self._s(),
+            node_id=1,
         )
         assert isinstance(node.body, Block)
         assert node.until_cond is cond
@@ -849,26 +938,47 @@ class TestLoopNode:
         cond = BoolLit(value=True, span=span(1, 0, 1, 4), node_id=6)
         bound = IntLit(value=5, span=span(1, 0, 1, 1), node_id=7)
         a = Loop(
-            for_var=None, for_iter=None,
-            for_range_to=None, for_range_down=False, for_range_by=None,
-            while_cond=None, bound=bound, body=body, until_cond=cond,
-            span=span(1, 0, 1, 20), node_id=1,
+            for_var=None,
+            for_iter=None,
+            for_range_to=None,
+            for_range_down=False,
+            for_range_by=None,
+            while_cond=None,
+            bound=bound,
+            body=body,
+            until_cond=cond,
+            span=span(1, 0, 1, 20),
+            node_id=1,
         )
         b = Loop(
-            for_var=None, for_iter=None,
-            for_range_to=None, for_range_down=False, for_range_by=None,
-            while_cond=None, bound=bound, body=body, until_cond=cond,
-            span=span(9, 0, 9, 20), node_id=99,
+            for_var=None,
+            for_iter=None,
+            for_range_to=None,
+            for_range_down=False,
+            for_range_by=None,
+            while_cond=None,
+            bound=bound,
+            body=body,
+            until_cond=cond,
+            span=span(9, 0, 9, 20),
+            node_id=99,
         )
         assert a == b
 
     def test_loop_frozen(self) -> None:
         body = UnitLit(span=span(), node_id=2)
         node = Loop(
-            for_var=None, for_iter=None,
-            for_range_to=None, for_range_down=False, for_range_by=None,
-            while_cond=None, bound=None, body=body, until_cond=None,
-            span=span(), node_id=1,
+            for_var=None,
+            for_iter=None,
+            for_range_to=None,
+            for_range_down=False,
+            for_range_by=None,
+            while_cond=None,
+            bound=None,
+            body=body,
+            until_cond=None,
+            span=span(),
+            node_id=1,
         )
         with pytest.raises((FrozenInstanceError, AttributeError)):
             setattr(node, "bound", 5)
@@ -990,6 +1100,7 @@ class TestTryNode:
 # Binder nodes
 # ---------------------------------------------------------------------------
 
+
 class TestBinders:
     def _s(self) -> SourceSpan:
         return span()
@@ -1051,30 +1162,49 @@ class TestBinders:
 # Declaration nodes
 # ---------------------------------------------------------------------------
 
+
 class TestDeclarations:
     def _s(self) -> SourceSpan:
         return span()
 
     def test_field_as_param(self) -> None:
         t = TextT(span=self._s(), node_id=2)
-        f = Param(name="title", type_expr=t, kind=ParamKind.NAMED_ONLY, default=None,
-                  span=self._s(), node_id=1)
+        f = Param(
+            name="title",
+            type_expr=t,
+            kind=ParamKind.NAMED_ONLY,
+            default=None,
+            span=self._s(),
+            node_id=1,
+        )
         assert f.name == "title"
         assert f.type_expr is t
         assert f.kind == ParamKind.NAMED_ONLY
 
     def test_record_def(self) -> None:
         t = IntT(span=self._s(), node_id=3)
-        f = Param(name="x", type_expr=t, kind=ParamKind.NAMED_ONLY, default=None,
-                  span=self._s(), node_id=2)
+        f = Param(
+            name="x",
+            type_expr=t,
+            kind=ParamKind.NAMED_ONLY,
+            default=None,
+            span=self._s(),
+            node_id=2,
+        )
         node = RecordDef(name="Point", fields=(f,), span=self._s(), node_id=1)
         assert node.name == "Point"
         assert isinstance(node.fields, tuple)
 
     def test_variant_def(self) -> None:
         t = IntT(span=self._s(), node_id=3)
-        f = Param(name="val", type_expr=t, kind=ParamKind.STANDARD, default=None,
-                  span=self._s(), node_id=2)
+        f = Param(
+            name="val",
+            type_expr=t,
+            kind=ParamKind.STANDARD,
+            default=None,
+            span=self._s(),
+            node_id=2,
+        )
         v = VariantDef(name="Some", fields=(f,), span=self._s(), node_id=1)
         assert v.name == "Some"
 
@@ -1123,6 +1253,7 @@ class TestDeclarations:
 
     def test_func_def_is_declaration(self) -> None:
         import typing
+
         args = typing.get_args(Declaration)
         assert FuncDef in args
 
@@ -1130,8 +1261,12 @@ class TestDeclarations:
         """ExceptionDef stores name, fields, base, and privacy/builtin flags."""
         t = TextT(span=self._s(), node_id=3)
         f = Param(
-            name="msg", type_expr=t, kind=ParamKind.NAMED_ONLY,
-            default=None, span=self._s(), node_id=2,
+            name="msg",
+            type_expr=t,
+            kind=ParamKind.NAMED_ONLY,
+            default=None,
+            span=self._s(),
+            node_id=2,
         )
         node = ExceptionDef(name="MyErr", fields=(f,), base=None, span=self._s(), node_id=1)
         assert node.name == "MyErr"
@@ -1143,16 +1278,18 @@ class TestDeclarations:
         assert node.is_builtin is False
 
     def test_exception_def_with_base(self) -> None:
-        node = ExceptionDef(
-            name="DerivedErr", fields=(), base="BaseErr", span=self._s(), node_id=1
-        )
+        node = ExceptionDef(name="DerivedErr", fields=(), base="BaseErr", span=self._s(), node_id=1)
         assert node.base == "BaseErr"
 
     def test_exception_def_equality_ignores_span(self) -> None:
         t = IntT(span=self._s(), node_id=3)
         f = Param(
-            name="code", type_expr=t, kind=ParamKind.NAMED_ONLY,
-            default=None, span=self._s(), node_id=2,
+            name="code",
+            type_expr=t,
+            kind=ParamKind.NAMED_ONLY,
+            default=None,
+            span=self._s(),
+            node_id=2,
         )
         a = ExceptionDef(name="E", fields=(f,), base=None, span=span(1, 0, 1, 1), node_id=1)
         b = ExceptionDef(name="E", fields=(f,), base=None, span=span(9, 0, 9, 1), node_id=99)
@@ -1161,6 +1298,7 @@ class TestDeclarations:
     def test_exception_def_is_declaration(self) -> None:
         """ExceptionDef is part of the Declaration union."""
         import typing
+
         args = typing.get_args(Declaration)
         assert ExceptionDef in args
 
@@ -1186,6 +1324,7 @@ class TestDeclarations:
 # ---------------------------------------------------------------------------
 # Pattern nodes
 # ---------------------------------------------------------------------------
+
 
 class TestPatterns:
     def _s(self) -> SourceSpan:
@@ -1240,6 +1379,7 @@ class TestPatterns:
 # Program node
 # ---------------------------------------------------------------------------
 
+
 class TestProgram:
     def _s(self) -> SourceSpan:
         return span()
@@ -1279,6 +1419,7 @@ class TestProgram:
 # ---------------------------------------------------------------------------
 # Visitor / walk
 # ---------------------------------------------------------------------------
+
 
 class TestVisitorWalk:
     """Verify that walk() visits every node kind in a tree."""
@@ -1335,16 +1476,19 @@ class TestVisitorWalk:
         )
 
         variant_field = Param(
-            name="val", type_expr=text_t, kind=ParamKind.STANDARD, default=None,
-            span=s, node_id=211
+            name="val", type_expr=text_t, kind=ParamKind.STANDARD, default=None, span=s, node_id=211
         )
         variant_def = VariantDef(name="Some", fields=(variant_field,), span=s, node_id=212)
         enum_def = EnumDef(name="Opt", variants=(variant_def,), span=s, node_id=213)
 
         type_alias = TypeAlias(name="Names", type_expr=list_t, span=s, node_id=214)
         exc_field = Param(
-            name="msg", type_expr=text_t, kind=ParamKind.NAMED_ONLY,
-            default=None, span=s, node_id=2140,
+            name="msg",
+            type_expr=text_t,
+            kind=ParamKind.NAMED_ONLY,
+            default=None,
+            span=s,
+            node_id=2140,
         )
         exception_def = ExceptionDef(
             name="MyErr",
@@ -1475,10 +1619,17 @@ class TestVisitorWalk:
         do_body = Block(items=(unit_lit,), span=s, node_id=512)
         do_limit = IntLit(value=5, span=s, node_id=5120)
         do_node = Loop(
-            for_var=None, for_iter=None,
-            for_range_to=None, for_range_down=False, for_range_by=None,
-            while_cond=None, bound=do_limit, body=do_body, until_cond=bool_lit,
-            span=s, node_id=513,
+            for_var=None,
+            for_iter=None,
+            for_range_to=None,
+            for_range_down=False,
+            for_range_by=None,
+            while_cond=None,
+            bound=do_limit,
+            body=do_body,
+            until_cond=bool_lit,
+            span=s,
+            node_id=513,
         )
 
         # Try/catch
@@ -1515,17 +1666,42 @@ class TestVisitorWalk:
         # Block at the top level
         top_block = Block(
             items=(
-                record_def, enum_def, exception_def, type_alias, param_decl, input_no_ann,
-                agent_decl, func_def,
-                let_decl, let_with_type, let_applied, var_decl, var_with_type,
-                assign_stmt, indexed_assign_stmt,
+                record_def,
+                enum_def,
+                exception_def,
+                type_alias,
+                param_decl,
+                input_no_ann,
+                agent_decl,
+                func_def,
+                let_decl,
+                let_with_type,
+                let_applied,
+                var_decl,
+                var_with_type,
+                assign_stmt,
+                indexed_assign_stmt,
                 # expressions directly in block
-                var_ref, field_access, index_access,
-                binary_op, unary_not, unary_neg, is_test,
-                call_node, lam, lam_no_ret,
-                case_node, if_node, do_node, try_node, raise_node,
-                break_node, continue_node,
-                dec_lit, dict_lit, list_lit,
+                var_ref,
+                field_access,
+                index_access,
+                binary_op,
+                unary_not,
+                unary_neg,
+                is_test,
+                call_node,
+                lam,
+                lam_no_ret,
+                case_node,
+                if_node,
+                do_node,
+                try_node,
+                raise_node,
+                break_node,
+                continue_node,
+                dec_lit,
+                dict_lit,
+                list_lit,
             ),
             span=s,
             node_id=1,
@@ -1562,8 +1738,15 @@ class TestVisitorWalk:
         kinds = {type(n) for n in visited}
 
         decl_kinds = {
-            RecordDef, EnumDef, ExceptionDef, TypeAlias, ParamDecl, Param, VariantDef,
-            AgentDecl, FuncDef,
+            RecordDef,
+            EnumDef,
+            ExceptionDef,
+            TypeAlias,
+            ParamDecl,
+            Param,
+            VariantDef,
+            AgentDecl,
+            FuncDef,
         }
         for kind in decl_kinds:
             assert kind in kinds, f"Expected {kind.__name__} to be visited"
@@ -1577,12 +1760,40 @@ class TestVisitorWalk:
         kinds = {type(n) for n in visited}
 
         expr_kinds = {
-            VarRef, FieldAccess, IndexAccess, NamedArg, Placeholder,
-            BinaryOp, UnaryNot, UnaryNeg, IsTest,
-            Call, Lambda, Block, If, IfBranch, Case, CaseBranch,
-            Loop, Try, CatchClause, Raise, Break, Continue,
-            UnitLit, IntLit, DecimalLit, BoolLit, NullLit, StringLit,
-            ListLit, DictLit, DictEntry, Template, TextSegment, InterpSegment,
+            VarRef,
+            FieldAccess,
+            IndexAccess,
+            NamedArg,
+            Placeholder,
+            BinaryOp,
+            UnaryNot,
+            UnaryNeg,
+            IsTest,
+            Call,
+            Lambda,
+            Block,
+            If,
+            IfBranch,
+            Case,
+            CaseBranch,
+            Loop,
+            Try,
+            CatchClause,
+            Raise,
+            Break,
+            Continue,
+            UnitLit,
+            IntLit,
+            DecimalLit,
+            BoolLit,
+            NullLit,
+            StringLit,
+            ListLit,
+            DictLit,
+            DictEntry,
+            Template,
+            TextSegment,
+            InterpSegment,
         }
         for kind in expr_kinds:
             assert kind in kinds, f"Expected {kind.__name__} to be visited"
@@ -1596,7 +1807,17 @@ class TestVisitorWalk:
         kinds = {type(n) for n in visited}
 
         type_kinds = {
-            TextT, JsonT, BoolT, IntT, DecimalT, NameT, ListT, DictT, UnitT, AgentT, FuncT,
+            TextT,
+            JsonT,
+            BoolT,
+            IntT,
+            DecimalT,
+            NameT,
+            ListT,
+            DictT,
+            UnitT,
+            AgentT,
+            FuncT,
             AppliedT,
         }
         for kind in type_kinds:
@@ -1641,7 +1862,11 @@ class TestVisitorWalk:
         kinds = {type(n) for n in visited}
 
         pattern_kinds = {
-            WildcardPattern, LiteralPattern, VarPattern, ConstructorPattern, PatternField
+            WildcardPattern,
+            LiteralPattern,
+            VarPattern,
+            ConstructorPattern,
+            PatternField,
         }
         for kind in pattern_kinds:
             assert kind in kinds, f"Expected {kind.__name__} to be visited"
@@ -1702,8 +1927,9 @@ class TestVisitorWalk:
 
         s = self._s()
         p_type = IntT(span=s, node_id=3)
-        p = Param(name="x", type_expr=p_type, kind=ParamKind.STANDARD, default=None,
-                  span=s, node_id=2)
+        p = Param(
+            name="x", type_expr=p_type, kind=ParamKind.STANDARD, default=None, span=s, node_id=2
+        )
         ret = TextT(span=s, node_id=4)
         body = VarRef(name="x", span=s, node_id=5)
         fd = FuncDef(name="f", params=(p,), return_type=ret, body=body, span=s, node_id=1)
@@ -1738,8 +1964,9 @@ class TestVisitorWalk:
 
         s = self._s()
         p_type = IntT(span=s, node_id=3)
-        p = Param(name="x", type_expr=p_type, kind=ParamKind.STANDARD, default=None,
-                  span=s, node_id=2)
+        p = Param(
+            name="x", type_expr=p_type, kind=ParamKind.STANDARD, default=None, span=s, node_id=2
+        )
         ret = BoolT(span=s, node_id=4)
         body = BoolLit(value=True, span=s, node_id=5)
         lam = Lambda(params=(p,), return_type=ret, body=body, span=s, node_id=1)
@@ -1815,10 +2042,17 @@ class TestVisitorWalk:
         body = UnitLit(span=s, node_id=2)
         cond = BoolLit(value=True, span=s, node_id=3)
         node = Loop(
-            for_var=None, for_iter=None,
-            for_range_to=None, for_range_down=False, for_range_by=None,
-            while_cond=None, bound=None, body=body, until_cond=cond,
-            span=s, node_id=1,
+            for_var=None,
+            for_iter=None,
+            for_range_to=None,
+            for_range_down=False,
+            for_range_by=None,
+            while_cond=None,
+            bound=None,
+            body=body,
+            until_cond=cond,
+            span=s,
+            node_id=1,
         )
 
         visited: list[object] = []
@@ -1835,10 +2069,17 @@ class TestVisitorWalk:
         s = self._s()
         body = UnitLit(span=s, node_id=2)
         node = Loop(
-            for_var=None, for_iter=None,
-            for_range_to=None, for_range_down=False, for_range_by=None,
-            while_cond=None, bound=None, body=body, until_cond=None,
-            span=s, node_id=1,
+            for_var=None,
+            for_iter=None,
+            for_range_to=None,
+            for_range_down=False,
+            for_range_by=None,
+            while_cond=None,
+            bound=None,
+            body=body,
+            until_cond=None,
+            span=s,
+            node_id=1,
         )
 
         visited: list[object] = []
@@ -1857,10 +2098,17 @@ class TestVisitorWalk:
         body = UnitLit(span=s, node_id=2)
         cond = BoolLit(value=True, span=s, node_id=3)
         node = Loop(
-            for_var=None, for_iter=None,
-            for_range_to=None, for_range_down=False, for_range_by=None,
-            while_cond=None, bound=bound, body=body, until_cond=cond,
-            span=s, node_id=1,
+            for_var=None,
+            for_iter=None,
+            for_range_to=None,
+            for_range_down=False,
+            for_range_by=None,
+            while_cond=None,
+            bound=bound,
+            body=body,
+            until_cond=cond,
+            span=s,
+            node_id=1,
         )
 
         visited: list[object] = []
@@ -1881,10 +2129,17 @@ class TestVisitorWalk:
         body = UnitLit(span=s, node_id=2)
         cond = BoolLit(value=False, span=s, node_id=3)
         node = Loop(
-            for_var="i", for_iter=for_iter,
-            for_range_to=None, for_range_down=False, for_range_by=None,
-            while_cond=while_cond, bound=None, body=body, until_cond=cond,
-            span=s, node_id=1,
+            for_var="i",
+            for_iter=for_iter,
+            for_range_to=None,
+            for_range_down=False,
+            for_range_by=None,
+            while_cond=while_cond,
+            bound=None,
+            body=body,
+            until_cond=cond,
+            span=s,
+            node_id=1,
         )
 
         visited: list[object] = []
@@ -1973,8 +2228,9 @@ class TestVisitorWalk:
         s = self._s()
         p_type = IntT(span=s, node_id=2)
         default = IntLit(value=0, span=s, node_id=3)
-        p = Param(name="x", type_expr=p_type, kind=ParamKind.STANDARD, default=default,
-                  span=s, node_id=1)
+        p = Param(
+            name="x", type_expr=p_type, kind=ParamKind.STANDARD, default=default, span=s, node_id=1
+        )
 
         visited: list[object] = []
         walk(p, visited.append)
@@ -1989,8 +2245,9 @@ class TestVisitorWalk:
 
         s = self._s()
         p_type = IntT(span=s, node_id=2)
-        p = Param(name="x", type_expr=p_type, kind=ParamKind.STANDARD, default=None,
-                  span=s, node_id=1)
+        p = Param(
+            name="x", type_expr=p_type, kind=ParamKind.STANDARD, default=None, span=s, node_id=1
+        )
 
         visited: list[object] = []
         walk(p, visited.append)
@@ -2224,82 +2481,98 @@ class TestVisitorWalk:
 # Union alias sanity
 # ---------------------------------------------------------------------------
 
+
 class TestUnionAliases:
     """Verify that the union aliases contain the right members."""
 
     def test_var_ref_is_expr(self) -> None:
         import typing
+
         args = typing.get_args(Expr)
         assert VarRef in args
 
     def test_raise_is_expr(self) -> None:
         import typing
+
         args = typing.get_args(Expr)
         assert Raise in args, "Raise must be in Expr (bottom type)"
         assert Return in args, "Return must be in Expr (bottom type)"
 
     def test_block_is_expr(self) -> None:
         import typing
+
         args = typing.get_args(Expr)
         assert Block in args
 
     def test_if_is_expr(self) -> None:
         import typing
+
         args = typing.get_args(Expr)
         assert If in args
 
     def test_case_is_expr(self) -> None:
         import typing
+
         args = typing.get_args(Expr)
         assert Case in args
 
     def test_loop_is_expr(self) -> None:
         import typing
+
         args = typing.get_args(Expr)
         assert Loop in args
 
     def test_try_is_expr(self) -> None:
         import typing
+
         args = typing.get_args(Expr)
         assert Try in args
 
     def test_call_is_expr(self) -> None:
         import typing
+
         args = typing.get_args(Expr)
         assert Call in args
 
     def test_placeholder_is_expr(self) -> None:
         import typing
+
         args = typing.get_args(Expr)
         assert Placeholder in args
 
     def test_index_access_is_expr(self) -> None:
         import typing
+
         args = typing.get_args(Expr)
         assert IndexAccess in args
 
     def test_lambda_is_expr(self) -> None:
         import typing
+
         args = typing.get_args(Expr)
         assert Lambda in args
 
     def test_unit_lit_is_expr(self) -> None:
         import typing
+
         args = typing.get_args(Expr)
         assert UnitLit in args
 
     def test_wildcard_pattern_is_pattern(self) -> None:
         import typing
+
         args = typing.get_args(Pattern)
         assert WildcardPattern in args
 
     def test_text_segment_is_template_segment(self) -> None:
         import typing
+
         args = typing.get_args(TemplateSegment)
         assert TextSegment in args
 
     def test_binder_union_members(self) -> None:
         import typing
+
         args = typing.get_args(Binder)
         assert LetDecl in args
         assert VarDecl in args
@@ -2307,18 +2580,21 @@ class TestUnionAliases:
 
     def test_assign_target_union_members(self) -> None:
         import typing
+
         args = typing.get_args(AssignTarget)
         assert NameTarget in args
         assert IndexTarget in args
 
     def test_declaration_union_members(self) -> None:
         import typing
+
         args = typing.get_args(Declaration)
         for cls in (FuncDef, RecordDef, EnumDef, TypeAlias, ParamDecl, AgentDecl):
             assert cls in args, f"{cls.__name__} missing from Declaration union"
 
     def test_item_contains_declaration_binder_expr(self) -> None:
         import typing
+
         args = typing.get_args(Item)
         # Item is Declaration | Binder | Expr — check a sample from each
         # (FuncDef is a Declaration, LetDecl is a Binder, VarRef is an Expr)
@@ -2330,6 +2606,7 @@ class TestUnionAliases:
 # ---------------------------------------------------------------------------
 # Removed nodes are truly gone
 # ---------------------------------------------------------------------------
+
 
 class TestRemovedNodes:
     """Verify that legacy nodes are no longer part of the public API."""
@@ -2370,6 +2647,7 @@ class TestCastNode:
 
     def test_cast_in_expr_union(self) -> None:
         import typing
+
         assert Cast in typing.get_args(Expr)
 
     def test_cast_expr_construction(self) -> None:
@@ -2390,12 +2668,18 @@ class TestCastNode:
         expr = IntLit(value=42, span=self._sp(), node_id=0)
         target = TextT(span=self._sp(), node_id=1)
         n1 = Cast(
-            expr=expr, target_type=target, test_only=False,
-            span=SourceSpan(1, 0, 1, 5, 0, 5), node_id=99,
+            expr=expr,
+            target_type=target,
+            test_only=False,
+            span=SourceSpan(1, 0, 1, 5, 0, 5),
+            node_id=99,
         )
         n2 = Cast(
-            expr=expr, target_type=target, test_only=False,
-            span=SourceSpan(2, 0, 2, 5, 0, 5), node_id=100,
+            expr=expr,
+            target_type=target,
+            test_only=False,
+            span=SourceSpan(2, 0, 2, 5, 0, 5),
+            node_id=100,
         )
         assert n1 == n2
 
@@ -2416,6 +2700,7 @@ class TestCastNode:
     def test_cast_walk_visits_cast_and_children(self) -> None:
         """walk() visits Cast, its expr child, and its target_type child."""
         from agm.agl.syntax.visitor import walk
+
         expr = IntLit(value=1, span=self._sp(), node_id=0)
         target = TextT(span=self._sp(), node_id=1)
         node = Cast(expr=expr, target_type=target, test_only=False, span=self._sp(), node_id=2)
@@ -2439,55 +2724,60 @@ class TestModuleSystemNodes:
 
     def test_import_mode_enum_values(self) -> None:
         from agm.agl.syntax import ImportMode
+
         assert ImportMode.ALL.value == "ALL"
         assert ImportMode.USING.value == "USING"
         assert ImportMode.HIDING.value == "HIDING"
 
     def test_qualifier_empty_segments_is_self_ref(self) -> None:
         from agm.agl.syntax import Qualifier
+
         q = Qualifier(segments=(), span=self._sp(), node_id=0)
         assert q.segments == ()
 
     def test_qualifier_dotted_segments(self) -> None:
         from agm.agl.syntax import Qualifier
+
         q = Qualifier(segments=("foo", "bar"), span=self._sp(), node_id=0)
         assert q.segments == ("foo", "bar")
 
     def test_qualifier_equality_ignores_span_and_node_id(self) -> None:
         from agm.agl.syntax import Qualifier
-        q1 = Qualifier(segments=("mod",), span=SourceSpan(1,0,1,3,0,3), node_id=0)
-        q2 = Qualifier(segments=("mod",), span=SourceSpan(2,0,2,3,0,3), node_id=99)
+
+        q1 = Qualifier(segments=("mod",), span=SourceSpan(1, 0, 1, 3, 0, 3), node_id=0)
+        q2 = Qualifier(segments=("mod",), span=SourceSpan(2, 0, 2, 3, 0, 3), node_id=99)
         assert q1 == q2
 
     def test_qualifier_immutable(self) -> None:
         from agm.agl.syntax import Qualifier
+
         q = Qualifier(segments=("a",), span=self._sp(), node_id=0)
         with pytest.raises((FrozenInstanceError, AttributeError)):
             setattr(q, "segments", ("b",))
 
     def test_import_item_with_rename(self) -> None:
         from agm.agl.syntax import ImportItem
+
         item = ImportItem(name="foo", rename="bar", span=self._sp(), node_id=0)
         assert item.name == "foo"
         assert item.rename == "bar"
 
     def test_import_item_no_rename(self) -> None:
         from agm.agl.syntax import ImportItem
+
         item = ImportItem(name="baz", rename=None, span=self._sp(), node_id=0)
         assert item.rename is None
 
     def test_import_item_equality_ignores_span(self) -> None:
         from agm.agl.syntax import ImportItem
-        i1 = ImportItem(
-            name="x", rename=None, span=SourceSpan(1, 0, 1, 1, 0, 1), node_id=0
-        )
-        i2 = ImportItem(
-            name="x", rename=None, span=SourceSpan(2, 0, 2, 1, 0, 1), node_id=99
-        )
+
+        i1 = ImportItem(name="x", rename=None, span=SourceSpan(1, 0, 1, 1, 0, 1), node_id=0)
+        i2 = ImportItem(name="x", rename=None, span=SourceSpan(2, 0, 2, 1, 0, 1), node_id=99)
         assert i1 == i2
 
     def test_import_decl_basic(self) -> None:
         from agm.agl.syntax import ImportDecl, ImportMode
+
         decl = ImportDecl(
             module_path=("foo", "bar"),
             wildcard=False,
@@ -2507,6 +2797,7 @@ class TestModuleSystemNodes:
 
     def test_import_decl_wildcard(self) -> None:
         from agm.agl.syntax import ImportDecl, ImportMode
+
         decl = ImportDecl(
             module_path=("utils",),
             wildcard=True,
@@ -2521,6 +2812,7 @@ class TestModuleSystemNodes:
 
     def test_import_decl_qualified_with_alias(self) -> None:
         from agm.agl.syntax import ImportDecl, ImportMode
+
         decl = ImportDecl(
             module_path=("foo",),
             wildcard=False,
@@ -2536,6 +2828,7 @@ class TestModuleSystemNodes:
 
     def test_import_decl_using_mode(self) -> None:
         from agm.agl.syntax import ImportDecl, ImportItem, ImportMode
+
         items = (
             ImportItem(name="foo", rename=None, span=self._sp(), node_id=1),
             ImportItem(name="bar", rename="b", span=self._sp(), node_id=2),
@@ -2555,9 +2848,8 @@ class TestModuleSystemNodes:
 
     def test_import_decl_hiding_mode(self) -> None:
         from agm.agl.syntax import ImportDecl, ImportItem, ImportMode
-        items = (
-            ImportItem(name="private_fn", rename=None, span=self._sp(), node_id=1),
-        )
+
+        items = (ImportItem(name="private_fn", rename=None, span=self._sp(), node_id=1),)
         decl = ImportDecl(
             module_path=("m",),
             wildcard=False,
@@ -2572,6 +2864,7 @@ class TestModuleSystemNodes:
 
     def test_import_decl_is_declaration(self) -> None:
         from agm.agl.syntax import ImportDecl, ImportMode
+
         decl = ImportDecl(
             module_path=("m",),
             wildcard=False,
@@ -2590,6 +2883,7 @@ class TestModuleSystemNodes:
     def test_import_decl_walk_visits_items(self) -> None:
         from agm.agl.syntax import ImportDecl, ImportItem, ImportMode
         from agm.agl.syntax.visitor import walk
+
         item = ImportItem(name="x", rename=None, span=self._sp(), node_id=1)
         decl = ImportDecl(
             module_path=("m",),
@@ -2608,22 +2902,21 @@ class TestModuleSystemNodes:
 
     def test_export_item_with_rename(self) -> None:
         from agm.agl.syntax import ExportItem
+
         item = ExportItem(name="foo", rename="bar", span=self._sp(), node_id=0)
         assert item.name == "foo"
         assert item.rename == "bar"
 
     def test_export_item_equality_ignores_span(self) -> None:
         from agm.agl.syntax import ExportItem
-        i1 = ExportItem(
-            name="x", rename=None, span=SourceSpan(1, 0, 1, 1, 0, 1), node_id=0
-        )
-        i2 = ExportItem(
-            name="x", rename=None, span=SourceSpan(2, 0, 2, 1, 0, 1), node_id=99
-        )
+
+        i1 = ExportItem(name="x", rename=None, span=SourceSpan(1, 0, 1, 1, 0, 1), node_id=0)
+        i2 = ExportItem(name="x", rename=None, span=SourceSpan(2, 0, 2, 1, 0, 1), node_id=99)
         assert i1 == i2
 
     def test_export_decl_basic(self) -> None:
         from agm.agl.syntax import ExportDecl, ImportMode
+
         decl = ExportDecl(
             module_path=("foo", "bar"),
             wildcard=False,
@@ -2639,6 +2932,7 @@ class TestModuleSystemNodes:
 
     def test_export_decl_using_mode(self) -> None:
         from agm.agl.syntax import ExportDecl, ExportItem, ImportMode
+
         item = ExportItem(name="foo", rename="bar", span=self._sp(), node_id=1)
         decl = ExportDecl(
             module_path=("m",),
@@ -2654,6 +2948,7 @@ class TestModuleSystemNodes:
     def test_export_decl_walk_visits_items(self) -> None:
         from agm.agl.syntax import ExportDecl, ExportItem, ImportMode
         from agm.agl.syntax.visitor import walk
+
         item = ExportItem(name="x", rename=None, span=self._sp(), node_id=1)
         decl = ExportDecl(
             module_path=("m",),
@@ -2671,6 +2966,7 @@ class TestModuleSystemNodes:
     def test_infix_decl_walk_is_leaf(self) -> None:
         from agm.agl.syntax import InfixAssoc, InfixDecl
         from agm.agl.syntax.visitor import walk
+
         decl = InfixDecl(
             name="|>",
             assoc=InfixAssoc.LEFT,
@@ -2687,6 +2983,7 @@ class TestModuleSystemNodes:
     def test_qualifier_walk_is_leaf(self) -> None:
         from agm.agl.syntax import Qualifier
         from agm.agl.syntax.visitor import walk
+
         q = Qualifier(segments=("a", "b"), span=self._sp(), node_id=0)
         visited: list[object] = []
         walk(q, visited.append)
@@ -2739,6 +3036,7 @@ class TestModuleSystemNodes:
 
     def test_var_ref_with_module_qualifier(self) -> None:
         from agm.agl.syntax import Qualifier
+
         q = Qualifier(segments=("foo",), span=self._sp(), node_id=0)
         ref = VarRef(name="x", span=self._sp(), node_id=1, module_qualifier=q)
         assert ref.module_qualifier is q

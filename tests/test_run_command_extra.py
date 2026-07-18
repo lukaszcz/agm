@@ -67,9 +67,7 @@ class TestRunEmptyCommand:
         (tmp_path / "home").mkdir()
         monkeypatch.setattr(run_module.Path, "cwd", staticmethod(lambda: tmp_path))
         monkeypatch.setattr(os, "environ", env)
-        monkeypatch.setattr(
-            run_module, "load_run_config", lambda **_: _make_run_config()
-        )
+        monkeypatch.setattr(run_module, "load_run_config", lambda **_: _make_run_config())
         with pytest.raises(SystemExit) as exc_info:
             run_module.run(
                 RunArgs(
@@ -97,17 +95,17 @@ class TestRunDryRun:
     @pytest.fixture(autouse=True)
     def reset_dry_run(self) -> Generator[None, None, None]:
         from agm.core import dry_run
+
         original = dry_run.enabled()
         yield
         dry_run.set_enabled(original)
 
     def _enable_dry_run(self) -> None:
         from agm.core import dry_run
+
         dry_run.set_enabled(True)
 
-    def _setup_env(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> dict[str, str]:
+    def _setup_env(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, str]:
         env = {"HOME": str(tmp_path / "home"), "PATH": "/bin"}
         (tmp_path / "home").mkdir()
         monkeypatch.setattr(run_module.Path, "cwd", staticmethod(lambda: tmp_path))
@@ -119,9 +117,7 @@ class TestRunDryRun:
     ) -> None:
         self._enable_dry_run()
         self._setup_env(tmp_path, monkeypatch)
-        monkeypatch.setattr(
-            run_module, "load_run_config", lambda **_: _make_run_config()
-        )
+        monkeypatch.setattr(run_module, "load_run_config", lambda **_: _make_run_config())
         run_module.run(
             RunArgs(
                 run_command=["echo", "hi"],
@@ -145,9 +141,7 @@ class TestRunDryRun:
     ) -> None:
         self._enable_dry_run()
         self._setup_env(tmp_path, monkeypatch)
-        monkeypatch.setattr(
-            run_module, "load_run_config", lambda **_: _make_run_config()
-        )
+        monkeypatch.setattr(run_module, "load_run_config", lambda **_: _make_run_config())
         monkeypatch.setattr(run_module.srt.shutil, "which", lambda *a, **kw: "/bin/srt")
 
         run_module.run(
@@ -178,9 +172,7 @@ class TestRunDryRun:
         (tmp_path / "home").mkdir()
         monkeypatch.setattr(run_module.Path, "cwd", staticmethod(lambda: tmp_path))
         monkeypatch.setattr(os, "environ", env)
-        monkeypatch.setattr(
-            run_module, "load_run_config", lambda **_: _make_run_config()
-        )
+        monkeypatch.setattr(run_module, "load_run_config", lambda **_: _make_run_config())
         monkeypatch.setattr(run_module.srt.shutil, "which", lambda *a, **kw: "/bin/srt")
 
         run_module.run(
@@ -208,9 +200,7 @@ class TestRunDryRun:
         (tmp_path / "home").mkdir()
         monkeypatch.setattr(run_module.Path, "cwd", staticmethod(lambda: tmp_path))
         monkeypatch.setattr(os, "environ", env)
-        monkeypatch.setattr(
-            run_module, "load_run_config", lambda **_: _make_run_config()
-        )
+        monkeypatch.setattr(run_module, "load_run_config", lambda **_: _make_run_config())
         monkeypatch.setattr(run_module.shutil, "which", lambda *a, **kw: "/usr/bin/systemd-run")
         run_module.run(
             RunArgs(
@@ -239,9 +229,7 @@ class TestRunDryRun:
         (tmp_path / "home").mkdir()
         monkeypatch.setattr(run_module.Path, "cwd", staticmethod(lambda: tmp_path))
         monkeypatch.setattr(os, "environ", env)
-        monkeypatch.setattr(
-            run_module, "load_run_config", lambda **_: _make_run_config()
-        )
+        monkeypatch.setattr(run_module, "load_run_config", lambda **_: _make_run_config())
         monkeypatch.setattr(run_module.shutil, "which", lambda *a, **kw: "/usr/bin/systemd-run")
 
         run_module.run(
@@ -270,9 +258,7 @@ class TestRunDryRun:
         (tmp_path / "home").mkdir()
         monkeypatch.setattr(run_module.Path, "cwd", staticmethod(lambda: tmp_path))
         monkeypatch.setattr(os, "environ", env)
-        monkeypatch.setattr(
-            run_module, "load_run_config", lambda **_: _make_run_config()
-        )
+        monkeypatch.setattr(run_module, "load_run_config", lambda **_: _make_run_config())
         monkeypatch.setattr(run_module.shutil, "which", lambda *a, **kw: "/usr/bin/systemd-run")
 
         run_module.run(
@@ -301,9 +287,7 @@ class TestRunDryRun:
         (tmp_path / "home").mkdir()
         monkeypatch.setattr(run_module.Path, "cwd", staticmethod(lambda: tmp_path))
         monkeypatch.setattr(os, "environ", env)
-        monkeypatch.setattr(
-            run_module, "load_run_config", lambda **_: _make_run_config()
-        )
+        monkeypatch.setattr(run_module, "load_run_config", lambda **_: _make_run_config())
         # No raises: the function should simply return (not raise SystemExit)
         run_module.run(
             RunArgs(
@@ -337,9 +321,7 @@ class TestRunNoSandboxSwapLimit:
         (tmp_path / "home").mkdir()
         monkeypatch.setattr(run_module.Path, "cwd", staticmethod(lambda: tmp_path))
         monkeypatch.setattr(os, "environ", env)
-        monkeypatch.setattr(
-            run_module, "load_run_config", lambda **_: _make_run_config()
-        )
+        monkeypatch.setattr(run_module, "load_run_config", lambda **_: _make_run_config())
         monkeypatch.setattr(run_module.shutil, "which", lambda *a, **kw: None)
 
         with pytest.raises(SystemExit) as exc_info:
@@ -367,17 +349,13 @@ class TestRunNoSandboxSwapLimit:
         (tmp_path / "home").mkdir()
         monkeypatch.setattr(run_module.Path, "cwd", staticmethod(lambda: tmp_path))
         monkeypatch.setattr(os, "environ", env)
-        monkeypatch.setattr(
-            run_module, "load_run_config", lambda **_: _make_run_config()
-        )
+        monkeypatch.setattr(run_module, "load_run_config", lambda **_: _make_run_config())
         monkeypatch.setattr(run_module.shutil, "which", lambda *a, **kw: "/usr/bin/systemd-run")
 
         foreground_calls: list[list[str]] = []
         cleanup_calls: list[list[str] | None] = []
 
-        def fake_run_foreground(
-            cmd: list[str], **kw: Any
-        ) -> int:
+        def fake_run_foreground(cmd: list[str], **kw: Any) -> int:
             foreground_calls.append(cmd)
             cleanup_calls.append(kw["interrupt_cleanup_cmd"])
             return 0
@@ -418,13 +396,14 @@ class TestRunNoSandboxLive:
         (tmp_path / "home").mkdir()
         monkeypatch.setattr(run_module.Path, "cwd", staticmethod(lambda: tmp_path))
         monkeypatch.setattr(os, "environ", env)
-        monkeypatch.setattr(
-            run_module, "load_run_config", lambda **_: _make_run_config()
-        )
+        monkeypatch.setattr(run_module, "load_run_config", lambda **_: _make_run_config())
         foreground_calls: list[list[str]] = []
 
         def fake_run_foreground(
-            cmd: list[str], *, cwd: Path | None = None, env: dict[str, str] | None = None,
+            cmd: list[str],
+            *,
+            cwd: Path | None = None,
+            env: dict[str, str] | None = None,
             interrupt_cleanup_cmd: list[str] | None = None,
             isolate_process_group: bool = False,
         ) -> int:
@@ -456,12 +435,13 @@ class TestRunNoSandboxLive:
         (tmp_path / "home").mkdir()
         monkeypatch.setattr(run_module.Path, "cwd", staticmethod(lambda: tmp_path))
         monkeypatch.setattr(os, "environ", env)
-        monkeypatch.setattr(
-            run_module, "load_run_config", lambda **_: _make_run_config()
-        )
+        monkeypatch.setattr(run_module, "load_run_config", lambda **_: _make_run_config())
 
         def fake_run_foreground(
-            cmd: list[str], *, cwd: Path | None = None, env: dict[str, str] | None = None,
+            cmd: list[str],
+            *,
+            cwd: Path | None = None,
+            env: dict[str, str] | None = None,
             interrupt_cleanup_cmd: list[str] | None = None,
             isolate_process_group: bool = False,
         ) -> int:
@@ -497,9 +477,7 @@ class TestRunNoSandboxLive:
         (tmp_path / "home").mkdir()
         monkeypatch.setattr(run_module.Path, "cwd", staticmethod(lambda: tmp_path))
         monkeypatch.setattr(os, "environ", env)
-        monkeypatch.setattr(
-            run_module, "load_run_config", lambda **_: _make_run_config()
-        )
+        monkeypatch.setattr(run_module, "load_run_config", lambda **_: _make_run_config())
         # Monkeypatch _run_with_optional_resource_limits to return normally
         # instead of always raising SystemExit, making the trailing return reachable.
         monkeypatch.setattr(run_module, "_run_with_optional_resource_limits", lambda **kw: None)
@@ -526,13 +504,9 @@ class TestRunNoSandboxLive:
         (tmp_path / "home").mkdir()
         monkeypatch.setattr(run_module.Path, "cwd", staticmethod(lambda: tmp_path))
         monkeypatch.setattr(os, "environ", env)
-        monkeypatch.setattr(
-            run_module, "load_run_config", lambda **_: _make_run_config()
-        )
+        monkeypatch.setattr(run_module, "load_run_config", lambda **_: _make_run_config())
 
-        def fake_run_foreground(
-            cmd: list[str], **kw: Any
-        ) -> int:
+        def fake_run_foreground(cmd: list[str], **kw: Any) -> int:
             return 0
 
         monkeypatch.setattr(run_module, "run_foreground", fake_run_foreground)

@@ -222,14 +222,14 @@ DO_LSQB = "DO_LSQB"  # [ opening a do-loop bound
 # ---------------------------------------------------------------------------
 # Module system tokens (contextual / synthetic — %declare in grammar)
 # ---------------------------------------------------------------------------
-IMPORT = "IMPORT"       # contextual: 'import' at item-start
-QUALIFIED = "QUALIFIED" # contextual: 'qualified' in import line
-USING = "USING"         # contextual: 'using' in import line
-HIDING = "HIDING"       # contextual: 'hiding' in import line
-EXPORT = "EXPORT"       # contextual: 'export' in import line
-PRIVATE = "PRIVATE"     # contextual: 'private' at item-start
-MODQUAL = "MODQUAL"     # synthetic: merged module-qualifier prefix (e.g. "foo.bar::")
-MODPATH = "MODPATH"     # synthetic: merged module path in import (e.g. "foo.bar")
+IMPORT = "IMPORT"  # contextual: 'import' at item-start
+QUALIFIED = "QUALIFIED"  # contextual: 'qualified' in import line
+USING = "USING"  # contextual: 'using' in import line
+HIDING = "HIDING"  # contextual: 'hiding' in import line
+EXPORT = "EXPORT"  # contextual: 'export' in import line
+PRIVATE = "PRIVATE"  # contextual: 'private' at item-start
+MODQUAL = "MODQUAL"  # synthetic: merged module-qualifier prefix (e.g. "foo.bar::")
+MODPATH = "MODPATH"  # synthetic: merged module path in import (e.g. "foo.bar")
 
 # ---------------------------------------------------------------------------
 # Grammar token-type mapping
@@ -244,9 +244,7 @@ MODPATH = "MODPATH"     # synthetic: merged module path in import (e.g. "foo.bar
 # ``tokenize()`` public helper preserves that lowercase stream; only the
 # parser-facing ``AglLexer.lex()`` method applies this mapping.
 # ---------------------------------------------------------------------------
-GRAMMAR_TOKEN_REMAP: dict[str, str] = {
-    kw: kw.upper() for kw in KEYWORDS if kw != KW_AS_QUESTION
-}
+GRAMMAR_TOKEN_REMAP: dict[str, str] = {kw: kw.upper() for kw in KEYWORDS if kw != KW_AS_QUESTION}
 # `as?` contains `?` which is not valid in an uppercase terminal name; map it
 # explicitly to the declared terminal name AS_QUESTION.
 GRAMMAR_TOKEN_REMAP[KW_AS_QUESTION] = "AS_QUESTION"

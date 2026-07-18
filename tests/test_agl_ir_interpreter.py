@@ -119,9 +119,7 @@ def _make_program(
     sources = {_SOURCE_ID: SourceFile(display_name="<test>", normalized_text=_SOURCE_TEXT)}
     return ExecutableProgram(
         entry_module=ENTRY_ID,
-        modules={
-            ENTRY_ID: ExecutableModule(module_id=ENTRY_ID, initializers=initializers)
-        },
+        modules={ENTRY_ID: ExecutableModule(module_id=ENTRY_ID, initializers=initializers)},
         symbols=symbols or {},
         nominals=nominals or {},
         sources=sources,
@@ -132,18 +130,14 @@ def _make_program(
 def _let_sym(n: int, name: str) -> tuple[SymbolId, SymbolDescriptor]:
     """Return a (SymbolId, SymbolDescriptor) for an immutable let binding."""
     sym = SymbolId(n)
-    desc = SymbolDescriptor(
-        symbol_id=sym, mutable=False, public_name=name, owner=ENTRY_ID
-    )
+    desc = SymbolDescriptor(symbol_id=sym, mutable=False, public_name=name, owner=ENTRY_ID)
     return sym, desc
 
 
 def _var_sym(n: int, name: str) -> tuple[SymbolId, SymbolDescriptor]:
     """Return a (SymbolId, SymbolDescriptor) for a mutable var binding."""
     sym = SymbolId(n)
-    desc = SymbolDescriptor(
-        symbol_id=sym, mutable=True, public_name=name, owner=ENTRY_ID
-    )
+    desc = SymbolDescriptor(symbol_id=sym, mutable=True, public_name=name, owner=ENTRY_ID)
     return sym, desc
 
 
@@ -272,9 +266,7 @@ class TestContainers:
             ),
             {sym: desc},
         )
-        assert result == {
-            "d": DictValue({"a": IntValue(1), "b": IntValue(2)})
-        }
+        assert result == {"d": DictValue({"a": IntValue(1), "b": IntValue(2)})}
 
     def test_make_dict_empty(self) -> None:
         sym, desc = _let_sym(0, "d")
@@ -789,9 +781,7 @@ class TestCoerceMapEnumFields:
             variant="Triangle",
             fields={"sides": IntValue(3)},
         )
-        coercion = MapEnumFields(
-            variants=(("Circle", (("radius", IntToDecimal()),)),)
-        )
+        coercion = MapEnumFields(variants=(("Circle", (("radius", IntToDecimal()),)),))
         result = _apply_coercion(ev, coercion)
         # Triangle variant is not in the coercion → returned unchanged.
         assert result == ev
@@ -848,9 +838,7 @@ class TestRunReturnValues:
     def test_private_symbol_excluded(self) -> None:
         """A symbol with public_name=None should not appear in run() results."""
         sym = SymbolId(0)
-        desc = SymbolDescriptor(
-            symbol_id=sym, mutable=False, public_name=None, owner=ENTRY_ID
-        )
+        desc = SymbolDescriptor(symbol_id=sym, mutable=False, public_name=None, owner=ENTRY_ID)
         result = _run(
             (IrBind(_LOC, sym, IrConstInt(_LOC, 1)),),
             {sym: desc},
@@ -863,9 +851,7 @@ class TestRunReturnValues:
 
         other_mod = ModuleId.from_dotted("other")
         sym = SymbolId(0)
-        desc = SymbolDescriptor(
-            symbol_id=sym, mutable=False, public_name="x", owner=other_mod
-        )
+        desc = SymbolDescriptor(symbol_id=sym, mutable=False, public_name="x", owner=other_mod)
         result = _run(
             (IrBind(_LOC, sym, IrConstInt(_LOC, 1)),),
             {sym: desc},
@@ -928,6 +914,7 @@ class TestDefensiveErrors:
     def test_assign_with_path_list(self) -> None:
         """IrAssign with a non-empty path performs indexed assignment on a list."""
         from agm.agl.semantics.values import IntValue, ListValue
+
         sym, desc = _var_sym(0, "v")
         prog = _make_program(
             (
@@ -947,6 +934,7 @@ class TestDefensiveErrors:
     def test_ir_and_non_bool_lhs_raises(self) -> None:
         """IrAnd with a non-BoolValue lhs raises InvalidIrError."""
         from agm.agl.ir import IrAnd
+
         prog = _make_program(
             (IrAnd(_LOC, lhs=IrConstInt(_LOC, 1), rhs=IrConstBool(_LOC, True)),),
         )
@@ -956,6 +944,7 @@ class TestDefensiveErrors:
     def test_ir_and_non_bool_rhs_raises(self) -> None:
         """IrAnd with a non-BoolValue rhs raises InvalidIrError."""
         from agm.agl.ir import IrAnd
+
         prog = _make_program(
             (IrAnd(_LOC, lhs=IrConstBool(_LOC, True), rhs=IrConstInt(_LOC, 1)),),
         )
@@ -965,6 +954,7 @@ class TestDefensiveErrors:
     def test_ir_or_non_bool_lhs_raises(self) -> None:
         """IrOr with a non-BoolValue lhs raises InvalidIrError."""
         from agm.agl.ir import IrOr
+
         prog = _make_program(
             (IrOr(_LOC, lhs=IrConstInt(_LOC, 1), rhs=IrConstBool(_LOC, False)),),
         )
@@ -974,6 +964,7 @@ class TestDefensiveErrors:
     def test_ir_or_non_bool_rhs_raises(self) -> None:
         """IrOr with a non-BoolValue rhs raises InvalidIrError."""
         from agm.agl.ir import IrOr
+
         prog = _make_program(
             (IrOr(_LOC, lhs=IrConstBool(_LOC, False), rhs=IrConstInt(_LOC, 1)),),
         )
@@ -983,6 +974,7 @@ class TestDefensiveErrors:
     def test_ir_unary_not_non_bool_raises(self) -> None:
         """IrUnary NOT with a non-BoolValue raises InvalidIrError."""
         from agm.agl.ir import IrUnary, UnaryOp
+
         prog = _make_program(
             (IrUnary(_LOC, op=UnaryOp.NOT, kind=None, value=IrConstInt(_LOC, 1)),),
         )
@@ -992,6 +984,7 @@ class TestDefensiveErrors:
     def test_ir_unary_neg_none_kind_raises(self) -> None:
         """IrUnary NEG with kind=None raises InvalidIrError at runtime."""
         from agm.agl.ir import IrUnary, UnaryOp
+
         prog = _make_program(
             (IrUnary(_LOC, op=UnaryOp.NEG, kind=None, value=IrConstInt(_LOC, 5)),),
         )
@@ -1001,6 +994,7 @@ class TestDefensiveErrors:
     def test_ir_unary_neg_non_numeric_raises(self) -> None:
         """IrUnary NEG with non-numeric value raises InvalidIrError."""
         from agm.agl.ir import IrUnary, NumericKind, UnaryOp
+
         prog = _make_program(
             (
                 IrUnary(
@@ -1140,6 +1134,7 @@ class TestIrAssignPathErrors:
     def test_assign_path_intermediate_list_oob_raises(self) -> None:
         """IrAssign: intermediate step with out-of-bounds list index raises AglRaise."""
         from agm.agl.semantics.exceptions import AglRaise
+
         # xss = [[1, 2]], then xss[5][0] := 99 — step 0 is OOB
         sym, desc = self._var(0, "xss")
         inner = IrMakeList(_LOC, (IrConstInt(_LOC, 1), IrConstInt(_LOC, 2)))
@@ -1165,6 +1160,7 @@ class TestIrAssignPathErrors:
     def test_assign_path_intermediate_dict_missing_key_raises(self) -> None:
         """IrAssign: intermediate step with missing dict key raises AglRaise."""
         from agm.agl.semantics.exceptions import AglRaise
+
         # m = {"a": [1, 2]}, then m["z"]["a"] := 99 — step 0 key is missing
         sym, desc = self._var(0, "m")
         inner = IrMakeList(_LOC, (IrConstInt(_LOC, 1), IrConstInt(_LOC, 2)))
@@ -1194,13 +1190,12 @@ class TestIrAssignPathErrors:
     def test_assign_path_final_list_oob_raises(self) -> None:
         """IrAssign: final step with out-of-bounds list index raises AglRaise."""
         from agm.agl.semantics.exceptions import AglRaise
+
         # xs = [1, 2], then xs[5] := 99 — final step is OOB
         sym, desc = self._var(0, "xs")
         prog = _make_program(
             (
-                IrBind(
-                    _LOC, sym, IrMakeList(_LOC, (IrConstInt(_LOC, 1), IrConstInt(_LOC, 2)))
-                ),
+                IrBind(_LOC, sym, IrMakeList(_LOC, (IrConstInt(_LOC, 1), IrConstInt(_LOC, 2)))),
                 IrAssign(
                     _LOC,
                     sym,
@@ -1217,6 +1212,7 @@ class TestIrAssignPathErrors:
     def test_assign_path_final_dict_missing_key_raises(self) -> None:
         """IrAssign: final step with missing dict key raises AglRaise."""
         from agm.agl.semantics.exceptions import AglRaise
+
         # m = {"a": 1}, then m["z"] := 99 — final step key is missing
         sym, desc = self._var(0, "m")
         prog = _make_program(
@@ -1294,9 +1290,7 @@ class TestImportIsolation:
         source = _ir_interpreter_source()
         imports = _collect_import_names(source)
         forbidden = {n for n in imports if n.startswith("agm.agl.syntax")}
-        assert not forbidden, (
-            f"ir_interpreter.py imports syntax modules: {sorted(forbidden)}"
-        )
+        assert not forbidden, f"ir_interpreter.py imports syntax modules: {sorted(forbidden)}"
 
     def test_no_scope_import(self) -> None:
         source = _ir_interpreter_source()
@@ -1308,17 +1302,13 @@ class TestImportIsolation:
             for n in imports
             if n.startswith("agm.agl.scope") and not n.startswith("agm.agl.eval.scope")
         }
-        assert not forbidden, (
-            f"ir_interpreter.py imports AST-scope modules: {sorted(forbidden)}"
-        )
+        assert not forbidden, f"ir_interpreter.py imports AST-scope modules: {sorted(forbidden)}"
 
     def test_no_typecheck_import(self) -> None:
         source = _ir_interpreter_source()
         imports = _collect_import_names(source)
         forbidden = {n for n in imports if n.startswith("agm.agl.typecheck")}
-        assert not forbidden, (
-            f"ir_interpreter.py imports typecheck modules: {sorted(forbidden)}"
-        )
+        assert not forbidden, f"ir_interpreter.py imports typecheck modules: {sorted(forbidden)}"
 
 
 # ---------------------------------------------------------------------------
@@ -1332,15 +1322,11 @@ _LOCAL_SID = SymbolId(102)
 
 
 def _fn_sym_desc() -> SymbolDescriptor:
-    return SymbolDescriptor(
-        symbol_id=_FN_SID, mutable=False, public_name="f", owner=ENTRY_ID
-    )
+    return SymbolDescriptor(symbol_id=_FN_SID, mutable=False, public_name="f", owner=ENTRY_ID)
 
 
 def _param_sym_desc() -> SymbolDescriptor:
-    return SymbolDescriptor(
-        symbol_id=_PARAM_SID, mutable=False, public_name="x", owner=_FN_ID
-    )
+    return SymbolDescriptor(symbol_id=_PARAM_SID, mutable=False, public_name="x", owner=_FN_ID)
 
 
 def _make_fn_descriptor(
@@ -1387,6 +1373,7 @@ class TestFunctionEvaluation:
         )
         result = IrInterpreter(prog).run()
         from agm.agl.semantics.values import IntValue
+
         assert result["result"] == IntValue(42)
 
     def test_param_default_can_call_top_level_function(self) -> None:
@@ -1548,6 +1535,7 @@ class TestFunctionEvaluation:
         )
         result = IrInterpreter(prog).run()
         from agm.agl.semantics.values import IntValue
+
         assert result["result"] == IntValue(7)
 
     def test_direct_call_with_use_default(self) -> None:
@@ -1573,6 +1561,7 @@ class TestFunctionEvaluation:
         )
         result = IrInterpreter(prog).run()
         from agm.agl.semantics.values import IntValue
+
         assert result["result"] == IntValue(99)
 
     def test_direct_call_param_bound_by_value(self) -> None:
@@ -1606,6 +1595,7 @@ class TestFunctionEvaluation:
         )
         result = IrInterpreter(prog).run()
         from agm.agl.semantics.values import IntValue
+
         assert result["result2"] == IntValue(55)
 
 
@@ -2212,6 +2202,7 @@ class TestIrExec:
             with pytest.raises(AglRaise) as exc_info:
                 IrInterpreter(prog).run()
         from agm.agl.semantics.values import BoolValue
+
         assert exc_info.value.exc.display_name == "ExecError"
         assert exc_info.value.exc.fields["timed_out"] == BoolValue(True)
 

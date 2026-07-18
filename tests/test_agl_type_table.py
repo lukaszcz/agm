@@ -17,8 +17,8 @@ from agm.agl.capabilities import HostCapabilities
 from agm.agl.modules.ids import ENTRY_ID, PRELUDE_ID, STD_CORE_ID, ModuleId
 from agm.agl.parser import parse_program
 from agm.agl.repl import ReplSession
-from agm.agl.scope import resolve
-from agm.agl.scope.graph import resolve_graph
+from agm.agl.scope import resolve_module
+from agm.agl.scope.program import resolve_program
 from agm.agl.semantics.analyses import (
     compute_finite_closure,
     compute_uninhabited,
@@ -47,8 +47,8 @@ from agm.agl.semantics.types import (
     UnitType,
 )
 from agm.agl.syntax.nodes import LetDecl, ParamKind, VarDecl
-from agm.agl.typecheck import CheckedProgram, check
-from agm.agl.typecheck.graph import check_graph
+from agm.agl.typecheck import CheckedModule, check_module
+from agm.agl.typecheck.program import check_program
 from tests.agl.ir_harness import make_graph_from_files
 
 _CAPS = HostCapabilities(
@@ -64,19 +64,19 @@ _CAPS = HostCapabilities(
 _LIB_ID = ModuleId.from_dotted("lib")
 
 
-def _check(src: str) -> CheckedProgram:
+def _check(src: str) -> CheckedModule:
     """Parse + resolve + check a single-module AgL program."""
-    return check(resolve(parse_program(src)), _CAPS)
+    return check_module(resolve_module(parse_program(src)), _CAPS)
 
 
-def _check_graph(tmp_path: Path, modules: dict[str, str]):
-    """Build and typecheck a multi-module graph; returns CheckedModuleGraph."""
+def _check_program(tmp_path: Path, modules: dict[str, str]):
+    """Build and typecheck a multi-module graph; returns CheckedProgram."""
     graph = make_graph_from_files(tmp_path, modules)
-    rgraph = resolve_graph(graph)
-    return check_graph(rgraph, _CAPS)
+    resolved_program = resolve_program(graph)
+    return check_program(resolved_program, _CAPS)
 
 
-def _binding_value_type(checked: CheckedProgram, name: str):
+def _binding_value_type(checked: CheckedModule, name: str):
     """Inferred type of the RHS of the top-level ``let``/``var <name> = ...``."""
     for item in checked.resolved.program.body.items:
         if isinstance(item, (LetDecl, VarDecl)) and item.name == name:
@@ -1035,7 +1035,7 @@ class TestEnvTypeHasMatchingTableDefSingleModule:
 
 
 # ---------------------------------------------------------------------------
-# Every env-registered type has a matching table def: graph mode
+# Every env-registered type has a matching table def: program context
 # ---------------------------------------------------------------------------
 
 
@@ -1049,9 +1049,9 @@ class TestEnvTypeHasMatchingTableDefGraphMode:
                 "record Point\n  x: int\n  y: int\ndef makePoint() -> Point = Point(x = 1, y = 2)"
             ),
         }
-        cg = _check_graph(tmp_path, modules)
+        cg = _check_program(tmp_path, modules)
         mylib_id = ModuleId.from_dotted("mylib")
-        point = cg.graph_type_table[(mylib_id, "Point")]
+        point = cg.program_type_table[(mylib_id, "Point")]
         assert isinstance(point, RecordType)
 
         mylib_table = cg.modules[mylib_id].type_env.type_table
@@ -1776,9 +1776,10 @@ class TestFiniteClosure:
             )
         )
         assert table.has_finite_closure(ENTRY_ID, "R") is True
-        assert table.has_finite_schema(
-            RecordType("R", type_args=(IntType(),), module_id=ENTRY_ID)
-        ) is True
+        assert (
+            table.has_finite_schema(RecordType("R", type_args=(IntType(),), module_id=ENTRY_ID))
+            is True
+        )
 
     def test_nested_phantom_argument_growth_is_finite_schema(self) -> None:
         table = TypeTable()
@@ -1823,9 +1824,10 @@ class TestFiniteClosure:
         )
 
         assert table.has_finite_closure(ENTRY_ID, "E") is True
-        assert table.has_finite_schema(
-            EnumType("E", type_args=(IntType(),), module_id=ENTRY_ID)
-        ) is True
+        assert (
+            table.has_finite_schema(EnumType("E", type_args=(IntType(),), module_id=ENTRY_ID))
+            is True
+        )
 
     def test_unknown_nested_nominal_argument_counts_as_schema_growth(self) -> None:
         table = TypeTable()

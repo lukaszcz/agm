@@ -677,9 +677,7 @@ class TestSymbolDescriptor:
         assert desc.public_name is None
 
     def test_frozen(self) -> None:
-        desc = SymbolDescriptor(
-            symbol_id=SYM0, mutable=False, public_name=None, owner=MOD_A
-        )
+        desc = SymbolDescriptor(symbol_id=SYM0, mutable=False, public_name=None, owner=MOD_A)
         with pytest.raises(dataclasses.FrozenInstanceError):
             setattr(desc, "mutable", True)
 
@@ -752,12 +750,8 @@ class TestExecutableModule:
 
 class TestExecutableProgram:
     def _make_program(self) -> ExecutableProgram:
-        sym_desc = SymbolDescriptor(
-            symbol_id=SYM0, mutable=False, public_name="y", owner=MOD_A
-        )
-        nom_desc = NominalDescriptor(
-            nominal=NOM0, display_name="Foo", kind=NominalKind.RECORD
-        )
+        sym_desc = SymbolDescriptor(symbol_id=SYM0, mutable=False, public_name="y", owner=MOD_A)
+        nom_desc = NominalDescriptor(nominal=NOM0, display_name="Foo", kind=NominalKind.RECORD)
         sf = SourceFile(display_name="main.agl", normalized_text="")
         em = ExecutableModule(module_id=MOD_A, initializers=())
 

@@ -145,19 +145,19 @@ class TestSetTomlDepsValue:
         assert 'mylib = "main"' in result
 
     def test_adds_deps_section_to_existing_content(self) -> None:
-        content = "[other]\nkey = \"value\"\n"
+        content = '[other]\nkey = "value"\n'
         result = _set_toml_deps_value(content, "mylib", "main")
         assert "[deps]" in result
         assert 'mylib = "main"' in result
 
     def test_updates_existing_dep_entry(self) -> None:
-        content = "[deps]\nmylib = \"old\"\n"
+        content = '[deps]\nmylib = "old"\n'
         result = _set_toml_deps_value(content, "mylib", "new")
         assert 'mylib = "new"' in result
         assert 'mylib = "old"' not in result
 
     def test_adds_new_dep_to_existing_deps_section(self) -> None:
-        content = "[deps]\nexisting = \"branch\"\n"
+        content = '[deps]\nexisting = "branch"\n'
         result = _set_toml_deps_value(content, "newlib", "feat")
         assert 'existing = "branch"' in result
         assert 'newlib = "feat"' in result
@@ -168,32 +168,32 @@ class TestSetTomlDepsValue:
         assert '"branch"' in result
 
     def test_preserves_other_sections_after_deps(self) -> None:
-        content = "[deps]\nmylib = \"main\"\n\n[other]\nkey = \"value\"\n"
+        content = '[deps]\nmylib = "main"\n\n[other]\nkey = "value"\n'
         result = _set_toml_deps_value(content, "mylib", "new")
         assert "[other]" in result
         assert 'key = "value"' in result
         assert 'mylib = "new"' in result
 
     def test_new_dep_inserted_before_next_section(self) -> None:
-        content = "[deps]\nexisting = \"branch\"\n\n[other]\nkey = \"value\"\n"
+        content = '[deps]\nexisting = "branch"\n\n[other]\nkey = "value"\n'
         result = _set_toml_deps_value(content, "newlib", "feat")
         # newlib should appear before [other]
         assert result.index('newlib = "feat"') < result.index("[other]")
 
     def test_deps_section_at_end_of_file_no_trailing_newline(self) -> None:
         # content with no trailing newline — separator should be added
-        content = "[other]\nkey = \"value\""
+        content = '[other]\nkey = "value"'
         result = _set_toml_deps_value(content, "mylib", "main")
         assert "[deps]" in result
         assert 'mylib = "main"' in result
 
     def test_content_with_trailing_newline(self) -> None:
-        content = "[other]\nkey = \"value\"\n"
+        content = '[other]\nkey = "value"\n'
         result = _set_toml_deps_value(content, "mylib", "main")
         assert "[deps]\n" in result
 
     def test_update_second_dep_in_section(self) -> None:
-        content = "[deps]\nfirst = \"a\"\nsecond = \"old\"\n"
+        content = '[deps]\nfirst = "a"\nsecond = "old"\n'
         result = _set_toml_deps_value(content, "second", "new")
         assert 'first = "a"' in result
         assert 'second = "new"' in result
@@ -202,7 +202,7 @@ class TestSetTomlDepsValue:
     def test_result_is_valid_toml(self, tmp_path: Path) -> None:
         import tomllib
 
-        content = "[deps]\nexisting = \"branch\"\n"
+        content = '[deps]\nexisting = "branch"\n'
         result = _set_toml_deps_value(content, "newlib", "feat")
         toml_file = tmp_path / "test.toml"
         toml_file.write_bytes(result.encode())
@@ -215,7 +215,7 @@ class TestSetTomlDepsValue:
     def test_update_result_is_valid_toml(self, tmp_path: Path) -> None:
         import tomllib
 
-        content = "[deps]\nmylib = \"old\"\n"
+        content = '[deps]\nmylib = "old"\n'
         result = _set_toml_deps_value(content, "mylib", "new")
         toml_file = tmp_path / "test.toml"
         toml_file.write_bytes(result.encode())
@@ -225,13 +225,13 @@ class TestSetTomlDepsValue:
         assert deps["mylib"] == "new"
 
     def test_deps_with_comment_header(self) -> None:
-        content = "[deps] # my deps\nmylib = \"old\"\n"
+        content = '[deps] # my deps\nmylib = "old"\n'
         result = _set_toml_deps_value(content, "mylib", "new")
         assert 'mylib = "new"' in result
         assert 'mylib = "old"' not in result
 
     def test_deps_section_with_leading_spaces_in_header(self) -> None:
-        content = "  [deps]\nmylib = \"old\"\n"
+        content = '  [deps]\nmylib = "old"\n'
         result = _set_toml_deps_value(content, "mylib", "new")
         assert 'mylib = "new"' in result
 
@@ -404,7 +404,7 @@ class TestLoadDependencyTomlEnv:
         config_dir = project_dir / "config"
         config_dir.mkdir()
         config_file = config_dir / "config.toml"
-        config_file.write_text("[other]\nkey = \"value\"\n", encoding="utf-8")
+        config_file.write_text('[other]\nkey = "value"\n', encoding="utf-8")
         env: dict[str, str] = {}
         result = load_dependency_toml_env(
             project_dir=project_dir,
@@ -746,9 +746,7 @@ class TestEnsureDependencyConfigsForBranch:
         monkeypatch.setattr(dep_env_module.git_helpers, "is_git_repo", lambda _: True)
         main_config_dir = project_dir / "config"
         main_config_dir.mkdir()
-        (main_config_dir / "config.toml").write_text(
-            '[deps]\nmylib = "main"\n', encoding="utf-8"
-        )
+        (main_config_dir / "config.toml").write_text('[deps]\nmylib = "main"\n', encoding="utf-8")
         # Pre-create config with existing entry
         config_dir = project_dir / "config" / "feat"
         config_dir.mkdir(parents=True)
@@ -809,12 +807,11 @@ class TestEnsureDependencyConfigsForBranch:
         parent_config_dir = project_dir / "config" / "parent-branch"
         parent_config_dir.mkdir(parents=True)
         parent_config_file = parent_config_dir / "config.toml"
-        parent_config_file.write_text(
-            '[deps]\nmylib = "dev"\n', encoding="utf-8"
-        )
+        parent_config_file.write_text('[deps]\nmylib = "dev"\n', encoding="utf-8")
         # New branch should inherit parent's dep config, not use filesystem fallback
         ensure_dependency_configs_for_branch(
-            project_dir=project_dir, branch="child-branch",
+            project_dir=project_dir,
+            branch="child-branch",
             parent_branch="parent-branch",
         )
         config_file = project_dir / "config" / "child-branch" / "config.toml"
@@ -860,14 +857,11 @@ class TestEnsureDependencyConfigsForBranch:
         # Create parent workspace config with a .env file
         parent_config_dir = project_dir / "config" / "parent-branch"
         parent_config_dir.mkdir(parents=True)
-        (parent_config_dir / "config.toml").write_text(
-            '[deps]\nmylib = "dev"\n', encoding="utf-8"
-        )
-        (parent_config_dir / ".env").write_text(
-            "MY_VAR=from_parent\n", encoding="utf-8"
-        )
+        (parent_config_dir / "config.toml").write_text('[deps]\nmylib = "dev"\n', encoding="utf-8")
+        (parent_config_dir / ".env").write_text("MY_VAR=from_parent\n", encoding="utf-8")
         ensure_dependency_configs_for_branch(
-            project_dir=project_dir, branch="child-branch",
+            project_dir=project_dir,
+            branch="child-branch",
             parent_branch="parent-branch",
         )
         child_env_file = project_dir / "config" / "child-branch" / ".env"
@@ -893,18 +887,15 @@ class TestEnsureDependencyConfigsForBranch:
         parent_config_dir = project_dir / "config" / "parent-branch"
         parent_config_dir.mkdir(parents=True)
         parent_config_file = parent_config_dir / "config.toml"
-        parent_config_file.write_text(
-            '[deps]\nmylib = "dev"\n', encoding="utf-8"
-        )
+        parent_config_file.write_text('[deps]\nmylib = "dev"\n', encoding="utf-8")
         # Pre-create child workspace config with different content
         child_config_dir = project_dir / "config" / "child-branch"
         child_config_dir.mkdir(parents=True)
         child_config_file = child_config_dir / "config.toml"
-        child_config_file.write_text(
-            '[deps]\nmylib = "custom"\n', encoding="utf-8"
-        )
+        child_config_file.write_text('[deps]\nmylib = "custom"\n', encoding="utf-8")
         ensure_dependency_configs_for_branch(
-            project_dir=project_dir, branch="child-branch",
+            project_dir=project_dir,
+            branch="child-branch",
             parent_branch="parent-branch",
         )
         # Existing config should not be overwritten by parent
@@ -917,9 +908,7 @@ class TestEnsureDependencyConfigsForBranch:
         deps_dir.mkdir()
         config_dir = project_dir / "config"
         config_dir.mkdir()
-        (config_dir / "config.toml").write_text(
-            '[deps]\nmissing = "main"\n', encoding="utf-8"
-        )
+        (config_dir / "config.toml").write_text('[deps]\nmissing = "main"\n', encoding="utf-8")
 
         ensure_dependency_configs_for_branch(project_dir=project_dir, branch="feat")
 
@@ -942,9 +931,7 @@ class TestEnsureDependencyConfigsForBranch:
         subprocess.run(["git", "init", "-b", "main"], cwd=main_dir, env=env, check=True)
         monkeypatch.setattr(dep_env_module.git_helpers, "is_git_repo", lambda _: True)
 
-        ensure_dependency_configs_for_branch(
-            project_dir=project_dir, branch="feat"
-        )
+        ensure_dependency_configs_for_branch(project_dir=project_dir, branch="feat")
 
         config_file = project_dir / "config" / "feat" / "config.toml"
         assert not config_file.exists()
@@ -972,9 +959,7 @@ class TestSeedFromParentConfig:
         (parent_config_dir / "config.toml").write_text(
             '[deps]\nlib1 = "dev"\nlib2 = "v2"\n', encoding="utf-8"
         )
-        _seed_from_parent_config(
-            project_dir=project_dir, parent_branch="parent", branch="child"
-        )
+        _seed_from_parent_config(project_dir=project_dir, parent_branch="parent", branch="child")
         child_config_file = project_dir / "config" / "child" / "config.toml"
         assert child_config_file.exists()
         content = child_config_file.read_text(encoding="utf-8")
@@ -990,9 +975,7 @@ class TestSeedFromParentConfig:
         (parent_config_dir / "config.toml").write_text("", encoding="utf-8")
         (parent_config_dir / ".env").write_text("FOO=bar\n", encoding="utf-8")
         (parent_config_dir / ".env.local").write_text("BAZ=qux\n", encoding="utf-8")
-        _seed_from_parent_config(
-            project_dir=project_dir, parent_branch="parent", branch="child"
-        )
+        _seed_from_parent_config(project_dir=project_dir, parent_branch="parent", branch="child")
         child_config_dir = project_dir / "config" / "child"
         assert (child_config_dir / ".env").exists()
         assert (child_config_dir / ".env.local").exists()
@@ -1015,18 +998,14 @@ class TestSeedFromParentConfig:
         # Parent config
         parent_config_dir = project_dir / "config" / "parent"
         parent_config_dir.mkdir(parents=True)
-        (parent_config_dir / "config.toml").write_text(
-            '[deps]\nlib = "dev"\n', encoding="utf-8"
-        )
+        (parent_config_dir / "config.toml").write_text('[deps]\nlib = "dev"\n', encoding="utf-8")
         # Child config already exists with content
         child_config_dir = project_dir / "config" / "child"
         child_config_dir.mkdir(parents=True)
         (child_config_dir / "config.toml").write_text(
             '[deps]\nlib = "existing"\n', encoding="utf-8"
         )
-        _seed_from_parent_config(
-            project_dir=project_dir, parent_branch="parent", branch="child"
-        )
+        _seed_from_parent_config(project_dir=project_dir, parent_branch="parent", branch="child")
         content = (child_config_dir / "config.toml").read_text(encoding="utf-8")
         assert 'lib = "existing"' in content
 
@@ -1036,15 +1015,11 @@ class TestSeedFromParentConfig:
         deps_dir.mkdir()
         parent_config_dir = project_dir / "config" / "parent"
         parent_config_dir.mkdir(parents=True)
-        (parent_config_dir / "config.toml").write_text(
-            '[deps]\nlib = "dev"\n', encoding="utf-8"
-        )
+        (parent_config_dir / "config.toml").write_text('[deps]\nlib = "dev"\n', encoding="utf-8")
         # Child dir exists but is empty (e.g. created by mkdir)
         child_config_dir = project_dir / "config" / "child"
         child_config_dir.mkdir(parents=True)
-        _seed_from_parent_config(
-            project_dir=project_dir, parent_branch="parent", branch="child"
-        )
+        _seed_from_parent_config(project_dir=project_dir, parent_branch="parent", branch="child")
         assert (child_config_dir / "config.toml").exists()
 
     def test_does_not_copy_subdirectories(self, tmp_path: Path) -> None:
@@ -1056,9 +1031,7 @@ class TestSeedFromParentConfig:
         (parent_config_dir / "config.toml").write_text("", encoding="utf-8")
         # A subdirectory in parent config (should not be copied)
         (parent_config_dir / "subdir").mkdir()
-        _seed_from_parent_config(
-            project_dir=project_dir, parent_branch="parent", branch="child"
-        )
+        _seed_from_parent_config(project_dir=project_dir, parent_branch="parent", branch="child")
         child_config_dir = project_dir / "config" / "child"
         assert not (child_config_dir / "subdir").exists()
 
@@ -1213,9 +1186,7 @@ class TestUpdateAllProjectDependencyConfigs:
         project_dir = self._workspace_project(tmp_path)
         captured_envs: list[dict[str, str] | None] = []
 
-        def fake_current_branch(
-            _repo_dir: Path, *, env: dict[str, str] | None = None
-        ) -> str:
+        def fake_current_branch(_repo_dir: Path, *, env: dict[str, str] | None = None) -> str:
             captured_envs.append(env)
             return "main"
 
@@ -1300,7 +1271,7 @@ class TestEnsureConfigTomlFileCoverage:
         config_dir = project_dir / "config"
         config_dir.mkdir()
         config_file = config_dir / "config.toml"
-        config_file.write_text("[deps]\nfoo = \"bar\"\n", encoding="utf-8")
+        config_file.write_text('[deps]\nfoo = "bar"\n', encoding="utf-8")
         _ensure_config_toml_file(project_dir, None)
         # Content unchanged
         assert 'foo = "bar"' in config_file.read_text(encoding="utf-8")
@@ -1394,9 +1365,7 @@ class TestEnsureDependencyConfigsForBranchSkipsNone:
         dep_dir.mkdir(parents=True)
         config_dir = project_dir / "config"
         config_dir.mkdir()
-        (config_dir / "config.toml").write_text(
-            '[deps]\nmylib = "main"\n', encoding="utf-8"
-        )
+        (config_dir / "config.toml").write_text('[deps]\nmylib = "main"\n', encoding="utf-8")
 
         # Make _dependency_config_checkout_name return None
         monkeypatch.setattr(
@@ -1413,9 +1382,7 @@ class TestEnsureDependencyConfigsForBranchSkipsNone:
             lambda **kwargs: update_calls.append(kwargs),
         )
 
-        dep_env_module.ensure_dependency_configs_for_branch(
-            project_dir=project_dir, branch="feat"
-        )
+        dep_env_module.ensure_dependency_configs_for_branch(project_dir=project_dir, branch="feat")
         # No update calls since checkout_name was None
         assert update_calls == []
 
@@ -1439,7 +1406,6 @@ class TestDependencyConfigCheckoutNameHappyPath:
         assert result == "feat"
 
 
-
 class TestUpdateDependencyConfigsForBranchNoCheckout:
     def test_skips_dep_with_no_matching_checkout(
         self,
@@ -1454,9 +1420,7 @@ class TestUpdateDependencyConfigsForBranchNoCheckout:
         dep_dir = deps_dir / "orphan"
         dep_dir.mkdir()
         # No checkout directories at all - _dependency_config_checkout_name returns None
-        monkeypatch.setattr(
-            dep_env_module.git_helpers, "is_git_repo", lambda _: False
-        )
+        monkeypatch.setattr(dep_env_module.git_helpers, "is_git_repo", lambda _: False)
         update_dependency_configs_for_branch(project_dir=project_dir, branch="feat")
         # No config should be created
         config_file = project_dir / "config" / "feat" / "config.toml"
@@ -1482,7 +1446,7 @@ class TestSetTomlProjectName:
         assert "[deps]" in result
 
     def test_updates_existing_name(self) -> None:
-        content = "[project]\nname = \"old\"\n"
+        content = '[project]\nname = "old"\n'
         result = dep_env_module._set_toml_project_name(content, "new")
         assert 'name = "new"' in result
         assert "old" not in result
@@ -1497,7 +1461,7 @@ class TestSetTomlProjectName:
         assert project_idx < name_idx < deps_idx
 
     def test_appends_after_existing_keys(self) -> None:
-        content = "[project]\nalpha = \"1\"\n"
+        content = '[project]\nalpha = "1"\n'
         result = dep_env_module._set_toml_project_name(content, "beta")
         lines = result.splitlines()
         assert any("alpha" in ln for ln in lines)
@@ -1523,7 +1487,7 @@ class TestEnsureProjectNameInConfig:
         project_dir.mkdir()
         config_dir = project_dir / "config"
         config_dir.mkdir()
-        (config_dir / "config.toml").write_text("[deps]\nfoo = \"bar\"\n", encoding="utf-8")
+        (config_dir / "config.toml").write_text('[deps]\nfoo = "bar"\n', encoding="utf-8")
 
         dep_env_module.ensure_project_name_in_config(project_dir=project_dir, name="hello")
 

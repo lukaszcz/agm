@@ -64,19 +64,19 @@ from agm.agl.matchcompile.normalize import (
 )
 from agm.agl.modules.ids import ENTRY_ID, PRELUDE_ID
 from agm.agl.parser import parse_program
-from agm.agl.scope import resolve
-from agm.agl.scope.graph import resolve_graph
+from agm.agl.scope import resolve_module
+from agm.agl.scope.program import resolve_program
 from agm.agl.semantics.type_table import TypeTable
 from agm.agl.semantics.types import EnumType, IntType, Type, TypeTemplate
 from agm.agl.semantics.values import BoolValue, EnumValue, Value
 from agm.agl.syntax.nodes import Case
 from agm.agl.syntax.visitor import walk
 from agm.agl.typecheck import (
-    CheckedProgram,
+    CheckedModule,
     EnumOwnerForm,
     EnumOwnerFormKind,
-    check,
-    check_graph,
+    check_module,
+    check_program,
 )
 from tests.agl.ir_harness import make_graph_from_files
 from tests.agl.match_reference import reference_action
@@ -92,8 +92,8 @@ _CAPS = HostCapabilities(
 )
 
 
-def _compile(source: str) -> tuple[CheckedProgram, Case, CompiledCase]:
-    checked = check(resolve(parse_program(source)), _CAPS)
+def _compile(source: str) -> tuple[CheckedModule, Case, CompiledCase]:
+    checked = check_module(resolve_module(parse_program(source)), _CAPS)
     cases: list[Case] = []
 
     def collect(node: object) -> None:
@@ -108,7 +108,7 @@ def _compile(source: str) -> tuple[CheckedProgram, Case, CompiledCase]:
 
 def _compile_graph_case(tmp_path: Path, modules: dict[str, str]) -> CompiledCase:
     graph = make_graph_from_files(tmp_path, modules)
-    checked = check_graph(resolve_graph(graph), _CAPS).modules[ENTRY_ID]
+    checked = check_program(resolve_program(graph), _CAPS).modules[ENTRY_ID]
     cases: list[Case] = []
 
     def collect(node: object) -> None:
@@ -389,9 +389,7 @@ def test_every_arm_on_a_bottom_scrutinee_is_redundant() -> None:
 
     assert not any(isinstance(issue, NonExhaustiveIssue) for issue in compiled.issues)
     redundant = [issue for issue in compiled.issues if isinstance(issue, RedundantArmIssue)]
-    assert [issue.action_id for issue in redundant] == [
-        branch.node_id for branch in case.branches
-    ]
+    assert [issue.action_id for issue in redundant] == [branch.node_id for branch in case.branches]
 
 
 def test_duplicate_subsumed_and_uninhabited_arms_are_each_redundant() -> None:
@@ -556,8 +554,9 @@ def test_generated_nested_multi_column_matrices_match_the_reference() -> None:
         pair_type = cast(EnumType, compiled.normalized.root.type)
         pair_constructor = cast(
             EnumConstructor,
-            cast(ClosedSignature, signature_for_type(pair_type, checked.type_env.type_table))
-            .constructors[0],
+            cast(
+                ClosedSignature, signature_for_type(pair_type, checked.type_env.type_table)
+            ).constructors[0],
         )
         bit_type = cast(EnumType, pair_constructor.fields[0].type)
         values: tuple[Value, ...] = (

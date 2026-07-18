@@ -328,9 +328,7 @@ def _apply_coercion(value: Value, coercion: Coercion) -> Value:
                 raise InvalidIrError(
                     f"MapDictValues coercion requires DictValue, got {type(value).__name__}"
                 )
-            return DictValue(
-                {k: _apply_coercion(v, child_op) for k, v in value.entries.items()}
-            )
+            return DictValue({k: _apply_coercion(v, child_op) for k, v in value.entries.items()})
 
         case MapRecordFields(fields=field_coercions):
             if not isinstance(value, RecordValue):
@@ -413,8 +411,8 @@ class IrInterpreter:
         self._param_values: Mapping[SymbolId, Value] = (
             param_values if param_values is not None else {}
         )
-        self._registry: AgentRegistry = registry if registry is not None else AgentRegistry(
-            named={}, default_agent=None
+        self._registry: AgentRegistry = (
+            registry if registry is not None else AgentRegistry(named={}, default_agent=None)
         )
         self._strict_json: bool = strict_json
         # Global max-iters safety valve. ``None`` means the valve is off; a
@@ -424,9 +422,7 @@ class IrInterpreter:
         self._loop_limit = loop_limit
         self._shell_exec_timeout: float | None = shell_exec_timeout
         seeded_timeout = (
-            builtin_host_settings.get("timeout")
-            if builtin_host_settings is not None
-            else None
+            builtin_host_settings.get("timeout") if builtin_host_settings is not None else None
         )
         if seeded_timeout is not None:
             assert isinstance(seeded_timeout, EnumValue)
@@ -434,9 +430,7 @@ class IrInterpreter:
         elif shell_exec_timeout is None:
             self._timeout_setting = none_value()
         else:
-            self._timeout_setting = some_value(
-                TextValue(_format_timeout(shell_exec_timeout))
-            )
+            self._timeout_setting = some_value(TextValue(_format_timeout(shell_exec_timeout)))
         # Registers for the HOST-CONSUMED ``builtin var`` engine settings
         # (``runner``, ``log``, ``log-file``).  Unlike the three runtime-live
         # keys (which reuse ``_strict_json`` / ``_loop_limit`` /
@@ -468,11 +462,7 @@ class IrInterpreter:
         host_contract = self._host_contracts.get(contract_id)
         if host_contract is None or contract.codec_name in {"text", "json"}:
             return _parse_contract_output(raw, contract, effective_strict=effective_strict)
-        schema = (
-            host_contract.json_schema
-            if isinstance(host_contract.json_schema, dict)
-            else None
-        )
+        schema = host_contract.json_schema if isinstance(host_contract.json_schema, dict) else None
         return _call_custom_codec_parse(
             host_contract,
             contract,
@@ -529,9 +519,7 @@ class IrInterpreter:
         """Evaluate ``expr`` and require its result to be a ``BoolValue``."""
         value = self._eval(expr)
         if not isinstance(value, BoolValue):
-            raise InvalidIrError(
-                f"{context} expected BoolValue, got {type(value).__name__}"
-            )
+            raise InvalidIrError(f"{context} expected BoolValue, got {type(value).__name__}")
         return value.value
 
     def _eval_render_bool_option(self, expr: IrExpr, option_name: str) -> bool:
@@ -752,9 +740,7 @@ class IrInterpreter:
                 constructor_desc.fields
                 if callee_val.variant is None
                 else next(
-                    v.fields
-                    for v in constructor_desc.variants
-                    if v.name == callee_val.variant
+                    v.fields for v in constructor_desc.variants if v.name == callee_val.variant
                 )
             )
             fields = {
@@ -1115,8 +1101,7 @@ class IrInterpreter:
                 val = self._eval(val_expr)
                 if not isinstance(val, (RecordValue, ExceptionValue)):
                     raise InvalidIrError(
-                        f"IrField: expected RecordValue or ExceptionValue,"
-                        f" got {type(val).__name__}"
+                        f"IrField: expected RecordValue or ExceptionValue, got {type(val).__name__}"
                     )
                 return val.fields[field_name]
 
@@ -1328,25 +1313,19 @@ class IrInterpreter:
                 elif isinstance(coll, TextValue):
                     elements = [TextValue(ch) for ch in coll.value]
                 else:  # pragma: no cover
-                    raise InvalidIrError(
-                        f"IrIterInit: unexpected collection type {type(coll)!r}"
-                    )
+                    raise InvalidIrError(f"IrIterInit: unexpected collection type {type(coll)!r}")
                 return IteratorValue(elements=elements)
 
             case IrIterHasNext(iterator=iter_expr):
                 it = self._eval(iter_expr)
                 if not isinstance(it, IteratorValue):  # pragma: no cover
-                    raise InvalidIrError(
-                        f"IrIterHasNext: expected IteratorValue, got {type(it)!r}"
-                    )
+                    raise InvalidIrError(f"IrIterHasNext: expected IteratorValue, got {type(it)!r}")
                 return BoolValue(it.pos < len(it.elements))
 
             case IrIterNext(iterator=iter_expr):
                 it = self._eval(iter_expr)
                 if not isinstance(it, IteratorValue):  # pragma: no cover
-                    raise InvalidIrError(
-                        f"IrIterNext: expected IteratorValue, got {type(it)!r}"
-                    )
+                    raise InvalidIrError(f"IrIterNext: expected IteratorValue, got {type(it)!r}")
                 elem = it.elements[it.pos]
                 it.pos += 1
                 return elem
@@ -1357,8 +1336,7 @@ class IrInterpreter:
                     slot = self._frame.get(cap.symbol)
                     if slot is None:
                         raise InvalidIrError(
-                            f"IrMakeClosure: capture symbol_id={cap.symbol.value!r}"
-                            " not in frame"
+                            f"IrMakeClosure: capture symbol_id={cap.symbol.value!r} not in frame"
                         )
                     if cap.by_cell:
                         if not isinstance(slot, Cell):
@@ -1393,9 +1371,7 @@ class IrInterpreter:
                         return self._execute_direct_call(
                             node.function_id, node.arguments, node.location
                         )
-                    return self._execute_indirect_call(
-                        node.callee, node.arguments, node.location
-                    )
+                    return self._execute_indirect_call(node.callee, node.arguments, node.location)
                 except AglRaise as exc:
                     if exc.span is None:
                         exc.span = node.location

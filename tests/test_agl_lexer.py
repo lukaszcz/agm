@@ -263,8 +263,11 @@ class TestOperators:
         # ``::`` breaks an identifier scan (``:`` is a stop character), so a
         # ``name::`` tail does not glue into the identifier.
         assert tok("ask-request::[Review]") == [
-            ("NAME", "ask-request"), ("DCOLON", "::"), ("LSQB", "["),
-            ("NAME", "Review"), ("RSQB", "]"),
+            ("NAME", "ask-request"),
+            ("DCOLON", "::"),
+            ("LSQB", "["),
+            ("NAME", "Review"),
+            ("RSQB", "]"),
         ]
 
     def test_comma(self) -> None:
@@ -709,7 +712,7 @@ class TestSingleQuotedStrings:
         ]
 
     def test_double_quote_inside_single_quoted_string(self) -> None:
-        result = tok('\'"\'')
+        result = tok("'\"'")
         frags = [v for t, v in result if t == "STRING_FRAGMENT"]
         assert frags == ['"']
 
@@ -1548,9 +1551,7 @@ class TestTripleTemplatePositions:
             spanned = [
                 t
                 for t in tokenize(source)
-                if t.start_pos is not None
-                and t.end_pos is not None
-                and t.end_pos > t.start_pos
+                if t.start_pos is not None and t.end_pos is not None and t.end_pos > t.start_pos
             ]
             ends = sorted(spanned, key=lambda t: t.start_pos)
             for prev, nxt in zip(ends, ends[1:]):
@@ -1693,22 +1694,35 @@ class TestIdentifierUnicodeAndSymbols:
     def test_spaces_break_identifier_before_operator(self) -> None:
         # Whitespace is a stop character, so the operator tokens re-emerge.
         assert tok("a - b") == [
-            ("NAME", "a"), ("MINUS", "-"), ("NAME", "b"),
+            ("NAME", "a"),
+            ("MINUS", "-"),
+            ("NAME", "b"),
         ]
         assert tok("a -> b") == [
-            ("NAME", "a"), ("THIN_ARROW", "->"), ("NAME", "b"),
+            ("NAME", "a"),
+            ("THIN_ARROW", "->"),
+            ("NAME", "b"),
         ]
         assert tok("x != 3") == [
-            ("NAME", "x"), ("NEQ", "!="), ("INT", "3"),
+            ("NAME", "x"),
+            ("NEQ", "!="),
+            ("INT", "3"),
         ]
         assert tok("a + b") == [
-            ("NAME", "a"), ("PLUS", "+"), ("NAME", "b"),
+            ("NAME", "a"),
+            ("PLUS", "+"),
+            ("NAME", "b"),
         ]
         assert tok("a * b") == [
-            ("NAME", "a"), ("STAR", "*"), ("NAME", "b"),
+            ("NAME", "a"),
+            ("STAR", "*"),
+            ("NAME", "b"),
         ]
         assert tok("Pass => ()") == [
-            ("NAME", "Pass"), ("ARROW", "=>"), ("LPAR", "("), ("RPAR", ")"),
+            ("NAME", "Pass"),
+            ("ARROW", "=>"),
+            ("LPAR", "("),
+            ("RPAR", ")"),
         ]
 
     def test_string_quotes_inside_identifier(self) -> None:
@@ -1717,19 +1731,25 @@ class TestIdentifierUnicodeAndSymbols:
         assert tok("foo'bar") == [("NAME", "foo'bar")]
         # A leading quote (or one after whitespace) still starts a template.
         assert tok('"hello"') == [
-            ("TEMPLATE_START", '"'), ("STRING_FRAGMENT", "hello"),
+            ("TEMPLATE_START", '"'),
+            ("STRING_FRAGMENT", "hello"),
             ("TEMPLATE_END", '"'),
         ]
         assert tok("ask 'x'") == [
             ("NAME", "ask"),
-            ("TEMPLATE_START", "'"), ("STRING_FRAGMENT", "x"), ("TEMPLATE_END", "'"),
+            ("TEMPLATE_START", "'"),
+            ("STRING_FRAGMENT", "x"),
+            ("TEMPLATE_END", "'"),
         ]
 
     def test_structural_punctuators_break_identifier(self) -> None:
         # `.` `:` `,` `(` `)` etc. are stop characters even without spaces.
         assert tok("a.b") == [("NAME", "a"), ("DOT", "."), ("NAME", "b")]
         assert tok("f(x)") == [
-            ("NAME", "f"), ("LPAR", "("), ("NAME", "x"), ("RPAR", ")"),
+            ("NAME", "f"),
+            ("LPAR", "("),
+            ("NAME", "x"),
+            ("RPAR", ")"),
         ]
         assert tok("a:b") == [("NAME", "a"), ("COLON", ":"), ("NAME", "b")]
 
@@ -2062,8 +2082,23 @@ class TestV2Keywords:
         source = "let var set do until if else case of try catch raise as and or not"
         result = tok(source)
         types = [t for t, _ in result]
-        for kw in ("let", "var", "do", "until", "if", "else", "case",
-                   "of", "try", "catch", "raise", "as", "and", "or", "not"):
+        for kw in (
+            "let",
+            "var",
+            "do",
+            "until",
+            "if",
+            "else",
+            "case",
+            "of",
+            "try",
+            "catch",
+            "raise",
+            "as",
+            "and",
+            "or",
+            "not",
+        ):
             assert kw in types, f"keyword {kw!r} must still be reserved"
 
 

@@ -116,6 +116,7 @@ def source_env_files(
         sourced_env[key.decode("utf-8")] = value.decode("utf-8", errors="surrogateescape")
     return sourced_env
 
+
 def load_dotenv_file(path: Path) -> dict[str, str]:
     """Load dotenv assignments from *path* without executing shell code."""
 
@@ -123,10 +124,7 @@ def load_dotenv_file(path: Path) -> dict[str, str]:
         return {}
 
     parsed = dotenv_values(path, encoding="utf-8")
-    return {
-        key: value if value is not None else ""
-        for key, value in parsed.items()
-    }
+    return {key: value if value is not None else "" for key, value in parsed.items()}
 
 
 def load_dotenv_files(

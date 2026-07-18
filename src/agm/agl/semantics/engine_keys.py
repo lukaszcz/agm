@@ -25,9 +25,7 @@ _TYPE_BY_KIND: dict[EngineKeyKind, Type] = {
 }
 
 # Lookup: kebab key name → resolved AgL type.
-_ENGINE_KEY_TYPES: dict[str, Type] = {
-    name: _TYPE_BY_KIND[kind] for name, kind in ENGINE_KEY_KINDS
-}
+_ENGINE_KEY_TYPES: dict[str, Type] = {name: _TYPE_BY_KIND[kind] for name, kind in ENGINE_KEY_KINDS}
 
 
 def get_engine_key_type(name: str) -> Type | None:

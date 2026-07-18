@@ -36,9 +36,7 @@ class TestRunSetup:
             project_setup, "require_current_project_dir", lambda cwd=None: project_dir
         )
         monkeypatch.setattr(project_setup, "current_workspace", lambda pd, cwd=None, env=None: None)
-        monkeypatch.setattr(
-            project_setup.git_helpers, "current_branch", lambda p, env=None: "main"
-        )
+        monkeypatch.setattr(project_setup.git_helpers, "current_branch", lambda p, env=None: "main")
         monkeypatch.setattr(
             project_setup,
             "load_workspace_env",
@@ -63,9 +61,7 @@ class TestRunSetup:
             project_setup, "require_current_project_dir", lambda cwd=None: project_dir
         )
         monkeypatch.setattr(project_setup, "current_workspace", lambda pd, cwd=None, env=None: None)
-        monkeypatch.setattr(
-            project_setup.git_helpers, "current_branch", lambda p, env=None: "main"
-        )
+        monkeypatch.setattr(project_setup.git_helpers, "current_branch", lambda p, env=None: "main")
         monkeypatch.setattr(
             project_setup,
             "load_workspace_env",
@@ -101,9 +97,7 @@ class TestRunSetup:
             project_setup, "require_current_project_dir", lambda cwd=None: project_dir
         )
         monkeypatch.setattr(project_setup, "current_workspace", lambda pd, cwd=None, env=None: None)
-        monkeypatch.setattr(
-            project_setup.git_helpers, "current_branch", lambda p, env=None: "main"
-        )
+        monkeypatch.setattr(project_setup.git_helpers, "current_branch", lambda p, env=None: "main")
         monkeypatch.setattr(
             project_setup,
             "load_workspace_env",
@@ -134,9 +128,7 @@ class TestRunSetup:
             project_setup, "require_current_project_dir", lambda cwd=None: project_dir
         )
         monkeypatch.setattr(project_setup, "current_workspace", lambda pd, cwd=None, env=None: None)
-        monkeypatch.setattr(
-            project_setup.git_helpers, "current_branch", lambda p, env=None: "main"
-        )
+        monkeypatch.setattr(project_setup.git_helpers, "current_branch", lambda p, env=None: "main")
         monkeypatch.setattr(
             project_setup,
             "load_workspace_env",
@@ -165,9 +157,7 @@ class TestRunSetup:
             project_setup, "require_current_project_dir", lambda cwd=None: project_dir
         )
         monkeypatch.setattr(project_setup, "current_workspace", lambda pd, cwd=None, env=None: None)
-        monkeypatch.setattr(
-            project_setup.git_helpers, "current_branch", lambda p, env=None: "main"
-        )
+        monkeypatch.setattr(project_setup.git_helpers, "current_branch", lambda p, env=None: "main")
         monkeypatch.setattr(
             project_setup,
             "load_workspace_env",
@@ -205,9 +195,7 @@ class TestLoadCurrentConfigEnvWithNoResult:
         repo = project / "repo"
         repo.mkdir(parents=True)
         monkeypatch.setattr(setup_module, "require_current_project_dir", lambda cwd=None: project)
-        monkeypatch.setattr(
-            setup_module, "current_workspace", lambda pd, cwd=None, env=None: None
-        )
+        monkeypatch.setattr(setup_module, "current_workspace", lambda pd, cwd=None, env=None: None)
 
         env_captured: list[dict[str, Any]] = []
 
@@ -242,9 +230,7 @@ class TestLoadCurrentConfigEnvWithNoResult:
         plain = tmp_path / "plain"
         plain.mkdir()
         monkeypatch.setattr(setup_module, "require_current_project_dir", lambda cwd=None: plain)
-        monkeypatch.setattr(
-            setup_module, "current_workspace", lambda pd, cwd=None, env=None: None
-        )
+        monkeypatch.setattr(setup_module, "current_workspace", lambda pd, cwd=None, env=None: None)
         monkeypatch.setattr(
             setup_module, "load_config_env", lambda pd, br, *, workspace_dir, env=None: {}
         )
@@ -277,9 +263,7 @@ class TestRunSetupLabelFromProjectDir:
             setup_module, "require_current_project_dir", lambda cwd=None: project_dir
         )
         monkeypatch.setattr(setup_module, "current_workspace", lambda pd, cwd=None, env=None: None)
-        monkeypatch.setattr(
-            setup_module.git_helpers, "current_branch", lambda p, env=None: "main"
-        )
+        monkeypatch.setattr(setup_module.git_helpers, "current_branch", lambda p, env=None: "main")
         monkeypatch.setattr(
             setup_module,
             "load_workspace_env",
@@ -314,9 +298,7 @@ class TestLoadCurrentConfigEnvRepoDirFallback:
         cwd.mkdir()
 
         monkeypatch.setattr(setup_module, "require_current_project_dir", lambda cwd=None: project)
-        monkeypatch.setattr(
-            setup_module, "current_workspace", lambda pd, cwd=None, env=None: None
-        )
+        monkeypatch.setattr(setup_module, "current_workspace", lambda pd, cwd=None, env=None: None)
 
         captured_env: dict[str, Any] = {}
 
@@ -353,9 +335,7 @@ class TestRunSetupNoScripts:
             setup_module, "require_current_project_dir", lambda cwd=None: project_dir
         )
         monkeypatch.setattr(setup_module, "current_workspace", lambda pd, cwd=None, env=None: None)
-        monkeypatch.setattr(
-            setup_module.git_helpers, "current_branch", lambda p, env=None: "main"
-        )
+        monkeypatch.setattr(setup_module.git_helpers, "current_branch", lambda p, env=None: "main")
         monkeypatch.setattr(
             setup_module,
             "load_workspace_env",
@@ -379,9 +359,7 @@ class TestLoadCurrentConfigEnvWhenResultNoneNoRepoDir:
         (project / ".agm").mkdir()
 
         monkeypatch.setattr(setup_module, "require_current_project_dir", lambda cwd=None: project)
-        monkeypatch.setattr(
-            setup_module, "current_workspace", lambda pd, cwd=None, env=None: None
-        )
+        monkeypatch.setattr(setup_module, "current_workspace", lambda pd, cwd=None, env=None: None)
 
         env_captured: list[dict[str, Any]] = []
 
@@ -425,12 +403,8 @@ class TestRunSetupLabelValueErrorFallback:
         monkeypatch.setattr(
             setup_module, "require_current_project_dir", lambda cwd=None: project_dir
         )
-        monkeypatch.setattr(
-            setup_module, "current_workspace", lambda pd, cwd=None, env=None: None
-        )
-        monkeypatch.setattr(
-            setup_module.git_helpers, "current_branch", lambda p, env=None: "main"
-        )
+        monkeypatch.setattr(setup_module, "current_workspace", lambda pd, cwd=None, env=None: None)
+        monkeypatch.setattr(setup_module.git_helpers, "current_branch", lambda p, env=None: "main")
         monkeypatch.setattr(
             setup_module,
             "load_workspace_env",
@@ -468,9 +442,7 @@ class TestLoadCurrentConfigEnvFallbackNoResult:
         (project2 / "worktrees").mkdir()
 
         monkeypatch.setattr(setup_module, "require_current_project_dir", lambda cwd=None: project2)
-        monkeypatch.setattr(
-            setup_module, "current_workspace", lambda pd, cwd=None, env=None: None
-        )
+        monkeypatch.setattr(setup_module, "current_workspace", lambda pd, cwd=None, env=None: None)
 
         env_captured: list[dict[str, Any]] = []
 
@@ -481,9 +453,7 @@ class TestLoadCurrentConfigEnvFallbackNoResult:
             workspace_dir: Path,
             env: Any = None,
         ) -> dict[str, str]:
-            env_captured.append(
-                {"branch": branch, "workspace_dir": workspace_dir}
-            )
+            env_captured.append({"branch": branch, "workspace_dir": workspace_dir})
             return {}
 
         monkeypatch.setattr(setup_module, "load_config_env", fake_load_config_env)
@@ -518,9 +488,7 @@ class TestRunSetupWithCurrentWorkspaceResult:
         monkeypatch.setattr(
             setup_module, "current_workspace", lambda pd, cwd=None, env=None: workspace
         )
-        monkeypatch.setattr(
-            setup_module.git_helpers, "current_branch", lambda p, env=None: "main"
-        )
+        monkeypatch.setattr(setup_module.git_helpers, "current_branch", lambda p, env=None: "main")
         monkeypatch.setattr(
             setup_module,
             "load_workspace_env",
@@ -546,12 +514,8 @@ class TestRunSetupWithCurrentWorkspaceResult:
         monkeypatch.setattr(
             setup_module, "require_current_project_dir", lambda cwd=None: project_dir
         )
-        monkeypatch.setattr(
-            setup_module, "current_workspace", lambda pd, cwd=None, env=None: None
-        )
-        monkeypatch.setattr(
-            setup_module.git_helpers, "current_branch", lambda p, env=None: "dev"
-        )
+        monkeypatch.setattr(setup_module, "current_workspace", lambda pd, cwd=None, env=None: None)
+        monkeypatch.setattr(setup_module.git_helpers, "current_branch", lambda p, env=None: "dev")
         monkeypatch.setattr(
             setup_module,
             "load_workspace_env",
@@ -582,20 +546,14 @@ class TestRunSetupWithCurrentWorkspaceResult:
         monkeypatch.setattr(
             setup_module, "require_current_project_dir", lambda cwd=None: project_dir
         )
-        monkeypatch.setattr(
-            setup_module, "current_workspace", lambda pd, cwd=None, env=None: None
-        )
-        monkeypatch.setattr(
-            setup_module.git_helpers, "current_branch", lambda p, env=None: "main"
-        )
+        monkeypatch.setattr(setup_module, "current_workspace", lambda pd, cwd=None, env=None: None)
+        monkeypatch.setattr(setup_module.git_helpers, "current_branch", lambda p, env=None: "main")
         monkeypatch.setattr(
             setup_module,
             "load_workspace_env",
             lambda pd, branch, workspace_dir, env=None: dict(os.environ),
         )
-        monkeypatch.setattr(
-            setup_module, "require_success", lambda cmd, cwd=None, env=None: None
-        )
+        monkeypatch.setattr(setup_module, "require_success", lambda cmd, cwd=None, env=None: None)
         monkeypatch.setattr(
             setup_module,
             "project_config_dir",

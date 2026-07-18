@@ -139,9 +139,7 @@ class TestCommitConfigDirChanges:
         workspace_config = config_dir / "feature"
         workspace_config.mkdir()
 
-        def fake_exact_repo_root(
-            path: Path, *, env: dict[str, str] | None = None
-        ) -> Path:
+        def fake_exact_repo_root(path: Path, *, env: dict[str, str] | None = None) -> Path:
             return config_dir
 
         def fake_add_paths(
@@ -171,7 +169,9 @@ class TestCommitConfigDirChanges:
         monkeypatch.setattr(config_git, "require_success", fake_require_success)
 
         commit_config_dir_changes(
-            project_dir, "chore: test", add_paths=[workspace_config],
+            project_dir,
+            "chore: test",
+            add_paths=[workspace_config],
         )
 
         assert commands_run[0][1] is None
@@ -202,16 +202,12 @@ class TestCommitConfigDirChangesRealRepo:
         project_dir = tmp_path / "proj"
         config_dir = project_dir / "config"
         config_dir.mkdir(parents=True)
-        subprocess.run(
-            ["git", "-C", str(config_dir), "init", "-q"], check=True, env=env
-        )
+        subprocess.run(["git", "-C", str(config_dir), "init", "-q"], check=True, env=env)
         # No local identity is configured: the commit must rely on the
         # global config reachable through HOME.
         return project_dir, env
 
-    def test_commits_new_workspace_config_using_env_identity(
-        self, tmp_path: Path
-    ) -> None:
+    def test_commits_new_workspace_config_using_env_identity(self, tmp_path: Path) -> None:
         project_dir, env = self._make_repo(tmp_path)
         config_dir = project_dir / "config"
         workspace_config = config_dir / "feature"
@@ -268,18 +264,14 @@ class TestCommitConfigDirChangesRealRepo:
         )
         assert log.stdout.strip() == ""
 
-    def test_add_paths_commit_excludes_unrelated_staged_changes(
-        self, tmp_path: Path
-    ) -> None:
+    def test_add_paths_commit_excludes_unrelated_staged_changes(self, tmp_path: Path) -> None:
         project_dir, env = self._make_repo(tmp_path)
         config_dir = project_dir / "config"
 
         # An unrelated file is staged before the scoped commit runs.
         unrelated = config_dir / "unrelated.txt"
         unrelated.write_text("hand-edited\n", encoding="utf-8")
-        subprocess.run(
-            ["git", "-C", str(config_dir), "add", "unrelated.txt"], check=True, env=env
-        )
+        subprocess.run(["git", "-C", str(config_dir), "add", "unrelated.txt"], check=True, env=env)
 
         workspace_config = config_dir / "feature"
         workspace_config.mkdir()
@@ -340,9 +332,7 @@ class TestCommitConfigDirChangesRealRepo:
         )
         assert log.stdout.strip() == ""
 
-    def test_config_dir_does_not_exist_does_nothing(
-        self, tmp_path: Path
-    ) -> None:
+    def test_config_dir_does_not_exist_does_nothing(self, tmp_path: Path) -> None:
         """Config dir being absent is silently ignored — no exception, no commit."""
         project_dir = tmp_path / "proj"
         project_dir.mkdir()
@@ -350,9 +340,7 @@ class TestCommitConfigDirChangesRealRepo:
         # calling git (containing_root checks path.exists()), so env={} is safe.
         commit_config_dir_changes(project_dir, "chore: test", env={})
 
-    def test_config_dir_not_git_repo_does_nothing(
-        self, tmp_path: Path
-    ) -> None:
+    def test_config_dir_not_git_repo_does_nothing(self, tmp_path: Path) -> None:
         """Config dir that exists but is not a git repo is silently ignored."""
         _, env = self._make_repo(tmp_path)
         # Create a separate project whose config dir has no git init.
@@ -365,9 +353,7 @@ class TestCommitConfigDirChangesRealRepo:
         # No git repo should have been created as a side effect.
         assert not (config_dir / ".git").exists()
 
-    def test_no_add_paths_commits_tracked_changes_and_config_toml(
-        self, tmp_path: Path
-    ) -> None:
+    def test_no_add_paths_commits_tracked_changes_and_config_toml(self, tmp_path: Path) -> None:
         """Without add_paths, tracked modifications and new config.toml are committed."""
         project_dir, env = self._make_repo(tmp_path)
         config_dir = project_dir / "config"
@@ -375,9 +361,7 @@ class TestCommitConfigDirChangesRealRepo:
         # Track a file, then modify it.
         tracked_file = config_dir / "settings.toml"
         tracked_file.write_text("[base]\n", encoding="utf-8")
-        subprocess.run(
-            ["git", "-C", str(config_dir), "add", "settings.toml"], check=True, env=env
-        )
+        subprocess.run(["git", "-C", str(config_dir), "add", "settings.toml"], check=True, env=env)
         subprocess.run(
             ["git", "-C", str(config_dir), "commit", "-m", "initial"], check=True, env=env
         )
@@ -407,9 +391,7 @@ class TestCommitConfigDirChangesRealRepo:
         )
         assert "chore: update config" in log.stdout
 
-    def test_no_add_paths_commits_tracked_changes_without_config_toml(
-        self, tmp_path: Path
-    ) -> None:
+    def test_no_add_paths_commits_tracked_changes_without_config_toml(self, tmp_path: Path) -> None:
         """Without add_paths and no config.toml present, only tracked changes commit."""
         project_dir, env = self._make_repo(tmp_path)
         config_dir = project_dir / "config"
@@ -417,9 +399,7 @@ class TestCommitConfigDirChangesRealRepo:
         # Track a file, then modify it; no config.toml exists.
         tracked_file = config_dir / "settings.toml"
         tracked_file.write_text("[base]\n", encoding="utf-8")
-        subprocess.run(
-            ["git", "-C", str(config_dir), "add", "settings.toml"], check=True, env=env
-        )
+        subprocess.run(["git", "-C", str(config_dir), "add", "settings.toml"], check=True, env=env)
         subprocess.run(
             ["git", "-C", str(config_dir), "commit", "-m", "initial"], check=True, env=env
         )
@@ -437,9 +417,7 @@ class TestCommitConfigDirChangesRealRepo:
         assert "settings.toml" in committed.stdout
         assert "config.toml" not in committed.stdout
 
-    def test_no_staged_changes_does_not_create_commit(
-        self, tmp_path: Path
-    ) -> None:
+    def test_no_staged_changes_does_not_create_commit(self, tmp_path: Path) -> None:
         """When nothing is staged after _add_paths, no commit is created."""
         project_dir, env = self._make_repo(tmp_path)
         config_dir = project_dir / "config"
@@ -462,9 +440,7 @@ class TestCommitConfigDirChangesRealRepo:
         )
         assert log.stdout.strip() == ""
 
-    def test_empty_add_paths_does_not_create_commit(
-        self, tmp_path: Path
-    ) -> None:
+    def test_empty_add_paths_does_not_create_commit(self, tmp_path: Path) -> None:
         """Passing add_paths=[] causes an early return with no git operations."""
         project_dir, env = self._make_repo(tmp_path)
         config_dir = project_dir / "config"
@@ -472,9 +448,7 @@ class TestCommitConfigDirChangesRealRepo:
         # Stage a file so a commit would be possible if add_paths were not empty.
         staged_file = config_dir / "something.txt"
         staged_file.write_text("content\n", encoding="utf-8")
-        subprocess.run(
-            ["git", "-C", str(config_dir), "add", "something.txt"], check=True, env=env
-        )
+        subprocess.run(["git", "-C", str(config_dir), "add", "something.txt"], check=True, env=env)
 
         commit_config_dir_changes(project_dir, "chore: test", add_paths=[], env=env)
 

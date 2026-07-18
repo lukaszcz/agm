@@ -290,10 +290,8 @@ class TestLiveHostReconfiguration:
         policy = HostSettingsPolicy(
             build_runner=lambda command: lambda request: AgentResponse(content=command),
             resolve_trace_path=lambda enabled, log_file: (
-                Path(log_file) if log_file is not None else trace_path
-            )
-            if enabled
-            else None,
+                (Path(log_file) if log_file is not None else trace_path) if enabled else None
+            ),
         )
         s = _session(host_settings_policy=policy, trace_path=trace_path)
         _ok(s, "import std.config")

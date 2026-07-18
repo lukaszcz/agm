@@ -19,7 +19,7 @@ from agm.sandbox import srt
 DEFAULT_MEMORY_LIMIT = "32G"
 DEFAULT_SWAP_LIMIT = "0"
 _SYSTEMD_DELEGATED_CGROUP_BOOTSTRAP = (
-    'CG=/sys/fs/cgroup$(cut -d: -f3 /proc/self/cgroup); '
+    "CG=/sys/fs/cgroup$(cut -d: -f3 /proc/self/cgroup); "
     'mkdir -p "${CG}/init"; '
     'echo $$ > "${CG}/init/cgroup.procs"; '
     'echo "+memory" > "${CG}/cgroup.subtree_control"; '

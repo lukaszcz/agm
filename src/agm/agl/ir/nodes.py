@@ -737,9 +737,7 @@ class IrLiteralCaseKey:
             value = decimal.Decimal(value)
             object.__setattr__(self, "scalar_value", value)
         if not is_canonical_literal_scalar(self.kind, value):
-            raise ValueError(
-                f"invalid scalar {value!r} for literal case kind {self.kind.name!r}"
-            )
+            raise ValueError(f"invalid scalar {value!r} for literal case kind {self.kind.name!r}")
 
 
 IrCaseKey: TypeAlias = IrEnumCaseKey | IrLiteralCaseKey

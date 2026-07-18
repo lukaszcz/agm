@@ -23,6 +23,22 @@ def _make_param(
 
 
 # ---------------------------------------------------------------------------
+# Source discovery
+# ---------------------------------------------------------------------------
+
+
+class TestSourceDiscovery:
+    def test_discovers_param_using_the_standard_library(self) -> None:
+        from agm.cli_support.exec_params import discover_params_from_source
+
+        params = discover_params_from_source(
+            "param selected: Option[bool] = Option::Some(value = true)\nselected"
+        )
+
+        assert [param.name for param in params] == ["selected"]
+
+
+# ---------------------------------------------------------------------------
 # param_flag
 # ---------------------------------------------------------------------------
 

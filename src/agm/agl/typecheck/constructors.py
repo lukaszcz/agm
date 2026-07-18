@@ -12,7 +12,7 @@ from collections.abc import Mapping
 from typing import Literal, Protocol
 
 from agm.agl.modules.ids import ModuleId
-from agm.agl.scope.symbols import BindingRef, ConstructorRef, ResolvedProgram
+from agm.agl.scope.symbols import BindingRef, ConstructorRef, ModuleResolution
 from agm.agl.semantics.types import (
     EnumType,
     ExceptionType,
@@ -43,7 +43,7 @@ class ConstructorCheckCtx(Protocol):
     """The minimal _Checker surface the constructor checker needs."""
 
     _env: TypeEnvironment
-    _resolved: ResolvedProgram
+    _resolved: ModuleResolution
     _current_type_vars: frozenset[str]
 
     def _record_constructor_call_binding(self, node_id: int, binding: dict[str, Expr]) -> None: ...
@@ -59,9 +59,7 @@ class ConstructorCheckCtx(Protocol):
 
     def _check_expr(self, expr: Expr, *, expected: Type | None) -> Type: ...
 
-    def _assert_assignable(
-        self, value_type: Type, target_type: Type, span: SourceSpan
-    ) -> None: ...
+    def _assert_assignable(self, value_type: Type, target_type: Type, span: SourceSpan) -> None: ...
 
     def _constrain_argument(
         self,
@@ -166,7 +164,7 @@ class ConstructorChecker:
         resolved_owner_name = self._ctx._env.resolve_constructor_owner_name(owner_name)
         if resolved_owner_name is not None:
             owner_name = resolved_owner_name
-        # Cross-module callers may supply the graph-table signature up front;
+        # Cross-module callers may supply the program-table signature up front;
         # otherwise resolve it through the constructor's recorded owner module.
         if sig is None:
             imported_gdef = self._ctx._env.get_generic_type_from_module(
@@ -215,9 +213,7 @@ class ConstructorChecker:
         if sig is not None:
             return sig, None, owner_name
         imported = self._ctx._env.get_open_imported_generic_type(owner_name)
-        assert imported is not None, (
-            f"No constructor signature for {owner_name}.{variant}"
-        )
+        assert imported is not None, f"No constructor signature for {owner_name}.{variant}"
         module_id, source_name, imported_gdef = imported
         sig = self._ctx._env.get_ctor_sig_from_module(module_id, source_name, variant)
         assert sig is not None, f"No constructor signature for {owner_name}.{variant}"
@@ -316,8 +312,7 @@ class ConstructorChecker:
         )
         if generic_constructor is None:
             raise AglTypeError(
-                f"'{owner_name}' is not a generic constructor and does not accept "
-                "type arguments.",
+                f"'{owner_name}' is not a generic constructor and does not accept type arguments.",
                 span=span,
             )
         gdef, sig, type_params = generic_constructor
@@ -447,9 +442,7 @@ class ConstructorChecker:
             engine.complete_from_context(
                 produced,
                 expected,
-                engine.origin(
-                    span, role=ConstraintRole.EXPECTED_RESULT, subject=owner_name
-                ),
+                engine.origin(span, role=ConstraintRole.EXPECTED_RESULT, subject=owner_name),
             )
         self._ctx._record_constructor_call_binding(node.node_id, dict(bound_exprs))
         if hole_indices:
@@ -555,9 +548,7 @@ class ConstructorChecker:
         Falls back to the unqualified import map for cross-module types that
         are open-imported but not registered in the local environment.
         """
-        owner = self._ctx._env.resolve_type_by_module_id(
-            ref.owner_module_id, ref.owner_name
-        )
+        owner = self._ctx._env.resolve_type_by_module_id(ref.owner_module_id, ref.owner_name)
         if owner is None:
             owner = self._ctx._env.get_type(ref.owner_name)
         assert isinstance(owner, (RecordType, EnumType, ExceptionType)), (
@@ -591,11 +582,11 @@ class ConstructorChecker:
             )
             return gdef, sig, gdef.type_params
 
-        source = (
-            self._ctx._env.source_type_template_qname(owner_module_id, owner_name)
-            if owner_module_id is not None
-            else self._ctx._env.source_type_template(owner_name)
-        )
+        if owner_module_id is not None:
+            source = self._ctx._env.source_type_template_qname(owner_module_id, owner_name)
+        else:
+            owner_form = self._ctx._env.resolve_unqualified_enum_owner_form(owner_name)
+            source = None if owner_form is None else owner_form.type_template
         if source is None or not isinstance(source.template, EnumType):
             return None
         target = source.template
@@ -658,9 +649,7 @@ class ConstructorChecker:
         enum_type = self._resolve_qualified_enum_owner(
             owner_name, variant, span, owner_module_id=owner_module_id
         )
-        return self.check_constructor_as_value(
-            owner=enum_type, variant=variant, span=span
-        )
+        return self.check_constructor_as_value(owner=enum_type, variant=variant, span=span)
 
     # --- Resolve qualified enum owner (private helper) ---
 
@@ -677,7 +666,7 @@ class ConstructorChecker:
         Scope records ``Owner::member`` for any declared type name without
         checking enum-ness or variant existence, so both are validated here.
         When ``owner_module_id`` is given (cross-module constructor ref), look up
-        directly in the graph type table instead of the unqualified import map.
+        directly in the program type table instead of the unqualified import map.
         """
         if owner_module_id is not None:
             enum_type = self._ctx._env.resolve_type_by_module_id(owner_module_id, owner_name)
@@ -784,7 +773,11 @@ class ConstructorChecker:
             owner_name, variant, span, owner_module_id=owner_module_id
         )
         return self._check_constructor_call(
-            owner=enum_type, variant=variant, positional=positional, named=named, span=span,
+            owner=enum_type,
+            variant=variant,
+            positional=positional,
+            named=named,
+            span=span,
             node=node,
             hole_indices=hole_indices,
         )
@@ -844,7 +837,7 @@ class ConstructorChecker:
             )
             assert sig is not None, (
                 f"GenericTypeDef '{callee_ref.name}' in '{callee_ref.module_id.dotted()}' "
-                "has no constructor signature in the graph table"
+                "has no constructor signature in the program table"
             )
             return self.check_generic_constructor_as_value(
                 ctor_ref=ConstructorRef(
@@ -950,8 +943,7 @@ class ConstructorChecker:
             )
         if node.type_args:
             raise AglTypeError(
-                f"'{callee_ref.name}' is not a generic type and does not accept "
-                "type arguments.",
+                f"'{callee_ref.name}' is not a generic type and does not accept type arguments.",
                 span=node.span,
             )
         if isinstance(owner_type, EnumType):
@@ -961,8 +953,13 @@ class ConstructorChecker:
             )
         self._reject_abstract_exception_constructor(owner_type, node.span)
         return self._check_constructor_call(
-            owner=owner_type, variant=None, positional=node.args, named=node.named_args,
-            span=node.span, node=node, hole_indices=hole_indices,
+            owner=owner_type,
+            variant=None,
+            positional=node.args,
+            named=node.named_args,
+            span=node.span,
+            node=node,
+            hole_indices=hole_indices,
         )
 
     # --- Unqualified constructor callee call (public entry point) ---
@@ -1045,8 +1042,13 @@ class ConstructorChecker:
         owner = self.resolve_constructor_owner(ctor_ref, node.span)
         self._reject_abstract_exception_constructor(owner, node.span)
         return self._check_constructor_call(
-            owner=owner, variant=ctor_ref.variant, positional=node.args, named=node.named_args,
-            span=node.span, node=node, hole_indices=hole_indices,
+            owner=owner,
+            variant=ctor_ref.variant,
+            positional=node.args,
+            named=node.named_args,
+            span=node.span,
+            node=node,
+            hole_indices=hole_indices,
         )
 
     # --- Qualified constructor callee call (public entry point) ---
@@ -1060,9 +1062,9 @@ class ConstructorChecker:
     ) -> Type:
         """Handle a Call whose callee is a qualified constructor VarRef."""
         assert isinstance(node.callee, VarRef)
-        owner_name, variant, owner_module_id = (
-            self._ctx._resolved.qualified_constructor_refs[node.callee.node_id]
-        )
+        owner_name, variant, owner_module_id = self._ctx._resolved.qualified_constructor_refs[
+            node.callee.node_id
+        ]
         type_args: tuple[TypeExpr, ...] = ()
         if (
             node.callee.type_qualifier is not None
@@ -1070,8 +1072,12 @@ class ConstructorChecker:
         ):
             type_args = node.callee.type_qualifier.type_args
         return self._resolve_qualified_constructor_and_call(
-            owner_name=owner_name, variant=variant, owner_module_id=owner_module_id,
-            positional=node.args, named=node.named_args, span=node.span,
+            owner_name=owner_name,
+            variant=variant,
+            owner_module_id=owner_module_id,
+            positional=node.args,
+            named=node.named_args,
+            span=node.span,
             node=node,
             expected=expected,
             type_args=type_args,
@@ -1084,9 +1090,10 @@ class ConstructorChecker:
         self, owner: RecordType | EnumType | ExceptionType, span: SourceSpan
     ) -> None:
         owner = self._ctx._zonk_constructor_owner(owner)
-        if isinstance(owner, ExceptionType) and self._ctx._env.type_table.exception_def(
-            owner
-        ).abstract:
+        if (
+            isinstance(owner, ExceptionType)
+            and self._ctx._env.type_table.exception_def(owner).abstract
+        ):
             raise AglTypeError(
                 "The abstract 'Exception' base type is not constructible. "
                 "Use a concrete exception type (e.g. 'Abort').",

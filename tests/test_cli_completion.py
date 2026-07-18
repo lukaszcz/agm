@@ -216,9 +216,9 @@ def test_complete_run_command_lists_executables_and_paths(
     monkeypatch.chdir(cwd)
 
     assert completion.complete_run_command(_make_ctx(), "np") == ["npm"]
-    assert completion.complete_run_command(
-        _make_ctx(run_command_args=["npm"]), "pack"
-    ) == ["package.json"]
+    assert completion.complete_run_command(_make_ctx(run_command_args=["npm"]), "pack") == [
+        "package.json"
+    ]
 
 
 def test_complete_run_command_lists_executables_without_home(
@@ -870,9 +870,7 @@ class TestCompleteRunCommand:
         result = completion.complete_run_command(_make_ctx(), "")
         assert result == []
 
-    def test_returns_empty_on_path_iteration_error(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_returns_empty_on_path_iteration_error(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("PATH", "/broken")
         monkeypatch.setattr(
             completion,
@@ -1277,9 +1275,7 @@ class TestCompleteRunCommandCtx:
         (work / "file.txt").write_text("x")
         monkeypatch.chdir(work)
 
-        result = completion.complete_run_command(
-            _make_ctx(run_command_args=["python"]), "f"
-        )
+        result = completion.complete_run_command(_make_ctx(run_command_args=["python"]), "f")
         assert result == ["file.txt"]
 
 
@@ -1342,7 +1338,7 @@ class TestPathCandidatesValueError:
         link.symlink_to(outside)
         monkeypatch.chdir(work)
 
-        # incomplete="ext/t" => parent="ext" => base_dir = resolve(work/ext) = outside
+        # incomplete="ext/t" => parent="ext" => base_dir = resolve_module(work/ext) = outside
         # Iterating outside/ finds target.txt which is not relative to work
         result = completion._path_candidates("ext/t")
         # Should use absolute path for display
@@ -1491,7 +1487,7 @@ class TestExecParamCompletionItems:
 
         monkeypatch.setattr(
             PipelineDriver,
-            "prepare",
+            "prepare_program",
             staticmethod(lambda source: (_ for _ in ()).throw(RuntimeError("boom"))),
         )
         items = completion._exec_param_completion_items("param x: text\n", "--")
@@ -1570,9 +1566,7 @@ class TestCompleteDirArgument:
         assert "mydir/" in result
         assert all(c.endswith("/") for c in result)
 
-    def test_excludes_files(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-    ) -> None:
+    def test_excludes_files(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
         work = tmp_path / "work"
         work.mkdir()
         (work / "somefile.agl").write_text("")

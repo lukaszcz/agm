@@ -356,12 +356,8 @@ def test_exception_value_eq() -> None:
     nom_err2 = NominalId(PRELUDE_ID, "Err2")
     nom_err_other = NominalId(ModuleId.from_dotted("mymod"), "Err")
 
-    ex1 = ExceptionValue(
-        nominal=nom_err, display_name="Err", fields={"message": TextValue("oops")}
-    )
-    ex2 = ExceptionValue(
-        nominal=nom_err, display_name="Err", fields={"message": TextValue("oops")}
-    )
+    ex1 = ExceptionValue(nominal=nom_err, display_name="Err", fields={"message": TextValue("oops")})
+    ex2 = ExceptionValue(nominal=nom_err, display_name="Err", fields={"message": TextValue("oops")})
     # Same nominal+fields, different display_name → equal.
     ex_diff_disp = ExceptionValue(
         nominal=nom_err, display_name="ErrAlias", fields={"message": TextValue("oops")}
@@ -513,7 +509,7 @@ def test_ir_closure_value_identity_hash() -> None:
     from agm.agl.semantics.values import IrClosureValue
 
     v = IrClosureValue(function_id=FunctionId(0), captures=())
-    # Hash is id(v) 
+    # Hash is id(v)
     assert hash(v) == id(v)
     # Can be used in a set
     s: set[IrClosureValue] = {v}

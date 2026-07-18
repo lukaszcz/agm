@@ -39,7 +39,7 @@ from agm.agl.runtime.externs import (
     encode_boundary_value,
 )
 from agm.agl.runtime.render import render_value
-from agm.agl.scope import resolve
+from agm.agl.scope import resolve_module
 from agm.agl.semantics.exceptions import AglRaise
 from agm.agl.semantics.values import (
     AgentValue,
@@ -58,7 +58,7 @@ from agm.agl.semantics.values import (
     UnitValue,
 )
 from agm.agl.type_schema import build_extern_contract
-from agm.agl.typecheck import check
+from agm.agl.typecheck import check_module
 
 _PATH = Path("/virtual/extern_boundary.agl")
 
@@ -68,25 +68,19 @@ _CAPS = HostCapabilities(
     supports_shell_exec=True,
     codec_kinds={
         "text": frozenset({"text"}),
-        "json": frozenset(
-            {"json", "record", "enum", "list", "dict", "int", "decimal", "bool"}
-        ),
+        "json": frozenset({"json", "record", "enum", "list", "dict", "int", "decimal", "bool"}),
     },
 )
 
 _BOX = "record Box\n  value: int\n  label: text\n"
-_SHAPE = (
-    "enum Shape\n"
-    "  | circle(radius: decimal)\n"
-    "  | rect(width: int, height: int)\n"
-)
+_SHAPE = "enum Shape\n  | circle(radius: decimal)\n  | rect(width: int, height: int)\n"
 _BAD_THING = "exception BadThing extends Exception\n  detail: text\n"
 
 
 def build_contract(source: str, fn_name: str = "f") -> ExternContract:
     """Parse + resolve (file-backed) + check *source*, compiling ``fn_name``'s contract."""
-    resolved = resolve(parse_program(source), origin_path=_PATH)
-    cp = check(resolved, _CAPS)
+    resolved = resolve_module(parse_program(source), origin_path=_PATH)
+    cp = check_module(resolved, _CAPS)
     sig = cp.function_signatures[fn_name]
     return build_extern_contract(sig, cp.type_env.type_table)
 
@@ -640,9 +634,7 @@ class TestSealing:
             decode_boundary_value(contract.result, handle, this_calls_seals)
 
     def test_decode_rejects_cross_variable_handle(self) -> None:
-        contract = build_contract(
-            "extern def pair[A, B](a: A, b: B) -> A\n0", fn_name="pair"
-        )
+        contract = build_contract("extern def pair[A, B](a: A, b: B) -> A\n0", fn_name="pair")
         seals = {"A": object(), "B": object()}
         encoded = encode_boundary_value(contract.params[1].schema, IntValue(1), seals)
         assert isinstance(encoded, SealedHandle)
@@ -896,18 +888,11 @@ class TestExternRegistryMisuse:
         assert getattr(module, "captured_name") == "agm_agl_extern_companion__entry__0"
         assert "\x00" not in module.__name__
 
-    def test_companion_may_remove_its_synthetic_module_during_import(
-        self, tmp_path: Path
-    ) -> None:
+    def test_companion_may_remove_its_synthetic_module_during_import(self, tmp_path: Path) -> None:
         from agm.agl.modules.ids import ModuleId
 
         companion = tmp_path / "lib.py"
-        companion.write_text(
-            "import sys\n"
-            "del sys.modules[__name__]\n"
-            "def f():\n"
-            "    return 1\n"
-        )
+        companion.write_text("import sys\ndel sys.modules[__name__]\ndef f():\n    return 1\n")
         registry = ExternRegistry()
         module_id = ModuleId.from_dotted("lib")
 

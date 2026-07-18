@@ -150,7 +150,7 @@ This is where the **binding error** lives.
   `kind == CallKind.agent` and `node.agent not in declared_agents` ⇒
   `AglScopeError` ("unknown agent 'X'; declare it with `agent X`"). `prompt`/`exec`
   branches unchanged.
-- Surface the declared set on `ResolvedProgram` (e.g.
+- Surface the declared set on `ModuleResolution` (e.g.
   `declared_agents: frozenset[str]` or the full decl map with runner hints) so
   typecheck/host can consume it without re-walking.
 - Emit a **warning** for any declared agent never referenced by a call
@@ -315,7 +315,7 @@ for the binding-error behavior. 100% coverage of `src/` must hold.
 
 1. **Lexer + grammar + AST + transformer** for `agent_decl` (parser tests green).
 2. **Scope**: declaration table, binding error, root-only/duplicate/reserved,
-   unused warning; expose declared set on `ResolvedProgram` (scope tests green).
+   unused warning; expose declared set on `ModuleResolution` (scope tests green).
 3. **Typecheck + capabilities**: drop name-existence check, retire
    `has_fallback_agent` (typecheck tests green).
 4. **Runtime**: `declared_agents()` API + source↔host reconciliation errors

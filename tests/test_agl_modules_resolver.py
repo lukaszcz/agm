@@ -60,9 +60,7 @@ class TestResolveModuleFound:
         root_a.mkdir()
         root_b.mkdir()
         _make_module(root_b, "util.helper")
-        result = resolve_module(
-            ModuleId.from_dotted("util.helper"), _roots(root_a, root_b)
-        )
+        result = resolve_module(ModuleId.from_dotted("util.helper"), _roots(root_a, root_b))
         assert result == (root_b / "util" / "helper.agl").resolve()
 
     def test_same_file_via_two_roots_counts_once(self, tmp_path: Path) -> None:
@@ -292,9 +290,7 @@ class TestExpandWildcard:
         keys = list(result.keys())
         assert keys == sorted(keys, key=lambda m: m.segments)
 
-    def test_same_canonical_file_via_symlinked_roots_counts_once(
-        self, tmp_path: Path
-    ) -> None:
+    def test_same_canonical_file_via_symlinked_roots_counts_once(self, tmp_path: Path) -> None:
         root = tmp_path / "lib"
         root.mkdir()
         _make_module(root, "x.mod")

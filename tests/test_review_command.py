@@ -104,8 +104,7 @@ def test_prepare_review_expands_scope_and_aspects(
 
     assert prepared.command == ["fake-reviewer"]
     assert prepared.effective_file.read_text(encoding="utf-8") == (
-        "review feature branch for "
-        f"{DEFAULT_REVIEW_ASPECTS}, performance\n"
+        f"review feature branch for {DEFAULT_REVIEW_ASPECTS}, performance\n"
     )
 
 
@@ -155,8 +154,7 @@ def test_prepare_review_uses_inline_prompt_and_extra_prompt(
     )
 
     assert prepared.effective_file.read_text(encoding="utf-8") == (
-        f"inline {review_pass.DEFAULT_REVIEW_SCOPE}\n"
-        f"extra {DEFAULT_REVIEW_ASPECTS}"
+        f"inline {review_pass.DEFAULT_REVIEW_SCOPE}\nextra {DEFAULT_REVIEW_ASPECTS}"
     )
 
 
@@ -584,9 +582,7 @@ def test_review_once_honors_explicit_and_disabled_review_file(
     review_mod.review_once(_review_args(review_file="saved/review.md"))
     review_mod.review_once(_review_args(no_review_file=True))
 
-    assert (tmp_path / "saved" / "review.md").read_text(encoding="utf-8") == (
-        "review output\n"
-    )
+    assert (tmp_path / "saved" / "review.md").read_text(encoding="utf-8") == ("review output\n")
     assert not (tmp_path / ".agent-files").exists()
 
 
@@ -830,7 +826,8 @@ def test_refine_repeats_revise_for_unknown_status_and_honors_max_steps(
 
     refine(
         RefineArgs(
-            max_steps=3, no_max_steps=False,
+            max_steps=3,
+            no_max_steps=False,
             runner=None,
             reviewer=None,
             reviser=None,
@@ -941,7 +938,8 @@ def test_refine_max_steps_limits_iterations_to_exact_count(
         reviews.clear()
         refine(
             RefineArgs(
-                max_steps=n, no_max_steps=False,
+                max_steps=n,
+                no_max_steps=False,
                 runner=None,
                 reviewer=None,
                 reviser=None,
@@ -994,7 +992,8 @@ def test_refine_max_steps_one_with_continue_still_exits(
 
     refine(
         RefineArgs(
-            max_steps=1, no_max_steps=False,
+            max_steps=1,
+            no_max_steps=False,
             runner=None,
             reviewer=None,
             reviser=None,
@@ -1051,7 +1050,8 @@ def test_refine_max_steps_with_alternating_continue_and_unknown(
 
     refine(
         RefineArgs(
-            max_steps=5, no_max_steps=False,
+            max_steps=5,
+            no_max_steps=False,
             runner=None,
             reviewer=None,
             reviser=None,
@@ -1111,7 +1111,8 @@ def test_refine_runs_fresh_review_after_continue(
 
     refine(
         RefineArgs(
-            max_steps=5, no_max_steps=False,
+            max_steps=5,
+            no_max_steps=False,
             runner="both",
             reviewer="reviewer",
             reviser="reviser",
@@ -1167,7 +1168,8 @@ def test_refine_no_save_review_disables_review_file_for_each_review(
 
     refine(
         RefineArgs(
-            max_steps=5, no_max_steps=False,
+            max_steps=5,
+            no_max_steps=False,
             runner=None,
             reviewer=None,
             reviser=None,
@@ -1223,7 +1225,8 @@ def test_refine_save_review_enables_auto_review_file_for_each_review(
 
     refine(
         RefineArgs(
-            max_steps=5, no_max_steps=False,
+            max_steps=5,
+            no_max_steps=False,
             runner=None,
             reviewer=None,
             reviser=None,
@@ -1279,7 +1282,8 @@ def test_refine_review_file_uses_custom_review_file_for_each_review(
 
     refine(
         RefineArgs(
-            max_steps=5, no_max_steps=False,
+            max_steps=5,
+            no_max_steps=False,
             runner=None,
             reviewer=None,
             reviser=None,
@@ -1335,7 +1339,8 @@ def test_refine_leaves_missing_scope_and_aspects_for_review_config(
 
     refine(
         RefineArgs(
-            max_steps=None, no_max_steps=False,
+            max_steps=None,
+            no_max_steps=False,
             runner=None,
             reviewer=None,
             reviser=None,
@@ -1394,7 +1399,8 @@ def test_refine_uses_named_config_and_forwards_command_name(
 
     refine(
         RefineArgs(
-            max_steps=None, no_max_steps=False,
+            max_steps=None,
+            no_max_steps=False,
             runner=None,
             reviewer=None,
             reviser=None,
@@ -1454,7 +1460,8 @@ def test_refine_writes_review_and_revise_output_to_log_file(
 
     refine(
         RefineArgs(
-            max_steps=1, no_max_steps=False,
+            max_steps=1,
+            no_max_steps=False,
             runner=None,
             reviewer=None,
             reviser=None,
@@ -1512,7 +1519,8 @@ def test_refine_step_header_is_printed_and_logged(
 
     refine(
         RefineArgs(
-            max_steps=1, no_max_steps=False,
+            max_steps=1,
+            no_max_steps=False,
             runner=None,
             reviewer=None,
             reviser=None,
@@ -1571,7 +1579,8 @@ def test_refine_prints_logging_to_full_default_log_path(
 
     refine(
         RefineArgs(
-            max_steps=1, no_max_steps=False,
+            max_steps=1,
+            no_max_steps=False,
             runner=None,
             reviewer=None,
             reviser=None,
@@ -1606,7 +1615,8 @@ def test_refine_exits_when_named_config_is_missing(
     with pytest.raises(SystemExit):
         refine(
             RefineArgs(
-                max_steps=None, no_max_steps=False,
+                max_steps=None,
+                no_max_steps=False,
                 runner=None,
                 reviewer=None,
                 reviser=None,
@@ -1647,7 +1657,8 @@ def test_run_wrappers_translate_keyboard_interrupt(monkeypatch: pytest.MonkeyPat
     with pytest.raises(SystemExit) as refine_exit:
         refine_mod.run(
             RefineArgs(
-                max_steps=1, no_max_steps=False,
+                max_steps=1,
+                no_max_steps=False,
                 runner=None,
                 reviewer=None,
                 reviser=None,
@@ -1700,7 +1711,8 @@ def test_refine_no_max_steps_runs_until_complete(
 
     refine(
         RefineArgs(
-            max_steps=None, no_max_steps=True,
+            max_steps=None,
+            no_max_steps=True,
             runner=None,
             reviewer=None,
             reviser=None,

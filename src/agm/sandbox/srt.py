@@ -121,9 +121,7 @@ def _print_dry_run(
             alias_command_name=alias_command_name,
         )
         settings_source = "merged"
-        settings_detail = ", ".join(
-            display_path(path, cwd=cwd) for path in settings_candidates
-        )
+        settings_detail = ", ".join(display_path(path, cwd=cwd) for path in settings_candidates)
 
     dry_run.print_configuration("sandbox")
     dry_run.print_detail("settings source", settings_source)

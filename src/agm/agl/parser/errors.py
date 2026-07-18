@@ -116,8 +116,7 @@ def _make_chained_comparison_error(span: SourceSpan) -> AglSyntaxError:
     the friendly message below is emitted instead of the generic fallback.
     """
     return AglSyntaxError(
-        "Comparisons are non-associative; parenthesize explicitly, "
-        "e.g. `(x == y) == z`.",
+        "Comparisons are non-associative; parenthesize explicitly, e.g. `(x == y) == z`.",
         span=span,
     )
 
@@ -138,20 +137,14 @@ def _make_inline_compound_error(
       be parenthesized; ``if``/``try`` have no expression form at all.
     """
     if stmt_context:
-        guidance = (
-            f"`{keyword}` is not allowed inline here; "
-            "write it as an indented block instead."
-        )
+        guidance = f"`{keyword}` is not allowed inline here; write it as an indented block instead."
     elif keyword == "case":
         guidance = (
             "`case` is not allowed inline here; "
             "parenthesize the case expression, e.g. `(case x of ...)`."
         )
     else:
-        guidance = (
-            f"`{keyword}` is not allowed inline here; "
-            "write it as an indented block instead."
-        )
+        guidance = f"`{keyword}` is not allowed inline here; write it as an indented block instead."
     return AglSyntaxError(guidance, span=span)
 
 
@@ -240,9 +233,7 @@ def syntax_error_from_lark(
         # by whether the expected set contains any statement starter.
         if tok.type in _INLINE_BLOCKED:
             stmt_context = bool(_STMT_STARTERS & set(exc.expected))
-            return _make_inline_compound_error(
-                tok.value, span, stmt_context=stmt_context
-            )
+            return _make_inline_compound_error(tok.value, span, stmt_context=stmt_context)
         if tok.type == "_NEWLINE":
             if "_INDENT" in exc.expected:
                 return AglSyntaxError(
@@ -275,14 +266,22 @@ def syntax_error_from_lark(
     if isinstance(exc, UnexpectedEOF):
         # No position info; use (1, 1) as a fallback.
         span = SourceSpan(
-            start_line=1, start_col=1, end_line=1, end_col=1,
-            start_offset=0, end_offset=0,
+            start_line=1,
+            start_col=1,
+            end_line=1,
+            end_col=1,
+            start_offset=0,
+            end_offset=0,
         )
         return AglSyntaxError("Unexpected end of input.", span=span)
 
     # Generic fallback.
     span = SourceSpan(
-        start_line=1, start_col=1, end_line=1, end_col=1,
-        start_offset=0, end_offset=0,
+        start_line=1,
+        start_col=1,
+        end_line=1,
+        end_col=1,
+        start_offset=0,
+        end_offset=0,
     )
     return AglSyntaxError(str(exc), span=span)

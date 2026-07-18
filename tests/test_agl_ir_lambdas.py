@@ -20,12 +20,12 @@ import decimal
 import pytest
 
 from agm.agl.eval.ir_interpreter import IrInterpreter
-from agm.agl.lower import lower_program
+from agm.agl.lower import lower_module
 from agm.agl.parser import parse_program
-from agm.agl.scope import resolve
+from agm.agl.scope import resolve_module
 from agm.agl.semantics.exceptions import AglRaise
 from agm.agl.semantics.values import DecimalValue, IntValue, TextValue
-from agm.agl.typecheck import check
+from agm.agl.typecheck import check_module
 from tests.agl.ir_harness import _compiled_checked, base_caps, evaluate_ir, evaluate_ir_raises
 
 
@@ -74,11 +74,7 @@ r
 
 def test_lambda_explicit_return_type() -> None:
     """Lambda with explicit return type bound to let; called indirectly."""
-    source = (
-        "let dbl = fn(x: int) -> int => x * 2\n"
-        "let r = dbl(4)\n"
-        "()"
-    )
+    source = "let dbl = fn(x: int) -> int => x * 2\nlet r = dbl(4)\n()"
     ir = evaluate_ir(source)
     assert ir["r"] == IntValue(8)
 
@@ -90,11 +86,7 @@ def test_lambda_explicit_return_type() -> None:
 
 def test_lambda_inferred_return_type() -> None:
     """Lambda with inferred return type (no -> annotation)."""
-    source = (
-        "let inc = fn(x: int) => x + 1\n"
-        "let r = inc(9)\n"
-        "()"
-    )
+    source = "let inc = fn(x: int) => x + 1\nlet r = inc(9)\n()"
     ir = evaluate_ir(source)
     assert ir["r"] == IntValue(10)
 
@@ -108,7 +100,7 @@ def test_def_bound_to_typed_let_indirect_call() -> None:
     """Named def bound to a typed let (function value), then called indirectly."""
     source = (
         "def classify(n: int) -> text =\n"
-        "  if | n > 0 => \"pos\" | n < 0 => \"neg\" | else => \"zero\"\n"
+        '  if | n > 0 => "pos" | n < 0 => "neg" | else => "zero"\n'
         "let g: (int) -> text = classify\n"
         "let r1 = g(7)\n"
         "let r2 = g(-3)\n"
@@ -130,7 +122,7 @@ def test_higher_order_apply() -> None:
     """Higher-order function: def apply(f, n) calling f(n) via indirect call."""
     source = (
         "def classify(n: int) -> text =\n"
-        "  if | n > 0 => \"pos\" | n < 0 => \"neg\" | else => \"zero\"\n"
+        '  if | n > 0 => "pos" | n < 0 => "neg" | else => "zero"\n'
         "def apply(f: (int) -> text, n: int) -> text = f(n)\n"
         "let r1 = apply(classify, 10)\n"
         "let r2 = apply(classify, -5)\n"
@@ -236,11 +228,7 @@ def test_value_call_int_arg_to_decimal_param() -> None:
     Regression for BLOCKER bug: IR previously yielded IntValue(5) while ir
     yielded DecimalValue(5).  Evaluation must now yield DecimalValue.
     """
-    source = (
-        "let f = fn(x: decimal) => x\n"
-        "let r = f(5)\n"
-        "()"
-    )
+    source = "let f = fn(x: decimal) => x\nlet r = f(5)\n()"
     ir = evaluate_ir(source)
     assert ir["r"] == DecimalValue(decimal.Decimal("5"))
 
@@ -254,11 +242,7 @@ def test_value_call_int_arg_to_json_param() -> None:
     """
     from agm.agl.semantics.values import JsonValue
 
-    source = (
-        "let f = fn(x: json) => x\n"
-        "let r = f(5)\n"
-        "()"
-    )
+    source = "let f = fn(x: json) => x\nlet r = f(5)\n()"
     ir = evaluate_ir(source)
     assert ir["r"] == JsonValue(5)
 
@@ -292,12 +276,7 @@ def test_recursion_depth_via_indirect_call() -> None:
     # setup that isn't quite right for pure indirect recursion).
     # Instead use a lambda that calls itself via an outer var (mutual via value).
     # The simplest: a def called via a function-value binding.
-    source = (
-        "def inf(n: int) -> int = inf(n + 1)\n"
-        "let f: (int) -> int = inf\n"
-        "let r = f(0)\n"
-        "()"
-    )
+    source = "def inf(n: int) -> int = inf(n + 1)\nlet f: (int) -> int = inf\nlet r = f(0)\n()"
     ir_exc = evaluate_ir_raises(source)
     assert ir_exc.display_name == "RecursionError"
     assert ir_exc.fields["limit"] == IntValue(256)
@@ -305,19 +284,12 @@ def test_recursion_depth_via_indirect_call() -> None:
 
 def test_recursion_depth_custom_limit_indirect() -> None:
     """IR-side recursion depth guard at a custom low limit via indirect call."""
-    source = (
-        "def inf(n: int) -> int = inf(n + 1)\n"
-        "let f: (int) -> int = inf\n"
-        "let r = f(0)\n"
-        "()"
-    )
+    source = "def inf(n: int) -> int = inf(n + 1)\nlet f: (int) -> int = inf\nlet r = f(0)\n()"
     program = parse_program(source)
-    resolved = resolve(program)
+    resolved = resolve_module(program)
     caps = base_caps()
-    checked = check(resolved, caps)
-    executable = lower_program(
-        _compiled_checked(checked), source_text=source, source_label="<test>"
-    )
+    checked = check_module(resolved, caps)
+    executable = lower_module(_compiled_checked(checked), source_text=source, source_label="<test>")
     interp = IrInterpreter(executable, max_call_depth=5)
     with pytest.raises(AglRaise) as exc_info:
         interp.run()
@@ -334,11 +306,7 @@ def test_recursion_depth_custom_limit_indirect() -> None:
 
 def test_closure_valued_binding_normalized() -> None:
     """A lambda binding normalizes to a <closure> sentinel in the IR pipeline."""
-    source = (
-        "let f = fn(x: int) => x * 2\n"
-        "let r = f(3)\n"
-        "()"
-    )
+    source = "let f = fn(x: int) => x * 2\nlet r = f(3)\n()"
     ir = evaluate_ir(source)
     assert ir["r"] == IntValue(6)
 
@@ -352,10 +320,10 @@ def test_function_values_program() -> None:
     """function_values.agl end-to-end (adapted to not use print — use bindings)."""
     source = (
         "def classify(n: int) -> text =\n"
-        "  if | n > 0 => \"pos\" | n < 0 => \"neg\" | else => \"zero\"\n"
+        '  if | n > 0 => "pos" | n < 0 => "neg" | else => "zero"\n'
         "\n"
         "def label(n: int) -> text =\n"
-        "  \"val=\" + classify(n)\n"
+        '  "val=" + classify(n)\n'
         "\n"
         "def apply(f: (int) -> text, n: int) -> text = f(n)\n"
         "\n"
@@ -389,11 +357,7 @@ def test_function_values_program() -> None:
 
 def test_lambda_with_decimal_return() -> None:
     """Lambda body returns int but explicit return type is decimal — coerced."""
-    source = (
-        "let to_dec = fn(x: int) -> decimal => x\n"
-        "let r = to_dec(3)\n"
-        "()"
-    )
+    source = "let to_dec = fn(x: int) -> decimal => x\nlet r = to_dec(3)\n()"
     ir = evaluate_ir(source)
     assert ir["r"] == DecimalValue(decimal.Decimal("3"))
 
@@ -426,11 +390,7 @@ def test_lambda_passed_as_arg_to_higher_order() -> None:
 
 def test_indirect_call_with_two_args() -> None:
     """Indirect call with two positional arguments."""
-    source = (
-        "let add = fn(x: int, y: int) -> int => x + y\n"
-        "let r = add(3, 4)\n"
-        "()"
-    )
+    source = "let add = fn(x: int, y: int) -> int => x + y\nlet r = add(3, 4)\n()"
     ir = evaluate_ir(source)
     assert ir["r"] == IntValue(7)
 
@@ -472,10 +432,6 @@ def test_lambda_with_default_param() -> None:
     lowered default still ends up in the FunctionDescriptor and is lowered via
     lower_coerced.
     """
-    source = (
-        "let add = fn(x: int, y: int = 10) -> int => x + y\n"
-        "let r = add(5, 3)\n"
-        "()"
-    )
+    source = "let add = fn(x: int, y: int = 10) -> int => x + y\nlet r = add(5, 3)\n()"
     ir = evaluate_ir(source)
     assert ir["r"] == IntValue(8)

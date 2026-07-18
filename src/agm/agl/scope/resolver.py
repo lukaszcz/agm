@@ -1,6 +1,6 @@
 """Static name-resolution pass for the AgL pipeline.
 
-``resolve(program)`` performs a full single-pass walk over the AST,
+``resolve_module(program)`` performs a full single-pass walk over the AST,
 building the lexical scope chain and populating side tables:
 
 - ``resolution``:     ``VarRef.node_id`` / ``AssignStmt.node_id`` → ``BindingRef``
@@ -40,7 +40,7 @@ from contextlib import contextmanager
 from typing import TYPE_CHECKING
 
 from agm.agl.diagnostics import Diagnostic
-from agm.agl.modules.ids import ENTRY_ID, PRELUDE_ID, STD_CONFIG_ID, ModuleId
+from agm.agl.modules.ids import ENTRY_ID, PRELUDE_ID, STD_CONFIG_ID, STD_CORE_ID, ModuleId
 from agm.agl.scope.symbols import (
     BUILTIN_CALL_NAMES,
     AglScopeError,
@@ -48,7 +48,7 @@ from agm.agl.scope.symbols import (
     BindingRef,
     BuiltinKind,
     ConstructorRef,
-    ResolvedProgram,
+    ModuleResolution,
     ScopeNode,
 )
 from agm.agl.semantics.engine_keys import RESERVED_PROGRAM_NAMES
@@ -170,7 +170,7 @@ class _Resolver:
     """Stateful resolver that builds the scope tree and resolution tables.
 
     Implements explicit ``isinstance`` dispatch for each node kind.
-    Use ``resolve(program)`` — the public function — rather than instantiating
+    Use ``resolve_module(program)`` — the public function — rather than instantiating
     this class directly.
     """
 
@@ -178,14 +178,13 @@ class _Resolver:
         self,
         module_id: ModuleId = ENTRY_ID,
         import_env: ImportEnv | None = None,
-        decl_info: dict[tuple[ModuleId, str], tuple[int, SourceSpan, BinderKind]]
-        | None = None,
+        decl_info: dict[tuple[ModuleId, str], tuple[int, SourceSpan, BinderKind]] | None = None,
         private_info: dict[tuple[ModuleId, str], bool] | None = None,
         is_entry: bool = True,
         repl_session_scope: ScopeNode | None = None,
         origin_path: Path | None = None,
     ) -> None:
-        # Graph-mode parameters (None = single-program mode).
+        # Program parameters (None = module mode).
         self._module_id: ModuleId = module_id
         self._import_env: ImportEnv | None = import_env
         # Maps (module_id, name) → (node_id, span, kind) for cross-module refs.
@@ -196,7 +195,7 @@ class _Resolver:
         self._private_info: dict[tuple[ModuleId, str], bool] = (
             private_info if private_info is not None else {}
         )
-        # Whether this module is the entry module (graph mode only).
+        # Whether this module is the entry module (program context only).
         self._is_entry: bool = is_entry
         # Optional REPL session scope for ``::name`` self-ref fallback.
         # When set, ``_lookup_own_root`` falls back to this scope for names not
@@ -225,7 +224,7 @@ class _Resolver:
         self._declared_functions: dict[str, FuncDef] = {}
         # Program-declared agent names that have been referenced as a VarRef.
         self._referenced_agents: set[str] = set()
-        # Header-only tracking for imports in non-entry modules (graph mode).
+        # Header-only tracking for imports in non-entry modules (program context).
         self._seen_non_import_item: bool = False
         # Source-declared program name.
         self._program_name: str | None = None
@@ -264,7 +263,7 @@ class _Resolver:
         ambient_agents: frozenset[str] = frozenset(),
         ambient_constructor_candidates: dict[str, tuple[ConstructorRef, ...]] | None = None,
         ambient_type_names: frozenset[str] = frozenset(),
-    ) -> ResolvedProgram:
+    ) -> ModuleResolution:
         """Execute the resolution pass over *program*.
 
         When *parent_scope* is given, the entry's root scope is parented to it
@@ -274,7 +273,7 @@ class _Resolver:
 
         *ambient_agents* are agent names the host already backs.  They count
         as valid call targets alongside this program's own ``agent``
-        declarations, but never appear in ``ResolvedProgram.declared_agents``
+        declarations, but never appear in ``ModuleResolution.declared_agents``
         and never trigger an unused-agent warning.
 
         *ambient_constructor_candidates* carries constructor candidates from
@@ -324,7 +323,7 @@ class _Resolver:
         self._at_root = False
         self._pop_scope()
 
-        return ResolvedProgram(
+        return ModuleResolution(
             program=program,
             resolution=self._resolution,
             builtin_calls=self._builtin_calls,
@@ -335,8 +334,7 @@ class _Resolver:
             warnings=self._unused_agent_warnings(),
             declared_type_names=frozenset(self._declared_type_names),
             constructor_candidates={
-                name: tuple(refs)
-                for name, refs in self._constructor_candidates.items()
+                name: tuple(refs) for name, refs in self._constructor_candidates.items()
             },
             constructor_refs=dict(self._constructor_refs),
             qualified_constructor_refs=dict(self._qualified_constructor_refs),
@@ -380,8 +378,7 @@ class _Resolver:
         """Validate and record a function declaration."""
         if decl.name in _RESERVED_NAMES and not decl.is_builtin:
             raise AglScopeError(
-                f"'{decl.name}' is a built-in name and cannot be used as a "
-                f"function name.",
+                f"'{decl.name}' is a built-in name and cannot be used as a function name.",
                 span=decl.span,
             )
         if decl.is_extern and self._origin_path is None:
@@ -511,8 +508,7 @@ class _Resolver:
         """
         existing = self._constructor_candidates.get(ctor_key, [])
         if any(
-            (c.owner_module_id, c.owner_name)
-            == (cref.owner_module_id, cref.owner_name)
+            (c.owner_module_id, c.owner_name) == (cref.owner_module_id, cref.owner_name)
             or (
                 (
                     c.owner_decl_node_id == _BUILTIN_CONSTRUCTOR_NODE_ID
@@ -590,7 +586,7 @@ class _Resolver:
                 # prelude `Retry`/`ExecResult` names) are conveniences and yield to
                 # any user declaration that already claimed the name — skip rather
                 # than raise so a `def Retry()`/`agent Retry` is legal.
-                if all(c.owner_decl_node_id == _BUILTIN_CONSTRUCTOR_NODE_ID for c in crefs):
+                if all(c.owner_module_id in (PRELUDE_ID, STD_CORE_ID) for c in crefs):
                     continue
                 # A user-declared constructor colliding with a non-constructor
                 # binding (def/agent) of the same name is a genuine duplicate.
@@ -604,8 +600,12 @@ class _Resolver:
                 name=name,
                 mutable=False,
                 decl_span=SourceSpan(
-                    start_line=0, start_col=0, end_line=0, end_col=0,
-                    start_offset=0, end_offset=0,
+                    start_line=0,
+                    start_col=0,
+                    end_line=0,
+                    end_col=0,
+                    start_offset=0,
+                    end_offset=0,
                 ),
                 decl_node_id=rep.owner_decl_node_id,
                 kind=BinderKind.constructor_binding,
@@ -647,8 +647,12 @@ class _Resolver:
                 continue
             # Create a synthetic binding ref for the ambient agent.
             synthetic_span = SourceSpan(
-                start_line=0, start_col=0, end_line=0, end_col=0,
-                start_offset=0, end_offset=0,
+                start_line=0,
+                start_col=0,
+                end_line=0,
+                end_col=0,
+                start_offset=0,
+                end_offset=0,
             )
             ref = BindingRef(
                 name=name,
@@ -830,7 +834,7 @@ class _Resolver:
         existing = scope.bindings.get(name)
         if existing is not None and not (
             existing.kind is BinderKind.constructor_binding
-            and existing.decl_node_id == _BUILTIN_CONSTRUCTOR_NODE_ID
+            and existing.module_id in (PRELUDE_ID, STD_CORE_ID)
         ):
             raise AglScopeError(
                 f"Name '{name}' is already declared in this scope.",
@@ -860,7 +864,7 @@ class _Resolver:
         are not pure expressions are handled first; everything else is treated
         as an expression item.
 
-        In graph mode (``_import_env is not None``), additional enforcement:
+        In program context (``_import_env is not None``), additional enforcement:
 
         - Non-entry modules: only ``FuncDef``, ``RecordDef``, ``EnumDef``,
           ``TypeAlias``, ``InfixDecl``, ``ImportDecl``, and ``ExportDecl`` are
@@ -871,8 +875,8 @@ class _Resolver:
         - Non-entry modules: ``ImportDecl`` and ``ExportDecl`` must precede all declarations
           (header-only; ``_seen_non_import_item`` tracks this).
         """
-        is_graph_mode = self._import_env is not None
-        is_non_entry_root = is_graph_mode and not self._is_entry and self._at_root
+        has_import_context = self._import_env is not None
+        is_non_entry_root = has_import_context and not self._is_entry and self._at_root
 
         for item in items:
             if isinstance(item, (ImportDecl, ExportDecl)):
@@ -889,7 +893,7 @@ class _Resolver:
                         "declarations in a library module.",
                         span=item.span,
                     )
-                # The graph module-system pass processes imports/exports; this pass skips them.
+                # The program module-system pass processes imports/exports; this pass skips them.
                 continue
             if isinstance(item, InfixDecl):
                 if not self._at_root:
@@ -1072,14 +1076,13 @@ class _Resolver:
             )
         ref = self._current_scope().lookup(name)
         if ref is None:
-            # In graph mode with import_env, try open imports as fallback, so a
+            # In program context with import_env, try open imports as fallback, so a
             # bare target reaches an imported mutable binding just like a read.
             if self._import_env is not None:
                 ref = self._lookup_import_env_unqualified(name, node.span)
             if ref is None:
                 raise AglScopeError(
-                    f"'{name}' is not declared; assignment requires an existing "
-                    f"mutable binding.",
+                    f"'{name}' is not declared; assignment requires an existing mutable binding.",
                     span=node.span,
                 )
         if not ref.mutable:
@@ -1262,7 +1265,7 @@ class _Resolver:
         - Exactly 1 candidate → record in constructor_refs.
         - ≥ 2 candidates → ambiguity error.
 
-        In graph mode (when ``_import_env`` is set):
+        In program context (when ``_import_env`` is set):
         - ``node.module_qualifier is None`` → lexical scope first, then open imports.
         - ``node.module_qualifier.segments == ()`` (``::name``) → self-ref to own scope.
         - ``node.module_qualifier.segments != ()`` → qualified cross-module access.
@@ -1270,6 +1273,10 @@ class _Resolver:
         if node.type_qualifier is not None:
             self._resolve_type_qualified_constructor(node)
             return
+        if node.name in _BUILTIN_CALL_NAMES and self._current_scope().lookup(node.name) is None:
+            raise AglScopeError(
+                f"Built-in function '{node.name}' cannot be used as a value.", span=node.span
+            )
 
         # Single-segment qualifiers can name either a type or an import handle.
         if node.module_qualifier is not None:
@@ -1286,18 +1293,13 @@ class _Resolver:
                     span=node.module_qualifier.span,
                 )
 
-        # Standard lexical lookup (single-program mode or bare name in graph mode).
+        # Standard lexical lookup (module mode or bare name in program context).
         ref = self._current_scope().lookup(node.name)
         if ref is None:
-            # In graph mode with import_env, try open imports as fallback.
+            # In program context with import_env, try open imports as fallback.
             if self._import_env is not None:
                 ref = self._lookup_import_env_unqualified(node.name, node.span)
             if ref is None:
-                if node.name in _RESERVED_NAMES:
-                    raise AglScopeError(
-                        f"'{node.name}' is a built-in and cannot be used as a value.",
-                        span=node.span,
-                    )
                 raise AglScopeError(
                     f"'{node.name}' is not defined.",
                     span=node.span,
@@ -1310,9 +1312,7 @@ class _Resolver:
         if ref.kind == BinderKind.constructor_binding:
             candidates = self._constructor_candidates.get(node.name, [])
             if len(candidates) >= 2:
-                owner_names = ", ".join(
-                    f"'{c.owner_name}'" for c in candidates
-                )
+                owner_names = ", ".join(f"'{c.owner_name}'" for c in candidates)
                 raise AglScopeError(
                     f"'{node.name}' is ambiguous: it is declared as a constructor "
                     f"in multiple types ({owner_names}). "
@@ -1363,8 +1363,7 @@ class _Resolver:
         type_name = segments[0]
         type_match = type_name in self._declared_type_names
         handle_match = (
-            self._import_env is not None
-            and self._import_env.qualified.get(segments) is not None
+            self._import_env is not None and self._import_env.qualified.get(segments) is not None
         )
         if type_match and handle_match:
             raise AglScopeError(
@@ -1414,7 +1413,7 @@ class _Resolver:
         return (src_name, owning_module)
 
     def _lookup_import_env_unqualified(self, name: str, span: SourceSpan) -> BindingRef | None:
-        """Look up a bare name in the open-import environment (graph mode).
+        """Look up a bare name in the open-import environment (program context).
 
         Returns a ``BindingRef`` if exactly one ``QName`` matches, or raises
         ``AglScopeError`` on ambiguity (clash-on-use).  Returns ``None`` if the
@@ -1428,9 +1427,7 @@ class _Resolver:
             return None
         if len(qnames) > 1:
             # Clash-on-use: more than one module exposes this name.
-            qualifiers = sorted(
-                qn[0].dotted() + "::" + qn[1] for qn in qnames
-            )
+            qualifiers = sorted(qn[0].dotted() + "::" + qn[1] for qn in qnames)
             hint = ", ".join(qualifiers)
             raise AglScopeError(
                 f"'{name}' is ambiguous: imported from multiple modules. "
@@ -1442,7 +1439,7 @@ class _Resolver:
         return self._make_cross_module_ref(qname[0], name, qname[1], span)
 
     def _resolve_varref_qualified(self, node: VarRef) -> None:
-        """Resolve a qualified VarRef (``::name`` or ``MODQUAL::name``) in graph mode."""
+        """Resolve a qualified VarRef (``::name`` or ``MODQUAL::name``) in program context."""
         assert self._import_env is not None
         assert node.module_qualifier is not None
 
@@ -1458,9 +1455,7 @@ class _Resolver:
             return
 
         # Qualified access: MODQUAL::name
-        ref = self._lookup_qualified_binding(
-            node.module_qualifier.segments, node.name, node.span
-        )
+        ref = self._lookup_qualified_binding(node.module_qualifier.segments, node.name, node.span)
         self._resolution[node.node_id] = ref
 
     def _lookup_qualified_binding(
@@ -1510,7 +1505,7 @@ class _Resolver:
         ``lookup()`` (which walks the parent chain and would fall through to a session
         parent scope or find nested shadows first).
 
-        In the REPL graph mode, if *name* is not in the entry's own root scope,
+        In the REPL program context, if *name* is not in the entry's own root scope,
         we fall back to the session scope (``_repl_session_scope``) so that
         ``::name`` can resolve to a prior session binding.
         """
@@ -1566,9 +1561,9 @@ class _Resolver:
         """
         callee = node.callee
         if (
-            self._import_env is None
-            and isinstance(callee, VarRef)
+            isinstance(callee, VarRef)
             and callee.name in _BUILTIN_CALL_NAMES
+            and self._current_scope().lookup(callee.name) is None
         ):
             self._builtin_calls[node.node_id] = _BUILTIN_CALL_NAMES[callee.name]
         else:
@@ -1588,9 +1583,8 @@ class _Resolver:
         """Resolve a field-access expression by resolving its object as a value."""
         if isinstance(expr.obj, VarRef) and expr.obj.module_qualifier is None:
             existing = self._current_scope().lookup(expr.obj.name)
-            if (
-                expr.obj.name in self._declared_type_names
-                and (existing is None or existing.kind is BinderKind.constructor_binding)
+            if expr.obj.name in self._declared_type_names and (
+                existing is None or existing.kind is BinderKind.constructor_binding
             ):
                 raise AglScopeError(
                     f"'{expr.obj.name}' is a type name, not a value; use '::' for "
@@ -1824,7 +1818,7 @@ class _Resolver:
 # ---------------------------------------------------------------------------
 
 
-def resolve(
+def resolve_module(
     program: Program,
     *,
     parent_scope: ScopeNode | None = None,
@@ -1832,7 +1826,7 @@ def resolve(
     ambient_constructor_candidates: dict[str, tuple[ConstructorRef, ...]] | None = None,
     ambient_type_names: frozenset[str] = frozenset(),
     origin_path: Path | None = None,
-) -> ResolvedProgram:
+) -> ModuleResolution:
     """Run the full static name-resolution pass over *program*.
 
     Parameters
@@ -1848,7 +1842,7 @@ def resolve(
     ambient_agents:
         Agent names the host already backs.  They are valid call targets
         alongside this program's own ``agent`` declarations, but are not
-        reported in ``ResolvedProgram.declared_agents`` and never produce an
+        reported in ``ModuleResolution.declared_agents`` and never produce an
         unused-agent warning.  Default empty → only in-program declarations
         are valid.
     ambient_constructor_candidates:
@@ -1865,7 +1859,7 @@ def resolve(
 
     Returns
     -------
-    ResolvedProgram
+    ModuleResolution
         The program annotated with resolution side tables.
 
     Raises

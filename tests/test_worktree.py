@@ -67,8 +67,6 @@ class TestProjectWorktreeHelpers:
         assert branch_exists(tmp_path, "feature")
 
 
-
-
 class TestSyncRemoteTrackingBranches:
     """Tests for sync_remote_tracking_branches."""
 
@@ -279,8 +277,13 @@ class TestEnsureWorktree:
             env: dict[str, str] | None = None,
         ) -> None:
             add_calls.append(
-                {"repo": repo, "path": path, "branch": branch,
-                 "create": create, "start_point": start_point}
+                {
+                    "repo": repo,
+                    "path": path,
+                    "branch": branch,
+                    "create": create,
+                    "start_point": start_point,
+                }
             )
 
         monkeypatch.setattr(worktree_mod.git_helpers, "worktree_add", fake_worktree_add)
@@ -576,8 +579,8 @@ class TestEnsureWorktree:
         monkeypatch.setattr(
             worktree_mod.git_helpers,
             "worktree_add",
-            lambda repo, path, branch, create=False, start_point=None, env=None: (
-                add_calls.append(path)
+            lambda repo, path, branch, create=False, start_point=None, env=None: add_calls.append(
+                path
             ),
         )
 
@@ -783,9 +786,7 @@ class TestRemoveWorktree:
 
         assert deleted == [("feat", True)]
 
-    def test_can_skip_branch_delete(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_can_skip_branch_delete(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         project_dir = tmp_path / "proj"
         repo_dir = project_dir / "repo"
         worktree_path = project_dir / "worktrees" / "feat"

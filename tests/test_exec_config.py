@@ -136,9 +136,7 @@ class TestLoadExecConfig:
             )
         )
 
-        cfg = load_exec_config(
-            home=home, proj_dir=None, cwd=tmp_path, command_name="myflow"
-        )
+        cfg = load_exec_config(home=home, proj_dir=None, cwd=tmp_path, command_name="myflow")
         assert cfg.runner == "flow-runner"
 
     def test_command_name_none_uses_base_table(self, tmp_path: Path) -> None:
@@ -197,9 +195,7 @@ class TestLoadExecConfig:
             )
         )
 
-        cfg = load_exec_config(
-            home=home, proj_dir=None, cwd=tmp_path, command_name="agents"
-        )
+        cfg = load_exec_config(home=home, proj_dir=None, cwd=tmp_path, command_name="agents")
         # The base [exec] scalars are unchanged.
         assert cfg.runner == "default-runner"
         # The agents map is preserved intact, not merged in as scalar config.
@@ -242,9 +238,7 @@ class TestLoadExecConfig:
         home.mkdir()
         (home / ".agm").mkdir()
         log_path = tmp_path / "trace.jsonl"
-        (home / ".agm" / "config.toml").write_text(
-            f"[exec]\nlog-file = {str(log_path)!r}\n"
-        )
+        (home / ".agm" / "config.toml").write_text(f"[exec]\nlog-file = {str(log_path)!r}\n")
         cfg = load_exec_config(home=home, proj_dir=None, cwd=tmp_path)
         assert cfg.log_file == str(log_path)
 
@@ -337,9 +331,7 @@ class TestExecConfigProgramTableOverride:
         home = tmp_path / "home"
         home.mkdir()
         (home / ".agm").mkdir()
-        (home / ".agm" / "config.toml").write_text(
-            "\n".join(["[exec]", 'runner = "exec-runner"'])
-        )
+        (home / ".agm" / "config.toml").write_text("\n".join(["[exec]", 'runner = "exec-runner"']))
         merged = load_merged_config(home=home, proj_dir=None, cwd=tmp_path)
         cfg = exec_config_from_merged(merged)
         assert cfg.runner == "exec-runner"

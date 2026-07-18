@@ -43,14 +43,14 @@ from agm.agl.matchcompile.normalize import (
 )
 from agm.agl.modules.ids import ENTRY_ID
 from agm.agl.parser import parse_program
-from agm.agl.scope import resolve
-from agm.agl.scope.graph import resolve_graph
+from agm.agl.scope import resolve_module
+from agm.agl.scope.program import resolve_program
 from agm.agl.semantics.type_table import TypeTable
 from agm.agl.semantics.types import BoolType, EnumType, IntType, TextType
 from agm.agl.semantics.values import BoolValue, EnumValue
 from agm.agl.syntax.nodes import Case
 from agm.agl.syntax.visitor import walk
-from agm.agl.typecheck import CheckedModule, CheckedProgram, check, check_graph
+from agm.agl.typecheck import CheckedModule, check_module, check_program
 from tests.agl.ir_harness import make_graph_from_files
 from tests.agl.match_reference import matrix_action, reference_action
 
@@ -65,11 +65,11 @@ _CAPS = HostCapabilities(
 )
 
 
-def _check(source: str) -> CheckedProgram:
-    return check(resolve(parse_program(source)), _CAPS)
+def _check(source: str) -> CheckedModule:
+    return check_module(resolve_module(parse_program(source)), _CAPS)
 
 
-def _only_case(checked: CheckedProgram | CheckedModule) -> Case:
+def _only_case(checked: CheckedModule | CheckedModule) -> Case:
     cases: list[Case] = []
 
     def collect(node: object) -> None:
@@ -81,9 +81,7 @@ def _only_case(checked: CheckedProgram | CheckedModule) -> Case:
     return cases[0]
 
 
-def _pair_case() -> tuple[
-    CheckedProgram, Case, PatternMatrix, EnumConstructor, OccurrenceAllocator
-]:
+def _pair_case() -> tuple[CheckedModule, Case, PatternMatrix, EnumConstructor, OccurrenceAllocator]:
     checked = _check(
         "enum Pair\n"
         "  | pair(left: bool, right: bool)\n"
@@ -918,7 +916,7 @@ def test_imported_generic_signature_is_canonical_during_matrix_specialization(
             ),
         },
     )
-    checked = check_graph(resolve_graph(graph), _CAPS).modules[ENTRY_ID]
+    checked = check_program(resolve_program(graph), _CAPS).modules[ENTRY_ID]
     normalized = normalize_case(_only_case(checked), checked)
     matrix = matrix_from_normalized(normalized)
     head = head_constructors(matrix, 0)[0]
@@ -982,9 +980,7 @@ def test_independent_decomposition_orders_have_one_canonical_matrix_key() -> Non
     left_then_right, complete_ledger = _decompose_independent_columns(
         matrix, boxed, allocator, (0, 1)
     )
-    right_then_left, _ = _decompose_independent_columns(
-        matrix, boxed, complete_ledger, (1, 0)
-    )
+    right_then_left, _ = _decompose_independent_columns(matrix, boxed, complete_ledger, (1, 0))
 
     assert left_then_right == right_then_left
     assert hash(left_then_right) == hash(right_then_left)
@@ -1018,8 +1014,7 @@ def test_nested_decompositions_are_canonicalized_in_topological_order() -> None:
     assert left_then_right.matrix == right_then_left
     assert hash(left_then_right.matrix) == hash(right_then_left)
     decomposition_parent_orders = tuple(
-        decomposition.parent.creation_order
-        for decomposition in right_then_left.path_decompositions
+        decomposition.parent.creation_order for decomposition in right_then_left.path_decompositions
     )
     assert decomposition_parent_orders == tuple(sorted(decomposition_parent_orders))
 

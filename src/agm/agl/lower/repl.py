@@ -10,13 +10,13 @@ from agm.agl.ir.ids import NominalId, SourceId, SymbolId
 from agm.agl.ir.program import ExecutableProgram, NominalDescriptor, SourceFile
 from agm.agl.ir.validate import validate_ir
 from agm.agl.lower.lowerer import _LinkState, _Lowerer
-from agm.agl.matchcompile import MatchCompiledModuleGraph, MatchCompiledProgram
+from agm.agl.matchcompile import MatchCompiledModule, MatchCompiledProgram
 from agm.agl.modules.ids import ENTRY_ID, ModuleId
 from agm.agl.self_validation import self_validation_enabled
 from agm.agl.syntax.nodes import Binder, Declaration
 from agm.util.text import normalize_newlines
 
-__all__ = ["LinkImage", "LoweredReplEntry", "lower_repl_entry", "lower_repl_graph"]
+__all__ = ["LinkImage", "LoweredReplEntry", "lower_repl_entry", "lower_repl_program"]
 
 
 @dataclass(slots=True)
@@ -78,7 +78,7 @@ class LoweredReplEntry:
 
 
 def lower_repl_entry(
-    compiled_entry: MatchCompiledProgram,
+    compiled_entry: MatchCompiledModule,
     *,
     image: LinkImage,
     source_text: str,
@@ -118,30 +118,30 @@ def lower_repl_entry(
     return LoweredReplEntry(program=program, trailing_expression=trailing_expression)
 
 
-def lower_repl_graph(
-    compiled_graph: MatchCompiledModuleGraph,
+def lower_repl_program(
+    compiled: MatchCompiledProgram,
     *,
     image: LinkImage,
     source_text: str,
     contract_payloads: Mapping[int, ContractPayload] | None = None,
 ) -> LoweredReplEntry:
     """Incrementally link a match-compiled module graph into a REPL image."""
-    from agm.agl.lower.graph import lower_graph
+    from agm.agl.lower.program import lower_program
 
     # NOTE: ``image._linked_modules`` is intentionally NOT updated here. Linking
     # a module allocates persistent IDs, but the entry may still fail at runtime;
     # marking modules linked before the entry succeeds would desync the image
     # from the session's cached ``LoadedModule`` set. The session calls
     # ``LinkImage.mark_linked`` once the entry has evaluated successfully.
-    program = lower_graph(
-        compiled_graph,
+    program = lower_program(
+        compiled,
         _link=image._state,
         _already_linked=frozenset(image._linked_modules),
         _entry_source_text=source_text,
         contract_payloads=contract_payloads,
     )
-    checked_graph = compiled_graph.checked_graph
-    entry = checked_graph.modules[checked_graph.entry_id].resolved.program
+    checked = compiled.checked
+    entry = checked.modules[checked.entry_id].resolved.program
     last = entry.body.items[-1]
     marker = (
         len(program.modules[program.entry_module].initializers) - 1

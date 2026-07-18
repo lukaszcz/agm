@@ -483,10 +483,10 @@ class TestValidProgram:
 
     def test_lowered_partial_application_program_passes_deep_validation(self) -> None:
         from agm.agl.capabilities import HostCapabilities
-        from agm.agl.lower import lower_program
+        from agm.agl.lower import lower_module
         from agm.agl.parser import parse_program
-        from agm.agl.scope import resolve
-        from agm.agl.typecheck import check
+        from agm.agl.scope import resolve_module
+        from agm.agl.typecheck import check_module
 
         source = "def add(x: int, y: int) -> int = x + y\nlet add1 = add(1, ?)\nadd1(2)"
         capabilities = HostCapabilities(
@@ -495,8 +495,8 @@ class TestValidProgram:
             supports_shell_exec=True,
             codec_kinds={},
         )
-        checked = check(resolve(parse_program(source)), capabilities)
-        program = lower_program(
+        checked = check_module(resolve_module(parse_program(source)), capabilities)
+        program = lower_module(
             _compiled_checked(checked),
             source_text=source,
             source_label="<test>",

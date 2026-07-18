@@ -498,9 +498,7 @@ def _make_validation_error(
     if error.validator == "type":
         field_elem = error.path[-1] if error.path else None
         fname: str | None = field_elem if isinstance(field_elem, str) else None
-        return ValidationError(
-            category="wrong_type", message=error.message, path=path, field=fname
-        )
+        return ValidationError(category="wrong_type", message=error.message, path=path, field=fname)
     if error.validator == "oneOf":
         return _classify_enum_failure(error, path, decode_schema, defs)
     return ValidationError(category="wrong_type", message=error.message, path=path, field=None)
@@ -518,7 +516,8 @@ def _classify_enum_failure(
         return ValidationError(
             category="bad_case",
             message="Enum object did not match any known variant.",
-            path=path, field=None,
+            path=path,
+            field=None,
         )
 
     case_val = instance.get("$case")
@@ -526,7 +525,8 @@ def _classify_enum_failure(
         return ValidationError(
             category="bad_case",
             message='Enum object is missing a string "$case" tag.',
-            path=path, field="$case",
+            path=path,
+            field="$case",
         )
 
     enum_decode = _find_enum_decode_at_path(decode_schema, list(error.absolute_path), defs)
@@ -534,7 +534,8 @@ def _classify_enum_failure(
         return ValidationError(
             category="bad_case",
             message='Enum object is missing a string "$case" tag.',
-            path=path, field="$case",
+            path=path,
+            field="$case",
         )
 
     known_variants = {v.name: v for v in enum_decode.variants}
@@ -544,7 +545,8 @@ def _classify_enum_failure(
             category="bad_case",
             message=f'Unknown "$case" {case_val!r} for enum {enum_decode.display_name!r}. '
             f"Valid variants: {valid}.",
-            path=path, field="$case",
+            path=path,
+            field="$case",
         )
 
     variant = known_variants[case_val]
@@ -554,7 +556,8 @@ def _classify_enum_failure(
             return ValidationError(
                 category="missing_field",
                 message=f"Enum variant {case_val!r} is missing field {field_name!r}.",
-                path=path, field=field_name,
+                path=path,
+                field=field_name,
             )
     declared = set(variant_field_names) | {"$case"}
     for key in instance:
@@ -562,13 +565,15 @@ def _classify_enum_failure(
             return ValidationError(
                 category="unknown_field",
                 message=f"Enum variant {case_val!r} has an unexpected field {key!r}.",
-                path=path, field=key,
+                path=path,
+                field=key,
             )
 
     return ValidationError(
         category="bad_case",
         message="Enum object did not match the selected variant schema.",
-        path=path, field=None,
+        path=path,
+        field=None,
     )
 
 
@@ -593,9 +598,7 @@ def _parse_json_core(
             parsed_obj: object = json.loads(raw, parse_float=Decimal)
         except json.JSONDecodeError as exc:
             return ParseResult.failure(f"Strict JSON parse failed: {exc}")
-        return _validate_and_decode_core(
-            raw.strip(), parsed_obj, schema_dict, decode_schema, defs
-        )
+        return _validate_and_decode_core(raw.strip(), parsed_obj, schema_dict, decode_schema, defs)
 
     json_text = _extract_json_text(raw)
     if json_text is _AMBIGUOUS_MULTI_VALUE:
@@ -696,7 +699,7 @@ class JsonCodec:
       via stdlib ``json.loads`` (surrounding whitespace permitted; nothing
       else).  No fence stripping or repair.
 
-    Schema validation is always strict in both modes (rules 3–6 of 
+    Schema validation is always strict in both modes (rules 3–6 of
     never relaxed).
 
     ``make_contract`` derives the JSON Schema and typeless decode walk once

@@ -14,9 +14,9 @@ Resolution is namespace- and scope-directed, never capitalization-directed — a
 
 Agents must be declared in source; the pass binds each declared agent as a first-class value of agent type. Register-backed `builtin var` declarations are admitted only in the canonical `std.config` module. The pass enforces lexical control-flow boundaries — `break`/`continue` must stay within a loop in the same function, `return` must appear inside a function body — and the extern (Python FFI) placement rule that externs are only allowed in file-backed modules.
 
-Graph-mode resolution extends this pass across modules; see [modules.md](agl/modules.md).
+Program resolution extends this pass across modules; see [modules.md](agl/modules.md).
 
 ## Code Entry Points
 
-- `src/agm/agl/scope/` — the single-module resolver, graph-aware resolution, and the resolved-program side tables.
-- Tests: `tests/test_agl_scope.py`, `tests/test_agl_scope_graph.py`, `tests/test_agl_scope_imports.py`.
+- `src/agm/agl/scope/` — `resolve_module`, `resolve_program`, and their resolution side tables.
+- Tests: `tests/test_agl_scope.py`, `tests/test_agl_scope_program.py`, `tests/test_agl_scope_imports.py`.

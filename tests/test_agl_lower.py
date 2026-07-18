@@ -2,11 +2,11 @@
 
 Covers:
 - ``compile_coercion`` — every branch of the coercion compiler.
-- ``lower_program`` — lowering of supported nodes, including coercion
+- ``lower_module`` — lowering of supported nodes, including coercion
   insertion, binding/assignment lowering, and validate_ir pass.
 
 Pipeline helper: reuses the ``parse_resolve_check`` pattern from
-``tests/test_agl_typecheck.py`` to obtain a ``CheckedProgram`` from source.
+``tests/test_agl_typecheck.py`` to obtain a ``CheckedModule`` from source.
 """
 
 from __future__ import annotations
@@ -80,11 +80,11 @@ from agm.agl.ir.operations import (
 )
 from agm.agl.ir.program import ExecutableProgram, FunctionDescriptor, IrFunctionBody
 from agm.agl.ir.validate import validate_ir
-from agm.agl.lower import LinkImage, compile_coercion, lower_program, lower_repl_entry
+from agm.agl.lower import LinkImage, compile_coercion, lower_module, lower_repl_entry
 from agm.agl.lower.lowerer import _Lowerer
-from agm.agl.matchcompile import MatchCompiledProgram, compile_program_matches
+from agm.agl.matchcompile import MatchCompiledModule, compile_module_matches
 from agm.agl.parser import parse_program, parse_program_seeded
-from agm.agl.scope import resolve
+from agm.agl.scope import resolve_module
 from agm.agl.semantics.types import (
     BoolType,
     DecimalType,
@@ -98,10 +98,10 @@ from agm.agl.semantics.types import (
     UnitType,
 )
 from agm.agl.syntax.nodes import Case, Placeholder
-from agm.agl.typecheck import check
-from agm.agl.typecheck.env import CheckedProgram
+from agm.agl.typecheck import check_module
+from agm.agl.typecheck.env import CheckedModule
 from tests._agl_helpers import enum_type, record_type, type_table_for
-from tests.agl.ir_harness import _compiled_checked, _compiled_checked_graph
+from tests.agl.ir_harness import _compiled_checked
 
 _REPO_STDLIB_ROOT = Path(__file__).resolve().parents[1] / "stdlib"
 
@@ -122,16 +122,16 @@ def _caps() -> HostCapabilities:
     )
 
 
-def _check(source: str) -> CheckedProgram:
+def _check(source: str) -> CheckedModule:
     prog = parse_program(source)
-    resolved = resolve(prog)
-    return check(resolved, _caps())
+    resolved = resolve_module(prog)
+    return check_module(resolved, _caps())
 
 
 def test_lower_repl_entry_accumulates_tables_and_resolves_prior_symbols() -> None:
     image = LinkImage()
     first_program, next_id = parse_program_seeded("let x = 41\n()", start_id=0)
-    first_checked = check(resolve(first_program), _caps())
+    first_checked = check_module(resolve_module(first_program), _caps())
 
     first = lower_repl_entry(
         _compiled_checked(first_checked),
@@ -144,8 +144,8 @@ def test_lower_repl_entry_accumulates_tables_and_resolves_prior_symbols() -> Non
 
     second_source = "let y = x + 1\ny"
     second_program, _ = parse_program_seeded(second_source, start_id=next_id)
-    second_checked = check(
-        resolve(second_program, parent_scope=first_checked.resolved.root_scope),
+    second_checked = check_module(
+        resolve_module(second_program, parent_scope=first_checked.resolved.root_scope),
         _caps(),
         seed_env=first_checked.type_env,
     )
@@ -165,7 +165,7 @@ def test_lower_repl_entry_accumulates_tables_and_resolves_prior_symbols() -> Non
 def _lower(source: str) -> ExecutableProgram:
     """Parse → check → lower the source; return ExecutableProgram."""
     checked = _check(source)
-    return lower_program(
+    return lower_module(
         _compiled_checked(checked),
         source_text=source,
         source_label="<test>",
@@ -205,7 +205,7 @@ def _function_body(desc: FunctionDescriptor) -> object:
     return desc.impl.body
 
 
-def _make_lowerer(checked: CheckedProgram, source: str) -> "_Lowerer":
+def _make_lowerer(checked: CheckedModule, source: str) -> "_Lowerer":
     """Match-compile ``checked`` and create a lowerer with fresh link state."""
     from agm.agl.ir.ids import SourceId
     from agm.agl.ir.program import SourceFile
@@ -218,8 +218,8 @@ def _make_lowerer(checked: CheckedProgram, source: str) -> "_Lowerer":
     link.next_source += 1
     normalized = normalize_newlines(source)
     link.sources[source_id] = SourceFile(display_name="<test>", normalized_text=normalized)
-    match_result = compile_program_matches(checked)
-    assert isinstance(match_result.compiled, MatchCompiledProgram)
+    match_result = compile_module_matches(checked)
+    assert isinstance(match_result.compiled, MatchCompiledModule)
     compiled = match_result.compiled
     return _Lowerer(compiled.checked, link, ENTRY_ID, source_id, source, compiled.cases)
 
@@ -567,7 +567,7 @@ class TestCompileCoercion:
 
 
 # ---------------------------------------------------------------------------
-# lower_program: basic sanity — validate_ir passes
+# lower_module: basic sanity — validate_ir passes
 # ---------------------------------------------------------------------------
 
 
@@ -599,7 +599,7 @@ class TestLowerProgramValidateIr:
 
 
 # ---------------------------------------------------------------------------
-# lower_program: literal lowering
+# lower_module: literal lowering
 # ---------------------------------------------------------------------------
 
 
@@ -657,7 +657,7 @@ class TestLiteralLowering:
 
 
 # ---------------------------------------------------------------------------
-# lower_program: list literal lowering
+# lower_module: list literal lowering
 # ---------------------------------------------------------------------------
 
 
@@ -711,7 +711,7 @@ class TestListLitLowering:
 
 
 # ---------------------------------------------------------------------------
-# lower_program: dict literal lowering
+# lower_module: dict literal lowering
 # ---------------------------------------------------------------------------
 
 
@@ -751,7 +751,7 @@ class TestDictLitLowering:
 
 
 # ---------------------------------------------------------------------------
-# lower_program: let / var binding lowering
+# lower_module: let / var binding lowering
 # ---------------------------------------------------------------------------
 
 
@@ -841,7 +841,7 @@ class TestBindingLowering:
 
 
 # ---------------------------------------------------------------------------
-# lower_program: VarRef lowering (IrLoad)
+# lower_module: VarRef lowering (IrLoad)
 # ---------------------------------------------------------------------------
 
 
@@ -863,7 +863,7 @@ class TestVarRefLowering:
 
 
 # ---------------------------------------------------------------------------
-# lower_program: AssignStmt lowering (simple name target only)
+# lower_module: AssignStmt lowering (simple name target only)
 # ---------------------------------------------------------------------------
 
 
@@ -903,12 +903,12 @@ class TestAssignStmtLowering:
 
 
 # ---------------------------------------------------------------------------
-# lower_program: Block lowering
+# lower_module: Block lowering
 #
 # A Block node appears as an expression only inside branches of control-flow
 # (if/case/do/try) and function bodies. We test the
 # Block lowering path by calling the lowerer's internal API directly with a
-# synthetic Block node constructed from a lowered CheckedProgram.  This
+# synthetic Block node constructed from a lowered CheckedModule.  This
 # exercises the Block arm of lower_expr and _lower_block without extra syntax
 # control-flow in the source.
 # ---------------------------------------------------------------------------
@@ -916,7 +916,7 @@ class TestAssignStmtLowering:
 
 class TestBlockLowering:
     def test_block_emits_ir_block(self) -> None:
-        # Build a CheckedProgram from a simple multi-statement source so we
+        # Build a CheckedModule from a simple multi-statement source so we
         # can reuse its node_types and resolution tables.  Then construct
         # a synthetic Block wrapping those items and call lower_expr directly.
         from agm.agl.syntax.nodes import Block, LetDecl, VarRef
@@ -924,7 +924,7 @@ class TestBlockLowering:
 
         src = "let _a: int = 1\n_a"
         checked = _check(src)
-        # Build a _Lowerer in the same state as lower_program would, but stop
+        # Build a _Lowerer in the same state as lower_module would, but stop
         # before running the top-level body so we can call lower_expr manually.
         lowerer = _make_lowerer(checked, src)
 
@@ -957,7 +957,7 @@ class TestBlockLowering:
 
 
 # ---------------------------------------------------------------------------
-# lower_program: sources table
+# lower_module: sources table
 # ---------------------------------------------------------------------------
 
 
@@ -979,7 +979,7 @@ class TestSourcesTable:
 
 
 # ---------------------------------------------------------------------------
-# lower_program: nominals table starts empty
+# lower_module: nominals table starts empty
 # ---------------------------------------------------------------------------
 
 
@@ -1089,7 +1089,7 @@ class TestNominalsEmpty:
 
 
 # ---------------------------------------------------------------------------
-# lower_program: unsupported nodes raise a clear error
+# lower_module: unsupported nodes raise a clear error
 # ---------------------------------------------------------------------------
 
 
@@ -1189,7 +1189,7 @@ let c = Color::Red
 
 
 # ---------------------------------------------------------------------------
-# lower_program: Location fields are valid
+# lower_module: Location fields are valid
 # ---------------------------------------------------------------------------
 
 
@@ -1212,7 +1212,7 @@ class TestLocationValidity:
 
 
 # ---------------------------------------------------------------------------
-# lower_program: validate_ir integration
+# lower_module: validate_ir integration
 # ---------------------------------------------------------------------------
 
 
@@ -1256,7 +1256,7 @@ class TestIrFieldLowering:
         from agm.agl.syntax.nodes import FieldAccess, UnitLit
         from agm.agl.syntax.spans import UNKNOWN_SOURCE, SourceSpan
 
-        # Build a CheckedProgram from the trivial source "()" — we only need the
+        # Build a CheckedModule from the trivial source "()" — we only need the
         # resolved/type-table scaffolding, not the actual program body.
         checked = _check("()")
 
@@ -1473,7 +1473,7 @@ class TestScanCapturesLoopForIterWhileCond:
         while_cond_ref = VarRef(name="x", span=fake_span, node_id=88882)
 
         # Inject resolutions for the synthetic node_ids so _record_capture can
-        # find them; the resolution dict is mutable even though ResolvedProgram is frozen.
+        # find them; the resolution dict is mutable even though ModuleResolution is frozen.
         checked.resolved.resolution[88881] = x_ref
         checked.resolved.resolution[88882] = x_ref
 
@@ -1662,11 +1662,7 @@ class TestPartialCallLowering:
     """Golden tests for lowering placeholder calls to closure IR."""
 
     def test_declared_partial_call_captures_non_holes_and_preserves_defaults(self) -> None:
-        source = (
-            "def f(x: int, y: int, z: int = 9) -> int = x + y + z\n"
-            "let h = f(?, 2)\n"
-            "()"
-        )
+        source = "def f(x: int, y: int, z: int = 9) -> int = x + y + z\nlet h = f(?, 2)\n()"
         prog = _lower(source)
         h_bind = prog.modules[prog.entry_module].initializers[1]
         assert isinstance(h_bind, IrBind)
@@ -1694,11 +1690,7 @@ class TestPartialCallLowering:
         assert args[2] == UseDefault(param_index=2)
 
     def test_value_partial_call_captures_callee_before_arguments(self) -> None:
-        source = (
-            "let f = fn(x: int, y: int) -> int => x + y\n"
-            "let h = f(?, 2)\n"
-            "()"
-        )
+        source = "let f = fn(x: int, y: int) -> int => x + y\nlet h = f(?, 2)\n()"
         prog = _lower(source)
         h_bind = prog.modules[prog.entry_module].initializers[1]
         assert isinstance(h_bind, IrBind)
@@ -1746,11 +1738,7 @@ class TestPartialCallLowering:
         assert y_value.symbol == captured_bind.symbol
 
     def test_partial_call_captured_argument_coercion_is_inside_synthesized_body(self) -> None:
-        source = (
-            "def f(x: decimal, y: decimal) -> decimal = x + y\n"
-            "let h = f(?, 1)\n"
-            "()"
-        )
+        source = "def f(x: decimal, y: decimal) -> decimal = x + y\nlet h = f(?, 1)\n()"
         prog = _lower(source)
         h_bind = prog.modules[prog.entry_module].initializers[1]
         assert isinstance(h_bind, IrBind)
@@ -1788,15 +1776,15 @@ class TestPartialCallLowering:
 
 
 # ---------------------------------------------------------------------------
-# lower_graph: multi-module golden test
+# lower_program: multi-module golden test
 # ---------------------------------------------------------------------------
 
 
 class TestLowerGraph:
-    """Golden tests for lower_graph."""
+    """Golden tests for lower_program."""
 
-    def test_lower_graph_simple(self, tmp_path: Path) -> None:
-        """lower_graph on a two-module program builds a valid ExecutableProgram.
+    def test_lower_program_simple(self, tmp_path: Path) -> None:
+        """lower_program on a two-module program builds a valid ExecutableProgram.
 
         Asserts the task-specified structure for a 2-module program:
         - Both modules appear in ``program.modules`` with distinct entries.
@@ -1810,12 +1798,12 @@ class TestLowerGraph:
         """
         import os
 
-        from agm.agl.lower.graph import lower_graph
+        from agm.agl.lower.program import lower_program
         from agm.agl.modules.ids import ModuleId
         from agm.agl.modules.loader import load_graph
         from agm.agl.modules.roots import RootSet
-        from agm.agl.scope.graph import resolve_graph
-        from agm.agl.typecheck.graph import check_graph
+        from agm.agl.scope.program import resolve_program
+        from agm.agl.typecheck.program import check_program
 
         # Library defines a record type + a function using it.
         # Entry defines its own record type + imports lib's function.
@@ -1849,10 +1837,10 @@ class TestLowerGraph:
             entry_path=None,
             roots=RootSet(roots=frozenset({root, _REPO_STDLIB_ROOT})),
         )
-        rg = resolve_graph(mg)
-        cg = check_graph(rg, _caps())
+        rg = resolve_program(mg)
+        cg = check_program(rg, _caps())
 
-        prog = lower_graph(_compiled_checked_graph(cg))
+        prog = lower_program(_compiled_checked(cg))
 
         # Both modules must appear
         assert len(prog.modules) == 2
@@ -1900,8 +1888,8 @@ class TestLowerGraph:
         # lowering; call validate_ir explicitly so the test pins it regardless.
         validate_ir(prog, deep=True)
 
-    def test_lower_graph_type_alias_no_spurious_nominal(self, tmp_path: Path) -> None:
-        """Type alias does not register a spurious NominalId in lower_graph.
+    def test_lower_program_type_alias_no_spurious_nominal(self, tmp_path: Path) -> None:
+        """Type alias does not register a spurious NominalId in lower_program.
 
         A program with ``type Foo = Point`` (where Point is a record) must NOT
         create a ``NominalId(mid, "Foo")`` entry in ``program.nominals``.
@@ -1910,12 +1898,12 @@ class TestLowerGraph:
         import os
 
         from agm.agl.ir.ids import NominalId
-        from agm.agl.lower.graph import lower_graph
+        from agm.agl.lower.program import lower_program
         from agm.agl.modules.ids import ModuleId
         from agm.agl.modules.loader import load_graph
         from agm.agl.modules.roots import RootSet
-        from agm.agl.scope.graph import resolve_graph
-        from agm.agl.typecheck.graph import check_graph
+        from agm.agl.scope.program import resolve_program
+        from agm.agl.typecheck.program import check_program
 
         # Library defines a record and an enum, each with an alias pointing to them.
         # Exercises both the RecordType and EnumType alias-skip guards in graph.py.
@@ -1949,10 +1937,10 @@ class TestLowerGraph:
             entry_path=None,
             roots=RootSet(roots=frozenset({root, _REPO_STDLIB_ROOT})),
         )
-        rg = resolve_graph(mg)
-        cg = check_graph(rg, _caps())
+        rg = resolve_program(mg)
+        cg = check_program(rg, _caps())
 
-        prog = lower_graph(_compiled_checked_graph(cg))
+        prog = lower_program(_compiled_checked(cg))
 
         nominal_names = {desc.display_name for desc in prog.nominals.values()}
         nominal_ids = set(prog.nominals.keys())
@@ -1976,6 +1964,7 @@ class TestLowerGraph:
         assert NominalId(lib_mid, "ColorAlias") not in nominal_ids, (
             "NominalId(lib_mid, 'ColorAlias') must NOT appear in program.nominals"
         )
+
 
 # ---------------------------------------------------------------------------
 # Golden lowering: print, parse_json, param declarations

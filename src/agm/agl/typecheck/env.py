@@ -4,7 +4,7 @@
 - The user-declared type namespace (records, enums, aliases, exceptions).
 - The variable → Type binding table derived from the scope side tables.
 
-``CheckedProgram`` is the frozen output of the type-checking pass.
+``CheckedModule`` is the frozen output of the type-checking pass.
 ``OutputContractSpec`` records the statically derived codec + target type per
 ``AgentCall`` node.
 ``AglTypeError`` is the fatal type error raised by the checker.
@@ -13,14 +13,13 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Literal
 
-from agm.agl.capabilities import HostCapabilities
 from agm.agl.diagnostics import AglError, Diagnostic
 from agm.agl.modules.ids import ENTRY_ID, ModuleId
 from agm.agl.scope.imports import ImportEnv, QName
-from agm.agl.scope.symbols import BindingRef, ResolvedProgram
+from agm.agl.scope.symbols import BindingRef, ModuleResolution
 from agm.agl.semantics.persistent import PersistentDict
 from agm.agl.semantics.type_table import (
     BUILTIN_PRELUDE_TYPE_DEFS,
@@ -286,16 +285,16 @@ class PartialCallSpec:
 
 
 # ---------------------------------------------------------------------------
-# CheckedProgram — output of the type-checking pass
+# CheckedModule — output of the type-checking pass
 # ---------------------------------------------------------------------------
 
 
 @dataclass(frozen=True, slots=True)
-class CheckedProgram:
+class CheckedModule:
     """Immutable output of the type-checking pass.
 
     ``resolved``
-        The ``ResolvedProgram`` from the scope pass (carries the original
+        The ``ModuleResolution`` from the scope pass (carries the original
         ``Program`` and scope side tables).
     ``node_types``
         Maps ``node_id`` → resolved ``Type`` for every expression node that
@@ -321,7 +320,7 @@ class CheckedProgram:
         for type-namespace access after checking.
     """
 
-    resolved: ResolvedProgram
+    resolved: ModuleResolution
     node_types: dict[int, Type]
     contract_specs: dict[int, OutputContractSpec]
     call_sites: tuple[CallSiteRecord, ...]
@@ -331,7 +330,9 @@ class CheckedProgram:
     cast_specs: dict[int, CastSpec]
     argument_bindings: ArgumentBindings
     partial_calls: dict[int, PartialCallSpec]
-    capabilities: HostCapabilities | None = None
+    module_id: ModuleId = ENTRY_ID
+    import_env: ImportEnv = field(default_factory=lambda: ImportEnv({}, {}))
+    source_text: str = ""
 
 
 def _assert_checked_types_closed(types: Iterable[Type], *, owner: str) -> None:
@@ -381,7 +382,7 @@ def assert_checked_output_closed(
     type_env.seal()
 
 
-def assert_checked_program_closed(checked: CheckedProgram) -> None:
+def assert_checked_module_closed(checked: CheckedModule) -> None:
     """Assert that a single-module checked program is safe to lower."""
     assert_checked_output_closed(
         node_types=checked.node_types,
@@ -411,25 +412,25 @@ class TypeEnvironment:
     The ``TypeEnvironment`` is constructed and populated by the
     ``_TypeBuilder`` pre-pass; the main ``_Checker`` visitor then queries it.
 
-    Graph mode
+    Program context
     ---------------
-    When ``graph_type_table``, ``import_env``, and ``module_id`` are supplied,
+    When ``program_type_table``, ``import_env``, and ``module_id`` are supplied,
     the environment becomes module-aware:
 
-    - ``graph_type_table`` maps ``(ModuleId, name)`` to the fully-built
+    - ``program_type_table`` maps ``(ModuleId, name)`` to the fully-built
       ``Type`` objects stamped with their owning ``module_id``.  Built once by
-      the graph pre-pass; shared (read-only) across all per-module envs.
-    - ``graph_generic_table`` and ``graph_alias_table`` carry cross-module
+      the program pre-pass; shared (read-only) across all per-module envs.
+    - ``program_generic_table`` and ``program_alias_table`` carry cross-module
       templates for applied nominal types and parameterized aliases; during
-      graph type-table construction, ``graph_alias_keys`` and
-      ``graph_alias_resolver`` let transparent cross-module aliases resolve
+      program type-table construction, ``program_alias_keys`` and
+      ``program_alias_resolver`` let transparent cross-module aliases resolve
       lazily before their sorted body-resolution turn.
     - ``import_env`` is the per-module :class:`~agm.agl.scope.imports.ImportEnv`
-      produced by graph scope resolution. Used to resolve qualified and open-imported type names.
+      produced by program scope resolution. Used to resolve qualified and open-imported type names.
     - ``module_id`` is the owning module of the current env.  ``::Name``
       (empty-segment qualifier) resolves against this module's own types.
 
-    These fields are ``None`` in the single-program path; the resolution logic
+    These fields are ``None`` in the module path; the resolution logic
     in ``resolve_type_expr`` and ``_resolve_name_type`` checks for ``None``
     before entering the module-aware branches, so the existing path is
     unchanged when these are absent.
@@ -438,15 +439,15 @@ class TypeEnvironment:
     def __init__(
         self,
         *,
-        graph_type_table: Mapping[tuple[ModuleId, str], Type] | None = None,
-        graph_generic_table: Mapping[tuple[ModuleId, str], GenericTypeDef] | None = None,
-        graph_alias_table: Mapping[tuple[ModuleId, str], GenericAliasDef] | None = None,
-        graph_alias_keys: frozenset[tuple[ModuleId, str]] | None = None,
-        graph_alias_resolver: Callable[[ModuleId, str, SourceSpan | None], Type | None]
+        program_type_table: Mapping[tuple[ModuleId, str], Type] | None = None,
+        program_generic_table: Mapping[tuple[ModuleId, str], GenericTypeDef] | None = None,
+        program_alias_table: Mapping[tuple[ModuleId, str], GenericAliasDef] | None = None,
+        program_alias_keys: frozenset[tuple[ModuleId, str]] | None = None,
+        program_alias_resolver: Callable[[ModuleId, str, SourceSpan | None], Type | None]
         | None = None,
-        graph_ctor_sig_table: Mapping[tuple[ModuleId, str, str | None], ConstructorSignature]
+        program_ctor_sig_table: Mapping[tuple[ModuleId, str, str | None], ConstructorSignature]
         | None = None,
-        graph_ctor_field_kinds_table: Mapping[
+        program_ctor_field_kinds_table: Mapping[
             tuple[ModuleId, str, str | None], tuple[tuple[str, ParamKind], ...]
         ]
         | None = None,
@@ -456,7 +457,7 @@ class TypeEnvironment:
     ) -> None:
         # Shared nominal type-declaration table (dual-write target alongside
         # ``_types``): defaults to a fresh table seeded with built-in prelude
-        # defs; graph mode passes one shared instance across per-module envs.
+        # defs; program context passes one shared instance across per-module envs.
         self._type_table: TypeTable = (
             type_table if type_table is not None else create_seeded_type_table()
         )
@@ -475,7 +476,7 @@ class TypeEnvironment:
         # Alias type-params — name → tuple of type-param names.
         self._alias_type_params: dict[str, tuple[str, ...]] = {}
         # Node-id-keyed function signatures — decl_node_id → FunctionSignature.
-        # Populated in graph mode by the whole-graph function-signature pre-pass so
+        # Populated in program context by the whole-program function-signature pre-pass so
         # that _check_declared_name_call can look up the CORRECT signature for a
         # cross-module callee by its globally-unique decl_node_id rather than by
         # bare name (which would pick the wrong signature when two modules define
@@ -483,8 +484,8 @@ class TypeEnvironment:
         self._function_signatures_by_node_id: dict[int, FunctionSignature] = {}
         # Declaration node_ids of ``extern def``s, keyed by the same globally-unique
         # decl_node_id as ``_function_signatures_by_node_id``.  Populated by
-        # ``_preregister_funcdef`` (single-program mode) and by the graph
-        # function-signature pre-pass seeding (graph mode, including imported
+        # ``_preregister_funcdef`` (module mode) and by the program
+        # function-signature pre-pass seeding (program context, including imported
         # externs).  Consulted by ``_check_declared_name_call`` to decide whether a
         # declared-name call site is an extern call site to record.
         self._extern_node_ids: set[int] = set()
@@ -496,30 +497,30 @@ class TypeEnvironment:
             tuple[str, str | None], tuple[tuple[str, ParamKind], ...]
         ] = {}
         # Cross-module constructor field-kinds table: (ModuleId, owner_name, variant) → kinds.
-        self._graph_ctor_field_kinds_table: (
+        self._program_ctor_field_kinds_table: (
             Mapping[tuple[ModuleId, str, str | None], tuple[tuple[str, ParamKind], ...]] | None
-        ) = graph_ctor_field_kinds_table
-        # Graph-mode context: None in single-program path.
-        self._graph_type_table: Mapping[tuple[ModuleId, str], Type] | None = graph_type_table
+        ) = program_ctor_field_kinds_table
+        # Program context: None in module path.
+        self._program_type_table: Mapping[tuple[ModuleId, str], Type] | None = program_type_table
         # Cross-module generic type definitions: (ModuleId, name) → GenericTypeDef.
-        # Populated by the graph type pre-pass for qualified generic constructor calls.
-        self._graph_generic_table: Mapping[tuple[ModuleId, str], GenericTypeDef] | None = (
-            graph_generic_table
+        # Populated by the program type pre-pass for qualified generic constructor calls.
+        self._program_generic_table: Mapping[tuple[ModuleId, str], GenericTypeDef] | None = (
+            program_generic_table
         )
         # Cross-module parameterized type aliases: (ModuleId, name) → GenericAliasDef.
-        self._graph_alias_table: Mapping[tuple[ModuleId, str], GenericAliasDef] = (
-            graph_alias_table if graph_alias_table is not None else {}
+        self._program_alias_table: Mapping[tuple[ModuleId, str], GenericAliasDef] = (
+            program_alias_table if program_alias_table is not None else {}
         )
-        self._graph_alias_keys: frozenset[tuple[ModuleId, str]] = (
-            graph_alias_keys if graph_alias_keys is not None else frozenset()
+        self._program_alias_keys: frozenset[tuple[ModuleId, str]] = (
+            program_alias_keys if program_alias_keys is not None else frozenset()
         )
-        self._graph_alias_resolver: (
+        self._program_alias_resolver: (
             Callable[[ModuleId, str, SourceSpan | None], Type | None] | None
-        ) = graph_alias_resolver
+        ) = program_alias_resolver
         # Cross-module constructor signatures: (ModuleId, owner_name, variant) → sig.
-        self._graph_ctor_sig_table: (
+        self._program_ctor_sig_table: (
             Mapping[tuple[ModuleId, str, str | None], ConstructorSignature] | None
-        ) = graph_ctor_sig_table
+        ) = program_ctor_sig_table
         self._import_env: ImportEnv | None = import_env
         self._module_id: ModuleId = module_id
         self._sealed = False
@@ -760,7 +761,7 @@ class TypeEnvironment:
         Used for alias-transparent qualifier resolution in qualified
         constructors and ``is`` tests.
 
-        In graph mode, also searches open-imported types when the name is not
+        In program context, also searches open-imported types when the name is not
         found locally.
         """
         if name in self._types or name in self._alias_targets:
@@ -768,51 +769,51 @@ class TypeEnvironment:
                 return self._resolve_name_type(name, span=None, _resolving=frozenset())
             except AglTypeError:
                 return None
-        # Graph mode: look up via open imports.
-        if self._import_env is not None and self._graph_type_table is not None:
+        # Program context: look up via open imports.
+        if self._import_env is not None and self._program_type_table is not None:
             candidates = self._import_env.unqualified.get(name, frozenset())
-            type_candidates = [qn for qn in candidates if self._is_graph_type_candidate(qn)]
+            type_candidates = [qn for qn in candidates if self._is_program_type_candidate(qn)]
             if len(type_candidates) == 1:
                 try:
-                    return self._resolve_graph_qname_as_bare_type(
+                    return self._resolve_program_qname_as_bare_type(
                         type_candidates[0], name, span=None
                     )
                 except AglTypeError:
                     return None
         return None
 
-    def _is_graph_type_candidate(self, qname: QName) -> bool:
-        """Return whether a graph QName denotes any type-namespace declaration."""
+    def _is_program_type_candidate(self, qname: QName) -> bool:
+        """Return whether a program-qualified name denotes any type-namespace declaration."""
         key = (qname[0], qname[1])
         return (
-            (self._graph_type_table is not None and key in self._graph_type_table)
-            or (self._graph_generic_table is not None and key in self._graph_generic_table)
-            or key in self._graph_alias_table
-            or key in self._graph_alias_keys
+            (self._program_type_table is not None and key in self._program_type_table)
+            or (self._program_generic_table is not None and key in self._program_generic_table)
+            or key in self._program_alias_table
+            or key in self._program_alias_keys
         )
 
-    def _ensure_graph_alias_resolved(
+    def _ensure_program_alias_resolved(
         self, module_id: ModuleId, name: str, span: SourceSpan | None
     ) -> Type | None:
-        """Resolve a graph alias lazily when the graph pre-pass is still building it."""
+        """Resolve a program alias lazily when the program pre-pass is still building it."""
         key = (module_id, name)
-        if key not in self._graph_alias_keys or self._graph_alias_resolver is None:
+        if key not in self._program_alias_keys or self._program_alias_resolver is None:
             return None
-        return self._graph_alias_resolver(module_id, name, span)
+        return self._program_alias_resolver(module_id, name, span)
 
-    def _resolve_graph_qname_as_bare_type(
+    def _resolve_program_qname_as_bare_type(
         self, qname: QName, exposed_name: str, *, span: SourceSpan | None
     ) -> Type | None:
-        """Resolve a graph QName used as an unapplied type expression."""
-        assert self._graph_type_table is not None
+        """Resolve a program-qualified name used as an unapplied type expression."""
+        assert self._program_type_table is not None
         key = (qname[0], qname[1])
-        typ = self._graph_type_table.get(key)
+        typ = self._program_type_table.get(key)
         if typ is not None:
             return typ
-        typ = self._ensure_graph_alias_resolved(qname[0], qname[1], span)
+        typ = self._ensure_program_alias_resolved(qname[0], qname[1], span)
         if typ is not None:
             return typ
-        alias_def = self._graph_alias_table.get(key)
+        alias_def = self._program_alias_table.get(key)
         if alias_def is not None and alias_def.type_params:
             raise AglTypeError(
                 f"Parameterized alias '{exposed_name}' requires "
@@ -820,7 +821,7 @@ class TypeEnvironment:
                 f"use '{exposed_name}[...]' to apply it.",
                 span=span,
             )
-        return self._graph_type_table.get(key)
+        return self._program_type_table.get(key)
 
     # --- Function signature table ---
 
@@ -837,7 +838,7 @@ class TypeEnvironment:
     def register_function_signature_by_node_id(self, node_id: int, sig: FunctionSignature) -> None:
         """Register a function signature keyed by its declaration ``node_id``.
 
-        Used by the graph pre-pass to seed every module's env with ALL
+        Used by the program pre-pass to seed every module's env with ALL
         function signatures before any body is checked.  Because ``node_id``
         is globally unique, signatures from different modules never
         collide here even when two modules define functions with the same name.
@@ -853,7 +854,7 @@ class TypeEnvironment:
         name collision problem when two modules define same-named functions with
         different signatures.
 
-        Populated in graph mode by the whole-graph function-signature pre-pass
+        Populated in program context by the whole-program function-signature pre-pass
         (via :meth:`register_function_signature_by_node_id`) AND in single-
         program mode by ``_preregister_funcdef`` (which always seeds both the
         name-keyed and node-id-keyed tables).  Returns ``None`` only for
@@ -933,9 +934,9 @@ class TypeEnvironment:
         flexible ``InferenceVarType`` nodes are owned by an expression region
         and must be finalized before an environment is seeded or retained.
 
-        Only per-module state is walked here.  The whole-graph tables that every
+        Only per-module state is walked here.  The whole-program tables that every
         module env of a graph shares (the ``TypeTable`` and the ``_graph_*``
-        maps) are validated once per graph by :meth:`assert_shared_tables_closed`
+        maps) are validated once per program by :meth:`assert_shared_tables_closed`
         rather than redundantly on every per-module seal.
         """
         types: list[Type] = [
@@ -961,18 +962,18 @@ class TypeEnvironment:
             raise AssertionError("inference variable leaked into a persistent type environment")
 
     def assert_shared_tables_closed(self) -> None:
-        """Assert the whole-graph tables shared across module envs are closed.
+        """Assert the whole-program tables shared across module envs are closed.
 
         The ``TypeTable`` and the cross-module ``_graph_*`` maps are the same
         instances on every module env of a graph, so they are validated once per
-        graph (or once per single-module program) instead of on every seal.  The
-        graph type table itself is validated by the caller from the authoritative
-        :class:`CheckedModuleGraph` field, so it is not re-walked here.
+        program (or once per single-module program) instead of on every seal.  The
+        program type table itself is validated by the caller from the authoritative
+        :class:`CheckedProgram` field, so it is not re-walked here.
         """
-        constructor_sigs = tuple((self._graph_ctor_sig_table or {}).values())
+        constructor_sigs = tuple((self._program_ctor_sig_table or {}).values())
         types: list[Type] = [
-            *(alias.template for alias in self._graph_alias_table.values()),
-            *(generic.template for generic in (self._graph_generic_table or {}).values()),
+            *(alias.template for alias in self._program_alias_table.values()),
+            *(generic.template for generic in (self._program_generic_table or {}).values()),
             *(template for sig in constructor_sigs for template in sig.field_templates),
             *(sig.result_template for sig in constructor_sigs),
             *(
@@ -1127,9 +1128,9 @@ class TypeEnvironment:
                     resolved_args,
                     span=eff_span,
                 )
-            graph_alias_def = self._graph_alias_table.get((self._module_id, name))
-            if graph_alias_def is not None:
-                return self.instantiate_alias(name, graph_alias_def, resolved_args, span=eff_span)
+            program_alias_def = self._program_alias_table.get((self._module_id, name))
+            if program_alias_def is not None:
+                return self.instantiate_alias(name, program_alias_def, resolved_args, span=eff_span)
             if name in self._types:
                 raise AglTypeError(
                     f"Type '{name}' does not take type arguments.",
@@ -1158,10 +1159,10 @@ class TypeEnvironment:
         span: SourceSpan | None,
     ) -> Type | None:
         """Resolve an unqualified generic application through open imports."""
-        if self._import_env is None or self._graph_generic_table is None:
+        if self._import_env is None or self._program_generic_table is None:
             return None
         candidates = self._import_env.unqualified.get(name, frozenset())
-        type_candidates = [qname for qname in candidates if self._is_graph_type_candidate(qname)]
+        type_candidates = [qname for qname in candidates if self._is_program_type_candidate(qname)]
         if len(type_candidates) > 1:
             labels = sorted(f"{qname[0].dotted()}::{qname[1]}" for qname in type_candidates)
             raise AglTypeError(
@@ -1172,13 +1173,13 @@ class TypeEnvironment:
         if not type_candidates:
             return None
         module_id, source_name = type_candidates[0]
-        gdef = self._graph_generic_table.get((module_id, source_name))
+        gdef = self._program_generic_table.get((module_id, source_name))
         if gdef is not None:
             return self.instantiate_from_gdef(source_name, gdef, args, span=span)
-        alias_def = self._graph_alias_table.get((module_id, source_name))
-        if alias_def is None and (module_id, source_name) in self._graph_alias_keys:
-            self._ensure_graph_alias_resolved(module_id, source_name, span)
-            alias_def = self._graph_alias_table.get((module_id, source_name))
+        alias_def = self._program_alias_table.get((module_id, source_name))
+        if alias_def is None and (module_id, source_name) in self._program_alias_keys:
+            self._ensure_program_alias_resolved(module_id, source_name, span)
+            alias_def = self._program_alias_table.get((module_id, source_name))
         if alias_def is not None:
             return self.instantiate_alias(source_name, alias_def, args, span=span)
         raise AglTypeError(
@@ -1198,7 +1199,7 @@ class TypeEnvironment:
         from agm.agl.syntax.types import Qualifier
 
         assert isinstance(qualifier, Qualifier)
-        if self._import_env is None or self._graph_generic_table is None:
+        if self._import_env is None or self._program_generic_table is None:
             raise AglTypeError(
                 f"Module qualifier '{'.'.join(qualifier.segments)}::' cannot be resolved "
                 "outside of a module graph.",
@@ -1218,16 +1219,19 @@ class TypeEnvironment:
                 f"'{'.'.join(qualifier.segments)}::'.",
                 span=span,
             )
-        gdef = self._graph_generic_table.get((qname[0], qname[1]))
+        gdef = self._program_generic_table.get((qname[0], qname[1]))
         if gdef is not None:
             return self.instantiate_from_gdef(qname[1], gdef, args, span=span)
-        alias_def = self._graph_alias_table.get((qname[0], qname[1]))
-        if alias_def is None and (qname[0], qname[1]) in self._graph_alias_keys:
-            self._ensure_graph_alias_resolved(qname[0], qname[1], span)
-            alias_def = self._graph_alias_table.get((qname[0], qname[1]))
+        alias_def = self._program_alias_table.get((qname[0], qname[1]))
+        if alias_def is None and (qname[0], qname[1]) in self._program_alias_keys:
+            self._ensure_program_alias_resolved(qname[0], qname[1], span)
+            alias_def = self._program_alias_table.get((qname[0], qname[1]))
         if alias_def is not None:
             return self.instantiate_alias(qname[1], alias_def, args, span=span)
-        if self._graph_type_table is not None and (qname[0], qname[1]) in self._graph_type_table:
+        if (
+            self._program_type_table is not None
+            and (qname[0], qname[1]) in self._program_type_table
+        ):
             raise AglTypeError(
                 f"Type '{'.'.join(qualifier.segments)}::{name}' does not take type arguments.",
                 span=span,
@@ -1278,11 +1282,11 @@ class TypeEnvironment:
                 _resolving=_resolving | {name},
                 type_vars=type_vars,
             )
-        graph_alias_def = self._graph_alias_table.get((self._module_id, name))
-        if graph_alias_def is not None:
+        program_alias_def = self._program_alias_table.get((self._module_id, name))
+        if program_alias_def is not None:
             raise AglTypeError(
                 f"Parameterized alias '{name}' requires "
-                f"{len(graph_alias_def.type_params)} type argument(s); "
+                f"{len(program_alias_def.type_params)} type argument(s); "
                 f"use '{name}[...]' to apply it.",
                 span=span,
             )
@@ -1290,16 +1294,16 @@ class TypeEnvironment:
         typ = self._types.get(name)
         if typ is not None:
             return typ
-        # Graph mode: unqualified lookup through open-imported names.
-        if self._import_env is not None and self._graph_type_table is not None:
+        # Program context: unqualified lookup through open-imported names.
+        if self._import_env is not None and self._program_type_table is not None:
             candidates = self._import_env.unqualified.get(name, frozenset())
-            # Filter to candidates that are type names in the graph type namespace.
+            # Filter to candidates that are type names in the program type namespace.
             type_candidates: list[QName] = [
-                qn for qn in candidates if self._is_graph_type_candidate(qn)
+                qn for qn in candidates if self._is_program_type_candidate(qn)
             ]
             if len(type_candidates) == 1:
                 qn = type_candidates[0]
-                typ = self._resolve_graph_qname_as_bare_type(qn, name, span=span)
+                typ = self._resolve_program_qname_as_bare_type(qn, name, span=span)
                 if typ is not None:
                     return typ
             elif len(type_candidates) > 1:
@@ -1325,16 +1329,16 @@ class TypeEnvironment:
     ) -> Type:
         """Resolve a module-qualified type reference ``QUALIFIER::Name``.
 
-        Called only in graph mode.  Falls back to the local type namespace
+        Called only in program context.  Falls back to the local type namespace
         (prelude / built-ins) when the qualifier is empty (``::Name``
-        self-reference to the current module) and no graph context exists.
+        self-reference to the current module) and no program context exists.
         """
         from agm.agl.syntax.types import Qualifier
 
         assert isinstance(qualifier, Qualifier)
 
-        if self._graph_type_table is None:
-            # Single-module path: module qualifiers have no graph table to consult.
+        if self._program_type_table is None:
+            # Single-module path: module qualifiers have no program table to consult.
             # ::Name (empty segments) = current module's own type.
             if not qualifier.segments:
                 return self._resolve_name_type(name, span=span, _resolving=frozenset())
@@ -1347,7 +1351,7 @@ class TypeEnvironment:
         # ``::Name`` — self-reference to the current module's own type.
         if not qualifier.segments:
             key = (self._module_id, name)
-            t = self._graph_type_table.get(key)
+            t = self._program_type_table.get(key)
             if t is not None:
                 return t
             # Fall back to own local types (covers built-ins and prelude).
@@ -1370,10 +1374,10 @@ class TypeEnvironment:
                 "It may not be in the imported set S, or may not be exported.",
                 span=span,
             )
-        t = self._resolve_graph_qname_as_bare_type(qname, name, span=span)
+        t = self._resolve_program_qname_as_bare_type(qname, name, span=span)
         if t is not None:
             return t
-        # Name is in S but isn't a type in the graph table — it might be a function.
+        # Name is in S but isn't a type in the program table — it might be a function.
         raise AglTypeError(
             f"'{'.'.join(handle)}::{name}' does not name a type.",
             span=span,
@@ -1382,8 +1386,8 @@ class TypeEnvironment:
     def non_builtin_type_items(self) -> list[tuple[str, Type]]:
         """Return ``(name, type)`` pairs for all non-builtin registered types.
 
-        Used by the graph pre-pass to collect type shells into the shared
-        ``graph_type_table`` without accessing the private ``_types`` dict.
+        Used by the program pre-pass to collect type shells into the shared
+        ``program_type_table`` without accessing the private ``_types`` dict.
         Builtins (exception types and prelude types) are excluded.
         """
         builtin = frozenset(BUILTIN_EXCEPTIONS) | BUILTIN_PRELUDE_TYPE_NAMES
@@ -1400,21 +1404,21 @@ class TypeEnvironment:
         return frozenset(self._types) | frozenset(self._alias_targets)
 
     def resolve_type_by_module_id(self, module_id: ModuleId, name: str) -> Type | None:
-        """Directly look up a type by owning module and name in the graph type table.
+        """Directly look up a type by owning module and name in the program type table.
 
         Used for cross-module constructor references when the owning module is
         already known from scope resolution (e.g. ``mylib::Color::Red``).
 
-        Returns ``None`` in single-program mode or if not found.
+        Returns ``None`` in module mode or if not found.
         """
-        if self._graph_type_table is None:
+        if self._program_type_table is None:
             return None
-        return self._graph_type_table.get((module_id, name))
+        return self._program_type_table.get((module_id, name))
 
     def resolve_constructible_type_by_module_id(
         self, module_id: ModuleId, name: str
     ) -> RecordType | EnumType | ExceptionType | None:
-        """Resolve a graph type name or transparent alias to a nominal target.
+        """Resolve a program type name or transparent alias to a nominal target.
 
         Scope tentatively classifies aliases with a named or applied body as
         constructor bindings. This confirms that classification after aliases
@@ -1439,7 +1443,7 @@ class TypeEnvironment:
 
         This is the public checked-type boundary for downstream consumers that
         retain source import names. It exposes only an immutable semantic match,
-        not the mutable graph type/generic/alias registries. Non-generic aliases,
+        not the mutable program type/generic/alias registries. Non-generic aliases,
         generic aliases, alias chains, transformed arguments, and ordinary
         nominal declarations all share the exact template matcher.
         """
@@ -1453,20 +1457,20 @@ class TypeEnvironment:
     def source_type_template_qname(self, module_id: ModuleId, name: str) -> TypeTemplate | None:
         """Return immutable checked template data for one source type QName.
 
-        Graph aliases are already cycle-checked and resolved by the checked
-        program boundary. Own-module fallback supports the single-program path
+        Program aliases are already cycle-checked and resolved by the checked
+        program boundary. Own-module fallback supports the module path
         without exposing any mutable type-environment registry.
         """
         key = (module_id, name)
-        alias_def = self._graph_alias_table.get(key)
+        alias_def = self._program_alias_table.get(key)
         if alias_def is not None:
             return TypeTemplate(alias_def.template, alias_def.type_params)
-        if self._graph_generic_table is not None:
-            generic_def = self._graph_generic_table.get(key)
+        if self._program_generic_table is not None:
+            generic_def = self._program_generic_table.get(key)
             if generic_def is not None:
                 return TypeTemplate(generic_def.template, generic_def.type_params)
-        if self._graph_type_table is not None:
-            resolved = self._graph_type_table.get(key)
+        if self._program_type_table is not None:
+            resolved = self._program_type_table.get(key)
             if resolved is not None:
                 return TypeTemplate(resolved)
         if module_id != self._module_id:
@@ -1492,17 +1496,17 @@ class TypeEnvironment:
             return cached
         names = set(self._types) | set(self._alias_targets) | set(self._generic_types)
         names.update(
-            name for module_id, name in self._graph_alias_table if module_id == self._module_id
+            name for module_id, name in self._program_alias_table if module_id == self._module_id
         )
-        if self._graph_generic_table is not None:
+        if self._program_generic_table is not None:
             names.update(
                 name
-                for module_id, name in self._graph_generic_table
+                for module_id, name in self._program_generic_table
                 if module_id == self._module_id
             )
-        if self._graph_type_table is not None:
+        if self._program_type_table is not None:
             names.update(
-                name for module_id, name in self._graph_type_table if module_id == self._module_id
+                name for module_id, name in self._program_type_table if module_id == self._module_id
             )
         own_names = frozenset(names)
         if self._sealed:
@@ -1537,7 +1541,7 @@ class TypeEnvironment:
             type_qnames = tuple(
                 qname
                 for qname in self._import_env.unqualified.get(owner_name, frozenset())
-                if self._is_graph_type_candidate(qname)
+                if self._is_program_type_candidate(qname)
             )
             if len(type_qnames) != 1:
                 return None
@@ -1547,7 +1551,7 @@ class TypeEnvironment:
             if self._import_env is None or module_qualifier is None or not module_qualifier:
                 return None
             qname = self._import_env.qualified.get(module_qualifier, {}).get(owner_name)
-            if qname is None or not self._is_graph_type_candidate(qname):
+            if qname is None or not self._is_program_type_candidate(qname):
                 return None
             source_module_id, source_name = qname
             expected_qualifier = module_qualifier
@@ -1569,7 +1573,7 @@ class TypeEnvironment:
         if self._import_env is None:
             return False
         return any(
-            self._is_graph_type_candidate(qname)
+            self._is_program_type_candidate(qname)
             for qname in self._import_env.unqualified.get(name, frozenset())
         )
 
@@ -1617,11 +1621,11 @@ class TypeEnvironment:
 
         Used to detect and instantiate generic constructors referenced via a
         module qualifier (e.g. ``lib::Box[int](value: 1)``).  Returns ``None``
-        in single-program mode or when the type is not generic.
+        in module mode or when the type is not generic.
         """
-        if self._graph_generic_table is None:
+        if self._program_generic_table is None:
             return None
-        return self._graph_generic_table.get((module_id, name))
+        return self._program_generic_table.get((module_id, name))
 
     def get_open_imported_generic_type(
         self, exposed_name: str
@@ -1676,11 +1680,11 @@ class TypeEnvironment:
             gdef = self._generic_types.get(name)
             if gdef is not None:
                 return name, gdef
-            if self._graph_generic_table is None:
+            if self._program_generic_table is None:
                 return None
-            gdef = self._graph_generic_table.get((self._module_id, name))
+            gdef = self._program_generic_table.get((self._module_id, name))
             return (name, gdef) if gdef is not None else None
-        if self._import_env is None or self._graph_generic_table is None:
+        if self._import_env is None or self._program_generic_table is None:
             return None
         handle_map = self._import_env.qualified.get(qualifier.segments)
         if handle_map is None:
@@ -1688,7 +1692,7 @@ class TypeEnvironment:
         qname = handle_map.get(name)
         if qname is None:
             return None
-        gdef = self._graph_generic_table.get((qname[0], qname[1]))
+        gdef = self._program_generic_table.get((qname[0], qname[1]))
         if gdef is None:
             return None
         qualified_name = f"{'.'.join(qualifier.segments)}::{name}"
@@ -1697,11 +1701,11 @@ class TypeEnvironment:
     def _open_imported_generic_type_matches(
         self, exposed_name: str
     ) -> list[tuple[ModuleId, str, GenericTypeDef]]:
-        if self._import_env is None or self._graph_generic_table is None:
+        if self._import_env is None or self._program_generic_table is None:
             return []
         matches: list[tuple[ModuleId, str, GenericTypeDef]] = []
         for module_id, source_name in self._import_env.unqualified.get(exposed_name, frozenset()):
-            gdef = self._graph_generic_table.get((module_id, source_name))
+            gdef = self._program_generic_table.get((module_id, source_name))
             if gdef is not None:
                 matches.append((module_id, source_name, gdef))
         return matches
@@ -1712,12 +1716,12 @@ class TypeEnvironment:
         """Look up a cross-module ``ConstructorSignature`` by owning module, name, and variant.
 
         Companion to :meth:`get_generic_type_from_module` for checking cross-module
-        generic constructor calls.  Returns ``None`` in single-program mode or when
+        generic constructor calls.  Returns ``None`` in module mode or when
         not found.
         """
-        if self._graph_ctor_sig_table is None:
+        if self._program_ctor_sig_table is None:
             return None
-        return self._graph_ctor_sig_table.get((module_id, owner_name, variant))
+        return self._program_ctor_sig_table.get((module_id, owner_name, variant))
 
     def register_constructor_field_kinds(
         self,
@@ -1745,8 +1749,8 @@ class TypeEnvironment:
         result = self._constructor_field_kinds.get((owner_name, variant))
         if result is not None:
             return result
-        if module_id is not None and self._graph_ctor_field_kinds_table is not None:
-            return self._graph_ctor_field_kinds_table.get((module_id, owner_name, variant))
+        if module_id is not None and self._program_ctor_field_kinds_table is not None:
+            return self._program_ctor_field_kinds_table.get((module_id, owner_name, variant))
         return None
 
     def get_constructor_field_kinds_for_type(

@@ -315,7 +315,7 @@ r
 
 def test_raise_propagates() -> None:
     """raise propagates as AglRaise; both pipelines raise equivalent exceptions."""
-    source = "raise Abort(message = \"oops\")\n"
+    source = 'raise Abort(message = "oops")\n'
     evaluate_ir_raises(source)
 
 
@@ -520,10 +520,10 @@ catch CastError =>
 def _lower(source: str) -> object:
     """Parse → check → lower; return ExecutableProgram."""
     from agm.agl.capabilities import HostCapabilities
-    from agm.agl.lower import lower_program
+    from agm.agl.lower import lower_module
     from agm.agl.parser import parse_program
-    from agm.agl.scope import resolve
-    from agm.agl.typecheck import check
+    from agm.agl.scope import resolve_module
+    from agm.agl.typecheck import check_module
 
     caps = HostCapabilities(
         agent_names=frozenset(),
@@ -531,15 +531,13 @@ def _lower(source: str) -> object:
         supports_shell_exec=False,
         codec_kinds={
             "text": frozenset({"text"}),
-            "json": frozenset(
-                {"json", "record", "enum", "list", "dict", "int", "decimal", "bool"}
-            ),
+            "json": frozenset({"json", "record", "enum", "list", "dict", "int", "decimal", "bool"}),
         },
     )
     prog = parse_program(source)
-    resolved = resolve(prog)
-    checked = check(resolved, caps)
-    return lower_program(
+    resolved = resolve_module(prog)
+    checked = check_module(resolved, caps)
+    return lower_module(
         _compiled_checked(checked),
         source_text=source,
         source_label="<test>",
@@ -588,7 +586,7 @@ def test_lower_raise_shape() -> None:
     """Golden lowering: raise produces IrRaise with an IrMakeException for the exc."""
     from agm.agl.ir.program import ExecutableProgram
 
-    source = "raise Abort(message = \"boom\")\n"
+    source = 'raise Abort(message = "boom")\n'
     prog = _lower(source)
     assert isinstance(prog, ExecutableProgram)
     entry = prog.modules[prog.entry_module]

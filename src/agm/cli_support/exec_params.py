@@ -51,14 +51,19 @@ def _build_engine_key_flags() -> frozenset[str]:
 
 
 # Non-engine built-in flags that are always reserved on ``agm exec``.
-_BUILTIN_EXEC_FLAGS: frozenset[str] = frozenset({
-    "--command", "-c",
-    "--module-path", "-I",
-    "--max-call-depth",
-    "--help", "-h",
-    "--dry-run",
-    "--no-stdlib",
-})
+_BUILTIN_EXEC_FLAGS: frozenset[str] = frozenset(
+    {
+        "--command",
+        "-c",
+        "--module-path",
+        "-I",
+        "--max-call-depth",
+        "--help",
+        "-h",
+        "--dry-run",
+        "--no-stdlib",
+    }
+)
 
 # Reserved flag strings: non-engine built-ins UNION engine-key flags (both polarities).
 # Collision check is verbatim — no underscore↔hyphen normalisation.
@@ -84,7 +89,7 @@ def discover_params_from_source(source: str) -> tuple[ParamDeclInfo, ...]:
     try:
         from agm.agl import PipelineDriver
 
-        prepared = PipelineDriver.prepare(source)
+        prepared = PipelineDriver.prepare_program(source)
         discovery = PipelineDriver(
             default_agent=lambda request: AgentResponse(content="")
         ).discover_params(prepared)
@@ -93,9 +98,7 @@ def discover_params_from_source(source: str) -> tuple[ParamDeclInfo, ...]:
         return ()
 
 
-def _format_param_collision(
-    param: ParamDeclInfo, flag: str, *, source_name: str | None
-) -> str:
+def _format_param_collision(param: ParamDeclInfo, flag: str, *, source_name: str | None) -> str:
     """Return a formatted diagnostic for a param flag collision."""
     return format_diagnostic(
         Diagnostic(
@@ -128,9 +131,7 @@ def check_param_collisions(
         if isinstance(param.type, BoolType):
             no_flag = negative_param_flag(param.name)
             if no_flag in RESERVED_FLAGS:
-                errors.append(
-                    _format_param_collision(param, no_flag, source_name=source_name)
-                )
+                errors.append(_format_param_collision(param, no_flag, source_name=source_name))
     return errors
 
 
@@ -180,9 +181,7 @@ def parse_param_tokens(
             if bool_val is not None:
                 raise ValueError(f"Option {flag!r} does not take a value")
             if param.name in result:
-                raise ValueError(
-                    f"Option '{param_flag(param.name)}' specified more than once"
-                )
+                raise ValueError(f"Option '{param_flag(param.name)}' specified more than once")
             result[param.name] = value
             i += 1
             continue
@@ -195,9 +194,7 @@ def parse_param_tokens(
         if bool_val is not None:
             # Bool flag: --name → True, --no-name → False.
             if param.name in result:
-                raise ValueError(
-                    f"Option '{param_flag(param.name)}' specified more than once"
-                )
+                raise ValueError(f"Option '{param_flag(param.name)}' specified more than once")
             result[param.name] = bool_val
             i += 1
         else:
@@ -205,9 +202,7 @@ def parse_param_tokens(
             if i + 1 >= len(tokens) or tokens[i + 1].startswith("--"):
                 raise ValueError(f"Option {token!r} requires a value")
             if param.name in result:
-                raise ValueError(
-                    f"Option '{param_flag(param.name)}' specified more than once"
-                )
+                raise ValueError(f"Option '{param_flag(param.name)}' specified more than once")
             result[param.name] = tokens[i + 1]
             i += 2
 

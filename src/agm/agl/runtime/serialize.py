@@ -146,8 +146,7 @@ def _emit_dict(obj: dict[object, object], *, indent: int | None, level: int) -> 
     values = list(obj.values())
     if indent is None:
         items = [
-            f"{k}: {_emit(v, indent=None, level=level)}"
-            for k, v in zip(keys, values, strict=True)
+            f"{k}: {_emit(v, indent=None, level=level)}" for k, v in zip(keys, values, strict=True)
         ]
         return "{" + ", ".join(items) + "}"
     pad = " " * (indent * (level + 1))

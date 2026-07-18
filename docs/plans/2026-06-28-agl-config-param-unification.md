@@ -213,7 +213,7 @@ From reconnaissance (current line numbers; may shift during implementation):
 | Parser | `config_pragma()` + value builders `transform.py:246–282` | `param_decl()` `:197–208`; `program_decl()` `:210–218` |
 | AST | `ConfigPragma` + `PragmaValue` `nodes.py:810–828` | `ParamDecl` `:763–778`; `ProgramDecl` `:782–787`; `Declaration` union `:839–842` |
 | Scope | `_PRAGMA_KEY_KINDS` `resolver.py:135–143`; `_validate_pragma_value` `:167–234`; header-only `:739` | `_resolve_param` `:1038–1056`; `BinderKind.param_binding` `symbols.py:112` |
-| Resolved | `ResolvedProgram.config_pragmas` `symbols.py:243–244` | `program_name` `symbols.py:246` |
+| Resolved | `ModuleResolution.config_pragmas` `symbols.py:243–244` | `program_name` `symbols.py:246` |
 | Typecheck | skipped `checker.py:382` | `_check_param` `:436–457` |
 | Pipeline | `PreparedProgram.config_pragmas` `pipeline.py:114–123` | `discover_params` `:483–533`; `ParamDeclInfo` `runtime/types.py:88–96` |
 | Runtime | applied to driver settings `exec.py:260–264` | `_prepare_ir_params`/`decode_param_value`/`convert_param_value` `runtime/params.py:23–145` |
@@ -274,7 +274,7 @@ From reconnaissance (current line numbers; may shift during implementation):
     param default.
 - Remove `_PRAGMA_KEY_KINDS` / `_validate_pragma_value` / header-only enforcement; value
   *type* checking moves to typecheck (§6.6) since values are now expressions.
-- `ResolvedProgram`: replace `config_pragmas: dict[str, PragmaValue]` with an ordered
+- `ModuleResolution`: replace `config_pragmas: dict[str, PragmaValue]` with an ordered
   list of resolved config decls (name + node_id), parallel to params. Keep
   `program_name`.
 - **Reserved program names:** a `program NAME` (or file stem used as the program key)

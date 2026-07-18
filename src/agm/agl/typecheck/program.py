@@ -1,26 +1,26 @@
-"""Graph-aware type-checking pass for the AgL module system.
+"""Program-level type-checking pass for the AgL module system.
 
-``check_graph(resolved_graph, capabilities)`` runs the full type-checking pass
-over a :class:`~agm.agl.scope.graph.ResolvedModuleGraph`, producing a
-:class:`CheckedModuleGraph`.
+``check_program(resolved, capabilities)`` runs the full type-checking pass
+over a :class:`~agm.agl.scope.program.ResolvedProgram`, producing a
+:class:`CheckedProgram`.
 
 Algorithm
 ---------
-1. **Graph type pre-pass** — collect ALL public type declarations across every
+1. **Program type pre-pass** — collect ALL public type declarations across every
    module and resolve their bodies (stamping each
    ``RecordType``/``EnumType``/``ExceptionType`` handle with the owning
-   ``ModuleId``), building the shared ``graph_type_table``.
+   ``ModuleId``), building the shared ``program_type_table``.
    ``RecordType``/``EnumType``/``ExceptionType`` carry no field/variant data
    of their own (their shapes live in the shared ``TypeTable``), so a
    reference to another module's type is a valid handle whether or not that
    type's own body has been resolved yet — body resolution is therefore
    order-free.
 
-   The pre-pass is genuinely whole-graph two-phase:
+   The pre-pass is genuinely whole-program two-phase:
 
    a. **Headers** — every declared name's handle (or, for a generic
       declaration, its ``GenericTypeDef``) is registered into the shared
-      ``graph_type_table`` first; type aliases are registered as lazy graph
+      ``program_type_table`` first; type aliases are registered as lazy program
       alias keys because aliases are transparent and have no handle shell.
    b. **Bodies, order-free** — each declaration's body (field/variant type
       expressions) is resolved in a fixed deterministic order (sorted by
@@ -29,16 +29,16 @@ Algorithm
       number of modules) are legal, since every nominal reference resolves to
       a handle regardless of build order; alias references resolve lazily and
       still reject transparent alias cycles.
-   c. **Inhabitation** — once every body is resolved, the whole-graph
+   c. **Inhabitation** — once every body is resolved, the whole-program
       inhabitation fixpoint
       (:func:`~agm.agl.semantics.analyses.compute_uninhabited`) rejects the
-      first declaration (across the whole graph) that has no finite value,
+      first declaration (across the whole program) that has no finite value,
       consistent with the single-module ``_TypeBuilder`` check.
 
-2. **Graph function-signature pre-pass** — resolve the parameter and return type
+2. **Program function-signature pre-pass** — resolve the parameter and return type
    annotations for EVERY top-level ``FuncDef`` in EVERY module (using the
-   ``graph_type_table`` and each module's ``ImportEnv`` for cross-module type
-   refs), producing a ``graph_func_sig_table`` mapping each ``FuncDef.node_id``
+   ``program_type_table`` and each module's ``ImportEnv`` for cross-module type
+   refs), producing a ``program_func_sig_table`` mapping each ``FuncDef.node_id``
    to ``(FunctionSignature, FunctionType)``. No function body is checked in this
    phase. The result is used in Phase 3 to
    seed EVERY module's env with ALL function binding types before any body is
@@ -47,33 +47,32 @@ Algorithm
 
 3. **Per-module type-check** — for each module, build a module-aware
    :class:`~agm.agl.typecheck.env.TypeEnvironment` seeded with the module's own
-   types (from the graph table), ALL function binding types (from the
-   function-signature pre-pass), and the graph table + import env for cross-module
+   types (from the program table), ALL function binding types (from the
+   function-signature pre-pass), and the program table + import env for cross-module
    lookups, then run the existing :class:`~agm.agl.typecheck.builder._TypeBuilder`
    and :class:`~agm.agl.typecheck.checker._Checker` logic.
 
 Single-module equivalence
 -------------------------
-A single-module (entry-only) graph checked via :func:`check_graph` is
+A single-module (entry-only) program checked via :func:`check_program` is
 equivalent to calling :func:`~agm.agl.typecheck.checker.check` directly on the
-entry's :class:`~agm.agl.scope.symbols.ResolvedProgram`.
+entry's :class:`~agm.agl.scope.symbols.ModuleResolution`.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Mapping
 
 from agm.agl.capabilities import HostCapabilities
 from agm.agl.diagnostics import Diagnostic
 from agm.agl.modules.ids import ModuleId
-from agm.agl.scope.graph import ResolvedModuleGraph
 from agm.agl.scope.imports import ImportEnv
-from agm.agl.scope.symbols import ResolvedProgram
+from agm.agl.scope.program import ResolvedProgram
+from agm.agl.scope.symbols import ModuleResolution
 from agm.agl.semantics.analyses import compute_uninhabited, uninhabitable_message
 from agm.agl.semantics.type_table import TypeTable, create_seeded_type_table, decl_key_sort_key
 from agm.agl.semantics.types import (
-    CastSpec,
     FunctionType,
     Type,
 )
@@ -89,18 +88,15 @@ from agm.agl.syntax.nodes import (
 )
 from agm.agl.syntax.spans import SourceSpan
 from agm.agl.typecheck.builder import _TypeBuilder
-from agm.agl.typecheck.checker import _Checker, check_prepared
+from agm.agl.typecheck.checker import _check_prepared_module, _Checker
 from agm.agl.typecheck.env import (
     AglTypeError,
-    ArgumentBindings,
-    CallSiteRecord,
+    CheckedModule,
     ConstructorSignature,
     FunctionSignature,
     GenericAliasDef,
     GenericTypeDef,
-    OutputContractSpec,
     ParamSpec,
-    PartialCallSpec,
     TypeEnvironment,
     _assert_checked_types_closed,
     assert_checked_output_closed,
@@ -112,68 +108,18 @@ from agm.agl.typecheck.env import (
 
 
 @dataclass(frozen=True, slots=True)
-class CheckedModule:
-    """Per-module output of the graph type-checking pass.
-
-    ``module_id``
-        The :class:`~agm.agl.modules.ids.ModuleId` of this module.
-    ``resolved``
-        The :class:`~agm.agl.scope.symbols.ResolvedProgram` from graph scope resolution.
-    ``node_types``
-        Maps ``node_id`` → resolved :class:`~agm.agl.semantics.types.Type`
-        for every expression node that was type-checked in this module.
-    ``contract_specs``
-        Maps ``AgentCall.node_id`` →
-        :class:`~agm.agl.typecheck.env.OutputContractSpec` for call sites that
-        parse output.
-    ``call_sites``
-        Tuple of :class:`~agm.agl.typecheck.env.CallSiteRecord` — one per
-        agent-call/exec site in this module, in source order.
-    ``warnings``
-        Non-fatal type-check diagnostics from this module.
-    ``function_signatures``
-        Maps function name → :class:`~agm.agl.typecheck.env.FunctionSignature`
-        for all top-level ``def`` declarations in this module.
-    ``cast_specs``
-        Maps ``Cast.node_id`` → :class:`~agm.agl.semantics.types.CastSpec`
-        for every cast expression in this module.
-    ``type_env``
-        The module-aware :class:`~agm.agl.typecheck.env.TypeEnvironment`
-        built during the pass.
-    ``import_env``
-        The immutable source import environment used to resolve this module.
-        It is retained explicitly so later checked-program consumers can use
-        source aliases and exposure rules without reaching into ``type_env``.
-    """
-
-    module_id: ModuleId
-    resolved: ResolvedProgram
-    node_types: dict[int, Type]
-    contract_specs: dict[int, OutputContractSpec]
-    call_sites: tuple[CallSiteRecord, ...]
-    warnings: tuple[Diagnostic, ...]
-    function_signatures: dict[str, FunctionSignature]
-    cast_specs: dict[int, CastSpec]
-    type_env: TypeEnvironment
-    import_env: ImportEnv
-    source_text: str
-    argument_bindings: ArgumentBindings
-    partial_calls: dict[int, PartialCallSpec]
-
-
-@dataclass(frozen=True, slots=True)
-class CheckedModuleGraph:
-    """Immutable output of :func:`check_graph`.
+class CheckedProgram:
+    """Immutable output of :func:`check_program`.
 
     ``modules``
         Maps each :class:`~agm.agl.modules.ids.ModuleId` to its
         :class:`CheckedModule`.
     ``entry_id``
         Always :data:`~agm.agl.modules.ids.ENTRY_ID`.
-    ``graph_type_table``
-        Whole-graph type table mapping ``(ModuleId, name)`` to the fully-built
+    ``program_type_table``
+        Whole-program type table mapping ``(ModuleId, name)`` to the fully-built
         :class:`~agm.agl.semantics.types.Type` object stamped with the owning
-        ``module_id``.  Built in the graph pre-pass; shared (read-only) across
+        ``module_id``.  Built in the program pre-pass; shared (read-only) across
         all per-module environments.
     ``warnings``
         All non-fatal type-check diagnostics collected across all modules, in
@@ -182,13 +128,13 @@ class CheckedModuleGraph:
 
     modules: dict[ModuleId, CheckedModule]
     entry_id: ModuleId
-    graph_type_table: dict[tuple[ModuleId, str], Type]
+    program_type_table: dict[tuple[ModuleId, str], Type]
     warnings: tuple[Diagnostic, ...]
     capabilities: HostCapabilities | None = None
 
 
 def _assert_checked_module_closed(module: CheckedModule) -> None:
-    """Assert that one graph module is safe to pass to the lowerer."""
+    """Assert that one program module is safe to pass to the lowerer."""
     assert_checked_output_closed(
         node_types=module.node_types,
         contract_specs=module.contract_specs,
@@ -201,19 +147,19 @@ def _assert_checked_module_closed(module: CheckedModule) -> None:
     )
 
 
-def assert_checked_module_graph_closed(checked: CheckedModuleGraph) -> None:
-    """Assert that all graph-level checked output is safe to lower."""
+def assert_checked_program_closed(checked: CheckedProgram) -> None:
+    """Assert that all program-level checked output is safe to lower."""
     for module in checked.modules.values():
         _assert_checked_module_closed(module)
-    _assert_checked_types_closed(checked.graph_type_table.values(), owner="checked module graph")
-    # The remaining whole-graph tables (the shared TypeTable and the generic /
+    _assert_checked_types_closed(checked.program_type_table.values(), owner="checked module graph")
+    # The remaining whole-program tables (the shared TypeTable and the generic /
     # alias / constructor maps) are the same instances on every module env, so
     # validate them once here rather than on every per-module seal.
     checked.modules[checked.entry_id].type_env.assert_shared_tables_closed()
 
 
 # ---------------------------------------------------------------------------
-# Graph type pre-pass helpers
+# Program type pre-pass helpers
 # ---------------------------------------------------------------------------
 
 
@@ -227,39 +173,39 @@ def _collect_shells_only(builder: _TypeBuilder, program: object) -> None:
     builder.collect_shells_only(program)
 
 
-def _sync_graph_env_extensions(
+def _sync_program_env_extensions(
     mid: ModuleId,
     env: TypeEnvironment,
-    graph_generic_table: dict[tuple[ModuleId, str], GenericTypeDef],
-    graph_ctor_sig_table: dict[tuple[ModuleId, str, str | None], ConstructorSignature],
-    graph_ctor_field_kinds_table: dict[
+    program_generic_table: dict[tuple[ModuleId, str], GenericTypeDef],
+    program_ctor_sig_table: dict[tuple[ModuleId, str, str | None], ConstructorSignature],
+    program_ctor_field_kinds_table: dict[
         tuple[ModuleId, str, str | None], tuple[tuple[str, ParamKind], ...]
     ],
 ) -> None:
-    """Copy generic type and constructor metadata built for one module into graph tables."""
+    """Copy generic type and constructor metadata built for one module into program tables."""
     for generic_name, gdef in env.all_generic_types().items():
-        graph_generic_table[(mid, generic_name)] = gdef
+        program_generic_table[(mid, generic_name)] = gdef
     for (owner_name, variant), sig in env.all_constructor_sigs():
-        graph_ctor_sig_table[(mid, owner_name, variant)] = sig
+        program_ctor_sig_table[(mid, owner_name, variant)] = sig
     for (owner_name, variant), kinds in env.all_constructor_field_kinds():
-        graph_ctor_field_kinds_table[(mid, owner_name, variant)] = kinds
+        program_ctor_field_kinds_table[(mid, owner_name, variant)] = kinds
 
 
 def _resolve_body_for_one(
     mid: ModuleId,
     name: str,
     per_module_builders: dict[ModuleId, _TypeBuilder],
-    graph_type_table: dict[tuple[ModuleId, str], Type],
-    graph_generic_table: dict[tuple[ModuleId, str], GenericTypeDef],
-    graph_alias_table: dict[tuple[ModuleId, str], GenericAliasDef],
-    graph_ctor_sig_table: dict[tuple[ModuleId, str, str | None], ConstructorSignature],
-    graph_ctor_field_kinds_table: dict[
+    program_type_table: dict[tuple[ModuleId, str], Type],
+    program_generic_table: dict[tuple[ModuleId, str], GenericTypeDef],
+    program_alias_table: dict[tuple[ModuleId, str], GenericAliasDef],
+    program_ctor_sig_table: dict[tuple[ModuleId, str, str | None], ConstructorSignature],
+    program_ctor_field_kinds_table: dict[
         tuple[ModuleId, str, str | None], tuple[tuple[str, ParamKind], ...]
     ],
-    resolved_graph: ResolvedModuleGraph,
+    resolved: ResolvedProgram,
     cross_envs: dict[ModuleId, TypeEnvironment],
 ) -> None:
-    """Resolve the body of one type ``(mid, name)`` and update the graph table.
+    """Resolve the body of one type ``(mid, name)`` and update the program table.
 
     Called once per key in a fixed deterministic order (no dependency
     ordering): every type reference is a handle, valid regardless of whether
@@ -268,7 +214,7 @@ def _resolve_body_for_one(
     cross_env = cross_envs[mid]
     builder = per_module_builders[mid]
 
-    program = resolved_graph.modules[mid].resolved.program
+    program = resolved.modules[mid].resolved.program
     assert isinstance(program, Program)
 
     for item in program.body.items:
@@ -276,23 +222,23 @@ def _resolve_body_for_one(
             builder.build_record(item.name)
             t = cross_env.get_type(item.name)
             if t is not None:
-                # Non-generic record: update the graph table with the fully-built type.
-                graph_type_table[(mid, item.name)] = t
+                # Non-generic record: update the program table with the fully-built type.
+                program_type_table[(mid, item.name)] = t
             # Generic record: body registered in _generic_types (no _types entry);
-            # graph_type_table retains the handle from Step A.  Cross-module generic
-            # constructor calls use _graph_generic_table / _graph_ctor_sig_table instead.
+            # program_type_table retains the handle from Step A.  Cross-module generic
+            # constructor calls use _program_generic_table / _program_ctor_sig_table instead.
             break
         if isinstance(item, EnumDef) and item.name == name:
             builder.build_enum(item.name)
             t = cross_env.get_type(item.name)
             if t is not None:
-                graph_type_table[(mid, item.name)] = t
+                program_type_table[(mid, item.name)] = t
             break
         if isinstance(item, ExceptionDef) and item.name == name:
             builder.build_exception(name)
             typ = cross_env.get_type(name)
             assert typ is not None, f"Exception type {name!r} not registered"
-            graph_type_table[(mid, name)] = typ
+            program_type_table[(mid, name)] = typ
             break
         if isinstance(item, TypeAlias) and item.name == name:
             if item.type_params:
@@ -302,30 +248,30 @@ def _resolve_body_for_one(
                     span=item.span,
                     type_vars=frozenset(item.type_params),
                 )
-                graph_alias_table[(mid, item.name)] = GenericAliasDef(
+                program_alias_table[(mid, item.name)] = GenericAliasDef(
                     type_params=item.type_params,
                     template=template,
                 )
             else:
-                resolved = cross_env.resolve_type_expr(item.type_expr, span=item.span)
-                graph_type_table[(mid, item.name)] = resolved
+                alias_type = cross_env.resolve_type_expr(item.type_expr, span=item.span)
+                program_type_table[(mid, item.name)] = alias_type
             break
     else:
         # Unreachable: called only for keys produced by _collect_all_type_keys,
         # which iterates the same program.body.items.
         raise AssertionError(f"type '{name}' not found in module '{mid}'")  # pragma: no cover
 
-    _sync_graph_env_extensions(
+    _sync_program_env_extensions(
         mid,
         cross_env,
-        graph_generic_table,
-        graph_ctor_sig_table,
-        graph_ctor_field_kinds_table,
+        program_generic_table,
+        program_ctor_sig_table,
+        program_ctor_field_kinds_table,
     )
 
 
 def _collect_all_type_keys(
-    resolved_graph: ResolvedModuleGraph,
+    resolved: ResolvedProgram,
 ) -> set[tuple[ModuleId, str]]:
     """Collect the set of all user-declared type keys across all modules.
 
@@ -336,38 +282,36 @@ def _collect_all_type_keys(
 
     This set is the fixed order in which Step C below resolves every
     declaration's body (sorted by :func:`decl_key_sort_key`). It is LARGER
-    than ``graph_type_table`` during the shell-collection step because
-    aliases are not yet resolved to shells there — the graph table is only
+    than ``program_type_table`` during the shell-collection step because
+    aliases are not yet resolved to shells there — the program table is only
     populated with record/enum shells and is updated with alias resolutions
     as each body is resolved.
     """
     all_keys: set[tuple[ModuleId, str]] = set()
-    for mid, rmod in resolved_graph.modules.items():
+    for mid, rmod in resolved.modules.items():
         program = rmod.resolved.program
         assert isinstance(program, Program)
         for item in program.body.items:
             if isinstance(item, (RecordDef, EnumDef, ExceptionDef, TypeAlias)):
                 # Builtin/prelude shadowing is rejected in _collect_shells_only
-                # (Step A of _build_graph_type_table), which is called before this
+                # (Step A of _build_program_type_table), which is called before this
                 # function.  Only non-builtin types reach this point.
                 all_keys.add((mid, item.name))
     return all_keys
 
 
-def _find_type_decl_span(
-    resolved_graph: ResolvedModuleGraph, key: tuple[ModuleId, str]
-) -> SourceSpan | None:
+def _find_type_decl_span(resolved: ResolvedProgram, key: tuple[ModuleId, str]) -> SourceSpan | None:
     """Return the declaration span for *key*, or ``None`` if it cannot be found.
 
-    Used to attach a real source span to the whole-graph inhabitation error
-    (see :func:`_build_graph_type_table`): the resolved module ASTs are
+    Used to attach a real source span to the whole-program inhabitation error
+    (see :func:`_build_program_type_table`): the resolved module ASTs are
     already in hand, so the span is a plain lookup rather than anything
     carried through the type table itself (a ``TypeDef`` has no span — it is
-    a pure semantic description, shared with non-graph single-module
+    a pure semantic description, shared with standalone-module
     building).
     """
     mid, name = key
-    rmod = resolved_graph.modules.get(mid)
+    rmod = resolved.modules.get(mid)
     if rmod is None:
         return None
     program = rmod.resolved.program
@@ -381,18 +325,18 @@ def _find_type_decl_span(
 def _raise_first_uninhabited(
     uninhabited: frozenset[tuple[ModuleId, str]],
     type_table: TypeTable,
-    resolved_graph: ResolvedModuleGraph,
+    resolved: ResolvedProgram,
 ) -> None:
     """Raise ``AglTypeError`` for the first uninhabited key, sorted deterministically."""
     mid, name = sorted(uninhabited, key=decl_key_sort_key)[0]
     typedef = type_table.get(mid, name)
     assert typedef is not None
-    span = _find_type_decl_span(resolved_graph, (mid, name))
+    span = _find_type_decl_span(resolved, (mid, name))
     raise AglTypeError(uninhabitable_message(typedef.kind, name), span=span)
 
 
-def _build_graph_type_table(
-    resolved_graph: ResolvedModuleGraph,
+def _build_program_type_table(
+    resolved: ResolvedProgram,
     *,
     type_table: TypeTable | None = None,
     entry_seed_env: TypeEnvironment | None = None,
@@ -405,18 +349,18 @@ def _build_graph_type_table(
 ]:
     """Phase 1: collect and resolve all public type declarations across all modules.
 
-    Returns a ``graph_type_table`` mapping ``(ModuleId, name)`` → the
+    Returns a ``program_type_table`` mapping ``(ModuleId, name)`` → the
     ``RecordType``/``EnumType``/``ExceptionType`` handle or resolved-alias
     ``Type``.
 
-    The pre-pass is genuinely whole-graph two-phase:
+    The pre-pass is genuinely whole-program two-phase:
 
     Step A: Register every declared name's handle for ALL modules.  Records,
             enums, and exceptions get their handle entered into
-            ``graph_type_table`` directly (a handle carries no field/variant
+            ``program_type_table`` directly (a handle carries no field/variant
             data, so there is nothing left to fill in later — forward
             references within or across modules are valid immediately).
-            Type aliases are registered as lazy graph alias keys (their target
+            Type aliases are registered as lazy program alias keys (their target
             type is not known until the alias body is resolved, so they have
             no handle entry yet).
 
@@ -449,65 +393,65 @@ def _build_graph_type_table(
 
     # Step A: register every declared name's handle for all modules.
     # For records/enums: register the handle in both the per-module env AND
-    # graph_type_table.  For aliases: register in the per-module env only
-    # (their entry is added to graph_type_table in Step C, once resolved).
+    # program_type_table.  For aliases: register in the per-module env only
+    # (their entry is added to program_type_table in Step C, once resolved).
     per_module_envs: dict[ModuleId, TypeEnvironment] = {}
 
-    for mid, rmod in resolved_graph.modules.items():
+    for mid, rmod in resolved.modules.items():
         env = TypeEnvironment(module_id=mid)
         if mid.is_entry and entry_seed_env is not None:
             env.seed_from(entry_seed_env)
         # The builder is transient: it only collects headers into ``env``
-        # (which bootstraps ``graph_type_table`` below).  Body resolution
+        # (which bootstraps ``program_type_table`` below).  Body resolution
         # uses the cross-module builders built later, not this one.
         _collect_shells_only(_TypeBuilder(env, module_id=mid), rmod.resolved.program)
         per_module_envs[mid] = env
 
-    # Collect record/enum handles into the shared graph type table.
+    # Collect record/enum handles into the shared program type table.
     # Aliases are NOT added here — their entries will be written in Step C
     # after their target type is resolved.
-    graph_type_table: dict[tuple[ModuleId, str], Type] = {}
+    program_type_table: dict[tuple[ModuleId, str], Type] = {}
     for mid, env in per_module_envs.items():
         for name, t in env.non_builtin_type_items():
-            graph_type_table[(mid, name)] = t
+            program_type_table[(mid, name)] = t
 
     # Cross-module generic type definitions carry no shape (a GenericTypeDef is
     # just a type-parameter count plus a TypeVarType-stamped template — the
     # same "shell" data a non-generic handle carries), so — like
-    # graph_type_table above — they are collected here in Step A rather than
+    # program_type_table above — they are collected here in Step A rather than
     # gated on that module's own body-resolution order in Step C: a qualified
     # generic application (e.g. ``lib::Box[int]``) inside a field of a type
     # declared in a module that sorts before ``lib`` in the fixed body-resolution
     # order must still resolve.  Aliases need resolved targets rather than
-    # shells, so graph environments resolve them lazily; constructor signatures
+    # shells, so program environments resolve them lazily; constructor signatures
     # and constructor field kinds genuinely need a resolved body (field/target
     # types), so those remain filled as each type body is resolved in Step C.
-    graph_generic_table: dict[tuple[ModuleId, str], GenericTypeDef] = {}
+    program_generic_table: dict[tuple[ModuleId, str], GenericTypeDef] = {}
     for mid, env in per_module_envs.items():
         for name, gdef in env.all_generic_types().items():
-            graph_generic_table[(mid, name)] = gdef
-    graph_alias_table: dict[tuple[ModuleId, str], GenericAliasDef] = {}
+            program_generic_table[(mid, name)] = gdef
+    program_alias_table: dict[tuple[ModuleId, str], GenericAliasDef] = {}
     alias_decls: dict[tuple[ModuleId, str], TypeAlias] = {}
-    for mid, rmod in resolved_graph.modules.items():
+    for mid, rmod in resolved.modules.items():
         program = rmod.resolved.program
         assert isinstance(program, Program)
         for item in program.body.items:
             if isinstance(item, TypeAlias):
                 alias_decls[(mid, item.name)] = item
-    graph_alias_keys = frozenset(alias_decls)
-    graph_ctor_sig_table: dict[tuple[ModuleId, str, str | None], ConstructorSignature] = {}
-    graph_ctor_field_kinds_table: dict[
+    program_alias_keys = frozenset(alias_decls)
+    program_ctor_sig_table: dict[tuple[ModuleId, str, str | None], ConstructorSignature] = {}
+    program_ctor_field_kinds_table: dict[
         tuple[ModuleId, str, str | None], tuple[tuple[str, ParamKind], ...]
     ] = {}
 
     # Build per-module cross-module-aware environments and builders for
-    # body resolution.  Each env knows the full graph_type_table and its own
+    # body resolution.  Each env knows the full program_type_table and its own
     # module's ImportEnv so qualified and open-imported type refs resolve.
     cross_envs: dict[ModuleId, TypeEnvironment] = {}
     cross_builders: dict[ModuleId, _TypeBuilder] = {}
     resolving_aliases: set[tuple[ModuleId, str]] = set()
 
-    def _resolve_graph_alias(
+    def _resolve_program_alias(
         alias_mid: ModuleId, alias_name: str, span: SourceSpan | None
     ) -> Type | None:
         key = (alias_mid, alias_name)
@@ -526,27 +470,27 @@ def _build_graph_type_table(
                     span=item.span,
                     type_vars=frozenset(item.type_params),
                 )
-                graph_alias_table[key] = GenericAliasDef(
+                program_alias_table[key] = GenericAliasDef(
                     type_params=item.type_params,
                     template=template,
                 )
                 return None
             resolved = env.resolve_type_expr(item.type_expr, span=item.span)
-            graph_type_table[key] = resolved
+            program_type_table[key] = resolved
             return resolved
         finally:
             resolving_aliases.remove(key)
 
-    for mid, rmod in resolved_graph.modules.items():
+    for mid, rmod in resolved.modules.items():
         import_env = rmod.import_env
         cross_env = TypeEnvironment(
-            graph_type_table=graph_type_table,
-            graph_generic_table=graph_generic_table,
-            graph_alias_table=graph_alias_table,
-            graph_alias_keys=graph_alias_keys,
-            graph_alias_resolver=_resolve_graph_alias,
-            graph_ctor_sig_table=graph_ctor_sig_table,
-            graph_ctor_field_kinds_table=graph_ctor_field_kinds_table,
+            program_type_table=program_type_table,
+            program_generic_table=program_generic_table,
+            program_alias_table=program_alias_table,
+            program_alias_keys=program_alias_keys,
+            program_alias_resolver=_resolve_program_alias,
+            program_ctor_sig_table=program_ctor_sig_table,
+            program_ctor_field_kinds_table=program_ctor_field_kinds_table,
             import_env=import_env,
             module_id=mid,
             type_table=shared_type_table,
@@ -565,9 +509,9 @@ def _build_graph_type_table(
         cross_builders[mid] = builder
 
     # Use the COMPLETE set of declared type keys (including aliases), NOT just
-    # the record/enum handles in graph_type_table, as the fixed resolution
+    # the record/enum handles in program_type_table, as the fixed resolution
     # order for Step B below.
-    all_type_keys = _collect_all_type_keys(resolved_graph)
+    all_type_keys = _collect_all_type_keys(resolved)
 
     def _resolve_one(key: tuple[ModuleId, str]) -> None:
         mid, name = key
@@ -575,12 +519,12 @@ def _build_graph_type_table(
             mid=mid,
             name=name,
             per_module_builders=cross_builders,
-            graph_type_table=graph_type_table,
-            graph_generic_table=graph_generic_table,
-            graph_alias_table=graph_alias_table,
-            graph_ctor_sig_table=graph_ctor_sig_table,
-            graph_ctor_field_kinds_table=graph_ctor_field_kinds_table,
-            resolved_graph=resolved_graph,
+            program_type_table=program_type_table,
+            program_generic_table=program_generic_table,
+            program_alias_table=program_alias_table,
+            program_ctor_sig_table=program_ctor_sig_table,
+            program_ctor_field_kinds_table=program_ctor_field_kinds_table,
+            resolved=resolved,
             cross_envs=cross_envs,
         )
 
@@ -594,34 +538,34 @@ def _build_graph_type_table(
         _resolve_one(key)
 
     # Step C: every body is now resolved, so the inhabitation fixpoint can
-    # run over the whole shared table (this graph's declarations plus the
+    # run over the whole shared table (this program's declarations plus the
     # builtin/prelude defs, all trivially inhabited). The per-module builder
     # re-check in Phase 3 (``_check_module``) skips its own inhabitation pass
-    # (``check_inhabitation=False``) precisely because this whole-graph check
+    # (``check_inhabitation=False``) precisely because this whole-program check
     # has already run.
     uninhabited = compute_uninhabited(shared_type_table)
     if uninhabited:
-        _raise_first_uninhabited(uninhabited, shared_type_table, resolved_graph)
+        _raise_first_uninhabited(uninhabited, shared_type_table, resolved)
 
     return (
-        graph_type_table,
-        graph_generic_table,
-        graph_alias_table,
-        graph_ctor_sig_table,
-        graph_ctor_field_kinds_table,
+        program_type_table,
+        program_generic_table,
+        program_alias_table,
+        program_ctor_sig_table,
+        program_ctor_field_kinds_table,
     )
 
 
 # ---------------------------------------------------------------------------
-# Phase 2: whole-graph function-signature pre-pass
+# Phase 2: whole-program function-signature pre-pass
 # ---------------------------------------------------------------------------
 
 
-def _build_graph_func_sig_table(
-    resolved_graph: ResolvedModuleGraph,
-    graph_type_table: dict[tuple[ModuleId, str], Type],
-    graph_generic_table: dict[tuple[ModuleId, str], GenericTypeDef],
-    graph_alias_table: dict[tuple[ModuleId, str], GenericAliasDef],
+def _build_program_func_sig_table(
+    resolved: ResolvedProgram,
+    program_type_table: dict[tuple[ModuleId, str], Type],
+    program_generic_table: dict[tuple[ModuleId, str], GenericTypeDef],
+    program_alias_table: dict[tuple[ModuleId, str], GenericAliasDef],
     entry_seed_env: TypeEnvironment | None = None,
 ) -> dict[int, tuple[str, FunctionSignature, FunctionType, bool]]:
     """Phase 2: compute function signatures for ALL top-level FuncDefs across all modules.
@@ -634,12 +578,12 @@ def _build_graph_func_sig_table(
     as calls to an extern declared in the calling module).
 
     This pre-pass builds per-module ``TypeEnvironment``s seeded with the
-    graph-wide type table and the module's ``ImportEnv`` so that parameter/return
+    program-wide type table and the module's ``ImportEnv`` so that parameter/return
     type annotations that reference cross-module types (e.g. ``lib::Color``) resolve
     correctly.  No function body is checked — only the type-expression annotations
     in each ``FuncDef``'s parameter and return-type declarations are resolved.
 
-    The result is used in :func:`check_graph` (Phase 3) to seed EVERY module's
+    The result is used in :func:`check_program` (Phase 3) to seed EVERY module's
     ``TypeEnvironment`` with ALL reachable function binding types BEFORE any body is
     checked.  Because ``node_id`` is globally unique, seeding the whole table into
     every module's env is safe and collision-free.  This makes cross-file mutual
@@ -649,7 +593,7 @@ def _build_graph_func_sig_table(
 
     Reuses :meth:`~agm.agl.typecheck.checker._Checker._preregister_funcdef` logic
     without duplicating type-expression resolution: a temporary per-module
-    ``TypeEnvironment`` (seeded with own types + graph table + import env) is
+    ``TypeEnvironment`` (seeded with own types + program table + import env) is
     constructed for each module, then each ``FuncDef`` in that module has its
     signature resolved through the normal ``TypeEnvironment.resolve_type_expr``
     path — the exact same path used in the real per-module check.
@@ -658,7 +602,7 @@ def _build_graph_func_sig_table(
 
     result: dict[int, tuple[str, FunctionSignature, FunctionType, bool]] = {}
 
-    for mid, rmod in resolved_graph.modules.items():
+    for mid, rmod in resolved.modules.items():
         program = rmod.resolved.program
         assert isinstance(program, Program)
 
@@ -666,21 +610,21 @@ def _build_graph_func_sig_table(
         # Build a cross-module-aware env for this module, seeded with its own
         # types so bare-name local type refs in param annotations resolve.
         env = TypeEnvironment(
-            graph_type_table=graph_type_table,
-            graph_generic_table=graph_generic_table,
-            graph_alias_table=graph_alias_table,
+            program_type_table=program_type_table,
+            program_generic_table=program_generic_table,
+            program_alias_table=program_alias_table,
             import_env=import_env,
             module_id=mid,
         )
         if mid.is_entry and entry_seed_env is not None:
             env.seed_from(entry_seed_env)
-        for (t_mid, t_name), t in graph_type_table.items():
+        for (t_mid, t_name), t in program_type_table.items():
             if t_mid == mid:
                 env.register_type(t_name, t)
         # Also seed the module's own generic types so bare-name local generic
         # refs in param/return annotations (e.g. `o: Option[T]`) resolve here —
         # mirroring the register_type seeding above for non-generic types.
-        for (g_mid, g_name), gdef in graph_generic_table.items():
+        for (g_mid, g_name), gdef in program_generic_table.items():
             if g_mid == mid:
                 env.register_generic_type(g_name, gdef)
 
@@ -720,8 +664,8 @@ def _build_graph_func_sig_table(
     return result
 
 
-def _build_graph_builtin_var_table(
-    resolved_graph: ResolvedModuleGraph,
+def _build_program_builtin_var_table(
+    resolved: ResolvedProgram,
 ) -> dict[int, Type]:
     """Compute binding types for every ``builtin var`` across all modules.
 
@@ -736,7 +680,7 @@ def _build_graph_builtin_var_table(
     from agm.agl.semantics.engine_keys import get_engine_key_type
 
     result: dict[int, Type] = {}
-    for _mid, loaded in resolved_graph.modules.items():
+    for _mid, loaded in resolved.modules.items():
         for item in loaded.resolved.program.body.items:
             if isinstance(item, BuiltinVarDecl):
                 key_type = get_engine_key_type(item.name)
@@ -755,7 +699,7 @@ def _module_function_signatures(
 ) -> dict[str, FunctionSignature]:
     """Return checked schemes declared by *program*, keyed by their local names.
 
-    A graph environment carries imported schemes during checking, keyed by
+    A program environment carries imported schemes during checking, keyed by
     declaration node id.  They support resolved occurrences but are not
     declarations of the module being published.
     """
@@ -771,17 +715,17 @@ def _module_function_signatures(
 
 def _check_module(
     mid: ModuleId,
-    resolved: ResolvedProgram,
+    resolved: ModuleResolution,
     source_text: str,
     capabilities: HostCapabilities,
-    graph_type_table: dict[tuple[ModuleId, str], Type],
+    program_type_table: dict[tuple[ModuleId, str], Type],
     import_env_map: Mapping[ModuleId, object],
-    graph_func_sig_table: dict[int, tuple[str, FunctionSignature, FunctionType, bool]],
-    graph_builtin_var_table: dict[int, Type],
-    graph_generic_table: dict[tuple[ModuleId, str], GenericTypeDef],
-    graph_alias_table: dict[tuple[ModuleId, str], GenericAliasDef],
-    graph_ctor_sig_table: dict[tuple[ModuleId, str, str | None], ConstructorSignature],
-    graph_ctor_field_kinds_table: dict[
+    program_func_sig_table: dict[int, tuple[str, FunctionSignature, FunctionType, bool]],
+    program_builtin_var_table: dict[int, Type],
+    program_generic_table: dict[tuple[ModuleId, str], GenericTypeDef],
+    program_alias_table: dict[tuple[ModuleId, str], GenericAliasDef],
+    program_ctor_sig_table: dict[tuple[ModuleId, str, str | None], ConstructorSignature],
+    program_ctor_field_kinds_table: dict[
         tuple[ModuleId, str, str | None], tuple[tuple[str, ParamKind], ...]
     ],
     type_table: TypeTable,
@@ -790,10 +734,10 @@ def _check_module(
     """Type-check one module with a module-aware ``TypeEnvironment``.
 
     The env is seeded with:
-    - The module's own types (from ``graph_type_table``).
-    - The graph table + import env for cross-module lookups.
-    - Binding types (function signatures) from the whole-graph function-signature
-      pre-pass (``graph_func_sig_table``), seeded BEFORE any body is checked so
+    - The module's own types (from ``program_type_table``).
+    - The program table + import env for cross-module lookups.
+    - Binding types (function signatures) from the whole-program function-signature
+      pre-pass (``program_func_sig_table``), seeded BEFORE any body is checked so
       that cross-module function calls — including those in import cycles — can
       look up callee types regardless of per-module checking order.  The pre-pass
       computed ``(name, FunctionSignature,
@@ -801,7 +745,7 @@ def _check_module(
       ``node_id``s are globally unique, so seeding the whole table into
       every module's env is safe and collision-free.
     - ``type_table``: the single ``TypeTable`` instance shared by every module
-      in this graph (the same one built and dual-written in the type pre-pass),
+      in this program (the same one built and dual-written in the type pre-pass),
       so this module's own re-check dual-writes into the same table.
     - ``entry_seed_env``: when given and ``mid`` is the entry module, the session
       type env is seeded first so that prior REPL bindings are available.
@@ -810,29 +754,29 @@ def _check_module(
     assert isinstance(import_env, ImportEnv)
 
     env = TypeEnvironment(
-        graph_type_table=graph_type_table,
-        graph_generic_table=graph_generic_table,
-        graph_alias_table=graph_alias_table,
-        graph_ctor_sig_table=graph_ctor_sig_table,
-        graph_ctor_field_kinds_table=graph_ctor_field_kinds_table,
+        program_type_table=program_type_table,
+        program_generic_table=program_generic_table,
+        program_alias_table=program_alias_table,
+        program_ctor_sig_table=program_ctor_sig_table,
+        program_ctor_field_kinds_table=program_ctor_field_kinds_table,
         import_env=import_env,
         module_id=mid,
         type_table=type_table,
     )
 
     # Seed from the REPL session type env first (for the entry module in REPL
-    # graph mode).  Graph tables override on collision, so the entry's own types
+    # program context).  Program tables override on collision, so the entry's own types
     # and function signatures always shadow any session binding with the same name.
     if mid.is_entry and entry_seed_env is not None:
         env.seed_from(entry_seed_env)
 
     # Seed env with the module's own fully-resolved types so they're
     # accessible by bare name (no qualifier needed within the module).
-    for (t_mid, t_name), t in graph_type_table.items():
+    for (t_mid, t_name), t in program_type_table.items():
         if t_mid == mid:
             env.register_type(t_name, t)
 
-    # Seed binding types from the whole-graph function-signature pre-pass.
+    # Seed binding types from the whole-program function-signature pre-pass.
     # This makes EVERY module's function signatures available in EVERY module's
     # env before any body is checked, enabling cross-file mutual recursion (the current rules).
     #
@@ -851,44 +795,36 @@ def _check_module(
     #   here; the current module's own signatures always win because
     #   builder.collect() → _preregister_funcdef re-registers them AFTER this
     #   seeding step, overwriting any cross-module collision for bare-name calls.
-    for node_id, (name, sig, func_type, is_extern) in graph_func_sig_table.items():
+    for node_id, (name, sig, func_type, is_extern) in program_func_sig_table.items():
         env.set_binding_type(node_id, func_type)
         env.register_function_signature_by_node_id(node_id, sig)
         env.register_function_signature(name, sig)
         if is_extern:
             env.register_extern_node_id(node_id)
 
-    # Seed builtin-var binding types (engine settings) from the whole-graph
+    # Seed builtin-var binding types (engine settings) from the whole-program
     # pre-pass so a ``std.config::key`` read/assign in any module resolves its
     # type.  Keyed by globally-unique decl node id, so seeding the whole table
     # into every module's env is safe and collision-free.
-    for var_node_id, var_type in graph_builtin_var_table.items():
+    for var_node_id, var_type in program_builtin_var_table.items():
         env.set_binding_type(var_node_id, var_type)
 
     # Build the checked output through the same close/finalize boundary as a
-    # single module. The graph pre-pass already checked inhabitation over the
+    # single module. The program pre-pass already checked inhabitation over the
     # shared table, so this per-module pass only skips that redundant analysis.
-    cp = check_prepared(
+    cp = _check_prepared_module(
         resolved,
         capabilities,
         env=env,
         module_id=mid,
         check_inhabitation=False,
     )
-    return CheckedModule(
+    return replace(
+        cp,
         module_id=mid,
-        resolved=resolved,
-        node_types=cp.node_types,
-        contract_specs=cp.contract_specs,
-        call_sites=cp.call_sites,
-        warnings=cp.warnings,
-        function_signatures=_module_function_signatures(resolved.program, cp.type_env),
-        cast_specs=cp.cast_specs,
-        type_env=cp.type_env,
         import_env=import_env,
         source_text=source_text,
-        argument_bindings=cp.argument_bindings,
-        partial_calls=cp.partial_calls,
+        function_signatures=_module_function_signatures(resolved.program, cp.type_env),
     )
 
 
@@ -897,120 +833,118 @@ def _check_module(
 # ---------------------------------------------------------------------------
 
 
-def check_graph(
-    resolved_graph: ResolvedModuleGraph,
+def check_program(
+    resolved: ResolvedProgram,
     capabilities: HostCapabilities,
     entry_seed_env: TypeEnvironment | None = None,
-) -> CheckedModuleGraph:
-    """Run the full type-checking pass over a :class:`ResolvedModuleGraph`.
+) -> CheckedProgram:
+    """Run the full type-checking pass over a :class:`ResolvedProgram`.
 
     Parameters
     ----------
-    resolved_graph:
-        Output of :func:`~agm.agl.scope.graph.resolve_graph`.
+    resolved:
+        Output of :func:`~agm.agl.scope.program.resolve_program`.
     capabilities:
         Immutable host capability catalog (agents, codecs, renderers).
     entry_seed_env:
         When given, the entry module's ``TypeEnvironment`` is seeded from this
-        environment before the graph type table and function signatures are
-        installed.  Used by the REPL graph mode to make prior session
-        bindings available in graph-mode entries.
+        environment before the program type table and function signatures are
+        installed.  Used by the REPL program context to make prior session
+        bindings available in program entries.
 
     Returns
     -------
-    CheckedModuleGraph
-        Per-module type side tables plus the shared graph type table.
+    CheckedProgram
+        Per-module type side tables plus the shared program type table.
 
     Raises
     ------
     AglTypeError
         On the first static type violation in any module (first-error abort).
     """
-    # One TypeTable shared by every module in this graph: the type pre-pass
+    # One TypeTable shared by every module in this program: the type pre-pass
     # dual-writes into it below, and Phase 3 re-checks each module's own
-    # declarations against the SAME instance, so the whole graph's declarations
+    # declarations against the SAME instance, so the whole program's declarations
     # land in one table regardless of per-module checking order.
     shared_type_table = create_seeded_type_table()
 
-    # Phase 1: build the graph-wide type table with all module types stamped
+    # Phase 1: build the program-wide type table with all module types stamped
     # with their owning module_id.  Also collects cross-module generic type defs,
     # parameterized aliases, constructor signatures, and constructor field kinds
     # from the per-module envs built during body resolution.
     (
-        graph_type_table,
-        graph_generic_table,
-        graph_alias_table,
-        graph_ctor_sig_table,
-        graph_ctor_field_kinds_table,
-    ) = _build_graph_type_table(
-        resolved_graph,
+        program_type_table,
+        program_generic_table,
+        program_alias_table,
+        program_ctor_sig_table,
+        program_ctor_field_kinds_table,
+    ) = _build_program_type_table(
+        resolved,
         type_table=shared_type_table,
         entry_seed_env=entry_seed_env,
     )
 
-    # Phase 2: build the graph-wide function-signature table.
+    # Phase 2: build the program-wide function-signature table.
     # Resolves parameter/return TypeExprs for every top-level FuncDef in every
-    # module using the graph_type_table (so cross-module type refs in annotations
+    # module using the program_type_table (so cross-module type refs in annotations
     # resolve), WITHOUT checking any function body.  Keyed by FuncDef.node_id
     # .
-    graph_func_sig_table = _build_graph_func_sig_table(
-        resolved_graph,
-        graph_type_table,
-        graph_generic_table,
-        graph_alias_table,
+    program_func_sig_table = _build_program_func_sig_table(
+        resolved,
+        program_type_table,
+        program_generic_table,
+        program_alias_table,
         entry_seed_env=entry_seed_env,
     )
 
     # Phase 2b: canonical binding types for every ``builtin var`` (engine
     # settings), keyed by decl node id, seeded into every module's env below.
-    graph_builtin_var_table = _build_graph_builtin_var_table(resolved_graph)
+    program_builtin_var_table = _build_program_builtin_var_table(resolved)
 
     # Collect import envs for per-module checking.
     import_env_map: dict[ModuleId, object] = {
-        mid: rmod.import_env for mid, rmod in resolved_graph.modules.items()
+        mid: rmod.import_env for mid, rmod in resolved.modules.items()
     }
 
     # Phase 3: type-check each module's bodies.
     # Non-entry modules are checked first, then entry (ordering kept for
     # determinism and for any future ordering-sensitive checks), but function
-    # signature availability no longer depends on this order — the whole-graph
+    # signature availability no longer depends on this order — the whole-program
     # pre-pass in Phase 2 seeds all binding types before any body is checked,
     # so cross-file mutual recursion is handled correctly.
     checked_modules: dict[ModuleId, CheckedModule] = {}
     all_warnings: list[Diagnostic] = []
 
     # Check non-entry modules first, then entry.
-    ordered_mids = [mid for mid in resolved_graph.modules if not mid.is_entry] + [
-        resolved_graph.entry_id
-    ]
+    ordered_mids = [mid for mid in resolved.modules if not mid.is_entry] + [resolved.entry_id]
 
     for mid in ordered_mids:
-        rmod = resolved_graph.modules[mid]
+        rmod = resolved.modules[mid]
         cm = _check_module(
             mid,
             rmod.resolved,
             rmod.source_text,
             capabilities,
-            graph_type_table,
+            program_type_table,
             import_env_map,
-            graph_func_sig_table,
-            graph_builtin_var_table,
-            graph_generic_table,
-            graph_alias_table,
-            graph_ctor_sig_table,
-            graph_ctor_field_kinds_table,
+            program_func_sig_table,
+            program_builtin_var_table,
+            program_generic_table,
+            program_alias_table,
+            program_ctor_sig_table,
+            program_ctor_field_kinds_table,
             shared_type_table,
             entry_seed_env=entry_seed_env if mid.is_entry else None,
         )
         checked_modules[mid] = cm
         all_warnings.extend(cm.warnings)
 
-    checked = CheckedModuleGraph(
+    checked = CheckedProgram(
         modules=checked_modules,
-        entry_id=resolved_graph.entry_id,
-        graph_type_table=graph_type_table,
+        entry_id=resolved.entry_id,
+        program_type_table=program_type_table,
         warnings=tuple(all_warnings),
         capabilities=capabilities,
     )
-    assert_checked_module_graph_closed(checked)
+    assert_checked_program_closed(checked)
     return checked

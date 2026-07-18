@@ -329,6 +329,7 @@ r"""
 
 # ---------------------------------------------------------------------------
 
+
 def test_case_constructor_nested_literal_no_match_fallback() -> None:
     """Constructor arm matched but nested literal sub-plan fails; falls to next arm."""
     # s = Circle(radius = 7); arm 0: Circle(radius = 3) — variant matches, literal fails

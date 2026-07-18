@@ -47,10 +47,10 @@ from tests.agl.ir_harness import _compiled_checked, evaluate_ir
 def _lower(source: str) -> ExecutableProgram:
     """Parse → check → lower the source; return ExecutableProgram."""
     from agm.agl.capabilities import HostCapabilities
-    from agm.agl.lower import lower_program
+    from agm.agl.lower import lower_module
     from agm.agl.parser import parse_program
-    from agm.agl.scope import resolve
-    from agm.agl.typecheck import check
+    from agm.agl.scope import resolve_module
+    from agm.agl.typecheck import check_module
 
     caps = HostCapabilities(
         agent_names=frozenset(),
@@ -58,15 +58,13 @@ def _lower(source: str) -> ExecutableProgram:
         supports_shell_exec=False,
         codec_kinds={
             "text": frozenset({"text"}),
-            "json": frozenset(
-                {"json", "record", "enum", "list", "dict", "int", "decimal", "bool"}
-            ),
+            "json": frozenset({"json", "record", "enum", "list", "dict", "int", "decimal", "bool"}),
         },
     )
     prog = parse_program(source)
-    resolved = resolve(prog)
-    checked = check(resolved, caps)
-    return lower_program(
+    resolved = resolve_module(prog)
+    checked = check_module(resolved, caps)
+    return lower_module(
         _compiled_checked(checked),
         source_text=source,
         source_label="<test>",
@@ -317,9 +315,7 @@ let p3 = Point(x = 9, y = 9)
 
     # Equal records must hash identically (set deduplication / dict key lookup).
     ir_set = {lp1, lp2, lp3}
-    assert len(ir_set) == 2, (
-        f"Expected 2 distinct members in set (p1==p2), got {len(ir_set)}"
-    )
+    assert len(ir_set) == 2, f"Expected 2 distinct members in set (p1==p2), got {len(ir_set)}"
     # Use as dict keys: p1 and p2 must map to the same slot.
     ir_dict: dict[RecordValue, str] = {lp1: "first"}
     ir_dict[lp2] = "second"  # should overwrite lp1's slot (same key)
@@ -339,9 +335,7 @@ let p3 = Point(x = 9, y = 9)
     assert isinstance(ip3, RecordValue)
 
     ir_set = {ip1, ip2, ip3}
-    assert len(ir_set) == 2, (
-        f"IR: expected 2 distinct set members, got {len(ir_set)}"
-    )
+    assert len(ir_set) == 2, f"IR: expected 2 distinct set members, got {len(ir_set)}"
     ir_dict: dict[RecordValue, str] = {ip1: "first"}
     ir_dict[ip2] = "second"
     assert len(ir_dict) == 1
@@ -374,9 +368,7 @@ let c3 = Color::Blue()
     assert isinstance(lc3, EnumValue)
 
     ir_set = {lc1, lc2, lc3}
-    assert len(ir_set) == 2, (
-        f"Expected 2 distinct set members (c1==c2), got {len(ir_set)}"
-    )
+    assert len(ir_set) == 2, f"Expected 2 distinct set members (c1==c2), got {len(ir_set)}"
     ir_dict: dict[EnumValue, str] = {lc1: "red-1"}
     ir_dict[lc2] = "red-2"  # must overwrite lc1's slot
     assert len(ir_dict) == 1
@@ -392,9 +384,7 @@ let c3 = Color::Blue()
     assert isinstance(ic3, EnumValue)
 
     ir_set = {ic1, ic2, ic3}
-    assert len(ir_set) == 2, (
-        f"IR: expected 2 distinct set members, got {len(ir_set)}"
-    )
+    assert len(ir_set) == 2, f"IR: expected 2 distinct set members, got {len(ir_set)}"
     ir_dict: dict[EnumValue, str] = {ic1: "red-1"}
     ir_dict[ic2] = "red-2"
     assert len(ir_dict) == 1
@@ -557,7 +547,6 @@ let z = Option[int]::none
     assert mk.variant == "some"
     assert isinstance(ir["v"], EnumValue) and ir["v"].variant == "some"
     assert isinstance(ir["z"], EnumValue) and ir["z"].variant == "none"
-
 
 
 # ---------------------------------------------------------------------------

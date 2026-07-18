@@ -5,13 +5,13 @@ from pathlib import Path
 import pytest
 
 from agm.agl.capabilities import HostCapabilities
-from agm.agl.lower import lower_program
+from agm.agl.lower import lower_module
 from agm.agl.modules.ids import ModuleId
 from agm.agl.modules.loader import load_graph
 from agm.agl.modules.roots import RootSet
 from agm.agl.parser import parse_program
-from agm.agl.scope import AglScopeError, resolve
-from agm.agl.scope.graph import resolve_graph
+from agm.agl.scope import AglScopeError, resolve_module
+from agm.agl.scope.program import resolve_program
 from agm.agl.scope.symbols import BUILTIN_CALL_NAMES
 from agm.agl.semantics.types import (
     BUILTIN_EXCEPTIONS,
@@ -27,14 +27,14 @@ from agm.agl.semantics.types import (
     TypeVarType,
 )
 from agm.agl.syntax.nodes import ParamKind
-from agm.agl.typecheck import check
+from agm.agl.typecheck import check_module
 from agm.agl.typecheck.checker import (
     _builtin_function_signature,
     _builtin_function_signature_alternates,
     _signature_matches,
 )
 from agm.agl.typecheck.env import AglTypeError, FunctionSignature, ParamSpec
-from agm.agl.typecheck.graph import check_graph
+from agm.agl.typecheck.program import check_program
 
 _ROOTS = RootSet(frozenset({Path(__file__).resolve().parents[1] / "stdlib"}))
 _CAPS = HostCapabilities()
@@ -43,8 +43,8 @@ _STD_CORE = Path(__file__).resolve().parents[1] / "stdlib" / "std" / "core.agl"
 
 def _check(source: str, *, default_stdlib: bool = True) -> None:
     graph = load_graph(source, entry_path=None, roots=_ROOTS, default_stdlib=default_stdlib)
-    resolved = resolve_graph(graph)
-    check_graph(resolved, _CAPS)
+    resolved = resolve_program(graph)
+    check_program(resolved, _CAPS)
 
 
 def test_core_stdlib_is_opened_unqualified_by_default() -> None:
@@ -59,7 +59,7 @@ def test_no_stdlib_disables_default_open_import() -> None:
         default_stdlib=False,
     )
     with pytest.raises(AglScopeError, match="'Some' is not defined"):
-        resolve_graph(graph)
+        resolve_program(graph)
 
 
 def test_no_stdlib_still_allows_explicit_std_core_import() -> None:
@@ -81,8 +81,8 @@ def test_builtin_function_signature_must_match() -> None:
 
 def test_stdlib_ask_signature_is_context_inferred_with_optional_arguments() -> None:
     graph = load_graph("()\n", entry_path=None, roots=_ROOTS, default_stdlib=True)
-    resolved = resolve_graph(graph)
-    checked = check_graph(resolved, _CAPS)
+    resolved = resolve_program(graph)
+    checked = check_program(resolved, _CAPS)
     std_core = checked.modules[ModuleId.from_dotted("std.core")]
 
     ask_sig = std_core.function_signatures["ask"]
@@ -94,9 +94,7 @@ def test_stdlib_ask_signature_is_context_inferred_with_optional_arguments() -> N
     assert params[1].name == "agent" and params[1].type == AgentType() and params[1].has_default
     assert params[2].name == "format" and params[2].type == TextType() and params[2].has_default
     assert (
-        params[3].name == "strict_json"
-        and params[3].type == BoolType()
-        and params[3].has_default
+        params[3].name == "strict_json" and params[3].type == BoolType() and params[3].has_default
     )
     p4 = params[4]
     assert p4.name == "on_parse_error"
@@ -165,14 +163,10 @@ def test_std_core_declares_every_public_builtin() -> None:
 
     program = parse_program(_STD_CORE.read_text())
     records = {
-        item.name
-        for item in program.body.items
-        if isinstance(item, RecordDef) and item.is_builtin
+        item.name for item in program.body.items if isinstance(item, RecordDef) and item.is_builtin
     }
     enums = {
-        item.name
-        for item in program.body.items
-        if isinstance(item, EnumDef) and item.is_builtin
+        item.name for item in program.body.items if isinstance(item, EnumDef) and item.is_builtin
     }
     exceptions = {
         item.name
@@ -180,9 +174,7 @@ def test_std_core_declares_every_public_builtin() -> None:
         if isinstance(item, ExceptionDef) and item.is_builtin
     }
     functions = {
-        item.name
-        for item in program.body.items
-        if isinstance(item, FuncDef) and item.is_builtin
+        item.name for item in program.body.items if isinstance(item, FuncDef) and item.is_builtin
     }
 
     public_prelude = set(BUILTIN_PRELUDE_TYPES) - set(COMPATIBILITY_PRELUDE_TYPE_NAMES)
@@ -237,7 +229,7 @@ def test_exception_in_field_type_is_built_before_record() -> None:
         "  code: int\n"
         "record Wrapper\n"
         "  err: Local\n"
-        "Wrapper(err = Local(message = \"m\", code = 1))\n"
+        'Wrapper(err = Local(message = "m", code = 1))\n'
     )
 
 
@@ -249,7 +241,7 @@ def test_exception_extends_concrete_exception_inherits_field_kinds() -> None:
         "  code: int\n"
         "exception Derived extends Base\n"
         "  detail: text\n"
-        "Derived(message = \"m\", code = 1, detail = \"d\")\n"
+        'Derived(message = "m", code = 1, detail = "d")\n'
     )
 
 
@@ -269,25 +261,13 @@ def test_exception_extends_cycle_is_uninhabitable() -> None:
     # independent evidence to become inhabited, so both stay uninhabited —
     # the same inhabitation fixpoint that rejects field recursion.
     with pytest.raises(AglTypeError, match="uninhabitable"):
-        _check(
-            "exception A extends B\n"
-            "  a: int\n"
-            "exception B extends A\n"
-            "  b: int\n"
-            "()\n"
-        )
+        _check("exception A extends B\n  a: int\nexception B extends A\n  b: int\n()\n")
 
 
 def test_single_module_exception_extends_cycle_is_uninhabitable() -> None:
-    source = (
-        "exception A extends B\n"
-        "  a: int\n"
-        "exception B extends A\n"
-        "  b: int\n"
-        "()\n"
-    )
+    source = "exception A extends B\n  a: int\nexception B extends A\n  b: int\n()\n"
     with pytest.raises(AglTypeError, match="uninhabitable"):
-        check(resolve(parse_program(source)), _CAPS)
+        check_module(resolve_module(parse_program(source)), _CAPS)
 
 
 def test_private_exception_definition_parses_and_checks() -> None:
@@ -298,8 +278,8 @@ def test_single_module_lowerer_skips_builtin_function_definitions() -> None:
     from tests.agl.ir_harness import _compiled_checked
 
     source = "builtin def print[T](value: T) -> unit\n()\n"
-    checked = check(resolve(parse_program(source)), _CAPS)
-    lower_program(_compiled_checked(checked), source_text=source, source_label="<test>")
+    checked = check_module(resolve_module(parse_program(source)), _CAPS)
+    lower_module(_compiled_checked(checked), source_text=source, source_label="<test>")
 
 
 def test_source_declared_builtin_function_call_is_classified() -> None:

@@ -106,9 +106,7 @@ def prepare_runtime(args: LoopArgs) -> LoopStepRuntime:
     prompt_source = loop_prompt_source(args)
     resolved_prompt: ResolvedPrompt | None = None
     if prompt_source is not None:
-        resolved_prompt = prepare_prompt_from_source(
-            prompt_source, temp_files=temp_files, env=env
-        )
+        resolved_prompt = prepare_prompt_from_source(prompt_source, temp_files=temp_files, env=env)
     resolved_runner_command = runner_command(args)
     validate_command(resolved_runner_command, kind="runner")
     implement_prompt_file: Path | None = None
@@ -169,10 +167,7 @@ def prepare_runtime(args: LoopArgs) -> LoopStepRuntime:
     resolved_extra_selector_prompt_source = extra_selector_prompt_source(args)
 
     # Apply extra selector prompt to the selector invocation
-    if (
-        select_invocation is not None
-        and resolved_extra_selector_prompt_source is not None
-    ):
+    if select_invocation is not None and resolved_extra_selector_prompt_source is not None:
         new_effective = append_extra_prompt(
             select_invocation.effective_prompt_file,
             resolved_extra_selector_prompt_source,
@@ -238,9 +233,7 @@ def print_dry_run(runtime: LoopStepRuntime) -> None:
     if has_selector_command:
         assert runtime.select_invocation is not None
         assert runtime.select_invocation.selector_command is not None
-        selector_command_text = dry_run.format_command(
-            runtime.select_invocation.selector_command
-        )
+        selector_command_text = dry_run.format_command(runtime.select_invocation.selector_command)
     dry_run.print_detail("selector command", selector_command_text)
 
     prompts = [runtime.bootstrap_prompt, runtime.loop_prompt]

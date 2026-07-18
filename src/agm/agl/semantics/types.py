@@ -168,7 +168,7 @@ class RecordType:
     .record_fields``).  ``type_args`` holds the resolved type arguments for a
     generic instantiation (empty tuple for non-generic records).
     ``module_id`` is the owning module (defaults to ``ENTRY_ID`` so existing
-    single-program paths and built-in/prelude types are unaffected).
+    module paths and built-in/prelude types are unaffected).
     """
 
     name: str
@@ -437,18 +437,14 @@ def match_type_template(
     parameters = frozenset(type_params)
     inferred: dict[str, Type] = {}
 
-    def visit_nominal(
-        pattern: RecordType | EnumType, actual: RecordType | EnumType
-    ) -> bool:
+    def visit_nominal(pattern: RecordType | EnumType, actual: RecordType | EnumType) -> bool:
         return (
             pattern.module_id == actual.module_id
             and pattern.name == actual.name
             and len(pattern.type_args) == len(actual.type_args)
             and all(
                 visit(pattern_arg, actual_arg)
-                for pattern_arg, actual_arg in zip(
-                    pattern.type_args, actual.type_args, strict=True
-                )
+                for pattern_arg, actual_arg in zip(pattern.type_args, actual.type_args, strict=True)
             )
         )
 
@@ -481,13 +477,9 @@ def match_type_template(
             return isinstance(actual, EnumType) and visit_nominal(pattern, actual)
         return pattern == actual
 
-    if not visit(template, concrete) or any(
-        parameter not in inferred for parameter in type_params
-    ):
+    if not visit(template, concrete) or any(parameter not in inferred for parameter in type_params):
         return None
-    return TypeTemplateMatch(
-        tuple((parameter, inferred[parameter]) for parameter in type_params)
-    )
+    return TypeTemplateMatch(tuple((parameter, inferred[parameter]) for parameter in type_params))
 
 
 class EnumOwnerFormKind(_enum.Enum):
@@ -552,9 +544,7 @@ class EnumOwnerForm:
         return _match_enum_owner_template(self.type_template, concrete)
 
 
-def _match_enum_owner_template(
-    template: TypeTemplate, concrete: Type
-) -> TypeTemplateMatch | None:
+def _match_enum_owner_template(template: TypeTemplate, concrete: Type) -> TypeTemplateMatch | None:
     """Match enum owner templates while permitting uninferred phantom parameters."""
     bindings = match_type_template(template.template, concrete, ())
     if bindings is not None:
@@ -873,16 +863,16 @@ COMPATIBILITY_PRELUDE_TYPE_NAMES: frozenset[str] = frozenset(
 class CastKind(_enum.Enum):
     """Classification of a cast operation from cast_classification()."""
 
-    TOTAL_NOOP = "TOTAL_NOOP"      # source already assignable to target (no-op/widen)
+    TOTAL_NOOP = "TOTAL_NOOP"  # source already assignable to target (no-op/widen)
     TOTAL_RENDER = "TOTAL_RENDER"  # render data value to text
-    TOTAL_JSON = "TOTAL_JSON"      # canonicalize JSON-shaped value to json
-    FALLIBLE = "FALLIBLE"          # runtime-fallible conversion
+    TOTAL_JSON = "TOTAL_JSON"  # canonicalize JSON-shaped value to json
+    FALLIBLE = "FALLIBLE"  # runtime-fallible conversion
     STATIC_ERROR = "STATIC_ERROR"  # statically impossible — raise AglTypeError
 
 
 @dataclass(frozen=True, slots=True)
 class CastSpec:
-    """Resolved runtime cast descriptor stored in CheckedProgram.cast_specs."""
+    """Resolved runtime cast descriptor stored in CheckedModule.cast_specs."""
 
     target_type: Type
     kind: CastKind

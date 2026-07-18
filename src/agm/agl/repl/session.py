@@ -23,7 +23,7 @@ from typing import TYPE_CHECKING, cast
 
 from agm.agl.diagnostics import AglError, Diagnostic, diagnostic_from_span
 from agm.agl.repl.entry import EntryKind, EntryResult
-from agm.agl.repl.graph_session import GraphSession
+from agm.agl.repl.entry_pipeline import EntryPipeline
 from agm.config.engine_keys import HOST_CONSUMED_ENGINE_KEYS
 
 if TYPE_CHECKING:
@@ -44,7 +44,7 @@ if TYPE_CHECKING:
     from agm.agl.syntax.nodes import ImportDecl, InfixAssoc, Program
     from agm.agl.syntax.spans import SourceSpan
     from agm.agl.syntax.types import TypeExpr
-    from agm.agl.typecheck.env import CheckedProgram, TypeEnvironment
+    from agm.agl.typecheck.env import CheckedModule, TypeEnvironment
 
 
 # Layout-only token types that carry no statement to evaluate.
@@ -205,10 +205,10 @@ class ReplSession:
         self._extra_cli_roots: tuple[str, ...] = tuple(extra_cli_roots)
         # Lazily assembled RootSet (set directly in tests via s._roots = ...).
         self._roots: RootSet | None = None
-        # Cached lib modules from prior REPL graph-mode entries.
+        # Cached lib modules from prior REPL program entries.
         self._loaded_lib_modules: dict[ModuleId, LoadedModule] = {}
-        # Accumulated import declarations from prior promoted graph-mode entries.
-        # These are prepended to each new entry's program in graph mode so that
+        # Accumulated import declarations from prior promoted program entries.
+        # These are prepended to each new entry's program in program context so that
         # open imports (e.g. ``import util``) persist across entries.
         self._accumulated_imports: list["ImportDecl"] = []
         # Resolved user infix fixity declared in prior promoted entries
@@ -216,7 +216,7 @@ class ReplSession:
         # as ambient fixity so an ``infixl``/``infixr`` declaration made in one
         # entry makes the operator usable in later entries.
         self._accumulated_infix: dict[str, tuple[int, "InfixAssoc"]] = {}
-        self._graph_session = GraphSession(self)
+        self._entry_pipeline = EntryPipeline(self)
 
     @staticmethod
     def _make_agent_type() -> "Type":
@@ -273,11 +273,11 @@ class ReplSession:
         return node_ids
 
     @staticmethod
-    def _assert_checked_state_closed(checked: "CheckedProgram") -> None:
+    def _assert_checked_state_closed(checked: "CheckedModule") -> None:
         """Assert that a checked entry satisfies the shared lowering boundary."""
-        from agm.agl.typecheck.env import assert_checked_program_closed
+        from agm.agl.typecheck.env import assert_checked_module_closed
 
-        assert_checked_program_closed(checked)
+        assert_checked_module_closed(checked)
 
     # ------------------------------------------------------------------
     # Registration (delegated to the internal runtime — shared validation)
@@ -365,9 +365,9 @@ class ReplSession:
             return None
 
         type_envs = [self._type_env]
-        graph_type_env = self._build_type_entry_graph_env()
-        if graph_type_env is not None:
-            type_envs.append(graph_type_env)
+        program_type_env = self._build_type_entry_program_env()
+        if program_type_env is not None:
+            type_envs.append(program_type_env)
 
         for type_env in type_envs:
             generic_result = self._try_generic_type_entry(type_expr, type_env)
@@ -424,17 +424,15 @@ class ReplSession:
             name=None,
             value=None,
             value_type=None,
-            type_display=format_generic_type_def_for_repl(
-                display_name, gdef, type_env.type_table
-            ),
+            type_display=format_generic_type_def_for_repl(display_name, gdef, type_env.type_table),
             diagnostics=[],
             warnings=[],
             error=None,
             ok=True,
         )
 
-    def _build_type_entry_graph_env(self) -> "TypeEnvironment | None":
-        """Build a throwaway graph-aware type env for std/imported type entries."""
+    def _build_type_entry_program_env(self) -> "TypeEnvironment | None":
+        """Build a throwaway program-level type env for std/imported type entries."""
         from agm.agl.modules.errors import (
             AmbiguousModule,
             ImportEntryError,
@@ -445,9 +443,9 @@ class ReplSession:
         from agm.agl.modules.loader import build_repl_graph
         from agm.agl.parser import AglSyntaxError, parse_program_seeded
         from agm.agl.scope import AglScopeError
-        from agm.agl.scope.graph import resolve_graph
+        from agm.agl.scope.program import resolve_program
         from agm.agl.typecheck import AglTypeError
-        from agm.agl.typecheck.graph import check_graph
+        from agm.agl.typecheck.program import check_program
 
         host_env = self._runtime.host_environment()
         try:
@@ -456,7 +454,7 @@ class ReplSession:
                 start_id=self._next_node_id,
                 ambient_infix=self._accumulated_infix,
             )
-            program = self._graph_session._inject_accumulated_imports(program)
+            program = self._entry_pipeline._inject_accumulated_imports(program)
             graph, _new_next_id, _new_modules = build_repl_graph(
                 program,
                 next_start_id,
@@ -464,7 +462,7 @@ class ReplSession:
                 cached=self._loaded_lib_modules,
                 roots=self._ensure_roots(),
             )
-            rgraph = resolve_graph(
+            resolved_program = resolve_program(
                 graph,
                 ambient_agents=self._ambient_agents(host_env),
                 entry_ambient_constructor_candidates=self._ambient_constructor_candidates,
@@ -472,8 +470,8 @@ class ReplSession:
                 entry_parent_scope=self._session_scope,
                 entry_repl_session_scope=self._session_scope,
             )
-            cgraph = check_graph(
-                rgraph,
+            checked_program = check_program(
+                resolved_program,
                 host_env.capabilities,
                 entry_seed_env=self._type_env,
             )
@@ -487,7 +485,7 @@ class ReplSession:
             ImportEntryError,
         ):
             return None
-        return cgraph.modules[ENTRY_ID].type_env
+        return checked_program.modules[ENTRY_ID].type_env
 
     def _eval_entry_pipeline(self, text: str, *, check_only: bool = False) -> EntryResult:
         """Run the resolve → typecheck → matchcompile → lower/eval entry core.
@@ -522,15 +520,13 @@ class ReplSession:
         # checker accepts it; the original ``program`` is kept for classification,
         # echo, and promotion (which care about what the user actually typed).
         orig_program = program
-        pipeline_program, next_start_id = self._repl_wrap_trailing_binder(
-            program, next_start_id
-        )
+        pipeline_program, next_start_id = self._repl_wrap_trailing_binder(program, next_start_id)
 
-        # [1d] REPL entries use the graph-mode pipeline by default because that
+        # [1d] REPL entries use the program pipeline by default because that
         # is where the synthetic ``import std.core`` prelude is injected.  This
         # keeps the REPL aligned with ``agm exec``: stdlib names are open unless
         # a host explicitly opts out.
-        return self._graph_session.eval_entry_graph_mode(
+        return self._entry_pipeline.eval_entry(
             text=text,
             orig_program=orig_program,
             pipeline_program=pipeline_program,
@@ -595,9 +591,7 @@ class ReplSession:
         """
         return host_env.capabilities.agent_names | self._declared_agents
 
-    def _fail(
-        self, diagnostics: list[Diagnostic], warnings: list[Diagnostic]
-    ) -> EntryResult:
+    def _fail(self, diagnostics: list[Diagnostic], warnings: list[Diagnostic]) -> EntryResult:
         """Build a clean pre-execution failure result (no promotion)."""
         return EntryResult(
             kind="statement",
@@ -622,10 +616,7 @@ class ReplSession:
         from agm.agl.runtime.params import build_engine_config_base
 
         defaults = build_engine_config_base({})
-        return {
-            key: self._engine_base.get(key, defaults[key])
-            for key in HOST_CONSUMED_ENGINE_KEYS
-        }
+        return {key: self._engine_base.get(key, defaults[key]) for key in HOST_CONSUMED_ENGINE_KEYS}
 
     def _build_timeout_setting_base(self) -> "EnumValue":
         """Seed the readable timeout register from host input or engine data."""
@@ -668,7 +659,7 @@ class ReplSession:
     def _pre_eval_param_check(
         self,
         program: "Program",
-        checked: "CheckedProgram",
+        checked: "CheckedModule",
         warnings: list[Diagnostic],
     ) -> tuple[EntryResult | None, dict[str, Value], str | None, dict[str, object]]:
         """Validate and convert config-backed params without mutating session state."""
@@ -744,7 +735,7 @@ class ReplSession:
     def _build_check_only_result(
         self,
         program: "Program",
-        checked: "CheckedProgram",
+        checked: "CheckedModule",
         warnings: list[Diagnostic],
     ) -> EntryResult:
         """Build the EntryResult for a ``check_only`` (type-only) run.
@@ -772,7 +763,7 @@ class ReplSession:
         *,
         text: str,
         program: "Program",
-        checked: "CheckedProgram",
+        checked: "CheckedModule",
         next_start_id: int,
         entry_program_name: str | None,
         entry_active_config: dict[str, object],
@@ -868,12 +859,10 @@ class ReplSession:
         for name, ref in entry_root.bindings.items():
             symbol = self._link_image.symbol_for_decl(ref.decl_node_id)
             declared_before_failure = (
-                failure_span is not None
-                and ref.decl_span.end_offset <= failure_span.start_offset
+                failure_span is not None and ref.decl_span.end_offset <= failure_span.start_offset
             )
             installed_before_failure = symbol in self._ir_base_frame and (
-                failure_span is None
-                or ref.decl_span.start_offset <= failure_span.start_offset
+                failure_span is None or ref.decl_span.start_offset <= failure_span.start_offset
             )
             promoted_before_failure = installed_before_failure or (
                 symbol is None and declared_before_failure
@@ -917,8 +906,7 @@ class ReplSession:
         promoted_agents = {
             item.name
             for item in program.body.items
-            if isinstance(item, AgentDecl)
-            and _before_failure(item.span.end_offset)
+            if isinstance(item, AgentDecl) and _before_failure(item.span.end_offset)
         }
         self._declared_agents.update(promoted_agents)
         if promoted_type_names:
@@ -939,8 +927,7 @@ class ReplSession:
                 # ``_declared_params`` stays aligned with ``_session_scope``
                 # (otherwise ``declared_params()`` raises ``KeyError``).
                 installed_before_failure = symbol in self._ir_base_frame and (
-                    failure_span is None
-                    or item.span.start_offset <= failure_span.start_offset
+                    failure_span is None or item.span.start_offset <= failure_span.start_offset
                 )
                 if not partial or installed_before_failure:
                     typ = checked.type_env.get_binding_type(item.node_id)
@@ -969,7 +956,7 @@ class ReplSession:
         return tuple(installed)
 
     def _echo_data_ir(
-        self, program: "Program", checked: "CheckedProgram", captured: "Value | None"
+        self, program: "Program", checked: "CheckedModule", captured: "Value | None"
     ) -> tuple["Value | None", "Type | None"]:
         from agm.agl.semantics.values import Cell
         from agm.agl.syntax.nodes import Binder, Declaration, LetDecl, VarDecl
@@ -1042,9 +1029,7 @@ class ReplSession:
             return last.callee.name != "ask"
         return True
 
-    def _value_type_of_last(
-        self, program: "Program", checked: "CheckedProgram"
-    ) -> "Type | None":
+    def _value_type_of_last(self, program: "Program", checked: "CheckedModule") -> "Type | None":
         """Static type carried by the entry's last item, or ``None``.
 
         The checked type of the expression for a bare-expression entry, the
@@ -1081,9 +1066,9 @@ class ReplSession:
         from agm.agl.modules.ids import ENTRY_ID
         from agm.agl.modules.loader import build_repl_graph
         from agm.agl.parser import parse_program_seeded
-        from agm.agl.scope.graph import resolve_graph
+        from agm.agl.scope.program import resolve_program
         from agm.agl.syntax.nodes import Binder, Declaration
-        from agm.agl.typecheck.graph import check_graph
+        from agm.agl.typecheck.program import check_program
 
         host_env = self._runtime.host_environment()
         # Throwaway ids: type_of never promotes and never advances the session
@@ -1095,19 +1080,18 @@ class ReplSession:
         items = program.body.items
         if len(items) != 1 or isinstance(items[0], (Binder, Declaration)):
             raise AglError(
-                "':type' expects a single expression, "
-                "not a binding, declaration, or statement."
+                "':type' expects a single expression, not a binding, declaration, or statement."
             )
         expr_item = items[0]
-        graph_program = self._graph_session._inject_accumulated_imports(program)
+        entry_program = self._entry_pipeline._inject_accumulated_imports(program)
         graph, _next_node_id, _new_modules = build_repl_graph(
-            graph_program,
+            entry_program,
             next_node_id,
             path=None,
             cached=self._loaded_lib_modules,
             roots=self._ensure_roots(),
         )
-        resolved_graph = resolve_graph(
+        resolved = resolve_program(
             graph,
             ambient_agents=self._ambient_agents(host_env),
             entry_ambient_constructor_candidates=self._ambient_constructor_candidates,
@@ -1115,13 +1099,13 @@ class ReplSession:
             entry_parent_scope=self._session_scope,
             entry_repl_session_scope=self._session_scope,
         )
-        checked_graph = check_graph(
-            resolved_graph, host_env.capabilities, entry_seed_env=self._type_env
+        checked_program = check_program(
+            resolved, host_env.capabilities, entry_seed_env=self._type_env
         )
-        checked = checked_graph.modules[ENTRY_ID]
-        from agm.agl.matchcompile import compile_graph_matches, diagnostics_from_match_issues
+        checked = checked_program.modules[ENTRY_ID]
+        from agm.agl.matchcompile import compile_program_matches, diagnostics_from_match_issues
 
-        match_result = compile_graph_matches(checked_graph)
+        match_result = compile_program_matches(checked_program)
         if match_result.compiled is None:
             diagnostic = diagnostics_from_match_issues(match_result.issues)[0]
             raise AglError(diagnostic.message, span=match_result.issues[0].span)

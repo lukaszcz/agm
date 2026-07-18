@@ -298,10 +298,10 @@ def run(args: ExecArgs) -> None:
         idle_timeout=resolved_timeout,
     )
 
-    # ``prepare_program`` was already called above; the same ``PreparedGraph`` is
+    # ``prepare_program`` was already called above; the same ``PreparedProgram`` is
     # reused for discovery and the run, so the source is loaded and scoped only
     # once.  On a source with load/scope errors ``declared_agents`` is ``()`` and
-    # ``run_prepared_graph`` resurfaces the captured diagnostic (exit 1).
+    # ``run_prepared`` resurfaces the captured diagnostic (exit 1).
     runtime = PipelineDriver(
         default_loop_limit=resolved_loop_limit,
         default_strict_json=resolved_strict_json,
@@ -316,7 +316,7 @@ def run(args: ExecArgs) -> None:
         if declaration.name in per_agent_cmds:
             runtime.register_agent(declaration.name, factory)
 
-    discovery = runtime.discover_params_graph(prepared)
+    discovery = runtime.discover_params(prepared)
     for diag in discovery.warnings:
         print(format_diagnostic(diag, source_name=diagnostic_source_name), file=sys.stderr)
     checked = discovery.checked
@@ -326,9 +326,7 @@ def run(args: ExecArgs) -> None:
         raise SystemExit(1)
 
     external_params: dict[str, object] = {}
-    collision_errors = check_param_collisions(
-        discovery.params, source_name=diagnostic_source_name
-    )
+    collision_errors = check_param_collisions(discovery.params, source_name=diagnostic_source_name)
     if collision_errors:
         for err in collision_errors:
             print(f"Error: {err}", file=sys.stderr)
@@ -355,10 +353,10 @@ def run(args: ExecArgs) -> None:
     # is prepared and the runner is built — hence a check-only pass here rather
     # than letting the run below surface it.  The lowered program it produces is
     # handed to that run, so the graph is lowered exactly once per invocation.
-    param_preflight = runtime.preflight_params_graph(
+    param_preflight = runtime.preflight_params(
         prepared,
         param_values=external_params,
-        compiled_graph=discovery.compiled_graph,
+        compiled=discovery.compiled,
     )
     if not param_preflight.result.ok:
         for diag in param_preflight.result.diagnostics:
@@ -434,16 +432,16 @@ def run(args: ExecArgs) -> None:
         "timeout": convert_config_value("timeout", timeout_seed_raw, _timeout_type),
     }
 
-    # Reuse the ``PreparedGraph`` from above — no second parse/scope of the source.
-    # Pass the already-computed compiled_graph from discovery and the program the
+    # Reuse the ``PreparedProgram`` from above — no second parse/scope of the source.
+    # Pass the already-computed compiled from discovery and the program the
     # preflight already lowered, so the graph is type-checked, match-compiled and
     # lowered exactly once.
-    result = runtime.run_prepared_graph(
+    result = runtime.run_prepared(
         prepared,
         param_values=external_params,
         check_only=dry_run.enabled(),
         log_file=log_file,
-        compiled_graph=discovery.compiled_graph,
+        compiled=discovery.compiled,
         executable=param_preflight.executable,
         host_settings_policy=policy,
         builtin_host_settings=builtin_host_settings,

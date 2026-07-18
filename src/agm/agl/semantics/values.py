@@ -44,9 +44,7 @@ def _json_eq(left: object, right: object) -> bool:
     # Guard: a bool only equals another bool of the same value.
     if isinstance(left, bool) or isinstance(right, bool):
         return isinstance(left, bool) and isinstance(right, bool) and left == right
-    if isinstance(left, (int, decimal.Decimal)) and isinstance(
-        right, (int, decimal.Decimal)
-    ):
+    if isinstance(left, (int, decimal.Decimal)) and isinstance(right, (int, decimal.Decimal)):
         return decimal.Decimal(left) == decimal.Decimal(right)
     if isinstance(left, list) and isinstance(right, list):
         if len(left) != len(right):
@@ -252,9 +250,7 @@ class RecordValue:
     def __hash__(self) -> int:
         # Use hash(v) rather than repr(v) so that the eq/hash contract holds:
         # equal values (e.g. JsonValue(1) == JsonValue(Decimal("1.0"))) hash the same.
-        return hash(
-            (self.nominal, tuple(sorted((k, hash(v)) for k, v in self.fields.items())))
-        )
+        return hash((self.nominal, tuple(sorted((k, hash(v)) for k, v in self.fields.items()))))
 
     def __eq__(self, other: object) -> bool:
         if isinstance(other, RecordValue):
@@ -322,9 +318,7 @@ class ExceptionValue:
 
     def __hash__(self) -> int:
         # Use hash(v) rather than repr(v) so that the eq/hash contract holds.
-        return hash(
-            (self.nominal, tuple(sorted((k, hash(v)) for k, v in self.fields.items())))
-        )
+        return hash((self.nominal, tuple(sorted((k, hash(v)) for k, v in self.fields.items()))))
 
     def __eq__(self, other: object) -> bool:
         if isinstance(other, ExceptionValue):

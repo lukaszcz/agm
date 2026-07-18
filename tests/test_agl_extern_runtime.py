@@ -229,10 +229,10 @@ class TestRoundTrips:
 
 class TestDecimalExactness:
     def test_decimal_argument_arrives_as_decimal_never_float(self, tmp_path: Path) -> None:
-        source = "extern def check(x: decimal) -> bool\nlet r = check(0.1)\nr\n"
+        source = "extern def check_module(x: decimal) -> bool\nlet r = check_module(0.1)\nr\n"
         companion = (
             "from decimal import Decimal\n"
-            "def check(x):\n"
+            "def check_module(x):\n"
             "    return isinstance(x, Decimal) and not isinstance(x, float)\n"
         )
         result, _ = evaluate_ir_with_externs(source, companion, tmp_path)
@@ -553,16 +553,16 @@ class TestOptionAsPlainEnum:
 
     def test_option_of_option_disambiguates_nesting_depth(self, tmp_path: Path) -> None:
         source = (
-            self._OPTION + "extern def check(o: Option[Option[int]]) -> bool\n"
+            self._OPTION + "extern def check_module(o: Option[Option[int]]) -> bool\n"
             "let some_some: Option[Option[int]] = Some(value = Some(value = 5))\n"
             "let some_none: Option[Option[int]] = Some(value = None)\n"
-            "let r1 = check(some_some)\n"
-            "let r2 = check(some_none)\n"
-            "let r3: bool = check(None)\n"
+            "let r1 = check_module(some_some)\n"
+            "let r2 = check_module(some_none)\n"
+            "let r3: bool = check_module(None)\n"
             "r1\n"
         )
         companion = (
-            "def check(o):\n"
+            "def check_module(o):\n"
             "    if o == {'$case': 'Some', 'value': {'$case': 'Some', 'value': 5}}:\n"
             "        return True\n"
             "    if o == {'$case': 'Some', 'value': {'$case': 'None'}}:\n"
@@ -576,18 +576,16 @@ class TestOptionAsPlainEnum:
         assert result["r2"] == BoolValue(True)
         assert result["r3"] == BoolValue(True)
 
-    def test_option_of_json_disambiguates_none_from_some_of_json_null(
-        self, tmp_path: Path
-    ) -> None:
+    def test_option_of_json_disambiguates_none_from_some_of_json_null(self, tmp_path: Path) -> None:
         source = (
-            self._OPTION + "extern def check(o: Option[json]) -> bool\n"
+            self._OPTION + "extern def check_module(o: Option[json]) -> bool\n"
             "let some_null: Option[json] = Some(value = null)\n"
-            "let r1 = check(some_null)\n"
-            "let r2: bool = check(None)\n"
+            "let r1 = check_module(some_null)\n"
+            "let r2: bool = check_module(None)\n"
             "r1\n"
         )
         companion = (
-            "def check(o):\n"
+            "def check_module(o):\n"
             "    if o == {'$case': 'Some', 'value': None}:\n"
             "        return True\n"
             "    if o == {'$case': 'None'}:\n"
@@ -657,9 +655,7 @@ class TestDeepCopyIsolation:
         )
         companion = "def touch(xs):\n    xs.append(99)\n    return xs\n"
         result, _ = evaluate_ir_with_externs(source, companion, tmp_path)
-        assert result["touched"] == ListValue(
-            (IntValue(1), IntValue(2), IntValue(3), IntValue(99))
-        )
+        assert result["touched"] == ListValue((IntValue(1), IntValue(2), IntValue(3), IntValue(99)))
 
     def test_mutating_a_received_json_object_does_not_affect_the_agl_value_used_after_the_call(
         self, tmp_path: Path
@@ -689,11 +685,11 @@ class TestArgumentBinding:
         self, tmp_path: Path
     ) -> None:
         source = (
-            "extern def greet(name: text, /, greeting: text = \"Hello\", *,"
+            'extern def greet(name: text, /, greeting: text = "Hello", *,'
             " loud: bool = false) -> text\n"
-            "let a = greet(\"Ada\")\n"
-            "let b = greet(\"Ada\", greeting = \"Hi\")\n"
-            "let c = greet(\"Ada\", \"Hi\", loud = true)\n"
+            'let a = greet("Ada")\n'
+            'let b = greet("Ada", greeting = "Hi")\n'
+            'let c = greet("Ada", "Hi", loud = true)\n'
             "a\n"
         )
         companion = "def greet(name, greeting, loud):\n    return f'{name}|{greeting}|{loud}'\n"
@@ -854,7 +850,7 @@ class TestExternError:
             roots=_roots(root),
             default_stdlib=False,
         )
-        result = driver.run_prepared_graph(prepared)
+        result = driver.run_prepared(prepared)
         assert result.ok is False
         assert result.error is not None
         assert result.error.type_name == "ExternError"
@@ -896,7 +892,7 @@ class TestRecursionAndLoops:
 
 
 # ---------------------------------------------------------------------------
-# End-to-end file runs via PipelineDriver (real files, graph pipeline)
+# End-to-end file runs via PipelineDriver (real files, program pipeline)
 # ---------------------------------------------------------------------------
 
 
@@ -912,7 +908,7 @@ class TestEndToEndFileRuns:
             roots=_roots(tmp_path),
             default_stdlib=False,
         )
-        result = driver.run_prepared_graph(prepared)
+        result = driver.run_prepared(prepared)
         assert result.ok is True, result.diagnostics
 
     def test_library_module_extern_reachable_via_qualified_call(self, tmp_path: Path) -> None:
@@ -926,7 +922,7 @@ class TestEndToEndFileRuns:
             roots=_roots(root),
             default_stdlib=False,
         )
-        result = driver.run_prepared_graph(prepared)
+        result = driver.run_prepared(prepared)
         assert result.ok is True, result.diagnostics
         assert result.bindings["r"] == IntValue(2)
 
@@ -941,13 +937,11 @@ class TestEndToEndFileRuns:
             roots=_roots(root),
             default_stdlib=False,
         )
-        result = driver.run_prepared_graph(prepared)
+        result = driver.run_prepared(prepared)
         assert result.ok is True, result.diagnostics
         assert result.bindings["r"] == IntValue(2)
 
-    def test_private_extern_callable_inside_module_invisible_outside(
-        self, tmp_path: Path
-    ) -> None:
+    def test_private_extern_callable_inside_module_invisible_outside(self, tmp_path: Path) -> None:
         root = tmp_path / "root"
         write_module_file(
             root,
@@ -963,7 +957,7 @@ class TestEndToEndFileRuns:
             roots=_roots(root),
             default_stdlib=False,
         )
-        result = driver.run_prepared_graph(prepared)
+        result = driver.run_prepared(prepared)
         assert result.ok is True, result.diagnostics
         assert result.bindings["r"] == IntValue(3)
 
@@ -973,7 +967,7 @@ class TestEndToEndFileRuns:
             roots=_roots(root),
             default_stdlib=False,
         )
-        outside_result = driver.run_prepared_graph(outside_prepared)
+        outside_result = driver.run_prepared(outside_prepared)
         assert outside_result.ok is False
 
 
@@ -1002,7 +996,7 @@ class TestDryRun:
             roots=_roots(root),
             default_stdlib=False,
         )
-        result = driver.run_prepared_graph(prepared, check_only=True)
+        result = driver.run_prepared(prepared, check_only=True)
         assert result.ok is True
         assert [cs.callee for cs in result.call_sites] == ["f"]
         assert not marker.exists()
@@ -1018,7 +1012,7 @@ class TestDryRun:
             roots=_roots(root),
             default_stdlib=False,
         )
-        result = driver.run_prepared_graph(prepared, check_only=True)
+        result = driver.run_prepared(prepared, check_only=True)
         assert result.ok is True
         assert [cs.callee for cs in result.call_sites] == ["f"]
 

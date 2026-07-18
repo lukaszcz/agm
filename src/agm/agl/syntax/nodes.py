@@ -778,7 +778,13 @@ class LiteralPattern:
 
 @dataclass(frozen=True, slots=True)
 class VarPattern:
-    """A binding pattern — captures the matched value into ``name``."""
+    """A bare pattern name: top-level constructors or field-directed nested syntax.
+
+    At case-pattern top level, the name denotes a nullary constructor. Within
+    a constructor field, it denotes that field only when its spelling matches
+    the field name; otherwise it may denote a nullary constructor of the field
+    type. Use :class:`AsPattern` for an explicit general-purpose binder.
+    """
 
     name: str
     span: SourceSpan = dc_field(compare=False)

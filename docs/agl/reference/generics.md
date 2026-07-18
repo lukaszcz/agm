@@ -417,6 +417,22 @@ optional; when present, it must agree with that type. A nearer ordinary binding
 set, exactly like any other shadowing (see
 [Bindings and scope](bindings-and-scope.md)).
 
+## Bare names in patterns
+
+A bare name at the top level of a `case` pattern is a nullary constructor and
+never captures a value. Use an `as` pattern for a catch-all binder:
+
+```agl
+case value of
+  | _ as captured => captured
+```
+
+Inside a constructor pattern, a bare name is field-directed: it binds only
+when it has the matched field's name. A different bare name must be a nullary
+constructor of that field's type. When a field and a constructor share a name,
+write `name()` for the constructor or `_ as name` for the field value. Use
+`field as name` to give a field binding a different name.
+
 ## No generic agent targets
 
 An `ask` call's response type becomes a wire-serialized output contract, and a

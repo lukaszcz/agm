@@ -302,6 +302,10 @@ class CheckedModule:
     ``resolved``
         The ``ModuleResolution`` from the scope pass (carries the original
         ``Program`` and scope side tables).
+    ``resolution`` / ``constructor_refs`` / ``qualified_constructor_refs``
+        Checker-owned reference tables. They begin as copies of scope output and
+        carry final field-directed pattern reconciliation without changing the
+        scope artifact.
     ``node_types``
         Maps ``node_id`` → resolved ``Type`` for every expression node that
         was type-checked.  Statement nodes are not entered here.
@@ -327,6 +331,9 @@ class CheckedModule:
     """
 
     resolved: ModuleResolution
+    resolution: dict[int, BindingRef]
+    constructor_refs: dict[int, ConstructorRef]
+    qualified_constructor_refs: dict[int, tuple[str, str, ModuleId | None]]
     node_types: dict[int, Type]
     contract_specs: dict[int, OutputContractSpec]
     call_sites: tuple[CallSiteRecord, ...]

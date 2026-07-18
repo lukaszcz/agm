@@ -1262,7 +1262,7 @@ class TestIrFieldLowering:
 
         # A fresh node_id not present in qualified_constructor_refs.
         fake_node_id = 99999
-        assert fake_node_id not in checked.resolved.qualified_constructor_refs
+        assert fake_node_id not in checked.qualified_constructor_refs
 
         span = SourceSpan(
             start_line=1,
@@ -1456,8 +1456,8 @@ class TestScanCapturesLoopForIterWhileCond:
         source = "var x = 0\nvar _y = x\n()"
         checked = _check(source)
 
-        # Locate x's BindingRef via any resolved reference to it.
-        x_ref = next(ref for ref in checked.resolved.resolution.values() if ref.name == "x")
+        # Locate x's BindingRef via any checked reference to it.
+        x_ref = next(ref for ref in checked.resolution.values() if ref.name == "x")
 
         # Synthetic VarRef nodes for for_iter and while_cond, using fresh node_ids
         # that don't collide with any real node in the checked program.
@@ -1472,10 +1472,9 @@ class TestScanCapturesLoopForIterWhileCond:
         for_iter_ref = VarRef(name="x", span=fake_span, node_id=88881)
         while_cond_ref = VarRef(name="x", span=fake_span, node_id=88882)
 
-        # Inject resolutions for the synthetic node_ids so _record_capture can
-        # find them; the resolution dict is mutable even though ModuleResolution is frozen.
-        checked.resolved.resolution[88881] = x_ref
-        checked.resolved.resolution[88882] = x_ref
+        # Inject checked references for the synthetic node_ids so _record_capture can find them.
+        checked.resolution[88881] = x_ref
+        checked.resolution[88882] = x_ref
 
         # Synthetic Loop: for_iter and while_cond both reference x; body is unit.
         body = UnitLit(span=fake_span, node_id=88883)

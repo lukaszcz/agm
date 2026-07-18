@@ -3,7 +3,7 @@
     {
       "name": "nested_field_binder_and_constructor",
       "expect": {
-        "stdout": "7:ready\n",
+        "stdout": "1:7:ready\nconstructor\n",
         "calls": {}
       }
     }

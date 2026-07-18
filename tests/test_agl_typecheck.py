@@ -54,6 +54,7 @@ from agm.agl.syntax.nodes import (
     Call,
     Case,
     Cast,
+    ConstructorPattern,
     DictEntry,
     DictLit,
     Do,
@@ -3273,6 +3274,122 @@ class TestConstructorRefDispatch:
             "case m of | Red => 1 | _ => 2"
         )
         assert "does not belong" in str(err)
+
+    def test_field_directed_constructor_restores_outer_assignment_references(self) -> None:
+        source = (
+            "enum Flag\n  | on\n  | off\n"
+            "enum Packet\n  | packet(flag: Flag)\n"
+            "var on: int = 0\n"
+            "let item = packet(Flag::on)\n"
+            "case item of\n"
+            "  | packet(on) =>\n"
+            "    on := on + 1\n"
+            "    on\n"
+            "  | packet(_) => 0"
+        )
+        resolved = resolve_module(parse_program(source))
+        case = resolved.program.body.items[-1]
+        assert isinstance(case, Case)
+        pattern = case.branches[0].pattern
+        assert isinstance(pattern, ConstructorPattern)
+        field_pattern = pattern.positional[0]
+        body = case.branches[0].body
+        assert isinstance(body, Block)
+        assignment = body.items[0]
+        assert isinstance(assignment, AssignStmt)
+
+        # Scope records the temporary branch binding, which remains its own output.
+        assert resolved.resolution[assignment.node_id].decl_node_id == field_pattern.node_id
+
+        checked = check_module(resolved, default_capabilities())
+        outer_var = resolved.program.body.items[2]
+        assert isinstance(outer_var, VarDecl)
+        assert checked.resolution[assignment.node_id].decl_node_id == outer_var.node_id
+        assert checked.resolution[body.items[1].node_id].decl_node_id == outer_var.node_id
+        assert resolved.resolution[assignment.node_id].decl_node_id == field_pattern.node_id
+
+    def test_field_directed_constructor_restores_indexed_assignment_root(self) -> None:
+        source = (
+            "enum Flag\n  | on\n  | off\n"
+            "enum Packet\n  | packet(flag: Flag)\n"
+            "var on: list[int] = [0]\n"
+            "let item = packet(Flag::on)\n"
+            "case item of\n"
+            "  | packet(on) =>\n"
+            "    on[0] := 1\n"
+            "    on[0]\n"
+            "  | packet(_) => 0"
+        )
+        resolved = resolve_module(parse_program(source))
+        case = resolved.program.body.items[-1]
+        assert isinstance(case, Case)
+        body = case.branches[0].body
+        assert isinstance(body, Block)
+        assignment = body.items[0]
+        assert isinstance(assignment, AssignStmt)
+        outer_var = resolved.program.body.items[2]
+        assert isinstance(outer_var, VarDecl)
+
+        checked = check_module(resolved, default_capabilities())
+        assert checked.resolution[assignment.node_id].decl_node_id == outer_var.node_id
+
+    def test_failed_field_directed_check_preserves_scope_resolution(self) -> None:
+        source = (
+            "enum Flag\n  | on\n  | off\n"
+            "enum Packet\n  | packet(flag: Flag)\n"
+            "var on: int = 0\n"
+            "let item = packet(Flag::on)\n"
+            "case item of\n"
+            "  | packet(on) =>\n"
+            "    on := \"wrong\"\n"
+            "    0\n"
+            "  | packet(_) => 0"
+        )
+        resolved = resolve_module(parse_program(source))
+        case = resolved.program.body.items[-1]
+        assert isinstance(case, Case)
+        body = case.branches[0].body
+        assert isinstance(body, Block)
+        assignment = body.items[0]
+        assert isinstance(assignment, AssignStmt)
+        provisional_ref = resolved.resolution[assignment.node_id]
+
+        with pytest.raises(AglTypeError):
+            check_module(resolved, default_capabilities())
+
+        assert resolved.resolution[assignment.node_id] == provisional_ref
+        assert assignment.node_id not in resolved.constructor_refs
+
+    def test_field_directed_assignment_to_a_final_binder_is_rejected(self) -> None:
+        source = (
+            "enum Flag\n  | on\n  | off\n"
+            "enum Packet\n  | packet(flag: Flag)\n"
+            "let item = packet(Flag::on)\n"
+            "case item of\n"
+            "  | packet(flag) =>\n"
+            "    flag := Flag::off\n"
+            "    0\n"
+            "  | packet(_) => 0"
+        )
+        resolved = resolve_module(parse_program(source))
+
+        with pytest.raises(AglTypeError):
+            check_module(resolved, default_capabilities())
+
+    def test_reconciliation_rollback_restores_constructor_references(self) -> None:
+        from agm.agl.typecheck.checker import _Checker, _InferenceRegion
+        from agm.agl.typecheck.inference import InferenceEngine
+
+        resolved = resolve_module(parse_program("enum Flag\n  | on\non"))
+        constructor_ref = next(iter(resolved.constructor_refs.values()))
+        checker = _Checker(TypeEnvironment(), resolved, default_capabilities())
+        region = _InferenceRegion(InferenceEngine(), {}, {}, [])
+        node_id = -1
+        region.reconciled_constructor_ref_originals[node_id] = constructor_ref
+
+        checker._rollback_region_side_tables(region)
+
+        assert checker._resolved.constructor_refs[node_id] == constructor_ref
 
     def test_bare_pattern_rejects_missing_or_stale_constructor_candidates(self) -> None:
         resolved = resolve_module(

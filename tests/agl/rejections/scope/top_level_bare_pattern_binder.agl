@@ -1,0 +1,7 @@
+enum Flag
+  | on
+  | off
+
+let value: Flag = Flag::on
+case value of
+  | captured => 1

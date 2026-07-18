@@ -1078,7 +1078,7 @@ class _Resolver:
                     f"'{name}' is not declared; assignment requires an existing mutable binding.",
                     span=node.span,
                 )
-        if not ref.mutable:
+        if not ref.mutable and ref.decl_node_id not in self._provisional_pattern_binders:
             raise AglScopeError(
                 f"Cannot assign to '{name}': "
                 f"{_immutable_binder_phrase(ref.kind)} (immutable). "

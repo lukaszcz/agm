@@ -223,6 +223,10 @@ class _InferenceRegion:
     call_sites_start: int = 0
     warnings_start: int = 0
     return_target_lengths: tuple[int, ...] = ()
+    reconciled_resolution_originals: dict[int, BindingRef] = field(default_factory=dict)
+    reconciled_constructor_ref_originals: dict[int, ConstructorRef | None] = field(
+        default_factory=dict
+    )
 
 
 _IndexLike = IndexAccess | IndexTarget
@@ -420,7 +424,12 @@ class _Checker:
         capabilities: HostCapabilities,
     ) -> None:
         self._env = env
-        self._resolved = resolved
+        self._resolved = replace(
+            resolved,
+            resolution=dict(resolved.resolution),
+            constructor_refs=dict(resolved.constructor_refs),
+            qualified_constructor_refs=dict(resolved.qualified_constructor_refs),
+        )
         self._caps = capabilities
         self._node_types: dict[int, Type] = {}
         self._inference_region: _InferenceRegion | None = None
@@ -960,6 +969,11 @@ class _Checker:
     def _check_assign_stmt(self, stmt: AssignStmt) -> Type:
         if isinstance(stmt.target, NameTarget):
             ref = self._resolved.resolution[stmt.node_id]
+            if not ref.mutable:
+                raise AglTypeError(
+                    f"Cannot assign to '{ref.name}': assignment requires a mutable binding.",
+                    span=stmt.target.span,
+                )
             target_type = self._require_binding_type(ref)
             val_type = self._check_boundary_expr(stmt.value, expected=target_type)
             self._assert_assignable(val_type, target_type, stmt.span)
@@ -1584,6 +1598,12 @@ class _Checker:
         ):
             for node_id in region.added_side_table_keys.get(table_name, set()):
                 table.pop(node_id, None)
+        self._resolved.resolution.update(region.reconciled_resolution_originals)
+        for node_id, constructor_ref in region.reconciled_constructor_ref_originals.items():
+            if constructor_ref is None:
+                self._resolved.constructor_refs.pop(node_id, None)
+            else:
+                self._resolved.constructor_refs[node_id] = constructor_ref
         del self._call_sites[region.call_sites_start :]
         del self._warnings[region.warnings_start :]
         for targets, start in zip(
@@ -3273,7 +3293,15 @@ class _Checker:
                         f"'{name}' is ambiguous outside the pattern; qualify the reference.",
                         span=provisional[0].span,
                     )
+            region = self._inference_region
+            assert region is not None
             for ref_node_id in reference_node_ids:
+                region.reconciled_resolution_originals.setdefault(
+                    ref_node_id, self._resolved.resolution[ref_node_id]
+                )
+                region.reconciled_constructor_ref_originals.setdefault(
+                    ref_node_id, self._resolved.constructor_refs.get(ref_node_id)
+                )
                 self._resolved.resolution[ref_node_id] = target_ref
                 if target_ref.kind is BinderKind.constructor_binding:
                     constructor = self._pattern_classifications[provisional[0].node_id]
@@ -3381,6 +3409,9 @@ class _Checker:
     def result(self, resolved: ModuleResolution) -> CheckedModule:
         return CheckedModule(
             resolved=resolved,
+            resolution=self._resolved.resolution,
+            constructor_refs=self._resolved.constructor_refs,
+            qualified_constructor_refs=self._resolved.qualified_constructor_refs,
             node_types=self._node_types,
             contract_specs=self._contract_specs,
             call_sites=tuple(self._call_sites),

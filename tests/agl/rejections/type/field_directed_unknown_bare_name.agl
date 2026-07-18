@@ -1,0 +1,11 @@
+enum Flag
+  | on
+  | off
+
+enum Packet
+  | packet(flag: Flag)
+
+let item = packet(Flag::on)
+case item of
+  | packet(captured) => 1
+  | packet(_) => 0

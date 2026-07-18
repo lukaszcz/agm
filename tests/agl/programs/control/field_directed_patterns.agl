@@ -6,7 +6,18 @@ enum Flag
 enum Packet
   | packet(count: int, flag: Flag, label: text)
 
-let value = packet(7, on(), "ready")
+enum NamedPacket
+  | named_packet(on: Flag)
+
+var on: int = 0
+let value = packet(7, Flag::on, "ready")
 case value of
-  | packet(count, flag = on, label = label as shown) => print "${count}:${shown}"
+  | packet(count, flag = on, label = label as shown) =>
+    on := on + 1
+    print "${on}:${count}:${shown}"
   | packet(_, _, _) => print "other"
+
+let named = named_packet(on = Flag::on)
+case named of
+  | named_packet(on()) => print "constructor"
+  | named_packet(_ as captured) => print "capture"

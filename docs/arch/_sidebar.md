@@ -9,7 +9,16 @@
   - [Testing](/testing.md)
 - AgL
   - [Overview](/agl/index.md)
-  - [Frontend](/agl/frontend.md)
-  - [Execution](/agl/execution.md)
+  - Frontend
+    - [Overview](/agl/frontend/index.md)
+    - [Syntax: lexer, parser, AST](/agl/frontend/syntax.md)
+    - [Name resolution](/agl/frontend/scope.md)
+    - [Type system and checking](/agl/frontend/types.md)
+    - [Match compilation](/agl/frontend/matchcompile.md)
+  - Execution
+    - [Overview](/agl/execution/index.md)
+    - [Lowering and the IR](/agl/execution/lowering.md)
+    - [Evaluator](/agl/execution/evaluator.md)
+    - [Host runtime and pipeline](/agl/execution/runtime.md)
   - [Modules](/agl/modules.md)
   - [REPL and hosting](/agl/repl.md)

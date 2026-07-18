@@ -414,8 +414,9 @@ Qualification is accepted in expression, pattern, and `is`-test positions
 type selects the owner even when variants share a name, so qualification is
 optional; when present, it must agree with that type. A nearer ordinary binding
 (a `let`, `var`, or function parameter) **shadows** a constructor or overload
-set, exactly like any other shadowing (see
-[Bindings and scope](bindings-and-scope.md)).
+set in expression/value position, exactly like any other shadowing (see
+[Bindings and scope](bindings-and-scope.md)). In pattern position, lookup stays
+constructor-directed regardless of local values.
 
 ## Bare names in patterns
 

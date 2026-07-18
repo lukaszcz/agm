@@ -1,0 +1,43 @@
+# Nested field-directed constructors leave same-spelled outer mutable values usable.
+enum Signal
+  | read
+  | assign
+  | indexed
+  | skip
+
+enum Packet
+  | packet(signal: Signal)
+
+param matched: bool
+
+var read: int = 4
+var assign: int = 8
+var indexed: list[int] = [12]
+
+let reading: Packet = if matched => packet(Signal::read) | else => packet(Signal::skip)
+case reading of
+  | packet(read) as matched_packet =>
+    case matched_packet of
+      | packet(read) => print "read ${read} alias ${matched_packet == reading}"
+      | packet(_) => print "read inner miss"
+  | packet(_) => print "read outer miss"
+
+let writing: Packet = if matched => packet(Signal::assign) | else => packet(Signal::skip)
+case writing of
+  | packet(assign) =>
+    case writing of
+      | packet(assign) =>
+        assign := assign + 1
+        print "assign ${assign}"
+      | packet(_) => print "assign inner miss"
+  | packet(_) => print "assign outer miss"
+
+let indexing: Packet = if matched => packet(Signal::indexed) | else => packet(Signal::skip)
+case indexing of
+  | packet(indexed) =>
+    case indexing of
+      | packet(indexed) =>
+        indexed[0] := indexed[0] + 1
+        print "indexed ${indexed[0]}"
+      | packet(_) => print "indexed inner miss"
+  | packet(_) => print "indexed outer miss"

@@ -182,7 +182,7 @@ def _is_placeholder_position_error(
     )
 
 
-def _import_migration_error(
+def _module_header_migration_error(
     *,
     token_type: str,
     token_value: str,
@@ -196,19 +196,21 @@ def _import_migration_error(
     if header is None:
         return None
     module_kind = str(header.group("kind"))
+    noun = "import" if module_kind.endswith("import") else "export"
     path_before_token = str(header.group("path"))
     if token_type == "DOT" and _MODULE_PATH_BEFORE_DOT_RE.fullmatch(path_before_token):
         return AglSyntaxError("Module paths use `/` between segments.", span=span)
     if token_type == "SLASH" and not path_before_token.strip():
-        return AglSyntaxError("An import module path must not start with `/`.", span=span)
-    if (
-        token_type == "NAME"
-        and token_value == "qualified"
-        and module_kind.endswith("import")
-    ):
         return AglSyntaxError(
-            "`qualified` was removed; imports are qualified by default.", span=span
+            f"An {noun} module path must not start with `/`.", span=span
         )
+    if token_type == "NAME" and token_value == "qualified":
+        message = (
+            "`qualified` was removed; imports are qualified by default."
+            if noun == "import"
+            else "`qualified` was removed; exports name modules directly."
+        )
+        return AglSyntaxError(message, span=span)
     return None
 
 
@@ -250,7 +252,7 @@ def syntax_error_from_lark(
             token_type=tok.type, source_text=source_text, token_pos=pos
         ):
             return _make_placeholder_position_error(span)
-        migration_error = _import_migration_error(
+        migration_error = _module_header_migration_error(
             token_type=tok.type,
             token_value=str(tok),
             source_text=source_text,

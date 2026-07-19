@@ -18,6 +18,9 @@ and plain-path routes. Plain imports are qualified-only; `using` and `open impor
 inject bare names. One shared suffix/anchored resolver serves value reads and writes,
 constructors, and type qualification, retaining ambiguity and route identity until the use
 site; its diagnostics distinguish private declarations from names outside a contribution.
+The scope pass also recognizes whitespace-separated qualifier near-misses only when
+re-resolving the corresponding tight route succeeds, preserving valid division and
+juxtaposition expressions.
 
 ## Static Guarantees
 

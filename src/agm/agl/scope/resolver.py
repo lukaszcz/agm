@@ -1787,7 +1787,7 @@ class _Resolver:
                 pattern.span,
                 pattern.node_id,
                 scope,
-                allow_existing_provisional=bool(candidates),
+                allow_existing_pattern_slot=bool(candidates),
             )
             self._provisional_pattern_binders.add(pattern.node_id)
         elif isinstance(pattern, AsPattern):
@@ -1815,14 +1815,15 @@ class _Resolver:
         scope: ScopeNode,
         *,
         allow_existing_provisional: bool = False,
+        allow_existing_pattern_slot: bool = False,
     ) -> bool:
         """Introduce one branch-local pattern binding.
 
         Returns whether this name became the scope's provisional binding. A
         nested spelling with constructor candidates may ultimately be a
-        constructor rather than a binder, so a later such spelling may share
-        its provisional slot. The checker validates final duplicate binders and
-        rewrites branch references to the unique final binder if necessary.
+        constructor rather than a binder, so it may share an existing pattern
+        slot. The checker validates final duplicate binders and rewrites branch
+        references to the unique final binder if necessary.
         """
         self._check_not_reserved(name, span)
         existing = scope.bindings.get(name)
@@ -1830,6 +1831,9 @@ class _Resolver:
             if (
                 allow_existing_provisional
                 and existing.decl_node_id in self._provisional_pattern_binders
+            ) or (
+                allow_existing_pattern_slot
+                and existing.kind is BinderKind.pattern_binding
             ):
                 return False
             raise AglScopeError(

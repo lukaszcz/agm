@@ -111,6 +111,23 @@ def test_nested_constructor_and_binder_clashes_are_field_directed() -> None:
     )
 
 
+def test_constructor_candidate_after_explicit_binder_is_field_directed() -> None:
+    result = evaluate_ir(
+        "enum Flag\n  | on\n"
+        "enum Packet\n  | packet(value: int, flag: Flag)\n"
+        "let item = packet(7, on())\n"
+        "let result = case item of | packet(_ as on, on) => on\n"
+        "result"
+    )
+    assert result["result"].value == 7
+    _reject_type(
+        "enum Flag\n  | on\n"
+        "enum Packet\n  | packet(value: int, on: int)\n"
+        "let item = packet(7, 8)\n"
+        "case item of | packet(_ as on, on) => on"
+    )
+
+
 def test_final_classification_rejects_duplicate_binders_and_ambiguous_outer_references() -> None:
     _reject_type(
         "enum Packet\n  | packet(value: int)\n"

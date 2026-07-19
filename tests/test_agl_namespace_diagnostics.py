@@ -20,20 +20,19 @@ def _graph(tmp_path: Path, entry: str, modules: dict[str, str] | None = None) ->
     return make_graph_from_files(tmp_path, {"entry": entry, **(modules or {})})
 
 
-def test_legacy_module_header_spellings_explain_the_required_migration() -> None:
-    cases = (
-        ("import old.path", ("module", "/")),
-        ("import /old/path", ("import", "path", "start", "/")),
-        ("import old/path qualified", ("qualified", "removed", "imports")),
-        ("export /old/path", ("export", "path", "start", "/")),
-        ("export old/path qualified", ("qualified", "removed", "exports")),
-    )
-
-    for source, terms in cases:
-        with pytest.raises(AglSyntaxError) as raised:
-            parse_program(source)
-        diagnostic = str(raised.value).lower()
-        assert all(term in diagnostic for term in terms)
+@pytest.mark.parametrize(
+    "source",
+    (
+        "import old.path",
+        "import /old/path",
+        "import old/path qualified",
+        "export /old/path",
+        "export old/path qualified",
+    ),
+)
+def test_legacy_module_header_spellings_are_syntax_errors(source: str) -> None:
+    with pytest.raises(AglSyntaxError):
+        parse_program(source)
 
 
 def test_open_import_using_reports_the_redundant_combination() -> None:

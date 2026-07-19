@@ -230,6 +230,7 @@ EXPORT = "EXPORT"  # contextual: 'export' at item-start
 PRIVATE = "PRIVATE"  # contextual: 'private' at item-start
 MODQUAL = "MODQUAL"  # synthetic: merged module-qualifier prefix (e.g. "foo/bar::")
 MODPATH = "MODPATH"  # synthetic: merged module path in a header (e.g. "foo/bar")
+WILDCARD = "WILDCARD"  # synthetic: adjacent "/*" tail of a wildcard module header
 
 # ---------------------------------------------------------------------------
 # Grammar token-type mapping

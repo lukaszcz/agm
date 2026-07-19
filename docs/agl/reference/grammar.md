@@ -52,12 +52,14 @@ on a `type_alias` or on `extern_func_def`; `"private"` composes with
 ## Import and export declarations
 
 ```ebnf
-import_decl ::= ["open"] "import" module_path ["/" "*"]
+import_decl ::= ["open"] "import" module_path ["/*"]
                 ["as" ref_name]
                 [using_clause | hiding_clause]
+                                           (* "/*" is byte-adjacent to the path *)
 
-export_decl ::= "export" module_path ["/" "*"]
+export_decl ::= "export" module_path ["/*"]
                 [using_clause | hiding_clause]
+                                           (* "/*" is byte-adjacent to the path *)
 
 module_path ::= NAME ("/" NAME)*
 ref_name    ::= name

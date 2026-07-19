@@ -59,10 +59,6 @@ _ELSE_BEFORE_TOKEN_RE = re.compile(r"(?<![A-Za-z0-9_])else\s*$")
 # identifier-body character, so a name that merely ends in ``?`` (predicate names
 # like ``empty?`` or the ``as?`` keyword) does not masquerade as a placeholder.
 _PLACEHOLDER_BEFORE_TOKEN_RE = re.compile(r"(?<![^\s(){}\[\]:,.|;/@=])\?[0-9]*\s*$")
-_MODULE_HEADER_RE = re.compile(
-    r"(?:^|[;\n])[ \t]*(?P<kind>(?:(?:open[ \t]+)?import|export))[ \t]+(?P<path>[^;\n]*)$"
-)
-_MODULE_PATH_BEFORE_DOT_RE = re.compile(r"[^\s/]+(?:[ \t]*/[ \t]*[^\s/]+)*[ \t]*$")
 
 
 class AglSyntaxError(AglError):
@@ -182,38 +178,6 @@ def _is_placeholder_position_error(
     )
 
 
-def _module_header_migration_error(
-    *,
-    token_type: str,
-    token_value: str,
-    source_text: str | None,
-    token_pos: int,
-    span: SourceSpan,
-) -> AglSyntaxError | None:
-    if source_text is None:
-        return None
-    header = _MODULE_HEADER_RE.search(source_text[:token_pos])
-    if header is None:
-        return None
-    module_kind = str(header.group("kind"))
-    noun = "import" if module_kind.endswith("import") else "export"
-    path_before_token = str(header.group("path"))
-    if token_type == "DOT" and _MODULE_PATH_BEFORE_DOT_RE.fullmatch(path_before_token):
-        return AglSyntaxError("Module paths use `/` between segments.", span=span)
-    if token_type == "SLASH" and not path_before_token.strip():
-        return AglSyntaxError(
-            f"An {noun} module path must not start with `/`.", span=span
-        )
-    if token_type == "NAME" and token_value == "qualified":
-        message = (
-            "`qualified` was removed; imports are qualified by default."
-            if noun == "import"
-            else "`qualified` was removed; exports name modules directly."
-        )
-        return AglSyntaxError(message, span=span)
-    return None
-
-
 def syntax_error_from_lark(
     exc: Exception,
     *,
@@ -252,15 +216,6 @@ def syntax_error_from_lark(
             token_type=tok.type, source_text=source_text, token_pos=pos
         ):
             return _make_placeholder_position_error(span)
-        migration_error = _module_header_migration_error(
-            token_type=tok.type,
-            token_value=str(tok),
-            source_text=source_text,
-            token_pos=pos,
-            span=span,
-        )
-        if migration_error is not None:
-            return migration_error
         # Chained comparison detection: the unexpected token is
         # a comparison operator AND that operator is NOT in the expected set.
         # When the operator IS expected, we are still before the first comparison

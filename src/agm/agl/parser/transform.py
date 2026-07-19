@@ -2160,7 +2160,7 @@ class AstBuilder(Transformer):
             elif isinstance(a, Token) and a.type == "MODPATH":
                 module_path = tuple(str(a).split("/"))
             elif isinstance(a, Token):
-                # Skip IMPORT, SLASH, STAR, etc.
+                # Skip IMPORT, WILDCARD, etc.
                 pass
             elif type(a) is str:
                 # import_alias result: plain str (not Token, which is also a str subclass)
@@ -2189,7 +2189,7 @@ class AstBuilder(Transformer):
         return self._import_decl_from_args(meta, args, wildcard=False)
 
     def import_decl_wildcard(self, meta: Meta, args: _Args) -> syntax.ImportDecl:
-        """import_decl_wildcard: OPEN? IMPORT MODPATH SLASH STAR import_alias? import_clause?"""
+        """import_decl_wildcard: OPEN? IMPORT MODPATH WILDCARD import_alias? import_clause?"""
         return self._import_decl_from_args(meta, args, wildcard=True)
 
     def import_alias(self, meta: Meta, args: _Args) -> str:
@@ -2282,7 +2282,7 @@ class AstBuilder(Transformer):
         return self._export_decl_from_args(meta, args, wildcard=False)
 
     def export_decl_wildcard(self, meta: Meta, args: _Args) -> syntax.ExportDecl:
-        """export_decl_wildcard: EXPORT MODPATH SLASH STAR export_clause?"""
+        """export_decl_wildcard: EXPORT MODPATH WILDCARD export_clause?"""
         return self._export_decl_from_args(meta, args, wildcard=True)
 
     def _export_hiding_items(self, meta: Meta, args: _Args) -> tuple[syntax.ExportItem, ...]:

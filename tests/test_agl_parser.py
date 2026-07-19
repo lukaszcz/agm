@@ -3282,36 +3282,31 @@ class TestImportDecl:
         assert decl.items[0].rename == "X"
 
     @pytest.mark.parametrize(
-        ("source", "hint"),
+        "source",
         (
-            ("import foo.bar", "(?i)module paths use"),
-            ("import /foo", "must not start with `/`"),
-            ("import foo qualified", "qualified.*removed"),
+            "import foo/bar / *",
+            "import foo/bar/ *",
+            "import foo/bar /*",
+            "export foo/bar / *",
+            "export foo/bar/ *",
+            "export foo/bar /*",
         ),
     )
-    def test_legacy_import_spellings_have_migration_diagnostics(
-        self, source: str, hint: str
-    ) -> None:
-        with pytest.raises(AglSyntaxError, match=hint):
+    def test_wildcard_tail_must_be_adjacent_to_the_module_path(self, source: str) -> None:
+        with pytest.raises(AglSyntaxError):
             parse(source)
 
     @pytest.mark.parametrize(
         "source",
         (
-            "import foo using item.field",
-            "import foo as alias.field",
-            "export foo using item.field",
-            "export foo as alias.field",
+            "import foo.bar",
+            "import /foo",
+            "import foo qualified",
         ),
     )
-    def test_dots_after_module_header_do_not_get_migration_diagnostic(self, source: str) -> None:
-        with pytest.raises(AglSyntaxError) as raised:
+    def test_legacy_import_spellings_are_syntax_errors(self, source: str) -> None:
+        with pytest.raises(AglSyntaxError):
             parse(source)
-        assert "module paths use" not in str(raised.value)
-
-    def test_export_dotted_module_path_gets_migration_diagnostic(self) -> None:
-        with pytest.raises(AglSyntaxError, match="(?i)module paths use"):
-            parse("export foo.bar")
 
     def test_import_after_other_decl(self) -> None:
         it = items(parse("let x = 1\nimport foo"))
@@ -3331,7 +3326,7 @@ class TestExportDecl:
         assert decl.items == ()
 
     def test_export_slash_path_wildcard(self) -> None:
-        (decl,) = items(parse("export foo / bar / *"))
+        (decl,) = items(parse("export foo / bar/*"))
         assert isinstance(decl, syntax.ExportDecl)
         assert decl.module_path == ("foo", "bar")
         assert decl.wildcard is True

@@ -57,9 +57,9 @@ from agm.agl.lexer.tokens import (
     PRIVATE,
     RSQB,
     SLASH,
-    STAR,
     TYPEARG_LSQB,
     USING,
+    WILDCARD,
 )
 from agm.agl.syntax.advisories import SpacedQualifier
 
@@ -257,37 +257,29 @@ def _merge_modpath(tokens: list[Token]) -> list[Token]:
                 end_pos=last_tok.end_pos,
             )
             result.append(merged)
-            # A following SLASH STAR is the wildcard tail. The raw scanner
-            # makes a tight ``/*`` an OP_NAME, so split that header-local form
-            # back into the grammar's two punctuation tokens.
+            # A byte-adjacent ``/*`` is the wildcard tail. The raw scanner makes
+            # it an OP_NAME; retype it as the grammar's single WILDCARD token.
+            # Whitespace anywhere in the tail leaves the operator alone, so the
+            # header fails to parse — the same adjacency rule module qualifiers
+            # obey.
             i = j
-            if i < n and tokens[i].type == OP_NAME and str(tokens[i]) == "/*":
-                wildcard = tokens[i]
-                assert wildcard.start_pos is not None
-                assert wildcard.end_pos is not None
-                assert wildcard.column is not None
-                result.extend(
-                    (
-                        Token(
-                            SLASH,
-                            "/",
-                            start_pos=wildcard.start_pos,
-                            line=wildcard.line,
-                            column=wildcard.column,
-                            end_line=wildcard.line,
-                            end_column=wildcard.column + 1,
-                            end_pos=wildcard.start_pos + 1,
-                        ),
-                        Token(
-                            STAR,
-                            "*",
-                            start_pos=wildcard.start_pos + 1,
-                            line=wildcard.line,
-                            column=wildcard.column + 1,
-                            end_line=wildcard.end_line,
-                            end_column=wildcard.end_column,
-                            end_pos=wildcard.end_pos,
-                        ),
+            if (
+                i < n
+                and tokens[i].type == OP_NAME
+                and str(tokens[i]) == "/*"
+                and tokens[i].start_pos == merged.end_pos
+            ):
+                tail = tokens[i]
+                result.append(
+                    Token(
+                        WILDCARD,
+                        "/*",
+                        start_pos=tail.start_pos,
+                        line=tail.line,
+                        column=tail.column,
+                        end_line=tail.end_line,
+                        end_column=tail.end_column,
+                        end_pos=tail.end_pos,
                     )
                 )
                 i += 1

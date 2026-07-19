@@ -87,7 +87,8 @@ alias makes both routes available.
 ## Wildcards
 
 `import prefix/*` expands to one import per module whose slash path is `prefix`
-or starts with `prefix/`. The import's
+or starts with `prefix/`. The `/*` tail is byte-adjacent to the path, as a
+module qualifier's `::` is. The import's
 `open`, selection clause, and alias apply independently to every matched
 module. A `using` or `hiding` name must be public in every matched module.
 

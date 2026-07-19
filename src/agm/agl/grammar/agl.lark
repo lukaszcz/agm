@@ -80,7 +80,7 @@
 // ---------------------------------------------------------------------------
 
 %declare NAME OP_NAME
-%declare OPEN IMPORT USING HIDING EXPORT PRIVATE MODQUAL MODPATH
+%declare OPEN IMPORT USING HIDING EXPORT PRIVATE MODQUAL MODPATH WILDCARD
 %declare PLACEHOLDER PLACEHOLDER_NUM
 %declare AS_QUESTION
 // AGENT: the reserved word `agent`.  Declared (rather than written as the
@@ -713,10 +713,11 @@ pattern_field: field_name EQ pattern   -> pat_field_named
 // MODPATH token, eliminating the LALR(1) ambiguity with the expression grammar.
 // Byte-adjacent qualified prefixes `[SLASH]NAME(SLASH NAME)*::` are pre-merged
 // into MODQUAL, eliminating the DCOLON ambiguity with typed_call_atom.
+// A byte-adjacent `/*` tail is pre-merged into WILDCARD on the same principle.
 // ---------------------------------------------------------------------------
 
-// import_decl: OPEN? IMPORT MODPATH (SLASH STAR)? (as ref_name)? import_clause?
-import_decl : OPEN? IMPORT MODPATH SLASH STAR import_alias? import_clause? -> import_decl_wildcard
+// import_decl: OPEN? IMPORT MODPATH WILDCARD? (as ref_name)? import_clause?
+import_decl : OPEN? IMPORT MODPATH WILDCARD import_alias? import_clause? -> import_decl_wildcard
             | OPEN? IMPORT MODPATH import_alias? import_clause? -> import_decl_plain
 
 import_alias : "as" name
@@ -727,7 +728,7 @@ import_clause : USING import_item (COMMA import_item)* -> import_clause_using
 import_item : name "as" name -> import_item_rename
             | name           -> import_item_plain
 
-export_decl : EXPORT MODPATH SLASH STAR export_clause? -> export_decl_wildcard
+export_decl : EXPORT MODPATH WILDCARD export_clause? -> export_decl_wildcard
             | EXPORT MODPATH export_clause?          -> export_decl_plain
 
 export_clause : USING export_item (COMMA export_item)* -> export_clause_using

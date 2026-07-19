@@ -179,6 +179,10 @@ class ConstructorRef:
     ``owner_module_id``
         Semantic owner module, retained so same-named constructors from
         different modules remain distinguishable in resolver side tables.
+    ``can_match_bare_pattern``
+        Whether a bare pattern name can directly match this candidate. This is
+        true precisely for a known nullary enum variant, and is retained for
+        scope's field-directed duplicate-binder decision.
     """
 
     owner_name: str
@@ -186,6 +190,7 @@ class ConstructorRef:
     owner_decl_node_id: int
     type_params: tuple[str, ...]
     owner_module_id: ModuleId = ENTRY_ID
+    can_match_bare_pattern: bool = False
 
     def matches(self, enum_type: EnumType, variant: str) -> bool:
         """Whether this reference denotes *variant* of *enum_type*.
@@ -212,12 +217,14 @@ class SlotCandidate:
 
     ``pattern_node_id`` identifies the candidate pattern. ``unconditional``
     records whether that candidate applies regardless of the matched field's
-    constructor interpretation.
+    constructor interpretation. ``can_match_bare_pattern`` records whether a
+    bare pattern name can directly match a known nullary enum variant.
     """
 
     pattern_node_id: int
     span: SourceSpan
     unconditional: bool
+    can_match_bare_pattern: bool = False
 
 
 @dataclass(frozen=True, slots=True)

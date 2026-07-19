@@ -1282,6 +1282,109 @@ class TestParentScopeSeam:
         # Without ambient candidates, constructor_refs is not populated.
         assert call_node.callee.node_id not in entry.constructor_refs
 
+    def test_ambient_nullary_variant_retains_bare_pattern_metadata(self) -> None:
+        prior = parse_and_resolve("enum Flag\n  | mark\nmark()")
+        entry = resolve_module(
+            parse_program(
+                "enum Packet\n"
+                "  | packet(left: int, right: int)\n"
+                "let item = packet(1, 2)\n"
+                "case item of | packet(mark, _ as mark) => mark"
+            ),
+            parent_scope=prior.root_scope,
+            ambient_constructor_candidates=prior.constructor_candidates,
+        )
+
+        assert entry.constructor_candidates["mark"][0].can_match_bare_pattern
+        slot = next(iter(entry.pattern_slots.values()))
+        assert tuple(candidate.can_match_bare_pattern for candidate in slot.candidates) == (
+            True,
+            False,
+        )
+
+    @pytest.mark.parametrize(
+        ("candidate_source", "declaration", "name", "type_name", "value"),
+        (
+            pytest.param(
+                "local",
+                "enum Mark\n  | mark(value: int)",
+                "mark",
+                "Mark",
+                "mark(1)",
+                id="local-payload-variant",
+            ),
+            pytest.param(
+                "local",
+                "record Mark\n  value: int",
+                "Mark",
+                "Mark",
+                "Mark(value = 1)",
+                id="local-record",
+            ),
+            pytest.param(
+                "prelude",
+                "",
+                "Retry",
+                "ParsePolicy",
+                "Retry(n = 1)",
+                id="prelude-payload-variant",
+            ),
+            pytest.param(
+                "prelude",
+                "",
+                "ExecResult",
+                "ExecResult",
+                "ExecResult",
+                id="prelude-record",
+            ),
+            pytest.param(
+                "ambient",
+                "enum Mark\n  | mark(value: int)",
+                "mark",
+                "Mark",
+                "mark(1)",
+                id="ambient-payload-variant",
+            ),
+            pytest.param(
+                "ambient",
+                "record Mark\n  value: int",
+                "Mark",
+                "Mark",
+                "Mark(value = 1)",
+                id="ambient-record",
+            ),
+        ),
+    )
+    @pytest.mark.parametrize("bare_first", (True, False), ids=("bare-then-as", "as-then-bare"))
+    def test_payload_and_record_candidates_reject_duplicate_pattern_binders_eagerly(
+        self,
+        candidate_source: str,
+        declaration: str,
+        name: str,
+        type_name: str,
+        value: str,
+        bare_first: bool,
+    ) -> None:
+        """Only bare nullary enum variants defer this duplicate diagnosis."""
+        patterns = f"{name}, _ as {name}" if bare_first else f"_ as {name}, {name}"
+        entry_source = (
+            f"enum Packet\n  | packet(left: {type_name}, right: {type_name})\n"
+            f"let item = packet({value}, {value})\n"
+            f"case item of | packet({patterns}) => {name}"
+        )
+
+        with pytest.raises(AglScopeError):
+            if candidate_source == "ambient":
+                prior = parse_and_resolve(f"{declaration}\n{value}")
+                resolve_module(
+                    parse_program(entry_source),
+                    parent_scope=prior.root_scope,
+                    ambient_constructor_candidates=prior.constructor_candidates,
+                    ambient_type_names=prior.declared_type_names,
+                )
+            else:
+                parse_and_resolve(f"{declaration}\n{entry_source}")
+
     def test_ambient_constructor_candidates_resolve_prior_entry_ctor(self) -> None:
         """Constructor from a prior REPL entry resolves via ambient_constructor_candidates."""
         from agm.agl.scope.symbols import ConstructorRef
@@ -1690,14 +1793,14 @@ class TestDirectASTConstruction:
         assert binding.kind is BinderKind.pattern_slot
         assert binding.decl_node_id == branch.pattern.node_id
 
-    def test_as_pattern_duplicate_with_inner_field_binder_is_deferred(self) -> None:
-        parse_and_resolve(
+    def test_as_pattern_duplicate_with_inner_field_binder_is_rejected_in_scope(self) -> None:
+        reject_scope(
             "enum E\n  | A(value: int)\nlet value = A(1)\n"
             "case value of | A(value = value as captured) as captured => captured | _ => 0"
         )
 
-    def test_as_pattern_duplicate_chain_binder_is_deferred(self) -> None:
-        parse_and_resolve("case 0 of | _ as captured as captured => captured")
+    def test_as_pattern_duplicate_chain_binder_is_rejected_in_scope(self) -> None:
+        reject_scope("case 0 of | _ as captured as captured => captured")
 
     def test_duplicate_pattern_var_rejected(self) -> None:
         let_x = _make_let("x", _make_intlit(1))

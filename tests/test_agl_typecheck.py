@@ -4139,6 +4139,57 @@ class TestSeedEnv:
 
 
 # ---------------------------------------------------------------------------
+# Duplicate field-directed bare-pattern candidates
+# ---------------------------------------------------------------------------
+
+
+def _nullary_duplicate_pattern_source(
+    candidate_name: str, candidate_type: str, candidate_value: str, *, bare_first: bool
+) -> str:
+    patterns = (
+        f"{candidate_name}, _ as {candidate_name}"
+        if bare_first
+        else f"_ as {candidate_name}, {candidate_name}"
+    )
+    return (
+        f"enum Packet\n  | packet(left: {candidate_type}, right: {candidate_type})\n"
+        f"let item = packet({candidate_value}, {candidate_value})\n"
+        f"case item of | packet({patterns}) => {candidate_name}"
+    )
+
+
+@pytest.mark.parametrize("candidate_source", ("local", "ambient"))
+@pytest.mark.parametrize("bare_first", (True, False), ids=("bare-then-as", "as-then-bare"))
+def test_nullary_candidate_defers_duplicate_pattern_binder_until_typecheck_selection(
+    candidate_source: str, bare_first: bool
+) -> None:
+    """A bare nullary variant is selected rather than treated as a duplicate binder."""
+    if candidate_source == "local":
+        checked = accept_type(
+            "enum Mark\n  | mark\n"
+            + _nullary_duplicate_pattern_source("mark", "Mark", "mark()", bare_first=bare_first)
+        )
+    else:
+        prior = accept_type("enum Mark\n  | mark\nmark()")
+        resolved = resolve_module(
+            parse_program(
+                _nullary_duplicate_pattern_source("mark", "Mark", "mark()", bare_first=bare_first)
+            ),
+            parent_scope=prior.resolved.root_scope,
+            ambient_constructor_candidates=prior.resolved.constructor_candidates,
+            ambient_type_names=prior.resolved.declared_type_names,
+        )
+        checked = check_module(resolved, default_capabilities(), seed_env=prior.type_env)
+
+    case = checked.resolved.program.body.items[-1]
+    assert isinstance(case, Case)
+    pattern = case.branches[0].pattern
+    assert isinstance(pattern, ConstructorPattern)
+    bare_pattern = pattern.positional[0] if bare_first else pattern.positional[1]
+    assert checked.pattern_classifications[bare_pattern.node_id] is not None
+
+
+# ---------------------------------------------------------------------------
 # CheckedModule fields
 # ---------------------------------------------------------------------------
 

@@ -180,6 +180,7 @@ def _build_cross_module_constructor_candidates(
                         owner_decl_node_id=decl.node_id,
                         type_params=decl.type_params,
                         owner_module_id=mid,
+                        can_match_bare_pattern=not variant.fields,
                     )
                     candidates.setdefault(variant.name, []).append(cref)
     return (

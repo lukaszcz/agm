@@ -154,8 +154,8 @@ def test_constructor_candidate_after_explicit_binder_is_field_directed() -> None
     )
 
 
-def test_final_classification_rejects_duplicate_binders_and_ambiguous_outer_references() -> None:
-    _reject_type(
+def test_scope_rejects_duplicate_binders_and_typecheck_rejects_ambiguous_outer_references() -> None:
+    _reject_scope(
         "enum Packet\n  | packet(value: int)\n"
         "let item = packet(1)\ncase item of | packet(value as value) => value"
     )

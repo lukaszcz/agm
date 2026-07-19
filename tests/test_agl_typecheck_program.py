@@ -2146,6 +2146,128 @@ def test_two_library_functions_same_name_different_signatures(tmp_path: Path) ->
 
 
 # ---------------------------------------------------------------------------
+# Imported duplicate field-directed bare-pattern candidates
+# ---------------------------------------------------------------------------
+
+
+def _imported_duplicate_pattern_entry(
+    candidate_name: str,
+    candidate_type: str,
+    candidate_value: str,
+    *,
+    module_name: str,
+    bare_first: bool,
+) -> str:
+    patterns = (
+        f"{candidate_name}, _ as {candidate_name}"
+        if bare_first
+        else f"_ as {candidate_name}, {candidate_name}"
+    )
+    return (
+        f"import {module_name}\n"
+        f"enum Packet\n  | packet(left: {candidate_type}, right: {candidate_type})\n"
+        f"let item = packet({candidate_value}, {candidate_value})\n"
+        f"case item of | packet({patterns}) => {candidate_name}"
+    )
+
+
+@pytest.mark.parametrize(
+    ("module_name", "library_source", "candidate_name", "candidate_type", "candidate_value"),
+    (
+        pytest.param(
+            "lib", "enum Mark\n  | mark", "mark", "Mark", "mark()", id="imported"
+        ),
+        pytest.param(
+            "std.core",
+            None,
+            "None",
+            "Option[int]",
+            "None()",
+            id="prelude",
+        ),
+    ),
+)
+@pytest.mark.parametrize("bare_first", (True, False), ids=("bare-then-as", "as-then-bare"))
+def test_open_nullary_candidate_defers_duplicate_binder_until_selection(
+    tmp_path: Path,
+    module_name: str,
+    library_source: str | None,
+    candidate_name: str,
+    candidate_type: str,
+    candidate_value: str,
+    bare_first: bool,
+) -> None:
+    modules = {
+        "entry": _imported_duplicate_pattern_entry(
+            candidate_name,
+            candidate_type,
+            candidate_value,
+            module_name=module_name,
+            bare_first=bare_first,
+        )
+    }
+    if library_source is not None:
+        modules["lib"] = library_source
+    checked = _check_program(tmp_path, modules)
+
+    entry = checked.modules[ENTRY_ID]
+    case = entry.resolved.program.body.items[-1]
+    from agm.agl.syntax.nodes import Case, ConstructorPattern
+
+    assert isinstance(case, Case)
+    pattern = case.branches[0].pattern
+    assert isinstance(pattern, ConstructorPattern)
+    bare_pattern = pattern.positional[0] if bare_first else pattern.positional[1]
+    assert entry.pattern_classifications[bare_pattern.node_id] is not None
+
+
+@pytest.mark.parametrize(
+    ("library_source", "candidate_name", "candidate_type", "candidate_value"),
+    (
+        pytest.param(
+            "enum Mark\n  | mark(value: int)",
+            "mark",
+            "Mark",
+            "mark(1)",
+            id="payload-variant",
+        ),
+        pytest.param(
+            "record Mark\n  value: int",
+            "Mark",
+            "Mark",
+            "Mark(value = 1)",
+            id="record",
+        ),
+    ),
+)
+@pytest.mark.parametrize("bare_first", (True, False), ids=("bare-then-as", "as-then-bare"))
+def test_open_imported_payload_and_record_candidates_reject_duplicate_binders_eagerly(
+    tmp_path: Path,
+    library_source: str,
+    candidate_name: str,
+    candidate_type: str,
+    candidate_value: str,
+    bare_first: bool,
+) -> None:
+    graph = _make_graph_from_files(
+        tmp_path,
+        {
+            "lib": library_source,
+            "entry": _imported_duplicate_pattern_entry(
+                candidate_name,
+                candidate_type,
+                candidate_value,
+                module_name="lib",
+                bare_first=bare_first,
+            ),
+        },
+    )
+
+    with pytest.raises(AglScopeError):
+        resolve_program(graph)
+
+
+# ---------------------------------------------------------------------------
 # Cross-module constructor call error paths
 # ---------------------------------------------------------------------------
 

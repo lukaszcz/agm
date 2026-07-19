@@ -475,6 +475,7 @@ class _Resolver:
                             owner_decl_node_id=_BUILTIN_CONSTRUCTOR_NODE_ID,
                             type_params=(),
                             owner_module_id=PRELUDE_ID,
+                            can_match_bare_pattern=not _vfields,
                         )
                         self._add_constructor_candidate(variant_name, cref)
             else:
@@ -538,6 +539,7 @@ class _Resolver:
                         owner_decl_node_id=item.node_id,
                         type_params=item.type_params,
                         owner_module_id=self._module_id,
+                        can_match_bare_pattern=not variant.fields,
                     )
                     self._add_constructor_candidate(variant.name, cref)
             elif isinstance(item, ExceptionDef):
@@ -1731,9 +1733,10 @@ class _Resolver:
 
         A top-level bare name is constructor-only. Each nested name resolves
         directly to the slot created for its branch, so no later pass has to
-        repair lexical resolution. Unambiguous repeated bare names remain an
-        eager scope error; ``as`` candidates defer duplicate-binder diagnosis
-        until their field-directed classifications are known.
+        repair lexical resolution. The shared slot eagerly rejects duplicate
+        binders unless at least one candidate can match a bare nullary enum
+        variant; otherwise type checking defers diagnosis until field-directed
+        classification.
         """
         if isinstance(pattern, VarPattern):
             candidates = tuple(self._constructor_candidates.get(pattern.name, ()))
@@ -1747,18 +1750,16 @@ class _Resolver:
                         span=pattern.span,
                     )
                 return
-            exists = self._add_pattern_slot_candidate(
+            self._add_pattern_slot_candidate(
                 pattern.name,
                 pattern.span,
                 pattern.node_id,
                 scope,
                 unconditional=False,
+                can_match_bare_pattern=any(
+                    candidate.can_match_bare_pattern for candidate in candidates
+                ),
             )
-            if exists and not candidates:
-                raise AglScopeError(
-                    f"Name '{pattern.name}' is bound more than once in this pattern.",
-                    span=pattern.span,
-                )
         elif isinstance(pattern, AsPattern):
             self._bind_pattern_vars(pattern.pattern, scope, nested=nested)
             self._add_pattern_slot_candidate(
@@ -1767,6 +1768,7 @@ class _Resolver:
                 pattern.node_id,
                 scope,
                 unconditional=True,
+                can_match_bare_pattern=False,
             )
         elif isinstance(pattern, ConstructorPattern):
             for child in pattern.positional:
@@ -1793,16 +1795,17 @@ class _Resolver:
         scope: ScopeNode,
         *,
         unconditional: bool,
-    ) -> bool:
-        """Add a candidate and create its branch-local shared binding once.
+        can_match_bare_pattern: bool,
+    ) -> None:
+        """Join a candidate to its branch-local shared binding.
 
-        Returns whether the branch already had a slot for *name*.
+        Reject duplicate binders immediately only when neither the arriving
+        candidate nor any prior slot candidate can match a bare pattern.
         """
         self._check_not_reserved(name, span)
         branch_slots = self._active_branch_pattern_slots
         assert branch_slots is not None
         slot_id = branch_slots.get(name)
-        exists = slot_id is not None
         if slot_id is None:
             slot_id = self._next_pattern_slot_id
             self._next_pattern_slot_id += 1
@@ -1828,6 +1831,13 @@ class _Resolver:
                 ),
             )
         slot = self._pattern_slots[slot_id]
+        if slot.candidates and not can_match_bare_pattern and not any(
+            candidate.can_match_bare_pattern for candidate in slot.candidates
+        ):
+            raise AglScopeError(
+                f"Name '{name}' is bound more than once in this pattern.",
+                span=span,
+            )
         self._pattern_slots[slot_id] = PatternSlot(
             slot_id=slot.slot_id,
             name=slot.name,
@@ -1837,12 +1847,12 @@ class _Resolver:
                     pattern_node_id=pattern_node_id,
                     span=span,
                     unconditional=unconditional,
+                    can_match_bare_pattern=can_match_bare_pattern,
                 ),
             ),
             alternative=slot.alternative,
             outside_constructor_candidates=slot.outside_constructor_candidates,
         )
-        return exists
 
 
 # ---------------------------------------------------------------------------

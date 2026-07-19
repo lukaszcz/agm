@@ -31,7 +31,7 @@ from agm.agl.parser import parse_program
 from agm.agl.scope import resolve_module
 from agm.agl.scope.program import ResolvedModule, ResolvedProgram, resolve_program
 from agm.agl.scope.symbols import AglScopeError, BinderKind
-from agm.agl.syntax.nodes import VarRef
+from agm.agl.syntax.nodes import Case, ConstructorPattern, VarPattern, VarRef
 from tests.agl.ir_harness import make_graph_from_files as _make_graph_from_files
 
 # ---------------------------------------------------------------------------
@@ -1969,6 +1969,46 @@ class TestExportDecl:
             )
             == 2
         )
+
+
+@pytest.mark.parametrize(
+    ("pattern", "candidate_facts"),
+    (
+        ("packet(mark, _ as mark)", (True, False)),
+        ("packet(_ as mark, mark)", (False, True)),
+    ),
+)
+def test_imported_nullary_variant_defers_duplicate_pattern_binders(
+    tmp_path: Path, pattern: str, candidate_facts: tuple[bool, bool]
+) -> None:
+    graph = _make_graph_from_files(
+        tmp_path,
+        {
+            "library": "enum Flag\n  | mark",
+            "entry": (
+                "import library\n"
+                "enum Packet\n"
+                "  | packet(left: int, right: int)\n"
+                "let item = packet(1, 2)\n"
+                f"case item of | {pattern} => mark"
+            ),
+        },
+    )
+
+    entry = resolve_program(graph).modules[ENTRY_ID].resolved
+    case = entry.program.body.items[-1]
+    assert isinstance(case, Case)
+    assert isinstance(case.branches[0].pattern, ConstructorPattern)
+    bare = next(
+        pattern
+        for pattern in case.branches[0].pattern.positional
+        if isinstance(pattern, VarPattern)
+    )
+    assert entry.pattern_constructor_candidates[bare.node_id][0].can_match_bare_pattern
+    slot = next(iter(entry.pattern_slots.values()))
+    assert tuple(
+        candidate.can_match_bare_pattern for candidate in slot.candidates
+    ) == candidate_facts
 
 
 def test_bare_pattern_constructor_shared_spelling_defers_to_scrutinee(tmp_path: Path) -> None:

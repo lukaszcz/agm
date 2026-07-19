@@ -139,23 +139,108 @@ def test_scope_slot_alternative_is_the_outer_slot_ref() -> None:
     assert slots[1].alternative.slot_id == slots[0].slot_id
 
 
-def test_scope_preserves_eager_unambiguous_duplicate_and_as_handling() -> None:
-    with pytest.raises(AglScopeError, match="bound more than once"):
+@pytest.mark.parametrize(
+    ("pattern", "candidate_facts"),
+    (
+        ("packet(value, _ as value)", (True, False)),
+        ("packet(_ as value, value)", (False, True)),
+    ),
+)
+def test_scope_defers_duplicate_binders_for_local_nullary_enum_variants(
+    pattern: str, candidate_facts: tuple[bool, bool]
+) -> None:
+    resolved = _resolve(
+        "enum Flag\n"
+        "  | value\n"
+        "enum Packet\n"
+        "  | packet(value: int, other: int)\n"
+        "let item = packet(1, 2)\n"
+        f"case item of | {pattern} => value"
+    )
+
+    slot = next(iter(resolved.pattern_slots.values()))
+    assert tuple(
+        candidate.can_match_bare_pattern for candidate in slot.candidates
+    ) == candidate_facts
+    assert resolved.constructor_candidates["value"][0].can_match_bare_pattern
+    with pytest.raises(AglTypeError):
+        check_module(resolved, HostCapabilities())
+
+
+@pytest.mark.parametrize("pattern", ("packet(value, _ as value)", "packet(_ as value, value)"))
+def test_scope_rejects_duplicate_binders_for_local_payload_variant_regardless_of_order(
+    pattern: str,
+) -> None:
+    with pytest.raises(AglScopeError):
+        _resolve(
+            "enum Flag\n"
+            "  | value(data: int)\n"
+            "enum Packet\n"
+            "  | packet(left: int, right: int)\n"
+            "let item = packet(1, 2)\n"
+            f"case item of | {pattern} => value"
+        )
+
+
+@pytest.mark.parametrize("pattern", ("packet(Retry, _ as Retry)", "packet(_ as Retry, Retry)"))
+def test_scope_rejects_duplicate_binders_for_prelude_payload_variant_regardless_of_order(
+    pattern: str,
+) -> None:
+    with pytest.raises(AglScopeError):
         _resolve(
             "enum Packet\n"
             "  | packet(left: int, right: int)\n"
             "let item = packet(1, 2)\n"
-            "case item of | packet(value, value) => value"
+            f"case item of | {pattern} => Retry"
         )
 
+
+@pytest.mark.parametrize("pattern", ("packet(Token, _ as Token)", "packet(_ as Token, Token)"))
+def test_scope_rejects_duplicate_binders_for_record_candidates_regardless_of_order(
+    pattern: str,
+) -> None:
+    with pytest.raises(AglScopeError):
+        _resolve(
+            "record Token\n"
+            "  value: int\n"
+            "enum Packet\n"
+            "  | packet(left: int, right: int)\n"
+            "let item = packet(1, 2)\n"
+            f"case item of | {pattern} => Token"
+        )
+
+
+@pytest.mark.parametrize(
+    "pattern",
+    ("packet(ExecResult, _ as ExecResult)", "packet(_ as ExecResult, ExecResult)"),
+)
+def test_scope_rejects_duplicate_binders_for_prelude_record_candidates_regardless_of_order(
+    pattern: str,
+) -> None:
+    with pytest.raises(AglScopeError):
+        _resolve(
+            "enum Packet\n"
+            "  | packet(left: int, right: int)\n"
+            "let item = packet(1, 2)\n"
+            f"case item of | {pattern} => ExecResult"
+        )
+
+
+def test_constructor_candidate_metadata_is_only_true_for_nullary_enum_variants() -> None:
     resolved = _resolve(
-        "enum Packet\n"
-        "  | packet(value: int, other: int)\n"
-        "let item = packet(1, 2)\n"
-        "case item of | packet(value, _ as value) => value"
+        "record Token\n"
+        "  value: int\n"
+        "enum Flag\n"
+        "  | empty\n"
+        "  | payload(value: int)\n"
+        "()"
     )
-    with pytest.raises(AglTypeError, match="bound more than once"):
-        check_module(resolved, HostCapabilities())
+
+    assert resolved.constructor_candidates["Token"][0].can_match_bare_pattern is False
+    assert resolved.constructor_candidates["empty"][0].can_match_bare_pattern is True
+    assert resolved.constructor_candidates["payload"][0].can_match_bare_pattern is False
+    assert resolved.constructor_candidates["Retry"][0].can_match_bare_pattern is False
+    assert resolved.constructor_candidates["ExecResult"][0].can_match_bare_pattern is False
 
 
 def test_checked_accessors_fully_dereference_binder_slot_without_mutating_scope() -> None:

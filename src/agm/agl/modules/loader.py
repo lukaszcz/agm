@@ -7,7 +7,7 @@ phase of the AgL module system:
 2. Extract top-level import/export declarations.
 3. BFS over transitive import and export declarations, resolving each module id
    to its canonical file via :func:`~agm.agl.modules.resolver.resolve_module` (or
-   :func:`~agm.agl.modules.resolver.expand_wildcard` for ``.*`` imports),
+   :func:`~agm.agl.modules.resolver.expand_wildcard` for ``/*`` imports),
    parsing each file with a monotonically growing ``start_id`` seed so that
    **node ids are disjoint across all modules in the graph**.
 4. Terminate traversal when a module id is already loaded — this makes cycles

@@ -35,8 +35,9 @@ def _module_path(module: ModuleId) -> str:
     return module.path_str()
 
 
-def _module_sort_key(module: ModuleId) -> tuple[str, ...]:
-    return module.segments
+def _module_sort_key(module: ModuleId) -> str:
+    """Return the user-visible path ordering for deterministic diagnostics."""
+    return module.path_str()
 
 
 def render_qualifier(qualifier: tuple[str, ...], *, anchored: bool = False) -> str:

@@ -234,7 +234,7 @@ class TestExpandWildcard:
         assert ModuleId.from_path("foo/bar") in result
 
     def test_glob_matches_direct_file_and_subtree(self, tmp_path: Path) -> None:
-        """foo.* should match foo.agl (if present) AND foo/**/*.agl."""
+        """foo/* should match foo.agl (if present) AND foo/**/*.agl."""
         root = tmp_path / "lib"
         root.mkdir()
         _make_module(root, "ns/direct")
@@ -267,8 +267,9 @@ class TestExpandWildcard:
     def test_empty_wildcard_raises_prefix_not_found(self, tmp_path: Path) -> None:
         root = tmp_path / "lib"
         root.mkdir()
-        with pytest.raises(ModulePrefixNotFound):
+        with pytest.raises(ModulePrefixNotFound) as raised:
             expand_wildcard(("nosuchprefix",), _roots(root))
+        assert "nosuchprefix/*" in str(raised.value)
 
     def test_ambiguous_id_across_roots_raises_ambiguous(self, tmp_path: Path) -> None:
         root_a = tmp_path / "a"

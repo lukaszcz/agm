@@ -1482,10 +1482,10 @@ def test_private_compiler_guards_reject_malformed_internal_states() -> None:
     binder_matrix = matrix_from_normalized(binder_compiled.normalized)
     binder_row = binder_matrix.rows[0]
     binder_cell = cast(WildcardCell, binder_row.cells[0])
-    binder = binder_cell.as_binders[0]
+    binder = binder_cell.binders[0]
     unavailable = replace(
         binder_row,
-        cells=(replace(binder_cell, as_binders=()),),
+        cells=(replace(binder_cell, binders=()),),
         binder_assignments=(BinderAssignment(OccurrenceId(999), binder),),
     )
     with pytest.raises(MatchCompileInvariantError, match="unavailable"):

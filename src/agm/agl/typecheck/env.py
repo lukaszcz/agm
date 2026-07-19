@@ -262,18 +262,12 @@ class ArgumentBindings:
     ``constructor_patterns``
         Constructor-pattern ``Pattern.node_id`` → ordered ``(field_name,
         sub_pattern)`` pairs (partial patterns omit unmentioned fields).
-    ``pattern_binders`` / ``pattern_constructors``
-        The final field-directed classification of bare patterns. These are the
-        authoritative source for match normalization and lowering; scope's
-        provisional bindings are not semantic pattern classifications.
     """
 
     function_calls: dict[int, tuple[Expr | None, ...]]
     function_param_types: dict[int, tuple[Type, ...]]
     constructor_calls: dict[int, dict[str, Expr]]
     constructor_patterns: dict[int, tuple[tuple[str, Pattern], ...]]
-    pattern_binders: frozenset[int] = frozenset()
-    pattern_constructors: dict[int, ConstructorRef] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)
@@ -300,12 +294,15 @@ class CheckedModule:
     """Immutable output of the type-checking pass.
 
     ``resolved``
-        The ``ModuleResolution`` from the scope pass (carries the original
-        ``Program`` and scope side tables).
-    ``resolution`` / ``constructor_refs`` / ``qualified_constructor_refs``
-        Checker-owned reference tables. They begin as copies of scope output and
-        carry final field-directed pattern reconciliation without changing the
-        scope artifact.
+        The ``ModuleResolution`` carrying the original ``Program`` and the scope
+        side tables, with the checker's final field-directed pattern
+        reconciliation applied to its reference tables. The scope pass' own
+        artifact is left unchanged.
+    ``pattern_classifications``
+        Final field-directed classification of bare patterns: ``Pattern.node_id``
+        → ``None`` for a binder, or the ``ConstructorRef`` it matches. This is
+        the authoritative source for match normalization and lowering; scope's
+        provisional bindings are not semantic pattern classifications.
     ``node_types``
         Maps ``node_id`` → resolved ``Type`` for every expression node that
         was type-checked.  Statement nodes are not entered here.
@@ -331,9 +328,6 @@ class CheckedModule:
     """
 
     resolved: ModuleResolution
-    resolution: dict[int, BindingRef]
-    constructor_refs: dict[int, ConstructorRef]
-    qualified_constructor_refs: dict[int, tuple[str, str, ModuleId | None]]
     node_types: dict[int, Type]
     contract_specs: dict[int, OutputContractSpec]
     call_sites: tuple[CallSiteRecord, ...]
@@ -342,6 +336,7 @@ class CheckedModule:
     function_signatures: dict[str, FunctionSignature]
     cast_specs: dict[int, CastSpec]
     argument_bindings: ArgumentBindings
+    pattern_classifications: dict[int, ConstructorRef | None]
     partial_calls: dict[int, PartialCallSpec]
     module_id: ModuleId = ENTRY_ID
     import_env: ImportEnv = field(default_factory=lambda: ImportEnv({}, {}))

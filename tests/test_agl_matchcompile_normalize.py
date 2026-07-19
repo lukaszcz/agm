@@ -162,7 +162,6 @@ def test_bottom_has_an_empty_closed_signature_and_no_inhabiting_patterns() -> No
     assert signature_for_type(BottomType(), checked.type_env.type_table) == ClosedSignature(())
     assert not pattern_cell_inhabits_type(
         WildcardCell(
-            binder=None,
             provenance=SourcePatternProvenance(0, SourceSpan(1, 1, 1, 1, 0, 0)),
         ),
         BottomType(),
@@ -202,9 +201,9 @@ def test_normalize_case_preserves_priority_actions_and_binder_provenance() -> No
     assert isinstance(normalized.rows[0].cells[0], ConstructorCell)
     binder_cell = normalized.rows[1].cells[0]
     assert isinstance(binder_cell, WildcardCell)
-    assert len(binder_cell.as_binders) == 1
-    assert binder_cell.as_binders[0].node_id == case.branches[1].pattern.node_id
-    assert binder_cell.as_binders[0].name == "captured"
+    assert len(binder_cell.binders) == 1
+    assert binder_cell.binders[0].node_id == case.branches[1].pattern.node_id
+    assert binder_cell.binders[0].name == "captured"
     assert isinstance(binder_cell.provenance, SourcePatternProvenance)
     assert normalized.rows[1].binder_assignments == ()
 
@@ -221,7 +220,7 @@ def test_as_patterns_preserve_all_current_occurrence_binders() -> None:
     assert [binder.name for binder in cell.binders] == ["whole", "same"]
     child = cell.arguments[0]
     assert isinstance(child, WildcardCell)
-    assert [binder.name for binder in child.as_binders] == ["inner"]
+    assert [binder.name for binder in child.binders] == ["inner"]
 
 
 def test_numeric_literals_share_runtime_equality_canonical_form() -> None:
@@ -381,9 +380,9 @@ def test_constructor_normalization_expands_omitted_generic_fields_in_declaration
     assert len(outer.arguments) == 3
     first, second, third = outer.arguments
     assert isinstance(first, WildcardCell)
-    assert [binder.name for binder in first.as_binders] == ["captured"]
+    assert [binder.name for binder in first.binders] == ["captured"]
     assert isinstance(second, WildcardCell)
-    assert second.binder is None
+    assert second.binders == ()
     assert second.provenance == OmittedFieldProvenance(
         constructor_pattern_id=case.branches[0].pattern.node_id,
         field_name="second",
@@ -520,8 +519,8 @@ def test_decision_model_carries_occurrence_and_binder_identities() -> None:
     normalized = normalize_case(_only_case(checked.resolved.program), checked)
     cell = normalized.rows[0].cells[0]
     assert isinstance(cell, WildcardCell)
-    assert len(cell.as_binders) == 1
-    assignment = BinderAssignment(normalized.root.id, cell.as_binders[0])
+    assert len(cell.binders) == 1
+    assignment = BinderAssignment(normalized.root.id, cell.binders[0])
     leaf = DecisionLeaf(normalized.rows[0].action_id, (assignment,))
     fail = DecisionFail()
     constructor = LiteralConstructor(LiteralKind.NUMERIC, decimal.Decimal(1))
@@ -617,15 +616,12 @@ def test_malformed_checked_literal_and_bare_variant_metadata_raise_invariants() 
 
     bare_none = enum_case.branches[0].pattern
     bare_some = replace(bare_none, name="some")
-    assert bare_none.node_id in enum_checked.argument_bindings.pattern_constructors
-    some_ref = replace(
-        enum_checked.argument_bindings.pattern_constructors[bare_none.node_id], variant="some"
+    bare_none_ref = enum_checked.pattern_classifications[bare_none.node_id]
+    assert bare_none_ref is not None
+    some_ref = replace(bare_none_ref, variant="some")
+    malformed_checked = replace(
+        enum_checked, pattern_classifications={bare_none.node_id: some_ref}
     )
-    malformed_bindings = replace(
-        enum_checked.argument_bindings,
-        pattern_constructors={bare_none.node_id: some_ref},
-    )
-    malformed_checked = replace(enum_checked, argument_bindings=malformed_bindings)
     with pytest.raises(MatchCompileInvariantError, match="invalid final"):
         normalize_case(_replace_case_pattern(enum_case, bare_some), malformed_checked)
 
@@ -637,20 +633,19 @@ def test_bare_variant_normalization_rejects_missing_and_wrong_owner_metadata() -
     case = _only_case(checked.resolved.program)
     pattern = case.branches[0].pattern
 
-    missing_ref = replace(checked.argument_bindings, pattern_constructors={})
     with pytest.raises(MatchCompileInvariantError, match="missing final constructor"):
-        normalize_case(case, replace(checked, argument_bindings=missing_ref))
+        normalize_case(case, replace(checked, pattern_classifications={}))
 
-    ref = checked.argument_bindings.pattern_constructors[pattern.node_id]
+    ref = checked.pattern_classifications[pattern.node_id]
+    assert ref is not None
     checked.type_env.type_table.register(
         TypeDef(kind="enum", name="Other", module_id=ENTRY_ID, variants=(("none", ()),))
     )
     wrong_owner = replace(ref, owner_name="Other")
-    wrong_owner_bindings = replace(
-        checked.argument_bindings, pattern_constructors={pattern.node_id: wrong_owner}
-    )
     with pytest.raises(MatchCompileInvariantError, match="invalid final"):
-        normalize_case(case, replace(checked, argument_bindings=wrong_owner_bindings))
+        normalize_case(
+            case, replace(checked, pattern_classifications={pattern.node_id: wrong_owner})
+        )
 
 
 def test_malformed_checked_constructor_metadata_raise_invariants() -> None:

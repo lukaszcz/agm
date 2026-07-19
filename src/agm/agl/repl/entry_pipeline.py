@@ -268,9 +268,6 @@ class EntryPipeline:
 
         return CheckedModule(
             resolved=entry.resolved,
-            resolution=entry.resolution,
-            constructor_refs=entry.constructor_refs,
-            qualified_constructor_refs=entry.qualified_constructor_refs,
             node_types=entry.node_types,
             contract_specs=entry.contract_specs,
             call_sites=entry.call_sites,
@@ -279,6 +276,7 @@ class EntryPipeline:
             function_signatures=entry.function_signatures,
             cast_specs=entry.cast_specs,
             argument_bindings=entry.argument_bindings,
+            pattern_classifications=entry.pattern_classifications,
             partial_calls=entry.partial_calls,
         )
 

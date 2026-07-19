@@ -76,10 +76,11 @@ def _matches(
         case AsPattern(pattern=inner):
             return _matches(inner, subject_type, value, checked)
         case VarPattern(node_id=node_id, name=variant):
-            if node_id in checked.argument_bindings.pattern_binders:
+            classification = checked.pattern_classifications.get(node_id)
+            if node_id in checked.pattern_classifications and classification is None:
                 return True
             return (
-                node_id in checked.argument_bindings.pattern_constructors
+                classification is not None
                 and isinstance(subject_type, EnumType)
                 and isinstance(value, EnumValue)
                 and value.nominal.module_id == subject_type.module_id

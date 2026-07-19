@@ -479,15 +479,13 @@ def specialize(
     for row_index in merge(constructor_rows, profile.wildcard_rows):
         row = matrix.rows[row_index]
         cell = row.cells[column]
+        assignments = _migrate_binders(row, cell, selected)
         if isinstance(cell, ConstructorCell):
             replacement = cell.arguments
-            assignments = _migrate_binders(row, cell, selected)
         else:
             replacement = tuple(
-                WildcardCell(binder=None, provenance=cell.provenance)
-                for _ in range(canonical.arity)
+                WildcardCell(provenance=cell.provenance) for _ in range(canonical.arity)
             )
-            assignments = _migrate_binders(row, cell, selected)
         rows.append(
             MatrixRow(
                 cells=(*row.cells[:column], *replacement, *row.cells[column + 1 :]),

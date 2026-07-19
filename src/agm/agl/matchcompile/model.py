@@ -220,14 +220,8 @@ class BinderProvenance:
 class WildcardCell:
     """An irrefutable matrix cell, optionally annotated with source binders."""
 
-    binder: BinderProvenance | None
     provenance: PatternProvenance
-    as_binders: tuple[BinderProvenance, ...] = ()
-
-    @property
-    def binders(self) -> tuple[BinderProvenance, ...]:
-        """All source binders attached to this occurrence."""
-        return (() if self.binder is None else (self.binder,)) + self.as_binders
+    binders: tuple[BinderProvenance, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)

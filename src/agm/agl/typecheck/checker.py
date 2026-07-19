@@ -429,7 +429,6 @@ class _Checker:
             resolved,
             resolution=dict(resolved.resolution),
             constructor_refs=dict(resolved.constructor_refs),
-            qualified_constructor_refs=dict(resolved.qualified_constructor_refs),
         )
         self._caps = capabilities
         self._node_types: dict[int, Type] = {}
@@ -454,6 +453,12 @@ class _Checker:
         # final lexical meaning so nested reconciliation can continue past a
         # constructor-classified slot or reach an enclosing final binder.
         self._reconciled_pattern_binders: dict[int, VarPattern | AsPattern | None] = {}
+        # Reverse index over ``self._resolved.resolution``: declaration node_id →
+        # the reference node_ids currently pointing at it. Built on first pattern
+        # reconciliation and kept in sync as references are retargeted; a region
+        # rollback restores pre-reconciliation references, so it is invalidated
+        # there and rebuilt on demand.
+        self._resolution_by_decl: dict[int, list[int]] | None = None
         self._partial_calls: dict[int, PartialCallSpec] = {}
         # Extern provenance for first-class function values.  A value can name
         # one or more externs (e.g. through a branch); when such a function
@@ -1604,6 +1609,10 @@ class _Checker:
         ):
             for node_id in region.added_side_table_keys.get(table_name, set()):
                 table.pop(node_id, None)
+        if region.reconciled_resolution_originals:
+            # References move back to their pre-reconciliation declarations, so
+            # the reverse index is stale; rebuild it on the next reconciliation.
+            self._resolution_by_decl = None
         self._resolved.resolution.update(region.reconciled_resolution_originals)
         for node_id, constructor_ref in region.reconciled_constructor_ref_originals.items():
             if constructor_ref is None:
@@ -3253,12 +3262,12 @@ class _Checker:
 
     def _reconciled_pattern_ref(self, ref: BindingRef) -> BindingRef | None:
         """Return a provisional pattern reference's finalized lexical binding."""
-        binder = self._reconciled_pattern_binders.get(ref.decl_node_id, ref)
+        if ref.decl_node_id not in self._reconciled_pattern_binders:
+            return ref
+        binder = self._reconciled_pattern_binders[ref.decl_node_id]
         if binder is None:
             return None
-        if isinstance(binder, (VarPattern, AsPattern)):
-            return replace(ref, decl_span=binder.span, decl_node_id=binder.node_id)
-        return ref
+        return replace(ref, decl_span=binder.span, decl_node_id=binder.node_id)
 
     def _reconciled_lexical_lookup(self, scope: ScopeNode, name: str) -> BindingRef:
         """Look up *name* through checker-finalized provisional pattern slots."""
@@ -3305,10 +3314,11 @@ class _Checker:
             final_binder = binders[0] if binders else None
             for provisional_id in provisional_ids:
                 self._reconciled_pattern_binders[provisional_id] = final_binder
+            by_decl = self._resolution_reverse_index()
             reference_node_ids = [
                 ref_node_id
-                for ref_node_id, ref in self._resolved.resolution.items()
-                if ref.decl_node_id in provisional_ids
+                for provisional_id in provisional_ids
+                for ref_node_id in by_decl.get(provisional_id, ())
             ]
             if not reference_node_ids:
                 continue
@@ -3345,6 +3355,18 @@ class _Checker:
                     self._resolved.constructor_refs[ref_node_id] = constructor
                 else:
                     self._resolved.constructor_refs.pop(ref_node_id, None)
+            for provisional_id in provisional_ids:
+                by_decl.pop(provisional_id, None)
+            by_decl.setdefault(target_ref.decl_node_id, []).extend(reference_node_ids)
+
+    def _resolution_reverse_index(self) -> dict[int, list[int]]:
+        """Return the declaration → references index, building it if needed."""
+        if self._resolution_by_decl is None:
+            index: dict[int, list[int]] = {}
+            for ref_node_id, ref in self._resolved.resolution.items():
+                index.setdefault(ref.decl_node_id, []).append(ref_node_id)
+            self._resolution_by_decl = index
+        return self._resolution_by_decl
 
     @staticmethod
     def _pattern_binding_candidates(pattern: Pattern) -> tuple[VarPattern | AsPattern, ...]:
@@ -3442,12 +3464,9 @@ class _Checker:
     # Result
     # ------------------------------------------------------------------
 
-    def result(self, resolved: ModuleResolution) -> CheckedModule:
+    def result(self) -> CheckedModule:
         return CheckedModule(
-            resolved=resolved,
-            resolution=self._resolved.resolution,
-            constructor_refs=self._resolved.constructor_refs,
-            qualified_constructor_refs=self._resolved.qualified_constructor_refs,
+            resolved=self._resolved,
             node_types=self._node_types,
             contract_specs=self._contract_specs,
             call_sites=tuple(self._call_sites),
@@ -3460,17 +3479,8 @@ class _Checker:
                 function_param_types=self._function_call_param_types,
                 constructor_calls=self._constructor_call_bindings,
                 constructor_patterns=self._constructor_pattern_bindings,
-                pattern_binders=frozenset(
-                    node_id
-                    for node_id, constructor in self._pattern_classifications.items()
-                    if constructor is None
-                ),
-                pattern_constructors={
-                    node_id: constructor
-                    for node_id, constructor in self._pattern_classifications.items()
-                    if constructor is not None
-                },
             ),
+            pattern_classifications=self._pattern_classifications,
             partial_calls=self._partial_calls,
         )
 
@@ -3500,7 +3510,7 @@ def _check_prepared_module(
 
     checker = _Checker(env=env, resolved=resolved, capabilities=capabilities)
     checker.check_module(resolved.program)
-    checked = checker.result(resolved)
+    checked = checker.result()
     assert_checked_module_closed(checked)
     return checked
 

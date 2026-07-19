@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import decimal
 import weakref
+from dataclasses import replace
 from typing import Never, NoReturn, assert_never
 
 from agm.agl.modules.ids import ENTRY_ID, ModuleId
@@ -91,7 +92,9 @@ def _unsupported(description: str, node: Never) -> NoReturn:
         ) from exc
 
 
-def _bare_enum_constructors(checked: CheckedPatternOwner) -> frozenset[tuple[ModuleId, str, str]]:
+def resolve_bare_enum_constructors(
+    checked: CheckedPatternOwner,
+) -> frozenset[tuple[ModuleId, str, str]]:
     """Collect enum constructors whose unqualified call forms are visible.
 
     The witness renderer may use an explicit call form for field-bearing
@@ -297,18 +300,7 @@ def _canonical_literal(pattern: LiteralPattern, subject_type: Type) -> Construct
 
 def _add_as_binder(cell: PatternCell, binder: BinderProvenance) -> PatternCell:
     """Attach an as-pattern binder to the occurrence represented by *cell*."""
-    if isinstance(cell, WildcardCell):
-        return WildcardCell(
-            binder=cell.binder,
-            provenance=cell.provenance,
-            as_binders=(*cell.as_binders, binder),
-        )
-    return ConstructorCell(
-        constructor=cell.constructor,
-        arguments=cell.arguments,
-        provenance=cell.provenance,
-        binders=(*cell.binders, binder),
-    )
+    return replace(cell, binders=(*cell.binders, binder))
 
 
 def normalize_pattern(
@@ -320,19 +312,20 @@ def normalize_pattern(
     provenance = SourcePatternProvenance(pattern.node_id, pattern.span)
     match pattern:
         case WildcardPattern():
-            return WildcardCell(binder=None, provenance=provenance)
+            return WildcardCell(provenance=provenance)
         case AsPattern(pattern=inner, node_id=node_id, name=name):
             return _add_as_binder(
                 normalize_pattern(inner, subject_type, checked),
                 BinderProvenance(node_id=node_id, name=name, span=pattern.span),
             )
         case VarPattern(node_id=node_id, name=name):
-            if node_id in checked.argument_bindings.pattern_binders:
+            classifications = checked.pattern_classifications
+            if node_id in classifications and classifications[node_id] is None:
                 return WildcardCell(
-                    binder=BinderProvenance(node_id=node_id, name=name, span=pattern.span),
                     provenance=provenance,
+                    binders=(BinderProvenance(node_id=node_id, name=name, span=pattern.span),),
                 )
-            constructor_ref = checked.argument_bindings.pattern_constructors.get(node_id)
+            constructor_ref = classifications.get(node_id)
             if constructor_ref is None or constructor_ref.variant != name:
                 raise MatchCompileInvariantError(
                     "missing final constructor classification for bare pattern"
@@ -388,7 +381,6 @@ def normalize_pattern(
                 if child is None:
                     arguments.append(
                         WildcardCell(
-                            binder=None,
                             provenance=OmittedFieldProvenance(
                                 constructor_pattern_id=pattern.node_id,
                                 field_name=field.name,
@@ -408,12 +400,14 @@ def normalize_case(
     checked: CheckedPatternOwner,
     *,
     enum_owner_forms: tuple[EnumOwnerForm, ...] | None = None,
+    bare_enum_constructors: frozenset[tuple[ModuleId, str, str]] | None = None,
 ) -> NormalizedCase:
     """Normalize one checked source case into a source-priority one-column matrix.
 
-    *enum_owner_forms* lets a caller normalizing every case of one checked owner
-    enumerate that owner's writable enum spellings once instead of once per
-    case; it defaults to resolving them from *checked*.
+    *enum_owner_forms* and *bare_enum_constructors* let a caller normalizing every
+    case of one checked owner enumerate that owner's writable enum spellings and
+    visible bare constructor forms once instead of once per case; both default to
+    resolving them from *checked*.
     """
     try:
         subject_type = checked.node_types[case.subject.node_id]
@@ -457,10 +451,15 @@ def normalize_case(
     owner_forms = (
         checked.type_env.enum_owner_forms() if enum_owner_forms is None else enum_owner_forms
     )
+    bare_constructors = (
+        resolve_bare_enum_constructors(checked)
+        if bare_enum_constructors is None
+        else bare_enum_constructors
+    )
     case_context = MatchCaseContext(
         module_id=module_id,
         enum_owner_forms=owner_forms,
-        bare_enum_constructors=_bare_enum_constructors(checked),
+        bare_enum_constructors=bare_constructors,
         owner_program=checked.resolved.program,
     )
     return NormalizedCase(
@@ -482,5 +481,6 @@ __all__ = [
     "normalize_case",
     "normalize_pattern",
     "pattern_cell_inhabits_type",
+    "resolve_bare_enum_constructors",
     "signature_for_type",
 ]

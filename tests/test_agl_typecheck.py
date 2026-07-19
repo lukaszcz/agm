@@ -3304,8 +3304,8 @@ class TestConstructorRefDispatch:
         checked = check_module(resolved, default_capabilities())
         outer_var = resolved.program.body.items[2]
         assert isinstance(outer_var, VarDecl)
-        assert checked.resolution[assignment.node_id].decl_node_id == outer_var.node_id
-        assert checked.resolution[body.items[1].node_id].decl_node_id == outer_var.node_id
+        assert checked.resolved.resolution[assignment.node_id].decl_node_id == outer_var.node_id
+        assert checked.resolved.resolution[body.items[1].node_id].decl_node_id == outer_var.node_id
         assert resolved.resolution[assignment.node_id].decl_node_id == field_pattern.node_id
 
     def test_field_directed_constructor_restores_indexed_assignment_root(self) -> None:
@@ -3331,7 +3331,7 @@ class TestConstructorRefDispatch:
         assert isinstance(outer_var, VarDecl)
 
         checked = check_module(resolved, default_capabilities())
-        assert checked.resolution[assignment.node_id].decl_node_id == outer_var.node_id
+        assert checked.resolved.resolution[assignment.node_id].decl_node_id == outer_var.node_id
 
     def test_failed_field_directed_check_preserves_scope_resolution(self) -> None:
         source = (
@@ -3391,6 +3391,38 @@ class TestConstructorRefDispatch:
 
         assert checker._resolved.constructor_refs[node_id] == constructor_ref
 
+    def test_reconciliation_rollback_invalidates_the_reference_reverse_index(self) -> None:
+        from agm.agl.typecheck.checker import _Checker, _InferenceRegion
+        from agm.agl.typecheck.inference import InferenceEngine
+
+        source = (
+            "enum Flag\n  | on\n  | off\n"
+            "enum Packet\n  | packet(flag: Flag)\n"
+            "let item = packet(Flag::on)\n"
+            "case item of\n"
+            "  | packet(flag) => flag\n"
+            "  | packet(_) => Flag::off"
+        )
+        resolved = resolve_module(parse_program(source))
+        checker = _Checker(TypeEnvironment(), resolved, default_capabilities())
+        reference_node_id, original_ref = next(iter(checker._resolved.resolution.items()))
+        index = checker._resolution_reverse_index()
+        assert reference_node_id in index[original_ref.decl_node_id]
+
+        # Simulate a region that retargeted the reference and then failed.
+        retargeted = replace(original_ref, decl_node_id=-1)
+        checker._resolved.resolution[reference_node_id] = retargeted
+        index.pop(original_ref.decl_node_id)
+        index[-1] = [reference_node_id]
+        region = _InferenceRegion(InferenceEngine(), {}, {}, [])
+        region.reconciled_resolution_originals[reference_node_id] = original_ref
+
+        checker._rollback_region_side_tables(region)
+
+        rebuilt = checker._resolution_reverse_index()
+        assert rebuilt[original_ref.decl_node_id] == [reference_node_id]
+        assert -1 not in rebuilt
+
     @pytest.mark.parametrize(
         ("outer_value", "inner_body"),
         [
@@ -3420,7 +3452,7 @@ class TestConstructorRefDispatch:
         outer_var = resolved.program.body.items[2]
         assert isinstance(outer_var, VarDecl)
 
-        on_references = [ref for ref in checked.resolution.values() if ref.name == "on"]
+        on_references = [ref for ref in checked.resolved.resolution.values() if ref.name == "on"]
         assert on_references
         assert {ref.decl_node_id for ref in on_references} == {outer_var.node_id}
 

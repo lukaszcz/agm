@@ -1126,8 +1126,11 @@ def _check_artifact_provenance(
 ) -> None:
     """Assert a cached artifact wraps the exact prepared resolutions.
 
-    Object identity is the provenance contract: structurally equal programs
-    prepared in separate passes are not interchangeable compiler inputs.  Call
+    Source identity is the provenance contract: structurally equal programs
+    prepared in separate passes are not interchangeable compiler inputs.  The
+    check anchors on the parsed program rather than the resolution wrapper,
+    because typechecking reconciles pattern binders into a replaced
+    :class:`ModuleResolution` that shares its prepared program.  Call
     sites guard this check with :func:`self_validation_enabled` — building its
     module mappings costs more than the production path should ever pay for an
     invariant it cannot violate.
@@ -1136,7 +1139,7 @@ def _check_artifact_provenance(
         prepared_entry == compiled_entry
         and prepared_modules.keys() == compiled_modules.keys()
         and all(
-            compiled_modules[module_id] is prepared_resolved
+            compiled_modules[module_id].program is prepared_resolved.program
             for module_id, prepared_resolved in prepared_modules.items()
         )
     )

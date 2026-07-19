@@ -91,10 +91,10 @@ def _constructor_by_variant(matrix: PatternMatrix, column: int) -> dict[str, Enu
 
 def _migrated(row: MatrixRow, matrix: PatternMatrix, column: int) -> tuple[BinderAssignment, ...]:
     wildcard = cast(WildcardCell, row.cells[column])
-    assert wildcard.binder is not None
+    assert wildcard.binders
     return (
         *row.binder_assignments,
-        BinderAssignment(matrix.occurrences[column].id, wildcard.binder),
+        BinderAssignment(matrix.occurrences[column].id, wildcard.binders[0]),
     )
 
 
@@ -135,8 +135,8 @@ def test_paper_specializations_preserve_complete_rows_and_priority() -> None:
         replace(
             row_wildcard,
             cells=(
-                WildcardCell(None, wildcard.provenance),
-                WildcardCell(None, wildcard.provenance),
+                WildcardCell(wildcard.provenance),
+                WildcardCell(wildcard.provenance),
                 row_wildcard.cells[1],
             ),
             binder_assignments=_migrated(row_wildcard, columns, 0),
@@ -203,7 +203,7 @@ def _head_arguments(
 ) -> tuple[Value, ...] | None:
     head_only = ConstructorCell(
         constructor,
-        tuple(WildcardCell(None, provenance_cell.provenance) for _ in range(constructor.arity)),
+        tuple(WildcardCell(provenance_cell.provenance) for _ in range(constructor.arity)),
         provenance_cell.provenance,
     )
     if not canonical_cell_matches(head_only, value):

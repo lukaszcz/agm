@@ -23,7 +23,11 @@ from .diagnostics import (
     issue_sort_key,
     render_witness,
 )
-from .normalize import MatchCompileInvariantError, normalize_case
+from .normalize import (
+    MatchCompileInvariantError,
+    normalize_case,
+    resolve_bare_enum_constructors,
+)
 
 
 def _immutable_cases(cases: Mapping[int, CompiledCase]) -> Mapping[int, CompiledCase]:
@@ -105,10 +109,19 @@ def _compile_owner_cases(owner: CheckedModule) -> tuple[dict[int, CompiledCase],
     cases: dict[int, CompiledCase] = {}
     issues: list[MatchIssue] = []
     # Every case of one checked owner shares that owner's writable enum
-    # spellings, and enumerating them rescans the whole type namespace.
+    # spellings and visible bare constructor forms, and enumerating either
+    # rescans the whole type namespace.
     owner_forms = owner.type_env.enum_owner_forms()
+    bare_constructors = resolve_bare_enum_constructors(owner)
     for case_node_id, source_case in _source_cases(owner.resolved.program).items():
-        compiled = compile_case(normalize_case(source_case, owner, enum_owner_forms=owner_forms))
+        compiled = compile_case(
+            normalize_case(
+                source_case,
+                owner,
+                enum_owner_forms=owner_forms,
+                bare_enum_constructors=bare_constructors,
+            )
+        )
         cases[case_node_id] = compiled
         issues.extend(compiled.issues)
     return cases, issues

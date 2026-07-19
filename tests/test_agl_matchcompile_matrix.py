@@ -126,9 +126,9 @@ def test_specialization_and_default_are_exact_and_migrate_binders() -> None:
     assert isinstance(first_left, ConstructorCell)
     assert first_left.constructor == BoolConstructor(False)
     assert isinstance(first_right, WildcardCell)
-    assert [binder.name for binder in first_right.as_binders] == ["captured"]
+    assert [binder.name for binder in first_right.binders] == ["captured"]
     assert all(isinstance(cell, WildcardCell) for cell in specialized.rows[2].cells)
-    whole = cast(WildcardCell, matrix.rows[2].cells[0]).as_binders[0]
+    whole = cast(WildcardCell, matrix.rows[2].cells[0]).binders[0]
     assert specialized.rows[2].binder_assignments == (
         BinderAssignment(matrix.occurrences[0].id, whole),
     )
@@ -435,7 +435,7 @@ def test_matrix_operations_reject_malformed_boundaries_loudly() -> None:
             matrix.type_table,
         )
     with pytest.raises(MatchCompileInvariantError, match="binder assignment"):
-        binder = cast(WildcardCell, matrix.rows[2].cells[0]).as_binders[0]
+        binder = cast(WildcardCell, matrix.rows[2].cells[0]).binders[0]
         bad_row = replace(
             row,
             binder_assignments=(BinderAssignment(OccurrenceId(99), binder),),
@@ -493,7 +493,7 @@ def test_matrix_rejects_bad_constructor_children_and_occurrence_provenance() -> 
             variant=pair.variant,
             fields=(ConstructorField("wrong", BoolType()),),
         ),
-        (WildcardCell(None, first.provenance),),
+        (WildcardCell(first.provenance),),
         first.provenance,
     )
     with pytest.raises(MatchCompileInvariantError, match="incompatible"):
@@ -714,10 +714,10 @@ def test_allocator_rejects_incompatible_origin_and_rows_reject_duplicate_binders
     with pytest.raises(MatchCompileInvariantError, match="creation order"):
         specialize(matrix, 0, pair, replace(allocator, next_creation_order=0))
 
-    binder = cast(WildcardCell, matrix.rows[2].cells[0]).as_binders[0]
+    binder = cast(WildcardCell, matrix.rows[2].cells[0]).binders[0]
     duplicate = replace(
         matrix.rows[2],
-        cells=(WildcardCell(binder, matrix.rows[2].cells[0].provenance),),
+        cells=(WildcardCell(matrix.rows[2].cells[0].provenance, (binder,)),),
         binder_assignments=(BinderAssignment(matrix.occurrences[0].id, binder),),
     )
     with pytest.raises(MatchCompileInvariantError, match="binder"):
@@ -742,7 +742,7 @@ def test_invalid_manually_constructed_constructor_metadata_is_rejected() -> None
     )
     cell = ConstructorCell(
         duplicate_fields,
-        (WildcardCell(None, provenance), WildcardCell(None, provenance)),
+        (WildcardCell(provenance), WildcardCell(provenance)),
         provenance,
     )
     with pytest.raises(MatchCompileInvariantError, match="checked signature"):
@@ -850,7 +850,7 @@ def test_matrix_rejects_single_enum_head_that_disagrees_with_checked_signature(
             constructor,
             fields=(*constructor.fields, ConstructorField("extra", BoolType())),
         )
-        arguments = (*arguments, WildcardCell(None, cell.provenance))
+        arguments = (*arguments, WildcardCell(cell.provenance))
     elif defect == "reordered":
         malformed = replace(constructor, fields=tuple(reversed(constructor.fields)))
         arguments = tuple(reversed(arguments))

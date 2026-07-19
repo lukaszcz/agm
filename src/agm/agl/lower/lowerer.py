@@ -540,7 +540,7 @@ class _Lowerer:
     def _record_capture(
         self, node_id: int, local_ids: set[int], captured: dict[int, BindingRef]
     ) -> None:
-        ref = self._checked.resolved.resolution.get(node_id)
+        ref = self._checked.binding_for(node_id)
         if (
             ref is not None
             and ref.decl_node_id not in local_ids
@@ -1048,7 +1048,7 @@ class _Lowerer:
                     return self._lower_nullary_constructor(nid, owner_name, variant_name, span)
 
                 # Check for constructor reference FIRST (mirrors legacy _eval_var_ref).
-                cref = self._checked.resolved.constructor_refs.get(nid)
+                cref = self._checked.constructor_ref_for(nid)
                 if cref is not None:
                     node_typ = self._node_type(nid)
                     if isinstance(node_typ, FunctionType):
@@ -1065,8 +1065,8 @@ class _Lowerer:
                     # record VarRef is impossible under the current grammar.
                     return self._lower_nullary_constructor(nid, cref.owner_name, cref.variant, span)
 
-                ref = self._checked.resolved.resolution.get(nid)
-                assert ref is not None, f"compiler bug: no resolution for VarRef node_id={nid!r}"
+                ref = self._checked.binding_for(nid)
+                assert ref is not None, f"compiler bug: no binding for VarRef node_id={nid!r}"
                 if ref.kind is BinderKind.builtin_var_binding:
                     # A ``builtin var`` read pulls the engine setting from its
                     # interpreter register, keyed by the engine-key name.
@@ -1944,7 +1944,7 @@ class _Lowerer:
         if builtin_kind is not None:
             return self._lower_builtin_call(builtin_kind, call_node, span)
 
-        # (a) VarRef callee in constructor_refs
+        # (a) VarRef callee resolving to a constructor.
         if isinstance(callee, VarRef):
             qcr = self._checked.resolved.qualified_constructor_refs.get(callee.node_id)
             if qcr is not None:
@@ -1955,7 +1955,7 @@ class _Lowerer:
                     variant_name,
                     span,
                 )
-            cref = self._checked.resolved.constructor_refs.get(callee.node_id)
+            cref = self._checked.constructor_ref_for(callee.node_id)
             if cref is not None:
                 return self._lower_named_constructor_call(
                     nid,
@@ -1964,7 +1964,7 @@ class _Lowerer:
                     span,
                 )
             # (b) VarRef callee resolving via BinderKind.constructor_binding.
-            callee_ref = self._checked.resolved.resolution.get(callee.node_id)
+            callee_ref = self._checked.binding_for(callee.node_id)
             if callee_ref is not None and callee_ref.kind is BinderKind.constructor_binding:
                 return self._lower_named_constructor_call(
                     nid,
@@ -2239,7 +2239,7 @@ class _Lowerer:
         param_symbols: tuple[SymbolId, ...],
     ) -> IrExpr:
         assert isinstance(call_node.callee, VarRef)
-        callee_ref = self._checked.resolved.resolution.get(call_node.callee.node_id)
+        callee_ref = self._checked.binding_for(call_node.callee.node_id)
         assert callee_ref is not None and callee_ref.kind is BinderKind.function_binding
         fn_id = self._link.fn_node_to_id.get(callee_ref.decl_node_id)
         assert fn_id is not None, (
@@ -2329,10 +2329,10 @@ class _Lowerer:
         if qcr is not None:
             owner_name, variant, _owner_module = qcr
             return owner_name, variant
-        cref = self._checked.resolved.constructor_refs.get(callee.node_id)
+        cref = self._checked.constructor_ref_for(callee.node_id)
         if cref is not None:
             return cref.owner_name, cref.variant
-        callee_ref = self._checked.resolved.resolution.get(callee.node_id)
+        callee_ref = self._checked.binding_for(callee.node_id)
         assert callee_ref is not None
         return callee_ref.name, None
 
@@ -2978,9 +2978,9 @@ class _Lowerer:
         assign_node_id: int,
     ) -> "IrAssign | IrBuiltinStore":
         """Lower an assignment statement (simple name, indexed path, or builtin var)."""
-        ref = self._checked.resolved.resolution.get(assign_node_id)
+        ref = self._checked.binding_for(assign_node_id)
         assert ref is not None, (
-            f"compiler bug: no resolution for AssignStmt node_id={assign_node_id!r}"
+            f"compiler bug: no binding for AssignStmt node_id={assign_node_id!r}"
         )
 
         if ref.kind is BinderKind.builtin_var_binding:

@@ -144,6 +144,31 @@ class TestPersistence:
         assert result.ok, result.diagnostics
         assert result.value == IntValue(15)
 
+    def test_selected_pattern_slots_lower_in_repl_entries(self) -> None:
+        s = ReplSession()
+
+        binder_result = s.eval_entry(
+            "enum Flag\n  | on\n"
+            "enum Packet\n  | packet(flag: Flag)\n"
+            "var on = 1\nlet item = packet(Flag::on)\n"
+            "let result = case item of | packet(on) =>\n"
+            "  on := on + 1\n"
+            "  on\n"
+            "result"
+        )
+        constructor_session = ReplSession()
+        constructor_result = constructor_session.eval_entry(
+            "enum Flag\n  | on\n"
+            "enum Packet\n  | packet(flag: Flag)\n"
+            "let item = packet(Flag::on)\n"
+            "case item of | packet(on) => on() == Flag::on"
+        )
+
+        assert binder_result.ok, binder_result.diagnostics
+        assert binder_result.value == IntValue(2)
+        assert constructor_result.ok, constructor_result.diagnostics
+        assert constructor_result.value == BoolValue(True)
+
     def test_partial_application_closure_persists_into_next_entry(self) -> None:
         s = ReplSession()
 

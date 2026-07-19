@@ -47,6 +47,32 @@ def test_final_classification_restores_outer_value_references() -> None:
     assert result["result"].value == 7
 
 
+def test_lowering_uses_selected_binder_slot_for_assignment() -> None:
+    result = evaluate_ir(
+        "enum Flag\n  | on\n"
+        "enum Packet\n  | packet(flag: Flag)\n"
+        "var on = 1\nlet item = packet(Flag::on)\n"
+        "let result = case item of | packet(on) =>\n"
+        "  on := on + 1\n"
+        "  on\n"
+        "result"
+    )
+
+    assert result["result"].value == 2
+
+
+def test_lowering_uses_selected_constructor_slot_for_calls() -> None:
+    result = evaluate_ir(
+        "enum Flag\n  | on\n"
+        "enum Packet\n  | packet(flag: Flag)\n"
+        "let item = packet(Flag::on)\n"
+        "let result = case item of | packet(on) => on() == Flag::on\n"
+        "result"
+    )
+
+    assert result["result"].value is True
+
+
 def test_nested_names_follow_the_matched_field() -> None:
     _check(
         "enum Flag\n  | on\n  | off\n"

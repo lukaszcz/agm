@@ -278,6 +278,8 @@ class EntryPipeline:
             argument_bindings=entry.argument_bindings,
             pattern_classifications=entry.pattern_classifications,
             partial_calls=entry.partial_calls,
+            slot_resolution=entry.slot_resolution,
+            slot_constructor_refs=entry.slot_constructor_refs,
         )
 
     def _inject_accumulated_imports(self, program: Program) -> Program:

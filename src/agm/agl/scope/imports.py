@@ -297,8 +297,6 @@ def build_import_env(
 
     for decl in decls:
         is_open = decl.is_open
-        if is_open and decl.mode == ImportMode.USING:
-            raise AglScopeError("open imports cannot also use a using clause", span=decl.span)
 
         rename_map = _build_rename_map(decl)
         inject_bare = is_open or decl.mode == ImportMode.USING

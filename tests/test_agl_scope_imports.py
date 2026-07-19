@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
-
 from agm.agl.modules.ids import ModuleId
 from agm.agl.scope.imports import (
     QualResolutionAmbiguous,
@@ -15,7 +13,6 @@ from agm.agl.scope.imports import (
     build_import_env,
     resolve_qualified,
 )
-from agm.agl.scope.symbols import AglScopeError
 from agm.agl.syntax.nodes import ImportDecl, ImportItem
 from agm.agl.syntax.spans import UNKNOWN_SOURCE, SourceSpan
 from agm.agl.syntax.types import ImportMode
@@ -125,18 +122,6 @@ def test_using_injects_only_its_renamed_members() -> None:
         module, (module, "trim")
     )
     assert isinstance(resolve_qualified(env, ("text",), "trim"), QualResolutionMissingMember)
-
-
-def test_open_import_cannot_combine_with_using() -> None:
-    decl = _decl("tools/text", is_open=True, mode=ImportMode.USING, items=(_item("trim"),))
-    module = _module("tools/text")
-
-    with pytest.raises(AglScopeError):
-        _build(
-            [decl],
-            {decl.node_id: SingleTarget(module)},
-            {module: _exports("tools/text", "trim")},
-        )
 
 
 def test_alias_is_a_route_but_not_a_suffix_or_anchor() -> None:

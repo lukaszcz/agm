@@ -115,17 +115,6 @@ class TestContributionSets:
         assert set(env.unqualified) == {"public"}
         assert env.unqualified["public"] == frozenset({(module, "public")})
 
-    def test_open_using_is_rejected_as_redundant(self) -> None:
-        decl = _decl("lib/api", is_open=True, mode=ImportMode.USING, items=(_item("one"),))
-        module = _module("lib/api")
-
-        with pytest.raises(AglScopeError):
-            _build(
-                [decl],
-                {decl.node_id: SingleTarget(module)},
-                {module: _exports("lib/api", "one")},
-            )
-
 
 class TestContributionImmutability:
     def test_public_mappings_are_immutable_snapshots(self) -> None:

@@ -4,7 +4,7 @@
 
 The lexer is hand-written because AgL is indentation-sensitive: it produces INDENT/DEDENT tokens, handles multiline strings and string interpolation, and emits `NAME`/`OP_NAME` tokens for identifiers — capitalization never classifies a name. The parser is a Lark LALR grammar over those tokens, and an AST builder constructs the AST. User `infixl`/`infixr` declarations are parser metadata: the builder uses their priorities to rewrite flat infix chains into ordinary AST nodes before anything crosses the firewall. These two passes are the only Lark-aware code in the system.
 
-The implementation-level token contract lives in `src/agm/agl/lexer/tokens.py` (the declared single source of truth) and the lexer pass docstrings; the surface grammar is documented from the user's perspective in the AgL reference (`docs/agl/reference/`). Module headers are merged as slash paths, while byte-adjacent slash-qualified prefixes are merged before parsing so imports and qualified references remain LALR-friendly.
+The implementation-level token contract lives in `src/agm/agl/lexer/tokens.py` (the declared single source of truth) and the lexer pass docstrings; the surface grammar is documented from the user's perspective in the AgL reference (`docs/agl/reference/`). Module headers are merged as slash paths, while every byte-adjacent module qualifier — single-segment or slash-separated, with an optional anchor — is merged before parsing so imports and qualified references remain LALR-friendly.
 
 ## The AST
 

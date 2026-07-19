@@ -29,6 +29,10 @@ Flag notes:
       true`` in config also enables logging; CLI flags override config.
     - ``--runner COMMAND`` overrides the default agent runner command from config.
       When set, it is used as the default runner for all unnamed agents.
+    - Every loaded entry and library module opens ``std/core`` by default
+      (except ``std/core`` itself). ``--no-stdlib`` disables that automatic
+      opening throughout the loaded program. Ordinary imports are qualified by
+      default; ``open import`` and ``using`` make selected names bare.
     - A program reads and writes the engine settings (``strict-json``,
       ``max-iters``, ``runner``, ``timeout``, ``log``, ``log-file``) through the
       ``std/config`` module; a ``std/config::KEY := VALUE`` write takes effect

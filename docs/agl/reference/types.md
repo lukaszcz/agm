@@ -167,8 +167,8 @@ See [Functions](functions.md) for the declaration and call syntax.
 
 ## Standard core types
 
-The following types are defined by `std.core`, which is opened unqualified in
-the entry module by default.
+The following types are defined by `std/core`, which the automatic prelude
+opens in every loaded entry and library module except `std/core` itself.
 
 ### `Option[T]`
 
@@ -299,7 +299,7 @@ A record may be generic — `record Box[T]` then a field `value: T`
 (see [Generics](generics.md)).
 
 `builtin record` is the body-equivalent form for host-recognized nominal record
-types in `std.core`. The name and full field shape must match a recognized
+types in `std/core`. The name and full field shape must match a recognized
 built-in type exactly.
 
 ## Enum types
@@ -464,24 +464,23 @@ qualifier:
 
 ```agl
 import mylib
-import mylib qualified as M
+import mylib as M
 
 # These are equivalent:
 let p1: mylib::Point = mylib::origin()
 let p2: M::Point     = M::origin()
 ```
 
-The qualifier is the handle under which the module was imported. Qualified type
-references work in annotations, cast targets, and constructor expressions. An
-open (unqualified) import also brings the type name into unqualified scope,
-so `Point` (without a qualifier) resolves to `mylib::Point` if `mylib` is
-open-imported and no other open import clashes.
+A plain import provides suffix routes; `as` provides its alias route. Qualified
+type references work in annotations, cast targets, and constructor expressions.
+An open import also brings the type name into bare scope, so `Point` resolves
+to `mylib::Point` if `mylib` is open-imported and no other open import clashes.
 
 Generic imported types retain the same qualification rules. Apply type
 arguments after the complete qualified name:
 
 ```agl
-import mylib
+open import mylib
 
 let p1: Box[int] = Box(value = 1)
 let p2: mylib::Box[int] = mylib::Box(value = 2)

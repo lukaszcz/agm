@@ -13,9 +13,10 @@ Resolution is namespace- and scope-directed, never capitalization-directed — a
 ## Import Environments
 
 `scope/imports.py` is the pure import-policy seam. Its contribution environment
-merges every declaration for a module into selected members, bare injection, aliases,
-and plain-path routes. Plain imports are qualified-only; `using` and `open import`
-inject bare names. One shared suffix/anchored resolver serves value reads and writes,
+merges every declaration for a module into its selected members, bare injection, aliases,
+and plain-path routes. The selected set bounds both routes and bare injection: plain
+imports are qualified-only, while `using` and `open import` inject bare names. One shared
+suffix/anchored resolver serves value reads and writes,
 constructors, and type qualification, retaining ambiguity and route identity until the use
 site; its diagnostics distinguish private declarations from names outside a contribution.
 The scope pass also recognizes whitespace-separated qualifier near-misses only when

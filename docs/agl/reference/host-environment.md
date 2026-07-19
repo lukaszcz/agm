@@ -114,7 +114,7 @@ target — see [Generics](generics.md#the-finite-schema-boundary).
 
 ### Engine settings
 
-The standard-library module `std.config` exposes the following fixed engine
+The standard-library module `std/config` exposes the following fixed engine
 settings as mutable bindings ([Bindings and scope](bindings-and-scope.md)):
 
 | Setting | AgL type | Portable default |
@@ -135,12 +135,12 @@ Import `std/config` and read or write a setting through a qualified target
 A setting's effective value is resolved as:
 
 ```
-setting X:  source (std.config::X := e)  >  CLI --X  >  [<program>].X  >  [exec].X  >  engine default
+setting X:  source (std/config::X := e)  >  CLI --X  >  [<program>].X  >  [exec].X  >  engine default
 param   Y:  CLI --Y                       >  [<program>].Y  >  source default (param Y = e) >  required error
 ```
 
 The CLI flag and the config-file layers supply the setting's **initial** value;
-a source write to `std.config::X` overrides them from its program point onward. A
+a source write to `std/config::X` overrides them from its program point onward. A
 program that never writes a setting keeps the value chosen by the CLI/config
 layers.
 
@@ -156,7 +156,7 @@ have no config section.
 
 ### Positional effect
 
-Every setting takes effect **positionally**: a write to `std.config::X` governs
+Every setting takes effect **positionally**: a write to `std/config::X` governs
 the statements that follow it, in program order, and does not affect statements
 before it. A completed write remains effective if a later expression fails.
 Writing `runner`, `log`, or `log-file` repoints the default agent and the trace
@@ -172,7 +172,7 @@ the rest of the run without rolling back the assigned `log` or `log-file` value.
 
 - A bad `--timeout`, `[<program>].timeout`, or `[exec].timeout` value is caught
   before execution (exit 1 pre-execution error).
-- A bad duration in `std.config::timeout := Some("…")` is evaluated at runtime;
+- A bad duration in `std/config::timeout := Some("…")` is evaluated at runtime;
   a bad value raises a runtime error (exit 2).
 - A CLI, `[<program>]`, or `[exec]` timeout initially seeds both shell execution
   and agent idle timeout. A source write to the `timeout` setting changes only

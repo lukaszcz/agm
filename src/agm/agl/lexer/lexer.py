@@ -146,7 +146,7 @@ def _promote_soft_keywords(tokens: list[Token]) -> list[Token]:
     - 'open' → OPEN only at item-start and only directly before 'import'.
     - 'import' → IMPORT at item-start, or immediately after OPEN.
     - 'private' → PRIVATE and 'export' → EXPORT at item-start.
-    - 'using' → USING and 'hiding' → HIDING within import or export lines.
+    - 'using' → USING and 'hiding' → HIDING within import or export declarations.
     """
     result: list[Token] = []
     in_import_line = False
@@ -198,7 +198,7 @@ def _promote_soft_keywords(tokens: list[Token]) -> list[Token]:
 
 
 def _merge_modpath(tokens: list[Token]) -> list[Token]:
-    """Merge import module paths into single MODPATH tokens.
+    """Merge module-header paths into single MODPATH tokens.
 
     Pattern: immediately following an IMPORT or EXPORT token, consume
     NAME (SLASH NAME)* into a single MODPATH token whose value

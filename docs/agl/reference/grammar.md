@@ -49,12 +49,15 @@ decorators: a modifier may sit on the same line as the declaration it adorns
 on a `type_alias` or on `extern_func_def`; `"private"` composes with
 `extern_func_def` the same way it composes with `func_def`.
 
-## Import declarations
+## Import and export declarations
 
 ```ebnf
-import_decl ::= "open"? "import" module_path ("/" "*")?
-                ("as" ref_name)?
-                (using_clause | hiding_clause)?
+import_decl ::= ["open"] "import" module_path ["/" "*"]
+                ["as" ref_name]
+                [using_clause | hiding_clause]
+
+export_decl ::= "export" module_path ["/" "*"]
+                [using_clause | hiding_clause]
 
 module_path ::= NAME ("/" NAME)*
 ref_name    ::= name
@@ -65,9 +68,9 @@ import_item   ::= ref_name ("as" ref_name)?
 ```
 
 `"open"` is a contextual soft keyword only when it directly precedes an
-item-start `"import"`. `"import"` and `"private"` are contextual at
-item-start; `"using"` and `"hiding"` are contextual within import lines.
-They remain valid identifiers elsewhere.
+item-start `"import"`. `"import"`, `"export"`, and `"private"` are
+contextual at item-start; `"using"` and `"hiding"` are contextual within
+import and export declarations. They remain valid identifiers elsewhere.
 
 Examples:
 
@@ -79,6 +82,8 @@ import foo/bar hiding x, y
 import foo/bar using x as X, y
 import foo/*
 import foo/bar/* as A
+export foo/bar using x as X, y
+export foo/bar/* hiding internal
 ```
 
 ### Suites (indented blocks)
@@ -297,7 +302,7 @@ pattern        ::= "_"
                  | name
                  | name "(" pattern_fields? ")"
                  | qual_prefix type_qual? name ("(" pattern_fields? ")")?
-qual_prefix    ::= "/"? module_path "::" | "::"
+qual_prefix    ::= ["/"] NAME ("/" NAME)* "::" | "::"
 type_qual      ::= name "::"
 pattern_fields ::= pattern_field ("," pattern_field)* ","?
 pattern_field  ::= pattern              (* positional sub-pattern *)

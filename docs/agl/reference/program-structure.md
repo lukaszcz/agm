@@ -20,7 +20,7 @@ item       ::= import_decl                        (* header position only *)
              | param_decl                         (* root only *)
              | program_decl                       (* root only *)
              | agent_decl                         (* root only *)
-             | builtin_var_def                     (* root only; std.config only *)
+             | builtin_var_def                     (* root only; std/config only *)
              | "private"? func_def                (* root only *)
              | binder | expr
 binder     ::= let_decl | var_decl
@@ -49,7 +49,7 @@ The following are **root-only**: a static error if nested inside a block.
 - **`agent` declarations** — the names of the agents the program may call.
   Entry-module only (see [Modules](modules.md)).
 - **`builtin var` declarations** — body-less engine-backed mutable bindings.
-  They are reserved to the canonical standard-library `std.config` module;
+  They are reserved to the canonical standard-library `std/config` module;
   entry programs and ordinary libraries cannot declare them.
 - **`def` declarations** — user-defined functions. Like type declarations,
   all `def`s at the program root are collected before any expression is
@@ -75,7 +75,7 @@ return `void`, and are commonly followed by another expression.
 
 ## Engine settings
 
-The standard-library module `std.config` exposes the program's engine
+The standard-library module `std/config` exposes the program's engine
 settings — the knobs that control the default agent runner, trace logging,
 JSON strictness, the loop safety valve, and the shell-exec timeout. Each is a
 **mutable binding**; import the module and assign it through a qualified target

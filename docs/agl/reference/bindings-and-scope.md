@@ -46,7 +46,7 @@ var artifact: text = ask("Implement ${spec}", agent = impl)
 ```ebnf
 assign_stmt ::= assign_target ":=" expr
 assign_target ::= NAME ("[" expr "]")*
-                | module_path "::" NAME
+                | qual_prefix NAME
 ```
 
 `:=` updates the nearest visible **mutable** binding, has type `unit`, and

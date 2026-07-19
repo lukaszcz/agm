@@ -1092,7 +1092,10 @@ def exec_cmd(
     no_stdlib: bool = typer.Option(
         False,
         "--no-stdlib",
-        help="Do not automatically open the core AgL standard library in the entry module.",
+        help=(
+            "Disable automatic std/core opening throughout the loaded program "
+            "(entry and library modules)."
+        ),
     ),
     timeout: str | None = typer.Option(
         None,
@@ -1244,7 +1247,10 @@ def repl_cmd(
     no_stdlib: bool = typer.Option(
         False,
         "--no-stdlib",
-        help="Do not automatically open std/core in the REPL session.",
+        help=(
+            "Disable automatic std/core opening for each loaded REPL program "
+            "(entries and library modules)."
+        ),
     ),
     _help: bool = _help_option(),
     _dry_run: bool = _dry_run_option(),

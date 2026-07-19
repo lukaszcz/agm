@@ -188,8 +188,12 @@ including `ask`, `print`, and `exec` — use the uniform `f(arg, name = val)` sy
 command for each declared agent is resolved from `[exec.agents]` (per-agent), the source runner
 hint, `--runner`, `[exec] runner`, `[loop] runner`, or `claude -p` (built-in default).
 
-Programs can span multiple `.agl` files via the module system (`import utils.math`). `agm exec`
-searches the entry file's directory, the installed stdlib root (`~/.agm/stdlib`),
+Programs can span multiple `.agl` files via the module system (`import utils/math`).
+Every loaded entry and library module, except `std/core` itself, opens `std/core` by
+default; `--no-stdlib` disables that automatic opening throughout the loaded program.
+Other imports are qualified by default and use `open import` or `using` to make names
+bare. `agm exec` searches the entry file's directory, the installed stdlib root
+(`~/.agm/stdlib`),
 the global library root (`~/.agm/lib`, relocated by `AGM_HOME`), and any configured
 `[modules] roots` for imported modules.
 
@@ -211,7 +215,9 @@ accumulates bindings, types, and declarations, so earlier results stay available
 calls fire exactly once. By default it fires agent calls immediately; `--confirm-agents`
 asks before each one. Multiline editing, syntax highlighting, tab-completion, and history are
 built in, and `:` meta-commands (`:help`, `:type`, `:bindings`, …) inspect the session.
-The core standard library is opened automatically, as in `agm exec`.
+The `std/core` standard-library module is opened automatically throughout each loaded
+program, as in `agm exec`; pass `--no-stdlib` to disable that automatic opening for the
+entry and its library modules.
 
 ```bash
 agm repl                        # launch; type :help for commands, :quit to exit

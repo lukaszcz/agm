@@ -98,23 +98,25 @@ reserved for standard-library declarations that are implemented by the host.
 `extern` is reserved for declarations implemented by a companion Python file
 (see [Python FFI](ffi.md)).
 
-**Module system soft keywords** — `open`, `import`, `private`, `using`, and
-`hiding` are **not reserved**. They remain valid identifiers in all positions
-except:
+**Module system soft keywords** — `open`, `import`, `export`, `private`,
+`using`, and `hiding` are **not reserved**. They remain valid identifiers in all
+positions except:
 
 | Keyword | Promoted to | Window |
 |---------|-------------|--------|
 | `open` | `OPEN` | At item-start, directly before `import` |
 | `import` | `IMPORT` | At item-start, or directly after `open` |
+| `export` | `EXPORT` | At item-start |
 | `private` | `PRIVATE` | At item-start |
-| `using` | `USING` | Within an import line |
-| `hiding` | `HIDING` | Within an import line |
+| `using` | `USING` | Within an import or export declaration |
+| `hiding` | `HIDING` | Within an import or export declaration |
 
 Examples where they remain plain identifiers:
 
 ```agl
 let import = 1          # 'import' not at item-start → VAR_NAME
-let using = "hello"     # 'using' not in import line → VAR_NAME
+let export = "hello"    # 'export' not at item-start → VAR_NAME
+let using = "hello"     # 'using' not in an import/export declaration → VAR_NAME
 def private() -> text = "x"  # 'private' not at item-start → VAR_NAME
 ```
 
@@ -131,12 +133,12 @@ foo/bar::Color::Red   # module qualifier, enum Color, variant Red
 ```
 
 A qualifier is an optional leading `/`, followed by a slash-separated module
-path and `::` immediately after its final segment. Every part of the qualifier
-through `::` must be byte-adjacent: `foo/bar::thing` is a qualifier, while
-`foo / bar::thing` is division followed by a separate qualifier. A leading
-`/` anchors resolution to the complete module path. A leading `::` with no
-preceding path is the **self-reference** form — it refers to the current
-module.
+path and `::` immediately after its final segment. **Every** module qualifier,
+including a single-segment form such as `config::key`, is byte-adjacent through
+`::`: `foo/bar::thing` is a qualifier, while `foo / bar::thing` is division
+followed by a separate qualifier. A leading `/` anchors resolution to the
+complete module path. A leading `::` with no preceding path is the
+**self-reference** form — it refers to the current module.
 
 The type-argument form `callee::[T]` and typed-call form `callee::[T](args)`
 (e.g. `ask-request::[Review](…)`) are distinct constructs — they are NOT module

@@ -224,12 +224,12 @@ DO_LSQB = "DO_LSQB"  # [ opening a do-loop bound
 # ---------------------------------------------------------------------------
 OPEN = "OPEN"  # contextual: 'open' directly before an item-start import
 IMPORT = "IMPORT"  # contextual: 'import' at item-start
-USING = "USING"  # contextual: 'using' in import line
-HIDING = "HIDING"  # contextual: 'hiding' in import line
-EXPORT = "EXPORT"  # contextual: 'export' in import line
+USING = "USING"  # contextual: 'using' in an import or export declaration
+HIDING = "HIDING"  # contextual: 'hiding' in an import or export declaration
+EXPORT = "EXPORT"  # contextual: 'export' at item-start
 PRIVATE = "PRIVATE"  # contextual: 'private' at item-start
 MODQUAL = "MODQUAL"  # synthetic: merged module-qualifier prefix (e.g. "foo/bar::")
-MODPATH = "MODPATH"  # synthetic: merged module path in import (e.g. "foo/bar")
+MODPATH = "MODPATH"  # synthetic: merged module path in a header (e.g. "foo/bar")
 
 # ---------------------------------------------------------------------------
 # Grammar token-type mapping

@@ -6,12 +6,12 @@ Data model
   binding, whether it is mutable, and its declaration span.
 - ``ConstructorRef`` — metadata about a resolved constructor reference (record
   or enum variant).
-- ``PatternSlot`` — a scope-created deferred pattern binding selected by the
-  checker in a later pass.
+- ``PatternSlot`` — scope-created pattern-slot metadata recorded alongside
+  provisional pattern bindings.
 - ``ScopeNode`` — a node in the scope tree (one per scope-introducing
   construct).  The root ``ScopeNode`` is always present; nested scopes form a
   tree for visibility analysis.
-- ``ModuleResolution`` — the frozen output of the scope pass: the original
+- ``ModuleResolution`` — the output of the scope pass: the original
   ``Program`` plus side tables.
 - ``BuiltinKind`` — enum classifying a built-in Call node.
 - ``AglScopeError`` — fatal scope error raised by the resolver.
@@ -108,8 +108,7 @@ class BinderKind(enum.Enum):
     ``loop_var_binding``
         A ``for``-loop iteration variable (immutable, loop-body-local).
     ``pattern_slot``
-        A deferred field-directed pattern binding whose final target is selected
-        by the type checker.
+        A bridge to an outer field-directed pattern slot.
     """
 
     let_binding = "let_binding"
@@ -203,13 +202,13 @@ class ConstructorRef:
 
 
 # ---------------------------------------------------------------------------
-# PatternSlot — deferred field-directed pattern binding
+# PatternSlot — shared field-directed pattern metadata
 # ---------------------------------------------------------------------------
 
 
 @dataclass(frozen=True, slots=True)
 class SlotCandidate:
-    """One pattern candidate that may determine a :class:`PatternSlot`'s target.
+    """Metadata for one source pattern recorded in a :class:`PatternSlot`.
 
     ``pattern_node_id`` identifies the candidate pattern. ``unconditional``
     records whether that candidate applies regardless of the matched field's
@@ -223,13 +222,13 @@ class SlotCandidate:
 
 @dataclass(frozen=True, slots=True)
 class PatternSlot:
-    """A shared deferred binding for field-directed pattern candidates.
+    """Parallel metadata for field-directed pattern candidates.
 
-    ``alternative`` is the visible non-slot binding, if any, and
-    ``outside_constructor_candidates`` counts the visible same-named
-    constructors outside the pattern. Scope creates one slot for each
-    ambiguous branch-local name. The checker later selects its binding or
-    constructor interpretation without changing scope's reference tables.
+    ``alternative`` is either an enclosing ordinary binding or an outer
+    pattern-slot bridge, if one is visible. ``outside_constructor_candidates``
+    counts the visible same-named constructors outside the pattern. Scope
+    records slots alongside provisional branch bindings and their reference
+    associations.
     """
 
     slot_id: int
@@ -267,8 +266,8 @@ class BindingRef:
         For cross-module resolution via ``resolve_program()``, cross-module
         references carry the owning library module's id.
     ``slot_id``
-        The deferred :class:`PatternSlot` id for a field-directed pattern
-        reference, or ``None`` for an ordinary resolved binding.
+        The :class:`PatternSlot` id when this reference represents an outer
+        pattern-slot bridge, or ``None`` for an ordinary resolved binding.
     """
 
     name: str
@@ -323,7 +322,7 @@ class ScopeNode:
 
 @dataclass(frozen=True, slots=True)
 class ModuleResolution:
-    """Immutable output of the scope resolution pass.
+    """Output of the scope resolution pass.
 
     ``program``
         The original ``Program`` AST node (never mutated).
@@ -378,19 +377,19 @@ class ModuleResolution:
         interpretation from the matched occurrence's type and field name.
     ``provisional_pattern_binders``
         Node ids of nested bare names provisionally introduced into a branch
-        scope so its body can resolve before field-directed checking classifies
-        them. The checker publishes the authoritative final binder set.
+        scope so its body can resolve. The checker retargets their references
+        in its checked copy after determining the final classification.
     ``case_scopes``
         Maps every source ``Case.node_id`` to the exact lexical scope active
         when the resolver entered that case.  Downstream diagnostics use this
         provenance to determine which constructor spellings are valid at the
         case site without reimplementing lexical lookup.
     ``pattern_slots``
-        Deferred field-directed pattern slots keyed by slot id.  Empty until
-        scope starts emitting slots.
+        Scope-created field-directed pattern-slot metadata keyed by slot id.
+        Recorded alongside the provisional binding data.
     ``slot_references``
-        Maps reference node ids to their deferred pattern slot ids.  Empty
-        until scope starts emitting slots.
+        Maps branch-reference node ids to their associated pattern-slot ids;
+        this is parallel metadata for the provisional bindings.
     """
 
     program: Program

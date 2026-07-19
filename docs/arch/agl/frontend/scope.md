@@ -8,7 +8,7 @@ Resolution is namespace- and scope-directed, never capitalization-directed — a
 
 - Built-in calls (`print`, `exec`, `ask`, and friends) are recognized by resolving the callee to a known built-in declaration, not by keyword.
 - Constructors live in the value namespace; an ambiguous unqualified constructor name is a static error, disambiguated with `Type::Ctor` qualification.
-- Scope records constructor candidates for bare pattern names independently of ordinary value bindings. Top-level names are constructor-only; nested names are provisional branch bindings until field-directed type checking publishes their final binder or constructor classification. An `as`-pattern name is always a variable binder.
+- Scope records constructor candidates for bare pattern names independently of ordinary value bindings. Top-level names are constructor-only; nested names retain provisional branch bindings while scope records parallel pattern-slot metadata and their branch-reference associations. Typechecking reconciles the provisional references by retargeting its checked copy to the final binder or constructor classification. An `as`-pattern name is always a variable binder.
 
 ## Static Guarantees
 
@@ -19,4 +19,4 @@ Program resolution extends this pass across modules; see [modules.md](agl/module
 ## Code Entry Points
 
 - `src/agm/agl/scope/` — `resolve_module`, `resolve_program`, and their resolution side tables.
-- Tests: `tests/test_agl_scope.py`, `tests/test_agl_scope_program.py`, `tests/test_agl_scope_imports.py`.
+- Tests: `tests/test_agl_scope.py`, `tests/test_agl_scope_program.py`, `tests/test_agl_scope_imports.py`, `tests/test_agl_pattern_slots.py`.

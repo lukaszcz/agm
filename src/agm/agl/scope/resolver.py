@@ -5,6 +5,8 @@ building the lexical scope chain and populating side tables:
 
 - ``resolution``:     ``VarRef.node_id`` / ``AssignStmt.node_id`` → ``BindingRef``
 - ``builtin_calls``:  ``Call.node_id`` → ``BuiltinKind``  (for contextual built-ins)
+- ``pattern_slots`` / ``slot_references``: parallel metadata and reference
+  associations for provisionally bound nested pattern names
 
 Scope rules
 -----------
@@ -37,6 +39,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Iterator
 from contextlib import contextmanager
+from dataclasses import replace
 from typing import TYPE_CHECKING
 
 from agm.agl.diagnostics import Diagnostic
@@ -49,7 +52,9 @@ from agm.agl.scope.symbols import (
     BuiltinKind,
     ConstructorRef,
     ModuleResolution,
+    PatternSlot,
     ScopeNode,
+    SlotCandidate,
     immutable_assignment_message,
     immutable_binder_phrase,
 )
@@ -145,6 +150,12 @@ _BUILTIN_CONSTRUCTOR_NODE_ID = -1
 # The set of names that may NOT be used as any kind of binding.
 _RESERVED_NAMES: frozenset[str] = frozenset(_BUILTIN_CALL_NAMES)
 
+
+def _slot_candidate_start(candidate: SlotCandidate) -> int:
+    """Return the source-order key for a deferred pattern candidate."""
+    return candidate.span.start_offset
+
+
 # ---------------------------------------------------------------------------
 # Resolver class
 # ---------------------------------------------------------------------------
@@ -225,6 +236,14 @@ class _Resolver:
         # not depend on ordinary lexical value bindings.
         self._pattern_constructor_candidates: dict[int, tuple[ConstructorRef, ...]] = {}
         self._provisional_pattern_binders: set[int] = set()
+        # Scope records slot metadata and reference associations alongside
+        # existing provisional bindings. Type checking reconciles provisional
+        # references in its checked copy; slots remain parallel metadata.
+        self._pattern_slots: dict[int, PatternSlot] = {}
+        self._slot_references: dict[int, int] = {}
+        self._pattern_slot_by_candidate: dict[int, int] = {}
+        self._active_branch_pattern_slots: dict[str, int] | None = None
+        self._next_pattern_slot_id: int = 0
         # Case.node_id -> exact lexical scope active at the case site.
         self._case_scopes: dict[int, ScopeNode] = {}
         # Loop-context flag: True when resolving inside a loop body (while_cond,
@@ -306,6 +325,7 @@ class _Resolver:
 
         self._at_root = False
         self._pop_scope()
+        self._finalize_pattern_slot_tables()
 
         return ModuleResolution(
             program=program,
@@ -325,6 +345,8 @@ class _Resolver:
             pattern_constructor_candidates=dict(self._pattern_constructor_candidates),
             provisional_pattern_binders=frozenset(self._provisional_pattern_binders),
             case_scopes=dict(self._case_scopes),
+            pattern_slots=dict(self._pattern_slots),
+            slot_references=dict(self._slot_references),
         )
 
     # ------------------------------------------------------------------
@@ -1607,7 +1629,8 @@ class _Resolver:
         self._resolve_expr(node.subject)
         for branch in node.branches:
             with self._child_scope(branch.node_id) as branch_scope:
-                self._bind_pattern_vars(branch.pattern, branch_scope)
+                with self._branch_pattern_slots():
+                    self._bind_pattern_vars(branch.pattern, branch_scope)
                 self._resolve_expr_or_block(branch.body)
 
     def _resolve_loop(self, node: Loop) -> None:
@@ -1745,12 +1768,12 @@ class _Resolver:
     def _bind_pattern_vars(
         self, pattern: Pattern, scope: ScopeNode, *, nested: bool = False
     ) -> None:
-        """Provisionally bind nested bare names and validate top-level names.
+        """Bind nested bare names provisionally and validate top-level names.
 
-        A top-level bare name is constructor-only. Nested bare names cannot be
-        classified until shared argument binding maps them to a field, so they
-        are provisionally bound for branch-body resolution and finalized by the
-        type checker.
+        A top-level bare name is constructor-only. Scope records slot metadata
+        and branch-reference associations for each nested name while retaining
+        its provisional branch binding. Type checking retargets the provisional
+        references in its checked copy to the final classification.
         """
         if isinstance(pattern, VarPattern):
             candidates = tuple(self._constructor_candidates.get(pattern.name, ()))
@@ -1764,6 +1787,13 @@ class _Resolver:
                         span=pattern.span,
                     )
                 return
+            self._add_pattern_slot_candidate(
+                pattern.name,
+                pattern.span,
+                pattern.node_id,
+                scope,
+                unconditional=False,
+            )
             self._bind_pattern_name(
                 pattern.name,
                 pattern.span,
@@ -1774,6 +1804,13 @@ class _Resolver:
             self._provisional_pattern_binders.add(pattern.node_id)
         elif isinstance(pattern, AsPattern):
             self._bind_pattern_vars(pattern.pattern, scope, nested=nested)
+            self._add_pattern_slot_candidate(
+                pattern.name,
+                pattern.span,
+                pattern.node_id,
+                scope,
+                unconditional=True,
+            )
             if not self._bind_pattern_name(
                 pattern.name,
                 pattern.span,
@@ -1789,6 +1826,80 @@ class _Resolver:
                 self._bind_pattern_vars(field.pattern, scope, nested=True)
         # WildcardPattern, LiteralPattern — no bindings introduced.
 
+    @contextmanager
+    def _branch_pattern_slots(self) -> Iterator[None]:
+        """Collect one shared pattern slot per name in the active branch."""
+        parent_slots = self._active_branch_pattern_slots
+        self._active_branch_pattern_slots = {}
+        try:
+            yield
+        finally:
+            self._active_branch_pattern_slots = parent_slots
+
+    def _add_pattern_slot_candidate(
+        self,
+        name: str,
+        span: SourceSpan,
+        pattern_node_id: int,
+        scope: ScopeNode,
+        *,
+        unconditional: bool,
+    ) -> None:
+        """Add a candidate to its branch slot without changing provisional bindings."""
+        branch_slots = self._active_branch_pattern_slots
+        assert branch_slots is not None
+        slot_id = branch_slots.get(name)
+        if slot_id is None:
+            slot_id = self._next_pattern_slot_id
+            self._next_pattern_slot_id += 1
+            branch_slots[name] = slot_id
+            self._pattern_slots[slot_id] = PatternSlot(
+                slot_id=slot_id,
+                name=name,
+                candidates=(),
+                alternative=self._pattern_slot_alternative(scope, name),
+                outside_constructor_candidates=len(self._constructor_candidates.get(name, ())),
+            )
+        slot = self._pattern_slots[slot_id]
+        self._pattern_slots[slot_id] = replace(
+            slot,
+            candidates=(
+                *slot.candidates,
+                SlotCandidate(
+                    pattern_node_id=pattern_node_id,
+                    span=span,
+                    unconditional=unconditional,
+                ),
+            ),
+        )
+        self._pattern_slot_by_candidate[pattern_node_id] = slot_id
+
+    def _pattern_slot_alternative(self, scope: ScopeNode, name: str) -> BindingRef | None:
+        """Return *name*'s enclosing binding or an outer pattern-slot bridge."""
+        parent = scope.parent
+        alternative = parent.lookup(name) if parent is not None else None
+        if alternative is None:
+            return None
+        outer_slot_id = self._pattern_slot_by_candidate.get(alternative.decl_node_id)
+        if outer_slot_id is None:
+            return alternative
+        return replace(alternative, kind=BinderKind.pattern_slot, slot_id=outer_slot_id)
+
+    def _finalize_pattern_slot_tables(self) -> None:
+        """Order candidates by source and populate bridge entries for branch references."""
+        self._pattern_slots = {
+            slot_id: replace(
+                slot,
+                candidates=tuple(sorted(slot.candidates, key=_slot_candidate_start)),
+            )
+            for slot_id, slot in self._pattern_slots.items()
+        }
+        self._slot_references = {
+            node_id: slot_id
+            for node_id, binding in self._resolution.items()
+            if (slot_id := self._pattern_slot_by_candidate.get(binding.decl_node_id)) is not None
+        }
+
     def _bind_pattern_name(
         self,
         name: str,
@@ -1802,10 +1913,10 @@ class _Resolver:
         """Introduce one branch-local pattern binding.
 
         Returns whether this name became the scope's provisional binding. A
-        nested spelling with constructor candidates may ultimately be a
-        constructor rather than a binder, so it may share an existing pattern
-        slot. The checker validates final duplicate binders and rewrites branch
-        references to the unique final binder if necessary.
+        nested spelling with constructor candidates may be classified as a
+        constructor, so it may share slot metadata with another spelling. The
+        checker validates duplicate binders and retargets provisional branch
+        references in its checked copy to the final classification.
         """
         self._check_not_reserved(name, span)
         existing = scope.bindings.get(name)
@@ -1813,10 +1924,7 @@ class _Resolver:
             if (
                 allow_existing_provisional
                 and existing.decl_node_id in self._provisional_pattern_binders
-            ) or (
-                allow_existing_pattern_slot
-                and existing.kind is BinderKind.pattern_binding
-            ):
+            ) or (allow_existing_pattern_slot and existing.kind is BinderKind.pattern_binding):
                 return False
             raise AglScopeError(
                 f"Name '{name}' is bound more than once in this pattern.", span=span

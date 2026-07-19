@@ -291,13 +291,15 @@ class PartialCallSpec:
 
 @dataclass(frozen=True, slots=True)
 class CheckedModule:
-    """Immutable output of the type-checking pass.
+    """Output of the type-checking pass.
 
     ``resolved``
-        The ``ModuleResolution`` carrying the original ``Program`` and the scope
-        side tables, with the checker's final field-directed pattern
-        reconciliation applied to its reference tables. The scope pass' own
-        artifact is left unchanged.
+        A checked copy of the ``ModuleResolution`` carrying the original
+        ``Program`` and scope side tables. For field-directed patterns, the
+        checker reconciles provisional branch references by retargeting this
+        copy's reference tables; the scope-pass artifact is left unchanged.
+        Pattern slots and their reference associations remain parallel metadata
+        and do not drive this reconciliation.
     ``pattern_classifications``
         Final field-directed classification of bare patterns: ``Pattern.node_id``
         → ``None`` for a binder, or the ``ConstructorRef`` it matches. This is
@@ -326,9 +328,10 @@ class CheckedModule:
         constructors without reconstructing it.  This is the public contract
         for type-namespace access after checking.
     ``slot_resolution`` / ``slot_constructor_refs``
-        Checker selections for deferred field-directed pattern slots.  The
-        ``binding_for`` and ``constructor_ref_for`` accessors combine these
-        with the raw scope tables.
+        Optional pattern-slot bridge maps for consumers that explicitly
+        populate them. The checker leaves them empty while it reconciles
+        provisional references; ``binding_for`` and ``constructor_ref_for``
+        honor them when present.
     """
 
     resolved: ModuleResolution
@@ -349,7 +352,7 @@ class CheckedModule:
     slot_constructor_refs: dict[int, ConstructorRef] = field(default_factory=dict)
 
     def binding_for(self, node_id: int) -> BindingRef | None:
-        """Return *node_id*'s checked binding, dereferencing a pattern slot if present."""
+        """Return *node_id*'s checked binding, honoring an optional slot bridge."""
         raw_binding = self.resolved.resolution.get(node_id)
         slot_id = self.resolved.slot_references.get(node_id)
         if slot_id is None and raw_binding is not None:
@@ -359,7 +362,7 @@ class CheckedModule:
         return self.slot_resolution.get(slot_id)
 
     def constructor_ref_for(self, node_id: int) -> ConstructorRef | None:
-        """Return *node_id*'s checked constructor reference, dereferencing a slot if present."""
+        """Return *node_id*'s constructor reference, honoring an optional slot bridge."""
         raw_binding = self.resolved.resolution.get(node_id)
         slot_id = self.resolved.slot_references.get(node_id)
         if slot_id is None and raw_binding is not None:

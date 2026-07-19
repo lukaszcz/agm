@@ -13,7 +13,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Mapping
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from typing import Literal, cast
 
 from agm.agl.diagnostics import AglError, Diagnostic
@@ -1616,8 +1616,13 @@ class TypeEnvironment:
             return self.resolve_enum_owner_form(EnumOwnerFormKind.LOCAL, owner_name)
         return self.resolve_enum_owner_form(EnumOwnerFormKind.OPEN_IMPORT, owner_name)
 
-    def _with_blocked_short_variants(self, form: EnumOwnerForm) -> EnumOwnerForm:
-        """Record variants whose short owner spelling is occupied by a module route."""
+    def _blocked_short_variants(self, form: EnumOwnerForm) -> frozenset[str]:
+        """Return variants whose short owner spelling is occupied by a module route.
+
+        Only a ``LOCAL``/``OPEN_IMPORT`` form can be shadowed this way: those
+        are the only kinds writable as a bare ``owner_name`` qualifier, which
+        is exactly the qualifier a same-named module route also competes for.
+        """
         template = form.type_template
         if (
             self._import_env is None
@@ -1625,14 +1630,13 @@ class TypeEnvironment:
             or template is None
             or not isinstance(template.template, EnumType)
         ):
-            return form
+            return frozenset()
         owner_qualifier = (form.owner_name or "",)
-        blocked = frozenset(
+        return frozenset(
             variant
             for variant in self.type_table.enum_variants(template.template)
             if qualifier_contributes(self._import_env, owner_qualifier, variant)
         )
-        return replace(form, blocked_variants=blocked)
 
     def enum_owner_forms(self) -> tuple[EnumOwnerForm, ...]:
         """Enumerate finite checked owner forms writable in this environment."""
@@ -1640,13 +1644,13 @@ class TypeEnvironment:
         for owner_name in self._own_source_type_names():
             for kind in (EnumOwnerFormKind.LOCAL, EnumOwnerFormKind.SELF):
                 own_form = cast(EnumOwnerForm, self.resolve_enum_owner_form(kind, owner_name))
-                forms.add(self._with_blocked_short_variants(own_form))
+                forms.add(own_form)
         if self._import_env is not None:
             for owner_name in self._import_env.unqualified:
                 form = self.resolve_enum_owner_form(EnumOwnerFormKind.OPEN_IMPORT, owner_name)
                 if form is None:
                     continue
-                forms.add(self._with_blocked_short_variants(form))
+                forms.add(form)
             for contribution in self._import_env.contributions.values():
                 routes = contribution_routes(contribution)
                 for owner_name, qname in contribution.members.items():
@@ -1681,6 +1685,31 @@ class TypeEnvironment:
             )
 
         return tuple(sorted(forms, key=form_key))
+
+    def blocked_enum_variants(
+        self, forms: tuple[EnumOwnerForm, ...] | None = None
+    ) -> Mapping[tuple[str, ...], frozenset[str]]:
+        """Map each short enum-owner qualifier to the variants a module route blocks.
+
+        A match-compile consumer selecting a source spelling for one concrete
+        enum constructor needs this alongside ``enum_owner_forms``: an
+        ``EnumOwnerForm`` describes only an owner spelling, never which of
+        that owner's variants a same-named module route makes ambiguous.
+        *forms* lets a caller that already enumerated this environment's owner
+        forms (e.g. to normalize every case of one checked owner) reuse them
+        instead of enumerating them again; it defaults to resolving them from
+        this environment. The key is the same ``(owner_name,)`` qualifier
+        ``qualifier_contributes`` checks the module routes against.
+        """
+        owner_forms = self.enum_owner_forms() if forms is None else forms
+        blocked: dict[tuple[str, ...], frozenset[str]] = {}
+        for form in owner_forms:
+            if form.kind not in (EnumOwnerFormKind.LOCAL, EnumOwnerFormKind.OPEN_IMPORT):
+                continue
+            variants = self._blocked_short_variants(form)
+            if variants:
+                blocked[(form.owner_name or "",)] = variants
+        return blocked
 
     def get_generic_type_from_module(self, module_id: ModuleId, name: str) -> GenericTypeDef | None:
         """Look up a cross-module ``GenericTypeDef`` by owning module and name.

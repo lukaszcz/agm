@@ -1182,6 +1182,63 @@ def test_local_owner_form_blocks_shadowed_open_import_spelling(tmp_path: Path) -
     )
 
 
+def test_module_route_blocks_only_the_variant_it_shadows(tmp_path: Path) -> None:
+    """A module route sharing the enum's short owner name blocks only its own variant.
+
+    ``helpers/Owner`` is a plain (non-open) import, so it only contributes a
+    qualified route ``Owner::block`` to its own ``block`` member -- it never
+    puts ``block`` in scope on its own. That route collides with the local
+    enum's ``block`` variant under the short spelling ``Owner::block``, which
+    forces the diagnostic to fall back to the longer self-qualified spelling
+    for that one variant, while the untouched ``free`` variant keeps using the
+    short spelling. ``Twin`` duplicates both variant names on an unrelated
+    local enum so neither name is a lexically unambiguous bare constructor,
+    forcing every witness through owner-form selection instead of the earlier
+    bare-name shortcut.
+    """
+    modules = {
+        "helpers/Owner": "def block() -> int = 1\n",
+    }
+    declarations = "enum Owner\n  | block\n  | free\nenum Twin\n  | block\n  | free\n"
+
+    # Covers only "free" (via the ambiguous short spelling, which is fine to
+    # write since "free" itself is not a colliding member), leaving "block"
+    # -- the blocked variant -- as the missing witness.
+    covers_free = _compile_graph_case(
+        tmp_path,
+        {
+            **modules,
+            "entry": (
+                "import helpers/Owner\n"
+                f"{declarations}"
+                "let value = Owner::free\n"
+                "case value of | Owner::free => 0\n"
+            ),
+        },
+    )
+    issue = cast(NonExhaustiveIssue, covers_free.issues[0])
+    assert render_witness(issue.witness) == "::Owner::block"
+
+    # Covers only "block" (via the self-qualifier, which bypasses the
+    # type-name/module-route ambiguity since it never consults import
+    # routes), leaving "free" -- the unblocked variant -- as the missing
+    # witness.
+    covers_block = _compile_graph_case(
+        tmp_path,
+        {
+            **modules,
+            "entry": (
+                "import helpers/Owner\n"
+                f"{declarations}"
+                "let value = ::Owner::block\n"
+                "case value of | ::Owner::block => 0\n"
+            ),
+        },
+    )
+    issue = cast(NonExhaustiveIssue, covers_block.issues[0])
+    assert render_witness(issue.witness) == "Owner::free"
+
+
 def test_reexported_alias_chain_uses_final_exposed_name(tmp_path: Path) -> None:
     compiled = _compile_graph_case(
         tmp_path,

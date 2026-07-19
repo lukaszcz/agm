@@ -402,6 +402,20 @@ def _witness_for_occurrence(
     )
 
 
+def _short_spelling_blocked(
+    form: EnumOwnerForm, variant: str, case_context: MatchCaseContext
+) -> bool:
+    """Return whether a module route makes *form*'s short spelling ambiguous for *variant*.
+
+    Only a ``LOCAL``/``OPEN_IMPORT`` form spells its owner bare as
+    ``owner_name`` -- the same qualifier a same-named module route competes
+    for -- so only those kinds consult ``blocked_enum_variants``.
+    """
+    if form.kind not in (EnumOwnerFormKind.LOCAL, EnumOwnerFormKind.OPEN_IMPORT):
+        return False
+    return variant in case_context.blocked_enum_variants.get((form.owner_name or "",), frozenset())
+
+
 def _source_spelling(
     constructor: EnumConstructor, case_context: MatchCaseContext
 ) -> EnumConstructorSpelling:
@@ -418,7 +432,8 @@ def _source_spelling(
     matches = tuple(
         form
         for form in case_context.enum_owner_forms
-        if form.match(enum_type) is not None and constructor.variant not in form.blocked_variants
+        if form.match(enum_type) is not None
+        and not _short_spelling_blocked(form, constructor.variant, case_context)
     )
     if not matches:
         return EnumConstructorSpelling(None, None)

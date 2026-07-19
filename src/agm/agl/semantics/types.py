@@ -495,16 +495,17 @@ class EnumOwnerFormKind(_enum.Enum):
 class EnumOwnerForm:
     """One immutable checked enum-owner source form.
 
-    Source identity, template metadata, and blocked short variants are excluded
-    from display equality; they retain the checked resolution needed to validate
-    a concrete enum without reinterpreting import syntax downstream.
+    Source identity and template metadata are excluded from display equality;
+    they retain the checked resolution needed to validate a concrete enum
+    without reinterpreting import syntax downstream. This type describes only
+    an owner spelling; which variants a module route makes ambiguous under
+    that spelling is variant-level data carried alongside forms, not on them.
     """
 
     owner_name: str | None
     module_qualifier: tuple[str, ...] | None
     bare: bool = False
     qualifier_anchored: bool = False
-    blocked_variants: frozenset[str] = field(default_factory=frozenset, compare=False, repr=False)
     kind: EnumOwnerFormKind | None = field(default=None, compare=False)
     source_module_id: ModuleId | None = field(default=None, compare=False, repr=False)
     source_name: str | None = field(default=None, compare=False, repr=False)

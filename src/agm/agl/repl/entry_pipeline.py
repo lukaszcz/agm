@@ -33,6 +33,7 @@ if TYPE_CHECKING:
     from agm.agl.scope.symbols import ConstructorRef, ScopeNode
     from agm.agl.semantics.types import Type
     from agm.agl.semantics.values import EnumValue, Frame, Value
+    from agm.agl.syntax.advisories import SpacedQualifier
     from agm.agl.syntax.nodes import ImportDecl, Item, Program
     from agm.agl.syntax.spans import SourceSpan
     from agm.agl.typecheck.env import CheckedModule, TypeEnvironment
@@ -134,6 +135,7 @@ class EntryPipeline:
         tab_warnings: list[Diagnostic],
         next_start_id: int,
         check_only: bool,
+        spaced_qualifiers: tuple[SpacedQualifier, ...] = (),
     ) -> EntryResult:
         """Program pipeline for REPL entries that have imports or cached lib modules.
 
@@ -170,6 +172,7 @@ class EntryPipeline:
                 cached=self._ctx._loaded_lib_modules,
                 roots=roots,
                 default_stdlib=self._ctx._default_stdlib,
+                spaced_qualifiers=spaced_qualifiers,
             )
         except AglSyntaxError as exc:
             return self._ctx._fail([exc.to_diagnostic()], tab_warnings)
@@ -576,13 +579,11 @@ class EntryPipeline:
         self, entry_imports: tuple[ImportDecl, ...]
     ) -> list[ImportDecl]:
         """Return accumulated declarations not replaced by an entry module identity."""
-        from agm.agl.modules.ids import ModuleId
-
-        replacement_modules = {ModuleId(segments=tuple(decl.module_path)) for decl in entry_imports}
+        replacement_modules = {tuple(decl.module_path) for decl in entry_imports}
         return [
             decl
             for decl in self._ctx._accumulated_imports
-            if ModuleId(segments=tuple(decl.module_path)) not in replacement_modules
+            if tuple(decl.module_path) not in replacement_modules
         ]
 
     def _replace_accumulated_imports(self, entry_imports: tuple[ImportDecl, ...]) -> None:

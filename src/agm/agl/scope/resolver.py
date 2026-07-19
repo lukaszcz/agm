@@ -37,6 +37,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Iterator
 from contextlib import contextmanager
+from dataclasses import replace
 from typing import TYPE_CHECKING
 
 from agm.agl.diagnostics import Diagnostic
@@ -47,7 +48,9 @@ from agm.agl.scope.imports import (
     QualResolutionMissingMember,
     QualResolutionUnknownQualifier,
     ambiguous_qualification_message,
+    private_missing_member_module,
     qualification_repair_guidance,
+    qualifier_contributes,
     render_qualifier,
     resolve_qualified,
 )
@@ -69,6 +72,7 @@ from agm.agl.semantics.types import (
     COMPATIBILITY_PRELUDE_TYPE_NAMES,
     EnumType,
 )
+from agm.agl.syntax.advisories import SpacedQualifier
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -79,7 +83,6 @@ from agm.agl.syntax.nodes import (
     AgentDecl,
     AssignStmt,
     BinaryOp,
-    BinOp,
     Block,
     BoolLit,
     Break,
@@ -136,7 +139,7 @@ from agm.agl.syntax.nodes import (
     assign_target_root_name,
 )
 from agm.agl.syntax.spans import SourceSpan
-from agm.agl.syntax.types import AppliedT, NameT, Qualifier, TypeQualifier
+from agm.agl.syntax.types import AppliedT, NameT, Qualifier
 
 # ---------------------------------------------------------------------------
 # Built-in names and reserved-name enforcement
@@ -194,7 +197,7 @@ class _Resolver:
         is_entry: bool = True,
         repl_session_scope: ScopeNode | None = None,
         origin_path: Path | None = None,
-        source_text: str = "",
+        spaced_qualifiers: tuple[SpacedQualifier, ...] = (),
     ) -> None:
         # Program parameters (None = module mode).
         self._module_id: ModuleId = module_id
@@ -218,7 +221,13 @@ class _Resolver:
         # backing file (inline `-c` sources, direct REPL entries). Drives the
         # `extern def` placement check — externs require a file-backed module.
         self._origin_path: Path | None = origin_path
-        self._source_text = source_text
+        # Spaced-qualifier advisories from this module's lex pass, keyed by the
+        # offset of the ``::`` that whitespace kept out of a qualifier.  A
+        # self-qualified reference that fails to resolve consults them to
+        # explain the mis-parse (see ``_spaced_qualifier_repair``).
+        self._spaced_qualifiers: dict[int, SpacedQualifier] = {
+            advisory.dcolon_offset: advisory for advisory in spaced_qualifiers
+        }
 
         self._resolution: dict[int, BindingRef] = {}
         self._builtin_calls: dict[int, BuiltinKind] = {}
@@ -1246,9 +1255,6 @@ class _Resolver:
             self._resolve_expr(expr.obj)
             self._resolve_expr(expr.index)
         elif isinstance(expr, BinaryOp):
-            near_miss = self._spaced_slash_qualifier_near_miss(expr)
-            if near_miss is not None:
-                raise near_miss
             self._resolve_expr(expr.left)
             self._resolve_expr(expr.right)
         elif isinstance(expr, UnaryNot):
@@ -1318,7 +1324,9 @@ class _Resolver:
             if self._import_env is not None:
                 ref = self._lookup_import_env_unqualified(node.name, node.span)
             if ref is None:
-                raise AglScopeError(
+                raise self._spaced_qualifier_repair(
+                    self._spaced_qualifier_around(node.span), node.span
+                ) or AglScopeError(
                     f"'{node.name}' is not defined.",
                     span=node.span,
                 )
@@ -1354,7 +1362,10 @@ class _Resolver:
             return
         if node.module_qualifier.segments == ():
             if type_name not in self._declared_type_names:
-                raise AglScopeError(
+                raise self._spaced_qualifier_repair(
+                    self._spaced_qualifier_at(node.module_qualifier.span),
+                    node.module_qualifier.span,
+                ) or AglScopeError(
                     f"'{type_name}' is not defined in this module.",
                     span=node.type_qualifier.span,
                 )
@@ -1384,13 +1395,10 @@ class _Resolver:
         type_match = type_name in self._declared_type_names
         module_match = False
         if self._import_env is not None:
-            # SD4 is intentionally asymmetric: a type name is a candidate on
-            # its own, but an import route is a candidate only when it actually
-            # contributes the requested constructor/variant member.
-            module_match = not isinstance(
-                resolve_qualified(self._import_env, segments, node.name),
-                (QualResolutionUnknownQualifier, QualResolutionMissingMember),
-            )
+            # The test is intentionally asymmetric: a type name is a candidate
+            # on its own, but an import route is a candidate only when it
+            # actually contributes the requested constructor/variant member.
+            module_match = qualifier_contributes(self._import_env, segments, node.name)
         if type_match and module_match:
             raise AglScopeError(
                 f"Qualifier '{type_name}' is both a type name and a module route for "
@@ -1454,7 +1462,10 @@ class _Resolver:
             # Self-reference: ::name — look up in own root scope.
             ref = self._lookup_own_root(node.name)
             if ref is None:
-                raise AglScopeError(
+                raise self._spaced_qualifier_repair(
+                    self._spaced_qualifier_at(node.module_qualifier.span),
+                    node.module_qualifier.span,
+                ) or AglScopeError(
                     f"'{node.name}' is not defined in this module.",
                     span=node.span,
                 )
@@ -1486,11 +1497,8 @@ class _Resolver:
         if isinstance(result, QualResolutionUnknownQualifier):
             raise AglScopeError(f"No module imported under qualifier '{qualifier_str}'.", span=span)
         if isinstance(result, QualResolutionMissingMember):
-            private_modules = [
-                module for module in result.candidates if self._private_info.get((module, name))
-            ]
-            if private_modules:
-                module = private_modules[0]
+            module = private_missing_member_module(result, self._private_info)
+            if module is not None:
                 raise AglScopeError(
                     f"'{name}' in module '{module.path_str()}' is declared private and cannot be "
                     "accessed from outside the module.",
@@ -1565,155 +1573,51 @@ class _Resolver:
             module_id=owning_module,
         )
 
-    def _bare_reference_resolves_normally(self, name: str, import_env: ImportEnv) -> bool:
-        """Return whether a bare value reference has an ordinary resolution path."""
-        return (
-            self._current_scope().lookup(name) is not None
-            or len(import_env.unqualified.get(name, frozenset())) == 1
-        )
-
-    def _call_callee_resolves_normally(self, name: str, import_env: ImportEnv) -> bool:
-        """Return whether a bare call callee has its ordinary resolution path."""
-        return name in _BUILTIN_CALL_NAMES or self._bare_reference_resolves_normally(
-            name, import_env
-        )
-
-    def _postfix_root_reference(self, expr: Expr) -> VarRef | None:
-        """Return the reference at the root of a call, field, or index postfix chain."""
-        while isinstance(expr, (Call, FieldAccess, IndexAccess)):
-            if isinstance(expr, Call):
-                expr = expr.callee
-            else:
-                expr = expr.obj
-        return expr if isinstance(expr, VarRef) else None
-
-    def _spaced_qualifier_details(
-        self, node: Call
-    ) -> tuple[VarRef, str, str, SourceSpan] | None:
-        """Return the self-qualified reference parsed as the first juxtaposition argument."""
-        if (
-            not isinstance(node.callee, VarRef)
-            or node.callee.module_qualifier is not None
-            or not node.args
-        ):
-            return None
-        reference = self._postfix_root_reference(node.args[0])
-        if reference is None:
-            return None
-        module_qualifier = reference.module_qualifier
-        if (
-            module_qualifier is None
-            or module_qualifier.segments != ()
-            or node.callee.span.end_offset >= module_qualifier.span.start_offset
-        ):
-            return None
-        if reference.type_qualifier is None:
-            member = reference.name
-            qualified_name = reference.name
-        else:
-            member = reference.type_qualifier.name
-            qualified_name = (
-                f"{self._type_qualifier_source_text(reference.type_qualifier)}::{reference.name}"
-            )
-        return reference, member, qualified_name, module_qualifier.span
-
-    def _type_qualifier_source_text(self, type_qualifier: TypeQualifier) -> str:
-        """Return a type qualifier's spelling, including any explicit type arguments."""
-        if type_qualifier.type_args is None:
-            return type_qualifier.name
-        start_offset = self._source_text.index(
-            type_qualifier.name, type_qualifier.span.start_offset
-        )
-        end_offset = self._source_text.index("]", type_qualifier.type_args[-1].span.end_offset) + 1
-        return self._source_text[start_offset:end_offset]
-
-    def _spaced_qualifier_error(
-        self,
-        qualifier: tuple[str, ...],
-        reference: VarRef,
-        member: str,
-        qualified_name: str,
-        span: SourceSpan,
+    def _spaced_qualifier_repair(
+        self, advisory: SpacedQualifier | None, failure_span: SourceSpan
     ) -> AglScopeError | None:
-        """Build a repair only when *qualifier* resolves the intended member."""
-        assert self._import_env is not None
-        result = resolve_qualified(self._import_env, qualifier, member)
+        """Explain a reference that whitespace split from its module qualifier.
+
+        A run such as ``app/config ::x`` never becomes a qualifier — the lexer
+        requires byte adjacency — so it parses as an unrelated expression whose
+        parts then fail to resolve on their own.  The lexer recorded the run it
+        saw; the repair is offered only when that run actually contributes the
+        intended member (and, for ``Type::Ctor``, only when the member names a
+        constructible type).
+        """
+        if advisory is None or self._import_env is None:
+            return None
+        result = resolve_qualified(
+            self._import_env, advisory.segments, advisory.member, anchored=advisory.anchored
+        )
         if not isinstance(result, QualResolutionFound):
             return None
-        if reference.type_qualifier is not None:
+        if advisory.type_qualified:
             _node_id, _span, kind = self._decl_info.get(
-                result.qname, (-1, reference.span, BinderKind.let_binding)
+                result.qname, (-1, advisory.dcolon_span, BinderKind.let_binding)
             )
             if kind is not BinderKind.constructor_binding:
                 return None
-        intended = f"{'/'.join(qualifier)}::{qualified_name}"
+        rendered = render_qualifier(advisory.segments, anchored=advisory.anchored)
         return AglScopeError(
-            f"Whitespace before '::{qualified_name}' makes this a call with a self-reference, "
-            f"not a module qualifier. Write '{intended}' without whitespace.",
-            span=span,
+            f"Whitespace before '::{advisory.member_text}' makes this a call with a "
+            f"self-reference, not a module qualifier. "
+            f"Write '{rendered}::{advisory.member_text}' without whitespace.",
+            # The lexer knows the offsets but not which module it scanned; the
+            # failing reference supplies the source identity.
+            span=replace(advisory.dcolon_span, source=failure_span.source),
         )
 
-    def _spaced_qualifier_near_miss(self, node: Call) -> AglScopeError | None:
-        """Recognize an unresolved call that can only be a spaced qualifier typo."""
-        import_env = self._import_env
-        if import_env is None or not isinstance(node.callee, VarRef):
-            return None
-        if self._call_callee_resolves_normally(node.callee.name, import_env):
-            return None
-        details = self._spaced_qualifier_details(node)
-        if details is None:
-            return None
-        reference, member, qualified_name, span = details
-        return self._spaced_qualifier_error(
-            (node.callee.name,), reference, member, qualified_name, span
-        )
+    def _spaced_qualifier_at(self, span: SourceSpan) -> SpacedQualifier | None:
+        """Return the advisory for a self-qualified reference whose ``::`` is at *span*."""
+        return self._spaced_qualifiers.get(span.start_offset)
 
-    def _slash_qualifier_segments(self, expr: Expr) -> tuple[VarRef, ...] | None:
-        """Return the byte-adjacent bare references in a division-shaped slash path."""
-        references: tuple[VarRef, ...]
-        if isinstance(expr, VarRef):
-            references = (expr,)
-        elif isinstance(expr, BinaryOp) and expr.op is BinOp.DIV:
-            left_references = self._slash_qualifier_segments(expr.left)
-            right_references = self._slash_qualifier_segments(expr.right)
-            if left_references is None or right_references is None:
-                return None
-            references = left_references + right_references
-        else:
-            return None
-        if any(
-            reference.module_qualifier is not None or reference.type_qualifier is not None
-            for reference in references
-        ):
-            return None
-        if any(
-            previous.span.end_offset + 1 != following.span.start_offset
-            for previous, following in zip(references, references[1:], strict=False)
-        ):
-            return None
-        return references
-
-    def _spaced_slash_qualifier_near_miss(self, node: BinaryOp) -> AglScopeError | None:
-        """Recognize a slash route parsed as division before a spaced ``::``."""
-        import_env = self._import_env
-        if import_env is None or node.op is not BinOp.DIV or not isinstance(node.right, Call):
-            return None
-        details = self._spaced_qualifier_details(node.right)
-        if details is None or not isinstance(node.right.callee, VarRef):
-            return None
-        path = self._slash_qualifier_segments(node.left)
-        if path is None or path[-1].span.end_offset + 1 != node.right.callee.span.start_offset:
-            return None
-        segments = path + (node.right.callee,)
-        if all(
-            self._bare_reference_resolves_normally(reference.name, import_env)
-            for reference in segments[:-1]
-        ) and self._call_callee_resolves_normally(segments[-1].name, import_env):
-            return None
-        reference, member, qualified_name, span = details
-        return self._spaced_qualifier_error(
-            tuple(segment.name for segment in segments), reference, member, qualified_name, span
-        )
+    def _spaced_qualifier_around(self, span: SourceSpan) -> SpacedQualifier | None:
+        """Return the advisory whose broken qualifier run contains *span*."""
+        for advisory in self._spaced_qualifiers.values():
+            if advisory.covers(span.start_offset):
+                return advisory
+        return None
 
     def _resolve_call(self, node: Call) -> None:
         """Resolve a ``Call`` node.
@@ -1723,9 +1627,6 @@ class _Resolver:
         all other callees, resolve the callee expression normally (it must
         resolve to a binding).
         """
-        near_miss = self._spaced_qualifier_near_miss(node)
-        if near_miss is not None:
-            raise near_miss
         callee = node.callee
         if (
             isinstance(callee, VarRef)

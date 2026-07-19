@@ -500,7 +500,7 @@ class ReplSession:
         fails. ``check_only`` stops after match compilation without lowering,
         executing, promoting, or advancing the node-id counter.
         """
-        from agm.agl.lexer import tab_warning_collector
+        from agm.agl.lexer import spaced_qualifier_collector, tab_warning_collector
         from agm.agl.parser import AglSyntaxError, parse_program_seeded
 
         host_env = self._runtime.host_environment()
@@ -509,7 +509,7 @@ class ReplSession:
         # scan).  The collector is populated even on a failed parse, so they
         # surface on EVERY return path (mirroring ``PipelineDriver.prepare``).
         # [1] Parse (seeded so node ids stay globally unique across entries).
-        with tab_warning_collector() as tab_sink:
+        with tab_warning_collector() as tab_sink, spaced_qualifier_collector() as spaced_sink:
             try:
                 program, next_start_id = parse_program_seeded(
                     text, start_id=self._next_node_id, ambient_infix=self._accumulated_infix
@@ -517,6 +517,7 @@ class ReplSession:
             except AglSyntaxError as exc:
                 return self._fail([exc.to_diagnostic()], list(tab_sink))
         tab_warnings: list[Diagnostic] = list(tab_sink)
+        spaced_qualifiers = tuple(spaced_sink)
 
         # [1b] REPL trailing-binder synthesis: in AgL, a block ending in a
         # ``let``/``var`` is a static error (the binder needs a continuation
@@ -540,6 +541,7 @@ class ReplSession:
             tab_warnings=tab_warnings,
             next_start_id=next_start_id,
             check_only=check_only,
+            spaced_qualifiers=spaced_qualifiers,
         )
 
     # ------------------------------------------------------------------
@@ -1069,6 +1071,7 @@ class ReplSession:
         underlying ``AglSyntaxError``/``AglScopeError``/``AglTypeError`` on
         failure, or ``AglError`` for match errors or a non-expression entry.
         """
+        from agm.agl.lexer import spaced_qualifier_collector
         from agm.agl.modules.ids import ENTRY_ID
         from agm.agl.modules.loader import build_repl_graph
         from agm.agl.parser import parse_program_seeded
@@ -1080,9 +1083,10 @@ class ReplSession:
         # Throwaway ids: type_of never promotes and never advances the session
         # counter, so seeding at ``_next_node_id`` is safe — all promoted ids are
         # strictly below it, making this parse's ids disjoint from the session's.
-        program, next_node_id = parse_program_seeded(
-            text, start_id=self._next_node_id, ambient_infix=self._accumulated_infix
-        )
+        with spaced_qualifier_collector() as spaced_sink:
+            program, next_node_id = parse_program_seeded(
+                text, start_id=self._next_node_id, ambient_infix=self._accumulated_infix
+            )
         items = program.body.items
         if len(items) != 1 or isinstance(items[0], (Binder, Declaration)):
             raise AglError(
@@ -1100,6 +1104,7 @@ class ReplSession:
             cached=self._loaded_lib_modules,
             roots=roots,
             default_stdlib=self._default_stdlib,
+            spaced_qualifiers=tuple(spaced_sink),
         )
         resolved = resolve_program(
             graph,

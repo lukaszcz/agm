@@ -34,7 +34,7 @@ from typing import Iterator
 
 from lark.lexer import Lexer, LexerState, Token
 
-from agm.agl.diagnostics import Diagnostic
+from agm.agl.diagnostics import Diagnostic, SourceSpan
 from agm.agl.lexer.layout import layout
 from agm.agl.lexer.scanner import _Scanner
 from agm.agl.lexer.tokens import (
@@ -61,6 +61,7 @@ from agm.agl.lexer.tokens import (
     TYPEARG_LSQB,
     USING,
 )
+from agm.agl.syntax.advisories import SpacedQualifier
 
 _INDEX_PREDECESSORS = frozenset(
     {
@@ -102,6 +103,30 @@ def tab_warning_collector() -> Iterator[list[Diagnostic]]:
         yield sink
     finally:
         _TAB_WARNING_SINK.reset(token)
+
+
+# Ambient sink for spaced-qualifier advisories, mirroring the TAB sink above.
+# ``_merge_modqual`` deposits into it as it walks the token stream, so the
+# advisories are complete whether or not the grammar later accepts the program.
+_SPACED_QUALIFIER_SINK: contextvars.ContextVar[list[SpacedQualifier] | None] = (
+    contextvars.ContextVar("agl_spaced_qualifier_sink", default=None)
+)
+
+
+@contextmanager
+def spaced_qualifier_collector() -> Iterator[list[SpacedQualifier]]:
+    """Collect spaced-qualifier advisories produced by lexing within the ``with`` block.
+
+    Yields a list that the module-qualifier merge pass appends to.  Callers keep
+    the result alongside the parsed module so later passes can explain a
+    reference that whitespace turned into an unrelated expression.
+    """
+    sink: list[SpacedQualifier] = []
+    token = _SPACED_QUALIFIER_SINK.set(sink)
+    try:
+        yield sink
+    finally:
+        _SPACED_QUALIFIER_SINK.reset(token)
 
 
 def _remap(tokens: Iterator[Token]) -> Iterator[Token]:
@@ -149,18 +174,16 @@ def _promote_soft_keywords(tokens: list[Token]) -> list[Token]:
     - 'using' → USING and 'hiding' → HIDING within import or export declarations.
     """
     result: list[Token] = []
-    in_import_line = False
-    in_export_line = False
+    in_module_header = False
     prev_type: str | None = None  # None means start-of-stream
 
     for index, tok in enumerate(tokens):
         tt = tok.type
         tv = str(tok)
 
-        # Track import-line window: close on line/stmt terminators
+        # Track the module-header window: close on line/stmt terminators
         if tt in ("_NEWLINE", "_INDENT", "_DEDENT", "SEMICOLON"):
-            in_import_line = False
-            in_export_line = False
+            in_module_header = False
 
         if tt == NAME:
             at_item_start = prev_type is None or prev_type in _ITEM_START_TYPES
@@ -174,18 +197,13 @@ def _promote_soft_keywords(tokens: list[Token]) -> list[Token]:
                 tok = _retype(tok, OPEN)
             elif tv == "import" and (at_item_start or prev_type == OPEN):
                 tok = _retype(tok, IMPORT)
-                in_import_line = True
+                in_module_header = True
             elif tv == "export" and at_item_start:
                 tok = _retype(tok, EXPORT)
-                in_export_line = True
+                in_module_header = True
             elif tv == "private" and at_item_start:
                 tok = _retype(tok, PRIVATE)
-            elif in_import_line:
-                if tv == "using":
-                    tok = _retype(tok, USING)
-                elif tv == "hiding":
-                    tok = _retype(tok, HIDING)
-            elif in_export_line:
+            elif in_module_header:
                 if tv == "using":
                     tok = _retype(tok, USING)
                 elif tv == "hiding":
@@ -279,15 +297,119 @@ def _merge_modpath(tokens: list[Token]) -> list[Token]:
     return result
 
 
-def _merge_modqual(tokens: list[Token]) -> list[Token]:
+def _member_reference(
+    tokens: list[Token], dcolon_index: int, source: str
+) -> tuple[str, str, bool] | None:
+    """Describe the reference following a ``::`` as ``(member, text, type_qualified)``.
+
+    Consumes a ``NAME``, an optional balanced ``[...]`` type-argument group, and
+    an optional ``:: NAME`` variant tail, then slices the source across the run.
+    Returns ``None`` when no name follows the ``::`` and there is nothing to
+    quote back to the author.
+    """
+    n = len(tokens)
+    index = dcolon_index + 1
+    if index >= n or tokens[index].type != NAME:
+        return None
+    member = str(tokens[index])
+    start = tokens[index].start_pos
+    end = tokens[index].end_pos
+    index += 1
+    if index < n and tokens[index].type == LSQB:
+        depth = 0
+        while index < n:
+            if tokens[index].type == LSQB:
+                depth += 1
+            elif tokens[index].type == RSQB:
+                depth -= 1
+                if depth == 0:
+                    end = tokens[index].end_pos
+                    index += 1
+                    break
+            index += 1
+    type_qualified = (
+        index + 1 < n and tokens[index].type == DCOLON and tokens[index + 1].type == NAME
+    )
+    if type_qualified:
+        end = tokens[index + 1].end_pos
+    return member, source[start:end], type_qualified
+
+
+def _token_span(tok: Token) -> SourceSpan:
+    """Build a :class:`SourceSpan` from a token's position fields.
+
+    The span carries no ``SourceId``; consumers stamp their own module identity
+    onto it, since the lexer never learns which source it is scanning.
+    """
+    line = tok.line if tok.line is not None else 1
+    col = tok.column if tok.column is not None else 1
+    start = tok.start_pos if tok.start_pos is not None else 0
+    return SourceSpan(
+        start_line=line,
+        start_col=col,
+        end_line=tok.end_line if tok.end_line is not None else line,
+        end_col=tok.end_column if tok.end_column is not None else col + len(str(tok)),
+        start_offset=start,
+        end_offset=tok.end_pos if tok.end_pos is not None else start + len(str(tok)),
+    )
+
+
+def _record_spaced_qualifier(
+    tokens: list[Token],
+    dcolon_index: int,
+    run_start: Token,
+    segments: list[str],
+    *,
+    source: str,
+    seen: set[int],
+) -> None:
+    """Deposit one spaced-qualifier advisory into the ambient sink, if any is active.
+
+    The first run recorded for a given ``::`` wins.  ``_merge_modqual`` scans
+    left to right, so that is the longest run reaching the ``::`` — the whole
+    route rather than one of its suffixes.
+    """
+    sink = _SPACED_QUALIFIER_SINK.get()
+    dcolon = tokens[dcolon_index]
+    dcolon_offset = dcolon.start_pos
+    assert dcolon_offset is not None
+    if sink is None or dcolon_offset in seen:
+        return
+    reference = _member_reference(tokens, dcolon_index, source)
+    if reference is None:
+        return
+    member, member_text, type_qualified = reference
+    seen.add(dcolon_offset)
+    run_start_offset = run_start.start_pos
+    assert run_start_offset is not None
+    sink.append(
+        SpacedQualifier(
+            segments=tuple(segments),
+            anchored=run_start.type == SLASH,
+            run_start_offset=run_start_offset,
+            dcolon_span=_token_span(dcolon),
+            member=member,
+            member_text=member_text,
+            type_qualified=type_qualified,
+        )
+    )
+
+
+def _merge_modqual(tokens: list[Token], source: str) -> list[Token]:
     """Merge byte-adjacent slash-qualified prefixes into ``MODQUAL`` tokens.
 
     A qualifier is ``[SLASH] NAME (SLASH NAME)* DCOLON`` with every pair in
     that run adjacent in the source. The token value retains its optional
     leading slash so the AST builder can distinguish anchored references.
     ``NAME DCOLON LSQB`` remains unmerged for typed calls.
+
+    A run whose only defect is whitespace before the ``::`` emits its tokens
+    unchanged — the grammar must not see a qualifier there — but is recorded as
+    a :class:`~agm.agl.syntax.advisories.SpacedQualifier` advisory so a later
+    pass can explain the mis-parse.
     """
     result: list[Token] = []
+    seen_dcolons: set[int] = set()
     i = 0
     n = len(tokens)
     while i < n:
@@ -322,6 +444,11 @@ def _merge_modqual(tokens: list[Token]) -> list[Token]:
             segments.append(str(last_name))
             j += 2
 
+        if j < n and tokens[j].type == DCOLON and last_name.end_pos != tokens[j].start_pos:
+            _record_spaced_qualifier(
+                tokens, j, start, segments, source=source, seen=seen_dcolons
+            )
+
         if (
             j < n
             and tokens[j].type == DCOLON
@@ -352,9 +479,9 @@ def _merge_modqual(tokens: list[Token]) -> list[Token]:
     return result
 
 
-def apply_module_passes(tokens: list[Token]) -> list[Token]:
+def apply_module_passes(tokens: list[Token], source: str) -> list[Token]:
     """Apply soft-keyword promotion, import path merging, and module-qualifier merging."""
-    return _merge_modqual(_merge_modpath(_promote_soft_keywords(tokens)))
+    return _merge_modqual(_merge_modpath(_promote_soft_keywords(tokens)), source)
 
 
 def _remap_adjacent_brackets(tokens: list[Token]) -> list[Token]:
@@ -466,7 +593,9 @@ class AglLexer(Lexer):
         scanner = _Scanner(source)
         try:
             after_remap = list(_remap(layout(scanner.scan())))
-            tokens = _mark_typearg_lsqb(_remap_adjacent_brackets(apply_module_passes(after_remap)))
+            tokens = _mark_typearg_lsqb(
+                _remap_adjacent_brackets(apply_module_passes(after_remap, source))
+            )
         finally:
             sink = _TAB_WARNING_SINK.get()
             if sink is not None:

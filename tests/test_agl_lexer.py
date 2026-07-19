@@ -13,7 +13,9 @@ from agm.agl.diagnostics import Diagnostic
 from agm.agl.lexer import (
     AglLexer,
     LexError,
+    SpacedQualifier,
     lex_tab_warnings,
+    spaced_qualifier_collector,
     tab_warning_collector,
     tokenize,
 )
@@ -2544,3 +2546,55 @@ class TestAtToken:
         assert name_tok.type == "NAME"
         assert str(name_tok) == "pos"
         assert name_tok.column == 2  # `pos` starts immediately after `@`
+
+
+# ---------------------------------------------------------------------------
+# Spaced-qualifier advisories
+# ---------------------------------------------------------------------------
+
+
+class TestSpacedQualifierAdvisories:
+    """The lexer records runs that would have been qualifiers but for whitespace."""
+
+    @staticmethod
+    def _advisories(source: str) -> list[SpacedQualifier]:
+        with spaced_qualifier_collector() as sink:
+            list(tokenize(source))
+        return sink
+
+    def test_tight_qualifier_records_nothing(self) -> None:
+        assert self._advisories("config::x") == []
+        assert self._advisories("app/config::x") == []
+
+    def test_spaced_route_records_its_full_run_and_member(self) -> None:
+        (advisory,) = self._advisories("app/config ::x")
+        assert advisory.segments == ("app", "config")
+        assert advisory.anchored is False
+        assert advisory.dcolon_offset == len("app/config ")
+        assert advisory.member_text == "x"
+
+    def test_anchored_route_is_recorded_once_with_its_leading_slash(self) -> None:
+        (advisory,) = self._advisories("/foo/bar ::x")
+        assert advisory.segments == ("foo", "bar")
+        assert advisory.anchored is True
+        assert advisory.member_text == "x"
+
+    def test_member_text_spans_type_arguments_and_a_variant(self) -> None:
+        (advisory,) = self._advisories("app/config ::E[int]::X")
+        assert advisory.segments == ("app", "config")
+        assert advisory.member_text == "E[int]::X"
+
+    def test_member_text_spans_nested_type_arguments(self) -> None:
+        (advisory,) = self._advisories("config ::E[list[int]]::X")
+        assert advisory.member_text == "E[list[int]]::X"
+
+    def test_member_text_covers_a_variant_without_type_arguments(self) -> None:
+        (advisory,) = self._advisories("config ::E::X")
+        assert advisory.member_text == "E::X"
+
+    def test_unterminated_type_arguments_fall_back_to_the_bare_member(self) -> None:
+        (advisory,) = self._advisories("config ::E[int")
+        assert advisory.member_text == "E"
+
+    def test_a_non_name_member_records_nothing(self) -> None:
+        assert self._advisories("config ::(x)") == []

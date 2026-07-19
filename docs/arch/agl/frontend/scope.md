@@ -19,8 +19,10 @@ imports are qualified-only, while `using` and `open import` inject bare names. O
 suffix/anchored resolver serves value reads and writes,
 constructors, and type qualification, retaining ambiguity and route identity until the use
 site; its diagnostics distinguish private declarations from names outside a contribution.
-The scope pass also recognizes whitespace-separated qualifier near-misses only when
-re-resolving the corresponding tight route succeeds, preserving valid division and
+Whitespace-separated qualifier near-misses are reported from the lexer's advisories
+rather than reconstructed from AST shapes: when a reference fails to resolve at an offset
+an advisory covers, the pass offers the tight spelling — but only when re-resolving that
+route actually contributes the intended member, preserving valid division and
 juxtaposition expressions.
 
 ## Static Guarantees

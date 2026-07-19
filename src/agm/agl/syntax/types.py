@@ -87,6 +87,11 @@ class Qualifier:
     anchored: bool = False
 
 
+def render_qualifier(qualifier: tuple[str, ...], *, anchored: bool = False) -> str:
+    """Render a source qualifier with its slash route and optional anchor."""
+    return ("/" if anchored else "") + "/".join(qualifier)
+
+
 @dataclass(frozen=True, slots=True)
 class TypeQualifier:
     """A static type qualifier in ``Type::Ctor`` or ``Type[T]::Ctor``.

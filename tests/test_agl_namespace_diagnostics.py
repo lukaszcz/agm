@@ -280,6 +280,86 @@ def test_spaced_type_qualified_near_miss_requires_a_constructible_owner(tmp_path
     assert "config::e::x" not in diagnostic
 
 
+@pytest.mark.parametrize(
+    ("entry", "modules", "intended"),
+    (
+        # The spelling before the spaced '::' is also a built-in call name.
+        (
+            "import app/print\nprint ::x",
+            {"app/print": "def x() -> int = 1"},
+            "print::x",
+        ),
+        # The spelling before the spaced '::' is also a local function.
+        (
+            "import app/config\ndef config(value: int) -> int = value\nconfig ::x",
+            {"app/config": "def x() -> int = 1"},
+            "config::x",
+        ),
+        # Every segment of the spaced route is also a local binding.
+        (
+            (
+                "import app/config\nlet app = 8\n"
+                "def config(value: int) -> int = value\napp/config ::x"
+            ),
+            {"app/config": "def x() -> int = 1"},
+            "app/config::x",
+        ),
+        # A type-qualified member behind a locally-shadowed route spelling.
+        (
+            "import app/config\ndef config(value: int) -> int = value\nconfig ::E::X",
+            {"app/config": "enum E\n  | X"},
+            "config::E::X",
+        ),
+    ),
+)
+def test_spaced_qualifier_near_miss_survives_a_shadowed_route_spelling(
+    tmp_path: Path, entry: str, modules: dict[str, str], intended: str
+) -> None:
+    """The repair is offered even when the spaced spelling has its own local meaning."""
+    graph = _graph(tmp_path, entry, modules)
+
+    with pytest.raises(AglScopeError) as raised:
+        resolve_program(graph)
+
+    diagnostic = str(raised.value).lower()
+    assert intended.lower() in diagnostic
+    assert "whitespace" in diagnostic
+
+
+def test_an_unrelated_undefined_name_reports_its_own_error(tmp_path: Path) -> None:
+    """A spaced qualifier elsewhere in the module does not colour other failures."""
+    graph = _graph(
+        tmp_path,
+        "import app/config\nlet y = missing\nconfig ::x",
+        {"app/config": "def x() -> int = 1"},
+    )
+
+    with pytest.raises(AglScopeError) as raised:
+        resolve_program(graph)
+
+    diagnostic = str(raised.value).lower()
+    assert "missing" in diagnostic
+    assert "whitespace" not in diagnostic
+
+
+def test_spaced_qualifier_near_miss_reaches_a_non_juxtaposition_mis_parse(
+    tmp_path: Path,
+) -> None:
+    """A spaced '::' behind a field access is not a bare call, but is still repaired."""
+    graph = _graph(
+        tmp_path,
+        "import app/config\nrecord R\n  config: int\nlet r = R(config = 1)\nr.config ::x",
+        {"app/config": "def x() -> int = 1"},
+    )
+
+    with pytest.raises(AglScopeError) as raised:
+        resolve_program(graph)
+
+    diagnostic = str(raised.value).lower()
+    assert "config::x" in diagnostic
+    assert "whitespace" in diagnostic
+
+
 def test_qualified_scope_errors_distinguish_route_set_and_private_access(tmp_path: Path) -> None:
     cases: tuple[tuple[str, dict[str, str], tuple[str, ...], tuple[str, ...]], ...] = (
         (

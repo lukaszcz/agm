@@ -2,14 +2,37 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from types import MappingProxyType
-from typing import Mapping
+from typing import Callable, Mapping, TypeVar
 
 from agm.agl.modules.ids import ModuleId
 from agm.agl.scope.symbols import AglScopeError
 from agm.agl.syntax.nodes import ImportDecl
-from agm.agl.syntax.types import ImportMode
+from agm.agl.syntax.types import ImportMode, render_qualifier
+
+__all__ = [
+    "ImportEnv",
+    "ImportTarget",
+    "ModuleContribution",
+    "QName",
+    "QualResolution",
+    "QualResolutionAmbiguous",
+    "QualResolutionFound",
+    "QualResolutionMissingMember",
+    "QualResolutionUnknownQualifier",
+    "SingleTarget",
+    "WildcardTarget",
+    "ambiguous_qualification_message",
+    "build_import_env",
+    "contribution_routes",
+    "private_missing_member_module",
+    "qualification_repair_guidance",
+    "qualifier_candidates",
+    "qualifier_contributes",
+    "render_qualifier",
+    "resolve_qualified",
+]
 
 QName = tuple[ModuleId, str]
 
@@ -29,20 +52,6 @@ class WildcardTarget:
 
 
 ImportTarget = SingleTarget | WildcardTarget
-
-
-def _module_path(module: ModuleId) -> str:
-    return module.path_str()
-
-
-def _module_sort_key(module: ModuleId) -> str:
-    """Return the user-visible path ordering for deterministic diagnostics."""
-    return module.path_str()
-
-
-def render_qualifier(qualifier: tuple[str, ...], *, anchored: bool = False) -> str:
-    """Render a source qualifier with its slash route and optional anchor."""
-    return ("/" if anchored else "") + "/".join(qualifier)
 
 
 def qualification_repair_guidance() -> str:
@@ -84,32 +93,31 @@ def _exposed_name(source_name: str, rename_map: Mapping[str, str]) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _immutable_members(members: Mapping[str, QName]) -> Mapping[str, QName]:
-    """Copy *members* into a deterministically ordered immutable mapping."""
-    return MappingProxyType({name: qname for name, qname in sorted(members.items())})
+_K = TypeVar("_K")
+_V = TypeVar("_V")
 
 
-def _immutable_unqualified(
-    unqualified: Mapping[str, frozenset[QName]],
-) -> Mapping[str, frozenset[QName]]:
-    """Copy bare-name candidates into a deterministically ordered immutable mapping."""
+def _by_name(name: str) -> str:
+    """Order a string-keyed mapping by its own keys."""
+    return name
+
+
+def _frozen_sorted(mapping: Mapping[_K, _V], key: Callable[[_K], str]) -> Mapping[_K, _V]:
+    """Copy *mapping* into a deterministically ordered read-only mapping."""
+    ordered: dict[_K, _V] = {entry: mapping[entry] for entry in sorted(mapping, key=key)}
+    return MappingProxyType(ordered)
+
+
+def _frozen_routes(
+    routes: Mapping[tuple[str, ...], set[ModuleId]],
+) -> Mapping[tuple[str, ...], tuple[ModuleId, ...]]:
+    """Freeze a route index, ordering each candidate list for stable diagnostics."""
     return MappingProxyType(
-        {name: frozenset(qnames) for name, qnames in sorted(unqualified.items())}
+        {
+            qualifier: tuple(sorted(modules, key=ModuleId.path_str))
+            for qualifier, modules in routes.items()
+        }
     )
-
-
-def _immutable_contributions(
-    contributions: Mapping[ModuleId, "ModuleContribution"],
-) -> Mapping[ModuleId, "ModuleContribution"]:
-    """Copy module contributions into a deterministic immutable mapping."""
-    return MappingProxyType(
-        {module: contributions[module] for module in sorted(contributions, key=_module_sort_key)}
-    )
-
-
-def _immutable_names(names: frozenset[str]) -> frozenset[str]:
-    """Copy a set of names into an immutable set."""
-    return frozenset(names)
 
 
 @dataclass(frozen=True, slots=True)
@@ -130,12 +138,8 @@ class ModuleContribution:
     aliases: frozenset[str]
 
     def __post_init__(self) -> None:
-        members = _immutable_members(self.members)
-        bare_names = _immutable_names(self.bare_names)
-        aliases = _immutable_names(self.aliases)
+        members = _frozen_sorted(self.members, _by_name)
         object.__setattr__(self, "members", members)
-        object.__setattr__(self, "bare_names", bare_names)
-        object.__setattr__(self, "aliases", aliases)
 
 
 @dataclass(frozen=True, slots=True)
@@ -148,12 +152,33 @@ class ImportEnv:
 
     contributions: Mapping[ModuleId, ModuleContribution]
     unqualified: Mapping[str, frozenset[QName]]
+    # Route indexes derived from the contributions, so qualified resolution is a
+    # dict lookup instead of a scan over every imported module.
+    suffix_routes: Mapping[tuple[str, ...], tuple[ModuleId, ...]] = field(
+        init=False, repr=False, compare=False
+    )
+    anchored_routes: Mapping[tuple[str, ...], tuple[ModuleId, ...]] = field(
+        init=False, repr=False, compare=False
+    )
 
     def __post_init__(self) -> None:
-        contributions = _immutable_contributions(self.contributions)
-        unqualified = _immutable_unqualified(self.unqualified)
+        contributions = _frozen_sorted(self.contributions, ModuleId.path_str)
         object.__setattr__(self, "contributions", contributions)
+        unqualified = _frozen_sorted(self.unqualified, _by_name)
         object.__setattr__(self, "unqualified", unqualified)
+
+        suffix: dict[tuple[str, ...], set[ModuleId]] = {}
+        anchored: dict[tuple[str, ...], set[ModuleId]] = {}
+        for module, contribution in contributions.items():
+            if contribution.path_enabled:
+                segments = module.segments
+                for index in range(len(segments)):
+                    suffix.setdefault(segments[index:], set()).add(module)
+                anchored.setdefault(segments, set()).add(module)
+            for alias in contribution.aliases:
+                suffix.setdefault((alias,), set()).add(module)
+        object.__setattr__(self, "suffix_routes", _frozen_routes(suffix))
+        object.__setattr__(self, "anchored_routes", _frozen_routes(anchored))
 
 
 @dataclass(frozen=True, slots=True)
@@ -226,7 +251,7 @@ def _compute_set(
     for name in selected_names:
         if name not in exported_names:
             raise AglScopeError(
-                f"name {name!r} is not exported by module {_module_path(module)!r}",
+                f"name {name!r} is not exported by module {module.path_str()!r}",
                 span=decl.span,
             )
     if decl.mode == ImportMode.USING:
@@ -238,7 +263,7 @@ def _targets(target: ImportTarget) -> tuple[ModuleId, ...]:
     """Return a deterministic per-module expansion of an import target."""
     if isinstance(target, SingleTarget):
         return (target.module,)
-    return tuple(sorted(target.modules, key=_module_sort_key))
+    return tuple(sorted(target.modules, key=ModuleId.path_str))
 
 
 def _add_member(
@@ -252,7 +277,7 @@ def _add_member(
     if existing is not None and existing != qname:
         raise AglScopeError(
             f"conflicting origins for exposed name {exposed_name!r}"
-            f" ({_module_path(existing[0])!r} and {_module_path(qname[0])!r})",
+            f" ({existing[0].path_str()!r} and {qname[0].path_str()!r})",
             span=decl.span,
         )
     accumulator.members[exposed_name] = qname
@@ -275,6 +300,9 @@ def build_import_env(
         if is_open and decl.mode == ImportMode.USING:
             raise AglScopeError("open imports cannot also use a using clause", span=decl.span)
 
+        rename_map = _build_rename_map(decl)
+        inject_bare = is_open or decl.mode == ImportMode.USING
+
         for module in _targets(targets[decl.node_id]):
             accumulator = accumulators.setdefault(
                 module,
@@ -289,8 +317,6 @@ def build_import_env(
 
             module_exports = exports.get(module, {})
             selected = _compute_set(decl, module, module_exports)
-            rename_map = _build_rename_map(decl)
-            inject_bare = is_open or decl.mode == ImportMode.USING
             for source_name in sorted(selected):
                 exposed_name = _exposed_name(source_name, rename_map)
                 _add_member(accumulator, exposed_name, module_exports[source_name], decl)
@@ -299,22 +325,21 @@ def build_import_env(
 
     contributions: dict[ModuleId, ModuleContribution] = {}
     unqualified_acc: dict[str, set[QName]] = {}
-    for module in sorted(accumulators, key=_module_sort_key):
-        accumulator = accumulators[module]
+    for module, accumulator in accumulators.items():
         contribution = ModuleContribution(
             module=module,
-            members=dict(accumulator.members),
+            members=accumulator.members,
             bare_names=frozenset(accumulator.bare_names),
             path_enabled=accumulator.path_enabled,
             aliases=frozenset(accumulator.aliases),
         )
         contributions[module] = contribution
-        for name in sorted(contribution.bare_names):
+        for name in contribution.bare_names:
             unqualified_acc.setdefault(name, set()).add(contribution.members[name])
 
     return ImportEnv(
         contributions=contributions,
-        unqualified={name: frozenset(unqualified_acc[name]) for name in sorted(unqualified_acc)},
+        unqualified={name: frozenset(qnames) for name, qnames in unqualified_acc.items()},
     )
 
 
@@ -325,19 +350,56 @@ def qualifier_candidates(
     anchored: bool,
 ) -> tuple[ModuleId, ...]:
     """Collect every route matching a qualifier, without applying precedence."""
-    candidates: set[ModuleId] = set()
-    for module, contribution in env.contributions.items():
-        matches_path = contribution.path_enabled and (
-            module.segments == qualifier
-            if anchored
-            else bool(qualifier) and module.segments[-len(qualifier) :] == qualifier
-        )
-        matches_alias = (
-            not anchored and len(qualifier) == 1 and qualifier[0] in contribution.aliases
-        )
-        if matches_path or matches_alias:
-            candidates.add(module)
-    return tuple(sorted(candidates, key=_module_sort_key))
+    index = env.anchored_routes if anchored else env.suffix_routes
+    return index.get(qualifier, ())
+
+
+def contribution_routes(
+    contribution: ModuleContribution,
+) -> tuple[tuple[tuple[str, ...], bool], ...]:
+    """Enumerate every ``(qualifier, anchored)`` route that reaches *contribution*.
+
+    This is the writable inverse of :func:`qualifier_candidates`: a plain import
+    exposes every suffix of its path plus the ``/``-anchored full path, and each
+    alias exposes a single-segment route.
+    """
+    routes: list[tuple[tuple[str, ...], bool]] = [
+        ((alias,), False) for alias in sorted(contribution.aliases)
+    ]
+    if contribution.path_enabled:
+        segments = contribution.module.segments
+        routes.extend((segments[index:], False) for index in range(len(segments)))
+        routes.append((segments, True))
+    return tuple(routes)
+
+
+def qualifier_contributes(
+    env: ImportEnv, qualifier: tuple[str, ...], member: str, *, anchored: bool = False
+) -> bool:
+    """Return whether some route under *qualifier* contributes *member*.
+
+    True for both a unique resolution and an ambiguity: the qualifier does name
+    the member either way, which is what qualifier-shadowing checks care about.
+    """
+    return isinstance(
+        resolve_qualified(env, qualifier, member, anchored=anchored),
+        (QualResolutionFound, QualResolutionAmbiguous),
+    )
+
+
+def private_missing_member_module(
+    result: QualResolutionMissingMember,
+    private_info: Mapping[QName, bool],
+) -> ModuleId | None:
+    """Return the candidate module that declares the missing member private.
+
+    A privacy miss is reported in preference to a plain "not in the imported
+    set" miss, because it names the actual reason the member is unreachable.
+    """
+    for module in result.candidates:
+        if private_info.get((module, result.member)):
+            return module
+    return None
 
 
 def resolve_qualified(

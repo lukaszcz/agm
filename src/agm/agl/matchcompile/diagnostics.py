@@ -9,6 +9,7 @@ from typing import TypeAlias
 
 from agm.agl.semantics.types import EnumType, Type
 from agm.agl.syntax.spans import SourceSpan
+from agm.agl.syntax.types import render_qualifier
 
 from .model import LiteralConstructor, LiteralKind
 
@@ -54,10 +55,7 @@ def qualified_owner_name(
     """
     if module_qualifier is None:
         return owner_name
-    if module_qualifier:
-        prefix = "/" if anchored else ""
-        return f"{prefix}{'/'.join(module_qualifier)}::{owner_name}"
-    return f"::{owner_name}"
+    return f"{render_qualifier(module_qualifier, anchored=anchored)}::{owner_name}"
 
 
 @dataclass(frozen=True, slots=True)

@@ -13,7 +13,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Literal, cast
 
 from agm.agl.diagnostics import AglError, Diagnostic
@@ -26,6 +26,9 @@ from agm.agl.scope.imports import (
     QualResolutionMissingMember,
     QualResolutionUnknownQualifier,
     ambiguous_qualification_message,
+    contribution_routes,
+    private_missing_member_module,
+    qualifier_contributes,
     render_qualifier,
     resolve_qualified,
 )
@@ -602,11 +605,8 @@ class TypeEnvironment:
 
     def has_qualified_import_member(self, qualifier: Qualifier, name: str) -> bool:
         """Return whether a qualifier route contributes *name* after filtering."""
-        return self._import_env is not None and isinstance(
-            resolve_qualified(
-                self._import_env, qualifier.segments, name, anchored=qualifier.anchored
-            ),
-            (QualResolutionFound, QualResolutionAmbiguous),
+        return self._import_env is not None and qualifier_contributes(
+            self._import_env, qualifier.segments, name, anchored=qualifier.anchored
         )
 
     def _resolve_import_qname(
@@ -632,11 +632,9 @@ class TypeEnvironment:
         if isinstance(result, QualResolutionUnknownQualifier):
             raise AglTypeError(f"Unknown module qualifier '{rendered}::'.", span=span)
         if isinstance(result, QualResolutionMissingMember):
-            private_modules = [
-                module for module in result.candidates if self._private_info.get((module, name))
-            ]
-            if private_modules:
-                module_path = private_modules[0].path_str()
+            private_module = private_missing_member_module(result, self._private_info)
+            if private_module is not None:
+                module_path = private_module.path_str()
                 raise AglTypeError(
                     f"Type '{name}' in module '{module_path}' is declared private "
                     "and cannot be accessed from outside the module.",
@@ -1628,25 +1626,13 @@ class TypeEnvironment:
             or not isinstance(template.template, EnumType)
         ):
             return form
+        owner_qualifier = (form.owner_name or "",)
         blocked = frozenset(
             variant
             for variant in self.type_table.enum_variants(template.template)
-            if isinstance(
-                resolve_qualified(self._import_env, (form.owner_name or "",), variant),
-                (QualResolutionFound, QualResolutionAmbiguous),
-            )
+            if qualifier_contributes(self._import_env, owner_qualifier, variant)
         )
-        return EnumOwnerForm(
-            form.owner_name,
-            form.module_qualifier,
-            bare=form.bare,
-            qualifier_anchored=form.qualifier_anchored,
-            blocked_variants=blocked,
-            kind=form.kind,
-            source_module_id=form.source_module_id,
-            source_name=form.source_name,
-            type_template=template,
-        )
+        return replace(form, blocked_variants=blocked)
 
     def enum_owner_forms(self) -> tuple[EnumOwnerForm, ...]:
         """Enumerate finite checked owner forms writable in this environment."""
@@ -1662,15 +1648,7 @@ class TypeEnvironment:
                     continue
                 forms.add(self._with_blocked_short_variants(form))
             for contribution in self._import_env.contributions.values():
-                routes: set[tuple[tuple[str, ...], bool]] = {
-                    ((alias,), False) for alias in contribution.aliases
-                }
-                if contribution.path_enabled:
-                    routes.update(
-                        (contribution.module.segments[index:], False)
-                        for index in range(len(contribution.module.segments))
-                    )
-                    routes.add((contribution.module.segments, True))
+                routes = contribution_routes(contribution)
                 for owner_name, qname in contribution.members.items():
                     if not self._is_program_type_candidate(qname):
                         continue

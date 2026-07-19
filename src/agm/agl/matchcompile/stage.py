@@ -197,6 +197,10 @@ def _validate_cases(
     expected_ids = set(expected)
     missing = expected_ids - actual_ids
     extra = actual_ids - expected_ids
+    # Hoisted for the same reason as in ``_compile_owner_cases``: every case of
+    # one checked owner shares that owner's writable enum spellings, and
+    # enumerating them rescans the whole type namespace.
+    owner_forms = owner.type_env.enum_owner_forms()
     if missing:
         raise MatchCompileInvariantError(
             f"match-compiled artifact is missing case ids {sorted(missing)}"
@@ -228,7 +232,7 @@ def _validate_cases(
             )
         validate_compiled_case(
             compiled,
-            expected_normalized=normalize_case(source_case, owner),
+            expected_normalized=normalize_case(source_case, owner, enum_owner_forms=owner_forms),
             require_success=True,
         )
 

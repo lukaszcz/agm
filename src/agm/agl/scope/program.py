@@ -479,7 +479,7 @@ def resolve_program(
             is_entry=is_entry,
             repl_session_scope=entry_repl_session_scope if is_entry else None,
             origin_path=loaded.path,
-            source_text=loaded.source_text,
+            spaced_qualifiers=loaded.spaced_qualifiers,
         )
         resolved = resolver.run(
             loaded.program,

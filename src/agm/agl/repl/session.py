@@ -442,12 +442,9 @@ class ReplSession:
             ModulePrefixNotFound,
         )
         from agm.agl.modules.ids import ENTRY_ID
-        from agm.agl.modules.loader import build_repl_graph
         from agm.agl.parser import AglSyntaxError, parse_program_seeded
         from agm.agl.scope import AglScopeError
-        from agm.agl.scope.program import resolve_program
         from agm.agl.typecheck import AglTypeError
-        from agm.agl.typecheck.program import check_program
 
         host_env = self._runtime.host_environment()
         try:
@@ -456,30 +453,8 @@ class ReplSession:
                 start_id=self._next_node_id,
                 ambient_infix=self._accumulated_infix,
             )
-            roots = self._ensure_roots()
-            program, next_start_id, _entry_imports = self._entry_pipeline._prepare_entry_program(
-                program, next_start_id, roots
-            )
-            graph, _new_next_id, _new_modules = build_repl_graph(
-                program,
-                next_start_id,
-                path=None,
-                cached=self._loaded_lib_modules,
-                roots=roots,
-                default_stdlib=self._default_stdlib,
-            )
-            resolved_program = resolve_program(
-                graph,
-                ambient_agents=self._ambient_agents(host_env),
-                entry_ambient_constructor_candidates=self._ambient_constructor_candidates,
-                entry_ambient_type_names=self._ambient_type_names,
-                entry_parent_scope=self._session_scope,
-                entry_repl_session_scope=self._session_scope,
-            )
-            checked_program = check_program(
-                resolved_program,
-                host_env.capabilities,
-                entry_seed_env=self._type_env,
+            checked_program = self._entry_pipeline.resolve_and_check_program(
+                program, next_start_id, host_env
             )
         except (
             AglSyntaxError,
@@ -1073,11 +1048,8 @@ class ReplSession:
         """
         from agm.agl.lexer import spaced_qualifier_collector
         from agm.agl.modules.ids import ENTRY_ID
-        from agm.agl.modules.loader import build_repl_graph
         from agm.agl.parser import parse_program_seeded
-        from agm.agl.scope.program import resolve_program
         from agm.agl.syntax.nodes import Binder, Declaration
-        from agm.agl.typecheck.program import check_program
 
         host_env = self._runtime.host_environment()
         # Throwaway ids: type_of never promotes and never advances the session
@@ -1093,29 +1065,8 @@ class ReplSession:
                 "':type' expects a single expression, not a binding, declaration, or statement."
             )
         expr_item = items[0]
-        roots = self._ensure_roots()
-        entry_program, next_node_id, _entry_imports = self._entry_pipeline._prepare_entry_program(
-            program, next_node_id, roots
-        )
-        graph, _next_node_id, _new_modules = build_repl_graph(
-            entry_program,
-            next_node_id,
-            path=None,
-            cached=self._loaded_lib_modules,
-            roots=roots,
-            default_stdlib=self._default_stdlib,
-            spaced_qualifiers=tuple(spaced_sink),
-        )
-        resolved = resolve_program(
-            graph,
-            ambient_agents=self._ambient_agents(host_env),
-            entry_ambient_constructor_candidates=self._ambient_constructor_candidates,
-            entry_ambient_type_names=self._ambient_type_names,
-            entry_parent_scope=self._session_scope,
-            entry_repl_session_scope=self._session_scope,
-        )
-        checked_program = check_program(
-            resolved, host_env.capabilities, entry_seed_env=self._type_env
+        checked_program = self._entry_pipeline.resolve_and_check_program(
+            program, next_node_id, host_env, spaced_qualifiers=tuple(spaced_sink)
         )
         checked = checked_program.modules[ENTRY_ID]
         from agm.agl.matchcompile import compile_program_matches, diagnostics_from_match_issues

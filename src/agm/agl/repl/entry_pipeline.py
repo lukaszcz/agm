@@ -266,6 +266,52 @@ class EntryPipeline:
             contract_payloads=contract_payloads,
         )
 
+    def resolve_and_check_program(
+        self,
+        program: Program,
+        next_start_id: int,
+        host_env: HostEnvironment,
+        *,
+        spaced_qualifiers: tuple[SpacedQualifier, ...] = (),
+    ) -> CheckedProgram:
+        """Prepare, build the module graph, resolve, and typecheck *program*.
+
+        Shared by REPL call sites that only need a checked program — no match
+        compilation, lowering, or evaluation — such as ``type_of`` and the
+        throwaway std/import type-environment builder. Raises the underlying
+        ``AglSyntaxError``/module-loading errors/``AglScopeError``/``AglTypeError``
+        on failure; callers that need diagnostics instead of a raised exception
+        must catch these themselves.
+        """
+        from agm.agl.modules.loader import build_repl_graph
+        from agm.agl.scope.program import resolve_program
+        from agm.agl.typecheck.program import check_program
+
+        roots = self._ctx._ensure_roots()
+        entry_program, next_start_id, _entry_imports = self._prepare_entry_program(
+            program, next_start_id, roots
+        )
+        graph, _next_start_id, _new_modules = build_repl_graph(
+            entry_program,
+            next_start_id,
+            path=None,
+            cached=self._ctx._loaded_lib_modules,
+            roots=roots,
+            default_stdlib=self._ctx._default_stdlib,
+            spaced_qualifiers=spaced_qualifiers,
+        )
+        resolved_program = resolve_program(
+            graph,
+            ambient_agents=self._ctx._ambient_agents(host_env),
+            entry_ambient_constructor_candidates=self._ctx._ambient_constructor_candidates,
+            entry_ambient_type_names=self._ctx._ambient_type_names,
+            entry_parent_scope=self._ctx._session_scope,
+            entry_repl_session_scope=self._ctx._session_scope,
+        )
+        return check_program(
+            resolved_program, host_env.capabilities, entry_seed_env=self._ctx._type_env
+        )
+
     @staticmethod
     def _checked_program_from_module(entry: CheckedModule) -> CheckedModule:
         """Adapt entry-module checker output for REPL static-state promotion."""

@@ -3312,10 +3312,17 @@ class _Checker:
         """Select *slot*'s lexical fallback without consulting scope again."""
         alternative = slot.alternative
         if alternative is None:
-            raise AssertionError(f"pattern slot '{slot.name}' has no final binding")
+            raise AssertionError(f"pattern slot '{slot.name}' has no final alternative")
         if alternative.kind is BinderKind.pattern_slot:
-            assert alternative.slot_id is not None
-            binding = self._slot_resolution[alternative.slot_id]
+            assert alternative.slot_id is not None, (
+                f"pattern slot '{slot.name}' has an unidentifiable final alternative"
+            )
+            binding = self._slot_resolution.get(alternative.slot_id)
+            if binding is None:
+                raise AssertionError(
+                    f"pattern slot '{slot.name}' final alternative "
+                    f"{alternative.slot_id} was not selected"
+                )
             constructor = self._slot_constructor_refs.get(alternative.slot_id)
             return _PatternSlotFallback(
                 binding,

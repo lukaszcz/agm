@@ -8,7 +8,7 @@ Resolution is namespace- and scope-directed, never capitalization-directed — a
 
 - Built-in calls (`print`, `exec`, `ask`, and friends) are recognized by resolving the callee to a known built-in declaration, not by keyword.
 - Constructors live in the value namespace; an ambiguous unqualified constructor name is a static error, disambiguated with `Type::Ctor` qualification.
-- Scope records constructor candidates for bare pattern names independently of ordinary value bindings. Top-level names are constructor-only; nested field-directed names resolve to immutable pattern-slot `BindingRef`s, with slot metadata recording candidates and visible alternatives. Typechecking selects each slot's final binder or constructor in checker-owned maps. The checked artifact exposes accessors for those selected meanings. An `as`-pattern name is always a variable binder.
+- Scope records constructor candidates for bare pattern names independently of ordinary value bindings. Top-level names are constructor-only; nested field-directed names resolve to immutable pattern-slot `BindingRef`s, with slot metadata recording candidates and visible alternatives. Typechecking selects each slot's final binder or constructor in checker-owned maps; consumers use the checked artifact's accessors for those meanings. No later pass rewrites scope's resolution tables. An `as`-pattern name is always a variable binder.
 
 ## Static Guarantees
 

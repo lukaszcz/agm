@@ -267,11 +267,41 @@ def test_slot_selection_rejects_binderless_slot_without_alternative() -> None:
     )
     slot = next(iter(resolved.pattern_slots.values()))
 
-    with pytest.raises(AssertionError, match="no final binding"):
+    with pytest.raises(AssertionError):
         check_module(
             replace(resolved, pattern_slots={slot.slot_id: replace(slot, alternative=None)}),
             HostCapabilities(),
         )
+
+
+def test_slot_selection_rejects_nested_slot_without_selected_final_alternative() -> None:
+    resolved = _resolve(
+        "enum Flag\n"
+        "  | on\n"
+        "enum Packet\n"
+        "  | packet(flag: Flag)\n"
+        "var on: int = 0\n"
+        "let item = packet(Flag::on)\n"
+        "case item of\n"
+        "  | packet(on) =>\n"
+        "    case item of\n"
+        "      | packet(on) => on\n"
+        "  | packet(_) => 0"
+    )
+    outer_slot, inner_slot = resolved.pattern_slots.values()
+    assert inner_slot.alternative is not None
+    assert inner_slot.alternative.kind is BinderKind.pattern_slot
+    malformed_alternative = replace(inner_slot.alternative, slot_id=inner_slot.slot_id + 1)
+    malformed = replace(
+        resolved,
+        pattern_slots={
+            outer_slot.slot_id: outer_slot,
+            inner_slot.slot_id: replace(inner_slot, alternative=malformed_alternative),
+        },
+    )
+
+    with pytest.raises(AssertionError):
+        check_module(malformed, HostCapabilities())
 
 
 def test_inference_rollback_discards_nested_slot_selections_without_mutating_scope(

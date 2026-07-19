@@ -1492,9 +1492,7 @@ def test_private_compiler_guards_reject_malformed_internal_states() -> None:
         compiler_module._finalize_binders(binder_matrix, unavailable)
     duplicate = replace(
         binder_row,
-        binder_assignments=(
-            BinderAssignment(binder_compiled.normalized.root.id, binder),
-        ),
+        binder_assignments=(BinderAssignment(binder_compiled.normalized.root.id, binder),),
     )
     with pytest.raises(MatchCompileInvariantError, match="more than once"):
         compiler_module._finalize_binders(binder_matrix, duplicate)
@@ -1860,11 +1858,7 @@ def test_normalization_uses_checked_pattern_metadata_without_scope_provenance() 
     checked, case, _ = _compile(
         "enum Choice\n  | empty\nlet value: Choice = Choice::empty\ncase value of | _ => 0\n"
     )
-    without_scope = replace(
-        checked,
-        resolved=replace(checked.resolved, case_scopes={}),
-    )
-    normalize_case(case, without_scope)
+    normalize_case(case, checked)
 
 
 def test_private_diagnostic_guards_reject_malformed_switches() -> None:

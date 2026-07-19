@@ -452,12 +452,11 @@ class TestAssignErrors:
         assert "catch binder" in msg
         assert "declared with 'let'" not in msg
 
-    def test_assign_to_pattern_binding_names_pattern(self) -> None:
-        err = reject_scope("let v = 1\ncase v of\n  | _ as n =>\n    n := 2\n")
-        line, msg = diag(err)
-        assert line == 4
-        assert "pattern binding" in msg
-        assert "declared with 'let'" not in msg
+    def test_assign_to_pattern_slot_is_deferred_to_typecheck(self) -> None:
+        resolved = parse_and_resolve("let v = 1\ncase v of\n  | _ as n =>\n    n := 2\n")
+        assignment = resolved.program.body.items[1].branches[0].body.items[0]
+        assert isinstance(assignment, AssignStmt)
+        assert resolved.resolution[assignment.node_id].kind is BinderKind.pattern_slot
 
     def test_assign_to_param_names_param(self) -> None:
         """Assigning to a parameter is rejected with the 'param_binding' phrasing."""
@@ -1167,7 +1166,7 @@ class TestIfScoping:
 class TestCaseScoping:
     def test_case_var_pattern_visible_in_body(self) -> None:
         r = parse_and_resolve("let x = 1\ncase x of\n  | _ as n => n\n")
-        assert _ref(r, "n").kind == BinderKind.pattern_binding
+        assert _ref(r, "n").kind == BinderKind.pattern_slot
 
     def test_case_pattern_not_visible_outside(self) -> None:
         err = reject_scope("let x = 1\ncase x of\n  | _ as n => n\nn\n")
@@ -1652,7 +1651,7 @@ class TestDirectASTConstruction:
             node_id=_nid(),
         )
         r = resolve_program(let_x, case_node)
-        assert r.resolution[matched_ref.node_id].kind == BinderKind.pattern_binding
+        assert r.resolution[matched_ref.node_id].kind == BinderKind.pattern_slot
 
     def test_case_constructor_pattern_with_field(self) -> None:
         let_x = _make_let("x", _make_intlit(1))
@@ -1677,7 +1676,7 @@ class TestDirectASTConstruction:
             node_id=_nid(),
         )
         r = resolve_program(let_x, case_node)
-        assert r.resolution[issues_ref.node_id].kind == BinderKind.pattern_binding
+        assert r.resolution[issues_ref.node_id].kind == BinderKind.pattern_slot
 
     def test_as_pattern_binds_even_when_name_is_a_constructor(self) -> None:
         resolved = parse_and_resolve(
@@ -1688,19 +1687,17 @@ class TestDirectASTConstruction:
         assert isinstance(branch.pattern, AsPattern)
         bound_ref = _find_varref(program, "A")
         binding = resolved.resolution[bound_ref.node_id]
-        assert binding.kind is BinderKind.pattern_binding
+        assert binding.kind is BinderKind.pattern_slot
         assert binding.decl_node_id == branch.pattern.node_id
 
-    def test_as_pattern_duplicate_with_inner_field_binder_rejected(self) -> None:
-        err = reject_scope(
+    def test_as_pattern_duplicate_with_inner_field_binder_is_deferred(self) -> None:
+        parse_and_resolve(
             "enum E\n  | A(value: int)\nlet value = A(1)\n"
             "case value of | A(value = value as captured) as captured => captured | _ => 0"
         )
-        assert "captured" in err.to_diagnostic().message
 
-    def test_as_pattern_duplicate_chain_binder_rejected(self) -> None:
-        err = reject_scope("case 0 of | _ as captured as captured => captured")
-        assert "captured" in err.to_diagnostic().message
+    def test_as_pattern_duplicate_chain_binder_is_deferred(self) -> None:
+        parse_and_resolve("case 0 of | _ as captured as captured => captured")
 
     def test_duplicate_pattern_var_rejected(self) -> None:
         let_x = _make_let("x", _make_intlit(1))
@@ -1738,8 +1735,8 @@ class TestDirectASTConstruction:
 
         case_node = Case(subject=_make_varref("x"), branches=(branch,), span=_sp(), node_id=_nid())
         r = resolve_program(let_outer, let_x, case_node)
-        # The inner VarRef resolves to the pattern_binding, not the outer let "v"
-        assert r.resolution[v_in_branch.node_id].kind == BinderKind.pattern_binding
+        # The inner VarRef resolves to the branch slot, not the outer let "v".
+        assert r.resolution[v_in_branch.node_id].kind == BinderKind.pattern_slot
         assert r.resolution[v_in_branch.node_id].decl_node_id == pv.node_id
 
     # --- Type declarations outside root rejected ---

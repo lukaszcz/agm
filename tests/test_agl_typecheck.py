@@ -3298,14 +3298,14 @@ class TestConstructorRefDispatch:
         assignment = body.items[0]
         assert isinstance(assignment, AssignStmt)
 
-        # Scope records the temporary branch binding, which remains its own output.
+        assert resolved.resolution[assignment.node_id].kind is BinderKind.pattern_slot
         assert resolved.resolution[assignment.node_id].decl_node_id == field_pattern.node_id
 
         checked = check_module(resolved, default_capabilities())
         outer_var = resolved.program.body.items[2]
         assert isinstance(outer_var, VarDecl)
-        assert checked.resolved.resolution[assignment.node_id].decl_node_id == outer_var.node_id
-        assert checked.resolved.resolution[body.items[1].node_id].decl_node_id == outer_var.node_id
+        assert checked.binding_for(assignment.node_id).decl_node_id == outer_var.node_id
+        assert checked.binding_for(body.items[1].node_id).decl_node_id == outer_var.node_id
         assert resolved.resolution[assignment.node_id].decl_node_id == field_pattern.node_id
 
     def test_field_directed_constructor_restores_indexed_assignment_root(self) -> None:
@@ -3331,7 +3331,7 @@ class TestConstructorRefDispatch:
         assert isinstance(outer_var, VarDecl)
 
         checked = check_module(resolved, default_capabilities())
-        assert checked.resolved.resolution[assignment.node_id].decl_node_id == outer_var.node_id
+        assert checked.binding_for(assignment.node_id).decl_node_id == outer_var.node_id
 
     def test_failed_field_directed_check_preserves_scope_resolution(self) -> None:
         source = (
@@ -3341,7 +3341,7 @@ class TestConstructorRefDispatch:
             "let item = packet(Flag::on)\n"
             "case item of\n"
             "  | packet(on) =>\n"
-            "    on := \"wrong\"\n"
+            '    on := "wrong"\n'
             "    0\n"
             "  | packet(_) => 0"
         )
@@ -3380,52 +3380,15 @@ class TestConstructorRefDispatch:
         # scope pass uses for assignments it rejects itself.
         assert "pattern binding" in str(excinfo.value)
 
-    def test_reconciliation_rollback_restores_constructor_references(self) -> None:
-        from agm.agl.typecheck.checker import _Checker, _InferenceRegion
-        from agm.agl.typecheck.inference import InferenceEngine
+    def test_checker_has_no_scope_repair_state(self) -> None:
+        from agm.agl.typecheck.checker import _Checker
 
         resolved = resolve_module(parse_program("enum Flag\n  | on\non"))
-        constructor_ref = next(iter(resolved.constructor_refs.values()))
         checker = _Checker(TypeEnvironment(), resolved, default_capabilities())
-        region = _InferenceRegion(InferenceEngine(), {}, {}, [])
-        node_id = -1
-        region.reconciled_constructor_ref_originals[node_id] = constructor_ref
 
-        checker._rollback_region_side_tables(region)
-
-        assert checker._resolved.constructor_refs[node_id] == constructor_ref
-
-    def test_reconciliation_rollback_invalidates_the_reference_reverse_index(self) -> None:
-        from agm.agl.typecheck.checker import _Checker, _InferenceRegion
-        from agm.agl.typecheck.inference import InferenceEngine
-
-        source = (
-            "enum Flag\n  | on\n  | off\n"
-            "enum Packet\n  | packet(flag: Flag)\n"
-            "let item = packet(Flag::on)\n"
-            "case item of\n"
-            "  | packet(flag) => flag\n"
-            "  | packet(_) => Flag::off"
-        )
-        resolved = resolve_module(parse_program(source))
-        checker = _Checker(TypeEnvironment(), resolved, default_capabilities())
-        reference_node_id, original_ref = next(iter(checker._resolved.resolution.items()))
-        index = checker._resolution_reverse_index()
-        assert reference_node_id in index[original_ref.decl_node_id]
-
-        # Simulate a region that retargeted the reference and then failed.
-        retargeted = replace(original_ref, decl_node_id=-1)
-        checker._resolved.resolution[reference_node_id] = retargeted
-        index.pop(original_ref.decl_node_id)
-        index[-1] = [reference_node_id]
-        region = _InferenceRegion(InferenceEngine(), {}, {}, [])
-        region.reconciled_resolution_originals[reference_node_id] = original_ref
-
-        checker._rollback_region_side_tables(region)
-
-        rebuilt = checker._resolution_reverse_index()
-        assert rebuilt[original_ref.decl_node_id] == [reference_node_id]
-        assert -1 not in rebuilt
+        assert checker._resolved is resolved
+        assert not hasattr(checker, "_resolution_by_decl")
+        assert not hasattr(checker, "_reconciled_pattern_binders")
 
     @pytest.mark.parametrize(
         ("outer_value", "inner_body"),
@@ -3456,7 +3419,12 @@ class TestConstructorRefDispatch:
         outer_var = resolved.program.body.items[2]
         assert isinstance(outer_var, VarDecl)
 
-        on_references = [ref for ref in checked.resolved.resolution.values() if ref.name == "on"]
+        on_references = [
+            binding
+            for node_id, ref in checked.resolved.resolution.items()
+            if ref.name == "on"
+            if (binding := checked.binding_for(node_id)) is not None
+        ]
         assert on_references
         assert {ref.decl_node_id for ref in on_references} == {outer_var.node_id}
 
@@ -7547,14 +7515,12 @@ class TestGenericCoverageEdgeCases:
         callee = VarRef(name="Alias", span=span, node_id=1)
         call = Call(callee=callee, args=(), named_args=(), span=span, node_id=2)
         ctx = MagicMock()
-        ctx._resolved.constructor_refs = {
-            callee.node_id: ConstructorRef(
-                owner_name="Alias",
-                variant=None,
-                owner_decl_node_id=3,
-                type_params=("X",),
-            )
-        }
+        ctor_ref = ConstructorRef(
+            owner_name="Alias",
+            variant=None,
+            owner_decl_node_id=3,
+            type_params=("X",),
+        )
         source_template = TypeTemplate(
             RecordType("Box", (TypeVarType("X"),)),
             ("X",),
@@ -7590,7 +7556,7 @@ class TestGenericCoverageEdgeCases:
             "_check_generic_constructor_call",
             return_value=expected,
         ):
-            result = checker.check_constructor_callee_call(call)
+            result = checker.check_constructor_callee_call(call, ctor_ref=ctor_ref)
 
         assert result == expected
 
@@ -7607,14 +7573,12 @@ class TestGenericCoverageEdgeCases:
         callee = VarRef(name="Alias", span=span, node_id=1)
         call = Call(callee=callee, args=(), named_args=(), span=span, node_id=2)
         ctx = MagicMock()
-        ctx._resolved.constructor_refs = {
-            callee.node_id: ConstructorRef(
-                owner_name="Alias",
-                variant=None,
-                owner_decl_node_id=3,
-                type_params=("X",),
-            )
-        }
+        ctor_ref = ConstructorRef(
+            owner_name="Alias",
+            variant=None,
+            owner_decl_node_id=3,
+            type_params=("X",),
+        )
         ctx._env.get_generic_type_from_module.return_value = None
         ctx._env.source_type_template_qname.return_value = TypeTemplate(
             RecordType("Missing", (TypeVarType("X"),)),
@@ -7629,7 +7593,7 @@ class TestGenericCoverageEdgeCases:
             "_check_generic_constructor_call",
             return_value=expected,
         ):
-            result = checker.check_constructor_callee_call(call)
+            result = checker.check_constructor_callee_call(call, ctor_ref=ctor_ref)
 
         assert result == expected
 

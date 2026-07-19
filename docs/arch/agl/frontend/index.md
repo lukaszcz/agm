@@ -4,7 +4,7 @@ The frontend turns source text into a fully resolved, type-checked, match-compil
 
 ## Pass Structure
 
-Each pass wraps the previous pass's artifact rather than mutating it: parsing yields the AST, scope yields a resolved program, typecheck yields a checked program, and match compilation yields the artifact that lowering consumes. Conclusions are recorded in pass artifacts and side tables keyed by stable node ids, so AST nodes stay frozen and shared. The scope artifact remains unchanged, while current typechecking may reconcile its own checked copy. Program-level variants of scope, typecheck, and match compilation generalize these passes to whole module graphs ([modules.md](agl/modules.md)).
+Each pass wraps the previous pass's artifact rather than mutating it: parsing yields the AST, scope yields a resolved program, typecheck yields a checked program, and match compilation yields the artifact that lowering consumes. Conclusions are recorded in pass artifacts and side tables keyed by stable node ids, so AST nodes stay frozen and shared. Scope emits immutable pattern-slot `BindingRef`s for field-directed branch names; typecheck selects their final meanings in checker-owned maps. The checked artifact exposes accessors for those selected meanings. Program-level variants of scope, typecheck, and match compilation generalize these passes to whole module graphs ([modules.md](agl/modules.md)).
 
 ## What To Read Next
 

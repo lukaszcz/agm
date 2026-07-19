@@ -56,10 +56,8 @@ from agm.agl.scope.symbols import (
     ConstructorRef,
     ModuleResolution,
     PatternSlot,
-    ScopeNode,
     immutable_assignment_message,
 )
-from agm.agl.self_validation import self_validation_enabled
 from agm.agl.semantics.type_table import TypeTable, comparable_types
 from agm.agl.semantics.types import (
     AgentType,
@@ -235,27 +233,11 @@ class _InferenceRegion:
     call_sites_start: int = 0
     warnings_start: int = 0
     return_target_lengths: tuple[int, ...] = ()
-    reconciled_resolution_originals: dict[int, BindingRef] = field(default_factory=dict)
-    reconciled_constructor_ref_originals: dict[int, ConstructorRef | None] = field(
-        default_factory=dict
-    )
-    pattern_slots_start: int = 0
-
-
-@dataclass(frozen=True, slots=True)
-class _PatternSlotSelection:
-    """One shadow selection outcome, including a modeled diagnostic."""
-
-    slot_id: int
-    binding: BindingRef | None = None
-    constructor: ConstructorRef | None = None
-    error: AglTypeError | None = None
-    deferred_constructor_ambiguity: bool = False
 
 
 @dataclass(frozen=True, slots=True)
 class _PatternSlotFallback:
-    """A selected lexical fallback, possibly awaiting a consuming reference."""
+    """A fully dereferenced lexical fallback for a selected slot."""
 
     binding: BindingRef
     constructor: ConstructorRef | None = None
@@ -458,11 +440,7 @@ class _Checker:
         module_id: ModuleId = ENTRY_ID,
     ) -> None:
         self._env = env
-        self._resolved = replace(
-            resolved,
-            resolution=dict(resolved.resolution),
-            constructor_refs=dict(resolved.constructor_refs),
-        )
+        self._resolved = resolved
         self._caps = capabilities
         self._module_id = module_id
         self._node_types: dict[int, Type] = {}
@@ -480,25 +458,12 @@ class _Checker:
         self._constructor_call_bindings: dict[int, dict[str, Expr]] = {}
         self._constructor_pattern_bindings: dict[int, tuple[tuple[str, Pattern], ...]] = {}
         # ``None`` means a final binder; a ConstructorRef means a final bare
-        # constructor pattern. Scope only supplied provisional nested binders.
+        # constructor pattern. Scope supplies shared nested slot references.
         self._pattern_classifications: dict[int, ConstructorRef | None] = {}
-        # The slot maps are a parallel, fully-dereferenced selection path. The
-        # existing reconciliation below remains the checked artifact's authority.
+        # Pattern-slot selections are the checked artifact's authority. Their
+        # values are fully dereferenced ordinary binders or constructors.
         self._slot_resolution: dict[int, BindingRef] = {}
         self._slot_constructor_refs: dict[int, ConstructorRef] = {}
-        self._selected_pattern_slots: dict[int, _PatternSlotSelection] = {}
-        self._next_pattern_slot_index = 0
-        # Provisional nested pattern names may shadow another provisional name
-        # from an enclosing case. This table records each provisional slot's
-        # final lexical meaning so nested reconciliation can continue past a
-        # constructor-classified slot or reach an enclosing final binder.
-        self._reconciled_pattern_binders: dict[int, VarPattern | AsPattern | None] = {}
-        # Reverse index over ``self._resolved.resolution``: declaration node_id →
-        # the reference node_ids currently pointing at it. Built on first pattern
-        # reconciliation and kept in sync as references are retargeted; a region
-        # rollback restores pre-reconciliation references, so it is invalidated
-        # there and rebuilt on demand.
-        self._resolution_by_decl: dict[int, list[int]] | None = None
         self._partial_calls: dict[int, PartialCallSpec] = {}
         # Extern provenance for first-class function values.  A value can name
         # one or more externs (e.g. through a branch); when such a function
@@ -1019,7 +984,7 @@ class _Checker:
 
     def _check_assign_stmt(self, stmt: AssignStmt) -> Type:
         if isinstance(stmt.target, NameTarget):
-            ref = self._resolved.resolution[stmt.node_id]
+            ref = self._binding_for(stmt.node_id)
             if not ref.mutable:
                 raise AglTypeError(
                     immutable_assignment_message(ref.name, ref.kind),
@@ -1045,7 +1010,7 @@ class _Checker:
         )
 
     def _check_indexed_assign_stmt(self, stmt: AssignStmt, target: IndexTarget) -> Type:
-        ref = self._resolved.resolution[stmt.node_id]
+        ref = self._binding_for(stmt.node_id)
         if not ref.mutable:
             raise AglTypeError(
                 f"Cannot assign through index of '{ref.name}': "
@@ -1104,7 +1069,6 @@ class _Checker:
             len(self._call_sites),
             len(self._warnings),
             tuple(len(targets) for targets in self._return_extern_targets_stack),
-            pattern_slots_start=self._next_pattern_slot_index,
         )
         # Some side tables are written while an expression is being checked,
         # while call-site metadata remains typed obligations until region close.
@@ -1280,6 +1244,22 @@ class _Checker:
 
     # --- VarRef ---
 
+    def _binding_for(self, node_id: int) -> BindingRef:
+        """Return a checked binding, dereferencing a scope-created slot."""
+        binding = self._resolved.resolution[node_id]
+        if binding.kind is not BinderKind.pattern_slot:
+            return binding
+        assert binding.slot_id is not None
+        return self._slot_resolution[binding.slot_id]
+
+    def _constructor_ref_for(self, node_id: int) -> ConstructorRef | None:
+        """Return a checked constructor reference, dereferencing a slot."""
+        binding = self._resolved.resolution.get(node_id)
+        if binding is None or binding.kind is not BinderKind.pattern_slot:
+            return self._resolved.constructor_refs.get(node_id)
+        assert binding.slot_id is not None
+        return self._slot_constructor_refs.get(binding.slot_id)
+
     def _check_varref(self, node: VarRef, *, expected: Type | None = None) -> Type:
         if node.node_id in self._resolved.qualified_constructor_refs:
             owner_name, variant, owner_module_id = self._resolved.qualified_constructor_refs[
@@ -1301,8 +1281,7 @@ class _Checker:
                 expected=expected,
             )
         # Bare constructor reference → zero-arg construction or generic constructor as value.
-        if node.node_id in self._resolved.constructor_refs:
-            ctor_ref = self._resolved.constructor_refs[node.node_id]
+        if (ctor_ref := self._constructor_ref_for(node.node_id)) is not None:
             if ctor_ref.type_params:
                 return self._constructors.check_generic_constructor_as_value(
                     ctor_ref=ctor_ref, span=node.span, expected=expected
@@ -1311,7 +1290,7 @@ class _Checker:
             return self._constructors.check_constructor_as_value(
                 owner=owner, variant=ctor_ref.variant, span=node.span
             )
-        ref = self._resolved.resolution[node.node_id]
+        ref = self._binding_for(node.node_id)
         # A constructor_binding resolves to a type declaration, not a value.
         # Catch bare type name references (e.g. ``mylib::Color``) and raise a
         # user-facing error instead of an internal assertion failure.
@@ -1490,8 +1469,10 @@ class _Checker:
         # constructor checker, which instantiates the constructor with the
         # supplied type arguments and returns a function value (payload) or
         # the constructed nominal value (nullary variant).
-        if isinstance(node.expr, VarRef) and node.expr.node_id in self._resolved.constructor_refs:
-            ctor_ref = self._resolved.constructor_refs[node.expr.node_id]
+        if (
+            isinstance(node.expr, VarRef)
+            and (ctor_ref := self._constructor_ref_for(node.expr.node_id)) is not None
+        ):
             typ = self._constructors.check_constructor_type_apply(
                 ctor_ref=ctor_ref, type_args=node.type_args, span=node.span
             )
@@ -1503,7 +1484,7 @@ class _Checker:
         ):
             raise self._qualified_constructor_typed_call_error(node.span)
         if isinstance(node.expr, VarRef):
-            constructor_ref = self._resolved.resolution.get(node.expr.node_id)
+            constructor_ref = self._binding_for(node.expr.node_id)
             if (
                 constructor_ref is not None
                 and constructor_ref.kind is BinderKind.constructor_binding
@@ -1521,7 +1502,7 @@ class _Checker:
                 span=node.span,
             )
 
-        ref = self._resolved.resolution.get(node.expr.node_id)
+        ref = self._binding_for(node.expr.node_id)
         if ref is None or ref.kind is not BinderKind.function_binding:
             raise AglTypeError(
                 "Explicit type arguments can only be applied to a generic function value.",
@@ -1644,7 +1625,6 @@ class _Checker:
             ("pattern_classifications", self._pattern_classifications),
             ("slot_resolution", self._slot_resolution),
             ("slot_constructor_refs", self._slot_constructor_refs),
-            ("selected_pattern_slots", self._selected_pattern_slots),
             ("partial_calls", self._partial_calls),
             ("contract_specs", self._contract_specs),
             ("cast_specs", self._cast_specs),
@@ -1653,17 +1633,6 @@ class _Checker:
         ):
             for node_id in region.added_side_table_keys.get(table_name, set()):
                 table.pop(node_id, None)
-        if region.reconciled_resolution_originals:
-            # References move back to their pre-reconciliation declarations, so
-            # the reverse index is stale; rebuild it on the next reconciliation.
-            self._resolution_by_decl = None
-        self._resolved.resolution.update(region.reconciled_resolution_originals)
-        for node_id, constructor_ref in region.reconciled_constructor_ref_originals.items():
-            if constructor_ref is None:
-                self._resolved.constructor_refs.pop(node_id, None)
-            else:
-                self._resolved.constructor_refs[node_id] = constructor_ref
-        self._next_pattern_slot_index = region.pattern_slots_start
         del self._call_sites[region.call_sites_start :]
         del self._warnings[region.warnings_start :]
         for targets, start in zip(
@@ -1898,12 +1867,11 @@ class _Checker:
             return self._builtins.check_exec(node, expected=expected)
 
         # Constructor call?
-        if (
-            isinstance(node.callee, VarRef)
-            and node.callee.node_id in self._resolved.constructor_refs
-        ):
+        if isinstance(node.callee, VarRef) and (
+            ctor_ref := self._constructor_ref_for(node.callee.node_id)
+        ) is not None:
             return self._constructors.check_constructor_callee_call(
-                node, expected=expected, hole_indices=hole_indices
+                node, ctor_ref=ctor_ref, expected=expected, hole_indices=hole_indices
             )
         if (
             isinstance(node.callee, VarRef)
@@ -1924,7 +1892,7 @@ class _Checker:
         # Exception: a cross-module constructor_binding (module_qualifier present)
         # is handled as a constructor call.
         if isinstance(node.callee, VarRef):
-            callee_ref = self._resolved.resolution.get(node.callee.node_id)
+            callee_ref = self._binding_for(node.callee.node_id)
             if callee_ref is not None and callee_ref.kind is BinderKind.function_binding:
                 return self._check_declared_name_call(
                     node,
@@ -2334,15 +2302,7 @@ class _Checker:
         branch_types: list[Type] = []
         for branch in node.branches:
             self._bind_pattern_types(branch.pattern, subj_type, branch)
-            selected_slots = self._select_ready_pattern_slots()
-            try:
-                self._reconcile_provisional_pattern_references(node, branch.pattern)
-            except AglTypeError as error:
-                if self_validation_enabled():
-                    self._validate_selected_pattern_slots(selected_slots, error)
-                raise
-            if self_validation_enabled():
-                self._validate_selected_pattern_slots(selected_slots)
+            self._select_ready_pattern_slots()
             bt = self._check_expr(branch.body, expected=expected)
             branch_types.append(bt)
         result = self._unify_branch_types(branch_types, node.span, "Case expression")
@@ -3297,48 +3257,30 @@ class _Checker:
                 span=pattern.span,
             )
 
-    def _select_ready_pattern_slots(self) -> tuple[_PatternSlotSelection, ...]:
-        """Model source-ordered slots whose field-directed checks have completed."""
-        slot_ids = tuple(sorted(self._resolved.pattern_slots))
-        selections: list[_PatternSlotSelection] = []
-        while self._next_pattern_slot_index < len(slot_ids):
-            slot = self._resolved.pattern_slots[slot_ids[self._next_pattern_slot_index]]
-            if not all(
+    def _select_ready_pattern_slots(self) -> None:
+        """Publish every slot whose field-directed candidates are classified."""
+        for slot_id in sorted(self._resolved.pattern_slots):
+            if slot_id in self._slot_resolution:
+                continue
+            slot = self._resolved.pattern_slots[slot_id]
+            if all(
                 candidate.pattern_node_id in self._pattern_classifications
                 for candidate in slot.candidates
             ):
-                break
-            selection = self._select_pattern_slot(slot)
-            selections.append(selection)
-            if selection.error is None:
-                self._record_side_table_addition(
-                    "selected_pattern_slots", self._selected_pattern_slots, slot.slot_id
-                )
-                self._selected_pattern_slots[slot.slot_id] = selection
-            self._next_pattern_slot_index += 1
-        return tuple(selections)
+                self._select_pattern_slot(slot)
 
-    def _select_pattern_slot(self, slot: PatternSlot) -> _PatternSlotSelection:
-        """Model one slot's final binding or selection diagnostic independently.
-
-        This is deliberately a shadow path: it records a successful selection in
-        its side tables, but represents failures as outcomes so reconciliation
-        remains the production authority for error control flow.
-        """
+    def _select_pattern_slot(self, slot: PatternSlot) -> None:
+        """Select and publish one slot's fully dereferenced final meaning."""
         binders = [
             candidate
             for candidate in slot.candidates
             if self._pattern_classifications[candidate.pattern_node_id] is None
         ]
         if len(binders) > 1:
-            return _PatternSlotSelection(
-                slot_id=slot.slot_id,
-                error=AglTypeError(
-                    f"Name '{slot.name}' is bound more than once in this pattern.",
-                    span=binders[1].span,
-                ),
+            raise AglTypeError(
+                f"Name '{slot.name}' is bound more than once in this pattern.",
+                span=binders[1].span,
             )
-        deferred_constructor_ambiguity = False
         if binders:
             binding = BindingRef(
                 name=slot.name,
@@ -3351,14 +3293,10 @@ class _Checker:
             constructor = None
         else:
             fallback = self._select_pattern_slot_fallback(slot)
-            deferred_constructor_ambiguity = fallback.deferred_constructor_ambiguity
-            if deferred_constructor_ambiguity and self._slot_has_references(slot):
-                return _PatternSlotSelection(
-                    slot_id=slot.slot_id,
-                    error=AglTypeError(
-                        f"'{slot.name}' is ambiguous outside the pattern; qualify the reference.",
-                        span=slot.candidates[0].span,
-                    ),
+            if fallback.deferred_constructor_ambiguity and self._slot_has_references(slot):
+                raise AglTypeError(
+                    f"'{slot.name}' is ambiguous outside the pattern; qualify the reference.",
+                    span=slot.candidates[0].span,
                 )
             binding = fallback.binding
             constructor = fallback.constructor
@@ -3369,271 +3307,36 @@ class _Checker:
                 "slot_constructor_refs", self._slot_constructor_refs, slot.slot_id
             )
             self._slot_constructor_refs[slot.slot_id] = constructor
-        return _PatternSlotSelection(
-            slot.slot_id,
-            binding,
-            constructor,
-            deferred_constructor_ambiguity=deferred_constructor_ambiguity,
-        )
 
     def _select_pattern_slot_fallback(self, slot: PatternSlot) -> _PatternSlotFallback:
-        """Select *slot*'s lexical fallback, retaining deferred ambiguity."""
+        """Select *slot*'s lexical fallback without consulting scope again."""
         alternative = slot.alternative
         if alternative is None:
             raise AssertionError(f"pattern slot '{slot.name}' has no final binding")
         if alternative.kind is BinderKind.pattern_slot:
             assert alternative.slot_id is not None
-            selected = self._selected_pattern_slots[alternative.slot_id]
-            assert selected.binding is not None
+            binding = self._slot_resolution[alternative.slot_id]
+            constructor = self._slot_constructor_refs.get(alternative.slot_id)
             return _PatternSlotFallback(
-                selected.binding,
-                selected.constructor,
-                selected.deferred_constructor_ambiguity,
+                binding,
+                constructor,
+                deferred_constructor_ambiguity=(
+                    binding.kind is BinderKind.constructor_binding and constructor is None
+                ),
             )
         if alternative.kind is not BinderKind.constructor_binding:
             return _PatternSlotFallback(alternative)
         constructor_candidates = self._resolved.constructor_candidates.get(slot.name, ())
         if slot.outside_constructor_candidates != 1 or len(constructor_candidates) != 1:
-            # Reconciliation only needs an outside fallback when a branch
-            # reference crosses a slot. Keep the ambiguity with this selection
-            # so a nested slot that consumes the fallback reports it at its own
-            # source spelling.
             return _PatternSlotFallback(alternative, deferred_constructor_ambiguity=True)
         return _PatternSlotFallback(alternative, constructor_candidates[0])
 
     def _slot_has_references(self, slot: PatternSlot) -> bool:
-        """Whether a branch reference directly consumes *slot*."""
-        return slot.slot_id in self._resolved.slot_references.values()
-
-    def _validate_selected_pattern_slots(
-        self,
-        selections: Sequence[_PatternSlotSelection],
-        authoritative_error: AglTypeError | None = None,
-    ) -> None:
-        """Verify shadow and authoritative selection outcomes agree exactly."""
-        selection_error = next(
-            (selection.error for selection in selections if selection.error), None
+        """Whether a branch-body reference directly resolves to *slot*."""
+        return any(
+            ref.kind is BinderKind.pattern_slot and ref.slot_id == slot.slot_id
+            for ref in self._resolved.resolution.values()
         )
-        if authoritative_error is not None:
-            if selection_error is None:
-                raise AssertionError(
-                    "pattern-slot selection invariant failed: shadow selection succeeded but "
-                    "authoritative reconciliation failed"
-                )
-            if (
-                str(selection_error),
-                selection_error.span,
-                selection_error.related,
-            ) != (
-                str(authoritative_error),
-                authoritative_error.span,
-                authoritative_error.related,
-            ):
-                raise AssertionError(
-                    "pattern-slot selection invariant failed: shadow and authoritative "
-                    "selection diagnostics disagree"
-                )
-            return
-        if selection_error is not None:
-            raise AssertionError(
-                "pattern-slot selection invariant failed: shadow selection failed but "
-                "authoritative reconciliation succeeded"
-            )
-        for selection in selections:
-            assert selection.binding is not None
-            for node_id, reference_slot_id in self._resolved.slot_references.items():
-                if reference_slot_id != selection.slot_id:
-                    continue
-                actual_binding = self._resolved.resolution[node_id]
-                actual_constructor = self._resolved.constructor_refs.get(node_id)
-                if (
-                    actual_binding != selection.binding
-                    or actual_constructor != selection.constructor
-                ):
-                    raise AssertionError(
-                        "pattern-slot selection invariant failed: shadow selection disagrees "
-                        f"with authoritative reconciliation for bridge reference node {node_id} "
-                        f"in slot {selection.slot_id}"
-                    )
-
-    @staticmethod
-    def _scope_chain(scope: ScopeNode) -> tuple[ScopeNode, ...]:
-        """Return *scope* and each lexical ancestor."""
-        scopes: list[ScopeNode] = []
-        current: ScopeNode | None = scope
-        while current is not None:
-            scopes.append(current)
-            current = current.parent
-        return tuple(scopes)
-
-    def _reconciled_pattern_ref(self, ref: BindingRef) -> BindingRef | None:
-        """Return a provisional pattern reference's finalized lexical binding."""
-        if ref.decl_node_id not in self._reconciled_pattern_binders:
-            return ref
-        binder = self._reconciled_pattern_binders[ref.decl_node_id]
-        if binder is None:
-            return None
-        return replace(ref, decl_span=binder.span, decl_node_id=binder.node_id)
-
-    def _reconciled_lexical_lookup(self, scope: ScopeNode, name: str) -> BindingRef:
-        """Look up *name* through checker-finalized provisional pattern slots."""
-        return next(
-            resolved_ref
-            for current in self._scope_chain(scope)
-            if (ref := current.bindings.get(name)) is not None
-            if (resolved_ref := self._reconciled_pattern_ref(ref)) is not None
-        )
-
-    def _reconcile_provisional_pattern_references(self, case: Case, pattern: Pattern) -> None:
-        """Reconcile branch references with final field-directed classifications.
-
-        Scope gives nested bare names a temporary branch binding because their
-        field type is not known yet. Several candidate spellings can share that
-        temporary slot. Once checking decides which names truly bind, every
-        branch reference is redirected to the unique final binder or to the
-        enclosing scope when none binds.
-        """
-        case_scope = self._resolved.case_scopes[case.node_id]
-        names: dict[str, list[VarPattern | AsPattern]] = {}
-        for candidate in self._pattern_binding_candidates(pattern):
-            names.setdefault(candidate.name, []).append(candidate)
-
-        for name, candidates in names.items():
-            provisional = [
-                candidate
-                for candidate in candidates
-                if candidate.node_id in self._resolved.provisional_pattern_binders
-            ]
-            if not provisional:
-                continue
-            final_binder = self._final_binder_for(name, candidates)
-            provisional_ids = {candidate.node_id for candidate in provisional}
-            for provisional_id in provisional_ids:
-                self._reconciled_pattern_binders[provisional_id] = final_binder
-            reference_node_ids = [
-                ref_node_id
-                for provisional_id in provisional_ids
-                for ref_node_id in self._resolution_reverse_index().get(provisional_id, ())
-            ]
-            if not reference_node_ids:
-                continue
-            target_ref = self._reconciled_target_ref(
-                name,
-                case_scope,
-                final_binder,
-                reference_node_ids[0],
-                provisional[0].span,
-            )
-            constructor: ConstructorRef | None = None
-            if target_ref.kind is BinderKind.constructor_binding:
-                constructor = self._pattern_classifications[provisional[0].node_id]
-                assert constructor is not None
-            self._retarget_references(provisional_ids, reference_node_ids, target_ref, constructor)
-
-    def _final_binder_for(
-        self, name: str, candidates: list[VarPattern | AsPattern]
-    ) -> VarPattern | AsPattern | None:
-        """Return the one spelling of *name* that truly binds, if any.
-
-        Spellings classified as constructors bind nothing; more than one
-        surviving binder means the pattern binds *name* twice.
-        """
-        binders = [
-            candidate
-            for candidate in candidates
-            if self._pattern_classifications.get(candidate.node_id) is None
-        ]
-        if len(binders) > 1:
-            raise AglTypeError(
-                f"Name '{name}' is bound more than once in this pattern.",
-                span=binders[1].span,
-            )
-        return binders[0] if binders else None
-
-    def _reconciled_target_ref(
-        self,
-        name: str,
-        case_scope: ScopeNode,
-        final_binder: VarPattern | AsPattern | None,
-        sample_ref_node_id: int,
-        provisional_span: SourceSpan,
-    ) -> BindingRef:
-        """Return the binding branch references to *name* must point at.
-
-        With a final binder the provisional reference is simply re-pointed at
-        it; otherwise the name means whatever it meant outside the pattern,
-        which must be unambiguous when that is a constructor spelling.
-        """
-        if final_binder is not None:
-            return replace(
-                self._resolved.resolution[sample_ref_node_id],
-                decl_span=final_binder.span,
-                decl_node_id=final_binder.node_id,
-            )
-        target_ref = self._reconciled_lexical_lookup(case_scope, name)
-        candidates_for_name = self._resolved.constructor_candidates.get(name, ())
-        if target_ref.kind is BinderKind.constructor_binding and len(candidates_for_name) != 1:
-            raise AglTypeError(
-                f"'{name}' is ambiguous outside the pattern; qualify the reference.",
-                span=provisional_span,
-            )
-        return target_ref
-
-    def _retarget_references(
-        self,
-        provisional_ids: set[int],
-        reference_node_ids: list[int],
-        target_ref: BindingRef,
-        constructor: ConstructorRef | None,
-    ) -> None:
-        """Re-point *reference_node_ids* at *target_ref*, recording undo state.
-
-        The originals are stashed on the active inference region so a rollback
-        restores the resolver's tables, and the lazy reverse index is moved
-        along with the references it indexes.
-        """
-        region = self._inference_region
-        assert region is not None
-        for ref_node_id in reference_node_ids:
-            region.reconciled_resolution_originals.setdefault(
-                ref_node_id, self._resolved.resolution[ref_node_id]
-            )
-            region.reconciled_constructor_ref_originals.setdefault(
-                ref_node_id, self._resolved.constructor_refs.get(ref_node_id)
-            )
-            self._resolved.resolution[ref_node_id] = target_ref
-            if constructor is not None:
-                self._resolved.constructor_refs[ref_node_id] = constructor
-            else:
-                self._resolved.constructor_refs.pop(ref_node_id, None)
-        by_decl = self._resolution_reverse_index()
-        for provisional_id in provisional_ids:
-            by_decl.pop(provisional_id, None)
-        by_decl.setdefault(target_ref.decl_node_id, []).extend(reference_node_ids)
-
-    def _resolution_reverse_index(self) -> dict[int, list[int]]:
-        """Return the declaration → references index, building it if needed."""
-        if self._resolution_by_decl is None:
-            index: dict[int, list[int]] = {}
-            for ref_node_id, ref in self._resolved.resolution.items():
-                index.setdefault(ref.decl_node_id, []).append(ref_node_id)
-            self._resolution_by_decl = index
-        return self._resolution_by_decl
-
-    @staticmethod
-    def _pattern_binding_candidates(pattern: Pattern) -> tuple[VarPattern | AsPattern, ...]:
-        """Return bare and explicit binding names in a pattern."""
-        if isinstance(pattern, VarPattern):
-            return (pattern,)
-        if isinstance(pattern, AsPattern):
-            return (*_Checker._pattern_binding_candidates(pattern.pattern), pattern)
-        if isinstance(pattern, ConstructorPattern):
-            return tuple(
-                candidate
-                for child in (*pattern.positional, *(field.pattern for field in pattern.named))
-                for candidate in _Checker._pattern_binding_candidates(child)
-            )
-        return ()
 
     # ------------------------------------------------------------------
     # Branch unification

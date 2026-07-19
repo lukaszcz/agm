@@ -6,8 +6,8 @@ Data model
   binding, whether it is mutable, and its declaration span.
 - ``ConstructorRef`` — metadata about a resolved constructor reference (record
   or enum variant).
-- ``PatternSlot`` — scope-created pattern-slot metadata recorded alongside
-  provisional pattern bindings.
+- ``PatternSlot`` — scope-created metadata for a shared branch binding whose
+  final meaning is selected by type checking.
 - ``ScopeNode`` — a node in the scope tree (one per scope-introducing
   construct).  The root ``ScopeNode`` is always present; nested scopes form a
   tree for visibility analysis.
@@ -108,7 +108,7 @@ class BinderKind(enum.Enum):
     ``loop_var_binding``
         A ``for``-loop iteration variable (immutable, loop-body-local).
     ``pattern_slot``
-        A bridge to an outer field-directed pattern slot.
+        A branch-local field-directed pattern binding selected by type checking.
     """
 
     let_binding = "let_binding"
@@ -225,10 +225,8 @@ class PatternSlot:
     """Parallel metadata for field-directed pattern candidates.
 
     ``alternative`` is either an enclosing ordinary binding or an outer
-    pattern-slot bridge, if one is visible. ``outside_constructor_candidates``
-    counts the visible same-named constructors outside the pattern. Scope
-    records slots alongside provisional branch bindings and their reference
-    associations.
+    pattern-slot binding, if one is visible. ``outside_constructor_candidates``
+    counts the visible same-named constructors outside the pattern.
     """
 
     slot_id: int
@@ -266,8 +264,8 @@ class BindingRef:
         For cross-module resolution via ``resolve_program()``, cross-module
         references carry the owning library module's id.
     ``slot_id``
-        The :class:`PatternSlot` id when this reference represents an outer
-        pattern-slot bridge, or ``None`` for an ordinary resolved binding.
+        The :class:`PatternSlot` id when this reference is a field-directed
+        pattern slot, or ``None`` for an ordinary resolved binding.
     """
 
     name: str
@@ -375,21 +373,9 @@ class ModuleResolution:
         constructors to its candidate constructors. Constructor candidates are
         independent of ordinary value bindings; the checker selects the final
         interpretation from the matched occurrence's type and field name.
-    ``provisional_pattern_binders``
-        Node ids of nested bare names provisionally introduced into a branch
-        scope so its body can resolve. The checker retargets their references
-        in its checked copy after determining the final classification.
-    ``case_scopes``
-        Maps every source ``Case.node_id`` to the exact lexical scope active
-        when the resolver entered that case.  Downstream diagnostics use this
-        provenance to determine which constructor spellings are valid at the
-        case site without reimplementing lexical lookup.
     ``pattern_slots``
         Scope-created field-directed pattern-slot metadata keyed by slot id.
-        Recorded alongside the provisional binding data.
-    ``slot_references``
-        Maps branch-reference node ids to their associated pattern-slot ids;
-        this is parallel metadata for the provisional bindings.
+        Branch-body references resolve directly to the shared slot binding.
     """
 
     program: Program
@@ -409,10 +395,7 @@ class ModuleResolution:
     pattern_constructor_candidates: dict[int, tuple[ConstructorRef, ...]] = field(
         default_factory=dict
     )
-    provisional_pattern_binders: frozenset[int] = frozenset()
-    case_scopes: dict[int, ScopeNode] = field(default_factory=dict)
     pattern_slots: dict[int, PatternSlot] = field(default_factory=dict)
-    slot_references: dict[int, int] = field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------

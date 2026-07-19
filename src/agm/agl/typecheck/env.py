@@ -294,17 +294,14 @@ class CheckedModule:
     """Output of the type-checking pass.
 
     ``resolved``
-        A checked copy of the ``ModuleResolution`` carrying the original
-        ``Program`` and scope side tables. For field-directed patterns, the
-        checker reconciles provisional branch references by retargeting this
-        copy's reference tables; the scope-pass artifact is left unchanged.
-        Pattern slots and their reference associations remain parallel metadata
-        and do not drive this reconciliation.
+        The original ``ModuleResolution`` carrying the ``Program`` and scope
+        side tables. Field-directed branch references remain immutable,
+        scope-created pattern-slot ``BindingRef`` instances; checker selections
+        below provide their final meanings without changing scope output.
     ``pattern_classifications``
         Final field-directed classification of bare patterns: ``Pattern.node_id``
         → ``None`` for a binder, or the ``ConstructorRef`` it matches. This is
-        the authoritative source for match normalization and lowering; scope's
-        provisional bindings are not semantic pattern classifications.
+        the authoritative source for match normalization and lowering.
     ``node_types``
         Maps ``node_id`` → resolved ``Type`` for every expression node that
         was type-checked.  Statement nodes are not entered here.
@@ -328,10 +325,10 @@ class CheckedModule:
         constructors without reconstructing it.  This is the public contract
         for type-namespace access after checking.
     ``slot_resolution`` / ``slot_constructor_refs``
-        Pattern-slot selection shadow maps published by the checker for the
-        eventual replacement of mutable reference repair. In M3, the
-        reconciled checked reference tables in ``resolved`` remain
-        authoritative; these maps are supplementary migration metadata.
+        Checker-owned, fully dereferenced pattern-slot selections.
+        ``binding_for`` and ``constructor_ref_for`` apply them to scope-created
+        slot references; consumers must use these accessors for references that
+        may be slots.
     """
 
     resolved: ModuleResolution
@@ -352,24 +349,18 @@ class CheckedModule:
     slot_constructor_refs: dict[int, ConstructorRef] = field(default_factory=dict)
 
     def binding_for(self, node_id: int) -> BindingRef | None:
-        """Return *node_id*'s checked binding, honoring an optional slot bridge."""
+        """Return *node_id*'s checked binding, dereferencing a pattern slot."""
         raw_binding = self.resolved.resolution.get(node_id)
-        slot_id = self.resolved.slot_references.get(node_id)
-        if slot_id is None and raw_binding is not None:
-            slot_id = raw_binding.slot_id
-        if slot_id is None:
+        if raw_binding is None or raw_binding.slot_id is None:
             return raw_binding
-        return self.slot_resolution.get(slot_id)
+        return self.slot_resolution.get(raw_binding.slot_id)
 
     def constructor_ref_for(self, node_id: int) -> ConstructorRef | None:
-        """Return *node_id*'s constructor reference, honoring an optional slot bridge."""
+        """Return *node_id*'s checked constructor reference through a slot."""
         raw_binding = self.resolved.resolution.get(node_id)
-        slot_id = self.resolved.slot_references.get(node_id)
-        if slot_id is None and raw_binding is not None:
-            slot_id = raw_binding.slot_id
-        if slot_id is None:
+        if raw_binding is None or raw_binding.slot_id is None:
             return self.resolved.constructor_refs.get(node_id)
-        return self.slot_constructor_refs.get(slot_id)
+        return self.slot_constructor_refs.get(raw_binding.slot_id)
 
 
 def _assert_checked_types_closed(types: Iterable[Type], *, owner: str) -> None:

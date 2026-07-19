@@ -968,12 +968,12 @@ class ConstructorChecker:
         self,
         node: Call,
         *,
+        ctor_ref: ConstructorRef,
         expected: Type | None = None,
         hole_indices: Mapping[int, int] | None = None,
     ) -> Type:
         """Handle a Call whose callee is an unqualified constructor VarRef."""
         assert isinstance(node.callee, VarRef)
-        ctor_ref = self._ctx._resolved.constructor_refs[node.callee.node_id]
         if ctor_ref.type_params:
             # Generic constructor: route to generic call handler.
             gdef = None

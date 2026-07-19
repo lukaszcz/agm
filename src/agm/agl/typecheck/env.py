@@ -328,10 +328,10 @@ class CheckedModule:
         constructors without reconstructing it.  This is the public contract
         for type-namespace access after checking.
     ``slot_resolution`` / ``slot_constructor_refs``
-        Optional pattern-slot bridge maps for consumers that explicitly
-        populate them. The checker leaves them empty while it reconciles
-        provisional references; ``binding_for`` and ``constructor_ref_for``
-        honor them when present.
+        Pattern-slot selection shadow maps published by the checker for the
+        eventual replacement of mutable reference repair. In M3, the
+        reconciled checked reference tables in ``resolved`` remain
+        authoritative; these maps are supplementary migration metadata.
     """
 
     resolved: ModuleResolution

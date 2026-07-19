@@ -4,10 +4,13 @@ from __future__ import annotations
 
 from dataclasses import replace
 
+import pytest
+
 from agm.agl.capabilities import HostCapabilities
 from agm.agl.parser import parse_program
 from agm.agl.scope import resolve_module
-from agm.agl.scope.symbols import BinderKind, BindingRef, PatternSlot, SlotCandidate
+from agm.agl.scope.symbols import BinderKind, BindingRef, ConstructorRef, PatternSlot, SlotCandidate
+from agm.agl.semantics.types import EnumType
 from agm.agl.syntax.nodes import (
     AsPattern,
     Block,
@@ -17,7 +20,21 @@ from agm.agl.syntax.nodes import (
     VarPattern,
     VarRef,
 )
-from agm.agl.typecheck import check_module
+from agm.agl.typecheck import AglTypeError, TypeEnvironment, check_module
+
+_NESTED_OVERLOADED_FALLBACK_SOURCE = (
+    "enum Flag\n"
+    "  | on\n"
+    "enum Other\n"
+    "  | on\n"
+    "enum Packet\n"
+    "  | packet(flag: Flag)\n"
+    "let item = packet(Flag::on)\n"
+    "case item of\n"
+    "  | packet(on) =>\n"
+    "    case item of | packet(on) => on\n"
+    "  | packet(_) => 0"
+)
 
 
 def test_pattern_slot_models_construct_and_scope_tables_default_empty() -> None:
@@ -220,12 +237,7 @@ def test_scope_slot_includes_as_candidates_and_bridges_provisional_body_referenc
 
 
 def test_scope_slot_includes_standalone_as_binder_and_bridges_body_reference() -> None:
-    resolved = resolve_module(
-        parse_program(
-            "let item = 1\n"
-            "case item of | _ as value => value"
-        )
-    )
+    resolved = resolve_module(parse_program("let item = 1\ncase item of | _ as value => value"))
     case = resolved.program.body.items[-1]
     assert isinstance(case, Case)
     pattern = case.branches[0].pattern
@@ -319,6 +331,390 @@ def test_checked_module_accessors_dereference_pattern_slot_binding() -> None:
 
     assert slotted.binding_for(node_id) is constructor_binding
     assert slotted.constructor_ref_for(node_id) is constructor_ref
+
+
+def test_typecheck_selects_an_ordinary_pattern_slot_binder() -> None:
+    resolved = resolve_module(
+        parse_program(
+            "enum Packet\n"
+            "  | packet(value: int)\n"
+            "let item = packet(1)\n"
+            "case item of | packet(value) => value"
+        )
+    )
+    checked = check_module(resolved, HostCapabilities())
+    slot = next(iter(resolved.pattern_slots.values()))
+    body_ref_node_id = next(iter(resolved.slot_references))
+
+    assert checked.slot_resolution[slot.slot_id].decl_node_id == slot.candidates[0].pattern_node_id
+    assert slot.slot_id not in checked.slot_constructor_refs
+    assert checked.binding_for(body_ref_node_id) == checked.resolved.resolution[body_ref_node_id]
+    assert checked.constructor_ref_for(body_ref_node_id) is None
+
+
+def test_typecheck_selects_a_constructor_pattern_slot() -> None:
+    resolved = resolve_module(
+        parse_program(
+            "enum Flag\n"
+            "  | on\n"
+            "enum Packet\n"
+            "  | packet(flag: Flag)\n"
+            "let item = packet(on())\n"
+            "case item of | packet(on) => on"
+        )
+    )
+    checked = check_module(resolved, HostCapabilities())
+    slot = next(iter(resolved.pattern_slots.values()))
+    body_ref_node_id = next(iter(resolved.slot_references))
+
+    assert checked.slot_resolution[slot.slot_id] == checked.resolved.resolution[body_ref_node_id]
+    assert (
+        checked.slot_constructor_refs[slot.slot_id]
+        == checked.resolved.constructor_refs[body_ref_node_id]
+    )
+    assert checked.binding_for(body_ref_node_id) == checked.resolved.resolution[body_ref_node_id]
+    assert (
+        checked.constructor_ref_for(body_ref_node_id)
+        == checked.resolved.constructor_refs[body_ref_node_id]
+    )
+
+
+def test_typecheck_selects_fallback_alternatives_through_nested_slots() -> None:
+    resolved = resolve_module(
+        parse_program(
+            "enum Flag\n"
+            "  | on\n"
+            "enum Packet\n"
+            "  | packet(flag: Flag)\n"
+            "var on: int = 0\n"
+            "let item = packet(Flag::on)\n"
+            "case item of\n"
+            "  | packet(on) =>\n"
+            "    case item of | packet(on) => on\n"
+            "  | packet(_) => 0"
+        )
+    )
+    checked = check_module(resolved, HostCapabilities())
+    slots = tuple(resolved.pattern_slots.values())
+    body_ref_node_id = next(iter(resolved.slot_references))
+
+    assert len(slots) == 2
+    assert list(checked.slot_resolution) == [slot.slot_id for slot in slots]
+    assert checked.slot_resolution[slots[1].slot_id] == checked.slot_resolution[slots[0].slot_id]
+    assert (
+        checked.slot_resolution[slots[1].slot_id] == checked.resolved.resolution[body_ref_node_id]
+    )
+    assert slots[0].slot_id not in checked.slot_constructor_refs
+    assert slots[1].slot_id not in checked.slot_constructor_refs
+    assert checked.binding_for(body_ref_node_id) == checked.resolved.resolution[body_ref_node_id]
+
+
+def test_typecheck_slot_selection_reports_the_existing_duplicate_binder_error() -> None:
+    source = (
+        "enum Packet\n"
+        "  | packet(value: int, other: int)\n"
+        "let item = packet(1, 2)\n"
+        "case item of | packet(value, _ as value) => value"
+    )
+
+    with pytest.raises(AglTypeError, match="bound more than once"):
+        check_module(resolve_module(parse_program(source)), HostCapabilities())
+
+
+def test_slot_selector_models_source_ordered_duplicate_with_as_pattern() -> None:
+    from agm.agl.typecheck.builder import _TypeBuilder
+    from agm.agl.typecheck.checker import _Checker
+
+    resolved = resolve_module(
+        parse_program(
+            "enum Flag\n"
+            "  | on\n"
+            "enum Packet\n"
+            "  | packet(on: int, other: int)\n"
+            "let item = packet(1, 2)\n"
+            "case item of | packet(on, _ as on) => on"
+        )
+    )
+    case = resolved.program.body.items[-1]
+    assert isinstance(case, Case)
+    pattern = case.branches[0].pattern
+    assert isinstance(pattern, ConstructorPattern)
+    first_binder, second_binder = pattern.positional
+    assert isinstance(first_binder, VarPattern)
+    assert isinstance(second_binder, AsPattern)
+
+    env = TypeEnvironment()
+    _TypeBuilder(env).collect(resolved.program)
+    checker = _Checker(env, resolved, HostCapabilities())
+    checker._bind_pattern_types(case.branches[0].pattern, EnumType("Packet"), case.branches[0])
+
+    selections = checker._select_ready_pattern_slots()
+
+    assert len(selections) == 1
+    assert selections[0].error is not None
+    assert str(selections[0].error) == "Name 'on' is bound more than once in this pattern."
+    assert selections[0].error.span == second_binder.span
+
+
+def test_slot_selector_uses_unique_outside_constructor_candidate() -> None:
+    from agm.agl.typecheck.builder import _TypeBuilder
+    from agm.agl.typecheck.checker import _Checker
+
+    resolved = resolve_module(
+        parse_program(
+            "enum Flag\n"
+            "  | on\n"
+            "enum Packet\n"
+            "  | packet(flag: Flag)\n"
+            "let item = packet(on())\n"
+            "case item of | packet(on) => on"
+        )
+    )
+    case = resolved.program.body.items[-1]
+    assert isinstance(case, Case)
+    pattern = case.branches[0].pattern
+    assert isinstance(pattern, ConstructorPattern)
+    bare = pattern.positional[0]
+    assert isinstance(bare, VarPattern)
+    slot = next(iter(resolved.pattern_slots.values()))
+
+    env = TypeEnvironment()
+    _TypeBuilder(env).collect(resolved.program)
+    checker = _Checker(env, resolved, HostCapabilities())
+    checker._bind_pattern_types(case.branches[0].pattern, EnumType("Packet"), case.branches[0])
+    checker._pattern_classifications[bare.node_id] = ConstructorRef(
+        owner_name="unrelated",
+        variant="on",
+        owner_decl_node_id=-1,
+        type_params=(),
+    )
+
+    checker._select_ready_pattern_slots()
+
+    assert checker._slot_constructor_refs[slot.slot_id] == resolved.constructor_candidates["on"][0]
+
+
+def test_slot_selector_models_outside_constructor_ambiguity() -> None:
+    from agm.agl.typecheck.builder import _TypeBuilder
+    from agm.agl.typecheck.checker import _Checker
+
+    resolved = resolve_module(
+        parse_program(
+            "enum Flag\n"
+            "  | on\n"
+            "enum Other\n"
+            "  | on\n"
+            "enum Packet\n"
+            "  | packet(flag: Flag)\n"
+            "let item = packet(Flag::on)\n"
+            "case item of | packet(on) => on"
+        )
+    )
+    case = resolved.program.body.items[-1]
+    assert isinstance(case, Case)
+    pattern = case.branches[0].pattern
+    assert isinstance(pattern, ConstructorPattern)
+    bare = pattern.positional[0]
+    assert isinstance(bare, VarPattern)
+
+    env = TypeEnvironment()
+    _TypeBuilder(env).collect(resolved.program)
+    checker = _Checker(env, resolved, HostCapabilities())
+    checker._bind_pattern_types(case.branches[0].pattern, EnumType("Packet"), case.branches[0])
+
+    selections = checker._select_ready_pattern_slots()
+
+    assert len(selections) == 1
+    assert selections[0].error is not None
+    assert str(selections[0].error) == (
+        "'on' is ambiguous outside the pattern; qualify the reference."
+    )
+    assert selections[0].error.span == bare.span
+    with pytest.raises(AglTypeError, match="ambiguous outside the pattern"):
+        check_module(resolved, HostCapabilities())
+
+
+def test_self_validation_rejects_shadow_success_when_authoritative_duplicate_fails() -> None:
+    resolved = resolve_module(
+        parse_program(
+            "enum Flag\n"
+            "  | on\n"
+            "enum Packet\n"
+            "  | packet(on: int, other: int)\n"
+            "let item = packet(1, 2)\n"
+            "case item of | packet(on, _ as on) => on"
+        )
+    )
+    slot = next(iter(resolved.pattern_slots.values()))
+    malformed = replace(
+        resolved,
+        pattern_slots={slot.slot_id: replace(slot, candidates=(slot.candidates[0],))},
+    )
+
+    with pytest.raises(AssertionError, match="pattern-slot selection invariant failed"):
+        check_module(malformed, HostCapabilities())
+
+
+def test_self_validation_rejects_different_duplicate_diagnostic() -> None:
+    resolved = resolve_module(
+        parse_program(
+            "enum Flag\n"
+            "  | on\n"
+            "enum Packet\n"
+            "  | packet(on: int, other: int)\n"
+            "let item = packet(1, 2)\n"
+            "case item of | packet(on, _ as on) => on"
+        )
+    )
+    slot = next(iter(resolved.pattern_slots.values()))
+    malformed = replace(
+        resolved,
+        pattern_slots={slot.slot_id: replace(slot, candidates=tuple(reversed(slot.candidates)))},
+    )
+
+    with pytest.raises(AssertionError, match="selection diagnostics disagree"):
+        check_module(malformed, HostCapabilities())
+
+
+def test_self_validation_rejects_shadow_ambiguity_when_authority_succeeds() -> None:
+    resolved = resolve_module(
+        parse_program(
+            "enum Flag\n"
+            "  | on\n"
+            "enum Packet\n"
+            "  | packet(flag: Flag)\n"
+            "let item = packet(on())\n"
+            "case item of | packet(on) => on"
+        )
+    )
+    slot = next(iter(resolved.pattern_slots.values()))
+    malformed = replace(
+        resolved,
+        pattern_slots={slot.slot_id: replace(slot, outside_constructor_candidates=2)},
+    )
+
+    with pytest.raises(AssertionError, match="shadow selection failed"):
+        check_module(malformed, HostCapabilities())
+
+
+def test_nested_overloaded_fallback_keeps_authoritative_error_with_self_validation() -> None:
+    with pytest.raises(AglTypeError):
+        check_module(
+            resolve_module(parse_program(_NESTED_OVERLOADED_FALLBACK_SOURCE)), HostCapabilities()
+        )
+
+
+def test_nested_overloaded_fallback_keeps_authoritative_error_without_self_validation(
+    self_validation_disabled: None,
+) -> None:
+    with pytest.raises(AglTypeError):
+        check_module(
+            resolve_module(parse_program(_NESTED_OVERLOADED_FALLBACK_SOURCE)), HostCapabilities()
+        )
+
+
+def test_production_path_keeps_authoritative_outside_ambiguity(
+    self_validation_disabled: None,
+) -> None:
+    source = (
+        "enum Flag\n"
+        "  | on\n"
+        "enum Other\n"
+        "  | on\n"
+        "enum Packet\n"
+        "  | packet(flag: Flag)\n"
+        "let item = packet(Flag::on)\n"
+        "case item of | packet(on) => on"
+    )
+
+    with pytest.raises(AglTypeError, match="ambiguous outside the pattern"):
+        check_module(resolve_module(parse_program(source)), HostCapabilities())
+
+
+def test_typecheck_rejects_a_binderless_slot_without_an_alternative() -> None:
+    resolved = resolve_module(
+        parse_program(
+            "enum Flag\n"
+            "  | on\n"
+            "enum Packet\n"
+            "  | packet(flag: Flag)\n"
+            "let item = packet(on())\n"
+            "case item of | packet(on) => on"
+        )
+    )
+    slot = next(iter(resolved.pattern_slots.values()))
+    malformed = replace(
+        resolved,
+        pattern_slots={slot.slot_id: replace(slot, alternative=None)},
+    )
+
+    with pytest.raises(AssertionError):
+        check_module(malformed, HostCapabilities())
+
+
+def test_typecheck_self_validation_rejects_slot_reconciliation_mismatch() -> None:
+    resolved = resolve_module(
+        parse_program(
+            "enum Flag\n"
+            "  | on\n"
+            "enum Packet\n"
+            "  | packet(flag: Flag)\n"
+            "let value = 0\n"
+            "let item = packet(on())\n"
+            "case item of | packet(on) => on"
+        )
+    )
+    slot = next(iter(resolved.pattern_slots.values()))
+    value = resolved.program.body.items[2]
+    assert isinstance(value, LetDecl)
+    malformed_alternative = BindingRef(
+        name="on",
+        mutable=False,
+        decl_span=value.span,
+        decl_node_id=value.node_id,
+        kind=BinderKind.let_binding,
+    )
+    malformed = replace(
+        resolved,
+        pattern_slots={slot.slot_id: replace(slot, alternative=malformed_alternative)},
+    )
+
+    with pytest.raises(AssertionError):
+        check_module(malformed, HostCapabilities())
+
+
+def test_typecheck_rolls_back_selected_nested_pattern_slots() -> None:
+    from agm.agl.typecheck.builder import _TypeBuilder
+    from agm.agl.typecheck.checker import _Checker
+
+    resolved = resolve_module(
+        parse_program(
+            "enum Flag\n"
+            "  | on\n"
+            "enum Packet\n"
+            "  | packet(flag: Flag)\n"
+            "var on: int = 0\n"
+            "let item = packet(Flag::on)\n"
+            "case item of\n"
+            "  | packet(on) =>\n"
+            "    case item of\n"
+            "      | packet(on) =>\n"
+            '        on := "wrong"\n'
+            "        on\n"
+            "      | packet(_) => 0\n"
+            "  | packet(_) => 0"
+        )
+    )
+    env = TypeEnvironment()
+    _TypeBuilder(env).collect(resolved.program)
+    checker = _Checker(env, resolved, HostCapabilities())
+
+    with pytest.raises(AglTypeError):
+        checker.check_module(resolved.program)
+
+    assert checker._slot_resolution == {}
+    assert checker._slot_constructor_refs == {}
+    assert checker._selected_pattern_slots == {}
 
 
 def test_checked_module_accessors_support_slot_reference_table() -> None:

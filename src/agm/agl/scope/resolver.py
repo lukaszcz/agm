@@ -50,6 +50,8 @@ from agm.agl.scope.symbols import (
     ConstructorRef,
     ModuleResolution,
     ScopeNode,
+    immutable_assignment_message,
+    immutable_binder_phrase,
 )
 from agm.agl.semantics.engine_keys import RESERVED_PROGRAM_NAMES
 from agm.agl.semantics.type_table import BUILTIN_PRELUDE_TYPE_DEFS
@@ -142,24 +144,6 @@ _BUILTIN_CONSTRUCTOR_NODE_ID = -1
 
 # The set of names that may NOT be used as any kind of binding.
 _RESERVED_NAMES: frozenset[str] = frozenset(_BUILTIN_CALL_NAMES)
-
-# Per-binder phrasing for the ``:=``-on-immutable rejection.
-_IMMUTABLE_BINDER_PHRASES: dict[BinderKind, str] = {
-    BinderKind.let_binding: "it was declared with 'let'",
-    BinderKind.catch_binder: "it is a catch binder",
-    BinderKind.pattern_binding: "it is a pattern binding",
-    BinderKind.function_binding: "it is a function (def) binding",
-    BinderKind.agent_binding: "it is an agent binding",
-    BinderKind.param_binding: "it is a parameter binding",
-    BinderKind.constructor_binding: "it is a constructor binding",
-    BinderKind.loop_var_binding: "it is a for-loop variable binding",
-}
-
-
-def _immutable_binder_phrase(kind: BinderKind) -> str:
-    """Return the ``:=``-rejection phrase naming *kind*'s binder."""
-    return _IMMUTABLE_BINDER_PHRASES[kind]
-
 
 # ---------------------------------------------------------------------------
 # Resolver class
@@ -1094,9 +1078,7 @@ class _Resolver:
                 )
         if not ref.mutable and ref.decl_node_id not in self._provisional_pattern_binders:
             raise AglScopeError(
-                f"Cannot assign to '{name}': "
-                f"{_immutable_binder_phrase(ref.kind)} (immutable). "
-                f"Declare with 'var' to make the variable mutable.",
+                immutable_assignment_message(name, ref.kind),
                 span=node.span,
             )
         self._resolution[node.node_id] = ref
@@ -1122,7 +1104,7 @@ class _Resolver:
         if not ref.mutable:
             raise AglScopeError(
                 f"Cannot assign to '{target.name}': "
-                f"{_immutable_binder_phrase(ref.kind)} (immutable).",
+                f"{immutable_binder_phrase(ref.kind)} (immutable).",
                 span=node.span,
             )
         self._resolution[node.node_id] = ref

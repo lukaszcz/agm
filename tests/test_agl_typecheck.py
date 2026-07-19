@@ -3373,8 +3373,12 @@ class TestConstructorRefDispatch:
         )
         resolved = resolve_module(parse_program(source))
 
-        with pytest.raises(AglTypeError):
+        with pytest.raises(AglTypeError) as excinfo:
             check_module(resolved, default_capabilities())
+
+        # The rejection names the actual binder kind, matching the wording the
+        # scope pass uses for assignments it rejects itself.
+        assert "pattern binding" in str(excinfo.value)
 
     def test_reconciliation_rollback_restores_constructor_references(self) -> None:
         from agm.agl.typecheck.checker import _Checker, _InferenceRegion

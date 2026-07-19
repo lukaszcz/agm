@@ -22,6 +22,7 @@ from dataclasses import dataclass, field
 
 from agm.agl.diagnostics import AglError, Diagnostic
 from agm.agl.modules.ids import ENTRY_ID, ModuleId
+from agm.agl.semantics.types import EnumType
 from agm.agl.syntax.nodes import AgentDecl, FuncDef, Program
 from agm.agl.syntax.spans import SourceSpan
 
@@ -118,6 +119,40 @@ class BinderKind(enum.Enum):
     loop_var_binding = "loop_var_binding"
 
 
+# Per-binder phrasing for the ``:=``-on-immutable rejection.  Mutable binder
+# kinds (``var_binding``, ``builtin_var_binding``) have no entry: an assignment
+# to them is never rejected.
+_IMMUTABLE_BINDER_PHRASES: dict[BinderKind, str] = {
+    BinderKind.let_binding: "it was declared with 'let'",
+    BinderKind.catch_binder: "it is a catch binder",
+    BinderKind.pattern_binding: "it is a pattern binding",
+    BinderKind.function_binding: "it is a function (def) binding",
+    BinderKind.agent_binding: "it is an agent binding",
+    BinderKind.param_binding: "it is a parameter binding",
+    BinderKind.constructor_binding: "it is a constructor binding",
+    BinderKind.loop_var_binding: "it is a for-loop variable binding",
+}
+
+
+def immutable_binder_phrase(kind: BinderKind) -> str:
+    """Return the ``:=``-rejection phrase naming *kind*'s binder."""
+    return _IMMUTABLE_BINDER_PHRASES[kind]
+
+
+def immutable_assignment_message(name: str, kind: BinderKind) -> str:
+    """Return the canonical ``:=``-on-immutable rejection message for *name*.
+
+    Both the scope resolver and the type checker can reject such an assignment
+    (field-directed pattern binders are only classified during checking), so
+    the wording lives here and is identical whichever pass reports it.
+    """
+    return (
+        f"Cannot assign to '{name}': "
+        f"{immutable_binder_phrase(kind)} (immutable). "
+        f"Declare with 'var' to make the variable mutable."
+    )
+
+
 # ---------------------------------------------------------------------------
 # ConstructorRef — metadata about a resolved constructor reference
 # ---------------------------------------------------------------------------
@@ -146,6 +181,19 @@ class ConstructorRef:
     owner_decl_node_id: int
     type_params: tuple[str, ...]
     owner_module_id: ModuleId = ENTRY_ID
+
+    def matches(self, enum_type: EnumType, variant: str) -> bool:
+        """Whether this reference denotes *variant* of *enum_type*.
+
+        Constructor identity is module-aware: same-named constructors declared
+        in different modules are distinct, so the owning module must agree as
+        well as the enum name and the variant spelling.
+        """
+        return (
+            self.owner_module_id == enum_type.module_id
+            and self.owner_name == enum_type.name
+            and self.variant == variant
+        )
 
 
 # ---------------------------------------------------------------------------

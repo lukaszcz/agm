@@ -56,6 +56,7 @@ from agm.agl.scope.symbols import (
     ConstructorRef,
     ModuleResolution,
     ScopeNode,
+    immutable_assignment_message,
 )
 from agm.agl.semantics.type_table import TypeTable, comparable_types
 from agm.agl.semantics.types import (
@@ -184,6 +185,14 @@ from agm.agl.typecheck.inference import (
 # Built-in function names that user-defined defs may not shadow. Derived from
 # the single source of truth in ``scope.symbols`` so the two never drift.
 _BUILTIN_FUNC_NAMES: frozenset[str] = frozenset(BUILTIN_CALL_NAMES)
+
+
+def _variant_not_in_enum(variant: str, enum_type: EnumType, span: SourceSpan) -> AglTypeError:
+    """Return the diagnostic for a variant spelling the matched enum lacks."""
+    return AglTypeError(
+        f"Variant '{variant}' does not belong to enum '{enum_type.name}'.",
+        span=span,
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -982,7 +991,7 @@ class _Checker:
             ref = self._resolved.resolution[stmt.node_id]
             if not ref.mutable:
                 raise AglTypeError(
-                    f"Cannot assign to '{ref.name}': assignment requires a mutable binding.",
+                    immutable_assignment_message(ref.name, ref.kind),
                     span=stmt.target.span,
                 )
             target_type = self._require_binding_type(ref)
@@ -3121,31 +3130,23 @@ class _Checker:
         assert isinstance(pattern, ConstructorPattern), (
             f"Unexpected pattern kind: {type(pattern).__name__}"
         )
-        if not isinstance(subj_type, EnumType):
-            raise AglTypeError(
-                f"Cannot match constructor pattern '{pattern.name}' against "
-                f"non-enum type '{subj_type!r}'.",
-                span=pattern.span,
-            )
+        enum_type = self._require_enum_scrutinee(pattern.name, subj_type, pattern.span)
         self._check_variant_qualification(
             qualifier=pattern.qualifier,
             module_qualifier=pattern.module_qualifier,
-            enum_type=subj_type,
+            enum_type=enum_type,
             span=pattern.span,
         )
         variant_name = pattern.name
-        enum_variants = self._env.type_table.enum_variants(subj_type)
+        enum_variants = self._env.type_table.enum_variants(enum_type)
         if variant_name not in enum_variants:
-            raise AglTypeError(
-                f"Variant '{variant_name}' does not belong to enum '{subj_type.name}'.",
-                span=pattern.span,
-            )
+            raise _variant_not_in_enum(variant_name, enum_type, pattern.span)
         vfields = enum_variants[variant_name]
         field_kinds = self._env.get_constructor_field_kinds(
-            subj_type.name, variant_name, module_id=subj_type.module_id
+            enum_type.name, variant_name, module_id=enum_type.module_id
         )
         assert field_kinds is not None, (
-            f"field kinds not registered for {subj_type.name}.{variant_name}"
+            f"field kinds not registered for {enum_type.name}.{variant_name}"
         )
         binding = bind_pattern_args(
             field_kinds,
@@ -3168,6 +3169,20 @@ class _Checker:
                 )
         self._record_constructor_pattern_binding(pattern.node_id, tuple(bound_pairs))
 
+    @staticmethod
+    def _require_enum_scrutinee(name: str, subj_type: Type, span: SourceSpan) -> EnumType:
+        """Return *subj_type* as an ``EnumType``, rejecting a non-enum scrutinee.
+
+        Constructor spellings — bare or applied — only match enum values, so
+        both pattern forms share this guard.
+        """
+        if not isinstance(subj_type, EnumType):
+            raise AglTypeError(
+                f"Cannot match constructor pattern '{name}' against non-enum type '{subj_type!r}'.",
+                span=span,
+            )
+        return subj_type
+
     def _candidate_for_field_type(
         self, pattern: VarPattern, field_type: Type
     ) -> ConstructorRef | None:
@@ -3175,29 +3190,20 @@ class _Checker:
         if not isinstance(field_type, EnumType):
             return None
         for candidate in self._resolved.pattern_constructor_candidates.get(pattern.node_id, ()):
-            if (
-                candidate.owner_module_id == field_type.module_id
-                and candidate.owner_name == field_type.name
-                and candidate.variant == pattern.name
-            ):
+            if candidate.matches(field_type, pattern.name):
                 return candidate
         return None
 
     def _check_top_level_bare_constructor(self, pattern: VarPattern, subj_type: Type) -> None:
         """Finalize a top-level bare pattern as a nullary enum constructor."""
-        if not isinstance(subj_type, EnumType):
-            raise AglTypeError(
-                f"Cannot match constructor pattern '{pattern.name}' against "
-                f"non-enum type '{subj_type!r}'.",
-                span=pattern.span,
-            )
-        candidate = self._candidate_for_field_type(pattern, subj_type)
+        enum_type = self._require_enum_scrutinee(pattern.name, subj_type, pattern.span)
+        candidate = self._candidate_for_field_type(pattern, enum_type)
         if candidate is None:
-            raise AglTypeError(
-                f"Variant '{pattern.name}' does not belong to enum '{subj_type.name}'.",
-                span=pattern.span,
-            )
-        self._require_nullary_bare_constructor(pattern, subj_type)
+            # A visible constructor of the same spelling may belong to another
+            # enum; the bare name then names no constructor of this enum, even
+            # when this enum happens to declare a same-named variant.
+            raise _variant_not_in_enum(pattern.name, enum_type, pattern.span)
+        self._require_nullary_bare_constructor(pattern, enum_type)
         self._record_pattern_classification(pattern.node_id, candidate)
 
     def _check_field_bare_pattern(
@@ -3240,10 +3246,7 @@ class _Checker:
         assert isinstance(enum_type, EnumType)
         fields = self._env.type_table.enum_variants(enum_type).get(pattern.name)
         if fields is None:
-            raise AglTypeError(
-                f"Variant '{pattern.name}' does not belong to enum '{enum_type.name}'.",
-                span=pattern.span,
-            )
+            raise _variant_not_in_enum(pattern.name, enum_type, pattern.span)
         if fields:
             raise AglTypeError(
                 f"'{pattern.name}' has fields; write '{pattern.name}(...)' to match it.",
@@ -3300,64 +3303,110 @@ class _Checker:
             ]
             if not provisional:
                 continue
-            binders = [
-                candidate
-                for candidate in candidates
-                if self._pattern_classifications.get(candidate.node_id) is None
-            ]
-            if len(binders) > 1:
-                raise AglTypeError(
-                    f"Name '{name}' is bound more than once in this pattern.",
-                    span=binders[1].span,
-                )
+            final_binder = self._final_binder_for(name, candidates)
             provisional_ids = {candidate.node_id for candidate in provisional}
-            final_binder = binders[0] if binders else None
             for provisional_id in provisional_ids:
                 self._reconciled_pattern_binders[provisional_id] = final_binder
-            by_decl = self._resolution_reverse_index()
             reference_node_ids = [
                 ref_node_id
                 for provisional_id in provisional_ids
-                for ref_node_id in by_decl.get(provisional_id, ())
+                for ref_node_id in self._resolution_reverse_index().get(provisional_id, ())
             ]
             if not reference_node_ids:
                 continue
-            if final_binder is not None:
-                target_ref = replace(
-                    self._resolved.resolution[reference_node_ids[0]],
-                    decl_span=final_binder.span,
-                    decl_node_id=final_binder.node_id,
-                )
+            target_ref = self._reconciled_target_ref(
+                name,
+                case_scope,
+                final_binder,
+                reference_node_ids[0],
+                provisional[0].span,
+            )
+            constructor: ConstructorRef | None = None
+            if target_ref.kind is BinderKind.constructor_binding:
+                constructor = self._pattern_classifications[provisional[0].node_id]
+                assert constructor is not None
+            self._retarget_references(provisional_ids, reference_node_ids, target_ref, constructor)
+
+    def _final_binder_for(
+        self, name: str, candidates: list[VarPattern | AsPattern]
+    ) -> VarPattern | AsPattern | None:
+        """Return the one spelling of *name* that truly binds, if any.
+
+        Spellings classified as constructors bind nothing; more than one
+        surviving binder means the pattern binds *name* twice.
+        """
+        binders = [
+            candidate
+            for candidate in candidates
+            if self._pattern_classifications.get(candidate.node_id) is None
+        ]
+        if len(binders) > 1:
+            raise AglTypeError(
+                f"Name '{name}' is bound more than once in this pattern.",
+                span=binders[1].span,
+            )
+        return binders[0] if binders else None
+
+    def _reconciled_target_ref(
+        self,
+        name: str,
+        case_scope: ScopeNode,
+        final_binder: VarPattern | AsPattern | None,
+        sample_ref_node_id: int,
+        provisional_span: SourceSpan,
+    ) -> BindingRef:
+        """Return the binding branch references to *name* must point at.
+
+        With a final binder the provisional reference is simply re-pointed at
+        it; otherwise the name means whatever it meant outside the pattern,
+        which must be unambiguous when that is a constructor spelling.
+        """
+        if final_binder is not None:
+            return replace(
+                self._resolved.resolution[sample_ref_node_id],
+                decl_span=final_binder.span,
+                decl_node_id=final_binder.node_id,
+            )
+        target_ref = self._reconciled_lexical_lookup(case_scope, name)
+        candidates_for_name = self._resolved.constructor_candidates.get(name, ())
+        if target_ref.kind is BinderKind.constructor_binding and len(candidates_for_name) != 1:
+            raise AglTypeError(
+                f"'{name}' is ambiguous outside the pattern; qualify the reference.",
+                span=provisional_span,
+            )
+        return target_ref
+
+    def _retarget_references(
+        self,
+        provisional_ids: set[int],
+        reference_node_ids: list[int],
+        target_ref: BindingRef,
+        constructor: ConstructorRef | None,
+    ) -> None:
+        """Re-point *reference_node_ids* at *target_ref*, recording undo state.
+
+        The originals are stashed on the active inference region so a rollback
+        restores the resolver's tables, and the lazy reverse index is moved
+        along with the references it indexes.
+        """
+        region = self._inference_region
+        assert region is not None
+        for ref_node_id in reference_node_ids:
+            region.reconciled_resolution_originals.setdefault(
+                ref_node_id, self._resolved.resolution[ref_node_id]
+            )
+            region.reconciled_constructor_ref_originals.setdefault(
+                ref_node_id, self._resolved.constructor_refs.get(ref_node_id)
+            )
+            self._resolved.resolution[ref_node_id] = target_ref
+            if constructor is not None:
+                self._resolved.constructor_refs[ref_node_id] = constructor
             else:
-                target_ref = self._reconciled_lexical_lookup(case_scope, name)
-                candidates_for_name = self._resolved.constructor_candidates.get(name, ())
-                if (
-                    target_ref.kind is BinderKind.constructor_binding
-                    and len(candidates_for_name) != 1
-                ):
-                    raise AglTypeError(
-                        f"'{name}' is ambiguous outside the pattern; qualify the reference.",
-                        span=provisional[0].span,
-                    )
-            region = self._inference_region
-            assert region is not None
-            for ref_node_id in reference_node_ids:
-                region.reconciled_resolution_originals.setdefault(
-                    ref_node_id, self._resolved.resolution[ref_node_id]
-                )
-                region.reconciled_constructor_ref_originals.setdefault(
-                    ref_node_id, self._resolved.constructor_refs.get(ref_node_id)
-                )
-                self._resolved.resolution[ref_node_id] = target_ref
-                if target_ref.kind is BinderKind.constructor_binding:
-                    constructor = self._pattern_classifications[provisional[0].node_id]
-                    assert constructor is not None
-                    self._resolved.constructor_refs[ref_node_id] = constructor
-                else:
-                    self._resolved.constructor_refs.pop(ref_node_id, None)
-            for provisional_id in provisional_ids:
-                by_decl.pop(provisional_id, None)
-            by_decl.setdefault(target_ref.decl_node_id, []).extend(reference_node_ids)
+                self._resolved.constructor_refs.pop(ref_node_id, None)
+        by_decl = self._resolution_reverse_index()
+        for provisional_id in provisional_ids:
+            by_decl.pop(provisional_id, None)
+        by_decl.setdefault(target_ref.decl_node_id, []).extend(reference_node_ids)
 
     def _resolution_reverse_index(self) -> dict[int, list[int]]:
         """Return the declaration → references index, building it if needed."""

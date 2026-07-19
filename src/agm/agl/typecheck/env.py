@@ -325,6 +325,10 @@ class CheckedModule:
         exceptions) so downstream consumers (the interpreter) can resolve
         constructors without reconstructing it.  This is the public contract
         for type-namespace access after checking.
+    ``slot_resolution`` / ``slot_constructor_refs``
+        Checker selections for deferred field-directed pattern slots.  The
+        ``binding_for`` and ``constructor_ref_for`` accessors combine these
+        with the raw scope tables.
     """
 
     resolved: ModuleResolution
@@ -341,6 +345,28 @@ class CheckedModule:
     module_id: ModuleId = ENTRY_ID
     import_env: ImportEnv = field(default_factory=lambda: ImportEnv({}, {}))
     source_text: str = ""
+    slot_resolution: dict[int, BindingRef] = field(default_factory=dict)
+    slot_constructor_refs: dict[int, ConstructorRef] = field(default_factory=dict)
+
+    def binding_for(self, node_id: int) -> BindingRef | None:
+        """Return *node_id*'s checked binding, dereferencing a pattern slot if present."""
+        raw_binding = self.resolved.resolution.get(node_id)
+        slot_id = self.resolved.slot_references.get(node_id)
+        if slot_id is None and raw_binding is not None:
+            slot_id = raw_binding.slot_id
+        if slot_id is None:
+            return raw_binding
+        return self.slot_resolution.get(slot_id)
+
+    def constructor_ref_for(self, node_id: int) -> ConstructorRef | None:
+        """Return *node_id*'s checked constructor reference, dereferencing a slot if present."""
+        raw_binding = self.resolved.resolution.get(node_id)
+        slot_id = self.resolved.slot_references.get(node_id)
+        if slot_id is None and raw_binding is not None:
+            slot_id = raw_binding.slot_id
+        if slot_id is None:
+            return self.resolved.constructor_refs.get(node_id)
+        return self.slot_constructor_refs.get(slot_id)
 
 
 def _assert_checked_types_closed(types: Iterable[Type], *, owner: str) -> None:

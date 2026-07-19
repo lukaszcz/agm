@@ -6,6 +6,8 @@ Data model
   binding, whether it is mutable, and its declaration span.
 - ``ConstructorRef`` — metadata about a resolved constructor reference (record
   or enum variant).
+- ``PatternSlot`` — a scope-created deferred pattern binding selected by the
+  checker in a later pass.
 - ``ScopeNode`` — a node in the scope tree (one per scope-introducing
   construct).  The root ``ScopeNode`` is always present; nested scopes form a
   tree for visibility analysis.
@@ -105,6 +107,9 @@ class BinderKind(enum.Enum):
         A record constructor or enum variant binding (immutable value binding).
     ``loop_var_binding``
         A ``for``-loop iteration variable (immutable, loop-body-local).
+    ``pattern_slot``
+        A deferred field-directed pattern binding whose final target is selected
+        by the type checker.
     """
 
     let_binding = "let_binding"
@@ -117,6 +122,7 @@ class BinderKind(enum.Enum):
     builtin_var_binding = "builtin_var_binding"
     constructor_binding = "constructor_binding"
     loop_var_binding = "loop_var_binding"
+    pattern_slot = "pattern_slot"
 
 
 # Per-binder phrasing for the ``:=``-on-immutable rejection.  Mutable binder
@@ -197,6 +203,43 @@ class ConstructorRef:
 
 
 # ---------------------------------------------------------------------------
+# PatternSlot — deferred field-directed pattern binding
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class SlotCandidate:
+    """One pattern candidate that may determine a :class:`PatternSlot`'s target.
+
+    ``pattern_node_id`` identifies the candidate pattern. ``unconditional``
+    records whether that candidate applies regardless of the matched field's
+    constructor interpretation.
+    """
+
+    pattern_node_id: int
+    span: SourceSpan
+    unconditional: bool
+
+
+@dataclass(frozen=True, slots=True)
+class PatternSlot:
+    """A shared deferred binding for field-directed pattern candidates.
+
+    ``alternative`` is the visible non-slot binding, if any, and
+    ``outside_constructor_candidates`` counts the visible same-named
+    constructors outside the pattern. Scope creates one slot for each
+    ambiguous branch-local name. The checker later selects its binding or
+    constructor interpretation without changing scope's reference tables.
+    """
+
+    slot_id: int
+    name: str
+    candidates: tuple[SlotCandidate, ...]
+    alternative: BindingRef | None
+    outside_constructor_candidates: int
+
+
+# ---------------------------------------------------------------------------
 # BindingRef — a resolved variable reference
 # ---------------------------------------------------------------------------
 
@@ -223,6 +266,9 @@ class BindingRef:
         local bindings, this is always :data:`~agm.agl.modules.ids.ENTRY_ID`.
         For cross-module resolution via ``resolve_program()``, cross-module
         references carry the owning library module's id.
+    ``slot_id``
+        The deferred :class:`PatternSlot` id for a field-directed pattern
+        reference, or ``None`` for an ordinary resolved binding.
     """
 
     name: str
@@ -231,6 +277,7 @@ class BindingRef:
     decl_node_id: int
     kind: BinderKind
     module_id: ModuleId = ENTRY_ID
+    slot_id: int | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -338,6 +385,12 @@ class ModuleResolution:
         when the resolver entered that case.  Downstream diagnostics use this
         provenance to determine which constructor spellings are valid at the
         case site without reimplementing lexical lookup.
+    ``pattern_slots``
+        Deferred field-directed pattern slots keyed by slot id.  Empty until
+        scope starts emitting slots.
+    ``slot_references``
+        Maps reference node ids to their deferred pattern slot ids.  Empty
+        until scope starts emitting slots.
     """
 
     program: Program
@@ -359,6 +412,8 @@ class ModuleResolution:
     )
     provisional_pattern_binders: frozenset[int] = frozenset()
     case_scopes: dict[int, ScopeNode] = field(default_factory=dict)
+    pattern_slots: dict[int, PatternSlot] = field(default_factory=dict)
+    slot_references: dict[int, int] = field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------

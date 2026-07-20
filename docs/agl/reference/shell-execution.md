@@ -110,8 +110,9 @@ A nonzero exit raises `ExecError`, and unparseable output raises
 - `format` — codec name (a `text` value); normally auto-selected.
 - `strict_json` — `bool`; opts the JSON codec into strict parsing.
 - `on_parse_error` — `ParsePolicy`; controls retry behavior on parse
-  failures in the parsed form. In the structured form this parameter is
-  ignored.
+  failures in the parsed form. In the structured form (an untyped `exec`
+  returning `ExecResult`, where no stdout parsing happens) passing this
+  parameter is a static error.
 
 ## Retries
 

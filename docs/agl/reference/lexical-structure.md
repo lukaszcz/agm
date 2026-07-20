@@ -67,6 +67,7 @@ variable, agent, or function names:
 record enum type param program agent def fn let var for while do until done
 if else case of try catch raise return break continue exception extends builtin extern as as?
 and or not is in to downto by true false null
+infixl infixr prio
 ```
 
 **`as?`** is a single reserved keyword/token — the `?` is part of the
@@ -169,7 +170,7 @@ and **not** a structural operator/punctuator delimiter.  The delimiter
 characters that terminate an identifier are:
 
 ```
-(  )  [  ]  {  }  :  ,  .  |  ;  /
+(  )  [  ]  {  }  :  ,  .  |  ;  /  @  =
 ```
 
 The string quotes `"` and `'`, and the arithmetic operators `+` and `*`, are
@@ -179,9 +180,10 @@ starts a string template because an identifier must begin with a letter or
 `_`.
 
 Every other character is an identifier-continuation character.  In particular
-the operator characters `-`, `?`, `!`, `<`, `>`, `=` may appear *inside*
+the operator characters `-`, `?`, `!`, `<`, `>` may appear *inside*
 an identifier, so names like `ask-prompt`, `ask?`, and `do-it-now!` scan as a
-single token.
+single token.  Note that `=` and `@` **are** delimiters, so `a=b` scans as
+three tokens and `@std` as two.
 
 Operator names are a second lexical class of identifier: the grammar terminal
 `OP_NAME`. They start with an operator character and continue while the next

@@ -126,7 +126,8 @@ A `def` inside a nested block is a static error. See
   (`int → decimal` widening applies; see [Types](types.md)), and the
   binding's declared type is the annotation.
 - Without an annotation, the binding's type is inferred from the initializer.
-  **Untyped `ask` and `exec` results default to `text`**:
+  **An untyped `ask` defaults to `text`; an untyped `exec` defaults to the
+  structured `ExecResult`**:
 
   ```agl
   let x = ask "A"           # x: text
@@ -272,10 +273,10 @@ let one = mk(1)                    # called positionally, in field order
 
 Direct construction uses positional-greedy binding — positional arguments fill
 positional-capable fields first, then named arguments follow (`Box(value = 1)`,
-`some(value = x)`, or `Ok(42)` for a single-standard-field variant). A
+`Some(value = x)`, or `Ok(42)` for a single-standard-field variant). A
 constructor reached **through a variable** is an ordinary function value invoked
 **positionally**, in declaration order. Nullary enum variants are ordinary
-values (`let e: Option[int] = none`). See [Generics](generics.md) for the full
+values (`let e: Option[int] = None`). See [Generics](generics.md) for the full
 constructor-value story (including when a generic constructor needs an
 expected-type annotation).
 

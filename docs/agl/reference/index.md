@@ -46,11 +46,11 @@ enum Review
 agent reviewer
 agent impl
 
-def review_and_fix(artifact: text, retries: int = 2) -> text =
+def review_and_fix(artifact: text) -> text =
   let r: Review = ask(
     "Review the artifact for correctness:\n${artifact}",
     agent = reviewer,
-    on_parse_error = Retry(n = retries)
+    on_parse_error = Retry(n = 2)
   )
   case r of
     | Pass => artifact
@@ -64,6 +64,7 @@ var artifact: text = ask("Implement ${spec}", agent = impl)
 do[5]
   artifact := review_and_fix(artifact)
   let final: Review = ask("Final review:\n${artifact}", agent = reviewer)
+  final
 until final is Pass
 ```
 

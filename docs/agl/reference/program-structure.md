@@ -14,14 +14,18 @@ expression-oriented sequence.
 program    ::= block EOF
 block      ::= item ((NEWLINE | ";") item)* (NEWLINE | ";")?
 item       ::= import_decl                        (* header position only *)
+             | export_decl                        (* root only *)
              | "private"? record_def              (* root only *)
              | "private"? enum_def                (* root only *)
              | "private"? type_alias              (* root only *)
+             | "private"? exception_def           (* root only *)
              | param_decl                         (* root only *)
              | program_decl                       (* root only *)
              | agent_decl                         (* root only *)
+             | infix_decl                         (* root only *)
              | builtin_var_def                     (* root only; std/config only *)
              | "private"? func_def                (* root only *)
+             | "private"? extern_func_def         (* root only; file-backed modules *)
              | binder | expr
 binder     ::= let_decl | var_decl
 ```

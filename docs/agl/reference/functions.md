@@ -676,6 +676,11 @@ def make_policy(retries: int) -> ParsePolicy =
   if retries == 0 => ParsePolicy::Abort else => Retry(n = retries)
 ```
 
+The `on_parse_error` argument of `ask`/`exec` is the exception: it requires a
+**syntactic** static constructor written at the call site (`Abort`, or
+`Retry(n = <int literal>)`), so a `ParsePolicy` held in a binding or returned
+from a function like `make_policy` cannot be passed to it.
+
 ## Complete example
 
 ```agl
@@ -692,12 +697,11 @@ agent reviewer
 def summarize_issues(issues: list[text]) -> text =
   "Issues found:\n${issues}"
 
-def review_artifact(artifact: text, max_retries: int = 2) -> Review =
-  let policy = if max_retries > 0 => Retry(n = max_retries) else => Abort
+def review_artifact(artifact: text) -> Review =
   let r: Review = ask(
     "Review this artifact:\n${artifact}",
     agent = reviewer,
-    on_parse_error = policy
+    on_parse_error = Retry(n = 2)
   )
   r
 

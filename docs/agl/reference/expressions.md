@@ -624,7 +624,7 @@ initializer of a `let`/`var`:
 
 ```agl
 let x: int = raise Abort(message = "Cannot continue.")
-let y: int = if done => (return 0) | else => 1
+let y: int = if finished => (return 0) else => 1
 
 case status of
   | Ok => ()
@@ -642,7 +642,7 @@ type** (assignable to any expected type), so they may appear in any expression
 position inside a loop:
 
 ```agl
-let x: int = if done => break else => count
+let x: int = if finished => break else => count
 ```
 
 `break` exits the innermost enclosing loop immediately; the loop produces

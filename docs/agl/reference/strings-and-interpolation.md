@@ -35,9 +35,10 @@ argument, an `exec` command, or any other position.
 | exception | `TypeName(f1 = value1, …)` — record-style with all fields including `trace_id`, in declaration order |
 
 AgL structured values (`list`, `dict`, record, enum, exception) always render on
-a **single line** — no injected newlines. A `json` value that appears *nested*
-inside such a structured value renders compact (single-line) to preserve that
-property; a `json` value that is interpolated directly renders pretty (multi-line).
+a **single line** — no injected newlines. A `json` value renders as **compact**
+(single-line) JSON whether it is nested inside another structured value or
+interpolated directly; use `render(value, pretty = true)` for indented,
+multi-line output.
 
 Scalar text conventions:
 
@@ -56,11 +57,16 @@ To obtain JSON output use an explicit `as json` cast inside the interpolation:
 let r: R = R(x = 1)
 print "${r}"           # → R(x = 1)         (AgL render form — the default)
 
-# A json value interpolated directly is top-level, so it renders pretty
-# (multi-line, 2-space indent):
-print "${r as json}"   # → {
-                       #      "x": 1
-                       #    }
+# A json value renders as compact JSON, whether nested or interpolated directly:
+print "${r as json}"   # → {"x": 1}
+```
+
+For indented, multi-line JSON, call `render` explicitly:
+
+```agl
+print render(r as json, pretty = true)   # → {
+                                         #      "x": 1
+                                         #    }
 ```
 
 ## Opaque values in interpolation

@@ -90,8 +90,8 @@ agent name, is a static error.
 When `agent` is omitted, `ask` uses the host's configured default agent.
 There is no surface name for the default agent — it is implicit. A call
 that omits `agent` requires the host to have a default agent configured; if
-none is configured the host reports an invocation error before the program
-runs.
+none is configured, this is a static error (see
+[Host environment](host-environment.md)).
 
 ## Target types: types as contracts
 
@@ -465,7 +465,7 @@ because there is no response to parse.
 
 `callee::[Type](args)` is a general typed-call form for generic calls and bare
 constructor references. Qualified generic constructors put the type argument on
-the owning type instead, as in `Option[int]::some(value = 1)`. Type arguments
+the owning type instead, as in `Option[int]::Some(value = 1)`. Type arguments
 are delimited by square brackets because AgL identifiers may contain `<` and
 `>`, so `Review>` would otherwise scan as one token.
 

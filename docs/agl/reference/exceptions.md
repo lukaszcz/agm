@@ -231,7 +231,9 @@ python_type: text    # the raising Python exception's class name; empty for
 
 A **bounded** loop (`[n]`, with `n ≥ 1`) exhausted its bound before an exit
 condition triggered ([Control flow](control-flow.md)). An unbounded loop (no
-`[n]`) never raises this exception.
+`[n]`) raises this only when the host `max-iters` safety valve is active and its
+cap is reached (see [Control flow](control-flow.md)); with the valve off, an
+unbounded loop never raises it.
 
 ```text
 limit: int                  # the bound in effect

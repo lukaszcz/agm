@@ -233,7 +233,7 @@ for x in items do
 done
 
 # bottom type: `break` in a typed branch
-let v: int = if done => break else => count
+let v: int = if finished => break else => count
 ```
 
 `break`/`continue` are valid only **lexically inside a loop body within the

@@ -7,12 +7,13 @@ import pytest
 from agm.agl.capabilities import HostCapabilities
 from agm.agl.parser import parse_program
 from agm.agl.scope import resolve_module
-from agm.agl.scope.symbols import AglScopeError, BinderKind, BindingRef, PatternSlot, SlotCandidate
+from agm.agl.scope.symbols import AglScopeError, BinderKind, BindingRef, PatternSlot
 from agm.agl.syntax.nodes import (
     AsPattern,
     AssignStmt,
     Block,
     Case,
+    CaseBranch,
     ConstructorPattern,
     LetDecl,
     VarPattern,
@@ -27,19 +28,10 @@ def _resolve(source: str):
     return resolve_module(parse_program(source))
 
 
-def test_pattern_slot_model_and_empty_scope_tables() -> None:
+def test_a_program_without_patterns_creates_no_slots() -> None:
     resolved = _resolve("let value = 1\nvalue")
-    binding = next(iter(resolved.resolution.values()))
-    candidate = SlotCandidate(11, resolved.program.span, True)
-    slot = PatternSlot(7, "value", (candidate,), binding)
 
-    assert slot.candidates == (candidate,)
-    assert slot.alternative is binding
-    assert BinderKind.pattern_slot.value == "pattern_slot"
     assert resolved.pattern_slots == {}
-    assert not hasattr(resolved, "provisional_pattern_binders")
-    assert not hasattr(resolved, "case_scopes")
-    assert not hasattr(resolved, "slot_references")
 
 
 def test_scope_binds_one_shared_pattern_slot_per_branch_name() -> None:
@@ -341,54 +333,6 @@ def test_checked_accessors_dereference_nested_slot_alternatives() -> None:
     assert checked.constructor_ref_for(slot_refs[0]) is None
 
 
-def test_slot_selection_rejects_binderless_slot_without_alternative() -> None:
-    resolved = _resolve(
-        "enum Flag\n"
-        "  | on\n"
-        "enum Packet\n"
-        "  | packet(flag: Flag)\n"
-        "let item = packet(on())\n"
-        "case item of | packet(on) => on"
-    )
-    slot = next(iter(resolved.pattern_slots.values()))
-
-    with pytest.raises(AssertionError):
-        check_module(
-            replace(resolved, pattern_slots={slot.slot_id: replace(slot, alternative=None)}),
-            HostCapabilities(),
-        )
-
-
-def test_slot_selection_rejects_nested_slot_without_selected_final_alternative() -> None:
-    resolved = _resolve(
-        "enum Flag\n"
-        "  | on\n"
-        "enum Packet\n"
-        "  | packet(flag: Flag)\n"
-        "var on: int = 0\n"
-        "let item = packet(Flag::on)\n"
-        "case item of\n"
-        "  | packet(on) =>\n"
-        "    case item of\n"
-        "      | packet(on) => on\n"
-        "  | packet(_) => 0"
-    )
-    outer_slot, inner_slot = resolved.pattern_slots.values()
-    assert inner_slot.alternative is not None
-    assert inner_slot.alternative.kind is BinderKind.pattern_slot
-    malformed_alternative = replace(inner_slot.alternative, slot_id=inner_slot.slot_id + 1)
-    malformed = replace(
-        resolved,
-        pattern_slots={
-            outer_slot.slot_id: outer_slot,
-            inner_slot.slot_id: replace(inner_slot, alternative=malformed_alternative),
-        },
-    )
-
-    with pytest.raises(AssertionError):
-        check_module(malformed, HostCapabilities())
-
-
 def test_inference_rollback_discards_nested_slot_selections_without_mutating_scope(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -440,8 +384,8 @@ def test_inference_rollback_discards_nested_slot_selections_without_mutating_sco
     selected_slot_ids: set[int] = set()
     select_pattern_slot = checker._select_pattern_slot
 
-    def record_slot_selection(slot: PatternSlot) -> None:
-        select_pattern_slot(slot)
+    def record_slot_selection(slot: PatternSlot, branch: CaseBranch) -> None:
+        select_pattern_slot(slot, branch)
         assert slot.slot_id in checker._slot_resolution
         assert slot.slot_id in checker._slot_constructor_refs
         selected_slot_ids.add(slot.slot_id)

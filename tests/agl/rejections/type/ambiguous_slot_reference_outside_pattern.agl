@@ -1,0 +1,17 @@
+enum Color
+  | Red
+  | Blue
+
+enum Signal
+  | Red
+  | Green
+
+enum Wrap
+  | wrap(shade: Color)
+
+let w = wrap(Color::Blue)
+case w of
+  | wrap(Red) =>
+    print "${Red()}"
+  | wrap(Blue) =>
+    print "blue"

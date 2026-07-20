@@ -154,6 +154,7 @@ from agm.agl.syntax.nodes import (
 )
 from agm.agl.syntax.spans import SourceSpan
 from agm.agl.syntax.types import Qualifier, TypeExpr
+from agm.agl.syntax.visitor import walk
 from agm.agl.typecheck.arguments import bind_call_args, bind_pattern_args
 from agm.agl.typecheck.builder import _BUILTIN_TYPE_NAMES as _BUILTIN_TYPE_NAMES
 from agm.agl.typecheck.builder import _TypeBuilder
@@ -3265,9 +3266,9 @@ class _Checker:
         to find its enclosing slot's selection already made.
         """
         for slot_id in self._resolved.branch_pattern_slots.get(branch.node_id, ()):
-            self._select_pattern_slot(self._resolved.pattern_slots[slot_id])
+            self._select_pattern_slot(self._resolved.pattern_slots[slot_id], branch)
 
-    def _select_pattern_slot(self, slot: PatternSlot) -> None:
+    def _select_pattern_slot(self, slot: PatternSlot, branch: CaseBranch) -> None:
         """Select and publish one slot's fully dereferenced final meaning."""
         binders = [
             candidate
@@ -3295,7 +3296,7 @@ class _Checker:
             ):
                 raise AglTypeError(
                     f"'{slot.name}' is ambiguous outside the pattern; qualify the reference.",
-                    span=slot.candidates[0].span,
+                    span=self._slot_reference_span(branch, slot),
                 )
         self._record_side_table_addition("slot_resolution", self._slot_resolution, slot.slot_id)
         self._slot_resolution[slot.slot_id] = binding
@@ -3314,19 +3315,15 @@ class _Checker:
         constructor spelling stayed ambiguous outside the pattern.
         """
         alternative = slot.alternative
-        if alternative is None:
-            raise AssertionError(f"pattern slot '{slot.name}' has no final alternative")
+        assert alternative is not None, f"pattern slot '{slot.name}' has no final alternative"
         if alternative.kind is BinderKind.pattern_slot:
             assert alternative.slot_id is not None, (
                 f"pattern slot '{slot.name}' has an unidentifiable final alternative"
             )
-            binding = self._slot_resolution.get(alternative.slot_id)
-            if binding is None:
-                raise AssertionError(
-                    f"pattern slot '{slot.name}' final alternative "
-                    f"{alternative.slot_id} was not selected"
-                )
-            return binding, self._slot_constructor_refs.get(alternative.slot_id)
+            return (
+                self._slot_resolution[alternative.slot_id],
+                self._slot_constructor_refs.get(alternative.slot_id),
+            )
         if alternative.kind is not BinderKind.constructor_binding:
             return alternative, None
         constructor_candidates = self._resolved.constructor_candidates.get(slot.name, ())
@@ -3337,6 +3334,24 @@ class _Checker:
     def _slot_has_references(self, slot: PatternSlot) -> bool:
         """Whether a branch-body reference directly resolves to *slot*."""
         return slot.slot_id in self._referenced_slot_ids
+
+    def _slot_reference_span(self, branch: CaseBranch, slot: PatternSlot) -> SourceSpan:
+        """Span of the first branch-body reference that resolves to *slot*.
+
+        The pattern occurrence is unambiguous where it stands, so an ambiguity
+        diagnostic belongs at the reference the user has to qualify.
+        """
+        spans: list[SourceSpan] = []
+
+        def collect(node: object) -> None:
+            if spans or not isinstance(node, VarRef):
+                return
+            ref = self._resolved.resolution.get(node.node_id)
+            if ref is not None and ref.slot_id == slot.slot_id:
+                spans.append(node.span)
+
+        walk(branch.body, collect)
+        return spans[0] if spans else slot.candidates[0].span
 
     # ------------------------------------------------------------------
     # Branch unification

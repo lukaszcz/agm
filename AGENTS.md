@@ -23,7 +23,7 @@ The primary purpose of architecture docs in docs/arch/**/*.md is to provide agen
 Use `just` for the standard workflow:
 
 - `just setup` creates `.venv` with Python 3.12 and installs the project plus dev dependencies via `uv`
-- `just lint` runs `ruff check src/ tests/`
+- `just lint` runs `ruff check src/ tests/` and `ruff format --check src/ tests/` (run `uv run ruff format src/ tests/` to fix formatting)
 - `just test` runs the test suite
 - `just typecheck` runs strict `mypy` with `MYPYPATH=src:stubs`
 - `just check` runs linting, tests, and type checking together

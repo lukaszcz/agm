@@ -415,6 +415,7 @@ class TestMultiFileParams:
 
 class TestWildcardImportUsingHiding:
     """import pkg.* using … / hiding … works end-to-end through real source."""
+
     def _make_pkg(self, tmp_path: Path) -> Path:
         """Create a small package with two modules, each exporting two names."""
         lib_dir = tmp_path / "lib"

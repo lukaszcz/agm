@@ -7946,6 +7946,7 @@ class TestCast:
 
 class TestCastClassificationTable:
     """Direct unit tests for cast_classification() covering the new nominal→json pairs."""
+
     def test_record_to_json_is_total_json(self) -> None:
         from agm.agl.semantics.types import CastKind, cast_classification
 

@@ -778,6 +778,7 @@ class TestPipelineDriverProperties:
 
 class TestResetExternRegistry:
     """``PipelineDriver.reset_extern_registry`` — the ``ReplSession.reset()`` seam."""
+
     def test_noop_before_the_host_environment_is_ever_assembled(self) -> None:
         # Nothing cached yet: resetting must not crash, and a later
         # ``host_environment()`` call still works normally afterward.
@@ -2568,6 +2569,7 @@ class TestDeclaredAgentsApi:
 
 class TestAgentReconciliation:
     """run() enforces the source↔host agent contract before execution."""
+
     def test_registered_but_undeclared_is_host_error(self) -> None:
         calls: list[str] = []
 

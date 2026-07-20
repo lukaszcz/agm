@@ -2799,23 +2799,17 @@ class _Checker:
             if not module_qualifier.segments
             else EnumOwnerFormKind.QUALIFIED_IMPORT
         )
-        form = self._env.resolve_enum_owner_form(
-            kind, enum_name, module_qualifier, span=span
-        )
+        form = self._env.resolve_enum_owner_form(kind, enum_name, module_qualifier, span=span)
         if form is not None:
             rendered = render_qualifier(
                 module_qualifier.segments, anchored=module_qualifier.anchored
             )
             owner = (
-                f"::{enum_name}"
-                if not module_qualifier.segments
-                else f"{rendered}::{enum_name}"
+                f"::{enum_name}" if not module_qualifier.segments else f"{rendered}::{enum_name}"
             )
             self._require_enum_owner_match(form, enum_type, owner, span)
             return
-        rendered = render_qualifier(
-            module_qualifier.segments, anchored=module_qualifier.anchored
-        )
+        rendered = render_qualifier(module_qualifier.segments, anchored=module_qualifier.anchored)
         raise AglTypeError(f"'{rendered}::{enum_name}' is not a known enum type.", span=span)
 
     # --- field access ---

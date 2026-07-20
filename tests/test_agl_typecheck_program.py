@@ -786,9 +786,7 @@ def test_imported_generic_alias_to_record_is_a_constructor_value(tmp_path: Path)
     checked = _check_program(
         tmp_path,
         {
-            "entry": (
-                "import lib\nlet factory: (int) -> lib::Box[int] = lib::Alias\nfactory"
-            ),
+            "entry": ("import lib\nlet factory: (int) -> lib::Box[int] = lib::Alias\nfactory"),
             "lib": "record Box[T]\n  value: T\ntype Alias[T] = Box[T]",
         },
     )
@@ -1019,10 +1017,7 @@ def test_module_prefix_variant_is_test_uses_lhs_enum_name(tmp_path: Path) -> Non
 
 def test_slash_module_prefix_variant_is_test_uses_lhs_enum_name(tmp_path: Path) -> None:
     modules = {
-        "entry": (
-            "import pkg/lib\nlet c = pkg/lib::Color::Red\n"
-            "let ok = c is pkg/lib::Red\nok"
-        ),
+        "entry": ("import pkg/lib\nlet c = pkg/lib::Color::Red\nlet ok = c is pkg/lib::Red\nok"),
         "pkg/lib": "enum Color\n  | Red\n  | Blue",
     }
     cg = _check_program(tmp_path, modules)
@@ -2080,9 +2075,7 @@ def test_cross_module_same_name_qualified_call_false_reject(tmp_path: Path) -> N
     """
     modules = {
         "lib": "def helper(n: int) -> int = n + 1",
-        "entry": (
-            "import lib\ndef helper(s: text) -> text = s\nlet r = lib::helper(5)\nr"
-        ),
+        "entry": ("import lib\ndef helper(s: text) -> text = s\nlet r = lib::helper(5)\nr"),
     }
     # Must NOT raise — the call uses lib's signature (int param).
     cg = _check_program(tmp_path, modules)
@@ -2905,8 +2898,7 @@ def test_cross_module_higher_order_generic_inference(tmp_path: Path) -> None:
         {
             "app": "def app[T](f: T -> T, value: T) -> T = f(value)",
             "identity": "def id[T](value: T) -> T = value",
-            "entry": "import app\nimport identity\n"
-            "let result = app::app(identity::id, 0)\nresult",
+            "entry": "import app\nimport identity\nlet result = app::app(identity::id, 0)\nresult",
         },
     )
 
@@ -2931,9 +2923,7 @@ def test_imported_generic_occurrences_are_fresh_and_checked_output_is_closed(
                 "Pair(left = left, right = right)"
             ),
             "entry": (
-                "import app\n"
-                'let values = app::pair(app::make(1), app::make("text"))\n'
-                "values"
+                'import app\nlet values = app::pair(app::make(1), app::make("text"))\nvalues'
             ),
         },
     )

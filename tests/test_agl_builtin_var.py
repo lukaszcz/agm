@@ -103,10 +103,7 @@ class TestBuiltinVarRegisters:
 
     def test_runner_write_then_read(self) -> None:
         result = _run_program(
-            "import std/config\n"
-            'std/config::runner := "codex"\n'
-            "let r = std/config::runner\n"
-            "print r"
+            'import std/config\nstd/config::runner := "codex"\nlet r = std/config::runner\nprint r'
         )
         assert result.ok
         assert result.bindings["r"] == TextValue("codex")
@@ -181,10 +178,7 @@ class TestBuiltinVarGate:
 class TestStdConfigQualified:
     def test_qualified_read_reflects_write(self) -> None:
         result = _run_program(
-            "import std/config\n"
-            "std/config::max-iters := 3\n"
-            "let n = std/config::max-iters\n"
-            "print n"
+            "import std/config\nstd/config::max-iters := 3\nlet n = std/config::max-iters\nprint n"
         )
         assert result.ok, f"expected success but got: {result.error!r}"
         assert result.bindings["n"] == IntValue(3)

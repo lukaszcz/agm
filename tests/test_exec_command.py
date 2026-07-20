@@ -867,8 +867,7 @@ class TestExecLowersGraphOnce:
         (tmp_path / "helper.agl").write_text('def greet(who: text) -> text = "hi ${who}"\n')
         agl_file = tmp_path / "prog.agl"
         agl_file.write_text(
-            'open import helper\nparam who: text = "world"\n'
-            "print helper::greet(who)\n"
+            'open import helper\nparam who: text = "world"\nprint helper::greet(who)\n'
         )
 
         assert exec_command.run(_exec_args(agl_file, param_tokens=["--who", "agl"])) is None

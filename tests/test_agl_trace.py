@@ -475,6 +475,7 @@ class TestBuiltinExceptionTraceId:
     """Built-in runtime exceptions (ArithmeticError, MatchError,
     MaxIterationsExceeded, ExecError) must carry a non-empty ``trace_id`` that
     matches their ``exception`` trace record — mirroring AgentParseError."""
+
     def test_arithmetic_error_trace_id_non_empty_with_logging(self, tmp_path: Path) -> None:
         log_path = tmp_path / "trace.jsonl"
         rt = PipelineDriver()

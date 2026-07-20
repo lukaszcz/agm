@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
+from types import MappingProxyType
 from typing import Literal, cast
 
 from agm.agl.diagnostics import AglError, Diagnostic
@@ -21,16 +22,12 @@ from agm.agl.modules.ids import ENTRY_ID, ModuleId
 from agm.agl.scope.imports import (
     ImportEnv,
     QName,
-    QualResolutionAmbiguous,
     QualResolutionFound,
-    QualResolutionMissingMember,
-    QualResolutionUnknownQualifier,
-    ambiguous_qualification_message,
     contribution_routes,
-    private_missing_member_module,
     qualifier_contributes,
-    render_qualifier,
     resolve_qualified,
+    resolve_qualified_member,
+    try_resolve_qualified_member,
 )
 from agm.agl.scope.symbols import BindingRef, ModuleResolution
 from agm.agl.semantics.persistent import PersistentDict
@@ -549,6 +546,13 @@ class TypeEnvironment:
         # is populated only once ``seal`` has frozen the declaration namespace, so
         # a still-mutating environment never serves a stale answer.
         self._sealed_own_source_type_names: frozenset[str] | None = None
+        # Memos for the enum owner-form enumeration and its variant-level
+        # counterpart.  Both rescan the whole type namespace (and, for imports,
+        # every contribution route), and match compilation asks for them once
+        # per case.  Like the memo above, they are populated only once ``seal``
+        # has frozen the declaration namespace.
+        self._sealed_enum_owner_forms: tuple[EnumOwnerForm, ...] | None = None
+        self._sealed_blocked_enum_variants: Mapping[tuple[str, ...], frozenset[str]] | None = None
         # Built-in exception types are always available.
         for exc_name, exc_type in BUILTIN_EXCEPTIONS.items():
             self._types[exc_name] = exc_type
@@ -618,40 +622,26 @@ class TypeEnvironment:
         required: bool = True,
     ) -> QName | None:
         """Resolve a qualified member through the shared contribution resolver."""
-        result = resolve_qualified(
-            cast(ImportEnv, self._import_env),
-            qualifier.segments,
-            name,
-            anchored=qualifier.anchored,
-        )
-        if isinstance(result, QualResolutionFound):
-            return result.qname
+        import_env = cast(ImportEnv, self._import_env)
         if not required:
-            return None
-        rendered = render_qualifier(qualifier.segments, anchored=qualifier.anchored)
-        if isinstance(result, QualResolutionUnknownQualifier):
-            raise AglTypeError(f"Unknown module qualifier '{rendered}::'.", span=span)
-        if isinstance(result, QualResolutionMissingMember):
-            private_module = private_missing_member_module(result, self._private_info)
-            if private_module is not None:
-                module_path = private_module.path_str()
-                raise AglTypeError(
-                    f"Type '{name}' in module '{module_path}' is declared private "
-                    "and cannot be accessed from outside the module.",
-                    span=span,
-                )
-            raise AglTypeError(
-                f"Type '{name}' is not accessible via qualifier '{rendered}::'.", span=span
-            )
-        assert isinstance(result, QualResolutionAmbiguous)
-        raise AglTypeError(
-            ambiguous_qualification_message(
-                qualifier.segments,
-                name,
-                result.candidates,
-                anchored=qualifier.anchored,
+            return try_resolve_qualified_member(import_env, qualifier, name)
+        return resolve_qualified_member(
+            import_env,
+            qualifier,
+            name,
+            self._private_info,
+            unknown_qualifier=lambda rendered: AglTypeError(
+                f"Unknown module qualifier '{rendered}::'.", span=span
             ),
-            span=span,
+            private_member=lambda module: AglTypeError(
+                f"Type '{name}' in module '{module.path_str()}' is declared private "
+                "and cannot be accessed from outside the module.",
+                span=span,
+            ),
+            missing_member=lambda rendered: AglTypeError(
+                f"Type '{name}' is not accessible via qualifier '{rendered}::'.", span=span
+            ),
+            ambiguous=lambda message: AglTypeError(message, span=span),
         )
 
     def register_type(self, name: str, typ: Type) -> None:
@@ -1266,7 +1256,7 @@ class TypeEnvironment:
         from agm.agl.syntax.types import Qualifier
 
         assert isinstance(qualifier, Qualifier)
-        rendered = render_qualifier(qualifier.segments, anchored=qualifier.anchored)
+        rendered = qualifier.render()
         if self._import_env is None or self._program_generic_table is None:
             raise AglTypeError(
                 f"Module qualifier '{rendered}::' cannot be resolved outside of a module graph.",
@@ -1388,7 +1378,7 @@ class TypeEnvironment:
         from agm.agl.syntax.types import Qualifier
 
         assert isinstance(qualifier, Qualifier)
-        rendered = render_qualifier(qualifier.segments, anchored=qualifier.anchored)
+        rendered = qualifier.render()
 
         if self._program_type_table is None:
             # Single-module path: module qualifiers have no program table to consult.
@@ -1639,7 +1629,14 @@ class TypeEnvironment:
         )
 
     def enum_owner_forms(self) -> tuple[EnumOwnerForm, ...]:
-        """Enumerate finite checked owner forms writable in this environment."""
+        """Enumerate finite checked owner forms writable in this environment.
+
+        Memoized once the environment is sealed, so consumers that need the
+        owner forms per case (match compilation) can simply ask the environment.
+        """
+        cached = self._sealed_enum_owner_forms
+        if cached is not None:
+            return cached
         forms: set[EnumOwnerForm] = set()
         for owner_name in self._own_source_type_names():
             for kind in (EnumOwnerFormKind.LOCAL, EnumOwnerFormKind.SELF):
@@ -1684,24 +1681,27 @@ class TypeEnvironment:
                 form.kind.value,
             )
 
-        return tuple(sorted(forms, key=form_key))
+        ordered = tuple(sorted(forms, key=form_key))
+        if self._sealed:
+            self._sealed_enum_owner_forms = ordered
+        return ordered
 
-    def blocked_enum_variants(
-        self, forms: tuple[EnumOwnerForm, ...] | None = None
-    ) -> Mapping[tuple[str, ...], frozenset[str]]:
+    def blocked_enum_variants(self) -> Mapping[tuple[str, ...], frozenset[str]]:
         """Map each short enum-owner qualifier to the variants a module route blocks.
 
         A match-compile consumer selecting a source spelling for one concrete
         enum constructor needs this alongside ``enum_owner_forms``: an
         ``EnumOwnerForm`` describes only an owner spelling, never which of
         that owner's variants a same-named module route makes ambiguous.
-        *forms* lets a caller that already enumerated this environment's owner
-        forms (e.g. to normalize every case of one checked owner) reuse them
-        instead of enumerating them again; it defaults to resolving them from
-        this environment. The key is the same ``(owner_name,)`` qualifier
+        The key is the same ``(owner_name,)`` qualifier
         ``qualifier_contributes`` checks the module routes against.
+
+        Memoized on the same terms as ``enum_owner_forms``.
         """
-        owner_forms = self.enum_owner_forms() if forms is None else forms
+        cached = self._sealed_blocked_enum_variants
+        if cached is not None:
+            return cached
+        owner_forms = self.enum_owner_forms()
         blocked: dict[tuple[str, ...], frozenset[str]] = {}
         for form in owner_forms:
             if form.kind not in (EnumOwnerFormKind.LOCAL, EnumOwnerFormKind.OPEN_IMPORT):
@@ -1709,7 +1709,10 @@ class TypeEnvironment:
             variants = self._blocked_short_variants(form)
             if variants:
                 blocked[(form.owner_name or "",)] = variants
-        return blocked
+        result: Mapping[tuple[str, ...], frozenset[str]] = MappingProxyType(blocked)
+        if self._sealed:
+            self._sealed_blocked_enum_variants = result
+        return result
 
     def get_generic_type_from_module(self, module_id: ModuleId, name: str) -> GenericTypeDef | None:
         """Look up a cross-module ``GenericTypeDef`` by owning module and name.
@@ -1787,7 +1790,7 @@ class TypeEnvironment:
         gdef = self._program_generic_table.get((qname[0], qname[1]))
         if gdef is None:
             return None
-        rendered = render_qualifier(qualifier.segments, anchored=qualifier.anchored)
+        rendered = qualifier.render()
         qualified_name = f"{rendered}::{name}"
         return qualified_name, gdef
 

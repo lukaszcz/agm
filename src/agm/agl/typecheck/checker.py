@@ -48,7 +48,7 @@ from typing import Literal, TypeGuard, assert_never
 from agm.agl.capabilities import HostCapabilities
 from agm.agl.diagnostics import Diagnostic
 from agm.agl.modules.ids import ENTRY_ID, ModuleId
-from agm.agl.scope.imports import qualification_repair_guidance, render_qualifier
+from agm.agl.scope.imports import qualification_repair_guidance
 from agm.agl.scope.symbols import (
     BUILTIN_CALL_NAMES,
     BinderKind,
@@ -2801,15 +2801,13 @@ class _Checker:
         )
         form = self._env.resolve_enum_owner_form(kind, enum_name, module_qualifier, span=span)
         if form is not None:
-            rendered = render_qualifier(
-                module_qualifier.segments, anchored=module_qualifier.anchored
-            )
+            rendered = module_qualifier.render()
             owner = (
                 f"::{enum_name}" if not module_qualifier.segments else f"{rendered}::{enum_name}"
             )
             self._require_enum_owner_match(form, enum_type, owner, span)
             return
-        rendered = render_qualifier(module_qualifier.segments, anchored=module_qualifier.anchored)
+        rendered = module_qualifier.render()
         raise AglTypeError(f"'{rendered}::{enum_name}' is not a known enum type.", span=span)
 
     # --- field access ---

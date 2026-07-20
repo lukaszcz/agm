@@ -43,16 +43,12 @@ from typing import TYPE_CHECKING
 from agm.agl.diagnostics import Diagnostic
 from agm.agl.modules.ids import ENTRY_ID, PRELUDE_ID, STD_CONFIG_ID, STD_CORE_ID, ModuleId
 from agm.agl.scope.imports import (
-    QualResolutionAmbiguous,
     QualResolutionFound,
-    QualResolutionMissingMember,
-    QualResolutionUnknownQualifier,
-    ambiguous_qualification_message,
-    private_missing_member_module,
     qualification_repair_guidance,
     qualifier_contributes,
     render_qualifier,
     resolve_qualified,
+    resolve_qualified_member,
 )
 from agm.agl.scope.symbols import (
     BUILTIN_CALL_NAMES,
@@ -1308,9 +1304,7 @@ class _Resolver:
                 self._resolve_varref_qualified(node)
                 return
             if node.module_qualifier.segments != ():
-                qualifier_str = render_qualifier(
-                    node.module_qualifier.segments, anchored=node.module_qualifier.anchored
-                )
+                qualifier_str = node.module_qualifier.render()
                 raise AglScopeError(
                     f"No module imported under qualifier '{qualifier_str}' or type named "
                     f"'{qualifier_str}'.",
@@ -1373,9 +1367,7 @@ class _Resolver:
             self._qualified_constructor_refs[node.node_id] = (type_name, node.name, owner_module)
             return
         if self._import_env is None:
-            qualifier_str = render_qualifier(
-                node.module_qualifier.segments, anchored=node.module_qualifier.anchored
-            )
+            qualifier_str = node.module_qualifier.render()
             raise AglScopeError(
                 f"No module imported under qualifier '{qualifier_str}'.",
                 span=node.module_qualifier.span,
@@ -1420,7 +1412,7 @@ class _Resolver:
             (owning_module, src_name), (-1, span, BinderKind.let_binding)
         )
         if kind is not BinderKind.constructor_binding:
-            rendered = render_qualifier(qualifier.segments, anchored=qualifier.anchored)
+            rendered = qualifier.render()
             raise AglScopeError(
                 f"'{rendered}::{type_name}' is not a constructible type.",
                 span=span,
@@ -1488,34 +1480,23 @@ class _Resolver:
     ) -> tuple[ModuleId, str]:
         """Resolve one contributed member and translate its shared verdict to scope errors."""
         assert self._import_env is not None
-        result = resolve_qualified(
-            self._import_env, qualifier.segments, name, anchored=qualifier.anchored
-        )
-        qualifier_str = render_qualifier(qualifier.segments, anchored=qualifier.anchored)
-        if isinstance(result, QualResolutionFound):
-            return result.qname
-        if isinstance(result, QualResolutionUnknownQualifier):
-            raise AglScopeError(f"No module imported under qualifier '{qualifier_str}'.", span=span)
-        if isinstance(result, QualResolutionMissingMember):
-            module = private_missing_member_module(result, self._private_info)
-            if module is not None:
-                raise AglScopeError(
-                    f"'{name}' in module '{module.path_str()}' is declared private and cannot be "
-                    "accessed from outside the module.",
-                    span=span,
-                )
-            raise AglScopeError(
-                f"'{name}' is not in the imported set of '{qualifier_str}'.", span=span
-            )
-        assert isinstance(result, QualResolutionAmbiguous)
-        raise AglScopeError(
-            ambiguous_qualification_message(
-                qualifier.segments,
-                name,
-                result.candidates,
-                anchored=qualifier.anchored,
+        return resolve_qualified_member(
+            self._import_env,
+            qualifier,
+            name,
+            self._private_info,
+            unknown_qualifier=lambda rendered: AglScopeError(
+                f"No module imported under qualifier '{rendered}'.", span=span
             ),
-            span=span,
+            private_member=lambda module: AglScopeError(
+                f"'{name}' in module '{module.path_str()}' is declared private and cannot be "
+                "accessed from outside the module.",
+                span=span,
+            ),
+            missing_member=lambda rendered: AglScopeError(
+                f"'{name}' is not in the imported set of '{rendered}'.", span=span
+            ),
+            ambiguous=lambda message: AglScopeError(message, span=span),
         )
 
     def _lookup_own_root(self, name: str) -> BindingRef | None:

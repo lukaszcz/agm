@@ -507,6 +507,23 @@ class TestTypeEnvironment:
         env.register_type("Foo", rt)
         assert env.get_type("Foo") == rt
 
+    def test_enum_owner_forms_track_declarations_until_sealed(self) -> None:
+        """An unsealed env re-enumerates; a sealed one serves a stable answer."""
+        env = TypeEnvironment()
+        env.register_type("Foo", RecordType(name="Foo"))
+        assert "Foo" in {form.owner_name for form in env.enum_owner_forms()}
+        assert env.blocked_enum_variants() == {}
+        # Still mutable: a later declaration must show up rather than be masked
+        # by an answer memoized from the earlier call.
+        env.register_type("Bar", RecordType(name="Bar"))
+        owners = {form.owner_name for form in env.enum_owner_forms()}
+        assert {"Foo", "Bar"} <= owners
+
+        env.seal()
+        # Sealed: the enumeration is settled, so repeat asks reuse one answer.
+        assert env.enum_owner_forms() is env.enum_owner_forms()
+        assert env.blocked_enum_variants() is env.blocked_enum_variants()
+
     def test_register_alias(self) -> None:
         from agm.agl.syntax.types import NameT
 

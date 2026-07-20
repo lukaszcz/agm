@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import decimal
 import weakref
-from collections.abc import Mapping
 from typing import Never, NoReturn, assert_never
 
 from agm.agl.modules.ids import ENTRY_ID, ModuleId
@@ -16,7 +15,6 @@ from agm.agl.semantics.types import (
     BottomType,
     DecimalType,
     DictType,
-    EnumOwnerForm,
     EnumType,
     ExceptionType,
     FunctionType,
@@ -392,21 +390,8 @@ def normalize_pattern(
             _unsupported("source pattern", unreachable)
 
 
-def normalize_case(
-    case: Case,
-    checked: CheckedPatternOwner,
-    *,
-    enum_owner_forms: tuple[EnumOwnerForm, ...] | None = None,
-    blocked_enum_variants: Mapping[tuple[str, ...], frozenset[str]] | None = None,
-) -> NormalizedCase:
-    """Normalize one checked source case into a source-priority one-column matrix.
-
-    *enum_owner_forms* lets a caller normalizing every case of one checked owner
-    enumerate that owner's writable enum spellings once instead of once per
-    case; it defaults to resolving them from *checked*. *blocked_enum_variants*
-    is its variant-level counterpart -- the module-route exclusions that apply
-    to those forms' short spellings -- and defaults the same way.
-    """
+def normalize_case(case: Case, checked: CheckedPatternOwner) -> NormalizedCase:
+    """Normalize one checked source case into a source-priority one-column matrix."""
     try:
         subject_type = checked.node_types[case.subject.node_id]
     except KeyError as exc:
@@ -452,14 +437,8 @@ def normalize_case(
             f"missing resolver scope provenance for case node {case.node_id}"
         ) from exc
     module_id = checked.module_id if isinstance(checked, CheckedModule) else ENTRY_ID
-    owner_forms = (
-        checked.type_env.enum_owner_forms() if enum_owner_forms is None else enum_owner_forms
-    )
-    blocked_variants = (
-        checked.type_env.blocked_enum_variants(owner_forms)
-        if blocked_enum_variants is None
-        else blocked_enum_variants
-    )
+    owner_forms = checked.type_env.enum_owner_forms()
+    blocked_variants = checked.type_env.blocked_enum_variants()
     case_context = MatchCaseContext(
         module_id=module_id,
         enum_owner_forms=owner_forms,

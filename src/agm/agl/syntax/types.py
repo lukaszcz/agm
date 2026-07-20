@@ -86,6 +86,10 @@ class Qualifier:
     node_id: int = field(compare=False)
     anchored: bool = False
 
+    def render(self) -> str:
+        """Render this qualifier as it would be written in source."""
+        return render_qualifier(self.segments, anchored=self.anchored)
+
 
 def render_qualifier(qualifier: tuple[str, ...], *, anchored: bool = False) -> str:
     """Render a source qualifier with its slash route and optional anchor."""

@@ -9,7 +9,7 @@ from typing import Callable, Mapping, TypeVar
 from agm.agl.modules.ids import ModuleId
 from agm.agl.scope.symbols import AglScopeError
 from agm.agl.syntax.nodes import ImportDecl
-from agm.agl.syntax.types import ImportMode, render_qualifier
+from agm.agl.syntax.types import ImportMode, Qualifier, render_qualifier
 
 __all__ = [
     "ImportEnv",
@@ -32,6 +32,8 @@ __all__ = [
     "qualifier_contributes",
     "render_qualifier",
     "resolve_qualified",
+    "resolve_qualified_member",
+    "try_resolve_qualified_member",
 ]
 
 QName = tuple[ModuleId, str]
@@ -398,6 +400,48 @@ def private_missing_member_module(
         if private_info.get((module, result.member)):
             return module
     return None
+
+
+def try_resolve_qualified_member(env: ImportEnv, qualifier: Qualifier, member: str) -> QName | None:
+    """Resolve ``qualifier::member``, returning ``None`` for any non-unique verdict."""
+    result = resolve_qualified(env, qualifier.segments, member, anchored=qualifier.anchored)
+    return result.qname if isinstance(result, QualResolutionFound) else None
+
+
+def resolve_qualified_member(
+    env: ImportEnv,
+    qualifier: Qualifier,
+    member: str,
+    private_info: Mapping[QName, bool],
+    *,
+    unknown_qualifier: Callable[[str], Exception],
+    private_member: Callable[[ModuleId], Exception],
+    missing_member: Callable[[str], Exception],
+    ambiguous: Callable[[str], Exception],
+) -> QName:
+    """Resolve ``qualifier::member`` or raise a caller-supplied error for the verdict.
+
+    Each callback receives only what its wording needs — the rendered qualifier,
+    the module declaring a private member, or the shared ambiguity message — so
+    scope and typecheck can keep their own exception classes and phrasing while
+    sharing one walk over the resolution verdicts.
+    """
+    result = resolve_qualified(env, qualifier.segments, member, anchored=qualifier.anchored)
+    if isinstance(result, QualResolutionFound):
+        return result.qname
+    rendered = qualifier.render()
+    if isinstance(result, QualResolutionUnknownQualifier):
+        raise unknown_qualifier(rendered)
+    if isinstance(result, QualResolutionMissingMember):
+        module = private_missing_member_module(result, private_info)
+        if module is not None:
+            raise private_member(module)
+        raise missing_member(rendered)
+    raise ambiguous(
+        ambiguous_qualification_message(
+            qualifier.segments, member, result.candidates, anchored=qualifier.anchored
+        )
+    )
 
 
 def resolve_qualified(

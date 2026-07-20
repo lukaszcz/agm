@@ -2263,7 +2263,7 @@ class AstBuilder(Transformer):
             if isinstance(a, Token) and a.type == "MODPATH":
                 module_path = tuple(str(a).split("/"))
             elif isinstance(a, Token):
-                # Skip EXPORT, SLASH, STAR, etc.
+                # Skip EXPORT, WILDCARD, etc.
                 pass
             else:
                 mode, items = cast(tuple[ImportMode, tuple[syntax.ExportItem, ...]], a)

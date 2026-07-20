@@ -104,20 +104,8 @@ def _source_cases(program: Program) -> dict[int, Case]:
 def _compile_owner_cases(owner: CheckedModule) -> tuple[dict[int, CompiledCase], list[MatchIssue]]:
     cases: dict[int, CompiledCase] = {}
     issues: list[MatchIssue] = []
-    # Every case of one checked owner shares that owner's writable enum
-    # spellings and their blocked variants, and enumerating them rescans the
-    # whole type namespace.
-    owner_forms = owner.type_env.enum_owner_forms()
-    blocked_variants = owner.type_env.blocked_enum_variants(owner_forms)
     for case_node_id, source_case in _source_cases(owner.resolved.program).items():
-        compiled = compile_case(
-            normalize_case(
-                source_case,
-                owner,
-                enum_owner_forms=owner_forms,
-                blocked_enum_variants=blocked_variants,
-            )
-        )
+        compiled = compile_case(normalize_case(source_case, owner))
         cases[case_node_id] = compiled
         issues.extend(compiled.issues)
     return cases, issues
@@ -206,11 +194,6 @@ def _validate_cases(
     expected_ids = set(expected)
     missing = expected_ids - actual_ids
     extra = actual_ids - expected_ids
-    # Hoisted for the same reason as in ``_compile_owner_cases``: every case of
-    # one checked owner shares that owner's writable enum spellings and their
-    # blocked variants, and enumerating them rescans the whole type namespace.
-    owner_forms = owner.type_env.enum_owner_forms()
-    blocked_variants = owner.type_env.blocked_enum_variants(owner_forms)
     if missing:
         raise MatchCompileInvariantError(
             f"match-compiled artifact is missing case ids {sorted(missing)}"
@@ -242,12 +225,7 @@ def _validate_cases(
             )
         validate_compiled_case(
             compiled,
-            expected_normalized=normalize_case(
-                source_case,
-                owner,
-                enum_owner_forms=owner_forms,
-                blocked_enum_variants=blocked_variants,
-            ),
+            expected_normalized=normalize_case(source_case, owner),
             require_success=True,
         )
 

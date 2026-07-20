@@ -24,7 +24,7 @@ The checker selects the concrete behavior the evaluator later relies on and publ
 
 An `extern def` shares the body-less builtin-`def` signature path, plus extern-only checks (the name must be a valid Python identifier; no function or agent type may occur in the signature); extern calls typecheck like ordinary calls.
 
-A checked-output validation walk covers every type-bearing side table before anything crosses to lowering and seals the type environment; a leaked flexible variable is a compiler invariant failure, so checked artifacts contain concrete types and no solver state.
+A checked-output validation walk covers every type-bearing side table before anything crosses to lowering and seals the type environment; a leaked flexible variable is a compiler invariant failure, so checked artifacts contain concrete types and no solver state. Sealing also licenses memoization: namespace-wide enumerations the environment can be asked for repeatedly downstream — own source type names, writable enum-owner forms, and their blocked variants — are cached once the declaration namespace is frozen, so later passes simply ask the environment instead of hand-threading results.
 
 ## Code Entry Points
 

@@ -64,7 +64,7 @@
 //   - The production custom lexer emits _INDENT directly (without a preceding
 //     _NEWLINE); the _NEWLINE is consumed and only _INDENT is emitted.
 //   - `expr` / `or_expr` never start with _INDENT.
-//   - So `func_body: suite_expr | expr` and `catch_body: suite_expr | or_expr`
+//   - So `func_body: suite_expr | expr` and `catch_body: suite_expr | closed_item`
 //     are unambiguous (_INDENT distinguishes the suite alternative).
 //   - Branch bodies (if/case) also support suite_expr via `branch_body`.
 
@@ -286,15 +286,17 @@ param_marker: SLASH    -> marker_slash
 // named arguments such as ask(..., agent: worker).
 param_def: field_name COLON type_expr (EQ or_expr)?
 
-// func_body: indented suite, an inline binder sequence, OR inline expr (full expr,
-// including if/case/do/try/lambda). The suite_expr alternative starts with _INDENT;
-// expr never starts with _INDENT, so this is unambiguous (the production lexer emits
-// _INDENT without a preceding _NEWLINE). The inline binder sequence admits compact
-// one-line block bodies such as `def f() = let x = 1; x` without making semicolons
-// after ordinary expression bodies ambiguous with top-level item separators.
-func_body: suite_expr | func_inline_seq | expr
-
-func_inline_seq: binder (SEMICOLON binder)* SEMICOLON expr
+// func_body: indented suite OR a single inline expr (full expr, including
+// if/case/do/try/lambda). The suite_expr alternative starts with _INDENT;
+// expr never starts with _INDENT, so this is unambiguous (the production lexer
+// emits _INDENT without a preceding _NEWLINE).
+//
+// A `def` body ends at a newline, and within a block `;` *is* a newline, so a
+// `;` here always starts the next block item rather than extending the body —
+// there is no marker that could distinguish the two.  An inline body is
+// therefore a single item, as an `=>` body is; write a sequence as a
+// parenthesized block (`def f() = (let x = 1; x)`) or as a suite.
+func_body: suite_expr | expr
 
 // ---------------------------------------------------------------------------
 // Binders (transparent)
@@ -442,16 +444,47 @@ do_body: suite_expr | inline_seq
 loop_end : "until" or_expr  -> loop_until
          | "done"            -> loop_done
 
-// inline_seq: semicolon-separated or_exprs and binders.
-// (Open forms like if/case/try must use the suite form in do-body position.)
-inline_seq: inline_item (SEMICOLON inline_item)*
+// A *marked* inline body — one whose end is fixed by a following token — is a
+// `;` sequence of marked_items ending in a value_item.  The three marked
+// positions (parenthesized block, loop body, try body) share both rules; they
+// differ only where the body's terminator could be consumed by its own last
+// item, which is spelled out at try_body below.
+//
+// marked_item: every item form there is.  The open forms (if/case/try/do) and
+// lambdas are safe here only because the marker terminates the body.
+?marked_item: expr | inline_assign | letvar_decl
 
-inline_item: binder | or_expr
+// value_item: a marked body's last item, which supplies the body's value and
+// so may not be a binder — the same rule a block obeys.
+?value_item: expr | inline_assign
+
+// inline_seq: the loop body.  Its terminator (`until`/`done`) is mandatory and
+// exactly one per loop, so even a trailing nested loop is unambiguous:
+// `do ... until p until q` binds the inner `until` innermost-first.
+inline_seq: (marked_item SEMICOLON)* value_item
 
 // try expression
 try_expr: "try" try_body (catch_clause)+
 
-try_body: suite_expr | or_expr (SEMICOLON or_expr)*
+// try_body: the same marked-body sequence, terminated by `catch`.  Unlike a
+// loop's `until`/`done` — mandatory and exactly one per loop — `catch` is a
+// repeatable clause, so try_tail bars the two forms that would contest it:
+//
+//   try     a nested `try` last here consumes EVERY following catch clause,
+//           leaving none for this body's own `try`, which requires one.  The
+//           form can never parse, so barring it only moves the error earlier.
+//   lambda  a lambda body is introduced by `=>` and is itself unmarked, so it
+//           extends rightwards; a following `catch` is contested whenever that
+//           body ends in a `try`.  Unlike the case above this one does cost a
+//           spelling — `try fn(...) => e catch ...` — in exchange for keeping
+//           the grammar conflict-free.
+//
+// Both stay admissible in any earlier position of the sequence, and in the
+// final one once parenthesized, which restores the marker.
+try_body: suite_expr | (marked_item SEMICOLON)* try_tail
+
+?try_tail: or_expr | inline_assign | raise_expr | return_expr
+         | if_expr | case_expr | loop_expr
 
 catch_clause: "catch" catch_pattern ARROW catch_body
 
@@ -459,13 +492,36 @@ catch_clause: "catch" catch_pattern ARROW catch_body
 // "_" arrives as NAME; transformer checks value for wildcard.
 catch_pattern: name ("as" name)?
 
-// catch_body: single or_expr (inline) or suite_expr (multi-statement indented block).
-// Suite form starts with _INDENT; or_expr never starts with _INDENT.
-catch_body: suite_expr | or_expr
+// catch_body / branch_body: an inline body or a suite_expr (indented block).
+// Suite form starts with _INDENT; no inline alternative starts with _INDENT.
+//
+// A body after `=>` is exactly ONE closed_item.  Nothing marks where such a
+// body ends: a following `|`, `else`, or `catch` could belong either to the
+// body or to the enclosing branch list.  So no `;` sequence is admissible
+// here, and neither are the open forms (if/case/try/do) or lambdas, whose
+// own branch lists would swallow the enclosing form's continuation.
+//
+// This is the one body position without an end marker.  Every other inline
+// body has one — `)` for a parenthesized block, `until`/`done` for a loop
+// body, `catch` for a try body, a newline for a `def` body — and each of
+// those admits a full `;` sequence.  To write a sequence after `=>`,
+// parenthesize it or use the suite form.
+catch_body: suite_expr | closed_item
 
-// branch_body: single or_expr (inline) or suite_expr (indented block).
-// Suite form starts with _INDENT; or_expr never starts with _INDENT.
-branch_body: suite_expr | or_expr
+branch_body: suite_expr | closed_item
+
+// closed_item: the items that cannot extend rightwards into a trailing
+// `|`/`else`/`catch`.  Used as the whole of an `=>` body, and as the final
+// item of the `catch`-terminated try body.
+?closed_item: or_expr | inline_assign | raise_expr | return_expr
+
+// inline_assign: the assignment form admissible in an inline body.  Unlike
+// assign_stmt, the RHS is or_expr rather than expr — an open form there would
+// extend into the enclosing branch list.  The suite form keeps assign_stmt and
+// its unrestricted RHS.
+inline_assign: postfix ASSIGN or_expr
+
+?letvar_decl: let_decl | var_decl
 
 // raise and return expressions
 raise_expr: "raise" or_expr
@@ -619,10 +675,19 @@ juxt_var_ref: NAME -> var_ref
 break_expr    : "break"
 continue_expr : "continue"
 
-// Parenthesized expression or unit literal.
+// Parenthesized expression, parenthesized block, or unit literal.
 // `()` is BOTH the unit literal and the empty argument list.
-paren_expr_or_unit: LPAR RPAR         -> unit_lit
-                  | LPAR expr RPAR    -> paren_expr
+paren_expr_or_unit: LPAR RPAR              -> unit_lit
+                  | LPAR expr RPAR         -> paren_expr
+                  | LPAR paren_block RPAR  -> paren_block_expr
+
+// paren_block: the same marked-body sequence.  `)` is the one terminator no
+// item form can consume, so nothing is barred from the final position here.
+// This covers the block forms `expr` alone does not — a `;` sequence and a
+// bare assignment.  The single-`expr` case stays on the paren_expr
+// alternative above, which is why the sequence form requires at least one `;`.
+paren_block: (marked_item SEMICOLON)+ value_item
+           | inline_assign
 
 // ---------------------------------------------------------------------------
 // Call arguments

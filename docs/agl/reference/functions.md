@@ -13,7 +13,7 @@ from other functions. The type of a function value is written
 ```ebnf
 func_def      ::= "def" NAME type_params? "(" param_list? ")" ("->" type_expr)? ("=" func_body | suite)
                 | "builtin" "def" NAME type_params? "(" param_list? ")" "->" type_expr
-func_body     ::= expr | suite | inline_binder_block
+func_body     ::= expr | suite
 type_params   ::= "[" NAME ("," NAME)* "]"
 param_list    ::= param_entry ("," param_entry)* ","?
 param_entry   ::= param | param_marker
@@ -41,12 +41,14 @@ def summarize(doc: text, limit: int = 3) -> text =
 def double(n: int) = n * 2
 
 # Compact one-line block body.
-def incremented() -> int = let x = 0; x + 1
+def incremented() -> int = (let x = 0; x + 1)
 ```
 
-A compact one-line block body must start with one or more `let`, `var`, or
-assignment items separated by semicolons, followed by the expression that
-provides the function's result.
+An inline `def` body is a single item. A `def` body ends at a newline, and
+within a block `;` *is* a newline, so a `;` after the body always starts the
+next block item rather than extending the body. Write a multi-item body as a
+parenthesized block or as a suite — see
+[Inline bodies](grammar.md#inline-bodies).
 
 ### Return type
 
@@ -94,10 +96,12 @@ A `return` inside a lambda returns from that lambda, not from an enclosing
 `def`. A `return` is valid only inside a function body; it is a static error at
 the program top level or in parameter defaults.
 
-Like `raise`, `return` is a top-level expression form. Inline branch and loop
-body positions accept only `or_expr`, so write a suite body or parenthesize the
-return expression (`if done => (return x)`). A `return` followed by a newline is
-a bare `return`; the operand never continues onto the next line.
+Like `raise`, `return` is admitted directly in an inline branch or `catch`
+body (`if ready => return x else => 0`) and in a loop body. It remains an
+`expr`-level form, so in an `or_expr` position — an `until` condition, a
+binder's right-hand side, an operand — it must be parenthesized. A `return`
+followed by a newline is a bare `return`; the operand never continues onto the
+next line.
 
 ### Built-in functions
 

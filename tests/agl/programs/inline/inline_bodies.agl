@@ -1,0 +1,70 @@
+# Inline bodies: closed forms (`:=`, `raise`, `return`) as whole branch and
+# catch bodies; parenthesized blocks as the inline escape hatch; and open forms
+# (`case`/`if`/`try`/nested loop) in loop bodies across the `do`, `for`, and
+# `while` spellings.
+param k: int
+
+enum Verdict
+  | Pass
+  | Fail(issues: list[text])
+
+exception Halt extends Exception
+  code: int
+
+agent reviewer
+
+# `:=` as a whole inline branch body, and a parenthesized block as the inline
+# escape hatch for a binder sequence.
+var label: text = "unset"
+case k of
+  | 0 => label := "zero"
+  | 1 => (let doubled = k * 2; print "doubled:${doubled}")
+  | _ => label := "many"
+print label
+
+# `return` inline in a branch body; `raise` inline in the other arm.
+def classify(n: int) -> text =
+  if n < 0 => return "negative" else => return "non-negative"
+
+print classify(k)
+
+# Inline `raise`, caught by an inline catch body that assigns.
+var caught: text = "none"
+try
+  if k == 9 => raise Halt(code = k, message = "nine") else => ()
+catch Halt as e => caught := "halt:${e.code}"
+print caught
+
+# A `catch`-terminated try body takes the same `;` sequence as a loop body,
+# including binders and assignments.
+var probe: int = 0
+let probed = try probe := k; let bumped = probe + 1; bumped catch _ => -1
+print "probed:${probed}"
+
+# Open forms inline in loop bodies: `case` under `for`, `if` under `while`,
+# and a nested loop under bare `do`.
+var total: int = 0
+for i in 1 to 3 do case i of | 2 => total := total + 10 | _ => total := total + 1 done
+print total
+
+var w: int = 0
+var seen: int = 0
+while w < 2 do w := w + 1; if w == 1 => seen := seen + 5 else => seen := seen + 1 done
+print seen
+
+var outer: int = 0
+var inner: int = 0
+do
+  inner := 0
+  do inner := inner + 1 until inner >= 2
+  outer := outer + 1
+until outer >= 3
+print "${outer}/${inner}"
+
+# An inline `try` in a loop body, over an agent call that may fail to parse.
+# The inline `catch` body is an assignment.
+def review(i: int) -> Verdict = ask("Review ${i}.", agent = reviewer)
+
+var failures: int = 0
+for i in 1 to 2 do try print review(i) catch AgentParseError => failures := failures + 1 done
+print "failures:${failures}"

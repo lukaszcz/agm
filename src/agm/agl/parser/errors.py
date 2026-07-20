@@ -15,9 +15,13 @@ Special cases:
 from __future__ import annotations
 
 import re
+from typing import TYPE_CHECKING
 
 from agm.agl.diagnostics import AglError
 from agm.agl.syntax.spans import SourceSpan
+
+if TYPE_CHECKING:
+    from lark.exceptions import UnexpectedToken
 
 # All comparison operator token types (mirrors tokens.py).  Equality is ``==``
 # (``EQ_EQ``); ``=`` (``EQ``) is a binder / named-arg separator, not a comparison.
@@ -59,6 +63,15 @@ _ELSE_BEFORE_TOKEN_RE = re.compile(r"(?<![A-Za-z0-9_])else\s*$")
 # identifier-body character, so a name that merely ends in ``?`` (predicate names
 # like ``empty?`` or the ``as?`` keyword) does not masquerade as a placeholder.
 _PLACEHOLDER_BEFORE_TOKEN_RE = re.compile(r"(?<![^\s(){}\[\]:,.|;/@=])\?[0-9]*\s*$")
+
+# An inline `=>` body is a single item: no binders, no `;` sequence.  Both are
+# legal once the body is parenthesized or written as an indented block, so the
+# diagnostic names those two fixes rather than the grammar rule.
+_INLINE_BODY_OPENERS: frozenset[str] = frozenset({"let", "var"})
+
+# Tokens that end a `try` body.  Arriving at one while `catch` is still
+# expected means the `try` has no `catch` clause of its own.
+_TRY_BODY_ENDERS: frozenset[str] = frozenset({"_NEWLINE", "_DEDENT", "$END"})
 
 
 class AglSyntaxError(AglError):
@@ -148,6 +161,44 @@ def _make_inline_compound_error(
     return AglSyntaxError(guidance, span=span)
 
 
+def _completed_rule(exc: UnexpectedToken) -> str | None:
+    """Name of the grammar rule just completed on the parse stack, if exposed.
+
+    Lets a diagnostic ask the parser what it had just finished reading rather
+    than guessing from source text.  Returns ``None`` when the parser state is
+    unavailable (a synthesised exception, or a lark version that stops
+    exposing it), so callers fall back to the generic message.
+    """
+    parser: object = getattr(exc, "interactive_parser", None)
+    state: object = getattr(parser, "parser_state", None)
+    stack: object = getattr(state, "value_stack", None)
+    if not isinstance(stack, list):
+        return None
+    items: list[object] = stack
+    data: object = getattr(items[-1], "data", None)
+    return data if isinstance(data, str) else None
+
+
+def _inline_body_guidance(value: str, source_text: str | None, token_pos: int) -> str | None:
+    """Guidance for a binder opening an inline ``=>`` body, which takes one item.
+
+    Returns ``None`` unless the binder really does open the body introduced by
+    the nearest preceding ``=>`` on the same line, so that a stray ``let``
+    elsewhere still takes the generic path.
+    """
+    if source_text is None:
+        return None
+    arrow = source_text.rfind("=>", 0, token_pos)
+    if arrow < 0 or "\n" in source_text[arrow:token_pos]:
+        return None
+    if source_text[arrow + 2 : token_pos].strip():
+        return None
+    return (
+        f"a `{value}` binding cannot be an inline `=>` body; "
+        f"parenthesize it (`({value} x = ...; x)`) or use an indented block."
+    )
+
+
 def _make_missing_else_arrow_error(span: SourceSpan) -> AglSyntaxError:
     return AglSyntaxError("Missing `=>` after `else`.", span=span)
 
@@ -234,6 +285,30 @@ def syntax_error_from_lark(
         if tok.type in _INLINE_BLOCKED:
             stmt_context = bool(_STMT_STARTERS & set(exc.expected))
             return _make_inline_compound_error(tok.value, span, stmt_context=stmt_context)
+        # A binder written directly in an inline `=>` body, which takes a
+        # single item.  It is legal parenthesized or as an indented block.
+        if tok.value in _INLINE_BODY_OPENERS:
+            guidance = _inline_body_guidance(str(tok.value), source_text, pos)
+            if guidance is not None:
+                return AglSyntaxError(guidance, span=span)
+        # The `try` body ended while a `catch` was still expected.
+        if tok.type in _TRY_BODY_ENDERS and "CATCH" in exc.expected:
+            return AglSyntaxError(
+                "a `try` expression requires at least one `catch` clause.",
+                span=span,
+            )
+        # A nested `try` closed a marked body's final item: it consumed every
+        # `catch`, so the enclosing `try` has none and the body has no value.
+        if (
+            tok.type in _TRY_BODY_ENDERS
+            and "SEMICOLON" in exc.expected
+            and _completed_rule(exc) == "try_expr"
+        ):
+            return AglSyntaxError(
+                "a nested `try` at the end of a `try` body takes the enclosing "
+                "`catch` clauses; parenthesize it.",
+                span=span,
+            )
         if tok.type == "_NEWLINE":
             if "_INDENT" in exc.expected:
                 return AglSyntaxError(

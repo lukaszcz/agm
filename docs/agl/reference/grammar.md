@@ -92,6 +92,69 @@ export foo/bar/* hiding internal
 suite ::= NEWLINE INDENT block DEDENT
 ```
 
+### Inline bodies
+
+Every body may be written as a suite. Written inline instead, what it may hold
+follows one rule: **a `;` sequence is admissible exactly where a token marks
+the body's end.**
+
+```ebnf
+marked_body ::= (marked_item ";")* value_item
+marked_item ::= expr | assign_expr | let_decl | var_decl
+value_item  ::= expr | assign_expr
+```
+
+A *marked* body is one whose end is fixed by a following token. All three
+marked positions share `marked_body`: any item may appear, and the last must
+supply a value rather than bind a name — the same rule a block obeys.
+
+| body | end marker | inline form |
+| ---- | ---------- | ----------- |
+| `( … )` | `)` | `marked_body` |
+| `do … until`/`done` | `until` / `done` | `marked_body` |
+| `try … catch` | `catch` | `marked_body`, last item not a `try` or lambda |
+| `def f() = …` | newline | exactly one item |
+| `… => …` | *none* | exactly one item |
+
+The two unmarked bodies take a single item. A `def` body ends at a newline,
+and a `=>` body ends at nothing at all — a following `|`, `else`, or `catch`
+could belong either to the body or to the enclosing branch list.
+
+What differences remain among the marked bodies are derived, not stipulated: a
+body's last item may not be a form that could consume the body's own
+terminator. Nothing consumes `)`. A loop's `until`/`done` is mandatory and
+occurs exactly once per loop, so even a nested loop in final position is
+unambiguous — `do … until p until q` binds the inner `until` innermost-first.
+But `catch` is a repeatable clause, so two forms are barred from a `try`
+body's final position. A nested `try` there consumes every following `catch`,
+leaving none for the body's own `try`, which requires one — so that spelling
+could never parse in any case. A lambda is barred because its body is
+introduced by `=>` and is itself unmarked, extending rightwards, so a
+following `catch` is contested whenever that body ends in a `try`. Both stay
+legal anywhere earlier in the sequence, and in final position once
+parenthesized — `try (fn(x: int) -> int => x) catch _ => 0` — which restores
+the marker.
+
+An unmarked body holds a single `closed_item` — no `;`, no binder, and none of
+the open forms whose own branch lists would swallow the enclosing form's
+continuation.
+
+This is not a special restriction on `;`. Within a block, `;` and a newline
+are the same separator (see [Programs and blocks](#programs-and-blocks)), and
+a newline cannot appear inside an inline body either. To write a multi-item
+body after `=>`, parenthesize it or use the suite form:
+
+```agl
+| 1 => (let doubled = k * 2; print "doubled:${doubled}")
+| 2 =>
+    let doubled = k * 2
+    print "doubled:${doubled}"
+```
+
+Parentheses directly after a callee are that call's argument list, so a
+parenthesized block passed as an argument carries its own parentheses:
+`print((let x = 4; x * 2))`.
+
 ## Type declarations
 
 ```ebnf
@@ -254,9 +317,16 @@ range_tail  ::= ("to" | "downto") or_expr ("by" or_expr)?
 while_clause::= "while" or_expr NEWLINE?
 loop_bound  ::= "[" or_expr "]"           (* int; n <= 0 runs zero iterations *)
 loop_end    ::= "until" or_expr | "done"   (* omitted terminator allowed in suite form *)
-inline_body ::= inline_item (";" inline_item)*
-inline_item ::= let_decl | var_decl | assign_expr | or_expr
+inline_body ::= marked_item (";" marked_item)*
+marked_item ::= closed_item | let_decl | var_decl
+              | case_expr | if_expr | try_expr | loop
 ```
+
+A loop body is the one inline position that admits the *open* forms
+(`case`, `if`, `try`, and a nested loop). A loop is closed by its terminator
+(`until` / `done`), which no open form can extend into, so their branch lists
+end unambiguously (see [Inline bodies](#inline-bodies)). A nested
+`do … until p until q` binds the inner `until` innermost-first.
 
 At most one `for` and one `while` clause, in that order. `done` and an
 omitted (suite-form) terminator are equivalent to `until false`. `break` and
@@ -270,9 +340,22 @@ semantics.
 
 ```ebnf
 if_expr        ::= "if" "|"? if_cond_branch ("|" if_cond_branch)* if_else_branch?
-if_cond_branch ::= or_expr "=>" (suite | or_expr)
-if_else_branch ::= "|"? "else" "=>" (suite | or_expr)
+if_cond_branch ::= or_expr "=>" branch_body
+if_else_branch ::= "|"? "else" "=>" branch_body
+
+branch_body    ::= suite | closed_item
+closed_item    ::= or_expr
+                 | assign_expr                    (* RHS restricted to or_expr *)
+                 | raise_expr
+                 | return_expr
 ```
+
+`branch_body` is shared by `if` branches, `case` branches, and `catch`
+clauses. An inline body after `=>` is exactly **one** item: no `;` sequence
+and no binder. See [Inline bodies](#inline-bodies) for why, and for the two
+ways to write a multi-item body inline. An inline `:=` restricts its
+right-hand side to `or_expr`; the suite form keeps the unrestricted
+right-hand side.
 
 Without an `else` branch the `if` expression has type `unit` and returns
 `void`. With all branches returning a common type `T`, the `if` expression has
@@ -282,17 +365,22 @@ type `T`.
 
 ```ebnf
 case_expr    ::= "case" or_expr "of" "|"? case_branch ("|" case_branch)*
-case_branch  ::= pattern "=>" (suite | or_expr)
+case_branch  ::= pattern "=>" branch_body
 ```
 
 ## `try` / `catch`
 
 ```ebnf
-try_expr      ::= "try" (suite | or_expr (";" or_expr)*) catch_clause+
-catch_clause  ::= "catch" catch_pattern "=>" (suite | or_expr)
+try_expr      ::= "try" try_body catch_clause+
+try_body      ::= suite | (marked_item ";")* closed_item
+catch_clause  ::= "catch" catch_pattern "=>" branch_body
 catch_pattern ::= name ("as" name)?
                 | "_" ("as" name)?
 ```
+
+`catch` marks where a `try` body ends, so an inline try body is a full `;`
+sequence — binders and `:=` included. Its final item must still be closed: an
+open form there would consume the `catch`.
 
 ## Patterns
 
@@ -379,6 +467,12 @@ atom           ::= INT | DECIMAL | "true" | "false" | "null"
                                                     (* applied-type-qualified constructor *)
                | template
                | "(" expr ")"                      (* parenthesized expr *)
+               | "(" paren_block ")"               (* parenthesized block *)
+
+paren_block    ::= (paren_item ";")+ paren_tail
+                 | assign_expr
+paren_item     ::= paren_tail | let_decl | var_decl
+paren_tail     ::= expr | assign_expr
 
 atom_no_call   ::= (* same as atom but excludes "(" — prevents sugar conflict *)
                INT | DECIMAL | "true" | "false" | "null"
@@ -473,8 +567,16 @@ dedented as described in [Lexical structure](lexical-structure.md).
   not cascade shift/reduce conflicts into every operator rule.
 - `()` is both the unit literal and the empty argument list of a zero-arg
   call — the two are syntactically unified.
-- Branch bodies, loop inline bodies, and `until` conditions reference `or_expr`
-  directly; a `case`, `if`, `raise`, or `return` expression in those positions
-  must use a suite form or be parenthesized.
+- Inline branch and `catch` bodies hold a single *closed* item — `or_expr`,
+  `:=`, `raise`, or `return`. They admit neither a `;` sequence nor a binder,
+  nor the *open* forms (`case`, `if`, `try`, a loop) or a lambda, whose body is
+  itself an `expr`: those would extend rightwards into the enclosing branch
+  list's `|` / `else` / `catch`. Write them as a suite or parenthesize them
+  (see [Inline bodies](#inline-bodies)).
+- `until` conditions reference `or_expr` directly, so an open form there must
+  be parenthesized.
+- Bodies whose end is marked by a token — a parenthesized block, a loop body,
+  a `try` body — take a full `;` sequence; loop bodies additionally admit the
+  open forms, because the loop terminator closes the body.
 - A `return` followed by a newline is a bare `return`; its operand does not
   continue onto the next line.

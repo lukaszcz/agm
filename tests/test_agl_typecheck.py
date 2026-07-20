@@ -1814,7 +1814,7 @@ class TestFuncDef:
         assert "mismatch" in str(err).lower() or "expected" in str(err).lower()
 
     def test_funcdef_tail_after_bottom_binding_checked_against_annotation(self) -> None:
-        err = reject_type('def f() -> int = let x: int = return 1; "A"')
+        err = reject_type('def f() -> int = (let x: int = return 1; "A")')
         assert "mismatch" in str(err).lower() or "expected" in str(err).lower()
 
     def test_funcdef_tail_after_return_participates_in_inference(self) -> None:

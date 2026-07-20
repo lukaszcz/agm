@@ -59,7 +59,7 @@ increment()
 
 def test_inline_function_body_with_let() -> None:
     source = """
-def g() -> int = let x = 0; x + 1
+def g() -> int = (let x = 0; x + 1)
 let r = g()
 r
 """

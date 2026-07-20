@@ -137,16 +137,17 @@ def broken() -> int =
 ## Inline forms
 
 AgL is designed so that small workflows fit on one line. Items are separated
-by `;` inline. Branch bodies, `until` conditions, and the right-hand sides of
-binders are **`or_expr`** — the operator-chain level — and a `case` or `if`
-expression in those positions must be parenthesized:
+by `;` inline. `until` conditions and the right-hand sides of binders are
+**`or_expr`** — the operator-chain level — so a `case` or `if` expression in
+those positions must be parenthesized. Loop bodies also admit `case`, `if`,
+`try`, and nested loops directly:
 
 ```agl
 # Inline block: items separated by ';'
 let x = 3; let y = x + 1; y
 
 # Inline do loop: body items, then until condition
-do[5] let r: Review = ask("Review ${a}", agent = reviewer); case r of Fail(i) => a := ask("Fix ${i} in ${a}", agent = impl) | Pass => () until r is Pass
+do[5] r := ask("Review ${a}", agent = reviewer); case r of Fail(issues) => a := ask("Fix ${issues} in ${a}", agent = impl) | Pass => () until r is Pass
 
 # A case expression as a loop condition must be parenthesized:
 do[3] n := n + 1 until (case st of Done => true | _ => false)
@@ -163,15 +164,17 @@ case review of
 
 ### Branch bodies
 
-An `if` or `case` branch body is either a suite (indented block) or a single
-expression at the `or_expr` level. A branch body that begins a new `if` or
-`case` in the same inline position must be parenthesized or placed in a suite.
+An `if` or `case` branch body is either a suite (indented block) or an inline
+body. An inline body after `=>` is exactly one item: an `or_expr`, an
+assignment, `raise`, or `return`. A `;` sequence, a binder, or a body that
+begins a new `if`, `case`, `try`, or loop must be parenthesized or placed in a
+suite — see [Inline bodies](grammar.md#inline-bodies).
 
 ### Inline `try`
 
 A `try`/`catch` inline holds a sequence of items up to the first `catch`
-keyword; the `catch` body is a single expression at `or_expr` level or a
-suite.
+keyword — binders and assignments included, with the last item an expression.
+The `catch` body, like any `=>` body, is a single item or a suite.
 
 ## Expression statements
 

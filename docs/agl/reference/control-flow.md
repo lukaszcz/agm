@@ -63,10 +63,13 @@ if res.exit_code != 0 =>
 Because an `else`-less `if` always has type `unit`, it is for effectful
 control flow. A branch body that produces a non-`unit` value is a static error.
 
-Branch bodies are suites (indented blocks) or single expressions at the
-`or_expr` level. Because branch bodies are `or_expr` positions, a `case` or
-`if` expression used inline must be parenthesized. Mutating an outer `var`
-with `:=` inside a branch persists after the `if`.
+Branch bodies are suites (indented blocks) or inline bodies. An inline body
+after `=>` is exactly one item: an `or_expr`, an assignment, `raise`, or
+`return`. It admits neither a `;` sequence nor a binder, nor a `case`, `if`,
+`try`, or loop expression. Write any of those as a suite or parenthesize them
+— `(let x = e; body)` — see
+[Inline bodies](grammar.md#inline-bodies). Mutating an outer `var` with `:=`
+inside a branch persists after the `if`.
 
 ## `case`
 
@@ -120,7 +123,7 @@ while_clause::= "while" or_expr NEWLINE?
 loop_bound  ::= "[" or_expr "]"
 loop_end    ::= "until" or_expr | "done"
 inline_seq  ::= inline_item (";" inline_item)*
-inline_item ::= binder | or_expr
+inline_item ::= binder | or_expr | case_expr | if_expr | try_expr | loop
 ```
 
 A loop may begin with **at most one `for`** clause and **at most one
@@ -130,6 +133,12 @@ optional iteration **bound** `[n]`. The body is an indented suite or an
 inline `;`-separated sequence. It ends with `until E`, `done`, or — in the
 **multi-line** form only — nothing (the body is delimited by indentation).
 `done` and an omitted terminator are equivalent to `until false`.
+
+A loop body is the one inline position that also admits `case`, `if`, `try`,
+and a nested loop: the terminator closes the body, so no open form can extend
+past it. A nested `do … until p until q` binds the inner `until` innermost-first.
+`for` and `while` are prefix clauses on this same construct, so every loop
+shape parses its body identically.
 
 ```agl
 # collection for, terminated by `done`

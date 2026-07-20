@@ -1,0 +1,76 @@
+{
+  "scenarios": [
+    {
+      "name": "k_zero_all_pass",
+      "params": {
+        "k": 0
+      },
+      "agents": {
+        "reviewer": [
+          "{\"$case\": \"Pass\"}",
+          "{\"$case\": \"Pass\"}"
+        ]
+      },
+      "expect": {
+        "stdout": "zero\nnon-negative\nnone\nprobed:1\n12\n6\n3/2\nVerdict::Pass\nVerdict::Pass\nfailures:0\n",
+        "calls": {
+          "reviewer": 2
+        }
+      }
+    },
+    {
+      "name": "k_one_paren_block_and_fail_verdict",
+      "params": {
+        "k": 1
+      },
+      "agents": {
+        "reviewer": [
+          "{\"$case\": \"Pass\"}",
+          "{\"$case\": \"Fail\", \"issues\": [\"slow\"]}"
+        ]
+      },
+      "expect": {
+        "stdout": "doubled:2\nunset\nnon-negative\nnone\nprobed:2\n12\n6\n3/2\nVerdict::Pass\nVerdict::Fail(issues = [\"slow\"])\nfailures:0\n",
+        "calls": {
+          "reviewer": 2
+        }
+      }
+    },
+    {
+      "name": "k_nine_inline_raise_caught",
+      "params": {
+        "k": 9
+      },
+      "agents": {
+        "reviewer": [
+          "{\"$case\": \"Pass\"}",
+          "{\"$case\": \"Pass\"}"
+        ]
+      },
+      "expect": {
+        "stdout": "many\nnon-negative\nhalt:9\nprobed:10\n12\n6\n3/2\nVerdict::Pass\nVerdict::Pass\nfailures:0\n",
+        "calls": {
+          "reviewer": 2
+        }
+      }
+    },
+    {
+      "name": "k_negative_parse_failures_caught_inline",
+      "params": {
+        "k": -3
+      },
+      "agents": {
+        "reviewer": [
+          "BROKEN",
+          "BROKEN"
+        ]
+      },
+      "expect": {
+        "stdout": "many\nnegative\nnone\nprobed:-2\n12\n6\n3/2\nfailures:2\n",
+        "calls": {
+          "reviewer": 2
+        }
+      }
+    }
+  ]
+}

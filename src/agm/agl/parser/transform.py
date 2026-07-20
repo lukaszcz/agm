@@ -762,8 +762,13 @@ class AstBuilder(Transformer):
         expr = _find_non_token(args)
         return cast(syntax.Expr, expr)
 
-    def func_inline_seq(self, meta: Meta, args: _Args) -> syntax.Block:
-        """func_inline_seq: binder (SEMICOLON binder)* SEMICOLON expr."""
+    def _block_from_items(self, meta: Meta, args: _Args) -> syntax.Block:
+        """Build a Block from every non-token argument, in order.
+
+        Shared by the inline body sequences (function, loop, try, and
+        parenthesized blocks), which differ only in which items the grammar
+        admits.
+        """
         items = tuple(
             cast(syntax.Item, a) for a in args if a is not None and not isinstance(a, Token)
         )
@@ -772,6 +777,20 @@ class AstBuilder(Transformer):
             span=self._span_from_meta(meta),
             node_id=self._next_id(),
         )
+
+    def _body_as_expr(self, meta: Meta, item: _RawItem) -> syntax.Expr:
+        """Coerce an inline `=>` body to an Expr.
+
+        An assignment is a Binder, not an Expr, so it is wrapped in a
+        single-item Block — the same shape the equivalent suite body produces.
+        """
+        if isinstance(item, syntax.AssignStmt):
+            return syntax.Block(
+                items=(item,),
+                span=self._span_from_meta(meta),
+                node_id=self._next_id(),
+            )
+        return cast(syntax.Expr, item)
 
     # ------------------------------------------------------------------
     # let_decl / var_decl / assign_stmt
@@ -1800,23 +1819,8 @@ class AstBuilder(Transformer):
         return cast(syntax.Expr, inner)
 
     def inline_seq(self, meta: Meta, args: _Args) -> syntax.Block:
-        """inline_seq: inline_item (SEMICOLON inline_item)*
-
-        Build a Block from the inline items (or_exprs and binders).
-        """
-        items = tuple(
-            cast(syntax.Item, a) for a in args if a is not None and not isinstance(a, Token)
-        )
-        return syntax.Block(
-            items=items,
-            span=self._span_from_meta(meta),
-            node_id=self._next_id(),
-        )
-
-    def inline_item(self, meta: Meta, args: _Args) -> syntax.Item:
-        """inline_item: binder | or_expr — transparent."""
-        inner = _find_non_token(args)
-        return cast(syntax.Item, inner)
+        """inline_seq: marked_item (SEMICOLON marked_item)*"""
+        return self._block_from_items(meta, args)
 
     def loop_until(self, meta: Meta, args: _Args) -> syntax.Expr:
         """loop_until: "until" or_expr — return the condition expression."""
@@ -1900,19 +1904,14 @@ class AstBuilder(Transformer):
     # ------------------------------------------------------------------
 
     def try_body(self, meta: Meta, args: _Args) -> syntax.Expr:
-        """try_body: suite_expr | or_expr (SEMICOLON or_expr)*
+        """try_body: suite_expr | (marked_item SEMICOLON)* closed_item
 
-        Returns a Block (for multiple items) or the single expr.
+        Returns a Block for a sequence, or the single item on its own.
         """
         items = [a for a in args if a is not None and not isinstance(a, Token)]
         if len(items) == 1:
-            return cast(syntax.Expr, items[0])
-        # Multiple or_exprs: wrap in a Block.
-        return syntax.Block(
-            items=tuple(cast(syntax.Item, i) for i in items),
-            span=self._span_from_meta(meta),
-            node_id=self._next_id(),
-        )
+            return self._body_as_expr(meta, cast(_RawItem, items[0]))
+        return self._block_from_items(meta, args)
 
     def catch_pattern(self, meta: Meta, args: _Args) -> tuple[str | None, str | None]:
         """catch_pattern: name ("as" name)?
@@ -1931,9 +1930,8 @@ class AstBuilder(Transformer):
         return (exc_type, binding)
 
     def catch_body(self, meta: Meta, args: _Args) -> syntax.Expr:
-        """catch_body: suite_expr | or_expr — pass through the inner expr."""
-        inner = _find_non_token(args)
-        return cast(syntax.Expr, inner)
+        """catch_body: suite_expr | closed_item."""
+        return self._body_as_expr(meta, cast(_RawItem, _find_non_token(args)))
 
     def catch_clause(self, meta: Meta, args: _Args) -> syntax.CatchClause:
         """catch_clause: "catch" catch_pattern ARROW catch_body"""
@@ -2001,9 +1999,23 @@ class AstBuilder(Transformer):
         return block
 
     def branch_body(self, meta: Meta, args: _Args) -> syntax.Expr:
-        """branch_body: suite_expr | or_expr — pass through the inner expr."""
-        inner = _find_non_token(args)
-        return cast(syntax.Expr, inner)
+        """branch_body: suite_expr | closed_item."""
+        return self._body_as_expr(meta, cast(_RawItem, _find_non_token(args)))
+
+    def inline_assign(self, meta: Meta, args: _Args) -> syntax.AssignStmt:
+        """inline_assign: postfix ASSIGN or_expr.
+
+        Same node as assign_stmt; the grammar restricts only the RHS.
+        """
+        return self.assign_stmt(meta, args)
+
+    def paren_block(self, meta: Meta, args: _Args) -> syntax.Block:
+        """paren_block: (paren_item SEMICOLON)+ paren_tail | inline_assign."""
+        return self._block_from_items(meta, args)
+
+    def paren_block_expr(self, meta: Meta, args: _Args) -> syntax.Block:
+        """paren_expr_or_unit: LPAR paren_block RPAR — unwrap to the Block."""
+        return next(a for a in args if isinstance(a, syntax.Block))
 
     # ------------------------------------------------------------------
     # Patterns

@@ -1178,7 +1178,7 @@ class TestFuncDef:
         assert len(fd.body.items) == 2
 
     def test_def_inline_block_body_with_let(self) -> None:
-        fd = first(parse("def g() -> int = let x = 0; 0"))
+        fd = first(parse("def g() -> int = (let x = 0; 0)"))
         assert isinstance(fd, FuncDef)
         assert isinstance(fd.body, Block)
         assert len(fd.body.items) == 2

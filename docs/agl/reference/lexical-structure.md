@@ -46,11 +46,12 @@ The layout rules:
    ```agl
    if
      | status is Complete => ()
-     | status is Blocked => let report = ask("Explain ${status}", agent = critic)
+     | status is Blocked => (let report = ask("Explain ${status}", agent = critic); print report)
      | else => ()
 
+   var r: Review = Pass
    do[5]
-     let r: Review = ask("Review ${artifact}", agent = reviewer)
+     r := ask("Review ${artifact}", agent = reviewer)
    until r is Pass
    ```
 
@@ -402,7 +403,9 @@ support multiple arguments: `f(a, b)`.
 
 `case` and `if` expressions sit **below all of this**: they are the loosest
 expression forms. In positions where a following `|` would be ambiguous
-(branch bodies, `if`/`until` conditions) they must be parenthesized.
+(branch bodies, `if`/`until` conditions) they must be parenthesized. A loop
+body is not such a position — the loop terminator closes it — so they may
+appear there directly.
 
 All comparison operators are non-associative: `x == y == z`, `1 < 2 < 3`, and
 `a <= b != c` are parse errors with a targeted diagnostic.

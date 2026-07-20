@@ -83,12 +83,19 @@ body and all catch handler bodies (with `int → decimal` widening). A
 `try`/`catch` in a value position binds a typed result:
 
 ```ebnf
-try_expr      ::= "try" (suite | or_expr (";" or_expr)*) catch_clause+
+try_expr      ::= "try" try_body catch_clause+
+try_body      ::= suite | (marked_item ";")* closed_item
 catch_clause  ::= "catch" catch_pattern "=>" branch_body
 catch_pattern ::= name ("as" name)?
                 | "_" ("as" name)?
-branch_body   ::= suite | or_expr
+branch_body   ::= suite | closed_item
 ```
+
+`branch_body` is the same body form an `if` or `case` branch takes — a suite
+or a single item. Because `catch` marks where a `try` body ends, an inline
+`try` body is a full `;` sequence, binders and assignments included, whose
+last item is an expression. See
+[Inline bodies](grammar.md#inline-bodies).
 
 ```agl
 try
@@ -97,6 +104,7 @@ try
     agent = reviewer,
     on_parse_error = Retry(n = 2)
   )
+  print "reviewed: ${review}"
 catch AgentParseError as e =>
   let report = ask("Explain invalid output:\n${e.raw}", agent = critic)
   raise e

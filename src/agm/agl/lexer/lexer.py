@@ -35,11 +35,13 @@ from typing import Iterator
 from lark.lexer import Lexer, LexerState, Token
 
 from agm.agl.diagnostics import Diagnostic, SourceSpan
+from agm.agl.lexer.errors import LexError
 from agm.agl.lexer.layout import layout
 from agm.agl.lexer.scanner import _Scanner
 from agm.agl.lexer.tokens import (
     CALL_LBRACE,
     DCOLON,
+    DECIMAL,
     DO_LSQB,
     EXPORT,
     GRAMMAR_TOKEN_REMAP,
@@ -48,6 +50,7 @@ from agm.agl.lexer.tokens import (
     INDEX_LSQB,
     INT,
     LBRACE,
+    LPAR,
     LSQB,
     MODPATH,
     MODQUAL,
@@ -55,6 +58,7 @@ from agm.agl.lexer.tokens import (
     OP_NAME,
     OPEN,
     PRIVATE,
+    RPAR,
     RSQB,
     SLASH,
     TYPEARG_LSQB,
@@ -446,9 +450,7 @@ def _merge_modqual(tokens: list[Token], source: str) -> list[Token]:
             j += 2
 
         if j < n and tokens[j].type == DCOLON and last_name.end_pos != tokens[j].start_pos:
-            _record_spaced_qualifier(
-                tokens, j, start, segments, source=source, seen=seen_dcolons
-            )
+            _record_spaced_qualifier(tokens, j, start, segments, source=source, seen=seen_dcolons)
 
         if (
             j < n
@@ -480,9 +482,73 @@ def _merge_modqual(tokens: list[Token], source: str) -> list[Token]:
     return result
 
 
+# Tokens that can end an operand immediately left of a slash, and tokens that
+# can begin one immediately right of it. A slash touching either is reaching for
+# a path; a slash touching neither (the positional-parameter marker) is not.
+_OPERAND_END = frozenset({NAME, INT, DECIMAL, RPAR, RSQB, MODQUAL})
+_OPERAND_START = frozenset({NAME, INT, DECIMAL, LPAR})
+
+
+def _reaches_a_spaced_dcolon(tokens: list[Token], slash_index: int) -> bool:
+    """Whether a slash heads a tight segment run ending at a whitespace-split ``::``.
+
+    Such a run is a qualifier whose only defect is the gap before its ``::``;
+    :func:`_merge_modqual` has already recorded it as a
+    :class:`~agm.agl.syntax.advisories.SpacedQualifier`, whose diagnostic names
+    the tight spelling. Leaving it to that pass beats a blunt lexical error.
+    """
+    index = slash_index
+    n = len(tokens)
+    while (
+        index + 1 < n
+        and tokens[index].type == SLASH
+        and tokens[index + 1].type == NAME
+        and tokens[index].end_pos == tokens[index + 1].start_pos
+    ):
+        index += 2
+        if index < n and tokens[index].type == DCOLON:
+            return True
+    return False
+
+
+def _reject_clinging_slash(tokens: list[Token]) -> list[Token]:
+    """Reject a division slash that clings to an operand on either side.
+
+    Division is written with whitespace on both sides, matching ``+``, ``-``
+    and ``*``, which need it because they are identifier characters. Unspaced,
+    ``/`` separates module-path segments. Every slash that forms a path has
+    already been merged away by this point, so a slash still touching an
+    operand is a path that went nowhere, and reporting it here beats letting it
+    reach the grammar as arithmetic (``a/ b``) or a stray anchor (``a /b``).
+    """
+    for index, tok in enumerate(tokens):
+        if tok.type != SLASH or _reaches_a_spaced_dcolon(tokens, index):
+            continue
+        prev_tok = tokens[index - 1] if index > 0 else None
+        next_tok = tokens[index + 1] if index + 1 < len(tokens) else None
+        tight_left = (
+            prev_tok is not None
+            and prev_tok.type in _OPERAND_END
+            and prev_tok.end_pos == tok.start_pos
+        )
+        tight_right = (
+            next_tok is not None
+            and next_tok.type in _OPERAND_START
+            and tok.end_pos == next_tok.start_pos
+        )
+        if tight_left or tight_right:
+            raise LexError(
+                "'/' is a module path separator here; write ' / ' with spaces to divide",
+                span=_token_span(tok),
+            )
+    return tokens
+
+
 def apply_module_passes(tokens: list[Token], source: str) -> list[Token]:
     """Apply soft-keyword promotion, import path merging, and module-qualifier merging."""
-    return _merge_modqual(_merge_modpath(_promote_soft_keywords(tokens)), source)
+    return _reject_clinging_slash(
+        _merge_modqual(_merge_modpath(_promote_soft_keywords(tokens)), source)
+    )
 
 
 def _remap_adjacent_brackets(tokens: list[Token]) -> list[Token]:

@@ -302,7 +302,7 @@ pattern        ::= "_"
                  | name
                  | name "(" pattern_fields? ")"
                  | qual_prefix type_qual? name ("(" pattern_fields? ")")?
-qual_prefix    ::= ["/"] NAME ("/" NAME)* "::" | "::"
+qual_prefix    ::= ["/"] NAME ("/" NAME)* "::" | "::"    (* byte-adjacent throughout *)
 type_qual      ::= name "::"
 pattern_fields ::= pattern_field ("," pattern_field)* ","?
 pattern_field  ::= pattern              (* positional sub-pattern *)

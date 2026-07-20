@@ -220,7 +220,7 @@ def test_spaced_qualifier_preserves_resolvable_juxtaposition(
         "app / config ::x",
         "app / base/config ::x",
         "(app + base)/config ::x",
-        "app/(base + extra)/config ::x",
+        "app / (base + extra)/config ::x",
         "::app/config ::x",
     ),
 )

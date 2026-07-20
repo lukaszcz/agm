@@ -60,8 +60,15 @@ In expression, type, and pattern positions, every module qualifier is a tight
 run: optional leading `/`, then `NAME ("/" NAME)*`, immediately followed by
 `::`. This applies uniformly to single-segment and multi-segment qualifiers:
 `config::key` and `tools/config::key` are routes, while `config ::key` and
-`tools / config::key` are not the same forms. In import and export headers,
-`/` is a path separator and whitespace around it is permitted.
+`tools / config::key` are not the same forms. Import and export headers obey
+the same adjacency rule: `/` is a path separator written tight against both
+segments.
+
+`/` is division only with whitespace on both sides, matching `+`, `-` and `*`,
+which need it because they are identifier characters. A `/` touching an operand
+on exactly one side (`a/ b`, `a /b`) is a path that went nowhere and is
+rejected. The positional-parameter marker `/` touches no operand and is
+unaffected.
 
 ## Re-exports, prelude, and REPL
 

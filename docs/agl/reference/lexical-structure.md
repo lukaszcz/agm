@@ -140,6 +140,22 @@ followed by a separate qualifier. A leading `/` anchors resolution to the
 complete module path. A leading `::` with no preceding path is the
 **self-reference** form — it refers to the current module.
 
+`/` is the division operator only when written with whitespace on **both**
+sides. This matches `+`, `-` and `*`, which are identifier characters and so
+already need surrounding space to read as operators (`a+b` is one name). Left
+unspaced, `/` separates path segments, so a `/` that touches an operand on
+exactly one side is rejected:
+
+```agl
+let q = a / b        # division
+let r = a/b::thing   # qualifier
+let s = a/ b         # error: reads as a path, but the segments are split
+let t = a /b         # error: same
+```
+
+The positional-parameter marker `/` ([Functions](functions.md)) touches no
+operand and is unaffected.
+
 The type-argument form `callee::[T]` and typed-call form `callee::[T](args)`
 (e.g. `ask-request::[Review](…)`) are distinct constructs — they are NOT module
 qualifiers.

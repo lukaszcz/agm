@@ -12,7 +12,10 @@ without the suffix. For example, `utils/strings.agl` has identity
 `utils/strings`. The entry program has no path identity.
 
 A slash path is written byte-adjacent wherever it appears — in a header, a
-qualifier, or a wildcard tail. `a/b` is a path; `a / b` is division.
+qualifier, or a wildcard tail. `a/b` is a path; `a / b`, spaced on both sides,
+is division. A `/` touching an operand on exactly one side (`a/ b`) is neither
+and is rejected; see
+[Module qualifiers](lexical-structure.md#module-qualifiers).
 
 A module must resolve to exactly one file across the configured library roots.
 No matching file is an error; more than one matching file is also an error.

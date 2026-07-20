@@ -2408,7 +2408,7 @@ class TestModuleSystemLexer:
         assert lark_tok("foo/bar::baz")[0] == ("MODQUAL", "foo/bar")
         assert lark_tok("/foo/bar::baz")[0] == ("MODQUAL", "/foo/bar")
 
-    @pytest.mark.parametrize("source", ("foo ::bar", "foo / bar::baz", "foo/ bar::baz"))
+    @pytest.mark.parametrize("source", ("foo ::bar", "foo / bar::baz"))
     def test_spaced_qualifier_parts_do_not_merge_into_the_preceding_path(self, source: str) -> None:
         assert ("MODQUAL", "foo/bar") not in lark_tok(source)
 
@@ -2478,6 +2478,59 @@ class TestModuleSystemLexer:
         # After remap, 'import' at item-start becomes IMPORT in the parser stream
         result = lark_tok("import foo")
         assert result[0] == ("IMPORT", "import")
+
+
+# ---------------------------------------------------------------------------
+# Division spacing
+# ---------------------------------------------------------------------------
+
+
+class TestDivisionRequiresSurroundingSpace:
+    """`/` is division only with whitespace on both sides.
+
+    Unspaced, `/` is a path separator or anchor, so a slash that clings to an
+    operand on exactly one side has no reading and is rejected outright rather
+    than silently becoming arithmetic or a stray qualifier.
+    """
+
+    def test_spaced_slash_between_names_is_division(self) -> None:
+        assert lark_tok("a / b") == [("NAME", "a"), ("SLASH", "/"), ("NAME", "b")]
+
+    def test_spaced_slash_between_numbers_is_division(self) -> None:
+        assert lark_tok("10 / 2") == [("INT", "10"), ("SLASH", "/"), ("INT", "2")]
+
+    @pytest.mark.parametrize(
+        "source", ("a/ b", "a /b", "a/b", "10/2", "a/ 2", "f(1)/ 2", "a/(b + c)")
+    )
+    def test_slash_clinging_to_an_operand_is_rejected(self, source: str) -> None:
+        with pytest.raises(LexError):
+            lark_tok(source)
+
+    def test_spaced_dcolon_run_is_left_to_the_qualifier_advisory(self) -> None:
+        # `app/config ::x` is a qualifier with a gap before its `::`; the
+        # advisory names the tight spelling, so the lexer stays out of the way.
+        types = [t for t, _ in lark_tok("app/config ::x")]
+        assert "SLASH" in types
+
+    def test_tight_slash_before_a_qualifier_is_still_a_path(self) -> None:
+        # `a/b::c` is a qualifier, not a rejected division — the merge happens
+        # before the spacing check sees the slash.
+        assert lark_tok("a/b::c")[0] == ("MODQUAL", "a/b")
+
+    def test_anchored_qualifier_after_a_space_is_still_a_qualifier(self) -> None:
+        assert lark_tok("f /b::c")[:2] == [("NAME", "f"), ("MODQUAL", "/b")]
+
+    def test_positional_parameter_marker_is_not_division(self) -> None:
+        # The `/` parameter marker sits between commas, touching no operand.
+        types = [t for t, _ in lark_tok("def g(a: int, /, b: int) -> int = a")]
+        assert "SLASH" in types
+
+    def test_wildcard_import_tail_is_unaffected(self) -> None:
+        assert tok("import foo/bar/*")[:3] == [
+            ("IMPORT", "import"),
+            ("MODPATH", "foo/bar"),
+            ("WILDCARD", "/*"),
+        ]
 
 
 # ---------------------------------------------------------------------------

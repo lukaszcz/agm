@@ -415,84 +415,34 @@ class TestBlockScoping:
 
 
 class TestAssignErrors:
-    def test_assign_to_let(self) -> None:
-        err = reject_scope("let stable = 1\nstable := 2\nstable")
-        line, msg = diag(err)
-        assert line == 2
-        assert "stable" in msg
-
     def test_assign_to_undeclared(self) -> None:
         err = reject_scope("ghost := 1")
         line, msg = diag(err)
         assert line == 1
         assert "ghost" in msg
 
-    def test_assign_to_input(self) -> None:
-        err = reject_scope("param spec\nspec := 2\nspec")
-        line, msg = diag(err)
-        assert line == 2
-        assert "spec" in msg
+    @pytest.mark.parametrize(
+        "source",
+        (
+            "let stable = 1\nstable := 2\nstable",
+            "param spec\nspec := 2\nspec",
+            "try\n  ()\ncatch _ as err =>\n  err := 1\n",
+            "def f(x: int) -> int = x\nf := 1\nf(1)",
+        ),
+        ids=("let", "param", "catch-binder", "function"),
+    )
+    def test_unqualified_assign_to_immutable_resolves_and_defers_to_typecheck(
+        self, source: str
+    ) -> None:
+        """Scope resolves the target; only typechecking knows a slot's mutability."""
+        resolved = parse_and_resolve(source)
+        assert resolved.resolution
 
-    def test_assign_to_let_names_let(self) -> None:
-        err = reject_scope("let stable = 1\nstable := 2\nstable")
-        _, msg = diag(err)
-        assert "let" in msg
-        assert "immutable" in msg
-
-    def test_assign_to_input_names_input_not_let(self) -> None:
-        err = reject_scope("param spec\nspec := 2\nspec")
-        _, msg = diag(err)
-        assert "param" in msg
-        assert "declared with 'let'" not in msg
-
-    def test_assign_to_catch_binder_names_catch(self) -> None:
-        err = reject_scope("try\n  ()\ncatch _ as err =>\n  err := 1\n")
-        line, msg = diag(err)
-        assert line == 4
-        assert "catch binder" in msg
-        assert "declared with 'let'" not in msg
-
-    def test_assign_to_pattern_slot_is_deferred_to_typecheck(self) -> None:
+    def test_assign_to_pattern_slot_resolves_to_the_slot_binding(self) -> None:
         resolved = parse_and_resolve("let v = 1\ncase v of\n  | _ as n =>\n    n := 2\n")
         assignment = resolved.program.body.items[1].branches[0].body.items[0]
         assert isinstance(assignment, AssignStmt)
         assert resolved.resolution[assignment.node_id].kind is BinderKind.pattern_slot
-
-    def test_assign_to_param_names_param(self) -> None:
-        """Assigning to a parameter is rejected with the 'param_binding' phrasing."""
-        # Use direct AST construction since the parser only allows expressions
-        # in a def body (assignment is a binder, not an expr in call position).
-        from agm.agl.syntax.types import IntT as IntTNode
-
-        sp = _sp()
-        int_t = IntTNode(span=sp, node_id=_nid())
-        param = Param(
-            name="n",
-            type_expr=int_t,
-            kind=ParamKind.STANDARD,
-            default=None,
-            span=sp,
-            node_id=_nid(),
-        )
-        assign_n = _make_assign("n", _make_intlit(2))
-        funcdef = FuncDef(
-            name="f",
-            params=(param,),
-            return_type=int_t,
-            body=_make_block(assign_n, _make_varref("n")),
-            span=sp,
-            node_id=_nid(),
-        )
-        call_f = Call(
-            callee=_make_varref("f"),
-            args=(_make_intlit(1),),
-            named_args=(),
-            span=sp,
-            node_id=_nid(),
-        )
-        err = reject_program(funcdef, call_f)
-        _, msg = diag(err)
-        assert "parameter binding" in msg
 
     def test_invalid_direct_ast_assign_target_rejected(self) -> None:
         assign_bad = AssignStmt(
@@ -504,12 +454,6 @@ class TestAssignErrors:
         err = reject_program(assign_bad, _make_unitlit())
         _, msg = diag(err)
         assert "indexed assignment requires a variable list or dict root" in msg
-
-    def test_assign_to_function_binding_names_function(self) -> None:
-        """Assigning to a def name is rejected."""
-        err = reject_scope("def f(x: int) -> int = x\nf := 1\nf(1)")
-        _, msg = diag(err)
-        assert "function" in msg.lower() or "def" in msg.lower() or "immutable" in msg.lower()
 
     def test_assign_to_var_resolves(self) -> None:
         r = parse_and_resolve("var n = 0\nn := 1\nn")
@@ -1241,11 +1185,15 @@ class TestParentScopeSeam:
         assert ref.name == "n"
         assert ref.mutable is True
 
-    def test_assign_to_parent_immutable_still_errors(self) -> None:
+    def test_assign_to_parent_immutable_resolves_as_immutable(self) -> None:
+        """``:=`` of a parent let binding resolves; typechecking rejects it."""
         session = parse_and_resolve("let k = 1\nk")
-        with pytest.raises(AglScopeError) as exc_info:
-            resolve_module(parse_program("k := 2"), parent_scope=session.root_scope)
-        assert "Cannot assign" in str(exc_info.value)
+        entry = resolve_module(parse_program("k := 2"), parent_scope=session.root_scope)
+        assign_stmt = entry.program.body.items[0]
+        assert isinstance(assign_stmt, AssignStmt)
+        ref = entry.resolution[assign_stmt.node_id]
+        assert ref.name == "k"
+        assert ref.mutable is False
 
     def test_ambient_agents(self) -> None:
         """An ambient agent resolves without an in-source declaration."""

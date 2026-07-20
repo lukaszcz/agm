@@ -31,7 +31,7 @@ def test_pattern_slot_model_and_empty_scope_tables() -> None:
     resolved = _resolve("let value = 1\nvalue")
     binding = next(iter(resolved.resolution.values()))
     candidate = SlotCandidate(11, resolved.program.span, True)
-    slot = PatternSlot(7, "value", (candidate,), binding, 2)
+    slot = PatternSlot(7, "value", (candidate,), binding)
 
     assert slot.candidates == (candidate,)
     assert slot.alternative is binding
@@ -110,7 +110,7 @@ def test_scope_slot_covers_as_candidates_and_all_branch_body_references() -> Non
         as_pattern.pattern.node_id,
         as_pattern.node_id,
     ]
-    assert [candidate.unconditional for candidate in slot.candidates] == [False, True]
+    assert [candidate.can_match_bare_pattern for candidate in slot.candidates] == [True, False]
     for ref in (first.value, body.items[1]):
         assert resolved.resolution[ref.node_id].kind is BinderKind.pattern_slot
         assert resolved.resolution[ref.node_id].slot_id == slot.slot_id

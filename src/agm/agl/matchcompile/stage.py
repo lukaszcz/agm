@@ -109,8 +109,9 @@ def _compile_owner_cases(owner: CheckedModule) -> tuple[dict[int, CompiledCase],
     cases: dict[int, CompiledCase] = {}
     issues: list[MatchIssue] = []
     # Every case of one checked owner shares that owner's writable enum
-    # spellings and visible bare constructor forms, and enumerating either
-    # rescans the whole type namespace.
+    # spellings and visible bare constructor forms. Enumerating the writable
+    # spellings rescans the whole type namespace, so resolve both once here
+    # rather than once per case.
     owner_forms = owner.type_env.enum_owner_forms()
     bare_constructors = resolve_bare_enum_constructors(owner)
     for case_node_id, source_case in _source_cases(owner.resolved.program).items():

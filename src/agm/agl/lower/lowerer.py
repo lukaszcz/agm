@@ -521,12 +521,15 @@ class _Lowerer:
     def _pattern_binding_ids(self, pattern: Pattern, out: set[int]) -> None:
         """Collect node_ids of the variable binders a pattern introduces."""
         match pattern:
-            case VarPattern() | AsPattern():
-                tbl = self._checked.pattern_classifications
-                if pattern.node_id in tbl and tbl[pattern.node_id] is None:
+            case AsPattern():
+                # An as-binder always binds; the checker classifies every
+                # AsPattern as a binder rather than a constructor spelling.
+                out.add(pattern.node_id)
+                self._pattern_binding_ids(pattern.pattern, out)
+            case VarPattern():
+                classifications = self._checked.pattern_classifications
+                if pattern.node_id in classifications and classifications[pattern.node_id] is None:
                     out.add(pattern.node_id)
-                if isinstance(pattern, AsPattern):
-                    self._pattern_binding_ids(pattern.pattern, out)
             case ConstructorPattern():
                 for p in pattern.positional:
                     self._pattern_binding_ids(p, out)

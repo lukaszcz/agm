@@ -130,6 +130,17 @@ class TestPersistence:
         assert r.value is not None
         assert _int(r.value) == 8
 
+    def test_assign_to_prior_immutable_binding_is_rejected(self) -> None:
+        """A later entry cannot reassign an earlier ``let``, and it survives."""
+        s = ReplSession()
+        assert s.eval_entry("let k = 1").ok
+
+        result = s.eval_entry("k := 2")
+
+        assert not result.ok
+        assert "cannot assign" in result.diagnostics[0].message.lower()
+        assert _int(dict((n, v) for n, _t, v in s.bindings())["k"]) == 1
+
     def test_new_constructor_does_not_shadow_persisted_value(self) -> None:
         s = ReplSession()
         assert s.eval_entry("let on = 7").ok

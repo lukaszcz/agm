@@ -2030,12 +2030,12 @@ class AstBuilder(Transformer):
             name = str(name_tok)
             if name == "_":
                 raise AglSyntaxError(
-                    "An as-pattern binder cannot be '_'.", span=_span_from_meta(meta)
+                    "An as-pattern binder cannot be '_'.", span=self._span_from_meta(meta)
                 )
             pattern = syntax.AsPattern(
                 pattern=pattern,
                 name=name,
-                span=_span_from_meta(meta),
+                span=self._span_from_meta(meta),
                 node_id=self._next_id(),
             )
         return pattern
@@ -2056,7 +2056,7 @@ class AstBuilder(Transformer):
             name=name,
             positional=positional,
             named=named,
-            span=_span_from_meta(meta),
+            span=self._span_from_meta(meta),
             node_id=self._next_id(),
         )
 

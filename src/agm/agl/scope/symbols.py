@@ -147,15 +147,26 @@ def immutable_binder_phrase(kind: BinderKind) -> str:
 def immutable_assignment_message(name: str, kind: BinderKind) -> str:
     """Return the canonical ``:=``-on-immutable rejection message for *name*.
 
-    Both the scope resolver and the type checker can reject such an assignment
-    (field-directed pattern binders are only classified during checking), so
-    the wording lives here and is identical whichever pass reports it.
+    Type checking is the only caller: a field-directed pattern slot's final
+    binding is selected there, so only it can judge an unqualified target.
+    The wording lives here beside :func:`immutable_binder_phrase`, which the
+    resolver also uses for the cross-module qualified-assignment rejection.
     """
     return (
         f"Cannot assign to '{name}': "
         f"{immutable_binder_phrase(kind)} (immutable). "
         f"Declare with 'var' to make the variable mutable."
     )
+
+
+def duplicate_binder_message(name: str) -> str:
+    """Return the canonical duplicate-pattern-binder rejection for *name*.
+
+    Scope rejects duplicates it can already prove (neither spelling can be a
+    bare nullary enum pattern) and checking rejects the rest, so the wording
+    lives here and is identical whichever pass reports it.
+    """
+    return f"Name '{name}' is bound more than once in this pattern."
 
 
 # ---------------------------------------------------------------------------
@@ -215,15 +226,13 @@ class ConstructorRef:
 class SlotCandidate:
     """Metadata for one source pattern recorded in a :class:`PatternSlot`.
 
-    ``pattern_node_id`` identifies the candidate pattern. ``unconditional``
-    records whether that candidate applies regardless of the matched field's
-    constructor interpretation. ``can_match_bare_pattern`` records whether a
-    bare pattern name can directly match a known nullary enum variant.
+    ``pattern_node_id`` identifies the candidate pattern.
+    ``can_match_bare_pattern`` records whether a bare pattern name can
+    directly match a known nullary enum variant.
     """
 
     pattern_node_id: int
     span: SourceSpan
-    unconditional: bool
     can_match_bare_pattern: bool = False
 
 
@@ -232,15 +241,13 @@ class PatternSlot:
     """Parallel metadata for field-directed pattern candidates.
 
     ``alternative`` is either an enclosing ordinary binding or an outer
-    pattern-slot binding, if one is visible. ``outside_constructor_candidates``
-    counts the visible same-named constructors outside the pattern.
+    pattern-slot binding, if one is visible.
     """
 
     slot_id: int
     name: str
     candidates: tuple[SlotCandidate, ...]
     alternative: BindingRef | None
-    outside_constructor_candidates: int
 
 
 # ---------------------------------------------------------------------------
@@ -383,6 +390,10 @@ class ModuleResolution:
     ``pattern_slots``
         Scope-created field-directed pattern-slot metadata keyed by slot id.
         Branch-body references resolve directly to the shared slot binding.
+    ``branch_pattern_slots``
+        Maps each case branch's node id to the slot ids that branch's pattern
+        created, in creation (outer-to-inner) order. The checker selects
+        exactly these once the branch's patterns are classified.
     """
 
     program: Program
@@ -403,6 +414,7 @@ class ModuleResolution:
         default_factory=dict
     )
     pattern_slots: dict[int, PatternSlot] = field(default_factory=dict)
+    branch_pattern_slots: dict[int, tuple[int, ...]] = field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------

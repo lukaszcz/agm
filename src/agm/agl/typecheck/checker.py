@@ -56,6 +56,7 @@ from agm.agl.scope.symbols import (
     ConstructorRef,
     ModuleResolution,
     PatternSlot,
+    duplicate_binder_message,
     immutable_assignment_message,
 )
 from agm.agl.semantics.type_table import TypeTable, comparable_types
@@ -98,6 +99,7 @@ from agm.agl.syntax.nodes import (
     BuiltinVarDecl,
     Call,
     Case,
+    CaseBranch,
     Cast,
     CatchClause,
     ConstructorPattern,
@@ -171,6 +173,8 @@ from agm.agl.typecheck.env import (
     PartialCallSpec,
     TypeEnvironment,
     assert_checked_module_closed,
+    dereference_slot_binding,
+    dereference_slot_constructor_ref,
 )
 from agm.agl.typecheck.inference import (
     ConstraintRole,
@@ -233,15 +237,6 @@ class _InferenceRegion:
     call_sites_start: int = 0
     warnings_start: int = 0
     return_target_lengths: tuple[int, ...] = ()
-
-
-@dataclass(frozen=True, slots=True)
-class _PatternSlotFallback:
-    """A fully dereferenced lexical fallback for a selected slot."""
-
-    binding: BindingRef
-    constructor: ConstructorRef | None = None
-    deferred_constructor_ambiguity: bool = False
 
 
 _IndexLike = IndexAccess | IndexTarget
@@ -464,6 +459,12 @@ class _Checker:
         # values are fully dereferenced ordinary binders or constructors.
         self._slot_resolution: dict[int, BindingRef] = {}
         self._slot_constructor_refs: dict[int, ConstructorRef] = {}
+        # Slot ids some branch-body reference resolves to.  Scope output is
+        # immutable during checking, so this is derived once up front instead of
+        # rescanning the whole resolution table per slot selection.
+        self._referenced_slot_ids: frozenset[int] = frozenset(
+            ref.slot_id for ref in resolved.resolution.values() if ref.slot_id is not None
+        )
         self._partial_calls: dict[int, PartialCallSpec] = {}
         # Extern provenance for first-class function values.  A value can name
         # one or more externs (e.g. through a branch); when such a function
@@ -1246,19 +1247,22 @@ class _Checker:
 
     def _binding_for(self, node_id: int) -> BindingRef:
         """Return a checked binding, dereferencing a scope-created slot."""
-        binding = self._resolved.resolution[node_id]
-        if binding.kind is not BinderKind.pattern_slot:
-            return binding
-        assert binding.slot_id is not None
-        return self._slot_resolution[binding.slot_id]
+        binding = dereference_slot_binding(
+            node_id,
+            resolution=self._resolved.resolution,
+            slot_resolution=self._slot_resolution,
+        )
+        assert binding is not None, f"unresolved reference {node_id}"
+        return binding
 
     def _constructor_ref_for(self, node_id: int) -> ConstructorRef | None:
         """Return a checked constructor reference, dereferencing a slot."""
-        binding = self._resolved.resolution.get(node_id)
-        if binding is None or binding.kind is not BinderKind.pattern_slot:
-            return self._resolved.constructor_refs.get(node_id)
-        assert binding.slot_id is not None
-        return self._slot_constructor_refs.get(binding.slot_id)
+        return dereference_slot_constructor_ref(
+            node_id,
+            resolution=self._resolved.resolution,
+            constructor_refs=self._resolved.constructor_refs,
+            slot_constructor_refs=self._slot_constructor_refs,
+        )
 
     def _check_varref(self, node: VarRef, *, expected: Type | None = None) -> Type:
         if node.node_id in self._resolved.qualified_constructor_refs:
@@ -1486,8 +1490,7 @@ class _Checker:
         if isinstance(node.expr, VarRef):
             constructor_ref = self._binding_for(node.expr.node_id)
             if (
-                constructor_ref is not None
-                and constructor_ref.kind is BinderKind.constructor_binding
+                constructor_ref.kind is BinderKind.constructor_binding
                 and not constructor_ref.module_id.is_entry
             ):
                 typ = self._constructors.check_cross_module_constructor_type_apply(
@@ -1503,7 +1506,7 @@ class _Checker:
             )
 
         ref = self._binding_for(node.expr.node_id)
-        if ref is None or ref.kind is not BinderKind.function_binding:
+        if ref.kind is not BinderKind.function_binding:
             raise AglTypeError(
                 "Explicit type arguments can only be applied to a generic function value.",
                 span=node.span,
@@ -1893,7 +1896,7 @@ class _Checker:
         # is handled as a constructor call.
         if isinstance(node.callee, VarRef):
             callee_ref = self._binding_for(node.callee.node_id)
-            if callee_ref is not None and callee_ref.kind is BinderKind.function_binding:
+            if callee_ref.kind is BinderKind.function_binding:
                 return self._check_declared_name_call(
                     node,
                     node.callee.name,
@@ -1902,8 +1905,7 @@ class _Checker:
                     hole_indices=hole_indices,
                 )
             if (
-                callee_ref is not None
-                and callee_ref.kind is BinderKind.constructor_binding
+                callee_ref.kind is BinderKind.constructor_binding
                 and not callee_ref.module_id.is_entry
             ):
                 return self._constructors.check_cross_module_constructor_call(
@@ -2302,7 +2304,7 @@ class _Checker:
         branch_types: list[Type] = []
         for branch in node.branches:
             self._bind_pattern_types(branch.pattern, subj_type, branch)
-            self._select_ready_pattern_slots()
+            self._select_branch_pattern_slots(branch)
             bt = self._check_expr(branch.body, expected=expected)
             branch_types.append(bt)
         result = self._unify_branch_types(branch_types, node.span, "Case expression")
@@ -2767,10 +2769,7 @@ class _Checker:
             span=node.span,
         )
         if node.variant not in self._env.type_table.enum_variants(expr_type):
-            raise AglTypeError(
-                f"Variant '{node.variant}' does not belong to enum '{expr_type.name}'.",
-                span=node.span,
-            )
+            raise _variant_not_in_enum(node.variant, expr_type, node.span)
         return BoolType()
 
     def _qualified_constructor_typed_call_error(self, span: SourceSpan) -> AglTypeError:
@@ -3257,17 +3256,16 @@ class _Checker:
                 span=pattern.span,
             )
 
-    def _select_ready_pattern_slots(self) -> None:
-        """Publish every slot whose field-directed candidates are classified."""
-        for slot_id in sorted(self._resolved.pattern_slots):
-            if slot_id in self._slot_resolution:
-                continue
-            slot = self._resolved.pattern_slots[slot_id]
-            if all(
-                candidate.pattern_node_id in self._pattern_classifications
-                for candidate in slot.candidates
-            ):
-                self._select_pattern_slot(slot)
+    def _select_branch_pattern_slots(self, branch: CaseBranch) -> None:
+        """Publish the slots *branch*'s pattern created, once it is classified.
+
+        Binding the branch pattern classifies every one of its candidates, so
+        the branch's own slots are exactly the ones ready to select.  Scope
+        publishes them outer-to-inner, which is the order a nested slot needs
+        to find its enclosing slot's selection already made.
+        """
+        for slot_id in self._resolved.branch_pattern_slots.get(branch.node_id, ()):
+            self._select_pattern_slot(self._resolved.pattern_slots[slot_id])
 
     def _select_pattern_slot(self, slot: PatternSlot) -> None:
         """Select and publish one slot's fully dereferenced final meaning."""
@@ -3277,10 +3275,7 @@ class _Checker:
             if self._pattern_classifications[candidate.pattern_node_id] is None
         ]
         if len(binders) > 1:
-            raise AglTypeError(
-                f"Name '{slot.name}' is bound more than once in this pattern.",
-                span=binders[1].span,
-            )
+            raise AglTypeError(duplicate_binder_message(slot.name), span=binders[1].span)
         if binders:
             binding = BindingRef(
                 name=slot.name,
@@ -3292,14 +3287,16 @@ class _Checker:
             )
             constructor = None
         else:
-            fallback = self._select_pattern_slot_fallback(slot)
-            if fallback.deferred_constructor_ambiguity and self._slot_has_references(slot):
+            binding, constructor = self._select_pattern_slot_fallback(slot)
+            if (
+                binding.kind is BinderKind.constructor_binding
+                and constructor is None
+                and self._slot_has_references(slot)
+            ):
                 raise AglTypeError(
                     f"'{slot.name}' is ambiguous outside the pattern; qualify the reference.",
                     span=slot.candidates[0].span,
                 )
-            binding = fallback.binding
-            constructor = fallback.constructor
         self._record_side_table_addition("slot_resolution", self._slot_resolution, slot.slot_id)
         self._slot_resolution[slot.slot_id] = binding
         if constructor is not None:
@@ -3308,8 +3305,14 @@ class _Checker:
             )
             self._slot_constructor_refs[slot.slot_id] = constructor
 
-    def _select_pattern_slot_fallback(self, slot: PatternSlot) -> _PatternSlotFallback:
-        """Select *slot*'s lexical fallback without consulting scope again."""
+    def _select_pattern_slot_fallback(
+        self, slot: PatternSlot
+    ) -> tuple[BindingRef, ConstructorRef | None]:
+        """Select *slot*'s lexical fallback without consulting scope again.
+
+        A ``constructor_binding`` fallback paired with ``None`` means the
+        constructor spelling stayed ambiguous outside the pattern.
+        """
         alternative = slot.alternative
         if alternative is None:
             raise AssertionError(f"pattern slot '{slot.name}' has no final alternative")
@@ -3323,27 +3326,17 @@ class _Checker:
                     f"pattern slot '{slot.name}' final alternative "
                     f"{alternative.slot_id} was not selected"
                 )
-            constructor = self._slot_constructor_refs.get(alternative.slot_id)
-            return _PatternSlotFallback(
-                binding,
-                constructor,
-                deferred_constructor_ambiguity=(
-                    binding.kind is BinderKind.constructor_binding and constructor is None
-                ),
-            )
+            return binding, self._slot_constructor_refs.get(alternative.slot_id)
         if alternative.kind is not BinderKind.constructor_binding:
-            return _PatternSlotFallback(alternative)
+            return alternative, None
         constructor_candidates = self._resolved.constructor_candidates.get(slot.name, ())
-        if slot.outside_constructor_candidates != 1 or len(constructor_candidates) != 1:
-            return _PatternSlotFallback(alternative, deferred_constructor_ambiguity=True)
-        return _PatternSlotFallback(alternative, constructor_candidates[0])
+        if len(constructor_candidates) != 1:
+            return alternative, None
+        return alternative, constructor_candidates[0]
 
     def _slot_has_references(self, slot: PatternSlot) -> bool:
         """Whether a branch-body reference directly resolves to *slot*."""
-        return any(
-            ref.kind is BinderKind.pattern_slot and ref.slot_id == slot.slot_id
-            for ref in self._resolved.resolution.values()
-        )
+        return slot.slot_id in self._referenced_slot_ids
 
     # ------------------------------------------------------------------
     # Branch unification

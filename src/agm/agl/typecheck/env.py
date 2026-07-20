@@ -285,6 +285,44 @@ class PartialCallSpec:
 
 
 # ---------------------------------------------------------------------------
+# Pattern-slot dereferencing — shared by the checker and its checked output
+# ---------------------------------------------------------------------------
+
+
+def dereference_slot_binding(
+    node_id: int,
+    *,
+    resolution: Mapping[int, BindingRef],
+    slot_resolution: Mapping[int, BindingRef],
+) -> BindingRef | None:
+    """Return *node_id*'s binding, following a pattern slot to its selection.
+
+    Scope-created references to a field-directed pattern slot carry no final
+    meaning of their own; the checker's ``slot_resolution`` supplies it.  The
+    checker uses this while it builds the table and ``CheckedModule`` uses it
+    afterwards, so both agree on what a slot reference denotes.
+    """
+    raw_binding = resolution.get(node_id)
+    if raw_binding is None or raw_binding.slot_id is None:
+        return raw_binding
+    return slot_resolution.get(raw_binding.slot_id)
+
+
+def dereference_slot_constructor_ref(
+    node_id: int,
+    *,
+    resolution: Mapping[int, BindingRef],
+    constructor_refs: Mapping[int, ConstructorRef],
+    slot_constructor_refs: Mapping[int, ConstructorRef],
+) -> ConstructorRef | None:
+    """Return *node_id*'s constructor reference, following a pattern slot."""
+    raw_binding = resolution.get(node_id)
+    if raw_binding is None or raw_binding.slot_id is None:
+        return constructor_refs.get(node_id)
+    return slot_constructor_refs.get(raw_binding.slot_id)
+
+
+# ---------------------------------------------------------------------------
 # CheckedModule — output of the type-checking pass
 # ---------------------------------------------------------------------------
 
@@ -350,17 +388,20 @@ class CheckedModule:
 
     def binding_for(self, node_id: int) -> BindingRef | None:
         """Return *node_id*'s checked binding, dereferencing a pattern slot."""
-        raw_binding = self.resolved.resolution.get(node_id)
-        if raw_binding is None or raw_binding.slot_id is None:
-            return raw_binding
-        return self.slot_resolution.get(raw_binding.slot_id)
+        return dereference_slot_binding(
+            node_id,
+            resolution=self.resolved.resolution,
+            slot_resolution=self.slot_resolution,
+        )
 
     def constructor_ref_for(self, node_id: int) -> ConstructorRef | None:
         """Return *node_id*'s checked constructor reference through a slot."""
-        raw_binding = self.resolved.resolution.get(node_id)
-        if raw_binding is None or raw_binding.slot_id is None:
-            return self.resolved.constructor_refs.get(node_id)
-        return self.slot_constructor_refs.get(raw_binding.slot_id)
+        return dereference_slot_constructor_ref(
+            node_id,
+            resolution=self.resolved.resolution,
+            constructor_refs=self.resolved.constructor_refs,
+            slot_constructor_refs=self.slot_constructor_refs,
+        )
 
 
 def _assert_checked_types_closed(types: Iterable[Type], *, owner: str) -> None:

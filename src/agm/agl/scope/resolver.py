@@ -6,13 +6,17 @@ building the lexical scope chain and populating side tables:
 - ``resolution``:     ``VarRef.node_id`` / ``AssignStmt.node_id`` → ``BindingRef``
 - ``builtin_calls``:  ``Call.node_id`` → ``BuiltinKind``  (for contextual built-ins)
 - ``pattern_slots``: metadata for branch-local shared field-directed bindings
+- ``branch_pattern_slots``: ``Case`` branch node id → the slot ids it created
 
 Scope rules
 -----------
 1. ``let``/``var``/``def`` bind in the current scope; redeclaration in the
    *same* scope is an error.
-2. ``:=`` resolves to the nearest visible **mutable** binding; ``:=`` on an
-   immutable binding → error; ``:=`` on an undeclared name → error.
+2. ``:=`` resolves to the nearest visible binding; ``:=`` on an undeclared
+   name → error.  Whether that binding is assignable is decided by type
+   checking, which alone knows a pattern slot's selected meaning.  A
+   *qualified* target is settled here: only ``builtin var`` is assignable
+   across a module boundary, and no qualified name is ever a pattern slot.
 3. Reading (``VarRef``) a name not visible in the current scope chain → error.
 4. Pattern variables and catch binders are immutable and branch-local.
 5. ``loop`` body bindings are visible to the ``until`` condition but not after.
@@ -38,10 +42,11 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from contextlib import contextmanager
+from dataclasses import replace
 from typing import TYPE_CHECKING
 
 from agm.agl.diagnostics import Diagnostic
-from agm.agl.modules.ids import ENTRY_ID, PRELUDE_ID, STD_CONFIG_ID, STD_CORE_ID, ModuleId
+from agm.agl.modules.ids import ENTRY_ID, PRELUDE_ID, STD_CONFIG_ID, ModuleId
 from agm.agl.scope.symbols import (
     BUILTIN_CALL_NAMES,
     AglScopeError,
@@ -53,7 +58,7 @@ from agm.agl.scope.symbols import (
     PatternSlot,
     ScopeNode,
     SlotCandidate,
-    immutable_assignment_message,
+    duplicate_binder_message,
     immutable_binder_phrase,
 )
 from agm.agl.semantics.engine_keys import RESERVED_PROGRAM_NAMES
@@ -232,6 +237,7 @@ class _Resolver:
         # field-directed name. The checker selects its final target once field
         # types are known.
         self._pattern_slots: dict[int, PatternSlot] = {}
+        self._branch_pattern_slots_by_node: dict[int, tuple[int, ...]] = {}
         self._active_branch_pattern_slots: dict[str, int] | None = None
         self._next_pattern_slot_id: int = 0
         # Loop-context flag: True when resolving inside a loop body (while_cond,
@@ -331,6 +337,7 @@ class _Resolver:
             qualified_constructor_refs=dict(self._qualified_constructor_refs),
             pattern_constructor_candidates=dict(self._pattern_constructor_candidates),
             pattern_slots=dict(self._pattern_slots),
+            branch_pattern_slots=dict(self._branch_pattern_slots_by_node),
         )
 
     # ------------------------------------------------------------------
@@ -573,14 +580,10 @@ class _Resolver:
         scope = self._current_scope()
         for name, crefs in self._constructor_candidates.items():
             if name in scope.bindings:
-                # Built-in constructor candidates (sentinel decl_node_id, e.g. the
-                # prelude `Retry`/`ExecResult` names) are conveniences and yield to
-                # any user declaration that already claimed the name — skip rather
-                # than raise so a `def Retry()`/`agent Retry` is legal.
-                if all(c.owner_module_id in (PRELUDE_ID, STD_CORE_ID) for c in crefs):
-                    continue
-                # Constructors remain candidates for pattern resolution, but
-                # ordinary value bindings own the value namespace spelling.
+                # Constructors remain candidates for pattern resolution, but an
+                # ordinary value binding that already claimed the name owns the
+                # value namespace spelling — including over built-in candidates,
+                # so a `def Retry()`/`agent Retry` is legal.
                 continue
             parent_ref = scope.parent.lookup(name) if scope.parent is not None else None
             if parent_ref is not None and parent_ref.kind is not BinderKind.constructor_binding:
@@ -1062,11 +1065,9 @@ class _Resolver:
                     f"'{name}' is not declared; assignment requires an existing mutable binding.",
                     span=node.span,
                 )
-        if not ref.mutable and ref.kind is not BinderKind.pattern_slot:
-            raise AglScopeError(
-                immutable_assignment_message(name, ref.kind),
-                span=node.span,
-            )
+        # Mutability is not decided here: a field-directed pattern slot's final
+        # binding is only known once checking selects it, so type checking owns
+        # the ``:=``-on-immutable rejection for every unqualified target.
         self._resolution[node.node_id] = ref
         self._resolve_assign_target_indexes(node.target)
         self._resolve_expr(node.value)
@@ -1590,7 +1591,7 @@ class _Resolver:
         self._resolve_expr(node.subject)
         for branch in node.branches:
             with self._child_scope(branch.node_id) as branch_scope:
-                with self._branch_pattern_slots():
+                with self._branch_pattern_slots(branch.node_id):
                     self._bind_pattern_vars(branch.pattern, branch_scope)
                 self._resolve_expr_or_block(branch.body)
 
@@ -1755,7 +1756,6 @@ class _Resolver:
                 pattern.span,
                 pattern.node_id,
                 scope,
-                unconditional=False,
                 can_match_bare_pattern=any(
                     candidate.can_match_bare_pattern for candidate in candidates
                 ),
@@ -1767,7 +1767,6 @@ class _Resolver:
                 pattern.span,
                 pattern.node_id,
                 scope,
-                unconditional=True,
                 can_match_bare_pattern=False,
             )
         elif isinstance(pattern, ConstructorPattern):
@@ -1778,13 +1777,21 @@ class _Resolver:
         # WildcardPattern, LiteralPattern — no bindings introduced.
 
     @contextmanager
-    def _branch_pattern_slots(self) -> Iterator[None]:
-        """Collect one shared pattern slot per name in the active branch."""
+    def _branch_pattern_slots(self, branch_node_id: int) -> Iterator[None]:
+        """Collect one shared pattern slot per name in the active branch.
+
+        The slot ids created here are published under *branch_node_id* so the
+        checker can select exactly this branch's slots instead of rescanning
+        every slot in the module.
+        """
         parent_slots = self._active_branch_pattern_slots
         self._active_branch_pattern_slots = {}
         try:
             yield
         finally:
+            self._branch_pattern_slots_by_node[branch_node_id] = tuple(
+                sorted(self._active_branch_pattern_slots.values())
+            )
             self._active_branch_pattern_slots = parent_slots
 
     def _add_pattern_slot_candidate(
@@ -1794,7 +1801,6 @@ class _Resolver:
         pattern_node_id: int,
         scope: ScopeNode,
         *,
-        unconditional: bool,
         can_match_bare_pattern: bool,
     ) -> None:
         """Join a candidate to its branch-local shared binding.
@@ -1816,7 +1822,6 @@ class _Resolver:
                 name=name,
                 candidates=(),
                 alternative=alternative,
-                outside_constructor_candidates=len(self._constructor_candidates.get(name, ())),
             )
             scope.define(
                 name,
@@ -1834,24 +1839,17 @@ class _Resolver:
         if slot.candidates and not can_match_bare_pattern and not any(
             candidate.can_match_bare_pattern for candidate in slot.candidates
         ):
-            raise AglScopeError(
-                f"Name '{name}' is bound more than once in this pattern.",
-                span=span,
-            )
-        self._pattern_slots[slot_id] = PatternSlot(
-            slot_id=slot.slot_id,
-            name=slot.name,
+            raise AglScopeError(duplicate_binder_message(name), span=span)
+        self._pattern_slots[slot_id] = replace(
+            slot,
             candidates=(
                 *slot.candidates,
                 SlotCandidate(
                     pattern_node_id=pattern_node_id,
                     span=span,
-                    unconditional=unconditional,
                     can_match_bare_pattern=can_match_bare_pattern,
                 ),
             ),
-            alternative=slot.alternative,
-            outside_constructor_candidates=slot.outside_constructor_candidates,
         )
 
 

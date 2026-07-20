@@ -1052,6 +1052,46 @@ class TestCheckedOutputClosure:
 # ---------------------------------------------------------------------------
 
 
+class TestAssignImmutability:
+    """``:=`` on an immutable binding is a type error.
+
+    Scope resolves every unqualified assignment target without judging it: a
+    field-directed pattern slot's final binding — and so its mutability — is
+    only known once checking selects the slot.
+    """
+
+    @pytest.mark.parametrize(
+        ("source", "line", "phrase"),
+        (
+            ("let stable = 1\nstable := 2\nstable", 2, "declared with 'let'"),
+            ("param spec\nspec := 2\nspec", 2, "parameter binding"),
+            ("try\n  ()\ncatch _ as err =>\n  err := 1\n", 4, "catch binder"),
+            ("def f(n: int) -> int =\n  n := 2\n  n\nf(1)", 2, "parameter binding"),
+            ("def f(x: int) -> int = x\nf := 1\nf(1)", 2, "function (def) binding"),
+            ("for x in [1, 2, 3] do\n  x := x + 1\ndone", 2, "for-loop variable binding"),
+        ),
+        ids=("let", "param", "catch-binder", "def-param", "function", "loop-var"),
+    )
+    def test_assign_to_immutable_binder_is_rejected(
+        self, source: str, line: int, phrase: str
+    ) -> None:
+        err = reject_type(source)
+        d = err.to_diagnostic()
+        assert d.line == line
+        assert phrase in d.message
+        assert "immutable" in d.message
+
+    def test_assign_to_selected_pattern_slot_binder_is_rejected(self) -> None:
+        """The slot case is why the rule cannot live in scope."""
+        err = reject_type("let v = 1\ncase v of\n  | _ as n =>\n    n := 2\n")
+        assert "pattern binding" in err.to_diagnostic().message
+
+    def test_assign_to_slot_falling_back_to_outer_var_is_allowed(self) -> None:
+        """A slot resolving to an enclosing ``var`` stays assignable."""
+        r = accept_type("var n = 0\nenum Flag\n  | on\ncase Flag::on of\n  | on =>\n    n := 2\n")
+        assert r.resolved.program is not None
+
+
 class TestBlockTyping:
     def test_block_last_expr_is_block_type(self) -> None:
         r = accept_type("let x = 1\nx")

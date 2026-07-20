@@ -146,10 +146,7 @@ class TestPersistence:
         assert s.eval_entry("let on = 7").ok
 
         result = s.eval_entry(
-            "enum Flag\n  | on\n"
-            "let matched = case Flag::on of\n"
-            "  | on => 8\n"
-            "on + matched"
+            "enum Flag\n  | on\nlet matched = case Flag::on of\n  | on => 8\non + matched"
         )
 
         assert result.ok, result.diagnostics
@@ -223,10 +220,23 @@ class TestStdlib:
 
         assert "Option[int]" in s.type_of("Some(value = 1)")
 
+    def test_no_stdlib_requires_explicit_core_import_after_reset(self) -> None:
+        s = ReplSession(
+            default_stdlib=False,
+            stdlib_root=Path(__file__).resolve().parents[1] / "stdlib",
+        )
+
+        assert not s.eval_entry("Some(value = 1)").ok
+        assert s.eval_entry("open import std/core\nSome(value = 1)").ok
+
+        s.reset()
+
+        assert not s.eval_entry("Some(value = 1)").ok
+
     def test_core_stdlib_qualified_generic_type_resolves_in_type_definition(self) -> None:
         s = ReplSession(stdlib_root=Path(__file__).resolve().parents[1] / "stdlib")
 
-        result = s.eval_entry("enum E = A(x: std.core::Option[int])")
+        result = s.eval_entry("enum E = A(x: std/core::Option[int])")
 
         assert result.ok, result.diagnostics
 
@@ -1113,9 +1123,9 @@ class TestLoadFile:
             "let n = 1\n"
             'var label: text = ""\n'
             "if n == 1 =>\n"
-            '    label := "one"\n'
+            '  label := "one"\n'
             "| else =>\n"
-            '    label := "many"\n'
+            '  label := "many"\n'
             "label\n"
         )
         s = ReplSession()
@@ -1930,7 +1940,7 @@ class TestImports:
         lib.write_text("def add(a: int, b: int) -> int = a + b\n")
         s = self._make_session_with_root(tmp_path)
         # Open import: functions are in unqualified scope
-        r = s.eval_entry("import mylib\nadd(3, 4)")
+        r = s.eval_entry("open import mylib\nadd(3, 4)")
         assert r.ok, r.diagnostics
         assert r.kind == "expression"
         assert _int(r.value) == 7
@@ -1939,7 +1949,7 @@ class TestImports:
         lib = tmp_path / "util.agl"
         lib.write_text("def double(x: int) -> int = x * 2\n")
         s = self._make_session_with_root(tmp_path)
-        r1 = s.eval_entry("import util")
+        r1 = s.eval_entry("open import util")
         assert r1.ok, r1.diagnostics
         # Open import: double() is in unqualified scope in next entry too
         r2 = s.eval_entry("double(5)")
@@ -2053,7 +2063,7 @@ class TestImports:
 
         cached_id = ModuleId(segments=("cached",))
         # Import once to cache it (open import: greet() in unqualified scope)
-        r1 = s.eval_entry("import cached\ngreet()")
+        r1 = s.eval_entry("open import cached\ngreet()")
         assert r1.ok, r1.diagnostics
         # Now cached_id should be in loaded_lib_modules
         assert cached_id in s._loaded_lib_modules
@@ -2065,7 +2075,7 @@ class TestImports:
         lib = tmp_path / "temp.agl"
         lib.write_text("def f() -> int = 1\n")
         s = self._make_session_with_root(tmp_path)
-        r = s.eval_entry("import temp\nf()")
+        r = s.eval_entry("open import temp\nf()")
         assert r.ok, r.diagnostics
         s.reset()
         assert not s._loaded_lib_modules
@@ -2104,7 +2114,7 @@ class TestImports:
         assert not s._link_image._linked_modules
         # Re-importing reloads and re-lowers boom (with fresh decl IDs) and
         # evaluates successfully instead of hitting a stale-link assertion.
-        r2 = s.eval_entry("import boom\nf()")
+        r2 = s.eval_entry("open import boom\nf()")
         assert r2.ok, r2.diagnostics
         assert _int(r2.value) == 42
 
@@ -2123,7 +2133,7 @@ class TestImports:
         lib = tmp_path / "mylib.agl"
         lib.write_text("def add(a: int, b: int) -> int = a + b\n")
         s = self._make_session_with_root(tmp_path)
-        r = s.eval_entry("import mylib\nadd(1, 2)", check_only=True)
+        r = s.eval_entry("open import mylib\nadd(1, 2)", check_only=True)
         assert r.ok, r.diagnostics
         # check_only does not promote session state.
         assert s.bindings() == []
@@ -2154,7 +2164,7 @@ class TestImports:
         lib.write_text("def id_fn(n: int) -> int = n\n")
         s = self._make_session_with_root(tmp_path)
         s.register_agent("helper", CountingAgent("ok"))
-        r = s.eval_entry("import mylib\nagent helper\nid_fn(7)")
+        r = s.eval_entry("open import mylib\nagent helper\nid_fn(7)")
         assert r.ok, r.diagnostics
 
     def test_agl_raise_in_graph_mode(self, tmp_path: Path) -> None:
@@ -2162,7 +2172,7 @@ class TestImports:
         lib = tmp_path / "mylib.agl"
         lib.write_text('def boom() -> int = raise Abort(message = "boom")\n')
         s = self._make_session_with_root(tmp_path)
-        r = s.eval_entry("import mylib\nboom()")
+        r = s.eval_entry("open import mylib\nboom()")
         assert not r.ok
         assert r.error is not None
 
@@ -2175,7 +2185,7 @@ class TestImports:
         s = self._make_session_with_root(tmp_path)
         s._trace_path = trace
 
-        r = s.eval_entry("import mylib\nboom()")
+        r = s.eval_entry("open import mylib\nboom()")
 
         assert not r.ok
         records = [json.loads(line) for line in trace.read_text().splitlines() if line]
@@ -2184,39 +2194,118 @@ class TestImports:
         assert kinds[-1] == "run_end"
         assert records[-1]["ok"] is False
 
-    def test_re_import_replaces_accumulated(self, tmp_path: Path) -> None:
-        # Re-importing the same module with a different using clause in a later
-        # entry replaces the prior accumulated import declaration (dedup).
-        lib = tmp_path / "mylib.agl"
-        lib.write_text(
-            "def add(a: int, b: int) -> int = a + b\ndef mul(a: int, b: int) -> int = a * b\n"
-        )
+    def test_wildcard_reimport_replaces_each_matched_module_by_identity(
+        self, tmp_path: Path
+    ) -> None:
+        (tmp_path / "tools").mkdir()
+        (tmp_path / "tools" / "add.agl").write_text("def add() -> int = 1\n")
+        (tmp_path / "tools" / "mul.agl").write_text("def mul() -> int = 2\n")
         s = self._make_session_with_root(tmp_path)
-        # Entry 1: open import of mylib (both add and mul in scope).
-        r1 = s.eval_entry("import mylib\nadd(1, 2)")
-        assert r1.ok, r1.diagnostics
-        assert len(s._accumulated_imports) == 1
-        old_decl = s._accumulated_imports[0]
-        # Entry 2: re-import mylib with 'using mul' only.
-        r2 = s.eval_entry("import mylib using mul\nmul(3, 4)")
-        assert r2.ok, r2.diagnostics
-        # The accumulated import list should still have one entry (replaced, not appended).
-        assert len(s._accumulated_imports) == 1
-        assert s._accumulated_imports[0] is not old_decl
 
-    def test_inject_dedup_skips_already_imported(self, tmp_path: Path) -> None:
-        # When the current entry already imports the same module as an accumulated
-        # import, the injection skips it (preamble-empty branch).
-        lib = tmp_path / "util.agl"
-        lib.write_text("def double(x: int) -> int = x * 2\n")
+        assert s.eval_entry("open import tools/*\nadd() + mul()").ok
+        replacement = s.eval_entry("import tools/add as arithmetic\narithmetic::add()")
+
+        assert replacement.ok, replacement.diagnostics
+        assert not s.eval_entry("add()").ok
+        preserved = s.eval_entry("mul()")
+        assert preserved.ok, preserved.diagnostics
+        assert _int(preserved.value) == 2
+
+    def test_direct_imports_replaced_by_wildcard_for_each_matched_module(
+        self, tmp_path: Path
+    ) -> None:
+        (tmp_path / "tools").mkdir()
+        (tmp_path / "tools" / "add.agl").write_text("def add() -> int = 1\n")
+        (tmp_path / "tools" / "mul.agl").write_text("def mul() -> int = 2\n")
         s = self._make_session_with_root(tmp_path)
-        # Entry 1: import util (accumulates it).
-        r1 = s.eval_entry("import util\ndouble(2)")
-        assert r1.ok, r1.diagnostics
-        # Entry 2: explicitly import util again; injection should be skipped.
-        r2 = s.eval_entry("import util\ndouble(5)")
-        assert r2.ok, r2.diagnostics
-        assert _int(r2.value) == 10
+
+        assert s.eval_entry(
+            "open import tools/add\nimport tools/mul as old_mul\nadd() + old_mul::mul()"
+        ).ok
+        replacement = s.eval_entry(
+            "import tools/* as all_tools\nall_tools::add() + all_tools::mul()"
+        )
+
+        assert replacement.ok, replacement.diagnostics
+        assert _int(replacement.value) == 3
+        assert not s.eval_entry("add()").ok
+        assert not s.eval_entry("old_mul::mul()").ok
+        assert s.eval_entry("all_tools::add()").ok
+        assert s.eval_entry("all_tools::mul()").ok
+
+    def test_same_entry_imports_union_while_replacing_prior_declarations(
+        self, tmp_path: Path
+    ) -> None:
+        lib = tmp_path / "math.agl"
+        lib.write_text("def add() -> int = 1\ndef mul() -> int = 2\n")
+        s = self._make_session_with_root(tmp_path)
+
+        assert s.eval_entry("open import math\nadd() + mul()").ok
+        result = s.eval_entry(
+            "import math using add\nimport math as arithmetic\nadd() + arithmetic::mul()"
+        )
+
+        assert result.ok, result.diagnostics
+        assert _int(result.value) == 3
+        assert s.eval_entry("add()").ok
+        assert s.eval_entry("arithmetic::mul()").ok
+        assert not s.eval_entry("mul()").ok
+
+    def test_replacement_removes_all_prior_declarations_for_one_module(
+        self, tmp_path: Path
+    ) -> None:
+        lib = tmp_path / "math.agl"
+        lib.write_text("def add() -> int = 1\ndef mul() -> int = 2\n")
+        s = self._make_session_with_root(tmp_path)
+
+        assert s.eval_entry(
+            "import math using add\nimport math as arithmetic\nadd() + arithmetic::mul()"
+        ).ok
+        replacement = s.eval_entry("import math hiding add\nmath::mul()")
+
+        assert replacement.ok, replacement.diagnostics
+        assert not s.eval_entry("add()").ok
+        assert not s.eval_entry("arithmetic::mul()").ok
+        assert not s.eval_entry("math::add()").ok
+        assert s.eval_entry("math::mul()").ok
+
+    def test_replacement_removes_alias_using_hiding_and_open_options(self, tmp_path: Path) -> None:
+        lib = tmp_path / "api.agl"
+        lib.write_text("def alpha() -> int = 1\ndef beta() -> int = 2\n")
+        s = self._make_session_with_root(tmp_path)
+
+        assert s.eval_entry("open import api\nalpha() + beta()").ok
+        assert s.eval_entry("import api as old_api\nold_api::alpha()").ok
+        assert not s.eval_entry("alpha()").ok
+        assert not s.eval_entry("beta()").ok
+
+        assert s.eval_entry("import api using beta\nbeta()").ok
+        assert not s.eval_entry("old_api::alpha()").ok
+        assert s.eval_entry("beta()").ok
+
+        assert s.eval_entry("import api hiding beta\napi::alpha()").ok
+        assert not s.eval_entry("beta()").ok
+        assert not s.eval_entry("api::beta()").ok
+        assert s.eval_entry("api::alpha()").ok
+
+    def test_replacement_updates_suffix_and_anchored_contributions(self, tmp_path: Path) -> None:
+        (tmp_path / "left").mkdir()
+        (tmp_path / "right").mkdir()
+        (tmp_path / "left" / "config.agl").write_text("def shared() -> int = 1\n")
+        (tmp_path / "right" / "config.agl").write_text("def shared() -> int = 3\n")
+        s = self._make_session_with_root(tmp_path)
+
+        assert s.eval_entry("import left/config").ok
+        assert s.eval_entry("import right/config").ok
+        assert not s.eval_entry("config::shared()").ok
+        assert s.eval_entry("/left/config::shared()").ok
+
+        replacement = s.eval_entry("import left/config hiding shared\nconfig::shared()")
+
+        assert replacement.ok, replacement.diagnostics
+        assert _int(replacement.value) == 3
+        assert not s.eval_entry("/left/config::shared()").ok
+        assert s.eval_entry("/right/config::shared()").ok
 
     def test_ensure_roots_lazy_init(self, tmp_path: Path) -> None:
         # When a ReplSession is created with cwd= but no explicit _roots,
@@ -2224,7 +2313,7 @@ class TestImports:
         lib = tmp_path / "lazylib.agl"
         lib.write_text("def val() -> int = 42\n")
         s = ReplSession(cwd=tmp_path)
-        r = s.eval_entry("import lazylib\nval()")
+        r = s.eval_entry("open import lazylib\nval()")
         assert r.ok, r.diagnostics
         assert _int(r.value) == 42
         # Roots were assembled lazily.
@@ -2267,7 +2356,7 @@ class TestImports:
         r1 = s.eval_entry("program first\n1")
         assert r1.ok, r1.diagnostics
         # Now in program context, try to declare a different program name.
-        r2 = s.eval_entry("import mylib\nprogram second\nadd(1, 2)")
+        r2 = s.eval_entry("open import mylib\nprogram second\nadd(1, 2)")
         assert not r2.ok
         assert "Program name already set" in r2.diagnostics[0].message
 
@@ -2306,7 +2395,7 @@ class TestImports:
         assert "nonexistent_module_xyz" in r.diagnostics[0].message
 
     def test_wildcard_and_plain_import_coexist(self, tmp_path: Path) -> None:
-        # Regression: import foo.* in entry1 and import foo in entry2
+        # Regression: import foo/* in entry1 and import foo in entry2
         # must BOTH persist. The dedup key must include the wildcard flag so they
         # don't clobber each other.
         # Create a submodule foo.a and a top-level module foo.
@@ -2316,10 +2405,10 @@ class TestImports:
         (tmp_path / "foo.agl").write_text("def top() -> int = 99\n")
         s = self._make_session_with_root(tmp_path)
         # Entry 1: wildcard import of foo.* (imports foo.a, brings val into scope)
-        r1 = s.eval_entry("import foo.*\nval()")
+        r1 = s.eval_entry("open import foo/*\nval()")
         assert r1.ok, r1.diagnostics
         # Entry 2: plain import of foo (brings top() into scope)
-        r2 = s.eval_entry("import foo\ntop()")
+        r2 = s.eval_entry("open import foo\ntop()")
         assert r2.ok, r2.diagnostics
         # Entry 3: val() from foo.a must still resolve (wildcard import persists)
         r3 = s.eval_entry("val()")
@@ -2327,6 +2416,35 @@ class TestImports:
         from agm.agl.semantics.values import IntValue
 
         assert r3.value == IntValue(42)
+
+    def test_retained_wildcard_picks_up_a_module_added_later(self, tmp_path: Path) -> None:
+        (tmp_path / "tools").mkdir()
+        (tmp_path / "tools" / "add.agl").write_text("def add() -> int = 1\n")
+        s = self._make_session_with_root(tmp_path)
+
+        assert s.eval_entry("open import tools/*\nadd()").ok
+
+        (tmp_path / "tools" / "mul.agl").write_text("def mul() -> int = 2\n")
+        later = s.eval_entry("mul()")
+
+        assert later.ok, later.diagnostics
+        assert _int(later.value) == 2
+
+    def test_retained_wildcard_does_not_undo_a_later_module_replacement(
+        self, tmp_path: Path
+    ) -> None:
+        """Re-expansion must not resurrect a declaration a later entry replaced."""
+        (tmp_path / "tools").mkdir()
+        (tmp_path / "tools" / "add.agl").write_text("def add() -> int = 1\n")
+        (tmp_path / "tools" / "mul.agl").write_text("def mul() -> int = 2\n")
+        s = self._make_session_with_root(tmp_path)
+
+        assert s.eval_entry("open import tools/*\nadd() + mul()").ok
+        assert s.eval_entry("import tools/add as arithmetic\narithmetic::add()").ok
+
+        assert not s.eval_entry("add()").ok
+        assert s.eval_entry("arithmetic::add()").ok
+        assert s.eval_entry("mul()").ok
 
     def test_generic_graph_load_error_surfaces_as_diagnostic(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -2414,7 +2532,7 @@ class TestExternRepl:
             "def add_one(x):\n    return x + 1\n",
         )
         s = self._make_session_with_root(tmp_path)
-        r1 = s.eval_entry("import extlib")
+        r1 = s.eval_entry("open import extlib")
         assert r1.ok, r1.diagnostics
         r2 = s.eval_entry("add_one(41)")
         assert r2.ok, r2.diagnostics
@@ -2428,7 +2546,7 @@ class TestExternRepl:
             "def add_one(x):\n    return x + 1\n",
         )
         s = self._make_session_with_root(tmp_path)
-        s.eval_entry("import extlib")
+        s.eval_entry("open import extlib")
         r1 = s.eval_entry("let g = add_one")
         assert r1.ok, r1.diagnostics
         r2 = s.eval_entry("g(9)")
@@ -2459,12 +2577,12 @@ class TestExternRepl:
             f"open({str(marker)!r}, 'a').write('x')\ndef touch():\n    return 1\n",
         )
         s = self._make_session_with_root(tmp_path)
-        r1 = s.eval_entry("import counting\ntouch()")
+        r1 = s.eval_entry("open import counting\ntouch()")
         assert r1.ok, r1.diagnostics
         r2 = s.eval_entry("touch()")
         assert r2.ok, r2.diagnostics
         # Re-importing the same module in a later entry is a no-op import.
-        r3 = s.eval_entry("import counting\ntouch()")
+        r3 = s.eval_entry("open import counting\ntouch()")
         assert r3.ok, r3.diagnostics
         assert marker.read_text() == "x"
 
@@ -2491,11 +2609,11 @@ class TestExternRepl:
         )
         s = self._make_session_with_root(tmp_path)
         roots = s._roots
-        r1 = s.eval_entry("import extlib\nadd_one(1)")
+        r1 = s.eval_entry("open import extlib\nadd_one(1)")
         assert r1.ok, r1.diagnostics
         s.reset()
         s._roots = roots  # :reset clears roots too; a real host re-supplies them
-        r2 = s.eval_entry("import extlib\nadd_one(1)")
+        r2 = s.eval_entry("open import extlib\nadd_one(1)")
         assert r2.ok, r2.diagnostics
         assert _int(r2.value) == 2
 
@@ -2511,7 +2629,7 @@ class TestExternRepl:
             "def boom():\n    raise ValueError('kaboom')\n",
         )
         s = self._make_session_with_root(tmp_path)
-        s.eval_entry("import extlib")
+        s.eval_entry("open import extlib")
         r = s.eval_entry("boom()")
         assert not r.ok
         assert r.error is not None
@@ -2531,7 +2649,7 @@ class TestExternRepl:
             "def boom():\n    raise ValueError('kaboom')\n",
         )
         s = self._make_session_with_root(tmp_path)
-        s.eval_entry("import extlib")
+        s.eval_entry("open import extlib")
         r = s.eval_entry(
             "let r = try\n  boom()\ncatch ExternError as e =>\n  print(e.function)\n  -1\n"
         )
@@ -2792,12 +2910,12 @@ class TestBareTypeEntry:
         from agm.agl.repl.render import render_entry_result
 
         s = ReplSession(stdlib_root=Path(__file__).resolve().parents[1] / "stdlib")
-        r = s.eval_entry("std.core::Option")
+        r = s.eval_entry("std/core::Option")
         assert r.ok
         assert r.kind == "type"
         assert (
             render_entry_result(r, echo=True)
-            == "<type:\nenum std.core::Option[T]\n  | None\n  | Some(value: T)\n>"
+            == "<type:\nenum std/core::Option[T]\n  | None\n  | Some(value: T)\n>"
         )
 
     def test_builtin_type_entry_works_when_graph_env_is_unavailable(self, tmp_path: Path) -> None:
@@ -2831,8 +2949,8 @@ class TestBareTypeEntry:
         env = TypeEnvironment(
             program_generic_table={(left, "Box"): left_def, (right, "Box"): right_def},
             import_env=ImportEnv(
+                contributions={},
                 unqualified={"Box": frozenset({(left, "Box"), (right, "Box")})},
-                qualified={},
             ),
         )
         s = ReplSession()
@@ -2841,7 +2959,7 @@ class TestBareTypeEntry:
     def test_qualified_unapplied_generic_resolution_edges(self) -> None:
         from agm.agl.modules.ids import ENTRY_ID, ModuleId
         from agm.agl.parser import parse_type_expr
-        from agm.agl.scope.imports import ImportEnv
+        from agm.agl.scope.imports import ImportEnv, ModuleContribution
         from agm.agl.semantics.types import RecordType
         from agm.agl.syntax.types import NameT
         from agm.agl.typecheck.env import GenericTypeDef, TypeEnvironment
@@ -2883,7 +3001,7 @@ class TestBareTypeEntry:
         assert qualified_expr.module_qualifier is not None
         no_handle_env = TypeEnvironment(
             program_generic_table={},
-            import_env=ImportEnv(unqualified={}, qualified={}),
+            import_env=ImportEnv(contributions={}, unqualified={}),
         )
         assert (
             no_handle_env.resolve_qualified_unapplied_generic_type(
@@ -2895,7 +3013,12 @@ class TestBareTypeEntry:
 
         no_name_env = TypeEnvironment(
             program_generic_table={},
-            import_env=ImportEnv(unqualified={}, qualified={("missing",): {}}),
+            import_env=ImportEnv(
+                contributions={
+                    lib: ModuleContribution(lib, {}, frozenset(), False, frozenset({"missing"}))
+                },
+                unqualified={},
+            ),
         )
         assert (
             no_name_env.resolve_qualified_unapplied_generic_type(
@@ -2908,8 +3031,12 @@ class TestBareTypeEntry:
         no_generic_env = TypeEnvironment(
             program_generic_table={},
             import_env=ImportEnv(
+                contributions={
+                    lib: ModuleContribution(
+                        lib, {"Box": (lib, "Box")}, frozenset(), False, frozenset({"missing"})
+                    )
+                },
                 unqualified={},
-                qualified={("missing",): {"Box": (lib, "Box")}},
             ),
         )
         assert (

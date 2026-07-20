@@ -70,7 +70,7 @@ print nested.value.value
 `dict[text, V]` use exactly the same form.
 
 ```agl
-import containers
+open import containers
 
 def unwrap(box: Box[int]) -> int = box.value
 let open_box: Box[int] = Box(value = 1)

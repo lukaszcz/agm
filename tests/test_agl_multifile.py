@@ -58,7 +58,7 @@ def _run_program(
 
 
 # ---------------------------------------------------------------------------
-# Scenario 1: wildcard import (import utils.*)
+# Scenario 1: wildcard import (import utils/*)
 # ---------------------------------------------------------------------------
 
 
@@ -70,17 +70,17 @@ def test_specific_catch_uses_module_qualified_exception_identity(
     lib_dir.mkdir()
     (lib_dir / "lib.agl").write_text("exception Boom extends Exception\n  detail: text\n")
 
-    source = """\
-import lib
-exception Boom extends Exception
-  code: int
-try
-  raise lib::Boom(message = "lib", detail = "from lib")
-catch Boom =>
-  print "wrong"
-catch _ =>
-  print "ok"
-"""
+    source = (
+        "import lib\n"
+        "exception Boom extends Exception\n"
+        "  code: int\n"
+        "try\n"
+        '  raise lib::Boom(message = "lib", detail = "from lib")\n'
+        "catch Boom =>\n"
+        '  print "wrong"\n'
+        "catch _ =>\n"
+        '  print "ok"\n'
+    )
     result = _run_program(source, roots_dirs=[lib_dir])
 
     assert result.ok is True
@@ -103,7 +103,9 @@ class TestWildcardImport:
             'def greet(name: text) -> text = "Hello, " + name + "!"\n'
         )
 
-        source = 'import utils.*\nlet n = add(3, 4)\nlet msg = greet("World")\nprint n\nprint msg\n'
+        source = (
+            'open import utils/*\nlet n = add(3, 4)\nlet msg = greet("World")\nprint n\nprint msg\n'
+        )
         result = _run_program(source, roots_dirs=[lib_dir])
 
         assert result.ok is True
@@ -131,7 +133,7 @@ class TestWildcardImport:
             "def pub(n: int) -> int = n + 1\nprivate def priv(n: int) -> int = n * 2\n"
         )
         # Calling the private name should produce a scope error.
-        source = "import utils.*\nlet r = priv(1)\nr\n"
+        source = "open import utils/*\nlet r = priv(1)\nr\n"
         result = _run_program(source, roots_dirs=[lib_dir])
         assert result.ok is False
         assert len(result.diagnostics) >= 1
@@ -153,7 +155,7 @@ class TestQualifiedImport:
         lib_dir.mkdir()
         (lib_dir / "calc.agl").write_text("def square(n: int) -> int = n * n\n")
 
-        source = "import calc qualified\nlet r = calc::square(5)\nprint r\n"
+        source = "open import calc\nlet r = calc::square(5)\nprint r\n"
         result = _run_program(source, roots_dirs=[lib_dir])
 
         assert result.ok is True
@@ -176,7 +178,7 @@ class TestQualifiedImport:
         lib_dir.mkdir()
         (lib_dir / "calc.agl").write_text("def square(n: int) -> int = n * n\n")
 
-        source = "import calc qualified\nlet r = square(5)\nr\n"
+        source = "import calc\nlet r = square(5)\nr\n"
         result = _run_program(source, roots_dirs=[lib_dir])
         assert result.ok is False
 
@@ -216,7 +218,7 @@ class TestImportedModuleErrors:
         # passes a text where int is expected
         bad_mod.write_text('def bad(n: int) -> int = "not an int"\n')
 
-        source = "import broken\nlet r = bad(1)\nprint r\n"
+        source = "open import broken\nlet r = bad(1)\nprint r\n"
         result = _run_program(source, roots_dirs=[lib_dir])
         assert result.ok is False
         # At least one diagnostic should mention the broken.agl file
@@ -231,7 +233,7 @@ class TestImportedModuleErrors:
         bad_mod = lib_dir / "badscope.agl"
         bad_mod.write_text("def f() -> int = undefined_name\n")
 
-        source = "import badscope\nlet r = f()\nr\n"
+        source = "open import badscope\nlet r = f()\nr\n"
         result = _run_program(source, roots_dirs=[lib_dir])
         assert result.ok is False
         assert any("badscope.agl" in (d.source_label or "") for d in result.diagnostics), (
@@ -258,7 +260,7 @@ class TestLibRootModule:
         work_dir = tmp_path / "work"
         work_dir.mkdir()
         entry = work_dir / "prog.agl"
-        entry.write_text("import shared\nlet r = double(21)\nprint r\n")
+        entry.write_text("open import shared\nlet r = double(21)\nprint r\n")
 
         # Use lib_dir as the lib-root, work_dir as the invocation root.
         source = entry.read_text()
@@ -269,7 +271,7 @@ class TestLibRootModule:
 
     def test_module_not_found_fails(self, tmp_path: Path) -> None:
         """A missing module causes a ModuleNotFound diagnostic."""
-        source = "import missing_module\nlet x = 1\nx\n"
+        source = "open import missing_module\nlet x = 1\nx\n"
         result = _run_program(source, roots_dirs=[tmp_path])
         assert result.ok is False
         assert any("missing_module" in d.message for d in result.diagnostics)
@@ -283,7 +285,7 @@ class TestLibRootModule:
         (root_a / "shared.agl").write_text("def f() -> int = 1\n")
         (root_b / "shared.agl").write_text("def f() -> int = 2\n")
 
-        source = "import shared\nlet r = f()\nr\n"
+        source = "open import shared\nlet r = f()\nr\n"
         result = _run_program(source, roots_dirs=[root_a, root_b])
         assert result.ok is False
         assert any("shared" in d.message for d in result.diagnostics)
@@ -309,7 +311,7 @@ class TestAgentValueCrossModule:
 
         source = (
             "agent mybot\n"
-            "import helper\n"
+            "open import helper\n"
             'let result = ask_with_agent("test question", mybot)\n'
             "print result\n"
         )
@@ -337,7 +339,7 @@ class TestAgentValueCrossModule:
 
         source = (
             "agent mybot\n"
-            "import utils.agent_helper\n"
+            "open import utils/agent_helper\n"
             'let r = ask_with_agent("ping", mybot)\n'
             "print r\n"
         )
@@ -372,7 +374,7 @@ class TestMultiFileParams:
         lib_dir.mkdir()
         (lib_dir / "math.agl").write_text("def square(n: int) -> int = n * n\n")
 
-        source = "import math\nparam n: int\nlet r = square(n)\nprint r\n"
+        source = "open import math\nparam n: int\nlet r = square(n)\nprint r\n"
 
         from agm.agl import PipelineDriver
         from agm.agl.modules.roots import RootSet
@@ -392,7 +394,7 @@ class TestMultiFileParams:
         lib_dir.mkdir()
         (lib_dir / "calc.agl").write_text("def sq(n: int) -> int = n * n\n")
 
-        source = "import calc\nparam n: int\nlet r = sq(n)\nprint r\n"
+        source = "open import calc\nparam n: int\nlet r = sq(n)\nprint r\n"
 
         from agm.agl import PipelineDriver
         from agm.agl.modules.roots import RootSet
@@ -435,38 +437,36 @@ class TestWildcardImportUsingHiding:
     ) -> None:
         """import pkg.* using add brings only 'add' into scope; 'mul' is inaccessible."""
         lib_dir = self._make_pkg(tmp_path)
-        # Only 'add' from pkg.math should be in scope; 'mul' must NOT be.
-        source = "import pkg.* using add\nlet r = add(3, 4)\nprint r\n"
+        # A wildcard `using` list must be public in every matched module.
+        source = "import pkg/* using add\nlet r = add(3, 4)\nprint r\n"
         result = _run_program(source, roots_dirs=[lib_dir])
-        assert result.ok is True
-        captured = capsys.readouterr()
-        assert "7" in captured.out
+        assert result.ok is False
+        assert result.diagnostics
 
     def test_wildcard_using_hidden_name_inaccessible(self, tmp_path: Path) -> None:
         """Names not listed in 'using' are inaccessible even though exported."""
         lib_dir = self._make_pkg(tmp_path)
-        # 'mul' is exported by pkg.math but not listed in using → scope error
-        source = "import pkg.* using add\nlet r = mul(3, 4)\nprint r\n"
+        # Validation occurs at the wildcard import before body resolution.
+        source = "import pkg/* using add\nlet r = mul(3, 4)\nprint r\n"
         result = _run_program(source, roots_dirs=[lib_dir])
         assert result.ok is False
-        assert any("mul" in d.message for d in result.diagnostics)
+        assert result.diagnostics
 
     def test_wildcard_hiding_removes_name(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
         """import pkg.* hiding mul brings all names except 'mul' into scope."""
         lib_dir = self._make_pkg(tmp_path)
-        # 'add' should still be in scope; 'mul' should not.
-        source = "import pkg.* hiding mul\nlet r = add(10, 5)\nprint r\n"
+        # A wildcard `hiding` list is likewise checked per expanded module.
+        source = "open import pkg/* hiding mul\nlet r = add(10, 5)\nprint r\n"
         result = _run_program(source, roots_dirs=[lib_dir])
-        assert result.ok is True
-        captured = capsys.readouterr()
-        assert "15" in captured.out
+        assert result.ok is False
+        assert result.diagnostics
 
     def test_wildcard_hiding_name_inaccessible(self, tmp_path: Path) -> None:
         """The hidden name is inaccessible after hiding."""
         lib_dir = self._make_pkg(tmp_path)
-        source = "import pkg.* hiding mul\nlet r = mul(3, 4)\nprint r\n"
+        source = "open import pkg/* hiding mul\nlet r = mul(3, 4)\nprint r\n"
         result = _run_program(source, roots_dirs=[lib_dir])
         assert result.ok is False
         assert any("mul" in d.message for d in result.diagnostics)
@@ -476,19 +476,17 @@ class TestWildcardImportUsingHiding:
     ) -> None:
         """using selects a name from every matched module that exports it."""
         lib_dir = self._make_pkg(tmp_path)
-        # 'add' is in pkg.math and 'greet' is in pkg.text; both should be in scope
+        # A list that is not shared by every module is rejected at the import.
         source = (
-            "import pkg.* using add, greet\n"
+            "import pkg/* using add, greet\n"
             "let n = add(2, 3)\n"
             'let s = greet("World")\n'
             "print n\n"
             "print s\n"
         )
         result = _run_program(source, roots_dirs=[lib_dir])
-        assert result.ok is True
-        captured = capsys.readouterr()
-        assert "5" in captured.out
-        assert "Hello, World" in captured.out
+        assert result.ok is False
+        assert result.diagnostics
 
 
 # ---------------------------------------------------------------------------
@@ -507,7 +505,7 @@ class TestExternMultiFile:
     """A library module's ``extern def`` through qualified/open imports and re-export."""
 
     def test_qualified_import_calls_the_extern(self, capsys: pytest.CaptureFixture[str]) -> None:
-        source = "import utils.ext_math qualified\nlet r = utils.ext_math::double(21)\nprint r\n"
+        source = "open import utils/ext_math\nlet r = utils/ext_math::double(21)\nprint r\n"
         result = _run_program(source, roots_dirs=[MULTI_FILE_DIR])
         assert result.ok is True
         assert "42" in capsys.readouterr().out
@@ -515,18 +513,18 @@ class TestExternMultiFile:
     def test_open_import_calls_the_extern_unqualified(
         self, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        source = "import utils.ext_math\nlet r = double(21)\nprint r\n"
+        source = "open import utils/ext_math\nlet r = double(21)\nprint r\n"
         result = _run_program(source, roots_dirs=[MULTI_FILE_DIR])
         assert result.ok is True
         assert "42" in capsys.readouterr().out
 
     def test_private_extern_invisible_via_open_import(self) -> None:
-        source = "import utils.ext_math\nlet r = secret(21)\nprint r\n"
+        source = "open import utils/ext_math\nlet r = secret(21)\nprint r\n"
         result = _run_program(source, roots_dirs=[MULTI_FILE_DIR])
         assert result.ok is False
 
     def test_private_extern_invisible_via_qualified_access(self) -> None:
-        source = "import utils.ext_math qualified\nlet r = utils.ext_math::secret(21)\nprint r\n"
+        source = "open import utils/ext_math\nlet r = utils/ext_math::secret(21)\nprint r\n"
         result = _run_program(source, roots_dirs=[MULTI_FILE_DIR])
         assert result.ok is False
 
@@ -536,7 +534,7 @@ class TestExternMultiFile:
         # `use_secret` (public) calls the private extern `secret` internally —
         # the private extern is only invisible to IMPORTERS, not to code in
         # its own declaring module.
-        source = "import utils.ext_math\nlet r = use_secret(21)\nprint r\n"
+        source = "open import utils/ext_math\nlet r = use_secret(21)\nprint r\n"
         result = _run_program(source, roots_dirs=[MULTI_FILE_DIR])
         assert result.ok is True
         assert "122" in capsys.readouterr().out
@@ -546,7 +544,7 @@ class TestExternMultiFile:
     ) -> None:
         # utils.ext_facade re-exports utils.ext_math via `export utils.ext_math`
         # (no extern def of its own, so it needs no companion file).
-        source = "import utils.ext_facade\nlet r = double(21)\nprint r\n"
+        source = "open import utils/ext_facade\nlet r = double(21)\nprint r\n"
         result = _run_program(source, roots_dirs=[MULTI_FILE_DIR])
         assert result.ok is True
         assert "42" in capsys.readouterr().out
@@ -554,9 +552,7 @@ class TestExternMultiFile:
     def test_reexported_extern_callable_through_the_facade_qualifier(
         self, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        source = (
-            "import utils.ext_facade qualified\nlet r = utils.ext_facade::double(21)\nprint r\n"
-        )
+        source = "open import utils/ext_facade\nlet r = utils/ext_facade::double(21)\nprint r\n"
         result = _run_program(source, roots_dirs=[MULTI_FILE_DIR])
         assert result.ok is True
         assert "42" in capsys.readouterr().out

@@ -417,7 +417,7 @@ def test_imported_generic_enum_normalizes_from_checked_metadata(tmp_path: Path) 
         {
             "lib": "enum Choice[T]\n  | absent\n  | present(value: T, note: text)",
             "entry": (
-                "import lib\n"
+                "open import lib\n"
                 'let value: Choice[int] = present(value = 1, note = "x")\n'
                 "case value of\n"
                 "  | present(value = _ as captured) => captured\n"
@@ -435,7 +435,7 @@ def test_imported_generic_enum_normalizes_from_checked_metadata(tmp_path: Path) 
     assert isinstance(constructor_cell, ConstructorCell)
     constructor = constructor_cell.constructor
     assert isinstance(constructor, EnumConstructor)
-    assert constructor.enum_type == EnumType("Choice", (IntType(),), ModuleId.from_dotted("lib"))
+    assert constructor.enum_type == EnumType("Choice", (IntType(),), ModuleId.from_path("lib"))
     assert [(field.name, field.type) for field in constructor.fields] == [
         ("value", IntType()),
         ("note", TextType()),
@@ -619,9 +619,7 @@ def test_malformed_checked_literal_and_bare_variant_metadata_raise_invariants() 
     bare_none_ref = enum_checked.pattern_classifications[bare_none.node_id]
     assert bare_none_ref is not None
     some_ref = replace(bare_none_ref, variant="some")
-    malformed_checked = replace(
-        enum_checked, pattern_classifications={bare_none.node_id: some_ref}
-    )
+    malformed_checked = replace(enum_checked, pattern_classifications={bare_none.node_id: some_ref})
     with pytest.raises(MatchCompileInvariantError, match="invalid final"):
         normalize_case(_replace_case_pattern(enum_case, bare_some), malformed_checked)
 

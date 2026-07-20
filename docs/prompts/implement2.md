@@ -1,0 +1,13 @@
+Implement the plan from .agent-files/PLAN.md
+
+Divide the implementation work into well-scoped tasks doable by an agent in 200k context widow. If the steps described in the plan are too big, split them into multiple tasks.
+
+Use subagents to implement the tasks. When handing off each task, include a brief summary of the ultimate goals of the whole plan. Make it clear that any work done must be a step toward these goals, but they are not acceptance criteria for the task. Provide each subagent task description directly in the subagent request. Launch subagents sequentially one at a time, not in parallel.
+
+After each implementation agent finishes, use a subagent to review its work for correctness, completeness, maintainability, adherence to the plan and to relevant AGENTS.md files.
+
+For EVERY issue identified by the reviewer, check if the issue is valid and if so, dispatch a subagent to fix it. If the review surfaces deeper architectural problems, resolve them yourself first by making reasonable design and architecture choices. All solutions must be principled, general, extensible and maintainable. EVERY issue identified by a reviewer MUST be addressed.
+
+Commit after completing each task.
+
+The goal is not complete until all acceptance criteria of the plan are met.

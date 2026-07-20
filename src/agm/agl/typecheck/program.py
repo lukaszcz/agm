@@ -143,7 +143,7 @@ def _assert_checked_module_closed(module: CheckedModule) -> None:
         function_signatures=module.function_signatures,
         cast_specs=module.cast_specs,
         argument_bindings=module.argument_bindings,
-        owner=f"checked module {module.module_id.dotted()}",
+        owner=f"checked module {module.module_id.path_str()}",
     )
 
 
@@ -492,6 +492,7 @@ def _build_program_type_table(
             program_ctor_sig_table=program_ctor_sig_table,
             program_ctor_field_kinds_table=program_ctor_field_kinds_table,
             import_env=import_env,
+            private_info=resolved.private_info,
             module_id=mid,
             type_table=shared_type_table,
         )
@@ -614,6 +615,7 @@ def _build_program_func_sig_table(
             program_generic_table=program_generic_table,
             program_alias_table=program_alias_table,
             import_env=import_env,
+            private_info=resolved.private_info,
             module_id=mid,
         )
         if mid.is_entry and entry_seed_env is not None:
@@ -673,7 +675,7 @@ def _build_program_builtin_var_table(
     engine-key registry), so no type-expression resolution or per-module env is
     needed.  The table is keyed by the declaration node id (globally unique), so
     seeding it into every module's env makes each engine setting readable and
-    assignable from any module that imports its owner (e.g. ``std.config``).
+    assignable from any module that imports its owner (e.g. ``std/config``).
     Unknown-key declarations are omitted; the owning module's own check rejects
     them with a clear error.
     """
@@ -720,6 +722,7 @@ def _check_module(
     capabilities: HostCapabilities,
     program_type_table: dict[tuple[ModuleId, str], Type],
     import_env_map: Mapping[ModuleId, object],
+    private_info: Mapping[tuple[ModuleId, str], bool],
     program_func_sig_table: dict[int, tuple[str, FunctionSignature, FunctionType, bool]],
     program_builtin_var_table: dict[int, Type],
     program_generic_table: dict[tuple[ModuleId, str], GenericTypeDef],
@@ -760,6 +763,7 @@ def _check_module(
         program_ctor_sig_table=program_ctor_sig_table,
         program_ctor_field_kinds_table=program_ctor_field_kinds_table,
         import_env=import_env,
+        private_info=private_info,
         module_id=mid,
         type_table=type_table,
     )
@@ -803,7 +807,7 @@ def _check_module(
             env.register_extern_node_id(node_id)
 
     # Seed builtin-var binding types (engine settings) from the whole-program
-    # pre-pass so a ``std.config::key`` read/assign in any module resolves its
+    # pre-pass so a ``std/config::key`` read/assign in any module resolves its
     # type.  Keyed by globally-unique decl node id, so seeding the whole table
     # into every module's env is safe and collision-free.
     for var_node_id, var_type in program_builtin_var_table.items():
@@ -927,6 +931,7 @@ def check_program(
             capabilities,
             program_type_table,
             import_env_map,
+            resolved.private_info,
             program_func_sig_table,
             program_builtin_var_table,
             program_generic_table,

@@ -77,7 +77,7 @@ def test_nested_names_follow_the_matched_field() -> None:
     _check(
         "enum Flag\n  | on\n  | off\n"
         "enum Packet\n  | packet(first: int, second: int, flag: Flag, label: text)\n"
-        "let value = packet(1, 2, on(), \"ok\")\n"
+        'let value = packet(1, 2, on(), "ok")\n'
         "case value of | packet(first, second, flag = on, label = label as renamed) => renamed"
     )
     _reject_type(
@@ -172,7 +172,7 @@ def test_cross_module_and_builtin_fields_use_field_directed_classification(tmp_p
         {
             "library": "enum Flag\n  | on\n  | off",
             "entry": (
-                "import library\n"
+                "open import library\n"
                 "enum Packet\n  | packet(flag: library::Flag)\n"
                 "let on = 7\nlet item = packet(library::Flag::on)\n"
                 "case item of | packet(on) => on"

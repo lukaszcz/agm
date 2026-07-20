@@ -1,8 +1,7 @@
 # Imported generics: open and module-qualified applied types in annotations,
 # function signatures, nested applications, constructor calls, qualified enum
 # constructors with explicit type arguments, and generic pattern matching.
-import library
-
+open import library
 def unbox(box: Box[int]) -> int = box.value
 
 def describe_option(option: library::Option[int]) -> text =

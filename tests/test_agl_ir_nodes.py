@@ -70,8 +70,8 @@ from agm.agl.modules.ids import ModuleId
 # Helpers
 # ---------------------------------------------------------------------------
 
-MOD_A = ModuleId.from_dotted("mod_a")
-MOD_B = ModuleId.from_dotted("mod_b")
+MOD_A = ModuleId.from_path("mod_a")
+MOD_B = ModuleId.from_path("mod_b")
 
 SID0 = SourceId(value=0)
 SYM0 = SymbolId(value=0)

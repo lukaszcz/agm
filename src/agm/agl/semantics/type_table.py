@@ -638,12 +638,12 @@ class TypeTable:
         culprit_module, culprit_name = culprit
         # Qualify the culprit with its module when it is not the entry module
         # (bare names from an imported module can otherwise be ambiguous),
-        # matching the ``module.dotted()::name`` convention used by
+        # matching the ``module.path_str()::name`` convention used by
         # RecordType/EnumType's own ``__repr__``.
         qualified_culprit = (
             culprit_name
             if culprit_module.is_entry
-            else f"{culprit_module.dotted()}::{culprit_name}"
+            else f"{culprit_module.path_str()}::{culprit_name}"
         )
         return (
             f"type '{t!r}' cannot be used as {use}: it contains '{qualified_culprit}', whose "

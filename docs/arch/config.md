@@ -27,8 +27,8 @@ Configuration is organized into sections consumed by specific features — for e
 
 For AgL execution, four sources combine with a defined precedence:
 
-- **Engine settings** (`runner`, `log`, `strict-json`, `max-iters`, `log-file`, `timeout`) — the `std.config` `builtin var` bindings:
-  `source write (std.config::X := e) > CLI flag > [<program>].X > [exec].X > engine default`
+- **Engine settings** (`runner`, `log`, `strict-json`, `max-iters`, `log-file`, `timeout`) — the `std/config` `builtin var` bindings:
+  `source write (std/config::X := e) > CLI flag > [<program>].X > [exec].X > engine default`
   Their names, value kinds, and consuming side come from the pure shared catalog in `config/engine_keys.py`, also consumed by AgL semantics, deep IR validation, and the AgL evaluator/REPL.
 - **Param values** (`param NAME`):
   `CLI flag > [<program>].Y > source default (param Y = e) > required error`

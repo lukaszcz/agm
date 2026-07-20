@@ -2,7 +2,7 @@
 
 Maps fixed engine-key names (kebab) to their resolved AgL types.  This module
 is the single source of truth for the fixed set of AgL engine-setting keys
-(declared as ``builtin var`` bindings in ``std.config``) and for program names
+(declared as ``builtin var`` bindings in ``std/config``) and for program names
 reserved by AGM.
 """
 

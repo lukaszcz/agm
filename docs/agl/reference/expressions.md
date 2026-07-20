@@ -79,7 +79,7 @@ constructor_ref ::= name
                   | qual_prefix name
                   | qual_prefix? type_ref "::" name
 type_ref    ::= name ("[" type_expr ("," type_expr)* "]")?
-qual_prefix ::= module_path "::" | "::"
+qual_prefix ::= ["/"] NAME ("/" NAME)* "::" | "::"
 constructor_args ::= "(" (ctor_arg ("," ctor_arg)* ","?)? ")"
 value_type_args ::= "::" "[" type_expr ("," type_expr)* "]"
 ctor_arg    ::= expr              (* positional *)

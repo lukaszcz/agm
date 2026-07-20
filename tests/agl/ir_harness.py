@@ -119,20 +119,20 @@ def evaluate_ir_raises(source: str, param_values: dict[str, Value] | None = None
     raise AssertionError("IR pipeline did not raise AglRaise")
 
 
-def write_module_file(root: Path, dotted: str, source: str) -> Path:
-    path = root / ModuleId.from_dotted(dotted).relpath().replace("/", os.sep)
+def write_module_file(root: Path, module_path: str, source: str) -> Path:
+    path = root / ModuleId.from_path(module_path).relpath().replace("/", os.sep)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(source)
     return path
 
 
-def write_companion_file(root: Path, dotted: str, source: str = "") -> Path:
-    """Write *dotted*'s Python companion file (the ``.agl`` sibling's ``.py`` twin).
+def write_companion_file(root: Path, module_path: str, source: str = "") -> Path:
+    """Write a module path's Python companion file (the ``.agl`` sibling's ``.py`` twin).
 
     Used by extern-def fixtures: any module declaring an extern needs a real
     companion file on disk before it can be loaded.
     """
-    agl_path = root / ModuleId.from_dotted(dotted).relpath().replace("/", os.sep)
+    agl_path = root / ModuleId.from_path(module_path).relpath().replace("/", os.sep)
     py_path = agl_path.with_suffix(".py")
     py_path.parent.mkdir(parents=True, exist_ok=True)
     py_path.write_text(source)
@@ -220,18 +220,18 @@ def make_graph_from_files(tmp_path: Path, modules: dict[str, str]) -> ModuleGrap
     root = tmp_path / "root"
     root.mkdir(parents=True, exist_ok=True)
     entry_source = modules.get("entry", "()")
-    for dotted, source in modules.items():
-        if dotted == "entry":
+    for module_path, source in modules.items():
+        if module_path == "entry":
             continue
-        write_module_file(root, dotted, source)
+        write_module_file(root, module_path, source)
     return load_graph(entry_source, entry_path=None, roots=_roots(root))
 
 
 def _checked(entry_source: str, modules: dict[str, str], tmp_path: Path) -> CheckedProgram:
     root = tmp_path / "root"
     root.mkdir(parents=True, exist_ok=True)
-    for dotted, source in modules.items():
-        write_module_file(root, dotted, source)
+    for module_path, source in modules.items():
+        write_module_file(root, module_path, source)
     graph = load_graph(entry_source, entry_path=None, roots=_roots(root))
     return check_program(resolve_program(graph), base_caps())
 

@@ -14,9 +14,10 @@ check_coverage := "100"
 test:
     uv run python -m pytest tests/ -q -n auto --cov=agm --cov-branch --cov-fail-under={{check_coverage}} --cov-report=term:skip-covered
 
-# Lint with ruff
+# Lint and check formatting with ruff
 lint:
     uv run ruff check src/ tests/
+    uv run ruff format --check src/ tests/
 
 # Type-check with mypy
 typecheck:

@@ -68,7 +68,7 @@ def lower_program(
             continue
         source_id = SourceId(link.next_source)
         link.next_source += 1
-        display_name = mid.dotted() if not mid.is_entry else "<entry>"
+        display_name = mid.path_str() if not mid.is_entry else "<entry>"
         module_source_text = (
             _entry_source_text
             if mid.is_entry and _entry_source_text is not None

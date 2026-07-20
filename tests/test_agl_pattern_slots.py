@@ -179,9 +179,7 @@ def test_assigning_to_a_slot_selected_as_a_binder_is_rejected() -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize(
-    "pattern", ("packet(value, _ as value)", "packet(_ as value, value)")
-)
+@pytest.mark.parametrize("pattern", ("packet(value, _ as value)", "packet(_ as value, value)"))
 def test_typecheck_diagnoses_duplicate_binders_that_could_have_been_variants(
     pattern: str,
 ) -> None:

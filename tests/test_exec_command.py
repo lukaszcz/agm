@@ -866,7 +866,9 @@ class TestExecLowersGraphOnce:
         lowerings = self._count_lowerings(monkeypatch)
         (tmp_path / "helper.agl").write_text('def greet(who: text) -> text = "hi ${who}"\n')
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text('import helper\nparam who: text = "world"\nprint helper::greet(who)\n')
+        agl_file.write_text(
+            'open import helper\nparam who: text = "world"\nprint helper::greet(who)\n'
+        )
 
         assert exec_command.run(_exec_args(agl_file, param_tokens=["--who", "agl"])) is None
 
@@ -968,10 +970,10 @@ class TestExecCommandExitCodes:
         assert result is None
 
     def test_param_value_flows_into_std_config_write(self, tmp_path: Path) -> None:
-        """A resolved parameter value can be written into a std.config engine setting."""
+        """A resolved parameter value can be written into a std/config engine setting."""
         agl_file = tmp_path / "test.agl"
         agl_file.write_text(
-            "import std.config\nparam chosen: text\nstd.config::runner := chosen\nprint chosen\n"
+            "import std/config\nparam chosen: text\nstd/config::runner := chosen\nprint chosen\n"
         )
 
         assert exec_command.run(_exec_args(agl_file, param_tokens=["--chosen", "echo"])) is None
@@ -979,7 +981,7 @@ class TestExecCommandExitCodes:
     def test_declared_agents_with_std_config_preserve_params(self, tmp_path: Path) -> None:
         agl_file = tmp_path / "test.agl"
         agl_file.write_text(
-            "import std.config\nagent worker\nstd.config::log := false\n"
+            "import std/config\nagent worker\nstd/config::log := false\n"
             "param value: int\nprint value\n"
         )
         from agm.cli_support.args import ExecArgs
@@ -1615,9 +1617,9 @@ class TestExecFFI:
         marker = tmp_path / "marker.txt"
         agl_file = tmp_path / "prog.agl"
         agl_file.write_text(
-            "import std.config\n"
+            "import std/config\n"
             "extern def choose_runner() -> text\n"
-            "std.config::runner := choose_runner()\n"
+            "std/config::runner := choose_runner()\n"
             "choose_runner()\n"
         )
         (tmp_path / "prog.py").write_text(
@@ -1645,7 +1647,7 @@ class TestExecFFI:
 
         marker = tmp_path / "marker.txt"
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text("import mylib\nmylib::run()\n")
+        agl_file.write_text("open import mylib\nmylib::run()\n")
         (tmp_path / "mylib.agl").write_text(
             "extern def from_lib(x: int) -> int\ndef run() -> int = from_lib(1)\n"
         )
@@ -2619,7 +2621,7 @@ class TestExecTimeoutAndLogFileFlags:
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text("import std.config\nprint std.config::timeout\n")
+        agl_file.write_text("import std/config\nprint std/config::timeout\n")
 
         exec_command.run(_exec_args_no_log(agl_file, timeout="0.0001s"))
 
@@ -2639,7 +2641,7 @@ class TestExecTimeoutAndLogFileFlags:
             '[exec]\ntimeout = "1s"\n\n[prog]\ntimeout = 0.0001\n'
         )
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text("import std.config\nprint std.config::timeout\n")
+        agl_file.write_text("import std/config\nprint std/config::timeout\n")
         monkeypatch.setattr(
             exec_command,
             "current_config_context",
@@ -2665,7 +2667,7 @@ class TestExecTimeoutAndLogFileFlags:
             f'[exec]\nlog = true\nlog-file = "{trace_path}"\n'
         )
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text("import std.config\nprint std.config::log-file\n")
+        agl_file.write_text("import std/config\nprint std/config::log-file\n")
         monkeypatch.setattr(
             exec_command,
             "current_config_context",
@@ -2681,7 +2683,7 @@ class TestExecTimeoutAndLogFileFlags:
 class TestExecSourceConfigPrecedence:
     """Source engine-setting declarations resolved by ``agm exec``.
 
-    A source ``std.config::KEY := VALUE`` assignment takes effect from its
+    A source ``std/config::KEY := VALUE`` assignment takes effect from its
     program point onward and overrides the CLI flag seed; the config-file layer
     is the floor.  Each test uses behavioral assertions — observable exit codes
     and output — rather than internal call counts, following the testing policy.
@@ -2694,7 +2696,7 @@ class TestExecSourceConfigPrecedence:
     def test_source_max_iters_caps_loop_at_source_value(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        """``std.config::max-iters := 3`` in source caps the do loop at 3 iterations.
+        """``std/config::max-iters := 3`` in source caps the do loop at 3 iterations.
 
         The loop ``until n >= 100`` cannot complete in 3 iterations (n starts at
         0 and increments by 1), so the runtime raises a LoopLimitExceeded and
@@ -2702,8 +2704,8 @@ class TestExecSourceConfigPrecedence:
         """
         agl_file = tmp_path / "prog.agl"
         agl_file.write_text(
-            "import std.config\n"
-            "std.config::max-iters := 3\n"
+            "import std/config\n"
+            "std/config::max-iters := 3\n"
             "var n = 0\n"
             "do\n"
             "  n := n + 1\n"
@@ -2716,11 +2718,11 @@ class TestExecSourceConfigPrecedence:
     def test_source_max_iters_allows_completion_when_sufficient(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        """``std.config::max-iters := 100`` allows a do loop needing exactly 100 iterations."""
+        """``std/config::max-iters := 100`` allows a do loop needing exactly 100 iterations."""
         agl_file = tmp_path / "prog.agl"
         agl_file.write_text(
-            "import std.config\n"
-            "std.config::max-iters := 100\n"
+            "import std/config\n"
+            "std/config::max-iters := 100\n"
             "var n = 0\n"
             "do\n"
             "  n := n + 1\n"
@@ -2734,11 +2736,11 @@ class TestExecSourceConfigPrecedence:
     def test_source_max_iters_zero_disables_host_limit(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        """``std.config::max-iters := 0`` turns an active host valve off."""
+        """``std/config::max-iters := 0`` turns an active host valve off."""
         agl_file = tmp_path / "prog.agl"
         agl_file.write_text(
-            "import std.config\n"
-            "std.config::max-iters := 0\n"
+            "import std/config\n"
+            "std/config::max-iters := 0\n"
             "var i = 0\n"
             "do\n"
             "  i := i + 1\n"
@@ -2753,7 +2755,7 @@ class TestExecSourceConfigPrecedence:
         """A computed negative ``max-iters`` value is rejected at the assignment point."""
         agl_file = tmp_path / "prog.agl"
         agl_file.write_text(
-            "import std.config\nlet bad = 0 - 1\nstd.config::max-iters := bad\nprint 1\n"
+            "import std/config\nlet bad = 0 - 1\nstd/config::max-iters := bad\nprint 1\n"
         )
 
         with pytest.raises(SystemExit) as exc_info:
@@ -2763,7 +2765,7 @@ class TestExecSourceConfigPrecedence:
     def test_source_max_iters_overrides_cli_max_iters(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        """Source ``std.config::max-iters := 3`` overrides CLI ``--max-iters 100``.
+        """Source ``std/config::max-iters := 3`` overrides CLI ``--max-iters 100``.
 
         The CLI ``--max-iters 100`` seeds the loop valve, but the source
         assignment takes effect from its program point and caps the loop at 3.
@@ -2772,8 +2774,8 @@ class TestExecSourceConfigPrecedence:
         """
         agl_file = tmp_path / "prog.agl"
         agl_file.write_text(
-            "import std.config\n"
-            "std.config::max-iters := 3\n"
+            "import std/config\n"
+            "std/config::max-iters := 3\n"
             "var n = 0\n"
             "do\n"
             "  n := n + 1\n"
@@ -2787,7 +2789,7 @@ class TestExecSourceConfigPrecedence:
     def test_source_max_iters_overrides_config_max_iters(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        """Source ``std.config::max-iters := 100`` overrides ``[exec] max-iters = 3`` in config.
+        """Source ``std/config::max-iters := 100`` overrides ``[exec] max-iters = 3`` in config.
 
         Config says 3 (loop would fail); source assignment says 100 (loop completes).
         """
@@ -2808,8 +2810,8 @@ class TestExecSourceConfigPrecedence:
 
         agl_file = tmp_path / "prog.agl"
         agl_file.write_text(
-            "import std.config\n"
-            "std.config::max-iters := 100\n"
+            "import std/config\n"
+            "std/config::max-iters := 100\n"
             "var n = 0\n"
             "do\n"
             "  n := n + 1\n"
@@ -2886,11 +2888,11 @@ class TestExecSourceConfigPrecedence:
     def test_source_strict_json_flows_into_runtime(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """``std.config::strict-json := true`` in source does NOT pre-fold into the
+        """``std/config::strict-json := true`` in source does NOT pre-fold into the
         PipelineDriver constructor; it is applied when the assignment executes.
         The constructor receives the config-file value (False by default)."""
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text("import std.config\nstd.config::strict-json := true\nlet x = 1\nx\n")
+        agl_file.write_text("import std/config\nstd/config::strict-json := true\nlet x = 1\nx\n")
 
         captured = _spy_runtime(monkeypatch)
         result = exec_command.run(_exec_args_no_log(agl_file))
@@ -2900,7 +2902,7 @@ class TestExecSourceConfigPrecedence:
         assert captured["default_strict_json"] is False
 
     def test_source_strict_json_overrides_cli_strict_json(self, tmp_path: Path) -> None:
-        """Source ``std.config::strict-json := true`` overrides CLI ``--no-strict-json``.
+        """Source ``std/config::strict-json := true`` overrides CLI ``--no-strict-json``.
 
         The CLI ``--no-strict-json`` seeds the lenient floor, but the source
         assignment flips strict JSON on before the ``exec`` parses a fenced JSON
@@ -2910,8 +2912,8 @@ class TestExecSourceConfigPrecedence:
         """
         agl_file = tmp_path / "prog.agl"
         agl_file.write_text(
-            "import std.config\n"
-            "std.config::strict-json := true\n"
+            "import std/config\n"
+            "std/config::strict-json := true\n"
             "let r: int = exec \"printf '```json\\n5\\n```'\"\n"
             "print r\n"
         )
@@ -2922,7 +2924,7 @@ class TestExecSourceConfigPrecedence:
     def test_source_strict_json_overrides_config_strict_json(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Source ``std.config::strict-json := false`` overrides ``[exec] strict-json = true``
+        """Source ``std/config::strict-json := false`` overrides ``[exec] strict-json = true``
         when the assignment executes. The PipelineDriver constructor still receives
         the config-file value (True)."""
         from agm.config.general import ExecConfig
@@ -2939,7 +2941,7 @@ class TestExecSourceConfigPrecedence:
         monkeypatch.setattr(exec_command, "exec_config_from_merged", lambda *_, **__: strict_config)
 
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text("import std.config\nstd.config::strict-json := false\nlet x = 1\nx\n")
+        agl_file.write_text("import std/config\nstd/config::strict-json := false\nlet x = 1\nx\n")
 
         captured = _spy_runtime(monkeypatch)
         result = exec_command.run(_exec_args_no_log(agl_file))
@@ -2955,11 +2957,11 @@ class TestExecSourceConfigPrecedence:
     def test_source_timeout_flows_into_runtime(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """``std.config::timeout := Some("30s")`` in source does NOT pre-fold into the
+        """``std/config::timeout := Some("30s")`` in source does NOT pre-fold into the
         PipelineDriver constructor; it is applied when the assignment executes.
         The constructor receives the config-file value (None by default)."""
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text('import std.config\nstd.config::timeout := Some("30s")\nlet x = 1\nx\n')
+        agl_file.write_text('import std/config\nstd/config::timeout := Some("30s")\nlet x = 1\nx\n')
 
         captured = _spy_runtime(monkeypatch)
         result = exec_command.run(_exec_args_no_log(agl_file))
@@ -2971,9 +2973,9 @@ class TestExecSourceConfigPrecedence:
     def test_source_timeout_integer_rejected(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        """``std.config::timeout := 60`` (integer) is a type error: timeout is Option[text]."""
+        """``std/config::timeout := 60`` (integer) is a type error: timeout is Option[text]."""
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text("import std.config\nstd.config::timeout := 60\nlet x = 1\nx\n")
+        agl_file.write_text("import std/config\nstd/config::timeout := 60\nlet x = 1\nx\n")
 
         with pytest.raises(SystemExit) as exc_info:
             exec_command.run(_exec_args_no_log(agl_file))
@@ -2982,7 +2984,7 @@ class TestExecSourceConfigPrecedence:
     def test_source_timeout_overrides_config_timeout(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Source ``std.config::timeout := Some("30s")`` overrides ``[exec] timeout = 999``
+        """Source ``std/config::timeout := Some("30s")`` overrides ``[exec] timeout = 999``
         when the assignment executes. The PipelineDriver constructor still receives
         the config-file value (999.0)."""
         from agm.config.general import ExecConfig
@@ -3001,7 +3003,7 @@ class TestExecSourceConfigPrecedence:
         )
 
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text('import std.config\nstd.config::timeout := Some("30s")\nlet x = 1\nx\n')
+        agl_file.write_text('import std/config\nstd/config::timeout := Some("30s")\nlet x = 1\nx\n')
 
         captured = _spy_runtime(monkeypatch)
         result = exec_command.run(_exec_args_no_log(agl_file))
@@ -3014,13 +3016,13 @@ class TestExecSourceConfigPrecedence:
         """A source timeout string that type-checks but fails parse_timeout raises
         a clean AgL-level ValueError at the assignment point (exit 2).
 
-        ``std.config::timeout := Some("forever")`` is a valid ``Option[text]`` value
+        ``std/config::timeout := Some("forever")`` is a valid ``Option[text]`` value
         so it passes scope and typecheck; the setting-write handler converts the
         parse_timeout ValueError to an AglRaise (uncaught AgL exception → exit 2).
         """
         agl_file = tmp_path / "prog.agl"
         agl_file.write_text(
-            'import std.config\nstd.config::timeout := Some("forever")\nlet x = 1\nx\n'
+            'import std/config\nstd/config::timeout := Some("forever")\nlet x = 1\nx\n'
         )
 
         with pytest.raises(SystemExit) as exc_info:
@@ -3032,9 +3034,9 @@ class TestExecSourceConfigPrecedence:
     # ------------------------------------------------------------------
 
     def test_source_log_write_creates_trace_file(self, tmp_path: Path) -> None:
-        """``std.config::log := true`` in source enables trace logging (creates a file)."""
+        """``std/config::log := true`` in source enables trace logging (creates a file)."""
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text('import std.config\nstd.config::log := true\nprint "hi"\n')
+        agl_file.write_text('import std/config\nstd/config::log := true\nprint "hi"\n')
 
         # Run in tmp_path so .agent-files/ is created there.
         import os
@@ -3058,14 +3060,14 @@ class TestExecSourceConfigPrecedence:
 
         agent_files = tmp_path / ".agent-files"
         log_files = list(agent_files.glob("exec-*.log"))
-        assert log_files, "Expected a trace log file from std.config::log := true"
+        assert log_files, "Expected a trace log file from std/config::log := true"
 
     def test_source_log_file_write_writes_to_specified_path(self, tmp_path: Path) -> None:
-        """``std.config::log-file := Some("path")`` in source writes the trace to that path."""
+        """``std/config::log-file := Some("path")`` in source writes the trace to that path."""
         log_path = tmp_path / "trace.log"
         agl_file = tmp_path / "prog.agl"
         agl_file.write_text(
-            f'import std.config\nstd.config::log-file := Some("{log_path}")\nprint "hi"\n'
+            f'import std/config\nstd/config::log-file := Some("{log_path}")\nprint "hi"\n'
         )
 
         exec_command.run(
@@ -3088,14 +3090,14 @@ class TestExecSourceConfigPrecedence:
     def test_source_runner_write_flows_into_agent_factory(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """``std.config::runner := "..."`` rebuilds the default runner command.
+        """``std/config::runner := "..."`` rebuilds the default runner command.
 
         We capture the runner command passed to runner_backed_agent_factory
         because it is the single user-observable boundary between exec.py and
         the subprocess world.
         """
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text('import std.config\nstd.config::runner := "my-runner"\nlet x = 1\nx\n')
+        agl_file.write_text('import std/config\nstd/config::runner := "my-runner"\nlet x = 1\nx\n')
 
         captured_runner: list[str] = []
 
@@ -3127,12 +3129,12 @@ class TestExecSourceConfigPrecedence:
     ) -> None:
         agl_file = tmp_path / "prog.agl"
         agl_file.write_text(
-            "import std.config\n"
-            "let previous = std.config::runner\n"
+            "import std/config\n"
+            "let previous = std/config::runner\n"
             "try\n"
-            '  std.config::runner := "\'"\n'
+            '  std/config::runner := "\'"\n'
             "catch Exception as error => ()\n"
-            "print(std.config::runner == previous)\n"
+            "print(std/config::runner == previous)\n"
         )
 
         exec_command.run(_exec_args_no_log(agl_file))
@@ -3179,7 +3181,7 @@ class TestExecModuleRoots:
         lib_dir = tmp_path
         (lib_dir / "mylib.agl").write_text("def answer() -> int = 42\n")
         entry = lib_dir / "entry.agl"
-        entry.write_text("import mylib\nlet r = answer()\nprint r\n")
+        entry.write_text("open import mylib\nlet r = answer()\nprint r\n")
 
         # A successful run returns normally (no SystemExit).
         exec_command.run(_exec_args_no_log(entry))
@@ -3193,7 +3195,7 @@ class TestExecModuleRoots:
         lib_dir = tmp_path
         (lib_dir / "broken.agl").write_text("def f() -> int = undeclared_name\n")
         entry = lib_dir / "entry.agl"
-        entry.write_text("import broken\nlet r = f()\nr\n")
+        entry.write_text("open import broken\nlet r = f()\nr\n")
 
         with pytest.raises(SystemExit) as exc_info:
             exec_command.run(_exec_args_no_log(entry))
@@ -3210,7 +3212,7 @@ class TestExecModuleRoots:
         lib_dir = tmp_path / "libdir"
         lib_dir.mkdir()
         (lib_dir / "util.agl").write_text('def greet() -> text = "Hi!"\n')
-        entry_source = "import util\nlet r = greet()\nprint r\n"
+        entry_source = "open import util\nlet r = greet()\nprint r\n"
 
         # Patch current_config_context as imported in exec_command
         from agm.config import context as ctx_mod
@@ -3234,7 +3236,7 @@ class TestExecModuleRoots:
     ) -> None:
         """A missing import causes exit 1 with a diagnostic on stderr."""
         entry = tmp_path / "prog.agl"
-        entry.write_text("import no_such_module\nlet x = 1\nx\n")
+        entry.write_text("open import no_such_module\nlet x = 1\nx\n")
 
         with pytest.raises(SystemExit) as exc_info:
             exec_command.run(_exec_args_no_log(entry))
@@ -3249,7 +3251,7 @@ class TestExecModuleRoots:
         lib_dir = tmp_path
         (lib_dir / "calc.agl").write_text("def square(n: int) -> int = n * n\n")
         entry = lib_dir / "prog.agl"
-        entry.write_text("import calc\nlet r = square(4)\nprint r\n")
+        entry.write_text("open import calc\nlet r = square(4)\nprint r\n")
 
         # A successful run returns normally (no SystemExit).
         exec_command.run(_exec_args_no_log(entry))
@@ -3291,7 +3293,7 @@ class TestExecModuleRoots:
         entry_dir = tmp_path / "work"
         entry_dir.mkdir()
         entry = entry_dir / "prog.agl"
-        entry.write_text("import shared\nlet r = pi()\nprint r\n")
+        entry.write_text("open import shared\nlet r = pi()\nprint r\n")
 
         # Patch load_module_roots to return a ModuleRootsConfig with lib_root set.
         with monkeypatch.context() as mp:
@@ -3310,7 +3312,7 @@ class TestExecModuleRoots:
     def test_exec_wildcard_import_multifile(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        """``import pkg.*`` wildcard imports two sibling modules and both are callable.
+        """``open import pkg/*`` imports two sibling modules and makes both callable.
 
         Verifies that the wildcard import path works end-to-end through the
         exec_command pipeline (discover_params + run_prepared).
@@ -3320,7 +3322,9 @@ class TestExecModuleRoots:
         (pkg_dir / "add.agl").write_text("def add(a: int, b: int) -> int = a + b\n")
         (pkg_dir / "mul.agl").write_text("def mul(a: int, b: int) -> int = a * b\n")
         entry = tmp_path / "prog.agl"
-        entry.write_text("import pkg.*\nlet s = add(3, 4)\nlet p = mul(3, 4)\nprint s\nprint p\n")
+        entry.write_text(
+            "open import pkg/*\nlet s = add(3, 4)\nlet p = mul(3, 4)\nprint s\nprint p\n"
+        )
 
         exec_command.run(_exec_args_no_log(entry))
         captured = capsys.readouterr()
@@ -3330,13 +3334,13 @@ class TestExecModuleRoots:
     def test_exec_qualified_import_multifile(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        """``import x qualified`` + ``x::name`` qualified call works end-to-end.
+        """``import x`` + ``x::name`` call works end-to-end.
 
-        Verifies that the qualified-import path works through the command pipeline.
+        Verifies that the import path works through the command pipeline.
         """
         (tmp_path / "mathlib.agl").write_text("def square(n: int) -> int = n * n\n")
         entry = tmp_path / "prog.agl"
-        entry.write_text("import mathlib qualified\nlet r = mathlib::square(7)\nprint r\n")
+        entry.write_text("import mathlib\nlet r = mathlib::square(7)\nprint r\n")
 
         exec_command.run(_exec_args_no_log(entry))
         captured = capsys.readouterr()
@@ -3361,7 +3365,7 @@ class TestExecModuleRoots:
         )
         entry = tmp_path / "entry.agl"
         entry.write_text(
-            "import greeter\n"
+            "open import greeter\n"
             "agent mybot\n"
             'let result = greeter::greet("What is your name?", mybot)\n'
             "print result\n"
@@ -3410,7 +3414,7 @@ class TestExecCliModulePaths:
         entry_dir = tmp_path / "prog"
         entry_dir.mkdir()
         entry = entry_dir / "main.agl"
-        entry.write_text("import helper\nlet r = answer()\nprint r\n")
+        entry.write_text("open import helper\nlet r = answer()\nprint r\n")
 
         args = ExecArgs(
             file=str(entry),
@@ -3443,7 +3447,7 @@ class TestExecCliModulePaths:
         entry_dir = tmp_path / "entry"
         entry_dir.mkdir()
         entry = entry_dir / "prog.agl"
-        entry.write_text("import mod_a\nimport mod_b\nlet r = va() + vb()\nprint r\n")
+        entry.write_text("open import mod_a\nopen import mod_b\nlet r = va() + vb()\nprint r\n")
 
         args = ExecArgs(
             file=str(entry),
@@ -3472,7 +3476,7 @@ class TestExecCliModulePaths:
         entry_dir = tmp_path / "prog"
         entry_dir.mkdir()
         entry = entry_dir / "main.agl"
-        entry.write_text("import helper\nlet r = answer()\nprint r\n")
+        entry.write_text("open import helper\nlet r = answer()\nprint r\n")
 
         args = ExecArgs(
             file=str(entry),
@@ -3517,7 +3521,7 @@ class TestExecCliModulePaths:
 
         args = ExecArgs(
             file=None,
-            command="import util\nlet r = greet()\nprint r\n",
+            command="open import util\nlet r = greet()\nprint r\n",
             param_tokens=[],
             strict_json=None,
             max_iters=None,

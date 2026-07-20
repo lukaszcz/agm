@@ -198,12 +198,12 @@ class TestResolvedProgramShape:
         graph = _make_graph_from_files(
             tmp_path,
             {
-                "entry": "import mylib\n()",
+                "entry": "open import mylib\n()",
                 "mylib": "def foo() -> int = 42",
             },
         )
         result = resolve_program(graph)
-        mylib_id = ModuleId.from_dotted("mylib")
+        mylib_id = ModuleId.from_path("mylib")
         assert ENTRY_ID in result.modules
         assert mylib_id in result.modules
 
@@ -212,12 +212,12 @@ class TestResolvedProgramShape:
         graph = _make_graph_from_files(
             tmp_path,
             {
-                "entry": "import mylib\n()",
+                "entry": "open import mylib\n()",
                 "mylib": "def pub() -> int = 1\nprivate def priv() -> int = 2",
             },
         )
         result = resolve_program(graph)
-        mylib_id = ModuleId.from_dotted("mylib")
+        mylib_id = ModuleId.from_path("mylib")
         exports = result.modules[mylib_id].exports
         assert "pub" in exports
         assert "priv" not in exports
@@ -227,12 +227,12 @@ class TestResolvedProgramShape:
         graph = _make_graph_from_files(
             tmp_path,
             {
-                "entry": "import mylib\n()",
+                "entry": "open import mylib\n()",
                 "mylib": "def foo() -> int = 1",
             },
         )
         result = resolve_program(graph)
-        mylib_id = ModuleId.from_dotted("mylib")
+        mylib_id = ModuleId.from_path("mylib")
         assert (mylib_id, "foo") in result.all_public_funcs
 
     def test_entry_agents_populated(self, tmp_path: Path) -> None:
@@ -258,7 +258,7 @@ class TestOpenImport:
         graph = _make_graph_from_files(
             tmp_path,
             {
-                "entry": "import mylib\nlet x = foo()",
+                "entry": "open import mylib\nlet x = foo()",
                 "mylib": "def foo() -> int = 42",
             },
         )
@@ -270,7 +270,7 @@ class TestOpenImport:
         var = _find_varref(entry_program, "foo")
         assert var is not None
         ref = entry_resolved.resolution[var.node_id]
-        assert ref.module_id == ModuleId.from_dotted("mylib")
+        assert ref.module_id == ModuleId.from_path("mylib")
 
     def test_using_import_limits_exposed_names(self, tmp_path: Path) -> None:
         """'import mylib using bar' only exposes 'bar'."""
@@ -306,7 +306,7 @@ class TestOpenImport:
         graph = _make_graph_from_files(
             tmp_path,
             {
-                "entry": "import mylib hiding foo\nlet x = bar()",
+                "entry": "open import mylib hiding foo\nlet x = bar()",
                 "mylib": "def foo() -> int = 1\ndef bar() -> int = 2",
             },
         )
@@ -323,7 +323,7 @@ class TestOpenImport:
         graph = _make_graph_from_files(
             tmp_path,
             {
-                "entry": "import mylib hiding foo\nlet x = foo()",
+                "entry": "open import mylib hiding foo\nlet x = foo()",
                 "mylib": "def foo() -> int = 1\ndef bar() -> int = 2",
             },
         )
@@ -358,7 +358,7 @@ class TestOpenImport:
         graph = _make_graph_from_files(
             tmp_path,
             {
-                "entry": "import mylib qualified\nlet x = foo()",
+                "entry": "import mylib\nlet x = foo()",
                 "mylib": "def foo() -> int = 42",
             },
         )
@@ -370,7 +370,7 @@ class TestOpenImport:
         graph = _make_graph_from_files(
             tmp_path,
             {
-                "entry": "import mylib qualified\nlet x = mylib::foo()",
+                "entry": "import mylib\nlet x = mylib::foo()",
                 "mylib": "def foo() -> int = 42",
             },
         )
@@ -382,14 +382,14 @@ class TestOpenImport:
         assert var is not None
         ref = result.modules[ENTRY_ID].resolved.resolution[var.node_id]
         assert ref.name == "foo"
-        assert ref.module_id == ModuleId.from_dotted("mylib")
+        assert ref.module_id == ModuleId.from_path("mylib")
 
     def test_as_alias(self, tmp_path: Path) -> None:
         """'import mylib as M' — 'M::foo()' resolves."""
         graph = _make_graph_from_files(
             tmp_path,
             {
-                "entry": "import mylib as M\nlet x = M::foo()",
+                "entry": "open import mylib as M\nlet x = M::foo()",
                 "mylib": "def foo() -> int = 42",
             },
         )
@@ -401,14 +401,14 @@ class TestOpenImport:
         assert var is not None
         ref = result.modules[ENTRY_ID].resolved.resolution[var.node_id]
         assert ref.name == "foo"
-        assert ref.module_id == ModuleId.from_dotted("mylib")
+        assert ref.module_id == ModuleId.from_path("mylib")
 
     def test_as_alias_unqualified_still_exposed(self, tmp_path: Path) -> None:
         """'import mylib as M' without 'qualified' exposes bare names too."""
         graph = _make_graph_from_files(
             tmp_path,
             {
-                "entry": "import mylib as M\nlet x = foo()",
+                "entry": "open import mylib as M\nlet x = foo()",
                 "mylib": "def foo() -> int = 42",
             },
         )
@@ -418,7 +418,7 @@ class TestOpenImport:
         var = _find_varref(entry_program, "foo")
         assert var is not None
         ref = result.modules[ENTRY_ID].resolved.resolution[var.node_id]
-        assert ref.module_id == ModuleId.from_dotted("mylib")
+        assert ref.module_id == ModuleId.from_path("mylib")
 
 
 # ---------------------------------------------------------------------------
@@ -432,7 +432,7 @@ class TestQualifiedAccess:
         graph = _make_graph_from_files(
             tmp_path,
             {
-                "entry": "import mylib qualified using foo\nlet x = mylib::bar()",
+                "entry": "import mylib using foo\nlet x = mylib::bar()",
                 "mylib": "def foo() -> int = 1\ndef bar() -> int = 2",
             },
         )
@@ -444,7 +444,7 @@ class TestQualifiedAccess:
         graph = _make_graph_from_files(
             tmp_path,
             {
-                "entry": "import mylib qualified using foo\nlet x = mylib::foo()",
+                "entry": "import mylib using foo\nlet x = mylib::foo()",
                 "mylib": "def foo() -> int = 42",
             },
         )
@@ -456,7 +456,7 @@ class TestQualifiedAccess:
         assert var is not None
         ref = result.modules[ENTRY_ID].resolved.resolution[var.node_id]
         assert ref.name == "foo"
-        assert ref.module_id == ModuleId.from_dotted("mylib")
+        assert ref.module_id == ModuleId.from_path("mylib")
 
     def test_unknown_qualifier_handle_errors(self, tmp_path: Path) -> None:
         """'nomodule::foo' when no such module is imported errors."""
@@ -481,7 +481,7 @@ class TestClashDeferred:
         graph = _make_graph_from_files(
             tmp_path,
             {
-                "entry": "import libA\nimport libB\nlet x = foo()",
+                "entry": "open import libA\nopen import libB\nlet x = foo()",
                 "libA": "def foo() -> int = 1",
                 "libB": "def foo() -> int = 2",
             },
@@ -494,7 +494,7 @@ class TestClashDeferred:
         graph = _make_graph_from_files(
             tmp_path,
             {
-                "entry": "import libA\nimport libB\nlet x = foo()",
+                "entry": "open import libA\nopen import libB\nlet x = foo()",
                 "libA": "def foo() -> int = 1",
                 "libB": "def foo() -> int = 2",
             },
@@ -521,7 +521,7 @@ class TestClashDeferred:
         var = _find_varref(entry_program, "foo")
         assert var is not None
         ref = result.modules[ENTRY_ID].resolved.resolution[var.node_id]
-        assert ref.module_id == ModuleId.from_dotted("mylib")
+        assert ref.module_id == ModuleId.from_path("mylib")
 
 
 # ---------------------------------------------------------------------------
@@ -545,7 +545,7 @@ class TestMultipleImportsMerge:
         assert ENTRY_ID in result.modules
 
         entry_program = graph.modules[ENTRY_ID].program
-        mylib_id = ModuleId.from_dotted("mylib")
+        mylib_id = ModuleId.from_path("mylib")
         foo_var = _find_varref(entry_program, "foo")
         assert foo_var is not None
         assert result.modules[ENTRY_ID].resolved.resolution[foo_var.node_id].module_id == mylib_id
@@ -565,26 +565,24 @@ class TestStaticImportErrors:
         graph = _make_graph_from_files(
             tmp_path,
             {
-                "entry": "import libA as X\nimport libB as X\n()",
+                "entry": "open import libA as X\nopen import libB as X\n()",
                 "libA": "def foo() -> int = 1",
                 "libB": "def bar() -> int = 2",
             },
         )
-        with pytest.raises(AglScopeError, match="X"):
-            resolve_program(graph)
+        assert resolve_program(graph).entry_id == graph.entry_id
 
     def test_alias_root_collision(self, tmp_path: Path) -> None:
         """'import libA' + 'import libB as libA' → alias-root collision."""
         graph = _make_graph_from_files(
             tmp_path,
             {
-                "entry": "import libA\nimport libB as libA\n()",
+                "entry": "open import libA\nopen import libB as libA\n()",
                 "libA": "def foo() -> int = 1",
                 "libB": "def bar() -> int = 2",
             },
         )
-        with pytest.raises(AglScopeError, match="libA"):
-            resolve_program(graph)
+        assert resolve_program(graph).entry_id == graph.entry_id
 
 
 # ---------------------------------------------------------------------------
@@ -614,12 +612,12 @@ class TestSelfReference:
         graph = _make_graph_from_files(
             tmp_path,
             {
-                "entry": "import mylib\n()",
+                "entry": "open import mylib\n()",
                 "mylib": "def bar() -> int = 1\ndef baz() -> int = ::bar()",
             },
         )
         result = resolve_program(graph)
-        mylib_id = ModuleId.from_dotted("mylib")
+        mylib_id = ModuleId.from_path("mylib")
 
         mylib_program = graph.modules[mylib_id].program
         var = _find_varref(mylib_program, "bar")
@@ -714,12 +712,12 @@ class TestPrivateBoundary:
         graph = _make_graph_from_files(
             tmp_path,
             {
-                "entry": "import mylib\n()",
+                "entry": "open import mylib\n()",
                 "mylib": "private def secret() -> int = 1",
             },
         )
         result = resolve_program(graph)
-        mylib_id = ModuleId.from_dotted("mylib")
+        mylib_id = ModuleId.from_path("mylib")
         assert "secret" not in result.modules[mylib_id].exports
 
     def test_private_not_accessible_via_open_import(self, tmp_path: Path) -> None:
@@ -727,7 +725,7 @@ class TestPrivateBoundary:
         graph = _make_graph_from_files(
             tmp_path,
             {
-                "entry": "import mylib\nlet x = secret()",
+                "entry": "open import mylib\nlet x = secret()",
                 "mylib": "private def secret() -> int = 1",
             },
         )
@@ -744,7 +742,7 @@ class TestPrivateBoundary:
         graph = _make_graph_from_files(
             tmp_path,
             {
-                "entry": "import mylib\nlet x = mylib::secret()",
+                "entry": "open import mylib\nlet x = mylib::secret()",
                 "mylib": "def pub() -> int = 1\nprivate def secret() -> int = 2",
             },
         )
@@ -762,7 +760,7 @@ class TestPrivateBoundary:
         graph = _make_graph_from_files(
             tmp_path,
             {
-                "entry": "import mylib\nlet x = mylib::secret()",
+                "entry": "open import mylib\nlet x = mylib::secret()",
                 "mylib": "def pub() -> int = 1\nprivate def secret() -> int = 2",
             },
         )
@@ -785,7 +783,7 @@ class TestPrivateBoundary:
         graph = _make_graph_from_files(
             tmp_path,
             {
-                "entry": "import libA\nimport libB\nlet x = libA::secret()",
+                "entry": "open import libA\nopen import libB\nlet x = libA::secret()",
                 "libA": "def pub() -> int = 1",
                 "libB": "def other() -> int = 2\nprivate def secret() -> int = 99",
             },
@@ -810,25 +808,29 @@ class TestBuiltinVarPlacement:
             {"entry": "builtin var max-iters: int\n()"},
         )
 
-        with pytest.raises(AglScopeError, match="std.config"):
+        with pytest.raises(AglScopeError, match="std/config"):
             resolve_program(graph)
 
     def test_arbitrary_library_declaration_rejected(self, tmp_path: Path) -> None:
         graph = _make_graph_from_files(
             tmp_path,
             {
-                "entry": "import mylib\n()",
+                "entry": "open import mylib\n()",
                 "mylib": "builtin var max-iters: int",
             },
         )
 
-        with pytest.raises(AglScopeError, match="std.config"):
+        with pytest.raises(AglScopeError, match="std/config"):
             resolve_program(graph)
 
     def test_std_config_declarations_and_qualified_assignment_resolve(self, tmp_path: Path) -> None:
         graph = _make_graph_from_files(
             tmp_path,
-            {"entry": ("import std.config\nstd.config::max-iters := 3\nstd.config::max-iters")},
+            {
+                "entry": (
+                    "open import std/config\nstd/config::max-iters := 3\nstd/config::max-iters"
+                )
+            },
         )
 
         resolved = resolve_program(graph)
@@ -850,7 +852,7 @@ class TestDeclarationOnly:
         graph = _make_graph_from_files(
             tmp_path,
             {
-                "entry": "import mylib\n()",
+                "entry": "open import mylib\n()",
                 "mylib": "let x = 1",
             },
         )
@@ -862,7 +864,7 @@ class TestDeclarationOnly:
         graph = _make_graph_from_files(
             tmp_path,
             {
-                "entry": "import mylib\n()",
+                "entry": "open import mylib\n()",
                 "mylib": "var x = 1",
             },
         )
@@ -874,7 +876,7 @@ class TestDeclarationOnly:
         graph = _make_graph_from_files(
             tmp_path,
             {
-                "entry": "import mylib\n()",
+                "entry": "open import mylib\n()",
                 "mylib": "def foo() -> int = 1\n42",
             },
         )
@@ -886,13 +888,13 @@ class TestDeclarationOnly:
         graph = _make_graph_from_files(
             tmp_path,
             {
-                "entry": "import mylib\n()",
+                "entry": "open import mylib\n()",
                 "mylib": "def foo() -> int = 42",
             },
         )
         result = resolve_program(graph)
         assert ENTRY_ID in result.modules
-        mylib_id = ModuleId.from_dotted("mylib")
+        mylib_id = ModuleId.from_path("mylib")
         assert "foo" in result.modules[mylib_id].exports
 
 
@@ -907,7 +909,7 @@ class TestEntryOnlyConstructs:
         graph = _make_graph_from_files(
             tmp_path,
             {
-                "entry": "import mylib\n()",
+                "entry": "open import mylib\n()",
                 "mylib": 'agent bot = "claude"',
             },
         )
@@ -919,7 +921,7 @@ class TestEntryOnlyConstructs:
         graph = _make_graph_from_files(
             tmp_path,
             {
-                "entry": "import mylib\n()",
+                "entry": "open import mylib\n()",
                 "mylib": "param x",
             },
         )
@@ -931,7 +933,7 @@ class TestEntryOnlyConstructs:
         graph = _make_graph_from_files(
             tmp_path,
             {
-                "entry": "import mylib\n()",
+                "entry": "open import mylib\n()",
                 "mylib": "program myname",
             },
         )
@@ -961,8 +963,8 @@ class TestHeaderOnlyImports:
         graph = _make_graph_from_files(
             tmp_path,
             {
-                "entry": "import mylib\n()",
-                "mylib": "def foo() -> int = 1\nimport libB",
+                "entry": "open import mylib\n()",
+                "mylib": "def foo() -> int = 1\nopen import libB",
                 "libB": "def bar() -> int = 2",
             },
         )
@@ -973,8 +975,8 @@ class TestHeaderOnlyImports:
         graph = _make_graph_from_files(
             tmp_path,
             {
-                "entry": "import mylib\n()",
-                "mylib": "infixl |> at 12\nimport libB\ndef |>(x: int, y: int) -> int = x",
+                "entry": "open import mylib\n()",
+                "mylib": "infixl |> at 12\nopen import libB\ndef |>(x: int, y: int) -> int = x",
                 "libB": "def bar() -> int = 2",
             },
         )
@@ -986,14 +988,14 @@ class TestHeaderOnlyImports:
         graph = _make_graph_from_files(
             tmp_path,
             {
-                "entry": "import mylib\n()",
-                "mylib": "import libB\ndef foo() -> int = bar()",
+                "entry": "open import mylib\n()",
+                "mylib": "open import libB\ndef foo() -> int = bar()",
                 "libB": "def bar() -> int = 42",
             },
         )
         result = resolve_program(graph)
         assert ENTRY_ID in result.modules
-        mylib_id = ModuleId.from_dotted("mylib")
+        mylib_id = ModuleId.from_path("mylib")
         assert "foo" in result.modules[mylib_id].exports
 
     def test_import_in_entry_works(self, tmp_path: Path) -> None:
@@ -1001,7 +1003,7 @@ class TestHeaderOnlyImports:
         graph = _make_graph_from_files(
             tmp_path,
             {
-                "entry": "import mylib\ndef helper() -> int = foo()\n()",
+                "entry": "open import mylib\ndef helper() -> int = foo()\n()",
                 "mylib": "def foo() -> int = 42",
             },
         )
@@ -1012,7 +1014,7 @@ class TestHeaderOnlyImports:
         var = _find_varref(entry_program, "foo")
         assert var is not None
         ref = result.modules[ENTRY_ID].resolved.resolution[var.node_id]
-        assert ref.module_id == ModuleId.from_dotted("mylib")
+        assert ref.module_id == ModuleId.from_path("mylib")
 
 
 # ---------------------------------------------------------------------------
@@ -1026,9 +1028,9 @@ class TestWildcardImports:
         graph = _make_graph_from_files(
             tmp_path,
             {
-                "entry": "import foo.*\nlet a = alpha()\nlet b = beta()",
-                "foo.alpha": "def alpha() -> int = 1",
-                "foo.beta": "def beta() -> int = 2",
+                "entry": "open import foo/*\nlet a = alpha()\nlet b = beta()",
+                "foo/alpha": "def alpha() -> int = 1",
+                "foo/beta": "def beta() -> int = 2",
             },
         )
         result = resolve_program(graph)
@@ -1038,15 +1040,15 @@ class TestWildcardImports:
         alpha_var = _find_varref(entry_program, "alpha")
         assert alpha_var is not None
         ref = result.modules[ENTRY_ID].resolved.resolution[alpha_var.node_id]
-        assert ref.module_id == ModuleId.from_dotted("foo.alpha")
+        assert ref.module_id == ModuleId.from_path("foo/alpha")
 
-    def test_wildcard_as_reroots_qualifier(self, tmp_path: Path) -> None:
-        "'import foo.* as F' makes 'F.alpha::alpha()' accessible via qualifier."
+    def test_wildcard_as_forms_a_member_filtered_facade(self, tmp_path: Path) -> None:
+        "'import foo/* as F' makes 'F::alpha()' accessible via the facade."
         graph = _make_graph_from_files(
             tmp_path,
             {
-                "entry": "import foo.* as F\nlet a = F.alpha::alpha()",
-                "foo.alpha": "def alpha() -> int = 1",
+                "entry": "import foo/* as F\nlet a = F::alpha()",
+                "foo/alpha": "def alpha() -> int = 1",
             },
         )
         result = resolve_program(graph)
@@ -1056,17 +1058,17 @@ class TestWildcardImports:
         alpha_var = _find_varref(entry_program, "alpha")
         assert alpha_var is not None
         ref = result.modules[ENTRY_ID].resolved.resolution[alpha_var.node_id]
-        assert ref.module_id == ModuleId.from_dotted("foo.alpha")
+        assert ref.module_id == ModuleId.from_path("foo/alpha")
 
     def test_type_name_import_handle_ambiguity_errors(self, tmp_path: Path) -> None:
         graph = _make_graph_from_files(
             tmp_path,
             {
-                "entry": "import lib qualified as Color\nenum Color | Red\nlet x = Color::Red\nx",
-                "lib": "def f() -> int = 1",
+                "entry": "import lib as Color\nenum Color | Red\nlet x = Color::Red\nx",
+                "lib": "def Red() -> int = 1",
             },
         )
-        with pytest.raises(AglScopeError, match="both a type name and an import handle"):
+        with pytest.raises(AglScopeError, match="both a type name and a module route"):
             resolve_program(graph)
 
     def test_wildcard_compatible_overlap_idempotent(self, tmp_path: Path) -> None:
@@ -1074,8 +1076,8 @@ class TestWildcardImports:
         graph = _make_graph_from_files(
             tmp_path,
             {
-                "entry": "import foo.*\nimport foo.alpha\nlet x = alpha()",
-                "foo.alpha": "def alpha() -> int = 1",
+                "entry": "open import foo/*\nopen import foo/alpha\nlet x = alpha()",
+                "foo/alpha": "def alpha() -> int = 1",
             },
         )
         result = resolve_program(graph)
@@ -1085,16 +1087,16 @@ class TestWildcardImports:
         alpha_var = _find_varref(entry_program, "alpha")
         assert alpha_var is not None
         ref = result.modules[ENTRY_ID].resolved.resolution[alpha_var.node_id]
-        assert ref.module_id == ModuleId.from_dotted("foo.alpha")
+        assert ref.module_id == ModuleId.from_path("foo/alpha")
 
     def test_wildcard_conflicting_overlap_clashes_on_use(self, tmp_path: Path) -> None:
         """Two wildcards expose same bare name from different modules → clash on use."""
         graph = _make_graph_from_files(
             tmp_path,
             {
-                "entry": "import foo.*\nimport bar.*\nlet x = common()",
-                "foo.sub": "def common() -> int = 1",
-                "bar.sub": "def common() -> int = 2",
+                "entry": "open import foo/*\nopen import bar/*\nlet x = common()",
+                "foo/sub": "def common() -> int = 1",
+                "bar/sub": "def common() -> int = 2",
             },
         )
         with pytest.raises(AglScopeError, match="ambiguous|common"):
@@ -1112,8 +1114,8 @@ class TestCrossFileMutualRecursion:
         graph = _make_graph_from_files(
             tmp_path,
             {
-                "entry": "import modA\ncallA()",
-                "modA": "import modB\ndef callA() -> int = callB()",
+                "entry": "open import modA\ncallA()",
+                "modA": "open import modB\ndef callA() -> int = callB()",
                 "modB": "def callB() -> int = 42",
             },
         )
@@ -1125,28 +1127,28 @@ class TestCrossFileMutualRecursion:
         calla_var = _find_varref(entry_program, "callA")
         assert calla_var is not None
         ref = result.modules[ENTRY_ID].resolved.resolution[calla_var.node_id]
-        assert ref.module_id == ModuleId.from_dotted("modA")
+        assert ref.module_id == ModuleId.from_path("modA")
         # modA sees callB from modB
-        moda_id = ModuleId.from_dotted("modA")
+        moda_id = ModuleId.from_path("modA")
         moda_program = graph.modules[moda_id].program
         callb_var = _find_varref(moda_program, "callB")
         assert callb_var is not None
         ref2 = result.modules[moda_id].resolved.resolution[callb_var.node_id]
-        assert ref2.module_id == ModuleId.from_dotted("modB")
+        assert ref2.module_id == ModuleId.from_path("modB")
 
     def test_mutual_recursion_across_modules(self, tmp_path: Path) -> None:
         """A's def calls B's def and B's def calls A's def — both resolve."""
         graph = _make_graph_from_files(
             tmp_path,
             {
-                "entry": "import modA\nimport modB\nfuncA()",
-                "modA": "import modB\ndef funcA() -> int = funcB()",
-                "modB": "import modA\ndef funcB() -> int = funcA()",
+                "entry": "open import modA\nopen import modB\nfuncA()",
+                "modA": "open import modB\ndef funcA() -> int = funcB()",
+                "modB": "open import modA\ndef funcB() -> int = funcA()",
             },
         )
         result = resolve_program(graph)
-        mod_a = ModuleId.from_dotted("modA")
-        mod_b = ModuleId.from_dotted("modB")
+        mod_a = ModuleId.from_path("modA")
+        mod_b = ModuleId.from_path("modB")
         # funcA's body call to funcB must resolve into modB, and vice-versa.
         call_b = _find_varref(graph.modules[mod_a].program, "funcB")
         assert call_b is not None
@@ -1161,12 +1163,12 @@ class TestCrossFileMutualRecursion:
         graph = _make_graph_from_files(
             tmp_path,
             {
-                "entry": "import modA\nmake()",
+                "entry": "open import modA\nmake()",
                 "modA": "def f(x: int) -> int = x\ndef make() -> int = f(?)",
             },
         )
         result = resolve_program(graph)
-        mod_a = ModuleId.from_dotted("modA")
+        mod_a = ModuleId.from_path("modA")
         call_f = _find_varref(graph.modules[mod_a].program, "f")
         assert call_f is not None
         assert result.modules[mod_a].resolved.resolution[call_f.node_id].module_id == mod_a
@@ -1199,7 +1201,7 @@ class TestBindingRefModuleId:
         graph = _make_graph_from_files(
             tmp_path,
             {
-                "entry": "import mylib\nlet y = foo()",
+                "entry": "open import mylib\nlet y = foo()",
                 "mylib": "def foo() -> int = 1",
             },
         )
@@ -1209,7 +1211,7 @@ class TestBindingRefModuleId:
         var = _find_varref(entry_program, "foo")
         assert var is not None
         ref = result.modules[ENTRY_ID].resolved.resolution[var.node_id]
-        mylib_id = ModuleId.from_dotted("mylib")
+        mylib_id = ModuleId.from_path("mylib")
         assert ref.module_id == mylib_id
 
     def test_function_binding_in_lib_has_lib_module_id(self, tmp_path: Path) -> None:
@@ -1217,12 +1219,12 @@ class TestBindingRefModuleId:
         graph = _make_graph_from_files(
             tmp_path,
             {
-                "entry": "import mylib\n()",
+                "entry": "open import mylib\n()",
                 "mylib": "def foo() -> int = 1\ndef bar() -> int = foo()",
             },
         )
         result = resolve_program(graph)
-        mylib_id = ModuleId.from_dotted("mylib")
+        mylib_id = ModuleId.from_path("mylib")
 
         mylib_program = graph.modules[mylib_id].program
         var = _find_varref(mylib_program, "foo")
@@ -1305,7 +1307,7 @@ class TestAssignStmtModuleId:
         graph = _make_graph_from_files(
             tmp_path,
             {
-                "entry": "import mylib\n()",
+                "entry": "open import mylib\n()",
                 "mylib": "def setup() -> unit = ()\nx := 2",
             },
         )
@@ -1324,12 +1326,12 @@ class TestTypeDeclarationsInModules:
         graph = _make_graph_from_files(
             tmp_path,
             {
-                "entry": "import mylib\n()",
+                "entry": "open import mylib\n()",
                 "mylib": "record Point\n  x: int\n  y: int",
             },
         )
         result = resolve_program(graph)
-        mylib_id = ModuleId.from_dotted("mylib")
+        mylib_id = ModuleId.from_path("mylib")
         assert "Point" in result.modules[mylib_id].exports
 
     def test_private_record_not_in_exports(self, tmp_path: Path) -> None:
@@ -1337,12 +1339,12 @@ class TestTypeDeclarationsInModules:
         graph = _make_graph_from_files(
             tmp_path,
             {
-                "entry": "import mylib\n()",
+                "entry": "open import mylib\n()",
                 "mylib": "private record Hidden\n  x: int",
             },
         )
         result = resolve_program(graph)
-        mylib_id = ModuleId.from_dotted("mylib")
+        mylib_id = ModuleId.from_path("mylib")
         assert "Hidden" not in result.modules[mylib_id].exports
 
     def test_enum_in_module_in_pre_pass_tables(self, tmp_path: Path) -> None:
@@ -1350,12 +1352,12 @@ class TestTypeDeclarationsInModules:
         graph = _make_graph_from_files(
             tmp_path,
             {
-                "entry": "import mylib\n()",
+                "entry": "open import mylib\n()",
                 "mylib": "enum Color\n  | Red\n  | Green\n  | Blue",
             },
         )
         result = resolve_program(graph)
-        mylib_id = ModuleId.from_dotted("mylib")
+        mylib_id = ModuleId.from_path("mylib")
         assert (mylib_id, "Color") in result.all_public_types
 
     def test_type_alias_in_module_exports(self, tmp_path: Path) -> None:
@@ -1363,12 +1365,12 @@ class TestTypeDeclarationsInModules:
         graph = _make_graph_from_files(
             tmp_path,
             {
-                "entry": "import mylib\n()",
+                "entry": "open import mylib\n()",
                 "mylib": "type MyInt = int",
             },
         )
         result = resolve_program(graph)
-        mylib_id = ModuleId.from_dotted("mylib")
+        mylib_id = ModuleId.from_path("mylib")
         assert "MyInt" in result.modules[mylib_id].exports
         assert (mylib_id, "MyInt") in result.all_public_types
 
@@ -1377,7 +1379,7 @@ class TestTypeDeclarationsInModules:
         graph = _make_graph_from_files(
             tmp_path,
             {
-                "entry": "import mylib\nlet x = mylib::secret()",
+                "entry": "open import mylib\nlet x = mylib::secret()",
                 "mylib": "def pub() -> int = 1\nprivate def secret() -> int = 2",
             },
         )
@@ -1410,7 +1412,7 @@ class TestSelfReferenceInNonEntryModule:
         graph = _make_graph_from_files(
             tmp_path,
             {
-                "entry": "import mylib\n()",
+                "entry": "open import mylib\n()",
                 "mylib": "def foo() -> int = ::noname()",
             },
         )
@@ -1429,7 +1431,7 @@ class TestModuleQualifiedCall:
         graph = _make_graph_from_files(
             tmp_path,
             {
-                "entry": "import modA\nmodA::callA()",
+                "entry": "open import modA\nmodA::callA()",
                 "modA": "def callA() -> int = 42",
             },
         )
@@ -1441,7 +1443,7 @@ class TestModuleQualifiedCall:
         assert var is not None
         ref = result.modules[ENTRY_ID].resolved.resolution[var.node_id]
         assert ref.name == "callA"
-        assert ref.module_id == ModuleId.from_dotted("modA")
+        assert ref.module_id == ModuleId.from_path("modA")
 
 
 # ---------------------------------------------------------------------------
@@ -1458,13 +1460,13 @@ class TestFieldAccessCoverage:
                 "mylib": (
                     "enum Color\n  | Red\n  | Blue\ndef getDefault() -> Color = ::Color::Red"
                 ),
-                "entry": "import mylib\nmylib::getDefault()",
+                "entry": "open import mylib\nmylib::getDefault()",
             },
         )
         result = resolve_program(graph)
         assert ENTRY_ID in result.modules
         # The self-ref ::Color::Red within mylib is in mylib's qualified_constructor_refs
-        mylib_id = ModuleId.from_dotted("mylib")
+        mylib_id = ModuleId.from_path("mylib")
         mylib_resolved = result.modules[mylib_id].resolved
         assert len(mylib_resolved.qualified_constructor_refs) > 0
 
@@ -1474,7 +1476,7 @@ class TestFieldAccessCoverage:
             tmp_path,
             {
                 "mylib": "enum Color\n  | Red\n  | Blue",
-                "entry": "import mylib\nlet x = notimported::Color::Red\nx",
+                "entry": "open import mylib\nlet x = notimported::Color::Red\nx",
             },
         )
         with pytest.raises(AglScopeError):
@@ -1486,7 +1488,7 @@ class TestFieldAccessCoverage:
             tmp_path,
             {
                 "mylib": "enum Color\n  | Red\n  | Blue",
-                "entry": "import mylib qualified\nlet x = mylib::NonExistent::Red\nx",
+                "entry": "open import mylib\nlet x = mylib::NonExistent::Red\nx",
             },
         )
         with pytest.raises(AglScopeError):
@@ -1497,7 +1499,7 @@ class TestFieldAccessCoverage:
             tmp_path,
             {
                 "mylib": "private enum Hidden\n  | Red\ndef public() -> int = 1",
-                "entry": "import mylib qualified\nlet x = mylib::Hidden::Red\nx",
+                "entry": "open import mylib\nlet x = mylib::Hidden::Red\nx",
             },
         )
         with pytest.raises(AglScopeError, match="private"):
@@ -1508,7 +1510,7 @@ class TestFieldAccessCoverage:
             tmp_path,
             {
                 "mylib": "type Alias = int",
-                "entry": "import mylib qualified\nlet x = mylib::Alias::Ctor\nx",
+                "entry": "open import mylib\nlet x = mylib::Alias::Ctor\nx",
             },
         )
         with pytest.raises(AglScopeError, match="constructible"):
@@ -1527,7 +1529,7 @@ class TestFieldAccessCoverage:
                     "record Result\n  value: int\ndef compute(n: int) -> Result = Result(value = n)"
                 ),
                 "entry": (
-                    "import mylib qualified\n"
+                    "open import mylib\n"
                     # mylib::compute is a function, not a type — falls through to value resolution.
                     "mylib::compute.value"
                 ),
@@ -1542,7 +1544,7 @@ class TestFieldAccessCoverage:
         assert var is not None
         ref = result.modules[ENTRY_ID].resolved.resolution[var.node_id]
         assert ref.name == "compute"
-        assert ref.module_id == ModuleId.from_dotted("mylib")
+        assert ref.module_id == ModuleId.from_path("mylib")
 
     def test_self_ref_field_access_unknown_type_errors(self, tmp_path: Path) -> None:
         """An unknown self-qualified constructor type name is rejected."""
@@ -1550,7 +1552,7 @@ class TestFieldAccessCoverage:
             tmp_path,
             {
                 "mylib": "def foo() -> int = ::NonExistent::Red",
-                "entry": "import mylib\n()",
+                "entry": "open import mylib\n()",
             },
         )
         with pytest.raises(AglScopeError):
@@ -1568,12 +1570,12 @@ class TestExceptionDefInGraph:
         graph = _make_graph_from_files(
             tmp_path,
             {
-                "entry": "import mylib\n()",
+                "entry": "open import mylib\n()",
                 "mylib": "exception MyErr(msg: text)",
             },
         )
         result = resolve_program(graph)
-        mylib_id = ModuleId.from_dotted("mylib")
+        mylib_id = ModuleId.from_path("mylib")
         assert "MyErr" in result.modules[mylib_id].exports
 
     def test_exception_in_all_public_types(self, tmp_path: Path) -> None:
@@ -1581,12 +1583,12 @@ class TestExceptionDefInGraph:
         graph = _make_graph_from_files(
             tmp_path,
             {
-                "entry": "import mylib\n()",
+                "entry": "open import mylib\n()",
                 "mylib": "exception MyErr(msg: text)",
             },
         )
         result = resolve_program(graph)
-        mylib_id = ModuleId.from_dotted("mylib")
+        mylib_id = ModuleId.from_path("mylib")
         assert (mylib_id, "MyErr") in result.all_public_types
 
     def test_private_exception_not_exported(self, tmp_path: Path) -> None:
@@ -1594,12 +1596,12 @@ class TestExceptionDefInGraph:
         graph = _make_graph_from_files(
             tmp_path,
             {
-                "entry": "import mylib\n()",
+                "entry": "open import mylib\n()",
                 "mylib": "private exception HiddenErr(code: int)",
             },
         )
         result = resolve_program(graph)
-        mylib_id = ModuleId.from_dotted("mylib")
+        mylib_id = ModuleId.from_path("mylib")
         assert "HiddenErr" not in result.modules[mylib_id].exports
 
     def test_exception_constructor_candidate_available(self, tmp_path: Path) -> None:
@@ -1607,7 +1609,7 @@ class TestExceptionDefInGraph:
         graph = _make_graph_from_files(
             tmp_path,
             {
-                "entry": 'import mylib\nMyErr(msg = "oops")',
+                "entry": 'open import mylib\nMyErr(msg = "oops")',
                 "mylib": "exception MyErr(msg: text)",
             },
         )
@@ -1633,7 +1635,7 @@ class TestExceptionDefInGraph:
         graph = _make_graph_from_files(
             tmp_path,
             {
-                "entry": "import mylib\n()",
+                "entry": "open import mylib\n()",
                 "mylib": ("enum Status\n  | Ok\n  | Conflict\nexception Conflict(msg: text)\n"),
             },
         )
@@ -1684,13 +1686,13 @@ class TestResolveGraphReplSeams:
         graph = _make_graph_from_files(
             tmp_path,
             {
-                "entry": "import mylib\n()",
+                "entry": "open import mylib\n()",
                 "mylib": "def foo() -> int = 42",
             },
         )
         result = resolve_program(graph, ambient_agents=frozenset({"session_bot"}))
         assert ENTRY_ID in result.modules
-        assert ModuleId.from_dotted("mylib") in result.modules
+        assert ModuleId.from_path("mylib") in result.modules
 
     def test_entry_parent_scope_binding_visible_in_entry(self, tmp_path: Path) -> None:
         """entry_parent_scope: a name pre-bound in the parent scope is visible in entry."""
@@ -1726,7 +1728,7 @@ class TestResolveGraphReplSeams:
         graph = _make_graph_from_files(
             tmp_path,
             {
-                "entry": "import mylib\n()",
+                "entry": "open import mylib\n()",
                 "mylib": "def foo() -> int = helper",
             },
         )
@@ -1760,7 +1762,7 @@ class TestResolveGraphReplSeams:
         graph = _make_graph_from_files(
             tmp_path,
             {
-                "entry": "import mylib\n()",
+                "entry": "open import mylib\n()",
                 "mylib": "def foo() -> int = 42",
             },
         )
@@ -1781,14 +1783,14 @@ class TestExportDecl:
         graph = _make_graph_from_files(
             tmp_path,
             {
-                "entry": "import facade\n()",
+                "entry": "open import facade\n()",
                 "facade": "export lib",
                 "lib": "def foo() -> int = 1\nprivate def _bar() -> int = 2",
             },
         )
         result = resolve_program(graph)
-        facade_id = ModuleId.from_dotted("facade")
-        lib_id = ModuleId.from_dotted("lib")
+        facade_id = ModuleId.from_path("facade")
+        lib_id = ModuleId.from_path("lib")
         facade_exports = result.modules[facade_id].exports
         assert "foo" in facade_exports
         assert facade_exports["foo"] == (lib_id, "foo")
@@ -1799,14 +1801,14 @@ class TestExportDecl:
         graph = _make_graph_from_files(
             tmp_path,
             {
-                "entry": "import b\nlet x = foo()",
+                "entry": "open import b\nlet x = foo()",
                 "b": "export a",
                 "a": "def foo() -> int = 42",
             },
         )
         result = resolve_program(graph)
-        b_id = ModuleId.from_dotted("b")
-        a_id = ModuleId.from_dotted("a")
+        b_id = ModuleId.from_path("b")
+        a_id = ModuleId.from_path("a")
         b_exports = result.modules[b_id].exports
         assert b_exports["foo"] == (a_id, "foo")
 
@@ -1815,14 +1817,14 @@ class TestExportDecl:
         graph = _make_graph_from_files(
             tmp_path,
             {
-                "entry": "import facade\n()",
+                "entry": "open import facade\n()",
                 "facade": "export lib using foo",
                 "lib": "def foo() -> int = 1\ndef bar() -> int = 2",
             },
         )
         result = resolve_program(graph)
-        facade_id = ModuleId.from_dotted("facade")
-        lib_id = ModuleId.from_dotted("lib")
+        facade_id = ModuleId.from_path("facade")
+        lib_id = ModuleId.from_path("lib")
         facade_exports = result.modules[facade_id].exports
         assert "foo" in facade_exports
         assert facade_exports["foo"] == (lib_id, "foo")
@@ -1833,14 +1835,14 @@ class TestExportDecl:
         graph = _make_graph_from_files(
             tmp_path,
             {
-                "entry": "import facade\n()",
+                "entry": "open import facade\n()",
                 "facade": "export lib using foo as plus",
                 "lib": "def foo() -> int = 1",
             },
         )
         result = resolve_program(graph)
-        facade_id = ModuleId.from_dotted("facade")
-        lib_id = ModuleId.from_dotted("lib")
+        facade_id = ModuleId.from_path("facade")
+        lib_id = ModuleId.from_path("lib")
         facade_exports = result.modules[facade_id].exports
         assert "plus" in facade_exports
         assert facade_exports["plus"] == (lib_id, "foo")
@@ -1851,14 +1853,14 @@ class TestExportDecl:
         graph = _make_graph_from_files(
             tmp_path,
             {
-                "entry": "import facade\n()",
+                "entry": "open import facade\n()",
                 "facade": "export lib hiding secret",
                 "lib": "def foo() -> int = 1\ndef secret() -> int = 0",
             },
         )
         result = resolve_program(graph)
-        facade_id = ModuleId.from_dotted("facade")
-        lib_id = ModuleId.from_dotted("lib")
+        facade_id = ModuleId.from_path("facade")
+        lib_id = ModuleId.from_path("lib")
         facade_exports = result.modules[facade_id].exports
         assert "foo" in facade_exports
         assert facade_exports["foo"] == (lib_id, "foo")
@@ -1869,13 +1871,13 @@ class TestExportDecl:
         graph = _make_graph_from_files(
             tmp_path,
             {
-                "entry": "import facade\n()",
-                "facade": "import lib\ndef local() -> int = 1",
+                "entry": "open import facade\n()",
+                "facade": "open import lib\ndef local() -> int = 1",
                 "lib": "def foo() -> int = 42",
             },
         )
         result = resolve_program(graph)
-        facade_id = ModuleId.from_dotted("facade")
+        facade_id = ModuleId.from_path("facade")
         facade_exports = result.modules[facade_id].exports
         assert "foo" not in facade_exports
         assert "local" in facade_exports
@@ -1885,15 +1887,15 @@ class TestExportDecl:
         graph = _make_graph_from_files(
             tmp_path,
             {
-                "entry": "import a\nlet x = foo()",
+                "entry": "open import a\nlet x = foo()",
                 "a": "export b",
                 "b": "export c",
                 "c": "def foo() -> int = 99",
             },
         )
         result = resolve_program(graph)
-        a_id = ModuleId.from_dotted("a")
-        c_id = ModuleId.from_dotted("c")
+        a_id = ModuleId.from_path("a")
+        c_id = ModuleId.from_path("c")
         a_exports = result.modules[a_id].exports
         assert a_exports["foo"] == (c_id, "foo")
 
@@ -1902,14 +1904,14 @@ class TestExportDecl:
         graph = _make_graph_from_files(
             tmp_path,
             {
-                "entry": "import facade\n()",
-                "facade": "export lib.*",
-                "lib.ops": "def add() -> int = 1",
+                "entry": "open import facade\n()",
+                "facade": "export lib/*",
+                "lib/ops": "def add() -> int = 1",
             },
         )
         result = resolve_program(graph)
-        facade_id = ModuleId.from_dotted("facade")
-        lib_ops_id = ModuleId.from_dotted("lib.ops")
+        facade_id = ModuleId.from_path("facade")
+        lib_ops_id = ModuleId.from_path("lib/ops")
         facade_exports = result.modules[facade_id].exports
         assert "add" in facade_exports
         assert facade_exports["add"] == (lib_ops_id, "add")
@@ -1919,7 +1921,7 @@ class TestExportDecl:
         graph = _make_graph_from_files(
             tmp_path,
             {
-                "entry": "import facade\n()",
+                "entry": "open import facade\n()",
                 "facade": "export a\nexport b",
                 "a": "def foo() -> int = 1",
                 "b": "def foo() -> int = 2",
@@ -1933,15 +1935,15 @@ class TestExportDecl:
         graph = _make_graph_from_files(
             tmp_path,
             {
-                "entry": "import a\nlet x = foo()",
+                "entry": "open import a\nlet x = foo()",
                 "a": "export b using foo",
                 "b": "export c",
                 "c": "def foo() -> int = 99",
             },
         )
         result = resolve_program(graph)
-        a_id = ModuleId.from_dotted("a")
-        c_id = ModuleId.from_dotted("c")
+        a_id = ModuleId.from_path("a")
+        c_id = ModuleId.from_path("c")
         a_exports = result.modules[a_id].exports
         assert a_exports["foo"] == (c_id, "foo")
 
@@ -1950,7 +1952,7 @@ class TestExportDecl:
         graph = _make_graph_from_files(
             tmp_path,
             {
-                "entry": "import facade\nlet x = foo()\nlet y = facade::foo()",
+                "entry": "open import facade\nlet x = foo()\nlet y = facade::foo()",
                 "facade": "export lib",
                 "lib": "def foo() -> int = 42",
             },
@@ -1958,7 +1960,7 @@ class TestExportDecl:
         result = resolve_program(graph)
         entry = result.modules[ENTRY_ID]
         bare = _find_varref(entry.resolved.program, "foo")
-        lib_id = ModuleId.from_dotted("lib")
+        lib_id = ModuleId.from_path("lib")
         assert bare is not None
         assert entry.resolved.resolution[bare.node_id].module_id == lib_id
         assert (
@@ -1986,7 +1988,7 @@ def test_imported_nullary_variant_defers_duplicate_pattern_binders(
         {
             "library": "enum Flag\n  | mark",
             "entry": (
-                "import library\n"
+                "open import library\n"
                 "enum Packet\n"
                 "  | packet(left: int, right: int)\n"
                 "let item = packet(1, 2)\n"
@@ -2006,9 +2008,9 @@ def test_imported_nullary_variant_defers_duplicate_pattern_binders(
     )
     assert entry.pattern_constructor_candidates[bare.node_id][0].can_match_bare_pattern
     slot = next(iter(entry.pattern_slots.values()))
-    assert tuple(
-        candidate.can_match_bare_pattern for candidate in slot.candidates
-    ) == candidate_facts
+    assert (
+        tuple(candidate.can_match_bare_pattern for candidate in slot.candidates) == candidate_facts
+    )
 
 
 def test_bare_pattern_constructor_shared_spelling_defers_to_scrutinee(tmp_path: Path) -> None:
@@ -2021,7 +2023,7 @@ def test_bare_pattern_constructor_shared_spelling_defers_to_scrutinee(tmp_path: 
         {
             "foreign": "enum Foreign\n  | same",
             "entry": (
-                "import foreign\n"
+                "open import foreign\n"
                 "enum Local\n  | same\n"
                 "let value: Local = Local::same\n"
                 "case value of | same => 1"

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import decimal
 import weakref
+from collections.abc import Mapping
 from dataclasses import replace
 from typing import Never, NoReturn, assert_never
 
@@ -400,14 +401,14 @@ def normalize_case(
     checked: CheckedPatternOwner,
     *,
     enum_owner_forms: tuple[EnumOwnerForm, ...] | None = None,
+    blocked_enum_variants: Mapping[tuple[str, ...], frozenset[str]] | None = None,
     bare_enum_constructors: frozenset[tuple[ModuleId, str, str]] | None = None,
 ) -> NormalizedCase:
     """Normalize one checked source case into a source-priority one-column matrix.
 
-    *enum_owner_forms* and *bare_enum_constructors* let a caller normalizing every
-    case of one checked owner enumerate that owner's writable enum spellings and
-    visible bare constructor forms once instead of once per case; both default to
-    resolving them from *checked*.
+    The optional context values let a whole-owner caller share checked
+    qualification metadata across all of its cases. Each defaults to resolving
+    from *checked* for direct callers.
     """
     try:
         subject_type = checked.node_types[case.subject.node_id]
@@ -451,6 +452,11 @@ def normalize_case(
     owner_forms = (
         checked.type_env.enum_owner_forms() if enum_owner_forms is None else enum_owner_forms
     )
+    blocked_variants = (
+        checked.type_env.blocked_enum_variants()
+        if blocked_enum_variants is None
+        else blocked_enum_variants
+    )
     bare_constructors = (
         resolve_bare_enum_constructors(checked)
         if bare_enum_constructors is None
@@ -459,6 +465,7 @@ def normalize_case(
     case_context = MatchCaseContext(
         module_id=module_id,
         enum_owner_forms=owner_forms,
+        blocked_enum_variants=blocked_variants,
         bare_enum_constructors=bare_constructors,
         owner_program=checked.resolved.program,
     )

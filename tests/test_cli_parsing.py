@@ -2242,6 +2242,22 @@ class TestExecEngineFlagExclusivity:
         assert "mutually exclusive" in result.output
 
 
+class TestReplStdlibOption:
+    def test_no_stdlib_passed_to_repl_args(
+        self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import agm.commands.repl as repl_mod
+
+        calls: list[object] = []
+        monkeypatch.setattr(repl_mod, "run", lambda a: calls.append(a))
+
+        result = invoke(runner, ["repl", "--no-stdlib"])
+
+        assert result.exit_code == 0, result.output
+        assert len(calls) == 1
+        assert getattr(calls[0], "no_stdlib") is True
+
+
 class TestMaxCallDepthOption:
     """Parser-contract tests for the --max-call-depth option on exec/repl."""
 

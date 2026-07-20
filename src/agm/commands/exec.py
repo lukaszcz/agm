@@ -29,9 +29,13 @@ Flag notes:
       true`` in config also enables logging; CLI flags override config.
     - ``--runner COMMAND`` overrides the default agent runner command from config.
       When set, it is used as the default runner for all unnamed agents.
+    - Every loaded entry and library module opens ``std/core`` by default
+      (except ``std/core`` itself). ``--no-stdlib`` disables that automatic
+      opening throughout the loaded program. Ordinary imports are qualified by
+      default; ``open import`` and ``using`` make selected names bare.
     - A program reads and writes the engine settings (``strict-json``,
       ``max-iters``, ``runner``, ``timeout``, ``log``, ``log-file``) through the
-      ``std.config`` module; a ``std.config::KEY := VALUE`` write takes effect
+      ``std/config`` module; a ``std/config::KEY := VALUE`` write takes effect
       from its program point onward and overrides the CLI flag, which overrides
       the config-file layer.  ``--max-call-depth`` remains a host/runtime
       recursion guard.
@@ -147,7 +151,7 @@ def run(args: ExecArgs) -> None:
 
     # ----------------------------------------------------------------
     # Assemble module roots and load + scope the graph ONCE.  A source
-    # ``std.config::KEY := VALUE`` write takes effect at its program point and
+    # ``std/config::KEY := VALUE`` write takes effect at its program point and
     # overrides the CLI flag, which overrides the config-file layer.
     # ----------------------------------------------------------------
     try:
@@ -226,7 +230,7 @@ def run(args: ExecArgs) -> None:
 
     base_runner_cmd = config.runner or default_agent_runner(merged=merged_config)
 
-    # Resolve strict_json: CLI > config. A source ``std.config::strict-json :=
+    # Resolve strict_json: CLI > config. A source ``std/config::strict-json :=
     # VALUE`` write is applied at runtime when it updates the live setting.
     strict_json = _first(args.strict_json, config.strict_json)
     # config.strict_json is always a bool, so _first always returns a bool here.
@@ -241,12 +245,12 @@ def run(args: ExecArgs) -> None:
     )
 
     # Resolve loop limit (max-iters valve): CLI > config. ``None`` leaves the
-    # valve off. A source ``std.config::max-iters := VALUE`` write is applied
+    # valve off. A source ``std/config::max-iters := VALUE`` write is applied
     # at runtime from its program point, overriding this initial value.
     check_max_iters(args.max_iters)
     resolved_loop_limit = _first(args.max_iters, config.default_loop_limit)
 
-    # Resolve timeout: CLI > [exec] config. A source ``std.config::timeout :=
+    # Resolve timeout: CLI > [exec] config. A source ``std/config::timeout :=
     # VALUE`` write is applied at runtime from its program point.
     # ``--timeout VALUE`` overrides the config; ``--no-timeout`` clears it (None).
     if args.timeout is not None:
@@ -274,7 +278,7 @@ def run(args: ExecArgs) -> None:
     # name; it dispatches by ``request.agent`` against ``per_agent_cmds``,
     # falling back to the default runner (the floor).  The agent idle-timeout is
     # start-resolved from CLI > [exec] config > engine default and fixed for the
-    # lifetime of this factory.  A source ``std.config::timeout := e`` write
+    # lifetime of this factory.  A source ``std/config::timeout := e`` write
     # updates ONLY the live shell-exec timeout from its program point onward.
     # The runner command resolves CLI flag > [exec] config > shared loop default
     # (the same default used by agm loop/review).
@@ -375,7 +379,7 @@ def run(args: ExecArgs) -> None:
 
     # Resolve + validate the trace log file up front.  --dry-run is
     # side-effect-free: no trace is written regardless of --log-file.  A source
-    # ``std.config::log``/``log-file`` write takes effect at runtime via the host
+    # ``std/config::log``/``log-file`` write takes effect at runtime via the host
     # reconfigurer, not here.
     if dry_run.enabled():
         log_file = None
@@ -384,7 +388,7 @@ def run(args: ExecArgs) -> None:
 
     # Host policy for reflecting host-consumed ``builtin var`` writes
     # (``runner``, ``log``, ``log-file``) into the live services during the run.
-    # A source ``std.config::runner := ...`` rebuilds the default agent from the
+    # A source ``std/config::runner := ...`` rebuilds the default agent from the
     # new command (source-authoritative); ``log``/``log-file`` writes repoint the
     # trace store.  The mid-run trace repoint must NOT truncate an existing file
     # and must reuse the trace path already prepared for this run rather than

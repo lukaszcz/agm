@@ -98,23 +98,25 @@ reserved for standard-library declarations that are implemented by the host.
 `extern` is reserved for declarations implemented by a companion Python file
 (see [Python FFI](ffi.md)).
 
-**Module system soft keywords** — `import`, `private`, `qualified`, `using`,
-and `hiding` are **not reserved**. They remain valid identifiers in all
+**Module system soft keywords** — `open`, `import`, `export`, `private`,
+`using`, and `hiding` are **not reserved**. They remain valid identifiers in all
 positions except:
 
 | Keyword | Promoted to | Window |
 |---------|-------------|--------|
-| `import` | `IMPORT` | At item-start (after newline, indent, dedent, `;`, or stream start) |
+| `open` | `OPEN` | At item-start, directly before `import` |
+| `import` | `IMPORT` | At item-start, or directly after `open` |
+| `export` | `EXPORT` | At item-start |
 | `private` | `PRIVATE` | At item-start |
-| `qualified` | `QUALIFIED` | Within an import line (after `import` keyword, before the next newline or `;`) |
-| `using` | `USING` | Within an import line |
-| `hiding` | `HIDING` | Within an import line |
+| `using` | `USING` | Within an import or export declaration |
+| `hiding` | `HIDING` | Within an import or export declaration |
 
 Examples where they remain plain identifiers:
 
 ```agl
 let import = 1          # 'import' not at item-start → VAR_NAME
-let using = "hello"     # 'using' not in import line → VAR_NAME
+let export = "hello"    # 'export' not at item-start → VAR_NAME
+let using = "hello"     # 'using' not in an import/export declaration → VAR_NAME
 def private() -> text = "x"  # 'private' not at item-start → VAR_NAME
 ```
 
@@ -124,16 +126,35 @@ def private() -> text = "x"  # 'private' not at item-start → VAR_NAME
 and type position:
 
 ```agl
-foo.bar::thing       # module foo.bar, name thing
-::name               # current module, name name (self-reference)
-A.baz::y             # alias-rooted qualifier, name y
-foo.bar::Color::Red   # module foo.bar, enum Color, variant Red
+foo/bar::thing        # suffix qualifier, name thing
+/foo/bar::thing       # anchored qualifier, name thing
+::name                # current module, name name (self-reference)
+foo/bar::Color::Red   # module qualifier, enum Color, variant Red
 ```
 
-A qualifier is a dotted module path followed by `::` immediately before the
-name it qualifies. Module path segments are dot-separated lowercase names.
-A leading `::` with no preceding path is the **self-reference** form — it
-refers to the current module.
+A qualifier is an optional leading `/`, followed by a slash-separated module
+path and `::` immediately after its final segment. **Every** module qualifier,
+including a single-segment form such as `config::key`, is byte-adjacent through
+`::`: `foo/bar::thing` is a qualifier, while `foo / bar::thing` is division
+followed by a separate qualifier. A leading `/` anchors resolution to the
+complete module path. A leading `::` with no preceding path is the
+**self-reference** form — it refers to the current module.
+
+`/` is the division operator only when written with whitespace on **both**
+sides. This matches `+`, `-` and `*`, which are identifier characters and so
+already need surrounding space to read as operators (`a+b` is one name). Left
+unspaced, `/` separates path segments, so a `/` that touches an operand on
+exactly one side is rejected:
+
+```agl
+let q = a / b        # division
+let r = a/b::thing   # qualifier
+let s = a/ b         # error: reads as a path, but the segments are split
+let t = a /b         # error: same
+```
+
+The positional-parameter marker `/` ([Functions](functions.md)) touches no
+operand and is unaffected.
 
 The type-argument form `callee::[T]` and typed-call form `callee::[T](args)`
 (e.g. `ask-request::[Review](…)`) are distinct constructs — they are NOT module
@@ -286,9 +307,9 @@ separates a branch condition or pattern from its body.
 [Module qualifiers](#module-qualifiers) above) and as the **type-argument
 introducer** `callee::[Type]` / `callee::[Type](args)`. It is
 a maximal-munch token distinct from two `:` delimiters. The two uses are
-disambiguated by context: a `::` immediately preceded by a name or dotted path
-is the qualifier form; a `::` following a `NAME` and immediately followed
-by `[` is the type-argument form.
+disambiguated by context: a `::` immediately preceded by a tightly written
+name or slash path is the qualifier form; a `::` following a `NAME` and
+immediately followed by `[` is the type-argument form.
 
 `==` is the **equality operator** (with `!=` for inequality). A single `=` is
 never a comparison: it separates a binder or named argument from its value

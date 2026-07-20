@@ -47,6 +47,14 @@ from typing import TYPE_CHECKING
 
 from agm.agl.diagnostics import Diagnostic
 from agm.agl.modules.ids import ENTRY_ID, PRELUDE_ID, STD_CONFIG_ID, ModuleId
+from agm.agl.scope.imports import (
+    QualResolutionFound,
+    qualification_repair_guidance,
+    qualifier_contributes,
+    render_qualifier,
+    resolve_qualified,
+    resolve_qualified_member,
+)
 from agm.agl.scope.symbols import (
     BUILTIN_CALL_NAMES,
     AglScopeError,
@@ -69,6 +77,7 @@ from agm.agl.semantics.types import (
     COMPATIBILITY_PRELUDE_TYPE_NAMES,
     EnumType,
 )
+from agm.agl.syntax.advisories import SpacedQualifier
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -135,7 +144,7 @@ from agm.agl.syntax.nodes import (
     assign_target_root_name,
 )
 from agm.agl.syntax.spans import SourceSpan
-from agm.agl.syntax.types import AppliedT, NameT
+from agm.agl.syntax.types import AppliedT, NameT, Qualifier
 
 # ---------------------------------------------------------------------------
 # Built-in names and reserved-name enforcement
@@ -176,6 +185,7 @@ class _Resolver:
         is_entry: bool = True,
         repl_session_scope: ScopeNode | None = None,
         origin_path: Path | None = None,
+        spaced_qualifiers: tuple[SpacedQualifier, ...] = (),
     ) -> None:
         # Program parameters (None = module mode).
         self._module_id: ModuleId = module_id
@@ -199,6 +209,13 @@ class _Resolver:
         # backing file (inline `-c` sources, direct REPL entries). Drives the
         # `extern def` placement check — externs require a file-backed module.
         self._origin_path: Path | None = origin_path
+        # Spaced-qualifier advisories from this module's lex pass, keyed by the
+        # offset of the ``::`` that whitespace kept out of a qualifier.  A
+        # self-qualified reference that fails to resolve consults them to
+        # explain the mis-parse (see ``_spaced_qualifier_repair``).
+        self._spaced_qualifiers: dict[int, SpacedQualifier] = {
+            advisory.dcolon_offset: advisory for advisory in spaced_qualifiers
+        }
 
         self._resolution: dict[int, BindingRef] = {}
         self._builtin_calls: dict[int, BuiltinKind] = {}
@@ -733,7 +750,7 @@ class _Resolver:
     def _resolve_builtin_var(self, node: BuiltinVarDecl) -> None:
         """Resolve a standard-library engine setting into a mutable register binding.
 
-        ``builtin var`` is reserved to the canonical ``std.config`` module.
+        ``builtin var`` is reserved to the canonical ``std/config`` module.
         The typecheck pass then validates that the name is a known engine key
         with its canonical type.
         """
@@ -746,7 +763,7 @@ class _Resolver:
         if self._module_id != STD_CONFIG_ID:
             raise AglScopeError(
                 "'builtin var' declarations are only allowed in the standard-library "
-                "module 'std.config'.",
+                "module 'std/config'.",
                 span=node.span,
             )
         ref = BindingRef(
@@ -1112,14 +1129,14 @@ class _Resolver:
         cross-module binding is rejected as immutable.
         """
         assert target.module_qualifier is not None
-        segments = target.module_qualifier.segments
-        if self._import_env is None or segments == ():
+        qualifier = target.module_qualifier
+        if self._import_env is None or qualifier.segments == ():
             raise AglScopeError(
                 f"'{target.name}' is not declared; assignment requires an existing "
                 f"mutable binding.",
                 span=node.span,
             )
-        ref = self._lookup_qualified_binding(segments, target.name, node.span)
+        ref = self._lookup_qualified_binding(qualifier, target.name, node.span)
         if not ref.mutable:
             raise AglScopeError(
                 f"Cannot assign to '{target.name}': "
@@ -1294,7 +1311,7 @@ class _Resolver:
                 self._resolve_varref_qualified(node)
                 return
             if node.module_qualifier.segments != ():
-                qualifier_str = ".".join(node.module_qualifier.segments)
+                qualifier_str = node.module_qualifier.render()
                 raise AglScopeError(
                     f"No module imported under qualifier '{qualifier_str}' or type named "
                     f"'{qualifier_str}'.",
@@ -1308,7 +1325,9 @@ class _Resolver:
             if self._import_env is not None:
                 ref = self._lookup_import_env_unqualified(node.name, node.span)
             if ref is None:
-                raise AglScopeError(
+                raise self._spaced_qualifier_repair(
+                    self._spaced_qualifier_around(node.span), node.span
+                ) or AglScopeError(
                     f"'{node.name}' is not defined.",
                     span=node.span,
                 )
@@ -1344,7 +1363,10 @@ class _Resolver:
             return
         if node.module_qualifier.segments == ():
             if type_name not in self._declared_type_names:
-                raise AglScopeError(
+                raise self._spaced_qualifier_repair(
+                    self._spaced_qualifier_at(node.module_qualifier.span),
+                    node.module_qualifier.span,
+                ) or AglScopeError(
                     f"'{type_name}' is not defined in this module.",
                     span=node.type_qualifier.span,
                 )
@@ -1352,13 +1374,13 @@ class _Resolver:
             self._qualified_constructor_refs[node.node_id] = (type_name, node.name, owner_module)
             return
         if self._import_env is None:
-            qualifier_str = ".".join(node.module_qualifier.segments)
+            qualifier_str = node.module_qualifier.render()
             raise AglScopeError(
                 f"No module imported under qualifier '{qualifier_str}'.",
                 span=node.module_qualifier.span,
             )
         src_name, owning_module = self._resolve_qualified_type_name(
-            node.module_qualifier.segments, type_name, node.type_qualifier.span
+            node.module_qualifier, type_name, node.type_qualifier.span
         )
         self._qualified_constructor_refs[node.node_id] = (src_name, node.name, owning_module)
 
@@ -1366,17 +1388,20 @@ class _Resolver:
         """Resolve ``Type::Ctor`` when the qualifier denotes a type name."""
         assert node.module_qualifier is not None
         segments = node.module_qualifier.segments
-        if len(segments) != 1:
+        if node.module_qualifier.anchored or len(segments) != 1:
             return False
         type_name = segments[0]
         type_match = type_name in self._declared_type_names
-        handle_match = (
-            self._import_env is not None and self._import_env.qualified.get(segments) is not None
-        )
-        if type_match and handle_match:
+        module_match = False
+        if self._import_env is not None:
+            # The test is intentionally asymmetric: a type name is a candidate
+            # on its own, but an import route is a candidate only when it
+            # actually contributes the requested constructor/variant member.
+            module_match = qualifier_contributes(self._import_env, segments, node.name)
+        if type_match and module_match:
             raise AglScopeError(
-                f"Qualifier '{type_name}' is both a type name and an import handle; "
-                "rename the import alias to disambiguate.",
+                f"Qualifier '{type_name}' is both a type name and a module route for "
+                f"'{node.name}'. {qualification_repair_guidance()}",
                 span=node.module_qualifier.span,
             )
         if not type_match:
@@ -1385,37 +1410,18 @@ class _Resolver:
         return True
 
     def _resolve_qualified_type_name(
-        self, handle: tuple[str, ...], type_name: str, span: SourceSpan
+        self, qualifier: Qualifier, type_name: str, span: SourceSpan
     ) -> tuple[str, ModuleId]:
-        """Resolve ``handle::type_name`` as a constructible type owner."""
-        assert self._import_env is not None
-        qual_map = self._import_env.qualified.get(handle)
-        qualifier_str = ".".join(handle)
-        if qual_map is None:
-            raise AglScopeError(
-                f"No module imported under qualifier '{qualifier_str}'.",
-                span=span,
-            )
-        qname = qual_map.get(type_name)
-        if qname is None:
-            owning_module: ModuleId = next(iter(qual_map.values()))[0]
-            if self._private_info.get((owning_module, type_name)):
-                raise AglScopeError(
-                    f"'{type_name}' in module '{owning_module.dotted()}' is declared private "
-                    f"and cannot be accessed from outside the module.",
-                    span=span,
-                )
-            raise AglScopeError(
-                f"'{type_name}' is not in the imported set of '{qualifier_str}'.",
-                span=span,
-            )
-        owning_module, src_name = qname[0], qname[1]
+        """Resolve ``qualifier::type_name`` as a constructible type owner."""
+        qname = self._resolve_qualified_qname(qualifier, type_name, span)
+        owning_module, src_name = qname
         _decl_node_id, _decl_span, kind = self._decl_info.get(
             (owning_module, src_name), (-1, span, BinderKind.let_binding)
         )
         if kind is not BinderKind.constructor_binding:
+            rendered = qualifier.render()
             raise AglScopeError(
-                f"'{qualifier_str}::{type_name}' is not a constructible type.",
+                f"'{rendered}::{type_name}' is not a constructible type.",
                 span=span,
             )
         return (src_name, owning_module)
@@ -1435,7 +1441,7 @@ class _Resolver:
             return None
         if len(qnames) > 1:
             # Clash-on-use: more than one module exposes this name.
-            qualifiers = sorted(qn[0].dotted() + "::" + qn[1] for qn in qnames)
+            qualifiers = sorted(qn[0].path_str() + "::" + qn[1] for qn in qnames)
             hint = ", ".join(qualifiers)
             raise AglScopeError(
                 f"'{name}' is ambiguous: imported from multiple modules. "
@@ -1455,7 +1461,10 @@ class _Resolver:
             # Self-reference: ::name — look up in own root scope.
             ref = self._lookup_own_root(node.name)
             if ref is None:
-                raise AglScopeError(
+                raise self._spaced_qualifier_repair(
+                    self._spaced_qualifier_at(node.module_qualifier.span),
+                    node.module_qualifier.span,
+                ) or AglScopeError(
                     f"'{node.name}' is not defined in this module.",
                     span=node.span,
                 )
@@ -1463,46 +1472,39 @@ class _Resolver:
             return
 
         # Qualified access: MODQUAL::name
-        ref = self._lookup_qualified_binding(node.module_qualifier.segments, node.name, node.span)
+        ref = self._lookup_qualified_binding(node.module_qualifier, node.name, node.span)
         self._resolution[node.node_id] = ref
 
     def _lookup_qualified_binding(
-        self, handle: tuple[str, ...], name: str, span: SourceSpan
+        self, qualifier: Qualifier, name: str, span: SourceSpan
     ) -> BindingRef:
-        """Resolve a ``MODQUAL::name`` reference to its cross-module ``BindingRef``.
-
-        Shared by qualified value references (:meth:`_resolve_varref_qualified`)
-        and qualified assignment targets (:meth:`_resolve_assign`).
-        """
-        assert self._import_env is not None
-        qual_map = self._import_env.qualified.get(handle)
-        if qual_map is None:
-            qualifier_str = ".".join(handle)
-            raise AglScopeError(
-                f"No module imported under qualifier '{qualifier_str}'.",
-                span=span,
-            )
-        qname = qual_map.get(name)
-        if qname is None:
-            qualifier_str = ".".join(handle)
-            # Determine the owning module for this handle: take any entry from the
-            # qual_map (all entries for this handle belong to at most one source module
-            # Wildcard handles may cover multiple modules, but each name maps
-            # to exactly one QName).  A non-None qual_map always has at least one entry
-            # because handles are only registered when names are added to them.
-            owning_module: ModuleId = next(iter(qual_map.values()))[0]
-            # Check if the name is private in the OWNING module (gives better error).
-            if self._private_info.get((owning_module, name)):
-                raise AglScopeError(
-                    f"'{name}' in module '{owning_module.dotted()}' is declared private "
-                    f"and cannot be accessed from outside the module.",
-                    span=span,
-                )
-            raise AglScopeError(
-                f"'{name}' is not in the imported set of '{qualifier_str}'.",
-                span=span,
-            )
+        """Resolve a qualified value or assignment target through the shared resolver."""
+        qname = self._resolve_qualified_qname(qualifier, name, span)
         return self._make_cross_module_ref(qname[0], name, qname[1], span)
+
+    def _resolve_qualified_qname(
+        self, qualifier: Qualifier, name: str, span: SourceSpan
+    ) -> tuple[ModuleId, str]:
+        """Resolve one contributed member and translate its shared verdict to scope errors."""
+        assert self._import_env is not None
+        return resolve_qualified_member(
+            self._import_env,
+            qualifier,
+            name,
+            self._private_info,
+            unknown_qualifier=lambda rendered: AglScopeError(
+                f"No module imported under qualifier '{rendered}'.", span=span
+            ),
+            private_member=lambda module: AglScopeError(
+                f"'{name}' in module '{module.path_str()}' is declared private and cannot be "
+                "accessed from outside the module.",
+                span=span,
+            ),
+            missing_member=lambda rendered: AglScopeError(
+                f"'{name}' is not in the imported set of '{rendered}'.", span=span
+            ),
+            ambiguous=lambda message: AglScopeError(message, span=span),
+        )
 
     def _lookup_own_root(self, name: str) -> BindingRef | None:
         """Look up *name* in the module's own root scope bindings only.
@@ -1558,6 +1560,52 @@ class _Resolver:
             kind=kind,
             module_id=owning_module,
         )
+
+    def _spaced_qualifier_repair(
+        self, advisory: SpacedQualifier | None, failure_span: SourceSpan
+    ) -> AglScopeError | None:
+        """Explain a reference that whitespace split from its module qualifier.
+
+        A run such as ``app/config ::x`` never becomes a qualifier — the lexer
+        requires byte adjacency — so it parses as an unrelated expression whose
+        parts then fail to resolve on their own.  The lexer recorded the run it
+        saw; the repair is offered only when that run actually contributes the
+        intended member (and, for ``Type::Ctor``, only when the member names a
+        constructible type).
+        """
+        if advisory is None or self._import_env is None:
+            return None
+        result = resolve_qualified(
+            self._import_env, advisory.segments, advisory.member, anchored=advisory.anchored
+        )
+        if not isinstance(result, QualResolutionFound):
+            return None
+        if advisory.type_qualified:
+            _node_id, _span, kind = self._decl_info.get(
+                result.qname, (-1, advisory.dcolon_span, BinderKind.let_binding)
+            )
+            if kind is not BinderKind.constructor_binding:
+                return None
+        rendered = render_qualifier(advisory.segments, anchored=advisory.anchored)
+        return AglScopeError(
+            f"Whitespace before '::{advisory.member_text}' makes this a call with a "
+            f"self-reference, not a module qualifier. "
+            f"Write '{rendered}::{advisory.member_text}' without whitespace.",
+            # The lexer knows the offsets but not which module it scanned; the
+            # failing reference supplies the source identity.
+            span=replace(advisory.dcolon_span, source=failure_span.source),
+        )
+
+    def _spaced_qualifier_at(self, span: SourceSpan) -> SpacedQualifier | None:
+        """Return the advisory for a self-qualified reference whose ``::`` is at *span*."""
+        return self._spaced_qualifiers.get(span.start_offset)
+
+    def _spaced_qualifier_around(self, span: SourceSpan) -> SpacedQualifier | None:
+        """Return the advisory whose broken qualifier run contains *span*."""
+        for advisory in self._spaced_qualifiers.values():
+            if advisory.covers(span.start_offset):
+                return advisory
+        return None
 
     def _resolve_call(self, node: Call) -> None:
         """Resolve a ``Call`` node.
@@ -1868,8 +1916,10 @@ class _Resolver:
                 ),
             )
         slot = self._pattern_slots[slot_id]
-        if slot.candidates and not can_match_bare_pattern and not any(
-            candidate.can_match_bare_pattern for candidate in slot.candidates
+        if (
+            slot.candidates
+            and not can_match_bare_pattern
+            and not any(candidate.can_match_bare_pattern for candidate in slot.candidates)
         ):
             raise AglScopeError(duplicate_binder_message(name), span=span)
         self._pattern_slots[slot_id] = replace(

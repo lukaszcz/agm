@@ -22,9 +22,9 @@ def _roots(*paths: Path) -> RootSet:
     return RootSet(roots=frozenset(paths))
 
 
-def _make_module(root: Path, dotted: str) -> Path:
-    """Write an empty .agl file for the given module under root."""
-    mid = ModuleId.from_dotted(dotted)
+def _make_module(root: Path, module_path: str) -> Path:
+    """Write an empty .agl file for the given module path under root."""
+    mid = ModuleId.from_path(module_path)
     path = root / mid.relpath().replace("/", os.sep)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("")
@@ -40,8 +40,8 @@ class TestResolveModuleFound:
     def test_single_root_finds_module(self, tmp_path: Path) -> None:
         root = tmp_path / "lib"
         root.mkdir()
-        expected = _make_module(root, "foo.bar")
-        result = resolve_module(ModuleId.from_dotted("foo.bar"), _roots(root))
+        expected = _make_module(root, "foo/bar")
+        result = resolve_module(ModuleId.from_path("foo/bar"), _roots(root))
         assert result == expected.resolve()
 
     def test_returns_canonical_path(self, tmp_path: Path) -> None:
@@ -51,7 +51,7 @@ class TestResolveModuleFound:
         # Access through a symlinked root
         link = tmp_path / "link"
         link.symlink_to(root)
-        result = resolve_module(ModuleId.from_dotted("mymod"), _roots(link))
+        result = resolve_module(ModuleId.from_path("mymod"), _roots(link))
         assert result == (root / "mymod.agl").resolve()
 
     def test_finds_module_in_one_of_multiple_roots(self, tmp_path: Path) -> None:
@@ -59,8 +59,8 @@ class TestResolveModuleFound:
         root_b = tmp_path / "b"
         root_a.mkdir()
         root_b.mkdir()
-        _make_module(root_b, "util.helper")
-        result = resolve_module(ModuleId.from_dotted("util.helper"), _roots(root_a, root_b))
+        _make_module(root_b, "util/helper")
+        result = resolve_module(ModuleId.from_path("util/helper"), _roots(root_a, root_b))
         assert result == (root_b / "util" / "helper.agl").resolve()
 
     def test_same_file_via_two_roots_counts_once(self, tmp_path: Path) -> None:
@@ -72,7 +72,7 @@ class TestResolveModuleFound:
         link = tmp_path / "link"
         link.symlink_to(root)
         # Both roots resolve to the same canonical file → exactly one → ok
-        result = resolve_module(ModuleId.from_dotted("foo"), _roots(root, link))
+        result = resolve_module(ModuleId.from_path("foo"), _roots(root, link))
         assert result == (root / "foo.agl").resolve()
 
     def test_nested_root_same_file_counts_once(self, tmp_path: Path) -> None:
@@ -89,7 +89,7 @@ class TestResolveModuleFound:
         root1 = inner
         link = tmp_path / "link"
         link.symlink_to(inner)
-        result = resolve_module(ModuleId.from_dotted("mod"), _roots(root1, link))
+        result = resolve_module(ModuleId.from_path("mod"), _roots(root1, link))
         assert result == mod_file.resolve()
 
 
@@ -98,7 +98,7 @@ class TestResolveModuleNotFound:
         root = tmp_path / "lib"
         root.mkdir()
         with pytest.raises(ModuleNotFound):
-            resolve_module(ModuleId.from_dotted("missing"), _roots(root))
+            resolve_module(ModuleId.from_path("missing"), _roots(root))
 
     def test_not_found_message_lists_roots(self, tmp_path: Path) -> None:
         root_a = tmp_path / "a"
@@ -106,7 +106,7 @@ class TestResolveModuleNotFound:
         root_a.mkdir()
         root_b.mkdir()
         try:
-            resolve_module(ModuleId.from_dotted("absent"), _roots(root_a, root_b))
+            resolve_module(ModuleId.from_path("absent"), _roots(root_a, root_b))
         except ModuleNotFound as exc:
             msg = str(exc)
             # Both roots should be listed in the error
@@ -119,7 +119,7 @@ class TestResolveModuleNotFound:
         root.mkdir()
         roots = _roots(root)
         try:
-            resolve_module(ModuleId.from_dotted("gone"), roots)
+            resolve_module(ModuleId.from_path("gone"), roots)
         except ModuleNotFound as exc:
             assert exc.searched_roots == roots.sorted_roots()
         else:
@@ -128,7 +128,7 @@ class TestResolveModuleNotFound:
     def test_empty_roots_raises_module_not_found(self, tmp_path: Path) -> None:
         empty_roots = RootSet(roots=frozenset())
         with pytest.raises(ModuleNotFound):
-            resolve_module(ModuleId.from_dotted("foo"), empty_roots)
+            resolve_module(ModuleId.from_path("foo"), empty_roots)
 
 
 class TestResolveModuleAmbiguous:
@@ -137,10 +137,10 @@ class TestResolveModuleAmbiguous:
         root_b = tmp_path / "b"
         root_a.mkdir()
         root_b.mkdir()
-        _make_module(root_a, "shared.util")
-        _make_module(root_b, "shared.util")
+        _make_module(root_a, "shared/util")
+        _make_module(root_b, "shared/util")
         with pytest.raises(AmbiguousModule):
-            resolve_module(ModuleId.from_dotted("shared.util"), _roots(root_a, root_b))
+            resolve_module(ModuleId.from_path("shared/util"), _roots(root_a, root_b))
 
     def test_ambiguous_error_lists_candidates(self, tmp_path: Path) -> None:
         root_a = tmp_path / "a"
@@ -150,7 +150,7 @@ class TestResolveModuleAmbiguous:
         _make_module(root_a, "dup")
         _make_module(root_b, "dup")
         try:
-            resolve_module(ModuleId.from_dotted("dup"), _roots(root_a, root_b))
+            resolve_module(ModuleId.from_path("dup"), _roots(root_a, root_b))
         except AmbiguousModule as exc:
             assert len(exc.candidates) >= 2
         else:
@@ -165,9 +165,9 @@ class TestResolveModuleDeterminism:
         root_a.mkdir()
         root_b.mkdir()
         # Only one root has the module → no ambiguity regardless of ordering
-        _make_module(root_b, "lib.core")
-        res1 = resolve_module(ModuleId.from_dotted("lib.core"), _roots(root_a, root_b))
-        res2 = resolve_module(ModuleId.from_dotted("lib.core"), _roots(root_b, root_a))
+        _make_module(root_b, "lib/core")
+        res1 = resolve_module(ModuleId.from_path("lib/core"), _roots(root_a, root_b))
+        res2 = resolve_module(ModuleId.from_path("lib/core"), _roots(root_b, root_a))
         assert res1 == res2
 
     def test_expand_wildcard_result_independent_of_filesystem_discovery_order(
@@ -185,25 +185,25 @@ class TestResolveModuleDeterminism:
         # Layout 1: single root, modules created in alphabetical order.
         root1 = tmp_path / "layout1"
         root1.mkdir()
-        _make_module(root1, "pkg.alpha")
-        _make_module(root1, "pkg.beta")
-        _make_module(root1, "pkg.gamma")
+        _make_module(root1, "pkg/alpha")
+        _make_module(root1, "pkg/beta")
+        _make_module(root1, "pkg/gamma")
 
         # Layout 2: single root, modules created in reverse-alphabetical order.
         root2 = tmp_path / "layout2"
         root2.mkdir()
-        _make_module(root2, "pkg.gamma")
-        _make_module(root2, "pkg.beta")
-        _make_module(root2, "pkg.alpha")
+        _make_module(root2, "pkg/gamma")
+        _make_module(root2, "pkg/beta")
+        _make_module(root2, "pkg/alpha")
 
         # Layout 3: two roots, modules split across them in mixed order.
         root3a = tmp_path / "layout3a"
         root3b = tmp_path / "layout3b"
         root3a.mkdir()
         root3b.mkdir()
-        _make_module(root3b, "pkg.gamma")
-        _make_module(root3a, "pkg.alpha")
-        _make_module(root3b, "pkg.beta")
+        _make_module(root3b, "pkg/gamma")
+        _make_module(root3a, "pkg/alpha")
+        _make_module(root3b, "pkg/beta")
 
         result1 = expand_wildcard(("pkg",), _roots(root1))
         result2 = expand_wildcard(("pkg",), _roots(root2))
@@ -229,63 +229,64 @@ class TestExpandWildcard:
     def test_single_root_single_file(self, tmp_path: Path) -> None:
         root = tmp_path / "lib"
         root.mkdir()
-        _make_module(root, "foo.bar")
+        _make_module(root, "foo/bar")
         result = expand_wildcard(("foo",), _roots(root))
-        assert ModuleId.from_dotted("foo.bar") in result
+        assert ModuleId.from_path("foo/bar") in result
 
     def test_glob_matches_direct_file_and_subtree(self, tmp_path: Path) -> None:
-        """foo.* should match foo.agl (if present) AND foo/**/*.agl."""
+        """foo/* should match foo.agl (if present) AND foo/**/*.agl."""
         root = tmp_path / "lib"
         root.mkdir()
-        _make_module(root, "ns.direct")
-        _make_module(root, "ns.sub.deep")
+        _make_module(root, "ns/direct")
+        _make_module(root, "ns/sub/deep")
         result = expand_wildcard(("ns",), _roots(root))
-        assert ModuleId.from_dotted("ns.direct") in result
-        assert ModuleId.from_dotted("ns.sub.deep") in result
+        assert ModuleId.from_path("ns/direct") in result
+        assert ModuleId.from_path("ns/sub/deep") in result
 
     def test_prefix_file_itself_included(self, tmp_path: Path) -> None:
         """glob pattern <root>/<prefix>.agl includes the prefix module itself."""
         root = tmp_path / "lib"
         root.mkdir()
         _make_module(root, "mylib")
-        _make_module(root, "mylib.util")
+        _make_module(root, "mylib/util")
         result = expand_wildcard(("mylib",), _roots(root))
-        assert ModuleId.from_dotted("mylib") in result
-        assert ModuleId.from_dotted("mylib.util") in result
+        assert ModuleId.from_path("mylib") in result
+        assert ModuleId.from_path("mylib/util") in result
 
     def test_wildcard_spans_multiple_roots(self, tmp_path: Path) -> None:
         root_a = tmp_path / "a"
         root_b = tmp_path / "b"
         root_a.mkdir()
         root_b.mkdir()
-        _make_module(root_a, "pkg.x")
-        _make_module(root_b, "pkg.y")
+        _make_module(root_a, "pkg/x")
+        _make_module(root_b, "pkg/y")
         result = expand_wildcard(("pkg",), _roots(root_a, root_b))
-        assert ModuleId.from_dotted("pkg.x") in result
-        assert ModuleId.from_dotted("pkg.y") in result
+        assert ModuleId.from_path("pkg/x") in result
+        assert ModuleId.from_path("pkg/y") in result
 
     def test_empty_wildcard_raises_prefix_not_found(self, tmp_path: Path) -> None:
         root = tmp_path / "lib"
         root.mkdir()
-        with pytest.raises(ModulePrefixNotFound):
+        with pytest.raises(ModulePrefixNotFound) as raised:
             expand_wildcard(("nosuchprefix",), _roots(root))
+        assert "nosuchprefix/*" in str(raised.value)
 
     def test_ambiguous_id_across_roots_raises_ambiguous(self, tmp_path: Path) -> None:
         root_a = tmp_path / "a"
         root_b = tmp_path / "b"
         root_a.mkdir()
         root_b.mkdir()
-        _make_module(root_a, "ns.clash")
-        _make_module(root_b, "ns.clash")
+        _make_module(root_a, "ns/clash")
+        _make_module(root_b, "ns/clash")
         with pytest.raises(AmbiguousModule):
             expand_wildcard(("ns",), _roots(root_a, root_b))
 
     def test_result_ordered_by_module_id(self, tmp_path: Path) -> None:
         root = tmp_path / "lib"
         root.mkdir()
-        _make_module(root, "pkg.z")
-        _make_module(root, "pkg.a")
-        _make_module(root, "pkg.m")
+        _make_module(root, "pkg/z")
+        _make_module(root, "pkg/a")
+        _make_module(root, "pkg/m")
         result = expand_wildcard(("pkg",), _roots(root))
         keys = list(result.keys())
         assert keys == sorted(keys, key=lambda m: m.segments)
@@ -293,20 +294,20 @@ class TestExpandWildcard:
     def test_same_canonical_file_via_symlinked_roots_counts_once(self, tmp_path: Path) -> None:
         root = tmp_path / "lib"
         root.mkdir()
-        _make_module(root, "x.mod")
+        _make_module(root, "x/mod")
         link = tmp_path / "link"
         link.symlink_to(root)
         result = expand_wildcard(("x",), _roots(root, link))
         # Should appear exactly once
-        assert list(result.keys()).count(ModuleId.from_dotted("x.mod")) == 1
+        assert list(result.keys()).count(ModuleId.from_path("x/mod")) == 1
 
     def test_deterministic_under_shuffled_roots(self, tmp_path: Path) -> None:
         root_a = tmp_path / "a"
         root_b = tmp_path / "b"
         root_a.mkdir()
         root_b.mkdir()
-        _make_module(root_a, "ns.one")
-        _make_module(root_b, "ns.two")
+        _make_module(root_a, "ns/one")
+        _make_module(root_b, "ns/two")
         result1 = expand_wildcard(("ns",), _roots(root_a, root_b))
         result2 = expand_wildcard(("ns",), _roots(root_b, root_a))
         assert result1 == result2
@@ -315,28 +316,28 @@ class TestExpandWildcard:
     def test_multi_segment_prefix(self, tmp_path: Path) -> None:
         root = tmp_path / "lib"
         root.mkdir()
-        _make_module(root, "a.b.c")
-        _make_module(root, "a.b.d")
+        _make_module(root, "a/b/c")
+        _make_module(root, "a/b/d")
         result = expand_wildcard(("a", "b"), _roots(root))
-        assert ModuleId.from_dotted("a.b.c") in result
-        assert ModuleId.from_dotted("a.b.d") in result
+        assert ModuleId.from_path("a/b/c") in result
+        assert ModuleId.from_path("a/b/d") in result
 
     def test_does_not_match_sibling_prefixes(self, tmp_path: Path) -> None:
         """expand_wildcard('foo') must NOT match 'foobar.agl'."""
         root = tmp_path / "lib"
         root.mkdir()
         _make_module(root, "foobar")
-        _make_module(root, "foo.real")
+        _make_module(root, "foo/real")
         result = expand_wildcard(("foo",), _roots(root))
-        assert ModuleId.from_dotted("foobar") not in result
-        assert ModuleId.from_dotted("foo.real") in result
+        assert ModuleId.from_path("foobar") not in result
+        assert ModuleId.from_path("foo/real") in result
 
     def test_values_are_canonical_paths(self, tmp_path: Path) -> None:
         root = tmp_path / "lib"
         root.mkdir()
-        mod_path = _make_module(root, "ns.mod")
+        mod_path = _make_module(root, "ns/mod")
         result = expand_wildcard(("ns",), _roots(root))
-        assert result[ModuleId.from_dotted("ns.mod")] == mod_path.resolve()
+        assert result[ModuleId.from_path("ns/mod")] == mod_path.resolve()
 
     def test_directory_named_agl_skipped_in_rglob(self, tmp_path: Path) -> None:
         """A directory ending in .agl inside the subtree must be skipped."""
@@ -346,10 +347,10 @@ class TestExpandWildcard:
         fake_dir = root / "ns" / "subdir.agl"
         fake_dir.mkdir(parents=True)
         # Also create a real module so the prefix is not empty
-        _make_module(root, "ns.real")
+        _make_module(root, "ns/real")
         result = expand_wildcard(("ns",), _roots(root))
         # Only the real file module should appear
-        assert ModuleId.from_dotted("ns.real") in result
+        assert ModuleId.from_path("ns/real") in result
         # No entry for the directory
         for mid in result:
             assert mid != ModuleId(segments=("ns", "subdir"))

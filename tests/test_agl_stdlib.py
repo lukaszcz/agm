@@ -64,9 +64,14 @@ def test_no_stdlib_disables_default_open_import() -> None:
 
 def test_no_stdlib_still_allows_explicit_std_core_import() -> None:
     _check(
-        "import std.core\nlet x: Option[int] = Some(value = 1)\nx\n",
+        "open import std/core\nlet x: Option[int] = Some(value = 1)\nx\n",
         default_stdlib=False,
     )
+
+
+def test_shipped_stdlib_modules_load_without_the_default_prelude() -> None:
+    """A shipped module may not lean on the prelude the user is free to switch off."""
+    _check("import std/config\nprint(std/config::runner)\n", default_stdlib=False)
 
 
 def test_unknown_builtin_function_is_rejected() -> None:
@@ -83,7 +88,7 @@ def test_stdlib_ask_signature_is_context_inferred_with_optional_arguments() -> N
     graph = load_graph("()\n", entry_path=None, roots=_ROOTS, default_stdlib=True)
     resolved = resolve_program(graph)
     checked = check_program(resolved, _CAPS)
-    std_core = checked.modules[ModuleId.from_dotted("std.core")]
+    std_core = checked.modules[ModuleId.from_path("std/core")]
 
     ask_sig = std_core.function_signatures["ask"]
 

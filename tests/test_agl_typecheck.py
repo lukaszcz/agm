@@ -509,6 +509,23 @@ class TestTypeEnvironment:
         env.register_type("Foo", rt)
         assert env.get_type("Foo") == rt
 
+    def test_enum_owner_forms_track_declarations_until_sealed(self) -> None:
+        """An unsealed env re-enumerates; a sealed one serves a stable answer."""
+        env = TypeEnvironment()
+        env.register_type("Foo", RecordType(name="Foo"))
+        assert "Foo" in {form.owner_name for form in env.enum_owner_forms()}
+        assert env.blocked_enum_variants() == {}
+        # Still mutable: a later declaration must show up rather than be masked
+        # by an answer memoized from the earlier call.
+        env.register_type("Bar", RecordType(name="Bar"))
+        owners = {form.owner_name for form in env.enum_owner_forms()}
+        assert {"Foo", "Bar"} <= owners
+
+        env.seal()
+        # Sealed: the enumeration is settled, so repeat asks reuse one answer.
+        assert env.enum_owner_forms() is env.enum_owner_forms()
+        assert env.blocked_enum_variants() is env.blocked_enum_variants()
+
     def test_register_alias(self) -> None:
         from agm.agl.syntax.types import NameT
 
@@ -878,8 +895,8 @@ class TestTypeEnvironment:
         from agm.agl.modules.ids import ModuleId
         from agm.agl.scope.imports import ImportEnv
 
-        mod_a = ModuleId.from_dotted("moda")
-        mod_b = ModuleId.from_dotted("modb")
+        mod_a = ModuleId.from_path("moda")
+        mod_b = ModuleId.from_path("modb")
         color_a = RecordType(name="Color")
         color_b = RecordType(name="Color")
         graph_table: dict[tuple[ModuleId, str], RecordType] = {
@@ -890,7 +907,7 @@ class TestTypeEnvironment:
         unqualified: dict[str, frozenset[tuple[ModuleId, str]]] = {
             "Color": frozenset({(mod_a, "Color"), (mod_b, "Color")}),
         }
-        import_env = ImportEnv(unqualified=unqualified, qualified={})
+        import_env = ImportEnv(contributions={}, unqualified=unqualified)
         env = TypeEnvironment(program_type_table=graph_table, import_env=import_env)
         # Both entries are in graph_table → type_candidates has 2 elements → False branch.
         result = env.resolve_named_type("Color")
@@ -901,13 +918,13 @@ class TestTypeEnvironment:
         from agm.agl.modules.ids import ModuleId
 
         env = TypeEnvironment()  # no program_type_table
-        result = env.resolve_type_by_module_id(ModuleId.from_dotted("mymod"), "Color")
+        result = env.resolve_type_by_module_id(ModuleId.from_path("mymod"), "Color")
         assert result is None
 
     def test_cross_module_constructible_lookup_rejects_missing_and_non_nominal_types(self) -> None:
         from agm.agl.modules.ids import ModuleId
 
-        module_id = ModuleId.from_dotted("lib")
+        module_id = ModuleId.from_path("lib")
         env = TypeEnvironment(program_type_table={(module_id, "Alias"): IntType()})
 
         assert env.resolve_constructible_type_by_module_id(module_id, "Missing") is None
@@ -918,7 +935,7 @@ class TestTypeEnvironment:
         from agm.agl.modules.ids import ModuleId
 
         env = TypeEnvironment()  # no program_generic_table
-        result = env.get_generic_type_from_module(ModuleId.from_dotted("lib"), "Box")
+        result = env.get_generic_type_from_module(ModuleId.from_path("lib"), "Box")
         assert result is None
 
     def test_get_ctor_sig_from_module_no_graph_table(self) -> None:
@@ -926,7 +943,7 @@ class TestTypeEnvironment:
         from agm.agl.modules.ids import ModuleId
 
         env = TypeEnvironment()  # no program_ctor_sig_table
-        result = env.get_ctor_sig_from_module(ModuleId.from_dotted("lib"), "Box", None)
+        result = env.get_ctor_sig_from_module(ModuleId.from_path("lib"), "Box", None)
         assert result is None
 
     def test_resolve_unknown_type_expr_kind_raises(self) -> None:
@@ -2244,7 +2261,7 @@ class TestPartialConstructorAndValueCalls:
 
         modules = {
             "entry": (
-                "import mylib\n"
+                "open import mylib\n"
                 "let make: (int) -> mylib::Point = mylib::Point(x = ?)\n"
                 "let make_open: (int) -> Point = Point(x = ?)\n"
                 "let make_box: (text) -> mylib::Box[text] = mylib::Box(value = ?)\n"
@@ -2263,7 +2280,7 @@ class TestPartialConstructorAndValueCalls:
             for item in entry.resolved.program.body.items
             if isinstance(item, LetDecl) and isinstance(item.value, Call)
         }
-        point_type = RecordType("Point", module_id=ModuleId.from_dotted("mylib"))
+        point_type = RecordType("Point", module_id=ModuleId.from_path("mylib"))
         assert entry.node_types[calls["make"].node_id] == FunctionType(
             params=(IntType(),), result=point_type
         )
@@ -2273,7 +2290,7 @@ class TestPartialConstructorAndValueCalls:
         box_text_type = RecordType(
             "Box",
             type_args=(TextType(),),
-            module_id=ModuleId.from_dotted("mylib"),
+            module_id=ModuleId.from_path("mylib"),
         )
         assert entry.node_types[calls["make_box"].node_id] == FunctionType(
             params=(TextType(),),
@@ -3619,7 +3636,7 @@ class TestConstructorRefDispatch:
         from agm.agl.modules.ids import ModuleId
 
         env = TypeEnvironment()
-        lib_id = ModuleId.from_dotted("lib")
+        lib_id = ModuleId.from_path("lib")
         result = env.get_constructor_field_kinds("Unknown", None, module_id=lib_id)
         assert result is None
 
@@ -4313,7 +4330,7 @@ class TestTypeReprAndKind:
     def test_exception_repr_qualified_for_non_entry_module(self) -> None:
         from agm.agl.modules.ids import ModuleId
 
-        lib_id = ModuleId.from_dotted("lib")
+        lib_id = ModuleId.from_path("lib")
         assert repr(ExceptionType(name="Boom", module_id=lib_id)) == "lib::Boom"
 
     def test_function_repr(self) -> None:
@@ -4366,7 +4383,7 @@ class TestTypeReprAndKind:
     def test_exception_equality_is_by_name_and_module_id_only(self) -> None:
         from agm.agl.modules.ids import ModuleId
 
-        lib_id = ModuleId.from_dotted("lib")
+        lib_id = ModuleId.from_path("lib")
         assert ExceptionType(name="Boom") == ExceptionType(name="Boom")
         assert ExceptionType(name="Boom") != ExceptionType(name="Boom", module_id=lib_id)
         assert ExceptionType(name="Boom") != ExceptionType(name="Bang")
@@ -5973,8 +5990,8 @@ class TestResolveTypeExprTypeVars:
         from agm.agl.scope.imports import ImportEnv
         from agm.agl.typecheck.env import GenericTypeDef
 
-        lib_a = ModuleId.from_dotted("a")
-        lib_b = ModuleId.from_dotted("b")
+        lib_a = ModuleId.from_path("a")
+        lib_b = ModuleId.from_path("b")
         gdef = GenericTypeDef(
             kind="record",
             type_params=("T",),
@@ -5987,7 +6004,7 @@ class TestResolveTypeExprTypeVars:
                     "Point": frozenset({(lib_a, "Point")}),
                     "Box": frozenset({(lib_a, "Box"), (lib_b, "Box")}),
                 },
-                qualified={},
+                contributions={},
             ),
             program_generic_table={(lib_a, "Box"): gdef, (lib_b, "Box"): gdef},
         )
@@ -8498,7 +8515,7 @@ class TestImportDeclTypecheck:
 
     def test_import_decl_does_not_raise(self) -> None:
         """A bare import declaration type-checks as unit."""
-        r = accept_type("import foo.bar\n1")
+        r = accept_type("open import foo/bar\n1")
         assert r  # no exception
 
     def test_import_with_alias_does_not_raise(self) -> None:
@@ -8506,7 +8523,7 @@ class TestImportDeclTypecheck:
         assert r
 
     def test_import_wildcard_does_not_raise(self) -> None:
-        r = accept_type("import foo.*\n1")
+        r = accept_type("import foo/*\n1")
         assert r
 
     def test_import_using_does_not_raise(self) -> None:
@@ -8556,7 +8573,7 @@ class TestGenericNominalModuleId:
         from agm.agl.modules.ids import ENTRY_ID, ModuleId
         from agm.agl.typecheck.env import GenericTypeDef
 
-        lib_id = ModuleId.from_dotted("mylib")
+        lib_id = ModuleId.from_path("mylib")
         template = RecordType("Box", module_id=lib_id)
         gdef = GenericTypeDef(kind="record", type_params=("T",), template=template)
         env = TypeEnvironment()
@@ -8573,7 +8590,7 @@ class TestGenericNominalModuleId:
         from agm.agl.modules.ids import ENTRY_ID, ModuleId
         from agm.agl.typecheck.env import GenericTypeDef
 
-        lib_id = ModuleId.from_dotted("mylib")
+        lib_id = ModuleId.from_path("mylib")
         template = EnumType("Option", module_id=lib_id)
         gdef = GenericTypeDef(kind="enum", type_params=("T",), template=template)
         env = TypeEnvironment()
@@ -8593,8 +8610,8 @@ class TestGenericNominalModuleId:
         from agm.agl.modules.ids import ModuleId
         from agm.agl.typecheck.env import GenericTypeDef
 
-        lib_a = ModuleId.from_dotted("libA")
-        lib_b = ModuleId.from_dotted("libB")
+        lib_a = ModuleId.from_path("libA")
+        lib_b = ModuleId.from_path("libB")
         tmpl_a = RecordType("Box", module_id=lib_a)
         tmpl_b = RecordType("Box", module_id=lib_b)
         gdef_a = GenericTypeDef(kind="record", type_params=("T",), template=tmpl_a)
@@ -8612,8 +8629,8 @@ class TestGenericNominalModuleId:
         from agm.agl.modules.ids import ModuleId
         from agm.agl.typecheck.inference import ConstraintRole, InferenceEngine
 
-        lib_a = ModuleId.from_dotted("libA")
-        lib_b = ModuleId.from_dotted("libB")
+        lib_a = ModuleId.from_path("libA")
+        lib_b = ModuleId.from_path("libB")
         engine = InferenceEngine()
         inferred = engine.instantiate(
             ("T",), (RecordType("Box", type_args=(TypeVarType("T"),), module_id=lib_a),)

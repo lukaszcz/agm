@@ -841,11 +841,11 @@ class TestExternError:
         self, tmp_path: Path
     ) -> None:
         root = tmp_path / "root"
-        write_module_file(root, "lib.mod", "extern def boom() -> int")
-        write_companion_file(root, "lib.mod", "def boom():\n    raise ValueError('x')\n")
+        write_module_file(root, "lib/mod", "extern def boom() -> int")
+        write_companion_file(root, "lib/mod", "def boom():\n    raise ValueError('x')\n")
         driver = PipelineDriver()
         prepared = PipelineDriver.prepare_program(
-            "import lib.mod\nlib.mod::boom()",
+            "import lib/mod\nlib/mod::boom()",
             entry_path=None,
             roots=_roots(root),
             default_stdlib=False,
@@ -913,11 +913,11 @@ class TestEndToEndFileRuns:
 
     def test_library_module_extern_reachable_via_qualified_call(self, tmp_path: Path) -> None:
         root = tmp_path / "root"
-        write_module_file(root, "lib.mod", "extern def f(x: int) -> int")
-        write_companion_file(root, "lib.mod", "def f(x):\n    return x + 1\n")
+        write_module_file(root, "lib/mod", "extern def f(x: int) -> int")
+        write_companion_file(root, "lib/mod", "def f(x):\n    return x + 1\n")
         driver = PipelineDriver()
         prepared = PipelineDriver.prepare_program(
-            "import lib.mod\nlet r = lib.mod::f(1)\nr\n",
+            "import lib/mod\nlet r = lib/mod::f(1)\nr\n",
             entry_path=None,
             roots=_roots(root),
             default_stdlib=False,
@@ -928,11 +928,11 @@ class TestEndToEndFileRuns:
 
     def test_library_module_extern_reachable_via_open_import(self, tmp_path: Path) -> None:
         root = tmp_path / "root"
-        write_module_file(root, "lib.mod", "extern def f(x: int) -> int")
-        write_companion_file(root, "lib.mod", "def f(x):\n    return x + 1\n")
+        write_module_file(root, "lib/mod", "extern def f(x: int) -> int")
+        write_companion_file(root, "lib/mod", "def f(x):\n    return x + 1\n")
         driver = PipelineDriver()
         prepared = PipelineDriver.prepare_program(
-            "import lib.mod\nlet r = f(1)\nr\n",
+            "open import lib/mod\nlet r = f(1)\nr\n",
             entry_path=None,
             roots=_roots(root),
             default_stdlib=False,
@@ -945,14 +945,14 @@ class TestEndToEndFileRuns:
         root = tmp_path / "root"
         write_module_file(
             root,
-            "lib.mod",
+            "lib/mod",
             "private extern def f(x: int) -> int\ndef g(x: int) -> int = f(x) + 1",
         )
-        write_companion_file(root, "lib.mod", "def f(x):\n    return x + 1\n")
+        write_companion_file(root, "lib/mod", "def f(x):\n    return x + 1\n")
         driver = PipelineDriver()
 
         prepared = PipelineDriver.prepare_program(
-            "import lib.mod\nlet r = lib.mod::g(1)\nr\n",
+            "import lib/mod\nlet r = lib/mod::g(1)\nr\n",
             entry_path=None,
             roots=_roots(root),
             default_stdlib=False,
@@ -962,7 +962,7 @@ class TestEndToEndFileRuns:
         assert result.bindings["r"] == IntValue(3)
 
         outside_prepared = PipelineDriver.prepare_program(
-            "import lib.mod\nlib.mod::f(1)",
+            "import lib/mod\nlib/mod::f(1)",
             entry_path=None,
             roots=_roots(root),
             default_stdlib=False,
@@ -980,10 +980,10 @@ class TestDryRun:
     def test_dry_run_lists_call_site_without_running_the_extern(self, tmp_path: Path) -> None:
         marker = tmp_path / "marker.txt"
         root = tmp_path / "root"
-        write_module_file(root, "lib.mod", "extern def f(x: int) -> int")
+        write_module_file(root, "lib/mod", "extern def f(x: int) -> int")
         write_companion_file(
             root,
-            "lib.mod",
+            "lib/mod",
             f"open({str(marker)!r}, 'a').write('imported')\n"
             "def f(x):\n"
             f"    open({str(marker)!r}, 'a').write('called')\n"
@@ -991,7 +991,7 @@ class TestDryRun:
         )
         driver = PipelineDriver()
         prepared = PipelineDriver.prepare_program(
-            "import lib.mod\nlib.mod::f(1)",
+            "import lib/mod\nlib/mod::f(1)",
             entry_path=None,
             roots=_roots(root),
             default_stdlib=False,
@@ -1003,11 +1003,11 @@ class TestDryRun:
 
     def test_dry_run_does_not_import_a_broken_companion(self, tmp_path: Path) -> None:
         root = tmp_path / "root"
-        write_module_file(root, "lib.mod", "extern def f(x: int) -> int")
-        write_companion_file(root, "lib.mod", "raise RuntimeError('broken')\n")
+        write_module_file(root, "lib/mod", "extern def f(x: int) -> int")
+        write_companion_file(root, "lib/mod", "raise RuntimeError('broken')\n")
         driver = PipelineDriver()
         prepared = PipelineDriver.prepare_program(
-            "import lib.mod\nlib.mod::f(1)",
+            "import lib/mod\nlib/mod::f(1)",
             entry_path=None,
             roots=_roots(root),
             default_stdlib=False,
@@ -1042,7 +1042,7 @@ class TestReplSmoke:
         session = ReplSession()
         session._roots = roots
 
-        result = session.eval_entry("import extlib\nadd_one(41)")
+        result = session.eval_entry("open import extlib\nadd_one(41)")
 
         assert result.ok, result.diagnostics
         assert result.value == IntValue(42)
@@ -1068,6 +1068,6 @@ class TestReplSmoke:
         session = ReplSession()
         session._roots = roots
 
-        result = session.eval_entry("import extlib\nadd_one(41)")
+        result = session.eval_entry("open import extlib\nadd_one(41)")
 
         assert result.ok is False

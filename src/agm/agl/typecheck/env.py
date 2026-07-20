@@ -14,11 +14,21 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
-from typing import Literal
+from types import MappingProxyType
+from typing import Literal, cast
 
 from agm.agl.diagnostics import AglError, Diagnostic
 from agm.agl.modules.ids import ENTRY_ID, ModuleId
-from agm.agl.scope.imports import ImportEnv, QName
+from agm.agl.scope.imports import (
+    ImportEnv,
+    QName,
+    QualResolutionFound,
+    contribution_routes,
+    qualifier_contributes,
+    resolve_qualified,
+    resolve_qualified_member,
+    try_resolve_qualified_member,
+)
 from agm.agl.scope.symbols import BindingRef, ConstructorRef, ModuleResolution
 from agm.agl.semantics.persistent import PersistentDict
 from agm.agl.semantics.type_table import (
@@ -54,6 +64,7 @@ from agm.agl.semantics.types import (
 )
 from agm.agl.syntax.nodes import Expr, ParamKind, Pattern
 from agm.agl.syntax.spans import SourceSpan
+from agm.agl.syntax.types import Qualifier
 
 # ---------------------------------------------------------------------------
 # ParamSpec — per-parameter descriptor in a FunctionSignature
@@ -521,6 +532,7 @@ class TypeEnvironment:
         ]
         | None = None,
         import_env: ImportEnv | None = None,
+        private_info: Mapping[tuple[ModuleId, str], bool] | None = None,
         module_id: ModuleId = ENTRY_ID,
         type_table: TypeTable | None = None,
     ) -> None:
@@ -591,6 +603,11 @@ class TypeEnvironment:
             Mapping[tuple[ModuleId, str, str | None], ConstructorSignature] | None
         ) = program_ctor_sig_table
         self._import_env: ImportEnv | None = import_env
+        # Scope collects this once from declarations; sharing it here preserves
+        # the public/private distinction for qualified type diagnostics.
+        self._private_info: Mapping[tuple[ModuleId, str], bool] = (
+            private_info if private_info is not None else {}
+        )
         self._module_id: ModuleId = module_id
         self._sealed = False
         # Memo for the own-type-name enumeration, which rebuilds a whole-namespace
@@ -598,6 +615,13 @@ class TypeEnvironment:
         # is populated only once ``seal`` has frozen the declaration namespace, so
         # a still-mutating environment never serves a stale answer.
         self._sealed_own_source_type_names: frozenset[str] | None = None
+        # Memos for the enum owner-form enumeration and its variant-level
+        # counterpart.  Both rescan the whole type namespace (and, for imports,
+        # every contribution route), and match compilation asks for them once
+        # per case.  Like the memo above, they are populated only once ``seal``
+        # has frozen the declaration namespace.
+        self._sealed_enum_owner_forms: tuple[EnumOwnerForm, ...] | None = None
+        self._sealed_blocked_enum_variants: Mapping[tuple[str, ...], frozenset[str]] | None = None
         # Built-in exception types are always available.
         for exc_name, exc_type in BUILTIN_EXCEPTIONS.items():
             self._types[exc_name] = exc_type
@@ -652,9 +676,42 @@ class TypeEnvironment:
     def get_type(self, name: str) -> Type | None:
         return self._types.get(name)
 
-    def has_qualified_import_handle(self, handle: tuple[str, ...]) -> bool:
-        """Return whether *handle* is a qualified import handle in this module."""
-        return self._import_env is not None and handle in self._import_env.qualified
+    def has_qualified_import_member(self, qualifier: Qualifier, name: str) -> bool:
+        """Return whether a qualifier route contributes *name* after filtering."""
+        return self._import_env is not None and qualifier_contributes(
+            self._import_env, qualifier.segments, name, anchored=qualifier.anchored
+        )
+
+    def _resolve_import_qname(
+        self,
+        qualifier: "Qualifier",
+        name: str,
+        *,
+        span: SourceSpan | None,
+        required: bool = True,
+    ) -> QName | None:
+        """Resolve a qualified member through the shared contribution resolver."""
+        import_env = cast(ImportEnv, self._import_env)
+        if not required:
+            return try_resolve_qualified_member(import_env, qualifier, name)
+        return resolve_qualified_member(
+            import_env,
+            qualifier,
+            name,
+            self._private_info,
+            unknown_qualifier=lambda rendered: AglTypeError(
+                f"Unknown module qualifier '{rendered}::'.", span=span
+            ),
+            private_member=lambda module: AglTypeError(
+                f"Type '{name}' in module '{module.path_str()}' is declared private "
+                "and cannot be accessed from outside the module.",
+                span=span,
+            ),
+            missing_member=lambda rendered: AglTypeError(
+                f"Type '{name}' is not accessible via qualifier '{rendered}::'.", span=span
+            ),
+            ambiguous=lambda message: AglTypeError(message, span=span),
+        )
 
     def register_type(self, name: str, typ: Type) -> None:
         self._assert_mutable()
@@ -1233,7 +1290,7 @@ class TypeEnvironment:
         candidates = self._import_env.unqualified.get(name, frozenset())
         type_candidates = [qname for qname in candidates if self._is_program_type_candidate(qname)]
         if len(type_candidates) > 1:
-            labels = sorted(f"{qname[0].dotted()}::{qname[1]}" for qname in type_candidates)
+            labels = sorted(f"{qname[0].path_str()}::{qname[1]}" for qname in type_candidates)
             raise AglTypeError(
                 f"Ambiguous type '{name}': it is exported by multiple modules "
                 f"({', '.join(labels)}). Use a qualified reference to disambiguate.",
@@ -1268,26 +1325,14 @@ class TypeEnvironment:
         from agm.agl.syntax.types import Qualifier
 
         assert isinstance(qualifier, Qualifier)
+        rendered = qualifier.render()
         if self._import_env is None or self._program_generic_table is None:
             raise AglTypeError(
-                f"Module qualifier '{'.'.join(qualifier.segments)}::' cannot be resolved "
-                "outside of a module graph.",
+                f"Module qualifier '{rendered}::' cannot be resolved outside of a module graph.",
                 span=span,
             )
-        handle_map = self._import_env.qualified.get(qualifier.segments)
-        if handle_map is None:
-            raise AglTypeError(
-                f"Unknown module qualifier '{'.'.join(qualifier.segments)}::'. "
-                "The module has not been imported or the qualifier is not in scope.",
-                span=span,
-            )
-        qname = handle_map.get(name)
-        if qname is None:
-            raise AglTypeError(
-                f"Type '{name}' is not accessible via qualifier "
-                f"'{'.'.join(qualifier.segments)}::'.",
-                span=span,
-            )
+        qname = self._resolve_import_qname(qualifier, name, span=span)
+        assert qname is not None
         gdef = self._program_generic_table.get((qname[0], qname[1]))
         if gdef is not None:
             return self.instantiate_from_gdef(qname[1], gdef, args, span=span)
@@ -1302,13 +1347,10 @@ class TypeEnvironment:
             and (qname[0], qname[1]) in self._program_type_table
         ):
             raise AglTypeError(
-                f"Type '{'.'.join(qualifier.segments)}::{name}' does not take type arguments.",
+                f"Type '{rendered}::{name}' does not take type arguments.",
                 span=span,
             )
-        raise AglTypeError(
-            f"'{'.'.join(qualifier.segments)}::{name}' does not name a type.",
-            span=span,
-        )
+        raise AglTypeError(f"'{rendered}::{name}' does not name a type.", span=span)
 
     def _resolve_name_type(
         self,
@@ -1377,7 +1419,7 @@ class TypeEnvironment:
                     return typ
             elif len(type_candidates) > 1:
                 # Ambiguous: multiple modules export this type name.
-                sorted_candidates = sorted(f"{qn[0].dotted()}::{qn[1]}" for qn in type_candidates)
+                sorted_candidates = sorted(f"{qn[0].path_str()}::{qn[1]}" for qn in type_candidates)
                 raise AglTypeError(
                     f"Ambiguous type '{name}': it is exported by multiple modules "
                     f"({', '.join(sorted_candidates)}). "
@@ -1405,6 +1447,7 @@ class TypeEnvironment:
         from agm.agl.syntax.types import Qualifier
 
         assert isinstance(qualifier, Qualifier)
+        rendered = qualifier.render()
 
         if self._program_type_table is None:
             # Single-module path: module qualifiers have no program table to consult.
@@ -1412,8 +1455,7 @@ class TypeEnvironment:
             if not qualifier.segments:
                 return self._resolve_name_type(name, span=span, _resolving=frozenset())
             raise AglTypeError(
-                f"Module qualifier '{'.'.join(qualifier.segments)}::' cannot be resolved "
-                "outside of a module graph.",
+                f"Module qualifier '{rendered}::' cannot be resolved outside of a module graph.",
                 span=span,
             )
 
@@ -1426,31 +1468,16 @@ class TypeEnvironment:
             # Fall back to own local types (covers built-ins and prelude).
             return self._resolve_name_type(name, span=span, _resolving=frozenset())
 
-        # Qualified reference: resolve via ImportEnv.
+        # Qualified reference: resolve through the contribution environment.
         assert self._import_env is not None
-        handle = qualifier.segments
-        handle_map = self._import_env.qualified.get(handle)
-        if handle_map is None:
-            raise AglTypeError(
-                f"Unknown module qualifier '{'.'.join(handle)}::'. "
-                "The module has not been imported or the qualifier is not in scope.",
-                span=span,
-            )
-        qname = handle_map.get(name)
-        if qname is None:
-            raise AglTypeError(
-                f"Type '{name}' is not accessible via qualifier '{'.'.join(handle)}::'. "
-                "It may not be in the imported set S, or may not be exported.",
-                span=span,
-            )
-        t = self._resolve_program_qname_as_bare_type(qname, name, span=span)
-        if t is not None:
-            return t
-        # Name is in S but isn't a type in the program table — it might be a function.
-        raise AglTypeError(
-            f"'{'.'.join(handle)}::{name}' does not name a type.",
-            span=span,
-        )
+        qname = self._resolve_import_qname(qualifier, name, span=span)
+        assert qname is not None
+        if not self._is_program_type_candidate(qname):
+            raise AglTypeError(f"'{rendered}::{name}' does not name a type.", span=span)
+        typ = self._resolve_program_qname_as_bare_type(qname, name, span=span)
+        if typ is not None:
+            return typ
+        raise AglTypeError(f"'{rendered}::{name}' does not name a type.", span=span)
 
     def non_builtin_type_items(self) -> list[tuple[str, Type]]:
         """Return ``(name, type)`` pairs for all non-builtin registered types.
@@ -1586,7 +1613,9 @@ class TypeEnvironment:
         self,
         kind: EnumOwnerFormKind,
         owner_name: str,
-        module_qualifier: tuple[str, ...] | None = None,
+        module_qualifier: Qualifier | None = None,
+        *,
+        span: SourceSpan | None = None,
     ) -> EnumOwnerForm | None:
         """Resolve one exact enum-owner source form through checked visibility."""
         source_module_id: ModuleId
@@ -1595,17 +1624,11 @@ class TypeEnvironment:
         if kind in (EnumOwnerFormKind.LOCAL, EnumOwnerFormKind.SELF):
             if owner_name not in self._own_source_type_names():
                 return None
-            if kind is EnumOwnerFormKind.LOCAL and self.has_qualified_import_handle((owner_name,)):
-                return None
             source_module_id = self._module_id
             source_name = owner_name
             expected_qualifier = None if kind is EnumOwnerFormKind.LOCAL else ()
         elif kind is EnumOwnerFormKind.OPEN_IMPORT:
-            if (
-                self._import_env is None
-                or owner_name in self._own_source_type_names()
-                or self.has_qualified_import_handle((owner_name,))
-            ):
+            if self._import_env is None or owner_name in self._own_source_type_names():
                 return None
             type_qnames = tuple(
                 qname
@@ -1617,13 +1640,21 @@ class TypeEnvironment:
             source_module_id, source_name = type_qnames[0]
             expected_qualifier = None
         else:
-            if self._import_env is None or module_qualifier is None or not module_qualifier:
+            if (
+                self._import_env is None
+                or module_qualifier is None
+                or not module_qualifier.segments
+            ):
                 return None
-            qname = self._import_env.qualified.get(module_qualifier, {}).get(owner_name)
-            if qname is None or not self._is_program_type_candidate(qname):
+            # A qualified enum spelling must preserve the shared resolver's
+            # verdict.  In particular, an unknown route or ambiguity is not a
+            # statement that the subject is "not an enum".
+            qname = self._resolve_import_qname(module_qualifier, owner_name, span=span)
+            assert qname is not None
+            if not self._is_program_type_candidate(qname):
                 return None
             source_module_id, source_name = qname
-            expected_qualifier = module_qualifier
+            expected_qualifier = module_qualifier.segments
         template = self.source_type_template_qname(source_module_id, source_name)
         assert template is not None
         return EnumOwnerForm(
@@ -1633,17 +1664,9 @@ class TypeEnvironment:
             source_module_id=source_module_id,
             source_name=source_name,
             type_template=template,
-        )
-
-    def has_visible_unqualified_type_name(self, name: str) -> bool:
-        """Return whether *name* occupies the visible unqualified type namespace."""
-        if name in self._own_source_type_names():
-            return True
-        if self._import_env is None:
-            return False
-        return any(
-            self._is_program_type_candidate(qname)
-            for qname in self._import_env.unqualified.get(name, frozenset())
+            qualifier_anchored=(
+                module_qualifier.anchored if module_qualifier is not None else False
+            ),
         )
 
     def resolve_unqualified_enum_owner_form(self, owner_name: str) -> EnumOwnerForm | None:
@@ -1652,38 +1675,113 @@ class TypeEnvironment:
             return self.resolve_enum_owner_form(EnumOwnerFormKind.LOCAL, owner_name)
         return self.resolve_enum_owner_form(EnumOwnerFormKind.OPEN_IMPORT, owner_name)
 
+    def _blocked_short_variants(self, form: EnumOwnerForm) -> frozenset[str]:
+        """Return variants whose short owner spelling is occupied by a module route.
+
+        Only a ``LOCAL``/``OPEN_IMPORT`` form can be shadowed this way: those
+        are the only kinds writable as a bare ``owner_name`` qualifier, which
+        is exactly the qualifier a same-named module route also competes for.
+        """
+        template = form.type_template
+        if (
+            self._import_env is None
+            or form.kind not in (EnumOwnerFormKind.LOCAL, EnumOwnerFormKind.OPEN_IMPORT)
+            or template is None
+            or not isinstance(template.template, EnumType)
+        ):
+            return frozenset()
+        owner_qualifier = (form.owner_name or "",)
+        return frozenset(
+            variant
+            for variant in self.type_table.enum_variants(template.template)
+            if qualifier_contributes(self._import_env, owner_qualifier, variant)
+        )
+
     def enum_owner_forms(self) -> tuple[EnumOwnerForm, ...]:
-        """Enumerate finite checked owner forms writable in this environment."""
+        """Enumerate finite checked owner forms writable in this environment.
+
+        Memoized once the environment is sealed, so consumers that need the
+        owner forms per case (match compilation) can simply ask the environment.
+        """
+        cached = self._sealed_enum_owner_forms
+        if cached is not None:
+            return cached
         forms: set[EnumOwnerForm] = set()
         for owner_name in self._own_source_type_names():
             for kind in (EnumOwnerFormKind.LOCAL, EnumOwnerFormKind.SELF):
-                form = self.resolve_enum_owner_form(kind, owner_name)
-                if form is not None:
-                    forms.add(form)
+                own_form = cast(EnumOwnerForm, self.resolve_enum_owner_form(kind, owner_name))
+                forms.add(own_form)
         if self._import_env is not None:
             for owner_name in self._import_env.unqualified:
                 form = self.resolve_enum_owner_form(EnumOwnerFormKind.OPEN_IMPORT, owner_name)
-                if form is not None:
-                    forms.add(form)
-            for handle, exposed_names in self._import_env.qualified.items():
-                for owner_name in exposed_names:
-                    form = self.resolve_enum_owner_form(
-                        EnumOwnerFormKind.QUALIFIED_IMPORT,
-                        owner_name,
-                        handle,
-                    )
-                    if form is not None:
-                        forms.add(form)
+                if form is None:
+                    continue
+                forms.add(form)
+            for contribution in self._import_env.contributions.values():
+                routes = contribution_routes(contribution)
+                for owner_name, qname in contribution.members.items():
+                    if not self._is_program_type_candidate(qname):
+                        continue
+                    template = cast(TypeTemplate, self.source_type_template_qname(*qname))
+                    for qualifier, anchored in routes:
+                        resolved = resolve_qualified(
+                            self._import_env, qualifier, owner_name, anchored=anchored
+                        )
+                        if not isinstance(resolved, QualResolutionFound):
+                            continue
+                        forms.add(
+                            EnumOwnerForm(
+                                owner_name,
+                                qualifier,
+                                kind=EnumOwnerFormKind.QUALIFIED_IMPORT,
+                                source_module_id=qname[0],
+                                source_name=qname[1],
+                                type_template=template,
+                                qualifier_anchored=anchored,
+                            )
+                        )
 
-        def form_key(form: EnumOwnerForm) -> tuple[str, tuple[str, ...], str]:
+        def form_key(form: EnumOwnerForm) -> tuple[str, tuple[str, ...], bool, str]:
             assert form.kind is not None
             return (
                 form.owner_name or "",
                 form.module_qualifier or (),
+                form.qualifier_anchored,
                 form.kind.value,
             )
 
-        return tuple(sorted(forms, key=form_key))
+        ordered = tuple(sorted(forms, key=form_key))
+        if self._sealed:
+            self._sealed_enum_owner_forms = ordered
+        return ordered
+
+    def blocked_enum_variants(self) -> Mapping[tuple[str, ...], frozenset[str]]:
+        """Map each short enum-owner qualifier to the variants a module route blocks.
+
+        A match-compile consumer selecting a source spelling for one concrete
+        enum constructor needs this alongside ``enum_owner_forms``: an
+        ``EnumOwnerForm`` describes only an owner spelling, never which of
+        that owner's variants a same-named module route makes ambiguous.
+        The key is the same ``(owner_name,)`` qualifier
+        ``qualifier_contributes`` checks the module routes against.
+
+        Memoized on the same terms as ``enum_owner_forms``.
+        """
+        cached = self._sealed_blocked_enum_variants
+        if cached is not None:
+            return cached
+        owner_forms = self.enum_owner_forms()
+        blocked: dict[tuple[str, ...], frozenset[str]] = {}
+        for form in owner_forms:
+            if form.kind not in (EnumOwnerFormKind.LOCAL, EnumOwnerFormKind.OPEN_IMPORT):
+                continue
+            variants = self._blocked_short_variants(form)
+            if variants:
+                blocked[(form.owner_name or "",)] = variants
+        result: Mapping[tuple[str, ...], frozenset[str]] = MappingProxyType(blocked)
+        if self._sealed:
+            self._sealed_blocked_enum_variants = result
+        return result
 
     def get_generic_type_from_module(self, module_id: ModuleId, name: str) -> GenericTypeDef | None:
         """Look up a cross-module ``GenericTypeDef`` by owning module and name.
@@ -1723,7 +1821,7 @@ class TypeEnvironment:
         matches = self._open_imported_generic_type_matches(name)
         if len(matches) > 1:
             labels = sorted(
-                f"{module_id.dotted()}::{source_name}" for module_id, source_name, _ in matches
+                f"{module_id.path_str()}::{source_name}" for module_id, source_name, _ in matches
             )
             raise AglTypeError(
                 f"Ambiguous generic type '{name}': it is exported by multiple modules "
@@ -1755,16 +1853,14 @@ class TypeEnvironment:
             return (name, gdef) if gdef is not None else None
         if self._import_env is None or self._program_generic_table is None:
             return None
-        handle_map = self._import_env.qualified.get(qualifier.segments)
-        if handle_map is None:
-            return None
-        qname = handle_map.get(name)
+        qname = self._resolve_import_qname(qualifier, name, span=span, required=False)
         if qname is None:
             return None
         gdef = self._program_generic_table.get((qname[0], qname[1]))
         if gdef is None:
             return None
-        qualified_name = f"{'.'.join(qualifier.segments)}::{name}"
+        rendered = qualifier.render()
+        qualified_name = f"{rendered}::{name}"
         return qualified_name, gdef
 
     def _open_imported_generic_type_matches(

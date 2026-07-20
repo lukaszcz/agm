@@ -1,2 +1,2 @@
-# Library module (dot-path lib.a) matched by the entry's `import lib.*` wildcard.
+# Library module (slash path lib/a) matched by the entry's `import lib/*` wildcard.
 def alpha() -> text = "alpha"

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import decimal
 import enum
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import TypeAlias
 
@@ -280,6 +281,13 @@ class MatchCaseContext:
 
     module_id: ModuleId
     enum_owner_forms: tuple[EnumOwnerForm, ...] = ()
+    # Variants a same-named module route makes ambiguous under one owner
+    # form's short ``(owner_name,)`` qualifier; see
+    # ``TypeEnvironment.blocked_enum_variants``. Plain data, not compared: the
+    # forms it corresponds to are already excluded from case-context equality.
+    blocked_enum_variants: Mapping[tuple[str, ...], frozenset[str]] = field(
+        default_factory=dict, repr=False, compare=False, hash=False
+    )
     bare_enum_constructors: frozenset[tuple[ModuleId, str, str]] = frozenset()
     owner_program: Program | None = field(default=None, repr=False, compare=False, hash=False)
 

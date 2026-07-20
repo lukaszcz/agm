@@ -3,10 +3,9 @@
 # the mutually recursive predicates span a cyclic import. A third module
 # (`parity`) consumes the cycle and returns an imported enum that the entry
 # pattern-matches. A param chooses the number under test.
-import even
-import odd
-import parity
-
+open import even
+open import odd
+open import parity
 param n: int
 
 # Mutually recursive predicates defined across a cyclic import (even ↔ odd).

@@ -217,11 +217,11 @@ def test_dict_value_eq_contract() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _make_nominal(module_dotted: str, name: str) -> "object":
+def _make_nominal(module_slash_path: str, name: str) -> "object":
     from agm.agl.ir.ids import NominalId
     from agm.agl.modules.ids import ModuleId
 
-    return NominalId(ModuleId.from_dotted(module_dotted), name)
+    return NominalId(ModuleId.from_path(module_slash_path), name)
 
 
 def test_record_value_eq_and_hash() -> None:
@@ -233,8 +233,8 @@ def test_record_value_eq_and_hash() -> None:
     from agm.agl.modules.ids import ModuleId
     from agm.agl.semantics.values import IntValue, NominalId, RecordValue
 
-    mod_a = ModuleId.from_dotted("mymod")
-    mod_b = ModuleId.from_dotted("other")
+    mod_a = ModuleId.from_path("mymod")
+    mod_b = ModuleId.from_path("other")
     nom_foo_a = NominalId(mod_a, "Foo")
     nom_foo_b = NominalId(mod_b, "Foo")
     nom_bar_a = NominalId(mod_a, "Bar")
@@ -266,8 +266,8 @@ def test_constructor_value_eq_and_hash() -> None:
     from agm.agl.modules.ids import ModuleId
     from agm.agl.semantics.values import ConstructorValue, NominalId
 
-    mod_a = ModuleId.from_dotted("mymod")
-    mod_b = ModuleId.from_dotted("other")
+    mod_a = ModuleId.from_path("mymod")
+    mod_b = ModuleId.from_path("other")
     nom_a = NominalId(mod_a, "Box")
     nom_b = NominalId(mod_b, "Box")
 
@@ -292,7 +292,7 @@ def test_record_value_hash_with_json_payload() -> None:
     from agm.agl.modules.ids import ModuleId
     from agm.agl.semantics.values import JsonValue, NominalId, RecordValue
 
-    nom = NominalId(ModuleId.from_dotted("m"), "R")
+    nom = NominalId(ModuleId.from_path("m"), "R")
     r1 = RecordValue(nominal=nom, display_name="R", fields={"v": JsonValue(1)})
     r2 = RecordValue(nominal=nom, display_name="R", fields={"v": JsonValue(decimal.Decimal("1"))})
     # JsonValue(1) == JsonValue(Decimal("1")), so records are equal.
@@ -313,8 +313,8 @@ def test_enum_value_eq_and_hash() -> None:
     from agm.agl.modules.ids import ModuleId
     from agm.agl.semantics.values import EnumValue, NominalId
 
-    mod = ModuleId.from_dotted("m")
-    mod2 = ModuleId.from_dotted("other")
+    mod = ModuleId.from_path("m")
+    mod2 = ModuleId.from_path("other")
     nom_color = NominalId(mod, "Color")
     nom_shape = NominalId(mod, "Shape")
     nom_color_other = NominalId(mod2, "Color")
@@ -354,7 +354,7 @@ def test_exception_value_eq() -> None:
 
     nom_err = NominalId(PRELUDE_ID, "Err")
     nom_err2 = NominalId(PRELUDE_ID, "Err2")
-    nom_err_other = NominalId(ModuleId.from_dotted("mymod"), "Err")
+    nom_err_other = NominalId(ModuleId.from_path("mymod"), "Err")
 
     ex1 = ExceptionValue(nominal=nom_err, display_name="Err", fields={"message": TextValue("oops")})
     ex2 = ExceptionValue(nominal=nom_err, display_name="Err", fields={"message": TextValue("oops")})

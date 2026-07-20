@@ -65,10 +65,10 @@ class AmbiguousModule(AglError):
 
 
 class ModulePrefixNotFound(AglError):
-    """A wildcard import prefix (``foo.*``) matched no module.
+    """A wildcard import prefix (``foo/*``) matched no module.
 
     ``prefix`` is the tuple of segments that formed the wildcard prefix (e.g.
-    ``("foo", "bar")`` for ``import foo.bar.*``).  ``span`` is the originating
+    ``("foo", "bar")`` for ``import foo/bar/*``).  ``span`` is the originating
     import declaration span, when available.
     """
 
@@ -78,8 +78,8 @@ class ModulePrefixNotFound(AglError):
         *,
         span: SourceSpan | None = None,
     ) -> None:
-        dotted_prefix = ".".join(prefix)
-        msg = f"wildcard prefix '{dotted_prefix}.*' matched no module"
+        slash_prefix = "/".join(prefix)
+        msg = f"wildcard prefix '{slash_prefix}/*' matched no module"
         super().__init__(msg, span=span)
         self.prefix = prefix
 

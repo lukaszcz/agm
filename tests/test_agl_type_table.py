@@ -61,7 +61,7 @@ _CAPS = HostCapabilities(
     },
 )
 
-_LIB_ID = ModuleId.from_dotted("lib")
+_LIB_ID = ModuleId.from_path("lib")
 
 
 def _check(src: str) -> CheckedModule:
@@ -1050,7 +1050,7 @@ class TestEnvTypeHasMatchingTableDefGraphMode:
             ),
         }
         cg = _check_program(tmp_path, modules)
-        mylib_id = ModuleId.from_dotted("mylib")
+        mylib_id = ModuleId.from_path("mylib")
         point = cg.program_type_table[(mylib_id, "Point")]
         assert isinstance(point, RecordType)
 
@@ -2342,7 +2342,7 @@ class TestFiniteClosure:
         # named with its module qualifier (matching the ``mod::Name``
         # convention RecordType/EnumType's own __repr__ uses) so it is never
         # ambiguous with a same-named declaration elsewhere.
-        mod = ModuleId.from_dotted("mod_a")
+        mod = ModuleId.from_path("mod_a")
         table = TypeTable()
         table.register(_pair_def())
         table.register(

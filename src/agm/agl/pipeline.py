@@ -1073,7 +1073,7 @@ class PipelineDriver:
         """Update the live engine defaults in place without losing registrations.
 
         Called by ``ReplSession`` after a successful entry, to carry that entry's
-        engine settings — which a ``std.config`` write may have changed mid-entry
+        engine settings — which a ``std/config`` write may have changed mid-entry
         — into the entries that follow.  Agent/codec registrations and the
         call-depth limit are preserved: only the three eval-consumed settings are
         updated.

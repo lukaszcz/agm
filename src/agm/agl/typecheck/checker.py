@@ -48,6 +48,7 @@ from typing import Literal, TypeGuard, assert_never
 from agm.agl.capabilities import HostCapabilities
 from agm.agl.diagnostics import Diagnostic
 from agm.agl.modules.ids import ENTRY_ID, ModuleId
+from agm.agl.scope.imports import qualification_repair_guidance
 from agm.agl.scope.symbols import (
     BUILTIN_CALL_NAMES,
     BinderKind,
@@ -1871,9 +1872,10 @@ class _Checker:
             return self._builtins.check_exec(node, expected=expected)
 
         # Constructor call?
-        if isinstance(node.callee, VarRef) and (
-            ctor_ref := self._constructor_ref_for(node.callee.node_id)
-        ) is not None:
+        if (
+            isinstance(node.callee, VarRef)
+            and (ctor_ref := self._constructor_ref_for(node.callee.node_id)) is not None
+        ):
             return self._constructors.check_constructor_callee_call(
                 node, ctor_ref=ctor_ref, expected=expected, hole_indices=hole_indices
             )
@@ -2766,6 +2768,7 @@ class _Checker:
         self._check_variant_qualification(
             qualifier=node.qualifier,
             module_qualifier=node.module_qualifier,
+            variant=node.variant,
             enum_type=expr_type,
             span=node.span,
         )
@@ -2785,6 +2788,7 @@ class _Checker:
         *,
         qualifier: str | None,
         module_qualifier: Qualifier | None,
+        variant: str,
         enum_type: EnumType,
         span: SourceSpan,
     ) -> None:
@@ -2792,7 +2796,9 @@ class _Checker:
         if qualifier is not None and module_qualifier is not None:
             self._check_module_qualified_variant(module_qualifier, qualifier, enum_type, span)
         elif module_qualifier is not None:
-            self._check_qualified_variant_prefix(module_qualifier, enum_type.name, enum_type, span)
+            self._check_qualified_variant_prefix(
+                module_qualifier, enum_type.name, variant, enum_type, span
+            )
 
     def _require_enum_owner_match(
         self,
@@ -2820,18 +2826,22 @@ class _Checker:
         self,
         module_qualifier: Qualifier,
         enum_name: str,
+        variant: str,
         enum_type: EnumType,
         span: SourceSpan,
     ) -> None:
         """Validate a lone ``prefix::Variant`` qualifier."""
-        if len(module_qualifier.segments) == 1:
+        if not module_qualifier.anchored and len(module_qualifier.segments) == 1:
             qualifier = module_qualifier.segments[0]
             form = self._env.resolve_unqualified_enum_owner_form(qualifier)
-            handle_match = self._env.has_qualified_import_handle(module_qualifier.segments)
-            if self._env.has_visible_unqualified_type_name(qualifier) and handle_match:
+            # A route competes with a type only when it contributes the enum
+            # owner being requested.  Merely sharing a suffix must not make a
+            # valid local enum spelling unusable.
+            module_member = self._env.has_qualified_import_member(module_qualifier, variant)
+            if form is not None and module_member:
                 raise AglTypeError(
-                    f"Qualifier '{qualifier}' is both a type name and an import handle; "
-                    "rename the import alias to disambiguate.",
+                    f"Qualifier '{qualifier}' is both a type name and a module route for "
+                    f"enum '{enum_name}'. {qualification_repair_guidance()}",
                     span=span,
                 )
             if form is not None:
@@ -2853,19 +2863,16 @@ class _Checker:
             if not module_qualifier.segments
             else EnumOwnerFormKind.QUALIFIED_IMPORT
         )
-        form = self._env.resolve_enum_owner_form(kind, enum_name, module_qualifier.segments)
+        form = self._env.resolve_enum_owner_form(kind, enum_name, module_qualifier, span=span)
         if form is not None:
+            rendered = module_qualifier.render()
             owner = (
-                f"::{enum_name}"
-                if not module_qualifier.segments
-                else f"{'.'.join(module_qualifier.segments)}::{enum_name}"
+                f"::{enum_name}" if not module_qualifier.segments else f"{rendered}::{enum_name}"
             )
             self._require_enum_owner_match(form, enum_type, owner, span)
             return
-        raise AglTypeError(
-            f"'{'.'.join(module_qualifier.segments)}::{enum_name}' is not a known enum type.",
-            span=span,
-        )
+        rendered = module_qualifier.render()
+        raise AglTypeError(f"'{rendered}::{enum_name}' is not a known enum type.", span=span)
 
     # --- field access ---
 
@@ -3138,6 +3145,7 @@ class _Checker:
         self._check_variant_qualification(
             qualifier=pattern.qualifier,
             module_qualifier=pattern.module_qualifier,
+            variant=pattern.name,
             enum_type=enum_type,
             span=pattern.span,
         )

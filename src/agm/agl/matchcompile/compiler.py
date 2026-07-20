@@ -391,6 +391,7 @@ def _witness_for_occurrence(
         qualification = EnumWitnessQualification(
             owner_name=spelling.owner_name,
             module_qualifier=spelling.module_qualifier,
+            qualifier_anchored=spelling.qualifier_anchored,
         )
     return EnumWitness(
         constructor.enum_type,
@@ -398,6 +399,20 @@ def _witness_for_occurrence(
         fields,
         qualification,
     )
+
+
+def _short_spelling_blocked(
+    form: EnumOwnerForm, variant: str, case_context: MatchCaseContext
+) -> bool:
+    """Return whether a module route makes *form*'s short spelling ambiguous for *variant*.
+
+    Only a ``LOCAL``/``OPEN_IMPORT`` form spells its owner bare as
+    ``owner_name`` -- the same qualifier a same-named module route competes
+    for -- so only those kinds consult ``blocked_enum_variants``.
+    """
+    if form.kind not in (EnumOwnerFormKind.LOCAL, EnumOwnerFormKind.OPEN_IMPORT):
+        return False
+    return variant in case_context.blocked_enum_variants.get((form.owner_name or "",), frozenset())
 
 
 def _source_spelling(
@@ -414,7 +429,10 @@ def _source_spelling(
         return EnumConstructorSpelling(None, None, bare=True)
 
     matches = tuple(
-        form for form in case_context.enum_owner_forms if form.match(enum_type) is not None
+        form
+        for form in case_context.enum_owner_forms
+        if form.match(enum_type) is not None
+        and not _short_spelling_blocked(form, constructor.variant, case_context)
     )
     if not matches:
         return EnumConstructorSpelling(None, None)
@@ -423,7 +441,11 @@ def _source_spelling(
         candidate: EnumOwnerForm,
     ) -> tuple[int, str, bool]:
         assert candidate.owner_name is not None
-        text = qualified_owner_name(candidate.owner_name, candidate.module_qualifier)
+        text = qualified_owner_name(
+            candidate.owner_name,
+            candidate.module_qualifier,
+            anchored=candidate.qualifier_anchored,
+        )
         return (
             len(text),
             text,

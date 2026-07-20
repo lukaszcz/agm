@@ -1,6 +1,5 @@
-import inference.box qualified
-import inference.echo qualified
-import inference.id qualified
-
-def relay[T](value: T) -> inference.box::Box[T] =
-  inference.box::Box(value = inference.echo::echo(inference.id::id(value)))
+import inference/box
+import inference/echo
+import inference/id
+def relay[T](value: T) -> inference/box::Box[T] =
+  inference/box::Box(value = inference/echo::echo(inference/id::id(value)))

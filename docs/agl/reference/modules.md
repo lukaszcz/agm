@@ -2,379 +2,200 @@
 
 [← Index](index.md)
 
-AgL supports a **file-based module system** that lets programs be split across
-multiple `.agl` files. Every file is a module; modules are identified by their
-path relative to the library search roots.
+AgL programs are composed from file-based modules. Imports expose public
+members through qualified routes and, when requested, bare names.
 
-## Module identity
+## Slash-path identity
 
-A module's identity is its **dot-path** — the relative file path with `/`
-replaced by `.` and the `.agl` suffix stripped. For example, a file at
-`utils/strings.agl` under a library root has the dot-path `utils.strings`.
+A module identity is its slash path: the relative path to its `.agl` file,
+without the suffix. For example, `utils/strings.agl` has identity
+`utils/strings`. The entry program has no path identity.
 
-The **entry module** is the program being run — it has no dot-path of its own
-and is always the root of the import graph.
+A slash path is written byte-adjacent wherever it appears — in a header, a
+qualifier, or a wildcard tail. `a/b` is a path; `a / b`, spaced on both sides,
+is division. A `/` touching an operand on exactly one side (`a/ b`) is neither
+and is rejected; see
+[Module qualifiers](lexical-structure.md#module-qualifiers).
 
-## Standard library
+A module must resolve to exactly one file across the configured library roots.
+No matching file is an error; more than one matching file is also an error.
+There is no root-priority shadowing. Wildcard imports select matching modules
+from the same global module set.
 
-The core standard library module is `std.core`. It defines common names such as
-`Option[T]`, `ExecResult`, `ParsePolicy`, `AgentRequest`, built-in exception
-types, and the host-implemented built-in functions.
-
-For batch execution, `std.core` is opened unqualified in the entry module by
-default. This is equivalent to an implicit leading:
-
-```agl
-import std.core
-```
-
-Use `agm exec --no-stdlib` to disable that implicit import. Explicit
-`import std.core` declarations still work and follow the same duplicate and
-ambiguity rules as any other import. If another open import also exports
-`Option`, for example, an unqualified use of `Option` is ambiguous until one of
-the references is qualified.
-
-## Importing modules
+## One-set imports
 
 ```ebnf
-import_decl ::= "import" module_path [".*"]
-                    ["qualified"]
-                    ["as" NAME]
-                    [import_clause]
+import_decl ::= ["open"] "import" module_path ["/*"]
+                ["as" ref_name]
+                [using_clause | hiding_clause]
 
-import_clause ::= "using" import_item ("," import_item)*
-                | "hiding" NAME ("," NAME)*
-
-import_item ::= NAME ["as" NAME]
-module_path ::= NAME ("." NAME)*
+module_path ::= NAME ("/" NAME)*
+using_clause ::= "using" import_item ("," import_item)*
+hiding_clause ::= "hiding" ref_name ("," ref_name)*
+import_item ::= ref_name ["as" ref_name]
 ```
 
-- `qualified` suppresses unqualified injection (all names require a qualifier).
-- `as NAME` replaces the qualifier handle: `import foo.bar as B` makes `B::x`
-  valid instead of `foo.bar::x`.  It does NOT suppress unqualified injection on
-  its own — combine with `qualified` to suppress unqualified access.
-- `using N1, N2` restricts the imported set to the listed names.
-- `using N as M` imports `N` under the canonical name `M`; only `M` is
-  accessible (neither unqualified `N` nor qualified `::N` work; use `M` or
-  `qualifier::M`).
-- `hiding N1, N2` imports all public names except the listed ones.
-- The combinations `qualified using`, `qualified hiding`, and `qualified as A
-  using …` are all valid.
+Each import contributes a selected set **S** of its target module's public
+members:
 
-Import and export declarations must appear **before any other declaration or
-expression** in the module's body. A non-entry module that places an `import` or
-`export` after a `def` (or any other item) is a static error.
+- no clause selects every public member;
+- `using` selects exactly its listed members;
+- `hiding` selects every public member except its listed members.
 
-### Open import
+Both bare access and qualified access are bounded by **S**. Repeated imports
+of the same module union their selected sets and bare-name contributions.
+This makes a small bare surface plus a full qualified API explicit:
 
 ```agl
-import utils.strings
+import utils/strings
+import utils/strings using trim
 ```
 
-Brings all public names from `utils.strings` into scope unqualified. Bare names
-accessible via multiple open imports are a **clash**: using the clashing name
-is a static error, but importing the modules is not. Names that are never
-referenced are fine even if they clash.
+`using` and `hiding` name top-level declarations. Enum variants travel with
+their enum: selecting `Color` makes `Color::Red` available, while selecting
+`Red` alone is invalid. A bare name contributed by several imports is an error
+when used, not when imported.
 
-### Selective import: `using` and `hiding`
+## `open`, `using`, and `hiding`
+
+A plain import contributes **S** only to qualified routes. `using` injects its
+selected names into the bare namespace. `open import` injects all of **S**
+bare; combining `open` and `using` is redundant and invalid.
 
 ```agl
-import utils.strings using trim, split
-import utils.strings hiding internal_helper
+import utils/strings
+open import app/vocabulary hiding internal-word
+import text/format using render as format
 ```
 
-`using N1, N2` restricts the open import to only the listed names. `hiding N1,
-N2` opens all public names except the listed ones. Both forms still register
-the module handle for qualified access.
+A `using N as M` rename is canonical: `M` is the member name for both bare and
+qualified access through that import, and `N` is inaccessible through it.
+`hiding` removes a member from both channels, so it can also remove a
+qualification ambiguity.
 
-The names in `using`/`hiding` identify **top-level declarations** — `def`,
-`record`, `enum`, and `type` aliases. **Enum variants travel with their enum**
-and are not separately listable in `using`/`hiding`. To import an enum type
-named `Color` (and thereby gain access to `Color::Red` etc.), write `using
-Color`. Writing `using Red` — naming only the variant constructor — is a static
-error ("Red is not exported by module …").
+## Aliases
 
-#### Name renames in `using`
+`as A` gives an import the single-name alias `A` instead of a path route. It
+does not make names bare. An aliased import is reached only through its alias;
+it does not participate in suffix or anchored path matching.
 
 ```agl
-import utils.strings using trim as clean, split
+import company/tools/config as settings
+
+settings::timeout
 ```
 
-`using N as M` makes `M` the canonical exposed name everywhere — both
-unqualified (`clean`) and qualified (`utils.strings::clean`).  The original
-name `trim` becomes inaccessible after the rename; only `M` is valid.
+Distinct modules may share an alias. The alias then acts as a facade: the
+requested member resolves when exactly one aliased module contributes it.
+Imports of one module merge normally, so importing it both plainly and with an
+alias makes both routes available.
 
-### Aliased import: `as`
+## Wildcards
+
+`import prefix/*` expands to one import per module whose slash path is `prefix`
+or starts with `prefix/`. The import's
+`open`, selection clause, and alias apply independently to every matched
+module. A `using` or `hiding` name must be public in every matched module.
 
 ```agl
-import utils.strings as str
+import tools/*
+open import domain/* hiding debug
+import codecs/* as codec
 ```
 
-Replaces the module's qualifier handle with the alias `str`, so qualified access
-uses `str::name` instead of `utils.strings::name`.  Bare names are still
-brought into scope unqualified unless `qualified` is also specified.
+An alias on a wildcard is a shared alias facade, not a path rewrite.
 
-### Qualified import
+## Suffix and anchored references
+
+A module qualifier ends in `::`:
 
 ```agl
-import utils.strings qualified
-import utils.strings qualified as str
-import utils.strings qualified as str using trim
+import company/tools/config
+import service/config as settings
+
+company/tools/config::timeout
+config::timeout                 # suffix route
+settings::timeout               # alias route
+/company/tools/config::timeout  # anchored plain-path route
 ```
 
-`qualified` prevents any unqualified injection: names from the module are only
-accessible via the qualifier handle.  `qualified as A` is the most common form
-when you want a short alias with no unqualified pollution.
+A non-aliased imported path may be named by any trailing sequence of its path
+segments. A qualifier route may match several imported modules; AgL filters
+those candidates by the requested member's contributed set **S**. One
+remaining candidate resolves; several are ambiguous; none is an error.
+There is no preference by route length, alias, or import order.
 
-### Wildcard import
+A leading `/` anchors a qualifier to the complete plain module path. Anchored
+qualifiers never match aliases and are always module routes. Aliases are
+single-segment routes only.
+
+Qualified type references follow the same rules and preserve nominal identity:
 
 ```agl
-import utils.*
-import utils.* as U
+import shapes/points as points
+
+let p: points::Point = points::Point(x = 0, y = 0)
 ```
 
-Imports all modules whose dot-path starts with `utils.` — a glob over the
-library roots. The same modifiers (`qualified`, `as`, `using`, `hiding`) may be
-combined with `.*`.
+`::name` refers to a declaration in the current module root and bypasses a
+lexical shadow. The same form works for `::Type` and `::Type::Variant`.
+Type-qualified constructors use `Type::Variant`; a short spelling can name an
+in-scope type or a module route and is resolved at the use site.
 
-**Wildcard alias re-rooting** (`as A`): the matched prefix is replaced by the
-alias in every qualifier handle.  For example, given modules `foo.bar` and
-`foo.bar.baz`:
+## Re-exports and visibility
+
+Public top-level `def`, `record`, `enum`, `exception`, and `type` declarations
+are exported by default. Prefix a declaration with `private` to keep it within
+its defining module.
+
+`export` re-exports public members without injecting them into the exporting
+module's local scope:
 
 ```agl
-import foo.bar.* as A
+export math/basic using add, multiply as mul
+export math/advanced hiding internal-helper
+export math/*
 ```
 
-produces qualifier handles `A` (for `foo.bar`) and `A.baz` (for `foo.bar.baz`),
-so `foo.bar::x` becomes `A::x` and `foo.bar.baz::y` becomes `A.baz::y`. The
-handles `foo.bar` and `foo.bar.baz` are not registered for that import.
+Re-exports preserve the original defining-module identity. Conflicting exposed
+names with different origins are static errors; duplicate paths to the same
+origin are allowed.
 
-## Re-exporting
+## Prelude
 
-A module may **re-export** names from another module, making them visible to
-consumers of the module as if they were defined locally. `export` is
-declaration-only: it loads the target module and contributes to the current
-module's public export set, but it does not inject names into the current
-module's local scope.
+Every loaded entry and library module, except `std/core` itself, implicitly
+behaves as if it began with `open import std/core`. The `--no-stdlib` option
+disables that automatic opening throughout the loaded program; an explicit
+`import std/core` or `open import std/core` always follows the ordinary import
+rules.
 
-```ebnf
-export_decl ::= "export" module_path [".*"] [export_clause]
+## Library modules and cycles
 
-export_clause ::= "using" export_item ("," export_item)*
-                | "hiding" NAME ("," NAME)*
+Imported modules are declaration-only: they may contain imports, exports,
+functions, type declarations, and infix declarations, but not executable
+top-level expressions, bindings, agents, parameters, or program declarations.
+Imports and exports appear before other declarations in a library module.
 
-export_item ::= NAME ["as" NAME]
-```
+Import cycles are valid. Public declarations are collected before bodies are
+resolved, so functions and nominal types may refer across cycles.
 
-Re-exports are transparent: a name re-exported through a chain of modules
-always carries its original defining module as its identity. A consumer that
-imports the facade sees re-exported names both unqualified and through the
-facade qualifier.
+## REPL
 
-Plain `export` re-exports all public names from the target module:
+REPL imports persist after a successful entry, retained as written: a retained
+wildcard expands again on every later entry, so it picks up modules added since.
+A later entry replaces the earlier import declaration for every module it names,
+so its selection, open mode, or alias takes effect for that module. Multiple
+declarations for one module in the same entry merge normally.
+A failed entry changes no imports, and `:reset` clears imports with the session
+bindings. Each REPL entry and its loaded library modules receive the
+`std/core` prelude unless the session was launched with `--no-stdlib`.
 
-```agl
-export math.ops
-```
+## Diagnostics
 
-Use `using` to re-export only selected names:
-
-```agl
-export math.ops using add, mul
-```
-
-`using` may rename the exposed name:
-
-```agl
-export math.ops using add as plus
-```
-
-Use `hiding` to re-export all public names except the listed names:
-
-```agl
-export math.ops hiding _impl
-```
-
-Wildcard export re-exports public names from every module in a subtree:
-
-```agl
-export math.*
-```
-
-Private names are never re-exported. **Name conflict**: if two `export`
-declarations would expose the same name with
-different origins, it is a static error.  Diamond re-exports (the same name
-re-exported via two paths from the same original definition) are allowed and
-collapse silently.
-
-### Merging imports
-
-Multiple import declarations for the same module are allowed and merge:
-
-```agl
-import utils.strings using trim
-import utils.strings qualified as str
-```
-
-The unqualified set is the union of all open contributions; the qualified alias
-is registered from the `as` form.
-
-## Qualified access: `::`
-
-A name may be accessed with an explicit module qualifier:
-
-```agl
-import math
-let r = math::sqrt(2.0)
-```
-
-The qualifier is the **handle** under which the module was imported — either
-the full dot-path (the default, e.g. `math` for `import math` or `foo.bar` for
-`import foo.bar`) or its `as` alias.
-
-**Qualified access is bounded by the imported set S.** If you restricted the
-import with `using` or `hiding`, the qualifier can only reach the names in S.
-A `using x, y` import means `module::z` is a static error for any name `z`
-not listed in `using`:
-
-```agl
-import calc using add          # S = {add}
-let r = calc::add(1, 2)        # OK — add is in S
-let s = calc::mul(2, 3)        # STATIC ERROR — mul is not in S
-```
-
-Qualified access to a **private** name is a static error even if the name is
-otherwise known.
-
-### Self-reference: `::name`
-
-The `::` prefix with no left-hand qualifier refers to the **current module's
-own top-level declaration** — it resolves directly in the module root and
-bypasses any lexical shadow (e.g. a function parameter or local `let` that
-happens to share the name):
-
-```agl
-def helper() -> int = 1
-def public() -> int = ::helper()   # unambiguously calls this module's helper
-
-def g(helper: int) -> int = ::helper()  # calls the top-level def, not the param
-```
-
-This is useful when a top-level name might otherwise be shadowed by an open
-import or by a local binding inside a function body.
-
-## Public and private names
-
-A declaration is **public** by default; prefixing it with `private` makes it
-visible only within the defining module:
-
-```agl
-private def internal_helper(x: int) -> int = x * 2
-def public_api(x: int) -> int = internal_helper(x)
-```
-
-`private` is a declaration modifier that behaves like a decorator: it may
-precede the declaration on the same line or on the line directly above it (the
-newline after the modifier is insignificant).
-
-Private names are never included in import environments. Attempting qualified
-access to a private name is a static error with a clear message.
-
-## Library modules (non-entry)
-
-A module that is imported (not the entry) is a **library module**. Library
-modules may only contain declarations:
-
-- `def` (including `extern def`; see [Python FFI](ffi.md)) — function
-  definitions
-- `record`, `enum`, `type` — type declarations
-- `import` — import declarations (header only, before all other items)
-
-Statements, binders (`let`/`var`), expressions, agent declarations, `param`
-declarations, and `program` declarations are all **static errors** in a library
-module.
-
-## Cross-module mutual recursion
-
-Cyclic imports between modules are explicitly allowed: two modules may import
-each other. Because modules are declaration-only (they contain no executable
-top-level code), importing a module never executes it, so there is no
-initialization-order issue.
-
-Functions in different modules may call each other recursively. All public
-function declarations across the full import graph are collected before any
-function body is resolved, so forward references between modules work without
-ordering constraints.
-
-## Example
-
-```
-# File: math/arith.agl
-def square(x: int) -> int = x * x
-private def internal() -> int = 0
-
-# File: main.agl (entry)
-import math.arith
-let s = square(5)
-print s
-```
-
-```
-# Using qualified access and aliasing:
-import math.arith as arith
-let s = arith::square(3)
-
-# Selective import:
-import math.arith using square
-let s = square(4)
-```
-
-## Module search roots
-
-A module's dot-path must resolve to **exactly one** module definition. If no
-module with that dot-path exists, a module-not-found error is raised. If two or
-more distinct definitions exist for the same dot-path, an ambiguity error is
-raised — there is no priority ordering and no silent shadowing.
-
-## Imports in an interactive session
-
-In an interactive session, `import` declarations are supported. An `import`
-declaration may be entered at any time — it is not restricted to a module header.
-Imported modules are loaded on first use and cached for the rest of the session.
-
-```agl
-# First entry
-import utils.strings
-let result = trim("  hello  ")   # works immediately
-
-# Second entry — prior import is still in scope
-let result2 = trim("  world  ")  # still works
-```
-
-**Open imports persist across entries.** When an entry imports a module with an
-open import (`import foo`), the names it brings into scope remain available in
-subsequent entries. Entering a new `import foo` in a later entry replaces the
-earlier one (for example to change `using`/`hiding`/`as` options).
-
-**Qualified imports across entries** also persist: `import foo qualified as F` in
-entry 1 makes `F::name` available in entry 2 and later.
-
-**`::name` self-reference** in the REPL refers to any name declared in the
-accumulated REPL session — including names declared in prior entries. This lets
-you explicitly bypass an open-imported name that shadows an earlier session
-binding:
-
-```agl
-# Suppose an imported module exports 'helper'
-import util   # exposes 'helper' unqualified
-
-def helper() -> int = 42   # declares a session binding named 'helper'
-
-::helper()   # calls the session's own 'helper', not the imported one
-```
-
-**Declaration-only restriction does not apply in the REPL.** Unlike imported
-library modules, the REPL session behaves like the entry module: bare
-expressions, `let`/`var`, `print`, `exec`, and `ask` calls are all valid at
-any point, interleaved freely with `import` declarations and function/type
-definitions.
+Imports report a missing or ambiguous module path, a selected name that is not
+public, redundant `open ... using`, or an import placed after a non-import
+item. A qualified use reports an unknown qualifier, a member outside its
+contributed set (including a private member), or every candidate of an
+ambiguous route. A bare use reports an ambiguous bare name only at its use
+site. These diagnostics identify a direct repair: add a longer suffix or an
+anchored path, use an alias, adjust `hiding`, or select the required name.

@@ -409,7 +409,7 @@ class TestReplRun:
         session = fake_console[0]["session"]
         assert isinstance(session, ReplSession)
         result = session.eval_entry(
-            "import std.config\nstd.config::timeout := std.config::timeout\nstd.config::timeout"
+            "import std/config\nstd/config::timeout := std/config::timeout\nstd/config::timeout"
         )
 
         assert result.ok
@@ -560,14 +560,14 @@ class TestReplTrace:
         session = fake_console[0]["session"]
         assert isinstance(session, ReplSession)
 
-        assert session.eval_entry("import std.config").ok
-        assert session.eval_entry('std.config::runner := "echo replacement"').ok
+        assert session.eval_entry("import std/config").ok
+        assert session.eval_entry('std/config::runner := "echo replacement"').ok
         live_trace = tmp_path / "live.jsonl"
-        assert session.eval_entry(f'std.config::log-file := Some("{live_trace}")').ok
+        assert session.eval_entry(f'std/config::log-file := Some("{live_trace}")').ok
         assert session.eval_entry('print "traced"').ok
-        assert session.eval_entry("std.config::log := false").ok
+        assert session.eval_entry("std/config::log := false").ok
         assert session.eval_entry('print "disabled"').ok
-        assert session.eval_entry("std.config::log-file := None").ok
+        assert session.eval_entry("std/config::log-file := None").ok
 
         records = [json.loads(line) for line in live_trace.read_text(encoding="utf-8").splitlines()]
         rendered = [record.get("rendered") for record in records]
@@ -588,12 +588,12 @@ class TestReplTrace:
         assert isinstance(session, ReplSession)
 
         result = session.eval_entry(
-            "import std.config\n"
-            "let previous = std.config::runner\n"
+            "import std/config\n"
+            "let previous = std/config::runner\n"
             "try\n"
-            '  std.config::runner := "\'"\n'
+            '  std/config::runner := "\'"\n'
             "catch Exception as error => ()\n"
-            "std.config::runner == previous"
+            "std/config::runner == previous"
         )
 
         assert result.ok

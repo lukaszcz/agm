@@ -1,7 +1,7 @@
 """Host-service reconfiguration for host-consumed ``builtin var`` settings.
 
 Writing the ``runner``, ``log``, or ``log-file`` engine settings (via
-``std.config::NAME := ...``) reflects into the live host services: ``runner``
+``std/config::NAME := ...``) reflects into the live host services: ``runner``
 rebuilds the default agent that unnamed ``ask`` calls dispatch through, and
 ``log``/``log-file`` repoint the trace store.  These tests drive the ``agm exec``
 command with the agent runner subprocess mocked, plus a direct pipeline test with
@@ -100,7 +100,9 @@ class TestRunnerReconfiguration:
     def test_runner_write_reconfigures_default_agent(self, tmp_path: Path) -> None:
         """A ``runner :=`` before an ``ask`` dispatches through the new command."""
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text('import std.config\nstd.config::runner := "codex-runner"\nask("hi")\n')
+        agl_file.write_text(
+            'open import std/config\nstd/config::runner := "codex-runner"\nask("hi")\n'
+        )
 
         received: list[list[str]] = []
         with (
@@ -133,10 +135,10 @@ class TestRunnerReconfiguration:
     ) -> None:
         agl_file = tmp_path / "prog.agl"
         agl_file.write_text(
-            "import std.config\n"
+            "open import std/config\n"
             'agent fixed = "fixed-runner"\n'
             "agent inherited\n"
-            'std.config::runner := "new-runner"\n'
+            'std/config::runner := "new-runner"\n'
             'ask("one", agent = fixed)\n'
             'ask("two", agent = inherited)\n'
         )
@@ -158,11 +160,11 @@ class TestTraceReconfiguration:
         trace_path = tmp_path / "trace.jsonl"
         agl_file = tmp_path / "prog.agl"
         agl_file.write_text(
-            "import std.config\n"
+            "open import std/config\n"
             'print "before"\n'
-            f'std.config::log-file := Some("{trace_path}")\n'
+            f'std/config::log-file := Some("{trace_path}")\n'
             'print "after"\n'
-            "std.config::log := false\n"
+            "std/config::log := false\n"
             'print "disabled"\n'
         )
 
@@ -186,10 +188,10 @@ class TestTraceReconfiguration:
 
         agl_file = tmp_path / "prog.agl"
         agl_file.write_text(
-            "import std.config\n"
-            "std.config::log := true\n"
+            "open import std/config\n"
+            "std/config::log := true\n"
             'print "first"\n'
-            "std.config::log := false\n"
+            "std/config::log := false\n"
             'print "second"\n'
         )
 
@@ -214,7 +216,7 @@ class TestTraceReconfiguration:
         """``--log`` seeds the ``log`` register so a read before any write sees True."""
         monkeypatch.setattr("agm.core.log.default_agent_files_dir", lambda: tmp_path)
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text("import std.config\nlet l = std.config::log\nprint l\n")
+        agl_file.write_text("open import std/config\nlet l = std/config::log\nprint l\n")
 
         exec_command.run(_exec_args(agl_file, no_log=False, log=True))
 
@@ -245,7 +247,7 @@ class TestTraceReconfiguration:
         monkeypatch.setattr("agm.core.log.default_agent_files_dir", lambda: tmp_path)
         agl_file = tmp_path / "prog.agl"
         agl_file.write_text(
-            'import std.config\nprint "before"\nstd.config::log := true\nprint "after"\n'
+            'open import std/config\nprint "before"\nstd/config::log := true\nprint "after"\n'
         )
 
         with patch("agm.core.log.datetime", _StepClock()):
@@ -265,12 +267,12 @@ class TestTraceReconfiguration:
         monkeypatch.setattr("agm.core.log.default_agent_files_dir", lambda: tmp_path)
         agl_file = tmp_path / "prog.agl"
         agl_file.write_text(
-            "import std.config\n"
-            "std.config::log := true\n"
+            "open import std/config\n"
+            "std/config::log := true\n"
             'print "first"\n'
-            "std.config::log := false\n"
+            "std/config::log := false\n"
             'print "second"\n'
-            "std.config::log := true\n"
+            "std/config::log := true\n"
             'print "third"\n'
         )
 
@@ -292,7 +294,7 @@ class TestTraceReconfiguration:
         trace_path = tmp_path / "explicit.jsonl"
         agl_file = tmp_path / "prog.agl"
         agl_file.write_text(
-            'import std.config\nprint "before"\nstd.config::log := true\nprint "after"\n'
+            'open import std/config\nprint "before"\nstd/config::log := true\nprint "after"\n'
         )
 
         with patch("agm.core.log.datetime", _StepClock()):
@@ -340,10 +342,10 @@ class TestReconfigureHooks:
             build_runner=recorder.build_runner, resolve_trace_path=recorder.resolve_trace_path
         )
         source = (
-            "import std.config\n"
-            'std.config::runner := "codex"\n'
-            "std.config::log := true\n"
-            'std.config::log-file := Some("out.jsonl")\n'
+            "open import std/config\n"
+            'std/config::runner := "codex"\n'
+            "std/config::log := true\n"
+            'std/config::log-file := Some("out.jsonl")\n'
             "print 1\n"
         )
         result = _run_program_with_policy(source, policy=policy)
@@ -361,7 +363,7 @@ class TestReconfigureHooks:
         policy = HostSettingsPolicy(
             build_runner=failing_build, resolve_trace_path=lambda enabled, log_file: None
         )
-        source = 'import std.config\nstd.config::runner := "boom"\nprint 1\n'
+        source = 'open import std/config\nstd/config::runner := "boom"\nprint 1\n'
         result = _run_program_with_policy(source, policy=policy)
 
         assert not result.ok
@@ -376,11 +378,11 @@ class TestReconfigureHooks:
             build_runner=failing_build, resolve_trace_path=lambda enabled, log_file: None
         )
         source = (
-            "import std.config\n"
+            "open import std/config\n"
             "try\n"
-            '  std.config::runner := "boom"\n'
+            '  std/config::runner := "boom"\n'
             "catch Exception as error => ()\n"
-            "let retained = std.config::runner\n"
+            "let retained = std/config::runner\n"
             "retained\n"
         )
         result = _run_program_with_policy(source, policy=policy)
@@ -409,10 +411,10 @@ class TestReconfigureHooks:
             resolve_trace_path=fail_then_recover,
         )
         result = _run_program_with_policy(
-            "import std.config\n"
-            'std.config::log-file := Some("nested/one.jsonl")\n'
-            'std.config::log-file := Some("nested/two.jsonl")\n'
-            'std.config::log-file := Some("nested/three.jsonl")\n'
+            "open import std/config\n"
+            'std/config::log-file := Some("nested/one.jsonl")\n'
+            'std/config::log-file := Some("nested/two.jsonl")\n'
+            'std/config::log-file := Some("nested/three.jsonl")\n'
             "print 1\n",
             policy=policy,
         )

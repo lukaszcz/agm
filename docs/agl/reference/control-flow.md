@@ -242,7 +242,7 @@ usual `unit` result, and enclosing loops are abandoned as well.
 A `[n]` bound is the loop's own termination machinery. Loops with a `for`
 clause are bounded by a finite collection. Both are **self-bounded** and are
 never cut short by the host. The host's `max-iters` setting
-(`--max-iters` / `[exec] max-iters` / a `std.config::max-iters` write) is a
+(`--max-iters` / `[exec] max-iters` / a `std/config::max-iters` write) is a
 **safety valve** that applies **only to unbounded loops** — those with no `[n]` bound
 and no `for` clause (a bare `while … do … done` or `do … until E`). It
 caps such loops at `max-iters` body executions, raising

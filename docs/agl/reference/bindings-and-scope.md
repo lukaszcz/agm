@@ -46,7 +46,7 @@ var artifact: text = ask("Implement ${spec}", agent = impl)
 ```ebnf
 assign_stmt ::= assign_target ":=" expr
 assign_target ::= NAME ("[" expr "]")*
-                | module_path "::" NAME
+                | qual_prefix NAME
 ```
 
 `:=` updates the nearest visible **mutable** binding, has type `unit`, and
@@ -179,16 +179,16 @@ builtin_var_def ::= "builtin" "var" NAME ":" type_expr
 
 A `builtin var` declares a body-less, host-backed, **mutable** binding with a
 mandatory type and no initializer. It may appear only at the root of the
-canonical standard-library module `std.config`; declarations in entry programs
-or other library modules are static errors. `std.config` uses it to expose the
+canonical standard-library module `std/config`; declarations in entry programs
+or other library modules are static errors. `std/config` uses it to expose the
 program's engine settings:
 
 ```agl
-import std.config
+open import std/config
 
-std.config::max-iters := 10           # write a setting (qualified target)
+std/config::max-iters := 10           # write a setting (qualified target)
 runner := "claude -p"                 # the open import also allows a bare target
-let cap = std.config::max-iters       # read a setting
+let cap = std/config::max-iters       # read a setting
 ```
 
 An engine setting is an ordinary mutable binding in another module, so an

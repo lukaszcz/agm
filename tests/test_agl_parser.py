@@ -380,8 +380,8 @@ class TestBinders:
     @pytest.mark.parametrize(
         "source",
         (
-            "std.config::NoSuchType::max-iters := 3",
-            "std.config::NoSuchType::max-iters[0] := 3",
+            "std/config::NoSuchType::max-iters := 3",
+            "std/config::NoSuchType::max-iters[0] := 3",
         ),
     )
     def test_type_qualified_assignment_target_rejected(self, source: str) -> None:
@@ -389,7 +389,7 @@ class TestBinders:
             parse(source)
 
     def test_module_qualified_assignment_target_preserved(self) -> None:
-        assignment = first(parse("std.config::max-iters := 3"))
+        assignment = first(parse("std/config::max-iters := 3"))
         assert isinstance(assignment, AssignStmt)
         assert isinstance(assignment.target, NameTarget)
         assert assignment.target.module_qualifier is not None
@@ -399,7 +399,7 @@ class TestBinders:
         "source",
         (
             "mm::xs[0] := 42",
-            "std.config::max-iters[0] := 3",
+            "std/config::max-iters[0] := 3",
         ),
     )
     def test_module_qualified_indexed_assignment_target_rejected(self, source: str) -> None:
@@ -3210,229 +3210,144 @@ class TestCastParsing:
 
 
 class TestImportDecl:
-    """Tests for import declaration parsing."""
+    """Tests for slash-path import declaration parsing."""
 
-    def test_simple_import(self) -> None:
-        prog = parse("import foo.bar")
-        (decl,) = items(prog)
+    def test_simple_import_is_qualified_by_default(self) -> None:
+        (decl,) = items(parse("import foo/bar"))
         assert isinstance(decl, syntax.ImportDecl)
         assert decl.module_path == ("foo", "bar")
         assert decl.wildcard is False
-        assert decl.qualified is False
+        assert decl.is_open is False
         assert decl.alias is None
         assert decl.mode == syntax.ImportMode.ALL
         assert decl.items == ()
 
-    def test_single_segment_import(self) -> None:
-        prog = parse("import utils")
-        (decl,) = items(prog)
-        assert isinstance(decl, syntax.ImportDecl)
-        assert decl.module_path == ("utils",)
-
     @pytest.mark.parametrize(
         ("source", "expected"),
-        [
-            ("import FooBar", ("FooBar",)),
-            ("import foo.Qux2", ("foo", "Qux2")),
-        ],
+        (("import FooBar", ("FooBar",)), ("import foo/Qux2", ("foo", "Qux2"))),
     )
     def test_import_path_accepts_uppercase_segments(
         self, source: str, expected: tuple[str, ...]
     ) -> None:
-        prog = parse(source)
-        (decl,) = items(prog)
+        (decl,) = items(parse(source))
         assert isinstance(decl, syntax.ImportDecl)
         assert decl.module_path == expected
 
-    def test_import_wildcard(self) -> None:
-        prog = parse("import foo.bar.*")
-        (decl,) = items(prog)
-        assert isinstance(decl, syntax.ImportDecl)
-        assert decl.wildcard is True
-        assert decl.module_path == ("foo", "bar")
+    @pytest.mark.parametrize(
+        "source",
+        (
+            "import foo / bar",
+            "import foo/ bar",
+            "import foo /bar",
+            "import foo/bar / baz",
+            "export foo / bar",
+            "export foo/ bar",
+            "export foo /bar",
+        ),
+    )
+    def test_module_path_separators_must_be_adjacent(self, source: str) -> None:
+        with pytest.raises(AglSyntaxError):
+            parse(source)
 
-    def test_import_qualified(self) -> None:
-        prog = parse("import foo qualified")
-        (decl,) = items(prog)
+    def test_single_segment_import(self) -> None:
+        (decl,) = items(parse("import utils"))
         assert isinstance(decl, syntax.ImportDecl)
-        assert decl.qualified is True
+        assert decl.module_path == ("utils",)
 
-    def test_import_with_alias(self) -> None:
-        prog = parse("import foo.bar as fb")
-        (decl,) = items(prog)
+    @pytest.mark.parametrize("alias", ("fb", "FB"))
+    def test_import_alias(self, alias: str) -> None:
+        (decl,) = items(parse(f"import foo/bar as {alias}"))
         assert isinstance(decl, syntax.ImportDecl)
+        assert decl.alias == alias
+        assert decl.is_open is False
+
+    @pytest.mark.parametrize(
+        ("source", "mode", "expected_items"),
+        (
+            ("import foo using item", syntax.ImportMode.USING, (("item", None),)),
+            (
+                "import foo using first, second",
+                syntax.ImportMode.USING,
+                (("first", None), ("second", None)),
+            ),
+            ("import foo hiding item", syntax.ImportMode.HIDING, (("item", None),)),
+            (
+                "import foo hiding first, second",
+                syntax.ImportMode.HIDING,
+                (("first", None), ("second", None)),
+            ),
+            ("import foo using item as renamed", syntax.ImportMode.USING, (("item", "renamed"),)),
+        ),
+    )
+    def test_import_items(
+        self,
+        source: str,
+        mode: syntax.ImportMode,
+        expected_items: tuple[tuple[str, str | None], ...],
+    ) -> None:
+        (decl,) = items(parse(source))
+        assert isinstance(decl, syntax.ImportDecl)
+        assert decl.mode is mode
+        assert tuple((item.name, item.rename) for item in decl.items) == expected_items
+
+    def test_open_import_with_alias_and_hiding(self) -> None:
+        (decl,) = items(parse("open import foo/bar as fb hiding secret"))
+        assert isinstance(decl, syntax.ImportDecl)
+        assert decl.is_open is True
         assert decl.alias == "fb"
-
-    def test_import_qualified_with_alias(self) -> None:
-        prog = parse("import foo qualified as f")
-        (decl,) = items(prog)
-        assert isinstance(decl, syntax.ImportDecl)
-        assert decl.qualified is True
-        assert decl.alias == "f"
-
-    def test_import_using_single_item(self) -> None:
-        prog = parse("import foo using bar")
-        (decl,) = items(prog)
-        assert isinstance(decl, syntax.ImportDecl)
-        assert decl.mode == syntax.ImportMode.USING
-        assert len(decl.items) == 1
-        assert decl.items[0].name == "bar"
-        assert decl.items[0].rename is None
-
-    def test_import_using_multiple_items(self) -> None:
-        prog = parse("import foo using bar, baz")
-        (decl,) = items(prog)
-        assert isinstance(decl, syntax.ImportDecl)
-        assert decl.mode == syntax.ImportMode.USING
-        assert len(decl.items) == 2
-        names = {i.name for i in decl.items}
-        assert names == {"bar", "baz"}
-
-    def test_import_using_with_rename(self) -> None:
-        prog = parse("import foo using bar as b")
-        (decl,) = items(prog)
-        assert isinstance(decl, syntax.ImportDecl)
-        assert decl.items[0].name == "bar"
-        assert decl.items[0].rename == "b"
-
-    def test_import_hiding_single_name(self) -> None:
-        prog = parse("import foo hiding secret")
-        (decl,) = items(prog)
-        assert isinstance(decl, syntax.ImportDecl)
         assert decl.mode == syntax.ImportMode.HIDING
-        assert len(decl.items) == 1
         assert decl.items[0].name == "secret"
 
-    def test_import_hiding_multiple_names(self) -> None:
-        prog = parse("import foo hiding a, b")
-        (decl,) = items(prog)
+    def test_open_import_using_is_a_syntax_error(self) -> None:
+        with pytest.raises(AglSyntaxError, match="open.*using"):
+            parse("open import foo using bar")
+
+    def test_import_wildcard_with_alias_and_hiding(self) -> None:
+        (decl,) = items(parse("import foo/bar/* as F hiding x, y"))
         assert isinstance(decl, syntax.ImportDecl)
-        assert decl.mode == syntax.ImportMode.HIDING
-        names = {i.name for i in decl.items}
-        assert names == {"a", "b"}
-
-    def test_import_using_type_name(self) -> None:
-        # TYPE_NAME in using clause
-        prog = parse("import foo using Bar")
-        (decl,) = items(prog)
-        assert isinstance(decl, syntax.ImportDecl)
-        assert decl.items[0].name == "Bar"
-
-    def test_import_after_other_decl(self) -> None:
-        """import can appear after other declarations."""
-        prog = parse("let x = 1\nimport foo")
-        it = items(prog)
-        assert isinstance(it[1], syntax.ImportDecl)
-
-    def test_import_is_in_declaration_union(self) -> None:
-        """ImportDecl is part of the Declaration union (item-level)."""
-        prog = parse("import foo")
-        (decl,) = items(prog)
-        # Declaration is a type alias union; check it's ImportDecl
-        assert type(decl).__name__ == "ImportDecl"
-
-    def test_import_qualified_using_two_items(self) -> None:
-        """import foo.bar qualified using x, y — qualified flag + using list."""
-        prog = parse("import foo.bar qualified using x, y")
-        (decl,) = items(prog)
-        assert isinstance(decl, syntax.ImportDecl)
+        assert decl.wildcard is True
         assert decl.module_path == ("foo", "bar")
-        assert decl.qualified is True
-        assert decl.mode == syntax.ImportMode.USING
-        assert {i.name for i in decl.items} == {"x", "y"}
+        assert decl.alias == "F"
+        assert decl.mode is syntax.ImportMode.HIDING
+        assert tuple(item.name for item in decl.items) == ("x", "y")
 
-    def test_import_qualified_as_alias_using_two_items(self) -> None:
-        """import foo.bar qualified as A using x, y — all three clauses."""
-        prog = parse("import foo.bar qualified as A using x, y")
-        (decl,) = items(prog)
-        assert isinstance(decl, syntax.ImportDecl)
-        assert decl.qualified is True
-        assert decl.alias == "A"
-        assert decl.mode == syntax.ImportMode.USING
-        assert {i.name for i in decl.items} == {"x", "y"}
-
-    def test_import_qualified_hiding_two_items(self) -> None:
-        """import foo.bar qualified hiding x, y — qualified flag + hiding list."""
-        prog = parse("import foo.bar qualified hiding x, y")
-        (decl,) = items(prog)
-        assert isinstance(decl, syntax.ImportDecl)
-        assert decl.qualified is True
-        assert decl.mode == syntax.ImportMode.HIDING
-        assert {i.name for i in decl.items} == {"x", "y"}
-
-    def test_import_wildcard_with_alias(self) -> None:
-        """import foo.bar.* as A — wildcard import with alias."""
-        prog = parse("import foo.bar.* as A")
-        (decl,) = items(prog)
-        assert isinstance(decl, syntax.ImportDecl)
-        assert decl.module_path == ("foo", "bar")
-        assert decl.wildcard is True
-        assert decl.alias == "A"
-
-    def test_import_alias_uppercase(self) -> None:
-        """import foo.bar as A — uppercase TYPE_NAME alias is accepted."""
-        prog = parse("import foo.bar as A")
-        (decl,) = items(prog)
-        assert isinstance(decl, syntax.ImportDecl)
-        assert decl.module_path == ("foo", "bar")
-        assert decl.alias == "A"
-
-    # --- Wildcard import with using/hiding ---
-
-    def test_import_wildcard_using(self) -> None:
-        """import foo.* using x, y — wildcard + using clause."""
-        prog = parse("import foo.* using x, y")
-        (decl,) = items(prog)
+    def test_import_wildcard_with_using_rename(self) -> None:
+        (decl,) = items(parse("import foo/bar/* using x as X"))
         assert isinstance(decl, syntax.ImportDecl)
         assert decl.wildcard is True
-        assert decl.module_path == ("foo",)
-        assert decl.mode == syntax.ImportMode.USING
-        assert {i.name for i in decl.items} == {"x", "y"}
-        assert decl.alias is None
-        assert decl.qualified is False
-
-    def test_import_wildcard_hiding(self) -> None:
-        """import foo.* hiding x — wildcard + hiding clause."""
-        prog = parse("import foo.* hiding x")
-        (decl,) = items(prog)
-        assert isinstance(decl, syntax.ImportDecl)
-        assert decl.wildcard is True
-        assert decl.module_path == ("foo",)
-        assert decl.mode == syntax.ImportMode.HIDING
-        assert len(decl.items) == 1
-        assert decl.items[0].name == "x"
-
-    def test_import_wildcard_using_with_rename(self) -> None:
-        """import foo.* using x as X — wildcard + using item rename."""
-        prog = parse("import foo.* using x as X")
-        (decl,) = items(prog)
-        assert isinstance(decl, syntax.ImportDecl)
-        assert decl.wildcard is True
-        assert decl.mode == syntax.ImportMode.USING
-        assert len(decl.items) == 1
-        assert decl.items[0].name == "x"
+        assert decl.mode is syntax.ImportMode.USING
         assert decl.items[0].rename == "X"
 
-    def test_import_wildcard_qualified_using(self) -> None:
-        """import foo.* qualified using x — wildcard + qualified + using."""
-        prog = parse("import foo.* qualified using x")
-        (decl,) = items(prog)
-        assert isinstance(decl, syntax.ImportDecl)
-        assert decl.wildcard is True
-        assert decl.qualified is True
-        assert decl.mode == syntax.ImportMode.USING
-        assert decl.items[0].name == "x"
+    @pytest.mark.parametrize(
+        "source",
+        (
+            "import foo/bar / *",
+            "import foo/bar/ *",
+            "import foo/bar /*",
+            "export foo/bar / *",
+            "export foo/bar/ *",
+            "export foo/bar /*",
+        ),
+    )
+    def test_wildcard_tail_must_be_adjacent_to_the_module_path(self, source: str) -> None:
+        with pytest.raises(AglSyntaxError):
+            parse(source)
 
-    def test_import_wildcard_alias_using(self) -> None:
-        """import foo.bar.* as A using x — wildcard + alias + using."""
-        prog = parse("import foo.bar.* as A using x")
-        (decl,) = items(prog)
-        assert isinstance(decl, syntax.ImportDecl)
-        assert decl.wildcard is True
-        assert decl.module_path == ("foo", "bar")
-        assert decl.alias == "A"
-        assert decl.mode == syntax.ImportMode.USING
-        assert decl.items[0].name == "x"
+    @pytest.mark.parametrize(
+        "source",
+        (
+            "import foo.bar",
+            "import /foo",
+            "import foo qualified",
+        ),
+    )
+    def test_legacy_import_spellings_are_syntax_errors(self, source: str) -> None:
+        with pytest.raises(AglSyntaxError):
+            parse(source)
+
+    def test_import_after_other_decl(self) -> None:
+        it = items(parse("let x = 1\nimport foo"))
+        assert isinstance(it[1], syntax.ImportDecl)
 
 
 class TestExportDecl:
@@ -3447,11 +3362,10 @@ class TestExportDecl:
         assert decl.mode == syntax.ImportMode.ALL
         assert decl.items == ()
 
-    def test_export_wildcard(self) -> None:
-        prog = parse("export foo.*")
-        (decl,) = items(prog)
+    def test_export_slash_path_wildcard(self) -> None:
+        (decl,) = items(parse("export foo/bar/*"))
         assert isinstance(decl, syntax.ExportDecl)
-        assert decl.module_path == ("foo",)
+        assert decl.module_path == ("foo", "bar")
         assert decl.wildcard is True
 
     def test_export_using_single_item(self) -> None:
@@ -3517,13 +3431,33 @@ class TestQualifiedRefs:
         assert expr.module_qualifier is not None
         assert expr.module_qualifier.segments == ("foo",)
 
-    def test_qual_var_ref_dotted(self) -> None:
-        prog = parse("foo.bar::baz")
-        (expr,) = items(prog)
+    def test_qual_var_ref_slash(self) -> None:
+        (expr,) = items(parse("foo/bar::baz"))
         assert isinstance(expr, syntax.VarRef)
         assert expr.name == "baz"
         assert expr.module_qualifier is not None
         assert expr.module_qualifier.segments == ("foo", "bar")
+        assert expr.module_qualifier.anchored is False
+
+    def test_multi_segment_qualifier_requires_a_tight_final_dcolon(self) -> None:
+        (expr,) = items(parse("foo/bar ::x"))
+        assert isinstance(expr, BinaryOp)
+        assert expr.op is BinOp.DIV
+        assert isinstance(expr.right, Call)
+        assert isinstance(expr.right.callee, VarRef)
+        assert expr.right.callee.name == "bar"
+        assert len(expr.right.args) == 1
+        (argument,) = expr.right.args
+        assert isinstance(argument, VarRef)
+        assert argument.module_qualifier is not None
+        assert argument.module_qualifier.segments == ()
+
+    def test_anchored_qual_var_ref(self) -> None:
+        (expr,) = items(parse("/foo/bar::baz"))
+        assert isinstance(expr, syntax.VarRef)
+        assert expr.module_qualifier is not None
+        assert expr.module_qualifier.segments == ("foo", "bar")
+        assert expr.module_qualifier.anchored is True
 
     def test_qual_constructor_simple(self) -> None:
         # foo::Bar → VarRef(name="Bar", module_qualifier=Qualifier(["foo"]))
@@ -3534,9 +3468,8 @@ class TestQualifiedRefs:
         assert expr.module_qualifier is not None
         assert expr.module_qualifier.segments == ("foo",)
 
-    def test_qual_constructor_dotted(self) -> None:
-        prog = parse("my.mod::Baz")
-        (expr,) = items(prog)
+    def test_qual_constructor_slash(self) -> None:
+        (expr,) = items(parse("my/mod::Baz"))
         assert isinstance(expr, syntax.VarRef)
         assert expr.name == "Baz"
         assert expr.module_qualifier is not None
@@ -3600,9 +3533,10 @@ class TestQualifiedRefs:
         assert isinstance(callee, syntax.VarRef)
         assert callee.module_qualifier is None
 
-    def test_type_qualifier_after_module_must_be_single_type_name(self) -> None:
+    @pytest.mark.parametrize("source", ("m::foo/bar::Baz", "m::/foo::Baz"))
+    def test_type_qualifier_after_module_must_be_single_unanchored_name(self, source: str) -> None:
         with pytest.raises(AglSyntaxError, match="single type name"):
-            parse("m::foo.bar::Baz")
+            parse(source)
 
 
 # ---------------------------------------------------------------------------

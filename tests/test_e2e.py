@@ -8171,6 +8171,24 @@ class TestReplCommand:
         assert result.returncode == 0
         assert any(line.split()[-1:] == ["10"] for line in result.stdout.splitlines())
 
+    def test_repl_no_stdlib_requires_explicit_core_import(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        work = tmp_path / "work"
+        work.mkdir()
+
+        result = run_agm(
+            ["repl", "--no-stdlib"],
+            env=env,
+            cwd=str(work),
+            input="Some(value = 1)\nopen import std/core\nSome(value = 1)\n:quit\n",
+        )
+
+        assert result.returncode == 0
+        # Only the second construction can render: it follows the explicit core
+        # import, while the first must fail with the stdlib prelude disabled.
+        assert result.stdout.count("Option::Some(") == 1
+
     def test_repl_with_configured_lib_root(self, tmp_path: Path, env: dict[str, str]) -> None:
         """A configured [modules] lib_root is resolved and used by the REPL."""
         home = Path(env["HOME"])
@@ -8188,7 +8206,7 @@ class TestReplCommand:
             ["repl"],
             env=env,
             cwd=str(work),
-            input="import math\ndouble(21)\n:quit\n",
+            input="open import math\ndouble(21)\n:quit\n",
         )
         assert result.returncode == 0
         assert any(line.split()[-1:] == ["42"] for line in result.stdout.splitlines())

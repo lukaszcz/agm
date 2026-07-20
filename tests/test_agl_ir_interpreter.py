@@ -849,7 +849,7 @@ class TestRunReturnValues:
         """A symbol owned by a different module should not appear in results."""
         from agm.agl.modules.ids import ModuleId
 
-        other_mod = ModuleId.from_dotted("other")
+        other_mod = ModuleId.from_path("other")
         sym = SymbolId(0)
         desc = SymbolDescriptor(symbol_id=sym, mutable=False, public_name="x", owner=other_mod)
         result = _run(

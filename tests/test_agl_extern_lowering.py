@@ -194,18 +194,18 @@ class TestGraphLowering:
         self, tmp_path: Path
     ) -> None:
         root = tmp_path / "root"
-        write_companion_file(root, "lib.mod", "def f(x):\n    return x + 1\n")
+        write_companion_file(root, "lib/mod", "def f(x):\n    return x + 1\n")
         graph = make_graph_from_files(
             tmp_path,
             {
-                "entry": "import lib.mod\nlib.mod::f(1)",
-                "lib.mod": "extern def f(x: int) -> int",
+                "entry": "open import lib/mod\nlib/mod::f(1)",
+                "lib/mod": "extern def f(x: int) -> int",
             },
         )
         checked = check_program(resolve_program(graph), _CAPS)
         executable = lower_program(_compiled_checked(checked))
 
-        lib_mid = ModuleId.from_dotted("lib.mod")
+        lib_mid = ModuleId.from_path("lib/mod")
         desc = _only_extern(executable)
         assert desc.module_id == lib_mid
 
@@ -237,11 +237,11 @@ class TestDryRunInventory:
 
     def test_pipeline_check_only_lists_the_extern_call_site(self, tmp_path: Path) -> None:
         root = tmp_path / "root"
-        write_module_file(root, "lib.mod", "extern def f(x: int) -> int")
-        write_companion_file(root, "lib.mod", "def f(x):\n    return x + 1\n")
+        write_module_file(root, "lib/mod", "extern def f(x: int) -> int")
+        write_companion_file(root, "lib/mod", "def f(x):\n    return x + 1\n")
         driver = PipelineDriver()
         prepared = PipelineDriver.prepare_program(
-            "import lib.mod\nlib.mod::f(1)",
+            "open import lib/mod\nlib/mod::f(1)",
             entry_path=None,
             roots=_roots(root),
             default_stdlib=False,
@@ -257,7 +257,7 @@ class TestDryRunInventory:
 # Validator: hand-built minimal programs (following test_agl_ir_validate.py style)
 # ---------------------------------------------------------------------------
 
-MOD_A = ModuleId.from_dotted("mod_a")
+MOD_A = ModuleId.from_path("mod_a")
 SID0 = SourceId(value=0)
 FN_EXT = FunctionId(value=0)
 SYM_EXT_FN = SymbolId(value=0)
@@ -405,7 +405,7 @@ class TestValidatorNegatives:
             validate_ir(_make_program(functions={FN_EXT: bad}))
 
     def test_extern_module_id_must_be_registered(self) -> None:
-        bad = _extern_desc(module_id=ModuleId.from_dotted("nope"))
+        bad = _extern_desc(module_id=ModuleId.from_path("nope"))
         with pytest.raises(InvalidIrError, match="module_id"):
             validate_ir(_make_program(functions={FN_EXT: bad}))
 

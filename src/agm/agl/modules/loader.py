@@ -7,7 +7,7 @@ phase of the AgL module system:
 2. Extract top-level import/export declarations.
 3. BFS over transitive import and export declarations, resolving each module id
    to its canonical file via :func:`~agm.agl.modules.resolver.resolve_module` (or
-   :func:`~agm.agl.modules.resolver.expand_wildcard` for ``.*`` imports),
+   :func:`~agm.agl.modules.resolver.expand_wildcard` for ``/*`` imports),
    parsing each file with a monotonically growing ``start_id`` seed so that
    **node ids are disjoint across all modules in the graph**.
 4. Terminate traversal when a module id is already loaded — this makes cycles
@@ -27,11 +27,13 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import agm.agl.syntax as syntax
+from agm.agl.lexer import spaced_qualifier_collector
 from agm.agl.modules.errors import ImportEntryError, MissingExternCompanion
 from agm.agl.modules.ids import ENTRY_ID, STD_CORE_ID, ModuleId
 from agm.agl.modules.resolver import expand_wildcard, resolve_module
 from agm.agl.modules.roots import RootSet
 from agm.agl.parser.parser import parse_program_seeded
+from agm.agl.syntax.advisories import SpacedQualifier
 from agm.agl.syntax.nodes import ExportDecl, FuncDef, ImportDecl
 from agm.agl.syntax.spans import SourceId, SourceSpan
 from agm.agl.syntax.types import ImportMode
@@ -62,6 +64,10 @@ class LoadedModule:
     export_decls:
         Top-level :class:`~agm.agl.syntax.nodes.ExportDecl` nodes extracted
         from ``program.body.items``.
+    spaced_qualifiers:
+        Lexical advisories for qualifier runs this module's source separated
+        from their ``::`` by whitespace — see
+        :class:`~agm.agl.syntax.advisories.SpacedQualifier`.
     companion_path:
         The canonical Python companion file path (this module's path with its
         suffix replaced by ``.py``) when ``program`` declares at least one
@@ -79,6 +85,7 @@ class LoadedModule:
     imports: tuple[ImportDecl, ...]
     export_decls: tuple[ExportDecl, ...]
     source_text: str
+    spaced_qualifiers: tuple[SpacedQualifier, ...]
     companion_path: Path | None
 
 
@@ -170,7 +177,7 @@ def _synthetic_stdlib_import(node_id: int) -> ImportDecl:
     return ImportDecl(
         module_path=STD_CORE_ID.segments,
         wildcard=False,
-        qualified=False,
+        is_open=True,
         alias=None,
         mode=ImportMode.ALL,
         items=(),
@@ -309,11 +316,12 @@ def _load_into_graph(
 
         file_source_id = SourceId(label=str(canon_path))
         source_text = normalize_newlines(fs.read_text(canon_path))
-        program, next_id = parse_program_seeded(
-            source_text,
-            start_id=next_id,
-            source=file_source_id,
-        )
+        with spaced_qualifier_collector() as spaced_sink:
+            program, next_id = parse_program_seeded(
+                source_text,
+                start_id=next_id,
+                source=file_source_id,
+            )
         if default_stdlib and mid != STD_CORE_ID:
             program = _with_default_stdlib_import(program, import_node_id=next_id)
             next_id += 1
@@ -325,6 +333,7 @@ def _load_into_graph(
             imports=_extract_imports(program),
             export_decls=_extract_exports(program),
             source_text=source_text,
+            spaced_qualifiers=tuple(spaced_sink),
             companion_path=_companion_path_for(mid, program, canon_path),
         )
         modules[mid] = loaded
@@ -387,11 +396,12 @@ def load_graph(
     label = str(canonical_entry_path) if canonical_entry_path is not None else "<command>"
     entry_source_id = SourceId(label=label)
 
-    entry_program, next_id = parse_program_seeded(
-        entry_source,
-        start_id=0,
-        source=entry_source_id,
-    )
+    with spaced_qualifier_collector() as entry_spaced_sink:
+        entry_program, next_id = parse_program_seeded(
+            entry_source,
+            start_id=0,
+            source=entry_source_id,
+        )
     if default_stdlib:
         entry_program = _with_default_stdlib_import(
             entry_program,
@@ -406,6 +416,7 @@ def load_graph(
         imports=_extract_imports(entry_program),
         export_decls=_extract_exports(entry_program),
         source_text=normalize_newlines(entry_source),
+        spaced_qualifiers=tuple(entry_spaced_sink),
         companion_path=_companion_path_for(ENTRY_ID, entry_program, canonical_entry_path),
     )
 
@@ -427,6 +438,8 @@ def build_repl_graph(
     path: Path | None,
     cached: dict[ModuleId, LoadedModule],
     roots: RootSet,
+    default_stdlib: bool = True,
+    spaced_qualifiers: tuple[SpacedQualifier, ...] = (),
 ) -> tuple[ModuleGraph, int, dict[ModuleId, LoadedModule]]:
     """Build a module graph from an already-parsed entry program.
 
@@ -449,6 +462,11 @@ def build_repl_graph(
         These are reused without re-parsing.
     roots:
         The assembled :class:`~agm.agl.modules.roots.RootSet` to search.
+    default_stdlib:
+        Whether to inject the standard-library prelude into the entry and
+        newly loaded library modules.
+    spaced_qualifiers:
+        Spaced-qualifier advisories collected while *program* was lexed.
 
     Returns
     -------
@@ -462,8 +480,9 @@ def build_repl_graph(
     entry_source_id = SourceId(label=label)
 
     seed_modules = dict(cached)
-    program = _with_default_stdlib_import(program, import_node_id=next_start_id)
-    next_start_id += 1
+    if default_stdlib:
+        program = _with_default_stdlib_import(program, import_node_id=next_start_id)
+        next_start_id += 1
 
     entry_loaded = LoadedModule(
         module_id=ENTRY_ID,
@@ -473,6 +492,7 @@ def build_repl_graph(
         imports=_extract_imports(program),
         export_decls=_extract_exports(program),
         source_text="",
+        spaced_qualifiers=spaced_qualifiers,
         companion_path=_companion_path_for(ENTRY_ID, program, canonical_entry_path),
     )
 
@@ -482,5 +502,5 @@ def build_repl_graph(
         canonical_entry_path=canonical_entry_path,
         seed_modules=seed_modules,
         start_id=next_start_id,
-        default_stdlib=True,
+        default_stdlib=default_stdlib,
     )

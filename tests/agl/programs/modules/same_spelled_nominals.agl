@@ -1,6 +1,5 @@
-import alpha qualified as a
-import beta qualified as b
-
+import alpha as a
+import beta as b
 param items: bool
 
 case a::make(items) of

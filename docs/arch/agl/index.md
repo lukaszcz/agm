@@ -38,7 +38,7 @@ The firewall is *semantic*, not an I/O boundary: it isolates the static passes f
 
 - **Agent invocation** goes through `agm.agent.runner` (the same prepare/run path as loop/review), with the default runner resolved from the shared `[loop]` config via `agm.agent.config.default_agent_runner`. AgL adds only its own dispatch/typed-request layer (`runtime/agents.py`) over that runner.
 - **Primitives** come from `agm.core`: shell `exec` and agent subprocesses use `core.process`, environments use `core.env`, file and trace I/O use `core.fs`/`core.log` (so AgL participates in dry-run for free), and generic helpers (`util.text`, `util.graph`) are reused for newline normalization and SCC computation (module-cycle detection and the type-table's finiteness/schema-planning analyses).
-- **Configuration** is loaded and layered by `agm.config`. The program's own engine settings are `builtin var` bindings in the standard-library module `std.config`; the evaluator reads and writes them through `IrBuiltinLoad`/`IrBuiltinStore`, backing runtime-live settings with live interpreter fields and host-consumed settings with registers that reconfigure the live host service on write (see [repl.md](agl/repl.md)). The `exec`/`repl` commands seed the initial values from the CLI and config-file layers using shared helpers (`core.log`); a source write overrides them from its program point onward.
+- **Configuration** is loaded and layered by `agm.config`. The program's own engine settings are `builtin var` bindings in the standard-library module `std/config`; the evaluator reads and writes them through `IrBuiltinLoad`/`IrBuiltinStore`, backing runtime-live settings with live interpreter fields and host-consumed settings with registers that reconfigure the live host service on write (see [repl.md](agl/repl.md)). The `exec`/`repl` commands seed the initial values from the CLI and config-file layers using shared helpers (`core.log`); a source write overrides them from its program point onward.
 
 ## Expression-Oriented Design
 
@@ -46,7 +46,7 @@ AgL has no separate statement category. Every construct — bindings, assignment
 
 ## Programs and Modules
 
-A **program** is the entry module together with its transitive imports, including the standard-library prelude. The production pipeline always loads that program and runs program-level scope, typecheck, match compilation, and lowering passes. A **module** is one compilation unit within the program; the corresponding module passes are workers used by those program passes and useful as white-box test seams. `ModuleGraph` remains the loader's data structure. Module loading and program passes are described in [modules.md](agl/modules.md).
+A **program** is the entry module together with its transitive imports. Unless the host disables it, every loaded entry and library module except `std/core` itself receives the automatic `std/core` open-import prelude. The production pipeline always loads that program and runs program-level scope, typecheck, match compilation, and lowering passes. A **module** is one compilation unit within the program; the corresponding module passes are workers used by those program passes and useful as white-box test seams. `ModuleGraph` remains the loader's data structure. Module loading and program passes are described in [modules.md](agl/modules.md).
 
 ## Package Map
 

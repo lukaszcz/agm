@@ -1,12 +1,11 @@
-# Modules: the import surface in combination with functions and casts. Exercises
-# an open import, a qualified-as import, a `using … as` rename, a `.*` wildcard
-# over a dotted prefix with alias re-rooting, qualified `::` access, a `private`
-# helper reached only through its public wrapper, and `::name` self-reference
-# bypassing a shadowing parameter. A param drives the numbers.
-import num.arith
-import num.stats qualified as st
-import text.format using label, shout as yell
-import lib.* qualified as L
+# Modules: import forms in combination with functions and casts. Exercises an
+# open import, an alias, a `using … as` rename, a wildcard alias facade,
+# qualified `::` access, a `private` helper reached only through its public
+# wrapper, and `::name` self-reference bypassing a shadowing parameter.
+open import num/arith
+import num/stats as st
+import text/format using label, shout as yell
+import lib/* as L
 
 param x: int
 param y: int
@@ -30,9 +29,9 @@ print(st::min2(x, y) as text)
 # A private helper reached only through its public wrapper.
 print(via_secret(x) as text)
 
-# Wildcard alias re-rooting: lib.a → L.a, lib.b → L.b.
-print(L.a::alpha())
-print(L.b::beta())
+# The wildcard alias is a merged facade filtered by the selected member.
+print(L::alpha())
+print(L::beta())
 
 # Self-reference inside a shadowing parameter scope.
 print(bump(x) as text)

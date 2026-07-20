@@ -4,7 +4,7 @@ This module provides two public functions:
 
 - :func:`resolve_module` — resolve a single :class:`~agm.agl.modules.ids.ModuleId`
   to its unique canonical :class:`~pathlib.Path`.
-- :func:`expand_wildcard` — expand a wildcard prefix (``foo.*``) into every
+- :func:`expand_wildcard` — expand a wildcard prefix (``foo/*``) into every
   matching :class:`~agm.agl.modules.ids.ModuleId` and its canonical path.
 
 Both enforce **global-uniqueness**: an id that resolves to ≥2 distinct
@@ -96,7 +96,7 @@ def expand_wildcard(
     Globs ``<root>/<prefix>.agl`` (the prefix module itself, if it exists) and
     ``<root>/<prefix>/**/*.agl`` (the full subtree) across **all** roots.
 
-    Each discovered file is mapped to its dotted :class:`~agm.agl.modules.ids.ModuleId`
+    Each discovered file is mapped to its slash-path :class:`~agm.agl.modules.ids.ModuleId`
     via the inverse of ``ModuleId.relpath()``.  Global uniqueness is enforced: if
     the same id is found in two roots as distinct canonical files, an
     :class:`~agm.agl.modules.errors.AmbiguousModule` error is raised.  The
@@ -107,7 +107,7 @@ def expand_wildcard(
     ----------
     prefix:
         The wildcard prefix as a tuple of segments, e.g. ``("foo", "bar")``
-        for ``import foo.bar.*``.
+        for ``import foo/bar/*``.
     roots:
         The set of search roots.
     span:

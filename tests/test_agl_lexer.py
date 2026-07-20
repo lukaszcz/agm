@@ -13,7 +13,9 @@ from agm.agl.diagnostics import Diagnostic
 from agm.agl.lexer import (
     AglLexer,
     LexError,
+    SpacedQualifier,
     lex_tab_warnings,
+    spaced_qualifier_collector,
     tab_warning_collector,
     tokenize,
 )
@@ -2261,7 +2263,7 @@ class TestCaseNeutralNames:
 
     def test_config_is_ordinary_name(self) -> None:
         # 'config' is an ordinary identifier everywhere, including at item-start
-        # and as the 'config' segment of a module path (e.g. std.config).
+        # and as the 'config' segment of a module path (e.g. std/config).
         assert tok("config") == [("NAME", "config")]
         assert ("NAME", "config") in tok("let config = 1")
 
@@ -2342,8 +2344,16 @@ class TestModuleSystemLexer:
     # --- import soft keyword ---
 
     def test_import_at_line_start_is_import_token(self) -> None:
-        result = tok("import foo.bar")
+        result = tok("import foo/bar")
         assert result[0] == ("IMPORT", "import")
+
+    def test_open_is_promoted_only_directly_before_item_start_import(self) -> None:
+        assert tok("open import foo")[0:2] == [("OPEN", "open"), ("IMPORT", "import")]
+        assert ("NAME", "open") in tok("let open = 1")
+        assert ("NAME", "open") in tok("open\nimport foo")
+
+    def test_qualified_remains_an_identifier(self) -> None:
+        assert tok("qualified") == [("NAME", "qualified")]
 
     def test_import_mid_expression_stays_name(self) -> None:
         # 'import' after an operator is NOT at item-start → stays NAME
@@ -2361,17 +2371,6 @@ class TestModuleSystemLexer:
         assert ("NAME", "private") in result
         types = [t for t, _ in result]
         assert "PRIVATE" not in types
-
-    def test_qualified_in_import_line(self) -> None:
-        result = tok("import foo qualified")
-        types = [t for t, _ in result]
-        assert "QUALIFIED" in types
-
-    def test_qualified_outside_import_line_stays_name(self) -> None:
-        result = tok("let qualified = 1")
-        assert ("NAME", "qualified") in result
-        types = [t for t, _ in result]
-        assert "QUALIFIED" not in types
 
     def test_using_in_import_line(self) -> None:
         result = tok("import foo using bar")
@@ -2401,25 +2400,34 @@ class TestModuleSystemLexer:
 
     # --- MODQUAL merging ---
 
-    def test_simple_name_dcolon_name_merges_to_modqual(self) -> None:
+    def test_tight_single_segment_qualifier_merges_to_modqual(self) -> None:
         result = lark_tok("foo::bar")
-        assert result[0] == ("MODQUAL", "foo")
-        assert result[1][0] == "NAME"
-        assert result[1][1] == "bar"
+        assert result[0:2] == [("MODQUAL", "foo"), ("NAME", "bar")]
 
-    def test_dotted_path_dcolon_merges_to_modqual(self) -> None:
-        result = lark_tok("foo.bar::baz")
-        assert result[0] == ("MODQUAL", "foo.bar")
-        assert result[1][1] == "baz"
+    def test_tight_slash_qualifier_and_anchor_merge_to_modqual(self) -> None:
+        assert lark_tok("foo/bar::baz")[0] == ("MODQUAL", "foo/bar")
+        assert lark_tok("/foo/bar::baz")[0] == ("MODQUAL", "/foo/bar")
 
-    def test_upper_name_dcolon_merges_to_modqual(self) -> None:
-        result = lark_tok("Foo::Bar")
-        assert result[0] == ("MODQUAL", "Foo")
-        assert result[1][0] == "NAME"
+    @pytest.mark.parametrize("source", ("foo ::bar", "foo / bar::baz"))
+    def test_spaced_qualifier_parts_do_not_merge_into_the_preceding_path(self, source: str) -> None:
+        assert ("MODQUAL", "foo/bar") not in lark_tok(source)
+
+    def test_qualifier_does_not_absorb_division(self) -> None:
+        assert lark_tok("a/b::c")[0] == ("MODQUAL", "a/b")
+        assert lark_tok("a / b::c")[:3] == [("NAME", "a"), ("SLASH", "/"), ("MODQUAL", "b")]
+
+    def test_multi_segment_qualifier_requires_a_tight_final_dcolon(self) -> None:
+        assert lark_tok("foo/bar ::x") == [
+            ("NAME", "foo"),
+            ("SLASH", "/"),
+            ("NAME", "bar"),
+            ("DCOLON", "::"),
+            ("NAME", "x"),
+        ]
 
     def test_typed_call_dcolon_lsqb_not_merged(self) -> None:
         # NAME DCOLON LSQB — must NOT be merged to MODQUAL (typed call syntax)
-        result = lark_tok("foo::[int]()")
+        result = lark_tok("f::[int]()")
         types = [t for t, _ in result]
         assert "MODQUAL" not in types
         assert "DCOLON" in types
@@ -2430,6 +2438,23 @@ class TestModuleSystemLexer:
         types = [t for t, _ in result]
         assert "MODQUAL" not in types
         assert "DCOLON" in types
+
+    def test_adjacent_slash_module_path_merges(self) -> None:
+        assert tok("import foo/bar/*")[:3] == [
+            ("IMPORT", "import"),
+            ("MODPATH", "foo/bar"),
+            ("WILDCARD", "/*"),
+        ]
+
+    def test_spaced_slash_module_path_stops_at_the_gap(self) -> None:
+        # `a / b` is division everywhere, so the path ends at the first
+        # non-adjacent separator and the header no longer parses.
+        assert tok("import foo / bar")[:4] == [
+            ("IMPORT", "import"),
+            ("MODPATH", "foo"),
+            ("SLASH", "/"),
+            ("NAME", "bar"),
+        ]
 
     def test_export_using_in_export_line(self) -> None:
         result = tok("export foo using bar")
@@ -2453,6 +2478,59 @@ class TestModuleSystemLexer:
         # After remap, 'import' at item-start becomes IMPORT in the parser stream
         result = lark_tok("import foo")
         assert result[0] == ("IMPORT", "import")
+
+
+# ---------------------------------------------------------------------------
+# Division spacing
+# ---------------------------------------------------------------------------
+
+
+class TestDivisionRequiresSurroundingSpace:
+    """`/` is division only with whitespace on both sides.
+
+    Unspaced, `/` is a path separator or anchor, so a slash that clings to an
+    operand on exactly one side has no reading and is rejected outright rather
+    than silently becoming arithmetic or a stray qualifier.
+    """
+
+    def test_spaced_slash_between_names_is_division(self) -> None:
+        assert lark_tok("a / b") == [("NAME", "a"), ("SLASH", "/"), ("NAME", "b")]
+
+    def test_spaced_slash_between_numbers_is_division(self) -> None:
+        assert lark_tok("10 / 2") == [("INT", "10"), ("SLASH", "/"), ("INT", "2")]
+
+    @pytest.mark.parametrize(
+        "source", ("a/ b", "a /b", "a/b", "10/2", "a/ 2", "f(1)/ 2", "a/(b + c)")
+    )
+    def test_slash_clinging_to_an_operand_is_rejected(self, source: str) -> None:
+        with pytest.raises(LexError):
+            lark_tok(source)
+
+    def test_spaced_dcolon_run_is_left_to_the_qualifier_advisory(self) -> None:
+        # `app/config ::x` is a qualifier with a gap before its `::`; the
+        # advisory names the tight spelling, so the lexer stays out of the way.
+        types = [t for t, _ in lark_tok("app/config ::x")]
+        assert "SLASH" in types
+
+    def test_tight_slash_before_a_qualifier_is_still_a_path(self) -> None:
+        # `a/b::c` is a qualifier, not a rejected division — the merge happens
+        # before the spacing check sees the slash.
+        assert lark_tok("a/b::c")[0] == ("MODQUAL", "a/b")
+
+    def test_anchored_qualifier_after_a_space_is_still_a_qualifier(self) -> None:
+        assert lark_tok("f /b::c")[:2] == [("NAME", "f"), ("MODQUAL", "/b")]
+
+    def test_positional_parameter_marker_is_not_division(self) -> None:
+        # The `/` parameter marker sits between commas, touching no operand.
+        types = [t for t, _ in lark_tok("def g(a: int, /, b: int) -> int = a")]
+        assert "SLASH" in types
+
+    def test_wildcard_import_tail_is_unaffected(self) -> None:
+        assert tok("import foo/bar/*")[:3] == [
+            ("IMPORT", "import"),
+            ("MODPATH", "foo/bar"),
+            ("WILDCARD", "/*"),
+        ]
 
 
 # ---------------------------------------------------------------------------
@@ -2530,3 +2608,55 @@ class TestAtToken:
         assert name_tok.type == "NAME"
         assert str(name_tok) == "pos"
         assert name_tok.column == 2  # `pos` starts immediately after `@`
+
+
+# ---------------------------------------------------------------------------
+# Spaced-qualifier advisories
+# ---------------------------------------------------------------------------
+
+
+class TestSpacedQualifierAdvisories:
+    """The lexer records runs that would have been qualifiers but for whitespace."""
+
+    @staticmethod
+    def _advisories(source: str) -> list[SpacedQualifier]:
+        with spaced_qualifier_collector() as sink:
+            list(tokenize(source))
+        return sink
+
+    def test_tight_qualifier_records_nothing(self) -> None:
+        assert self._advisories("config::x") == []
+        assert self._advisories("app/config::x") == []
+
+    def test_spaced_route_records_its_full_run_and_member(self) -> None:
+        (advisory,) = self._advisories("app/config ::x")
+        assert advisory.segments == ("app", "config")
+        assert advisory.anchored is False
+        assert advisory.dcolon_offset == len("app/config ")
+        assert advisory.member_text == "x"
+
+    def test_anchored_route_is_recorded_once_with_its_leading_slash(self) -> None:
+        (advisory,) = self._advisories("/foo/bar ::x")
+        assert advisory.segments == ("foo", "bar")
+        assert advisory.anchored is True
+        assert advisory.member_text == "x"
+
+    def test_member_text_spans_type_arguments_and_a_variant(self) -> None:
+        (advisory,) = self._advisories("app/config ::E[int]::X")
+        assert advisory.segments == ("app", "config")
+        assert advisory.member_text == "E[int]::X"
+
+    def test_member_text_spans_nested_type_arguments(self) -> None:
+        (advisory,) = self._advisories("config ::E[list[int]]::X")
+        assert advisory.member_text == "E[list[int]]::X"
+
+    def test_member_text_covers_a_variant_without_type_arguments(self) -> None:
+        (advisory,) = self._advisories("config ::E::X")
+        assert advisory.member_text == "E::X"
+
+    def test_unterminated_type_arguments_fall_back_to_the_bare_member(self) -> None:
+        (advisory,) = self._advisories("config ::E[int")
+        assert advisory.member_text == "E"
+
+    def test_a_non_name_member_records_nothing(self) -> None:
+        assert self._advisories("config ::(x)") == []

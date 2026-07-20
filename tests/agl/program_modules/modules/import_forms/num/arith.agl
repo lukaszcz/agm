@@ -1,4 +1,4 @@
-# Library module (dot-path num.arith) imported open by the entry. Includes a
+# Library module (slash path num/arith) imported open by the entry. Includes a
 # `private` helper reachable only through its public wrapper `via_secret`.
 def add(a: int, b: int) -> int = a + b
 def mul(a: int, b: int) -> int = a * b

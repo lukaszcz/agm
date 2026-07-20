@@ -1844,7 +1844,7 @@ class TestEngineRunnerDefault:
     def test_engine_runner_default_is_the_shared_agent_floor(self) -> None:
         """A host that seeds no runner must still get the real floor.
 
-        The engine default backstops ``std.config::runner`` when a host supplies
+        The engine default backstops ``std/config::runner`` when a host supplies
         no resolved runner.  It has to agree with ``default_agent_runner``: a
         divergent value here is invisible while every host seeds the key, and
         wrong the moment one does not.
@@ -3203,13 +3203,13 @@ class TestPrepareProgram:
 
         roots = RootSet(roots=frozenset({_STDLIB_ROOT}))
         prepared = PipelineDriver.prepare_program(
-            "import nonexistent.module\nlet x = 1\nx",
+            "open import nonexistent/module\nlet x = 1\nx",
             entry_path=None,
             roots=roots,
         )
         assert prepared.resolved is None
         assert len(prepared.diagnostics) >= 1
-        assert "nonexistent.module" in prepared.diagnostics[0].message
+        assert "nonexistent/module" in prepared.diagnostics[0].message
 
     def test_prepare_program_with_valid_import(self, tmp_path: pathlib.Path) -> None:
         """A valid import resolves when the module file exists on disk."""
@@ -3220,7 +3220,7 @@ class TestPrepareProgram:
         (lib_dir / "mymod.agl").write_text("def add(a: int, b: int) -> int = a + b\n")
 
         roots = RootSet(roots=frozenset({lib_dir, _STDLIB_ROOT}))
-        entry = "import mymod\nlet r = add(2, 3)\nr"
+        entry = "open import mymod\nlet r = add(2, 3)\nr"
         prepared = PipelineDriver.prepare_program(entry, entry_path=None, roots=roots)
         assert prepared.resolved is not None
         assert prepared.diagnostics == ()
@@ -3285,7 +3285,7 @@ class TestRunPreparedProgram:
         (lib_dir / "mymod.agl").write_text("def add(a: int, b: int) -> int = a + b\n")
 
         roots = RootSet(roots=frozenset({lib_dir.resolve(), _STDLIB_ROOT}))
-        entry = "import mymod\nlet r = add(2, 3)\nr"
+        entry = "open import mymod\nlet r = add(2, 3)\nr"
         prepared = PipelineDriver.prepare_program(entry, entry_path=None, roots=roots)
         rt = PipelineDriver()
         result = rt.run_prepared(prepared)
@@ -3312,12 +3312,12 @@ class TestRunPreparedProgram:
 
         roots = RootSet(roots=frozenset({_STDLIB_ROOT}))
         prepared = PipelineDriver.prepare_program(
-            "import missing.module\nlet x = 1\nx", entry_path=None, roots=roots
+            "open import missing/module\nlet x = 1\nx", entry_path=None, roots=roots
         )
         rt = PipelineDriver()
         result = rt.run_prepared(prepared)
         assert result.ok is False
-        assert "missing.module" in result.diagnostics[0].message
+        assert "missing/module" in result.diagnostics[0].message
 
     def test_graph_agents_are_entry_owned(self, tmp_path: pathlib.Path) -> None:
         """Agents are entry-program-owned; a registered undeclared agent is an error."""
@@ -3357,7 +3357,7 @@ class TestRunPreparedProgram:
         )
 
         roots = RootSet(roots=frozenset({lib_dir.resolve(), _STDLIB_ROOT}))
-        entry = 'import utils.*\nlet n = add(2, 3)\nlet g = greet("World")\nprint n\nprint g\n'
+        entry = 'open import utils/*\nlet n = add(2, 3)\nlet g = greet("World")\nprint n\nprint g\n'
         prepared = PipelineDriver.prepare_program(entry, entry_path=None, roots=roots)
         rt = PipelineDriver()
         result = rt.run_prepared(prepared, check_only=True)
@@ -3372,7 +3372,7 @@ class TestRunPreparedProgram:
         (lib_dir / "calc.agl").write_text("def square(n: int) -> int = n * n\n")
 
         roots = RootSet(roots=frozenset({lib_dir.resolve(), _STDLIB_ROOT}))
-        entry = "import calc qualified\nlet r = calc::square(5)\nr"
+        entry = "import calc\nlet r = calc::square(5)\nr"
         prepared = PipelineDriver.prepare_program(entry, entry_path=None, roots=roots)
         rt = PipelineDriver()
         result = rt.run_prepared(prepared)

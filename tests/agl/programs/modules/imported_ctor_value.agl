@@ -4,8 +4,7 @@
 # library module's generic/record definitions (not just the entry module's).
 # A payload enum constructor (`some`) and a record constructor (`Pair`), both
 # open-imported from `collections`, are bound as values and called positionally.
-import collections
-
+open import collections
 param n: int
 
 # Imported generic ENUM payload constructor as a value, called positionally.

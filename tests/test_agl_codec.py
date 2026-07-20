@@ -660,8 +660,8 @@ class TestRecursiveSchemaDerivation:
         assert properties["b"] == {"$ref": "#/$defs/Tree_text"}
 
     def test_cross_module_same_name_gets_qualified_keys(self) -> None:
-        mod_a = ModuleId.from_dotted("mod_a")
-        mod_b = ModuleId.from_dotted("mod_b")
+        mod_a = ModuleId.from_path("mod_a")
+        mod_b = ModuleId.from_path("mod_b")
         tree_a, tree_a_def = enum_type(
             "Tree",
             {"Leaf": {}, "Node": {"next": EnumType(name="Tree", module_id=mod_a)}},

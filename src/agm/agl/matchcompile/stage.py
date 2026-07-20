@@ -108,11 +108,10 @@ def _source_cases(program: Program) -> dict[int, Case]:
 def _compile_owner_cases(owner: CheckedModule) -> tuple[dict[int, CompiledCase], list[MatchIssue]]:
     cases: dict[int, CompiledCase] = {}
     issues: list[MatchIssue] = []
-    # Every case of one checked owner shares that owner's writable enum
-    # spellings and visible bare constructor forms. Enumerating the writable
-    # spellings rescans the whole type namespace, so resolve both once here
-    # rather than once per case.
+    # Every case of one checked owner shares its writable enum spellings,
+    # qualifier collisions, and visible bare constructor forms.
     owner_forms = owner.type_env.enum_owner_forms()
+    blocked_variants = owner.type_env.blocked_enum_variants()
     bare_constructors = resolve_bare_enum_constructors(owner)
     for case_node_id, source_case in _source_cases(owner.resolved.program).items():
         compiled = compile_case(
@@ -120,6 +119,7 @@ def _compile_owner_cases(owner: CheckedModule) -> tuple[dict[int, CompiledCase],
                 source_case,
                 owner,
                 enum_owner_forms=owner_forms,
+                blocked_enum_variants=blocked_variants,
                 bare_enum_constructors=bare_constructors,
             )
         )
@@ -233,8 +233,8 @@ def _validate_cases(
         context = normalized.case_context
         if context.module_id != module_id:
             raise MatchCompileInvariantError(
-                f"compiled case {case_id} belongs to module {context.module_id.dotted()}, "
-                f"not {module_id.dotted()}"
+                f"compiled case {case_id} belongs to module {context.module_id.path_str()}, "
+                f"not {module_id.path_str()}"
             )
         if context.owner_program is not program:
             raise MatchCompileInvariantError(
@@ -261,8 +261,8 @@ def validate_match_compiled_program(compiled: MatchCompiledProgram) -> None:
     expected_modules = set(compiled.checked.modules)
     actual_modules = set(compiled.cases_by_module)
     if expected_modules != actual_modules:
-        missing = sorted((mid.dotted() for mid in expected_modules - actual_modules))
-        extra = sorted((mid.dotted() for mid in actual_modules - expected_modules))
+        missing = sorted((mid.path_str() for mid in expected_modules - actual_modules))
+        extra = sorted((mid.path_str() for mid in actual_modules - expected_modules))
         raise MatchCompileInvariantError(
             f"match-compiled program module mismatch; missing={missing}, extra={extra}"
         )

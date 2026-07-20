@@ -174,7 +174,7 @@ class TestMutationRecord:
         log_path = tmp_path / "trace.jsonl"
         agl_file = tmp_path / "settings.agl"
         agl_file.write_text(
-            "import std.config\nstd.config::strict-json := true\n",
+            "open import std/config\nstd/config::strict-json := true\n",
             encoding="utf-8",
         )
         exec_command.run(_exec_args(agl_file, log_file=str(log_path)))
@@ -513,7 +513,7 @@ class TestBuiltinExceptionTraceId:
             "case 5 of\n"
             "  | 0 => ()\n"
             "  | _ =>\n"
-            '      raise MatchError(message = "no match", '
+            '    raise MatchError(message = "no match", '
             'scrutinee_type = "int", scrutinee = 5)\n',
             log_file=None,
         )

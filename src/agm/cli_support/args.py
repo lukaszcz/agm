@@ -242,3 +242,4 @@ class ReplArgs:
     max_iters: int | None = None
     # Optional recursion call-depth override (None = no override).
     max_call_depth: int | None = None
+    no_stdlib: bool = False

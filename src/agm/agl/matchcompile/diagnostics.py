@@ -9,6 +9,7 @@ from typing import TypeAlias
 
 from agm.agl.semantics.types import EnumType, Type
 from agm.agl.syntax.spans import SourceSpan
+from agm.agl.syntax.types import render_qualifier
 
 from .model import LiteralConstructor, LiteralKind
 
@@ -41,17 +42,20 @@ class WitnessField:
     witness: MatchWitness
 
 
-def qualified_owner_name(owner_name: str, module_qualifier: tuple[str, ...] | None) -> str:
+def qualified_owner_name(
+    owner_name: str,
+    module_qualifier: tuple[str, ...] | None,
+    *,
+    anchored: bool = False,
+) -> str:
     """Render one enum owner's source spelling from its module qualifier.
 
     ``None`` spells an unqualified owner, an empty qualifier spells the
-    self-module form ``::Owner``, and a non-empty one spells its dotted handle.
+    self-module form ``::Owner``, and a non-empty one spells its slash route.
     """
     if module_qualifier is None:
         return owner_name
-    if module_qualifier:
-        return f"{'.'.join(module_qualifier)}::{owner_name}"
-    return f"::{owner_name}"
+    return f"{render_qualifier(module_qualifier, anchored=anchored)}::{owner_name}"
 
 
 @dataclass(frozen=True, slots=True)
@@ -65,11 +69,16 @@ class EnumWitnessQualification:
 
     owner_name: str
     module_qualifier: tuple[str, ...] | None
+    qualifier_anchored: bool = False
 
     @property
     def owner_spelling(self) -> str:
         """The selected owner's source spelling, including any module qualifier."""
-        return qualified_owner_name(self.owner_name, self.module_qualifier)
+        return qualified_owner_name(
+            self.owner_name,
+            self.module_qualifier,
+            anchored=self.qualifier_anchored,
+        )
 
 
 @dataclass(frozen=True, slots=True)

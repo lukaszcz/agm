@@ -4,8 +4,7 @@
 # imported generics at int AND text (erasure across the module boundary),
 # qualified type annotations and constructors, pattern matching on imported
 # variants, and `as text` rendering. A param drives the payload and the branch.
-import collections
-
+open import collections
 param seed: int
 param empty: bool
 

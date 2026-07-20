@@ -103,7 +103,7 @@ a bare `return`; the operand never continues onto the next line.
 
 `builtin def` declares a function implemented by the host, so it has no body.
 Its return type annotation is required. The declared name and signature must
-match a recognized built-in exactly. This form is used by `std.core`; ordinary
+match a recognized built-in exactly. This form is used by `std/core`; ordinary
 programs normally call those declarations through the default standard-library
 import instead of redeclaring them.
 

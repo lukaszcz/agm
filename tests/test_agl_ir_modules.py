@@ -47,7 +47,7 @@ box
 def test_imported_alias_constructor_value_lowers(tmp_path: Path) -> None:
     result = evaluate_ir_graph(
         """
-import lib qualified
+import lib
 let factory: (int) -> lib::Box[int] = lib::Alias
 let box = factory(1)
 box
@@ -57,7 +57,7 @@ box
     )
 
     assert result["box"] == RecordValue(
-        NominalId(ModuleId.from_dotted("lib"), "Box"), "Box", {"value": IntValue(1)}
+        NominalId(ModuleId.from_path("lib"), "Box"), "Box", {"value": IntValue(1)}
     )
 
 
@@ -113,7 +113,7 @@ enum Color
   | Green
 """
     entry_source = """
-import shapes
+open import shapes
 let p = shapes::Point(x = 1, y = 2)
 let c = shapes::Color::Red
 let px = p.x
@@ -187,7 +187,7 @@ enum Status
   | Done
 """
     entry_source = """
-import status.*
+open import status
 let s: Status = Running
 let is_running = case s of
     | Running => true

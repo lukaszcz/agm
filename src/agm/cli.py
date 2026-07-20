@@ -1092,14 +1092,17 @@ def exec_cmd(
     no_stdlib: bool = typer.Option(
         False,
         "--no-stdlib",
-        help="Do not automatically open the core AgL standard library in the entry module.",
+        help=(
+            "Disable automatic std/core opening throughout the loaded program "
+            "(entry and library modules)."
+        ),
     ),
     timeout: str | None = typer.Option(
         None,
         "--timeout",
         help=(
             "Override the shell-exec timeout (e.g. '30s', '5m', '120').  "
-            "Seeds the in-program 'std.config::timeout' setting to some(VALUE).  "
+            "Seeds the in-program 'std/config::timeout' setting to some(VALUE).  "
             "Mutually exclusive with --no-timeout."
         ),
     ),
@@ -1108,7 +1111,7 @@ def exec_cmd(
         "--no-timeout",
         help=(
             "Remove any configured timeout (no shell-exec timeout).  "
-            "Seeds the in-program 'std.config::timeout' setting to none.  "
+            "Seeds the in-program 'std/config::timeout' setting to none.  "
             "Mutually exclusive with --timeout."
         ),
     ),
@@ -1238,7 +1241,15 @@ def repl_cmd(
         help=(
             "Enable trace logging to an auto-named timestamped file under .agent-files/. "
             "Trace logging is off by default; --log, --log-file, or [exec] log = true in "
-            "config.toml opt in. A std.config::log write takes effect in the REPL too."
+            "config.toml opt in. A std/config::log write takes effect in the REPL too."
+        ),
+    ),
+    no_stdlib: bool = typer.Option(
+        False,
+        "--no-stdlib",
+        help=(
+            "Disable automatic std/core opening for each loaded REPL program "
+            "(entries and library modules)."
         ),
     ),
     _help: bool = _help_option(),
@@ -1262,6 +1273,7 @@ def repl_cmd(
             no_log=no_log,
             log_file=log_file,
             log=log,
+            no_stdlib=no_stdlib,
         )
     )
 

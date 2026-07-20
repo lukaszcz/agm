@@ -33,7 +33,8 @@ if TYPE_CHECKING:
     from agm.agl.scope.symbols import ConstructorRef, ScopeNode
     from agm.agl.semantics.types import Type
     from agm.agl.semantics.values import EnumValue, Frame, Value
-    from agm.agl.syntax.nodes import ImportDecl, Program
+    from agm.agl.syntax.advisories import SpacedQualifier
+    from agm.agl.syntax.nodes import ImportDecl, Item, Program
     from agm.agl.syntax.spans import SourceSpan
     from agm.agl.typecheck.env import CheckedModule, TypeEnvironment
     from agm.agl.typecheck.program import CheckedProgram
@@ -48,7 +49,7 @@ class EntryPipelineCtx(Protocol):
     """The minimal ReplSession surface the program pipeline needs."""
 
     _loaded_lib_modules: dict[ModuleId, LoadedModule]
-    _accumulated_imports: list[ImportDecl]
+    _accumulated_imports: list[tuple[ImportDecl, ...]]
     _link_image: LinkImage
     _ir_base_frame: Frame
     _session_scope: ScopeNode
@@ -59,6 +60,7 @@ class EntryPipelineCtx(Protocol):
     _default_strict_json: bool
     _default_loop_limit: int | None
     _default_call_depth_limit: int
+    _default_stdlib: bool
     _shell_exec_timeout: float | None
     _persisted_host_settings: dict[str, Value]
     _persisted_timeout_setting: EnumValue
@@ -133,6 +135,7 @@ class EntryPipeline:
         tab_warnings: list[Diagnostic],
         next_start_id: int,
         check_only: bool,
+        spaced_qualifiers: tuple[SpacedQualifier, ...] = (),
     ) -> EntryResult:
         """Program pipeline for REPL entries that have imports or cached lib modules.
 
@@ -158,17 +161,18 @@ class EntryPipeline:
 
         roots = self._ctx._ensure_roots()
 
-        # Inject accumulated import declarations from prior entries at the head
-        # of the pipeline program so that open imports persist across entries.
-        entry_program = self._inject_accumulated_imports(pipeline_program)
-
         try:
+            entry_program, next_start_id, entry_imports = self._prepare_entry_program(
+                pipeline_program, next_start_id, roots
+            )
             graph, new_next_id, new_modules = build_repl_graph(
                 entry_program,
                 next_start_id,
                 path=None,
                 cached=self._ctx._loaded_lib_modules,
                 roots=roots,
+                default_stdlib=self._ctx._default_stdlib,
+                spaced_qualifiers=spaced_qualifiers,
             )
         except AglSyntaxError as exc:
             return self._ctx._fail([exc.to_diagnostic()], tab_warnings)
@@ -255,10 +259,57 @@ class EntryPipeline:
             warnings=warnings,
             new_next_id=new_next_id,
             new_modules=new_modules,
+            entry_imports=entry_imports,
             param_values=param_values,
             entry_program_name=entry_program_name,
             entry_active_config=entry_active_config,
             contract_payloads=contract_payloads,
+        )
+
+    def resolve_and_check_program(
+        self,
+        program: Program,
+        next_start_id: int,
+        host_env: HostEnvironment,
+        *,
+        spaced_qualifiers: tuple[SpacedQualifier, ...] = (),
+    ) -> CheckedProgram:
+        """Prepare, build the module graph, resolve, and typecheck *program*.
+
+        Shared by REPL call sites that only need a checked program — no match
+        compilation, lowering, or evaluation — such as ``type_of`` and the
+        throwaway std/import type-environment builder. Raises the underlying
+        ``AglSyntaxError``/module-loading errors/``AglScopeError``/``AglTypeError``
+        on failure; callers that need diagnostics instead of a raised exception
+        must catch these themselves.
+        """
+        from agm.agl.modules.loader import build_repl_graph
+        from agm.agl.scope.program import resolve_program
+        from agm.agl.typecheck.program import check_program
+
+        roots = self._ctx._ensure_roots()
+        entry_program, next_start_id, _entry_imports = self._prepare_entry_program(
+            program, next_start_id, roots
+        )
+        graph, _next_start_id, _new_modules = build_repl_graph(
+            entry_program,
+            next_start_id,
+            path=None,
+            cached=self._ctx._loaded_lib_modules,
+            roots=roots,
+            default_stdlib=self._ctx._default_stdlib,
+            spaced_qualifiers=spaced_qualifiers,
+        )
+        resolved_program = resolve_program(
+            graph,
+            ambient_agents=self._ctx._ambient_agents(host_env),
+            entry_ambient_constructor_candidates=self._ctx._ambient_constructor_candidates,
+            entry_ambient_type_names=self._ctx._ambient_type_names,
+            entry_parent_scope=self._ctx._session_scope,
+            entry_repl_session_scope=self._ctx._session_scope,
+        )
+        return check_program(
+            resolved_program, host_env.capabilities, entry_seed_env=self._ctx._type_env
         )
 
     @staticmethod
@@ -282,43 +333,92 @@ class EntryPipeline:
             slot_constructor_refs=entry.slot_constructor_refs,
         )
 
-    def _inject_accumulated_imports(self, program: Program) -> Program:
-        """Return a new program with accumulated session imports prepended.
+    def _prepare_entry_program(
+        self,
+        program: Program,
+        next_start_id: int,
+        roots: RootSet,
+    ) -> tuple[Program, int, tuple[ImportDecl, ...]]:
+        """Expand current wildcards, then inject imports retained by module identity.
 
-        Prior program entries may have imported modules via open import.
-        To make those imports persist across entries, we prepend the stored
-        ``ImportDecl`` nodes to the current entry's program items.  Nodes
-        with already-present module_paths are de-duplicated (if the current
-        entry re-imports the same module, the current entry's decl wins).
+        REPL replacement is finer grained than batch import merging: each
+        wildcard expands to exact target modules before retained declarations
+        are compared. A new entry replaces only the modules it names, while
+        declarations for one module in that entry still union normally.
+
+        Retention keeps each entry's declarations as written, so a retained
+        wildcard is re-expanded here against the current roots and picks up
+        modules added since. Returns the entry's own declarations unexpanded,
+        which is what :meth:`_replace_accumulated_imports` retains.
         """
+        from agm.agl.syntax.nodes import ImportDecl
+
+        entry_raw = tuple(item for item in program.body.items if isinstance(item, ImportDecl))
+        expanded, next_start_id, entry_imports = self._expand_entry_wildcards(
+            program, next_start_id, roots
+        )
+        preamble, next_start_id = self._retained_import_preamble(
+            entry_imports, roots, next_start_id
+        )
+        return (
+            self._prepend_imports(expanded, preamble),
+            next_start_id,
+            entry_raw,
+        )
+
+    @staticmethod
+    def _expand_entry_wildcards(
+        program: Program,
+        next_start_id: int,
+        roots: RootSet,
+    ) -> tuple[Program, int, tuple[ImportDecl, ...]]:
+        """Expand wildcard imports into distinct exact-module declarations."""
         from agm.agl.syntax.nodes import Block, ImportDecl, Program
 
-        if not self._ctx._accumulated_imports:
-            return program
-
-        # Collect (module_path, wildcard) pairs already imported in the current entry.
-        current_import_paths: set[tuple[tuple[str, ...], bool]] = set()
+        items: list[Item] = []
+        imports: list[ImportDecl] = []
+        expanded_wildcard = False
         for item in program.body.items:
-            if isinstance(item, ImportDecl):
-                current_import_paths.add((tuple(item.module_path), item.wildcard))
+            if not isinstance(item, ImportDecl):
+                items.append(item)
+                continue
+            expanded_wildcard = expanded_wildcard or item.wildcard
+            expanded, next_start_id = EntryPipeline._expand_decls((item,), roots, next_start_id)
+            items.extend(expanded)
+            imports.extend(expanded)
 
-        # Build the injected preamble: accumulated imports NOT already in the entry.
-        preamble = [
-            decl
-            for decl in self._ctx._accumulated_imports
-            if (tuple(decl.module_path), decl.wildcard) not in current_import_paths
-        ]
+        if not expanded_wildcard:
+            return program, next_start_id, tuple(imports)
+        return (
+            Program(
+                body=Block(
+                    items=tuple(items),
+                    span=program.body.span,
+                    node_id=program.body.node_id,
+                ),
+                span=program.span,
+                node_id=program.node_id,
+            ),
+            next_start_id,
+            tuple(imports),
+        )
+
+    @staticmethod
+    def _prepend_imports(program: Program, preamble: list[ImportDecl]) -> Program:
+        """Prepend *preamble* declarations to *program*'s body."""
+        from agm.agl.syntax.nodes import Block, Program
 
         if not preamble:
             return program
-
-        new_items = tuple(preamble) + program.body.items
-        new_block = Block(
-            items=new_items,
-            span=program.body.span,
-            node_id=program.body.node_id,
+        return Program(
+            body=Block(
+                items=(*preamble, *program.body.items),
+                span=program.body.span,
+                node_id=program.body.node_id,
+            ),
+            span=program.span,
+            node_id=program.node_id,
         )
-        return Program(body=new_block, span=program.span, node_id=program.node_id)
 
     def _evaluate_ir_program(
         self,
@@ -333,6 +433,7 @@ class EntryPipeline:
         warnings: list[Diagnostic],
         new_next_id: int,
         new_modules: dict[ModuleId, LoadedModule],
+        entry_imports: tuple[ImportDecl, ...],
         param_values: dict[str, Value],
         entry_program_name: str | None,
         entry_active_config: dict[str, object],
@@ -346,7 +447,6 @@ class EntryPipeline:
         from agm.agl.runtime.request import AgentCancelled
         from agm.agl.runtime.trace import TraceStore
         from agm.agl.semantics.exceptions import AglRaise
-        from agm.agl.syntax.nodes import ImportDecl
 
         # Companion paths for every module the checked program can reach: prior
         # entries' cached library modules plus this entry's newly linked ones.
@@ -487,25 +587,11 @@ class EntryPipeline:
             partial=False,
             failure_span=None,
         )
-        entry_imports = tuple(
-            item for item in orig_program.body.items if isinstance(item, ImportDecl)
-        )
         self._ctx._loaded_lib_modules.update(new_modules)
         self._ctx._link_image.mark_linked(
             mid for mid in checked_program.modules if not mid.is_entry
         )
-        import_indexes = {
-            (tuple(item.module_path), item.wildcard): index
-            for index, item in enumerate(self._ctx._accumulated_imports)
-        }
-        for item in entry_imports:
-            key = (tuple(item.module_path), item.wildcard)
-            index = import_indexes.get(key)
-            if index is None:
-                import_indexes[key] = len(self._ctx._accumulated_imports)
-                self._ctx._accumulated_imports.append(item)
-            else:
-                self._ctx._accumulated_imports[index] = item
+        self._replace_accumulated_imports(entry_imports)
         marker = lowered.trailing_expression
         captured = (
             interp.module_initializer_values[lowered.program.entry_module][marker]
@@ -528,6 +614,72 @@ class EntryPipeline:
             type_table=checked.type_env.type_table,
         )
 
+    def _retained_import_preamble(
+        self,
+        entry_imports: tuple[ImportDecl, ...],
+        roots: RootSet,
+        next_start_id: int,
+    ) -> tuple[list[ImportDecl], int]:
+        """Expand retained entries and keep the newest declarations per module.
+
+        Retained wildcards are re-expanded against the current roots, so a
+        module added since the wildcard was written is imported now. Later
+        entries still replace earlier ones module by module: a module named by
+        this entry drops out entirely, and a module named by several retained
+        entries keeps only the newest one's declarations.
+        """
+        replaced = {tuple(decl.module_path) for decl in entry_imports}
+        newest: dict[tuple[str, ...], list[ImportDecl]] = {}
+        for generation in self._ctx._accumulated_imports:
+            expanded, next_start_id = self._expand_decls(generation, roots, next_start_id)
+            covered: dict[tuple[str, ...], list[ImportDecl]] = {}
+            for decl in expanded:
+                covered.setdefault(tuple(decl.module_path), []).append(decl)
+            newest.update(covered)
+        return (
+            [decl for path, decls in newest.items() if path not in replaced for decl in decls],
+            next_start_id,
+        )
+
+    @staticmethod
+    def _expand_decls(
+        decls: tuple[ImportDecl, ...],
+        roots: RootSet,
+        next_start_id: int,
+    ) -> tuple[list[ImportDecl], int]:
+        """Expand every wildcard in *decls* into exact-module declarations."""
+        from dataclasses import replace
+
+        from agm.agl.modules.resolver import expand_wildcard
+
+        expanded: list[ImportDecl] = []
+        for decl in decls:
+            if not decl.wildcard:
+                expanded.append(decl)
+                continue
+            for module in expand_wildcard(tuple(decl.module_path), roots, span=decl.span):
+                expanded.append(
+                    replace(
+                        decl,
+                        module_path=module.segments,
+                        wildcard=False,
+                        node_id=next_start_id,
+                    )
+                )
+                next_start_id += 1
+        return expanded, next_start_id
+
+    def _replace_accumulated_imports(self, entry_imports: tuple[ImportDecl, ...]) -> None:
+        """Retain this entry's declarations as written, as the newest generation.
+
+        Declarations are kept unexpanded so a wildcard keeps tracking the module
+        set. Earlier generations stay: a wildcard among them may still name a
+        module this entry does not, and per-module precedence is applied when
+        the preamble is built.
+        """
+        if entry_imports:
+            self._ctx._accumulated_imports.append(entry_imports)
+
     def _persist_interpreter_settings(self, interp: "IrInterpreter", trace: "TraceStore") -> None:
         """Persist completed setting writes and the live trace destination."""
         self._ctx._update_engine_settings(
@@ -541,7 +693,7 @@ class EntryPipeline:
         # the entry; that is a transient I/O condition, not a destination the
         # session should adopt.  Keeping the session path lets the next entry
         # retry at the original destination.  A store that settled into no-log
-        # mode deliberately (``std.config::log := false``) does persist ``None``.
+        # mode deliberately (``std/config::log := false``) does persist ``None``.
         if not trace.disabled:
             self._ctx._trace_path = trace.path
 

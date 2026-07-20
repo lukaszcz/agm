@@ -17,10 +17,9 @@ pattern_atom   ::= "_"                                    (* wildcard *)
                  | qual_prefix type_qual? name
                      ("(" pattern_fields? ")")?           (* qualified constructor *)
 
-qual_prefix    ::= module_path "::"         (* module or type prefix *)
-                 | "::"                     (* current-module prefix *)
-type_qual      ::= name "::"                (* owning type after a module prefix *)
-module_path    ::= NAME ("." NAME)*
+qual_prefix    ::= ["/"] NAME ("/" NAME)* "::"  (* module prefix *)
+                 | "::"                              (* current-module prefix *)
+type_qual      ::= name "::"                         (* owning type after a module prefix *)
 name           ::= NAME | OP_NAME
 field_name     ::= NAME | "agent" | "to" | "downto" | "by"
 
@@ -146,9 +145,9 @@ The prefix may name an owning type (`Color::Red`), a module and owning type
 (`mylib::Color::Red`), or the current module (`::Color::Red`). A module may
 also qualify an exposed constructor directly (`mylib::Red`). Qualification
 states the owner explicitly but is not required to resolve same-spelled variants;
-when present, it must identify the scrutinee's enum. Dotted names occur only
-inside a module path such as `company.colors::Color::Red`; constructor
-qualification itself uses `::`, never `.`.
+when present, it must identify the scrutinee's enum. A module route uses slash segments, as in
+`company/colors::Color::Red`; constructor qualification itself uses `::`,
+never `.`.
 
 **Payload sub-patterns** follow the same positional-greedy binding as calls:
 

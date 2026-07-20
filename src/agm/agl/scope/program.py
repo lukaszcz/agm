@@ -10,8 +10,8 @@ Design
 - **Export maps**: non-private top-level ``def``/``record``/``enum``/``type``
   names per module plus explicit ``export`` declarations, computed before any
   body is resolved.
-- **ImportEnv per module**: built from each module's import declarations against
-  the already-loaded graph (no re-reading files).
+- **Contribution import environment per module**: built from each module's
+  import declarations against the already-loaded graph (no re-reading files).
 - **Whole-program pre-pass tables**: ``all_public_funcs`` and ``all_public_types``
   collected BEFORE resolving any body, enabling cross-module mutual recursion.
 - **Declaration-only enforcement**: non-entry modules may only contain
@@ -125,6 +125,7 @@ class ResolvedProgram:
     all_public_types: dict[tuple[ModuleId, str], RecordDef | EnumDef | ExceptionDef | TypeAlias]
     entry_agents: dict[str, AgentDecl]
     warnings: tuple[Diagnostic, ...]
+    private_info: Mapping[tuple[ModuleId, str], bool]
 
 
 # ---------------------------------------------------------------------------
@@ -202,8 +203,8 @@ def _compute_local_exports(self_id: ModuleId, program: Program) -> dict[str, QNa
             if not item.is_private:
                 result[item.name] = (self_id, item.name)
         elif isinstance(item, BuiltinVarDecl):
-            # The resolver admits these only in ``std.config``; its engine
-            # settings are public so callers can use ``std.config::name``.
+            # The resolver admits these only in ``std/config``; its engine
+            # settings are public so callers can use ``std/config::name``.
             result[item.name] = (self_id, item.name)
     return result
 
@@ -245,8 +246,8 @@ def _resolve_reexports(
                         elif existing != qname:
                             raise AglScopeError(
                                 f"re-export name {exposed!r} has conflicting origins:"
-                                f" {existing[0].dotted()!r}::{existing[1]!r}"
-                                f" and {qname[0].dotted()!r}::{qname[1]!r}",
+                                f" {existing[0].path_str()!r}::{existing[1]!r}"
+                                f" and {qname[0].path_str()!r}::{qname[1]!r}",
                                 span=decl.span,
                             )
 
@@ -401,7 +402,7 @@ def resolve_program(
         module_targets: dict[int, ImportTarget] = {
             decl.node_id: all_targets[decl.node_id] for decl in decls
         }
-        import_envs[mid] = build_import_env(mid, decls, module_targets, export_maps)
+        import_envs[mid] = build_import_env(decls, module_targets, export_maps)
 
     # ------------------------------------------------------------------
     # Step 5: Whole-program pre-pass — collect public funcs/types and
@@ -446,7 +447,7 @@ def resolve_program(
                     )
                     decl_info[key] = (item.node_id, item.span, kind)
             elif isinstance(item, BuiltinVarDecl):
-                # The resolver admits this declaration only in ``std.config``.
+                # The resolver admits this declaration only in ``std/config``.
                 # Record its mutable kind so qualified reads and writes resolve.
                 key = (mid, item.name)
                 decl_info[key] = (item.node_id, item.span, BinderKind.builtin_var_binding)
@@ -479,6 +480,7 @@ def resolve_program(
             is_entry=is_entry,
             repl_session_scope=entry_repl_session_scope if is_entry else None,
             origin_path=loaded.path,
+            spaced_qualifiers=loaded.spaced_qualifiers,
         )
         resolved = resolver.run(
             loaded.program,
@@ -505,4 +507,5 @@ def resolve_program(
         all_public_types=all_public_types,
         entry_agents=entry_agents,
         warnings=tuple(all_warnings),
+        private_info=private_info,
     )

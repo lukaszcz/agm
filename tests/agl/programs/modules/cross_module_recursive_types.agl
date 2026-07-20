@@ -1,8 +1,7 @@
 # Modules: a recursive type cycle spanning two library modules (tree_a's
 # NodeA <-> tree_b's NodeB), used from the entry program.
-import tree_a
-import tree_b
-
+open import tree_a
+open import tree_b
 param v: int
 param tag: text
 

@@ -180,7 +180,7 @@ class RecordType:
         return "record"
 
     def __repr__(self) -> str:
-        prefix = "" if self.module_id.is_entry else f"{self.module_id.dotted()}::"
+        prefix = "" if self.module_id.is_entry else f"{self.module_id.path_str()}::"
         if self.type_args:
             args_str = ", ".join(repr(a) for a in self.type_args)
             return f"{prefix}{self.name}[{args_str}]"
@@ -209,7 +209,7 @@ class EnumType:
         return "enum"
 
     def __repr__(self) -> str:
-        prefix = "" if self.module_id.is_entry else f"{self.module_id.dotted()}::"
+        prefix = "" if self.module_id.is_entry else f"{self.module_id.path_str()}::"
         if self.type_args:
             args_str = ", ".join(repr(a) for a in self.type_args)
             return f"{prefix}{self.name}[{args_str}]"
@@ -247,7 +247,7 @@ class ExceptionType:
         # matches the record/enum qualification style.
         if self.module_id.is_entry or self.module_id == PRELUDE_ID:
             return self.name
-        return f"{self.module_id.dotted()}::{self.name}"
+        return f"{self.module_id.path_str()}::{self.name}"
 
 
 # ---------------------------------------------------------------------------
@@ -497,12 +497,15 @@ class EnumOwnerForm:
 
     Source identity and template metadata are excluded from display equality;
     they retain the checked resolution needed to validate a concrete enum
-    without reinterpreting import syntax downstream.
+    without reinterpreting import syntax downstream. This type describes only
+    an owner spelling; which variants a module route makes ambiguous under
+    that spelling is variant-level data carried alongside forms, not on them.
     """
 
     owner_name: str | None
     module_qualifier: tuple[str, ...] | None
     bare: bool = False
+    qualifier_anchored: bool = False
     kind: EnumOwnerFormKind | None = field(default=None, compare=False)
     source_module_id: ModuleId | None = field(default=None, compare=False, repr=False)
     source_name: str | None = field(default=None, compare=False, repr=False)
@@ -532,6 +535,8 @@ class EnumOwnerForm:
                 raise ValueError("a self-qualified enum owner form requires an empty qualifier")
         elif not self.module_qualifier:
             raise ValueError("a qualified-import enum owner form requires an import handle")
+        if self.qualifier_anchored and not self.module_qualifier:
+            raise ValueError("only a non-empty module qualifier can be anchored")
 
     def match(self, concrete: Type) -> TypeTemplateMatch | None:
         """Match this checked owner form against one concrete semantic type.
@@ -849,7 +854,7 @@ BUILTIN_PRELUDE_TYPE_NAMES: frozenset[str] = frozenset(BUILTIN_PRELUDE_TYPES)
 
 # Legacy built-in types kept for compatibility with already-compiled tests and
 # internal APIs.  They remain available as nominal types, but their constructors
-# are not exported into source scope because std.core replaces this surface.
+# are not exported into source scope because std/core replaces this surface.
 COMPATIBILITY_PRELUDE_TYPE_NAMES: frozenset[str] = frozenset(
     {"OutputContract", "OutputContractOption"}
 )

@@ -110,6 +110,7 @@ class ReplSession:
         lib_root: "Path | None" = None,
         configured_roots: "Iterable[tuple[str, Path]]" = (),
         extra_cli_roots: "Iterable[str]" = (),
+        default_stdlib: bool = True,
     ) -> None:
         from pathlib import Path
 
@@ -121,6 +122,7 @@ class ReplSession:
 
         self._default_strict_json = default_strict_json
         self._default_loop_limit = default_loop_limit
+        self._default_stdlib = default_stdlib
         self._shell_exec_timeout = shell_exec_timeout
         # Capture initial engine defaults for :reset to restore.
         self._initial_loop_limit = default_loop_limit
@@ -133,7 +135,7 @@ class ReplSession:
         # Persisted register values for the host-consumed engine settings
         # (runner/log/log-file).  Seeded from the engine defaults overlaid with
         # ``_engine_base``, threaded into every entry's interpreter, and read
-        # back after a successful entry so a ``std.config::KEY := VALUE`` write
+        # back after a successful entry so a ``std/config::KEY := VALUE`` write
         # persists.
         self._persisted_host_settings: dict[str, Value] = self._build_host_settings_base()
         self._persisted_timeout_setting = self._build_timeout_setting_base()
@@ -207,10 +209,12 @@ class ReplSession:
         self._roots: RootSet | None = None
         # Cached lib modules from prior REPL program entries.
         self._loaded_lib_modules: dict[ModuleId, LoadedModule] = {}
-        # Accumulated import declarations from prior promoted program entries.
-        # These are prepended to each new entry's program in program context so that
-        # open imports (e.g. ``import util``) persist across entries.
-        self._accumulated_imports: list["ImportDecl"] = []
+        # Imports generally persist across successfully promoted program entries,
+        # one retained generation per entry, kept as written so a wildcard keeps
+        # tracking the module set. Declarations for a module named in a later
+        # generation replace earlier ones; the rest are prepended in program
+        # context for reuse.
+        self._accumulated_imports: list[tuple["ImportDecl", ...]] = []
         # Resolved user infix fixity declared in prior promoted entries
         # (operator name → ``(priority, associativity)``). Passed to the parser
         # as ambient fixity so an ``infixl``/``infixr`` declaration made in one
@@ -440,12 +444,9 @@ class ReplSession:
             ModulePrefixNotFound,
         )
         from agm.agl.modules.ids import ENTRY_ID
-        from agm.agl.modules.loader import build_repl_graph
         from agm.agl.parser import AglSyntaxError, parse_program_seeded
         from agm.agl.scope import AglScopeError
-        from agm.agl.scope.program import resolve_program
         from agm.agl.typecheck import AglTypeError
-        from agm.agl.typecheck.program import check_program
 
         host_env = self._runtime.host_environment()
         try:
@@ -454,26 +455,8 @@ class ReplSession:
                 start_id=self._next_node_id,
                 ambient_infix=self._accumulated_infix,
             )
-            program = self._entry_pipeline._inject_accumulated_imports(program)
-            graph, _new_next_id, _new_modules = build_repl_graph(
-                program,
-                next_start_id,
-                path=None,
-                cached=self._loaded_lib_modules,
-                roots=self._ensure_roots(),
-            )
-            resolved_program = resolve_program(
-                graph,
-                ambient_agents=self._ambient_agents(host_env),
-                entry_ambient_constructor_candidates=self._ambient_constructor_candidates,
-                entry_ambient_type_names=self._ambient_type_names,
-                entry_parent_scope=self._session_scope,
-                entry_repl_session_scope=self._session_scope,
-            )
-            checked_program = check_program(
-                resolved_program,
-                host_env.capabilities,
-                entry_seed_env=self._type_env,
+            checked_program = self._entry_pipeline.resolve_and_check_program(
+                program, next_start_id, host_env
             )
         except (
             AglSyntaxError,
@@ -494,7 +477,7 @@ class ReplSession:
         fails. ``check_only`` stops after match compilation without lowering,
         executing, promoting, or advancing the node-id counter.
         """
-        from agm.agl.lexer import tab_warning_collector
+        from agm.agl.lexer import spaced_qualifier_collector, tab_warning_collector
         from agm.agl.parser import AglSyntaxError, parse_program_seeded
 
         host_env = self._runtime.host_environment()
@@ -503,7 +486,7 @@ class ReplSession:
         # scan).  The collector is populated even on a failed parse, so they
         # surface on EVERY return path (mirroring ``PipelineDriver.prepare``).
         # [1] Parse (seeded so node ids stay globally unique across entries).
-        with tab_warning_collector() as tab_sink:
+        with tab_warning_collector() as tab_sink, spaced_qualifier_collector() as spaced_sink:
             try:
                 program, next_start_id = parse_program_seeded(
                     text, start_id=self._next_node_id, ambient_infix=self._accumulated_infix
@@ -511,6 +494,7 @@ class ReplSession:
             except AglSyntaxError as exc:
                 return self._fail([exc.to_diagnostic()], list(tab_sink))
         tab_warnings: list[Diagnostic] = list(tab_sink)
+        spaced_qualifiers = tuple(spaced_sink)
 
         # [1b] REPL trailing-binder synthesis: in AgL, a block ending in a
         # ``let``/``var`` is a static error (the binder needs a continuation
@@ -523,7 +507,7 @@ class ReplSession:
         pipeline_program, next_start_id = self._repl_wrap_trailing_binder(program, next_start_id)
 
         # [1d] REPL entries use the program pipeline by default because that
-        # is where the synthetic ``import std.core`` prelude is injected.  This
+        # is where the synthetic ``import std/core`` prelude is injected.  This
         # keeps the REPL aligned with ``agm exec``: stdlib names are open unless
         # a host explicitly opts out.
         return self._entry_pipeline.eval_entry(
@@ -534,6 +518,7 @@ class ReplSession:
             tab_warnings=tab_warnings,
             next_start_id=next_start_id,
             check_only=check_only,
+            spaced_qualifiers=spaced_qualifiers,
         )
 
     # ------------------------------------------------------------------
@@ -1063,44 +1048,27 @@ class ReplSession:
         underlying ``AglSyntaxError``/``AglScopeError``/``AglTypeError`` on
         failure, or ``AglError`` for match errors or a non-expression entry.
         """
+        from agm.agl.lexer import spaced_qualifier_collector
         from agm.agl.modules.ids import ENTRY_ID
-        from agm.agl.modules.loader import build_repl_graph
         from agm.agl.parser import parse_program_seeded
-        from agm.agl.scope.program import resolve_program
         from agm.agl.syntax.nodes import Binder, Declaration
-        from agm.agl.typecheck.program import check_program
 
         host_env = self._runtime.host_environment()
         # Throwaway ids: type_of never promotes and never advances the session
         # counter, so seeding at ``_next_node_id`` is safe — all promoted ids are
         # strictly below it, making this parse's ids disjoint from the session's.
-        program, next_node_id = parse_program_seeded(
-            text, start_id=self._next_node_id, ambient_infix=self._accumulated_infix
-        )
+        with spaced_qualifier_collector() as spaced_sink:
+            program, next_node_id = parse_program_seeded(
+                text, start_id=self._next_node_id, ambient_infix=self._accumulated_infix
+            )
         items = program.body.items
         if len(items) != 1 or isinstance(items[0], (Binder, Declaration)):
             raise AglError(
                 "':type' expects a single expression, not a binding, declaration, or statement."
             )
         expr_item = items[0]
-        entry_program = self._entry_pipeline._inject_accumulated_imports(program)
-        graph, _next_node_id, _new_modules = build_repl_graph(
-            entry_program,
-            next_node_id,
-            path=None,
-            cached=self._loaded_lib_modules,
-            roots=self._ensure_roots(),
-        )
-        resolved = resolve_program(
-            graph,
-            ambient_agents=self._ambient_agents(host_env),
-            entry_ambient_constructor_candidates=self._ambient_constructor_candidates,
-            entry_ambient_type_names=self._ambient_type_names,
-            entry_parent_scope=self._session_scope,
-            entry_repl_session_scope=self._session_scope,
-        )
-        checked_program = check_program(
-            resolved, host_env.capabilities, entry_seed_env=self._type_env
+        checked_program = self._entry_pipeline.resolve_and_check_program(
+            program, next_node_id, host_env, spaced_qualifiers=tuple(spaced_sink)
         )
         checked = checked_program.modules[ENTRY_ID]
         from agm.agl.matchcompile import compile_program_matches, diagnostics_from_match_issues
@@ -1194,7 +1162,7 @@ class ReplSession:
 
         Restores the three live engine settings (strict-json/max-iters/timeout)
         to their values at session construction, undoing any effect-at-binding
-        from ``std.config`` writes entered during the session.
+        from ``std/config`` writes entered during the session.
         """
         from agm.agl.lower import LinkImage
         from agm.agl.scope.symbols import ScopeNode
@@ -1215,7 +1183,7 @@ class ReplSession:
         self._declared_agents = set()
         self._ambient_constructor_candidates = {}
         self._ambient_type_names = frozenset()
-        # Re-seed the host-consumed registers so a prior ``std.config::runner``
+        # Re-seed the host-consumed registers so a prior ``std/config::runner``
         # (etc.) write does not bleed past :reset.
         self._persisted_host_settings = self._build_host_settings_base()
         self._persisted_timeout_setting = self._build_timeout_setting_base()
@@ -1228,7 +1196,7 @@ class ReplSession:
             registry = self._runtime.host_environment().registry
             registry.set_default_agent(self._host_settings_policy.build_runner(runner.value))
         # Restore live engine settings to the session's initial defaults so that
-        # promoted ``std.config`` effects from prior entries do not bleed past :reset.
+        # promoted ``std/config`` effects from prior entries do not bleed past :reset.
         self._update_engine_settings(
             strict_json=self._initial_strict_json,
             loop_limit=self._initial_loop_limit,

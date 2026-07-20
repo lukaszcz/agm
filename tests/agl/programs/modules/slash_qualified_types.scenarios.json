@@ -1,0 +1,9 @@
+{
+  "scenarios": [
+    {
+      "name": "qualified_type_constructor_pattern_and_is_test",
+      "module_roots": ["program_modules"],
+      "expect": {"stdout": "on\ntrue\n"}
+    }
+  ]
+}

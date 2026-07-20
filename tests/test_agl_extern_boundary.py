@@ -894,7 +894,7 @@ class TestExternRegistryMisuse:
         companion = tmp_path / "lib.py"
         companion.write_text("import sys\ndel sys.modules[__name__]\ndef f():\n    return 1\n")
         registry = ExternRegistry()
-        module_id = ModuleId.from_dotted("lib")
+        module_id = ModuleId.from_path("lib")
 
         module = registry.load_companion(module_id, companion)
 
@@ -906,4 +906,4 @@ class TestExternRegistryMisuse:
 
         registry = ExternRegistry()
         with pytest.raises(AssertionError):
-            registry.resolve(ModuleId.from_dotted("lib.mod"), "f")
+            registry.resolve(ModuleId.from_path("lib/mod"), "f")

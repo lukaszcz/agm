@@ -3352,11 +3352,17 @@ class _Checker:
         spans: list[SourceSpan] = []
 
         def collect(node: object) -> None:
-            if spans or not isinstance(node, VarRef):
+            if spans:
+                return
+            if isinstance(node, VarRef):
+                span = node.span
+            elif isinstance(node, AssignStmt):
+                span = node.target.span
+            else:
                 return
             ref = self._resolved.resolution.get(node.node_id)
             if ref is not None and ref.slot_id == slot.slot_id:
-                spans.append(node.span)
+                spans.append(span)
 
         walk(branch.body, collect)
         return spans[0] if spans else slot.candidates[0].span

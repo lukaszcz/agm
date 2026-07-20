@@ -126,6 +126,34 @@ def test_a_slot_selected_as_a_constructor_is_callable_in_the_branch_body() -> No
     assert out == "true\n"
 
 
+def test_constructor_selected_slot_preserves_agent_usage() -> None:
+    resolved = _resolve(
+        "agent on\n"
+        "enum Flag\n"
+        "  | on\n"
+        "enum Packet\n"
+        "  | packet(flag: Flag)\n"
+        "let item = packet(Flag::on)\n"
+        "case item of\n"
+        '  | packet(on) => ask("question", agent = on)\n'
+    )
+
+    checked = check_module(
+        resolved,
+        HostCapabilities(
+            agent_names=frozenset({"on"}),
+            has_default_agent=True,
+            codec_kinds={"text": frozenset({"text"})},
+        ),
+    )
+
+    slot_reference = _slot_reference(resolved)
+    binding = checked.binding_for(slot_reference)
+    assert binding is not None
+    assert binding.kind is BinderKind.agent_binding
+    assert resolved.warnings == ()
+
+
 def test_a_bare_nullary_variant_name_tests_the_variant() -> None:
     ok, out, diagnostics = _run(
         "enum Flag\n"
@@ -172,6 +200,29 @@ def test_assigning_to_a_slot_selected_as_a_binder_is_rejected() -> None:
 
     assert not ok
     assert "pattern binding" in diagnostics[0]
+
+
+def test_ambiguous_slot_assignment_is_diagnosed_at_the_target() -> None:
+    resolved = _resolve(
+        "enum Color\n"
+        "  | Red\n"
+        "  | Blue\n"
+        "enum Signal\n"
+        "  | Red\n"
+        "  | Green\n"
+        "enum Wrap\n"
+        "  | wrap(shade: Color)\n"
+        "let item = wrap(Color::Blue)\n"
+        "case item of\n"
+        "  | wrap(Red) =>\n"
+        "    Red := Color::Blue\n"
+    )
+
+    with pytest.raises(AglTypeError) as exc_info:
+        check_module(resolved, HostCapabilities())
+
+    diagnostic = exc_info.value.to_diagnostic()
+    assert diagnostic.line == 12
 
 
 # ---------------------------------------------------------------------------

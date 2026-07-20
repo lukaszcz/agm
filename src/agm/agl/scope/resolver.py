@@ -1331,9 +1331,7 @@ class _Resolver:
                     f"'{node.name}' is not defined.",
                     span=node.span,
                 )
-        # Track agent references for the unused-agent warning.
-        if ref.kind == BinderKind.agent_binding and node.name in self._declared_agents:
-            self._referenced_agents.add(node.name)
+        self._track_agent_reference(ref)
         self._resolution[node.node_id] = ref
         # If the resolved binding is a constructor, check for overload ambiguity.
         if ref.kind == BinderKind.constructor_binding:
@@ -1348,6 +1346,17 @@ class _Resolver:
                 )
             elif len(candidates) == 1:
                 self._constructor_refs[node.node_id] = candidates[0]
+
+    def _track_agent_reference(self, ref: BindingRef) -> None:
+        """Preserve agent usage hidden behind constructor-selected pattern slots."""
+        while ref.kind is BinderKind.pattern_slot:
+            assert ref.slot_id is not None
+            alternative = self._pattern_slots[ref.slot_id].alternative
+            if alternative is None:
+                return
+            ref = alternative
+        if ref.kind is BinderKind.agent_binding and ref.name in self._declared_agents:
+            self._referenced_agents.add(ref.name)
 
     def _resolve_type_qualified_constructor(self, node: VarRef) -> None:
         """Resolve an explicit ``[module::]Type[args]::Ctor`` reference."""

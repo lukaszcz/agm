@@ -69,6 +69,7 @@ print nested.value.value
 `Box[Box[int]]` are all applied types. The built-in `list[T]` and
 `dict[text, V]` use exactly the same form.
 
+<!-- agl-check: skip -->
 ```agl
 open import containers
 
@@ -108,6 +109,7 @@ When inference cannot determine the arguments, or to pin them explicitly, pass
 type arguments at the call site with the `::[…]` typed-call form, listing one
 argument per type parameter:
 
+<!-- agl-check: skip -->
 ```agl
 def apply[A, B](x: A, f: A -> B) -> B = f(x)
 record Box[T]
@@ -127,6 +129,7 @@ print be.value
 The same `::[…]` suffix can instantiate a generic function as a value without
 calling it:
 
+<!-- agl-check: skip -->
 ```agl
 let int_id = id::[int]
 print(int_id(9))
@@ -134,6 +137,7 @@ print(int_id(9))
 
 A nullary variant can be inferred purely from the expected type:
 
+<!-- agl-check: skip -->
 ```agl
 enum Option[T]
   | none
@@ -218,6 +222,7 @@ The same expression-local inference applies to every generic constructor form,
 including payload variants, nullary variants, and partial constructors. Evidence
 may come from a later sibling argument or the enclosing result:
 
+<!-- agl-check: skip -->
 ```agl
 enum Option[T]
   | none
@@ -241,6 +246,7 @@ bare generic constructor value explicitly with the same `::[…]` suffix used
 for generic functions. A payload variant becomes a function value; a nullary
 variant constructs its value directly, with no parentheses:
 
+<!-- agl-check: skip -->
 ```agl
 enum Option[T]
   | none
@@ -267,6 +273,7 @@ contents is a static error. You cannot:
 - access a field (`x.foo`) or index (`x[0]`) of it,
 - test it with `is` / `is not`.
 
+<!-- agl-check: error -->
 ```agl
 def bad[T](x: T) -> bool = x == x     # static error: '==' not permitted on 'T'
 ```
@@ -325,6 +332,7 @@ and folding a value works exactly like any other recursive type — a value is
 always a finite tree, regardless of how many argument levels its declaration
 can grow through:
 
+<!-- agl-check: skip -->
 ```agl
 let level0: Perfect[int] = Single(value = 1)
 let level1: Perfect[int] = Succ(next = Single(value = Pair(first = 1, second = 2)))
@@ -366,6 +374,7 @@ A concrete instantiation whose reachable declarations are all finite-closing
 may cross any schema boundary; one that reaches a non-closing declaration is
 rejected with a static error at that specific use site:
 
+<!-- agl-check: error -->
 ```agl
 let bad: Perfect[int] = ask("Give me a value.", agent = source)
 # static error: type 'Perfect[int]' cannot be used as an agent output type:
@@ -423,6 +432,7 @@ constructor-directed regardless of local values.
 A bare name at the top level of a `case` pattern is a nullary constructor and
 never captures a value. Use an `as` pattern for a catch-all binder:
 
+<!-- agl-check: skip -->
 ```agl
 case value of
   | _ as captured => captured

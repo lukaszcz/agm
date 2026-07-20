@@ -51,6 +51,7 @@ exception ValidationError extends Exception
   causes: list[ValidationError]   # legal: guarded by list[...]
 ```
 
+<!-- agl-check: error -->
 ```agl
 exception Broken extends Exception
   child: Broken   # rejected: uninhabitable, no list/dict guard
@@ -97,6 +98,7 @@ or a single item. Because `catch` marks where a `try` body ends, an inline
 last item is an expression. See
 [Inline bodies](grammar.md#inline-bodies).
 
+<!-- agl-check: skip -->
 ```agl
 try
   let review: Review = ask(
@@ -146,6 +148,7 @@ The operand must be an exception value (statically checked). `raise`
 **diverges** — it never yields a value. Its type is the bottom type,
 assignable to any expected type:
 
+<!-- agl-check: skip -->
 ```agl
 let x: int = if condition => 1 else => raise Abort(message = "!")
 raise Abort(message = "Cannot continue without repository access.")

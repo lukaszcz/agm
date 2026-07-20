@@ -74,6 +74,7 @@ import and export declarations. They remain valid identifiers elsewhere.
 
 Examples:
 
+<!-- agl-check: skip -->
 ```agl
 import foo/bar
 open import foo/bar as A
@@ -144,6 +145,7 @@ are the same separator (see [Programs and blocks](#programs-and-blocks)), and
 a newline cannot appear inside an inline body either. To write a multi-item
 body after `=>`, parenthesize it or use the suite form:
 
+<!-- agl-check: skip -->
 ```agl
 | 1 => (let doubled = k * 2; print "doubled:${doubled}")
 | 2 =>

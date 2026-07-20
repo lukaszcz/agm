@@ -5,6 +5,7 @@
 `exec` runs a shell command and yields its output. It is a built-in
 **function** invoked with the same uniform call syntax as user functions:
 
+<!-- agl-check: skip -->
 ```agl
 let res = exec "ls -la ${dir}"       # res : ExecResult (default)
 let out: text = exec "cat ${path}"   # parsed form: stdout verbatim
@@ -80,6 +81,7 @@ When the target type is any type other than `ExecResult`, `exec` parses
 stdout into that type (honouring `format`, `strict_json`, and
 `on_parse_error`) and **raises `ExecError` on a nonzero exit**:
 
+<!-- agl-check: skip -->
 ```agl
 let out: text = exec "cat ${path}"          # stdout verbatim; raises on nonzero
 let data: dict[text, int] = exec(           # JSON parsed; raises on nonzero
@@ -127,6 +129,7 @@ to parse, `AgentParseError` is raised with agent name `"exec"`.
 `AgentParseError` (unparseable output from a succeeding command) are distinct
 and independently catchable:
 
+<!-- agl-check: skip -->
 ```agl
 try
   let data: dict[text, int] = exec "compute-stats --json"

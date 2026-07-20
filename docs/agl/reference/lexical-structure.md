@@ -13,6 +13,7 @@ locations (lines and columns) are 1-based.
 A `#` begins a comment that runs to the end of the line. There are no block
 comments.
 
+<!-- agl-check: skip -->
 ```agl
 # This is a comment
 let x = 1   # so is this
@@ -43,6 +44,7 @@ The layout rules:
    terminator of a loop sit at the same indentation as the construct that owns
    them:
 
+   <!-- agl-check: skip -->
    ```agl
    if
      | status is Complete => ()
@@ -127,6 +129,7 @@ def private() -> text = "x"  # 'private' not at item-start → VAR_NAME
 `::` separates a **module qualifier** from the name it qualifies. In value
 and type position:
 
+<!-- agl-check: skip -->
 ```agl
 foo/bar::thing        # suffix qualifier, name thing
 /foo/bar::thing       # anchored qualifier, name thing
@@ -148,6 +151,7 @@ already need surrounding space to read as operators (`a+b` is one name). Left
 unspaced, `/` separates path segments, so a `/` that touches an operand on
 exactly one side is rejected:
 
+<!-- agl-check: error -->
 ```agl
 let q = a / b        # division
 let r = a/b::thing   # qualifier
@@ -346,6 +350,7 @@ The three markers are:
 immediately after `@` inside a parameter or field list. An unrecognized name
 after `@` (e.g. `@foo`) is a static error.
 
+<!-- agl-check: skip -->
 ```agl
 def f(x: int, @std, y: int) -> int = x + y   # @std same as /
 def g(a: int, /, b: int, @named, c: int) -> int = ...  # mixing / and @named

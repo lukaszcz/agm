@@ -133,6 +133,7 @@ y                  # block ends here; its value is y
 
 A block ending in a bare `let` or `var` is a static error:
 
+<!-- agl-check: error -->
 ```agl
 def broken() -> int =
   let x = 1        # static error: 'let' must be followed by an expression
@@ -146,6 +147,7 @@ by `;` inline. `until` conditions and the right-hand sides of binders are
 those positions must be parenthesized. Loop bodies also admit `case`, `if`,
 `try`, and nested loops directly:
 
+<!-- agl-check: skip -->
 ```agl
 # Inline block: items separated by ';'
 let x = 3; let y = x + 1; y
@@ -160,6 +162,7 @@ do[3] n := n + 1 until (case st of Done => true | _ => false)
 The `()` unit literal replaces `pass` — it is the idiomatic no-op in a
 branch body:
 
+<!-- agl-check: skip -->
 ```agl
 case review of
   Pass => ()

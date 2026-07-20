@@ -15,6 +15,7 @@ last item.
 
 ## Literals
 
+<!-- agl-check: skip -->
 ```agl
 42            # int
 1.5           # decimal
@@ -31,6 +32,7 @@ unified.
 
 ### List literals
 
+<!-- agl-check: skip -->
 ```agl
 let issues = ["missing tests", "unclear API"]
 ```
@@ -40,6 +42,7 @@ type, each element is checked against the expected element type. An empty list
 may obtain its element type from an expected container type or another
 constraint in the same enclosing expression:
 
+<!-- agl-check: skip -->
 ```agl
 def choose[T](left: T, right: T) -> T = right
 let items = choose([], [1])
@@ -48,12 +51,14 @@ let items = choose([], [1])
 If no such constraint determines the element type before the enclosing
 expression ends, add an annotation:
 
+<!-- agl-check: skip -->
 ```agl
 let items: list[Issue] = []
 ```
 
 ### Dictionary literals
 
+<!-- agl-check: skip -->
 ```agl
 let metadata: dict[text, json] = {
   "source": "reviewer",
@@ -67,6 +72,7 @@ empty dictionary may obtain its value type from an expected dictionary type or
 another constraint in the same enclosing expression; otherwise it needs an
 annotation:
 
+<!-- agl-check: skip -->
 ```agl
 let metadata: dict[text, json] = {}
 ```
@@ -105,6 +111,7 @@ alike — whenever a named-only parameter is in play.
 
 ### Record construction
 
+<!-- agl-check: skip -->
 ```agl
 Issue(title = "Bug", severity = 2, description = "...")
 ```
@@ -116,6 +123,7 @@ static errors.
 
 Qualified or unqualified:
 
+<!-- agl-check: skip -->
 ```agl
 Review::Pass
 Review::Fail(issues = ["missing tests"])
@@ -129,6 +137,7 @@ A nullary variant is constructed by writing its name alone (no parentheses).
 Payload variants use positional-greedy binding. Every unmarked payload field
 is standard (positional or named), regardless of the number of fields.
 
+<!-- agl-check: skip -->
 ```agl
 enum Result
   | Ok(value: int)
@@ -147,6 +156,7 @@ name, a bare reference to that name is a **static ambiguity error** — even
 when the expected type, the payload, or an explicit `::[…]` would in principle
 single out one enum. Disambiguate by qualifying with the owning enum:
 
+<!-- agl-check: skip -->
 ```agl
 enum Holder[T]
   | empty
@@ -168,6 +178,7 @@ The constructors of a generic record or enum ([Generics](generics.md)) are
 generic too. Their type arguments are normally inferred — from payload
 arguments, the expected type, or other evidence in the surrounding expression:
 
+<!-- agl-check: skip -->
 ```agl
 record Box[T]
   value: T
@@ -179,6 +190,7 @@ let bt: Box[text] = Box(value = "hi")    # same definition, T = text
 Pin the instantiation explicitly with `::[…]` when inference cannot (or
 should not) determine it:
 
+<!-- agl-check: skip -->
 ```agl
 let be = Box::[int](value = 99)
 ```
@@ -186,6 +198,7 @@ let be = Box::[int](value = 99)
 This also applies when a constructor value or partial constructor is an
 argument to another call: a sibling argument may determine its type arguments.
 
+<!-- agl-check: skip -->
 ```agl
 record Box[T]
   value: T
@@ -197,6 +210,7 @@ let b = build(Box(value = ?), 5)  # the partial is int -> Box[int]
 Nullary variants of a generic enum carry no payload to infer from, so they
 need contextual evidence (or an explicit `::[…]`):
 
+<!-- agl-check: skip -->
 ```agl
 enum Option[T]
   | none
@@ -216,6 +230,7 @@ directly, it is a positional callable — its arguments are supplied positionall
 in **declaration order**, since a function value has no named parameters
 ([Functions](functions.md)):
 
+<!-- agl-check: skip -->
 ```agl
 let mk: int -> Box[int] = Box     # the constructor as a value
 let made = mk(1)                    # called positionally
@@ -224,6 +239,7 @@ print made.value
 
 This lets constructors be passed to higher-order functions:
 
+<!-- agl-check: skip -->
 ```agl
 def apply[A, B](x: A, f: A -> B) -> B = f(x)
 
@@ -239,6 +255,7 @@ static error because the binding has no such evidence.
 
 Nullary enum variants are likewise ordinary values:
 
+<!-- agl-check: skip -->
 ```agl
 let n: Option[int] = none           # the nullary variant as a value
 ```
@@ -256,6 +273,7 @@ raise Abort(message = "Cannot continue.")
 `expr.field` reads a field of a **record**, **exception**, or `ExecResult`
 value:
 
+<!-- agl-check: skip -->
 ```agl
 let sev = issue.severity
 let code = res.exit_code
@@ -268,6 +286,7 @@ matching to extract variant payloads), dictionaries, or lists.
 
 `expr[index]` reads from a list or dictionary:
 
+<!-- agl-check: skip -->
 ```agl
 let third = xs[2]
 let last = xs[-1]
@@ -276,6 +295,7 @@ let value = metadata["source"]
 
 Indexing is a postfix operator and may be chained with calls and field access:
 
+<!-- agl-check: skip -->
 ```agl
 let cell = matrix[0][1]
 let name = rows[0].name
@@ -312,6 +332,7 @@ placeholder_arg ::= "?" | "?<digits>"
 **Single-argument sugar.** When there is exactly one positional argument and
 no named arguments, the parentheses may be dropped:
 
+<!-- agl-check: skip -->
 ```agl
 print review          # equivalent to print(review)
 ask "Hello?"          # equivalent to ask("Hello?")
@@ -322,6 +343,7 @@ f Opt::Some(x = 1)      # equivalent to f(Opt::Some(x = 1))
 
 Application binds **tighter than all operators**:
 
+<!-- agl-check: skip -->
 ```agl
 print x + 1           # parsed as (print x) + 1
 ```
@@ -340,6 +362,7 @@ application with placeholder arguments, see [Functions](functions.md). For
 its rendered value (followed by a newline) to the host's standard output, and
 returns `void`. It renders with `pretty = false` and `quote_strings = false`:
 
+<!-- agl-check: skip -->
 ```agl
 print "Review round failed; retrying."
 print review                           # renders review in AgL form
@@ -355,6 +378,7 @@ error, because built-ins are only valid in call position).
 `render` is a built-in function that converts any value to `text` using the
 same renderer as interpolation, `print`, casts to `text`, and REPL echo.
 
+<!-- agl-check: skip -->
 ```agl
 render(value: T, pretty: bool = true, quote_strings: bool = true) -> text
 ```
@@ -387,6 +411,7 @@ JSON value with nothing but surrounding whitespace — no Markdown fences, no
 prose, no repair. On success it returns the parsed JSON tree. On failure it
 raises a catchable `JsonParseError` ([Exceptions](exceptions.md)).
 
+<!-- agl-check: skip -->
 ```agl
 let v: json = parse_json('{"key": 42}')   # json dict
 let n: json = parse_json("42")             # json number 42
@@ -404,6 +429,7 @@ the text and yields the JSON **number** `42`. Use `parse_json` when you have
 a text value that contains serialized JSON and you want to traverse or
 validate its structure.
 
+<!-- agl-check: skip -->
 ```agl
 try
   let data: json = parse_json(raw_output)
@@ -438,6 +464,7 @@ by code point.
 
 ### Membership: `in`
 
+<!-- agl-check: skip -->
 ```agl
 issue in issues          # element membership:  issues: list[T]
 "source" in metadata     # key membership:      metadata: dict[text, V]
@@ -459,6 +486,7 @@ Operands must be `bool`. `and` and `or` short-circuit.
 
 ### Casts: `as` and `as?`
 
+<!-- agl-check: skip -->
 ```agl
 EXPR as T     # cast: convert EXPR to type T
 EXPR as? T    # convertibility test: bool, never raises
@@ -486,6 +514,7 @@ keywords — they cannot be used as variable names.
 
 Examples:
 
+<!-- agl-check: skip -->
 ```agl
 let n: int = raw_value as int          # raises CastError if not an int
 let ok: bool = raw_value as? int       # true when cast would succeed
@@ -520,6 +549,7 @@ either — a static error at the `as`/`as?` expression, not a runtime failure.
 
 ### Variant tests: `is`, `is not`
 
+<!-- agl-check: skip -->
 ```agl
 review is Pass
 status is Status::Blocked     # qualified; aliases resolve transparently
@@ -537,6 +567,7 @@ case_expr   ::= "case" or_expr "of" "|"? case_branch ("|" case_branch)*
 case_branch ::= pattern "=>" (suite | or_expr)
 ```
 
+<!-- agl-check: skip -->
 ```agl
 let next: text = case action of
   Stop => "Stop."
@@ -563,6 +594,7 @@ if_expr_branch ::= or_expr "=>" (suite | or_expr)
 if_else_branch ::= "|"? "else" "=>" (suite | or_expr)
 ```
 
+<!-- agl-check: skip -->
 ```agl
 let label: text = if | score > 90 => "A" | score > 75 => "B" | else => "C"
 ```
@@ -610,6 +642,7 @@ y                 # the block's value is y, an int
 A block that ends in a `let` or `var` with no continuation is a **static
 error** — a binder must be followed by at least one more expression.
 
+<!-- agl-check: error -->
 ```agl
 def broken() -> int =
   let x = 1        # static error: 'let' must be followed by an expression
@@ -622,6 +655,7 @@ expression site. Their type is the **bottom type** (assignable to any expected
 type), so they may appear in expression positions such as a branch suite or the
 initializer of a `let`/`var`:
 
+<!-- agl-check: skip -->
 ```agl
 let x: int = raise Abort(message = "Cannot continue.")
 let y: int = if finished => (return 0) else => 1
@@ -641,6 +675,7 @@ case status of
 type** (assignable to any expected type), so they may appear in any expression
 position inside a loop:
 
+<!-- agl-check: skip -->
 ```agl
 let x: int = if finished => break else => count
 ```
@@ -659,6 +694,7 @@ that is defined inside a loop — is a static error.
 common type (with `int → decimal` widening). This type becomes the `try`
 expression's type:
 
+<!-- agl-check: skip -->
 ```agl
 let result: decimal =
   try

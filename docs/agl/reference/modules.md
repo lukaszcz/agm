@@ -46,6 +46,7 @@ Both bare access and qualified access are bounded by **S**. Repeated imports
 of the same module union their selected sets and bare-name contributions.
 This makes a small bare surface plus a full qualified API explicit:
 
+<!-- agl-check: skip -->
 ```agl
 import utils/strings
 import utils/strings using trim
@@ -62,6 +63,7 @@ A plain import contributes **S** only to qualified routes. `using` injects its
 selected names into the bare namespace. `open import` injects all of **S**
 bare; combining `open` and `using` is redundant and invalid.
 
+<!-- agl-check: skip -->
 ```agl
 import utils/strings
 open import app/vocabulary hiding internal-word
@@ -79,6 +81,7 @@ qualification ambiguity.
 does not make names bare. An aliased import is reached only through its alias;
 it does not participate in suffix or anchored path matching.
 
+<!-- agl-check: skip -->
 ```agl
 import company/tools/config as settings
 
@@ -97,6 +100,7 @@ or starts with `prefix/`. The import's
 `open`, selection clause, and alias apply independently to every matched
 module. A `using` or `hiding` name must be public in every matched module.
 
+<!-- agl-check: skip -->
 ```agl
 import tools/*
 open import domain/* hiding debug
@@ -109,6 +113,7 @@ An alias on a wildcard is a shared alias facade, not a path rewrite.
 
 A module qualifier ends in `::`:
 
+<!-- agl-check: skip -->
 ```agl
 import company/tools/config
 import service/config as settings
@@ -131,6 +136,7 @@ single-segment routes only.
 
 Qualified type references follow the same rules and preserve nominal identity:
 
+<!-- agl-check: skip -->
 ```agl
 import shapes/points as points
 
@@ -151,6 +157,7 @@ its defining module.
 `export` re-exports public members without injecting them into the exporting
 module's local scope:
 
+<!-- agl-check: skip -->
 ```agl
 export math/basic using add, multiply as mul
 export math/advanced hiding internal-helper

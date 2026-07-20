@@ -6,6 +6,7 @@ An agent call is the heart of AgL: an expression that sends a rendered
 prompt to a host-provided agent and yields a **typed** result. All
 agent invocations use the built-in `ask` function:
 
+<!-- agl-check: skip -->
 ```agl
 ask "Summarize ${topic}"
 ask("Review this artifact:\n${artifact}", agent = reviewer)
@@ -36,12 +37,14 @@ record/enum **field name**.
 With no named arguments, `ask` may be called with the prompt string written
 directly, without parentheses:
 
+<!-- agl-check: skip -->
 ```agl
 let s = ask "Hello?"          # equivalent to ask("Hello?")
 ```
 
 With named arguments, parentheses are required:
 
+<!-- agl-check: skip -->
 ```agl
 let r: Review = ask("Review ${artifact}", agent = reviewer)
 ```
@@ -59,6 +62,7 @@ agent planner = "claude -p %{PROMPT_FILE}"
 Agent values may be stored, passed to functions, and held in lists — they
 are ordinary value bindings:
 
+<!-- agl-check: skip -->
 ```agl
 let agents: list[agent] = [reviewer, planner]
 
@@ -104,6 +108,7 @@ expected types propagate ([Expressions](expressions.md)):
    function parameter type),
 4. otherwise **`text`**.
 
+<!-- agl-check: skip -->
 ```agl
 let x = ask "A"                          # target: text
 let review: Review = ask("…", agent = reviewer)   # target: Review
@@ -134,6 +139,7 @@ AgL first resolves that expression's type and then builds the contract from the
 resolved concrete target. This gives a call in a generic call or constructor
 the same codec, schema, and validation as writing that concrete target directly:
 
+<!-- agl-check: skip -->
 ```agl
 def select[T](first: T, second: T) -> T = first
 let count = select(ask("Choose a count."), 1)  # target: int
@@ -148,6 +154,7 @@ agent call (codec, derived JSON Schema, format instructions, validation) is
 built from the type that is statically known at the call site, and a type
 variable is opaque at that point: there is nothing to derive a schema from.
 
+<!-- agl-check: error -->
 ```agl
 def fetch[T]() -> T =
   ask::[T]("give me a value")   # static error: target type is a type variable
@@ -162,6 +169,7 @@ A **concrete instance** of a generic type is perfectly fine, because it is no
 longer a type variable — only its erased instantiation matters to the
 contract:
 
+<!-- agl-check: skip -->
 ```agl
 enum Option[T]
   | none
@@ -177,6 +185,7 @@ exactly like any other: the response is validated and decoded through the same
 output contract, and construction/matching/equality on the resulting value
 work normally.
 
+<!-- agl-check: skip -->
 ```agl
 enum Tree
   | Leaf
@@ -201,6 +210,7 @@ other position, only its JSON Schema is unbounded. See
 Selects the agent. The value must have type `agent`. When omitted, the host
 default applies:
 
+<!-- agl-check: skip -->
 ```agl
 ask("Plan the next step.", agent = planner)
 ```
@@ -213,6 +223,7 @@ the codec is auto-selected from the target type — `text` targets use the
 types use the `json` codec. An explicit `format` must name a registered codec
 that supports the call's target type; both are checked statically.
 
+<!-- agl-check: skip -->
 ```agl
 let r: Review = ask("Review ${a}", agent = reviewer, format = "json")
 ```
@@ -231,6 +242,7 @@ default applies; the portable default is **lenient recovery** (see below).
 The parse policy for invalid structured output. The value is a `ParsePolicy`
 — one of two variants from the standard core enum:
 
+<!-- agl-check: skip -->
 ```agl
 enum ParsePolicy
   | Abort
@@ -241,6 +253,7 @@ enum ParsePolicy
 - `Retry(n: N)` — after the initial call, make up to `N` additional
   corrective calls; raise `AgentParseError` if all fail.
 
+<!-- agl-check: skip -->
 ```agl
 let r: Review = ask(
   "Review ${artifact}",
@@ -424,6 +437,7 @@ on its first attempt, **without invoking the agent**. It never dispatches,
 never retries, never parses, and emits no trace events — it only assembles the
 request value.
 
+<!-- agl-check: skip -->
 ```agl
 let r = ask-request("Summarize ${topic}")
 let r = ask-request::[Review]("Review ${artifact}", agent = reviewer)
@@ -435,6 +449,7 @@ Unlike `ask`, `ask-request` cannot infer its target type from context (its
 result type is fixed to `AgentRequest`), so the target type is given
 **explicitly** with the typed-call syntax `::[Type]`:
 
+<!-- agl-check: skip -->
 ```agl
 let r = ask-request::[Review]("Review ${artifact}")
 let n = ask-request::[int]("How many?")
@@ -442,6 +457,7 @@ let n = ask-request::[int]("How many?")
 
 Omitting the type argument defaults the target to `text`:
 
+<!-- agl-check: skip -->
 ```agl
 let r = ask-request("Anything goes")   # target type is text
 ```
@@ -454,6 +470,7 @@ is nested in a larger expression. The returned
 `AgentRequest.target_type` is `Some(value = "...")` for parsed response types
 and `None` for `unit`, because a `unit` response is ignored:
 
+<!-- agl-check: skip -->
 ```agl
 let r = ask-request::[unit]("Perform this task")
 ```

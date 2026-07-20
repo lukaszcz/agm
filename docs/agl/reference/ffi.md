@@ -8,6 +8,7 @@ function: it can be called, stored, passed, and returned exactly like a `def`
 or `fn` value ([Functions](functions.md)). Only its body is different — instead
 of an AgL expression, invoking it crosses into Python.
 
+<!-- agl-check: skip -->
 ```agl
 # mylib.agl
 extern def to_slug(title: text) -> text
@@ -68,6 +69,7 @@ defaults are all AgL-side call mechanics that resolve to a plain positional
 argument list before the call crosses the boundary, so the companion's own
 parameter names are unconstrained:
 
+<!-- agl-check: skip -->
 ```agl
 extern def greet(name: text, /, greeting: text = "Hello") -> text
 
@@ -174,6 +176,7 @@ Every one of these is enforced at every call: an implementation that tries to
 peek behind a handle fails the same way regardless of which concrete types the
 extern happens to be instantiated at.
 
+<!-- agl-check: skip -->
 ```agl
 extern def reverse[T](xs: list[T]) -> list[T]
 ```
@@ -199,6 +202,7 @@ return value does not conform to the extern's declared return type (including
 an invalid, missing, or stale sealed handle at a type-variable position). It
 is catchable with `try`/`catch` like any other exception:
 
+<!-- agl-check: skip -->
 ```agl
 try
   let slug = to_slug(title)

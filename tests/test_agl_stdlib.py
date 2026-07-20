@@ -69,6 +69,11 @@ def test_no_stdlib_still_allows_explicit_std_core_import() -> None:
     )
 
 
+def test_shipped_stdlib_modules_load_without_the_default_prelude() -> None:
+    """A shipped module may not lean on the prelude the user is free to switch off."""
+    _check("import std/config\nprint(std/config::runner)\n", default_stdlib=False)
+
+
 def test_unknown_builtin_function_is_rejected() -> None:
     with pytest.raises(AglTypeError, match="Unknown builtin function 'mystery'"):
         _check("builtin def mystery() -> unit\n()\n")

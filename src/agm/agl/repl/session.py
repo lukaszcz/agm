@@ -209,10 +209,12 @@ class ReplSession:
         self._roots: RootSet | None = None
         # Cached lib modules from prior REPL program entries.
         self._loaded_lib_modules: dict[ModuleId, LoadedModule] = {}
-        # Imports generally persist across successfully promoted program entries.
-        # Declarations for a module named in a later entry replace its retained
-        # declarations; the rest are prepended in program context for reuse.
-        self._accumulated_imports: list["ImportDecl"] = []
+        # Imports generally persist across successfully promoted program entries,
+        # one retained generation per entry, kept as written so a wildcard keeps
+        # tracking the module set. Declarations for a module named in a later
+        # generation replace earlier ones; the rest are prepended in program
+        # context for reuse.
+        self._accumulated_imports: list[tuple["ImportDecl", ...]] = []
         # Resolved user infix fixity declared in prior promoted entries
         # (operator name → ``(priority, associativity)``). Passed to the parser
         # as ambient fixity so an ``infixl``/``infixr`` declaration made in one

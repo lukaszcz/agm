@@ -181,10 +181,11 @@ resolved, so functions and nominal types may refer across cycles.
 
 ## REPL
 
-REPL imports persist after a successful entry. Wildcards expand before they
-are retained. A later entry replaces the earlier import declaration for every
-module it names, so its selection, open mode, or alias takes effect for that
-module. Multiple declarations for one module in the same entry merge normally.
+REPL imports persist after a successful entry, retained as written: a retained
+wildcard expands again on every later entry, so it picks up modules added since.
+A later entry replaces the earlier import declaration for every module it names,
+so its selection, open mode, or alias takes effect for that module. Multiple
+declarations for one module in the same entry merge normally.
 A failed entry changes no imports, and `:reset` clears imports with the session
 bindings. Each REPL entry and its loaded library modules receive the
 `std/core` prelude unless the session was launched with `--no-stdlib`.

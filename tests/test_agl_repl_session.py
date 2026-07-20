@@ -2360,6 +2360,35 @@ class TestImports:
 
         assert r3.value == IntValue(42)
 
+    def test_retained_wildcard_picks_up_a_module_added_later(self, tmp_path: Path) -> None:
+        (tmp_path / "tools").mkdir()
+        (tmp_path / "tools" / "add.agl").write_text("def add() -> int = 1\n")
+        s = self._make_session_with_root(tmp_path)
+
+        assert s.eval_entry("open import tools/*\nadd()").ok
+
+        (tmp_path / "tools" / "mul.agl").write_text("def mul() -> int = 2\n")
+        later = s.eval_entry("mul()")
+
+        assert later.ok, later.diagnostics
+        assert _int(later.value) == 2
+
+    def test_retained_wildcard_does_not_undo_a_later_module_replacement(
+        self, tmp_path: Path
+    ) -> None:
+        """Re-expansion must not resurrect a declaration a later entry replaced."""
+        (tmp_path / "tools").mkdir()
+        (tmp_path / "tools" / "add.agl").write_text("def add() -> int = 1\n")
+        (tmp_path / "tools" / "mul.agl").write_text("def mul() -> int = 2\n")
+        s = self._make_session_with_root(tmp_path)
+
+        assert s.eval_entry("open import tools/*\nadd() + mul()").ok
+        assert s.eval_entry("import tools/add as arithmetic\narithmetic::add()").ok
+
+        assert not s.eval_entry("add()").ok
+        assert s.eval_entry("arithmetic::add()").ok
+        assert s.eval_entry("mul()").ok
+
     def test_generic_graph_load_error_surfaces_as_diagnostic(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:

@@ -49,7 +49,7 @@ class EntryPipelineCtx(Protocol):
     """The minimal ReplSession surface the program pipeline needs."""
 
     _loaded_lib_modules: dict[ModuleId, LoadedModule]
-    _accumulated_imports: list[ImportDecl]
+    _accumulated_imports: list[tuple[ImportDecl, ...]]
     _link_image: LinkImage
     _ir_base_frame: Frame
     _session_scope: ScopeNode
@@ -342,14 +342,25 @@ class EntryPipeline:
         wildcard expands to exact target modules before retained declarations
         are compared. A new entry replaces only the modules it names, while
         declarations for one module in that entry still union normally.
+
+        Retention keeps each entry's declarations as written, so a retained
+        wildcard is re-expanded here against the current roots and picks up
+        modules added since. Returns the entry's own declarations unexpanded,
+        which is what :meth:`_replace_accumulated_imports` retains.
         """
+        from agm.agl.syntax.nodes import ImportDecl
+
+        entry_raw = tuple(item for item in program.body.items if isinstance(item, ImportDecl))
         expanded, next_start_id, entry_imports = self._expand_entry_wildcards(
             program, next_start_id, roots
         )
+        preamble, next_start_id = self._retained_import_preamble(
+            entry_imports, roots, next_start_id
+        )
         return (
-            self._inject_accumulated_imports(expanded, entry_imports),
+            self._prepend_imports(expanded, preamble),
             next_start_id,
-            entry_imports,
+            entry_raw,
         )
 
     @staticmethod
@@ -359,9 +370,6 @@ class EntryPipeline:
         roots: RootSet,
     ) -> tuple[Program, int, tuple[ImportDecl, ...]]:
         """Expand wildcard imports into distinct exact-module declarations."""
-        from dataclasses import replace
-
-        from agm.agl.modules.resolver import expand_wildcard
         from agm.agl.syntax.nodes import Block, ImportDecl, Program
 
         items: list[Item] = []
@@ -371,21 +379,10 @@ class EntryPipeline:
             if not isinstance(item, ImportDecl):
                 items.append(item)
                 continue
-            if not item.wildcard:
-                items.append(item)
-                imports.append(item)
-                continue
-            expanded_wildcard = True
-            for module in expand_wildcard(tuple(item.module_path), roots, span=item.span):
-                expanded = replace(
-                    item,
-                    module_path=module.segments,
-                    wildcard=False,
-                    node_id=next_start_id,
-                )
-                next_start_id += 1
-                items.append(expanded)
-                imports.append(expanded)
+            expanded_wildcard = expanded_wildcard or item.wildcard
+            expanded, next_start_id = EntryPipeline._expand_decls((item,), roots, next_start_id)
+            items.extend(expanded)
+            imports.extend(expanded)
 
         if not expanded_wildcard:
             return program, next_start_id, tuple(imports)
@@ -403,18 +400,11 @@ class EntryPipeline:
             tuple(imports),
         )
 
-    def _inject_accumulated_imports(
-        self,
-        program: Program,
-        entry_imports: tuple[ImportDecl, ...],
-    ) -> Program:
-        """Prepend retained imports except those replaced in this entry."""
+    @staticmethod
+    def _prepend_imports(program: Program, preamble: list[ImportDecl]) -> Program:
+        """Prepend *preamble* declarations to *program*'s body."""
         from agm.agl.syntax.nodes import Block, Program
 
-        if not self._ctx._accumulated_imports:
-            return program
-
-        preamble = self._retained_imports_after_replacement(entry_imports)
         if not preamble:
             return program
         return Program(
@@ -621,23 +611,71 @@ class EntryPipeline:
             type_table=checked.type_env.type_table,
         )
 
-    def _retained_imports_after_replacement(
-        self, entry_imports: tuple[ImportDecl, ...]
-    ) -> list[ImportDecl]:
-        """Return accumulated declarations not replaced by an entry module identity."""
-        replacement_modules = {tuple(decl.module_path) for decl in entry_imports}
-        return [
-            decl
-            for decl in self._ctx._accumulated_imports
-            if tuple(decl.module_path) not in replacement_modules
-        ]
+    def _retained_import_preamble(
+        self,
+        entry_imports: tuple[ImportDecl, ...],
+        roots: RootSet,
+        next_start_id: int,
+    ) -> tuple[list[ImportDecl], int]:
+        """Expand retained entries and keep the newest declarations per module.
+
+        Retained wildcards are re-expanded against the current roots, so a
+        module added since the wildcard was written is imported now. Later
+        entries still replace earlier ones module by module: a module named by
+        this entry drops out entirely, and a module named by several retained
+        entries keeps only the newest one's declarations.
+        """
+        replaced = {tuple(decl.module_path) for decl in entry_imports}
+        newest: dict[tuple[str, ...], list[ImportDecl]] = {}
+        for generation in self._ctx._accumulated_imports:
+            expanded, next_start_id = self._expand_decls(generation, roots, next_start_id)
+            covered: dict[tuple[str, ...], list[ImportDecl]] = {}
+            for decl in expanded:
+                covered.setdefault(tuple(decl.module_path), []).append(decl)
+            newest.update(covered)
+        return (
+            [decl for path, decls in newest.items() if path not in replaced for decl in decls],
+            next_start_id,
+        )
+
+    @staticmethod
+    def _expand_decls(
+        decls: tuple[ImportDecl, ...],
+        roots: RootSet,
+        next_start_id: int,
+    ) -> tuple[list[ImportDecl], int]:
+        """Expand every wildcard in *decls* into exact-module declarations."""
+        from dataclasses import replace
+
+        from agm.agl.modules.resolver import expand_wildcard
+
+        expanded: list[ImportDecl] = []
+        for decl in decls:
+            if not decl.wildcard:
+                expanded.append(decl)
+                continue
+            for module in expand_wildcard(tuple(decl.module_path), roots, span=decl.span):
+                expanded.append(
+                    replace(
+                        decl,
+                        module_path=module.segments,
+                        wildcard=False,
+                        node_id=next_start_id,
+                    )
+                )
+                next_start_id += 1
+        return expanded, next_start_id
 
     def _replace_accumulated_imports(self, entry_imports: tuple[ImportDecl, ...]) -> None:
-        """Replace retained declarations for every module touched by this entry."""
-        self._ctx._accumulated_imports[:] = [
-            *self._retained_imports_after_replacement(entry_imports),
-            *entry_imports,
-        ]
+        """Retain this entry's declarations as written, as the newest generation.
+
+        Declarations are kept unexpanded so a wildcard keeps tracking the module
+        set. Earlier generations stay: a wildcard among them may still name a
+        module this entry does not, and per-module precedence is applied when
+        the preamble is built.
+        """
+        if entry_imports:
+            self._ctx._accumulated_imports.append(entry_imports)
 
     def _persist_interpreter_settings(self, interp: "IrInterpreter", trace: "TraceStore") -> None:
         """Persist completed setting writes and the live trace destination."""

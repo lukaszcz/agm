@@ -1,3 +1,5 @@
+import std/core using Option
+
 builtin var runner: text
 builtin var log: bool
 builtin var log-file: Option[text]

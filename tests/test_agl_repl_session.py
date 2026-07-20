@@ -155,6 +155,16 @@ class TestPersistence:
         assert result.ok, result.diagnostics
         assert result.value == IntValue(15)
 
+    def test_new_record_colliding_with_persisted_binding_is_rejected(self) -> None:
+        """A record's constructor name is its root declaration, so nothing else can claim it."""
+        s = ReplSession()
+        assert s.eval_entry("let Widget = 1").ok
+
+        result = s.eval_entry("record Widget\n  x: int")
+
+        assert not result.ok
+        assert "already declared" in result.diagnostics[0].message.lower()
+
     def test_selected_pattern_slots_lower_in_repl_entries(self) -> None:
         s = ReplSession()
 

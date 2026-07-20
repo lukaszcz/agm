@@ -1,0 +1,5 @@
+exception Boom extends Exception
+  code: int
+
+let Boom = 1
+print Boom

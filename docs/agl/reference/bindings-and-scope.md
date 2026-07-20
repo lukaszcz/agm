@@ -301,24 +301,49 @@ let h: Holder[int] = Holder::tagged(by = 7)   # qualified — unambiguous
 
 A **nearer ordinary binding shadows** a constructor (or an overload set): an
 inner `let`, `var`, or function parameter named `tagged` hides the outer
-constructor for the rest of its scope, exactly like any other shadowing. An
-ordinary declaration may also use a constructor's spelling in its own scope;
-it owns expression position, while a case-pattern constructor lookup remains
-independent.
+constructor for the rest of its scope, exactly like any other shadowing.
 
 ```agl
 def shadow(tagged: int) -> int = tagged * 10   # parameter hides the constructor
 ```
 
-The same applies to the **standard core** constructor names — exception types
-(`Abort`, `AgentParseError`, …), enum variants (`Some`, `Retry`, …), and records
-(`ExecResult`, `AgentRequest`). They are conveniences, not reserved words: a
-`let`, `var`, `def`, or `param` may declare any of them, shadowing the
-constructor for the rest of the scope.
+Whether an ordinary declaration may claim a constructor's spelling **in that
+constructor's own scope** depends on whether the constructor stays reachable:
+
+- An **enum variant** may be claimed. Its name is `Owner::variant`, and the
+  unqualified spelling is a convenience, so the variant remains reachable
+  qualified. The claiming declaration owns expression position, while
+  case-pattern constructor lookup stays independent.
+- A constructor **declared in another module** may be claimed, since module
+  qualification still reaches it. This covers the **standard core** names —
+  exception types (`Abort`, `AgentParseError`, …), enum variants (`Some`,
+  `Retry`, …), and records (`ExecResult`, `AgentRequest`). They are
+  conveniences, not reserved words.
+- A **record**, **exception**, or **type alias** declared in the *same* module
+  may **not** be claimed. Its constructor name is the declaration itself, with
+  no qualified spelling to fall back on, so a second declaration of that name
+  is a duplicate-declaration error.
 
 ```agl
-let ExecResult = 0          # shadows the standard core record constructor
-def Retry(n: int) -> int = n + 1   # shadows the exception constructor
+enum Color
+  | Red
+  | Blue
+
+let Red = 5                 # allowed — 'Color::Red' still names the variant
+let ExecResult = 0          # allowed — declared in another module
+def Retry(n: int) -> int = n + 1
+
+record Widget
+  x: int
+
+let Widget = 1              # error: 'Widget' is already declared in this scope
+```
+
+Use [`::name`](modules.md) to reach the module's own top-level declaration past
+any shadowing:
+
+```agl
+print(::Red)                # the 'let', not the variant
 ```
 
 ## Lexical scoping

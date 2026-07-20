@@ -568,26 +568,54 @@ class _Resolver:
                 )
                 self._add_constructor_candidate(item.name, cref)
 
+    def _root_declaring_candidates(self, name: str) -> tuple[ConstructorRef, ...]:
+        """Candidates that declare *name* itself in this module's root.
+
+        An enum variant's bare spelling is a convenience injection of the member
+        ``Owner::variant``, which stays reachable however the bare name is
+        claimed, so a variant never declares the bare name.  Record, exception,
+        and alias constructors do: their constructor name *is* the root
+        declaration, and nothing else reaches them.
+        """
+        return tuple(
+            cref
+            for cref in self._constructor_candidates.get(name, ())
+            if cref.variant is None and cref.owner_module_id == self._module_id
+        )
+
     def _define_constructor_bindings(self) -> None:
         """Define each constructor name as a value binding in the current (root) scope.
 
         Collision rules:
         - Constructor-vs-constructor at the same scope: allowed (overload set).
-        - Constructor-vs-non-constructor at the same scope: duplicate error,
-          because the non-constructor binding was already defined before this
-          method is called (agents and defs are defined first).
+        - A constructor declared in *another* module never collides: the two
+          spellings stay separable by qualification, so declaring over a
+          prelude name such as ``Retry`` is always legal.
+        - A same-module constructor that declares the bare name (record,
+          exception, alias) colliding with an ordinary value binding is a
+          duplicate declaration, because no qualified spelling could tell the
+          two apart afterwards.
         """
         scope = self._current_scope()
         for name, crefs in self._constructor_candidates.items():
             if name in scope.bindings:
-                # Constructors remain candidates for pattern resolution, but an
-                # ordinary value binding that already claimed the name owns the
-                # value namespace spelling — including over built-in candidates,
-                # so a `def Retry()`/`agent Retry` is legal.
+                if self._root_declaring_candidates(name):
+                    raise AglScopeError(
+                        f"Name '{name}' is already declared in this scope.",
+                        span=None,
+                    )
+                # An enum variant's bare spelling yields to a value binding that
+                # already claimed it; `Owner::variant` still reaches the variant
+                # and pattern position still classifies it.
                 continue
             parent_ref = scope.parent.lookup(name) if scope.parent is not None else None
             if parent_ref is not None and parent_ref.kind is not BinderKind.constructor_binding:
-                # A REPL entry's new constructors remain available to pattern
+                if self._root_declaring_candidates(name):
+                    raise AglScopeError(
+                        f"Name '{name}' is already declared in this scope.",
+                        span=None,
+                    )
+                # A REPL entry's new variants remain available to pattern
                 # classification, but an ordinary session binding retains its
                 # expression-position meaning.
                 continue
@@ -808,14 +836,18 @@ class _Resolver:
     def _define(self, name: str, ref: BindingRef) -> None:
         """Define *name* in the current scope; error on redeclaration.
 
-        A user declaration may shadow a built-in constructor binding (e.g. the
-        prelude ``Retry``/``ExecResult`` names), which carry the sentinel
-        ``decl_node_id`` and have no source declaration; genuine user-declared
-        names still collide.
+        A declaration may claim the bare spelling of a constructor declared in
+        another module (e.g. the prelude ``Retry``/``ExecResult`` names) or of a
+        same-module enum variant, since ``Owner::variant`` and a qualified
+        module path still reach those.  A same-module record, exception, or
+        alias constructor declares the bare name itself, so it collides.
         """
         scope = self._current_scope()
         existing = scope.bindings.get(name)
-        if existing is not None and existing.kind is not BinderKind.constructor_binding:
+        if existing is not None and (
+            existing.kind is not BinderKind.constructor_binding
+            or self._root_declaring_candidates(name)
+        ):
             raise AglScopeError(
                 f"Name '{name}' is already declared in this scope.",
                 span=ref.decl_span,

@@ -1,0 +1,6 @@
+record Widget
+  x: int
+
+agent Widget
+
+print "done"

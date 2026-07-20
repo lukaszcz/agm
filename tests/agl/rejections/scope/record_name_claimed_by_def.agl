@@ -1,0 +1,7 @@
+record Widget
+  x: int
+
+def Widget() -> int
+  1
+
+print Widget()

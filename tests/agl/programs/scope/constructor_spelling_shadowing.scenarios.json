@@ -1,0 +1,25 @@
+{
+  "scenarios": [
+    {
+      "name": "variant_pattern_selected",
+      "params": {"pick": "red", "tint": 2},
+      "expect": {
+        "stdout": "pattern red\n2\n4\n2\n2\n3\n102\n"
+      }
+    },
+    {
+      "name": "other_variant_pattern_selected",
+      "params": {"pick": "blue", "tint": 5},
+      "expect": {
+        "stdout": "pattern blue\n5\n10\n5\n10\n6\n105\n"
+      }
+    },
+    {
+      "name": "zero_tint",
+      "params": {"pick": "blue", "tint": 0},
+      "expect": {
+        "stdout": "pattern blue\n0\n0\n0\n0\n1\n100\n"
+      }
+    }
+  ]
+}

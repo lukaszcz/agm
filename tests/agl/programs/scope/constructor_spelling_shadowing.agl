@@ -1,0 +1,43 @@
+# An enum variant's bare spelling is a convenience injection of
+# `Owner::variant`, so an ordinary binding may claim the bare name in the same
+# module: pattern position still classifies the variant, `Owner::variant` still
+# reaches it, and `::name` reaches the module-root binding past any shadow.
+# A constructor declared in another module never collides with a declaration
+# here, so a prelude spelling is always available to redeclare.
+enum Color
+  | Red
+  | Blue
+
+record Box
+  shade: Color
+
+param pick: text
+param tint: int
+
+let Red = tint
+let Blue = tint * 2
+
+def shade_of(c: Color) -> int
+  case c of
+    | Red => ::Red
+    | Blue => ::Blue
+
+def shadowed(Red: int) -> int
+  Red + ::Red
+
+def Retry() -> int
+  tint + 100
+
+let chosen: Color = if | pick == "red" => Color::Red | else => Color::Blue
+let boxed = Box(shade = chosen)
+
+case boxed.shade of
+  | Red => print "pattern red"
+  | Blue => print "pattern blue"
+
+print Red
+print Blue
+print(::Red)
+print shade_of(chosen)
+print shadowed(1)
+print Retry()

@@ -1,0 +1,5 @@
+record Widget
+  x: int
+
+let Widget = 1
+print Widget

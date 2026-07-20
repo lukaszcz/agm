@@ -6,6 +6,8 @@ The evaluator interprets the linked program and nothing else — it never import
 
 `break`/`continue`/`return` propagate as internal Python signals caught only by their owning construct (the loop, or the function-call boundary for `return`), so they unwind naturally through `try`/`catch`, which catches only AgL-level raises. An `IrCase` evaluates its subject once and selects an arm by enum variant or literal key; a switch with no matching key and no default is malformed IR (`InvalidIrError`) — the evaluator never synthesizes `MatchError`.
 
+Recursion is bounded by a `max_call_depth` guard that raises a catchable `RecursionError`. Because the tree-walker spans several Python frames per AgL call, `run()` raises Python's recursion limit so the AgL guard is reached first; a Python `RecursionError` that still escapes (the limit is capped) is converted to the same catchable AgL exception (`ir_interpreter.py`).
+
 ## Host-Backed Operations
 
 Host operations are dispatched by contract identity:

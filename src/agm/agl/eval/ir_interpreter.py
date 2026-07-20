@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import decimal
 import inspect
+import sys
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Protocol, assert_never, cast
 
@@ -255,6 +256,19 @@ def _make_literal_key_value(key: IrLiteralCaseKey) -> Value:
         return TextValue(key.scalar_value)
     assert key.scalar_value is None
     return JsonValue(None)
+
+
+# The tree-walking evaluator descends through several Python stack frames per AgL
+# call, so Python's own recursion limit — not the AgL call-depth guard — is what
+# a deep recursion hits first at the default ceiling.  Before running, ``run()``
+# raises Python's limit so the AgL guard (``max_call_depth``) trips first and its
+# ``RecursionError`` stays catchable.  This budget is a generous upper bound on
+# the Python frames one AgL call spans; ``_MAX_PYTHON_RECURSION_LIMIT`` caps how
+# high the limit is pushed, beyond which a genuine Python ``RecursionError`` is
+# converted to a catchable AgL ``RecursionError`` instead of escaping as a crash.
+_PYTHON_FRAMES_PER_AGL_CALL = 80
+_BASE_RECURSION_HEADROOM = 4000
+_MAX_PYTHON_RECURSION_LIMIT = 1_000_000
 
 
 # ---------------------------------------------------------------------------
@@ -644,16 +658,25 @@ class IrInterpreter:
                 case _:
                     continue
 
+    def _recursion_error(self) -> AglRaise:
+        """Build the catchable AgL ``RecursionError`` for an exceeded call depth.
+
+        Shared by the ``max_call_depth`` guard and the backstop that converts a
+        Python ``RecursionError`` (raised when Python's own limit is hit before
+        the guard) into the same catchable AgL exception.
+        """
+        return AglRaise(
+            _make_exc_value(
+                "RecursionError",
+                f"Maximum call depth ({self._max_call_depth}) exceeded",
+                trace_id=self._trace.new_event_id(),
+                limit=IntValue(self._max_call_depth),
+            )
+        )
+
     def _check_call_depth(self) -> None:
         if self._call_depth >= self._max_call_depth:
-            raise AglRaise(
-                _make_exc_value(
-                    "RecursionError",
-                    f"Maximum call depth ({self._max_call_depth}) exceeded",
-                    trace_id=self._trace.new_event_id(),
-                    limit=IntValue(self._max_call_depth),
-                )
-            )
+            raise self._recursion_error()
 
     def _eval_default_in_frame(self, param: "IrFunctionParam", frame: Frame) -> Value:
         """Evaluate an omitted argument's default expression in *frame*."""
@@ -814,15 +837,30 @@ class IrInterpreter:
         initializer runs, then iterates over all modules in insertion order
         (library modules first, entry last) executing each module's initializers.
         All evaluation runs under the pinned AgL decimal context.
-        """
-        with decimal.localcontext(AGL_DECIMAL_CONTEXT):
-            self._install_entry_function_closures()
-            self._install_entry_params()
 
-            for mod in self._program.modules.values():
-                for node in mod.initializers:
-                    self._eval_and_record_initializer(mod.module_id, node)
-        return self._collect_results()
+        Python's recursion limit is raised for the duration so the AgL
+        ``max_call_depth`` guard is reached before Python's own limit; a Python
+        ``RecursionError`` that still escapes (its limit is capped) is converted
+        to a catchable AgL ``RecursionError`` rather than crashing the host.
+        """
+        needed = _BASE_RECURSION_HEADROOM + self._max_call_depth * _PYTHON_FRAMES_PER_AGL_CALL
+        target = min(needed, _MAX_PYTHON_RECURSION_LIMIT)
+        previous_limit = sys.getrecursionlimit()
+        # Never lower an already-higher limit (e.g. a nested run); only raise it.
+        sys.setrecursionlimit(max(previous_limit, target))
+        try:
+            with decimal.localcontext(AGL_DECIMAL_CONTEXT):
+                self._install_entry_function_closures()
+                self._install_entry_params()
+
+                for mod in self._program.modules.values():
+                    for node in mod.initializers:
+                        self._eval_and_record_initializer(mod.module_id, node)
+            return self._collect_results()
+        except RecursionError:
+            raise self._recursion_error() from None
+        finally:
+            sys.setrecursionlimit(previous_limit)
 
     def _eval_and_record_initializer(self, module_id: ModuleId, node: IrExpr) -> None:
         """Evaluate one initializer, retaining its result for result collection."""
@@ -1221,13 +1259,19 @@ class IrInterpreter:
             case IrTry(body=body_expr, handlers=handlers):
                 try:
                     return self._eval(body_expr)
+                except RecursionError:
+                    # Python's limit was hit before the AgL guard (its limit is
+                    # capped); surface it as the same catchable AgL exception so
+                    # a `catch RecursionError` handler still fires.
+                    pending = self._recursion_error()
                 except AglRaise as exc:
-                    for handler in handlers:
-                        if handler.nominal is None or handler.nominal == exc.exc.nominal:
-                            if handler.symbol is not None:
-                                self._frame[handler.symbol] = exc.exc
-                            return self._eval(handler.body)
-                    raise
+                    pending = exc
+                for handler in handlers:
+                    if handler.nominal is None or handler.nominal == pending.exc.nominal:
+                        if handler.symbol is not None:
+                            self._frame[handler.symbol] = pending.exc
+                        return self._eval(handler.body)
+                raise pending
 
             case IrCase(subject=subject_expr, arms=arms, default=default):
                 subject_val = self._eval(subject_expr)

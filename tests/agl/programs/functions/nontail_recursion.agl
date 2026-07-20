@@ -1,0 +1,18 @@
+# Non-tail recursion — where the recursive call is an operand rather than the
+# whole body — must raise a *catchable* AgL RecursionError when it exceeds the
+# call-depth limit, exactly like tail recursion. It must never escape as a
+# host-level crash.
+param depth: int
+param catch_it: bool
+
+def sum_to(n: int) -> int =
+  if n == 0 => 0 else => n + sum_to(n - 1)
+
+def run_it(d: int, protect: bool) -> int =
+  if protect =>
+    try sum_to(d)
+    catch RecursionError as e => e.limit
+  else =>
+    sum_to(d)
+
+print(run_it(depth, catch_it))

@@ -219,9 +219,10 @@ def _merge_modpath(tokens: list[Token]) -> list[Token]:
     """Merge module-header paths into single MODPATH tokens.
 
     Pattern: immediately following an IMPORT or EXPORT token, consume
-    NAME (SLASH NAME)* into a single MODPATH token whose value
-    is the slash path (e.g. "foo/bar", "utils"). Whitespace around slash
-    separators is allowed in module headers.
+    NAME (SLASH NAME)* into a single MODPATH token whose value is the slash
+    path (e.g. "foo/bar", "utils"). Every pair in the run is adjacent in the
+    source, the rule module qualifiers obey: ``a/b`` is a path, ``a / b`` is
+    division, so a spaced header separator ends the path and fails to parse.
 
     This keeps slash-separated module headers distinct from division in the
     expression grammar. By merging the path in the lexer, the grammar sees a
@@ -238,10 +239,18 @@ def _merge_modpath(tokens: list[Token]) -> list[Token]:
             # Absorb NAME (SLASH NAME)*. Module path segments may begin with
             # either lowercase or uppercase letters.
             j = i
-            seg_parts: list[str] = [str(tokens[j])]
+            last_seg = tokens[j]
+            seg_parts: list[str] = [str(last_seg)]
             j += 1
-            while j + 1 < n and tokens[j].type == SLASH and tokens[j + 1].type == NAME:
-                seg_parts.append(str(tokens[j + 1]))
+            while (
+                j + 1 < n
+                and tokens[j].type == SLASH
+                and tokens[j + 1].type == NAME
+                and last_seg.end_pos == tokens[j].start_pos
+                and tokens[j].end_pos == tokens[j + 1].start_pos
+            ):
+                last_seg = tokens[j + 1]
+                seg_parts.append(str(last_seg))
                 j += 2
             modpath_value = "/".join(seg_parts)
             first_tok = tokens[i]

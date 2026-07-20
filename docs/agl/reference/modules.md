@@ -11,6 +11,9 @@ A module identity is its slash path: the relative path to its `.agl` file,
 without the suffix. For example, `utils/strings.agl` has identity
 `utils/strings`. The entry program has no path identity.
 
+A slash path is written byte-adjacent wherever it appears — in a header, a
+qualifier, or a wildcard tail. `a/b` is a path; `a / b` is division.
+
 A module must resolve to exactly one file across the configured library roots.
 No matching file is an error; more than one matching file is also an error.
 There is no root-priority shadowing. Wildcard imports select matching modules
@@ -19,7 +22,7 @@ from the same global module set.
 ## One-set imports
 
 ```ebnf
-import_decl ::= ["open"] "import" module_path ["/" "*"]
+import_decl ::= ["open"] "import" module_path ["/*"]
                 ["as" ref_name]
                 [using_clause | hiding_clause]
 
@@ -87,8 +90,7 @@ alias makes both routes available.
 ## Wildcards
 
 `import prefix/*` expands to one import per module whose slash path is `prefix`
-or starts with `prefix/`. The `/*` tail is byte-adjacent to the path, as a
-module qualifier's `::` is. The import's
+or starts with `prefix/`. The import's
 `open`, selection clause, and alias apply independently to every matched
 module. A `using` or `hiding` name must be public in every matched module.
 

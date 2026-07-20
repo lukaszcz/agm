@@ -2439,12 +2439,21 @@ class TestModuleSystemLexer:
         assert "MODQUAL" not in types
         assert "DCOLON" in types
 
-    def test_slash_module_paths_merge_without_tightness(self) -> None:
-        assert tok("import foo / bar / *")[:4] == [
+    def test_adjacent_slash_module_path_merges(self) -> None:
+        assert tok("import foo/bar/*")[:3] == [
             ("IMPORT", "import"),
             ("MODPATH", "foo/bar"),
+            ("WILDCARD", "/*"),
+        ]
+
+    def test_spaced_slash_module_path_stops_at_the_gap(self) -> None:
+        # `a / b` is division everywhere, so the path ends at the first
+        # non-adjacent separator and the header no longer parses.
+        assert tok("import foo / bar")[:4] == [
+            ("IMPORT", "import"),
+            ("MODPATH", "foo"),
             ("SLASH", "/"),
-            ("STAR", "*"),
+            ("NAME", "bar"),
         ]
 
     def test_export_using_in_export_line(self) -> None:

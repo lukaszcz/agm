@@ -3203,14 +3203,30 @@ class TestImportDecl:
 
     @pytest.mark.parametrize(
         ("source", "expected"),
-        (("import FooBar", ("FooBar",)), ("import foo / Qux2", ("foo", "Qux2"))),
+        (("import FooBar", ("FooBar",)), ("import foo/Qux2", ("foo", "Qux2"))),
     )
-    def test_import_path_accepts_uppercase_and_whitespace(
+    def test_import_path_accepts_uppercase_segments(
         self, source: str, expected: tuple[str, ...]
     ) -> None:
         (decl,) = items(parse(source))
         assert isinstance(decl, syntax.ImportDecl)
         assert decl.module_path == expected
+
+    @pytest.mark.parametrize(
+        "source",
+        (
+            "import foo / bar",
+            "import foo/ bar",
+            "import foo /bar",
+            "import foo/bar / baz",
+            "export foo / bar",
+            "export foo/ bar",
+            "export foo /bar",
+        ),
+    )
+    def test_module_path_separators_must_be_adjacent(self, source: str) -> None:
+        with pytest.raises(AglSyntaxError):
+            parse(source)
 
     def test_single_segment_import(self) -> None:
         (decl,) = items(parse("import utils"))
@@ -3326,7 +3342,7 @@ class TestExportDecl:
         assert decl.items == ()
 
     def test_export_slash_path_wildcard(self) -> None:
-        (decl,) = items(parse("export foo / bar/*"))
+        (decl,) = items(parse("export foo/bar/*"))
         assert isinstance(decl, syntax.ExportDecl)
         assert decl.module_path == ("foo", "bar")
         assert decl.wildcard is True

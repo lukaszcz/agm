@@ -55,13 +55,11 @@ on a `type_alias` or on `extern_func_def`; `"private"` composes with
 import_decl ::= ["open"] "import" module_path ["/*"]
                 ["as" ref_name]
                 [using_clause | hiding_clause]
-                                           (* "/*" is byte-adjacent to the path *)
 
 export_decl ::= "export" module_path ["/*"]
                 [using_clause | hiding_clause]
-                                           (* "/*" is byte-adjacent to the path *)
 
-module_path ::= NAME ("/" NAME)*
+module_path ::= NAME ("/" NAME)*    (* byte-adjacent, as is a trailing "/*" *)
 ref_name    ::= name
 
 using_clause  ::= "using" import_item ("," import_item)*

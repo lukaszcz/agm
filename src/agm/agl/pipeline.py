@@ -1126,20 +1126,21 @@ def _check_artifact_provenance(
 ) -> None:
     """Assert a cached artifact wraps the exact prepared resolutions.
 
-    Source identity is the provenance contract: structurally equal programs
+    Source identity is the provenance contract: structurally equal resolutions
     prepared in separate passes are not interchangeable compiler inputs. The
-    check anchors on the parsed program, which remains shared by the scope and
-    checked artifacts; typecheck keeps scope resolution unchanged and records
-    final pattern-slot meanings in checker-owned maps. Call sites guard this
-    check with :func:`self_validation_enabled` — building its module mappings
-    costs more than the production path should ever pay for an invariant it
-    cannot violate.
+    check anchors on the resolution object itself, which typecheck leaves
+    unchanged — it records final pattern-slot meanings in checker-owned maps —
+    so a compiled artifact must wrap the very object that was prepared, not
+    merely one sharing its parsed program. Call sites guard this check with
+    :func:`self_validation_enabled` — building its module mappings costs more
+    than the production path should ever pay for an invariant it cannot
+    violate.
     """
     same_provenance = (
         prepared_entry == compiled_entry
         and prepared_modules.keys() == compiled_modules.keys()
         and all(
-            compiled_modules[module_id].program is prepared_resolved.program
+            compiled_modules[module_id] is prepared_resolved
             for module_id, prepared_resolved in prepared_modules.items()
         )
     )

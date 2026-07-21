@@ -585,8 +585,8 @@ dedented as described in [Lexical structure](lexical-structure.md).
   innermost construct that can accept it; the layout rules guarantee each
   such token belongs to exactly one construct
   ([Lexical structure](lexical-structure.md)).
-- `juxt` is a **concrete** (non-transparent) rule so that application does
-  not cascade shift/reduce conflicts into every operator rule.
+- The optional single-argument call syntax applies a function to one following
+  argument: `f x` means `f(x)`. It does not chain, so `f x y` is invalid.
 - `()` is both the unit literal and the empty argument list of a zero-arg
   call — the two are syntactically unified.
 - Inline branch and `catch` bodies hold a single *closed* item — `or_expr`,

@@ -258,10 +258,14 @@ let z: Option[int] = none::[int]            # nullary value, no call needed
 ```
 
 The qualified forms `Option[int]::some` and `Option[int]::none` work the
-same way. This explicit applied-type-qualified constructor spelling requires
-`NAME` tokens for both `Option` and the constructor (`some`/`none`), not
-`OP_NAME`. The result is an ordinary function value (payload) or nominal value
-(nullary) and can be passed and called like any other.
+same way. In this explicit applied-type-qualified constructor form, the
+applied type name must be immediately followed by `[` (`NAME[`):
+`Option[int]::some` is valid, but `Option [int]::some` is invalid. This rule
+applies only to this constructor form; ordinary applied type expressions may
+have whitespace, so both `Option[int]` and `Option [int]` are valid type
+expressions. Both `Option` and the constructor (`some`/`none`) must be `NAME`,
+not `OP_NAME`. The result is an ordinary function value (payload) or nominal
+value (nullary) and can be passed and called like any other.
 
 ## Strict parametricity
 

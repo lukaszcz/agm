@@ -489,11 +489,15 @@ because there is no response to parse.
 
 `callee::[Type](args)` is a general typed-call form for generic calls and bare
 constructor references. Qualified generic constructors put the type argument on
-the owning type instead, as in `Option[int]::Some(value = 1)`; that explicit
-applied-type-qualified form requires `NAME` tokens for both names, not
-`OP_NAME`. Type arguments are delimited by square brackets because AgL
-identifiers may contain `<` and `>`, so `Review>` would otherwise scan as one
-token.
+the owning type instead, as in `Option[int]::Some(value = 1)`. In that explicit
+applied-type-qualified form, the applied type name must be immediately followed
+by `[` (`NAME[`): `Option[int]::Some(value = 1)` is valid, but
+`Option [int]::Some(value = 1)` is invalid. This restriction applies only to
+this constructor form; ordinary applied type expressions may have whitespace,
+so both `Option[int]` and `Option [int]` are valid type expressions. Both names
+in this constructor form must be `NAME`, not `OP_NAME`. Type arguments are
+delimited by square brackets because AgL identifiers may contain `<` and `>`,
+so `Review>` would otherwise scan as one token.
 
 ### Arguments
 

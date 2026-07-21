@@ -291,11 +291,10 @@ param_def: field_name COLON type_expr (EQ or_expr)?
 // expr never starts with _INDENT, so this is unambiguous (the production lexer
 // emits _INDENT without a preceding _NEWLINE).
 //
-// A `def` body ends at a newline, and within a block `;` *is* a newline, so a
-// `;` here always starts the next block item rather than extending the body —
-// there is no marker that could distinguish the two.  An inline body is
-// therefore a single item, as an `=>` body is; write a sequence as a
-// parenthesized block (`def f() = (let x = 1; x)`) or as a suite.
+// An inline `def` body is exactly one expr. It ends at the enclosing block
+// separator — a newline or `;` — which starts the next block item; `;` cannot
+// extend the body because no body-specific marker distinguishes it. Write a
+// sequence as a parenthesized block (`def f() = (let x = 1; x)`) or as a suite.
 func_body: suite_expr | expr
 
 // ---------------------------------------------------------------------------
@@ -505,11 +504,12 @@ catch_pattern: name ("as" name)?
 // here, and neither are the open forms (if/case/try/do) or lambdas, whose
 // own branch lists would swallow the enclosing form's continuation.
 //
-// This is the one body position without an end marker.  Every other inline
-// body has one — `)` for a parenthesized block, `until`/`done` for a loop
-// body, `catch` for a try body, a newline for a `def` body — and each of
-// those admits a full `;` sequence.  To write a sequence after `=>`,
-// parenthesize it or use the suite form.
+// This is the one body position without an end marker. The marked inline
+// bodies — `)` for a parenthesized block, `until`/`done` for a loop body, and
+// `catch` for a try body — admit a full `;` sequence. An inline `def` also
+// takes one expr, but its newline or `;` is the enclosing block separator and
+// starts the next block item rather than a body sequence. To write a sequence
+// after `=>`, parenthesize it or use the suite form.
 catch_body: suite_expr | closed_item
 
 branch_body: suite_expr | closed_item

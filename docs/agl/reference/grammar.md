@@ -97,33 +97,33 @@ suite ::= NEWLINE INDENT block DEDENT
 
 ### Inline bodies
 
-Every body may be written as a suite. Written inline instead, what it may hold
-follows one rule: **a `;` sequence is admissible exactly where a token marks
-the body's end.**
+Every body may be written as a suite. Written inline, a `;` sequence is
+admissible in the three body positions whose end is marked by a body-specific
+token: parenthesized blocks, loops, and `try` expressions.
 
 ```ebnf
 marked_body ::= (marked_item ";")* marked_item
 marked_item ::= expr | assign_expr | let_decl | var_decl
 ```
 
-A *marked* body is one whose end is fixed by a following token. All three
-marked positions share `marked_body`, and the parser accepts any marked item
-in final position, including a `let` or `var` binder. The AST preserves that
-form; a final binder makes the body `unit`-valued unless its initializer
-exits, in which case it is bottom-valued.
+Those three *marked* bodies share `marked_body`, and the parser accepts any
+marked item in final position, including a `let` or `var` binder. The AST
+preserves that form; a final binder makes the body `unit`-valued unless its
+initializer exits, in which case it is bottom-valued.
 
-| body | end marker | inline form |
-| ---- | ---------- | ----------- |
+| body | delimiter | inline form |
+| ---- | --------- | ----------- |
 | `( … )` | `)` | `marked_body` |
 | `do … until`/`done` | `until` / `done` | `marked_body` |
 | `try … catch` | `catch` | `marked_body`, last item not a `try` or lambda |
-| `def f() = …` | newline or `;` | exactly one item |
-| `… => …` | *none* | exactly one item |
+| `def f() = …` | enclosing newline or `;` | exactly one expression; delimiter starts the next block item |
+| `… => …` | *none* | exactly one `closed_item` |
 
-The two unmarked bodies take a single item. An inline `def` body ends at the
-next block separator — a newline or `;` — which starts the next block item. A
-`=>` body ends at nothing at all — a following `|`, `else`, or `catch` could
-belong either to the body or to the enclosing branch list.
+An inline `def` body is exactly one expression, not a marked-body sequence.
+Its enclosing block separator — a newline or `;` — ends the body and starts
+the next block item. A `=>` body ends at nothing at all — a following `|`,
+`else`, or `catch` could belong either to the body or to the enclosing branch
+list.
 
 What differences remain among the marked bodies are derived, not stipulated: a
 body's last item may not be a form that could consume the body's own
@@ -140,8 +140,8 @@ legal anywhere earlier in the sequence, and in final position once
 parenthesized — `try (fn(x: int) -> int => x) catch _ => 0` — which restores
 the marker.
 
-An unmarked body holds a single `closed_item` — no `;`, no binder, and none of
-the open forms whose own branch lists would swallow the enclosing form's
+A `=>` body holds a single `closed_item` — no `;`, no binder, and none of the
+open forms whose own branch lists would swallow the enclosing form's
 continuation.
 
 This is not a special restriction on `;`. Within a block, `;` and a newline

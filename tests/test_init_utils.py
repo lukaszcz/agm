@@ -609,6 +609,32 @@ class TestRunLocalInit:
 
         assert (tmp_path / "config").is_dir()
 
+    def test_init_commits_only_gitignore_when_embedded_repo_has_no_commits(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr(git_helpers, "is_git_repo", lambda _p: True)
+        monkeypatch.setattr(git_helpers, "exact_repo_root", lambda _p: tmp_path)
+        monkeypatch.setattr(git_helpers, "has_commits", lambda _p: False)
+        commands: list[list[str]] = []
+        monkeypatch.setattr(init_module, "require_success", lambda cmd, **_kw: commands.append(cmd))
+
+        run(make_args(no_config_git=True, no_notes_git=True))
+
+        assert commands == [
+            ["git", "-C", str(tmp_path), "add", "--", ".gitignore"],
+            [
+                "git",
+                "-C",
+                str(tmp_path),
+                "commit",
+                "-m",
+                "chore: initialize project",
+                "--",
+                ".gitignore",
+            ],
+        ]
+
     def test_init_with_project_name_creates_subdir(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:

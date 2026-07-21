@@ -200,24 +200,40 @@ def run(args: InitArgs) -> None:
             no_repo_git=args.no_repo_git,
             no_git_init=args.no_git_init,
         )
-        return
+    else:
+        repo_dir = base_dir if embedded_layout else base_dir / "repo"
+        if exists(repo_dir) and not is_empty_dir(repo_dir):
+            display_dir = display_path(repo_dir)
+            print(f"error: {display_dir} already exists and is not empty", file=sys.stderr)
+            raise SystemExit(1)
 
-    repo_dir = base_dir if embedded_layout else base_dir / "repo"
-    if exists(repo_dir) and not is_empty_dir(repo_dir):
-        display_dir = display_path(repo_dir)
-        print(f"error: {display_dir} already exists and is not empty", file=sys.stderr)
-        raise SystemExit(1)
+        clone_args = ["git", "clone"]
+        if args.branch is not None:
+            clone_args.extend(["--branch", args.branch])
+        clone_args.extend([repo_url, str(repo_dir)])
+        require_success(clone_args)
+        configure_project_dir(
+            project_dir,
+            embedded=embedded_layout,
+            no_config_git=args.no_config_git,
+            no_notes_git=args.no_notes_git,
+            no_repo_git=args.no_repo_git,
+            no_git_init=args.no_git_init,
+        )
 
-    clone_args = ["git", "clone"]
-    if args.branch is not None:
-        clone_args.extend(["--branch", args.branch])
-    clone_args.extend([repo_url, str(repo_dir)])
-    require_success(clone_args)
-    configure_project_dir(
-        project_dir,
-        embedded=embedded_layout,
-        no_config_git=args.no_config_git,
-        no_notes_git=args.no_notes_git,
-        no_repo_git=args.no_repo_git,
-        no_git_init=args.no_git_init,
-    )
+    if embedded_layout:
+        repo_root = git_helpers.exact_repo_root(base_dir)
+        if repo_root is not None and not git_helpers.has_commits(repo_root):
+            require_success(["git", "-C", str(repo_root), "add", "--", ".gitignore"])
+            require_success(
+                [
+                    "git",
+                    "-C",
+                    str(repo_root),
+                    "commit",
+                    "-m",
+                    "chore: initialize project",
+                    "--",
+                    ".gitignore",
+                ]
+            )

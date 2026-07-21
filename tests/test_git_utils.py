@@ -27,6 +27,7 @@ from agm.vcs.git import (
     fetch_prune_origin,
     find_first_git_repo,
     git_common_dir,
+    has_commits,
     has_staged_changes,
     is_git_repo,
     local_branch_exists,
@@ -135,6 +136,23 @@ class TestExactRepoRoot:
 
 
 class TestGenericGitProbeHelpers:
+    def test_has_commits_returns_false_for_unborn_repo(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        subprocess.run(["git", "init", "-b", "main", "-q"], cwd=repo, env=env, check=True)
+
+        assert has_commits(repo, env=env) is False
+
+    def test_has_commits_returns_true_after_initial_commit(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        repo = tmp_path / "repo"
+        _init_repo(repo, env)
+
+        assert has_commits(repo, env=env) is True
+
     # has_staged_changes: the error-exit path (unexpected returncode → SystemExit)
     # is kept as a behavioral fake because triggering a real git error exit with
     # returncode ≥ 2 from `git diff --cached --quiet` requires contriving a broken

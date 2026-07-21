@@ -86,7 +86,8 @@ _HELP_TEXTS: dict[str, str] = {
         to initialize a child directory derived from the repo URL. Without an
         explicit layout flag, agm chooses the embedded layout when the target
         project directory is already a git repo; otherwise it chooses the
-        split layout.
+        split layout. When that embedded repository has no commits, agm creates
+        its initial commit containing the generated .gitignore.
 
         Options:
           --embedded   Force the embedded layout with AGM data under .agm/.

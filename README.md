@@ -73,7 +73,8 @@ Without `--embedded` or `--split`, AGM chooses:
 - split otherwise
 
 `agm init` also creates `config/env.sh` and an executable `config/setup.sh` if they do not
-already exist.
+already exist. When initializing an embedded Git repository with no commits, it commits the
+generated `.gitignore` as the repository's initial commit.
 
 For split layouts without a repository URL, AGM initializes `repo/` as an empty git repository.
 Use `--no-repo-git` to skip that repository, or `--no-git-init` to skip all git repositories

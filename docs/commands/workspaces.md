@@ -102,6 +102,8 @@ config, workspace config, dependency environment, setup scripts, and tmux sessio
 - without `PROJECT_NAME`, AGM initializes the current directory
 - with `PROJECT_NAME`, AGM initializes a child directory with that name
 - with `--clone REPO_URL`, AGM initializes a child directory derived from the URL
+- when an embedded repository has no commits, AGM creates its initial commit containing the
+  generated `.gitignore`
 
 `agm init` split layout notes:
 

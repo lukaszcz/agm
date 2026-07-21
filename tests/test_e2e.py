@@ -3160,6 +3160,21 @@ class TestInit:
         assert not (project / "config").exists()
         assert not (project / "deps").exists()
 
+    def test_init_commits_gitignore_in_unborn_embedded_repo(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        project = tmp_path / "proj"
+        project.mkdir()
+        _git("init", "-b", "main", cwd=project, env=env)
+
+        result = run_agm(["init"], env=env, cwd=project)
+
+        assert result.returncode == 0
+        assert _git("status", "--porcelain", cwd=project, env=env).stdout == ""
+        assert _git("rev-list", "--count", "HEAD", cwd=project, env=env).stdout.strip() == "1"
+        committed_gitignore = _git("show", "HEAD:.gitignore", cwd=project, env=env).stdout
+        assert committed_gitignore.splitlines() == [".agm", ".agent-files"]
+
     def test_init_workspace_overrides_existing_git_repo(
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:

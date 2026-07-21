@@ -88,6 +88,15 @@ def exact_repo_root(path: Path, *, env: dict[str, str] | None = None) -> Path | 
     return resolved_root
 
 
+def has_commits(repo_dir: Path, *, env: dict[str, str] | None = None) -> bool:
+    """Return whether *repo_dir* has a commit reachable from ``HEAD``."""
+
+    return run_capture(
+        [*_git_args(repo_dir), "rev-parse", "--verify", "HEAD"],
+        env=env,
+    )[0] == 0
+
+
 def has_staged_changes(
     repo_dir: Path,
     paths: Sequence[Path],

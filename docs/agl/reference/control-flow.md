@@ -69,7 +69,7 @@ control flow. A branch body that produces a non-`unit` value is a static error.
 
 Branch bodies are suites (indented blocks) or inline bodies. An inline body
 after `=>` is exactly one item: an `or_expr`, an inline assignment
-(`postfix := or_expr`), `raise`, or `return`. It admits neither a `;` sequence
+(`assign_target := or_expr`), `raise`, or `return`. It admits neither a `;` sequence
 nor a binder, nor a `case`, `if`,
 `try`, or loop expression. Write any of those as a suite or parenthesize them
 — `(let x = e; body)` — see
@@ -131,7 +131,7 @@ loop_bound  ::= "[" or_expr "]"
 loop_end    ::= "until" or_expr | "done"
 inline_seq     ::= (marked_item ";")* marked_item
 marked_item    ::= expr | inline_assign | let_decl | var_decl
-inline_assign  ::= postfix ":=" or_expr
+inline_assign  ::= assign_target ":=" or_expr
 ```
 
 A loop may begin with **at most one `for`** clause and **at most one

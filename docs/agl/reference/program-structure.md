@@ -167,14 +167,14 @@ case review of
 
 An `if` or `case` branch body is either a suite (indented block) or an inline
 body. An inline body after `=>` is exactly one item: an `or_expr`, an inline
-assignment (`postfix := or_expr`), `raise`, or `return`. A `;` sequence, a
+assignment (`assign_target := or_expr`), `raise`, or `return`. A `;` sequence, a
 binder, or a body that begins a new `if`, `case`, `try`, or loop must be
 parenthesized or placed in a suite — see [Inline bodies](grammar.md#inline-bodies).
 
 ### Inline `try`
 
 A `try`/`catch` inline holds a sequence of items up to the first `catch`
-keyword — binders and `postfix := or_expr` assignments included. Its final item may be a `let` or
+keyword — binders and `assign_target := or_expr` assignments included. Its final item may be a `let` or
 `var`, making the try body `unit`-valued unless its initializer exits. The
 `catch` body, like any `=>` body, is a single item or a suite.
 

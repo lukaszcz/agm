@@ -104,7 +104,7 @@ token: parenthesized blocks, loops, and `try` expressions.
 ```ebnf
 marked_body   ::= (marked_item ";")* marked_item
 marked_item   ::= expr | inline_assign | let_decl | var_decl
-inline_assign ::= postfix ":=" or_expr
+inline_assign ::= assign_target ":=" or_expr
 ```
 
 Those three *marked* bodies share `marked_body`, and the parser accepts any
@@ -352,7 +352,7 @@ if_else_branch ::= "|"? "else" "=>" branch_body
 
 branch_body    ::= suite | closed_item
 closed_item    ::= or_expr
-                 | inline_assign                  (* postfix ":=" or_expr *)
+                 | inline_assign                  (* assign_target ":=" or_expr *)
                  | raise_expr
                  | return_expr
 ```
@@ -361,8 +361,8 @@ closed_item    ::= or_expr
 clauses. An inline body after `=>` is exactly **one** item: no `;` sequence
 and no binder. See [Inline bodies](#inline-bodies) for why, and for the two
 ways to write a multi-item body inline. An inline `:=` has the form
-`postfix := or_expr`; the suite form keeps the unrestricted `postfix := expr`
-form.
+`assign_target := or_expr`; the suite form keeps the unrestricted
+`assign_target := expr` form.
 
 Without an `else` branch the `if` expression has type `unit` and returns
 `void`. With all branches returning a common type `T`, the `if` expression has
@@ -390,7 +390,7 @@ catch_pattern     ::= name ("as" name)?
 ```
 
 `catch` marks where a `try` body ends, so an inline try body is a full `;`
-sequence — binders and `postfix := or_expr` assignments included. A final `let`
+sequence — binders and `assign_target := or_expr` assignments included. A final `let`
 or `var` binder is allowed
 and makes the body `unit`-valued unless its initializer exits. A final item and
 a final binder RHS must remain closed: an open form there would consume the

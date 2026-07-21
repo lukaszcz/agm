@@ -98,7 +98,7 @@ branch_body   ::= suite | closed_item
 
 `branch_body` is the same body form an `if` or `case` branch takes — a suite
 or a single item. Because `catch` marks where a `try` body ends, an inline
-`try` body is a full `;` sequence, binders and `postfix := or_expr` assignments included. Its final
+`try` body is a full `;` sequence, binders and `assign_target := or_expr` assignments included. Its final
 item may be a `let` or `var`; then the try body has type `unit` unless the
 initializer exits, in which case it has bottom type. See
 [Inline bodies](grammar.md#inline-bodies).

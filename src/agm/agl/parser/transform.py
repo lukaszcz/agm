@@ -757,17 +757,16 @@ class AstBuilder(Transformer):
         )
 
     def func_body(self, meta: Meta, args: _Args) -> syntax.Expr:
-        """func_body: suite_expr | func_inline_seq | expr — pass through the inner expr."""
-        # args[0] is a Block (from suite_expr/func_inline_seq) or any Expr (from expr).
+        """func_body: suite_expr | expr — pass through the inner expression."""
+        # The argument is a Block from suite_expr or an expression from expr.
         expr = _find_non_token(args)
         return cast(syntax.Expr, expr)
 
     def _block_from_items(self, meta: Meta, args: _Args) -> syntax.Block:
         """Build a Block from every non-token argument, in order.
 
-        Shared by the inline body sequences (function, loop, try, and
-        parenthesized blocks), which differ only in which items the grammar
-        admits.
+        Shared by the marked inline body sequences (loop, try, and
+        parenthesized blocks), which differ only in their terminators.
         """
         items = tuple(
             cast(syntax.Item, a) for a in args if a is not None and not isinstance(a, Token)
@@ -1819,7 +1818,7 @@ class AstBuilder(Transformer):
         return cast(syntax.Expr, inner)
 
     def inline_seq(self, meta: Meta, args: _Args) -> syntax.Block:
-        """inline_seq: marked_item (SEMICOLON marked_item)*"""
+        """inline_seq: (marked_item SEMICOLON)* marked_item."""
         return self._block_from_items(meta, args)
 
     def loop_until(self, meta: Meta, args: _Args) -> syntax.Expr:
@@ -1904,7 +1903,7 @@ class AstBuilder(Transformer):
     # ------------------------------------------------------------------
 
     def try_body(self, meta: Meta, args: _Args) -> syntax.Expr:
-        """try_body: suite_expr | (marked_item SEMICOLON)* closed_item
+        """try_body: suite_expr | (marked_item SEMICOLON)* try_tail.
 
         Returns a Block for a sequence, or the single item on its own.
         """
@@ -2010,7 +2009,7 @@ class AstBuilder(Transformer):
         return self.assign_stmt(meta, args)
 
     def paren_block(self, meta: Meta, args: _Args) -> syntax.Block:
-        """paren_block: (paren_item SEMICOLON)+ paren_tail | inline_assign."""
+        """paren_block: (marked_item SEMICOLON)+ marked_item | inline_assign."""
         return self._block_from_items(meta, args)
 
     def paren_block_expr(self, meta: Meta, args: _Args) -> syntax.Block:

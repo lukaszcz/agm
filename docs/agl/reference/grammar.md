@@ -100,14 +100,15 @@ follows one rule: **a `;` sequence is admissible exactly where a token marks
 the body's end.**
 
 ```ebnf
-marked_body ::= (marked_item ";")* value_item
+marked_body ::= (marked_item ";")* marked_item
 marked_item ::= expr | assign_expr | let_decl | var_decl
-value_item  ::= expr | assign_expr
 ```
 
 A *marked* body is one whose end is fixed by a following token. All three
-marked positions share `marked_body`: any item may appear, and the last must
-supply a value rather than bind a name — the same rule a block obeys.
+marked positions share `marked_body`, and the parser accepts any marked item
+in final position, including a `let` or `var` binder. The AST preserves that
+form; typechecking currently still requires a continuation expression after a
+binder.
 
 | body | end marker | inline form |
 | ---- | ---------- | ----------- |
@@ -373,16 +374,22 @@ case_branch  ::= pattern "=>" branch_body
 ## `try` / `catch`
 
 ```ebnf
-try_expr      ::= "try" try_body catch_clause+
-try_body      ::= suite | (marked_item ";")* closed_item
-catch_clause  ::= "catch" catch_pattern "=>" branch_body
-catch_pattern ::= name ("as" name)?
-                | "_" ("as" name)?
+try_expr          ::= "try" try_body catch_clause+
+try_body          ::= suite | (marked_item ";")* try_tail
+try_tail          ::= or_expr | assign_expr | try_letvar_decl | raise_expr
+                    | return_expr | if_expr | case_expr | loop_expr
+try_letvar_decl   ::= ("let" | "var") name type_ann? "=" try_value
+try_value         ::= or_expr | raise_expr | return_expr | if_expr | case_expr | loop_expr
+catch_clause      ::= "catch" catch_pattern "=>" branch_body
+catch_pattern     ::= name ("as" name)?
+                    | "_" ("as" name)?
 ```
 
 `catch` marks where a `try` body ends, so an inline try body is a full `;`
-sequence — binders and `:=` included. Its final item must still be closed: an
-open form there would consume the `catch`.
+sequence — binders and `:=` included. The parser accepts a final `let` or
+`var` binder and preserves it in the AST, though typechecking currently still
+requires a continuation expression after a binder. A final item and a final
+binder RHS must remain closed: an open form there would consume the `catch`.
 
 ## Patterns
 

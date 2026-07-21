@@ -424,6 +424,21 @@ class TestWildcardBinders:
         assert "_" in msg
         assert "not defined" in msg
 
+    @pytest.mark.parametrize(
+        "source",
+        (
+            "def f(_: int) -> int = (let _ = 0; _)\nf(1)",
+            "for _ in [1] do (let _ = 0; _) done",
+            "try () catch _ as _ => (let _ = 0; _)",
+        ),
+        ids=("parameter", "loop", "catch"),
+    )
+    def test_wildcard_is_not_readable_through_an_enclosing_binding(self, source: str) -> None:
+        err = reject_scope(source)
+        _, msg = diag(err)
+        assert "_" in msg
+        assert "not defined" in msg
+
 
 # ---------------------------------------------------------------------------
 # Assignment errors

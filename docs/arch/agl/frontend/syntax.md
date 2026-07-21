@@ -14,7 +14,7 @@ The AST is plain frozen dataclasses with no parser types — the firewall every 
 
 Each node carries a stable id assigned at build time. Later passes never mutate nodes; they record conclusions in side tables keyed by that id. This is the universal annotation convention — it is why nodes can be frozen and shared, and why `id()`-based identity is never used.
 
-Blocks may end in a `let` or `var` binder, whose semantic block value is `unit`. The parser preserves such trailing binders in suite blocks and the marked inline bodies used by loops, parenthesized blocks, and `try` bodies.
+The parser accepts blocks ending in a `let` or `var` binder and preserves those binders in the AST, including suite blocks and the marked inline bodies used by loops, parenthesized blocks, and `try` bodies. Typechecking still requires a continuation expression after a binder.
 
 ## Code Entry Points
 

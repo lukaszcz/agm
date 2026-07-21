@@ -19,6 +19,7 @@ Scope rules
    *qualified* target is settled here: only ``builtin var`` is assignable
    across a module boundary, and no qualified name is ever a pattern slot.
 3. Reading (``VarRef``) a name not visible in the current scope chain → error.
+   ``_`` is always a discard wildcard and never resolves as a readable name.
 4. Pattern variables and catch binders are immutable and branch-local.
 5. ``loop`` body bindings are visible to the ``until`` condition but not after.
 6. ``param`` and ``program`` declarations are only valid at the program root.
@@ -1298,6 +1299,8 @@ class _Resolver:
         - ``node.module_qualifier.segments == ()`` (``::name``) → self-ref to own scope.
         - ``node.module_qualifier.segments != ()`` → qualified cross-module access.
         """
+        if node.name == "_":
+            raise AglScopeError("'_' is not defined.", span=node.span)
         if node.type_qualifier is not None:
             self._resolve_type_qualified_constructor(node)
             return

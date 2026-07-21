@@ -448,8 +448,8 @@ loop_end : "until" or_expr  -> loop_until
 // `;` sequence of marked items. The three marked positions (parenthesized
 // block, loop body, try body) share this rule; they differ only where the
 // body's terminator could be consumed by its own last item, which is spelled
-// out at try_body below. A final let/var binder is permitted and gives its
-// enclosing block a unit value.
+// out at try_body below. A final let/var binder is permitted and preserved
+// in the AST.
 //
 // The open forms (if/case/try/do) and lambdas are safe here only because the
 // marker terminates the body.

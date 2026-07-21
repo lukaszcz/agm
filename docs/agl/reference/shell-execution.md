@@ -75,11 +75,11 @@ if res.exit_code != 0 =>
 Spawn failure and timeout still set `exit_code` to `-1` and `timed_out` to
 `true` respectively; they do not raise in this form.
 
-### Parsed form — target is any non-`ExecResult` type
+### Parsed form — target is any non-`ExecResult` or `unit` type
 
-When the target type is any type other than `ExecResult`, `exec` parses
-stdout into that type (honouring `format`, `strict_json`, and
-`on_parse_error`) and **raises `ExecError` on a nonzero exit**:
+When the target type is neither `ExecResult` nor `unit`, `exec` parses stdout
+into that type (honouring `format`, `strict_json`, and `on_parse_error`) and
+**raises `ExecError` on a nonzero exit**:
 
 <!-- agl-check: skip -->
 ```agl
@@ -92,6 +92,20 @@ let data: dict[text, int] = exec(           # JSON parsed; raises on nonzero
 
 A nonzero exit raises `ExecError`, and unparseable output raises
 `AgentParseError` (with agent name `"exec"`).
+
+### Unit form — target is `unit`
+
+In a discarded-value position, `exec` has target type `unit`. It still runs
+the command and raises `ExecError` on a nonzero exit, but discards successful
+stdout and returns `void`:
+
+```agl
+exec "make build"
+let completed: unit = exec "make lint"
+```
+
+Because no output is parsed, `format`, `strict_json`, and `on_parse_error` are
+invalid for a `unit` target.
 
 ## Execution semantics
 
@@ -112,9 +126,8 @@ A nonzero exit raises `ExecError`, and unparseable output raises
 - `format` — codec name (a `text` value); normally auto-selected.
 - `strict_json` — `bool`; opts the JSON codec into strict parsing.
 - `on_parse_error` — `ParsePolicy`; controls retry behavior on parse
-  failures in the parsed form. In the structured form (an untyped `exec`
-  returning `ExecResult`, where no stdout parsing happens) passing this
-  parameter is a static error.
+  failures in the parsed form. In the structured and unit forms, where no
+  stdout parsing happens, passing this parameter is a static error.
 
 ## Retries
 

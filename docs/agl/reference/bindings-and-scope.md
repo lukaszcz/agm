@@ -16,8 +16,9 @@ let_decl ::= "let" NAME (":" type_expr)? "=" expr
 
 `let` evaluates the initializer, checks it against the annotation (if any),
 and creates an **immutable** binding in the current scope. It scopes over the
-**continuation** — the remaining items in the block — and is not
-self-contained; a block ending in a bare `let` is a static error:
+**continuation** — the remaining items in the block and any enclosing
+continuation that consumes the block. A block ending in a bare `let` has type
+`unit`:
 
 <!-- agl-check: skip -->
 ```agl
@@ -29,6 +30,10 @@ let review: Review = ask(
 let count = 3
 ```
 
+`_` is a wildcard binder. `let _ = e` evaluates `e` and discards its value
+without introducing a readable name; it may be repeated in a scope. Use it
+when a non-`unit` value is intentionally discarded.
+
 ## `var` — mutable binding
 
 ```ebnf
@@ -36,7 +41,7 @@ var_decl ::= "var" NAME (":" type_expr)? "=" expr
 ```
 
 Identical to `let` except the binding is **mutable** — it may later be
-updated with `:=`:
+updated with `:=`. A final `var` also makes its block unit-valued:
 
 <!-- agl-check: skip -->
 ```agl

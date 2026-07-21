@@ -22,7 +22,7 @@ from agm.agl.repl import EntryResult, ReplSession
 from agm.agl.runtime.agents import AgentFn
 from agm.agl.runtime.host_settings import HostSettingsPolicy
 from agm.agl.runtime.request import AgentRequest, AgentResponse
-from agm.agl.semantics.values import BoolValue, EnumValue, IntValue, TextValue, Value
+from agm.agl.semantics.values import VOID_VALUE, BoolValue, EnumValue, IntValue, TextValue, Value
 
 _STDLIB_ROOT = Path(__file__).resolve().parents[1] / "stdlib"
 
@@ -150,7 +150,8 @@ class TestRuntimeLiveEffectCarryForward:
         s = _session(default_agent=agent)
         # Confirm the fenced reply parses in the default (lenient) mode.
         r_lenient = _ok(s, 'let a: int = ask """how many"""')
-        assert r_lenient.value == IntValue(42)
+        assert r_lenient.value == VOID_VALUE
+        assert dict((name, value) for name, _typ, value in s.bindings())["a"] == IntValue(42)
 
         _ok(s, "import std/config")
         _ok(s, "std/config::strict-json := true")

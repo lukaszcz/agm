@@ -162,6 +162,19 @@ def test_lower_repl_entry_accumulates_tables_and_resolves_prior_symbols() -> Non
     assert second.program.modules[second.program.entry_module].initializers
 
 
+def test_lower_repl_trailing_binder_has_no_expression_marker() -> None:
+    source = "let x = 41"
+    program, _next_id = parse_program_seeded(source, start_id=0)
+    entry = lower_repl_entry(
+        _compiled_checked(check_module(resolve_module(program), _caps())),
+        image=LinkImage(),
+        source_text=source,
+        source_label="<repl:1>",
+    )
+
+    assert entry.trailing_expression is None
+
+
 def _lower(source: str) -> ExecutableProgram:
     """Parse → check → lower the source; return ExecutableProgram."""
     checked = _check(source)
@@ -823,6 +836,24 @@ class TestBindingLowering:
         assert isinstance(bind, IrBind)
         assert prog.symbols[bind.symbol].mutable
 
+    def test_repeated_wildcard_binders_use_private_distinct_symbols(self) -> None:
+        prog = _lower("let _ = 1\nvar _ = 2\n()")
+        first, second, _unit = prog.modules[prog.entry_module].initializers
+
+        assert isinstance(first, IrBind)
+        assert isinstance(second, IrBind)
+        assert first.symbol != second.symbol
+        assert all(prog.symbols[bind.symbol].public_name is None for bind in (first, second))
+        assert prog.symbols[first.symbol].mutable is False
+        assert prog.symbols[second.symbol].mutable is True
+
+    def test_wildcard_binders_evaluate_effects_without_public_bindings(self) -> None:
+        from tests.agl.ir_harness import evaluate_ir_output
+
+        output = evaluate_ir_output('let _ = print "first"\nvar _ = print "second"\n()')
+
+        assert output == "first\nsecond\n"
+
     def test_symbol_public_name(self) -> None:
         prog = _lower("let myvar: int = 1\n()")
         inits = prog.modules[prog.entry_module].initializers
@@ -954,6 +985,40 @@ class TestBlockLowering:
         assert len(ir.items) == 2
         assert isinstance(ir.items[0], IrBind)
         assert isinstance(ir.items[1], IrLoad)
+
+    def test_trailing_binder_appends_unit_value(self) -> None:
+        source = "do\n  let finished = true\nuntil finished"
+        loop = _get_loop_ir(source)
+
+        assert isinstance(loop, IrLoop)
+        body = loop.body.items[0]
+        assert isinstance(body, IrBlock)
+        assert isinstance(body.items[-1], IrConstUnit)
+
+    def test_bottom_trailing_binder_does_not_append_unit_value(self) -> None:
+        source = 'do\n  let finished: bool = raise Abort(message = "stop")\nuntil finished'
+        loop = _get_loop_ir(source)
+
+        assert isinstance(loop, IrLoop)
+        body = loop.body.items[0]
+        assert isinstance(body, IrBlock)
+        assert len(body.items) == 1
+        assert isinstance(body.items[0], IrBind)
+
+    def test_trailing_loop_binder_remains_available_to_until_condition(self) -> None:
+        from agm.agl.semantics.values import IntValue
+        from tests.agl.ir_harness import evaluate_ir
+
+        values = evaluate_ir(
+            "var count = 0\n"
+            "do\n"
+            "  count := count + 1\n"
+            "  let finished = count >= 2\n"
+            "until finished\n"
+            "count"
+        )
+
+        assert values["count"] == IntValue(2)
 
 
 # ---------------------------------------------------------------------------
@@ -1116,15 +1181,14 @@ class TestUnsupportedNodes:
         When the callee of a Call is a Lambda, lowering produces an IrIndirectCall
         whose callee is an IrMakeClosure.
         """
-        prog = _lower("(fn() -> int => 42)()\n()")
+        prog = _lower("let ignored = (fn() -> int => 42)()\n()")
         inits = prog.modules[prog.entry_module].initializers
-        # The IIFE evaluates to an IrIndirectCall
-        # Initializaers: [IrIndirectCall(...), IrConstUnit()]
         indirect = inits[0]
-        assert isinstance(indirect, IrIndirectCall), (
-            f"Expected IrIndirectCall, got {type(indirect).__name__}"
+        assert isinstance(indirect, IrBind)
+        assert isinstance(indirect.value, IrIndirectCall), (
+            f"Expected IrIndirectCall, got {type(indirect.value).__name__}"
         )
-        assert isinstance(indirect.callee, IrMakeClosure)
+        assert isinstance(indirect.value.callee, IrMakeClosure)
 
     def test_qualified_enum_constructor_lowers_correctly(self) -> None:
         """Qualified constructor (e.g. Color::Red) lowers to IrMakeEnum/IrMakeConstructor.
@@ -2075,6 +2139,20 @@ class TestHostOpLowering:
         inits = prog.modules[prog.entry_module].initializers
         exec_nodes = [n for n in inits if isinstance(n, IrExec)]
         assert len(exec_nodes) == 1, f"Expected 1 IrExec, found {len(exec_nodes)}"
+
+    def test_unit_exec_lowers_to_outputless_contract(self) -> None:
+        from agm.agl.ir.nodes import IrExec
+
+        prog = _lower('exec("emit")\n()')
+        (node,) = [
+            initializer
+            for initializer in prog.modules[prog.entry_module].initializers
+            if isinstance(initializer, IrExec)
+        ]
+        contract = prog.contracts[node.contract_id]
+
+        assert contract.codec_name == "none"
+        assert contract.is_unit is True
 
     def test_agent_decl_lowers_to_ir_agent_handle_bind(self) -> None:
         """AgentDecl lowers to IrBind(symbol, IrAgentHandle(name))."""

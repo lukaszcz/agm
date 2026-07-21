@@ -425,8 +425,8 @@ supplied in any order:
 def format_msg(text: text, prefix: text = "[INFO]") -> text =
   "${prefix} ${text}"
 
-format_msg("Done.")              # prefix uses its default
-format_msg("Done.", prefix = "!") # prefix supplied by name
+let _ = format_msg("Done.")              # prefix uses its default
+let _ = format_msg("Done.", prefix = "!") # prefix supplied by name
 ```
 
 Unknown names, duplicates, and supplying a positional-only parameter by name

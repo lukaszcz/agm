@@ -173,7 +173,17 @@ until r is Pass
 ```
 
 Every loop expression has type **`unit`** — it runs for effect and returns
-`void`.
+`void`. Its body is a discarded-value position, so a bare body value must also
+have type `unit` (or `bottom`). A trailing `let` or `var` is unit-valued and
+may bind a value for the loop's `until` or `while` clause:
+
+```agl
+var attempts = 0
+do
+  attempts := attempts + 1
+  let finished = attempts >= 3
+until finished
+```
 
 ### Clause semantics
 

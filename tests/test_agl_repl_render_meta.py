@@ -690,9 +690,8 @@ class TestLoad:
         src.write_text("let x = 7\n")
         s = ReplSession()
         outcome = meta_mod.dispatch_meta(f":load {src}", _session_ctx(s))
-        assert outcome.text is not None
-        assert "x : int = 7" in outcome.text
-        # The binding persisted into the session.
+        assert outcome.text is None
+        # The binding persisted into the session without an echo.
         assert any(n == "x" for n, _t, _v in s.bindings())
 
     def test_load_agent_call_fires_exactly_once(self, tmp_path: Path) -> None:
@@ -713,15 +712,14 @@ class TestLoad:
         outcome = meta_mod.dispatch_meta(":load", _session_ctx())
         assert "usage" in (outcome.text or "").lower()
 
-    def test_load_renders_each_statement(self, tmp_path: Path) -> None:
-        # Multiple statements load incrementally; each statement's echo surfaces.
+    def test_load_keeps_trailing_binder_entries_silent(self, tmp_path: Path) -> None:
         src = tmp_path / "multi.agl"
         src.write_text("let a = 1\nlet b = 2\n")
         s = ReplSession()
         outcome = meta_mod.dispatch_meta(f":load {src}", _session_ctx(s))
-        assert outcome.text is not None
-        assert "a : int = 1" in outcome.text
-        assert "b : int = 2" in outcome.text
+
+        assert outcome.text is None
+        assert {name for name, _typ, _value in s.bindings()} == {"a", "b"}
 
     def test_load_halts_at_first_error(self, tmp_path: Path) -> None:
         src = tmp_path / "halt.agl"
@@ -770,8 +768,7 @@ class TestSave:
         s2 = ReplSession()
         outcome = meta_mod.dispatch_meta(f":load {out}", _session_ctx(s2))
         # No error surfaced and x reloaded as the shadowed value 2.
-        assert "line" not in (outcome.text or "")
-        assert "x : int = 2" in (outcome.text or "")
+        assert outcome.text is None
         vals = {n: v for n, _t, v in s2.bindings()}
         assert isinstance(vals["x"], IntValue)
         assert vals["x"].value == 2
@@ -836,79 +833,38 @@ class TestTheme:
 
 
 class TestNominalRenderingEcho:
-    """Verify REPL echo renders records and enums in AgL form / declaration order."""
+    """Verify :bindings renders persisted records and enums in AgL form."""
 
-    def test_record_echo_declaration_order(self) -> None:
-        # Declare a record with fields in a known order (y before x), then bind
-        # a value constructed in a DIFFERENT order (x before y); the echo must
-        # emit field values in the DECLARED order (y first).
+    def test_record_binding_keeps_declaration_order(self) -> None:
         s = ReplSession()
         s.eval_entry("record Point\n  y: int\n  x: int")
         r = s.eval_entry("let p = Point(x = 1, y = 2)")
+
         assert r.ok
-        assert r.value is not None
-        from agm.agl.repl.render import format_typed_value
+        assert render_mod.render_entry_result(r, echo=True) is None
+        outcome = meta_mod.dispatch_meta(":bindings", _session_ctx(s))
+        assert outcome.text is not None
+        assert "p : Point = Point(\n  y = 2,\n  x = 1\n)" in outcome.text
 
-        assert r.value_type is not None
-        line = format_typed_value("p", r.value_type, r.value)
-        # Declaration order is y, x — so "y: 2" must appear before "x: 1".
-        assert line == "p : Point = Point(\n  y = 2,\n  x = 1\n)"
-
-    def test_record_binding_echo_via_eval_entry(self) -> None:
-        # eval_entry result carries the value; render_entry_result with the
-        # session's type_lookup must produce AgL form.
-        from agm.agl.repl.render import render_entry_result
-
-        s = ReplSession()
-        s.eval_entry("record Author\n  name: text\n  active: bool")
-        r = s.eval_entry('let a = Author(name = "Ada", active = true)')
-        assert r.ok
-        rendered = render_entry_result(r, echo=True)
-        assert rendered == 'a : Author = Author(\n  name = "Ada",\n  active = true\n)'
-
-    def test_enum_echo_qualified_with_fields(self) -> None:
-        from agm.agl.repl.render import render_entry_result
-
+    def test_trailing_enum_binding_has_no_echo(self) -> None:
         s = ReplSession()
         s.eval_entry("enum Outcome\n  | Partial(left: int)\n  | Done")
         r = s.eval_entry("let o = Outcome::Partial(left = 7)")
+
         assert r.ok
-        rendered = render_entry_result(r, echo=True)
-        assert rendered == "o : Outcome = Outcome::Partial(\n  left = 7\n)"
+        assert render_mod.render_entry_result(r, echo=True) is None
+        outcome = meta_mod.dispatch_meta(":bindings", _session_ctx(s))
+        assert outcome.text is not None
+        assert "Outcome::Partial(\n  left = 7\n)" in outcome.text
 
-    def test_enum_nullary_variant_echo(self) -> None:
-        from agm.agl.repl.render import render_entry_result
-
-        s = ReplSession()
-        s.eval_entry("enum Outcome\n  | Partial(left: int)\n  | Done")
-        r = s.eval_entry("let d = Outcome::Done")
-        assert r.ok
-        rendered = render_entry_result(r, echo=True)
-        assert rendered is not None
-        assert "Outcome::Done" in rendered
-
-    def test_top_level_text_stays_quoted(self) -> None:
-        from agm.agl.repl.render import render_entry_result
-
-        s = ReplSession()
-        r = s.eval_entry('let msg = "hello world"')
-        assert r.ok
-        rendered = render_entry_result(r, echo=True)
-        assert rendered == 'msg : text = "hello world"'
-
-    def test_dollar_in_text_binding_echo_escapes_dollar(self) -> None:
-        # A binding whose text value contains ``$`` must echo with ``\$`` so
-        # the REPL output is a round-trippable AgL string literal.
-        # In AgL source, ``\$`` is an escape sequence for a literal ``$``;
-        # the resulting text value ``a${b}`` should echo as ``"a\${b}"``.
-        from agm.agl.repl.render import render_entry_result
-
+    def test_dollar_in_text_binding_renders_in_bindings(self) -> None:
         s = ReplSession()
         r = s.eval_entry(r'let t = "a\${b}"')
+
         assert r.ok
-        rendered = render_entry_result(r, echo=True)
-        assert rendered is not None
-        assert r"a\${b}" in rendered
+        outcome = meta_mod.dispatch_meta(":bindings", _session_ctx(s))
+        assert outcome.text is not None
+        assert r"a\${b}" in outcome.text
 
     def test_bindings_meta_renders_record_nominal(self) -> None:
         # :bindings must render a record binding in AgL form (not JSON).
@@ -928,11 +884,13 @@ class TestNominalRenderingEcho:
         assert outcome.text is not None
         assert "Cfg(\n  retries = 3,\n  timeout = 30\n)" in outcome.text
 
-    def test_load_meta_renders_record_nominal(self, tmp_path: Path) -> None:
-        # :load must render record bindings in AgL form (type_lookup threaded).
+    def test_load_persists_record_binding_for_bindings_rendering(self, tmp_path: Path) -> None:
         src = tmp_path / "rec.agl"
         src.write_text("record Point\n  y: int\n  x: int\nlet p = Point(x = 1, y = 2)\n")
         s = ReplSession()
         outcome = meta_mod.dispatch_meta(f":load {src}", _session_ctx(s))
-        assert outcome.text is not None
-        assert "Point(\n  y = 2,\n  x = 1\n)" in outcome.text
+
+        assert outcome.text == "Point declared"
+        bindings = meta_mod.dispatch_meta(":bindings", _session_ctx(s))
+        assert bindings.text is not None
+        assert "Point(\n  y = 2,\n  x = 1\n)" in bindings.text

@@ -194,7 +194,23 @@ def test_t4a_unit_exec_discards_successful_output() -> None:
     assert result is VOID_VALUE
 
 
-def test_t4b_unit_exec_still_raises_on_nonzero_exit() -> None:
+def test_t4a_full_pipeline_unit_exec_discards_successful_output() -> None:
+    """A checked unit exec reaches the evaluator as an outputless contract."""
+    commands = {"emit": _ok("ignored output\n")}
+
+    result = evaluate_ir_with_shell('exec("emit")\n()', commands)
+
+    assert result == {}
+
+
+def test_t4b_full_pipeline_unit_exec_still_raises_on_nonzero_exit() -> None:
+    """A checked unit exec still maps a shell failure to ExecError."""
+    ir_exc = evaluate_ir_raises_with_shell('exec("fail")\n()', {"fail": _fail(2)})
+
+    assert ir_exc.display_name == "ExecError"
+
+
+def test_t4c_unit_exec_still_raises_on_nonzero_exit() -> None:
     """Discarding successful output does not suppress ExecError."""
     import unittest.mock
 

@@ -32,6 +32,7 @@ from agm.agl.semantics.types import (
     RecordType,
     TextType,
     Type,
+    UnitType,
 )
 from agm.agl.semantics.values import VOID_VALUE, BoolValue, IntValue, UnitValue
 
@@ -317,7 +318,7 @@ class TestRedefinition:
         s.eval_entry("let x = 1")
         r = s.eval_entry('let x = "hello"')
         assert r.ok
-        assert isinstance(r.value_type, TextType)
+        assert isinstance(r.value_type, UnitType)
         # The promoted binding now has the new type/value.
         promoted = {n: (t, v) for n, t, v in s.bindings()}
         typ, _val = promoted["x"]
@@ -459,13 +460,24 @@ class TestEchoData:
         assert r.value is not None and _int(r.value) == 12
         assert isinstance(r.value_type, IntType)
 
-    def test_binding_echo_data(self) -> None:
+    @pytest.mark.parametrize("binder", ("let", "var"))
+    def test_trailing_binder_has_unit_value_and_no_echo(self, binder: str) -> None:
+        from agm.agl.repl.render import render_entry_result
+
         s = ReplSession()
-        r = s.eval_entry("let total = 5")
+        r = s.eval_entry(f"{binder} total = 5")
+
         assert r.kind == "binding"
         assert r.name == "total"
-        assert r.value is not None and _int(r.value) == 5
-        assert isinstance(r.value_type, IntType)
+        assert r.value == VOID_VALUE
+        assert isinstance(r.value_type, UnitType)
+        assert render_entry_result(r, echo=True) is None
+        assert _int(dict((name, value) for name, _typ, value in s.bindings())["total"]) == 5
+
+    def test_multi_item_entry_keeps_normal_block_discard_strictness(self) -> None:
+        result = ReplSession().eval_entry("let first = 1\nfirst\nlet second = 2")
+
+        assert not result.ok
 
     def test_declaration_echo_kind(self) -> None:
         s = ReplSession()
@@ -602,9 +614,10 @@ class TestInferenceBoundaries:
         program_result = s.eval_entry("let result = app(id, 0)")
 
         assert program_result.ok, program_result.diagnostics
-        assert program_result.value == IntValue(0)
-        assert isinstance(program_result.value_type, IntType)
-        assert render_entry_result(program_result, echo=True) == "result : int = 0"
+        assert program_result.value == VOID_VALUE
+        assert isinstance(program_result.value_type, UnitType)
+        assert render_entry_result(program_result, echo=True) is None
+        assert _int(dict((name, value) for name, _typ, value in s.bindings())["result"]) == 0
         # ``eval_entry`` and ``:type`` both use the program pipeline against
         # the same persisted declarations.
         assert s.type_of("app(id, 0)") == "int"
@@ -858,7 +871,9 @@ class TestExactlyOnce:
         s.register_agent("reviewer", named)
         r = s.eval_entry('agent reviewer\nlet out = ask("""review this""", agent = reviewer)')
         assert r.ok, r.diagnostics
-        assert _text(r.value) == "named-reply"
+        assert (
+            _text(dict((name, value) for name, _typ, value in s.bindings())["out"]) == "named-reply"
+        )
         assert named.calls == 1
 
 
@@ -898,7 +913,7 @@ class TestAgentDeclarations:
         assert r1.ok
         r2 = s.eval_entry('let out = ask("""go""", agent = helper)')
         assert r2.ok, r2.diagnostics
-        assert _text(r2.value) == "done"
+        assert _text(dict((name, value) for name, _typ, value in s.bindings())["out"]) == "done"
 
     def test_failed_entry_declaration_does_not_persist(self) -> None:
         # A declaration in an entry that fails to promote must NOT leak into the
@@ -1038,7 +1053,7 @@ class TestReset:
         s.reset()
         r = s.eval_entry("let a = 2")
         assert r.ok
-        assert _int(r.value) == 2
+        assert _int(dict((name, value) for name, _typ, value in s.bindings())["a"]) == 2
 
 
 # ---------------------------------------------------------------------------
@@ -1262,7 +1277,7 @@ class TestCheckOnly:
         assert r.ok
         assert r.kind == "binding"
         assert r.name == "x"
-        assert isinstance(r.value_type, IntType)
+        assert isinstance(r.value_type, UnitType)
         assert r.value is None
         # Not promoted: a later reference fails.
         assert s.bindings() == []
@@ -1679,17 +1694,16 @@ class TestIfExpr:
         vals = {n: _int(v) for n, _t, v in s.bindings()}
         assert vals["x"] == 42
 
-    def test_if_expr_in_let_binding_echoes_value(self) -> None:
-        # An if-expression used in a let binding produces a binding echo with
-        # the correct value and type.
+    def test_if_expr_in_trailing_let_binding_has_unit_result(self) -> None:
         s = ReplSession()
         r = s.eval_entry("let result = if true => 7 | else => 3")
+
         assert r.ok
         assert r.kind == "binding"
         assert r.name == "result"
-        assert r.value is not None
-        assert _int(r.value) == 7
-        assert isinstance(r.value_type, IntType)
+        assert r.value == VOID_VALUE
+        assert isinstance(r.value_type, UnitType)
+        assert _int(dict((name, value) for name, _typ, value in s.bindings())["result"]) == 7
 
 
 # ---------------------------------------------------------------------------
@@ -1817,8 +1831,8 @@ class TestFuncDef:
         assert r.ok
         assert r.kind == "binding"
         assert r.name == "result"
-        assert r.value is not None
-        assert _int(r.value) == 25
+        assert r.value == VOID_VALUE
+        assert _int(dict((name, value) for name, _typ, value in s.bindings())["result"]) == 25
 
     def test_funcdef_failed_entry_does_not_persist(self) -> None:
         # A function in a failing entry (type error) must not be callable in
@@ -2520,7 +2534,7 @@ class TestExternRepl:
         s.eval_entry("extern def f(x: int) -> int")
         r = s.eval_entry("let x = 1 + 1")
         assert r.ok
-        assert _int(r.value) == 2
+        assert _int(dict((name, value) for name, _typ, value in s.bindings())["x"]) == 2
 
     # -- Importing an extern-bearing library module --------------------------
 
@@ -2637,7 +2651,7 @@ class TestExternRepl:
         # The session is still usable after an uncaught extern failure.
         r2 = s.eval_entry("let x = 1 + 1")
         assert r2.ok
-        assert _int(r2.value) == 2
+        assert _int(dict((name, value) for name, _typ, value in s.bindings())["x"]) == 2
 
     def test_extern_error_is_catchable_and_renders_in_the_repl(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
@@ -2654,7 +2668,7 @@ class TestExternRepl:
             "let r = try\n  boom()\ncatch ExternError as e =>\n  print(e.function)\n  -1\n"
         )
         assert r.ok, r.diagnostics
-        assert _int(r.value) == -1
+        assert _int(dict((name, value) for name, _typ, value in s.bindings())["r"]) == -1
         assert capsys.readouterr().out.strip() == "boom"
 
 

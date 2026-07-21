@@ -496,15 +496,9 @@ class ReplSession:
         tab_warnings: list[Diagnostic] = list(tab_sink)
         spaced_qualifiers = tuple(spaced_sink)
 
-        # [1b] REPL trailing-binder synthesis: in AgL, a block ending in a
-        # ``let``/``var`` is a static error (the binder needs a continuation
-        # expression).  In the REPL, the continuation is the NEXT entry — so a
-        # standalone ``let x = 1`` entry is semantically valid.  Synthesize a
-        # ``UnitLit`` continuation appended to the pipeline program so the
-        # checker accepts it; the original ``program`` is kept for classification,
-        # echo, and promotion (which care about what the user actually typed).
+        # A trailing ``let``/``var`` is an ordinary unit-valued block item, so
+        # entries flow through the same program pipeline unchanged.
         orig_program = program
-        pipeline_program, next_start_id = self._repl_wrap_trailing_binder(program, next_start_id)
 
         # [1d] REPL entries use the program pipeline by default because that
         # is where the synthetic ``import std/core`` prelude is injected.  This
@@ -513,58 +507,13 @@ class ReplSession:
         return self._entry_pipeline.eval_entry(
             text=text,
             orig_program=orig_program,
-            pipeline_program=pipeline_program,
+            pipeline_program=program,
             host_env=host_env,
             tab_warnings=tab_warnings,
             next_start_id=next_start_id,
             check_only=check_only,
             spaced_qualifiers=spaced_qualifiers,
         )
-
-    # ------------------------------------------------------------------
-    # eval_entry helpers
-    # ------------------------------------------------------------------
-
-    def _repl_wrap_trailing_binder(
-        self, program: "Program", next_start_id: int
-    ) -> "tuple[Program, int]":
-        """Append a synthetic ``UnitLit`` when the entry ends with a trailing binder.
-
-        In AgL, the type checker rejects a block whose last item is a ``let`` or
-        ``var`` declaration (the binder needs a continuation expression).  In the
-        REPL, the continuation is the NEXT entry — so standalone ``let x = 1``
-        entries must be valid.
-
-        When the last item is a ``LetDecl`` or ``VarDecl``, this helper builds a
-        new ``Program`` (and ``Block``) with an appended synthetic ``UnitLit``
-        (node id ``next_start_id``), making the block checker-acceptable.
-        The synthetic node id is consumed, so ``next_start_id + 1`` is returned.
-
-        The ORIGINAL program is preserved for classification, echo data, and
-        promotion (they care about what the user typed, not the pipeline artifact).
-        If the last item is NOT a trailing binder, the program is returned
-        unchanged and ``next_start_id`` is not advanced.
-        """
-        from agm.agl.syntax.nodes import Block, LetDecl, Program, UnitLit, VarDecl
-
-        items = program.body.items
-        if not items or not isinstance(items[-1], (LetDecl, VarDecl)):
-            return program, next_start_id
-
-        # Append a UnitLit continuation — harmless to evaluate, satisfies the
-        # checker's "last item must be an expression" invariant.
-        synthetic = UnitLit(span=program.body.span, node_id=next_start_id)
-        new_block = Block(
-            items=(*items, synthetic),
-            span=program.body.span,
-            node_id=program.body.node_id,
-        )
-        new_program = Program(
-            body=new_block,
-            span=program.span,
-            node_id=program.node_id,
-        )
-        return new_program, next_start_id + 1
 
     def _ambient_agents(self, host_env: "HostEnvironment") -> frozenset[str]:
         """Agent names valid WITHOUT an in-entry ``agent`` declaration.
@@ -943,7 +892,8 @@ class ReplSession:
     def _echo_data_ir(
         self, program: "Program", checked: "CheckedModule", captured: "Value | None"
     ) -> tuple["Value | None", "Type | None"]:
-        from agm.agl.semantics.values import Cell
+        from agm.agl.semantics.types import UnitType
+        from agm.agl.semantics.values import VOID_VALUE
         from agm.agl.syntax.nodes import Binder, Declaration, LetDecl, VarDecl
 
         last = program.body.items[-1]
@@ -951,9 +901,7 @@ class ReplSession:
         if not isinstance(last, (Binder, Declaration)):
             return captured, value_type
         if isinstance(last, (LetDecl, VarDecl)):
-            symbol = self._link_image.symbol_for_decl(last.node_id)
-            slot = self._ir_base_frame.get(symbol) if symbol is not None else None
-            return (slot.value if isinstance(slot, Cell) else slot), value_type
+            return VOID_VALUE, UnitType()
         return None, None
 
     def _classify(self, program: "Program") -> tuple[EntryKind, str | None]:
@@ -1015,12 +963,12 @@ class ReplSession:
         return True
 
     def _value_type_of_last(self, program: "Program", checked: "CheckedModule") -> "Type | None":
-        """Static type carried by the entry's last item, or ``None``.
+        """Static type carried by the entry's final value, or ``None``.
 
-        The checked type of the expression for a bare-expression entry, the
-        declared binding type for a ``let``/``var``, ``None`` otherwise.  Shared
-        by the check-only result builder and the success echo so the two agree
-        on how an entry's type is derived.
+        A bare expression retains its checked type. A trailing ``let``/``var``
+        contributes the block's unit value rather than its stored binding type.
+        Shared by the check-only result builder and the success echo so the two
+        agree on how an entry's final value is derived.
         """
         from agm.agl.syntax.nodes import Binder, Declaration, LetDecl, VarDecl
 
@@ -1032,7 +980,9 @@ class ReplSession:
             # After narrowing: last is an Expr (not a Binder or Declaration).
             return checked.node_types.get(last.node_id)
         if isinstance(last, (LetDecl, VarDecl)):
-            return checked.type_env.get_binding_type(last.node_id)
+            from agm.agl.semantics.types import UnitType
+
+            return UnitType()
         return None
 
     # ------------------------------------------------------------------

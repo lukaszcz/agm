@@ -114,7 +114,7 @@ let x = ask "A"                          # target: text
 let review: Review = ask("…", agent = reviewer)   # target: Review
 var proposal: Turn = ask("…", agent = researcher)
 proposal := ask("Revise.", agent = researcher)  # target: Turn
-let _: unit = ask("Perform this task")          # response ignored
+let completed: unit = ask("Perform this task")  # response ignored
 ```
 
 The target type drives the call's **output contract**:

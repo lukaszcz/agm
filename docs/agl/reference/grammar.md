@@ -39,8 +39,9 @@ item       ::= import_decl                  (* header position only *)
 modifier   ::= ("private" | "builtin") NEWLINE?
 ```
 
-A block's value is its last item. A `let_decl` or `var_decl` as the final
-item (with no continuation) is a static error.
+A block's value is its last item. A final `let_decl` or `var_decl` has type
+`unit`; its binding remains visible to any enclosing construct that evaluates
+a continuation after the block, such as a loop's `until` condition.
 
 `"private"` and `"builtin"` are **declaration modifiers** that behave like
 decorators: a modifier may sit on the same line as the declaration it adorns

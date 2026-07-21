@@ -2445,6 +2445,9 @@ class _Lowerer:
             if self._item_is_bottom(item):
                 break
         assert real, "compiler bug: lowered block has no runtime items"
+        last = items[-1]
+        if isinstance(last, (LetDecl, VarDecl)) and not self._item_is_bottom(last):
+            real.append(IrConstUnit(location=self._loc(last.span)))
         return IrBlock(location=self._loc(span), items=tuple(real))
 
     # ------------------------------------------------------------------
@@ -2809,7 +2812,7 @@ class _Lowerer:
             target_type_label=repr(spec.target_type),
             structured_exec=structured_exec,
             format_instructions=fmt_instr,
-            is_unit=False,
+            is_unit=isinstance(spec.target_type, UnitType),
             target_type_kind=spec.target_type.kind,
             target_type=spec.target_type,
             defs=decode_defs,
@@ -2880,6 +2883,17 @@ class _Lowerer:
             # ----------------------------------------------------------
             # Binders
             # ----------------------------------------------------------
+            case LetDecl(name="_", value=rhs, span=span, node_id=nid):
+                # Wildcards have no scope/type binding record.  They still need
+                # an ordinary private binding so the RHS evaluates once, and the
+                # source node id gives repeated wildcards distinct IR symbols.
+                sym = self._alloc_sym(nid, name="_", mutable=False, public=False)
+                return IrBind(location=self._loc(span), symbol=sym, value=self.lower_expr(rhs))
+
+            case VarDecl(name="_", value=rhs, span=span, node_id=nid):
+                sym = self._alloc_sym(nid, name="_", mutable=True, public=False)
+                return IrBind(location=self._loc(span), symbol=sym, value=self.lower_expr(rhs))
+
             case LetDecl(name=name, value=rhs, span=span, node_id=nid):
                 sym = self._alloc_sym(nid, name=name, mutable=False, public=top_level)
                 binding_type = self._binding_type(nid)

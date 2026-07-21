@@ -11,7 +11,22 @@ In AgL **everything is an expression**: there is no separate statement
 category. Bindings, `:=`, `print`, `if` without `else`, and loops are all
 expressions with well-defined types. A block (function body, branch body, or
 the program top level) is a sequence of items whose value is the value of its
-last item.
+last item. A final `let` or `var` contributes `unit` as the block value.
+
+## Discarded values
+
+A bare expression before the final block item is evaluated in a discarded-value
+position and must have type `unit` (or `bottom`). Binders and declarations are
+valid intermediate items. To run a value-producing expression for effect
+without retaining its result, bind it to `_`:
+
+```agl
+let _ = ["report"]
+print "report fetched"
+```
+
+The same rule applies to a loop body, whose value is discarded on every
+iteration.
 
 ## Literals
 
@@ -388,10 +403,10 @@ structured values and JSON. `quote_strings` controls only a top-level `text`
 argument; when it is `false`, rendering text is identity.
 
 ```agl
-render("hi")                         # "\"hi\""
-render("hi", quote_strings = false)  # "hi"
-render([1, 2])                       # "[\n  1,\n  2\n]"
-render([1, 2], pretty = false)       # "[1, 2]"
+let _ = render("hi")                         # "\"hi\""
+let _ = render("hi", quote_strings = false)  # "hi"
+let _ = render([1, 2])                       # "[\n  1,\n  2\n]"
+let _ = render([1, 2], pretty = false)       # "[1, 2]"
 ```
 
 `render` cannot be bound as a function value (`let f = render` is a static

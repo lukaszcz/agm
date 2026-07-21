@@ -22,21 +22,24 @@ block      ::= item ((NEWLINE | ";") item)* (NEWLINE | ";")?
 
 item       ::= import_decl                  (* header position only *)
              | builtin_var_def              (* root only; standard library only *)
-             | modifier? record_def         (* root only *)
-             | modifier? enum_def           (* root only *)
-             | modifier? type_alias         (* root only; "builtin" not allowed *)
-             | modifier? exception_def      (* root only *)
+             | nominal_modifier? record_def (* root only *)
+             | nominal_modifier? enum_def   (* root only *)
+             | private_modifier? type_alias (* root only *)
+             | nominal_modifier? exception_def (* root only *)
              | export_decl                  (* root only *)
              | param_decl                   (* root only *)
              | program_decl                 (* root only *)
              | agent_decl                   (* root only *)
              | infix_decl                   (* root only *)
-             | modifier? func_def           (* root only *)
-             | ("private" NEWLINE?)? extern_func_def  (* root only; file-backed modules only *)
+             | private_modifier? func_def   (* root only *)
+             | builtin_func_def             (* root only *)
+             | private_modifier? extern_func_def  (* root only; file-backed modules only *)
              | let_decl | var_decl | assign_stmt
              | expr
 
-modifier   ::= ("private" | "builtin") NEWLINE?
+nominal_modifier ::= private_modifier | builtin_modifier
+private_modifier ::= "private" NEWLINE?
+builtin_modifier ::= "builtin" NEWLINE?
 ```
 
 A block's value is its last item. A final `let_decl` or `var_decl` has type
@@ -45,11 +48,13 @@ any enclosing construct that evaluates a continuation after the block, such as
 a loop's `until` condition.
 
 `"private"` and `"builtin"` are **declaration modifiers** that behave like
-decorators: a modifier may sit on the same line as the declaration it adorns
-(`builtin enum …`) or on the line directly above it (`builtin` then `enum …`)
-— the newline after the modifier is insignificant. `"builtin"` is not allowed
-on a `type_alias` or on `extern_func_def`; `"private"` composes with
-`extern_func_def` the same way it composes with `func_def`.
+decorators: they may sit on the same line as the declaration they adorn
+(`builtin enum …`) or on the line directly above it (`builtin` then `enum …`).
+The newline after a modifier is insignificant. `private` and `builtin` each
+prefix a `record`, `enum`, or `exception`; they do not combine. Only `private`
+prefixes a `type` alias, an ordinary `def`, or an `extern def`. `builtin def`
+is a body-less declaration form, not a modifier applied to an ordinary `def`.
+Thus `builtin` is not accepted for type aliases or extern functions.
 
 ## Import and export declarations
 
@@ -255,9 +260,10 @@ concrete type arguments (`Box[int]`, `Outcome[int, text]`). The built-in
 ## Function declarations
 
 ```ebnf
-func_def        ::= "def" name type_params? "(" param_list? ")" ("->" type_expr)? ("=" func_body | suite)
-extern_func_def ::= "extern" "def" name type_params? "(" param_list? ")" "->" type_expr
-func_body       ::= expr | suite
+func_def         ::= "def" name type_params? "(" param_list? ")" ("->" type_expr)? ("=" func_body | suite)
+builtin_func_def ::= "builtin" NEWLINE? "def" name type_params? "(" param_list? ")" "->" type_expr
+extern_func_def  ::= "extern" "def" name type_params? "(" param_list? ")" "->" type_expr
+func_body        ::= expr | suite
 param_list      ::= param_entry ("," param_entry)* ","?
 param_entry     ::= param | param_marker
 param           ::= field_name ":" type_expr ("=" or_expr)?
@@ -580,8 +586,10 @@ template      ::= '"' (text_fragment | interpolation)* '"'
 interpolation ::= "${" expr "}"
 ```
 
-Newlines are not permitted inside `${…}`. Triple-quoted templates are
-dedented as described in [Lexical structure](lexical-structure.md).
+A `text_fragment` is literal template text between the surrounding quote
+delimiters and any interpolation; its escapes and, for triple-quoted templates,
+dedent are described in [Lexical structure](lexical-structure.md). Newlines are
+not permitted inside `${…}`.
 
 ## Deterministic-parse notes
 

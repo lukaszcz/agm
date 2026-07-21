@@ -374,7 +374,7 @@ From loosest to tightest binding (the bottom binds tightest):
 | 8 | `-` (unary prefix) | — |
 | 9 | function application (single-arg sugar) | **non-chaining** |
 | 10 | `.field` access, `[index]`, `( args )` call | left |
-| 11 | atoms: literals, names, `( expr )`, `()` unit, templates | — |
+| 11 | atoms: literals, names, `( expr )`, `()` unit, templates, `break`, `continue` | — |
 
 User-defined symbolic infix operators are declared with `infixl` or `infixr`:
 

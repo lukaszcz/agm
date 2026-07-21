@@ -87,9 +87,9 @@ body and all catch handler bodies (with `int → decimal` widening). A
 try_expr          ::= "try" try_body catch_clause+
 try_body          ::= suite | (marked_item ";")* try_tail
 try_tail          ::= or_expr | inline_assign | try_letvar_decl | raise_expr
-                    | return_expr | if_expr | case_expr | loop_expr
+                    | return_expr | if_expr | case_expr | loop
 try_letvar_decl   ::= ("let" | "var") name type_ann? "=" try_value
-try_value         ::= or_expr | raise_expr | return_expr | if_expr | case_expr | loop_expr
+try_value         ::= or_expr | raise_expr | return_expr | if_expr | case_expr | loop
 catch_clause      ::= "catch" catch_pattern "=>" branch_body
 catch_pattern ::= name ("as" name)?
                 | "_" ("as" name)?

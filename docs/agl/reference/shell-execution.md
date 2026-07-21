@@ -9,7 +9,7 @@
 ```agl
 let res = exec "ls -la ${dir}"       # res : ExecResult (default)
 let out: text = exec "cat ${path}"   # parsed form: stdout verbatim
-exec "make build"                    # for effect; result discarded
+let _ = exec "make build"             # unit form; raises ExecError on nonzero
 ```
 
 Like `ask`, `exec` is a **contextual keyword**

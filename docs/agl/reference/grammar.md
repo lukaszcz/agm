@@ -249,19 +249,19 @@ concrete type arguments (`Box[int]`, `Outcome[int, text]`). The built-in
 ```ebnf
 func_def        ::= "def" name type_params? "(" param_list? ")" ("->" type_expr)? ("=" func_body | suite)
 extern_func_def ::= "extern" "def" name type_params? "(" param_list? ")" "->" type_expr
-func_body       ::= expr | suite | inline_binder_block
-inline_binder_block ::= (let_decl | var_decl | assign_expr)
-                        (";" (let_decl | var_decl | assign_expr))* ";" expr
+func_body       ::= expr | suite
 param_list      ::= param_entry ("," param_entry)* ","?
 param_entry     ::= param | param_marker
 param           ::= field_name ":" type_expr ("=" expr)?
 ```
 
-The `def` body is a single expression (which may be an indented `suite` or a
-compact one-line block starting with `let`, `var`, or assignment); for suite
-bodies, the `=` before the newline is optional. The return type
-annotation is optional for ordinary `def` declarations and required for
-`builtin def` and `extern def` — neither has a body. Zone markers (`/`, `*`,
+An inline `def` body after `=` is exactly one expression. It ends at the
+newline, and within a block `;` is a separator, so an inline body admits
+neither a binder nor a `;` sequence. Parenthesize a multi-item block or use a
+suite when the body needs binders or a sequence; for suite bodies, the `=`
+before the newline is optional. The return type annotation is optional for
+ordinary `def` declarations and required for `builtin def` and `extern def` —
+neither has a body. Zone markers (`/`, `*`,
 `@pos`, `@std`, `@named`) may appear as `param_entry` items between parameters;
 see [Functions](functions.md) for full zone semantics. No required
 positional-fillable (pos-only/standard) parameter may follow a defaulted one

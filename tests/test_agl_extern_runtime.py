@@ -268,7 +268,7 @@ class TestDecimalExactness:
 class TestStrictReturnValidation:
     def test_bool_element_in_returned_int_list_rejected(self, tmp_path: Path) -> None:
         exc = evaluate_ir_raises_with_externs(
-            "extern def f() -> list[int]\nf()\n()\n",
+            "extern def f() -> list[int]\nlet _ = f()\n()\n",
             "def f():\n    return [1, True, 2]\n",
             tmp_path,
         )
@@ -276,14 +276,14 @@ class TestStrictReturnValidation:
 
     def test_bool_element_in_returned_decimal_list_rejected(self, tmp_path: Path) -> None:
         exc = evaluate_ir_raises_with_externs(
-            "extern def f() -> list[decimal]\nf()\n()\n",
+            "extern def f() -> list[decimal]\nlet _ = f()\n()\n",
             "from decimal import Decimal\ndef f():\n    return [Decimal('1'), True]\n",
             tmp_path,
         )
         assert exc.display_name == "ExternError"
 
     def test_bool_field_in_returned_record_rejected(self, tmp_path: Path) -> None:
-        source = "record Box\n  value: int\n  label: text\nextern def f() -> Box\nf()\n()\n"
+        source = "record Box\n  value: int\n  label: text\nextern def f() -> Box\nlet _ = f()\n()\n"
         exc = evaluate_ir_raises_with_externs(
             source,
             "def f():\n    return {'value': True, 'label': 'x'}\n",
@@ -293,7 +293,7 @@ class TestStrictReturnValidation:
 
     def test_float_rejected_as_a_plain_int_return(self, tmp_path: Path) -> None:
         exc = evaluate_ir_raises_with_externs(
-            "extern def f() -> int\nf()\n()\n",
+            "extern def f() -> int\nlet _ = f()\n()\n",
             "def f():\n    return 1.5\n",
             tmp_path,
         )
@@ -301,7 +301,7 @@ class TestStrictReturnValidation:
 
     def test_float_rejected_inside_returned_json(self, tmp_path: Path) -> None:
         exc = evaluate_ir_raises_with_externs(
-            "extern def f() -> json\nf()\n()\n",
+            "extern def f() -> json\nlet _ = f()\n()\n",
             "def f():\n    return {'a': [1, 2.5]}\n",
             tmp_path,
         )
@@ -322,7 +322,7 @@ class TestUnitBoundary:
 
     def test_unit_return_rejects_non_none(self, tmp_path: Path) -> None:
         exc = evaluate_ir_raises_with_externs(
-            "extern def f() -> unit\nf()\n()\n",
+            "extern def f() -> unit\nlet _ = f()\n()\n",
             "def f():\n    return 0\n",
             tmp_path,
         )
@@ -352,7 +352,7 @@ class TestJsonPassthrough:
 
     def test_json_return_rejects_an_arbitrary_python_object(self, tmp_path: Path) -> None:
         exc = evaluate_ir_raises_with_externs(
-            "extern def f() -> json\nf()\n()\n",
+            "extern def f() -> json\nlet _ = f()\n()\n",
             "class Opaque:\n    pass\n\ndef f():\n    return Opaque()\n",
             tmp_path,
         )
@@ -364,8 +364,8 @@ class TestJsonPassthrough:
         source = (
             "extern def identity[T](x: T) -> T\n"
             "extern def leak_as_json() -> json\n"
-            "identity(1)\n"
-            "leak_as_json()\n"
+            "let _ = identity(1)\n"
+            "let _ = leak_as_json()\n"
             "()\n"
         )
         companion = (
@@ -411,7 +411,7 @@ class TestListDictDeepNesting:
 
     def test_dict_non_string_key_on_return_rejected(self, tmp_path: Path) -> None:
         exc = evaluate_ir_raises_with_externs(
-            "extern def f() -> dict[text, int]\nf()\n()\n",
+            "extern def f() -> dict[text, int]\nlet _ = f()\n()\n",
             "def f():\n    return {1: 2}\n",
             tmp_path,
         )
@@ -449,7 +449,7 @@ class TestRecordsRoundTrip:
 
     def test_record_return_missing_field_rejected(self, tmp_path: Path) -> None:
         exc = evaluate_ir_raises_with_externs(
-            self._BOX + "extern def f() -> Box\nf()\n()\n",
+            self._BOX + "extern def f() -> Box\nlet _ = f()\n()\n",
             "def f():\n    return {'value': 1}\n",
             tmp_path,
         )
@@ -457,7 +457,7 @@ class TestRecordsRoundTrip:
 
     def test_record_return_extra_field_rejected(self, tmp_path: Path) -> None:
         exc = evaluate_ir_raises_with_externs(
-            self._BOX + "extern def f() -> Box\nf()\n()\n",
+            self._BOX + "extern def f() -> Box\nlet _ = f()\n()\n",
             "def f():\n    return {'value': 1, 'label': 'x', 'extra': 1}\n",
             tmp_path,
         )
@@ -465,7 +465,7 @@ class TestRecordsRoundTrip:
 
     def test_record_return_misnamed_field_rejected(self, tmp_path: Path) -> None:
         exc = evaluate_ir_raises_with_externs(
-            self._BOX + "extern def f() -> Box\nf()\n()\n",
+            self._BOX + "extern def f() -> Box\nlet _ = f()\n()\n",
             "def f():\n    return {'value': 1, 'lbl': 'x'}\n",
             tmp_path,
         )
@@ -519,7 +519,7 @@ class TestEnumsRoundTrip:
 
     def test_enum_unknown_case_on_return_rejected(self, tmp_path: Path) -> None:
         exc = evaluate_ir_raises_with_externs(
-            self._SHAPE + "extern def f() -> Shape\nf()\n()\n",
+            self._SHAPE + "extern def f() -> Shape\nlet _ = f()\n()\n",
             "def f():\n    return {'$case': 'Triangle'}\n",
             tmp_path,
         )
@@ -796,7 +796,7 @@ class TestExternError:
         self, tmp_path: Path
     ) -> None:
         exc = evaluate_ir_raises_with_externs(
-            "extern def boom() -> int\nboom()\n()\n",
+            "extern def boom() -> int\nlet _ = boom()\n()\n",
             "def boom():\n    raise ValueError('kaboom')\n",
             tmp_path,
         )
@@ -814,7 +814,7 @@ class TestExternError:
         self, tmp_path: Path
     ) -> None:
         exc = evaluate_ir_raises_with_externs(
-            "extern def f() -> int\nf()\n()\n",
+            "extern def f() -> int\nlet _ = f()\n()\n",
             "def f():\n    return 'not an int'\n",
             tmp_path,
         )

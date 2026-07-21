@@ -278,10 +278,9 @@ class TestParenthesizedBlock:
         assert ok, diags
         assert out.strip() == "9"
 
-    def test_block_in_parens_must_end_in_a_value(self) -> None:
+    def test_block_in_parens_can_end_in_a_binder(self) -> None:
         ok, _out, diags = _run("let v = (let x = 4; let y = 5)\nprint v\n")
-        assert not ok
-        assert diags
+        assert ok, diags
 
 
 class TestTryBodyMatchesTheOtherMarkedBodies:

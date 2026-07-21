@@ -1,0 +1,4 @@
+def effect() -> unit =
+  1
+  ()
+effect()

@@ -1,4 +1,0 @@
-record R
-  x: int
-let r = R(x = 1)
-let j: json = r as json

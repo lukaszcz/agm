@@ -253,8 +253,8 @@ _SEMANTIC_REPLAY_SOURCE = (
     "enum Pair\n"
     "  | pair(left: bool, right: bool)\n"
     "let pair_value = pair(left = false, right = true)\n"
-    "case true of | true => 1 | false => 2\n"
-    "case 1 of | 1 => 3 | _ as captured => captured\n"
+    "let _ = case true of | true => 1 | false => 2\n"
+    "let _ = case 1 of | 1 => 3 | _ as captured => captured\n"
     "case pair_value of\n"
     "  | pair(left = true, right = _ as when_true) => when_true\n"
     "  | pair(left = false, right = _ as when_false) => when_false\n"
@@ -285,7 +285,7 @@ def test_empty_case_program_produces_valid_empty_artifact() -> None:
 
 def test_source_issues_are_all_sorted_adapted_and_prevent_artifact() -> None:
     checked = _checked(
-        "case true of\n  | true => 1\n  | true => 2\ncase false of\n  | false => 3\n"
+        "let _ = case true of\n  | true => 1\n  | true => 2\ncase false of\n  | false => 3\n"
     )
     result = compile_module_matches(checked)
 
@@ -305,7 +305,7 @@ def test_source_issues_are_all_sorted_adapted_and_prevent_artifact() -> None:
 
 def test_program_match_compilation_orders_issues_by_source_location() -> None:
     checked = _checked(
-        "case true of\n  | true => 1\n  | true => 2\ncase false of\n  | false => 3\n"
+        "let _ = case true of\n  | true => 1\n  | true => 2\ncase false of\n  | false => 3\n"
     )
 
     result = compile_module_matches(checked)
@@ -459,7 +459,7 @@ def test_program_artifact_rejects_missing_extra_mismatched_and_cross_program_cas
 
 def test_program_artifact_rejects_compiled_case_semantic_corruption() -> None:
     compiled = _compiled(
-        "case true of | true => 1 | false => 2\ncase false of | true => 3 | false => 4"
+        "let _ = case true of | true => 1 | false => 2\ncase false of | true => 3 | false => 4"
     )
     first_id, second_id = tuple(compiled.cases)
     first = compiled.cases[first_id]
@@ -677,7 +677,8 @@ def test_graph_artifact_rejects_compiled_case_semantic_corruption(tmp_path: Path
         tmp_path,
         {
             "entry": (
-                "case true of | true => 1 | false => 2\ncase false of | true => 3 | false => 4"
+                "let _ = case true of | true => 1 | false => 2\n"
+                "case false of | true => 3 | false => 4"
             )
         },
     )

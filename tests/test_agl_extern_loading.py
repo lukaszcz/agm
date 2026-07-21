@@ -388,7 +388,7 @@ class TestFailFastDiagnostics:
         checked, companion_paths = _build_checked(
             tmp_path,
             {
-                "entry": "open import lib/mod\nlib/mod::f(1)\nlib/mod::g(1)",
+                "entry": "open import lib/mod\nlet _ = lib/mod::f(1)\nlet _ = lib/mod::g(1)",
                 "lib/mod": "extern def f(x: int) -> int\nextern def g(x: int) -> int",
             },
         )
@@ -411,7 +411,7 @@ class TestFailFastDiagnostics:
         checked, companion_paths = _build_checked(
             tmp_path,
             {
-                "entry": "open import lib/mod\nlib/mod::f(1)\nlib/mod::g(1)",
+                "entry": "open import lib/mod\nlet _ = lib/mod::f(1)\nlet _ = lib/mod::g(1)",
                 "lib/mod": "extern def f(x: int) -> int\nextern def g(x: int) -> int",
             },
         )

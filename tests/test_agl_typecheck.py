@@ -1704,6 +1704,9 @@ class TestExec:
             UnitType(), "none", None, structured_exec=False
         )
 
+    def test_non_final_exec_rejects_parse_options(self) -> None:
+        reject_type('exec("ls", on_parse_error = Abort())\n()')
+
     def test_exec_function_target_rejected(self) -> None:
         err = reject_type('let f: (int) -> int = exec("ls")\nf(1)')
         assert "function" in str(err).lower() or "agent" in str(err).lower()

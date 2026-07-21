@@ -338,7 +338,7 @@ def test_accessors_dereference_a_nested_slot_to_the_enclosing_binding() -> None:
 
 def test_accessors_pass_through_references_that_are_not_slots() -> None:
     checked = check_module(
-        _resolve("enum Flag\n  | on\nlet value = 1\nvalue\non"), HostCapabilities()
+        _resolve("enum Flag\n  | on\nlet value = 1\nlet _ = value\non"), HostCapabilities()
     )
     value_id, value = next(
         (node_id, ref)

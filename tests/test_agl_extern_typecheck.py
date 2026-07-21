@@ -246,7 +246,9 @@ class TestExternCallTyping:
         assert cp.node_types[_last_call_node_id(cp, "f")] == IntType()
 
     def test_named_and_default_call(self) -> None:
-        check_extern("extern def f(a: int, @named, b: int = 2) -> int\nf(1)\nf(1, b = 3)")
+        check_extern(
+            "extern def f(a: int, @named, b: int = 2) -> int\nlet _ = f(1)\nlet _ = f(1, b = 3)"
+        )
 
     def test_zoned_positional_only_and_named_only_call(self) -> None:
         check_extern("extern def f(a: int, /, *, b: int) -> int\nf(1, b = 2)")
@@ -322,7 +324,7 @@ class TestExternCallSiteRecording:
         assert sites[0].target_type == IntType()
 
     def test_multiple_calls_each_recorded(self) -> None:
-        cp = check_extern("extern def f(x: int) -> int\nf(1)\nf(2)")
+        cp = check_extern("extern def f(x: int) -> int\nlet _ = f(1)\nlet _ = f(2)")
         sites = [s for s in cp.call_sites if s.callee == "f"]
         assert len(sites) == 2
 

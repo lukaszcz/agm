@@ -191,7 +191,7 @@ class TestHandleEqualityHashReprInPython:
 class TestSealingViolations:
     def test_forged_raw_value_at_a_type_var_return_position_rejected(self, tmp_path: Path) -> None:
         exc = evaluate_ir_raises_with_externs(
-            "extern def identity[T](x: T) -> T\nidentity(1)\n()\n",
+            "extern def identity[T](x: T) -> T\nlet _ = identity(1)\n()\n",
             "def identity(x):\n    return 999\n",
             tmp_path,
         )
@@ -214,8 +214,8 @@ class TestSealingViolations:
         source = (
             "extern def stash[T](x: T) -> T\n"
             "extern def leak[T]() -> T\n"
-            "stash(1)\n"
-            "leak::[int]()\n"
+            "let _ = stash(1)\n"
+            "let _ = leak::[int]()\n"
             "()\n"
         )
         companion = (
@@ -233,27 +233,29 @@ class TestSealingViolations:
     def test_handle_swapped_between_two_type_variables_of_one_call_rejected(
         self, tmp_path: Path
     ) -> None:
-        source = 'extern def pair[A, B](a: A, b: B) -> B\npair(1, "x")\n()\n'
+        source = 'extern def pair[A, B](a: A, b: B) -> B\nlet _ = pair(1, "x")\n()\n'
         companion = "def pair(a, b):\n    return a\n"
         exc = evaluate_ir_raises_with_externs(source, companion, tmp_path)
         assert exc.display_name == "ExternError"
 
     def test_partial_forgery_inside_a_returned_list_rejected(self, tmp_path: Path) -> None:
-        source = "extern def process[T](xs: list[T]) -> list[T]\nprocess([1, 2])\n()\n"
+        source = "extern def process[T](xs: list[T]) -> list[T]\nlet _ = process([1, 2])\n()\n"
         companion = "def process(xs):\n    return [xs[0], 999]\n"
         exc = evaluate_ir_raises_with_externs(source, companion, tmp_path)
         assert exc.display_name == "ExternError"
 
     def test_partial_forgery_inside_a_returned_dict_rejected(self, tmp_path: Path) -> None:
         source = (
-            "extern def process[T](d: dict[text, T]) -> dict[text, T]\nprocess({a: 1, b: 2})\n()\n"
+            "extern def process[T](d: dict[text, T]) -> dict[text, T]\n"
+            "let _ = process({a: 1, b: 2})\n"
+            "()\n"
         )
         companion = "def process(d):\n    return {'a': d['a'], 'b': 999}\n"
         exc = evaluate_ir_raises_with_externs(source, companion, tmp_path)
         assert exc.display_name == "ExternError"
 
     def test_companion_minted_handle_from_public_helpers_is_rejected(self, tmp_path: Path) -> None:
-        source = "extern def forge[T]() -> T\nforge::[int]()\n()\n"
+        source = "extern def forge[T]() -> T\nlet _ = forge::[int]()\n()\n"
         companion = (
             "from agm.agl.ir.contracts import BoundarySealVar\n"
             "from agm.agl.runtime.externs import encode_boundary_value\n"

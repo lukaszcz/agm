@@ -199,7 +199,7 @@ type_params      ::= "[" name ("," name)* "]"
 
 param_marker     ::= "/" | "*" | "@" NAME    (* NAME must be pos, std, or named *)
 
-param_decl       ::= "param" name (":" type_expr)? ("=" expr)?
+param_decl       ::= "param" name type_ann? ("=" expr)?
 program_decl     ::= "program" name
 
 agent_decl       ::= "agent" name ("=" STRING)?
@@ -222,6 +222,8 @@ The runner string of an `agent` declaration must be a literal string with no
 ## Type expressions
 
 ```ebnf
+type_ann  ::= ":" type_expr
+
 type_expr ::= "unit"
             | "text" | "json" | "bool" | "int" | "decimal"
             | name
@@ -299,9 +301,9 @@ previously declared user operator.
 ## Bindings and mutation
 
 ```ebnf
-let_decl ::= "let" name (":" type_expr)? "=" expr
-var_decl ::= "var" name (":" type_expr)? "=" expr
-builtin_var_def ::= "builtin" "var" name ":" type_expr  (* body-less; std/config only *)
+let_decl       ::= "let" name type_ann? "=" expr
+var_decl       ::= "var" name type_ann? "=" expr
+builtin_var_def ::= "builtin" "var" name type_ann  (* body-less; std/config only *)
 assign_stmt ::= assign_target ":=" expr
 assign_target ::= name ("[" expr "]")*
                 | qual_prefix name
@@ -385,9 +387,9 @@ case_branch  ::= pattern "=>" branch_body
 try_expr          ::= "try" try_body catch_clause+
 try_body          ::= suite | (marked_item ";")* try_tail
 try_tail          ::= or_expr | inline_assign | try_letvar_decl | raise_expr
-                    | return_expr | if_expr | case_expr | loop_expr
+                    | return_expr | if_expr | case_expr | loop
 try_letvar_decl   ::= ("let" | "var") name type_ann? "=" try_value
-try_value         ::= or_expr | raise_expr | return_expr | if_expr | case_expr | loop_expr
+try_value         ::= or_expr | raise_expr | return_expr | if_expr | case_expr | loop
 catch_clause      ::= "catch" catch_pattern "=>" branch_body
 catch_pattern     ::= name ("as" name)?
                     | "_" ("as" name)?
@@ -445,6 +447,7 @@ A `STRING` pattern may not contain interpolation.
 expr      ::= case_expr | if_expr | loop | try_expr | raise_expr
             | return_expr | lambda_expr | or_expr
 
+or_expr       ::= infix_expr
 infix_expr    ::= infix_operand (infix_op infix_operand)*
 infix_operand ::= "not"* is_expr
 
@@ -461,7 +464,7 @@ unary          ::= "-" unary | juxt
 juxt           ::= postfix juxt_arg     (* single-arg sugar; non-chaining *)
                | postfix
 
-juxt_arg       ::= atom_no_call juxt_suffix*
+juxt_arg       ::= juxt_atom juxt_suffix*
 juxt_suffix    ::= "." field_name
                | "[" expr "]"                  (* adjacent bracket only *)
                | "(" arg_list? ")"
@@ -486,20 +489,25 @@ atom           ::= INT | DECIMAL | "true" | "false" | "null"
                | template
                | "(" expr ")"                      (* parenthesized expr *)
                | "(" paren_block ")"               (* parenthesized block *)
+               | break_expr
+               | continue_expr
 
 paren_block    ::= (marked_item ";")+ marked_item
                  | inline_assign
                  | let_decl | var_decl
 
-atom_no_call   ::= (* same as atom but excludes "(" — prevents sugar conflict *)
-               INT | DECIMAL | "true" | "false" | "null"
-               | list_literal | dict_literal | NAME
-               | template
+juxt_atom      ::= INT | DECIMAL | "true" | "false" | "null"
+                 | list_literal | dict_literal | template
+                 | NAME                              (* bare references exclude OP_NAME *)
+                 | qual_prefix type_qual? name       (* qualified ref / constructor *)
+                 | applied_type_qualified_constructor
 
 qualified_constructor ::= qual_prefix type_qual? name | name
 
-raise_expr  ::= "raise" or_expr
-return_expr ::= "return" or_expr?
+raise_expr     ::= "raise" or_expr
+return_expr    ::= "return" or_expr?
+break_expr     ::= "break"
+continue_expr  ::= "continue"
 ```
 
 A bare name atom is resolved by scope and position: it may name a variable,
@@ -565,7 +573,9 @@ dict_entry   ::= STRING ":" expr        (* no interpolation in keys *)
 
 ```ebnf
 template      ::= '"' (text_fragment | interpolation)* '"'
+                | "'" (text_fragment | interpolation)* "'"
                 | '"""' (text_fragment | interpolation)* '"""'
+                | "'''" (text_fragment | interpolation)* "'''"
 
 interpolation ::= "${" expr "}"
 ```

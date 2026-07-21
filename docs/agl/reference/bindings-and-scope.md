@@ -192,11 +192,12 @@ program param types.
 ## `builtin var` — engine-setting bindings
 
 ```ebnf
-builtin_var_def ::= "builtin" "var" name ":" type_expr
+builtin_var_def ::= "builtin" NEWLINE? "var" name ":" type_expr
 ```
 
 A `builtin var` declares a body-less, host-backed, **mutable** binding with a
-mandatory type and no initializer. It may appear only at the root of the
+mandatory type and no initializer. The `builtin` marker may be on the same line
+as `var` or on the line directly above it. It may appear only at the root of the
 canonical standard-library module `std/config`; declarations in entry programs
 or other library modules are static errors. `std/config` uses it to expose the
 program's engine settings:

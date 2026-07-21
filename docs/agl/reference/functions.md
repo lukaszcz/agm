@@ -12,7 +12,7 @@ from other functions. The type of a function value is written
 
 ```ebnf
 func_def      ::= "def" name type_params? "(" param_list? ")" ("->" type_expr)? ("=" func_body | suite)
-                | "builtin" "def" name type_params? "(" param_list? ")" "->" type_expr
+                | "builtin" NEWLINE? "def" name type_params? "(" param_list? ")" "->" type_expr
 func_body     ::= expr | suite
 type_params   ::= "[" name ("," name)* "]"
 param_list    ::= param_entry ("," param_entry)* ","?

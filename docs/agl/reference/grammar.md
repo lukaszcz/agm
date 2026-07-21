@@ -262,7 +262,7 @@ concrete type arguments (`Box[int]`, `Outcome[int, text]`). The built-in
 ```ebnf
 func_def         ::= "def" name type_params? "(" param_list? ")" ("->" type_expr)? ("=" func_body | suite)
 builtin_func_def ::= "builtin" NEWLINE? "def" name type_params? "(" param_list? ")" "->" type_expr
-extern_func_def  ::= "extern" "def" name type_params? "(" param_list? ")" "->" type_expr
+extern_func_def  ::= "extern" NEWLINE? "def" name type_params? "(" param_list? ")" "->" type_expr
 func_body        ::= expr | suite
 param_list      ::= param_entry ("," param_entry)* ","?
 param_entry     ::= param | param_marker
@@ -309,7 +309,7 @@ previously declared user operator.
 ```ebnf
 let_decl       ::= "let" name type_ann? "=" expr
 var_decl       ::= "var" name type_ann? "=" expr
-builtin_var_def ::= "builtin" "var" name type_ann  (* body-less; std/config only *)
+builtin_var_def ::= "builtin" NEWLINE? "var" name type_ann  (* body-less; std/config only *)
 assign_stmt ::= assign_target ":=" expr
 assign_target ::= name ("[" expr "]")*
                 | qual_prefix name
@@ -349,9 +349,10 @@ end unambiguously (see [Inline bodies](#inline-bodies)). A nested
 
 At most one `for` and one `while` clause, in that order. `done` and an
 omitted (suite-form) terminator are equivalent to `until false`. `break` and
-`continue` are nullary expressions of the bottom type, valid only lexically
-inside a loop body within the same function/lambda. `return` may also appear
-inside a loop; it exits the nearest enclosing function. See
+`continue` are nullary expressions of the bottom type, valid anywhere in a
+loop's interior — its `while` guard, body, or `until` condition — within the
+same function/lambda. `return` may also appear inside a loop; it exits the
+nearest enclosing function. See
 [Control flow](control-flow.md) for the full clause, scope, and bound
 semantics.
 

@@ -23,7 +23,7 @@ def to_slug(title):
 ## Declaration syntax
 
 ```ebnf
-extern_func_def ::= "extern" "def" name type_params? "(" param_list? ")" "->" type_expr
+extern_func_def ::= "extern" NEWLINE? "def" name type_params? "(" param_list? ")" "->" type_expr
 ```
 
 An `extern def` has the same signature surface as an ordinary `def` —
@@ -32,7 +32,9 @@ default expressions all work identically ([Functions](functions.md),
 [Generics](generics.md)) — with two differences: it has no body, and the
 `-> type_expr` return-type annotation is **mandatory** (as for `builtin def`).
 Defaults are ordinary AgL expressions evaluated on the AgL side, before the
-call crosses the boundary — a companion never sees an unfilled default.
+call crosses the boundary — a companion never sees an unfilled default. The
+`extern` marker may be on the same line as `def` or on the line directly above
+it; the optional newline is insignificant.
 
 `private` composes with `extern def` exactly as it does with `def`: a private
 extern is callable only from within its declaring module

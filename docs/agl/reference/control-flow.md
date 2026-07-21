@@ -237,13 +237,12 @@ past the loop. Persistent state lives in an outer `var` mutated with `:=`.
 
 ### `break` and `continue`
 
-`break` exits the innermost enclosing loop immediately; `continue` skips the
-remainder of the current iteration's body and starts the next iteration
-(re-running the `for` advance, the `while`/`until` guards, and the bound
-check — a continued iteration still advances the iterator and still counts
-toward the bound). Both are nullary expressions of the **bottom type**:
-assignable to any expected type and usable in any branch position (like
-`raise`).
+`break` exits the innermost enclosing loop immediately; `continue` starts the
+next iteration. From a body or `until` condition, it skips the remaining work
+in the current iteration; from a `while` guard, it starts over without entering
+the body. The next iteration performs its normal `for` advance and loop checks.
+Both are nullary expressions of the **bottom type**: assignable to any expected
+type and usable in any branch position (like `raise`).
 
 <!-- agl-check: skip -->
 ```agl
@@ -257,8 +256,9 @@ done
 let v: int = if finished => break else => count
 ```
 
-`break`/`continue` are valid only **lexically inside a loop body within the
-same function/lambda**: one outside any loop, or one that would cross a
+`break`/`continue` are valid anywhere in the loop's **interior** — its
+`while` guard, body, or `until` condition — provided the target loop is in the
+same function or lambda. One outside any loop, or one that would cross a
 `fn`/`def`/lambda boundary into an outer loop, is a static error. `break`
 inside a `try` body exits the loop (it is not caught by `catch`, which
 handles only AgL exceptions).

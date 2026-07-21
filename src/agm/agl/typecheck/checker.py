@@ -23,10 +23,12 @@ Rules implemented
 9.  Declared-name calls — checked against the full ``FunctionSignature``.
 10. Value calls — checked against the ``FunctionType``; named args disallowed.
 11. Lambdas — inferred or annotated return type.
-12. Block typing — last item is the block's value; LetDecl/VarDecl at end is error.
+12. Block typing — the final item is the block's value; every non-final bare
+    expression must be assignable to ``unit`` (binders and declarations are exempt).
 13. ``if`` with no ``else`` yields ``unit``; with ``else`` branches must unify.
 14. ``case`` — validates subject, pattern, and branch types.
-15. ``loop`` — yields ``unit``; until/while conditions must be bool; bound must be int.
+15. ``loop`` — yields ``unit``; its body must be assignable to ``unit``;
+    until/while conditions must be bool; bound must be int.
 16. ``try/catch`` — body and handler types must unify.
 17. ``raise``/``return`` — yield ``BottomType`` (bottom, assignable to any target).
 18. Assignability: ``int`` widens to ``decimal``; ``json``
@@ -667,21 +669,20 @@ class _Checker:
     # ------------------------------------------------------------------
 
     def _check_block(self, block: Block, *, expected: Type | None) -> Type:
-        """Type-check every block item and return the last item's type."""
+        """Type-check a block, discarding non-final bare expression values."""
         if not block.items:
             return UnitType()
 
         last = block.items[-1]
-        if isinstance(last, (LetDecl, VarDecl)):
-            raise AglTypeError(
-                "a 'let'/'var' declaration must be followed by an expression in a block.",
-                span=last.span,
-            )
-
         result_type: Type = UnitType()
         for item in block.items:
-            item_type = self._check_item(item, expected=expected if item is last else None)
-            if item is last:
+            is_final = item is last
+            if not is_final and isinstance(item, Expr):
+                item_type = self._check_item(item, expected=UnitType())
+                self._assert_assignable(item_type, UnitType(), item.span)
+            else:
+                item_type = self._check_item(item, expected=expected if is_final else None)
+            if is_final:
                 result_type = item_type
         if isinstance(last, Expr):
             self._set_extern_expr_targets(
@@ -964,6 +965,10 @@ class _Checker:
         return BottomType() if isinstance(value_type, BottomType) else UnitType()
 
     def _check_binding(self, stmt: LetDecl | VarDecl) -> Type:
+        if stmt.name == "_":
+            val_type = self._check_boundary_expr(stmt.value, expected=None)
+            return self._binder_result(val_type)
+
         ann_type = self._resolve_annotation(stmt.type_ann, stmt.span)
         val_type = self._check_boundary_expr(stmt.value, expected=ann_type)
         if ann_type is not None:
@@ -2384,7 +2389,8 @@ class _Checker:
         if node.while_cond is not None:
             while_type = self._check_expr(node.while_cond, expected=None)
             self._require_bool_condition(while_type, node.while_cond.span, "while")
-        self._check_expr(node.body, expected=None)
+        body_type = self._check_expr(node.body, expected=UnitType())
+        self._assert_assignable(body_type, UnitType(), node.body.span)
         if node.until_cond is not None:
             cond_type = self._check_expr(node.until_cond, expected=None)
             self._require_bool_condition(cond_type, node.until_cond.span, "until")

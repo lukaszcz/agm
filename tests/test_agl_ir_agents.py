@@ -223,19 +223,18 @@ b
 
 
 def test_unit_typed_ask() -> None:
-    """Unit ask: agent is called for side effects, result is discarded."""
-    source = """\
-agent notifier
-let _: unit = ask("Notify!", agent = notifier)
-let result: text = "done"
-result
-"""
-    ir = evaluate_ir_with_agents(
-        source,
-        scripts={"notifier": ["acknowledged"]},
-    )
-    # The `_` binding may or may not appear in the snapshot; check a named binding.
-    assert ir.get("result") == TextValue("done")
+    """A bare ask runs once and discards its successful output."""
+    from agm.agl import PipelineDriver
+
+    calls: list[object] = []
+
+    def notify(request: object) -> str:
+        calls.append(request)
+        return "acknowledged"
+
+    result = PipelineDriver(default_agent=notify).run('ask("Notify!")\n()')
+    assert result.ok
+    assert len(calls) == 1
 
 
 # ---------------------------------------------------------------------------

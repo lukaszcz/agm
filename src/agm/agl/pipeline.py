@@ -1220,7 +1220,7 @@ def _materialize_custom_contract_payloads(
     payloads: dict[int, ContractPayload] = {}
     errors: list[Diagnostic] = []
     for node_id, spec in specs.items():
-        if spec.codec_name in BUILTIN_CODEC_NAMES:
+        if spec.codec_name in (*BUILTIN_CODEC_NAMES, "none"):
             continue
         try:
             contract = materialize_contract(spec, codecs, type_table)

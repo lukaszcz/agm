@@ -224,7 +224,8 @@ class OutputContractSpec:
         The resolved semantic type the agent's output will be parsed into.
     ``codec_name``
         The codec selected for this call (e.g. ``"text"`` or ``"json"``).
-        When ``structured_exec`` is ``True`` this field holds the placeholder
+        Output-discarding unit calls use ``"none"``. When ``structured_exec``
+        is ``True`` this field holds the placeholder
         value ``"text"`` and is **unused** —  will branch on
         ``structured_exec`` to skip codec lookup and return the raw ``ExecResult``
         handle instead.

@@ -12,7 +12,7 @@ catch ExecError as e =>
   print "timed ${e.timed_out}"
 
 if mode == "uncaught" =>
-  let _: text = exec "false"
+  let ignored: text = exec "false"
   ()
 else =>
   print "skip"

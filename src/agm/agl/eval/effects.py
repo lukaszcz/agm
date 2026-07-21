@@ -454,12 +454,16 @@ class EffectHandlers:
                 )
             )
 
-        # 5. Text codec: return stdout directly
+        # 5. Unit contract: successful output is deliberately discarded.
+        if contract.is_unit:
+            return VOID_VALUE
+
+        # 6. Text codec: return stdout directly
         captured = stdout.rstrip("\n")
         if contract.codec_name == "text":
             return TextValue(captured)
 
-        # 6. Parse/retry loop for typed exec
+        # 7. Parse/retry loop for typed exec
         effective_strict = (
             contract.strict_json if contract.strict_json is not None else self._ctx._strict_json
         )

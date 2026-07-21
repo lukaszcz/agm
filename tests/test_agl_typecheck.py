@@ -10,7 +10,7 @@ Grammar notes (shape constraints from the grammar):
 - ``enum`` uses pipe variants: ``enum E\\n  | A(x: int)\\n  | B``
 - ``raise`` can only appear at ``expr`` level (top-level block item, let/var
   rhs, funcdef body, lambda body) — NOT inline in branch bodies.
-- Programs must not end in a ``let``/``var`` declaration.
+- A trailing binder yields ``unit`` (or bottom when its RHS exits).
 
 Tests deliberately do *not* pin internal implementation details.
 """
@@ -119,7 +119,7 @@ from agm.agl.typecheck import (
     check_module,
 )
 from agm.agl.typecheck.builder import _TypeBuilder
-from agm.agl.typecheck.env import ConstructorSignature, GenericTypeDef
+from agm.agl.typecheck.env import ConstructorSignature, GenericTypeDef, OutputContractSpec
 from tests._agl_helpers import all_node_ids
 
 # ---------------------------------------------------------------------------
@@ -1114,13 +1114,18 @@ class TestBlockTyping:
         r = accept_type("let x = 1\nx")
         assert r.resolved.program is not None
 
-    def test_block_ending_in_let_is_error(self) -> None:
-        err = reject_type("let x = 1")
-        assert "let" in str(err) or "var" in str(err) or "declaration" in str(err)
+    @pytest.mark.parametrize("source", ("let x = 1", "var x = 1"), ids=("let", "var"))
+    def test_block_ending_in_binder_yields_unit(self, source: str) -> None:
+        r = accept_type(source)
+        assert r.resolved.program is not None
 
-    def test_block_ending_in_var_is_error(self) -> None:
-        err = reject_type("var x = 1")
-        assert "let" in str(err) or "var" in str(err) or "declaration" in str(err)
+    def test_non_final_bare_value_is_rejected(self) -> None:
+        err = reject_type("1\n()")
+        assert "unit" in str(err).lower()
+
+    def test_non_final_bottom_expression_is_allowed(self) -> None:
+        r = accept_type('raise Abort(message = "x")\n()')
+        assert r.resolved.program is not None
 
     def test_assign_at_end_is_valid(self) -> None:
         # AssignStmt at end is valid (it produces unit, not a LetDecl)
@@ -1205,6 +1210,13 @@ class TestUnitPropagation:
     def test_assign_is_valid_block_item(self) -> None:
         r = accept_type("var x = 1\nx := 2\n()")
         assert r.resolved.program is not None
+
+    def test_non_final_ask_uses_unit_context(self) -> None:
+        r = accept_type('ask("notify")\n()')
+        call = r.resolved.program.body.items[0]
+        assert isinstance(call, Call)
+        assert r.node_types[call.node_id] == UnitType()
+        assert call.node_id not in r.contract_specs
 
 
 # ---------------------------------------------------------------------------
@@ -1366,6 +1378,19 @@ class TestAsk:
         assert isinstance(decl, LetDecl)
         assert decl.value.node_id not in r.contract_specs
         assert r.node_types[decl.value.node_id] == UnitType()
+
+    @pytest.mark.parametrize("binder", ("let", "var"))
+    def test_wildcard_binding_discards_any_rhs_without_a_type_binding(self, binder: str) -> None:
+        r = accept_type(f"{binder} _: text = 1")
+        decl = r.resolved.program.body.items[0]
+        assert isinstance(decl, (LetDecl, VarDecl))
+        assert r.type_env.get_binding_type(decl.node_id) is None
+
+    def test_wildcard_binding_allows_bottom_rhs_without_inference(self) -> None:
+        r = accept_type('let _ = raise Abort(message = "x")')
+        decl = r.resolved.program.body.items[0]
+        assert isinstance(decl, LetDecl)
+        assert r.type_env.get_binding_type(decl.node_id) is None
 
     def test_ask_with_explicit_agent(self) -> None:
         r = accept_type('agent reviewer\nask("Q", agent = reviewer)')
@@ -1670,6 +1695,14 @@ class TestExec:
         spec = r.contract_specs[decl.value.node_id]
         assert spec.target_type == TextType()
         assert spec.codec_name == "text"
+
+    def test_non_final_exec_uses_non_structured_unit_contract(self) -> None:
+        r = accept_type('exec("ls")\n()')
+        call = r.resolved.program.body.items[0]
+        assert isinstance(call, Call)
+        assert r.contract_specs[call.node_id] == OutputContractSpec(
+            UnitType(), "none", None, structured_exec=False
+        )
 
     def test_exec_function_target_rejected(self) -> None:
         err = reject_type('let f: (int) -> int = exec("ls")\nf(1)')
@@ -2637,6 +2670,24 @@ class TestDo:
         assert isinstance(do_node, Do)
         t = r.node_types[do_node.node_id]
         assert t == UnitType()
+
+    @pytest.mark.parametrize(
+        "source",
+        (
+            "do 1 until true",
+            "do 1; () until true",
+            "while true do 1 done",
+            "for x in [1] do 1 done",
+        ),
+        ids=("do-final", "do-non-final", "while", "for"),
+    )
+    def test_loop_bare_value_body_is_rejected(self, source: str) -> None:
+        err = reject_type(source)
+        assert "unit" in str(err).lower()
+
+    def test_loop_body_binder_is_unit_and_visible_to_until(self) -> None:
+        r = accept_type("do\n  let finished = true\nuntil finished")
+        assert r.resolved.program is not None
 
     def test_do_condition_must_be_bool(self) -> None:
         err = reject_type("var i = 0\ndo\n  i := i + 1\nuntil i")
@@ -4515,17 +4566,22 @@ class TestMisc:
             "record Point\n  x: int\n"
             "enum E\n  | A(value: int)\n  | B\n"
             "let e = A(1)\n"
-            "case e of | A(value = _ as item) as enum_value => enum_value | B => B()\n"
+            "let enum_result = case e of | A(value = _ as item) as enum_value "
+            "=> enum_value | B => B()\n"
             "let point = Point(2)\n"
-            "case point of | _ as record_value => record_value.x\n"
+            "let record_result = case point of | _ as record_value => record_value.x\n"
             "case 0 of | 0 as scalar_value => scalar_value | _ => 0"
         )
-        enum_case = checked.resolved.program.body.items[3]
-        record_case = checked.resolved.program.body.items[5]
+        enum_item = checked.resolved.program.body.items[3]
+        record_item = checked.resolved.program.body.items[5]
         scalar_case = checked.resolved.program.body.items[6]
-        assert isinstance(enum_case, Case)
-        assert isinstance(record_case, Case)
+        assert isinstance(enum_item, LetDecl)
+        assert isinstance(record_item, LetDecl)
+        assert isinstance(enum_item.value, Case)
+        assert isinstance(record_item.value, Case)
         assert isinstance(scalar_case, Case)
+        enum_case = enum_item.value
+        record_case = record_item.value
         enum_pattern = enum_case.branches[0].pattern
         record_pattern = record_case.branches[0].pattern
         scalar_pattern = scalar_case.branches[0].pattern
@@ -8711,12 +8767,13 @@ class TestFieldAssignmentSyntaxChecks:
 
     def test_eq_eq_and_neq_on_structured_value_typecheck_to_bool(self) -> None:
         """Both '==' and '!=' on a structured (record) value yield bool."""
-        src = "record P\n  n: int\nlet a = P(n = 1)\nlet b = P(n = 2)\na == b\na != b"
+        src = "record P\n  n: int\nlet a = P(n = 1)\nlet b = P(n = 2)\nlet equal = a == b\na != b"
         r = accept_type(src)
-        # item 0 is the RecordDef; the two let bindings are items 1-2; the
-        # '==' and '!=' expression statements are items 3 and 4.
+        # item 0 is the RecordDef; the bindings are items 1-3; the final
+        # inequality is item 4.
         items = r.resolved.program.body.items
-        assert r.node_types[items[3].node_id] == BoolType()
+        assert isinstance(items[3], LetDecl)
+        assert r.node_types[items[3].value.node_id] == BoolType()
         assert r.node_types[items[4].node_id] == BoolType()
 
 

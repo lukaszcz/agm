@@ -11,7 +11,8 @@ building the lexical scope chain and populating side tables:
 Scope rules
 -----------
 1. ``let``/``var``/``def`` bind in the current scope; redeclaration in the
-   *same* scope is an error.
+   *same* scope is an error. ``let _`` and ``var _`` resolve their right-hand
+   sides but bind no name.
 2. ``:=`` resolves to the nearest visible binding; ``:=`` on an undeclared
    name → error.  Whether that binding is assignable is decided by type
    checking, which alone knows a pattern slot's selected meaning.  A
@@ -1069,28 +1070,30 @@ class _Resolver:
         self._check_not_reserved(node.name, node.span)
         # Resolve RHS before defining the name (lambda non-recursion).
         self._resolve_expr(node.value)
-        ref = BindingRef(
-            name=node.name,
-            mutable=False,
-            decl_span=node.span,
-            decl_node_id=node.node_id,
-            kind=BinderKind.let_binding,
-            module_id=self._module_id,
-        )
-        self._define(node.name, ref)
+        if node.name != "_":
+            ref = BindingRef(
+                name=node.name,
+                mutable=False,
+                decl_span=node.span,
+                decl_node_id=node.node_id,
+                kind=BinderKind.let_binding,
+                module_id=self._module_id,
+            )
+            self._define(node.name, ref)
 
     def _resolve_var(self, node: VarDecl) -> None:
         self._check_not_reserved(node.name, node.span)
         self._resolve_expr(node.value)
-        ref = BindingRef(
-            name=node.name,
-            mutable=True,
-            decl_span=node.span,
-            decl_node_id=node.node_id,
-            kind=BinderKind.var_binding,
-            module_id=self._module_id,
-        )
-        self._define(node.name, ref)
+        if node.name != "_":
+            ref = BindingRef(
+                name=node.name,
+                mutable=True,
+                decl_span=node.span,
+                decl_node_id=node.node_id,
+                kind=BinderKind.var_binding,
+                module_id=self._module_id,
+            )
+            self._define(node.name, ref)
 
     def _resolve_assign(self, node: AssignStmt) -> None:
         target = node.target

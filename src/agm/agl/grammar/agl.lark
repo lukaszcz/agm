@@ -445,23 +445,20 @@ loop_end : "until" or_expr  -> loop_until
          | "done"            -> loop_done
 
 // A *marked* inline body — one whose end is fixed by a following token — is a
-// `;` sequence of marked_items ending in a value_item.  The three marked
-// positions (parenthesized block, loop body, try body) share both rules; they
-// differ only where the body's terminator could be consumed by its own last
-// item, which is spelled out at try_body below.
+// `;` sequence of marked items. The three marked positions (parenthesized
+// block, loop body, try body) share this rule; they differ only where the
+// body's terminator could be consumed by its own last item, which is spelled
+// out at try_body below. A final let/var binder is permitted and gives its
+// enclosing block a unit value.
 //
-// marked_item: every item form there is.  The open forms (if/case/try/do) and
-// lambdas are safe here only because the marker terminates the body.
+// The open forms (if/case/try/do) and lambdas are safe here only because the
+// marker terminates the body.
 ?marked_item: expr | inline_assign | letvar_decl
 
-// value_item: a marked body's last item, which supplies the body's value and
-// so may not be a binder — the same rule a block obeys.
-?value_item: expr | inline_assign
-
-// inline_seq: the loop body.  Its terminator (`until`/`done`) is mandatory and
+// inline_seq: the loop body. Its terminator (`until`/`done`) is mandatory and
 // exactly one per loop, so even a trailing nested loop is unambiguous:
 // `do ... until p until q` binds the inner `until` innermost-first.
-inline_seq: (marked_item SEMICOLON)* value_item
+inline_seq: (marked_item SEMICOLON)* marked_item
 
 // try expression
 try_expr: "try" try_body (catch_clause)+
@@ -480,11 +477,18 @@ try_expr: "try" try_body (catch_clause)+
 //           the grammar conflict-free.
 //
 // Both stay admissible in any earlier position of the sequence, and in the
-// final one once parenthesized, which restores the marker.
+// final one once parenthesized, which restores the marker. A final binder uses
+// the same closed RHS alternatives: an unparenthesized nested `try` or lambda
+// would likewise contest the following `catch`.
 try_body: suite_expr | (marked_item SEMICOLON)* try_tail
 
-?try_tail: or_expr | inline_assign | raise_expr | return_expr
+?try_tail: or_expr | inline_assign | try_letvar_decl | raise_expr | return_expr
          | if_expr | case_expr | loop_expr
+
+?try_letvar_decl: "let" name type_ann? EQ try_value -> let_decl
+                 | "var" name type_ann? EQ try_value -> var_decl
+
+?try_value: or_expr | raise_expr | return_expr | if_expr | case_expr | loop_expr
 
 catch_clause: "catch" catch_pattern ARROW catch_body
 
@@ -681,12 +685,12 @@ paren_expr_or_unit: LPAR RPAR              -> unit_lit
                   | LPAR expr RPAR         -> paren_expr
                   | LPAR paren_block RPAR  -> paren_block_expr
 
-// paren_block: the same marked-body sequence.  `)` is the one terminator no
-// item form can consume, so nothing is barred from the final position here.
-// This covers the block forms `expr` alone does not — a `;` sequence and a
-// bare assignment.  The single-`expr` case stays on the paren_expr
-// alternative above, which is why the sequence form requires at least one `;`.
-paren_block: (marked_item SEMICOLON)+ value_item
+// paren_block: the same marked-body sequence. `)` is the one terminator no
+// item form can consume, so a final let/var binder is permitted. This covers
+// the block forms `expr` alone does not — a `;` sequence and a bare assignment.
+// The single-`expr` case stays on the paren_expr alternative above, which is
+// why the sequence form requires at least one `;`.
+paren_block: (marked_item SEMICOLON)+ marked_item
            | inline_assign
 
 // ---------------------------------------------------------------------------

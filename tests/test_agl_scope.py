@@ -409,6 +409,22 @@ class TestBlockScoping:
         assert "x" in msg
 
 
+class TestWildcardBinders:
+    def test_wildcard_binders_resolve_their_rhs_without_binding_a_name(self) -> None:
+        resolved = parse_and_resolve("let value = 1\nlet _ = value\nvar _ = value\n()")
+        assert _ref(resolved, "value", occurrence=0).kind is BinderKind.let_binding
+        assert "_" not in resolved.root_scope.bindings
+
+    def test_wildcard_binders_are_repeatable(self) -> None:
+        parse_and_resolve("let _ = 1\nlet _ = 2\nvar _ = 3\n()")
+
+    def test_wildcard_binder_is_not_readable(self) -> None:
+        err = reject_scope("let _ = 1\n_")
+        _, msg = diag(err)
+        assert "_" in msg
+        assert "not defined" in msg
+
+
 # ---------------------------------------------------------------------------
 # Assignment errors
 # ---------------------------------------------------------------------------

@@ -392,8 +392,8 @@ class Block:
     """An expression block: a sequence of items whose value is the last item.
 
     Items may be declarations (``FuncDef``, ``RecordDef``, …), binders
-    (``LetDecl``, ``VarDecl``, ``AssignStmt``), or expressions.  A block ending
-    in a binder is a static error (the binder needs a continuation expression).
+    (``LetDecl``, ``VarDecl``, ``AssignStmt``), or expressions. A block may end
+    in a ``let`` or ``var`` binder; semantically, that block has unit value.
     """
 
     items: tuple[Item, ...]

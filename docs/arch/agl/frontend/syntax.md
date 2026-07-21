@@ -14,6 +14,8 @@ The AST is plain frozen dataclasses with no parser types — the firewall every 
 
 Each node carries a stable id assigned at build time. Later passes never mutate nodes; they record conclusions in side tables keyed by that id. This is the universal annotation convention — it is why nodes can be frozen and shared, and why `id()`-based identity is never used.
 
+Blocks may end in a `let` or `var` binder, whose semantic block value is `unit`. The parser preserves such trailing binders in suite blocks and the marked inline bodies used by loops, parenthesized blocks, and `try` bodies.
+
 ## Code Entry Points
 
 - `src/agm/agl/lexer/` — the indentation-aware lexer; `tokens.py` is the token-contract source of truth.

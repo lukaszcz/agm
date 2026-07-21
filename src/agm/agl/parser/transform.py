@@ -779,12 +779,12 @@ class AstBuilder(Transformer):
         )
 
     def _body_as_expr(self, meta: Meta, item: _RawItem) -> syntax.Expr:
-        """Coerce an inline `=>` body to an Expr.
+        """Coerce a single inline body item to an expression.
 
-        An assignment is a Binder, not an Expr, so it is wrapped in a
-        single-item Block — the same shape the equivalent suite body produces.
+        A binder is not an expression, so it is wrapped in a single-item Block
+        — the same shape the equivalent suite body produces.
         """
-        if isinstance(item, syntax.AssignStmt):
+        if isinstance(item, (syntax.LetDecl, syntax.VarDecl, syntax.AssignStmt)):
             return syntax.Block(
                 items=(item,),
                 span=self._span_from_meta(meta),

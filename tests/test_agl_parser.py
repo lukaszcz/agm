@@ -2090,6 +2090,22 @@ class TestDoExpr:
         assert isinstance(e, Do)
         assert isinstance(e.body, Block)
 
+    @pytest.mark.parametrize("binder_type", (LetDecl, VarDecl), ids=("let", "var"))
+    def test_inline_sequence_can_end_in_binder(self, binder_type: type[LetDecl | VarDecl]) -> None:
+        e = first(parse(f"do {binder_type.__name__[:-4].lower()} terminal = 1 until true"))
+        assert isinstance(e, Do)
+        assert isinstance(e.body, Block)
+        assert isinstance(e.body.items[-1], binder_type)
+
+
+class TestParenthesizedBlock:
+    @pytest.mark.parametrize("binder_type", (LetDecl, VarDecl), ids=("let", "var"))
+    def test_inline_block_can_end_in_binder(self, binder_type: type[LetDecl | VarDecl]) -> None:
+        e = first(parse(f"let result = (0; {binder_type.__name__[:-4].lower()} terminal = 1)"))
+        assert isinstance(e, LetDecl)
+        assert isinstance(e.value, Block)
+        assert isinstance(e.value.items[-1], binder_type)
+
 
 # ---------------------------------------------------------------------------
 # Control flow: try_expr
@@ -2139,6 +2155,13 @@ class TestTryExpr:
         assert isinstance(e, Try)
         h = e.handlers[0]
         assert isinstance(h.body, Block)
+
+    @pytest.mark.parametrize("binder_type", (LetDecl, VarDecl), ids=("let", "var"))
+    def test_inline_try_body_can_end_in_binder(self, binder_type: type[LetDecl | VarDecl]) -> None:
+        e = first(parse(f"try {binder_type.__name__[:-4].lower()} terminal = 1 catch _ => ()"))
+        assert isinstance(e, Try)
+        assert isinstance(e.body, Block)
+        assert isinstance(e.body.items[-1], binder_type)
 
 
 # ---------------------------------------------------------------------------

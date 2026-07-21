@@ -117,12 +117,13 @@ exits, in which case it is bottom-valued.
 | `( … )` | `)` | `marked_body` |
 | `do … until`/`done` | `until` / `done` | `marked_body` |
 | `try … catch` | `catch` | `marked_body`, last item not a `try` or lambda |
-| `def f() = …` | newline | exactly one item |
+| `def f() = …` | newline or `;` | exactly one item |
 | `… => …` | *none* | exactly one item |
 
-The two unmarked bodies take a single item. A `def` body ends at a newline,
-and a `=>` body ends at nothing at all — a following `|`, `else`, or `catch`
-could belong either to the body or to the enclosing branch list.
+The two unmarked bodies take a single item. An inline `def` body ends at the
+next block separator — a newline or `;` — which starts the next block item. A
+`=>` body ends at nothing at all — a following `|`, `else`, or `catch` could
+belong either to the body or to the enclosing branch list.
 
 What differences remain among the marked bodies are derived, not stipulated: a
 body's last item may not be a form that could consume the body's own
@@ -255,12 +256,13 @@ param_entry     ::= param | param_marker
 param           ::= field_name ":" type_expr ("=" expr)?
 ```
 
-An inline `def` body after `=` is exactly one expression. It ends at the
-newline, and within a block `;` is a separator, so an inline body admits
-neither a binder nor a `;` sequence. Parenthesize a multi-item block or use a
-suite when the body needs binders or a sequence; for suite bodies, the `=`
-before the newline is optional. The return type annotation is optional for
-ordinary `def` declarations and required for `builtin def` and `extern def` —
+An inline `def` body after `=` is exactly one expression. It ends at the next
+block separator — a newline or `;` — which starts the next block item, so an
+inline body admits neither a binder nor a `;` sequence. Parenthesize a
+multi-item block or use a suite when the body needs binders or a sequence; for
+suite bodies, the `=` before the newline is optional. The return type
+annotation is optional for ordinary `def` declarations and required for
+`builtin def` and `extern def` —
 neither has a body. Zone markers (`/`, `*`,
 `@pos`, `@std`, `@named`) may appear as `param_entry` items between parameters;
 see [Functions](functions.md) for full zone semantics. No required

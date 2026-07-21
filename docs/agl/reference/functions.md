@@ -44,11 +44,10 @@ def double(n: int) = n * 2
 def incremented() -> int = (let x = 0; x + 1)
 ```
 
-An inline `def` body is a single item. A `def` body ends at a newline, and
-within a block `;` *is* a newline, so a `;` after the body always starts the
-next block item rather than extending the body. Write a multi-item body as a
-parenthesized block or as a suite — see
-[Inline bodies](grammar.md#inline-bodies).
+An inline `def` body is a single item. It ends at the next block separator —
+a newline or `;` — and a `;` after the body starts the next block item rather
+than extending the body. Write a multi-item body as a parenthesized block or
+as a suite — see [Inline bodies](grammar.md#inline-bodies).
 
 ### Return type
 

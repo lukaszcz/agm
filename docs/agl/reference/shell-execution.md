@@ -9,7 +9,7 @@
 ```agl
 let res = exec "ls -la ${dir}"       # res : ExecResult (default)
 let out: text = exec "cat ${path}"   # parsed form: stdout verbatim
-let _ = exec "make build"             # unit form; raises ExecError on nonzero
+let completed: unit = exec "make build" # unit form; raises ExecError on nonzero
 ```
 
 Like `ask`, `exec` is a **contextual keyword**
@@ -95,9 +95,10 @@ A nonzero exit raises `ExecError`, and unparseable output raises
 
 ### Unit form — target is `unit`
 
-In a discarded-value position, `exec` has target type `unit`. It still runs
-the command and raises `ExecError` on a nonzero exit, but discards successful
-stdout and returns `void`:
+When context requires `unit` — for example, a non-final bare expression in a
+block or a binding annotated `unit` — `exec` has target type `unit`. For this
+unit contract, a nonzero exit raises `ExecError`; successful stdout is
+discarded and the call returns `void`:
 
 ```agl
 exec "make build"

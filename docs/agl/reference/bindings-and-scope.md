@@ -11,7 +11,7 @@ assignment: `x = e` as an item is a syntax error — use `let`/`var` to bind or
 ## `let` — immutable binding
 
 ```ebnf
-let_decl ::= "let" NAME (":" type_expr)? "=" expr
+let_decl ::= "let" name (":" type_expr)? "=" expr
 ```
 
 `let` evaluates the initializer, checks it against the annotation (if any),
@@ -42,7 +42,7 @@ non-`unit` value is intentionally discarded.
 ## `var` — mutable binding
 
 ```ebnf
-var_decl ::= "var" NAME (":" type_expr)? "=" expr
+var_decl ::= "var" name (":" type_expr)? "=" expr
 ```
 
 Identical to `let` except the binding is **mutable** — it may later be
@@ -59,8 +59,8 @@ var artifact: text = ask("Implement ${spec}", agent = impl)
 
 ```ebnf
 assign_stmt ::= assign_target ":=" expr
-assign_target ::= NAME ("[" expr "]")*
-                | qual_prefix NAME
+assign_target ::= name ("[" expr "]")*
+                | qual_prefix name
 ```
 
 `:=` updates the nearest visible **mutable** binding, has type `unit`, and
@@ -109,7 +109,7 @@ Static rules, all checked before execution:
 ## `def` — function declarations
 
 ```ebnf
-func_def ::= ["private"] "def" NAME type_params? "(" params? ")" ("->" type_expr)? ("=" func_body | suite)
+func_def ::= ["private"] "def" name type_params? "(" params? ")" ("->" type_expr)? ("=" func_body | suite)
 ```
 
 `def` is a root-only declaration. It introduces an immutable binding of
@@ -163,7 +163,7 @@ A `def` inside a nested block is a static error. See
 ## `param` — declared program parameters
 
 ```ebnf
-param_decl ::= "param" NAME (":" type_expr)? ("=" expr)?
+param_decl ::= "param" name (":" type_expr)? ("=" expr)?
 ```
 
 `param` declarations are root-only. Each enters the root scope as an
@@ -192,7 +192,7 @@ program param types.
 ## `builtin var` — engine-setting bindings
 
 ```ebnf
-builtin_var_def ::= "builtin" "var" NAME ":" type_expr
+builtin_var_def ::= "builtin" "var" name ":" type_expr
 ```
 
 A `builtin var` declares a body-less, host-backed, **mutable** binding with a
@@ -224,7 +224,7 @@ layers.
 ## `agent` — declared agents
 
 ```ebnf
-agent_decl ::= "agent" NAME ("=" STRING)?
+agent_decl ::= "agent" name ("=" STRING)?
 ```
 
 `agent` declarations are root-only and **entry-module only** — they are a

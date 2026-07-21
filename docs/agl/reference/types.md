@@ -29,8 +29,8 @@ Type expressions:
 ```ebnf
 type_expr ::= "unit"
             | "text" | "json" | "bool" | "int" | "decimal"
-            | NAME
-            | NAME "[" type_expr ("," type_expr)* "]"   (* applied type *)
+            | name
+            | name "[" type_expr ("," type_expr)* "]"   (* applied type *)
             | "list" "[" type_expr "]"
             | "dict" "[" "text" "," type_expr "]"
             | func_type
@@ -38,16 +38,16 @@ type_expr ::= "unit"
 func_type ::= type_atom "->" type_expr
             | "(" type_list? ")" "->" type_expr
 type_atom ::= "unit" | "text" | "json" | "bool" | "int" | "decimal"
-            | NAME
-            | NAME "[" type_expr ("," type_expr)* "]"
+            | name
+            | name "[" type_expr ("," type_expr)* "]"
             | "list" "[" type_expr "]"
             | "dict" "[" "text" "," type_expr "]"
 type_list ::= type_expr ("," type_expr)* ","?
 ```
 
-A bare `NAME` in type position names a built-in type, a user type, an alias,
+A bare `name` in type position names a built-in type, a user type, an alias,
 or — inside a generic declaration — one of that declaration's type parameters.
-`NAME "[" … "]"` is an **applied type**: it instantiates a generic declaration
+`name "[" … "]"` is an **applied type**: it instantiates a generic declaration
 at concrete type arguments, e.g. `Box[int]`, `Option[text]`,
 `Outcome[int, text]`, or nested `Box[Box[int]]`. The built-in `list[T]` and
 `dict[text, V]` are the same applied-type form.
@@ -531,7 +531,7 @@ enum Option[T]
 type Pair[A, B] = dict[text, json]
 ```
 
-Each type parameter is an ordinary `NAME` in scope as a type throughout the
+Each type parameter is an ordinary `name` in scope as a type throughout the
 declaration's body. A generic type is **used** by applying it to type
 arguments — `Box[int]`, `Option[text]`, `Outcome[int, text]` — producing a
 distinct concrete type for each instantiation.

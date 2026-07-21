@@ -77,7 +77,7 @@ cannot be passed to `ask` except via the `agent` parameter.
 ### Agent declarations
 
 ```ebnf
-agent_decl ::= "agent" NAME ("=" STRING)?
+agent_decl ::= "agent" name ("=" STRING)?
 ```
 
 `agent` declarations are valid **only at the program root**. Each declared

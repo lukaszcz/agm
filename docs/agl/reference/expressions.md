@@ -342,8 +342,8 @@ type_args ::= "::" "[" type_expr ("," type_expr)* "]"
 arg_list        ::= arg ("," arg)* ","?
 arg             ::= expr                         (* positional *)
                   | placeholder_arg              (* positional hole *)
-                  | NAME "=" expr                (* named *)
-                  | NAME "=" placeholder_arg     (* named hole *)
+                  | field_name "=" expr          (* named *)
+                  | field_name "=" placeholder_arg (* named hole *)
 placeholder_arg ::= "?" | "?<digits>"
 ```
 
@@ -577,12 +577,12 @@ The left operand must have enum type; the variant must belong to that enum.
 
 ## `case` expressions
 
-A `case` expression selects among pattern branches whose bodies may be a
-single expression or an indented suite:
+A `case` expression selects among pattern branches whose bodies use the
+canonical `branch_body` form:
 
 ```ebnf
 case_expr   ::= "case" or_expr "of" "|"? case_branch ("|" case_branch)*
-case_branch ::= pattern "=>" (suite | or_expr)
+case_branch ::= pattern "=>" branch_body
 ```
 
 <!-- agl-check: skip -->
@@ -592,6 +592,10 @@ let next: text = case action of
   | Continue(prompt) => prompt
   | Escalate(reason) => "Investigate blocker:\n${reason}"
 ```
+
+`branch_body` is the canonical branch-body production: a suite or one
+`closed_item` (`or_expr`, inline assignment, `raise`, or `return`). See
+[Grammar](grammar.md#if).
 
 All branch result types must agree after `int → decimal` widening. An outer
 expected type propagates into every branch. The patterns must be exhaustive
@@ -607,9 +611,9 @@ has no separate `case` statement.
 An `if` **expression** selects among branches by boolean condition:
 
 ```ebnf
-if_expr        ::= "if" "|"? if_expr_branch ("|" if_expr_branch)* if_else_branch?
-if_expr_branch ::= or_expr "=>" (suite | or_expr)
-if_else_branch ::= "|"? "else" "=>" (suite | or_expr)
+if_expr        ::= "if" "|"? if_cond_branch ("|" if_cond_branch)* if_else_branch?
+if_cond_branch ::= or_expr "=>" branch_body
+if_else_branch ::= "|"? "else" "=>" branch_body
 ```
 
 <!-- agl-check: skip -->
@@ -617,8 +621,9 @@ if_else_branch ::= "|"? "else" "=>" (suite | or_expr)
 let label: text = if | score > 90 => "A" | score > 75 => "B" | else => "C"
 ```
 
-The `else` branch is optional. With `else`, all branch result types must agree
-after `int → decimal` widening. Without `else`, the `if` remains an expression
+The `else` branch is optional. It uses the canonical `branch_body` production
+([Grammar](grammar.md#if)). With `else`, all branch result types must agree after
+`int → decimal` widening. Without `else`, the `if` remains an expression
 but has type `unit`, as described below.
 
 ## Expressions with type `unit`

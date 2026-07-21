@@ -19,7 +19,7 @@ equally valid); see [Lexical structure](lexical-structure.md).
 
 `def`, `record`, `enum`, and `type` aliases may declare type parameters in a
 bracketed list immediately after the declared name. Each parameter is an
-ordinary `NAME` that is in scope **as a type** throughout the declaration's
+ordinary `name` that is in scope **as a type** throughout the declaration's
 body.
 
 ```agl

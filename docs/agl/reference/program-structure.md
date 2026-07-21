@@ -26,8 +26,8 @@ item       ::= import_decl                        (* header position only *)
              | builtin_var_def                     (* root only; std/config only *)
              | "private"? func_def                (* root only *)
              | "private"? extern_func_def         (* root only; file-backed modules *)
-             | binder | expr
-binder     ::= let_decl | var_decl
+             | let_decl | var_decl | assign_stmt
+             | expr
 ```
 
 ### Import declarations

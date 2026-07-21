@@ -33,7 +33,7 @@ item       ::= import_decl                  (* header position only *)
              | infix_decl                   (* root only *)
              | modifier? func_def           (* root only *)
              | ("private" NEWLINE?)? extern_func_def  (* root only; file-backed modules only *)
-             | let_decl | var_decl
+             | let_decl | var_decl | assign_stmt
              | expr
 
 modifier   ::= ("private" | "builtin") NEWLINE?
@@ -242,7 +242,7 @@ type_atom ::= "unit" | "text" | "json" | "bool" | "int" | "decimal"
 type_list ::= type_expr ("," type_expr)* ","?
 ```
 
-`NAME "[" … "]"` is an applied type: a generic declaration instantiated at
+`name "[" … "]"` is an applied type: a generic declaration instantiated at
 concrete type arguments (`Box[int]`, `Outcome[int, text]`). The built-in
 `list[T]` and `dict[text, V]` are the same form.
 
@@ -298,7 +298,7 @@ previously declared user operator.
 let_decl ::= "let" name (":" type_expr)? "=" expr
 var_decl ::= "var" name (":" type_expr)? "=" expr
 builtin_var_def ::= "builtin" "var" name ":" type_expr  (* body-less; std/config only *)
-assign_expr ::= assign_target ":=" expr
+assign_stmt ::= assign_target ":=" expr
 assign_target ::= name ("[" expr "]")*
                 | qual_prefix name
 ```

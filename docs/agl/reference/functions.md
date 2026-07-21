@@ -11,13 +11,13 @@ from other functions. The type of a function value is written
 ## `def` — named function declarations
 
 ```ebnf
-func_def      ::= "def" NAME type_params? "(" param_list? ")" ("->" type_expr)? ("=" func_body | suite)
-                | "builtin" "def" NAME type_params? "(" param_list? ")" "->" type_expr
+func_def      ::= "def" name type_params? "(" param_list? ")" ("->" type_expr)? ("=" func_body | suite)
+                | "builtin" "def" name type_params? "(" param_list? ")" "->" type_expr
 func_body     ::= expr | suite
-type_params   ::= "[" NAME ("," NAME)* "]"
+type_params   ::= "[" name ("," name)* "]"
 param_list    ::= param_entry ("," param_entry)* ","?
 param_entry   ::= param | param_marker
-param         ::= NAME ":" type_expr ("=" expr)?
+param         ::= field_name ":" type_expr ("=" expr)?
 param_marker  ::= "/" | "*" | "@" NAME    (* @pos, @std, @named *)
 ```
 
@@ -190,7 +190,7 @@ nested.
 ```ebnf
 lambda_expr ::= "fn" "(" params? ")" ("->" type_expr)? "=>" expr
 params      ::= param ("," param)* ","?
-param       ::= NAME ":" type_expr ("=" expr)?
+param       ::= field_name ":" type_expr ("=" expr)?
 ```
 
 `fn` produces a function value. The return type annotation is **optional**:
@@ -355,8 +355,8 @@ type_args ::= "::" "[" type_expr ("," type_expr)* "]"
 arg_list        ::= arg ("," arg)* ","?
 arg             ::= expr                         (* positional *)
                   | placeholder_arg              (* positional hole *)
-                  | NAME "=" expr                (* named *)
-                  | NAME "=" placeholder_arg     (* named hole *)
+                  | field_name "=" expr          (* named *)
+                  | field_name "=" placeholder_arg (* named hole *)
 placeholder_arg ::= "?" | "?<digits>"
 ```
 

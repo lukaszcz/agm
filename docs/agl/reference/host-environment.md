@@ -148,10 +148,10 @@ layers.
 
 `[exec]` holds global engine defaults with kebab field names (`strict-json`,
 `max-iters`, `log-file`). A `[<program>]` top-level section — keyed by the
-`program NAME` declaration or the `.agl` file stem — overrides both engine
+`program name` declaration or the `.agl` file stem — overrides both engine
 settings and param values for that program. A file stem that matches a reserved
 host section name (e.g. `exec`, `loop`) is an error unless an explicit `program
-NAME` declaration is present. Inline `-c` programs with no `program` declaration
+name` declaration is present. Inline `-c` programs with no `program` declaration
 have no config section.
 
 ### Positional effect

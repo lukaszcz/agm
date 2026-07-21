@@ -68,8 +68,9 @@ Because an `else`-less `if` always has type `unit`, it is for effectful
 control flow. A branch body that produces a non-`unit` value is a static error.
 
 Branch bodies are suites (indented blocks) or inline bodies. An inline body
-after `=>` is exactly one item: an `or_expr`, an assignment, `raise`, or
-`return`. It admits neither a `;` sequence nor a binder, nor a `case`, `if`,
+after `=>` is exactly one item: an `or_expr`, an inline assignment
+(`postfix := or_expr`), `raise`, or `return`. It admits neither a `;` sequence
+nor a binder, nor a `case`, `if`,
 `try`, or loop expression. Write any of those as a suite or parenthesize them
 — `(let x = e; body)` — see
 [Inline bodies](grammar.md#inline-bodies). Mutating an outer `var` with `:=`
@@ -128,8 +129,9 @@ range_tail  ::= ("to" | "downto") or_expr ("by" or_expr)?
 while_clause::= "while" or_expr NEWLINE?
 loop_bound  ::= "[" or_expr "]"
 loop_end    ::= "until" or_expr | "done"
-inline_seq  ::= inline_item (";" inline_item)*
-inline_item ::= binder | or_expr | case_expr | if_expr | try_expr | loop
+inline_seq     ::= (marked_item ";")* marked_item
+marked_item    ::= expr | inline_assign | let_decl | var_decl
+inline_assign  ::= postfix ":=" or_expr
 ```
 
 A loop may begin with **at most one `for`** clause and **at most one

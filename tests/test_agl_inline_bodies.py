@@ -3,11 +3,12 @@
 An inline body is the form written on the same line after ``=>`` (or after
 ``do``), as opposed to the suite form written as an indented block.
 
-A ``;`` sequence is admissible exactly where a token marks the body's end:
-``)`` for a parenthesized block, ``until``/``done`` for a loop body, ``catch``
-for a try body, a newline for a ``def`` body.  A body after ``=>`` has no such
-marker — a following ``|``, ``else``, or ``catch`` could belong to either the
-body or the enclosing form — so it holds exactly one item.
+A ``;`` sequence is admissible exactly where a body-specific token marks the
+body's end: ``)`` for a parenthesized block, ``until``/``done`` for a loop body,
+and ``catch`` for a try body. An inline ``def`` body is exactly one expression;
+a following newline or ``;`` starts the next enclosing block item. A body after
+``=>`` has no marker — a following ``|``, ``else``, or ``catch`` could belong to
+either the body or the enclosing form — so it holds exactly one item.
 
 Covers:
 - ``:=``, ``raise``, and ``return`` as whole inline ``=>`` bodies.
@@ -15,7 +16,8 @@ Covers:
   suite form as the two escape hatches.
 - Open forms (``case``/``if``/``try``/``do``) admitted inline in loop bodies,
   where the terminator resolves the ambiguity.
-- Parenthesized blocks, and try bodies taking the same sequence.
+- Parenthesized blocks, including a lone trailing binder, and try bodies taking
+  the same sequence.
 
 NOTE: the grammar's zero-conflict invariant is guarded by
       ``tests/test_agl_parser.py::test_zero_conflicts``.
@@ -33,6 +35,7 @@ from lark.lexer import Token
 from agm.agl import PipelineDriver
 from agm.agl.parser import AglSyntaxError, parse_program
 from agm.agl.parser.errors import syntax_error_from_lark
+from agm.agl.syntax import FuncDef, VarRef
 
 
 def _run(source: str) -> tuple[bool, str, list[str]]:
@@ -281,6 +284,21 @@ class TestParenthesizedBlock:
     def test_block_in_parens_can_end_in_a_binder(self) -> None:
         ok, _out, diags = _run("let v = (let x = 4; let y = 5)\nprint v\n")
         assert ok, diags
+
+    def test_lone_binder_in_parens_evaluates_to_unit(self) -> None:
+        ok, out, diags = _run("let value = (let x = 1)\nprint value\n")
+        assert ok, diags
+        assert out.strip() == "()"
+
+
+class TestInlineDefBody:
+    def test_semicolon_after_inline_body_starts_an_enclosing_block_item(self) -> None:
+        program = parse_program("def f() = expr; next")
+        assert len(program.body.items) == 2
+        function, next_item = program.body.items
+        assert isinstance(function, FuncDef)
+        assert isinstance(function.body, VarRef)
+        assert isinstance(next_item, VarRef)
 
 
 class TestTryBodyMatchesTheOtherMarkedBodies:

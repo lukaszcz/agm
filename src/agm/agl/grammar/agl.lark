@@ -436,7 +436,7 @@ range_by     : BY or_expr
 // loop_bound: [expr] — an arbitrary int-typed expression as the iteration bound.
 loop_bound: DO_LSQB or_expr RSQB
 
-// do body: suite (indented block) or inline sequence of or_expr/binder items.
+// do body: suite (indented block) or inline sequence of marked items.
 do_body: suite_expr | inline_seq
 
 // loop terminator: explicit `until E`, `done`, or (via layout) synthetic DONE.
@@ -687,11 +687,12 @@ paren_expr_or_unit: LPAR RPAR              -> unit_lit
 
 // paren_block: the same marked-body sequence. `)` is the one terminator no
 // item form can consume, so a final let/var binder is permitted. This covers
-// the block forms `expr` alone does not — a `;` sequence and a bare assignment.
-// The single-`expr` case stays on the paren_expr alternative above, which is
-// why the sequence form requires at least one `;`.
+// the block forms `expr` alone does not — a `;` sequence, a bare assignment,
+// and a lone binder. The single-`expr` case stays on the paren_expr alternative
+// above, which is why the sequence form requires at least one `;`.
 paren_block: (marked_item SEMICOLON)+ marked_item
            | inline_assign
+           | letvar_decl
 
 // ---------------------------------------------------------------------------
 // Call arguments

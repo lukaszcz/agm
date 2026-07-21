@@ -12,7 +12,7 @@
         ]
       },
       "expect": {
-        "stdout": "zero\nnon-negative\nnone\nprobed:1\n12\n6\n3/2\nVerdict::Pass\nVerdict::Pass\nfailures:0\n",
+        "stdout": "zero\n()\nnon-negative\nnone\nprobed:1\n12\n6\n3/2\nVerdict::Pass\nVerdict::Pass\nfailures:0\n",
         "calls": {
           "reviewer": 2
         }
@@ -30,7 +30,7 @@
         ]
       },
       "expect": {
-        "stdout": "doubled:2\nunset\nnon-negative\nnone\nprobed:2\n12\n6\n3/2\nVerdict::Pass\nVerdict::Fail(issues = [\"slow\"])\nfailures:0\n",
+        "stdout": "doubled:2\nunset\n()\nnon-negative\nnone\nprobed:2\n12\n6\n3/2\nVerdict::Pass\nVerdict::Fail(issues = [\"slow\"])\nfailures:0\n",
         "calls": {
           "reviewer": 2
         }
@@ -48,7 +48,7 @@
         ]
       },
       "expect": {
-        "stdout": "many\nnon-negative\nhalt:9\nprobed:10\n12\n6\n3/2\nVerdict::Pass\nVerdict::Pass\nfailures:0\n",
+        "stdout": "many\n()\nnon-negative\nhalt:9\nprobed:10\n12\n6\n3/2\nVerdict::Pass\nVerdict::Pass\nfailures:0\n",
         "calls": {
           "reviewer": 2
         }
@@ -66,7 +66,7 @@
         ]
       },
       "expect": {
-        "stdout": "many\nnegative\nnone\nprobed:-2\n12\n6\n3/2\nfailures:2\n",
+        "stdout": "many\n()\nnegative\nnone\nprobed:-2\n12\n6\n3/2\nfailures:2\n",
         "calls": {
           "reviewer": 2
         }

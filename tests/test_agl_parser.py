@@ -2106,6 +2106,14 @@ class TestParenthesizedBlock:
         assert isinstance(e.value, Block)
         assert isinstance(e.value.items[-1], binder_type)
 
+    @pytest.mark.parametrize("binder_type", (LetDecl, VarDecl), ids=("let", "var"))
+    def test_inline_block_can_be_a_lone_binder(self, binder_type: type[LetDecl | VarDecl]) -> None:
+        e = first(parse(f"let result = ({binder_type.__name__[:-4].lower()} terminal = 1)"))
+        assert isinstance(e, LetDecl)
+        assert isinstance(e.value, Block)
+        assert len(e.value.items) == 1
+        assert isinstance(e.value.items[0], binder_type)
+
 
 # ---------------------------------------------------------------------------
 # Control flow: try_expr

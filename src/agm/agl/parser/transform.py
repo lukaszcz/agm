@@ -2009,7 +2009,7 @@ class AstBuilder(Transformer):
         return self.assign_stmt(meta, args)
 
     def paren_block(self, meta: Meta, args: _Args) -> syntax.Block:
-        """paren_block: (marked_item SEMICOLON)+ marked_item | inline_assign."""
+        """paren_block: marked sequence, inline assignment, or lone binder."""
         return self._block_from_items(meta, args)
 
     def paren_block_expr(self, meta: Meta, args: _Args) -> syntax.Block:

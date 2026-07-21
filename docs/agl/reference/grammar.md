@@ -102,8 +102,9 @@ admissible in the three body positions whose end is marked by a body-specific
 token: parenthesized blocks, loops, and `try` expressions.
 
 ```ebnf
-marked_body ::= (marked_item ";")* marked_item
-marked_item ::= expr | assign_expr | let_decl | var_decl
+marked_body   ::= (marked_item ";")* marked_item
+marked_item   ::= expr | inline_assign | let_decl | var_decl
+inline_assign ::= postfix ":=" or_expr
 ```
 
 Those three *marked* bodies share `marked_body`, and the parser accepts any
@@ -325,8 +326,7 @@ while_clause::= "while" or_expr NEWLINE?
 loop_bound  ::= "[" or_expr "]"           (* int; n <= 0 runs zero iterations *)
 loop_end    ::= "until" or_expr | "done"   (* omitted terminator allowed in suite form *)
 inline_body ::= marked_item (";" marked_item)*
-marked_item ::= closed_item | let_decl | var_decl
-              | case_expr | if_expr | try_expr | loop
+marked_item ::= expr | inline_assign | let_decl | var_decl
 ```
 
 A loop body is the one inline position that admits the *open* forms
@@ -352,7 +352,7 @@ if_else_branch ::= "|"? "else" "=>" branch_body
 
 branch_body    ::= suite | closed_item
 closed_item    ::= or_expr
-                 | assign_expr                    (* RHS restricted to or_expr *)
+                 | inline_assign                  (* postfix ":=" or_expr *)
                  | raise_expr
                  | return_expr
 ```
@@ -360,9 +360,9 @@ closed_item    ::= or_expr
 `branch_body` is shared by `if` branches, `case` branches, and `catch`
 clauses. An inline body after `=>` is exactly **one** item: no `;` sequence
 and no binder. See [Inline bodies](#inline-bodies) for why, and for the two
-ways to write a multi-item body inline. An inline `:=` restricts its
-right-hand side to `or_expr`; the suite form keeps the unrestricted
-right-hand side.
+ways to write a multi-item body inline. An inline `:=` has the form
+`postfix := or_expr`; the suite form keeps the unrestricted `postfix := expr`
+form.
 
 Without an `else` branch the `if` expression has type `unit` and returns
 `void`. With all branches returning a common type `T`, the `if` expression has
@@ -380,7 +380,7 @@ case_branch  ::= pattern "=>" branch_body
 ```ebnf
 try_expr          ::= "try" try_body catch_clause+
 try_body          ::= suite | (marked_item ";")* try_tail
-try_tail          ::= or_expr | assign_expr | try_letvar_decl | raise_expr
+try_tail          ::= or_expr | inline_assign | try_letvar_decl | raise_expr
                     | return_expr | if_expr | case_expr | loop_expr
 try_letvar_decl   ::= ("let" | "var") name type_ann? "=" try_value
 try_value         ::= or_expr | raise_expr | return_expr | if_expr | case_expr | loop_expr
@@ -390,7 +390,8 @@ catch_pattern     ::= name ("as" name)?
 ```
 
 `catch` marks where a `try` body ends, so an inline try body is a full `;`
-sequence — binders and `:=` included. A final `let` or `var` binder is allowed
+sequence — binders and `postfix := or_expr` assignments included. A final `let`
+or `var` binder is allowed
 and makes the body `unit`-valued unless its initializer exits. A final item and
 a final binder RHS must remain closed: an open form there would consume the
 `catch`.
@@ -483,7 +484,8 @@ atom           ::= INT | DECIMAL | "true" | "false" | "null"
                | "(" paren_block ")"               (* parenthesized block *)
 
 paren_block    ::= (marked_item ";")+ marked_item
-                 | assign_expr
+                 | inline_assign
+                 | let_decl | var_decl
 
 atom_no_call   ::= (* same as atom but excludes "(" — prevents sugar conflict *)
                INT | DECIMAL | "true" | "false" | "null"

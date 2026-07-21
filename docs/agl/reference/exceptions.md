@@ -86,7 +86,7 @@ body and all catch handler bodies (with `int → decimal` widening). A
 ```ebnf
 try_expr          ::= "try" try_body catch_clause+
 try_body          ::= suite | (marked_item ";")* try_tail
-try_tail          ::= or_expr | assign_expr | try_letvar_decl | raise_expr
+try_tail          ::= or_expr | inline_assign | try_letvar_decl | raise_expr
                     | return_expr | if_expr | case_expr | loop_expr
 try_letvar_decl   ::= ("let" | "var") name type_ann? "=" try_value
 try_value         ::= or_expr | raise_expr | return_expr | if_expr | case_expr | loop_expr
@@ -98,7 +98,7 @@ branch_body   ::= suite | closed_item
 
 `branch_body` is the same body form an `if` or `case` branch takes — a suite
 or a single item. Because `catch` marks where a `try` body ends, an inline
-`try` body is a full `;` sequence, binders and assignments included. Its final
+`try` body is a full `;` sequence, binders and `postfix := or_expr` assignments included. Its final
 item may be a `let` or `var`; then the try body has type `unit` unless the
 initializer exits, in which case it has bottom type. See
 [Inline bodies](grammar.md#inline-bodies).

@@ -22,6 +22,10 @@ case k of
   | _ => label := "many"
 print label
 
+# A parenthesized block may consist solely of a trailing binder and is unit-valued.
+let binder_only = (let captured = k)
+print binder_only
+
 # `return` inline in a branch body; `raise` inline in the other arm.
 def classify(n: int) -> text =
   if n < 0 => return "negative" else => return "non-negative"

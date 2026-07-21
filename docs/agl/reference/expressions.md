@@ -11,7 +11,8 @@ In AgL **everything is an expression**: there is no separate statement
 category. Bindings, `:=`, `print`, `if` without `else`, and loops are all
 expressions with well-defined types. A block (function body, branch body, or
 the program top level) is a sequence of items whose value is the value of its
-last item. A final `let` or `var` contributes `unit` as the block value.
+last item. A final `let` or `var` contributes `unit` as the block value, or
+bottom when its initializer exits.
 
 ## Discarded values
 
@@ -657,8 +658,9 @@ y                 # the block's value is y, an int
 ```
 
 A block may end in a `let` or `var`. With no following item, the binder has no
-in-block continuation and the block evaluates to `unit`; the binding still
-scopes over an enclosing continuation, such as a loop's `until` condition.
+in-block continuation and the block evaluates to `unit` (or bottom when its
+initializer exits); the binding still scopes over an enclosing continuation,
+such as a loop's `until` condition.
 
 ```agl
 def prepare() -> unit =

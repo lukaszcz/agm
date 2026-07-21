@@ -38,12 +38,15 @@ RunResult surface asserted:
 from __future__ import annotations
 
 import json
+import unittest.mock
 from dataclasses import dataclass, field
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
 import pytest
+
+from agm.core.process import ProcessCaptureResult
 
 AGL_DIR = Path(__file__).parent / "agl"
 PROGRAMS_DIR = AGL_DIR / "programs"
@@ -99,14 +102,55 @@ def _agent_from_spec(name: str, spec: Any) -> ScriptedAgent:
     )
 
 
+@dataclass
+class ScriptedShell:
+    """Replays expected shell calls without crossing the subprocess boundary."""
+
+    responses: list[dict[str, Any]]
+    commands: list[str] = field(default_factory=list)
+
+    def __call__(
+        self,
+        args: list[str],
+        *,
+        idle_timeout: float | None = None,
+        isolate_process_group: bool = False,
+    ) -> ProcessCaptureResult:
+        del idle_timeout, isolate_process_group
+        assert args[:2] == ["sh", "-c"]
+        command = args[2]
+        self.commands.append(command)
+        index = len(self.commands) - 1
+        assert index < len(self.responses), f"unexpected shell command: {command!r}"
+        spec = self.responses[index]
+        assert command == spec["command"], (
+            f"shell command {index}: expected {spec['command']!r}, got {command!r}"
+        )
+        return ProcessCaptureResult(
+            returncode=spec.get("returncode", 0),
+            stdout=spec.get("stdout", ""),
+            stderr=spec.get("stderr", ""),
+            elapsed=0.01,
+            timed_out=spec.get("timed_out", False),
+            spawn_error=spec.get("spawn_error"),
+            spawn_errno=None,
+        )
+
+    def assert_complete(self) -> None:
+        assert len(self.commands) == len(self.responses), (
+            f"expected {len(self.responses)} shell commands, got {len(self.commands)}"
+        )
+
+
 def _run_program(
     source: str, scenario: dict[str, Any], program: Path
-) -> tuple[Any, dict[str, ScriptedAgent]]:
+) -> tuple[Any, dict[str, ScriptedAgent], ScriptedShell]:
     from agm.agl import PipelineDriver
 
     agents = {
         name: _agent_from_spec(name, spec) for name, spec in scenario.get("agents", {}).items()
     }
+    shell = ScriptedShell(responses=scenario.get("shell", []))
     kwargs: dict[str, Any] = {}
     runtime_cfg = scenario.get("runtime", {})
     if "default_call_depth_limit" in runtime_cfg:
@@ -120,34 +164,35 @@ def _run_program(
         if name != "ask":
             runtime.register_agent(name, agent)
     module_roots = scenario.get("module_roots", [])
-    if module_roots:
-        from agm.agl.modules.roots import RootSet
+    with unittest.mock.patch("agm.core.process.run_capture_result", side_effect=shell):
+        if module_roots:
+            from agm.agl.modules.roots import RootSet
 
-        roots = RootSet(
-            roots=frozenset(
-                {
-                    *((AGL_DIR / str(root)).resolve() for root in module_roots),
-                    REPO_STDLIB_ROOT,
-                }
+            roots = RootSet(
+                roots=frozenset(
+                    {
+                        *((AGL_DIR / str(root)).resolve() for root in module_roots),
+                        REPO_STDLIB_ROOT,
+                    }
+                )
             )
-        )
-        prepared = PipelineDriver.prepare_program(source, entry_path=None, roots=roots)
-        result = runtime.run_prepared(prepared, param_values=scenario.get("params", {}))
-    elif program.is_relative_to(EXTERNS_PROGRAMS_DIR):
-        # Three branches, in order: `module_roots` above builds a graph from
-        # explicit roots (multi-module fixtures); this branch also runs
-        # through the graph, via `entry_path`, because `extern def` requires
-        # a real file-backed origin so companion resolution can find the
-        # sibling `.py`; every other fixture falls through to the plain,
-        # non-graph `runtime.run` path in the `else` branch below.
-        from agm.agl.modules.roots import RootSet
+            prepared = PipelineDriver.prepare_program(source, entry_path=None, roots=roots)
+            result = runtime.run_prepared(prepared, param_values=scenario.get("params", {}))
+        elif program.is_relative_to(EXTERNS_PROGRAMS_DIR):
+            # Three branches, in order: `module_roots` above builds a graph from
+            # explicit roots (multi-module fixtures); this branch also runs
+            # through the graph, via `entry_path`, because `extern def` requires
+            # a real file-backed origin so companion resolution can find the
+            # sibling `.py`; every other fixture falls through to the plain,
+            # non-graph `runtime.run` path in the `else` branch below.
+            from agm.agl.modules.roots import RootSet
 
-        roots = RootSet(roots=frozenset({program.parent.resolve(), REPO_STDLIB_ROOT}))
-        prepared = PipelineDriver.prepare_program(source, entry_path=program, roots=roots)
-        result = runtime.run_prepared(prepared, param_values=scenario.get("params", {}))
-    else:
-        result = runtime.run(source, param_values=scenario.get("params", {}))
-    return result, agents
+            roots = RootSet(roots=frozenset({program.parent.resolve(), REPO_STDLIB_ROOT}))
+            prepared = PipelineDriver.prepare_program(source, entry_path=program, roots=roots)
+            result = runtime.run_prepared(prepared, param_values=scenario.get("params", {}))
+        else:
+            result = runtime.run(source, param_values=scenario.get("params", {}))
+    return result, agents, shell
 
 
 def _assert_host_error(result: Any, agents: dict[str, ScriptedAgent], spec: dict[str, Any]) -> None:
@@ -256,15 +301,17 @@ def _rejection_params() -> list[Any]:
 def test_program_scenario(
     program: Path, scenario: dict[str, Any], capsys: pytest.CaptureFixture[str]
 ) -> None:
-    result, agents = _run_program(program.read_text(encoding="utf-8"), scenario, program)
+    result, agents, shell = _run_program(program.read_text(encoding="utf-8"), scenario, program)
     out = capsys.readouterr().out
     expect = scenario["expect"]
     if "host_error" in expect:
         _assert_host_error(result, agents, expect["host_error"])
+        shell.assert_complete()
         return
     _assert_outcome(result, expect)
     _assert_output(out, expect)
     _assert_calls(agents, expect)
+    shell.assert_complete()
 
 
 @pytest.mark.parametrize("program", _rejection_params())

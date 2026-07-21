@@ -174,8 +174,8 @@ until r is Pass
 
 Every loop expression has type **`unit`** — it runs for effect and returns
 `void`. Its body is a discarded-value position, so a bare body value must also
-have type `unit` (or `bottom`). A trailing `let` or `var` is unit-valued and
-may bind a value for the loop's `until` or `while` clause:
+have type `unit` (or `bottom`). A trailing `let` or `var` is unit-valued (or bottom when its RHS exits) and
+may bind a value for the loop's post-body `until` clause:
 
 ```agl
 var attempts = 0
@@ -228,9 +228,10 @@ The `for` variable is a fresh **immutable** binding each iteration
 (assigning it with `:=` is a static error). It is in scope in the `while`
 guard, the body, and the `until` condition. It is **not** in scope in the
 `for` collection/range expressions or the `[n]` bound (all evaluated once at
-entry, in the enclosing scope), nor after the loop. Body bindings are
-visible to the `until` condition but do not survive to the next iteration
-or past the loop. Persistent state lives in an outer `var` mutated with `:=`.
+entry, in the enclosing scope), nor after the loop. The `while` guard runs
+before the body, so it cannot read body bindings. Body bindings are visible to
+the post-body `until` condition but do not survive to the next iteration or
+past the loop. Persistent state lives in an outer `var` mutated with `:=`.
 
 ### `break` and `continue`
 

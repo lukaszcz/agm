@@ -8,6 +8,7 @@
         "reviewer": ["{\"$case\": \"Pass\"}"],
         "critic": ["{\"$case\": \"Pass\"}"]
       },
+      "shell": [{"command": "printf 'final:%s' draft", "stdout": "final:draft"}],
       "expect": {
         "stdout": "final:draft\n",
         "calls": {"impl": 1, "reviewer": 1, "critic": 1}
@@ -21,6 +22,7 @@
         "reviewer": ["{\"$case\": \"Fail\", \"issues\": [\"off by one\"]}", "{\"$case\": \"Pass\"}"],
         "critic": ["{\"$case\": \"Pass\"}", "{\"$case\": \"Pass\"}"]
       },
+      "shell": [{"command": "printf 'final:%s' revised", "stdout": "final:revised"}],
       "expect": {
         "stdout": "final:revised\n",
         "calls": {"impl": 2, "reviewer": 2, "critic": 2},
@@ -41,6 +43,7 @@
         "reviewer": ["{\"$case\": \"Pass\"}", "{\"$case\": \"Pass\"}"],
         "critic": ["{\"$case\": \"Fail\", \"issues\": [\"tangled layers\"]}", "{\"$case\": \"Pass\"}"]
       },
+      "shell": [{"command": "printf 'final:%s' revised", "stdout": "final:revised"}],
       "expect": {
         "stdout": "final:revised\n",
         "calls": {"impl": 2, "reviewer": 2, "critic": 2},
@@ -57,6 +60,7 @@
         "reviewer": ["{\"$case\": \"Fail\", \"issues\": [\"bug\"]}", "{\"$case\": \"Pass\"}"],
         "critic": ["{\"$case\": \"Fail\", \"issues\": [\"style\"]}", "{\"$case\": \"Pass\"}"]
       },
+      "shell": [{"command": "printf 'final:%s' revised", "stdout": "final:revised"}],
       "expect": {
         "stdout": "final:revised\n",
         "calls": {"impl": 2, "reviewer": 2, "critic": 2}

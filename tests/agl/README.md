@@ -8,9 +8,9 @@ Layout:
 
 - `programs/**/*.agl` — valid AgL programs, each with a sidecar
   `<name>.scenarios.json` describing the scenarios it runs under. Every program is
-  exercised under **multiple scenarios**: distinct combinations of host params and
-  scripted mock agent responses, each driving a different control-flow path with its
-  own expected outcome.
+  exercised under **multiple scenarios**: distinct combinations of host params,
+  scripted mock agent responses, and scripted shell results, each driving a different
+  control-flow path with its own expected outcome.
 - `rejections/**/*.agl` — invalid programs that the static pipeline
   (lex/parse/scope/typecheck) must reject before executing anything, each with a
   sidecar `<name>.expect.json`.
@@ -49,6 +49,7 @@ Layout:
         "reviewer": ["first response", "second response"],
         "impl": {"responses": ["fix"], "repeat_last": true}
       },
+      "shell": [{"command": "printf done", "stdout": "done"}],
       "runtime": {"default_call_depth_limit": 20, "default_strict_json": true},
       "expect": {
         "stdout": "exact full stdout",
@@ -80,6 +81,11 @@ Field notes:
   test); the object form allows `repeat_last` for loop-exhaustion scenarios. The key
   `ask` scripts the built-in default agent (passed as the runtime's
   `default_agent`, since `ask` cannot be registered by name).
+- `shell` — ordered scripted shell calls. Each object names the rendered
+  `command` and may set `stdout`, `stderr`, `returncode`, `timed_out`, or
+  `spawn_error`; omitted fields describe a successful command with empty output.
+  The harness rejects an unexpected command and verifies the full script was used,
+  so acceptance tests never execute a real shell command.
 - `runtime` — optional `PipelineDriver` constructor overrides
   (`default_call_depth_limit`, `default_strict_json`).
 - `module_roots` — optional paths relative to `tests/agl/`. When present, the

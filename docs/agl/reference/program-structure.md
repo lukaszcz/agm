@@ -64,9 +64,10 @@ The following are **root-only**: a static error if nested inside a block.
 ### The block's value
 
 A block's **value** is the value of its last item. A final `let` or `var`
-binder has no in-block continuation, so the block value is `unit`. The
-binding remains available to an enclosing continuation that evaluates after
-the block, such as a loop's `until` condition.
+binder has no in-block continuation, so the block value is `unit` (or bottom
+when its initializer exits). The binding remains available to an enclosing
+continuation that evaluates after the block, such as a loop's `until`
+condition.
 
 ```agl
 let x = ask "A"
@@ -123,7 +124,8 @@ config-file layers.
 
 `let` and `var` bind a name and scope it over the **continuation** — the
 rest of the block and any enclosing continuation that consumes the block. A
-final binder makes its block `unit`-valued.
+final binder makes its block `unit`-valued unless its initializer exits, in
+which case the block is bottom-valued.
 
 ```agl
 let x = 3          # x is in scope below
@@ -173,8 +175,8 @@ suite — see [Inline bodies](grammar.md#inline-bodies).
 
 A `try`/`catch` inline holds a sequence of items up to the first `catch`
 keyword — binders and assignments included. Its final item may be a `let` or
-`var`, making the try body `unit`-valued. The `catch` body, like any `=>`
-body, is a single item or a suite.
+`var`, making the try body `unit`-valued unless its initializer exits. The
+`catch` body, like any `=>` body, is a single item or a suite.
 
 ## Expression statements
 

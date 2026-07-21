@@ -99,7 +99,8 @@ branch_body   ::= suite | closed_item
 `branch_body` is the same body form an `if` or `case` branch takes — a suite
 or a single item. Because `catch` marks where a `try` body ends, an inline
 `try` body is a full `;` sequence, binders and assignments included. Its final
-item may be a `let` or `var`; then the try body has type `unit`. See
+item may be a `let` or `var`; then the try body has type `unit` unless the
+initializer exits, in which case it has bottom type. See
 [Inline bodies](grammar.md#inline-bodies).
 
 <!-- agl-check: skip -->
@@ -212,7 +213,8 @@ metadata: json
 
 A shell command failed to run, exited nonzero, or timed out in the **parsed
 or unit form** of `exec` ([Shell execution](shell-execution.md)). The
-structured form raises it only on spawn failure.
+structured form raises it on spawn failure or timeout, but represents a
+nonzero exit as `ExecResult` data.
 
 ```text
 command: text     # the rendered command
@@ -373,7 +375,8 @@ The general-purpose user abort; carries only the base fields.
 | Missing dictionary key access or assignment | `KeyError` |
 | Agent transport failure | `AgentCallError` |
 | Invalid structured output after all attempts | `AgentParseError` |
-| Failing/timed-out shell command (parsed or unit form) | `ExecError` |
+| Failing shell command (parsed or unit form) | `ExecError` |
+| Timed-out shell command (any exec form) | `ExecError` |
 | Spawn failure (either exec form) | `ExecError` |
 | Extern (Python FFI) companion raised, or its return value violated the contract | `ExternError` |
 | Loop bound exhausted | `MaxIterationsExceeded` |

@@ -18,7 +18,7 @@ let_decl ::= "let" NAME (":" type_expr)? "=" expr
 and creates an **immutable** binding in the current scope. It scopes over the
 **continuation** — the remaining items in the block and any enclosing
 continuation that consumes the block. A block ending in a bare `let` has type
-`unit`:
+`unit` unless its initializer exits, in which case it has bottom type:
 
 <!-- agl-check: skip -->
 ```agl
@@ -33,8 +33,11 @@ let count = 3
 `_` is a wildcard binder. `let _ = e` evaluates `e` and discards its value
 without introducing a readable name; it may be repeated in a scope. `var _ =
 e` has the same discard behavior. `_` is never readable, even if an outer
-scope has a binding with that spelling. Use it when a non-`unit` value is
-intentionally discarded.
+scope has a binding with that spelling. An annotation on `_` is deliberately
+ignored: annotations normally constrain an initializer and declare its binder's
+type, but `_` creates neither a readable binder nor a binding type. Its RHS is
+therefore checked without an annotation-derived expected type. Use it when a
+non-`unit` value is intentionally discarded.
 
 ## `var` — mutable binding
 
@@ -43,8 +46,9 @@ var_decl ::= "var" NAME (":" type_expr)? "=" expr
 ```
 
 Identical to `let` except the binding is **mutable** — it may later be
-updated with `:=`. A final `var` also makes its block unit-valued; like a
-final `let`, it remains visible to an enclosing continuation:
+updated with `:=`. A final `var` also makes its block unit-valued (or bottom
+when its initializer exits); like a final `let`, it remains visible to an
+enclosing continuation:
 
 <!-- agl-check: skip -->
 ```agl
@@ -422,7 +426,8 @@ case review of
 
 A `do` body opens a fresh scope on each iteration, and the `until` condition
 is evaluated **in that same iteration scope** — it can see `let` or `var`
-bindings made by the body, including a final binder:
+bindings made by the body, including a final binder. A `while` condition runs
+before the body and cannot see its bindings:
 
 <!-- agl-check: skip -->
 ```agl

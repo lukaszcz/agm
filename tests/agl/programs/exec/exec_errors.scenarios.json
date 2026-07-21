@@ -3,6 +3,14 @@
     {
       "name": "caught_failure_exposes_fields",
       "params": {"mode": "calm"},
+      "shell": [
+        {
+          "command": "sh -c 'echo partial; echo oops >&2; exit 3'",
+          "returncode": 3,
+          "stdout": "partial\n",
+          "stderr": "oops\n"
+        }
+      ],
       "expect": {
         "stdout_contains": [
           "failed code 3\n",
@@ -16,6 +24,15 @@
     {
       "name": "uncaught_exec_error",
       "params": {"mode": "uncaught"},
+      "shell": [
+        {
+          "command": "sh -c 'echo partial; echo oops >&2; exit 3'",
+          "returncode": 3,
+          "stdout": "partial\n",
+          "stderr": "oops\n"
+        },
+        {"command": "false", "returncode": 1}
+      ],
       "expect": {
         "stdout_contains": ["failed code 3\n", "timed false\n"],
         "stdout_not_contains": ["skip", "tail"],

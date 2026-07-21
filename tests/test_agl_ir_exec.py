@@ -229,10 +229,20 @@ def test_t4c_unit_exec_still_raises_on_nonzero_exit() -> None:
 
 
 def test_t5_timeout() -> None:
-    """exec() that times out raises ExecError with timed_out=True."""
+    """Parsed exec that times out raises ExecError with timed_out=True."""
     source = 'let result: text = exec("sleep 999")\nresult'
     commands = {"sleep 999": _timed_out()}
     ir_exc = evaluate_ir_raises_with_shell(source, commands)
+    from agm.agl.semantics.values import BoolValue
+
+    assert ir_exc.display_name == "ExecError"
+    assert ir_exc.fields["timed_out"] == BoolValue(True)
+
+
+def test_t5a_structured_exec_timeout_raises_exec_error() -> None:
+    """Structured exec raises ExecError, rather than returning a timed-out record."""
+    source = 'let result: ExecResult = exec("sleep 999")\nresult'
+    ir_exc = evaluate_ir_raises_with_shell(source, {"sleep 999": _timed_out()})
     from agm.agl.semantics.values import BoolValue
 
     assert ir_exc.display_name == "ExecError"

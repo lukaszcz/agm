@@ -72,8 +72,8 @@ if res.exit_code != 0 =>
   print("command failed: ${res.stderr}")
 ```
 
-Spawn failure and timeout still set `exit_code` to `-1` and `timed_out` to
-`true` respectively; they do not raise in this form.
+A spawn failure or timeout raises `ExecError` in this form. A timeout does
+not produce an `ExecResult` with `timed_out = true`.
 
 ### Parsed form — target is any non-`ExecResult` or `unit` type
 
@@ -152,8 +152,8 @@ catch AgentParseError as e =>
   print "not valid JSON: ${e.raw}"
 ```
 
-In the structured form, `ExecError` is raised only by spawn failure in
-transport (the shell itself cannot be launched — a rarer condition); nonzero
-exits and timeouts surface in `exit_code` / `timed_out` instead.
+In the structured form, `ExecError` is raised for a spawn failure (the shell
+itself cannot be launched) or timeout. A nonzero exit instead surfaces in
+`exit_code`.
 
 See [Exceptions](exceptions.md) for the full field lists.

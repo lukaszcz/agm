@@ -3,6 +3,14 @@
     {
       "name": "simple_name",
       "params": {"name": "world"},
+      "shell": [
+        {"command": "printf 'hi %s' world", "stdout": "hi world"},
+        {"command": "echo padded", "stdout": "padded\n"},
+        {"command": "true"},
+        {"command": "echo 42", "stdout": "42\n"},
+        {"command": "printf '{\"k\": [1, 2]}'", "stdout": "{\"k\": [1, 2]}"},
+        {"command": "printf '[\"a\", \"b\"]'", "stdout": "[\"a\", \"b\"]"}
+      ],
       "expect": {
         "stdout_contains": [
           "hi world\n",
@@ -17,6 +25,14 @@
     {
       "name": "name_with_underscore",
       "params": {"name": "hello_world"},
+      "shell": [
+        {"command": "printf 'hi %s' hello_world", "stdout": "hi hello_world"},
+        {"command": "echo padded", "stdout": "padded\n"},
+        {"command": "true"},
+        {"command": "echo 42", "stdout": "42\n"},
+        {"command": "printf '{\"k\": [1, 2]}'", "stdout": "{\"k\": [1, 2]}"},
+        {"command": "printf '[\"a\", \"b\"]'", "stdout": "[\"a\", \"b\"]"}
+      ],
       "expect": {
         "stdout_contains": ["hi hello_world\n", "padded\nend marker\n", "43\n"]
       }

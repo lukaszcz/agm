@@ -5,8 +5,7 @@ var rounds: int = 0
 do[3] rounds := rounds + 1; let complete = rounds >= target until complete
 
 var single_runs: int = 0
-do let complete = true until complete
-single_runs := single_runs + 1
+do single_runs := single_runs + 1; let complete = true until complete
 
 print rounds
 print single_runs

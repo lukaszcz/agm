@@ -1,18 +1,22 @@
-# Trailing binders make loop bodies unit-valued and remain visible to `until`.
+# Trailing binders make loop bodies unit-valued and remain visible to post-body `until`.
 param target: int
 param use_while: bool
 
 var rounds: int = 0
+var route: text = ""
 
 if use_while =>
+  route := "while"
   while rounds < target do[3]
     rounds := rounds + 1
     let complete = rounds >= target
   until complete
 else =>
+  route := "until"
   do[3]
     rounds := rounds + 1
     let complete = rounds >= target
   until complete
 
+print route
 print rounds

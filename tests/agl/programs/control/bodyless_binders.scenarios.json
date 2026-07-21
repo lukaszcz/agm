@@ -1,14 +1,14 @@
 {
   "scenarios": [
     {
-      "name": "true_branches",
+      "name": "true_branches_evaluate_terminal_binders",
       "params": {"choose_true": true},
-      "expect": {"stdout": "all body forms completed\n"}
+      "expect": {"stdout": "function|if:true|case:true|grouped|try|\n"}
     },
     {
-      "name": "false_branches",
+      "name": "false_branches_evaluate_terminal_binders",
       "params": {"choose_true": false},
-      "expect": {"stdout": "all body forms completed\n"}
+      "expect": {"stdout": "function|if:false|case:false|grouped|try|\n"}
     }
   ]
 }

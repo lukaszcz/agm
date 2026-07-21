@@ -392,9 +392,10 @@ class Block:
     """An expression block: a sequence of items whose value is the last item.
 
     Items may be declarations (``FuncDef``, ``RecordDef``, …), binders
-    (``LetDecl``, ``VarDecl``, ``AssignStmt``), or expressions. The parser may
-    construct a block ending in a ``let`` or ``var`` binder; typechecking still
-    requires a continuation expression after a binder.
+    (``LetDecl``, ``VarDecl``, ``AssignStmt``), or expressions. The block's
+    value is its final item. A final ``let`` or ``var`` is allowed and yields
+    ``unit`` (or bottom when its initializer exits); earlier bare expressions
+    must be ``unit``- or bottom-valued.
     """
 
     items: tuple[Item, ...]

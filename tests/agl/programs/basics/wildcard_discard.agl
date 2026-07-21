@@ -1,4 +1,5 @@
 # `_` evaluates and discards values without introducing a readable binding.
+# Its annotations are deliberately ignored because it has no binding type.
 param initial: int
 
 var effects: int = initial
@@ -7,6 +8,6 @@ def produce(label: text) -> text =
   effects := effects + 1
   "discarded ${label}"
 
-let _ = produce("first")
-let _ = produce("second")
+let _: int = produce("first")
+var _: bool = produce("second")
 print effects

@@ -1,27 +1,33 @@
-# A body may end in a binder in every block form that has a continuation.
+# Terminal binders evaluate their RHS and keep effects in their enclosing continuation.
 param choose_true: bool
 
+var events: text = ""
+
+def log_event(event: text) -> text =
+  events := events + event + "|"
+  event
+
 def prepare() -> unit =
-  let function_value = "prepared"
+  let function_value = log_event("function")
 
 prepare()
 
 if choose_true =>
-  let if_value = "true branch"
+  let if_value = log_event("if:true")
 else =>
-  let if_value = "false branch"
+  let if_value = log_event("if:false")
 
 case choose_true of
   true =>
-    let case_value = "true case"
+    let case_value = log_event("case:true")
   | false =>
-    let case_value = "false case"
+    let case_value = log_event("case:false")
 
-let grouped: unit = ((); let parenthesized_value = "grouped")
+let grouped: unit = ((); let parenthesized_value = log_event("grouped"))
 
 let recovered: unit = try
-  let try_value = "try body"
+  let try_value = log_event("try")
 catch _ =>
   ()
 
-print "all body forms completed"
+print events

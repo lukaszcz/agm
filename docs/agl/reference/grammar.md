@@ -40,8 +40,9 @@ modifier   ::= ("private" | "builtin") NEWLINE?
 ```
 
 A block's value is its last item. A final `let_decl` or `var_decl` has type
-`unit`; its binding remains visible to any enclosing construct that evaluates
-a continuation after the block, such as a loop's `until` condition.
+`unit` (or bottom when its initializer exits); its binding remains visible to
+any enclosing construct that evaluates a continuation after the block, such as
+a loop's `until` condition.
 
 `"private"` and `"builtin"` are **declaration modifiers** that behave like
 decorators: a modifier may sit on the same line as the declaration it adorns
@@ -108,7 +109,8 @@ marked_item ::= expr | assign_expr | let_decl | var_decl
 A *marked* body is one whose end is fixed by a following token. All three
 marked positions share `marked_body`, and the parser accepts any marked item
 in final position, including a `let` or `var` binder. The AST preserves that
-form; a final binder makes the body `unit`-valued.
+form; a final binder makes the body `unit`-valued unless its initializer
+exits, in which case it is bottom-valued.
 
 | body | end marker | inline form |
 | ---- | ---------- | ----------- |
@@ -387,8 +389,9 @@ catch_pattern     ::= name ("as" name)?
 
 `catch` marks where a `try` body ends, so an inline try body is a full `;`
 sequence — binders and `:=` included. A final `let` or `var` binder is allowed
-and makes the body `unit`-valued. A final item and a final binder RHS must
-remain closed: an open form there would consume the `catch`.
+and makes the body `unit`-valued unless its initializer exits. A final item and
+a final binder RHS must remain closed: an open form there would consume the
+`catch`.
 
 ## Patterns
 

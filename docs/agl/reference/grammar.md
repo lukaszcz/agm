@@ -493,7 +493,7 @@ paren_block    ::= (marked_item ";")+ marked_item
 
 atom_no_call   ::= (* same as atom but excludes "(" — prevents sugar conflict *)
                INT | DECIMAL | "true" | "false" | "null"
-               | list_literal | dict_literal | name
+               | list_literal | dict_literal | NAME
                | template
 
 qualified_constructor ::= qual_prefix type_qual? name | name

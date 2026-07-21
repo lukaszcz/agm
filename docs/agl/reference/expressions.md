@@ -713,12 +713,16 @@ let x: int = if finished => break else => count
 ```
 
 `break` exits the innermost enclosing loop immediately; the loop produces
-`unit`. `continue` skips the remainder of the current iteration's body —
-including the `until` condition — and restarts the loop body from the top.
+`unit`. `continue` starts the next iteration. From a body or `until` condition,
+it skips the remaining work in the current iteration (including the `until`
+condition when it occurs in the body); from a `while` guard, it starts over
+without entering the body. The next iteration performs its normal `for` advance
+and loop checks.
 
-Both are checked to appear inside a loop body or `until` condition. Using
-`break` or `continue` outside a loop — including inside a `fn` or `lambda`
-that is defined inside a loop — is a static error.
+Both are valid anywhere in a loop's **interior** — its `while` guard, body, or
+`until` condition — provided the target loop is in the same function or lambda.
+Using either outside a loop, including in a `fn` or `lambda` that would cross
+into an enclosing loop, is a static error.
 
 ## `try` as an expression
 

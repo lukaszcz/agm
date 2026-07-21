@@ -4,7 +4,7 @@ Use subagents to implement the tasks. Launch subagents sequentially one at a tim
 
 A task is not done until all its acceptance criteria are satisfied. Do not mark partially done tasks as complete. Never defer any work.
 
-After each implementation agent finishes, use a subagent to review its work for correctness, completeness, maintainability, adherence to the task spec file and to relevant AGENTS.md files.
+After each implementation agent finishes, use a subagent to review its work for correctness, completeness, maintainability, adherence to the task file and to relevant AGENTS.md files.
 
 For EVERY issue identified by the reviewer, check if the issue is valid and if so, dispatch a subagent to fix it. If the review surfaces deeper architectural problems, resolve them yourself first by making reasonable design and architecture choices. All solutions must be principled, general, extensible and maintainable. EVERY issue identified by a reviewer MUST be addressed.
 

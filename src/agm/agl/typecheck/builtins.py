@@ -567,27 +567,24 @@ class BuiltinCallChecker:
                     span=offending_span,
                 )
             spec = OutputContractSpec(target_type, "none", None, structured_exec=False)
-            self._ctx._record_contract_spec(obligation.node_id, spec)
-            parse_policy = "default"
         else:
             exec_result_type = self._ctx._env.get_type("ExecResult")
             is_structured = exec_result_type is not None and target_type == exec_result_type
-            if is_structured:
-                if obligation.has_parse_shaping_option:
-                    option_name, offending_span = obligation.first_parse_option()
-                    raise AglTypeError(
-                        f"exec returning ExecResult does not accept '{option_name}'; those options "
-                        "apply only when parsing stdout into a typed value.",
-                        span=offending_span,
-                    )
-                spec = OutputContractSpec(target_type, "text", None, structured_exec=True)
-                assert not contains_inference_var(spec.target_type)
-                self._ctx._record_contract_spec(obligation.node_id, spec)
-                parse_policy = "default"
-            else:
+            if not is_structured:
                 spec = self._record_parsed_contract(obligation, use="an exec output type")
-                parse_policy = obligation.parse_policy
-        self._append_call_site(obligation, spec.codec_name, parse_policy)
+                self._append_call_site(obligation, spec.codec_name, obligation.parse_policy)
+                return
+            if obligation.has_parse_shaping_option:
+                option_name, offending_span = obligation.first_parse_option()
+                raise AglTypeError(
+                    f"exec returning ExecResult does not accept '{option_name}'; those options "
+                    "apply only when parsing stdout into a typed value.",
+                    span=offending_span,
+                )
+            spec = OutputContractSpec(target_type, "text", None, structured_exec=True)
+
+        self._ctx._record_contract_spec(obligation.node_id, spec)
+        self._append_call_site(obligation, spec.codec_name, "default")
 
     # --- on_parse_error policy extraction ---
 

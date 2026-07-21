@@ -6,14 +6,7 @@ and asserts the produced values, stdout, and raised exceptions.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
-
 import pytest
-
-if TYPE_CHECKING:
-    from agm.agl.eval.ir_interpreter import IrInterpreter
-    from agm.agl.ir.ids import ContractId
-    from agm.agl.ir.nodes import IrExec
 
 from agm.core.process import ProcessCaptureResult
 from tests.agl.ir_harness import (
@@ -85,43 +78,6 @@ def _fail(returncode: int, stdout: str = "", stderr: str = "") -> ProcessCapture
     )
 
 
-def _unit_exec_effect() -> tuple[IrInterpreter, IrExec, ContractId]:
-    """Build the evaluator seam for an output-discarding exec contract."""
-    from agm.agl.eval.ir_interpreter import IrInterpreter
-    from agm.agl.ir.contracts import ContractRequest
-    from agm.agl.ir.ids import ContractId, Location, SourceId
-    from agm.agl.ir.nodes import IrConstText, IrExec
-    from agm.agl.ir.program import ExecutableModule, ExecutableProgram, SourceFile
-    from agm.agl.modules.ids import ENTRY_ID
-
-    source_id = SourceId(0)
-    location = Location(source_id, 0, 1, 1, 0)
-    contract_id = ContractId(0)
-    node = IrExec(location, IrConstText(location, "cmd"), contract_id, max_attempts=1)
-    program = ExecutableProgram(
-        entry_module=ENTRY_ID,
-        modules={ENTRY_ID: ExecutableModule(module_id=ENTRY_ID, initializers=())},
-        symbols={},
-        nominals={},
-        sources={source_id: SourceFile(display_name="<test>", normalized_text="x")},
-        functions={},
-        contracts={
-            contract_id: ContractRequest(
-                codec_name="none",
-                strict_json=None,
-                json_schema=None,
-                decode=None,
-                target_type_label="unit",
-                structured_exec=False,
-                format_instructions="",
-                is_unit=True,
-            )
-        },
-    )
-    interpreter = IrInterpreter(program)
-    return interpreter, node, contract_id
-
-
 # ---------------------------------------------------------------------------
 # Simple text exec
 # ---------------------------------------------------------------------------
@@ -182,18 +138,6 @@ def test_t4_nonzero_exit_text() -> None:
     assert ir_exc.display_name == "ExecError"
 
 
-def test_t4a_unit_exec_discards_successful_output() -> None:
-    """A unit exec succeeds without parsing or retaining stdout."""
-    import unittest.mock
-
-    from agm.agl.eval import VOID_VALUE
-
-    interpreter, node, contract_id = _unit_exec_effect()
-    with unittest.mock.patch("agm.core.process.run_capture_result", return_value=_ok("ignored")):
-        result = interpreter._effects.eval_ir_exec(node, node.command, contract_id, 1)
-    assert result is VOID_VALUE
-
-
 def test_t4a_full_pipeline_unit_exec_discards_successful_output() -> None:
     """A checked unit exec reaches the evaluator as an outputless contract."""
     commands = {"emit": _ok("ignored output\n")}
@@ -208,19 +152,6 @@ def test_t4b_full_pipeline_unit_exec_still_raises_on_nonzero_exit() -> None:
     ir_exc = evaluate_ir_raises_with_shell('exec("fail")\n()', {"fail": _fail(2)})
 
     assert ir_exc.display_name == "ExecError"
-
-
-def test_t4c_unit_exec_still_raises_on_nonzero_exit() -> None:
-    """Discarding successful output does not suppress ExecError."""
-    import unittest.mock
-
-    from agm.agl.semantics.exceptions import AglRaise
-
-    interpreter, node, contract_id = _unit_exec_effect()
-    with unittest.mock.patch("agm.core.process.run_capture_result", return_value=_fail(2)):
-        with pytest.raises(AglRaise) as exc_info:
-            interpreter._effects.eval_ir_exec(node, node.command, contract_id, 1)
-    assert exc_info.value.exc.display_name == "ExecError"
 
 
 # ---------------------------------------------------------------------------

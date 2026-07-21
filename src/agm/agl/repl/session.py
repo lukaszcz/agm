@@ -496,17 +496,13 @@ class ReplSession:
         tab_warnings: list[Diagnostic] = list(tab_sink)
         spaced_qualifiers = tuple(spaced_sink)
 
-        # A trailing ``let``/``var`` is an ordinary unit-valued block item, so
-        # entries flow through the same program pipeline unchanged.
-        orig_program = program
-
         # [1d] REPL entries use the program pipeline by default because that
         # is where the synthetic ``import std/core`` prelude is injected.  This
         # keeps the REPL aligned with ``agm exec``: stdlib names are open unless
         # a host explicitly opts out.
         return self._entry_pipeline.eval_entry(
             text=text,
-            orig_program=orig_program,
+            orig_program=program,
             pipeline_program=program,
             host_env=host_env,
             tab_warnings=tab_warnings,

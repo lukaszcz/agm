@@ -836,16 +836,15 @@ class TestBindingLowering:
         assert isinstance(bind, IrBind)
         assert prog.symbols[bind.symbol].mutable
 
-    def test_repeated_wildcard_binders_use_private_distinct_symbols(self) -> None:
+    def test_repeated_wildcard_binders_lower_rhs_without_symbols(self) -> None:
         prog = _lower("let _ = 1\nvar _ = 2\n()")
         first, second, _unit = prog.modules[prog.entry_module].initializers
 
-        assert isinstance(first, IrBind)
-        assert isinstance(second, IrBind)
-        assert first.symbol != second.symbol
-        assert all(prog.symbols[bind.symbol].public_name is None for bind in (first, second))
-        assert prog.symbols[first.symbol].mutable is False
-        assert prog.symbols[second.symbol].mutable is True
+        assert isinstance(first, IrConstInt)
+        assert first.value == 1
+        assert isinstance(second, IrConstInt)
+        assert second.value == 2
+        assert not prog.symbols
 
     def test_wildcard_binders_evaluate_effects_without_public_bindings(self) -> None:
         from tests.agl.ir_harness import evaluate_ir_output

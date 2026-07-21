@@ -2883,16 +2883,8 @@ class _Lowerer:
             # ----------------------------------------------------------
             # Binders
             # ----------------------------------------------------------
-            case LetDecl(name="_", value=rhs, span=span, node_id=nid):
-                # Wildcards have no scope/type binding record.  They still need
-                # an ordinary private binding so the RHS evaluates once, and the
-                # source node id gives repeated wildcards distinct IR symbols.
-                sym = self._alloc_sym(nid, name="_", mutable=False, public=False)
-                return IrBind(location=self._loc(span), symbol=sym, value=self.lower_expr(rhs))
-
-            case VarDecl(name="_", value=rhs, span=span, node_id=nid):
-                sym = self._alloc_sym(nid, name="_", mutable=True, public=False)
-                return IrBind(location=self._loc(span), symbol=sym, value=self.lower_expr(rhs))
+            case LetDecl(name="_", value=rhs) | VarDecl(name="_", value=rhs):
+                return self.lower_expr(rhs)
 
             case LetDecl(name=name, value=rhs, span=span, node_id=nid):
                 sym = self._alloc_sym(nid, name=name, mutable=False, public=top_level)

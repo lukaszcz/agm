@@ -472,7 +472,7 @@ class TestEchoData:
         assert r.value == IntValue(5)
         assert isinstance(r.value_type, IntType)
         assert render_entry_result(r, echo=True) == "total : int = 5"
-        assert _int(dict((name, value) for name, _typ, value in s.bindings())["total"]) == 5
+        assert _int({name: value for name, _typ, value in s.bindings()}["total"]) == 5
 
     def test_multi_item_entry_keeps_normal_block_discard_strictness(self) -> None:
         result = ReplSession().eval_entry("let first = 1\nfirst\nlet second = 2")
@@ -870,9 +870,7 @@ class TestExactlyOnce:
         s.register_agent("reviewer", named)
         r = s.eval_entry('agent reviewer\nlet out = ask("""review this""", agent = reviewer)')
         assert r.ok, r.diagnostics
-        assert (
-            _text(dict((name, value) for name, _typ, value in s.bindings())["out"]) == "named-reply"
-        )
+        assert _text({name: value for name, _typ, value in s.bindings()}["out"]) == "named-reply"
         assert named.calls == 1
 
 
@@ -912,7 +910,7 @@ class TestAgentDeclarations:
         assert r1.ok
         r2 = s.eval_entry('let out = ask("""go""", agent = helper)')
         assert r2.ok, r2.diagnostics
-        assert _text(dict((name, value) for name, _typ, value in s.bindings())["out"]) == "done"
+        assert _text({name: value for name, _typ, value in s.bindings()}["out"]) == "done"
 
     def test_failed_entry_declaration_does_not_persist(self) -> None:
         # A declaration in an entry that fails to promote must NOT leak into the
@@ -1052,7 +1050,7 @@ class TestReset:
         s.reset()
         r = s.eval_entry("let a = 2")
         assert r.ok
-        assert _int(dict((name, value) for name, _typ, value in s.bindings())["a"]) == 2
+        assert _int({name: value for name, _typ, value in s.bindings()}["a"]) == 2
 
 
 # ---------------------------------------------------------------------------
@@ -2544,7 +2542,7 @@ class TestExternRepl:
         s.eval_entry("extern def f(x: int) -> int")
         r = s.eval_entry("let x = 1 + 1")
         assert r.ok
-        assert _int(dict((name, value) for name, _typ, value in s.bindings())["x"]) == 2
+        assert _int({name: value for name, _typ, value in s.bindings()}["x"]) == 2
 
     # -- Importing an extern-bearing library module --------------------------
 
@@ -2661,7 +2659,7 @@ class TestExternRepl:
         # The session is still usable after an uncaught extern failure.
         r2 = s.eval_entry("let x = 1 + 1")
         assert r2.ok
-        assert _int(dict((name, value) for name, _typ, value in s.bindings())["x"]) == 2
+        assert _int({name: value for name, _typ, value in s.bindings()}["x"]) == 2
 
     def test_extern_error_is_catchable_and_renders_in_the_repl(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
@@ -2678,7 +2676,7 @@ class TestExternRepl:
             "let r = try\n  boom()\ncatch ExternError as e =>\n  print(e.function)\n  -1\n"
         )
         assert r.ok, r.diagnostics
-        assert _int(dict((name, value) for name, _typ, value in s.bindings())["r"]) == -1
+        assert _int({name: value for name, _typ, value in s.bindings()}["r"]) == -1
         assert capsys.readouterr().out.strip() == "boom"
 
 

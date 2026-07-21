@@ -123,6 +123,11 @@ from agm.agl.syntax.types import (
 # Helper
 # ---------------------------------------------------------------------------
 
+_BINDER_CASES = (
+    pytest.param("let", LetDecl, id="let"),
+    pytest.param("var", VarDecl, id="var"),
+)
+
 
 def parse(src: str) -> Program:
     """Parse *src* and return the Program root."""
@@ -2090,25 +2095,31 @@ class TestDoExpr:
         assert isinstance(e, Do)
         assert isinstance(e.body, Block)
 
-    @pytest.mark.parametrize("binder_type", (LetDecl, VarDecl), ids=("let", "var"))
-    def test_inline_sequence_can_end_in_binder(self, binder_type: type[LetDecl | VarDecl]) -> None:
-        e = first(parse(f"do {binder_type.__name__[:-4].lower()} terminal = 1 until true"))
+    @pytest.mark.parametrize(("keyword", "binder_type"), _BINDER_CASES)
+    def test_inline_sequence_can_end_in_binder(
+        self, keyword: str, binder_type: type[LetDecl | VarDecl]
+    ) -> None:
+        e = first(parse(f"do {keyword} terminal = 1 until true"))
         assert isinstance(e, Do)
         assert isinstance(e.body, Block)
         assert isinstance(e.body.items[-1], binder_type)
 
 
 class TestParenthesizedBlock:
-    @pytest.mark.parametrize("binder_type", (LetDecl, VarDecl), ids=("let", "var"))
-    def test_inline_block_can_end_in_binder(self, binder_type: type[LetDecl | VarDecl]) -> None:
-        e = first(parse(f"let result = (0; {binder_type.__name__[:-4].lower()} terminal = 1)"))
+    @pytest.mark.parametrize(("keyword", "binder_type"), _BINDER_CASES)
+    def test_inline_block_can_end_in_binder(
+        self, keyword: str, binder_type: type[LetDecl | VarDecl]
+    ) -> None:
+        e = first(parse(f"let result = (0; {keyword} terminal = 1)"))
         assert isinstance(e, LetDecl)
         assert isinstance(e.value, Block)
         assert isinstance(e.value.items[-1], binder_type)
 
-    @pytest.mark.parametrize("binder_type", (LetDecl, VarDecl), ids=("let", "var"))
-    def test_inline_block_can_be_a_lone_binder(self, binder_type: type[LetDecl | VarDecl]) -> None:
-        e = first(parse(f"let result = ({binder_type.__name__[:-4].lower()} terminal = 1)"))
+    @pytest.mark.parametrize(("keyword", "binder_type"), _BINDER_CASES)
+    def test_inline_block_can_be_a_lone_binder(
+        self, keyword: str, binder_type: type[LetDecl | VarDecl]
+    ) -> None:
+        e = first(parse(f"let result = ({keyword} terminal = 1)"))
         assert isinstance(e, LetDecl)
         assert isinstance(e.value, Block)
         assert len(e.value.items) == 1
@@ -2164,9 +2175,11 @@ class TestTryExpr:
         h = e.handlers[0]
         assert isinstance(h.body, Block)
 
-    @pytest.mark.parametrize("binder_type", (LetDecl, VarDecl), ids=("let", "var"))
-    def test_inline_try_body_can_end_in_binder(self, binder_type: type[LetDecl | VarDecl]) -> None:
-        e = first(parse(f"try {binder_type.__name__[:-4].lower()} terminal = 1 catch _ => ()"))
+    @pytest.mark.parametrize(("keyword", "binder_type"), _BINDER_CASES)
+    def test_inline_try_body_can_end_in_binder(
+        self, keyword: str, binder_type: type[LetDecl | VarDecl]
+    ) -> None:
+        e = first(parse(f"try {keyword} terminal = 1 catch _ => ()"))
         assert isinstance(e, Try)
         assert isinstance(e.body, Block)
         assert isinstance(e.body.items[-1], binder_type)

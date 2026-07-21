@@ -146,12 +146,13 @@ There is no `finally`.
 ## `raise`
 
 ```ebnf
-raise_expr ::= "raise" expr
+raise_expr ::= "raise" or_expr
 ```
 
-The operand must be an exception value (statically checked). `raise`
-**diverges** — it never yields a value. Its type is the bottom type,
-assignable to any expected type:
+The operand must be an exception value (statically checked). It is an
+`or_expr`, so an open form such as `if`, `case`, `try`, a loop, another
+`raise`, or a lambda must be parenthesized. `raise` **diverges** — it never
+yields a value. Its type is the bottom type, assignable to any expected type:
 
 <!-- agl-check: skip -->
 ```agl

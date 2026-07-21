@@ -2,13 +2,17 @@
 
 [← Index](index.md)
 
-The collected surface grammar. Lexical tokens (`NEWLINE`, `INDENT`,
-`DEDENT`, identifier terminals `NAME`/`OP_NAME`, numbers, template tokens)
-and the layout rules that produce them are specified in
+The collected surface grammar. Identifier terminals (`NAME`/`OP_NAME`),
+numbers, templates, and the layout rules are specified in
 [Lexical structure](lexical-structure.md).
 
 Notation: `::=` defines a production; `|` separates alternatives; `?`, `*`,
 `+` mark optional and repeated elements; quoted strings are literal tokens.
+`NEWLINE`, `INDENT`, and `DEDENT` below are **source-layout notation**: they
+describe a line break and indentation change, not text written in source. The
+parser's internal layout tokens are `_NEWLINE`, `_INDENT`, and `_DEDENT`; when
+indentation starts a suite, the lexer consumes the preceding newline and the
+parser receives `_INDENT block _DEDENT`.
 
 ## Programs and blocks
 
@@ -92,7 +96,7 @@ export foo/bar/* hiding internal
 ### Suites (indented blocks)
 
 ```ebnf
-suite ::= NEWLINE INDENT block DEDENT
+suite ::= NEWLINE INDENT block DEDENT    (* source layout; parser: _INDENT block _DEDENT *)
 ```
 
 ### Inline bodies
@@ -254,7 +258,7 @@ extern_func_def ::= "extern" "def" name type_params? "(" param_list? ")" "->" ty
 func_body       ::= expr | suite
 param_list      ::= param_entry ("," param_entry)* ","?
 param_entry     ::= param | param_marker
-param           ::= field_name ":" type_expr ("=" expr)?
+param           ::= field_name ":" type_expr ("=" or_expr)?
 ```
 
 An inline `def` body after `=` is exactly one expression. It ends at the next
@@ -458,18 +462,18 @@ juxt           ::= postfix juxt_arg     (* single-arg sugar; non-chaining *)
                | postfix
 
 juxt_arg       ::= atom_no_call juxt_suffix*
-juxt_suffix    ::= "." name
+juxt_suffix    ::= "." field_name
                | "[" expr "]"                  (* adjacent bracket only *)
                | "(" arg_list? ")"
                | "::" "[" type_expr ("," type_expr)* "]" "(" arg_list? ")"
 
-postfix        ::= postfix "." name                (* runtime field access *)
+postfix        ::= postfix "." field_name          (* runtime field access *)
                | postfix "(" arg_list? ")"         (* call with parentheses *)
                | postfix "[" expr "]"              (* adjacent bracket only *)
-               | postfix "::" "[" type_expr ("," type_expr)* "]" "(" arg_list? ")"
+               | postfix "::" "[" type_expr ("," type_expr)* "]"   (* explicit type application *)
                | atom
 
-qualified_type ::= name ("[" type_expr ("," type_expr)* "]")?
+applied_type_qualified_constructor ::= qual_prefix? NAME "[" type_expr ("," type_expr)* "]" "::" NAME
 
 atom           ::= INT | DECIMAL | "true" | "false" | "null"
                | "(" ")"                           (* unit literal *)
@@ -477,8 +481,7 @@ atom           ::= INT | DECIMAL | "true" | "false" | "null"
                | dict_literal
                | name                              (* variable / constructor reference *)
                | qual_prefix type_qual? name       (* qualified ref / constructor *)
-               | qual_prefix? qualified_type "::" name
-                                                    (* applied-type-qualified constructor *)
+               | applied_type_qualified_constructor
                | template
                | "(" expr ")"                      (* parenthesized expr *)
                | "(" paren_block ")"               (* parenthesized block *)
@@ -494,7 +497,7 @@ atom_no_call   ::= (* same as atom but excludes "(" — prevents sugar conflict 
 
 qualified_constructor ::= qual_prefix type_qual? name | name
 
-raise_expr  ::= "raise" expr
+raise_expr  ::= "raise" or_expr
 return_expr ::= "return" or_expr?
 ```
 
@@ -504,14 +507,16 @@ used as a first-class value. The typed postfix form carries explicit type
 arguments to a generic `def` or bare constructor (`id::[int](5)`,
 `some::[int](value = 1)`, `apply::[int, int](…)`), or instantiate a generic
 function value (`id::[int]`). Qualified generic constructors put type arguments
-on the type side (`Option[int]::some(value = 1)`). A `postfix "." name` is
-always runtime field access; constructor qualification uses `::`. See
+on the type side (`Option[int]::some(value = 1)`). In that explicit
+type-qualified constructor form, both the applied type name and constructor
+name are `NAME` tokens (not `OP_NAME`). A `postfix "." field_name` is always
+runtime field access; constructor qualification uses `::`. See
 [Generics](generics.md).
 
 ## Lambda expressions
 
 ```ebnf
-lambda_expr ::= "fn" "(" params? ")" ("->" type_expr)? "=>" expr
+lambda_expr ::= "fn" "(" param_list? ")" ("->" type_expr)? "=>" expr
 ```
 
 The return type annotation is optional; when omitted, it is inferred from

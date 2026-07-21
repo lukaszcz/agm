@@ -109,7 +109,7 @@ Static rules, all checked before execution:
 ## `def` — function declarations
 
 ```ebnf
-func_def ::= ["private"] "def" name type_params? "(" params? ")" ("->" type_expr)? ("=" func_body | suite)
+func_def ::= ["private"] "def" name type_params? "(" param_list? ")" ("->" type_expr)? ("=" func_body | suite)
 ```
 
 `def` is a root-only declaration. It introduces an immutable binding of

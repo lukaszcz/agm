@@ -17,7 +17,7 @@ func_body     ::= expr | suite
 type_params   ::= "[" name ("," name)* "]"
 param_list    ::= param_entry ("," param_entry)* ","?
 param_entry   ::= param | param_marker
-param         ::= field_name ":" type_expr ("=" expr)?
+param         ::= field_name ":" type_expr ("=" or_expr)?
 param_marker  ::= "/" | "*" | "@" NAME    (* @pos, @std, @named *)
 ```
 
@@ -154,10 +154,12 @@ zone and has no punctuation equivalent; it must come first.
 At most one `/`/`@std` and one `*`/`@named` may appear, in zone order. `@pos`
 must be the first entry. Violations are static errors.
 
-**Defaults.** A parameter may carry a default value (`param: type = expr`).
-Only positional-fillable (pos-only or standard) parameters are subject to the
-ordering constraint: no *required* pos-only/standard parameter may follow a
-*defaulted* pos-only/standard one. Named-only defaults may appear in any order:
+**Defaults.** A parameter default is an `or_expr` (`param: type = or_expr`).
+Open forms such as `if`, `case`, `try`, loops, `raise`, and `fn` must therefore
+be parenthesized in a default. Only positional-fillable (pos-only or standard)
+parameters are subject to the ordering constraint: no *required*
+pos-only/standard parameter may follow a *defaulted* pos-only/standard one.
+Named-only defaults may appear in any order:
 
 ```agl
 def greet(name: text, greeting: text = "Hello") -> text =
@@ -188,9 +190,11 @@ nested.
 ## `fn` — anonymous functions (lambdas)
 
 ```ebnf
-lambda_expr ::= "fn" "(" params? ")" ("->" type_expr)? "=>" expr
-params      ::= param ("," param)* ","?
-param       ::= field_name ":" type_expr ("=" expr)?
+lambda_expr ::= "fn" "(" param_list? ")" ("->" type_expr)? "=>" expr
+param_list  ::= param_entry ("," param_entry)* ","?
+param_entry ::= param | param_marker
+param       ::= field_name ":" type_expr ("=" or_expr)?
+param_marker ::= "/" | "*" | "@" NAME    (* @pos, @std, @named *)
 ```
 
 `fn` produces a function value. The return type annotation is **optional**:
@@ -350,8 +354,7 @@ bare type variable itself — a value of a concrete or composite type such as
 All calls use the same uniform parenthesized syntax:
 
 ```ebnf
-call_expr ::= postfix_expr type_args? "(" arg_list? ")"
-type_args ::= "::" "[" type_expr ("," type_expr)* "]"
+call_expr ::= postfix "(" arg_list? ")"
 arg_list        ::= arg ("," arg)* ","?
 arg             ::= expr                         (* positional *)
                   | placeholder_arg              (* positional hole *)
@@ -359,6 +362,10 @@ arg             ::= expr                         (* positional *)
                   | field_name "=" placeholder_arg (* named hole *)
 placeholder_arg ::= "?" | "?<digits>"
 ```
+
+The `postfix` callee may already carry explicit type arguments, so
+`id::[int](5)` is a typed call; the `::[…]` application itself may also be used
+without a call as described in [Generic functions](#generic-functions).
 
 **Single-argument sugar.** When there is exactly one positional argument
 and no named arguments, the parentheses may be dropped and the argument

@@ -31,8 +31,12 @@ type_expr ::= "unit"
             | "text" | "json" | "bool" | "int" | "decimal"
             | name
             | name "[" type_expr ("," type_expr)* "]"   (* applied type *)
+            | qual_prefix name "[" type_expr ("," type_expr)* "]"
+                                                               (* qualified applied type *)
+            | qual_prefix name                                (* qualified type *)
             | "list" "[" type_expr "]"
             | "dict" "[" "text" "," type_expr "]"
+            | "agent"
             | func_type
 
 func_type ::= type_atom "->" type_expr
@@ -40,17 +44,23 @@ func_type ::= type_atom "->" type_expr
 type_atom ::= "unit" | "text" | "json" | "bool" | "int" | "decimal"
             | name
             | name "[" type_expr ("," type_expr)* "]"
+            | qual_prefix name "[" type_expr ("," type_expr)* "]"
+            | qual_prefix name
             | "list" "[" type_expr "]"
             | "dict" "[" "text" "," type_expr "]"
-type_list ::= type_expr ("," type_expr)* ","?
+            | "agent"
+type_list   ::= type_expr ("," type_expr)* ","?
+qual_prefix ::= ["/"] NAME ("/" NAME)* "::" | "::"    (* byte-adjacent *)
 ```
 
 A bare `name` in type position names a built-in type, a user type, an alias,
 or — inside a generic declaration — one of that declaration's type parameters.
 `name "[" … "]"` is an **applied type**: it instantiates a generic declaration
 at concrete type arguments, e.g. `Box[int]`, `Option[text]`,
-`Outcome[int, text]`, or nested `Box[Box[int]]`. The built-in `list[T]` and
-`dict[text, V]` are the same applied-type form.
+`Outcome[int, text]`, or nested `Box[Box[int]]`. A `qual_prefix` may precede
+the complete type name before its brackets, as in `mylib::Box[int]`; without
+brackets it forms a module-qualified type such as `mylib::Point`. The built-in
+`list[T]` and `dict[text, V]` are the same applied-type form.
 
 `dict[text, T]` keys are always `text`, and the key position must be spelled
 literally as `text`. There are no union types, no string-literal types, and no

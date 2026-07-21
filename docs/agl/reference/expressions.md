@@ -101,8 +101,8 @@ let metadata: dict[text, json] = {}
 constructor ::= constructor_ref value_type_args? constructor_args?
 constructor_ref ::= name
                   | qual_prefix name
-                  | qual_prefix? type_ref "::" name
-type_ref    ::= name ("[" type_expr ("," type_expr)* "]")?
+                  | applied_type_qualified_constructor
+applied_type_qualified_constructor ::= qual_prefix? NAME "[" type_expr ("," type_expr)* "]" "::" NAME
 qual_prefix ::= ["/"] NAME ("/" NAME)* "::" | "::"
 constructor_args ::= "(" (ctor_arg ("," ctor_arg)* ","?)? ")"
 value_type_args ::= "::" "[" type_expr ("," type_expr)* "]"
@@ -114,7 +114,9 @@ Constructor arguments follow the same **positional-greedy** binding as function
 calls — positional arguments fill positional-capable (pos-only/standard) field
 slots left to right; named arguments (`field = value`) follow. The optional
 value-position `::[…]` pins the type arguments of a generic constructor (see
-[Generic constructors](#generic-constructors)).
+[Generic constructors](#generic-constructors)). The explicit
+applied-type-qualified form (`Option[int]::some`) requires `NAME` for both the
+applied type and constructor; it does not accept `OP_NAME` there.
 
 **Per-type field zones.** Record fields, enum payload fields, and an
 exception's own fields default to the **standard** zone (positional or named),
@@ -337,8 +339,7 @@ user `def`s, built-in functions (`ask`, `exec`, `print`, `render`), and
 function values stored in bindings:
 
 ```ebnf
-call_expr ::= postfix_expr type_args? "(" arg_list? ")"
-type_args ::= "::" "[" type_expr ("," type_expr)* "]"
+call_expr ::= postfix "(" arg_list? ")"
 arg_list        ::= arg ("," arg)* ","?
 arg             ::= expr                         (* positional *)
                   | placeholder_arg              (* positional hole *)
@@ -346,6 +347,9 @@ arg             ::= expr                         (* positional *)
                   | field_name "=" placeholder_arg (* named hole *)
 placeholder_arg ::= "?" | "?<digits>"
 ```
+
+The `postfix` callee may already carry explicit type arguments, so
+`id::[int](5)` is a typed call.
 
 **Single-argument sugar.** When there is exactly one positional argument and
 no named arguments, the parentheses may be dropped:

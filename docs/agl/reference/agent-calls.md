@@ -128,6 +128,13 @@ The target type drives the call's **output contract**:
 
 `unit` is the exception: the call is dispatched once without an output
 contract, its response is ignored, and the expression evaluates to `void`.
+A bare `ask` in a discarded-value position therefore runs as a fire-and-forget
+unit call:
+
+```agl
+ask "Notify the reviewer."
+```
+
 Because nothing is parsed, `format`, `strict_json`, and `on_parse_error` are
 invalid for a `unit` target.
 

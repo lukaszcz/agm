@@ -1,0 +1,14 @@
+{
+  "scenarios": [
+    {
+      "name": "inline_sequence_converges",
+      "params": {"target": 2},
+      "expect": {"stdout": "2\n1\n"}
+    },
+    {
+      "name": "inline_sequence_converges_first_iteration",
+      "params": {"target": 1},
+      "expect": {"stdout": "1\n1\n"}
+    }
+  ]
+}

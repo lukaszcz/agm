@@ -16,17 +16,19 @@ last item. A final `let` or `var` contributes `unit` as the block value.
 ## Discarded values
 
 A bare expression before the final block item is evaluated in a discarded-value
-position and must have type `unit` (or `bottom`). Binders and declarations are
-valid intermediate items. To run a value-producing expression for effect
-without retaining its result, bind it to `_`:
+position and must have type `unit` or `bottom`. `bottom` is the type of an
+expression that does not return normally, such as `raise`, `return`, `break`,
+or `continue`; it is assignable wherever a value is expected. Binders and
+declarations are valid intermediate items. To run a value-producing expression
+for effect without retaining its result, bind it to `_`:
 
 ```agl
 let _ = ["report"]
 print "report fetched"
 ```
 
-The same rule applies to a loop body, whose value is discarded on every
-iteration.
+`_` creates no readable name and may be used repeatedly. The same rule applies
+to a loop body, whose value is discarded on every iteration.
 
 ## Literals
 
@@ -654,13 +656,13 @@ let y = x + 1
 y                 # the block's value is y, an int
 ```
 
-A block that ends in a `let` or `var` with no continuation is a **static
-error** — a binder must be followed by at least one more expression.
+A block may end in a `let` or `var`. With no following item, the binder has no
+in-block continuation and the block evaluates to `unit`; the binding still
+scopes over an enclosing continuation, such as a loop's `until` condition.
 
-<!-- agl-check: error -->
 ```agl
-def broken() -> int =
-  let x = 1        # static error: 'let' must be followed by an expression
+def prepare() -> unit =
+  let status = "ready"
 ```
 
 ## Divergent expressions

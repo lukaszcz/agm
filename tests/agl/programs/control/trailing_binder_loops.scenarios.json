@@ -1,0 +1,24 @@
+{
+  "scenarios": [
+    {
+      "name": "until_converges_on_first_iteration",
+      "params": {"target": 1, "use_while": false},
+      "expect": {"stdout": "1\n"}
+    },
+    {
+      "name": "while_variant_converges_early",
+      "params": {"target": 2, "use_while": true},
+      "expect": {"stdout": "2\n"}
+    },
+    {
+      "name": "until_exhausts_bound",
+      "params": {"target": 4, "use_while": false},
+      "expect": {"stdout": "", "raises": {"type": "MaxIterationsExceeded", "fields": {"limit": 3}}}
+    },
+    {
+      "name": "while_variant_exhausts_bound",
+      "params": {"target": 4, "use_while": true},
+      "expect": {"stdout": "", "raises": {"type": "MaxIterationsExceeded", "fields": {"limit": 3}}}
+    }
+  ]
+}

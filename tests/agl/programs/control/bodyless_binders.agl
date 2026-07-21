@@ -1,0 +1,27 @@
+# A body may end in a binder in every block form that has a continuation.
+param choose_true: bool
+
+def prepare() -> unit =
+  let function_value = "prepared"
+
+prepare()
+
+if choose_true =>
+  let if_value = "true branch"
+else =>
+  let if_value = "false branch"
+
+case choose_true of
+  true =>
+    let case_value = "true case"
+  | false =>
+    let case_value = "false case"
+
+let grouped: unit = ((); let parenthesized_value = "grouped")
+
+let recovered: unit = try
+  let try_value = "try body"
+catch _ =>
+  ()
+
+print "all body forms completed"

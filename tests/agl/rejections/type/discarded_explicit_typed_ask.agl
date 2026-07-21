@@ -1,0 +1,5 @@
+def demonstrate() -> unit =
+  ask::[text]("Produce a value.")
+  ()
+
+demonstrate()

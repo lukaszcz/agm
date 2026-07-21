@@ -63,10 +63,10 @@ The following are **root-only**: a static error if nested inside a block.
 
 ### The block's value
 
-A block's **value** is the value of its last item. A block that ends in a
-`let` or `var` binder (with no continuation) is a static error — a binder
-must be followed by at least one more item. This ensures that bindings always
-scope over a meaningful continuation.
+A block's **value** is the value of its last item. A final `let` or `var`
+binder has no in-block continuation, so the block value is `unit`. The
+binding remains available to an enclosing continuation that evaluates after
+the block, such as a loop's `until` condition.
 
 ```agl
 let x = ask "A"
@@ -122,21 +122,13 @@ config-file layers.
 ## Binders: `let` and `var`
 
 `let` and `var` bind a name and scope it over the **continuation** — the
-rest of the block. They are **not self-contained items**: they must be
-followed by at least one more item in the same block.
+rest of the block and any enclosing continuation that consumes the block. A
+final binder makes its block `unit`-valued.
 
 ```agl
 let x = 3          # x is in scope below
 let y = x + 1      # y is in scope below
 y                  # block ends here; its value is y
-```
-
-A block ending in a bare `let` or `var` is a static error:
-
-<!-- agl-check: error -->
-```agl
-def broken() -> int =
-  let x = 1        # static error: 'let' must be followed by an expression
 ```
 
 ## Inline forms
@@ -180,14 +172,17 @@ suite — see [Inline bodies](grammar.md#inline-bodies).
 ### Inline `try`
 
 A `try`/`catch` inline holds a sequence of items up to the first `catch`
-keyword — binders and assignments included, with the last item an expression.
-The `catch` body, like any `=>` body, is a single item or a suite.
+keyword — binders and assignments included. Its final item may be a `let` or
+`var`, making the try body `unit`-valued. The `catch` body, like any `=>`
+body, is a single item or a suite.
 
 ## Expression statements
 
 An expression evaluated at block level for its side effect is simply written
-as an item. Its value is either discarded (if not the last item) or becomes
-the block's value (if it is the last item):
+as an item. A non-final bare expression is a discarded-value position and
+therefore must have type `unit` or `bottom`; a value-producing call can be
+made explicit with `let _ = call()`. A final expression becomes the block's
+value:
 
 ```agl
 exec "make build"

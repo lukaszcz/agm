@@ -1,0 +1,37 @@
+{
+  "scenarios": [
+    {
+      "name": "unit_calls_succeed",
+      "params": {"target": 1, "fail": false},
+      "agents": {"notifier": ["ignored", "ignored"]},
+      "expect": {
+        "stdout": "1\n",
+        "calls": {"notifier": 2},
+        "prompts": [
+          {"agent": "notifier", "call": 0, "equals": "starting"},
+          {"agent": "notifier", "call": 1, "equals": "round 1"}
+        ]
+      }
+    },
+    {
+      "name": "unit_ask_loop_exhausts_bound",
+      "params": {"target": 4, "fail": false},
+      "agents": {"notifier": ["ignored", "ignored", "ignored", "ignored"]},
+      "expect": {
+        "stdout": "",
+        "calls": {"notifier": 4},
+        "raises": {"type": "MaxIterationsExceeded", "fields": {"limit": 3}}
+      }
+    },
+    {
+      "name": "unit_exec_failure_raises",
+      "params": {"target": 1, "fail": true},
+      "agents": {"notifier": ["ignored", "ignored"]},
+      "expect": {
+        "stdout": "",
+        "calls": {"notifier": 2},
+        "raises": {"type": "ExecError", "fields": {"command": "false", "exit_code": 1, "timed_out": false}}
+      }
+    }
+  ]
+}

@@ -30,7 +30,9 @@ pattern_field  ::= pattern                                (* positional sub-patt
 
 ### Wildcard `_`
 
-Matches anything, binds nothing:
+Matches anything, binds nothing. The same spelling is the unreadable discard
+binder in `let _ = value` and `var _ = value`; see
+[Bindings and scope](bindings-and-scope.md#let--immutable-binding).
 
 <!-- agl-check: skip -->
 ```agl

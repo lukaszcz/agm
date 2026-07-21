@@ -138,7 +138,7 @@ to parse, `AgentParseError` is raised with agent name `"exec"`.
 
 ## Exceptions
 
-`ExecError` (a failing or timed-out command, parsed form) and
+`ExecError` (a failing or timed-out command in parsed or unit form) and
 `AgentParseError` (unparseable output from a succeeding command) are distinct
 and independently catchable:
 

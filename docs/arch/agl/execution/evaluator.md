@@ -12,7 +12,7 @@ Recursion is bounded by a `max_call_depth` guard that raises a catchable `Recurs
 
 Host operations are dispatched by contract identity:
 
-- **Agents.** `ask` issues the call through the host agent runtime; the output is shaped by the contract's format metadata and the schema/decode descriptors compiled into it.
+- **Agents.** `ask` issues the call through the host agent runtime; the output is shaped by the contract's format metadata and the schema/decode descriptors compiled into it. A unit contract dispatches once and discards the response.
 - **Shell.** `exec` either returns a structured result or parses stdout into a target type, as selected during checking. A unit contract still runs the command and raises `ExecError` for failure, but discards successful stdout without resolving a codec.
 - **Conversions.** Casts and `parse_json` execute pre-resolved typeless recipes and always parse strictly; agent and `exec` output parsing uses the configurable strict/lenient codec pipeline.
 

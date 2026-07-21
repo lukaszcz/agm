@@ -1,0 +1,14 @@
+{
+  "scenarios": [
+    {
+      "name": "repeated_discards_run_each_effect",
+      "params": {"initial": 0},
+      "expect": {"stdout": "2\n"}
+    },
+    {
+      "name": "discard_preserves_existing_state",
+      "params": {"initial": 5},
+      "expect": {"stdout": "7\n"}
+    }
+  ]
+}

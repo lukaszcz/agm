@@ -31,8 +31,10 @@ let count = 3
 ```
 
 `_` is a wildcard binder. `let _ = e` evaluates `e` and discards its value
-without introducing a readable name; it may be repeated in a scope. Use it
-when a non-`unit` value is intentionally discarded.
+without introducing a readable name; it may be repeated in a scope. `var _ =
+e` has the same discard behavior. `_` is never readable, even if an outer
+scope has a binding with that spelling. Use it when a non-`unit` value is
+intentionally discarded.
 
 ## `var` — mutable binding
 
@@ -41,7 +43,8 @@ var_decl ::= "var" NAME (":" type_expr)? "=" expr
 ```
 
 Identical to `let` except the binding is **mutable** — it may later be
-updated with `:=`. A final `var` also makes its block unit-valued:
+updated with `:=`. A final `var` also makes its block unit-valued; like a
+final `let`, it remains visible to an enclosing continuation:
 
 <!-- agl-check: skip -->
 ```agl
@@ -418,8 +421,8 @@ case review of
 ### Loop scope
 
 A `do` body opens a fresh scope on each iteration, and the `until` condition
-is evaluated **in that same iteration scope** — it can see `let` bindings
-made by the body:
+is evaluated **in that same iteration scope** — it can see `let` or `var`
+bindings made by the body, including a final binder:
 
 <!-- agl-check: skip -->
 ```agl

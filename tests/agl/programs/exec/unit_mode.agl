@@ -1,0 +1,22 @@
+# Bare ask and exec calls adapt to unit in statement and loop-body positions.
+agent notifier
+param target: int
+param fail: bool
+
+ask("starting", agent = notifier)
+exec "true"
+
+var rounds: int = 0
+do[3]
+  rounds := rounds + 1
+  ask("round ${rounds}", agent = notifier)
+until rounds >= target
+
+do
+  exec "true"
+until true
+
+if fail =>
+  exec "false"
+
+print rounds

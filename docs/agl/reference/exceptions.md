@@ -84,9 +84,13 @@ body and all catch handler bodies (with `int → decimal` widening). A
 `try`/`catch` in a value position binds a typed result:
 
 ```ebnf
-try_expr      ::= "try" try_body catch_clause+
-try_body      ::= suite | (marked_item ";")* closed_item
-catch_clause  ::= "catch" catch_pattern "=>" branch_body
+try_expr          ::= "try" try_body catch_clause+
+try_body          ::= suite | (marked_item ";")* try_tail
+try_tail          ::= or_expr | assign_expr | try_letvar_decl | raise_expr
+                    | return_expr | if_expr | case_expr | loop_expr
+try_letvar_decl   ::= ("let" | "var") name type_ann? "=" try_value
+try_value         ::= or_expr | raise_expr | return_expr | if_expr | case_expr | loop_expr
+catch_clause      ::= "catch" catch_pattern "=>" branch_body
 catch_pattern ::= name ("as" name)?
                 | "_" ("as" name)?
 branch_body   ::= suite | closed_item
@@ -94,8 +98,8 @@ branch_body   ::= suite | closed_item
 
 `branch_body` is the same body form an `if` or `case` branch takes — a suite
 or a single item. Because `catch` marks where a `try` body ends, an inline
-`try` body is a full `;` sequence, binders and assignments included, whose
-last item is an expression. See
+`try` body is a full `;` sequence, binders and assignments included. Its final
+item may be a `let` or `var`; then the try body has type `unit`. See
 [Inline bodies](grammar.md#inline-bodies).
 
 <!-- agl-check: skip -->
@@ -207,8 +211,8 @@ metadata: json
 ### `ExecError`
 
 A shell command failed to run, exited nonzero, or timed out in the **parsed
-form** of `exec` ([Shell execution](shell-execution.md)). Also raised by the
-structured form on spawn failure.
+or unit form** of `exec` ([Shell execution](shell-execution.md)). The
+structured form raises it only on spawn failure.
 
 ```text
 command: text     # the rendered command
@@ -369,7 +373,7 @@ The general-purpose user abort; carries only the base fields.
 | Missing dictionary key access or assignment | `KeyError` |
 | Agent transport failure | `AgentCallError` |
 | Invalid structured output after all attempts | `AgentParseError` |
-| Failing/timed-out shell command (parsed form) | `ExecError` |
+| Failing/timed-out shell command (parsed or unit form) | `ExecError` |
 | Spawn failure (either exec form) | `ExecError` |
 | Extern (Python FFI) companion raised, or its return value violated the contract | `ExternError` |
 | Loop bound exhausted | `MaxIterationsExceeded` |

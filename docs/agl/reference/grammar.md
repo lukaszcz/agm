@@ -108,8 +108,7 @@ marked_item ::= expr | assign_expr | let_decl | var_decl
 A *marked* body is one whose end is fixed by a following token. All three
 marked positions share `marked_body`, and the parser accepts any marked item
 in final position, including a `let` or `var` binder. The AST preserves that
-form; typechecking currently still requires a continuation expression after a
-binder.
+form; a final binder makes the body `unit`-valued.
 
 | body | end marker | inline form |
 | ---- | ---------- | ----------- |
@@ -387,10 +386,9 @@ catch_pattern     ::= name ("as" name)?
 ```
 
 `catch` marks where a `try` body ends, so an inline try body is a full `;`
-sequence — binders and `:=` included. The parser accepts a final `let` or
-`var` binder and preserves it in the AST, though typechecking currently still
-requires a continuation expression after a binder. A final item and a final
-binder RHS must remain closed: an open form there would consume the `catch`.
+sequence — binders and `:=` included. A final `let` or `var` binder is allowed
+and makes the body `unit`-valued. A final item and a final binder RHS must
+remain closed: an open form there would consume the `catch`.
 
 ## Patterns
 
@@ -479,10 +477,8 @@ atom           ::= INT | DECIMAL | "true" | "false" | "null"
                | "(" expr ")"                      (* parenthesized expr *)
                | "(" paren_block ")"               (* parenthesized block *)
 
-paren_block    ::= (paren_item ";")+ paren_tail
+paren_block    ::= (marked_item ";")+ marked_item
                  | assign_expr
-paren_item     ::= paren_tail | let_decl | var_decl
-paren_tail     ::= expr | assign_expr
 
 atom_no_call   ::= (* same as atom but excludes "(" — prevents sugar conflict *)
                INT | DECIMAL | "true" | "false" | "null"

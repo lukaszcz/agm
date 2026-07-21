@@ -1,0 +1,14 @@
+{
+  "scenarios": [
+    {
+      "name": "true_branches",
+      "params": {"choose_true": true},
+      "expect": {"stdout": "all body forms completed\n"}
+    },
+    {
+      "name": "false_branches",
+      "params": {"choose_true": false},
+      "expect": {"stdout": "all body forms completed\n"}
+    }
+  ]
+}

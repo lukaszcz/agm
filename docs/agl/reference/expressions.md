@@ -103,6 +103,7 @@ constructor_ref ::= name
                   | qual_prefix name
                   | applied_type_qualified_constructor
 applied_type_qualified_constructor ::= qual_prefix? NAME "[" type_expr ("," type_expr)* "]" "::" NAME
+                                           (* `[` is byte-adjacent to the preceding NAME *)
 qual_prefix ::= ["/"] NAME ("/" NAME)* "::" | "::"
 constructor_args ::= "(" (ctor_arg ("," ctor_arg)* ","?)? ")"
 value_type_args ::= "::" "[" type_expr ("," type_expr)* "]"
@@ -114,9 +115,12 @@ Constructor arguments follow the same **positional-greedy** binding as function
 calls — positional arguments fill positional-capable (pos-only/standard) field
 slots left to right; named arguments (`field = value`) follow. The optional
 value-position `::[…]` pins the type arguments of a generic constructor (see
-[Generic constructors](#generic-constructors)). The explicit
-applied-type-qualified form (`Option[int]::some`) requires `NAME` for both the
-applied type and constructor; it does not accept `OP_NAME` there.
+[Generic constructors](#generic-constructors)). In the explicit
+applied-type-qualified form, the `[` must be byte-adjacent to the type name:
+`Option[int]::some` is valid, while `Option [int]::some` is not. This
+restriction does not apply to ordinary applied types, so both `Option[int]` and
+`Option [int]` are valid type expressions. This form requires `NAME` for both
+the applied type and constructor; it does not accept `OP_NAME` there.
 
 **Per-type field zones.** Record fields, enum payload fields, and an
 exception's own fields default to the **standard** zone (positional or named),

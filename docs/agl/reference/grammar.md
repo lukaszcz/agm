@@ -2,17 +2,13 @@
 
 [← Index](index.md)
 
-The collected surface grammar. Identifier terminals (`NAME`/`OP_NAME`),
-numbers, templates, and the layout rules are specified in
-[Lexical structure](lexical-structure.md).
+The collected surface grammar. Names, numbers, templates, and layout rules
+are specified in [Lexical structure](lexical-structure.md).
 
 Notation: `::=` defines a production; `|` separates alternatives; `?`, `*`,
-`+` mark optional and repeated elements; quoted strings are literal tokens.
-`NEWLINE`, `INDENT`, and `DEDENT` below are **source-layout notation**: they
-describe a line break and indentation change, not text written in source. The
-parser's internal layout tokens are `_NEWLINE`, `_INDENT`, and `_DEDENT`; when
-indentation starts a suite, the lexer consumes the preceding newline and the
-parser receives `_INDENT block _DEDENT`.
+`+` mark optional and repeated elements; quoted strings are literal source
+text. `NEWLINE`, `INDENT`, and `DEDENT` below are **source-layout notation**:
+they describe a line break and indentation change, not text written in source.
 
 ## Programs and blocks
 
@@ -96,8 +92,12 @@ export foo/bar/* hiding internal
 ### Suites (indented blocks)
 
 ```ebnf
-suite ::= NEWLINE INDENT block DEDENT    (* source layout; parser: _INDENT block _DEDENT *)
+suite ::= NEWLINE INDENT block DEDENT
 ```
+
+A suite starts on the line after its introducer. Its block is indented more
+than the introducing construct and ends when the indentation returns to that
+construct's level.
 
 ### Inline bodies
 
@@ -111,10 +111,10 @@ marked_item   ::= expr | inline_assign | let_decl | var_decl
 inline_assign ::= assign_target ":=" or_expr
 ```
 
-Those three *marked* bodies share `marked_body`, and the parser accepts any
-marked item in final position, including a `let` or `var` binder. The AST
-preserves that form; a final binder makes the body `unit`-valued unless its
-initializer exits, in which case it is bottom-valued.
+Those three *marked* bodies share `marked_body` and allow any marked item in
+final position, including a `let` or `var` binder. A final binder makes the
+body `unit`-valued unless its initializer exits, in which case it is
+bottom-valued.
 
 | body | delimiter | inline form |
 | ---- | --------- | ----------- |
@@ -474,6 +474,7 @@ postfix        ::= postfix "." field_name          (* runtime field access *)
                | atom
 
 applied_type_qualified_constructor ::= qual_prefix? NAME "[" type_expr ("," type_expr)* "]" "::" NAME
+                                           (* `[` is byte-adjacent to the preceding NAME *)
 
 atom           ::= INT | DECIMAL | "true" | "false" | "null"
                | "(" ")"                           (* unit literal *)
@@ -508,9 +509,12 @@ arguments to a generic `def` or bare constructor (`id::[int](5)`,
 `some::[int](value = 1)`, `apply::[int, int](…)`), or instantiate a generic
 function value (`id::[int]`). Qualified generic constructors put type arguments
 on the type side (`Option[int]::some(value = 1)`). In that explicit
-type-qualified constructor form, both the applied type name and constructor
-name are `NAME` tokens (not `OP_NAME`). A `postfix "." field_name` is always
-runtime field access; constructor qualification uses `::`. See
+type-qualified constructor form, the `[` is byte-adjacent to the applied type
+name: `Option[int]::some` is valid, while `Option [int]::some` is not. This
+restriction does not apply to ordinary applied types, so both `Option[int]` and
+`Option [int]` are valid type expressions. Both the applied type name and
+constructor name are `NAME` (not `OP_NAME`). A `postfix "." field_name` is
+always runtime field access; constructor qualification uses `::`. See
 [Generics](generics.md).
 
 ## Lambda expressions

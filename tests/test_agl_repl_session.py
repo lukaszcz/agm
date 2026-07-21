@@ -25,6 +25,7 @@ from agm.agl.semantics.types import (
     BUILTIN_PRELUDE_TYPES,
     COMPATIBILITY_PRELUDE_TYPE_NAMES,
     BoolType,
+    BottomType,
     EnumType,
     ExceptionType,
     IntType,
@@ -32,7 +33,6 @@ from agm.agl.semantics.types import (
     RecordType,
     TextType,
     Type,
-    UnitType,
 )
 from agm.agl.semantics.values import VOID_VALUE, BoolValue, IntValue, UnitValue
 
@@ -318,7 +318,7 @@ class TestRedefinition:
         s.eval_entry("let x = 1")
         r = s.eval_entry('let x = "hello"')
         assert r.ok
-        assert isinstance(r.value_type, UnitType)
+        assert isinstance(r.value_type, TextType)
         # The promoted binding now has the new type/value.
         promoted = {n: (t, v) for n, t, v in s.bindings()}
         typ, _val = promoted["x"]
@@ -461,7 +461,7 @@ class TestEchoData:
         assert isinstance(r.value_type, IntType)
 
     @pytest.mark.parametrize("binder", ("let", "var"))
-    def test_trailing_binder_has_unit_value_and_no_echo(self, binder: str) -> None:
+    def test_trailing_binder_echoes_declared_value(self, binder: str) -> None:
         from agm.agl.repl.render import render_entry_result
 
         s = ReplSession()
@@ -469,9 +469,9 @@ class TestEchoData:
 
         assert r.kind == "binding"
         assert r.name == "total"
-        assert r.value == VOID_VALUE
-        assert isinstance(r.value_type, UnitType)
-        assert render_entry_result(r, echo=True) is None
+        assert r.value == IntValue(5)
+        assert isinstance(r.value_type, IntType)
+        assert render_entry_result(r, echo=True) == "total : int = 5"
         assert _int(dict((name, value) for name, _typ, value in s.bindings())["total"]) == 5
 
     def test_multi_item_entry_keeps_normal_block_discard_strictness(self) -> None:
@@ -614,10 +614,9 @@ class TestInferenceBoundaries:
         program_result = s.eval_entry("let result = app(id, 0)")
 
         assert program_result.ok, program_result.diagnostics
-        assert program_result.value == VOID_VALUE
-        assert isinstance(program_result.value_type, UnitType)
-        assert render_entry_result(program_result, echo=True) is None
-        assert _int(dict((name, value) for name, _typ, value in s.bindings())["result"]) == 0
+        assert program_result.value == IntValue(0)
+        assert isinstance(program_result.value_type, IntType)
+        assert render_entry_result(program_result, echo=True) == "result : int = 0"
         # ``eval_entry`` and ``:type`` both use the program pipeline against
         # the same persisted declarations.
         assert s.type_of("app(id, 0)") == "int"
@@ -1277,11 +1276,21 @@ class TestCheckOnly:
         assert r.ok
         assert r.kind == "binding"
         assert r.name == "x"
-        assert isinstance(r.value_type, UnitType)
+        assert isinstance(r.value_type, IntType)
         assert r.value is None
         # Not promoted: a later reference fails.
         assert s.bindings() == []
         assert not s.eval_entry("x").ok
+
+    def test_check_only_trailing_binder_reports_bottom_initializer(self) -> None:
+        s = ReplSession()
+        r = s.eval_entry('let x: int = raise Abort(message = "x")', check_only=True)
+
+        assert r.ok
+        assert r.kind == "binding"
+        assert r.name == "x"
+        assert isinstance(r.value_type, BottomType)
+        assert r.value is None
 
     def test_check_only_does_not_advance_node_ids(self) -> None:
         s = ReplSession()
@@ -1694,16 +1703,17 @@ class TestIfExpr:
         vals = {n: _int(v) for n, _t, v in s.bindings()}
         assert vals["x"] == 42
 
-    def test_if_expr_in_trailing_let_binding_has_unit_result(self) -> None:
+    def test_if_expr_in_let_binding_echoes_value(self) -> None:
+        # An if-expression used in a let binding produces a binding echo with
+        # the correct value and type.
         s = ReplSession()
         r = s.eval_entry("let result = if true => 7 | else => 3")
-
         assert r.ok
         assert r.kind == "binding"
         assert r.name == "result"
-        assert r.value == VOID_VALUE
-        assert isinstance(r.value_type, UnitType)
-        assert _int(dict((name, value) for name, _typ, value in s.bindings())["result"]) == 7
+        assert r.value is not None
+        assert _int(r.value) == 7
+        assert isinstance(r.value_type, IntType)
 
 
 # ---------------------------------------------------------------------------
@@ -1831,8 +1841,8 @@ class TestFuncDef:
         assert r.ok
         assert r.kind == "binding"
         assert r.name == "result"
-        assert r.value == VOID_VALUE
-        assert _int(dict((name, value) for name, _typ, value in s.bindings())["result"]) == 25
+        assert r.value is not None
+        assert _int(r.value) == 25
 
     def test_funcdef_failed_entry_does_not_persist(self) -> None:
         # A function in a failing entry (type error) must not be callable in

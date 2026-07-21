@@ -610,10 +610,10 @@ class TestCompleter:
 
 
 class TestEvalOutput:
-    def test_trailing_binding_has_no_echo(self) -> None:
+    def test_binding_echo_shows_name_type_value(self) -> None:
         output = drive("let x = 5\r\x04")
 
-        assert "x : int = 5" not in output
+        assert "x : int = 5" in output
 
     def test_expression_echo_shows_value(self) -> None:
         output = drive('"hi"\r\x04')
@@ -632,7 +632,7 @@ class TestDryRun:
     def test_check_only_binding_shows_type_no_value(self) -> None:
         session = ReplSession()
         output = drive("let x = 5\r\x04", session=session, check_only=True)
-        assert "x : unit" in output
+        assert "x : int" in output
         assert "= 5" not in output  # no value in dry-run
         assert session.bindings() == []  # nothing persisted
 
@@ -642,7 +642,7 @@ class TestDryRun:
         assert "3" not in output  # the value is never computed
 
     def test_check_only_agent_call_typechecks_without_firing(self) -> None:
-        # An entry with an agent call type-checks as unit, but the fake agent
+        # An entry with an agent call type-checks and echoes its type, but the fake agent
         # is never invoked and no binding is persisted.
         agent = _CountingAgent("should-not-be-used")
         session = ReplSession(default_agent=agent)
@@ -651,7 +651,7 @@ class TestDryRun:
             session=session,
             check_only=True,
         )
-        assert "g : unit" in output
+        assert "g : text" in output
         assert agent.calls == 0  # no agent fired in dry-run
         assert session.bindings() == []  # no binding persisted
 
@@ -676,12 +676,11 @@ class TestDryRun:
 
 
 class TestMetaThroughLoop:
-    def test_trailing_bindings_stay_silent_with_either_echo_setting(self) -> None:
+    def test_set_echo_off_suppresses_then_on_restores(self) -> None:
+        # echo off → the binding is not echoed; echo on → the next binding is.
         output = drive(":set echo off\rlet a = 1\r:set echo on\rlet b = 2\r\x04")
-
-        assert "a : int = 1" not in output
-        assert "b : int = 2" not in output
-        assert "Echo on." in output
+        assert "a : int = 1" not in output  # suppressed while echo off
+        assert "b : int = 2" in output  # restored after echo on
 
     def test_bindings_meta_lists_live_bindings(self) -> None:
         output = drive("let x = 5\r:bindings\r\x04")
@@ -725,7 +724,7 @@ class TestMetaThroughLoop:
         src.write_text("let loaded = 9\n")
         session = ReplSession()
         output = drive(f":load {src}\r\x04", session=session)
-        assert "loaded : int = 9" not in output
+        assert "loaded : int = 9" in output
         assert any(n == "loaded" for n, _t, _v in session.bindings())
 
 
@@ -789,12 +788,12 @@ def _confirming_session(*answers: str, reply: str = "agent-reply") -> tuple[Repl
 
 
 class TestConfirmFlowThroughLoop:
-    def test_confirmed_call_dispatches_without_trailing_binding_echo(self) -> None:
+    def test_confirmed_call_dispatches_and_echoes(self) -> None:
         session, underlying = _confirming_session("y", reply="hello-world")
         assert isinstance(underlying, _CountingAgent)
         output = drive('let g = ask """ask"""\r\x04', session=session)
         assert underlying.calls == 1
-        assert "hello-world" not in output
+        assert "hello-world" in output
         assert any(n == "g" for n, _t, _v in session.bindings())
 
     def test_declined_call_aborts_entry_repl_continues(self) -> None:

@@ -690,8 +690,9 @@ class TestLoad:
         src.write_text("let x = 7\n")
         s = ReplSession()
         outcome = meta_mod.dispatch_meta(f":load {src}", _session_ctx(s))
-        assert outcome.text is None
-        # The binding persisted into the session without an echo.
+        assert outcome.text is not None
+        assert "x : int = 7" in outcome.text
+        # The binding persisted into the session.
         assert any(n == "x" for n, _t, _v in s.bindings())
 
     def test_load_agent_call_fires_exactly_once(self, tmp_path: Path) -> None:
@@ -712,14 +713,15 @@ class TestLoad:
         outcome = meta_mod.dispatch_meta(":load", _session_ctx())
         assert "usage" in (outcome.text or "").lower()
 
-    def test_load_keeps_trailing_binder_entries_silent(self, tmp_path: Path) -> None:
+    def test_load_renders_each_statement(self, tmp_path: Path) -> None:
+        # Multiple statements load incrementally; each statement's echo surfaces.
         src = tmp_path / "multi.agl"
         src.write_text("let a = 1\nlet b = 2\n")
         s = ReplSession()
         outcome = meta_mod.dispatch_meta(f":load {src}", _session_ctx(s))
-
-        assert outcome.text is None
-        assert {name for name, _typ, _value in s.bindings()} == {"a", "b"}
+        assert outcome.text is not None
+        assert "a : int = 1" in outcome.text
+        assert "b : int = 2" in outcome.text
 
     def test_load_halts_at_first_error(self, tmp_path: Path) -> None:
         src = tmp_path / "halt.agl"
@@ -768,7 +770,8 @@ class TestSave:
         s2 = ReplSession()
         outcome = meta_mod.dispatch_meta(f":load {out}", _session_ctx(s2))
         # No error surfaced and x reloaded as the shadowed value 2.
-        assert outcome.text is None
+        assert "line" not in (outcome.text or "")
+        assert "x : int = 2" in (outcome.text or "")
         vals = {n: v for n, _t, v in s2.bindings()}
         assert isinstance(vals["x"], IntValue)
         assert vals["x"].value == 2
@@ -833,7 +836,7 @@ class TestTheme:
 
 
 class TestNominalRenderingEcho:
-    """Verify :bindings renders persisted records and enums in AgL form."""
+    """Verify REPL echo renders records and enums in AgL form / declaration order."""
 
     def test_record_binding_keeps_declaration_order(self) -> None:
         s = ReplSession()
@@ -841,18 +844,22 @@ class TestNominalRenderingEcho:
         r = s.eval_entry("let p = Point(x = 1, y = 2)")
 
         assert r.ok
-        assert render_mod.render_entry_result(r, echo=True) is None
+        assert render_mod.render_entry_result(r, echo=True) == (
+            "p : Point = Point(\n  y = 2,\n  x = 1\n)"
+        )
         outcome = meta_mod.dispatch_meta(":bindings", _session_ctx(s))
         assert outcome.text is not None
         assert "p : Point = Point(\n  y = 2,\n  x = 1\n)" in outcome.text
 
-    def test_trailing_enum_binding_has_no_echo(self) -> None:
+    def test_enum_binding_echoes_qualified_value(self) -> None:
         s = ReplSession()
         s.eval_entry("enum Outcome\n  | Partial(left: int)\n  | Done")
         r = s.eval_entry("let o = Outcome::Partial(left = 7)")
 
         assert r.ok
-        assert render_mod.render_entry_result(r, echo=True) is None
+        assert render_mod.render_entry_result(r, echo=True) == (
+            "o : Outcome = Outcome::Partial(\n  left = 7\n)"
+        )
         outcome = meta_mod.dispatch_meta(":bindings", _session_ctx(s))
         assert outcome.text is not None
         assert "Outcome::Partial(\n  left = 7\n)" in outcome.text
@@ -890,7 +897,7 @@ class TestNominalRenderingEcho:
         s = ReplSession()
         outcome = meta_mod.dispatch_meta(f":load {src}", _session_ctx(s))
 
-        assert outcome.text == "Point declared"
+        assert outcome.text == "Point declared\np : Point = Point(\n  y = 2,\n  x = 1\n)"
         bindings = meta_mod.dispatch_meta(":bindings", _session_ctx(s))
         assert bindings.text is not None
         assert "Point(\n  y = 2,\n  x = 1\n)" in bindings.text

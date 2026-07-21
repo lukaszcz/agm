@@ -1216,11 +1216,12 @@ def _materialize_custom_contract_payloads(
     from agm.agl.ir.contracts import ContractPayload
     from agm.agl.runtime.codec import BUILTIN_CODEC_NAMES
     from agm.agl.runtime.contract import materialize_contract
+    from agm.agl.semantics.types import UnitType
 
     payloads: dict[int, ContractPayload] = {}
     errors: list[Diagnostic] = []
     for node_id, spec in specs.items():
-        if spec.codec_name in (*BUILTIN_CODEC_NAMES, "none"):
+        if spec.codec_name in BUILTIN_CODEC_NAMES or isinstance(spec.target_type, UnitType):
             continue
         try:
             contract = materialize_contract(spec, codecs, type_table)

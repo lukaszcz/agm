@@ -1089,6 +1089,45 @@ class TestCapabilitiesBuiltFromRegistrations:
         result = rt.run("let x = 1\nx")
         assert result.ok is True
 
+    def test_custom_codec_named_none_materializes_its_contract(self) -> None:
+        from agm.agl.runtime.codec import TextCodec
+        from agm.agl.semantics.type_table import TypeTable
+        from agm.agl.semantics.types import TextType
+        from agm.agl.semantics.values import TextValue
+
+        class NoneCodec(TextCodec):
+            @property
+            def name(self) -> str:
+                return "none"
+
+            def make_contract(
+                self, type_ref: Type, type_table: TypeTable | None = None
+            ) -> OutputContract:
+                assert isinstance(type_ref, TextType)
+                return OutputContract(
+                    target_type_label=repr(type_ref),
+                    codec=self,
+                    strict_json=None,
+                    format_instructions="Return a none-codec response.",
+                    json_schema=None,
+                )
+
+        requests: list[AgentRequest] = []
+
+        def agent(request: AgentRequest) -> str:
+            requests.append(request)
+            return "decoded"
+
+        rt = PipelineDriver(default_agent=agent)
+        rt.register_codec(NoneCodec())
+        result = rt.run('let answer: text = ask("prompt", format = "none")\nanswer')
+
+        assert result.ok
+        assert result.bindings["answer"] == TextValue("decoded")
+        assert len(requests) == 1
+        assert requests[0].output_contract is not None
+        assert requests[0].output_contract.format_instructions == "Return a none-codec response."
+
     def test_as_renderer_syntax_is_parse_error(self) -> None:
         """``${x as name}`` is a syntax error (renderer syntax removed)."""
         rt = PipelineDriver(default_agent=lambda req: "ok")

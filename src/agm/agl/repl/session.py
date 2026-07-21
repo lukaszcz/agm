@@ -892,8 +892,7 @@ class ReplSession:
     def _echo_data_ir(
         self, program: "Program", checked: "CheckedModule", captured: "Value | None"
     ) -> tuple["Value | None", "Type | None"]:
-        from agm.agl.semantics.types import UnitType
-        from agm.agl.semantics.values import VOID_VALUE
+        from agm.agl.semantics.values import Cell
         from agm.agl.syntax.nodes import Binder, Declaration, LetDecl, VarDecl
 
         last = program.body.items[-1]
@@ -901,7 +900,9 @@ class ReplSession:
         if not isinstance(last, (Binder, Declaration)):
             return captured, value_type
         if isinstance(last, (LetDecl, VarDecl)):
-            return VOID_VALUE, UnitType()
+            symbol = self._link_image.symbol_for_decl(last.node_id)
+            slot = self._ir_base_frame.get(symbol) if symbol is not None else None
+            return (slot.value if isinstance(slot, Cell) else slot), value_type
         return None, None
 
     def _classify(self, program: "Program") -> tuple[EntryKind, str | None]:
@@ -966,9 +967,9 @@ class ReplSession:
         """Static type carried by the entry's final value, or ``None``.
 
         A bare expression retains its checked type. A trailing ``let``/``var``
-        contributes the block's unit value rather than its stored binding type.
-        Shared by the check-only result builder and the success echo so the two
-        agree on how an entry's final value is derived.
+        reports the declared binding type for the REPL declaration echo, except
+        that an initializer which always exits reports ``bottom``. Shared by the
+        check-only result builder and the success echo so the two agree.
         """
         from agm.agl.syntax.nodes import Binder, Declaration, LetDecl, VarDecl
 
@@ -980,9 +981,12 @@ class ReplSession:
             # After narrowing: last is an Expr (not a Binder or Declaration).
             return checked.node_types.get(last.node_id)
         if isinstance(last, (LetDecl, VarDecl)):
-            from agm.agl.semantics.types import UnitType
+            from agm.agl.semantics.types import BottomType
 
-            return UnitType()
+            initializer_type = checked.node_types.get(last.value.node_id)
+            if isinstance(initializer_type, BottomType):
+                return initializer_type
+            return checked.type_env.get_binding_type(last.node_id)
         return None
 
     # ------------------------------------------------------------------

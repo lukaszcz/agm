@@ -181,6 +181,8 @@ from agm.agl.typecheck.env import (
 )
 from agm.agl.typecheck.function_inference import (
     CandidateSession,
+    FunctionReturnSource,
+    FunctionSignatureRecord,
     ModuleCandidateComponent,
     infer_module_component_candidates,
     resolve_function_header,
@@ -251,6 +253,31 @@ class _InferenceRegion:
 
 class _CandidateEvidenceError(AglTypeError):
     """An incompatible common type discovered from candidate return evidence."""
+
+
+class _FramedCandidateEvidenceError(AglTypeError):
+    """A candidate-return frame retaining its unmodified triggering error."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        original: AglTypeError,
+        span: SourceSpan,
+        related: Sequence[tuple[str, SourceSpan]],
+    ) -> None:
+        super().__init__(message, span=span, related=related)
+        self.original = original
+
+
+class _InferenceConstraintError(AglTypeError):
+    """A checked constraint failure with its participating solver origins."""
+
+    def __init__(self, message: str, *, original: InferenceError) -> None:
+        assert original.span is not None
+        super().__init__(message, span=original.span, related=original.related)
+        self.original = original
+        self.origins = original.origins
 
 
 _IndexLike = IndexAccess | IndexTarget
@@ -448,12 +475,22 @@ class _Checker:
         capabilities: HostCapabilities,
         module_id: ModuleId = ENTRY_ID,
         candidate_session: CandidateSession | None = None,
+        candidate_records: Mapping[int, FunctionSignatureRecord] | None = None,
     ) -> None:
         self._env = env
         self._resolved = resolved
         self._caps = capabilities
         self._module_id = module_id
         self._candidate_session = candidate_session
+        self._candidate_records = {
+            declaration_id: record
+            for declaration_id, record in (candidate_records or {}).items()
+            if record.return_source is FunctionReturnSource.CANDIDATE
+        }
+        # Checker-only provenance for final validation. It never leaves this
+        # checker or participates in semantic type identity.
+        self._inferred_return_expr_provenance: dict[int, set[int]] = {}
+        self._inferred_return_binding_provenance: dict[int, set[int]] = {}
         self._node_types: dict[int, Type] = {}
         self._inference_region: _InferenceRegion | None = None
         self._contract_specs: dict[int, OutputContractSpec] = {}
@@ -494,6 +531,7 @@ class _Checker:
         # types in inference mode.
         self._return_expected_stack: list[Type | None] = []
         self._return_collected_stack: list[list[Type]] = []
+        self._return_collected_provenance_stack: list[list[tuple[Type, set[int]]]] = []
         self._return_extern_targets_stack: list[list[_ExternTarget]] = []
 
     # ------------------------------------------------------------------
@@ -637,7 +675,7 @@ class _Checker:
             is_final = item is last
             if not is_final and isinstance(item, Expr):
                 item_type = self._check_item(item, expected=UnitType())
-                self._assert_assignable(item_type, UnitType(), item.span)
+                self._assert_assignable_from(item_type, UnitType(), item.span, item)
             else:
                 item_type = self._check_item(item, expected=expected if is_final else None)
             if is_final:
@@ -645,6 +683,10 @@ class _Checker:
         if isinstance(last, Expr):
             self._set_extern_expr_targets(
                 block.node_id, self._extern_targets_for_expr(last, result_type)
+            )
+            self._set_inferred_return_expr_provenance(
+                block.node_id,
+                set(self._inferred_return_expr_provenance.get(last.node_id, ())),
             )
         return result_type
 
@@ -693,11 +735,13 @@ class _Checker:
         collected: list[Type] = []
         self._return_expected_stack.append(expected)
         self._return_collected_stack.append(collected)
+        self._return_collected_provenance_stack.append([])
         self._return_extern_targets_stack.append([])
         try:
             yield collected
         finally:
             self._return_extern_targets_stack.pop()
+            self._return_collected_provenance_stack.pop()
             self._return_collected_stack.pop()
             self._return_expected_stack.pop()
 
@@ -733,7 +777,7 @@ class _Checker:
             for p, spec in zip(node.params, sig.params):
                 if p.default is not None:
                     def_type = self._check_boundary_expr(p.default, expected=spec.type)
-                    self._assert_assignable(def_type, spec.type, p.span)
+                    self._assert_assignable_from(def_type, spec.type, p.span, p.default)
             if node.is_extern:
                 return
             # Check body against declared return type.
@@ -742,7 +786,7 @@ class _Checker:
                 body_type = self._check_expr(node.body, expected=sig.result)
                 return_targets = self._current_return_extern_targets()
             if not isinstance(body_type, BottomType):
-                self._assert_assignable(body_type, sig.result, node.span)
+                self._assert_assignable_from(body_type, sig.result, node.span, node.body)
             targets = (
                 self._merge_extern_targets(
                     self._extern_targets_for_expr(node.body, body_type), return_targets
@@ -802,7 +846,7 @@ class _Checker:
         if stmt.default is not None:
             val_type = self._check_boundary_expr(stmt.default, expected=ann_type)
             if ann_type is not None:
-                self._assert_assignable(val_type, ann_type, stmt.span)
+                self._assert_assignable_from(val_type, ann_type, stmt.span, stmt.default)
                 declared_type = ann_type
             else:
                 if isinstance(val_type, BottomType):
@@ -914,7 +958,7 @@ class _Checker:
         ann_type = self._resolve_annotation(stmt.type_ann, stmt.span)
         val_type = self._check_boundary_expr(stmt.value, expected=ann_type)
         if ann_type is not None:
-            self._assert_assignable(val_type, ann_type, stmt.span)
+            self._assert_assignable_from(val_type, ann_type, stmt.span, stmt.value)
             declared_type = ann_type
         else:
             if isinstance(val_type, BottomType):
@@ -924,6 +968,14 @@ class _Checker:
                 )
             declared_type = val_type
         self._env.set_binding_type(stmt.node_id, declared_type)
+        self._set_inferred_return_binding_provenance(
+            stmt.node_id,
+            (
+                set(self._inferred_return_expr_provenance.get(stmt.value.node_id, ()))
+                if ann_type is None
+                else set()
+            ),
+        )
         targets = (
             self._extern_expr_targets.get(stmt.value.node_id, ())
             if isinstance(declared_type, FunctionType)
@@ -942,7 +994,13 @@ class _Checker:
                 )
             target_type = self._require_binding_type(ref)
             val_type = self._check_boundary_expr(stmt.value, expected=target_type)
-            self._assert_assignable(val_type, target_type, stmt.span)
+            self._assert_assignable_from(
+                val_type,
+                target_type,
+                stmt.span,
+                stmt.value,
+                binding_node_ids=(ref.decl_node_id,),
+            )
             targets = (
                 self._extern_expr_targets.get(stmt.value.node_id, ())
                 if isinstance(target_type, FunctionType)
@@ -968,21 +1026,48 @@ class _Checker:
                 span=target.span,
             )
         root_type = self._require_binding_type(ref)
-        elem_type = self._check_index_target_type(target, root_type)
+        elem_type = self._check_index_target_type(
+            target, root_type, binding_node_id=ref.decl_node_id
+        )
         value_type = self._check_boundary_expr(stmt.value, expected=elem_type)
-        self._assert_assignable(value_type, elem_type, stmt.span)
+        self._assert_assignable_from(
+            value_type,
+            elem_type,
+            stmt.span,
+            stmt.value,
+            binding_node_ids=(ref.decl_node_id,),
+        )
         return self._binder_result(value_type)
 
-    def _check_index_target_type(self, target: IndexTarget, root_type: Type) -> Type:
-        container_type = self._check_index_target_container_type(target.obj, root_type)
-        return self._check_index_operand(container_type, target.index, span=target.span)
+    def _check_index_target_type(
+        self, target: IndexTarget, root_type: Type, *, binding_node_id: int
+    ) -> Type:
+        binding_node_ids = (binding_node_id,)
+        container_type = self._check_index_target_container_type(
+            target.obj, root_type, binding_node_ids=binding_node_ids
+        )
+        return self._check_index_operand(
+            container_type,
+            target.index,
+            span=target.span,
+            binding_node_ids=binding_node_ids,
+        )
 
-    def _check_index_target_container_type(self, obj: Expr, root_type: Type) -> Type:
+    def _check_index_target_container_type(
+        self, obj: Expr, root_type: Type, *, binding_node_ids: Sequence[int]
+    ) -> Type:
         if isinstance(obj, VarRef):
             return root_type
         if isinstance(obj, IndexAccess):
-            container_type = self._check_index_target_container_type(obj.obj, root_type)
-            indexed_type = self._check_index_operand(container_type, obj.index, span=obj.span)
+            container_type = self._check_index_target_container_type(
+                obj.obj, root_type, binding_node_ids=binding_node_ids
+            )
+            indexed_type = self._check_index_operand(
+                container_type,
+                obj.index,
+                span=obj.span,
+                binding_node_ids=binding_node_ids,
+            )
             self._record_node_type(obj.node_id, indexed_type)
             return indexed_type
         raise AglTypeError(
@@ -1187,9 +1272,12 @@ class _Checker:
             if self._candidate_operation_can_defer((operand_type,), (BoolType,)):
                 return BoolType()
             if not isinstance(operand_type, BoolType):
-                raise AglTypeError(
-                    f"'not' requires a bool operand; got '{operand_type!r}'.",
-                    span=expr.operand.span,
+                raise self._frame_inferred_return_error(
+                    AglTypeError(
+                        f"'not' requires a bool operand; got '{operand_type!r}'.",
+                        span=expr.operand.span,
+                    ),
+                    exprs=(expr.operand,),
                 )
             return BoolType()
         if isinstance(expr, UnaryNeg):
@@ -1314,8 +1402,22 @@ class _Checker:
                 self._set_extern_expr_targets(
                     node.node_id, self._extern_targets_for_ref(ref, concrete)
                 )
+                if ref.decl_node_id in self._candidate_records:
+                    self._set_inferred_return_expr_provenance(node.node_id, {ref.decl_node_id})
+                else:
+                    self._set_inferred_return_expr_provenance(
+                        node.node_id,
+                        self._inferred_return_binding_provenance.get(ref.decl_node_id, set()),
+                    )
                 return concrete
         self._set_extern_expr_targets(node.node_id, self._extern_targets_for_ref(ref, typ))
+        if ref.decl_node_id in self._candidate_records:
+            self._set_inferred_return_expr_provenance(node.node_id, {ref.decl_node_id})
+        else:
+            self._set_inferred_return_expr_provenance(
+                node.node_id,
+                self._inferred_return_binding_provenance.get(ref.decl_node_id, set()),
+            )
         return typ
 
     def _active_inference_engine(self) -> InferenceEngine:
@@ -1368,13 +1470,11 @@ class _Checker:
                     engine.origin(arg_expr.span, role=role, subject=subject),
                 )
             except InferenceError as exc:
-                raise AglTypeError(
-                    f"Inconsistent type argument for {error_subject}: {exc}",
-                    span=exc.span,
-                    related=exc.related,
+                raise _InferenceConstraintError(
+                    f"Inconsistent type argument for {error_subject}: {exc}", original=exc
                 ) from exc
         else:
-            self._assert_assignable(argument_type, slot_type, arg_expr.span)
+            self._assert_assignable_from(argument_type, slot_type, arg_expr.span, arg_expr)
         return argument_type
 
     def _instantiate_generic_constructor_value(
@@ -1534,6 +1634,10 @@ class _Checker:
         )
         self._record_node_type(node.expr.node_id, concrete)
         self._set_extern_expr_targets(node.node_id, self._extern_targets_for_ref(ref, concrete))
+        self._set_inferred_return_expr_provenance(
+            node.node_id,
+            {ref.decl_node_id} if ref.decl_node_id in self._candidate_records else set(),
+        )
         return concrete
 
     # --- Cast ---
@@ -1543,10 +1647,11 @@ class _Checker:
         target_type = self._env.resolve_type_expr(node.target_type, span=node.span)
         kind = cast_classification(source_type, target_type)
         if kind == CastKind.STATIC_ERROR:
-            raise AglTypeError(
+            error = AglTypeError(
                 f"cannot cast '{source_type!r}' to '{target_type!r}'.",
                 span=node.span,
             )
+            raise self._frame_inferred_return_error(error, exprs=(node.expr,)) from error
         # Only a FALLIBLE cast derives a JSON schema at lowering time
         # (TOTAL_RENDER/TOTAL_JSON/TOTAL_NOOP never do) — and it may need one
         # not just for a bare record/enum target but for a composite target
@@ -1706,6 +1811,258 @@ class _Checker:
                 for expr in binding
             ),
             callee_kind=callee_kind,
+        )
+
+    def _set_inferred_return_expr_provenance(self, node_id: int, declaration_ids: set[int]) -> None:
+        """Record candidate-return evidence for one expression's static type."""
+        if declaration_ids:
+            self._inferred_return_expr_provenance[node_id] = set(declaration_ids)
+        else:
+            self._inferred_return_expr_provenance.pop(node_id, None)
+
+    def _set_inferred_return_binding_provenance(
+        self, node_id: int, declaration_ids: set[int]
+    ) -> None:
+        """Record candidate-return evidence retained by an unannotated binding."""
+        if declaration_ids:
+            self._inferred_return_binding_provenance[node_id] = set(declaration_ids)
+        else:
+            self._inferred_return_binding_provenance.pop(node_id, None)
+
+    def _inferred_return_provenance_for_exprs(self, exprs: Sequence[Expr]) -> set[int]:
+        """Return the conservative union of the expressions' static evidence."""
+        result: set[int] = set()
+        for expr in exprs:
+            result.update(self._inferred_return_expr_provenance.get(expr.node_id, ()))
+        return result
+
+    def _node_type(self, node_id: int) -> Type:
+        """Return a checked child type from the active expression region."""
+        assert self._inference_region is not None
+        return self._inference_region.engine.zonk(self._inference_region.node_types[node_id])
+
+    def _provenance_for_result(self, result_type: Type, exprs: Sequence[Expr]) -> set[int]:
+        """Keep evidence only from children that choose this result's static type."""
+        return self._inferred_return_provenance_for_exprs(
+            tuple(expr for expr in exprs if self._node_type(expr.node_id) == result_type)
+        )
+
+    @staticmethod
+    def _provenance_for_return_result(
+        result_type: Type, returned: Sequence[tuple[Type, set[int]]]
+    ) -> set[int]:
+        """Keep inferred-lambda return evidence only when it fixes the result type."""
+        return set().union(*(provenance for typ, provenance in returned if typ == result_type))
+
+    def _provenance_for_index_result(self, result_type: Type, obj: Expr) -> set[int]:
+        """Carry container evidence only when indexing exposes its element/value type."""
+        obj_type = self._node_type(obj.node_id)
+        if isinstance(obj_type, ListType) and obj_type.elem == result_type:
+            return self._inferred_return_provenance_for_exprs((obj,))
+        if isinstance(obj_type, DictType) and obj_type.value == result_type:
+            return self._inferred_return_provenance_for_exprs((obj,))
+        return set()
+
+    def _constructor_field_depends_on_owner_type(
+        self, owner_type: RecordType | EnumType, variant: str | None, field: str
+    ) -> bool:
+        """Whether a constructor field's static type depends on its owner arguments."""
+        if not owner_type.type_args:
+            return False
+        signature = self._env.get_ctor_sig_from_module(
+            owner_type.module_id, owner_type.name, variant
+        )
+        if signature is None:
+            signature = self._env.get_constructor_signature(owner_type.name, variant)
+        assert signature is not None
+        assert field in signature.field_names
+        field_template = signature.field_templates[signature.field_names.index(field)]
+        return bool(
+            self._rigid_type_vars(signature.result_template) & self._rigid_type_vars(field_template)
+        )
+
+    def _provenance_for_field_result(
+        self, owner_type: RecordType, field: str, obj: Expr
+    ) -> set[int]:
+        """Carry evidence only through a field selected by owner type arguments."""
+        if not self._constructor_field_depends_on_owner_type(owner_type, None, field):
+            return set()
+        return self._inferred_return_provenance_for_exprs((obj,))
+
+    def _set_generic_constructor_result_provenance(
+        self,
+        node_id: int,
+        result_template: Type,
+        field_templates: Mapping[str, Type],
+        bound_exprs: Mapping[str, Expr],
+    ) -> None:
+        """Propagate field evidence only through generic result type parameters."""
+        result_vars = self._rigid_type_vars(result_template)
+        self._set_inferred_return_expr_provenance(
+            node_id,
+            self._inferred_return_provenance_for_exprs(
+                tuple(
+                    expr
+                    for name, expr in bound_exprs.items()
+                    if not isinstance(expr, Placeholder)
+                    and result_vars.intersection(self._rigid_type_vars(field_templates[name]))
+                )
+            ),
+        )
+
+    @contextmanager
+    def _frame_direct_candidate_use(
+        self,
+        *,
+        exprs: Sequence[Expr] = (),
+        binding_node_ids: Sequence[int] = (),
+    ) -> Iterator[None]:
+        """Frame a failed check only from the expressions it directly consumes."""
+        try:
+            yield
+        except AglTypeError as exc:
+            framed = self._frame_inferred_return_error(
+                exc, exprs=exprs, binding_node_ids=binding_node_ids
+            )
+            if framed is exc:
+                raise
+            raise framed from exc
+
+    def _assert_assignable_from(
+        self,
+        value_type: Type,
+        target_type: Type,
+        span: SourceSpan,
+        expr: Expr,
+        *,
+        binding_node_ids: Sequence[int] = (),
+    ) -> None:
+        """Validate a final boundary using evidence from its direct participants."""
+        with self._frame_direct_candidate_use(exprs=(expr,), binding_node_ids=binding_node_ids):
+            self._assert_assignable(value_type, target_type, span)
+
+    @staticmethod
+    def _rigid_type_vars(typ: Type) -> frozenset[str]:
+        """Return rigid variables on which a generic static type depends."""
+        match typ:
+            case TypeVarType():
+                return frozenset((typ.name,))
+            case ListType():
+                return _Checker._rigid_type_vars(typ.elem)
+            case DictType():
+                return _Checker._rigid_type_vars(typ.value)
+            case RecordType() | EnumType():
+                return frozenset().union(*(_Checker._rigid_type_vars(arg) for arg in typ.type_args))
+            case FunctionType():
+                return frozenset().union(
+                    *(_Checker._rigid_type_vars(part) for part in (*typ.params, typ.result))
+                )
+            case _:
+                return frozenset()
+
+    def _generic_result_provenance(
+        self, signature: FunctionSignature, binding: tuple[Expr | None, ...]
+    ) -> set[int]:
+        """Carry evidence only from arguments that select the generic result type."""
+        result_vars = self._rigid_type_vars(signature.result)
+        if not result_vars:
+            return set()
+        return self._inferred_return_provenance_for_exprs(
+            tuple(
+                expr
+                for param, expr in zip(signature.params, binding, strict=True)
+                if expr is not None
+                and not isinstance(expr, Placeholder)
+                and result_vars.intersection(self._rigid_type_vars(param.type))
+            )
+        )
+
+    def _constraint_participants(
+        self, exc: AglTypeError, exprs: Sequence[Expr]
+    ) -> tuple[Expr, ...]:
+        """Return only arguments whose solver constraints caused *exc*.
+
+        Ordinary errors have no solver-origin metadata and retain their supplied
+        direct participants.  Constraint errors instead select the exact AST
+        expressions named by the solver, preventing unrelated generic arguments
+        from lending their candidate-return provenance to the diagnostic.
+        """
+        if not isinstance(exc, _InferenceConstraintError):
+            return tuple(exprs)
+        origin_spans = {origin.span for origin in exc.origins}
+        return tuple(expr for expr in exprs if expr.span in origin_spans)
+
+    def _frame_generic_constraint_error(
+        self, exc: AglTypeError, exprs: Sequence[Expr]
+    ) -> AglTypeError:
+        """Frame a generic-call conflict from the constraints that caused it."""
+        return self._frame_inferred_return_error(
+            exc, exprs=self._constraint_participants(exc, exprs)
+        )
+
+    def _frame_inferred_return_error(
+        self,
+        exc: AglTypeError,
+        *,
+        exprs: Sequence[Expr] = (),
+        binding_node_ids: Sequence[int] = (),
+    ) -> AglTypeError:
+        """Add inference guidance only when a failed check consumes marked input."""
+        if isinstance(exc, _FramedCandidateEvidenceError):
+            return exc
+        declaration_ids = self._inferred_return_provenance_for_exprs(exprs)
+        declaration_ids.update(
+            declaration_id
+            for node_id in binding_node_ids
+            for declaration_id in self._inferred_return_binding_provenance.get(node_id, ())
+        )
+        records: list[FunctionSignatureRecord] = [
+            self._candidate_records[declaration_id]
+            for declaration_id in declaration_ids
+            if declaration_id in self._candidate_records
+        ]
+
+        def declaration_order(
+            record: FunctionSignatureRecord,
+        ) -> tuple[tuple[str, ...], int, int]:
+            return (
+                record.module_id.segments,
+                record.declaration_span.start_offset,
+                record.declaration_node_id,
+            )
+
+        records.sort(key=declaration_order)
+        if not records:
+            return exc
+
+        names = ", ".join(f"'{record.name}'" for record in records)
+        singular = len(records) == 1
+        message = (
+            f"Could not validate inferred return type for function {names}. "
+            "Add an explicit return type annotation."
+            if singular
+            else f"Could not validate inferred return types for functions {names}. "
+            "Add explicit return type annotations."
+        )
+        assert exc.span is not None, "checker operation errors must carry a source span"
+        related: list[tuple[str, SourceSpan]] = [(f"Underlying type error: {exc}", exc.span)]
+        related.extend(exc.related)
+        for record in records:
+            related.append(
+                (
+                    f"Candidate return type inferred for function '{record.name}'.",
+                    record.declaration_span,
+                )
+            )
+            related.extend(
+                (f"Candidate return evidence for function '{record.name}'.", evidence)
+                for evidence in record.candidate_evidence
+            )
+        return _FramedCandidateEvidenceError(
+            message,
+            original=exc,
+            span=records[0].declaration_span,
+            related=related,
         )
 
     def _set_extern_expr_targets(self, node_id: int, targets: _ExternTargets) -> None:
@@ -1945,7 +2302,7 @@ class _Checker:
             if bound_expr is None or isinstance(bound_expr, Placeholder):
                 continue
             at = self._check_expr(bound_expr, expected=spec.type)
-            self._assert_assignable(at, spec.type, bound_expr.span)
+            self._assert_assignable_from(at, spec.type, bound_expr.span, bound_expr)
 
     def _finish_declared_call(
         self,
@@ -2044,27 +2401,38 @@ class _Checker:
         # to fill a still-unresolved variable. Exact constraints select the
         # generic instantiation; ordinary assignability remains a post-solve
         # check for fully concrete parameter positions.
-        for param, bound_expr in zip(params, binding, strict=True):
-            if bound_expr is None or isinstance(bound_expr, Placeholder):
-                continue
-            self._constrain_argument(
-                param.type,
-                bound_expr,
-                role=ConstraintRole.FUNCTION_ARGUMENT,
-                subject=func_name,
-                error_subject=f"call to '{func_name}'",
-            )
-
-        produced = self._call_result_type(params, result, binding, hole_indices)
-        if expected is not None:
-            engine.complete_from_context(
-                produced,
-                expected,
-                engine.origin(node.span, role=ConstraintRole.EXPECTED_RESULT, subject=func_name),
-            )
-        return self._finish_declared_call(
-            node, params, result, binding, hole_indices, check_args=False
+        participants = tuple(
+            expr for expr in binding if expr is not None and not isinstance(expr, Placeholder)
         )
+        try:
+            for param, bound_expr in zip(params, binding, strict=True):
+                if bound_expr is None or isinstance(bound_expr, Placeholder):
+                    continue
+                self._constrain_argument(
+                    param.type,
+                    bound_expr,
+                    role=ConstraintRole.FUNCTION_ARGUMENT,
+                    subject=func_name,
+                    error_subject=f"call to '{func_name}'",
+                )
+
+            produced = self._call_result_type(params, result, binding, hole_indices)
+            if expected is not None:
+                engine.complete_from_context(
+                    produced,
+                    expected,
+                    engine.origin(
+                        node.span, role=ConstraintRole.EXPECTED_RESULT, subject=func_name
+                    ),
+                )
+            return self._finish_declared_call(
+                node, params, result, binding, hole_indices, check_args=False
+            )
+        except AglTypeError as exc:
+            framed = self._frame_generic_constraint_error(exc, participants)
+            if framed is exc:
+                raise
+            raise framed from exc
 
     # --- declared-name call ---
 
@@ -2144,6 +2512,14 @@ class _Checker:
                 node.node_id, self._extern_binding_targets.get(callee_ref.decl_node_id, ())
             )
 
+        provenance = (
+            {callee_ref.decl_node_id}
+            if callee_ref.decl_node_id in self._candidate_records
+            else set()
+        )
+        if sig.type_params and not node.type_args:
+            provenance.update(self._generic_result_provenance(sig, binding))
+        self._set_inferred_return_expr_provenance(node.node_id, provenance)
         return result_type
 
     # --- value call (lambda / higher-order) ---
@@ -2161,17 +2537,18 @@ class _Checker:
                 span=node.span,
             )
         callee_type = self._check_expr(node.callee, expected=None)
-        if not isinstance(callee_type, FunctionType):
-            raise AglTypeError(
-                f"callee is not a function; got '{callee_type!r}'.",
-                span=node.callee.span,
-            )
-        if len(node.args) != len(callee_type.params):
-            raise AglTypeError(
-                f"Arity mismatch: function expects {len(callee_type.params)} argument(s), "
-                f"got {len(node.args)}.",
-                span=node.span,
-            )
+        with self._frame_direct_candidate_use(exprs=(node.callee,)):
+            if not isinstance(callee_type, FunctionType):
+                raise AglTypeError(
+                    f"callee is not a function; got '{callee_type!r}'.",
+                    span=node.callee.span,
+                )
+            if len(node.args) != len(callee_type.params):
+                raise AglTypeError(
+                    f"Arity mismatch: function expects {len(callee_type.params)} argument(s), "
+                    f"got {len(node.args)}.",
+                    span=node.span,
+                )
         return callee_type
 
     def _check_value_call(
@@ -2216,6 +2593,10 @@ class _Checker:
                     subject="function value",
                 ),
             )
+        self._set_inferred_return_expr_provenance(
+            node.node_id,
+            set(self._inferred_return_expr_provenance.get(node.callee.node_id, ())),
+        )
         extern_targets = self._extern_expr_targets.get(node.callee.node_id, ())
         if extern_targets:
             invocation_targets = tuple(
@@ -2256,10 +2637,11 @@ class _Checker:
             with self._return_context(result_type):
                 body_type = self._check_expr(node.body, expected=result_type)
             if not isinstance(body_type, BottomType):
-                self._assert_assignable(body_type, result_type, node.span)
+                self._assert_assignable_from(body_type, result_type, node.span, node.body)
         else:
             with self._return_context(None) as collected:
                 body_type = self._check_expr(node.body, expected=None)
+                return_provenance = tuple(self._return_collected_provenance_stack[-1])
             if isinstance(body_type, BottomType) and not collected:
                 raise AglTypeError(
                     "Cannot infer return type of lambda: body always raises.",
@@ -2276,6 +2658,11 @@ class _Checker:
                     span=node.span,
                     related=exc.related,
                 ) from exc
+            self._set_inferred_return_expr_provenance(
+                node.node_id,
+                self._provenance_for_result(result_type, (node.body,))
+                | self._provenance_for_return_result(result_type, return_provenance),
+            )
 
         return FunctionType(params=tuple(param_types), result=result_type)
 
@@ -2288,21 +2675,33 @@ class _Checker:
         for branch in node.branches:
             if not isinstance(branch.cond, ElseSentinel):
                 cond_type = self._check_expr(branch.cond, expected=None)
-                self._require_bool_condition(cond_type, branch.cond.span, "if")
+                try:
+                    self._require_bool_condition(cond_type, branch.cond.span, "if")
+                except AglTypeError as exc:
+                    raise self._frame_inferred_return_error(exc, exprs=(branch.cond,)) from exc
             bt = self._check_expr(branch.body, expected=body_expected)
             if not has_else:
-                self._assert_assignable(bt, UnitType(), branch.body.span)
+                self._assert_assignable_from(bt, UnitType(), branch.body.span, branch.body)
             branch_types.append(bt)
 
         if not has_else:
             return UnitType()
 
-        result = self._unify_branch_types(branch_types, node.span, "If expression")
+        try:
+            result = self._unify_branch_types(branch_types, node.span, "If expression")
+        except AglTypeError as exc:
+            raise self._frame_inferred_return_error(
+                exc, exprs=tuple(branch.body for branch in node.branches)
+            ) from exc
         self._set_extern_expr_targets(
             node.node_id,
             self._extern_targets_for_function_exprs(
                 tuple(branch.body for branch in node.branches), result
             ),
+        )
+        self._set_inferred_return_expr_provenance(
+            node.node_id,
+            self._provenance_for_result(result, tuple(branch.body for branch in node.branches)),
         )
         return result
 
@@ -2310,18 +2709,33 @@ class _Checker:
 
     def _check_case(self, node: Case, *, expected: Type | None) -> Type:
         subj_type = self._check_expr(node.subject, expected=None)
+        subject_provenance = self._inferred_return_provenance_for_exprs((node.subject,))
         branch_types: list[Type] = []
         for branch in node.branches:
-            self._bind_pattern_types(branch.pattern, subj_type, branch)
-            self._select_branch_pattern_slots(branch)
+            try:
+                self._bind_pattern_types(
+                    branch.pattern, subj_type, branch, candidate_provenance=subject_provenance
+                )
+                self._select_branch_pattern_slots(branch)
+            except AglTypeError as exc:
+                raise self._frame_inferred_return_error(exc, exprs=(node.subject,)) from exc
             bt = self._check_expr(branch.body, expected=expected)
             branch_types.append(bt)
-        result = self._unify_branch_types(branch_types, node.span, "Case expression")
+        try:
+            result = self._unify_branch_types(branch_types, node.span, "Case expression")
+        except AglTypeError as exc:
+            raise self._frame_inferred_return_error(
+                exc, exprs=tuple(branch.body for branch in node.branches)
+            ) from exc
         self._set_extern_expr_targets(
             node.node_id,
             self._extern_targets_for_function_exprs(
                 tuple(branch.body for branch in node.branches), result
             ),
+        )
+        self._set_inferred_return_expr_provenance(
+            node.node_id,
+            self._provenance_for_result(result, tuple(branch.body for branch in node.branches)),
         )
         return result
 
@@ -2330,33 +2744,37 @@ class _Checker:
     def _check_loop(self, node: Loop) -> Type:
         if node.bound is not None:
             bound_type = self._check_expr(node.bound, expected=None)
-            if not self._is_type_or_bottom(bound_type, IntType):
-                raise AglTypeError(
-                    f"do-loop bound must be int; got '{bound_type!r}'.",
-                    span=node.bound.span,
-                )
+            with self._frame_direct_candidate_use(exprs=(node.bound,)):
+                if not self._is_type_or_bottom(bound_type, IntType):
+                    raise AglTypeError(
+                        f"do-loop bound must be int; got '{bound_type!r}'.",
+                        span=node.bound.span,
+                    )
         if node.for_range_to is not None:
             # Integer-range for: for VAR in a to/downto b [by k]
             assert node.for_iter is not None
             start_type = self._check_expr(node.for_iter, expected=None)
-            if not self._is_type_or_bottom(start_type, IntType):
-                raise AglTypeError(
-                    f"'for' range start must be int; got '{start_type!r}'.",
-                    span=node.for_iter.span,
-                )
+            with self._frame_direct_candidate_use(exprs=(node.for_iter,)):
+                if not self._is_type_or_bottom(start_type, IntType):
+                    raise AglTypeError(
+                        f"'for' range start must be int; got '{start_type!r}'.",
+                        span=node.for_iter.span,
+                    )
             to_type = self._check_expr(node.for_range_to, expected=None)
-            if not self._is_type_or_bottom(to_type, IntType):
-                raise AglTypeError(
-                    f"'for' range bound must be int; got '{to_type!r}'.",
-                    span=node.for_range_to.span,
-                )
+            with self._frame_direct_candidate_use(exprs=(node.for_range_to,)):
+                if not self._is_type_or_bottom(to_type, IntType):
+                    raise AglTypeError(
+                        f"'for' range bound must be int; got '{to_type!r}'.",
+                        span=node.for_range_to.span,
+                    )
             if node.for_range_by is not None:
                 by_type = self._check_expr(node.for_range_by, expected=None)
-                if not self._is_type_or_bottom(by_type, IntType):
-                    raise AglTypeError(
-                        f"'for' range step must be int; got '{by_type!r}'.",
-                        span=node.for_range_by.span,
-                    )
+                with self._frame_direct_candidate_use(exprs=(node.for_range_by,)):
+                    if not self._is_type_or_bottom(by_type, IntType):
+                        raise AglTypeError(
+                            f"'for' range step must be int; got '{by_type!r}'.",
+                            span=node.for_range_by.span,
+                        )
                 # Static guard: a literal step <= 0 is always wrong.
                 # IntLit(0) → zero; UnaryNeg(IntLit(k)) with k >= 1 → always negative.
                 by_expr = node.for_range_by
@@ -2374,27 +2792,33 @@ class _Checker:
         elif node.for_iter is not None:
             # Collection for: for VAR in COLLECTION
             iter_type = self._check_expr(node.for_iter, expected=None)
-            if isinstance(iter_type, ListType):
-                elem_type: Type = iter_type.elem
-            elif isinstance(iter_type, DictType):
-                elem_type = TextType()
-            elif isinstance(iter_type, TextType):
-                elem_type = TextType()
-            else:
-                raise AglTypeError(
-                    f"'for' collection must be list[T], dict[text,V], or text; "
-                    f"got '{iter_type!r}'.",
-                    span=node.for_iter.span,
-                )
+            with self._frame_direct_candidate_use(exprs=(node.for_iter,)):
+                if isinstance(iter_type, ListType):
+                    elem_type: Type = iter_type.elem
+                elif isinstance(iter_type, DictType):
+                    elem_type = TextType()
+                elif isinstance(iter_type, TextType):
+                    elem_type = TextType()
+                else:
+                    raise AglTypeError(
+                        f"'for' collection must be list[T], dict[text,V], or text; "
+                        f"got '{iter_type!r}'.",
+                        span=node.for_iter.span,
+                    )
             self._env.set_binding_type(node.node_id, elem_type)
+            self._set_inferred_return_binding_provenance(
+                node.node_id, self._provenance_for_index_result(elem_type, node.for_iter)
+            )
         if node.while_cond is not None:
             while_type = self._check_expr(node.while_cond, expected=None)
-            self._require_bool_condition(while_type, node.while_cond.span, "while")
+            with self._frame_direct_candidate_use(exprs=(node.while_cond,)):
+                self._require_bool_condition(while_type, node.while_cond.span, "while")
         body_type = self._check_expr(node.body, expected=UnitType())
-        self._assert_assignable(body_type, UnitType(), node.body.span)
+        self._assert_assignable_from(body_type, UnitType(), node.body.span, node.body)
         if node.until_cond is not None:
             cond_type = self._check_expr(node.until_cond, expected=None)
-            self._require_bool_condition(cond_type, node.until_cond.span, "until")
+            with self._frame_direct_candidate_use(exprs=(node.until_cond,)):
+                self._require_bool_condition(cond_type, node.until_cond.span, "until")
         return UnitType()
 
     # --- try ---
@@ -2407,10 +2831,18 @@ class _Checker:
             ht = self._check_catch_clause(clause, expected=expected)
             handler_types.append(ht)
             handler_bodies.append(clause.body)
-        result = self._unify_branch_types(handler_types, node.span, "Try expression")
+        try:
+            result = self._unify_branch_types(handler_types, node.span, "Try expression")
+        except AglTypeError as exc:
+            raise self._frame_inferred_return_error(
+                exc, exprs=(node.body, *handler_bodies)
+            ) from exc
         self._set_extern_expr_targets(
             node.node_id,
             self._extern_targets_for_function_exprs((node.body, *handler_bodies), result),
+        )
+        self._set_inferred_return_expr_provenance(
+            node.node_id, self._provenance_for_result(result, (node.body, *handler_bodies))
         )
         return result
 
@@ -2438,10 +2870,11 @@ class _Checker:
     def _infer_raise(self, node: Raise) -> BottomType:
         exc_type = self._check_expr(node.exc, expected=None)
         if not isinstance(exc_type, ExceptionType):
-            raise AglTypeError(
+            error = AglTypeError(
                 f"'raise' requires an exception value; got '{exc_type!r}'.",
                 span=node.exc.span,
             )
+            raise self._frame_inferred_return_error(error, exprs=(node.exc,)) from error
         return BottomType()
 
     # --- return ---
@@ -2460,8 +2893,18 @@ class _Checker:
         self._record_return_extern_targets(targets)
         if expected is None:
             self._return_collected_stack[-1].append(value_type)
+            self._return_collected_provenance_stack[-1].append(
+                (
+                    value_type,
+                    self._provenance_for_result(
+                        value_type, () if node.value is None else (node.value,)
+                    ),
+                )
+            )
         else:
-            self._assert_assignable(value_type, expected, node.span)
+            self._assert_assignable_from(
+                value_type, expected, node.span, node if node.value is None else node.value
+            )
         return BottomType()
 
     # --- template ---
@@ -2517,7 +2960,7 @@ class _Checker:
             self._record_node_type(expr.node_id, result)
             return result
         child_type = self._check_expr(expr, expected=None)
-        self._assert_assignable(child_type, JsonType(), expr.span)
+        self._assert_assignable_from(child_type, JsonType(), expr.span, expr)
         return child_type
 
     # --- binary ops ---
@@ -2624,6 +3067,12 @@ class _Checker:
     def _check_binary_op(self, node: BinaryOp) -> Type:
         left_type = self._check_expr(node.left, expected=None)
         right_type = self._check_expr(node.right, expected=None)
+        try:
+            return self._check_binary_operands(node, left_type, right_type)
+        except AglTypeError as exc:
+            raise self._frame_inferred_return_error(exc, exprs=(node.left, node.right)) from exc
+
+    def _check_binary_operands(self, node: BinaryOp, left_type: Type, right_type: Type) -> Type:
         op = node.op
 
         if op in (BinOp.AND, BinOp.OR):
@@ -2707,13 +3156,25 @@ class _Checker:
             return self._check_in_op(left_type, right_type, node.span)
 
         if op == BinOp.ADD:
-            return self._check_add(left_type, right_type, node.span)
+            result = self._check_add(left_type, right_type, node.span)
+            self._set_inferred_return_expr_provenance(
+                node.node_id, self._provenance_for_result(result, (node.left, node.right))
+            )
+            return result
 
         if op == BinOp.SUB:
-            return self._check_numeric_binop(left_type, right_type, node.span, "-")
+            result = self._check_numeric_binop(left_type, right_type, node.span, "-")
+            self._set_inferred_return_expr_provenance(
+                node.node_id, self._provenance_for_result(result, (node.left, node.right))
+            )
+            return result
 
         if op == BinOp.MUL:
-            return self._check_numeric_binop(left_type, right_type, node.span, "*")
+            result = self._check_numeric_binop(left_type, right_type, node.span, "*")
+            self._set_inferred_return_expr_provenance(
+                node.node_id, self._provenance_for_result(result, (node.left, node.right))
+            )
+            return result
 
         if op == BinOp.DIV:
             if self._candidate_operation_can_defer((left_type, right_type), (IntType, DecimalType)):
@@ -2866,48 +3327,53 @@ class _Checker:
 
     def _check_unary_neg(self, node: UnaryNeg) -> Type:
         t = self._check_expr(node.operand, expected=None)
-        if self._candidate_session is not None and contains_inference_var(t):
+        with self._frame_direct_candidate_use(exprs=(node.operand,)):
+            if self._candidate_session is not None and contains_inference_var(t):
+                return t
+            # Reject operations on bare type variables.
+            if isinstance(t, TypeVarType):
+                raise AglTypeError(
+                    f"unary '-' is not permitted on a value of abstract type variable '{t.name}'.",
+                    span=node.span,
+                )
+            if not isinstance(t, (IntType, DecimalType)):
+                raise AglTypeError(
+                    f"Unary '-' requires a numeric operand; got '{t!r}'.",
+                    span=node.span,
+                )
+            self._set_inferred_return_expr_provenance(
+                node.node_id, self._provenance_for_result(t, (node.operand,))
+            )
             return t
-        # reject operations on bare type variables.
-        if isinstance(t, TypeVarType):
-            raise AglTypeError(
-                f"unary '-' is not permitted on a value of abstract type variable '{t.name}'.",
-                span=node.span,
-            )
-        if not isinstance(t, (IntType, DecimalType)):
-            raise AglTypeError(
-                f"Unary '-' requires a numeric operand; got '{t!r}'.",
-                span=node.span,
-            )
-        return t
 
     # --- is test ---
 
     def _check_is_test(self, node: IsTest) -> BoolType:
         expr_type = self._check_expr(node.expr, expected=None)
-        if self._candidate_session is not None and contains_inference_var(expr_type):
+        with self._frame_direct_candidate_use(exprs=(node.expr,)):
+            if self._candidate_session is not None and contains_inference_var(expr_type):
+                return BoolType()
+            # Reject operations on bare type variables.
+            if isinstance(expr_type, TypeVarType):
+                raise AglTypeError(
+                    f"an abstract type variable '{expr_type.name}' cannot be tested with 'is'.",
+                    span=node.span,
+                )
+            if not isinstance(expr_type, EnumType):
+                raise AglTypeError(
+                    f"'is' / 'is not' requires an enum-typed left-hand side; got '{expr_type!r}'.",
+                    span=node.span,
+                )
+            self._check_variant_qualification(
+                qualifier=node.qualifier,
+                module_qualifier=node.module_qualifier,
+                variant=node.variant,
+                enum_type=expr_type,
+                span=node.span,
+            )
+            if node.variant not in self._env.type_table.enum_variants(expr_type):
+                raise _variant_not_in_enum(node.variant, expr_type, node.span)
             return BoolType()
-        # reject operations on bare type variables.
-        if isinstance(expr_type, TypeVarType):
-            raise AglTypeError(
-                f"an abstract type variable '{expr_type.name}' cannot be tested with 'is'.",
-                span=node.span,
-            )
-        if not isinstance(expr_type, EnumType):
-            raise AglTypeError(
-                f"'is' / 'is not' requires an enum-typed left-hand side; got '{expr_type!r}'.",
-                span=node.span,
-            )
-        self._check_variant_qualification(
-            qualifier=node.qualifier,
-            module_qualifier=node.module_qualifier,
-            variant=node.variant,
-            enum_type=expr_type,
-            span=node.span,
-        )
-        if node.variant not in self._env.type_table.enum_variants(expr_type):
-            raise _variant_not_in_enum(node.variant, expr_type, node.span)
-        return BoolType()
 
     def _qualified_constructor_typed_call_error(self, span: SourceSpan) -> AglTypeError:
         return AglTypeError(
@@ -3013,38 +3479,50 @@ class _Checker:
         obj_type = self._check_expr(node.obj, expected=None)
         if self._candidate_session is not None and contains_inference_var(obj_type):
             return self._active_inference_engine().fresh("field result")
-        # reject operations on bare type variables.
-        if isinstance(obj_type, TypeVarType):
+        try:
+            # Reject operations on bare type variables.
+            if isinstance(obj_type, TypeVarType):
+                raise AglTypeError(
+                    f"a value of type variable '{obj_type.name}' has no fields.",
+                    span=node.span,
+                )
+            if isinstance(obj_type, ExceptionType):
+                exc_fields = self._env.type_table.exception_fields(obj_type)
+                if node.field not in exc_fields:
+                    raise AglTypeError(
+                        f"Exception type '{obj_type.name}' has no field '{node.field}'.",
+                        span=node.span,
+                    )
+                return exc_fields[node.field]
+            if isinstance(obj_type, RecordType):
+                record_fields = self._env.type_table.record_fields(obj_type)
+                if node.field not in record_fields:
+                    raise AglTypeError(
+                        f"Record '{obj_type.name}' has no field '{node.field}'.",
+                        span=node.span,
+                    )
+                field_type = record_fields[node.field]
+                self._set_inferred_return_expr_provenance(
+                    node.node_id,
+                    self._provenance_for_field_result(obj_type, node.field, node.obj),
+                )
+                return field_type
             raise AglTypeError(
-                f"a value of type variable '{obj_type.name}' has no fields.",
+                f"Field access requires a record or exception value; got '{obj_type!r}'.",
                 span=node.span,
             )
-        if isinstance(obj_type, ExceptionType):
-            exc_fields = self._env.type_table.exception_fields(obj_type)
-            if node.field not in exc_fields:
-                raise AglTypeError(
-                    f"Exception type '{obj_type.name}' has no field '{node.field}'.",
-                    span=node.span,
-                )
-            return exc_fields[node.field]
-        if isinstance(obj_type, RecordType):
-            record_fields = self._env.type_table.record_fields(obj_type)
-            if node.field not in record_fields:
-                raise AglTypeError(
-                    f"Record '{obj_type.name}' has no field '{node.field}'.",
-                    span=node.span,
-                )
-            return record_fields[node.field]
-        raise AglTypeError(
-            f"Field access requires a record or exception value; got '{obj_type!r}'.",
-            span=node.span,
-        )
+        except AglTypeError as exc:
+            raise self._frame_inferred_return_error(exc, exprs=(node.obj,)) from exc
 
     # --- index access ---
 
     def _check_index_access(self, node: _IndexLike) -> Type:
         obj_type = self._check_expr(node.obj, expected=None)
-        return self._check_index_operand(obj_type, node.index, span=node.span)
+        result = self._check_index_operand(obj_type, node.index, span=node.span, obj_expr=node.obj)
+        self._set_inferred_return_expr_provenance(
+            node.node_id, self._provenance_for_index_result(result, node.obj)
+        )
+        return result
 
     def _check_index_operand(
         self,
@@ -3052,30 +3530,42 @@ class _Checker:
         index: Expr,
         *,
         span: SourceSpan,
+        obj_expr: Expr | None = None,
+        binding_node_ids: Sequence[int] = (),
     ) -> Type:
         if self._candidate_session is not None and contains_inference_var(obj_type):
             self._check_expr(index, expected=None)
             return self._active_inference_engine().fresh("index result")
         # reject operations on bare type variables.
         if isinstance(obj_type, TypeVarType):
-            raise AglTypeError(
+            error = AglTypeError(
                 f"a value of type variable '{obj_type.name}' is not indexable.",
                 span=span,
             )
+            raise self._frame_inferred_return_error(
+                error,
+                exprs=(obj_expr,) if obj_expr else (),
+                binding_node_ids=binding_node_ids,
+            ) from error
         if isinstance(obj_type, ListType):
             index_type = self._check_expr(index, expected=IntType())
-            self._assert_assignable(index_type, IntType(), index.span)
+            self._assert_assignable_from(index_type, IntType(), index.span, index)
             return obj_type.elem
 
         if isinstance(obj_type, DictType):
             index_type = self._check_expr(index, expected=TextType())
-            self._assert_assignable(index_type, TextType(), index.span)
+            self._assert_assignable_from(index_type, TextType(), index.span, index)
             return obj_type.value
 
-        raise AglTypeError(
+        error = AglTypeError(
             f"indexing requires a list or dict; got '{obj_type!r}'.",
             span=span,
         )
+        raise self._frame_inferred_return_error(
+            error,
+            exprs=(obj_expr,) if obj_expr else (),
+            binding_node_ids=binding_node_ids,
+        ) from error
 
     # --- list / dict literals ---
 
@@ -3151,9 +3641,13 @@ class _Checker:
         if elem_expected is not None and not contains_inference_var(elem_expected):
             for elem in node.elements:
                 et = self._check_expr(elem, expected=elem_expected)
-                self._assert_assignable(et, elem_expected, elem.span)
+                self._assert_assignable_from(et, elem_expected, elem.span, elem)
             return ListType(elem=elem_expected)
-        unified = self._unify_elements(node.elements, kind="List", span=node.span)
+        with self._frame_direct_candidate_use(exprs=node.elements):
+            unified = self._unify_elements(node.elements, kind="List", span=node.span)
+        self._set_inferred_return_expr_provenance(
+            node.node_id, self._provenance_for_result(unified, node.elements)
+        )
         return ListType(elem=unified)
 
     def _check_dict_lit(self, node: DictLit, *, expected: Type | None) -> Type:
@@ -3184,10 +3678,13 @@ class _Checker:
         if val_expected is not None and not contains_inference_var(val_expected):
             for entry in node.entries:
                 et = self._check_expr(entry.value, expected=val_expected)
-                self._assert_assignable(et, val_expected, entry.span)
+                self._assert_assignable_from(et, val_expected, entry.span, entry.value)
             return DictType(value=val_expected)
-        unified = self._unify_elements(
-            [entry.value for entry in node.entries], kind="Dict", span=node.span
+        values = tuple(entry.value for entry in node.entries)
+        with self._frame_direct_candidate_use(exprs=values):
+            unified = self._unify_elements(values, kind="Dict", span=node.span)
+        self._set_inferred_return_expr_provenance(
+            node.node_id, self._provenance_for_result(unified, values)
         )
         return DictType(value=unified)
 
@@ -3306,6 +3803,7 @@ class _Checker:
         *,
         field_name: str | None = None,
         field_names: frozenset[str] = frozenset(),
+        candidate_provenance: set[int] | None = None,
     ) -> None:
         """Type and finally classify one pattern at its matched occurrence."""
         if isinstance(pattern, WildcardPattern):
@@ -3326,15 +3824,21 @@ class _Checker:
                 owner,
                 field_name=field_name,
                 field_names=field_names,
+                candidate_provenance=candidate_provenance,
             )
             self._env.set_binding_type(pattern.node_id, subj_type)
+            self._set_inferred_return_binding_provenance(
+                pattern.node_id, candidate_provenance or set()
+            )
             self._record_pattern_classification(pattern.node_id, None)
             return
         if isinstance(pattern, VarPattern):
             if field_name is None:
                 self._check_top_level_bare_constructor(pattern, subj_type)
             else:
-                self._check_field_bare_pattern(pattern, subj_type, field_name, field_names)
+                self._check_field_bare_pattern(
+                    pattern, subj_type, field_name, field_names, candidate_provenance
+                )
             return
 
         assert isinstance(pattern, ConstructorPattern), (
@@ -3377,6 +3881,13 @@ class _Checker:
                     pattern,
                     field_name=name,
                     field_names=constructor_field_names,
+                    candidate_provenance=(
+                        candidate_provenance
+                        if self._constructor_field_depends_on_owner_type(
+                            enum_type, variant_name, name
+                        )
+                        else set()
+                    ),
                 )
         self._record_constructor_pattern_binding(pattern.node_id, tuple(bound_pairs))
 
@@ -3423,6 +3934,7 @@ class _Checker:
         field_type: Type,
         field_name: str,
         field_names: frozenset[str],
+        candidate_provenance: set[int] | None,
     ) -> None:
         """Finalize one bare subpattern after shared field binding selected its slot."""
         candidate = self._candidate_for_field_type(pattern, field_type)
@@ -3435,6 +3947,9 @@ class _Checker:
                     span=pattern.span,
                 )
             self._env.set_binding_type(pattern.node_id, field_type)
+            self._set_inferred_return_binding_provenance(
+                pattern.node_id, candidate_provenance or set()
+            )
             self._record_pattern_classification(pattern.node_id, None)
             return
         if candidate is not None:
@@ -3706,6 +4221,7 @@ def _check_prepared_module(
     module_id: ModuleId = ENTRY_ID,
     check_inhabitation: bool = True,
     infer_candidates: bool = True,
+    candidate_records: Mapping[int, FunctionSignatureRecord] | None = None,
 ) -> CheckedModule:
     """Check using a prepared environment and return only finalized annotations.
 
@@ -3727,15 +4243,17 @@ def _check_prepared_module(
         if isinstance(item, FuncDef):
             header_checker._preregister_funcdef(item)
     if infer_candidates:
-        infer_module_component_candidates(
+        inferred_records = infer_module_component_candidates(
             ModuleCandidateComponent.singleton(resolved, env, capabilities, module_id)
         )
+        candidate_records = {record.declaration_node_id: record for record in inferred_records}
 
     checker = _Checker(
         env=env,
         resolved=resolved,
         capabilities=capabilities,
         module_id=module_id,
+        candidate_records=candidate_records,
     )
     checker.check_module(resolved.program)
     checked = checker.result()

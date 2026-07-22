@@ -1445,6 +1445,21 @@ def test_cross_module_field_type_single_direction(tmp_path: Path) -> None:
     )
 
 
+def test_cross_module_generic_record_field_access(tmp_path: Path) -> None:
+    """A generic imported record field retains its selected type argument."""
+    checked = _check_program(
+        tmp_path,
+        {
+            "entry": "import lib\nlet box = lib::Box(value = 1)\nbox.value",
+            "lib": "record Box[T]\n  value: T",
+        },
+    )
+
+    assert _binding_value_type(checked, ENTRY_ID, "box") == RecordType(
+        "Box", type_args=(IntType(),), module_id=ModuleId.from_path("lib")
+    )
+
+
 def test_cross_module_field_type_mutual_import_cycle(tmp_path: Path) -> None:
     """Mutual import cycle where FIELD types cross module boundaries typechecks.
 

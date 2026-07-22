@@ -637,6 +637,8 @@ def _build_program_func_sig_table(
                 is_builtin=item.is_builtin,
                 is_extern=item.is_extern,
                 return_source=FunctionReturnSource.DECLARED,
+                module_id=mid,
+                declaration_span=item.span,
             )
 
     return result
@@ -931,6 +933,7 @@ def check_program(
             module_id=mid,
             check_inhabitation=False,
             infer_candidates=False,
+            candidate_records=program_func_sig_table,
         )
         cm = replace(
             cp,

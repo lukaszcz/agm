@@ -151,6 +151,8 @@ class FunctionSignatureRecord:
     is_builtin: bool
     is_extern: bool
     return_source: FunctionReturnSource
+    module_id: ModuleId
+    declaration_span: SourceSpan
     candidate_evidence: tuple[SourceSpan, ...] = ()
 
 
@@ -365,6 +367,8 @@ def _infer_function_component(
                 is_builtin=False,
                 is_extern=False,
                 return_source=FunctionReturnSource.CANDIDATE,
+                module_id=module.module_id,
+                declaration_span=node.span,
                 candidate_evidence=(node.body.span,) if node.body is not None else (),
             )
         )

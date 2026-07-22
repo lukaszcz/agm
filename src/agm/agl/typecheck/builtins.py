@@ -127,7 +127,9 @@ class BuiltinCheckCtx(Protocol):
 
     def _check_expr(self, expr: Expr, *, expected: Type | None) -> Type: ...
 
-    def _assert_assignable(self, value_type: Type, target_type: Type, span: SourceSpan) -> None: ...
+    def _assert_assignable_from(
+        self, value_type: Type, target_type: Type, span: SourceSpan, expr: Expr
+    ) -> None: ...
 
     def _type_is_wire_serializable(self, typ: Type) -> bool: ...
 
@@ -184,7 +186,9 @@ class BuiltinCallChecker:
                     span=named.span,
                 )
             option_type = self._ctx._check_expr(named.value, expected=BoolType())
-            self._ctx._assert_assignable(option_type, BoolType(), named.value.span)
+            self._ctx._assert_assignable_from(
+                option_type, BoolType(), named.value.span, named.value
+            )
         self._ctx._check_expr(node.args[0], expected=None)
         return TextType()
 
@@ -197,7 +201,7 @@ class BuiltinCallChecker:
                 span=node.span,
             )
         arg_type = self._ctx._check_expr(node.args[0], expected=TextType())
-        self._ctx._assert_assignable(arg_type, TextType(), node.args[0].span)
+        self._ctx._assert_assignable_from(arg_type, TextType(), node.args[0].span, node.args[0])
         return JsonType()
 
     # --- ask ---
@@ -294,11 +298,13 @@ class BuiltinCallChecker:
                 f"{callee}: too many positional arguments (expected 1).", span=node.span
             )
         prompt_type = self._ctx._check_expr(node.args[0], expected=TextType())
-        self._ctx._assert_assignable(prompt_type, TextType(), node.args[0].span)
+        self._ctx._assert_assignable_from(prompt_type, TextType(), node.args[0].span, node.args[0])
         if "agent" in named:
             agent_na = named["agent"]
             agent_type = self._ctx._check_expr(agent_na.value, expected=AgentType())
-            self._ctx._assert_assignable(agent_type, AgentType(), agent_na.value.span)
+            self._ctx._assert_assignable_from(
+                agent_type, AgentType(), agent_na.value.span, agent_na.value
+            )
         return named
 
     def finalize(self, obligation: PendingBuiltinObligation) -> None:
@@ -409,7 +415,7 @@ class BuiltinCallChecker:
         if len(node.args) > 1:
             raise AglTypeError("exec: too many positional arguments (expected 1).", span=node.span)
         cmd_type = self._ctx._check_expr(node.args[0], expected=TextType())
-        self._ctx._assert_assignable(cmd_type, TextType(), node.args[0].span)
+        self._ctx._assert_assignable_from(cmd_type, TextType(), node.args[0].span, node.args[0])
         format_name, strict_json, parse_policy = self._parse_options(named)
         self._ctx._register_builtin_obligation(
             PendingBuiltinObligation(

@@ -2052,6 +2052,432 @@ class TestFuncDef:
     def test_direct_recursive_candidate_does_not_hide_concrete_body_errors(self) -> None:
         reject_type("def f(n: int) = if n == 0 => 0 else => f(n - 1) + true")
 
+    def test_candidate_validation_error_is_framed_with_original_and_candidate_spans(self) -> None:
+        source = 'def recurse(n: int) = if n == 0 => recurse(n) < "x" else => false\nrecurse(0)'
+        err = reject_type(source)
+
+        assert "inferred return type" in str(err).lower()
+        assert "annotation" in str(err).lower()
+        assert err.span is not None
+        assert source[err.span.start_offset : err.span.end_offset].startswith("def recurse")
+        assert any("underlying type error" in message.lower() for message, _ in err.related)
+        assert any("candidate return type" in message.lower() for message, _ in err.related)
+        assert any("candidate return evidence" in message.lower() for message, _ in err.related)
+        assert any(
+            source[span.start_offset : span.end_offset] == 'recurse(n) < "x"'
+            for message, span in err.related
+            if "underlying type error" in message.lower()
+        )
+
+    def test_nested_failed_operations_keep_the_original_candidate_frame(self) -> None:
+        err = reject_type(
+            'def recurse(n: int) = if n == 0 => 0 else => recurse(n - 1)\n(recurse(0) + "x") + 1'
+        )
+
+        assert "inferred return type" in str(err).lower()
+        assert (
+            len(
+                [
+                    message
+                    for message, _ in err.related
+                    if "candidate return type" in message.lower()
+                ]
+            )
+            == 1
+        )
+
+    def test_candidate_provenance_flows_through_unannotated_binding_and_value_call(self) -> None:
+        source = (
+            "def recurse(n: int) = if n == 0 => 0 else => recurse(n - 1)\n"
+            "let function = recurse\n"
+            "let value = function(0)\n"
+            'value + "x"'
+        )
+        err = reject_type(source)
+
+        assert "inferred return type" in str(err).lower()
+        assert any("underlying type error" in message.lower() for message, _ in err.related)
+
+    def test_generic_and_common_type_results_preserve_candidate_provenance(self) -> None:
+        generic = reject_type(
+            "def identity[T](value: T) -> T = value\n"
+            "def recurse(n: int) = if n == 0 => 0 else => recurse(n - 1)\n"
+            'identity(recurse(0)) + "x"'
+        )
+        common = reject_type(
+            "def recurse(n: int) = if n == 0 => 0 else => recurse(n - 1)\n"
+            "let value = if true => recurse(0) else => 1\n"
+            'value + "x"'
+        )
+
+        assert "inferred return type" in str(generic).lower()
+        assert "inferred return type" in str(common).lower()
+
+    def test_provenance_flows_through_unannotated_lambda_literals_and_generic_constructor(
+        self,
+    ) -> None:
+        sources = (
+            (
+                "def recurse(n: int) = if n == 0 => 0 else => recurse(n - 1)\n"
+                "let value = (fn() => recurse(0))()\n"
+                'value + "x"'
+            ),
+            (
+                "def recurse(n: int) = if n == 0 => 0 else => recurse(n - 1)\n"
+                "let value = [recurse(0)][0]\n"
+                'value + "x"'
+            ),
+            (
+                "def recurse(n: int) = if n == 0 => 0 else => recurse(n - 1)\n"
+                'let value = {"value": recurse(0)}["value"]\n'
+                'value + "x"'
+            ),
+            (
+                "record Box[T]\n  value: T\n"
+                "def recurse(n: int) = if n == 0 => 0 else => recurse(n - 1)\n"
+                "let value = Box(value = recurse(0)).value\n"
+                'value + "x"'
+            ),
+        )
+
+        for source in sources:
+            err = reject_type(source)
+
+            assert "inferred return type" in str(err).lower()
+
+    @pytest.mark.parametrize(
+        "source",
+        (
+            "def recurse(n: int) = if n == 0 => 0 else => recurse(n - 1)\n"
+            "def use() -> text = recurse(0)\n"
+            "use()",
+            "def recurse(n: int) = if n == 0 => 0 else => recurse(n - 1)\n"
+            "def use(value: text = recurse(0)) -> unit = ()\n"
+            "use()",
+            "def recurse(n: int) = if n == 0 => 0 else => recurse(n - 1)\nrecurse(0)\n()",
+            "def recurse(n: int) = if n == 0 => 0 else => recurse(n - 1)\n"
+            'var value: text = "x"\n'
+            "value := recurse(0)",
+        ),
+        ids=("function-body", "default", "discarded", "assignment"),
+    )
+    def test_final_validation_boundaries_frame_candidate_provenance(self, source: str) -> None:
+        err = reject_type(source)
+
+        assert "inferred return type" in str(err).lower()
+        assert any("underlying type error" in message.lower() for message, _ in err.related)
+
+    def test_fixed_result_choices_clear_candidate_provenance(self) -> None:
+        sources = (
+            "def recurse(n: int) = if n == 0 => 0 else => recurse(n - 1)\n"
+            "let value = recurse(0) + 1.5\n"
+            'value + "x"',
+            "def recurse(n: int) = if n == 0 => 0 else => recurse(n - 1)\n"
+            "let value = if true => recurse(0) else => 1.5\n"
+            'value + "x"',
+        )
+
+        for source in sources:
+            err = reject_type(source)
+
+            assert "inferred return type" not in str(err).lower()
+
+    def test_fixed_result_expression_clears_candidate_provenance(self) -> None:
+        err = reject_type(
+            "def recurse(n: int) = if n == 0 => 0 else => recurse(n - 1)\n"
+            "let comparison = recurse(0) == 1\n"
+            'comparison + "x"'
+        )
+
+        assert "inferred return type" not in str(err).lower()
+
+    @pytest.mark.parametrize(
+        "initializer",
+        ("recurse(0)", "recurse(0) as int"),
+        ids=("annotation", "cast"),
+    )
+    def test_annotation_barriers_clear_candidate_provenance(self, initializer: str) -> None:
+        err = reject_type(
+            "def recurse(n: int) = if n == 0 => 0 else => recurse(n - 1)\n"
+            f"let value: int = {initializer}\n"
+            'value + "x"'
+        )
+
+        assert "inferred return type" not in str(err).lower()
+
+    def test_unrelated_branch_error_after_candidate_comparison_is_ordinary(self) -> None:
+        err = reject_type(
+            "def recurse(n: int) = if n == 0 => 0 else => recurse(n - 1)\n"
+            'if recurse(0) == 0 => 1 else => "x"'
+        )
+
+        assert "inferred return type" not in str(err).lower()
+
+    def test_unrelated_call_parameter_error_after_candidate_argument_is_ordinary(self) -> None:
+        err = reject_type(
+            "def recurse(n: int) = if n == 0 => 0 else => recurse(n - 1)\n"
+            "def use(first: int, second: int) -> unit = ()\n"
+            'use(recurse(0), "x")'
+        )
+
+        assert "inferred return type" not in str(err).lower()
+
+    def test_fixed_case_pattern_field_binder_clears_candidate_provenance(self) -> None:
+        err = reject_type(
+            "enum Box\n"
+            "  | box(value: int)\n"
+            "def recurse(n: int) = if n == 0 => box(value = 1) else => recurse(n - 1)\n"
+            "case recurse(0) of\n"
+            '  | box(value) => value + "x"'
+        )
+
+        assert "inferred return type" not in str(err).lower()
+
+    def test_generic_case_pattern_field_binder_preserves_candidate_provenance(self) -> None:
+        err = reject_type(
+            "enum Box[T]\n"
+            "  | box(value: T)\n"
+            "def recurse(n: int) = if n == 0 => box(value = 1) else => recurse(n - 1)\n"
+            "case recurse(0) of\n"
+            '  | box(value) => value + "x"'
+        )
+
+        assert "inferred return type" in str(err).lower()
+
+    def test_assignment_target_preserves_candidate_provenance(self) -> None:
+        err = reject_type(
+            "def recurse(n: int) = if n == 0 => 0 else => recurse(n - 1)\n"
+            "var value = recurse(0)\n"
+            'value := "x"'
+        )
+
+        assert "inferred return type" in str(err).lower()
+
+    def test_annotation_failure_retains_candidate_provenance(self) -> None:
+        err = reject_type(
+            "def recurse(n: int) = if n == 0 => 0 else => recurse(n - 1)\n"
+            "let value: text = recurse(0)\n"
+            "value"
+        )
+
+        assert "inferred return type" in str(err).lower()
+        assert any("underlying type error" in message.lower() for message, _ in err.related)
+
+    def test_unrelated_concrete_error_in_inferred_function_is_unchanged(self) -> None:
+        err = reject_type(
+            "def recurse(n: int) = if n == 0 => 0 else => recurse(n - 1)\n"
+            "def broken() = 1 + true\n"
+            "broken()"
+        )
+
+        assert "inferred return type" not in str(err).lower()
+
+    def test_multiple_candidate_provenance_is_deterministic(self) -> None:
+        err = reject_type(
+            "def first(n: int) = if n == 0 => 0 else => first(n - 1)\n"
+            'def second(n: int) = if n == 0 => "x" else => second(n - 1)\n'
+            "first(0) + second(0)"
+        )
+
+        assert "first" in str(err)
+        assert "second" in str(err)
+        assert str(err).index("first") < str(err).index("second")
+        candidate_notes = [
+            message for message, _ in err.related if "candidate return type" in message.lower()
+        ]
+        assert candidate_notes == [
+            "Candidate return type inferred for function 'first'.",
+            "Candidate return type inferred for function 'second'.",
+        ]
+
+    @pytest.mark.parametrize(
+        "source",
+        (
+            "def recurse(n: int) = if n == 0 => 1 else => recurse(n - 1)\nrecurse(0) as list[int]",
+            "def recurse(n: int) = if n == 0 => 1 else => recurse(n - 1)\n"
+            'try recurse(0) catch _ => "text"',
+            "def recurse(n: int) = if n == 0 => 1 else => recurse(n - 1)\nraise recurse(0)",
+            "def recurse(n: int) = if n == 0 => 1 else => recurse(n - 1)\nrecurse(0).reviewer",
+            "def recurse(n: int) = if n == 0 => 1 else => recurse(n - 1)\nrecurse(0)[0]",
+            "def recurse(n: int) = if n == 0 => 1 else => recurse(n - 1)\n"
+            "let values: list[text] = [recurse(0)]\nvalues",
+            "def recurse(n: int) = if n == 0 => 1 else => recurse(n - 1)\n"
+            'let values: dict[text, text] = {"value": recurse(0)}\nvalues',
+            "def recurse(n: int) = if n == 0 => 1 else => recurse(n - 1)\nparse_json(recurse(0))",
+            "record Box\n  value: text\n"
+            "def recurse(n: int) = if n == 0 => 1 else => recurse(n - 1)\n"
+            "Box(value = recurse(0))",
+            "record Box[T]\n  value: T\n"
+            "def recurse(n: int) = if n == 0 => 1 else => recurse(n - 1)\n"
+            "let box: Box[text] = Box(value = recurse(0))\nbox",
+        ),
+        ids=(
+            "cast",
+            "try-branches",
+            "raise",
+            "field-access-reviewer-repro",
+            "index-access",
+            "expected-list-element",
+            "expected-dict-element",
+            "builtin-argument",
+            "constructor-argument",
+            "generic-constructor-argument",
+        ),
+    )
+    def test_candidate_evidence_consumers_frame_failures(self, source: str) -> None:
+        err = reject_type(source)
+
+        assert "inferred return type" in str(err).lower()
+        assert any("underlying type error" in message.lower() for message, _ in err.related)
+
+    @pytest.mark.parametrize(
+        "source",
+        (
+            'def recurse(n: int) = if n == 0 => [1] else => recurse(n - 1)\nrecurse(0)["x"]',
+            "def recurse(n: int) = if n == 0 => 1 else => recurse(n - 1)\n"
+            "recurse(0) + parse_json(1)",
+        ),
+        ids=("index-operand", "binary-child"),
+    )
+    def test_unrelated_failures_are_not_framed(self, source: str) -> None:
+        err = reject_type(source)
+
+        assert "inferred return type" not in str(err).lower()
+
+    @pytest.mark.parametrize(
+        "source",
+        (
+            "def recurse(n: int) = if n == 0 => 0 else => recurse(n - 1)\n"
+            "let value = recurse(0)\nvalue()",
+            "def recurse(n: int) = if n == 0 => 0 else => recurse(n - 1)\n"
+            "while recurse(0) do () done",
+            "def recurse(n: int) = if n == 0 => 0 else => recurse(n - 1)\n"
+            "for value in recurse(0) do () done",
+            'def recurse(n: int) = if n == 0 => "x" else => recurse(n - 1)\n'
+            "do[recurse(0)] () until true",
+            'def recurse(n: int) = if n == 0 => "x" else => recurse(n - 1)\n-recurse(0)',
+            "def recurse(n: int) = if n == 0 => 0 else => recurse(n - 1)\nrecurse(0) is Abort",
+            "def recurse(n: int) = if n == 0 => 0 else => recurse(n - 1)\n"
+            "var values = recurse(0)\nvalues[0] := 1",
+        ),
+        ids=(
+            "value-call-head",
+            "while",
+            "for-collection",
+            "loop-bound",
+            "unary",
+            "is",
+            "index-root",
+        ),
+    )
+    def test_direct_candidate_uses_frame_failures(self, source: str) -> None:
+        err = reject_type(source)
+
+        assert "inferred return type" in str(err).lower()
+
+    @pytest.mark.parametrize(
+        "source",
+        (
+            'def recurse(n: int) = if n == 0 => 0 else => recurse(n - 1)\n[recurse(0), "x"]',
+            "def recurse(n: int) = if n == 0 => 0 else => recurse(n - 1)\n"
+            '{"candidate": recurse(0), "other": "x"}',
+        ),
+        ids=("list", "dict"),
+    )
+    def test_literal_common_type_conflicts_frame_candidate_evidence(self, source: str) -> None:
+        err = reject_type(source)
+
+        assert "inferred return type" in str(err).lower()
+
+    def test_generic_result_provenance_survives_concrete_expected_type(self) -> None:
+        err = reject_type(
+            "def identity[T](value: T) -> T = value\n"
+            "def expect_text(value: text) -> unit = ()\n"
+            "def recurse(n: int) = if n == 0 => 0 else => recurse(n - 1)\n"
+            "expect_text(identity(recurse(0)))"
+        )
+
+        assert "inferred return type" in str(err).lower()
+
+    @pytest.mark.parametrize(
+        "source",
+        (
+            "def pair[T](left: T, right: T) -> T = left\n"
+            "def recurse(n: int) = if n == 0 => 0 else => recurse(n - 1)\n"
+            'pair(recurse(0), "x")',
+        ),
+        ids=("argument-solver-conflict",),
+    )
+    def test_generic_conflicts_frame_candidate_arguments(self, source: str) -> None:
+        err = reject_type(source)
+
+        assert "inferred return type" in str(err).lower()
+
+    def test_generic_argument_does_not_duplicate_an_inner_candidate_frame(self) -> None:
+        err = reject_type(
+            "def identity[T](value: T) -> T = value\n"
+            "def recurse(n: int) = if n == 0 => 0 else => recurse(n - 1)\n"
+            'identity(recurse(0) + "x")'
+        )
+
+        assert (
+            len(
+                [
+                    message
+                    for message, _ in err.related
+                    if "candidate return type" in message.lower()
+                ]
+            )
+            == 1
+        )
+
+    def test_generic_conflict_ignores_unrelated_candidate_argument_provenance(self) -> None:
+        err = reject_type(
+            "def combine[A, B](unrelated: A, first: B, second: B) -> unit = ()\n"
+            "def unrelated(n: int) = if n == 0 => true else => unrelated(n - 1)\n"
+            "def first(n: int) = if n == 0 => 0 else => first(n - 1)\n"
+            'def second(n: int) = if n == 0 => "x" else => second(n - 1)\n'
+            "combine(unrelated(0), first(0), second(0))"
+        )
+
+        candidate_notes = [
+            message for message, _ in err.related if "candidate return type" in message.lower()
+        ]
+        assert candidate_notes == [
+            "Candidate return type inferred for function 'first'.",
+            "Candidate return type inferred for function 'second'.",
+        ]
+
+    def test_generic_constructor_conflict_frames_candidate_field_provenance(self) -> None:
+        err = reject_type(
+            "record Pair[T]\n"
+            "  first: T\n"
+            "  second: T\n"
+            "def first(n: int) = if n == 0 => 0 else => first(n - 1)\n"
+            'def second(n: int) = if n == 0 => "x" else => second(n - 1)\n'
+            "Pair(first = first(0), second = second(0))"
+        )
+
+        assert "inferred return types" in str(err).lower()
+        assert any("underlying type error" in message.lower() for message, _ in err.related)
+
+    def test_for_element_binding_preserves_type_dependent_candidate_provenance(self) -> None:
+        err = reject_type(
+            "def recurse(n: int) = if n == 0 => [1] else => recurse(n - 1)\n"
+            'for value in recurse(0) do value + "x" done'
+        )
+
+        assert "inferred return type" in str(err).lower()
+
+    def test_nested_indexed_assignment_traversal_frames_root_candidate_provenance(self) -> None:
+        err = reject_type(
+            "def recurse(n: int) = if n == 0 => [1] else => recurse(n - 1)\n"
+            "var values = recurse(0)\n"
+            "values[0][0] := 1"
+        )
+
+        assert "inferred return type" in str(err).lower()
+
     def test_direct_recursive_candidate_skips_defaults_until_authoritative_check(self) -> None:
         reject_type('def f(n: int = "bad") = if n == 0 => 0 else => f(n - 1)')
 

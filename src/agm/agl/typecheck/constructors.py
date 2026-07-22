@@ -59,7 +59,9 @@ class ConstructorCheckCtx(Protocol):
 
     def _check_expr(self, expr: Expr, *, expected: Type | None) -> Type: ...
 
-    def _assert_assignable(self, value_type: Type, target_type: Type, span: SourceSpan) -> None: ...
+    def _assert_assignable_from(
+        self, value_type: Type, target_type: Type, span: SourceSpan, expr: Expr
+    ) -> None: ...
 
     def _constrain_argument(
         self,
@@ -87,6 +89,18 @@ class ConstructorCheckCtx(Protocol):
     ) -> RecordType | EnumType | ExceptionType: ...
 
     def _active_inference_engine(self) -> InferenceEngine: ...
+
+    def _set_generic_constructor_result_provenance(
+        self,
+        node_id: int,
+        result_template: Type,
+        field_templates: Mapping[str, Type],
+        bound_exprs: Mapping[str, Expr],
+    ) -> None: ...
+
+    def _frame_generic_constraint_error(
+        self, exc: AglTypeError, exprs: tuple[Expr, ...]
+    ) -> AglTypeError: ...
 
 
 # ---------------------------------------------------------------------------
@@ -421,17 +435,26 @@ class ConstructorChecker:
                 )
 
         fields_by_name = dict(zip(sig.field_names, field_types, strict=True))
-        for field_name, _field_kind in field_kinds:
-            bound_expr = bound_exprs[field_name]
-            if isinstance(bound_expr, Placeholder):
-                continue
-            self._ctx._constrain_argument(
-                fields_by_name[field_name],
-                bound_expr,
-                role=ConstraintRole.CONSTRUCTOR_FIELD,
-                subject=owner_name,
-                error_subject=f"constructor '{owner_name}'",
-            )
+        participants = tuple(
+            expr for expr in bound_exprs.values() if not isinstance(expr, Placeholder)
+        )
+        try:
+            for field_name, _field_kind in field_kinds:
+                bound_expr = bound_exprs[field_name]
+                if isinstance(bound_expr, Placeholder):
+                    continue
+                self._ctx._constrain_argument(
+                    fields_by_name[field_name],
+                    bound_expr,
+                    role=ConstraintRole.CONSTRUCTOR_FIELD,
+                    subject=owner_name,
+                    error_subject=f"constructor '{owner_name}'",
+                )
+        except AglTypeError as exc:
+            framed = self._ctx._frame_generic_constraint_error(exc, participants)
+            if framed is exc:
+                raise
+            raise framed from exc
 
         assert isinstance(result, (RecordType, EnumType))
         produced = self._constructor_call_result_type(
@@ -451,6 +474,13 @@ class ConstructorChecker:
                 tuple(bound_exprs[name] for name, _kind in field_kinds),
                 hole_indices,
                 callee_kind="constructor",
+            )
+        if not node_type_args:
+            self._ctx._set_generic_constructor_result_provenance(
+                node.node_id,
+                sig.result_template,
+                dict(zip(sig.field_names, sig.field_templates, strict=True)),
+                bound_exprs,
             )
         return produced
 
@@ -532,7 +562,9 @@ class ConstructorChecker:
             if isinstance(arg_expr, Placeholder):
                 continue
             arg_type = self._ctx._check_expr(arg_expr, expected=expected_field_type)
-            self._ctx._assert_assignable(arg_type, expected_field_type, arg_expr.span)
+            self._ctx._assert_assignable_from(
+                arg_type, expected_field_type, arg_expr.span, arg_expr
+            )
 
         return self._constructor_call_result_type(
             field_kinds, fields, owner, bound_exprs, hole_indices

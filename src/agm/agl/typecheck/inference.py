@@ -61,7 +61,23 @@ class SchemeInstantiation:
 
 
 class InferenceError(AglError):
-    """A source-aware failure of exact equality inference."""
+    """A source-aware failure of exact equality inference.
+
+    ``origins`` identifies precisely the constraints participating in the
+    failure.  Consumers can use it for semantic follow-up without recovering
+    meaning from rendered diagnostic text.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        span: SourceSpan | None = None,
+        related: Sequence[tuple[str, SourceSpan]] = (),
+        origins: tuple[ConstraintOrigin, ...] = (),
+    ) -> None:
+        super().__init__(message, span=span, related=related)
+        self.origins = origins
 
 
 @dataclass(frozen=True, slots=True)
@@ -415,7 +431,12 @@ class InferenceEngine:
                 f"{label} was first constrained by {first.role.value} '{first.subject}'."
             )
             related = ((related_message, first.span),)
-        raise InferenceError(message, span=origin.span, related=related)
+        raise InferenceError(
+            message,
+            span=origin.span,
+            related=related,
+            origins=self._merge_origins(evidence, (origin,)),
+        )
 
     def _contains_unresolved_variable(self, typ: Type) -> bool:
         return contains_inference_var(self.zonk(typ))

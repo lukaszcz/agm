@@ -1,0 +1,14 @@
+enum NonEmpty[T]
+  | Last(value: T)
+  | More(value: T, rest: NonEmpty[T])
+
+def first[T](items: NonEmpty[T]) =
+  case items of
+    | Last(value) => value
+    | More(value, rest) => first(rest)
+
+param first_value: int
+param next_value: int
+
+let items: NonEmpty[int] = More(value = first_value, rest = Last(value = next_value))
+print first(items)

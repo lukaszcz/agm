@@ -1817,12 +1817,128 @@ class TestFuncDef:
     def test_annotated_polymorphically_recursive_generic_is_accepted(self) -> None:
         accept_type("def depth[T](value: T) -> int = if true => 0 else => depth([value])\ndepth(0)")
 
-    def test_unannotated_uniformly_recursive_generic_needs_result_annotation(self) -> None:
-        err = reject_type("def loop[T](value: T) = if true => value else => loop(value)\nloop(0)")
+    def test_unannotated_uniformly_recursive_generic_infers_its_rigid_result(self) -> None:
+        checked = accept_type(
+            "enum NonEmpty[T]\n"
+            "  | Last(value: T)\n"
+            "  | More(value: T, rest: NonEmpty[T])\n"
+            "def first[T](items: NonEmpty[T]) =\n"
+            "  case items of\n"
+            "    | Last(value) => value\n"
+            "    | More(value, rest) => first(rest)\n"
+            "first(Last(value = 0))"
+        )
 
-        msg = str(err).lower()
-        assert "return type" in msg
-        assert "annotation" in msg
+        assert checked.function_signatures["first"].result == TypeVarType("T")
+        assert_checked_module_closed(checked)
+
+    def test_unannotated_uniformly_mutually_recursive_generics_infer_rigid_results(self) -> None:
+        checked = accept_type(
+            "enum NonEmpty[T]\n"
+            "  | Last(value: T)\n"
+            "  | More(value: T, rest: NonEmpty[T])\n"
+            "def first[T](items: NonEmpty[T]) =\n"
+            "  case items of\n"
+            "    | Last(value) => value\n"
+            "    | More(value, rest) => second(rest)\n"
+            "def second[U](items: NonEmpty[U]) =\n"
+            "  case items of\n"
+            "    | Last(value) => value\n"
+            "    | More(value, rest) => first(rest)\n"
+            "first(Last(value = 0))"
+        )
+
+        assert checked.function_signatures["first"].result == TypeVarType("T")
+        assert checked.function_signatures["second"].result == TypeVarType("U")
+
+    def test_uniform_generic_recursion_tracks_value_partial_and_explicit_occurrences(self) -> None:
+        checked = accept_type(
+            "enum NonEmpty[T]\n"
+            "  | Last(value: T)\n"
+            "  | More(value: T, rest: NonEmpty[T])\n"
+            "def via_value[T](items: NonEmpty[T]) =\n"
+            "  case items of\n"
+            "    | Last(value) => value\n"
+            "    | More(value, rest) => (let next: NonEmpty[T] -> T = via_value; next(rest))\n"
+            "def via_partial[U](items: NonEmpty[U]) =\n"
+            "  case items of\n"
+            "    | Last(value) => value\n"
+            "    | More(value, rest) => via_partial(?)(rest)\n"
+            "def via_explicit[V](items: NonEmpty[V]) =\n"
+            "  case items of\n"
+            "    | Last(value) => value\n"
+            "    | More(value, rest) => via_explicit::[V](rest)\n"
+            "via_value(Last(value = 0))"
+        )
+
+        assert checked.function_signatures["via_value"].result == TypeVarType("T")
+        assert checked.function_signatures["via_partial"].result == TypeVarType("U")
+        assert checked.function_signatures["via_explicit"].result == TypeVarType("V")
+
+    @pytest.mark.parametrize(
+        "source",
+        (
+            "def grow[T](value: T) = if true => value else => grow([value])\ngrow(0)",
+            "def swap[A, B](left: A, right: B) = if true => left else => swap(right, left)\n"
+            "swap(0, true)",
+            "def fixed[T](value: T) = if true => value else => fixed(0)\nfixed(1)",
+            "def first[T](value: T) = if true => value else => second([value])\n"
+            "def second[U](value: U) = if true => value else => first(value)\nfirst(0)",
+        ),
+    )
+    def test_unannotated_changed_generic_recursion_requires_result_annotation(
+        self, source: str
+    ) -> None:
+        err = reject_type(source)
+
+        assert "return type" in str(err).lower()
+        assert "annotation" in str(err).lower()
+
+    @pytest.mark.parametrize(
+        "recursive_expression",
+        (
+            pytest.param(
+                "(let next: list[T] -> T = recurse; next([value]))",
+                id="function-value",
+            ),
+            pytest.param("recurse(?)([value])", id="partial-application"),
+            pytest.param("recurse::[list[T]]([value])", id="explicit-type-application"),
+        ),
+    )
+    def test_changed_generic_recursion_through_indirect_forms_requires_annotation(
+        self, recursive_expression: str
+    ) -> None:
+        err = reject_type(
+            "def recurse[T](value: T) = if true => value else => "
+            f"{recursive_expression}\n"
+            "recurse(0)"
+        )
+
+        assert "return type" in str(err).lower()
+        assert "annotation" in str(err).lower()
+
+    def test_uniform_recursive_edge_must_match_the_inferred_result(self) -> None:
+        err = reject_type(
+            "def inconsistent[T](value: T) = (let item: T = inconsistent(value); [value])\n"
+            "inconsistent(0)"
+        )
+
+        assert "return type" in str(err).lower()
+        assert "annotation" in str(err).lower()
+
+    def test_acyclic_generic_dependencies_close_before_calls_and_values(self) -> None:
+        checked = accept_type(
+            "def direct(n: int) = identity(n)\n"
+            "def value(n: int) = (let f: int -> int = identity; f(n))\n"
+            "def partial(n: int) = identity(?)(n)\n"
+            "def explicit(n: int) = identity::[int](n)\n"
+            "def identity[T](value: T) = value\n"
+            "direct"
+        )
+
+        for name in ("direct", "value", "partial", "explicit"):
+            assert checked.function_signatures[name].result == IntType()
+        assert checked.function_signatures["identity"].result == TypeVarType("T")
 
     def test_unannotated_nonrecursive_generic_still_infers_its_result(self) -> None:
         checked = accept_type("def identity[T](value: T) = value\nidentity(0)")
@@ -6892,10 +7008,10 @@ class TestGenerics:
         err = reject_type("def f(x: int) -> int = x\nf::[int]")
         assert "not a generic function" in str(err)
 
-    def test_explicit_type_args_function_value_requires_known_signature(self) -> None:
-        err = reject_type("f::[int]\ndef f[T](x: T) = x")
-        assert "return type" in str(err)
-        assert "annotation" in str(err)
+    def test_explicit_type_args_forward_function_value_uses_closed_signature(self) -> None:
+        checked = accept_type("let g: int -> int = f::[int]\ndef f[T](x: T) = x\ng(1)")
+
+        assert checked.function_signatures["f"].result == TypeVarType("T")
 
     def test_explicit_type_args_arity_error(self) -> None:
         err = reject_type("def id[T](x: T) -> T = x\nid::[int, text](1)")

@@ -716,9 +716,7 @@ class _Checker:
         # local unannotated definition; only this declaration's node id can
         # determine whether its signature was pre-registered.
         sig = self._env.get_function_signature_by_node_id(node.node_id)
-        if sig is None:
-            self._infer_funcdef_signature(node)
-            return
+        assert sig is not None, f"No candidate signature for '{node.name}'"
         if node.is_builtin:
             return
         assert node.is_extern or node.body is not None, f"FuncDef '{node.name}' has no body"
@@ -766,6 +764,8 @@ class _Checker:
         assert node.body is not None
         self._candidate_session = session
         old_type_vars = self._current_type_vars
+        old_declaration_id = session.current_declaration_id
+        session.current_declaration_id = node.node_id
         self._current_type_vars = frozenset(signature.type_params)
         try:
             for param, spec in zip(node.params, signature.params, strict=True):
@@ -790,60 +790,8 @@ class _Checker:
             return result
         finally:
             self._current_type_vars = old_type_vars
+            session.current_declaration_id = old_declaration_id
             self._candidate_session = None
-
-    def _infer_funcdef_signature(self, node: FuncDef) -> None:
-        """Infer and register an unannotated ``def`` signature from its body."""
-        self._validate_funcdef_header(node)
-        assert node.return_type is None
-        assert node.body is not None, f"FuncDef '{node.name}' has no body"
-        sig, _func_type = resolve_function_header(self._env, node, result_type=UnitType())
-        old_type_vars = self._current_type_vars
-        self._current_type_vars = frozenset(sig.type_params)
-        try:
-            for p, spec in zip(node.params, sig.params):
-                self._env.set_binding_type(p.node_id, spec.type)
-            for p, spec in zip(node.params, sig.params):
-                if p.default is not None:
-                    def_type = self._check_boundary_expr(p.default, expected=spec.type)
-                    self._assert_assignable(def_type, spec.type, p.span)
-            with self._return_context(None) as collected:
-                body_type = self._check_expr(node.body, expected=None)
-                return_targets = self._current_return_extern_targets()
-            if isinstance(body_type, BottomType) and not collected:
-                raise AglTypeError(
-                    f"Cannot infer return type of function '{node.name}': body always raises. "
-                    "Add a return type annotation.",
-                    span=node.span,
-                )
-            try:
-                result_type = self._unify_branch_types(
-                    [*collected, body_type], node.span, "Function return"
-                )
-            except AglTypeError as exc:
-                raise AglTypeError(
-                    f"Cannot infer return type of function '{node.name}': return values have "
-                    "incompatible types. Add a return type annotation.",
-                    span=node.span,
-                    related=exc.related,
-                ) from exc
-            inferred_sig = FunctionSignature(
-                params=sig.params, result=result_type, type_params=sig.type_params
-            )
-            inferred_type = FunctionType(
-                params=tuple(p.type for p in sig.params), result=result_type
-            )
-            self._register_funcdef_signature(node, inferred_sig, inferred_type)
-            targets = (
-                self._merge_extern_targets(
-                    self._extern_targets_for_expr(node.body, body_type), return_targets
-                )
-                if isinstance(result_type, FunctionType)
-                else ()
-            )
-            self._set_extern_binding_targets(node.node_id, targets)
-        finally:
-            self._current_type_vars = old_type_vars
 
     def _check_param(self, stmt: ParamDecl) -> None:
         ann_type = (
@@ -1338,6 +1286,13 @@ class _Checker:
                 instantiation = engine.instantiate(sig.type_params, (typ,))
                 concrete = instantiation.templates[0]
                 assert isinstance(concrete, FunctionType)
+                result = self._candidate_generic_result(
+                    callee_declaration_id=ref.decl_node_id,
+                    type_args=tuple(instantiation.variables[name] for name in sig.type_params),
+                    result=concrete.result,
+                    span=node.span,
+                )
+                concrete = FunctionType(params=concrete.params, result=result)
                 for type_param in sig.type_params:
                     engine.require_solved(
                         instantiation.variables[type_param],
@@ -1367,6 +1322,27 @@ class _Checker:
         """Return the solver for the expression region currently being checked."""
         assert self._inference_region is not None
         return self._inference_region.engine
+
+    def _candidate_generic_result(
+        self,
+        *,
+        callee_declaration_id: int,
+        type_args: tuple[Type, ...],
+        result: Type,
+        span: SourceSpan,
+    ) -> Type:
+        """Delay a provisional generic result until its uniform edge is closed."""
+        session = self._candidate_session
+        if session is None or callee_declaration_id not in session.provisional_declaration_ids:
+            return result
+        delayed = self._active_inference_engine().fresh("generic recursive result")
+        session.record_generic_edge(
+            callee_declaration_id=callee_declaration_id,
+            type_args=type_args,
+            result=delayed,
+            span=span,
+        )
+        return delayed
 
     def _constrain_argument(
         self,
@@ -1530,12 +1506,7 @@ class _Checker:
             )
 
         sig = self._env.get_function_signature_by_node_id(ref.decl_node_id)
-        if sig is None:
-            raise AglTypeError(
-                f"Cannot infer return type of function '{ref.name}' before it is checked. "
-                "Add a return type annotation.",
-                span=node.span,
-            )
+        assert sig is not None, f"No candidate signature for '{ref.name}'"
         if not sig.type_params:
             raise AglTypeError(
                 f"'{ref.name}' is not a generic function and does not accept type arguments.",
@@ -1551,6 +1522,16 @@ class _Checker:
             span=node.span,
         )
         concrete = substitute(typ, subst)
+        assert isinstance(concrete, FunctionType)
+        concrete = FunctionType(
+            params=concrete.params,
+            result=self._candidate_generic_result(
+                callee_declaration_id=ref.decl_node_id,
+                type_args=tuple(subst[name] for name in sig.type_params),
+                result=concrete.result,
+                span=node.span,
+            ),
+        )
         self._record_node_type(node.expr.node_id, concrete)
         self._set_extern_expr_targets(node.node_id, self._extern_targets_for_ref(ref, concrete))
         return concrete
@@ -1995,6 +1976,7 @@ class _Checker:
         binding: tuple[Expr | None, ...],
         hole_indices: Mapping[int, int],
         *,
+        callee_declaration_id: int,
         expected: Type | None,
     ) -> Type:
         """Check a generic declared call with fresh expression-local variables."""
@@ -2020,9 +2002,13 @@ class _Checker:
                 )
                 for param in sig.params
             )
-            return self._finish_declared_call(
-                node, params, substitute(sig.result, subst), binding, hole_indices
+            result = self._candidate_generic_result(
+                callee_declaration_id=callee_declaration_id,
+                type_args=tuple(subst[name] for name in sig.type_params),
+                result=substitute(sig.result, subst),
+                span=node.span,
             )
+            return self._finish_declared_call(node, params, result, binding, hole_indices)
 
         assert self._inference_region is not None
         engine = self._inference_region.engine
@@ -2037,7 +2023,12 @@ class _Checker:
             )
             for index, param in enumerate(sig.params)
         )
-        result = instantiation.templates[-1]
+        result = self._candidate_generic_result(
+            callee_declaration_id=callee_declaration_id,
+            type_args=tuple(instantiation.variables[name] for name in sig.type_params),
+            result=instantiation.templates[-1],
+            span=node.span,
+        )
         for type_param in sig.type_params:
             engine.require_solved(
                 instantiation.variables[type_param],
@@ -2110,6 +2101,7 @@ class _Checker:
                 sig,
                 binding,
                 hole_indices,
+                callee_declaration_id=callee_ref.decl_node_id,
                 expected=expected,
             )
         else:
@@ -3587,16 +3579,14 @@ class _Checker:
         engine: InferenceEngine | None = None,
     ) -> Type:
         """Find a branch common type, normalizing candidate evidence before solving."""
-        if engine is None and self._inference_region is not None:
-            engine = self._inference_region.engine
         if engine is None:
-            non_bottom = [typ for typ in branch_types if not isinstance(typ, BottomType)]
-        else:
-            non_bottom = [
-                resolved
-                for typ in branch_types
-                if not isinstance(resolved := engine.zonk(typ), BottomType)
-            ]
+            assert self._inference_region is not None
+            engine = self._inference_region.engine
+        non_bottom = [
+            resolved
+            for typ in branch_types
+            if not isinstance(resolved := engine.zonk(typ), BottomType)
+        ]
         if not non_bottom:
             return BottomType()
         if self._candidate_session is not None:

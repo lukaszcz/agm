@@ -302,6 +302,22 @@ print xs[0]
 `list[int]` is not assignable to `list[decimal]` or `list[json]`, and
 `Box[int]` is a different type from `Box[text]`.
 
+## Recursive generic functions
+
+A generic function with an omitted result annotation can infer through direct
+or mutual recursion when each recursive call uses the caller's type parameters
+unchanged and in declaration order:
+
+```agl
+def first[T](value: T, more: bool) =
+  if more => first(value, false) else => value
+```
+
+A recursive call at a different instantiation is polymorphic recursion and
+requires an explicit result annotation. This includes growing an argument such
+as `T` to `list[T]`, replacing it with a fixed type, or permuting multiple type
+parameters. Annotated generic functions may use those recursive patterns.
+
 ## Recursive generic types
 
 A generic record or enum may reference itself, or another declaration that

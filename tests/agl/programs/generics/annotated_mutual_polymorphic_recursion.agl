@@ -1,0 +1,7 @@
+# Explicit result annotations permit mutual polymorphic recursion even when
+# the functions have different generic arities.
+def first[T](value: T) -> T = if true => value else => second(value, [value])
+def second[U, V](value: U, extra: V) -> U = if true => value else => first(value)
+
+param value: int
+print first(value)

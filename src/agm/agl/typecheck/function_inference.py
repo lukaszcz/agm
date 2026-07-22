@@ -1,7 +1,8 @@
-"""Shared function-header models and resolution helpers.
+"""Function-header resolution and disposable candidate return inference.
 
-Candidate return inference will extend this seam without exposing provisional
-state in semantic function signatures.
+Standalone and program checking share this seam. Candidate discovery builds
+same-module dependency SCCs for unannotated functions, closes each component
+before its dependents, and publishes only concrete signatures.
 """
 
 from __future__ import annotations
@@ -13,7 +14,14 @@ from typing import TYPE_CHECKING
 
 from agm.agl.modules.ids import ModuleId
 from agm.agl.semantics.persistent import PersistentDict
-from agm.agl.semantics.types import FunctionType, InferenceVarType, Type, contains_inference_var
+from agm.agl.semantics.types import (
+    FunctionType,
+    InferenceVarType,
+    Type,
+    TypeVarType,
+    contains_inference_var,
+    substitute,
+)
 from agm.agl.syntax.nodes import FuncDef, Param, ParamKind, Program, VarRef
 from agm.agl.syntax.visitor import walk
 from agm.agl.typecheck.inference import ConstraintRole, InferenceEngine, InferenceError
@@ -27,19 +35,53 @@ from agm.agl.syntax.types import TypeExpr
 from agm.agl.typecheck.env import AglTypeError, FunctionSignature, ParamSpec, TypeEnvironment
 
 
+@dataclass(frozen=True, slots=True)
+class GenericCandidateEdge:
+    """One provisional generic occurrence inside a candidate function component."""
+
+    caller_declaration_id: int
+    callee_declaration_id: int
+    type_args: tuple[Type, ...]
+    result: Type
+    span: SourceSpan
+
+
 @dataclass(slots=True)
 class CandidateSession:
-    """Disposable state shared while discovering one candidate signature.
+    """Disposable state shared while discovering one candidate component.
 
     Candidate checkers use this session's engine and retain their expression
-    side tables only for the duration of body traversal.  The final checker
-    creates all published artifacts after the candidate is concrete.
+    side tables only for body traversal. The final checker creates all
+    published artifacts after every component result is concrete.
     """
 
     engine: InferenceEngine
     provisional_declaration_ids: frozenset[int]
     evidence: list[SourceSpan] = field(default_factory=list)
     binding_snapshot: PersistentDict[int, Type] | None = None
+    current_declaration_id: int | None = None
+    generic_edges: list[GenericCandidateEdge] = field(default_factory=list)
+
+    def record_generic_edge(
+        self,
+        *,
+        callee_declaration_id: int,
+        type_args: tuple[Type, ...],
+        result: Type,
+        span: SourceSpan,
+    ) -> None:
+        """Retain a generic occurrence for component-wide uniformity validation."""
+        caller_declaration_id = self.current_declaration_id
+        assert caller_declaration_id is not None
+        self.generic_edges.append(
+            GenericCandidateEdge(
+                caller_declaration_id,
+                callee_declaration_id,
+                type_args,
+                result,
+                span,
+            )
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -54,10 +96,10 @@ class CandidateModule:
 
 @dataclass(frozen=True, slots=True)
 class ModuleCandidateComponent:
-    """A module component whose candidate signatures are coordinated together.
+    """Modules whose candidate discovery is coordinated together.
 
-    The standalone checker creates only synthetic singleton components.
-    Import-SCC inference can extend this boundary without changing that path.
+    Current standalone and program paths create synthetic singleton components;
+    candidate dependency SCCs are therefore confined to one module.
     """
 
     modules: tuple[CandidateModule, ...]
@@ -83,10 +125,11 @@ class FunctionReturnSource(Enum):
 
 @dataclass(frozen=True, slots=True)
 class FunctionSignatureRecord:
-    """Internal program-signature metadata keyed by a declaration node id.
+    """Internal declared-signature metadata keyed by a declaration node id.
 
-    ``candidate_evidence`` is reserved for the spans that support a later
-    candidate-inferred result and remains empty for declared results.
+    Program pre-passes currently create records only for explicit results.
+    ``candidate_evidence`` remains reserved for candidate metadata, whose
+    inferred signatures are currently published only in their own module.
     """
 
     declaration_node_id: int
@@ -105,7 +148,7 @@ def _declaration_key(node: FuncDef) -> tuple[int, int]:
 
 
 def _candidate_functions(module: CandidateModule) -> dict[int, FuncDef]:
-    """Return unannotated monomorphic ordinary functions by declaration id."""
+    """Return unannotated ordinary functions by declaration id."""
     program = module.resolved.program
     assert isinstance(program, Program)
     return {
@@ -115,7 +158,6 @@ def _candidate_functions(module: CandidateModule) -> dict[int, FuncDef]:
         and item.return_type is None
         and not item.is_builtin
         and not item.is_extern
-        and not item.type_params
     }
 
 
@@ -153,7 +195,7 @@ def _function_dependencies(
 
 
 def infer_module_component_candidates(component: ModuleCandidateComponent) -> None:
-    """Infer and close same-module monomorphic function dependency components.
+    """Infer and close same-module function dependency components.
 
     ``sccs`` returns sink components first for this dependency graph, so every
     acyclic callee becomes a concrete signature before a dependent body can
@@ -229,6 +271,8 @@ def _infer_function_component(module: CandidateModule, functions: tuple[FuncDef,
         assert session.binding_snapshot is not None
         module.env.restore_binding_types(session.binding_snapshot)
 
+    _close_generic_candidate_edges(session, provisional)
+
     unresolved = [
         node
         for node, result, _signature in provisional
@@ -264,6 +308,52 @@ def _infer_function_component(module: CandidateModule, functions: tuple[FuncDef,
                 params=tuple(param.type for param in signature.params), result=concrete_result
             ),
         )
+
+
+def _close_generic_candidate_edges(
+    session: CandidateSession,
+    provisional: list[tuple[FuncDef, InferenceVarType, FunctionSignature]],
+) -> None:
+    """Validate uniform generic recursion and connect its delayed result evidence."""
+    functions = {node.node_id: (node, result) for node, result, _signature in provisional}
+    engine = session.engine
+    for edge in session.generic_edges:
+        caller, _ = functions[edge.caller_declaration_id]
+        callee, _ = functions[edge.callee_declaration_id]
+        caller_vector = tuple(TypeVarType(name) for name in caller.type_params)
+        type_args = tuple(engine.zonk(arg) for arg in edge.type_args)
+        if len(type_args) != len(caller_vector) or type_args != caller_vector:
+            raise AglTypeError(
+                f"Cannot infer return type of function '{caller.name}': recursive call to "
+                f"'{callee.name}' changes its generic type arguments. Add a return type "
+                "annotation.",
+                span=edge.span,
+            )
+
+    for edge in session.generic_edges:
+        callee, callee_result = functions[edge.callee_declaration_id]
+        result_template = engine.zonk(callee_result)
+        substitutions = dict(
+            zip(callee.type_params, (engine.zonk(arg) for arg in edge.type_args), strict=True)
+        )
+        result = substitute(result_template, substitutions)
+        try:
+            engine.unify(
+                edge.result,
+                result,
+                engine.origin(
+                    edge.span,
+                    role=ConstraintRole.EXPECTED_RESULT,
+                    subject=f"recursive call to '{callee.name}'",
+                ),
+            )
+        except InferenceError as exc:
+            raise AglTypeError(
+                f"Cannot infer return type of function '{callee.name}': recursive return "
+                "evidence is incompatible. Add a return type annotation.",
+                span=edge.span,
+                related=exc.related,
+            ) from exc
 
 
 def validate_required_after_defaulted(params: Sequence[Param]) -> None:

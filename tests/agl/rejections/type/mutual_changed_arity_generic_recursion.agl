@@ -1,0 +1,4 @@
+def first[T](value: T) = if true => value else => second(value, [value])
+def second[U, V](value: U, extra: V) = if true => value else => first(value)
+
+print first(4)

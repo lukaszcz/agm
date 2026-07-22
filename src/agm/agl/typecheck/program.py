@@ -35,22 +35,19 @@ Algorithm
       first declaration (across the whole program) that has no finite value,
       consistent with the single-module ``_TypeBuilder`` check.
 
-2. **Program function-signature pre-pass** — resolve the parameter and return type
-   annotations for EVERY top-level ``FuncDef`` in EVERY module (using the
-   ``program_type_table`` and each module's ``ImportEnv`` for cross-module type
-   refs), producing a ``program_func_sig_table`` mapping each ``FuncDef.node_id``
-   to ``FunctionSignatureRecord``. No function body is checked in this
-   phase. The result is used in Phase 3 to
-   seed EVERY module's env with ALL function binding types before any body is
-   checked, enabling cross-file mutual recursion: a call to a not-yet-checked
-   module's function resolves its callee type from the pre-pass table.
+2. **Program function-signature pre-pass** — resolve parameter and explicit
+   return annotations for top-level ``FuncDef`` declarations in every module
+   (using the ``program_type_table`` and each module's ``ImportEnv`` for
+   cross-module type refs), producing a ``program_func_sig_table`` keyed by
+   ``FuncDef.node_id``. Definitions without result annotations are omitted;
+   no function body is checked in this phase.
 
 3. **Per-module type-check** — for each module, build a module-aware
    :class:`~agm.agl.typecheck.env.TypeEnvironment` seeded with the module's own
-   types (from the program table), ALL function binding types (from the
-   function-signature pre-pass), and the program table + import env for cross-module
-   lookups, then run the existing :class:`~agm.agl.typecheck.builder._TypeBuilder`
-   and :class:`~agm.agl.typecheck.checker._Checker` logic.
+   types, the explicitly declared program signatures, and the program table +
+   import env for cross-module lookups. The candidate coordinator then closes
+   same-module dependency SCCs of unannotated functions before authoritative
+   body checking publishes their signatures.
 
 Single-module equivalence
 -------------------------
@@ -570,32 +567,17 @@ def _build_program_func_sig_table(
     program_alias_table: dict[tuple[ModuleId, str], GenericAliasDef],
     entry_seed_env: TypeEnvironment | None = None,
 ) -> dict[int, FunctionSignatureRecord]:
-    """Phase 2: compute function signatures for ALL top-level FuncDefs across all modules.
+    """Phase 2: compute explicit top-level function signatures across modules.
 
-    Returns a table mapping each ``FuncDef.node_id`` to immutable named
-    metadata: the declared name, full signature, erased value type, declaration
-    status, and reserved candidate evidence. This is internal coordination
-    state; semantic function types remain unchanged.
+    The table contains only functions with declared return types. Unannotated
+    functions are inferred by each module's candidate coordinator in Phase 3,
+    so they cannot provide cross-module provisional signatures.
 
-    This pre-pass builds per-module ``TypeEnvironment``s seeded with the
-    program-wide type table and the module's ``ImportEnv`` so that parameter/return
-    type annotations that reference cross-module types (e.g. ``lib::Color``) resolve
-    correctly.  No function body is checked — only the type-expression annotations
-    in each ``FuncDef``'s parameter and return-type declarations are resolved.
-
-    The result is used in :func:`check_program` (Phase 3) to seed EVERY module's
-    ``TypeEnvironment`` with ALL reachable function binding types BEFORE any body is
-    checked.  Because ``node_id`` is globally unique, seeding the whole table into
-    every module's env is safe and collision-free.  This makes cross-file mutual
-    recursion work: both ``A::f`` (calling ``B::g``) and ``B::g`` (calling ``A::f``)
-    have the other's binding type available regardless of the per-module checking
-    order.
-
-    Reuses the shared function-header resolver: a temporary per-module
-    ``TypeEnvironment`` (seeded with own types + program table + import env) is
-    constructed for each module, then each ``FuncDef`` in that module has its
-    signature resolved through the normal ``TypeEnvironment.resolve_type_expr``
-    path — the exact same path used in the real per-module check.
+    The pre-pass uses temporary per-module environments seeded with the
+    program-wide type table and each module's ``ImportEnv``. It resolves only
+    header type expressions; no body is checked. The resulting node-id-keyed
+    signatures can safely seed every module environment, making explicitly
+    annotated cross-module recursion independent of module traversal order.
     """
     from agm.agl.typecheck.checker import _BUILTIN_FUNC_NAMES, _BUILTIN_TYPE_NAMES
 
@@ -730,13 +712,11 @@ def _check_module(
     The env is seeded with:
     - The module's own types (from ``program_type_table``).
     - The program table + import env for cross-module lookups.
-    - Binding types (function signatures) from the whole-program function-signature
-      pre-pass (``program_func_sig_table``), seeded BEFORE any body is checked so
-      that cross-module function calls — including those in import cycles — can
-      look up callee types regardless of per-module checking order.  The pre-pass
-      computed named signature records for ALL top-level ``FuncDef``s across ALL modules;
-      ``node_id``s are globally unique, so seeding the whole table into
-      every module's env is safe and collision-free.
+    - Explicit function signatures from the whole-program pre-pass
+      (``program_func_sig_table``), seeded before any body is checked. Their
+      globally unique ``node_id`` keys make declared cross-module calls
+      independent of per-module checking order. Unannotated signatures are
+      inferred later by this module's candidate coordinator.
     - ``type_table``: the single ``TypeTable`` instance shared by every module
       in this program (the same one built and dual-written in the type pre-pass),
       so this module's own re-check dual-writes into the same table.
@@ -770,9 +750,9 @@ def _check_module(
         if t_mid == mid:
             env.register_type(t_name, t)
 
-    # Seed binding types from the whole-program function-signature pre-pass.
-    # This makes EVERY module's function signatures available in EVERY module's
-    # env before any body is checked, enabling cross-file mutual recursion (the current rules).
+    # Seed explicit binding types from the whole-program function-signature
+    # pre-pass. Unannotated functions are added only after this module closes
+    # its own candidate dependency SCCs.
     #
     # Three tables are seeded:
     # - _binding_types (node_id-keyed, globally unique): used by _check_varref to
@@ -878,11 +858,9 @@ def check_program(
         entry_seed_env=entry_seed_env,
     )
 
-    # Phase 2: build the program-wide function-signature table.
-    # Resolves parameter/return TypeExprs for every top-level FuncDef in every
-    # module using the program_type_table (so cross-module type refs in annotations
-    # resolve), WITHOUT checking any function body.  Keyed by FuncDef.node_id
-    # .
+    # Phase 2: build the program-wide explicit function-signature table.
+    # It resolves declared header type expressions without checking bodies;
+    # unannotated functions are inferred during each module's Phase 3 work.
     program_func_sig_table = _build_program_func_sig_table(
         resolved,
         program_type_table,
@@ -900,12 +878,10 @@ def check_program(
         mid: rmod.import_env for mid, rmod in resolved.modules.items()
     }
 
-    # Phase 3: type-check each module's bodies.
-    # Non-entry modules are checked first, then entry (ordering kept for
-    # determinism and for any future ordering-sensitive checks), but function
-    # signature availability no longer depends on this order — the whole-program
-    # pre-pass in Phase 2 seeds all binding types before any body is checked,
-    # so cross-file mutual recursion is handled correctly.
+    # Phase 3: type-check each module's bodies. Non-entry modules are checked
+    # first, then entry, for deterministic output. Explicit cross-module
+    # signatures are already available; unannotated candidate inference remains
+    # local to each module's dependency SCCs.
     checked_modules: dict[ModuleId, CheckedModule] = {}
     all_warnings: list[Diagnostic] = []
 

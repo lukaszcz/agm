@@ -1,0 +1,14 @@
+{
+  "scenarios": [
+    {
+      "name": "int_value",
+      "params": {"value": 4},
+      "expect": {"stdout": "4\n"}
+    },
+    {
+      "name": "negative_value",
+      "params": {"value": -3},
+      "expect": {"stdout": "-3\n"}
+    }
+  ]
+}

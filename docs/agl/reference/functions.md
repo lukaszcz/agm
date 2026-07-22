@@ -64,10 +64,12 @@ def is_odd(n: int) = if n == 0 => false else => is_even(n - 1)
 
 This also applies when a later function is used as a function value or through
 partial application. Inference uses only the definitions in that dependency
-group, never callers or their expected types. A recursive generic function
-still needs an explicit result annotation. If a monomorphic group has no
-concrete result evidence, for example because it always raises or only calls
-within the group, AgL asks for return type annotations.
+group, never callers or their expected types. A recursive generic function is
+inferred when every recursive call preserves its type parameters in the same
+order; a call at changed, permuted, fixed, or nested type arguments needs an
+explicit result annotation. If a group has no concrete result evidence, for
+example because it always raises or only calls within the group, AgL asks for
+return type annotations.
 
 A function may also exit early with `return`; see [Early return](#early-return).
 

@@ -1880,6 +1880,210 @@ class TestFuncDef:
     def test_direct_recursive_candidate_skips_defaults_until_authoritative_check(self) -> None:
         reject_type('def f(n: int = "bad") = if n == 0 => 0 else => f(n - 1)')
 
+    @pytest.mark.parametrize(
+        "body",
+        (
+            "if n == 0 => recurse(n) + 1 else => 1.5",
+            "if n == 0 => 1.5 else => recurse(n) + 1",
+            "if n == 0 => return recurse(n) + 1\n  1.5",
+            "case n of | 0 => recurse(n) + 1 | _ => 1.5",
+            "try (if n == 0 => recurse(n) + 1 else => 1.5) catch _ => 1.5",
+        ),
+    )
+    def test_direct_recursive_widening_evidence_is_source_order_independent(
+        self, body: str
+    ) -> None:
+        checked = accept_type(f"def recurse(n: int) =\n  {body}\nrecurse")
+
+        assert checked.function_signatures["recurse"].result == DecimalType()
+
+    @pytest.mark.parametrize("elements", ("[1, 1.5]", "[1.5, 1]"))
+    def test_direct_recursive_literal_evidence_is_source_order_independent(
+        self, elements: str
+    ) -> None:
+        checked = accept_type(
+            f"def recurse(n: int) = if n == 0 => recurse(n) else => {elements}\nrecurse"
+        )
+
+        assert checked.function_signatures["recurse"].result == ListType(DecimalType())
+
+    @pytest.mark.parametrize("elements", ('[1, "x"]', '["x", 1]'))
+    def test_direct_recursive_incompatible_literal_evidence_requires_annotation_regardless_of_order(
+        self, elements: str
+    ) -> None:
+        err = reject_type(
+            f"def recurse(n: int) = if n == 0 => recurse(n) else => {elements}\nrecurse"
+        )
+
+        assert "cannot infer return type" in str(err).lower()
+        assert "annotation" in str(err).lower()
+
+    def test_direct_recursive_incompatible_literal_evidence_nested_in_case_requires_annotation(
+        self,
+    ) -> None:
+        err = reject_type(
+            "def recurse(n: int) =\n"
+            "  if n == 0 => recurse(n) else =>\n"
+            "    case n of\n"
+            '      | 1 => [1, "x"]\n'
+            "      | _ => recurse(n)\n"
+            "recurse"
+        )
+
+        assert "cannot infer return type" in str(err).lower()
+        assert "annotation" in str(err).lower()
+
+    def test_direct_recursive_literal_discards_bottom_element_evidence(self) -> None:
+        checked = accept_type(
+            'def recurse(n: int) = if n == 0 => [raise Abort(message = "stop"), 1] '
+            "else => recurse(n)\nrecurse"
+        )
+
+        assert checked.function_signatures["recurse"].result == ListType(IntType())
+
+    @pytest.mark.parametrize(
+        "elements",
+        (
+            '[raise Abort(message = "stop")]',
+            '[[raise Abort(message = "stop")]]',
+        ),
+    )
+    def test_direct_recursive_bottom_only_literal_evidence_cannot_close_candidate(
+        self, elements: str
+    ) -> None:
+        err = reject_type(
+            f"def recurse(n: int) = if n == 0 => {elements} else => recurse(n)\nrecurse"
+        )
+
+        assert "return type" in str(err).lower()
+        assert "annotation" in str(err).lower()
+
+    def test_direct_recursive_fixed_result_operations_defer_provisional_operands(self) -> None:
+        checked = accept_type(
+            "def recurse(n: int) = if n == 0 => recurse(n) == true else => false\nrecurse"
+        )
+
+        assert checked.function_signatures["recurse"].result == BoolType()
+
+    def test_direct_recursive_division_uses_fixed_decimal_result(self) -> None:
+        checked = accept_type(
+            "def recurse(n: int) = if n == 0 => recurse(n) / 1 else => 1.5\nrecurse"
+        )
+
+        assert checked.function_signatures["recurse"].result == DecimalType()
+
+    def test_direct_recursive_membership_defers_provisional_operand(self) -> None:
+        checked = accept_type(
+            "def recurse(n: int) = if n == 0 => recurse(n) in [true] else => false\nrecurse"
+        )
+
+        assert checked.function_signatures["recurse"].result == BoolType()
+
+    def test_direct_recursive_membership_rejects_concrete_invalid_operands(self) -> None:
+        reject_type("def recurse(n: int) = if n == 0 => 1 in 2 else => false\nrecurse")
+
+    def test_direct_recursive_membership_rechecks_deferred_operands(self) -> None:
+        reject_type(
+            "def recurse(n: int) = if n == 0 => recurse(n) in recurse(n) else => false\nrecurse"
+        )
+
+    def test_direct_recursive_membership_defers_only_potentially_valid_operands(self) -> None:
+        reject_type(
+            'def recurse(n: int) = if n == 0 => recurse(n) in "true" else => false\nrecurse'
+        )
+        reject_type(
+            'def recurse(n: int) = if n == 0 => 1 in {"value": recurse(n)} else => false\nrecurse'
+        )
+        reject_type(
+            "record Box[T]\n"
+            "  value: T\n"
+            "def recurse(n: int) = if n == 0 => recurse(n) in "
+            "Box(value = recurse(n)) else => false\n"
+            "recurse"
+        )
+
+    @pytest.mark.parametrize(
+        "body",
+        (
+            "recurse(n) and true",
+            "not recurse(n)",
+            "recurse(n) < 1",
+            "recurse(n) is Flag::yes",
+        ),
+    )
+    def test_direct_recursive_fixed_result_operations_handle_provisional_operands(
+        self, body: str
+    ) -> None:
+        source = (
+            "enum Flag\n"
+            "  | yes\n"
+            "  | no\n"
+            f"def recurse(n: int) = if n == 0 => {body} else => false\n"
+            "recurse"
+        )
+        if body in {"recurse(n) and true", "not recurse(n)"}:
+            checked = accept_type(source)
+            assert checked.function_signatures["recurse"].result == BoolType()
+        else:
+            reject_type(source)
+
+    def test_candidate_expected_shape_mismatch_is_reported_during_discovery(self) -> None:
+        reject_type(
+            "def accepts_list[T](value: list[T]) -> int = 0\n"
+            "def accepts_dict(value: dict[text, int]) -> int = 0\n"
+            "def recurse(n: int) =\n"
+            "  if n == 0 => accepts_list(recurse(n)) else => accepts_dict(recurse(n))\n"
+            "recurse"
+        )
+
+    def test_candidate_result_conflict_requires_annotation(self) -> None:
+        err = reject_type(
+            "def accepts_text(value: text) -> int = 0\n"
+            "def recurse(n: int) = if n == 0 => accepts_text(recurse(n)) else => 0\n"
+            "recurse"
+        )
+
+        assert "return type" in str(err).lower()
+        assert "annotation" in str(err).lower()
+
+    def test_direct_recursive_call_and_constructor_arguments_supply_expected_shapes(self) -> None:
+        checked = accept_type(
+            "enum Node\n"
+            "  | base\n"
+            "  | more(next: Node)\n"
+            "def preserve(value: Node) -> Node = value\n"
+            "def recurse(n: int) =\n"
+            "  if n == 0 => preserve(more(next = recurse(n))) else => base()\n"
+            "recurse"
+        )
+
+        assert checked.function_signatures["recurse"].result == EnumType("Node")
+
+    @pytest.mark.parametrize("body", ("recurse().value", "recurse()[0]"))
+    def test_direct_recursive_unknown_shape_requires_annotation(self, body: str) -> None:
+        err = reject_type(f"def recurse() = {body}")
+
+        assert "infer" in str(err).lower()
+        assert "annotation" in str(err).lower()
+
+    def test_direct_recursive_incomparable_evidence_requires_annotation(self) -> None:
+        err = reject_type('def recurse(n: int) = if n == 0 => recurse(n) + 1 else => "x"')
+
+        assert "return type" in str(err).lower()
+        assert "annotation" in str(err).lower()
+
+    def test_caller_annotation_cannot_solve_underconstrained_recursive_definition(self) -> None:
+        err = reject_type("def recurse() = recurse()\nlet value: int = recurse()")
+
+        assert "return type" in str(err).lower()
+        assert "annotation" in str(err).lower()
+
+    def test_all_provisional_branch_evidence_remains_underconstrained(self) -> None:
+        err = reject_type("def recurse() = if true => recurse() else => recurse()")
+
+        assert "return type" in str(err).lower()
+        assert "annotation" in str(err).lower()
+
     def test_funcdef_with_default_param(self) -> None:
         r = accept_type("def f(x: int, y: int = 0) -> int = x + y\nf(1)")
         assert "f" in r.function_signatures

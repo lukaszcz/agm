@@ -249,6 +249,10 @@ class _InferenceRegion:
     return_target_lengths: tuple[int, ...] = ()
 
 
+class _CandidateEvidenceError(AglTypeError):
+    """An incompatible common type discovered from candidate return evidence."""
+
+
 _IndexLike = IndexAccess | IndexTarget
 
 
@@ -766,14 +770,22 @@ class _Checker:
         try:
             for param, spec in zip(node.params, signature.params, strict=True):
                 self._env.set_binding_type(param.node_id, spec.type)
-            with self._return_context(None) as collected:
-                body_type = self._check_expr(node.body, expected=None)
-            result = self._unify_branch_types(
-                [*collected, body_type],
-                node.span,
-                "Function return",
-                engine=session.engine,
-            )
+            try:
+                with self._return_context(None) as collected:
+                    body_type = self._check_expr(node.body, expected=None)
+                result = self._unify_branch_types(
+                    [*collected, body_type],
+                    node.span,
+                    "Function return",
+                    engine=session.engine,
+                )
+            except _CandidateEvidenceError as exc:
+                raise AglTypeError(
+                    f"Cannot infer return type of function '{node.name}': return values have "
+                    "incompatible types. Add a return type annotation.",
+                    span=node.span,
+                    related=exc.related,
+                ) from exc
             session.evidence.append(node.body.span)
             return result
         finally:
@@ -1224,6 +1236,8 @@ class _Checker:
             return self._check_binary_op(expr)
         if isinstance(expr, UnaryNot):
             operand_type = self._check_expr(expr.operand, expected=None)
+            if self._candidate_operation_can_defer((operand_type,), (BoolType,)):
+                return BoolType()
             if not isinstance(operand_type, BoolType):
                 raise AglTypeError(
                     f"'not' requires a bool operand; got '{operand_type!r}'.",
@@ -2549,25 +2563,71 @@ class _Checker:
             return None
         if concrete:
             if all(isinstance(typ, TextType) for typ in concrete):
-                result: Type = TextType()
-            elif any(isinstance(typ, DecimalType) for typ in concrete):
-                result = DecimalType()
-            else:
-                result = IntType()
-            for typ in (left, right):
-                if contains_inference_var(typ):
-                    engine.unify(
-                        typ,
-                        result,
-                        engine.origin(span, role=ConstraintRole.EXPECTED_RESULT, subject=subject),
-                    )
-            return result
+                return TextType()
+            if any(isinstance(typ, DecimalType) for typ in concrete):
+                return DecimalType()
+            return IntType()
         engine.unify(
             left,
             right,
             engine.origin(span, role=ConstraintRole.EXPECTED_RESULT, subject=subject),
         )
         return engine.zonk(left)
+
+    def _candidate_operation_can_defer(
+        self,
+        types: Sequence[Type],
+        allowed: tuple[type[Type], ...],
+        *,
+        can_defer: Callable[[tuple[Type, ...]], bool] | None = None,
+    ) -> bool:
+        """Whether candidate mode can defer an operation's unresolved operand validity.
+
+        Concrete operands must still belong to the operation's accepted family.
+        ``can_defer`` supplies that compatibility check for operations with
+        asymmetric operand roles. Flexible operands are intentionally not
+        constrained here: a fixed-result operation can provide return evidence
+        without choosing an operand type before all branch evidence is known.
+        """
+        if self._candidate_session is None:
+            return False
+        engine = self._active_inference_engine()
+        resolved = tuple(engine.zonk(typ) for typ in types)
+        if not any(contains_inference_var(typ) for typ in resolved):
+            return False
+        if can_defer is not None:
+            return can_defer(resolved)
+        return all(
+            contains_inference_var(typ) or isinstance(typ, (*allowed, BottomType))
+            for typ in resolved
+        )
+
+    @staticmethod
+    def _candidate_in_operation_can_defer(operands: tuple[Type, ...]) -> bool:
+        """Whether partially known membership operands could form a valid operation."""
+        left, right = operands
+        if isinstance(right, InferenceVarType):
+            return True
+        if isinstance(right, ListType):
+            return True
+        if isinstance(right, (TextType, DictType)):
+            return contains_inference_var(left) or isinstance(left, (TextType, BottomType))
+        return False
+
+    def _candidate_equality_can_defer(self, left: Type, right: Type) -> bool:
+        """Return whether unresolved candidate equality operands may be deferred."""
+        if self._candidate_session is None:
+            return False
+        engine = self._active_inference_engine()
+        resolved = tuple(engine.zonk(typ) for typ in (left, right))
+        if not any(contains_inference_var(typ) for typ in resolved):
+            return False
+        return all(
+            contains_inference_var(typ)
+            or isinstance(typ, BottomType)
+            or comparable_types(typ, typ, self._env.type_table)
+            for typ in resolved
+        )
 
     def _check_binary_op(self, node: BinaryOp) -> Type:
         left_type = self._check_expr(node.left, expected=None)
@@ -2576,6 +2636,8 @@ class _Checker:
 
         if op in (BinOp.AND, BinOp.OR):
             op_name = "and" if op is BinOp.AND else "or"
+            if self._candidate_operation_can_defer((left_type, right_type), (BoolType,)):
+                return BoolType()
             if not self._is_type_or_bottom(left_type, BoolType):
                 raise AglTypeError(
                     f"'{op_name}' requires bool operands; left operand has type '{left_type!r}'.",
@@ -2589,6 +2651,8 @@ class _Checker:
             return BoolType()
 
         if op in (BinOp.EQ, BinOp.NEQ):
+            if self._candidate_equality_can_defer(left_type, right_type):
+                return BoolType()
             # reject operations on bare type variables.
             if isinstance(left_type, TypeVarType):
                 raise AglTypeError(
@@ -2615,6 +2679,10 @@ class _Checker:
             return BoolType()
 
         if op in (BinOp.LT, BinOp.LE, BinOp.GT, BinOp.GE):
+            if self._candidate_operation_can_defer(
+                (left_type, right_type), (IntType, DecimalType, TextType)
+            ):
+                return BoolType()
             # reject operations on bare type variables.
             if isinstance(left_type, TypeVarType):
                 raise AglTypeError(
@@ -2656,6 +2724,8 @@ class _Checker:
             return self._check_numeric_binop(left_type, right_type, node.span, "*")
 
         if op == BinOp.DIV:
+            if self._candidate_operation_can_defer((left_type, right_type), (IntType, DecimalType)):
+                return DecimalType()
             # reject operations on bare type variables.
             if isinstance(left_type, TypeVarType):
                 raise AglTypeError(
@@ -2762,6 +2832,10 @@ class _Checker:
         return IntType()
 
     def _check_in_op(self, left_type: Type, right_type: Type, span: SourceSpan) -> Type:
+        if self._candidate_operation_can_defer(
+            (left_type, right_type), (), can_defer=self._candidate_in_operation_can_defer
+        ):
+            return BoolType()
         # reject operations on bare type variables.
         if isinstance(left_type, TypeVarType):
             raise AglTypeError(
@@ -2819,6 +2893,8 @@ class _Checker:
 
     def _check_is_test(self, node: IsTest) -> BoolType:
         expr_type = self._check_expr(node.expr, expected=None)
+        if self._candidate_session is not None and contains_inference_var(expr_type):
+            return BoolType()
         # reject operations on bare type variables.
         if isinstance(expr_type, TypeVarType):
             raise AglTypeError(
@@ -2943,6 +3019,8 @@ class _Checker:
 
     def _check_field_access(self, node: FieldAccess, expected: Type | None = None) -> Type:
         obj_type = self._check_expr(node.obj, expected=None)
+        if self._candidate_session is not None and contains_inference_var(obj_type):
+            return self._active_inference_engine().fresh("field result")
         # reject operations on bare type variables.
         if isinstance(obj_type, TypeVarType):
             raise AglTypeError(
@@ -2983,6 +3061,9 @@ class _Checker:
         *,
         span: SourceSpan,
     ) -> Type:
+        if self._candidate_session is not None and contains_inference_var(obj_type):
+            self._check_expr(index, expected=None)
+            return self._active_inference_engine().fresh("index result")
         # reject operations on bare type variables.
         if isinstance(obj_type, TypeVarType):
             raise AglTypeError(
@@ -3121,10 +3202,13 @@ class _Checker:
     def _unify_elements(self, elements: Sequence[Expr], *, kind: str, span: SourceSpan) -> Type:
         """Find a literal's common element type without coercing flexible variables."""
         types = [self._check_expr(e, expected=None) for e in elements]
+        subject = f"{kind} literal elements"
+        if self._candidate_session is not None:
+            return self._common_types(types, span, subject)
         unified = types[0]
         for typ in types[1:]:
             provisional = self._unify_provisional_common_types(
-                unified, typ, span=span, subject=f"{kind} literal elements"
+                unified, typ, span=span, subject=subject
             )
             if provisional is not None:
                 unified = provisional
@@ -3132,11 +3216,63 @@ class _Checker:
                 unified = typ
             elif not is_assignable(typ, unified):
                 raise AglTypeError(
-                    f"{kind} literal elements have inconsistent types: "
-                    f"'{unified!r}' and '{typ!r}'.",
+                    f"{subject} have inconsistent types: '{unified!r}' and '{typ!r}'.",
                     span=span,
                 )
         return unified
+
+    def _common_concrete_types(self, types: Sequence[Type], span: SourceSpan, subject: str) -> Type:
+        """Apply the ordinary equality/widening rules to already-concrete evidence."""
+        result = types[0]
+        for typ in types[1:]:
+            if result == typ:
+                continue
+            if isinstance(result, IntType) and isinstance(typ, DecimalType):
+                result = DecimalType()
+            elif isinstance(result, DecimalType) and isinstance(typ, IntType):
+                continue
+            else:
+                raise AglTypeError(
+                    f"{subject} have incompatible types: '{result!r}' and '{typ!r}'.",
+                    span=span,
+                )
+        return result
+
+    def _common_types(
+        self,
+        types: Sequence[Type],
+        span: SourceSpan,
+        subject: str,
+        *,
+        engine: InferenceEngine | None = None,
+    ) -> Type:
+        """Combine candidate common-type evidence, normalizing concretes first."""
+        if engine is None:
+            engine = self._active_inference_engine()
+        try:
+            resolved = [engine.zonk(typ) for typ in types]
+            evidence = [typ for typ in resolved if not isinstance(typ, BottomType)]
+            if not evidence:
+                return engine.fresh(f"{subject} evidence")
+            concrete = [typ for typ in evidence if not contains_inference_var(typ)]
+            provisional = [typ for typ in evidence if contains_inference_var(typ)]
+            if concrete:
+                result = self._common_concrete_types(concrete, span, subject)
+                for typ in provisional:
+                    self._unify_provisional_common_types(
+                        typ, result, span=span, subject=subject, engine=engine
+                    )
+                return result
+            result = provisional[0]
+            for typ in provisional[1:]:
+                unified = self._unify_provisional_common_types(
+                    result, typ, span=span, subject=subject, engine=engine
+                )
+                assert unified is not None
+                result = unified
+            return result
+        except AglTypeError as exc:
+            raise _CandidateEvidenceError(str(exc), span=exc.span, related=exc.related) from exc
 
     def _unify_provisional_common_types(
         self,
@@ -3450,7 +3586,7 @@ class _Checker:
         *,
         engine: InferenceEngine | None = None,
     ) -> Type:
-        """Find a branch common type, exactly solving provisional candidates first."""
+        """Find a branch common type, normalizing candidate evidence before solving."""
         if engine is None and self._inference_region is not None:
             engine = self._inference_region.engine
         if engine is None:
@@ -3463,6 +3599,9 @@ class _Checker:
             ]
         if not non_bottom:
             return BottomType()
+        if self._candidate_session is not None:
+            return self._common_types(non_bottom, span, f"{construct} branches", engine=engine)
+
         result_type: Type = non_bottom[0]
         for branch_type in non_bottom[1:]:
             provisional = (
@@ -3483,7 +3622,7 @@ class _Checker:
             elif isinstance(result_type, IntType) and isinstance(branch_type, DecimalType):
                 result_type = DecimalType()
             elif isinstance(result_type, DecimalType) and isinstance(branch_type, IntType):
-                pass
+                continue
             else:
                 raise AglTypeError(
                     f"{construct} branches have incompatible types: "
@@ -3508,6 +3647,21 @@ class _Checker:
     # ------------------------------------------------------------------
 
     def _assert_assignable(self, value_type: Type, target_type: Type, span: SourceSpan) -> None:
+        if self._candidate_session is not None and (
+            contains_inference_var(value_type) or contains_inference_var(target_type)
+        ):
+            engine = self._active_inference_engine()
+            try:
+                engine.unify(
+                    value_type,
+                    target_type,
+                    engine.origin(
+                        span, role=ConstraintRole.EXPECTED_RESULT, subject="expected type"
+                    ),
+                )
+            except InferenceError as exc:
+                raise AglTypeError(str(exc), span=exc.span, related=exc.related) from exc
+            return
         if is_assignable(value_type, target_type):
             return
         raise AglTypeError(

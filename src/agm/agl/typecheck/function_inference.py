@@ -16,7 +16,7 @@ from agm.agl.semantics.persistent import PersistentDict
 from agm.agl.semantics.types import FunctionType, Type, contains_inference_var
 from agm.agl.syntax.nodes import FuncDef, Param, ParamKind, Program, VarRef
 from agm.agl.syntax.visitor import walk
-from agm.agl.typecheck.inference import ConstraintRole, InferenceEngine
+from agm.agl.typecheck.inference import ConstraintRole, InferenceEngine, InferenceError
 
 if TYPE_CHECKING:
     from agm.agl.capabilities import HostCapabilities
@@ -157,15 +157,23 @@ def _infer_direct_recursive_candidates(module: CandidateModule) -> None:
         session.binding_snapshot = module.env.snapshot_binding_types()
         try:
             candidate_type = checker.check_candidate_funcdef_body(item, signature, session)
-            engine.unify(
-                result,
-                candidate_type,
-                engine.origin(
-                    item.span,
-                    role=ConstraintRole.EXPECTED_RESULT,
-                    subject=f"return type of function '{item.name}'",
-                ),
-            )
+            try:
+                engine.unify(
+                    result,
+                    candidate_type,
+                    engine.origin(
+                        item.span,
+                        role=ConstraintRole.EXPECTED_RESULT,
+                        subject=f"return type of function '{item.name}'",
+                    ),
+                )
+            except InferenceError as exc:
+                raise AglTypeError(
+                    f"Cannot infer return type of function '{item.name}': return values have "
+                    "incompatible types. Add a return type annotation.",
+                    span=item.span,
+                    related=exc.related,
+                ) from exc
         finally:
             assert session.binding_snapshot is not None
             module.env.restore_binding_types(session.binding_snapshot)

@@ -264,11 +264,14 @@ class ReplSession:
         """Return AST ids belonging to the unexecuted suffix of a failed entry."""
         if failure_span is None:
             return set()
+        from agm.agl.syntax.nodes import ElseSentinel
         from agm.agl.syntax.visitor import walk
 
         node_ids: set[int] = set()
 
         def collect(node: object) -> None:
+            if isinstance(node, ElseSentinel):
+                return
             typed_node = cast("Program", node)
             if typed_node.span.start_offset >= failure_span.start_offset:
                 node_ids.add(typed_node.node_id)

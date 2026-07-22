@@ -1423,6 +1423,19 @@ class _InterruptAgent:
 
 
 class TestAgentCancellation:
+    def test_interrupt_without_agent_reports_interrupted_entry(self) -> None:
+        session = ReplSession()
+        with patch("agm.agl.eval.ir_interpreter.IrInterpreter.run", side_effect=KeyboardInterrupt):
+            result = session.eval_entry("1 + 1")
+
+        assert not result.ok
+        assert result.error is None
+        assert result.diagnostics
+        message = result.diagnostics[0].message.lower()
+        assert "interrupted" in message
+        assert "agent call" not in message
+        assert session.eval_entry("2 + 2").ok
+
     def test_declined_agent_aborts_entry_with_diagnostic(self) -> None:
         s = ReplSession(default_agent=_CancellingAgent())
         r = s.eval_entry('let g = ask """do it"""')

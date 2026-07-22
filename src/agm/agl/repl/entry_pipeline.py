@@ -547,6 +547,11 @@ class EntryPipeline:
             )
         except (AgentCancelled, KeyboardInterrupt) as exc:
             cancel_span = exc.span if isinstance(exc, AgentCancelled) else None
+            cancellation_message = (
+                "Agent call cancelled — entry aborted."
+                if isinstance(exc, AgentCancelled)
+                else "Entry interrupted — entry aborted."
+            )
             trace.run_end(ok=False)
             self._persist_interpreter_settings(interp, trace)
             installed = self._ctx._promote_ir_state(
@@ -566,7 +571,7 @@ class EntryPipeline:
                 name=name,
                 value=None,
                 value_type=None,
-                diagnostics=[Diagnostic(message="Agent call cancelled — entry aborted.", line=1)],
+                diagnostics=[Diagnostic(message=cancellation_message, line=1)],
                 warnings=warnings,
                 error=None,
                 ok=False,

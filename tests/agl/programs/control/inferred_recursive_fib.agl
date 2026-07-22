@@ -1,0 +1,6 @@
+# An unannotated directly recursive function infers its return type from
+# concrete branch evidence.
+def fib(n: int) =
+  if n < 2 => n else => fib(n - 1) + fib(n - 2)
+
+print fib(8)

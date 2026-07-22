@@ -129,6 +129,15 @@ def test_graph_func_signature_prepass_skips_inferred_return_type(tmp_path: Path)
     assert lib.type_env.all_function_signatures()["answer"].result == IntType()
 
 
+def test_single_module_program_infers_direct_recursive_return(tmp_path: Path) -> None:
+    graph = _check_program(
+        tmp_path,
+        {"entry": ("def fib(n: int) =\n  if n < 2 => n else => fib(n - 1) + fib(n - 2)\nfib(8)")},
+    )
+
+    assert graph.modules[ENTRY_ID].function_signatures["fib"].result == IntType()
+
+
 def test_program_signature_prepass_preserves_builtin_header_metadata(tmp_path: Path) -> None:
     """Builtin declarations receive the same program-header record as ordinary defs."""
     from agm.agl.syntax.nodes import FuncDef

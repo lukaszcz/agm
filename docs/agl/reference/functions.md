@@ -53,10 +53,19 @@ as a suite — see [Inline bodies](grammar.md#inline-bodies).
 
 The `-> RetType` annotation is optional on ordinary `def` declarations. When
 present, the body is checked against it; a mismatch is a static error. When
-omitted, AgL infers the return type from the body, as it does for lambdas. If
-the body has no inferable result, for example because it always raises or calls
-the same unannotated function before its signature is known, AgL reports a type
-error and asks for an explicit return type annotation.
+omitted, AgL infers the return type from the body, as it does for lambdas. A
+directly recursive function can use concrete evidence from another branch:
+
+```agl
+def fib(n: int) =
+  if n < 2 => n else => fib(n - 1) + fib(n - 2)
+```
+
+Candidate inference for direct recursion applies only to monomorphic functions.
+A recursive generic function needs an explicit result annotation. If a
+monomorphic body has no concrete result evidence, for example because it always
+raises or only calls itself, AgL reports a type error and asks for an explicit
+return type annotation.
 
 A function may also exit early with `return`; see [Early return](#early-return).
 

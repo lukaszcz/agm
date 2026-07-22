@@ -180,6 +180,9 @@ from agm.agl.typecheck.env import (
     dereference_slot_constructor_ref,
 )
 from agm.agl.typecheck.function_inference import (
+    CandidateSession,
+    ModuleCandidateComponent,
+    infer_module_component_candidates,
     resolve_function_header,
     validate_required_after_defaulted,
 )
@@ -440,11 +443,13 @@ class _Checker:
         resolved: ModuleResolution,
         capabilities: HostCapabilities,
         module_id: ModuleId = ENTRY_ID,
+        candidate_session: CandidateSession | None = None,
     ) -> None:
         self._env = env
         self._resolved = resolved
         self._caps = capabilities
         self._module_id = module_id
+        self._candidate_session = candidate_session
         self._node_types: dict[int, Type] = {}
         self._inference_region: _InferenceRegion | None = None
         self._contract_specs: dict[int, OutputContractSpec] = {}
@@ -747,6 +752,34 @@ class _Checker:
         finally:
             self._current_type_vars = old_type_vars
 
+    def check_candidate_funcdef_body(
+        self,
+        node: FuncDef,
+        signature: FunctionSignature,
+        session: CandidateSession,
+    ) -> Type:
+        """Infer disposable evidence for one provisional directly recursive result."""
+        assert node.body is not None
+        self._candidate_session = session
+        old_type_vars = self._current_type_vars
+        self._current_type_vars = frozenset(signature.type_params)
+        try:
+            for param, spec in zip(node.params, signature.params, strict=True):
+                self._env.set_binding_type(param.node_id, spec.type)
+            with self._return_context(None) as collected:
+                body_type = self._check_expr(node.body, expected=None)
+            result = self._unify_branch_types(
+                [*collected, body_type],
+                node.span,
+                "Function return",
+                engine=session.engine,
+            )
+            session.evidence.append(node.body.span)
+            return result
+        finally:
+            self._current_type_vars = old_type_vars
+            self._candidate_session = None
+
     def _infer_funcdef_signature(self, node: FuncDef) -> None:
         """Infer and register an unannotated ``def`` signature from its body."""
         self._validate_funcdef_header(node)
@@ -1018,7 +1051,9 @@ class _Checker:
             return self._inference_region.engine.zonk(typ)
 
         region = _InferenceRegion(
-            InferenceEngine(),
+            self._candidate_session.engine
+            if self._candidate_session is not None
+            else InferenceEngine(),
             {},
             {},
             [],
@@ -1027,6 +1062,18 @@ class _Checker:
             len(self._warnings),
             tuple(len(targets) for targets in self._return_extern_targets_stack),
         )
+        # Candidate sessions share their solver across the function body, but
+        # never finalize or publish an expression region. Their checker and
+        # every side table it accumulated are discarded after candidate closure.
+        if self._candidate_session is not None:
+            self._inference_region = region
+            try:
+                typ = self._infer_expr(expr, expected=expected)
+                self._record_node_type(expr.node_id, typ)
+                return region.engine.zonk(typ)
+            finally:
+                self._inference_region = None
+
         # Some side tables are written while an expression is being checked,
         # while call-site metadata remains typed obligations until region close.
         # The region records only its additions, so rollback never copies state
@@ -2478,6 +2525,50 @@ class _Checker:
         """
         return isinstance(t, allowed) or isinstance(t, BottomType)
 
+    def _candidate_same_family_result(
+        self,
+        left: Type,
+        right: Type,
+        *,
+        allowed: tuple[type[Type], ...],
+        span: SourceSpan,
+        subject: str,
+    ) -> Type | None:
+        """Propagate a candidate provisional result through a same-family operation."""
+        if self._candidate_session is None:
+            return None
+        engine = self._active_inference_engine()
+        left = engine.zonk(left)
+        right = engine.zonk(right)
+        if not (contains_inference_var(left) or contains_inference_var(right)):
+            return None
+        concrete = tuple(
+            typ for typ in (left, right) if not isinstance(typ, (InferenceVarType, BottomType))
+        )
+        if not all(isinstance(typ, allowed) for typ in concrete):
+            return None
+        if concrete:
+            if all(isinstance(typ, TextType) for typ in concrete):
+                result: Type = TextType()
+            elif any(isinstance(typ, DecimalType) for typ in concrete):
+                result = DecimalType()
+            else:
+                result = IntType()
+            for typ in (left, right):
+                if contains_inference_var(typ):
+                    engine.unify(
+                        typ,
+                        result,
+                        engine.origin(span, role=ConstraintRole.EXPECTED_RESULT, subject=subject),
+                    )
+            return result
+        engine.unify(
+            left,
+            right,
+            engine.origin(span, role=ConstraintRole.EXPECTED_RESULT, subject=subject),
+        )
+        return engine.zonk(left)
+
     def _check_binary_op(self, node: BinaryOp) -> Type:
         left_type = self._check_expr(node.left, expected=None)
         right_type = self._check_expr(node.right, expected=None)
@@ -2594,6 +2685,15 @@ class _Checker:
         )
 
     def _check_add(self, left_type: Type, right_type: Type, span: SourceSpan) -> Type:
+        candidate = self._candidate_same_family_result(
+            left_type,
+            right_type,
+            allowed=(TextType, IntType, DecimalType),
+            span=span,
+            subject="'+' operands",
+        )
+        if candidate is not None:
+            return candidate
         # reject operations on bare type variables.
         if isinstance(left_type, TypeVarType):
             raise AglTypeError(
@@ -2627,6 +2727,15 @@ class _Checker:
     def _check_numeric_binop(
         self, left_type: Type, right_type: Type, span: SourceSpan, op_str: str
     ) -> Type:
+        candidate = self._candidate_same_family_result(
+            left_type,
+            right_type,
+            allowed=(IntType, DecimalType),
+            span=span,
+            subject=f"'{op_str}' operands",
+        )
+        if candidate is not None:
+            return candidate
         # reject operations on bare type variables.
         if isinstance(left_type, TypeVarType):
             raise AglTypeError(
@@ -2691,6 +2800,8 @@ class _Checker:
 
     def _check_unary_neg(self, node: UnaryNeg) -> Type:
         t = self._check_expr(node.operand, expected=None)
+        if self._candidate_session is not None and contains_inference_var(t):
+            return t
         # reject operations on bare type variables.
         if isinstance(t, TypeVarType):
             raise AglTypeError(
@@ -3028,11 +3139,17 @@ class _Checker:
         return unified
 
     def _unify_provisional_common_types(
-        self, left: Type, right: Type, *, span: SourceSpan, subject: str
+        self,
+        left: Type,
+        right: Type,
+        *,
+        span: SourceSpan,
+        subject: str,
+        engine: InferenceEngine | None = None,
     ) -> Type | None:
         """Exactly unify provisional common-type candidates, if either has flexibles."""
-        assert self._inference_region is not None
-        engine = self._inference_region.engine
+        if engine is None:
+            engine = self._active_inference_engine()
         left = engine.zonk(left)
         right = engine.zonk(right)
         if not (contains_inference_var(left) or contains_inference_var(right)):
@@ -3330,12 +3447,15 @@ class _Checker:
         branch_types: list[Type],
         span: SourceSpan,
         construct: str,
+        *,
+        engine: InferenceEngine | None = None,
     ) -> Type:
         """Find a branch common type, exactly solving provisional candidates first."""
-        if self._inference_region is None:
+        if engine is None and self._inference_region is not None:
+            engine = self._inference_region.engine
+        if engine is None:
             non_bottom = [typ for typ in branch_types if not isinstance(typ, BottomType)]
         else:
-            engine = self._inference_region.engine
             non_bottom = [
                 resolved
                 for typ in branch_types
@@ -3347,9 +3467,13 @@ class _Checker:
         for branch_type in non_bottom[1:]:
             provisional = (
                 self._unify_provisional_common_types(
-                    result_type, branch_type, span=span, subject=f"{construct} branches"
+                    result_type,
+                    branch_type,
+                    span=span,
+                    subject=f"{construct} branches",
+                    engine=engine,
                 )
-                if self._inference_region is not None
+                if engine is not None
                 else None
             )
             if provisional is not None:
@@ -3447,6 +3571,19 @@ def _check_prepared_module(
     """
     builder = _TypeBuilder(env, module_id=module_id)
     builder.collect(resolved.program, check_inhabitation=check_inhabitation)
+
+    header_checker = _Checker(
+        env=env,
+        resolved=resolved,
+        capabilities=capabilities,
+        module_id=module_id,
+    )
+    for item in resolved.program.body.items:
+        if isinstance(item, FuncDef):
+            header_checker._preregister_funcdef(item)
+    infer_module_component_candidates(
+        ModuleCandidateComponent.singleton(resolved, env, capabilities, module_id)
+    )
 
     checker = _Checker(
         env=env,

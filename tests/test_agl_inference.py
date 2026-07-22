@@ -370,6 +370,18 @@ class TestContextCompletion:
 
 
 class TestFinalizationAndProvenance:
+    def test_solved_query_rejects_nested_unresolved_solution(self) -> None:
+        engine = InferenceEngine()
+        result = engine.fresh("result")
+        element = engine.fresh("element")
+        engine.unify(result, ListType(element), _origin(engine, 1))
+
+        assert engine.is_solved(result) is False
+
+        engine.unify(element, IntType(), _origin(engine, 2))
+
+        assert engine.is_solved(result) is True
+
     def test_zonk_compresses_links_and_rebuilds_nested_types(self) -> None:
         engine = InferenceEngine()
         first = engine.fresh("T")

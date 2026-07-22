@@ -1010,6 +1010,15 @@ class TypeEnvironment:
         self._assert_mutable()
         self._binding_types[node_id] = typ
 
+    def snapshot_binding_types(self) -> PersistentDict[int, Type]:
+        """Return a restorable snapshot of transient binding-type metadata."""
+        return self._binding_types.fork()
+
+    def restore_binding_types(self, snapshot: PersistentDict[int, Type]) -> None:
+        """Restore binding metadata after a disposable checking session."""
+        self._assert_mutable()
+        self._binding_types = snapshot
+
     def get_binding_type(self, node_id: int) -> Type | None:
         return self._binding_types.get(node_id)
 

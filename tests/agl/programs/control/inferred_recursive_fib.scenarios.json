@@ -1,0 +1,10 @@
+{
+  "scenarios": [
+    {
+      "name": "fib_without_return_annotation",
+      "expect": {
+        "stdout": "21\n"
+      }
+    }
+  ]
+}

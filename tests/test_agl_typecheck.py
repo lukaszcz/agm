@@ -113,6 +113,7 @@ from agm.agl.typecheck import (
     PartialCallSpec,
     RecordType,
     TextType,
+    Type,
     TypeEnvironment,
     UnitType,
     assert_checked_module_closed,
@@ -1805,6 +1806,79 @@ class TestFuncDef:
         assert "infer" in msg
         assert "return type" in msg
         assert "annotation" in msg
+
+    def test_unannotated_polymorphically_recursive_generic_needs_result_annotation(self) -> None:
+        err = reject_type("def depth[T](value: T) = if true => 0 else => depth([value])\ndepth(0)")
+
+        msg = str(err).lower()
+        assert "return type" in msg
+        assert "annotation" in msg
+
+    def test_annotated_polymorphically_recursive_generic_is_accepted(self) -> None:
+        accept_type("def depth[T](value: T) -> int = if true => 0 else => depth([value])\ndepth(0)")
+
+    def test_unannotated_uniformly_recursive_generic_needs_result_annotation(self) -> None:
+        err = reject_type("def loop[T](value: T) = if true => value else => loop(value)\nloop(0)")
+
+        msg = str(err).lower()
+        assert "return type" in msg
+        assert "annotation" in msg
+
+    def test_unannotated_nonrecursive_generic_still_infers_its_result(self) -> None:
+        checked = accept_type("def identity[T](value: T) = value\nidentity(0)")
+
+        assert checked.function_signatures["identity"].result == TypeVarType("T")
+
+    def test_direct_recursive_function_infers_from_alternative_branch(self) -> None:
+        checked = accept_type(
+            "def countdown(n: int) = if n == 0 => 0 else => countdown(n - 1)\ncountdown"
+        )
+
+        assert checked.function_signatures["countdown"].result == IntType()
+
+    def test_direct_recursive_function_infers_from_operator_operands(self) -> None:
+        checked = accept_type(
+            "def fib(n: int) = if n < 2 => n else => fib(n - 1) + fib(n - 2)\nfib"
+        )
+
+        assert checked.function_signatures["fib"].result == IntType()
+        assert_checked_module_closed(checked)
+        assert not any(contains_inference_var(typ) for typ in checked.node_types.values())
+
+    def test_direct_recursive_function_combines_return_operand_and_body_tail(self) -> None:
+        checked = accept_type(
+            "def countdown(n: int) =\n  if n == 0 => return 0\n  countdown(n - 1)\ncountdown"
+        )
+
+        assert checked.function_signatures["countdown"].result == IntType()
+
+    @pytest.mark.parametrize(
+        ("operation", "result"),
+        (
+            ('+ "x"', TextType()),
+            ("+ 1.5", DecimalType()),
+            ("- 1", IntType()),
+        ),
+    )
+    def test_direct_recursive_operator_peer_supplies_candidate_evidence(
+        self, operation: str, result: Type
+    ) -> None:
+        checked = accept_type(
+            f"def recurse(n: int) = if n == 0 => recurse(n) {operation} else => recurse(n)\nrecurse"
+        )
+
+        assert checked.function_signatures["recurse"].result == result
+
+    def test_direct_recursive_unary_operator_propagates_candidate(self) -> None:
+        checked = accept_type("def recurse(n: int) = if n == 0 => 0 else => -recurse(n)\nrecurse")
+
+        assert checked.function_signatures["recurse"].result == IntType()
+
+    def test_direct_recursive_candidate_does_not_hide_concrete_body_errors(self) -> None:
+        reject_type("def f(n: int) = if n == 0 => 0 else => f(n - 1) + true")
+
+    def test_direct_recursive_candidate_skips_defaults_until_authoritative_check(self) -> None:
+        reject_type('def f(n: int = "bad") = if n == 0 => 0 else => f(n - 1)')
 
     def test_funcdef_with_default_param(self) -> None:
         r = accept_type("def f(x: int, y: int = 0) -> int = x + y\nf(1)")

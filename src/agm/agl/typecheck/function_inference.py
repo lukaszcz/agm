@@ -1,8 +1,9 @@
 """Function-header resolution and disposable candidate return inference.
 
 Standalone and program checking share this seam. Candidate discovery builds
-same-module dependency SCCs for unannotated functions, closes each component
-before its dependents, and publishes only concrete signatures.
+function dependency SCCs within either a standalone module or one import SCC,
+closes each component before its dependents, and publishes only concrete
+signatures outside that import SCC.
 """
 
 from __future__ import annotations
@@ -58,7 +59,7 @@ class CandidateSession:
     engine: InferenceEngine
     provisional_declaration_ids: frozenset[int]
     evidence: list[SourceSpan] = field(default_factory=list)
-    binding_snapshot: PersistentDict[int, Type] | None = None
+    binding_snapshots: dict[ModuleId, PersistentDict[int, Type]] = field(default_factory=dict)
     current_declaration_id: int | None = None
     generic_edges: list[GenericCandidateEdge] = field(default_factory=list)
 
@@ -96,13 +97,16 @@ class CandidateModule:
 
 @dataclass(frozen=True, slots=True)
 class ModuleCandidateComponent:
-    """Modules whose candidate discovery is coordinated together.
+    """One import-SCC candidate batch and the environments it publishes into.
 
-    Current standalone and program paths create synthetic singleton components;
-    candidate dependency SCCs are therefore confined to one module.
+    ``modules`` is exactly one loader-provided import SCC. Provisional
+    signatures are visible only within those modules; ``publication_envs``
+    receives the closed candidates for later program checking. Standalone
+    checking uses the synthetic singleton.
     """
 
     modules: tuple[CandidateModule, ...]
+    publication_envs: tuple[TypeEnvironment, ...] = ()
 
     @classmethod
     def singleton(
@@ -113,7 +117,15 @@ class ModuleCandidateComponent:
         module_id: ModuleId,
     ) -> "ModuleCandidateComponent":
         """Build the standalone checker's synthetic one-module component."""
-        return cls((CandidateModule(resolved, env, capabilities, module_id),))
+        return cls((CandidateModule(resolved, env, capabilities, module_id),), (env,))
+
+    def discovery_targets(self) -> tuple[TypeEnvironment, ...]:
+        """Return the import-SCC environments that need provisional signatures."""
+        return tuple(module.env for module in self.modules)
+
+    def publication_targets(self) -> tuple[TypeEnvironment, ...]:
+        """Return every environment that receives this batch's closed signatures."""
+        return self.publication_envs or self.discovery_targets()
 
 
 class FunctionReturnSource(Enum):
@@ -125,11 +137,11 @@ class FunctionReturnSource(Enum):
 
 @dataclass(frozen=True, slots=True)
 class FunctionSignatureRecord:
-    """Internal declared-signature metadata keyed by a declaration node id.
+    """Internal function-signature metadata keyed by a declaration node id.
 
-    Program pre-passes currently create records only for explicit results.
-    ``candidate_evidence`` remains reserved for candidate metadata, whose
-    inferred signatures are currently published only in their own module.
+    Program header collection creates declared records first. Import-SCC
+    candidate discovery appends concrete candidate records before authoritative
+    module checking begins.
     """
 
     declaration_node_id: int
@@ -147,85 +159,118 @@ def _declaration_key(node: FuncDef) -> tuple[int, int]:
     return (node.span.start_offset, node.node_id)
 
 
-def _candidate_functions(module: CandidateModule) -> dict[int, FuncDef]:
-    """Return unannotated ordinary functions by declaration id."""
-    program = module.resolved.program
-    assert isinstance(program, Program)
-    return {
-        item.node_id: item
-        for item in program.body.items
-        if isinstance(item, FuncDef)
-        and item.return_type is None
-        and not item.is_builtin
-        and not item.is_extern
-    }
+_CandidateFunction = tuple[CandidateModule, FuncDef]
 
 
-def _function_key(functions: dict[int, FuncDef], declaration_id: int) -> tuple[int, int]:
-    """Look up the stable source order for a declaration id."""
-    return _declaration_key(functions[declaration_id])
+def _candidate_functions(component: ModuleCandidateComponent) -> dict[int, _CandidateFunction]:
+    """Return this import SCC's unannotated ordinary functions by declaration id."""
+    functions: dict[int, _CandidateFunction] = {}
+    for module in component.modules:
+        program = module.resolved.program
+        assert isinstance(program, Program)
+        for item in program.body.items:
+            if (
+                isinstance(item, FuncDef)
+                and item.return_type is None
+                and not item.is_builtin
+                and not item.is_extern
+            ):
+                functions[item.node_id] = (module, item)
+    return functions
+
+
+def _function_key(
+    functions: dict[int, _CandidateFunction], declaration_id: int
+) -> tuple[tuple[str, ...], int, int]:
+    """Return global deterministic source order for a declaration id."""
+    module, node = functions[declaration_id]
+    return (module.module_id.segments, *_declaration_key(node))
 
 
 def _function_dependencies(
-    functions: dict[int, FuncDef], resolved: "ModuleResolution"
+    functions: dict[int, _CandidateFunction],
 ) -> dict[int, tuple[int, ...]]:
-    """Collect body references to candidate functions by resolved declaration id."""
+    """Collect body references to batch candidates by resolved declaration id."""
     dependencies: dict[int, tuple[int, ...]] = {}
-    for declaration_id, node in functions.items():
+    for declaration_id, (module, node) in functions.items():
         assert node.body is not None
         referenced: set[int] = set()
 
         def visit(item: object) -> None:
             if not isinstance(item, VarRef):
                 return
-            reference = resolved.resolution.get(item.node_id)
+            reference = module.resolved.resolution.get(item.node_id)
             if reference is not None and reference.decl_node_id in functions:
                 referenced.add(reference.decl_node_id)
 
         # Walking the whole body deliberately includes direct calls, function
-        # values, partial applications, and type applications.  Defaults are
-        # not body evidence and are checked only by authoritative validation.
+        # values, partial applications, and type applications. Defaults are
+        # checked only by authoritative validation.
         walk(node.body, visit)
 
-        def dependency_key(declaration_id: int) -> tuple[int, int]:
-            return _function_key(functions, declaration_id)
+        def dependency_key(node_id: int) -> tuple[tuple[str, ...], int, int]:
+            return _function_key(functions, node_id)
 
         dependencies[declaration_id] = tuple(sorted(referenced, key=dependency_key))
     return dependencies
 
 
-def infer_module_component_candidates(component: ModuleCandidateComponent) -> None:
-    """Infer and close same-module function dependency components.
+def infer_module_component_candidates(
+    component: ModuleCandidateComponent,
+) -> tuple[FunctionSignatureRecord, ...]:
+    """Infer import-SCC candidates and publish only closed signatures.
 
-    ``sccs`` returns sink components first for this dependency graph, so every
-    acyclic callee becomes a concrete signature before a dependent body can
-    consume it. Only one genuinely recursive component shares live flexible
-    result variables.
+    ``sccs`` returns sink components first, so an acyclic callee closes before
+    its callers. Within an import cycle, the graph spans every module and a
+    recursive component shares provisional results across module boundaries.
     """
-    for module in component.modules:
-        functions = _candidate_functions(module)
-        dependencies = _function_dependencies(functions, module.resolved)
+    functions = _candidate_functions(component)
+    dependencies = _function_dependencies(functions)
+    records: list[FunctionSignatureRecord] = []
 
-        def component_key(declaration_id: int) -> tuple[int, int]:
-            return _function_key(functions, declaration_id)
+    def component_key(node_id: int) -> tuple[tuple[str, ...], int, int]:
+        return _function_key(functions, node_id)
 
-        for declaration_ids in sccs(dependencies, key=component_key):
-            functions_in_component = tuple(functions[node_id] for node_id in declaration_ids)
-            _infer_function_component(module, functions_in_component)
+    for declaration_ids in sccs(dependencies, key=component_key):
+        records.extend(
+            _infer_function_component(
+                component,
+                tuple(functions[node_id] for node_id in declaration_ids),
+            )
+        )
+    return tuple(records)
 
 
-def _infer_function_component(module: CandidateModule, functions: tuple[FuncDef, ...]) -> None:
-    """Infer one dependency component and publish only its closed signatures."""
+def _register_signature(
+    env: TypeEnvironment,
+    module: CandidateModule,
+    node: FuncDef,
+    signature: FunctionSignature,
+    function_type: FunctionType,
+) -> None:
+    """Install a declaration-id-keyed signature without changing visibility."""
+    if env is module.env:
+        env.register_function_signature(node.name, signature)
+    env.register_function_signature_by_node_id(node.node_id, signature)
+    env.set_binding_type(node.node_id, function_type)
+
+
+def _infer_function_component(
+    component: ModuleCandidateComponent,
+    functions: tuple[_CandidateFunction, ...],
+) -> tuple[FunctionSignatureRecord, ...]:
+    """Infer one cross-module function component and publish concrete schemes."""
     from agm.agl.typecheck.checker import _Checker
 
     engine = InferenceEngine()
-    session = CandidateSession(engine, frozenset(node.node_id for node in functions))
-    provisional: list[tuple[FuncDef, InferenceVarType, FunctionSignature]] = []
+    session = CandidateSession(engine, frozenset(node.node_id for _, node in functions))
+    provisional: list[tuple[CandidateModule, FuncDef, InferenceVarType, FunctionSignature]] = []
+    discovery_envs = component.discovery_targets()
+    publication_envs = component.publication_targets()
 
-    # Make every component member visible before any body is traversed. A
-    # dependency component has already closed before this point, whereas peers
-    # intentionally share this component's engine.
-    for node in functions:
+    # Make each member visible throughout its import SCC before traversing a
+    # body. Node-id keys retain declaration identity despite matching names.
+    for module, node in functions:
         checker = _Checker(
             env=module.env,
             resolved=module.resolved,
@@ -235,14 +280,15 @@ def _infer_function_component(module: CandidateModule, functions: tuple[FuncDef,
         checker._validate_funcdef_header(node)
         result = engine.fresh(f"{node.name} result")
         signature, function_type = resolve_function_header(module.env, node, result_type=result)
-        module.env.register_function_signature(node.name, signature)
-        module.env.register_function_signature_by_node_id(node.node_id, signature)
-        module.env.set_binding_type(node.node_id, function_type)
-        provisional.append((node, result, signature))
+        for env in discovery_envs:
+            _register_signature(env, module, node, signature, function_type)
+        provisional.append((module, node, result, signature))
 
-    session.binding_snapshot = module.env.snapshot_binding_types()
+    session.binding_snapshots = {
+        module.module_id: module.env.snapshot_binding_types() for module in component.modules
+    }
     try:
-        for node, result, signature in provisional:
+        for module, node, result, signature in provisional:
             checker = _Checker(
                 env=module.env,
                 resolved=module.resolved,
@@ -268,54 +314,69 @@ def _infer_function_component(module: CandidateModule, functions: tuple[FuncDef,
                     related=exc.related,
                 ) from exc
     finally:
-        assert session.binding_snapshot is not None
-        module.env.restore_binding_types(session.binding_snapshot)
+        for module in component.modules:
+            module.env.restore_binding_types(session.binding_snapshots[module.module_id])
 
     _close_generic_candidate_edges(session, provisional)
 
     unresolved = [
-        node
-        for node, result, _signature in provisional
+        (module, node)
+        for module, node, result, _signature in provisional
         if not engine.is_solved(result) or contains_inference_var(engine.zonk(result))
     ]
     if len(unresolved) == 1:
-        node = unresolved[0]
+        _, node = unresolved[0]
         raise AglTypeError(
             f"Cannot infer return type of function '{node.name}': insufficient concrete return "
             "evidence. Add a return type annotation.",
             span=node.span,
         )
     if unresolved:
-        names = ", ".join(f"'{node.name}'" for node in unresolved)
+        names = ", ".join(f"'{node.name}'" for _, node in unresolved)
         raise AglTypeError(
             f"Cannot infer return types for functions {names}: insufficient concrete return "
             "evidence. Add return type annotations.",
-            span=unresolved[0].span,
+            span=unresolved[0][1].span,
+            related=tuple(
+                (f"function '{node.name}' also has insufficient return evidence", node.span)
+                for _, node in unresolved[1:]
+            ),
         )
 
-    for node, result, signature in provisional:
+    records: list[FunctionSignatureRecord] = []
+    for module, node, result, signature in provisional:
         concrete_result = engine.zonk(result)
         concrete_signature = FunctionSignature(
             params=signature.params,
             result=concrete_result,
             type_params=signature.type_params,
         )
-        module.env.register_function_signature(node.name, concrete_signature)
-        module.env.register_function_signature_by_node_id(node.node_id, concrete_signature)
-        module.env.set_binding_type(
-            node.node_id,
-            FunctionType(
-                params=tuple(param.type for param in signature.params), result=concrete_result
-            ),
+        function_type = FunctionType(
+            params=tuple(param.type for param in signature.params), result=concrete_result
         )
+        for env in publication_envs:
+            _register_signature(env, module, node, concrete_signature, function_type)
+        records.append(
+            FunctionSignatureRecord(
+                declaration_node_id=node.node_id,
+                name=node.name,
+                signature=concrete_signature,
+                function_type=function_type,
+                is_builtin=False,
+                is_extern=False,
+                return_source=FunctionReturnSource.CANDIDATE,
+                candidate_evidence=(node.body.span,) if node.body is not None else (),
+            )
+        )
+    return tuple(records)
 
 
 def _close_generic_candidate_edges(
     session: CandidateSession,
-    provisional: list[tuple[FuncDef, InferenceVarType, FunctionSignature]],
+    provisional: list[tuple[CandidateModule, FuncDef, InferenceVarType, FunctionSignature]],
 ) -> None:
     """Validate uniform generic recursion and connect its delayed result evidence."""
-    functions = {node.node_id: (node, result) for node, result, _signature in provisional}
+    functions = {node.node_id: (node, result) for _, node, result, _signature in provisional}
     engine = session.engine
     for edge in session.generic_edges:
         caller, _ = functions[edge.caller_declaration_id]

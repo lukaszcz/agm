@@ -3705,6 +3705,7 @@ def _check_prepared_module(
     env: TypeEnvironment,
     module_id: ModuleId = ENTRY_ID,
     check_inhabitation: bool = True,
+    infer_candidates: bool = True,
 ) -> CheckedModule:
     """Check using a prepared environment and return only finalized annotations.
 
@@ -3725,9 +3726,10 @@ def _check_prepared_module(
     for item in resolved.program.body.items:
         if isinstance(item, FuncDef):
             header_checker._preregister_funcdef(item)
-    infer_module_component_candidates(
-        ModuleCandidateComponent.singleton(resolved, env, capabilities, module_id)
-    )
+    if infer_candidates:
+        infer_module_component_candidates(
+            ModuleCandidateComponent.singleton(resolved, env, capabilities, module_id)
+        )
 
     checker = _Checker(
         env=env,

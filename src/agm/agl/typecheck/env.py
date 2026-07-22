@@ -490,8 +490,10 @@ class TypeEnvironment:
     aliases) and a mapping from declaration ``node_id`` → ``Type`` for binding
     resolution during the check pass.
 
-    The ``TypeEnvironment`` is constructed and populated by the
-    ``_TypeBuilder`` pre-pass; the main ``_Checker`` visitor then queries it.
+    The ``TypeEnvironment`` is populated by the ``_TypeBuilder`` pre-pass.
+    Program checking seeds explicit headers first, then import-SCC candidate
+    inference publishes closed unannotated signatures before the main
+    ``_Checker`` visitor queries the environment.
 
     Program context
     ---------------
@@ -558,11 +560,11 @@ class TypeEnvironment:
         # Alias type-params — name → tuple of type-param names.
         self._alias_type_params: dict[str, tuple[str, ...]] = {}
         # Node-id-keyed function signatures — decl_node_id → FunctionSignature.
-        # Populated in program context by the whole-program function-signature pre-pass so
-        # that _check_declared_name_call can look up the CORRECT signature for a
-        # cross-module callee by its globally-unique decl_node_id rather than by
-        # bare name (which would pick the wrong signature when two modules define
-        # functions with the same name but different signatures).
+        # Program environments receive explicit headers from the whole-program
+        # pre-pass, then closed unannotated candidates from import-SCC inference,
+        # so _check_declared_name_call can look up the correct cross-module callee
+        # by globally unique decl_node_id rather than by bare name (which would
+        # collide when modules define different same-named functions).
         self._function_signatures_by_node_id: dict[int, FunctionSignature] = {}
         # Declaration node_ids of ``extern def``s, keyed by the same globally-unique
         # decl_node_id as ``_function_signatures_by_node_id``.  Populated by
@@ -965,10 +967,11 @@ class TypeEnvironment:
     def register_function_signature_by_node_id(self, node_id: int, sig: FunctionSignature) -> None:
         """Register a function signature keyed by its declaration ``node_id``.
 
-        Used by the program pre-pass to seed every module's env with ALL
-        function signatures before any body is checked.  Because ``node_id``
-        is globally unique, signatures from different modules never
-        collide here even when two modules define functions with the same name.
+        The program pre-pass seeds explicit signatures into every module env;
+        import-SCC inference later publishes each closed candidate into the
+        environments that need it. Because ``node_id`` is globally unique,
+        signatures from different modules never collide even when their
+        functions have the same name.
         """
         self._assert_mutable()
         self._function_signatures_by_node_id[node_id] = sig
@@ -981,12 +984,13 @@ class TypeEnvironment:
         name collision problem when two modules define same-named functions with
         different signatures.
 
-        Populated in program context by the whole-program function-signature pre-pass
-        (via :meth:`register_function_signature_by_node_id`) AND in single-
-        program mode by ``_preregister_funcdef`` (which always seeds both the
-        name-keyed and node-id-keyed tables).  Returns ``None`` only for
-        syntactically impossible cases (e.g. a callee node_id not registered
-        because the function body check raised before registration).
+        In program context, explicit signatures arrive from the whole-program
+        pre-pass and closed unannotated candidates arrive from import-SCC
+        inference (both via :meth:`register_function_signature_by_node_id`).
+        In single-program mode, ``_preregister_funcdef`` seeds both the
+        name-keyed and node-id-keyed tables. Returns ``None`` only for
+        syntactically impossible cases (for example, a callee declaration that
+        failed before registration).
         """
         return self._function_signatures_by_node_id.get(node_id)
 

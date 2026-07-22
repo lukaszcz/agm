@@ -35,19 +35,19 @@ Algorithm
       first declaration (across the whole program) that has no finite value,
       consistent with the single-module ``_TypeBuilder`` check.
 
-2. **Program function-signature pre-pass** — resolve parameter and explicit
-   return annotations for top-level ``FuncDef`` declarations in every module
-   (using the ``program_type_table`` and each module's ``ImportEnv`` for
-   cross-module type refs), producing a ``program_func_sig_table`` keyed by
-   ``FuncDef.node_id``. Definitions without result annotations are omitted;
-   no function body is checked in this phase.
+2. **Program function headers** — resolve parameter and explicit return
+   annotations for top-level ``FuncDef`` declarations in every module,
+   producing a declaration-node-id-keyed signature table.
 
-3. **Per-module type-check** — for each module, build a module-aware
-   :class:`~agm.agl.typecheck.env.TypeEnvironment` seeded with the module's own
-   types, the explicitly declared program signatures, and the program table +
-   import env for cross-module lookups. The candidate coordinator then closes
-   same-module dependency SCCs of unannotated functions before authoritative
-   body checking publishes their signatures.
+3. **Import-SCC candidate inference** — consume the preserved loader import
+   SCCs in reverse topological order. Each candidate function dependency SCC
+   publishes only closed unannotated signatures; one import cycle builds a
+   single cross-module function graph.
+
+4. **Authoritative per-module type-check** — after every signature is concrete,
+   recheck each module body with its module-aware
+   :class:`~agm.agl.typecheck.env.TypeEnvironment`. This pass alone publishes
+   checked node types, calls, contracts, bindings, and warnings.
 
 Single-module equivalence
 -------------------------
@@ -82,7 +82,7 @@ from agm.agl.syntax.nodes import (
 )
 from agm.agl.syntax.spans import SourceSpan
 from agm.agl.typecheck.builder import _TypeBuilder
-from agm.agl.typecheck.checker import _check_prepared_module
+from agm.agl.typecheck.checker import _check_prepared_module, _Checker
 from agm.agl.typecheck.env import (
     AglTypeError,
     CheckedModule,
@@ -95,8 +95,11 @@ from agm.agl.typecheck.env import (
     assert_checked_output_closed,
 )
 from agm.agl.typecheck.function_inference import (
+    CandidateModule,
     FunctionReturnSource,
     FunctionSignatureRecord,
+    ModuleCandidateComponent,
+    infer_module_component_candidates,
     resolve_function_header,
 )
 
@@ -538,8 +541,8 @@ def _build_program_type_table(
 
     # Step C: every body is now resolved, so the inhabitation fixpoint can
     # run over the whole shared table (this program's declarations plus the
-    # builtin/prelude defs, all trivially inhabited). The per-module builder
-    # re-check in Phase 3 (``_check_module``) skips its own inhabitation pass
+    # builtin/prelude defs, all trivially inhabited). The authoritative
+    # per-module check in Phase 4 skips its own inhabitation pass
     # (``check_inhabitation=False``) precisely because this whole-program check
     # has already run.
     uninhabited = compute_uninhabited(shared_type_table)
@@ -567,11 +570,11 @@ def _build_program_func_sig_table(
     program_alias_table: dict[tuple[ModuleId, str], GenericAliasDef],
     entry_seed_env: TypeEnvironment | None = None,
 ) -> dict[int, FunctionSignatureRecord]:
-    """Phase 2: compute explicit top-level function signatures across modules.
+    """Phase 2: collect explicit top-level function signatures across modules.
 
-    The table contains only functions with declared return types. Unannotated
-    functions are inferred by each module's candidate coordinator in Phase 3,
-    so they cannot provide cross-module provisional signatures.
+    The table initially contains only functions with declared return types.
+    Import-SCC candidate discovery later adds concrete candidate records; it
+    never exposes a provisional signature across a module boundary.
 
     The pre-pass uses temporary per-module environments seeded with the
     program-wide type table and each module's ``ImportEnv``. It resolves only
@@ -688,11 +691,9 @@ def _module_function_signatures(
     return signatures
 
 
-def _check_module(
+def _prepare_module_environment(
     mid: ModuleId,
     resolved: ModuleResolution,
-    source_text: str,
-    capabilities: HostCapabilities,
     program_type_table: dict[tuple[ModuleId, str], Type],
     import_env_map: Mapping[ModuleId, object],
     private_info: Mapping[tuple[ModuleId, str], bool],
@@ -706,8 +707,8 @@ def _check_module(
     ],
     type_table: TypeTable,
     entry_seed_env: TypeEnvironment | None = None,
-) -> CheckedModule:
-    """Type-check one module with a module-aware ``TypeEnvironment``.
+) -> TypeEnvironment:
+    """Build one module's environment before program-wide candidate discovery.
 
     The env is seeded with:
     - The module's own types (from ``program_type_table``).
@@ -715,8 +716,8 @@ def _check_module(
     - Explicit function signatures from the whole-program pre-pass
       (``program_func_sig_table``), seeded before any body is checked. Their
       globally unique ``node_id`` keys make declared cross-module calls
-      independent of per-module checking order. Unannotated signatures are
-      inferred later by this module's candidate coordinator.
+      independent of per-module checking order. The import-SCC candidate
+      coordinator adds unannotated signatures after their dependency SCCs close.
     - ``type_table``: the single ``TypeTable`` instance shared by every module
       in this program (the same one built and dual-written in the type pre-pass),
       so this module's own re-check dual-writes into the same table.
@@ -750,9 +751,9 @@ def _check_module(
         if t_mid == mid:
             env.register_type(t_name, t)
 
-    # Seed explicit binding types from the whole-program function-signature
-    # pre-pass. Unannotated functions are added only after this module closes
-    # its own candidate dependency SCCs.
+    # Seed explicit binding types from the whole-program header collection.
+    # The candidate coordinator installs only concrete signatures after their
+    # function dependency SCCs close.
     #
     # Three tables are seeded:
     # - _binding_types (node_id-keyed, globally unique): used by _check_varref to
@@ -783,23 +784,7 @@ def _check_module(
     for var_node_id, var_type in program_builtin_var_table.items():
         env.set_binding_type(var_node_id, var_type)
 
-    # Build the checked output through the same close/finalize boundary as a
-    # single module. The program pre-pass already checked inhabitation over the
-    # shared table, so this per-module pass only skips that redundant analysis.
-    cp = _check_prepared_module(
-        resolved,
-        capabilities,
-        env=env,
-        module_id=mid,
-        check_inhabitation=False,
-    )
-    return replace(
-        cp,
-        module_id=mid,
-        import_env=import_env,
-        source_text=source_text,
-        function_signatures=_module_function_signatures(resolved.program, cp.type_env),
-    )
+    return env
 
 
 # ---------------------------------------------------------------------------
@@ -837,7 +822,7 @@ def check_program(
         On the first static type violation in any module (first-error abort).
     """
     # One TypeTable shared by every module in this program: the type pre-pass
-    # dual-writes into it below, and Phase 3 re-checks each module's own
+    # dual-writes into it below, and Phase 4 re-checks each module's own
     # declarations against the SAME instance, so the whole program's declarations
     # land in one table regardless of per-module checking order.
     shared_type_table = create_seeded_type_table()
@@ -860,7 +845,7 @@ def check_program(
 
     # Phase 2: build the program-wide explicit function-signature table.
     # It resolves declared header type expressions without checking bodies;
-    # unannotated functions are inferred during each module's Phase 3 work.
+    # unannotated functions are inferred import SCC by import SCC in Phase 3.
     program_func_sig_table = _build_program_func_sig_table(
         resolved,
         program_type_table,
@@ -878,23 +863,15 @@ def check_program(
         mid: rmod.import_env for mid, rmod in resolved.modules.items()
     }
 
-    # Phase 3: type-check each module's bodies. Non-entry modules are checked
-    # first, then entry, for deterministic output. Explicit cross-module
-    # signatures are already available; unannotated candidate inference remains
-    # local to each module's dependency SCCs.
-    checked_modules: dict[ModuleId, CheckedModule] = {}
-    all_warnings: list[Diagnostic] = []
-
-    # Check non-entry modules first, then entry.
-    ordered_mids = [mid for mid in resolved.modules if not mid.is_entry] + [resolved.entry_id]
-
+    # Phase 3: build every module environment before candidate inference. The
+    # completed explicit headers are present in every environment, while each
+    # loader-provided import SCC later adds only its closed candidates.
+    ordered_mids = tuple(mid for import_scc in resolved.import_sccs for mid in import_scc)
+    module_envs: dict[ModuleId, TypeEnvironment] = {}
     for mid in ordered_mids:
-        rmod = resolved.modules[mid]
-        cm = _check_module(
+        module_envs[mid] = _prepare_module_environment(
             mid,
-            rmod.resolved,
-            rmod.source_text,
-            capabilities,
+            resolved.modules[mid].resolved,
             program_type_table,
             import_env_map,
             resolved.private_info,
@@ -907,11 +884,71 @@ def check_program(
             shared_type_table,
             entry_seed_env=entry_seed_env if mid.is_entry else None,
         )
+
+    for mid in ordered_mids:
+        rmod = resolved.modules[mid]
+        _TypeBuilder(module_envs[mid], module_id=mid).collect(
+            rmod.resolved.program, check_inhabitation=False
+        )
+        header_checker = _Checker(
+            env=module_envs[mid],
+            resolved=rmod.resolved,
+            capabilities=capabilities,
+            module_id=mid,
+        )
+        for item in rmod.resolved.program.body.items:
+            if isinstance(item, FuncDef):
+                header_checker._preregister_funcdef(item)
+
+    # Candidate discovery follows the preserved reverse-topological import SCC
+    # sequence. A cycle is one cross-module function graph; a dependency SCC's
+    # concrete records are available before its importers are considered.
+    publication_envs = tuple(module_envs.values())
+    for import_scc in resolved.import_sccs:
+        candidates = tuple(
+            CandidateModule(
+                resolved.modules[mid].resolved,
+                module_envs[mid],
+                capabilities,
+                mid,
+            )
+            for mid in import_scc
+        )
+        for record in infer_module_component_candidates(
+            ModuleCandidateComponent(candidates, publication_envs)
+        ):
+            program_func_sig_table[record.declaration_node_id] = record
+
+    # Phase 4: ordinary body checking is the sole source of checked artifacts.
+    checked_modules: dict[ModuleId, CheckedModule] = {}
+    all_warnings: list[Diagnostic] = []
+    for mid in ordered_mids:
+        rmod = resolved.modules[mid]
+        cp = _check_prepared_module(
+            rmod.resolved,
+            capabilities,
+            env=module_envs[mid],
+            module_id=mid,
+            check_inhabitation=False,
+            infer_candidates=False,
+        )
+        cm = replace(
+            cp,
+            module_id=mid,
+            import_env=rmod.import_env,
+            source_text=rmod.source_text,
+            function_signatures=_module_function_signatures(rmod.resolved.program, cp.type_env),
+        )
         checked_modules[mid] = cm
         all_warnings.extend(cm.warnings)
 
+    # Preserve the established checked-module presentation order independently
+    # from dependency-ordered inference and validation above.
+    presentation_order = tuple(mid for mid in resolved.modules if not mid.is_entry) + (
+        resolved.entry_id,
+    )
     checked = CheckedProgram(
-        modules=checked_modules,
+        modules={mid: checked_modules[mid] for mid in presentation_order},
         entry_id=resolved.entry_id,
         program_type_table=program_type_table,
         warnings=tuple(all_warnings),

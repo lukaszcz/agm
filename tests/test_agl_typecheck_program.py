@@ -14,6 +14,7 @@ import pytest
 
 from agm.agl.capabilities import HostCapabilities
 from agm.agl.modules.ids import ENTRY_ID, ModuleId
+from agm.agl.modules.loader import ModuleGraph
 from agm.agl.scope.program import resolve_program
 from agm.agl.scope.symbols import AglScopeError
 from agm.agl.semantics.types import (
@@ -67,11 +68,23 @@ def _check(src: str) -> CheckedModule:
     return check_module(resolved, _CAPS)
 
 
+def _check_graph(graph: ModuleGraph) -> CheckedProgram:
+    """Resolve and typecheck a loaded multi-module graph."""
+    return check_program(resolve_program(graph), _CAPS)
+
+
 def _check_program(tmp_path: Path, modules: dict[str, str]) -> CheckedProgram:
     """Build and typecheck a multi-module graph; returns CheckedProgram."""
-    mg = _make_graph_from_files(tmp_path, modules)
-    rg = resolve_program(mg)
-    return check_program(rg, _CAPS)
+    return _check_graph(_make_graph_from_files(tmp_path, modules))
+
+
+def _with_reversed_module_discovery_order(graph: ModuleGraph) -> ModuleGraph:
+    """Model a graph assembled with opposite module and import-SCC member order."""
+    return replace(
+        graph,
+        modules=dict(reversed(tuple(graph.modules.items()))),
+        sccs=tuple(tuple(reversed(component)) for component in graph.sccs),
+    )
 
 
 def _binding_value_type(cg: CheckedProgram, module_id: ModuleId, name: str) -> Type:
@@ -2079,6 +2092,154 @@ def test_cross_file_mutual_recursion_open_import(tmp_path: Path) -> None:
     assert mid_odd in cg.modules
     assert ENTRY_ID in cg.modules
     assert _binding_value_type(cg, ENTRY_ID, "result") == BoolType()
+
+
+# ---------------------------------------------------------------------------
+# Import-SCC candidate inference
+# ---------------------------------------------------------------------------
+
+
+def test_importer_consumes_inferred_unannotated_dependency(tmp_path: Path) -> None:
+    """A closed dependency candidate is available while inferring its importer."""
+    checked = _check_program(
+        tmp_path,
+        {
+            "entry": "import lib\ndef use() = lib::answer()\nuse()",
+            "lib": "def answer() = 42",
+        },
+    )
+
+    assert (
+        checked.modules[ModuleId.from_path("lib")].function_signatures["answer"].result == IntType()
+    )
+    assert checked.modules[ENTRY_ID].function_signatures["use"].result == IntType()
+
+
+@pytest.mark.parametrize(
+    ("import_form", "even_call", "odd_call"),
+    (
+        ("import", "odd::is_odd(n - 1)", "even::is_even(n - 1)"),
+        ("open import", "is_odd(n - 1)", "is_even(n - 1)"),
+    ),
+)
+def test_import_cycle_infers_cross_module_mutual_returns(
+    tmp_path: Path, import_form: str, even_call: str, odd_call: str
+) -> None:
+    """One candidate graph spans qualified and open-import module cycles."""
+    checked = _check_program(
+        tmp_path,
+        {
+            "entry": "import even\nlet result = even::is_even(10)\nresult",
+            "even": (
+                f"{import_form} odd\ndef is_even(n: int) = if n == 0 => true else => {even_call}"
+            ),
+            "odd": (
+                f"{import_form} even\ndef is_odd(n: int) = if n == 0 => false else => {odd_call}"
+            ),
+        },
+    )
+
+    assert (
+        checked.modules[ModuleId.from_path("even")].function_signatures["is_even"].result
+        == BoolType()
+    )
+    assert (
+        checked.modules[ModuleId.from_path("odd")].function_signatures["is_odd"].result
+        == BoolType()
+    )
+
+
+def test_same_named_candidates_in_distinct_modules_keep_node_identity(tmp_path: Path) -> None:
+    """Same-spelled candidates retain their distinct module-qualified results."""
+    checked = _check_program(
+        tmp_path,
+        {
+            "entry": (
+                "import numbers\n"
+                "import words\n"
+                "let number = numbers::value()\n"
+                "let word = words::value()\n"
+                "word"
+            ),
+            "numbers": "import words\ndef value() = 1",
+            "words": 'import numbers\ndef value() = "one"',
+        },
+    )
+
+    assert _binding_value_type(checked, ENTRY_ID, "number") == IntType()
+    assert _binding_value_type(checked, ENTRY_ID, "word") == TextType()
+
+
+def test_candidate_results_are_independent_of_module_discovery_order(tmp_path: Path) -> None:
+    """Candidate inference is stable when graph construction reverses an import cycle."""
+    sources = {
+        "entry": "import alpha\nalpha::value()",
+        "alpha": "import beta\ndef value() = beta::other()",
+        "beta": "import alpha\ndef other() = 1",
+    }
+    graph = _make_graph_from_files(tmp_path, sources)
+    reversed_graph = _with_reversed_module_discovery_order(graph)
+    assert tuple(graph.modules) != tuple(reversed_graph.modules)
+    assert graph.sccs != reversed_graph.sccs
+
+    forward = _check_graph(graph)
+    reverse = _check_graph(reversed_graph)
+
+    for checked in (forward, reverse):
+        assert (
+            checked.modules[ModuleId.from_path("alpha")].function_signatures["value"].result
+            == IntType()
+        )
+        assert (
+            checked.modules[ModuleId.from_path("beta")].function_signatures["other"].result
+            == IntType()
+        )
+
+
+def test_private_candidate_participates_without_becoming_importable(tmp_path: Path) -> None:
+    """Private helpers contribute inside their owner without entering import visibility."""
+    checked = _check_program(
+        tmp_path,
+        {
+            "entry": "import lib\nlib::public()",
+            "lib": "private def helper() = 1\ndef public() = helper()",
+        },
+    )
+
+    assert (
+        checked.modules[ModuleId.from_path("lib")].function_signatures["public"].result == IntType()
+    )
+
+
+def test_cross_module_underconstrained_cycle_reports_each_declaration(tmp_path: Path) -> None:
+    """An unresolved cross-module group reports declarations in stable source order."""
+    graph = _make_graph_from_files(
+        tmp_path,
+        {
+            "entry": "import first\nfirst::first()",
+            "first": "import second\ndef first() = second::second()",
+            "second": "import first\ndef second() = first::first()",
+        },
+    )
+
+    errors: list[AglTypeError] = []
+    for ordered_graph in (graph, _with_reversed_module_discovery_order(graph)):
+        with pytest.raises(AglTypeError) as raised:
+            _check_graph(ordered_graph)
+        errors.append(raised.value)
+
+    def declaration_sources(error: AglTypeError) -> tuple[str, tuple[str, ...]]:
+        assert error.span is not None
+        return (
+            error.span.source.label,
+            tuple(span.source.label for _message, span in error.related),
+        )
+
+    assert declaration_sources(errors[0]) == declaration_sources(errors[1])
+    primary_source, related_sources = declaration_sources(errors[0])
+    assert primary_source.endswith("first.agl")
+    assert len(related_sources) == 1
+    assert related_sources[0].endswith("second.agl")
 
 
 # ---------------------------------------------------------------------------

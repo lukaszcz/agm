@@ -138,6 +138,27 @@ def test_single_module_program_infers_direct_recursive_return(tmp_path: Path) ->
     assert graph.modules[ENTRY_ID].function_signatures["fib"].result == IntType()
 
 
+def test_single_module_program_infers_forward_and_mutual_returns(tmp_path: Path) -> None:
+    graph = _check_program(
+        tmp_path,
+        {
+            "entry": (
+                "def use_later(n: int) = later(n)\n"
+                "def later(n: int) = n + 1\n"
+                "def is_even(n: int) = if n == 0 => true else => is_odd(n - 1)\n"
+                "def is_odd(n: int) = if n == 0 => false else => is_even(n - 1)\n"
+                "is_even(2)"
+            )
+        },
+    )
+
+    signatures = graph.modules[ENTRY_ID].function_signatures
+    assert signatures["use_later"].result == IntType()
+    assert signatures["later"].result == IntType()
+    assert signatures["is_even"].result == BoolType()
+    assert signatures["is_odd"].result == BoolType()
+
+
 def test_program_signature_prepass_preserves_builtin_header_metadata(tmp_path: Path) -> None:
     """Builtin declarations receive the same program-header record as ordinary defs."""
     from agm.agl.syntax.nodes import FuncDef

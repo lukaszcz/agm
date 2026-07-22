@@ -13,10 +13,11 @@ from typing import TYPE_CHECKING
 
 from agm.agl.modules.ids import ModuleId
 from agm.agl.semantics.persistent import PersistentDict
-from agm.agl.semantics.types import FunctionType, Type, contains_inference_var
+from agm.agl.semantics.types import FunctionType, InferenceVarType, Type, contains_inference_var
 from agm.agl.syntax.nodes import FuncDef, Param, ParamKind, Program, VarRef
 from agm.agl.syntax.visitor import walk
 from agm.agl.typecheck.inference import ConstraintRole, InferenceEngine, InferenceError
+from agm.util.graph import sccs
 
 if TYPE_CHECKING:
     from agm.agl.capabilities import HostCapabilities
@@ -98,101 +99,167 @@ class FunctionSignatureRecord:
     candidate_evidence: tuple[SourceSpan, ...] = ()
 
 
-def _has_direct_self_reference(node: FuncDef, resolved: "ModuleResolution") -> bool:
-    """Return whether a function body references its own resolved declaration."""
-    assert node.body is not None
-    found = False
+def _declaration_key(node: FuncDef) -> tuple[int, int]:
+    """Return the stable source order for a top-level function declaration."""
+    return (node.span.start_offset, node.node_id)
 
-    def visit(item: object) -> None:
-        nonlocal found
-        if isinstance(item, VarRef):
+
+def _candidate_functions(module: CandidateModule) -> dict[int, FuncDef]:
+    """Return unannotated monomorphic ordinary functions by declaration id."""
+    program = module.resolved.program
+    assert isinstance(program, Program)
+    return {
+        item.node_id: item
+        for item in program.body.items
+        if isinstance(item, FuncDef)
+        and item.return_type is None
+        and not item.is_builtin
+        and not item.is_extern
+        and not item.type_params
+    }
+
+
+def _function_key(functions: dict[int, FuncDef], declaration_id: int) -> tuple[int, int]:
+    """Look up the stable source order for a declaration id."""
+    return _declaration_key(functions[declaration_id])
+
+
+def _function_dependencies(
+    functions: dict[int, FuncDef], resolved: "ModuleResolution"
+) -> dict[int, tuple[int, ...]]:
+    """Collect body references to candidate functions by resolved declaration id."""
+    dependencies: dict[int, tuple[int, ...]] = {}
+    for declaration_id, node in functions.items():
+        assert node.body is not None
+        referenced: set[int] = set()
+
+        def visit(item: object) -> None:
+            if not isinstance(item, VarRef):
+                return
             reference = resolved.resolution.get(item.node_id)
-            found = found or (reference is not None and reference.decl_node_id == node.node_id)
+            if reference is not None and reference.decl_node_id in functions:
+                referenced.add(reference.decl_node_id)
 
-    walk(node.body, visit)
-    return found
+        # Walking the whole body deliberately includes direct calls, function
+        # values, partial applications, and type applications.  Defaults are
+        # not body evidence and are checked only by authoritative validation.
+        walk(node.body, visit)
+
+        def dependency_key(declaration_id: int) -> tuple[int, int]:
+            return _function_key(functions, declaration_id)
+
+        dependencies[declaration_id] = tuple(sorted(referenced, key=dependency_key))
+    return dependencies
 
 
 def infer_module_component_candidates(component: ModuleCandidateComponent) -> None:
-    """Discover candidates for one module component before authoritative checking.
+    """Infer and close same-module monomorphic function dependency components.
 
-    The current caller supplies a synthetic singleton component.  This
-    coordinator is deliberately the extension point for later import/SCC work;
-    direct self-recursion remains the only candidate shape discovered here.
+    ``sccs`` returns sink components first for this dependency graph, so every
+    acyclic callee becomes a concrete signature before a dependent body can
+    consume it. Only one genuinely recursive component shares live flexible
+    result variables.
     """
     for module in component.modules:
-        _infer_direct_recursive_candidates(module)
+        functions = _candidate_functions(module)
+        dependencies = _function_dependencies(functions, module.resolved)
+
+        def component_key(declaration_id: int) -> tuple[int, int]:
+            return _function_key(functions, declaration_id)
+
+        for declaration_ids in sccs(dependencies, key=component_key):
+            functions_in_component = tuple(functions[node_id] for node_id in declaration_ids)
+            _infer_function_component(module, functions_in_component)
 
 
-def _infer_direct_recursive_candidates(module: CandidateModule) -> None:
-    """Close a module's directly recursive unannotated monomorphic functions."""
+def _infer_function_component(module: CandidateModule, functions: tuple[FuncDef, ...]) -> None:
+    """Infer one dependency component and publish only its closed signatures."""
     from agm.agl.typecheck.checker import _Checker
 
-    program = module.resolved.program
-    assert isinstance(program, Program)
-    for item in program.body.items:
-        if (
-            not isinstance(item, FuncDef)
-            or item.return_type is not None
-            or item.is_builtin
-            or item.is_extern
-            or item.type_params
-            or not _has_direct_self_reference(item, module.resolved)
-        ):
-            continue
+    engine = InferenceEngine()
+    session = CandidateSession(engine, frozenset(node.node_id for node in functions))
+    provisional: list[tuple[FuncDef, InferenceVarType, FunctionSignature]] = []
+
+    # Make every component member visible before any body is traversed. A
+    # dependency component has already closed before this point, whereas peers
+    # intentionally share this component's engine.
+    for node in functions:
         checker = _Checker(
             env=module.env,
             resolved=module.resolved,
             capabilities=module.capabilities,
             module_id=module.module_id,
         )
-        checker._validate_funcdef_header(item)
-        engine = InferenceEngine()
-        result = engine.fresh(f"{item.name} result")
-        signature, function_type = resolve_function_header(module.env, item, result_type=result)
-        module.env.register_function_signature(item.name, signature)
-        module.env.register_function_signature_by_node_id(item.node_id, signature)
-        module.env.set_binding_type(item.node_id, function_type)
-        session = CandidateSession(engine, frozenset({item.node_id}))
-        session.binding_snapshot = module.env.snapshot_binding_types()
-        try:
-            candidate_type = checker.check_candidate_funcdef_body(item, signature, session)
+        checker._validate_funcdef_header(node)
+        result = engine.fresh(f"{node.name} result")
+        signature, function_type = resolve_function_header(module.env, node, result_type=result)
+        module.env.register_function_signature(node.name, signature)
+        module.env.register_function_signature_by_node_id(node.node_id, signature)
+        module.env.set_binding_type(node.node_id, function_type)
+        provisional.append((node, result, signature))
+
+    session.binding_snapshot = module.env.snapshot_binding_types()
+    try:
+        for node, result, signature in provisional:
+            checker = _Checker(
+                env=module.env,
+                resolved=module.resolved,
+                capabilities=module.capabilities,
+                module_id=module.module_id,
+            )
+            candidate_type = checker.check_candidate_funcdef_body(node, signature, session)
             try:
                 engine.unify(
                     result,
                     candidate_type,
                     engine.origin(
-                        item.span,
+                        node.span,
                         role=ConstraintRole.EXPECTED_RESULT,
-                        subject=f"return type of function '{item.name}'",
+                        subject=f"return type of function '{node.name}'",
                     ),
                 )
             except InferenceError as exc:
                 raise AglTypeError(
-                    f"Cannot infer return type of function '{item.name}': return values have "
+                    f"Cannot infer return type of function '{node.name}': return values have "
                     "incompatible types. Add a return type annotation.",
-                    span=item.span,
+                    span=node.span,
                     related=exc.related,
                 ) from exc
-        finally:
-            assert session.binding_snapshot is not None
-            module.env.restore_binding_types(session.binding_snapshot)
+    finally:
+        assert session.binding_snapshot is not None
+        module.env.restore_binding_types(session.binding_snapshot)
+
+    unresolved = [
+        node
+        for node, result, _signature in provisional
+        if not engine.is_solved(result) or contains_inference_var(engine.zonk(result))
+    ]
+    if len(unresolved) == 1:
+        node = unresolved[0]
+        raise AglTypeError(
+            f"Cannot infer return type of function '{node.name}': insufficient concrete return "
+            "evidence. Add a return type annotation.",
+            span=node.span,
+        )
+    if unresolved:
+        names = ", ".join(f"'{node.name}'" for node in unresolved)
+        raise AglTypeError(
+            f"Cannot infer return types for functions {names}: insufficient concrete return "
+            "evidence. Add return type annotations.",
+            span=unresolved[0].span,
+        )
+
+    for node, result, signature in provisional:
         concrete_result = engine.zonk(result)
-        if not engine.is_solved(result) or contains_inference_var(concrete_result):
-            raise AglTypeError(
-                f"Cannot infer return type of function '{item.name}': insufficient concrete "
-                "return evidence. Add a return type annotation.",
-                span=item.span,
-            )
         concrete_signature = FunctionSignature(
             params=signature.params,
             result=concrete_result,
             type_params=signature.type_params,
         )
-        module.env.register_function_signature(item.name, concrete_signature)
-        module.env.register_function_signature_by_node_id(item.node_id, concrete_signature)
+        module.env.register_function_signature(node.name, concrete_signature)
+        module.env.register_function_signature_by_node_id(node.node_id, concrete_signature)
         module.env.set_binding_type(
-            item.node_id,
+            node.node_id,
             FunctionType(
                 params=tuple(param.type for param in signature.params), result=concrete_result
             ),

@@ -762,7 +762,7 @@ class _Checker:
         signature: FunctionSignature,
         session: CandidateSession,
     ) -> Type:
-        """Infer disposable evidence for one provisional directly recursive result."""
+        """Infer disposable evidence for one provisional component result."""
         assert node.body is not None
         self._candidate_session = session
         old_type_vars = self._current_type_vars

@@ -1829,6 +1829,65 @@ class TestFuncDef:
 
         assert checked.function_signatures["identity"].result == TypeVarType("T")
 
+    def test_unannotated_nonrecursive_generic_checks_default(self) -> None:
+        checked = accept_type(
+            "def identity[T](value: list[T], fallback: list[T] = []) = value\nidentity([0])"
+        )
+
+        assert checked.function_signatures["identity"].result == ListType(TypeVarType("T"))
+
+    def test_unannotated_nonrecursive_generic_that_always_raises_needs_annotation(self) -> None:
+        err = reject_type('def fail[T](value: T) = raise Abort(message = "x")')
+
+        assert "return type" in str(err).lower()
+        assert "annotation" in str(err).lower()
+
+    def test_unannotated_nonrecursive_generic_with_incompatible_results_needs_annotation(
+        self,
+    ) -> None:
+        err = reject_type('def choose[T](value: T) =\n  if true => return 1\n  "x"')
+
+        assert "return type" in str(err).lower()
+        assert "annotation" in str(err).lower()
+
+    def test_unannotated_forward_reference_is_inferred_before_its_declaration(self) -> None:
+        checked = accept_type(
+            "def use_later(n: int) = later(n)\ndef later(n: int) = n + 1\nuse_later"
+        )
+
+        assert checked.function_signatures["use_later"].result == IntType()
+        assert checked.function_signatures["later"].result == IntType()
+
+    def test_unannotated_first_class_forward_reference_is_inferred(self) -> None:
+        checked = accept_type(
+            "def use_later(n: int) =\n"
+            "  let next = later\n"
+            "  next(n)\n"
+            "def later(n: int) = n + 1\n"
+            "use_later"
+        )
+
+        assert checked.function_signatures["use_later"].result == IntType()
+        assert checked.function_signatures["later"].result == IntType()
+
+    def test_unannotated_mutual_recursion_infers_from_group_evidence(self) -> None:
+        checked = accept_type(
+            "def is_even(n: int) = if n == 0 => true else => is_odd(n - 1)\n"
+            "def is_odd(n: int) = if n == 0 => false else => is_even(n - 1)\n"
+            "is_even"
+        )
+
+        assert checked.function_signatures["is_even"].result == BoolType()
+        assert checked.function_signatures["is_odd"].result == BoolType()
+
+    def test_unannotated_mutual_recursion_without_evidence_requires_annotations(self) -> None:
+        err = reject_type("def first() = second()\ndef second() = first()\nfirst")
+
+        assert "first" in str(err)
+        assert "second" in str(err)
+        assert str(err).index("first") < str(err).index("second")
+        assert "annotation" in str(err).lower()
+
     def test_direct_recursive_function_infers_from_alternative_branch(self) -> None:
         checked = accept_type(
             "def countdown(n: int) = if n == 0 => 0 else => countdown(n - 1)\ncountdown"
@@ -2366,10 +2425,10 @@ class TestPartialDeclaredCalls:
         err = reject_type("def f(x: int) -> int = x\nlet g = f::[int](?)\ng")
         assert "not a generic function" in str(err)
 
-    def test_partial_call_to_unannotated_later_function_needs_return_annotation(self) -> None:
-        err = reject_type("let g = f(?)\ndef f(x: int) = x\ng")
-        assert "return type" in str(err)
-        assert "annotation" in str(err)
+    def test_partial_call_to_unannotated_later_function_is_inferred(self) -> None:
+        checked = accept_type("let g = f(?)\ndef f(x: int) = x\ng")
+
+        assert checked.function_signatures["f"].result == IntType()
 
     @pytest.mark.parametrize(
         "name", ["print", "render", "exec", "ask", "ask-request", "parse_json"]

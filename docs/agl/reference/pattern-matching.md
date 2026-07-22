@@ -34,7 +34,7 @@ Matches anything, binds nothing. The same spelling is the unreadable discard
 binder in `let _ = value` and `var _ = value`; see
 [Bindings and scope](bindings-and-scope.md#let--immutable-binding).
 
-<!-- agl-check: skip -->
+<!-- agl-check: fragment -->
 ```agl
 case result of
   | Complete(output) => artifact := output
@@ -50,7 +50,7 @@ chained; each receives the same value. An `as` binder is always a variable
 binder, even when its spelling is also a constructor name. `_` is not a valid
 binder name.
 
-<!-- agl-check: skip -->
+<!-- agl-check: fragment -->
 ```agl
 case shape of
   | Rect(w, h) as rectangle => print "${rectangle} has area ${w * h}"
@@ -63,7 +63,7 @@ A variable binder is explicit: use an `as`-pattern. `_ as name` is the
 catch-all binder; a constructor or literal may also be followed by `as name`.
 The binder is immutable and branch-local.
 
-<!-- agl-check: skip -->
+<!-- agl-check: fragment -->
 ```agl
 case result of
   | Blocked(reason) => raise Abort(message = reason)
@@ -81,7 +81,7 @@ An `int`, `decimal`, `bool`, `null`, or string literal matches by value
 equality (the same `==` semantics, including `int`/`decimal` numeric
 equivalence — the pattern `1` matches the value `1.0`):
 
-<!-- agl-check: skip -->
+<!-- agl-check: fragment -->
 ```agl
 case attempt of
   | 1 => print "first try"
@@ -139,7 +139,7 @@ When a type comes from an imported module, the constructor may be prefixed
 with a module qualifier. Both the module/type boundary and the type/variant
 boundary use `::`:
 
-<!-- agl-check: skip -->
+<!-- agl-check: fragment -->
 ```agl
 import mylib
 
@@ -173,7 +173,7 @@ constructor of its type is ambiguous; use `name()` (or qualification) for the
 constructor and `_ as name` for the binder. A bare name for another field does
 not move to that field; use a named sub-pattern to select it.
 
-<!-- agl-check: skip -->
+<!-- agl-check: fragment -->
 ```agl
 enum Result
   | Ok(value: int)
@@ -306,7 +306,7 @@ Use `is` / `is not` ([Expressions](expressions.md)) to *test* a variant
 without destructuring — typically in `if` and `until` conditions. Use `case`
 when you need the payload:
 
-<!-- agl-check: skip -->
+<!-- agl-check: fragment -->
 ```agl
 until review is Pass
 
@@ -318,7 +318,7 @@ case review of
 `is` / `is not` also apply to generic enum instances; qualify the variant the
 same way as in a pattern:
 
-<!-- agl-check: skip -->
+<!-- agl-check: fragment -->
 ```agl
 let probe: Option[int] = some(value = 99)
 if probe is Option::some => print "probe is some"

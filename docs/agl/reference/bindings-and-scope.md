@@ -20,7 +20,7 @@ and creates an **immutable** binding in the current scope. It scopes over the
 continuation that consumes the block. A block ending in a bare `let` has type
 `unit` unless its initializer exits, in which case it has bottom type:
 
-<!-- agl-check: skip -->
+<!-- agl-check: fragment -->
 ```agl
 let review: Review = ask(
   "Review ${artifact}",
@@ -50,7 +50,7 @@ updated with `:=`. A final `var` also makes its block unit-valued (or bottom
 when its initializer exits); like a final `let`, it remains visible to an
 enclosing continuation:
 
-<!-- agl-check: skip -->
+<!-- agl-check: fragment -->
 ```agl
 var artifact: text = ask("Implement ${spec}", agent = impl)
 ```
@@ -67,7 +67,7 @@ assign_target ::= name ("[" expr "]")*
 returns `void`. It never creates a binding. The expected type of the
 right-hand side is the declared type of the binding being updated:
 
-<!-- agl-check: skip -->
+<!-- agl-check: fragment -->
 ```agl
 var proposal: Turn = ask("Initial proposal.", agent = researcher)
 proposal := ask("Revise proposal.", agent = researcher)   # target type: Turn
@@ -144,7 +144,6 @@ A `def` inside a nested block is a static error. See
   **An untyped `ask` defaults to `text`; an untyped `exec` defaults to the
   structured `ExecResult`**:
 
-  <!-- agl-check: skip -->
   ```agl
   let x = ask "A"           # x: text
   let res = exec "ls"       # res: ExecResult (structured default)
@@ -154,7 +153,7 @@ A `def` inside a nested block is a static error. See
   annotation: `let items: list[Issue] = []`.
 - A `let` or `var` bound to a function value has a function type:
 
-  <!-- agl-check: skip -->
+  <!-- agl-check: fragment -->
   ```agl
   let double = fn(x: int) => x * 2   # double: int -> int
   let f: int -> text = classify     # explicit function type annotation
@@ -202,7 +201,6 @@ canonical standard-library module `std/config`; declarations in entry programs
 or other library modules are static errors. `std/config` uses it to expose the
 program's engine settings:
 
-<!-- agl-check: skip -->
 ```agl
 open import std/config
 
@@ -234,7 +232,6 @@ Each declared name enters the root scope as an **immutable binding of type
 `agent`**. Agent values may be stored in bindings, passed to `def` parameters,
 and held in `list[agent]`:
 
-<!-- agl-check: skip -->
 ```agl
 agent reviewer
 agent impl = "claude -p %{PROMPT_FILE}"
@@ -245,7 +242,7 @@ let agents: list[agent] = [reviewer, impl]
 A declared agent is a first-class value. It is passed to `ask` via the
 `agent` parameter:
 
-<!-- agl-check: skip -->
+<!-- agl-check: fragment -->
 ```agl
 let r: Review = ask("Review ${artifact}", agent = reviewer)
 ```
@@ -274,7 +271,6 @@ name may exist in both at once without collision. A `record` or `enum`
 declaration introduces a type name *and* a same-spelled value binding for its
 constructor:
 
-<!-- agl-check: skip -->
 ```agl
 record Box[T]
   value: T
@@ -288,7 +284,7 @@ let b: Box[int] = Box(value = 1)
 Record constructors and enum variants are normal bindings in the value
 namespace. They can be referenced bare, stored, and passed like any value:
 
-<!-- agl-check: skip -->
+<!-- agl-check: fragment -->
 ```agl
 let mk: int -> Box[int] = Box   # the constructor as a first-class value
 let one = mk(1)                    # called positionally, in field order
@@ -312,7 +308,6 @@ context, or explicit type arguments. **Qualify** the reference with the owning
 enum to disambiguate. Constructor patterns and `is` tests are different: their
 scrutinee's static enum type selects the owner.
 
-<!-- agl-check: skip -->
 ```agl
 enum Holder[T]
   | empty
@@ -368,7 +363,7 @@ let Widget = 1              # error: 'Widget' is already declared in this scope
 Use [`::name`](modules.md) to reach the module's own top-level declaration past
 any shadowing:
 
-<!-- agl-check: skip -->
+<!-- agl-check: fragment -->
 ```agl
 print(::Red)                # the 'let', not the variant
 ```
@@ -389,7 +384,6 @@ constructs each introduce a nested scope:
 their scope. Lambda bodies close over their definition environment but are not
 self-recursive (the lambda name is not in scope inside its own body):
 
-<!-- agl-check: skip -->
 ```agl
 let double = fn(x: int) => x * 2   # 'double' is NOT in scope inside
 ```
@@ -400,7 +394,7 @@ Inner scopes may **shadow** outer bindings with a new `let` or `var`.
 Shadowing is not mutation; the outer binding is unchanged when the inner
 scope ends:
 
-<!-- agl-check: skip -->
+<!-- agl-check: fragment -->
 ```agl
 let x = "outer"
 if condition =>
@@ -413,7 +407,7 @@ ask "Uses ${x}"      # outer
 
 `:=` reaches *through* scopes to the nearest visible mutable binding:
 
-<!-- agl-check: skip -->
+<!-- agl-check: fragment -->
 ```agl
 var artifact: text = ask("Implement ${spec}", agent = impl)
 
@@ -430,7 +424,7 @@ is evaluated **in that same iteration scope** — it can see `let` or `var`
 bindings made by the body, including a final binder. A `while` condition runs
 before the body and cannot see its bindings:
 
-<!-- agl-check: skip -->
+<!-- agl-check: fragment -->
 ```agl
 do[5]
   let review: Review = ask("Review ${artifact}", agent = reviewer)

@@ -151,7 +151,7 @@ by `;` inline. `until` conditions and the right-hand sides of binders are
 those positions must be parenthesized. Loop bodies also admit `case`, `if`,
 `try`, and nested loops directly:
 
-<!-- agl-check: skip -->
+<!-- agl-check: fragment -->
 ```agl
 # Inline block: items separated by ';'
 let x = 3; let y = x + 1; y
@@ -166,7 +166,7 @@ do[3] n := n + 1 until (case st of Done => true | _ => false)
 The `()` unit literal replaces `pass` — it is the idiomatic no-op in a
 branch body:
 
-<!-- agl-check: skip -->
+<!-- agl-check: fragment -->
 ```agl
 case review of
   Pass => ()

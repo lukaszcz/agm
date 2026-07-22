@@ -69,7 +69,7 @@ print nested.value.value
 `Box[Box[int]]` are all applied types. The built-in `list[T]` and
 `dict[text, V]` use exactly the same form.
 
-<!-- agl-check: skip -->
+<!-- agl-check: fragment -->
 ```agl
 open import containers
 
@@ -109,7 +109,7 @@ When inference cannot determine the arguments, or to pin them explicitly, pass
 type arguments at the call site with the `::[…]` typed-call form, listing one
 argument per type parameter:
 
-<!-- agl-check: skip -->
+<!-- agl-check: fragment -->
 ```agl
 def apply[A, B](x: A, f: A -> B) -> B = f(x)
 record Box[T]
@@ -129,7 +129,7 @@ print be.value
 The same `::[…]` suffix can instantiate a generic function as a value without
 calling it:
 
-<!-- agl-check: skip -->
+<!-- agl-check: fragment -->
 ```agl
 let int_id = id::[int]
 print(int_id(9))
@@ -137,7 +137,6 @@ print(int_id(9))
 
 A nullary variant can be inferred purely from the expected type:
 
-<!-- agl-check: skip -->
 ```agl
 enum Option[T]
   | none
@@ -222,7 +221,6 @@ The same expression-local inference applies to every generic constructor form,
 including payload variants, nullary variants, and partial constructors. Evidence
 may come from a later sibling argument or the enclosing result:
 
-<!-- agl-check: skip -->
 ```agl
 enum Option[T]
   | none
@@ -246,7 +244,6 @@ bare generic constructor value explicitly with the same `::[…]` suffix used
 for generic functions. A payload variant becomes a function value; a nullary
 variant constructs its value directly, with no parentheses:
 
-<!-- agl-check: skip -->
 ```agl
 enum Option[T]
   | none
@@ -338,7 +335,7 @@ and folding a value works exactly like any other recursive type — a value is
 always a finite tree, regardless of how many argument levels its declaration
 can grow through:
 
-<!-- agl-check: skip -->
+<!-- agl-check: fragment -->
 ```agl
 let level0: Perfect[int] = Single(value = 1)
 let level1: Perfect[int] = Succ(next = Single(value = Pair(first = 1, second = 2)))
@@ -438,7 +435,7 @@ constructor-directed regardless of local values.
 A bare name at the top level of a `case` pattern is a nullary constructor and
 never captures a value. Use an `as` pattern for a catch-all binder:
 
-<!-- agl-check: skip -->
+<!-- agl-check: fragment -->
 ```agl
 case value of
   | _ as captured => captured

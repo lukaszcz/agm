@@ -13,7 +13,6 @@ locations (lines and columns) are 1-based.
 A `#` begins a comment that runs to the end of the line. There are no block
 comments.
 
-<!-- agl-check: skip -->
 ```agl
 # This is a comment
 let x = 1   # so is this
@@ -44,7 +43,7 @@ The layout rules:
    terminator of a loop sit at the same indentation as the construct that owns
    them:
 
-   <!-- agl-check: skip -->
+   <!-- agl-check: fragment -->
    ```agl
    if
      | status is Complete => ()
@@ -129,7 +128,7 @@ def private() -> text = "x"  # 'private' not at item-start → VAR_NAME
 `::` separates a **module qualifier** from the name it qualifies. In value
 and type position:
 
-<!-- agl-check: skip -->
+<!-- agl-check: fragment -->
 ```agl
 foo/bar::thing        # suffix qualifier, name thing
 /foo/bar::thing       # anchored qualifier, name thing
@@ -350,7 +349,7 @@ The three markers are:
 immediately after `@` inside a parameter or field list. An unrecognized name
 after `@` (e.g. `@foo`) is a static error.
 
-<!-- agl-check: skip -->
+<!-- agl-check: fragment -->
 ```agl
 def f(x: int, @std, y: int) -> int = x + y   # @std same as /
 def g(a: int, /, b: int, @named, c: int) -> int = ...  # mixing / and @named

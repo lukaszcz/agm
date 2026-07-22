@@ -4212,22 +4212,14 @@ class TestSandbox:
                 except ProcessLookupError:
                     pass
 
-    def test_interrupt_kills_run_process_tree_with_real_systemd_run_scope(
+    def test_interrupt_kills_resource_limited_run_process_tree(
         self, tmp_path: Path, env: dict[str, str], default_sigint: None
     ) -> None:
+        """The systemd-run command shape must preserve interrupt cleanup semantics."""
         ready_file = tmp_path / "wrapped-run.ready"
         child_pid_file = tmp_path / "wrapped-run-child.pid"
 
-        probe = subprocess.run(
-            ["systemd-run", "--user", "--scope", "true"],
-            capture_output=True,
-            text=True,
-            env=env,
-            check=False,
-        )
-        if probe.returncode != 0:
-            pytest.skip(f"systemd-run --user --scope unavailable: {probe.stderr.strip()}")
-
+        self._make_fake_systemd_run(tmp_path / "bin", env)
         _install_fake_loop_command(
             tmp_path / "bin",
             env,

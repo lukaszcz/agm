@@ -132,7 +132,6 @@ from agm.agl.syntax.nodes import (
     Loop,
     NameTarget,
     NullLit,
-    Param,
     ParamDecl,
     ParamKind,
     Pattern,
@@ -179,6 +178,10 @@ from agm.agl.typecheck.env import (
     assert_checked_module_closed,
     dereference_slot_binding,
     dereference_slot_constructor_ref,
+)
+from agm.agl.typecheck.function_inference import (
+    resolve_function_header,
+    validate_required_after_defaulted,
 )
 from agm.agl.typecheck.inference import (
     ConstraintRole,
@@ -485,33 +488,6 @@ class _Checker:
         self._return_extern_targets_stack: list[list[_ExternTarget]] = []
 
     # ------------------------------------------------------------------
-    # required-after-defaulted check (shared by def and lambda)
-    # ------------------------------------------------------------------
-
-    @staticmethod
-    def _check_required_after_defaulted(params: Sequence[Param]) -> None:
-        """no required positional-fillable param may follow a defaulted one.
-
-        Named-only params are order-free — their defaults may appear in any order.
-        Raises ``AglTypeError`` if any POSITIONAL_ONLY or STANDARD param without a
-        default appears after one with a default.
-        """
-        seen_pos_default = False
-        for p in params:
-            is_pos_fillable = p.kind in (ParamKind.POSITIONAL_ONLY, ParamKind.STANDARD)
-            if is_pos_fillable:
-                has_default = p.default is not None
-                if has_default:
-                    seen_pos_default = True
-                elif seen_pos_default:
-                    raise AglTypeError(
-                        f"Parameter '{p.name}' has no default but follows a defaulted "
-                        "positional parameter. Required positional parameters must come "
-                        "before parameters with defaults.",
-                        span=p.span,
-                    )
-
-    # ------------------------------------------------------------------
     # Pre-registration of function signatures
     # ------------------------------------------------------------------
 
@@ -521,7 +497,7 @@ class _Checker:
         if node.return_type is None:
             return
 
-        sig, func_type = self._build_funcdef_signature(node, result_type=node.return_type)
+        sig, func_type = resolve_function_header(self._env, node, result_type=node.return_type)
         if node.is_extern:
             self._validate_extern_signature(node, sig)
             self._env.register_extern_node_id(node.node_id)
@@ -556,8 +532,6 @@ class _Checker:
                     f"Extern function '{node.name}' must declare a return type.",
                     span=node.span,
                 )
-        # no required positional-fillable param may follow a defaulted one.
-        self._check_required_after_defaulted(node.params)
 
     def _validate_extern_signature(self, node: FuncDef, sig: FunctionSignature) -> None:
         """Reject types that cannot cross the Python boundary in an extern's signature.
@@ -607,31 +581,6 @@ class _Checker:
             raise AglTypeError(message, span=span)
         if _contains_banned_extern_type(typ, type_table):
             raise AglTypeError(banned_message, span=span)
-
-    def _build_funcdef_signature(
-        self, node: FuncDef, *, result_type: TypeExpr | Type
-    ) -> tuple[FunctionSignature, FunctionType]:
-        """Resolve a ``def`` signature with either an annotated or inferred result."""
-        type_vars: frozenset[str] = frozenset(node.type_params)
-        params: list[ParamSpec] = []
-        for p in node.params:
-            pt = self._env.resolve_type_expr(p.type_expr, span=p.span, type_vars=type_vars)
-            has_default = p.default is not None
-            params.append(ParamSpec(name=p.name, type=pt, kind=p.kind, has_default=has_default))
-
-        resolved_result = (
-            self._env.resolve_type_expr(result_type, span=node.span, type_vars=type_vars)
-            if isinstance(result_type, TypeExpr)
-            else result_type
-        )
-        sig = FunctionSignature(
-            params=tuple(params), result=resolved_result, type_params=node.type_params
-        )
-        func_type = FunctionType(
-            params=tuple(p.type for p in params),
-            result=resolved_result,
-        )
-        return sig, func_type
 
     def _register_funcdef_signature(
         self, node: FuncDef, sig: FunctionSignature, func_type: FunctionType
@@ -803,7 +752,7 @@ class _Checker:
         self._validate_funcdef_header(node)
         assert node.return_type is None
         assert node.body is not None, f"FuncDef '{node.name}' has no body"
-        sig, _func_type = self._build_funcdef_signature(node, result_type=UnitType())
+        sig, _func_type = resolve_function_header(self._env, node, result_type=UnitType())
         old_type_vars = self._current_type_vars
         self._current_type_vars = frozenset(sig.type_params)
         try:
@@ -2237,8 +2186,7 @@ class _Checker:
     # --- Lambda ---
 
     def _check_lambda(self, node: Lambda, *, expected: Type | None) -> Type:
-        # no required positional-fillable param may follow a defaulted one.
-        self._check_required_after_defaulted(node.params)
+        validate_required_after_defaulted(node.params)
         # Lambda annotations may reference the rigid type variables of an
         # enclosing generic ``def`` body (the body is checked with them in scope).
         type_vars = self._current_type_vars

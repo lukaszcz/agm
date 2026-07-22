@@ -39,7 +39,7 @@ Algorithm
    annotations for EVERY top-level ``FuncDef`` in EVERY module (using the
    ``program_type_table`` and each module's ``ImportEnv`` for cross-module type
    refs), producing a ``program_func_sig_table`` mapping each ``FuncDef.node_id``
-   to ``(FunctionSignature, FunctionType)``. No function body is checked in this
+   to ``FunctionSignatureRecord``. No function body is checked in this
    phase. The result is used in Phase 3 to
    seed EVERY module's env with ALL function binding types before any body is
    checked, enabling cross-file mutual recursion: a call to a not-yet-checked
@@ -72,10 +72,7 @@ from agm.agl.scope.program import ResolvedProgram
 from agm.agl.scope.symbols import ModuleResolution
 from agm.agl.semantics.analyses import compute_uninhabited, uninhabitable_message
 from agm.agl.semantics.type_table import TypeTable, create_seeded_type_table, decl_key_sort_key
-from agm.agl.semantics.types import (
-    FunctionType,
-    Type,
-)
+from agm.agl.semantics.types import Type
 from agm.agl.syntax.nodes import (
     BuiltinVarDecl,
     EnumDef,
@@ -88,7 +85,7 @@ from agm.agl.syntax.nodes import (
 )
 from agm.agl.syntax.spans import SourceSpan
 from agm.agl.typecheck.builder import _TypeBuilder
-from agm.agl.typecheck.checker import _check_prepared_module, _Checker
+from agm.agl.typecheck.checker import _check_prepared_module
 from agm.agl.typecheck.env import (
     AglTypeError,
     CheckedModule,
@@ -96,10 +93,14 @@ from agm.agl.typecheck.env import (
     FunctionSignature,
     GenericAliasDef,
     GenericTypeDef,
-    ParamSpec,
     TypeEnvironment,
     _assert_checked_types_closed,
     assert_checked_output_closed,
+)
+from agm.agl.typecheck.function_inference import (
+    FunctionReturnSource,
+    FunctionSignatureRecord,
+    resolve_function_header,
 )
 
 # ---------------------------------------------------------------------------
@@ -568,15 +569,13 @@ def _build_program_func_sig_table(
     program_generic_table: dict[tuple[ModuleId, str], GenericTypeDef],
     program_alias_table: dict[tuple[ModuleId, str], GenericAliasDef],
     entry_seed_env: TypeEnvironment | None = None,
-) -> dict[int, tuple[str, FunctionSignature, FunctionType, bool]]:
+) -> dict[int, FunctionSignatureRecord]:
     """Phase 2: compute function signatures for ALL top-level FuncDefs across all modules.
 
-    Returns a table mapping each ``FuncDef.node_id``
-    to ``(name, FunctionSignature, FunctionType, is_extern)`` — the declared
-    function name, the full declared signature (names, types, has-default
-    flags), the erased value type, and whether the declaration is an
-    ``extern def`` (so calls to an imported extern are recorded the same way
-    as calls to an extern declared in the calling module).
+    Returns a table mapping each ``FuncDef.node_id`` to immutable named
+    metadata: the declared name, full signature, erased value type, declaration
+    status, and reserved candidate evidence. This is internal coordination
+    state; semantic function types remain unchanged.
 
     This pre-pass builds per-module ``TypeEnvironment``s seeded with the
     program-wide type table and the module's ``ImportEnv`` so that parameter/return
@@ -592,8 +591,7 @@ def _build_program_func_sig_table(
     have the other's binding type available regardless of the per-module checking
     order.
 
-    Reuses :meth:`~agm.agl.typecheck.checker._Checker._preregister_funcdef` logic
-    without duplicating type-expression resolution: a temporary per-module
+    Reuses the shared function-header resolver: a temporary per-module
     ``TypeEnvironment`` (seeded with own types + program table + import env) is
     constructed for each module, then each ``FuncDef`` in that module has its
     signature resolved through the normal ``TypeEnvironment.resolve_type_expr``
@@ -601,7 +599,7 @@ def _build_program_func_sig_table(
     """
     from agm.agl.typecheck.checker import _BUILTIN_FUNC_NAMES, _BUILTIN_TYPE_NAMES
 
-    result: dict[int, tuple[str, FunctionSignature, FunctionType, bool]] = {}
+    result: dict[int, FunctionSignatureRecord] = {}
 
     for mid, rmod in resolved.modules.items():
         program = rmod.resolved.program
@@ -633,35 +631,28 @@ def _build_program_func_sig_table(
         for item in program.body.items:
             if not isinstance(item, FuncDef):
                 continue
-            # Skip shadowing-check names — they are rejected during body check.
-            # Here we only skip the resolution to avoid raising prematurely on
-            # names that the body-checker will report with a better span.
-            if item.name in _BUILTIN_TYPE_NAMES or item.name in _BUILTIN_FUNC_NAMES:
+            # Defer invalid user shadowing declarations to the ordinary checker,
+            # which reports them at the declaration. A ``builtin def`` deliberately
+            # uses a builtin call name, so it must still receive program metadata.
+            if item.name in _BUILTIN_TYPE_NAMES or (
+                item.name in _BUILTIN_FUNC_NAMES and not item.is_builtin
+            ):
                 continue
             if item.return_type is None:
                 continue
 
-            type_vars: frozenset[str] = frozenset(item.type_params)
-            params: list[ParamSpec] = []
-            # required-after-defaulted check (positional-fillable zone only).
-            _Checker._check_required_after_defaulted(item.params)
-            for p in item.params:
-                pt = env.resolve_type_expr(p.type_expr, span=p.span, type_vars=type_vars)
-                params.append(
-                    ParamSpec(name=p.name, type=pt, kind=p.kind, has_default=p.default is not None)
-                )
-
-            result_type = env.resolve_type_expr(
-                item.return_type, span=item.span, type_vars=type_vars
+            signature, function_type = resolve_function_header(
+                env, item, result_type=item.return_type
             )
-            sig = FunctionSignature(
-                params=tuple(params), result=result_type, type_params=item.type_params
+            result[item.node_id] = FunctionSignatureRecord(
+                declaration_node_id=item.node_id,
+                name=item.name,
+                signature=signature,
+                function_type=function_type,
+                is_builtin=item.is_builtin,
+                is_extern=item.is_extern,
+                return_source=FunctionReturnSource.DECLARED,
             )
-            func_type = FunctionType(
-                params=tuple(p.type for p in params),
-                result=result_type,
-            )
-            result[item.node_id] = (item.name, sig, func_type, item.is_extern)
 
     return result
 
@@ -723,7 +714,7 @@ def _check_module(
     program_type_table: dict[tuple[ModuleId, str], Type],
     import_env_map: Mapping[ModuleId, object],
     private_info: Mapping[tuple[ModuleId, str], bool],
-    program_func_sig_table: dict[int, tuple[str, FunctionSignature, FunctionType, bool]],
+    program_func_sig_table: dict[int, FunctionSignatureRecord],
     program_builtin_var_table: dict[int, Type],
     program_generic_table: dict[tuple[ModuleId, str], GenericTypeDef],
     program_alias_table: dict[tuple[ModuleId, str], GenericAliasDef],
@@ -743,8 +734,7 @@ def _check_module(
       pre-pass (``program_func_sig_table``), seeded BEFORE any body is checked so
       that cross-module function calls — including those in import cycles — can
       look up callee types regardless of per-module checking order.  The pre-pass
-      computed ``(name, FunctionSignature,
-      FunctionType)`` for ALL top-level ``FuncDef``s across ALL modules;
+      computed named signature records for ALL top-level ``FuncDef``s across ALL modules;
       ``node_id``s are globally unique, so seeding the whole table into
       every module's env is safe and collision-free.
     - ``type_table``: the single ``TypeTable`` instance shared by every module
@@ -799,11 +789,11 @@ def _check_module(
     #   here; the current module's own signatures always win because
     #   builder.collect() → _preregister_funcdef re-registers them AFTER this
     #   seeding step, overwriting any cross-module collision for bare-name calls.
-    for node_id, (name, sig, func_type, is_extern) in program_func_sig_table.items():
-        env.set_binding_type(node_id, func_type)
-        env.register_function_signature_by_node_id(node_id, sig)
-        env.register_function_signature(name, sig)
-        if is_extern:
+    for node_id, record in program_func_sig_table.items():
+        env.set_binding_type(node_id, record.function_type)
+        env.register_function_signature_by_node_id(node_id, record.signature)
+        env.register_function_signature(record.name, record.signature)
+        if record.is_extern:
             env.register_extern_node_id(node_id)
 
     # Seed builtin-var binding types (engine settings) from the whole-program

@@ -115,6 +115,9 @@ class ResolvedProgram:
         type declaration node (``RecordDef | EnumDef | TypeAlias``).
     ``entry_agents``
         Agent declarations from the entry module (name → ``AgentDecl``).
+    ``import_sccs``
+        Loader-computed import strongly-connected components, retained in their
+        deterministic reverse-topological order for downstream program passes.
     ``warnings``
         Collected non-fatal scope-pass diagnostics from all modules.
     """
@@ -124,6 +127,7 @@ class ResolvedProgram:
     all_public_funcs: dict[tuple[ModuleId, str], FuncDef]
     all_public_types: dict[tuple[ModuleId, str], RecordDef | EnumDef | ExceptionDef | TypeAlias]
     entry_agents: dict[str, AgentDecl]
+    import_sccs: tuple[tuple[ModuleId, ...], ...]
     warnings: tuple[Diagnostic, ...]
     private_info: Mapping[tuple[ModuleId, str], bool]
 
@@ -506,6 +510,7 @@ def resolve_program(
         all_public_funcs=all_public_funcs,
         all_public_types=all_public_types,
         entry_agents=entry_agents,
+        import_sccs=graph.sccs,
         warnings=tuple(all_warnings),
         private_info=private_info,
     )

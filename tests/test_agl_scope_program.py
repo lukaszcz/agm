@@ -246,6 +246,31 @@ class TestResolvedProgramShape:
         result = resolve_program(graph)
         assert "bot" in result.entry_agents
 
+    @pytest.mark.parametrize(
+        "modules",
+        (
+            {
+                "entry": "import alpha\n()",
+                "alpha": "import beta\ndef alpha() -> int = 1",
+                "beta": "def beta() -> int = 1",
+            },
+            {
+                "entry": "import alpha\n()",
+                "alpha": "import beta\ndef alpha() -> int = 1",
+                "beta": "import alpha\ndef beta() -> int = 1",
+            },
+        ),
+    )
+    def test_preserves_loader_import_sccs(self, tmp_path: Path, modules: dict[str, str]) -> None:
+        """Resolved programs retain the loader's ordered immutable import SCCs."""
+        graph = _make_graph_from_files(tmp_path, modules)
+
+        result = resolve_program(graph)
+
+        assert result.import_sccs == graph.sccs
+        assert isinstance(result.import_sccs, tuple)
+        assert all(isinstance(component, tuple) for component in result.import_sccs)
+
 
 # ---------------------------------------------------------------------------
 # Test: open import — bare name resolution

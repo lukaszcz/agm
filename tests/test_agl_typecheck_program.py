@@ -36,6 +36,7 @@ from agm.agl.typecheck import (
     TextType,
     Type,
     TypeVarType,
+    UnitType,
     assert_checked_program_closed,
     check_module,
     check_program,
@@ -126,6 +127,59 @@ def test_graph_func_signature_prepass_skips_inferred_return_type(tmp_path: Path)
     )
     lib = cg.modules[ModuleId(("lib",))]
     assert lib.type_env.all_function_signatures()["answer"].result == IntType()
+
+
+def test_program_signature_prepass_preserves_builtin_header_metadata(tmp_path: Path) -> None:
+    """Builtin declarations receive the same program-header record as ordinary defs."""
+    from agm.agl.syntax.nodes import FuncDef
+    from agm.agl.typecheck.function_inference import FunctionReturnSource
+    from agm.agl.typecheck.program import (
+        _build_program_func_sig_table,
+        _build_program_type_table,
+    )
+
+    resolved = resolve_program(
+        _make_graph_from_files(tmp_path, {"entry": "builtin def print[T](value: T) -> unit\n()"})
+    )
+    (
+        program_type_table,
+        program_generic_table,
+        program_alias_table,
+        _,
+        _,
+    ) = _build_program_type_table(resolved)
+    records = _build_program_func_sig_table(
+        resolved,
+        program_type_table,
+        program_generic_table,
+        program_alias_table,
+    )
+    builtin = next(
+        item
+        for item in resolved.modules[ENTRY_ID].resolved.program.body.items
+        if isinstance(item, FuncDef)
+    )
+
+    record = records[builtin.node_id]
+
+    assert record.declaration_node_id == builtin.node_id
+    assert record.name == "print"
+    assert record.is_builtin is True
+    assert record.is_extern is False
+    assert record.return_source is FunctionReturnSource.DECLARED
+    assert record.candidate_evidence == ()
+    assert record.signature.result == UnitType()
+    assert record.function_type.result == UnitType()
+
+
+def test_builtin_header_has_standalone_program_signature_parity(tmp_path: Path) -> None:
+    """The shared header resolver gives builtin declarations identical public signatures."""
+    source = "builtin def print[T](value: T) -> unit\n()"
+
+    standalone = _check(source)
+    program = _check_program(tmp_path, {"entry": source})
+
+    assert program.modules[ENTRY_ID].function_signatures == standalone.function_signatures
 
 
 # ---------------------------------------------------------------------------

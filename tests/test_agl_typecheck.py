@@ -2052,6 +2052,21 @@ class TestFuncDef:
     def test_direct_recursive_candidate_does_not_hide_concrete_body_errors(self) -> None:
         reject_type("def f(n: int) = if n == 0 => 0 else => f(n - 1) + true")
 
+    def test_candidate_artifacts_are_discarded_before_authoritative_publication(self) -> None:
+        checked = accept_type(
+            "def recurse(n: int) =\n"
+            '  if n == 0 => ask::[int]("number") else => recurse(n - 1)\n'
+            "let value = recurse(0)\n"
+            "value"
+        )
+
+        # Candidate discovery visits ``ask`` too, but the authoritative pass
+        # is its sole publisher, so no temporary call/contract artifacts leak
+        # or duplicate the final call site.
+        assert len(checked.call_sites) == 1
+        assert len(checked.contract_specs) == 1
+        assert_checked_module_closed(checked)
+
     def test_candidate_validation_error_is_framed_with_original_and_candidate_spans(self) -> None:
         source = 'def recurse(n: int) = if n == 0 => recurse(n) < "x" else => false\nrecurse(0)'
         err = reject_type(source)
@@ -2263,6 +2278,50 @@ class TestFuncDef:
         assert "inferred return type" in str(err).lower()
         assert any("underlying type error" in message.lower() for message, _ in err.related)
 
+    @pytest.mark.parametrize(
+        "source",
+        (
+            "def recurse(n: int) = if n == 0 => 0 else => recurse(n - 1)\n"
+            "var value: int = recurse(0)\n"
+            'value + "x"',
+            "def recurse(n: int) = if n == 0 => 0 else => recurse(n - 1)\n"
+            "let value = recurse(0) as int\n"
+            'value + "x"',
+            "def recurse(n: int) = if n == 0 => 0 else => recurse(n - 1)\n"
+            "let value = recurse(0) as? int\n"
+            'value + "x"',
+            "def recurse(n: int) = if n == 0 => 0 else => recurse(n - 1)\n"
+            "def wrapper() -> int = recurse(0)\n"
+            'wrapper() + "x"',
+            "def recurse(n: int) = if n == 0 => 0 else => recurse(n - 1)\n"
+            "let wrapper = fn() -> int => recurse(0)\n"
+            'wrapper() + "x"',
+        ),
+        ids=("annotated-var", "cast", "fallible-cast", "annotated-def", "annotated-fn"),
+    )
+    def test_annotation_boundaries_publish_clean_results(self, source: str) -> None:
+        err = reject_type(source)
+
+        assert "inferred return type" not in str(err).lower()
+
+    @pytest.mark.parametrize(
+        "source",
+        (
+            "def recurse(n: int) = if n == 0 => 0 else => recurse(n - 1)\n"
+            "def wrapper() -> text = recurse(0)\n"
+            "wrapper()",
+            "def recurse(n: int) = if n == 0 => 0 else => recurse(n - 1)\n"
+            "let wrapper = fn() -> text => recurse(0)\n"
+            "wrapper()",
+        ),
+        ids=("def", "fn"),
+    )
+    def test_failed_function_annotation_retains_child_provenance(self, source: str) -> None:
+        err = reject_type(source)
+
+        assert "inferred return type" in str(err).lower()
+        assert any("underlying type error" in message.lower() for message, _ in err.related)
+
     def test_unrelated_concrete_error_in_inferred_function_is_unchanged(self) -> None:
         err = reject_type(
             "def recurse(n: int) = if n == 0 => 0 else => recurse(n - 1)\n"
@@ -2398,6 +2457,35 @@ class TestFuncDef:
         )
 
         assert "inferred return type" in str(err).lower()
+
+    def test_explicit_generic_application_does_not_clear_result_provenance(self) -> None:
+        err = reject_type(
+            "def identity[T](value: T) -> T = value\n"
+            "def recurse(n: int) = if n == 0 => 0 else => recurse(n - 1)\n"
+            'identity::[int](recurse(0)) + "x"'
+        )
+
+        assert "inferred return type" in str(err).lower()
+
+    def test_explicit_generic_function_value_restores_result_dependent_provenance(self) -> None:
+        err = reject_type(
+            "def identity[T](value: T) -> T = value\n"
+            "def recurse(n: int) = if n == 0 => 0 else => recurse(n - 1)\n"
+            "let function = identity::[int]\n"
+            'function(recurse(0)) + "x"'
+        )
+
+        assert "inferred return type" in str(err).lower()
+
+    def test_explicit_generic_function_value_ignores_non_result_argument_provenance(self) -> None:
+        err = reject_type(
+            "def ignore[T](value: T) -> int = 1\n"
+            "def recurse(n: int) = if n == 0 => 0 else => recurse(n - 1)\n"
+            "let function = ignore::[int]\n"
+            'function(recurse(0)) + "x"'
+        )
+
+        assert "inferred return type" not in str(err).lower()
 
     @pytest.mark.parametrize(
         "source",

@@ -491,6 +491,12 @@ class _Checker:
         # checker or participates in semantic type identity.
         self._inferred_return_expr_provenance: dict[int, set[int]] = {}
         self._inferred_return_binding_provenance: dict[int, set[int]] = {}
+        # Explicit generic applications become ordinary function values. Keep
+        # their result-to-parameter dependency separately from candidate
+        # provenance, so an eventual value call can recover evidence supplied
+        # after the value was stored. This remains checker-local scratch state.
+        self._generic_function_expr_result_dependencies: dict[int, tuple[bool, ...]] = {}
+        self._generic_function_binding_result_dependencies: dict[int, tuple[bool, ...]] = {}
         self._node_types: dict[int, Type] = {}
         self._inference_region: _InferenceRegion | None = None
         self._contract_specs: dict[int, OutputContractSpec] = {}
@@ -968,6 +974,14 @@ class _Checker:
                 )
             declared_type = val_type
         self._env.set_binding_type(stmt.node_id, declared_type)
+        self._set_generic_function_binding_result_dependencies(
+            stmt.node_id,
+            (
+                self._generic_function_expr_result_dependencies.get(stmt.value.node_id, ())
+                if isinstance(declared_type, FunctionType)
+                else ()
+            ),
+        )
         self._set_inferred_return_binding_provenance(
             stmt.node_id,
             (
@@ -1402,6 +1416,9 @@ class _Checker:
                 self._set_extern_expr_targets(
                     node.node_id, self._extern_targets_for_ref(ref, concrete)
                 )
+                self._set_generic_function_expr_result_dependencies(
+                    node.node_id, self._generic_function_result_dependencies(sig)
+                )
                 if ref.decl_node_id in self._candidate_records:
                     self._set_inferred_return_expr_provenance(node.node_id, {ref.decl_node_id})
                 else:
@@ -1411,6 +1428,11 @@ class _Checker:
                     )
                 return concrete
         self._set_extern_expr_targets(node.node_id, self._extern_targets_for_ref(ref, typ))
+        if isinstance(typ, FunctionType):
+            self._set_generic_function_expr_result_dependencies(
+                node.node_id,
+                self._generic_function_binding_result_dependencies.get(ref.decl_node_id, ()),
+            )
         if ref.decl_node_id in self._candidate_records:
             self._set_inferred_return_expr_provenance(node.node_id, {ref.decl_node_id})
         else:
@@ -1634,6 +1656,9 @@ class _Checker:
         )
         self._record_node_type(node.expr.node_id, concrete)
         self._set_extern_expr_targets(node.node_id, self._extern_targets_for_ref(ref, concrete))
+        self._set_generic_function_expr_result_dependencies(
+            node.node_id, self._generic_function_result_dependencies(sig)
+        )
         self._set_inferred_return_expr_provenance(
             node.node_id,
             {ref.decl_node_id} if ref.decl_node_id in self._candidate_records else set(),
@@ -1829,6 +1854,24 @@ class _Checker:
         else:
             self._inferred_return_binding_provenance.pop(node_id, None)
 
+    def _set_generic_function_expr_result_dependencies(
+        self, node_id: int, dependencies: tuple[bool, ...]
+    ) -> None:
+        """Record which arguments of a generic function value select its result."""
+        if any(dependencies):
+            self._generic_function_expr_result_dependencies[node_id] = dependencies
+        else:
+            self._generic_function_expr_result_dependencies.pop(node_id, None)
+
+    def _set_generic_function_binding_result_dependencies(
+        self, node_id: int, dependencies: tuple[bool, ...]
+    ) -> None:
+        """Retain a function value's result dependencies across a binding."""
+        if any(dependencies):
+            self._generic_function_binding_result_dependencies[node_id] = dependencies
+        else:
+            self._generic_function_binding_result_dependencies.pop(node_id, None)
+
     def _inferred_return_provenance_for_exprs(self, exprs: Sequence[Expr]) -> set[int]:
         """Return the conservative union of the expressions' static evidence."""
         result: set[int] = set()
@@ -1960,20 +2003,33 @@ class _Checker:
             case _:
                 return frozenset()
 
+    def _generic_function_result_dependencies(
+        self, signature: FunctionSignature
+    ) -> tuple[bool, ...]:
+        """Return whether each generic parameter's static type selects the result."""
+        result_vars = self._rigid_type_vars(signature.result)
+        return tuple(
+            bool(result_vars.intersection(self._rigid_type_vars(param.type)))
+            for param in signature.params
+        )
+
     def _generic_result_provenance(
         self, signature: FunctionSignature, binding: tuple[Expr | None, ...]
     ) -> set[int]:
         """Carry evidence only from arguments that select the generic result type."""
-        result_vars = self._rigid_type_vars(signature.result)
-        if not result_vars:
-            return set()
+        return self._result_dependent_provenance(
+            self._generic_function_result_dependencies(signature), binding
+        )
+
+    def _result_dependent_provenance(
+        self, dependencies: Sequence[bool], binding: Sequence[Expr | None]
+    ) -> set[int]:
+        """Return marked evidence from arguments whose types select the result."""
         return self._inferred_return_provenance_for_exprs(
             tuple(
                 expr
-                for param, expr in zip(signature.params, binding, strict=True)
-                if expr is not None
-                and not isinstance(expr, Placeholder)
-                and result_vars.intersection(self._rigid_type_vars(param.type))
+                for depends_on_result, expr in zip(dependencies, binding)
+                if depends_on_result and expr is not None and not isinstance(expr, Placeholder)
             )
         )
 
@@ -2517,7 +2573,11 @@ class _Checker:
             if callee_ref.decl_node_id in self._candidate_records
             else set()
         )
-        if sig.type_params and not node.type_args:
+        if sig.type_params:
+            # Explicit type arguments choose this occurrence's instantiation;
+            # they do not annotate its result. A generic result still depends
+            # on marked arguments wherever its declared result mentions their
+            # type parameters.
             provenance.update(self._generic_result_provenance(sig, binding))
         self._set_inferred_return_expr_provenance(node.node_id, provenance)
         return result_type
@@ -2593,10 +2653,10 @@ class _Checker:
                     subject="function value",
                 ),
             )
-        self._set_inferred_return_expr_provenance(
-            node.node_id,
-            set(self._inferred_return_expr_provenance.get(node.callee.node_id, ())),
-        )
+        dependencies = self._generic_function_expr_result_dependencies.get(node.callee.node_id, ())
+        provenance = set(self._inferred_return_expr_provenance.get(node.callee.node_id, ()))
+        provenance.update(self._result_dependent_provenance(dependencies, binding))
+        self._set_inferred_return_expr_provenance(node.node_id, provenance)
         extern_targets = self._extern_expr_targets.get(node.callee.node_id, ())
         if extern_targets:
             invocation_targets = tuple(

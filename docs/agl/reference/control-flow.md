@@ -19,7 +19,7 @@ An optional leading `|` after `if` is accepted, making all branches —
 including the first condition branch — introduced by `|`. The `else` branch,
 if present, must be last; its own `|` is optional:
 
-<!-- agl-check: skip -->
+<!-- agl-check: fragment -->
 ```agl
 if code is Fail or design is Fail =>
   artifact := ask("Fix issues:\n${code}\n${design}", agent = impl)
@@ -29,7 +29,7 @@ else =>
 
 Inline:
 
-<!-- agl-check: skip -->
+<!-- agl-check: fragment -->
 ```agl
 if | status is Complete => () | status is Blocked => print status | else => ()
 ```
@@ -46,7 +46,7 @@ Semantics:
 When an `else` branch is present **and** all branches have a common type `T`
 (with `int → decimal` widening), the `if` expression has type `T`:
 
-<!-- agl-check: skip -->
+<!-- agl-check: fragment -->
 ```agl
 let label: text = if | score > 90 => "A" | score > 75 => "B" | else => "C"
 
@@ -58,7 +58,7 @@ print(if status is Pass => "passed" else => "failed")
 When `else` is absent, the `if` expression has type `unit` and returns `void`.
 All branch bodies must also have type `unit`:
 
-<!-- agl-check: skip -->
+<!-- agl-check: fragment -->
 ```agl
 if res.exit_code != 0 =>
   print "command failed: ${res.stderr}"
@@ -83,7 +83,7 @@ case_expr        ::= "case" or_expr "of" "|"? case_branch ("|" case_branch)*
 case_branch      ::= pattern "=>" branch_body
 ```
 
-<!-- agl-check: skip -->
+<!-- agl-check: fragment -->
 ```agl
 case result of
   Complete(output) => artifact := output
@@ -106,7 +106,7 @@ described in [Pattern matching](pattern-matching.md).
 
 ### `case` as a value-producing expression
 
-<!-- agl-check: skip -->
+<!-- agl-check: fragment -->
 ```agl
 let next_prompt: text = case action of
   | Stop => "Stop."
@@ -148,7 +148,7 @@ past it. A nested `do … until p until q` binds the inner `until` innermost-fir
 `for` and `while` are prefix clauses on this same construct, so every loop
 shape parses its body identically.
 
-<!-- agl-check: skip -->
+<!-- agl-check: fragment -->
 ```agl
 # collection for, terminated by `done`
 for x in items do
@@ -244,7 +244,7 @@ the body. The next iteration performs its normal `for` advance and loop checks.
 Both are nullary expressions of the **bottom type**: assignable to any expected
 type and usable in any branch position (like `raise`).
 
-<!-- agl-check: skip -->
+<!-- agl-check: fragment -->
 ```agl
 for x in items do
   if x is Skip => continue

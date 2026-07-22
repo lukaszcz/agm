@@ -103,7 +103,7 @@ item may be a `let` or `var`; then the try body has type `unit` unless the
 initializer exits, in which case it has bottom type. See
 [Inline bodies](grammar.md#inline-bodies).
 
-<!-- agl-check: skip -->
+<!-- agl-check: fragment -->
 ```agl
 try
   let review: Review = ask(
@@ -154,7 +154,7 @@ The operand must be an exception value (statically checked). It is an
 `raise`, or a lambda must be parenthesized. `raise` **diverges** — it never
 yields a value. Its type is the bottom type, assignable to any expected type:
 
-<!-- agl-check: skip -->
+<!-- agl-check: fragment -->
 ```agl
 let x: int = if condition => 1 else => raise Abort(message = "!")
 raise Abort(message = "Cannot continue without repository access.")

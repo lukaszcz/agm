@@ -53,7 +53,7 @@ No boundary tags or other wrappers are added around interpolated values.
 
 To obtain JSON output use an explicit `as json` cast inside the interpolation:
 
-<!-- agl-check: skip -->
+<!-- agl-check: fragment -->
 ```agl
 let r: R = R(x = 1)
 print "${r}"           # → R(x = 1)         (AgL render form — the default)
@@ -64,7 +64,7 @@ print "${r as json}"   # → {"x": 1}
 
 For indented, multi-line JSON, call `render` explicitly:
 
-<!-- agl-check: skip -->
+<!-- agl-check: fragment -->
 ```agl
 print render(r as json, pretty = true)   # → {
                                          #      "x": 1

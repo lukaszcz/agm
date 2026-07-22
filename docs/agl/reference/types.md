@@ -79,7 +79,6 @@ empty argument list. Statement-like expressions return `void`, which has type
 expressions such as `print(…)`, `:=`, an `if` without an `else` branch, and
 loops all have type `unit`.
 
-<!-- agl-check: skip -->
 ```agl
 let _: unit = print "hello"
 ```
@@ -154,7 +153,7 @@ type or a parenthesized comma-separated list of types; the arrow `->` separates
 the parameters from the result type. A single parameter may omit parentheses,
 and chained arrows associate to the right:
 
-<!-- agl-check: skip -->
+<!-- agl-check: fragment -->
 ```agl
 let f: int -> text = classify        # one param, text result
 let g: (int, int) -> int = add       # two params, int result
@@ -259,7 +258,7 @@ record Issue
 All fields are required. By default, record fields are **standard**: they may be
 supplied positionally or as `field = value`:
 
-<!-- agl-check: skip -->
+<!-- agl-check: fragment -->
 ```agl
 let positional = Issue("Missing tests", 3, "No failure-path tests exist.")
 let named = Issue(
@@ -287,7 +286,7 @@ record Mixed
   label: text
 ```
 
-<!-- agl-check: skip -->
+<!-- agl-check: fragment -->
 ```agl
 let p = Pair(1, 2)             # positional (both fields are standard)
 let q = Pair(1, snd = 2)       # first positional, second named
@@ -334,7 +333,6 @@ enum Review
 payload arity. Common single-value variants and multi-field variants may both be
 constructed positionally or by name:
 
-<!-- agl-check: skip -->
 ```agl
 enum Result
   | Ok(value: int)
@@ -441,7 +439,7 @@ Record types and enum types are identified by **both their name and their
 defining module**. Two types with the same name are distinct types if they
 come from different modules:
 
-<!-- agl-check: skip -->
+<!-- agl-check: fragment -->
 ```agl
 # In foo.agl
 record Point
@@ -470,7 +468,7 @@ never interchangeable regardless of structural similarity.
 A type from an imported module may be named explicitly using the module
 qualifier:
 
-<!-- agl-check: skip -->
+<!-- agl-check: fragment -->
 ```agl
 import mylib
 import mylib as M
@@ -488,7 +486,7 @@ to `mylib::Point` if `mylib` is open-imported and no other open import clashes.
 Generic imported types retain the same qualification rules. Apply type
 arguments after the complete qualified name:
 
-<!-- agl-check: skip -->
+<!-- agl-check: fragment -->
 ```agl
 open import mylib
 
@@ -514,7 +512,7 @@ def make() -> ::Node = Node(value = 0)   # refers to this module's own Node
 
 `type` declares a transparent alias:
 
-<!-- agl-check: skip -->
+<!-- agl-check: fragment -->
 ```agl
 type Status = Review
 type Issues = list[Issue]
@@ -553,7 +551,6 @@ their type arguments match exactly, with no variance or subtyping. The
 `int → decimal` widening (below) does **not** propagate through type
 arguments.
 
-<!-- agl-check: skip -->
 ```agl
 let xs: list[int] = [1, 2]
 # let ys: list[decimal] = xs   # static error: list[int] ≠ list[decimal]
@@ -664,7 +661,7 @@ A **fallible** cast may raise `CastError` if the value does not conform to
 the target type. The `as?` form lets you probe convertibility without
 handling an exception:
 
-<!-- agl-check: skip -->
+<!-- agl-check: fragment -->
 ```agl
 let ok: bool = some_json as? int   # true if the value is an integral number
 ```

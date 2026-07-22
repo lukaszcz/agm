@@ -138,7 +138,7 @@ For `def`/`builtin def`/lambda, the **default zone is standard**: a
 parameter list with no markers has all parameters in the standard zone
 (positional or named). Markers switch zones at the boundary they appear at:
 
-<!-- agl-check: skip -->
+<!-- agl-check: fragment -->
 ```agl
 def f(x: int, /, y: int) -> int = x + y          # x pos-only, y standard
 def g(x: int, /, y: int, *, z: int) -> int = ...  # x pos-only, y std, z named-only
@@ -201,7 +201,6 @@ param_marker ::= "/" | "*" | "@" NAME    (* @pos, @std, @named *)
 when omitted it is inferred from the body. Parameter types are always
 required.
 
-<!-- agl-check: skip -->
 ```agl
 let double = fn(x: int) => x * 2
 let add    = fn(x: int, y: int) -> int => x + y
@@ -211,7 +210,6 @@ let greet  = fn(name: text) -> text => "Hello, ${name}!"
 A lambda is an ordinary expression and may appear anywhere an expression is
 accepted — in a binding, as a call argument, or in a list:
 
-<!-- agl-check: skip -->
 ```agl
 let ops: list[int -> int] = [fn(x: int) => x + 1, fn(x: int) => x * 2]
 ```
@@ -219,7 +217,6 @@ let ops: list[int -> int] = [fn(x: int) => x + 1, fn(x: int) => x * 2]
 When used in juxtaposition position (as the right operand of an operator or
 the lone argument to a single-arg call), a lambda must be parenthesized:
 
-<!-- agl-check: skip -->
 ```agl
 # Correct: parenthesized lambda in operator position
 let result = (fn(x: int) => x + 1)(5)
@@ -271,7 +268,7 @@ argument types and from the expected type of the call. Argument evidence fixes
 an instantiation before an expected result type is considered, so ordinary
 assignability (including `int` to `decimal`) applies only afterwards:
 
-<!-- agl-check: skip -->
+<!-- agl-check: fragment -->
 ```agl
 print(id(5))          # T = int, inferred from the argument
 print(id("hi"))       # T = text
@@ -281,7 +278,7 @@ print(fst("x", 9))    # A = text, B = int
 When inference is insufficient or you want to pin the instantiation, supply
 the type arguments explicitly with the typed-call form `::[…]`:
 
-<!-- agl-check: skip -->
+<!-- agl-check: fragment -->
 ```agl
 print(id::[int](5))
 ```
@@ -304,7 +301,6 @@ print(f("via value"))
 A higher-order declared call can supply those constraints through its other
 arguments, so a generic function occurrence is fresh at each use:
 
-<!-- agl-check: skip -->
 ```agl
 def apply[T](f: T -> T, value: T) -> T = f(value)
 def id[T](value: T) -> T = value
@@ -314,7 +310,7 @@ let n = apply(id, 5)              # `id` is instantiated as int -> int
 
 You can also pin the instantiation explicitly without calling the function:
 
-<!-- agl-check: skip -->
+<!-- agl-check: fragment -->
 ```agl
 let g = id::[int]
 print(g(5))
@@ -371,7 +367,7 @@ without a call as described in [Generic functions](#generic-functions).
 and no named arguments, the parentheses may be dropped and the argument
 written directly after the callee:
 
-<!-- agl-check: skip -->
+<!-- agl-check: fragment -->
 ```agl
 print review          # equivalent to print(review)
 ask "Hello?"          # equivalent to ask("Hello?")
@@ -382,7 +378,7 @@ f Opt::Some(x = 1)      # equivalent to f(Opt::Some(x = 1))
 
 Application binds **tighter than all operators**:
 
-<!-- agl-check: skip -->
+<!-- agl-check: fragment -->
 ```agl
 print x + 1           # parsed as (print x) + 1
 ```
@@ -395,7 +391,6 @@ declaration order. Named arguments use `name = value` and may follow the
 positional arguments in any order. Positional arguments must precede named
 arguments at the call site.
 
-<!-- agl-check: skip -->
 ```agl
 def add(x: int, y: int) -> int = x + y
 let r = add(3, 4)          # x=3, y=4 (both standard — positional or named)
@@ -448,7 +443,7 @@ type and is called with positional arguments only.
 A function value is called like any other call. The callee is an expression
 of function type:
 
-<!-- agl-check: skip -->
+<!-- agl-check: fragment -->
 ```agl
 let g: int -> text = classify
 let label = g(7)               # positional call of a function value
@@ -458,7 +453,6 @@ A generic call that produces a function value may use the arguments of that
 value call to determine its type arguments. The constraints of one enclosing
 expression are considered together, so this needs no intermediate annotation:
 
-<!-- agl-check: skip -->
 ```agl
 def maker[T]() -> T -> T = fn(value: T) => value
 
@@ -503,7 +497,7 @@ placeholders' order of appearance in the written argument list, including named
 arguments. With numbered placeholders, the number gives the resulting
 function's parameter position explicitly:
 
-<!-- agl-check: skip -->
+<!-- agl-check: fragment -->
 ```agl
 let reordered: (int, int) -> int = digits(?2, 9, ?1)
 print(reordered(1, 2))          # 291
@@ -639,7 +633,7 @@ func_type ::= type_atom "->" type_expr
 type_list ::= type_expr ("," type_expr)* ","?
 ```
 
-<!-- agl-check: skip -->
+<!-- agl-check: fragment -->
 ```agl
 let f: int -> text = classify
 let g: (int, int) -> int = add
@@ -675,7 +669,6 @@ default of 256, and may select a different limit before execution. The limit is
 not an AgL engine-setting binding and cannot be changed by the program. Exceeding
 it raises `RecursionError` ([Exceptions](exceptions.md)):
 
-<!-- agl-check: skip -->
 ```agl
 def fact(n: int) -> int =
   if n <= 1 => 1 else => n * fact(n - 1)

@@ -9,9 +9,9 @@ rotting as the language evolves.
 A block's expectation is declared by an HTML comment on the line immediately
 preceding its opening fence:
 
-* ``<!-- agl-check: skip -->`` — an illustrative fragment or deliberately
+* ``<!-- agl-check: fragment -->`` — an illustrative fragment or deliberately
   incomplete example (references undefined names, imports absent modules, …).
-  It is not compiled.
+  It must be rejected as a standalone program.
 * ``<!-- agl-check: error -->`` — a deliberately-rejected program that
   demonstrates a static error. It MUST fail the static pipeline (the exact
   message is not asserted).
@@ -41,7 +41,7 @@ from agm.agl.runtime.agents import AgentRequest
 
 _REFERENCE_DIR = Path(__file__).resolve().parents[1] / "docs" / "agl" / "reference"
 _FENCE = re.compile(r"^[ \t]*```agl\s*$")
-_MARKER = re.compile(r"<!--\s*agl-check:\s*(?P<kind>skip|error)\s*-->")
+_MARKER = re.compile(r"<!--\s*agl-check:\s*(?P<kind>skip|fragment|error)\s*-->")
 
 
 @dataclass(frozen=True)
@@ -50,7 +50,7 @@ class Snippet:
 
     path: Path
     line: int  # 1-based source line of the opening fence
-    marker: str | None  # "skip", "error", or None (must-compile)
+    marker: str | None  # "fragment", "error", or None (must-compile)
     source: str
 
     @property
@@ -59,7 +59,7 @@ class Snippet:
 
 
 def _discover_snippets() -> list[Snippet]:
-    """Collect every ```agl block, its start line, and its opt-out marker."""
+    """Collect every ```agl block and its compilation expectation."""
     snippets: list[Snippet] = []
     for path in sorted(_REFERENCE_DIR.glob("*.md")):
         lines = path.read_text(encoding="utf-8").splitlines()
@@ -94,6 +94,12 @@ def _discover_snippets() -> list[Snippet]:
 _SNIPPETS = _discover_snippets()
 
 
+def test_reference_docs_do_not_skip_snippets() -> None:
+    """Every reference snippet must have an executable test expectation."""
+    skipped = [snippet.id for snippet in _SNIPPETS if snippet.marker == "skip"]
+    assert not skipped, f"reference snippets must not opt out of testing: {skipped}"
+
+
 def _unused_agent(request: AgentRequest) -> str:
     """A default agent that is never invoked (the pipeline stops at --dry-run).
 
@@ -123,12 +129,10 @@ def _statically_compiles(source: str) -> tuple[bool, list[str]]:
 
 @pytest.mark.parametrize("snippet", _SNIPPETS, ids=[snippet.id for snippet in _SNIPPETS])
 def test_reference_doc_snippet(snippet: Snippet) -> None:
-    if snippet.marker == "skip":
-        pytest.skip("declared illustrative fragment (agl-check: skip)")
     compiles, diagnostics = _statically_compiles(snippet.source)
-    if snippet.marker == "error":
+    if snippet.marker in {"error", "fragment"}:
         assert not compiles, (
-            f"{snippet.id}: block is marked 'agl-check: error' but it statically compiled"
+            f"{snippet.id}: marked 'agl-check: {snippet.marker}' but it statically compiled"
         )
     else:
         assert compiles, (

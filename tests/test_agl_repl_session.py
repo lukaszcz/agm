@@ -200,6 +200,36 @@ class TestPersistence:
         assert r2.value is not None
         assert _int(r2.value) == 3
 
+    def test_recursive_candidate_signature_promotes_only_after_validation(self) -> None:
+        s = ReplSession()
+
+        defined = s.eval_entry(
+            "def fib(n: int) = if n < 2 => n else => fib(n - 1) + fib(n - 2)\nfib(8)"
+        )
+        later = s.eval_entry("fib(10)")
+
+        assert defined.ok, defined.diagnostics
+        assert defined.value == IntValue(21)
+        assert later.ok, later.diagnostics
+        assert later.value == IntValue(55)
+        assert s.type_of("fib") == "int -> int"
+
+    def test_failed_recursive_candidate_entry_promotes_nothing(self) -> None:
+        s = ReplSession()
+        assert s.eval_entry("let stable = 1").ok
+
+        failed = s.eval_entry("let transient = 2\ndef loop() = loop()")
+        stable = s.eval_entry("stable")
+        transient = s.eval_entry("transient")
+        loop = s.eval_entry("loop()")
+
+        assert not failed.ok
+        assert stable.ok, stable.diagnostics
+        assert stable.value == IntValue(1)
+        assert not transient.ok
+        assert not loop.ok
+        assert {name for name, _typ, _value in s.bindings()} == {"stable"}
+
 
 # ---------------------------------------------------------------------------
 # Standard library

@@ -1,0 +1,2 @@
+open import inference/factorial_consumer
+print increment_factorial(4)

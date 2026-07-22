@@ -1,0 +1,3 @@
+# The explicit result annotation checks against the inferred dependency signature.
+open import inference/recursive_factorial
+def increment_factorial(n: int) -> int = factorial(n) + 1

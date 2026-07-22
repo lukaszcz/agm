@@ -1,0 +1,2 @@
+open import inference/recursive_odd
+def is_even(n: int) = if n == 0 => true else => is_odd(n - 1)

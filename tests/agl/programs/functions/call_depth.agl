@@ -3,7 +3,7 @@
 # (--max-call-depth / [exec] max-call-depth, or the runtime default).
 param n: int
 
-def countdown(x: int) -> int =
+def countdown(x: int) =
   if x <= 0 => 0 else => countdown(x - 1)
 
 print(countdown(n))

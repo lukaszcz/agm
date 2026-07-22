@@ -53,9 +53,10 @@ as a suite — see [Inline bodies](grammar.md#inline-bodies).
 
 The `-> RetType` annotation is optional on ordinary `def` declarations. When
 present, the body is checked against it; a mismatch is a static error. When
-omitted, AgL infers the return type from the body, as it does for lambdas. A
-monomorphic function can infer through same-module forward references and
-mutual recursion when the group provides concrete evidence:
+omitted, AgL makes a best-effort inference of the return type from the body,
+as it does for lambdas. A monomorphic function can infer through direct
+recursion, same-module forward references, and mutual recursion when the group
+provides concrete evidence:
 
 ```agl
 def is_even(n: int) = if n == 0 => true else => is_odd(n - 1)

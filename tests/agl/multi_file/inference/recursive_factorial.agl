@@ -1,0 +1,2 @@
+# An inferred recursive dependency whose signature is consumed by another module.
+def factorial(n: int) = if n <= 1 => 1 else => n * factorial(n - 1)

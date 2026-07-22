@@ -201,6 +201,32 @@ def test_imported_generic_inside_generic_module_body_freshens_per_entry_occurren
     assert capsys.readouterr().out == "1\ntext\n"
 
 
+def test_unannotated_import_cycle_recursion_runs_from_fixture(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Imported mutually recursive candidates close before the entry executes."""
+    entry_file = MULTI_FILE_DIR / "entry_recursive_inference.agl"
+    result = _run_program(
+        entry_file.read_text(), entry_path=entry_file, roots_dirs=[MULTI_FILE_DIR]
+    )
+
+    assert result.ok is True
+    assert capsys.readouterr().out == "true\ntrue\n"
+
+
+def test_unannotated_dependency_signature_is_available_to_noncyclic_importer(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """An importer consumes its dependency's inferred recursive signature."""
+    entry_file = MULTI_FILE_DIR / "entry_noncyclic_recursive_inference.agl"
+    result = _run_program(
+        entry_file.read_text(), entry_path=entry_file, roots_dirs=[MULTI_FILE_DIR]
+    )
+
+    assert result.ok is True
+    assert capsys.readouterr().out == "25\n"
+
+
 # ---------------------------------------------------------------------------
 # Scenario 3: error in imported module reports correct file path
 # ---------------------------------------------------------------------------

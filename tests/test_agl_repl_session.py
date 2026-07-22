@@ -687,6 +687,17 @@ class TestFailureEffects:
         assert use.ok
         assert use.value is not None and _int(use.value) == 30
 
+    def test_runtime_raise_in_else_branch_returns_entry_error(self) -> None:
+        s = ReplSession()
+
+        result = s.eval_entry('let x = if 0 == 1 => 1 else => raise Abort(message = "a")')
+
+        assert not result.ok
+        assert result.error is not None
+        assert result.error.type_name == "Abort"
+        assert not s.eval_entry("x").ok
+        assert s.eval_entry("1").ok
+
     def test_runtime_raise_does_not_install_failing_binding_from_prior_function(self) -> None:
         s = ReplSession()
         declare = s.eval_entry('def f[T]() -> T = raise Abort(message = "A")')

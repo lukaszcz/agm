@@ -270,6 +270,22 @@ def _register_signature(
     env.set_binding_type(node.node_id, function_type)
 
 
+def _references_tainted_binding(module: CandidateModule, item: object, tainted: set[int]) -> bool:
+    """Whether a top-level binding reads a declaration whose type is not yet fixed."""
+    found = False
+
+    def visit(node: object) -> None:
+        nonlocal found
+        if not isinstance(node, VarRef):
+            return
+        reference = module.resolved.resolution.get(node.node_id)
+        if reference is not None and reference.decl_node_id in tainted:
+            found = True
+
+    walk(item, visit)
+    return found
+
+
 def _seed_candidate_visible_bindings(
     component: ModuleCandidateComponent, session: CandidateSession
 ) -> None:
@@ -285,12 +301,22 @@ def _seed_candidate_visible_bindings(
             capabilities=module.capabilities,
             module_id=module.module_id,
         )
+        # A value binding that reads a component candidate (directly or through
+        # an earlier such binding) cannot be typed before that candidate closes:
+        # its provisional result var is owned by this session's engine and any
+        # unification here would corrupt it. Such bindings — and their transitive
+        # dependents — are typed by the authoritative pass once every signature
+        # is concrete.
+        tainted = set(session.provisional_declaration_ids)
         for item in program.body.items:
             if isinstance(item, FuncDef):
                 session.visible_binding_snapshots[(module.module_id, item.node_id)] = (
                     module.env.snapshot_binding_types()
                 )
             elif isinstance(item, (AgentDecl, LetDecl, ParamDecl, VarDecl)):
+                if _references_tainted_binding(module, item, tainted):
+                    tainted.add(item.node_id)
+                    continue
                 checker._check_item(item, expected=None)
 
 

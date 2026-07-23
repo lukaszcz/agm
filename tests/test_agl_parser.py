@@ -26,6 +26,7 @@ import decimal
 import importlib.resources
 import logging
 import logging.handlers
+from unittest.mock import patch
 
 import pytest
 from lark.exceptions import UnexpectedToken
@@ -118,6 +119,7 @@ from agm.agl.syntax.types import (
     TextT,
     UnitT,
 )
+from agm.core.process import ProcessCaptureResult
 
 # ---------------------------------------------------------------------------
 # Helper
@@ -3942,3 +3944,178 @@ class TestModifierDecoratorNewline:
         assert isinstance(it[0], FuncDef)
         assert isinstance(it[1], EnumDef)
         assert it[1].is_private is True
+
+
+class TestRawTailCalls:
+    @pytest.mark.parametrize(
+        ("raw_source", "call_source"),
+        (
+            ("exec! ls -lh", 'exec("ls -lh")'),
+            ("ask! Summarize %{f}", 'ask("Summarize %{f}")'),
+            ("exec!\n  echo %{file}\n  date", 'exec("""echo %{file}\ndate""")'),
+            ("ask!\n  Review %{file}\n  carefully", 'ask("""Review %{file}\ncarefully""")'),
+            ("exec!::[json] cat result.json", 'exec::[json]("cat result.json")'),
+            ("ask!::[Review] Summarize %{f}", 'ask::[Review]("Summarize %{f}")'),
+            ("exec! : true", 'exec(": true")'),
+        ),
+    )
+    def test_desugars_to_equivalent_call(self, raw_source: str, call_source: str) -> None:
+        assert first(parse(raw_source)) == first(parse(call_source))
+
+    def test_is_allowed_at_each_line_final_position(self) -> None:
+        source = """\
+exec! true
+let a = exec! true
+var b = exec! true
+b := exec! false
+def returned() -> ExecResult
+  return exec! true
+def inline() -> ExecResult = return exec! true
+print exec! true
+(1 + 1) exec! true
+1 + 1; exec! true
+"""
+        program = parse(source)
+        assert len(program.body.items) == 10
+        returned = program.body.items[4]
+        inline = program.body.items[5]
+        assert isinstance(returned, FuncDef)
+        assert isinstance(returned.body, Block)
+        assert isinstance(returned.body.items[0], Return)
+        assert isinstance(inline, FuncDef)
+        assert isinstance(inline.body, Return)
+
+    def test_raw_tail_is_allowed_as_an_arrow_suite_item(self) -> None:
+        branch = first(parse("if true =>\n  exec! true"))
+        assert isinstance(branch, If)
+        assert isinstance(branch.branches[0].body, Block)
+        assert isinstance(branch.branches[0].body.items[0], Call)
+
+    def test_inline_nominal_declaration_does_not_reserve_nested_do_suite_items(self) -> None:
+        function = first(parse("def f() -> unit\n  record R x: int\n  do\n    exec! true\n  done"))
+        assert isinstance(function, FuncDef)
+        assert isinstance(function.body, Block)
+        loop = function.body.items[-1]
+        assert isinstance(loop, Do)
+        assert isinstance(loop.body, Block)
+        assert isinstance(loop.body.items[0], Call)
+
+    @pytest.mark.parametrize(
+        "source",
+        (
+            "exec!",
+            "1 + exec!",
+            "1 + exec! true",
+            "if true => exec! date | else => 0",
+            "case true of true => exec! date | false => 0",
+            "try exec! date catch _ => 0",
+            "if true => return exec! date | else => 0",
+            "case true of true => return exec! date | false => 0",
+            "try return exec! date catch _ => 0",
+        ),
+    )
+    def test_non_line_final_position_has_targeted_guidance(self, source: str) -> None:
+        with pytest.raises(AglSyntaxError, match="call form.*block form"):
+            parse(source)
+
+    @pytest.mark.parametrize(
+        "source",
+        (
+            "let exec! = 1",
+            "var ask! = 1",
+            "param exec!",
+            "def ask!() -> int = 1",
+            "def f(exec!: int) -> int = 1",
+            "agent ask!",
+            "record exec! value: int",
+            "record R(exec!: int)",
+            "record R\n  exec!: int",
+            "enum ask! = Variant",
+            "enum E = ask!",
+            "enum E\n  | V(exec!: int)",
+            "exception exec! value: int",
+            "exception X\n  ask!: int",
+            "type ask! = int",
+            "program exec!",
+            "for exec! in [] do 1 done",
+            "case x of value as ask! => 1",
+            "::ask!",
+            "let x = ::ask!",
+            "module::exec!",
+            "Type[int]::exec!",
+            "module::Type[int]::ask!",
+            "value.ask!",
+        ),
+    )
+    def test_reserved_raw_name_has_a_frontend_diagnostic(self, source: str) -> None:
+        with pytest.raises(AglSyntaxError, match="exec!|ask!"):
+            parse(source)
+
+    def test_raw_tail_default_is_rejected_inside_parameter_brackets(self) -> None:
+        with pytest.raises(AglSyntaxError, match="brackets.*call form.*block form"):
+            parse("def f(x: int = exec! true) -> int = x")
+
+    @pytest.mark.parametrize("declaration", ("record", "exception"))
+    @pytest.mark.parametrize("marker", ("/", "*", "@named"))
+    def test_nominal_marker_preserves_raw_field_reservation(
+        self, declaration: str, marker: str
+    ) -> None:
+        source = f"{declaration} R\n  x: int\n  {marker}\n  exec!: int"
+        with pytest.raises(AglSyntaxError, match="exec!.*reserved"):
+            parse(source)
+
+    def test_raw_tail_in_unsupported_lambda_suite_has_targeted_guidance(self) -> None:
+        with pytest.raises(AglSyntaxError, match="call form.*block form"):
+            parse("let f = fn() =>\n  exec! date")
+
+    @pytest.mark.parametrize(
+        "source",
+        (
+            "fn(exec!: int) => 1",
+            "type Box[ask!] = int",
+        ),
+    )
+    def test_reserved_raw_parameter_names_reach_frontend(self, source: str) -> None:
+        with pytest.raises(AglSyntaxError, match="(exec!|ask!).*reserved"):
+            parse(source)
+
+    @pytest.mark.parametrize("declaration", ("record", "exception"))
+    def test_inline_field_declaration_does_not_leak_to_next_expression(
+        self, declaration: str
+    ) -> None:
+        source = f"{declaration} R x: int\nfoo(exec! true)"
+        with pytest.raises(AglSyntaxError, match="brackets.*call form.*block form"):
+            parse(source)
+
+    def test_desugaring_assigns_node_ids_in_source_order(self) -> None:
+        raw_call = first(parse("exec! true"))
+        assert isinstance(raw_call, Call)
+        assert isinstance(raw_call.callee, VarRef)
+        assert isinstance(raw_call.args[0], StringLit)
+        assert raw_call.callee.node_id < raw_call.args[0].node_id < raw_call.node_id
+
+    def test_interpolated_raw_text_precedes_its_interpolation_node_ids(self) -> None:
+        raw_call = first(parse("exec! before %{value}"))
+        assert isinstance(raw_call, Call)
+        assert isinstance(raw_call.args[0], Template)
+        text, interpolation = raw_call.args[0].segments
+        assert isinstance(text, TextSegment)
+        assert isinstance(interpolation, InterpSegment)
+        assert text.node_id < interpolation.expr.node_id < interpolation.node_id
+
+    def test_desugared_statement_runs_through_the_pipeline(self) -> None:
+        completed = ProcessCaptureResult(
+            returncode=0,
+            stdout="",
+            stderr="",
+            elapsed=0.0,
+            timed_out=False,
+            spawn_error=None,
+            spawn_errno=None,
+        )
+        from agm.agl import PipelineDriver
+
+        with patch("agm.core.process.run_capture_result", return_value=completed):
+            result = PipelineDriver().run("exec! true")
+
+        assert result.ok

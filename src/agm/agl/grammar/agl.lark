@@ -74,6 +74,7 @@
 
 %declare _NEWLINE _INDENT _DEDENT
 %declare TEMPLATE_START STRING_FRAGMENT INTERP_START INTERP_END TEMPLATE_END
+%declare RAW_TAIL_NAME RAW_TAIL_START RAW_FRAGMENT RAW_TAIL_END
 
 // ---------------------------------------------------------------------------
 // Identifier / number / operator tokens (%declare — no regex; from custom lexer)
@@ -119,6 +120,9 @@ _sep: _NEWLINE | SEMICOLON
 
 ?item: declaration
      | binder
+     | raw_return_expr
+     | raw_call
+     | raw_juxt
      | expr
 
 // ---------------------------------------------------------------------------
@@ -173,11 +177,13 @@ field_def: field_name COLON type_expr
 // admitted here alongside ordinary identifiers.  `to`, `downto`, and `by` are
 // also admitted so that existing field uses like `tagged(by: T)` continue to
 // work after those words became reserved keywords.
-// Inlined (`?`): each alternative is a single token, so the parent rule
-// receives the name Token (type NAME, AGENT, TO, DOWNTO, or BY) directly.
-?field_name: NAME | AGENT | TO | DOWNTO | BY
+// The explicit rule lets the AST builder reject frontend-reserved raw-tail
+// spellings while still returning the original name Token to its parent.
+field_name: NAME | AGENT | TO | DOWNTO | BY
 
-?name: NAME | OP_NAME
+// Likewise, name validation is centralized in the AST builder without changing
+// the token consumed by declaration and reference productions.
+name: NAME | OP_NAME
 
 // enum_def: flat variant list using the |-continuation layout rule.
 // The |-continuation layout rule suppresses every _NEWLINE / _INDENT / _DEDENT
@@ -295,7 +301,7 @@ param_def: field_name COLON type_expr (EQ or_expr)?
 // separator — a newline or `;` — which starts the next block item; `;` cannot
 // extend the body because no body-specific marker distinguishes it. Write a
 // sequence as a parenthesized block (`def f() = (let x = 1; x)`) or as a suite.
-func_body: suite_expr | expr
+func_body: suite_expr | raw_return_expr | raw_call | raw_juxt | expr
 
 // ---------------------------------------------------------------------------
 // Binders (transparent)
@@ -303,9 +309,9 @@ func_body: suite_expr | expr
 
 ?binder: let_decl | var_decl | assign_stmt
 
-let_decl: "let" name type_ann? EQ expr
-var_decl: "var" name type_ann? EQ expr
-assign_stmt: postfix ASSIGN expr
+let_decl: "let" name type_ann? EQ (raw_call | raw_juxt | expr)
+var_decl: "var" name type_ann? EQ (raw_call | raw_juxt | expr)
+assign_stmt: postfix ASSIGN (raw_call | raw_juxt | expr)
 
 // Type annotation: COLON followed by a type_expr.
 type_ann: COLON type_expr
@@ -527,8 +533,11 @@ inline_assign: postfix ASSIGN or_expr
 
 ?letvar_decl: let_decl | var_decl
 
-// raise and return expressions
+// Raw-tail returns only occur at line-final block-item and function-body
+// positions. Inline branch, case, and try bodies use return_expr, so their
+// continuation markers remain grammar-visible instead of becoming raw payload.
 raise_expr: "raise" or_expr
+raw_return_expr: "return" (raw_call | raw_juxt) -> return_expr
 return_expr: "return" or_expr?
 
 // suite_expr: indented block — produces a Block expr.
@@ -729,6 +738,13 @@ template: TEMPLATE_START template_segment* TEMPLATE_END
 
 template_segment: STRING_FRAGMENT    -> tmpl_text
                 | interp             -> tmpl_interp
+
+raw_juxt: postfix raw_call -> juxt_call
+raw_call: raw_callee type_args? raw_tail
+raw_callee: RAW_TAIL_NAME
+raw_tail: RAW_TAIL_START (raw_text | interp)+ RAW_TAIL_END
+raw_text: RAW_FRAGMENT
+type_args: DCOLON LSQB type_arg_list RSQB
 
 interp: INTERP_START expr INTERP_END
 

@@ -63,6 +63,8 @@ _ELSE_BEFORE_TOKEN_RE = re.compile(r"(?<![A-Za-z0-9_])else\s*$")
 # identifier-body character, so a name that merely ends in ``?`` (predicate names
 # like ``empty?`` or the ``as?`` keyword) does not masquerade as a placeholder.
 _PLACEHOLDER_BEFORE_TOKEN_RE = re.compile(r"(?<![^\s(){}\[\]:,.|;/@=])\?[0-9]*\s*$")
+_RAW_TAIL_NAME_BEFORE_END_RE = re.compile(r"(exec!|ask!)(?:\s*::\s*\[[^]]*\])?\s*$")
+_RAW_TAIL_AFTER_INDENT_RE = re.compile(r"\s*(?:exec!|ask!)(?=\s|$)")
 
 # An inline `=>` body is a single item: no binders, no `;` sequence.  Both are
 # legal once the body is parenthesized or written as an indented block, so the
@@ -229,6 +231,14 @@ def _is_placeholder_position_error(
     )
 
 
+def _is_raw_tail_after_indent(source_text: str | None, token_pos: int) -> bool:
+    """Return whether an unsupported suite indentation starts a raw-tail form."""
+    return (
+        source_text is not None
+        and _RAW_TAIL_AFTER_INDENT_RE.match(source_text, token_pos) is not None
+    )
+
+
 def syntax_error_from_lark(
     exc: Exception,
     *,
@@ -267,6 +277,24 @@ def syntax_error_from_lark(
             token_type=tok.type, source_text=source_text, token_pos=pos
         ):
             return _make_placeholder_position_error(span)
+        if tok.type == "RAW_TAIL_NAME":
+            return AglSyntaxError(
+                "raw-tail forms are only allowed in line-final positions; use the call form "
+                "or an indented block form.",
+                span=span,
+            )
+        if tok.type == "RAW_TAIL_END":
+            name_match = (
+                _RAW_TAIL_NAME_BEFORE_END_RE.search(source_text[:pos])
+                if source_text is not None
+                else None
+            )
+            name = name_match.group(1) if name_match is not None else "raw-tail form"
+            return AglSyntaxError(
+                f"raw-tail payload for {name!r} cannot be empty; use the call form "
+                "or an indented block form.",
+                span=span,
+            )
         # Chained comparison detection: the unexpected token is
         # a comparison operator AND that operator is NOT in the expected set.
         # When the operator IS expected, we are still before the first comparison
@@ -307,6 +335,12 @@ def syntax_error_from_lark(
             return AglSyntaxError(
                 "a nested `try` at the end of a `try` body takes the enclosing "
                 "`catch` clauses; parenthesize it.",
+                span=span,
+            )
+        if tok.type == "_INDENT" and _is_raw_tail_after_indent(source_text, pos):
+            return AglSyntaxError(
+                "raw-tail forms are only allowed in line-final positions; use the call form "
+                "or an indented block form.",
                 span=span,
             )
         if tok.type == "_NEWLINE":

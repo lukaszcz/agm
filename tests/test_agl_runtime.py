@@ -176,6 +176,16 @@ class TestRegisterAgent:
         with pytest.raises(ValueError, match="ask-request"):
             rt.register_agent("ask-request", my_agent)
 
+    @pytest.mark.parametrize("name", ("exec!", "ask!"))
+    def test_register_raw_tail_name_raises(self, name: str) -> None:
+        rt = PipelineDriver()
+
+        def my_agent(request: object) -> str:
+            return "response"
+
+        with pytest.raises(ValueError, match=name):
+            rt.register_agent(name, my_agent)
+
 
 class TestRunBehavior:
     """run() behavior: valid programs run, static errors fail cleanly."""

@@ -883,14 +883,89 @@ class TestRawTailForms:
             tok("exec!\n  first\n next")
 
     @pytest.mark.parametrize("source", ("exec!", "ask!   ", "exec!\n", "exec!\nnext"))
-    def test_empty_payload_is_rejected(self, source: str) -> None:
-        with pytest.raises(LexError):
-            tok(source)
+    def test_empty_payload_reaches_the_parser(self, source: str) -> None:
+        tokens = tok(source)
+        assert ("RAW_TAIL_START", "") in tokens
+        assert ("RAW_TAIL_END", "") in tokens
 
     def test_raw_tail_is_rejected_inside_brackets(self) -> None:
         with pytest.raises(LexError) as exc_info:
             tok("(exec! echo hi)")
         assert exc_info.value.span is not None
+
+    def test_raw_tail_after_completed_paren_and_semicolon_is_scanned(self) -> None:
+        for source in ("(1 + 1) exec! true", "1 + 1; exec! true"):
+            assert ("RAW_TAIL_NAME", "exec!") in tok(source)
+            assert ("RAW_FRAGMENT", "true") in tok(source)
+
+    @pytest.mark.parametrize(
+        "source",
+        (
+            "record R\n  exec!: int",
+            "exception X\n  ask!: int",
+            "enum E\n  | ask!",
+            "let x = ::ask!",
+        ),
+    )
+    def test_reserved_raw_names_stay_names_in_field_variant_and_self_qualification(
+        self, source: str
+    ) -> None:
+        assert ("NAME", "exec!") in tok(source) or ("NAME", "ask!") in tok(source)
+
+    def test_parameter_name_stays_a_name_but_its_default_is_rejected_in_brackets(self) -> None:
+        assert ("NAME", "exec!") in tok("def f(exec!: int) -> int = 1")
+        with pytest.raises(LexError, match="brackets"):
+            tok("def f(x: int = exec! true) -> int = x")
+
+    @pytest.mark.parametrize("name", ("exec!", "ask!"))
+    def test_enum_variant_payload_field_name_stays_a_name(self, name: str) -> None:
+        assert ("NAME", name) in tok(f"enum E\n  | V({name}: int)")
+
+    def test_raw_tail_after_branch_arrow_remains_code(self) -> None:
+        assert tok("if true => exec! date | else => 0") == [
+            ("if", "if"),
+            ("true", "true"),
+            ("ARROW", "=>"),
+            ("RAW_TAIL_NAME", "exec!"),
+            ("NAME", "date"),
+            ("PIPE", "|"),
+            ("else", "else"),
+            ("ARROW", "=>"),
+            ("INT", "0"),
+        ]
+
+    def test_raw_tail_on_arrow_suite_line_is_scanned(self) -> None:
+        tokens = tok("if true =>\n  exec! true")
+        assert ("RAW_TAIL_NAME", "exec!") in tokens
+        assert ("RAW_FRAGMENT", "true") in tokens
+
+    @pytest.mark.parametrize(
+        "source",
+        (
+            "record R\nexec! true",
+            "record R\n  field: int\nexec! true",
+            "record R\n  field: exec! true",
+            "record R\n  do\n    exec! true\n  done",
+            "record R\n  x: int\n  *\n  y: int\nexec! true",
+            "enum E\n  | V(value: int)\nexec! true",
+        ),
+    )
+    def test_raw_tail_closes_nominal_context_outside_field_margin(self, source: str) -> None:
+        assert ("RAW_TAIL_NAME", "exec!") in tok(source)
+
+    @pytest.mark.parametrize(
+        "source",
+        (
+            "for exec! in [] do 1 done",
+            "case x of value as ask! => 1",
+            "type exec! = int",
+            "::ask!",
+        ),
+    )
+    def test_reserved_raw_names_stay_names_in_binding_and_qualified_contexts(
+        self, source: str
+    ) -> None:
+        assert ("NAME", "exec!") in tok(source) or ("NAME", "ask!") in tok(source)
 
     @pytest.mark.parametrize("name", ("exec!", "ask!"))
     def test_qualified_name_does_not_trigger_raw_tail(self, name: str) -> None:

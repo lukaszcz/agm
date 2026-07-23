@@ -3539,23 +3539,12 @@ class TestExecCliModulePaths:
 class TestReservedFileStem:
     """: a file stem matching a reserved AGM section name must exit 1."""
 
+    @pytest.mark.parametrize("name", ("loop", "exec", "exec!", "ask!"))
     def test_reserved_stem_no_program_decl_exits_1(
-        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+        self, name: str, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        """File 'loop.agl' with no ``program`` decl uses stem 'loop' (reserved) → exit 1."""
-        agl_file = tmp_path / "loop.agl"
-        agl_file.write_text("let x = 1\nx\n")
-
-        with pytest.raises(SystemExit) as exc_info:
-            exec_command.run(_exec_args_no_log(agl_file))
-
-        assert exc_info.value.code == 1
-
-    def test_exec_stem_no_program_decl_exits_1(
-        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
-    ) -> None:
-        """File 'exec.agl' with no ``program`` decl uses stem 'exec' (reserved) → exit 1."""
-        agl_file = tmp_path / "exec.agl"
+        """A reserved source stem without ``program NAME`` cannot select a config key."""
+        agl_file = tmp_path / f"{name}.agl"
         agl_file.write_text("let x = 1\nx\n")
 
         with pytest.raises(SystemExit) as exc_info:

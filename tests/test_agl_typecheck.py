@@ -58,6 +58,7 @@ from agm.agl.syntax.nodes import (
     DictEntry,
     DictLit,
     Do,
+    Expr,
     FieldAccess,
     FuncDef,
     If,
@@ -81,6 +82,7 @@ from agm.agl.syntax.nodes import (
     TypeApply,
     UnitLit,
     VarDecl,
+    VarPattern,
     VarRef,
 )
 from agm.agl.syntax.spans import SourceSpan
@@ -93,6 +95,7 @@ from agm.agl.syntax.types import (
     JsonT,
     ListT,
     TextT,
+    TypeExpr,
     UnitT,
 )
 from agm.agl.typecheck import (
@@ -1392,6 +1395,26 @@ class TestAsk:
         decl = r.resolved.program.body.items[0]
         assert isinstance(decl, LetDecl)
         assert r.type_env.get_binding_type(decl.node_id) is None
+
+    def test_checker_rejects_a_destructuring_let_from_a_resolved_artifact(self) -> None:
+        resolved = resolve_module(parse_program("let value = 1"))
+        (let,) = resolved.program.body.items
+        assert isinstance(let, LetDecl)
+        pattern = ConstructorPattern(
+            qualifier=None,
+            name="Pair",
+            positional=(),
+            named=(),
+            span=let.pattern.span,
+            node_id=let.pattern.node_id,
+        )
+        program = replace(
+            resolved.program,
+            body=replace(resolved.program.body, items=(replace(let, pattern=pattern),)),
+        )
+
+        with pytest.raises(AglTypeError):
+            check_module(replace(resolved, program=program), default_capabilities())
 
     def test_ask_with_explicit_agent(self) -> None:
         r = accept_type('agent reviewer\nask("Q", agent = reviewer)')
@@ -3178,7 +3201,11 @@ class TestPartialDeclaredCalls:
 class TestPartialConstructorAndValueCalls:
     def _let_call(self, checked: CheckedModule, name: str) -> Call:
         for item in checked.resolved.program.body.items:
-            if isinstance(item, LetDecl) and item.name == name:
+            if (
+                isinstance(item, LetDecl)
+                and isinstance(item.pattern, VarPattern)
+                and item.pattern.name == name
+            ):
                 assert isinstance(item.value, Call)
                 return item.value
         raise AssertionError(f"no call-valued let named {name!r}")
@@ -3324,9 +3351,11 @@ class TestPartialConstructorAndValueCalls:
         )
         entry = checked.modules[ENTRY_ID]
         calls = {
-            item.name: item.value
+            item.pattern.name: item.value
             for item in entry.resolved.program.body.items
-            if isinstance(item, LetDecl) and isinstance(item.value, Call)
+            if isinstance(item, LetDecl)
+            and isinstance(item.pattern, VarPattern)
+            and isinstance(item.value, Call)
         }
         point_type = RecordType("Point", module_id=ModuleId.from_path("mylib"))
         assert entry.node_types[calls["make"].node_id] == FunctionType(
@@ -5951,19 +5980,33 @@ class TestIndexTypechecking:
         )
         return check_module(resolved, default_capabilities())
 
+    def _binding(
+        self, name: str, type_ann: TypeExpr, value: Expr, sp: SourceSpan, *, mutable: bool
+    ) -> LetDecl | VarDecl:
+        if mutable:
+            return VarDecl(
+                name=name, type_ann=type_ann, value=value, span=sp, node_id=_mk_node_id()
+            )
+        return LetDecl(
+            pattern=VarPattern(name=name, span=sp, node_id=_mk_node_id()),
+            type_ann=type_ann,
+            value=value,
+            span=sp,
+            node_id=_mk_node_id(),
+        )
+
     def _list_decl_and_ref(
         self, *, mutable: bool = False
     ) -> tuple[LetDecl | VarDecl, VarRef, BindingRef]:
         sp = mk_span()
-        decl_cls = VarDecl if mutable else LetDecl
-        decl = decl_cls(
-            name="xs",
-            type_ann=ListT(
+        decl = self._binding(
+            "xs",
+            ListT(
                 elem=IntT(span=sp, node_id=_mk_node_id()),
                 span=sp,
                 node_id=_mk_node_id(),
             ),
-            value=ListLit(
+            ListLit(
                 elements=(
                     IntLit(value=10, span=sp, node_id=_mk_node_id()),
                     IntLit(value=20, span=sp, node_id=_mk_node_id()),
@@ -5971,8 +6014,8 @@ class TestIndexTypechecking:
                 span=sp,
                 node_id=_mk_node_id(),
             ),
-            span=sp,
-            node_id=_mk_node_id(),
+            sp,
+            mutable=mutable,
         )
         ref_expr = VarRef(name="xs", span=sp, node_id=_mk_node_id())
         ref = self._binding_ref(
@@ -5987,15 +6030,14 @@ class TestIndexTypechecking:
         self, *, mutable: bool = False
     ) -> tuple[LetDecl | VarDecl, VarRef, BindingRef]:
         sp = mk_span()
-        decl_cls = VarDecl if mutable else LetDecl
-        decl = decl_cls(
-            name="d",
-            type_ann=DictT(
+        decl = self._binding(
+            "d",
+            DictT(
                 value=IntT(span=sp, node_id=_mk_node_id()),
                 span=sp,
                 node_id=_mk_node_id(),
             ),
-            value=DictLit(
+            DictLit(
                 entries=(
                     DictEntry(
                         key=StringLit(value="a", span=sp, node_id=_mk_node_id()),
@@ -6007,8 +6049,8 @@ class TestIndexTypechecking:
                 span=sp,
                 node_id=_mk_node_id(),
             ),
-            span=sp,
-            node_id=_mk_node_id(),
+            sp,
+            mutable=mutable,
         )
         ref_expr = VarRef(name="d", span=sp, node_id=_mk_node_id())
         ref = self._binding_ref(
@@ -6066,7 +6108,7 @@ class TestIndexTypechecking:
             self._check_items((dict_decl, cast(Item, dict_index)), {dict_obj.node_id: dict_ref})
 
         decl = LetDecl(
-            name="n",
+            pattern=VarPattern(name="n", span=sp, node_id=_mk_node_id()),
             type_ann=IntT(span=sp, node_id=_mk_node_id()),
             value=IntLit(value=1, span=sp, node_id=_mk_node_id()),
             span=sp,

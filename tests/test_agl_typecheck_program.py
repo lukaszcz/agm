@@ -89,11 +89,13 @@ def _with_reversed_module_discovery_order(graph: ModuleGraph) -> ModuleGraph:
 
 def _binding_value_type(cg: CheckedProgram, module_id: ModuleId, name: str) -> Type:
     """Inferred type of the RHS of the top-level ``let``/``var <name> = ...`` in ``module_id``."""
-    from agm.agl.syntax.nodes import LetDecl, VarDecl
+    from agm.agl.syntax.nodes import LetDecl, VarDecl, simple_let_pattern_name
 
     module = cg.modules[module_id]
     for item in module.resolved.program.body.items:
-        if isinstance(item, (LetDecl, VarDecl)) and item.name == name:
+        if isinstance(item, VarDecl) and item.name == name:
+            return module.node_types[item.value.node_id]
+        if isinstance(item, LetDecl) and simple_let_pattern_name(item.pattern) == name:
             return module.node_types[item.value.node_id]
     raise AssertionError(f"no top-level binding named {name!r} in {module_id}")
 

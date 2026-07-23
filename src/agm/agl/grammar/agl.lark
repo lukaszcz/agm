@@ -303,7 +303,7 @@ func_body: suite_expr | expr
 
 ?binder: let_decl | var_decl | assign_stmt
 
-let_decl: "let" name type_ann? EQ expr
+let_decl: "let" pattern type_ann? EQ expr
 var_decl: "var" name type_ann? EQ expr
 assign_stmt: postfix ASSIGN expr
 
@@ -484,7 +484,7 @@ try_body: suite_expr | (marked_item SEMICOLON)* try_tail
 ?try_tail: or_expr | inline_assign | try_letvar_decl | raise_expr | return_expr
          | if_expr | case_expr | loop_expr
 
-?try_letvar_decl: "let" name type_ann? EQ try_value -> let_decl
+?try_letvar_decl: "let" pattern type_ann? EQ try_value -> let_decl
                  | "var" name type_ann? EQ try_value -> var_decl
 
 ?try_value: or_expr | raise_expr | return_expr | if_expr | case_expr | loop_expr

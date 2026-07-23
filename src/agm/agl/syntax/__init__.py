@@ -92,6 +92,7 @@ from agm.agl.syntax.nodes import (
     VarRef,
     WildcardPattern,
     assign_target_root_name,
+    simple_let_pattern_name,
 )
 from agm.agl.syntax.spans import SourceSpan
 from agm.agl.syntax.types import (
@@ -163,6 +164,7 @@ __all__ = [
     "IndexTarget",
     "AssignTarget",
     "assign_target_root_name",
+    "simple_let_pattern_name",
     # expressions
     "Block",
     "VarRef",

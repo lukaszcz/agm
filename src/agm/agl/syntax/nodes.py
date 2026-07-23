@@ -846,13 +846,27 @@ Pattern = WildcardPattern | LiteralPattern | VarPattern | AsPattern | Constructo
 
 @dataclass(frozen=True, slots=True)
 class LetDecl:
-    """``let name [: type] = expr`` — immutable binding (scopes over continuation)."""
+    """``let pattern [: type] = expr`` — immutable binding (scopes over continuation).
 
-    name: str
+    Pattern-bearing lets are represented uniformly in the AST. Downstream
+    pattern-binding semantics are introduced by later frontend stages; simple
+    variable and wildcard roots retain the existing binding behavior.
+    """
+
+    pattern: Pattern
     type_ann: TypeExpr | None
     value: Expr
     span: SourceSpan = dc_field(compare=False)
     node_id: int = dc_field(compare=False)
+
+
+def simple_let_pattern_name(pattern: Pattern) -> str | None:
+    """Return the compatibility binding name for a simple let root, if any."""
+    if isinstance(pattern, VarPattern):
+        return pattern.name
+    if isinstance(pattern, WildcardPattern):
+        return "_"
+    return None
 
 
 @dataclass(frozen=True, slots=True)

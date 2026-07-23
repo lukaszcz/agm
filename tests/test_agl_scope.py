@@ -244,7 +244,13 @@ def _make_varref(name: str, line: int = 1) -> VarRef:
 
 
 def _make_let(name: str, value: Expr, line: int = 1) -> LetDecl:
-    return LetDecl(name=name, type_ann=None, value=value, span=_sp(line), node_id=_nid())
+    return LetDecl(
+        pattern=VarPattern(name=name, span=_sp(line), node_id=_nid()),
+        type_ann=None,
+        value=value,
+        span=_sp(line),
+        node_id=_nid(),
+    )
 
 
 def _make_var(name: str, value: Expr, line: int = 1) -> VarDecl:
@@ -407,6 +413,18 @@ class TestBlockScoping:
         line, msg = diag(err)
         assert line == 2
         assert "x" in msg
+
+
+class TestLetPatternCompatibility:
+    def test_destructuring_let_is_rejected_before_it_creates_bindings(self) -> None:
+        err = reject_scope("let Pair(left, right) = value\nleft")
+        line, _ = diag(err)
+        assert line == 1
+
+    def test_wildcard_let_resolves_its_rhs_without_creating_a_binding(self) -> None:
+        resolved = parse_and_resolve("let value = 1\nlet _ = value\n()")
+        assert _ref(resolved, "value").kind is BinderKind.let_binding
+        assert "_" not in resolved.root_scope.bindings
 
 
 class TestWildcardBinders:

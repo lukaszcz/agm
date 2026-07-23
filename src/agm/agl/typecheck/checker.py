@@ -11,7 +11,9 @@ Rules implemented
 2.  Function declarations: parameter/return types resolved; ordering enforced
     (required before defaulted); FunctionSignature registered.
 3.  Binding type inference:
-    - ``let/var name: T = e`` — check ``e`` against ``T``.
+    - ``let pattern: T = e`` — check ``e`` against ``T``; currently only name
+      and wildcard patterns are supported.
+    - ``var name: T = e`` — check ``e`` against ``T``.
     - Other untyped initializers infer from the literal/expression.
     - ``param name[: T] [= default]`` — defaults to ``text`` when unannotated
       and defaultless; otherwise defaults are checked/inferred.
@@ -154,6 +156,7 @@ from agm.agl.syntax.nodes import (
     VarPattern,
     VarRef,
     WildcardPattern,
+    simple_let_pattern_name,
 )
 from agm.agl.syntax.spans import SourceSpan
 from agm.agl.syntax.types import Qualifier, TypeExpr
@@ -956,7 +959,15 @@ class _Checker:
         return BottomType() if isinstance(value_type, BottomType) else UnitType()
 
     def _check_binding(self, stmt: LetDecl | VarDecl) -> Type:
-        if stmt.name == "_":
+        if isinstance(stmt, LetDecl):
+            name = simple_let_pattern_name(stmt.pattern)
+            if name is None:
+                raise AglTypeError(
+                    "Destructuring let patterns are not supported yet.", span=stmt.pattern.span
+                )
+        else:
+            name = stmt.name
+        if name == "_":
             val_type = self._check_boundary_expr(stmt.value, expected=None)
             return self._binder_result(val_type)
 

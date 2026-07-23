@@ -11,8 +11,13 @@ assignment: `x = e` as an item is a syntax error — use `let`/`var` to bind or
 ## `let` — immutable binding
 
 ```ebnf
-let_decl ::= "let" name (":" type_expr)? "=" expr
+let_decl ::= "let" pattern (":" type_expr)? "=" expr
 ```
+
+The annotation follows the complete pattern. The parser accepts every
+[pattern](grammar.md#patterns) shape here; this release retains execution
+semantics only for simple name and `_` roots, while destructuring-let checking
+and execution are introduced separately.
 
 `let` evaluates the initializer, checks it against the annotation (if any),
 and creates an **immutable** binding in the current scope. It scopes over the

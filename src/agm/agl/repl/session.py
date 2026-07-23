@@ -715,6 +715,7 @@ class ReplSession:
             RecordDef,
             TypeAlias,
             VarDecl,
+            simple_let_pattern_name,
         )
         from agm.agl.typecheck.env import TypeEnvironment
 
@@ -725,7 +726,6 @@ class ReplSession:
             EnumDef,
             ExceptionDef,
             FuncDef,
-            LetDecl,
             ParamDecl,
             ProgramDecl,
             RecordDef,
@@ -735,6 +735,12 @@ class ReplSession:
         entry_names = {
             item.name for item in program.body.items if isinstance(item, named_declarations)
         }
+        entry_names.update(
+            name
+            for item in program.body.items
+            if isinstance(item, LetDecl)
+            if (name := simple_let_pattern_name(item.pattern)) is not None
+        )
         for item in program.body.items:
             if isinstance(item, EnumDef):
                 entry_names.update(variant.name for variant in item.variants)
@@ -786,7 +792,7 @@ class ReplSession:
             item.node_id
             for item in program.body.items
             if partial
-            and isinstance(item, named_declarations)
+            and (isinstance(item, LetDecl) or isinstance(item, named_declarations))
             and not _before_failure(item.span.end_offset)
         }
         for name, ref in entry_root.bindings.items():
@@ -919,6 +925,7 @@ class ReplSession:
             RecordDef,
             TypeAlias,
             VarDecl,
+            simple_let_pattern_name,
         )
 
         # A parsed program always has at least one item (empty/comment-only
@@ -927,7 +934,9 @@ class ReplSession:
         # Bare expression (not a binder or declaration) → "expression"
         if not isinstance(last, (Binder, Declaration)):
             return "expression", None
-        if isinstance(last, (LetDecl, VarDecl)):
+        if isinstance(last, LetDecl):
+            return "binding", simple_let_pattern_name(last.pattern)
+        if isinstance(last, VarDecl):
             return "binding", last.name
         if isinstance(
             last,

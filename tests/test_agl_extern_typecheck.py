@@ -30,7 +30,7 @@ from agm.agl.scope import resolve_module
 from agm.agl.scope.program import resolve_program
 from agm.agl.scope.symbols import AglScopeError, ModuleResolution, ScopeNode
 from agm.agl.semantics.types import CastSpec
-from agm.agl.syntax.nodes import Block, FuncDef, Program
+from agm.agl.syntax.nodes import Block, FuncDef, Program, VarPattern
 from agm.agl.syntax.spans import SourceSpan
 from agm.agl.typecheck import (
     AglTypeError,
@@ -278,7 +278,11 @@ class TestExternCallTyping:
 
         program = cp.resolved.program
         g_decl = next(
-            item for item in program.body.items if isinstance(item, LetDecl) and item.name == "g"
+            item
+            for item in program.body.items
+            if isinstance(item, LetDecl)
+            and isinstance(item.pattern, VarPattern)
+            and item.pattern.name == "g"
         )
         assert cp.node_types[g_decl.value.node_id] == FunctionType(
             params=(IntType(),), result=IntType()

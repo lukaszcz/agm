@@ -2883,14 +2883,17 @@ class _Lowerer:
             # ----------------------------------------------------------
             # Binders
             # ----------------------------------------------------------
-            case LetDecl(name="_", value=rhs) | VarDecl(name="_", value=rhs):
+            case LetDecl(pattern=WildcardPattern(), value=rhs) | VarDecl(name="_", value=rhs):
                 return self.lower_expr(rhs)
 
-            case LetDecl(name=name, value=rhs, span=span, node_id=nid):
+            case LetDecl(pattern=VarPattern(name=name), value=rhs, span=span, node_id=nid):
                 sym = self._alloc_sym(nid, name=name, mutable=False, public=top_level)
                 binding_type = self._binding_type(nid)
                 ir_val = self.lower_coerced(rhs, binding_type)
                 return IrBind(location=self._loc(span), symbol=sym, value=ir_val)
+
+            case LetDecl():
+                raise NotImplementedError("destructuring let patterns are not lowered yet")
 
             case VarDecl(name=name, value=rhs, span=span, node_id=nid):
                 sym = self._alloc_sym(nid, name=name, mutable=True, public=top_level)

@@ -796,12 +796,12 @@ class AstBuilder(Transformer):
     # ------------------------------------------------------------------
 
     def let_decl(self, meta: Meta, args: _Args) -> syntax.LetDecl:
-        # Grammar: "let" name type_ann? EQ expr
-        name_tok = _find_name_token(args)
-        ann, value = _extract_ann_and_value(args[1:])
+        # Grammar: "let" pattern type_ann? EQ expr
+        pattern = next(a for a in args if isinstance(a, _PATTERN_NODE_TYPES))
+        ann, value = _extract_ann_and_value(args)
         span = self._span_from_meta(meta)
         return syntax.LetDecl(
-            name=str(name_tok),
+            pattern=pattern,
             type_ann=ann,
             value=value,
             span=span,

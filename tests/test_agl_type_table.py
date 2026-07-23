@@ -46,7 +46,7 @@ from agm.agl.semantics.types import (
     TypeVarType,
     UnitType,
 )
-from agm.agl.syntax.nodes import LetDecl, ParamKind, VarDecl
+from agm.agl.syntax.nodes import LetDecl, ParamKind, VarDecl, simple_let_pattern_name
 from agm.agl.typecheck import CheckedModule, check_module
 from agm.agl.typecheck.program import check_program
 from tests.agl.ir_harness import make_graph_from_files
@@ -79,7 +79,9 @@ def _check_program(tmp_path: Path, modules: dict[str, str]):
 def _binding_value_type(checked: CheckedModule, name: str):
     """Inferred type of the RHS of the top-level ``let``/``var <name> = ...``."""
     for item in checked.resolved.program.body.items:
-        if isinstance(item, (LetDecl, VarDecl)) and item.name == name:
+        if isinstance(item, VarDecl) and item.name == name:
+            return checked.node_types[item.value.node_id]
+        if isinstance(item, LetDecl) and simple_let_pattern_name(item.pattern) == name:
             return checked.node_types[item.value.node_id]
     raise AssertionError(f"no top-level binding named {name!r}")
 

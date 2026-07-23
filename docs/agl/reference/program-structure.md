@@ -132,9 +132,11 @@ config-file layers.
 
 ## Binders: `let` and `var`
 
-`let` and `var` bind a name and scope it over the **continuation** — the
-rest of the block and any enclosing continuation that consumes the block. A
-final binder makes its block `unit`-valued unless its initializer exits, in
+`let` carries a pattern; `var` binds a single mutable name. Both scope their
+binding over the **continuation** — the rest of the block and any enclosing
+continuation that consumes the block. Currently, only a name or `_` is
+supported as a `let` pattern; destructuring patterns are parsed but rejected.
+A final binder makes its block `unit`-valued unless its initializer exits, in
 which case the block is bottom-valued.
 
 ```agl

@@ -144,6 +144,7 @@ from agm.agl.syntax.nodes import (
     VarPattern,
     VarRef,
     assign_target_root_name,
+    simple_let_pattern_name,
 )
 from agm.agl.syntax.spans import SourceSpan
 from agm.agl.syntax.types import AppliedT, NameT, Qualifier
@@ -1068,32 +1069,38 @@ class _Resolver:
     # ------------------------------------------------------------------
 
     def _resolve_let(self, node: LetDecl) -> None:
-        self._resolve_binding(node, mutable=False, kind=BinderKind.let_binding)
+        name = simple_let_pattern_name(node.pattern)
+        if name is None:
+            raise AglScopeError(
+                "Destructuring let patterns are not supported yet.", span=node.pattern.span
+            )
+        self._resolve_binding(node, name=name, mutable=False, kind=BinderKind.let_binding)
 
     def _resolve_var(self, node: VarDecl) -> None:
-        self._resolve_binding(node, mutable=True, kind=BinderKind.var_binding)
+        self._resolve_binding(node, name=node.name, mutable=True, kind=BinderKind.var_binding)
 
     def _resolve_binding(
         self,
         node: LetDecl | VarDecl,
         *,
+        name: str,
         mutable: bool,
         kind: BinderKind,
     ) -> None:
-        self._check_not_reserved(node.name, node.span)
+        self._check_not_reserved(name, node.span)
         # Resolve RHS before defining the name (lambda non-recursion).
         self._resolve_expr(node.value)
-        if node.name == "_":
+        if name == "_":
             return
         ref = BindingRef(
-            name=node.name,
+            name=name,
             mutable=mutable,
             decl_span=node.span,
             decl_node_id=node.node_id,
             kind=kind,
             module_id=self._module_id,
         )
-        self._define(node.name, ref)
+        self._define(name, ref)
 
     def _resolve_assign(self, node: AssignStmt) -> None:
         target = node.target

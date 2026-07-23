@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import decimal
 from collections.abc import Mapping
-from dataclasses import fields, is_dataclass
+from dataclasses import fields, is_dataclass, replace
 from inspect import Parameter, signature
 from pathlib import Path
 
@@ -97,7 +97,7 @@ from agm.agl.semantics.types import (
     TypeVarType,
     UnitType,
 )
-from agm.agl.syntax.nodes import Case, Placeholder
+from agm.agl.syntax.nodes import Case, ConstructorPattern, LetDecl, Placeholder
 from agm.agl.typecheck import check_module
 from agm.agl.typecheck.env import CheckedModule
 from tests._agl_helpers import enum_type, record_type, type_table_for
@@ -852,6 +852,23 @@ class TestBindingLowering:
         output = evaluate_ir_output('let _ = print "first"\nvar _ = print "second"\n()')
 
         assert output == "first\nsecond\n"
+
+    def test_lowerer_rejects_a_destructuring_let_from_a_checked_artifact(self) -> None:
+        source = "let value = 1"
+        checked = _check(source)
+        (let,) = checked.resolved.program.body.items
+        assert isinstance(let, LetDecl)
+        pattern = ConstructorPattern(
+            qualifier=None,
+            name="Pair",
+            positional=(),
+            named=(),
+            span=let.pattern.span,
+            node_id=let.pattern.node_id,
+        )
+
+        with pytest.raises(NotImplementedError):
+            _make_lowerer(checked, source).lower_item(replace(let, pattern=pattern))
 
     def test_symbol_public_name(self) -> None:
         prog = _lower("let myvar: int = 1\n()")

@@ -17,7 +17,7 @@ Usage::
 
     class Printer(Visitor):
         def visit_LetDecl(self, node: LetDecl) -> None:
-            print(f"let {node.name}")
+            print(f"let {node.pattern}")
 
     printer = Printer()
     walk(program, printer.dispatch)
@@ -468,6 +468,7 @@ def walk(node: object, callback: Callable[[object], None]) -> None:
 
     # --- Binder nodes ---
     elif isinstance(node, LetDecl):
+        walk(node.pattern, callback)
         if node.type_ann is not None:
             walk(node.type_ann, callback)
         walk(node.value, callback)

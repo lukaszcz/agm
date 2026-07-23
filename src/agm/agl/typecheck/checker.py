@@ -87,6 +87,7 @@ from agm.agl.semantics.types import (
     UnitType,
     cast_classification,
     contains_inference_var,
+    free_type_vars,
     is_assignable,
     substitute,
 )
@@ -1838,43 +1839,61 @@ class _Checker:
             callee_kind=callee_kind,
         )
 
+    @staticmethod
+    def _store_or_clear[T](table: dict[int, T], node_id: int, value: T, *, keep: bool) -> None:
+        """Record ``value`` for ``node_id`` when ``keep`` holds, otherwise clear it."""
+        if keep:
+            table[node_id] = value
+        else:
+            table.pop(node_id, None)
+
     def _set_inferred_return_expr_provenance(self, node_id: int, declaration_ids: set[int]) -> None:
         """Record candidate-return evidence for one expression's static type."""
-        if declaration_ids:
-            self._inferred_return_expr_provenance[node_id] = set(declaration_ids)
-        else:
-            self._inferred_return_expr_provenance.pop(node_id, None)
+        self._store_or_clear(
+            self._inferred_return_expr_provenance,
+            node_id,
+            set(declaration_ids),
+            keep=bool(declaration_ids),
+        )
 
     def _set_inferred_return_binding_provenance(
         self, node_id: int, declaration_ids: set[int]
     ) -> None:
         """Record candidate-return evidence retained by an unannotated binding."""
-        if declaration_ids:
-            self._inferred_return_binding_provenance[node_id] = set(declaration_ids)
-        else:
-            self._inferred_return_binding_provenance.pop(node_id, None)
+        self._store_or_clear(
+            self._inferred_return_binding_provenance,
+            node_id,
+            set(declaration_ids),
+            keep=bool(declaration_ids),
+        )
 
     def _set_generic_function_expr_result_dependencies(
         self, node_id: int, dependencies: tuple[bool, ...]
     ) -> None:
         """Record which arguments of a generic function value select its result."""
-        if any(dependencies):
-            self._generic_function_expr_result_dependencies[node_id] = dependencies
-        else:
-            self._generic_function_expr_result_dependencies.pop(node_id, None)
+        self._store_or_clear(
+            self._generic_function_expr_result_dependencies,
+            node_id,
+            dependencies,
+            keep=any(dependencies),
+        )
 
     def _set_generic_function_binding_result_dependencies(
         self, node_id: int, dependencies: tuple[bool, ...]
     ) -> None:
         """Retain a function value's result dependencies across a binding."""
-        if any(dependencies):
-            self._generic_function_binding_result_dependencies[node_id] = dependencies
-        else:
-            self._generic_function_binding_result_dependencies.pop(node_id, None)
+        self._store_or_clear(
+            self._generic_function_binding_result_dependencies,
+            node_id,
+            dependencies,
+            keep=any(dependencies),
+        )
 
     def _inferred_return_provenance_for_exprs(self, exprs: Sequence[Expr]) -> set[int]:
         """Return the conservative union of the expressions' static evidence."""
         result: set[int] = set()
+        if not self._inferred_return_expr_provenance:
+            return result
         for expr in exprs:
             result.update(self._inferred_return_expr_provenance.get(expr.node_id, ()))
         return result
@@ -1886,6 +1905,8 @@ class _Checker:
 
     def _provenance_for_result(self, result_type: Type, exprs: Sequence[Expr]) -> set[int]:
         """Keep evidence only from children that choose this result's static type."""
+        if not self._inferred_return_expr_provenance:
+            return set()
         return self._inferred_return_provenance_for_exprs(
             tuple(expr for expr in exprs if self._node_type(expr.node_id) == result_type)
         )
@@ -1900,9 +1921,10 @@ class _Checker:
     def _provenance_for_index_result(self, result_type: Type, obj: Expr) -> set[int]:
         """Carry container evidence only when indexing exposes its element/value type."""
         obj_type = self._node_type(obj.node_id)
-        if isinstance(obj_type, ListType) and obj_type.elem == result_type:
-            return self._inferred_return_provenance_for_exprs((obj,))
-        if isinstance(obj_type, DictType) and obj_type.value == result_type:
+        exposes_result = (isinstance(obj_type, ListType) and obj_type.elem == result_type) or (
+            isinstance(obj_type, DictType) and obj_type.value == result_type
+        )
+        if exposes_result:
             return self._inferred_return_provenance_for_exprs((obj,))
         return set()
 
@@ -1920,9 +1942,7 @@ class _Checker:
         assert signature is not None
         assert field in signature.field_names
         field_template = signature.field_templates[signature.field_names.index(field)]
-        return bool(
-            self._rigid_type_vars(signature.result_template) & self._rigid_type_vars(field_template)
-        )
+        return bool(free_type_vars(signature.result_template) & free_type_vars(field_template))
 
     def _provenance_for_field_result(
         self, owner_type: RecordType, field: str, obj: Expr
@@ -1940,7 +1960,7 @@ class _Checker:
         bound_exprs: Mapping[str, Expr],
     ) -> None:
         """Propagate field evidence only through generic result type parameters."""
-        result_vars = self._rigid_type_vars(result_template)
+        result_vars = free_type_vars(result_template)
         self._set_inferred_return_expr_provenance(
             node_id,
             self._inferred_return_provenance_for_exprs(
@@ -1948,7 +1968,7 @@ class _Checker:
                     expr
                     for name, expr in bound_exprs.items()
                     if not isinstance(expr, Placeholder)
-                    and result_vars.intersection(self._rigid_type_vars(field_templates[name]))
+                    and result_vars.intersection(free_type_vars(field_templates[name]))
                 )
             ),
         )
@@ -1984,33 +2004,13 @@ class _Checker:
         with self._frame_direct_candidate_use(exprs=(expr,), binding_node_ids=binding_node_ids):
             self._assert_assignable(value_type, target_type, span)
 
-    @staticmethod
-    def _rigid_type_vars(typ: Type) -> frozenset[str]:
-        """Return rigid variables on which a generic static type depends."""
-        match typ:
-            case TypeVarType():
-                return frozenset((typ.name,))
-            case ListType():
-                return _Checker._rigid_type_vars(typ.elem)
-            case DictType():
-                return _Checker._rigid_type_vars(typ.value)
-            case RecordType() | EnumType():
-                return frozenset().union(*(_Checker._rigid_type_vars(arg) for arg in typ.type_args))
-            case FunctionType():
-                return frozenset().union(
-                    *(_Checker._rigid_type_vars(part) for part in (*typ.params, typ.result))
-                )
-            case _:
-                return frozenset()
-
     def _generic_function_result_dependencies(
         self, signature: FunctionSignature
     ) -> tuple[bool, ...]:
         """Return whether each generic parameter's static type selects the result."""
-        result_vars = self._rigid_type_vars(signature.result)
+        result_vars = free_type_vars(signature.result)
         return tuple(
-            bool(result_vars.intersection(self._rigid_type_vars(param.type)))
-            for param in signature.params
+            bool(result_vars.intersection(free_type_vars(param.type))) for param in signature.params
         )
 
     def _generic_result_provenance(
@@ -3111,18 +3111,16 @@ class _Checker:
 
     def _candidate_equality_can_defer(self, left: Type, right: Type) -> bool:
         """Return whether unresolved candidate equality operands may be deferred."""
-        if self._candidate_session is None:
-            return False
-        engine = self._active_inference_engine()
-        resolved = tuple(engine.zonk(typ) for typ in (left, right))
-        if not any(contains_inference_var(typ) for typ in resolved):
-            return False
-        return all(
-            contains_inference_var(typ)
-            or isinstance(typ, BottomType)
-            or comparable_types(typ, typ, self._env.type_table)
-            for typ in resolved
-        )
+
+        def can_defer(resolved: tuple[Type, ...]) -> bool:
+            return all(
+                contains_inference_var(typ)
+                or isinstance(typ, BottomType)
+                or comparable_types(typ, typ, self._env.type_table)
+                for typ in resolved
+            )
+
+        return self._candidate_operation_can_defer((left, right), (), can_defer=can_defer)
 
     def _check_binary_op(self, node: BinaryOp) -> Type:
         left_type = self._check_expr(node.left, expected=None)
@@ -3215,22 +3213,13 @@ class _Checker:
         if op == BinOp.IN:
             return self._check_in_op(left_type, right_type, node.span)
 
-        if op == BinOp.ADD:
-            result = self._check_add(left_type, right_type, node.span)
-            self._set_inferred_return_expr_provenance(
-                node.node_id, self._provenance_for_result(result, (node.left, node.right))
-            )
-            return result
-
-        if op == BinOp.SUB:
-            result = self._check_numeric_binop(left_type, right_type, node.span, "-")
-            self._set_inferred_return_expr_provenance(
-                node.node_id, self._provenance_for_result(result, (node.left, node.right))
-            )
-            return result
-
-        if op == BinOp.MUL:
-            result = self._check_numeric_binop(left_type, right_type, node.span, "*")
+        if op in (BinOp.ADD, BinOp.SUB, BinOp.MUL):
+            if op == BinOp.ADD:
+                result = self._check_add(left_type, right_type, node.span)
+            else:
+                result = self._check_numeric_binop(
+                    left_type, right_type, node.span, "-" if op == BinOp.SUB else "*"
+                )
             self._set_inferred_return_expr_provenance(
                 node.node_id, self._provenance_for_result(result, (node.left, node.right))
             )
@@ -3770,21 +3759,28 @@ class _Checker:
                 )
         return unified
 
+    @staticmethod
+    def _widen_pair(left: Type, right: Type) -> Type | None:
+        """Return the equality/int-decimal widening of two concrete types, or None."""
+        if left == right:
+            return left
+        if isinstance(left, IntType) and isinstance(right, DecimalType):
+            return DecimalType()
+        if isinstance(left, DecimalType) and isinstance(right, IntType):
+            return left
+        return None
+
     def _common_concrete_types(self, types: Sequence[Type], span: SourceSpan, subject: str) -> Type:
         """Apply the ordinary equality/widening rules to already-concrete evidence."""
         result = types[0]
         for typ in types[1:]:
-            if result == typ:
-                continue
-            if isinstance(result, IntType) and isinstance(typ, DecimalType):
-                result = DecimalType()
-            elif isinstance(result, DecimalType) and isinstance(typ, IntType):
-                continue
-            else:
+            widened = self._widen_pair(result, typ)
+            if widened is None:
                 raise AglTypeError(
                     f"{subject} have incompatible types: '{result!r}' and '{typ!r}'.",
                     span=span,
                 )
+            result = widened
         return result
 
     def _common_types(
@@ -4182,18 +4178,15 @@ class _Checker:
             )
             if provisional is not None:
                 result_type = provisional
-            elif result_type == branch_type:
                 continue
-            elif isinstance(result_type, IntType) and isinstance(branch_type, DecimalType):
-                result_type = DecimalType()
-            elif isinstance(result_type, DecimalType) and isinstance(branch_type, IntType):
-                continue
-            else:
+            widened = self._widen_pair(result_type, branch_type)
+            if widened is None:
                 raise AglTypeError(
                     f"{construct} branches have incompatible types: "
                     f"'{result_type!r}' and '{branch_type!r}'.",
                     span=span,
                 )
+            result_type = widened
         return result_type
 
     # ------------------------------------------------------------------
@@ -4280,6 +4273,7 @@ def _check_prepared_module(
     env: TypeEnvironment,
     module_id: ModuleId = ENTRY_ID,
     check_inhabitation: bool = True,
+    prepare_headers: bool = True,
     infer_candidates: bool = True,
     candidate_records: Mapping[int, FunctionSignatureRecord] | None = None,
 ) -> CheckedModule:
@@ -4289,19 +4283,24 @@ def _check_prepared_module(
     namespace appropriate to their mode.  ``_Checker`` owns expression-region
     close/finalize validation, so this boundary never returns provisional
     inference state.
-    """
-    builder = _TypeBuilder(env, module_id=module_id)
-    builder.collect(resolved.program, check_inhabitation=check_inhabitation)
 
-    header_checker = _Checker(
-        env=env,
-        resolved=resolved,
-        capabilities=capabilities,
-        module_id=module_id,
-    )
-    for item in resolved.program.body.items:
-        if isinstance(item, FuncDef):
-            header_checker._preregister_funcdef(item)
+    ``prepare_headers`` runs the type-table build and function-header
+    pre-registration; the program driver disables it because Phase 3 already
+    seeded this environment before candidate inference.
+    """
+    if prepare_headers:
+        builder = _TypeBuilder(env, module_id=module_id)
+        builder.collect(resolved.program, check_inhabitation=check_inhabitation)
+
+        header_checker = _Checker(
+            env=env,
+            resolved=resolved,
+            capabilities=capabilities,
+            module_id=module_id,
+        )
+        for item in resolved.program.body.items:
+            if isinstance(item, FuncDef):
+                header_checker._preregister_funcdef(item)
     if infer_candidates:
         inferred_records = infer_module_component_candidates(
             ModuleCandidateComponent.singleton(resolved, env, capabilities, module_id)

@@ -932,6 +932,7 @@ def check_program(
             env=module_envs[mid],
             module_id=mid,
             check_inhabitation=False,
+            prepare_headers=False,
             infer_candidates=False,
             candidate_records=program_func_sig_table,
         )

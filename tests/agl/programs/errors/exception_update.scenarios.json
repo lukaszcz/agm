@@ -1,0 +1,28 @@
+{
+  "scenarios": [
+    {
+      "name": "no_trigger",
+      "params": {"trigger": false, "bump": 0},
+      "expect": {
+        "stdout": "calm\n",
+        "calls": {}
+      }
+    },
+    {
+      "name": "rewrapped_keeps_concrete_type",
+      "params": {"trigger": true, "bump": 10},
+      "expect": {
+        "stdout": "boom final 11 (ctx: boom)\n",
+        "calls": {}
+      }
+    },
+    {
+      "name": "zero_bump",
+      "params": {"trigger": true, "bump": 0},
+      "expect": {
+        "stdout": "boom final 1 (ctx: boom)\n",
+        "calls": {}
+      }
+    }
+  ]
+}

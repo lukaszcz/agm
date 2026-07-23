@@ -452,7 +452,11 @@ A `STRING` pattern may not contain interpolation.
 
 ```ebnf
 expr      ::= case_expr | if_expr | loop | try_expr | raise_expr
-            | return_expr | lambda_expr | or_expr
+            | return_expr | record_update | lambda_expr | or_expr
+
+record_update ::= update_target "with" field_update ("," field_update)*
+update_target ::= record_update | or_expr     (* chaining is left-associative *)
+field_update  ::= field_name "=" or_expr
 
 or_expr       ::= infix_expr
 infix_expr    ::= infix_operand (infix_op infix_operand)*
@@ -545,12 +549,19 @@ the body. Parameter types are always required.
 
 ```ebnf
 arg_list        ::= arg ("," arg)* ","?
-arg             ::= expr                         (* positional *)
+arg             ::= element_expr                 (* positional *)
                   | placeholder_arg              (* positional hole *)
-                  | field_name "=" expr          (* named *)
+                  | field_name "=" element_expr  (* named *)
                   | field_name "=" placeholder_arg (* named hole *)
 placeholder_arg ::= "?" | "?<digits>"
 ```
+
+`element_expr` is `expr` without a bare record update: in comma-separated
+element positions (call arguments, list and dict literal elements) a record
+update — including one that forms the body of an inline lambda — must be
+parenthesized, so that its update list cannot be confused with the enclosing
+comma-separated list. See
+[Record update](expressions.md#record-update).
 
 A placeholder is legal only as a whole parenthesized call argument: either a
 positional argument (`f(?, x)`) or the value of a named argument (`f(x = ?)`).
@@ -569,12 +580,14 @@ constructors) and is triggered solely by the parameter's zone.
 ## Literals
 
 ```ebnf
-list_literal ::= "[" (expr ("," expr)* ","?)? "]"
+list_literal ::= "[" (element_expr ("," element_expr)* ","?)? "]"
 
 dict_literal ::= "{" (dict_entry ("," dict_entry)* ","?)? "}"
-dict_entry   ::= STRING ":" expr        (* no interpolation in keys *)
-               | field_name ":" expr    (* shorthand for the string key *)
+dict_entry   ::= STRING ":" element_expr    (* no interpolation in keys *)
+               | field_name ":" element_expr (* shorthand for the string key *)
 ```
+
+`element_expr` excludes bare record updates — see [Calls](#calls).
 
 ## Templates
 

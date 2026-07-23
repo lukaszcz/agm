@@ -221,6 +221,20 @@ class NamedArg:
 
 
 @dataclass(frozen=True, slots=True)
+class RecordUpdate:
+    """A functional update: ``target with field = value, ...``.
+
+    Produces a copy of the record or exception value with the listed fields
+    replaced.  Updates reuse :class:`NamedArg` for the ``field = value`` pairs.
+    """
+
+    target: Expr
+    updates: tuple[NamedArg, ...]
+    span: SourceSpan = dc_field(compare=False)
+    node_id: int = dc_field(compare=False)
+
+
+@dataclass(frozen=True, slots=True)
 class Placeholder:
     """A call-argument placeholder.
 
@@ -735,6 +749,7 @@ Expr = (
     | IsTest
     | TypeApply
     | Call
+    | RecordUpdate
     | Lambda
     | Block
     | If

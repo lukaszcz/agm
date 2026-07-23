@@ -179,6 +179,19 @@ for its fields; `trace_id` is injected by the runtime and is not written
 in source when omitted. The same construction rule applies to user-declared
 exception types. `Abort` is the conventional type for user-initiated failures.
 
+Exception values support the
+[record update](expressions.md#record-update) operator. Field names are
+checked against the binding's static exception type, but the copy preserves
+the value's **concrete** exception type — updating through a
+`catch Exception as e` binding and re-raising keeps the original exception
+type catchable:
+
+<!-- agl-check: fragment -->
+```agl
+catch Exception as e =>
+  raise (e with message = "while deploying: ${e.message}")
+```
+
 ## Built-in exception catalog
 
 Field lists below are in addition to the base `message` and `trace_id`.

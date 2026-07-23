@@ -1,0 +1,20 @@
+{
+  "scenarios": [
+    {
+      "name": "content_reset",
+      "params": {"threshold": 1},
+      "expect": {
+        "stdout": "20\ntwenty\nnums\n0\n2\n",
+        "calls": {}
+      }
+    },
+    {
+      "name": "label_kept",
+      "params": {"threshold": 5},
+      "expect": {
+        "stdout": "20\ntwenty\nkept\n1\n2\n",
+        "calls": {}
+      }
+    }
+  ]
+}

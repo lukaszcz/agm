@@ -1,0 +1,16 @@
+# Record update on a recursive call whose return type is inferred: the
+# update's result type follows the target even before the recursion's
+# return type is solved.
+record Tally(count: int, last: int)
+
+param n: int
+
+def build(k: int)
+  if k <= 0 =>
+    Tally(count = 0, last = 0)
+  else =>
+    build(k - 1) with count = k, last = k * 10
+
+let t = build(n)
+print t.count
+print t.last

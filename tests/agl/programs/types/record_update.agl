@@ -1,0 +1,40 @@
+# Functional record update with `with`: multi-field updates, chaining,
+# original-value preservation, updates in function bodies, assignments, loops,
+# and parenthesized use in argument and comparison positions.
+record Point(x: int, y: int, z: int)
+
+record Issue
+  title: text
+  severity: int
+
+param bump: int
+
+agent tracker
+
+def shifted(p: Point, dz: int) -> Point = p with z = p.z + dz
+
+let p = Point(1, 2, 3)
+let q = p with x = 7, z = 4
+print(q == Point(7, 2, 4))
+print(p == Point(1, 2, 3))
+print q.y
+
+let chained = p with x = 10 with y = 20 with x = p.x + bump
+print chained.x
+print chained.y
+print chained.z
+
+print(shifted(q, 10) == Point(7, 2, 14))
+print(shifted((p with y = 0), 1) == Point(1, 0, 4))
+
+var acc = Point(0, 0, 0)
+for i in [1, 2, 3] do
+  acc := acc with x = acc.x + i, y = i
+done
+print acc.x
+print acc.y
+
+let fetched: Issue = ask("Fetch the top issue.", agent = tracker)
+let escalated = if fetched.severity >= 3 => (fetched with severity = fetched.severity + bump) | else => fetched
+print escalated.title
+print escalated.severity

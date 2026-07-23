@@ -109,6 +109,7 @@ from agm.agl.ir.nodes import (
     IrTemplateValue,
     IrTry,
     IrUnary,
+    IrUpdateRecord,
     IrVariantIs,
     UseDefault,
 )
@@ -228,6 +229,7 @@ from agm.agl.syntax.nodes import (
     ProgramDecl,
     Raise,
     RecordDef,
+    RecordUpdate,
     Return,
     StringLit,
     Template,
@@ -647,6 +649,10 @@ class _Lowerer:
                     self._scan_captures(na.value, local_ids, captured)
             case FieldAccess():
                 self._scan_captures(node.obj, local_ids, captured)
+            case RecordUpdate():
+                self._scan_captures(node.target, local_ids, captured)
+                for update in node.updates:
+                    self._scan_captures(update.value, local_ids, captured)
             case IndexAccess():
                 self._scan_captures(node.obj, local_ids, captured)
                 self._scan_captures(node.index, local_ids, captured)
@@ -1125,6 +1131,21 @@ class _Lowerer:
                     location=self._loc(span),
                     value=self.lower_expr(obj_expr),
                     field=field_name,
+                )
+
+            # ----------------------------------------------------------
+            # Record update → IrUpdateRecord
+            # ----------------------------------------------------------
+            case RecordUpdate(target=target_expr, updates=updates, span=span):
+                target_type = self._node_type(target_expr.node_id)
+                field_types = self._constructor_field_types(target_type, None)
+                ir_updates = tuple(
+                    (u.name, self.lower_coerced(u.value, field_types[u.name])) for u in updates
+                )
+                return IrUpdateRecord(
+                    location=self._loc(span),
+                    value=self.lower_expr(target_expr),
+                    updates=ir_updates,
                 )
 
             # ----------------------------------------------------------

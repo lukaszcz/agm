@@ -23,7 +23,7 @@ if
       let map_id: (list[int]) -> list[int] = map_one(id, ?)
       let mapped = map_id([n])
       print(mapped[0])
-      let map_render = map_one(fn(x: int) -> text => "v=${x}", ?)
+      let map_render = map_one(fn(x: int) -> text => "v=%{x}", ?)
       let rendered = map_render([3])
       print(rendered[0])
   | mode == "expected" =>

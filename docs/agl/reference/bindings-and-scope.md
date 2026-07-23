@@ -23,7 +23,7 @@ continuation that consumes the block. A block ending in a bare `let` has type
 <!-- agl-check: fragment -->
 ```agl
 let review: Review = ask(
-  "Review ${artifact}",
+  "Review %{artifact}",
   agent = reviewer,
   on_parse_error = Retry(n = 2)
 )
@@ -52,7 +52,7 @@ enclosing continuation:
 
 <!-- agl-check: fragment -->
 ```agl
-var artifact: text = ask("Implement ${spec}", agent = impl)
+var artifact: text = ask("Implement %{spec}", agent = impl)
 ```
 
 ## `:=` — destructive assignment
@@ -234,7 +234,7 @@ and held in `list[agent]`:
 
 ```agl
 agent reviewer
-agent impl = "claude -p %{PROMPT_FILE}"
+agent impl = "claude -p \%{PROMPT_FILE}"
 
 let agents: list[agent] = [reviewer, impl]
 ```
@@ -244,7 +244,7 @@ A declared agent is a first-class value. It is passed to `ask` via the
 
 <!-- agl-check: fragment -->
 ```agl
-let r: Review = ask("Review ${artifact}", agent = reviewer)
+let r: Review = ask("Review %{artifact}", agent = reviewer)
 ```
 
 Rules:
@@ -399,8 +399,8 @@ scope ends:
 let x = "outer"
 if condition =>
   let x = "inner"    # shadows outer x
-  ask "Uses ${x}"    # inner
-ask "Uses ${x}"      # outer
+  ask "Uses %{x}"    # inner
+ask "Uses %{x}"      # outer
 ```
 
 ### Mutation across scopes
@@ -409,11 +409,11 @@ ask "Uses ${x}"      # outer
 
 <!-- agl-check: fragment -->
 ```agl
-var artifact: text = ask("Implement ${spec}", agent = impl)
+var artifact: text = ask("Implement %{spec}", agent = impl)
 
 case review of
   | Fail(issues) =>
-      artifact := ask("Fix ${issues} in ${artifact}", agent = impl)
+      artifact := ask("Fix %{issues} in %{artifact}", agent = impl)
   | Pass => ()
 ```
 
@@ -427,7 +427,7 @@ before the body and cannot see its bindings:
 <!-- agl-check: fragment -->
 ```agl
 do[5]
-  let review: Review = ask("Review ${artifact}", agent = reviewer)
+  let review: Review = ask("Review %{artifact}", agent = reviewer)
 until review is Pass
 ```
 
@@ -453,7 +453,7 @@ are evaluated in the function's **definition** scope (not the call site):
 let default_limit = 3
 
 def summarize(doc: text, limit: int = default_limit) -> text =
-  "[${limit}] ${doc}"
+  "[%{limit}] %{doc}"
 ```
 
 `default_limit` is resolved at definition time, not call time.

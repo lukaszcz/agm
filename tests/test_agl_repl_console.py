@@ -358,10 +358,10 @@ class TestLexer:
     @pytest.mark.parametrize(
         "line",
         [
-            '"${x}"',
-            '"a${x}"',
-            '"a${x}b"',
-            '"${x}${y}"',
+            '"%{x}"',
+            '"a%{x}"',
+            '"a%{x}b"',
+            '"%{x}%{y}"',
         ],
     )
     def test_string_interpolation_is_not_duplicated(self, line: str) -> None:
@@ -582,10 +582,10 @@ class TestCompleter:
 
     def test_no_completion_after_interpolation_opener(self) -> None:
         # Regression: when completions were offered with an empty word after
-        # punctuation, typing `${x}` interactively could accept a stale
-        # completion and leave `${${x}` in the buffer.
+        # punctuation, typing `%{x}` interactively could accept a stale
+        # completion and leave `%{%{x}` in the buffer.
         completer = AglCompleter(ReplSession())
-        assert _completions(completer, "${") == []
+        assert _completions(completer, "%{") == []
 
     @pytest.mark.parametrize("quote", ['"""', "'''"])
     def test_no_completion_inside_unterminated_triple_quoted_string(self, quote: str) -> None:

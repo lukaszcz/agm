@@ -2999,7 +2999,7 @@ class _Checker:
         return TextType()
 
     def _check_template_literal(self, expr: ListLit | DictLit) -> Type:
-        """Check a non-empty container literal in a ``${ … }`` context."""
+        """Check a non-empty container literal in a ``%{ … }`` context."""
         if isinstance(expr, ListLit):
             for elem in expr.elements:
                 self._check_template_literal_child(elem)

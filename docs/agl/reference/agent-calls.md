@@ -8,9 +8,9 @@ agent invocations use the built-in `ask` function:
 
 <!-- agl-check: fragment -->
 ```agl
-ask "Summarize ${topic}"
-ask("Review this artifact:\n${artifact}", agent = reviewer)
-ask("Review ${artifact}", agent = reviewer, on_parse_error = Retry(n = 2))
+ask "Summarize %{topic}"
+ask("Review this artifact:\n%{artifact}", agent = reviewer)
+ask("Review %{artifact}", agent = reviewer, on_parse_error = Retry(n = 2))
 ```
 
 ## `ask` — the agent call function
@@ -45,7 +45,7 @@ With named arguments, parentheses are required:
 
 <!-- agl-check: fragment -->
 ```agl
-let r: Review = ask("Review ${artifact}", agent = reviewer)
+let r: Review = ask("Review %{artifact}", agent = reviewer)
 ```
 
 ## Agents as values
@@ -55,8 +55,11 @@ declaration introduces a name binding of type `agent` in the top-level scope:
 
 ```agl
 agent reviewer
-agent planner = "claude -p %{PROMPT_FILE}"
+agent planner = "claude -p \%{PROMPT_FILE}"
 ```
+
+A runner hint may include the host prompt-file placeholder; write it as
+`\%{PROMPT_FILE}` so it is literal text in the template.
 
 Agent values may be stored, passed to functions, and held in lists — they
 are ordinary value bindings:
@@ -83,7 +86,7 @@ agent_decl ::= "agent" name ("=" STRING)?
 name enters the root scope as an immutable binding of type `agent`. The
 optional `= "…"` string attaches a *runner hint* consumed by the host and
 has no language effect. The runner string must be a static literal — no
-`${…}` interpolation.
+`%{…}` interpolation.
 
 Declaring the same agent name twice, or declaring `ask` or `exec` as an
 agent name, is a static error.
@@ -230,7 +233,7 @@ that supports the call's target type; both are checked statically.
 
 <!-- agl-check: fragment -->
 ```agl
-let r: Review = ask("Review ${a}", agent = reviewer, format = "json")
+let r: Review = ask("Review %{a}", agent = reviewer, format = "json")
 ```
 
 ### `strict_json`
@@ -261,7 +264,7 @@ enum ParsePolicy
 <!-- agl-check: fragment -->
 ```agl
 let r: Review = ask(
-  "Review ${artifact}",
+  "Review %{artifact}",
   agent = reviewer,
   on_parse_error = Retry(n = 2)
 )
@@ -444,8 +447,8 @@ request value.
 
 <!-- agl-check: fragment -->
 ```agl
-let r = ask-request("Summarize ${topic}")
-let r = ask-request::[Review]("Review ${artifact}", agent = reviewer)
+let r = ask-request("Summarize %{topic}")
+let r = ask-request::[Review]("Review %{artifact}", agent = reviewer)
 ```
 
 ### Target type
@@ -456,7 +459,7 @@ result type is fixed to `AgentRequest`), so the target type is given
 
 <!-- agl-check: fragment -->
 ```agl
-let r = ask-request::[Review]("Review ${artifact}")
+let r = ask-request::[Review]("Review %{artifact}")
 let n = ask-request::[int]("How many?")
 ```
 

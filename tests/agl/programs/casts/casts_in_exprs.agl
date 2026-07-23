@@ -12,19 +12,19 @@ let sum = x + y
 let product = x * y
 
 # Cast in string interpolation: render an int as text inline
-let msg = "sum of ${a} and ${b} is ${sum as text}"
+let msg = "sum of %{a} and %{b} is %{sum as text}"
 print msg
 
 # Chained: int as json as text (renders through JSON representation)
-print "json-repr of sum: ${sum as json as text}"
+print "json-repr of sum: %{sum as json as text}"
 
 # Cast in var + accumulation
 var total: int = 0
 total := total + (a as int)
 total := total + (b as int)
 total := total + (a as int)
-print "accumulated: ${total as text}"
+print "accumulated: %{total as text}"
 
 # label annotated with int cast rendered in interpolation
-let annotated = "${label}: result=${product as text}"
+let annotated = "%{label}: result=%{product as text}"
 print annotated

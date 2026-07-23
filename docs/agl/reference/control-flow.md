@@ -22,7 +22,7 @@ if present, must be last; its own `|` is optional:
 <!-- agl-check: fragment -->
 ```agl
 if code is Fail or design is Fail =>
-  artifact := ask("Fix issues:\n${code}\n${design}", agent = impl)
+  artifact := ask("Fix issues:\n%{code}\n%{design}", agent = impl)
 else =>
   ()
 ```
@@ -61,7 +61,7 @@ All branch bodies must also have type `unit`:
 <!-- agl-check: fragment -->
 ```agl
 if res.exit_code != 0 =>
-  print "command failed: ${res.stderr}"
+  print "command failed: %{res.stderr}"
 ```
 
 Because an `else`-less `if` always has type `unit`, it is for effectful
@@ -111,7 +111,7 @@ described in [Pattern matching](pattern-matching.md).
 let next_prompt: text = case action of
   | Stop => "Stop."
   | Continue(prompt) => prompt
-  | Escalate(reason) => "Investigate:\n${reason}"
+  | Escalate(reason) => "Investigate:\n%{reason}"
 ```
 
 ## Loops
@@ -166,10 +166,10 @@ while i < target do[1000]
 done
 
 # bare post-test loop
-var r: Review = ask("Review ${a}", agent = reviewer)
+var r: Review = ask("Review %{a}", agent = reviewer)
 do
   case r of
-    | Fail(issues) => r := ask("Fix ${issues}", agent = impl)
+    | Fail(issues) => r := ask("Fix %{issues}", agent = impl)
     | Pass => break
 until r is Pass
 ```

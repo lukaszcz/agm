@@ -20,7 +20,7 @@ trace_id: text    # links the exception to its record in the run trace
 `Exception` itself is **not constructible** — `raise Exception(…)` is a
 static error. It exists for typing: a wildcard catch binds its variable as
 `Exception`, so only `message`, `trace_id`, and whole-value interpolation
-(`${e}`) are available there. Accessing a subtype field such as `e.raw`
+(`%{e}`) are available there. Accessing a subtype field such as `e.raw`
 requires catching the concrete type.
 
 Programs may declare concrete exception types:
@@ -107,16 +107,16 @@ initializer exits, in which case it has bottom type. See
 ```agl
 try
   let review: Review = ask(
-    "Review ${artifact}",
+    "Review %{artifact}",
     agent = reviewer,
     on_parse_error = Retry(n = 2)
   )
-  print "reviewed: ${review}"
+  print "reviewed: %{review}"
 catch AgentParseError as e =>
-  let report = ask("Explain invalid output:\n${e.raw}", agent = critic)
+  let report = ask("Explain invalid output:\n%{e.raw}", agent = critic)
   raise e
 catch _ as e =>
-  print "unexpected: ${e.message}"
+  print "unexpected: %{e.message}"
 ```
 
 Semantics:

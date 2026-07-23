@@ -3,7 +3,7 @@
 [← Index](index.md)
 
 Every string literal in AgL is a **template**: a sequence of literal text
-fragments and `${…}` interpolation holes. A template evaluates to `text`.
+fragments and `%{…}` interpolation holes. A template evaluates to `text`.
 The lexical forms — single- and triple-quoted strings, escapes, and the
 triple-quoted dedent rule — are specified in
 [Lexical structure](lexical-structure.md). This chapter specifies what
@@ -12,14 +12,15 @@ interpolation *means*.
 ## Interpolation
 
 ```ebnf
-interpolation ::= "${" expr "}"
+interpolation ::= "%{" expr "}"
 ```
 
 The expression may be anything with a **rendering** — a variable, field
 access, arithmetic, a call, a parenthesized `case` or `if` expression. Its
 value is converted to text using the **uniform rendering rule**, the same
 regardless of whether the template appears in an `ask` prompt, a `print`
-argument, an `exec` command, or any other position.
+argument, an `exec` command, or any other position. A percent sign not
+followed by `{` is literal; `\%` produces a literal percent sign.
 
 ## Uniform rendering rules
 
@@ -47,7 +48,7 @@ Scalar text conventions:
   notation — with trailing zeros dropped (`1.50` → `1.5`, `1E+2` → `100`).
 - Nested `text` values (a `text` field inside a record, list element, etc.)
   are emitted as a quoted AgL string literal with full JSON escaping plus
-  `\$` for dollar signs, so they cannot be mis-read as interpolation syntax.
+  `\%` for percent signs, so they cannot be mis-read as interpolation syntax.
 
 No boundary tags or other wrappers are added around interpolated values.
 
@@ -56,10 +57,10 @@ To obtain JSON output use an explicit `as json` cast inside the interpolation:
 <!-- agl-check: fragment -->
 ```agl
 let r: R = R(x = 1)
-print "${r}"           # → R(x = 1)         (AgL render form — the default)
+print "%{r}"           # → R(x = 1)         (AgL render form — the default)
 
 # A json value renders as compact JSON, whether nested or interpolated directly:
-print "${r as json}"   # → {"x": 1}
+print "%{r as json}"   # → {"x": 1}
 ```
 
 For indented, multi-line JSON, call `render` explicitly:
@@ -77,7 +78,7 @@ Function values and agent values render as opaque handles in templates:
 
 ```agl
 let f = fn(x: int) => x
-print "function is ${f}"   # function is <function: int -> ?>
+print "function is %{f}"   # function is <function: int -> ?>
 ```
 
 They still cannot be stored in a `json` slot or used where a JSON-shaped value
@@ -92,6 +93,6 @@ commands. See [Shell execution](shell-execution.md) for details.
 
 ## Errors
 
-- Newline inside `${…}` — lexical error.
+- Newline inside `%{…}` — lexical error.
 - Unterminated string, unterminated interpolation, unknown escape — lexical
   errors.

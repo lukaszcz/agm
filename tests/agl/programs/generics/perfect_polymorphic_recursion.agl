@@ -35,7 +35,7 @@ param b: int
 param c: int
 param d: int
 
-let show_int: int -> text = fn(n: int) -> text => "${n}"
+let show_int: int -> text = fn(n: int) -> text => "%{n}"
 
 # Level 0: the base case, no growth yet.
 let level0: Perfect[int] = Single(value = a)

@@ -24,7 +24,7 @@ print width
 
 let note = case grade of
   | Top() => "perfect"
-  | Mid(score) => "mid ${score}"
+  | Mid(score) => "mid %{score}"
   | Low() => "low"
 print note
 

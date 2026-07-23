@@ -26,7 +26,7 @@ def relay[T](value: T, f: T -> T) -> T = f(value)
 def same_lists[T](left: list[T], right: list[T]) -> list[T] = right
 def choose[T](left: T, right: T) -> T = right
 
-def stringify(n: int) -> text = "n=${n}"
+def stringify(n: int) -> text = "n=%{n}"
 
 if
   | mode == "argument_order" =>

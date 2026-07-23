@@ -8000,14 +8000,14 @@ class TestExecCommand:
             "  | Complete(output: text)\n"
             'agent impl = "impl-runner"\n'
             'agent reviewer = "review-runner"\n'
-            'var artifact: text = ask("Implement ${task}", agent = impl)\n'
+            'var artifact: text = ask("Implement %{task}", agent = impl)\n'
             "var review: Review = Pass\n"
             "do[3]\n"
-            '  review := ask("Review ${artifact}", agent = reviewer)\n'
+            '  review := ask("Review %{artifact}", agent = reviewer)\n'
             "  case review of\n"
             "    | Pass() => ()\n"
             "    | Fail(issues) =>\n"
-            '        let fix: Fix = ask("Fix ${issues} in ${artifact}", agent = impl)\n'
+            '        let fix: Fix = ask("Fix %{issues} in %{artifact}", agent = impl)\n'
             "        case fix of\n"
             "          | Complete(output) =>\n"
             "              artifact := output\n"

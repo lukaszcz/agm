@@ -7,14 +7,14 @@ var trail: text = ""
 if
   | mode == "shadow" =>
     let x = 2
-    trail := "branch ${x}"
+    trail := "branch %{x}"
   | mode == "plain" =>
-    trail := "branch kept ${x}"
+    trail := "branch kept %{x}"
   | else =>
     ()
 
 print trail
-print "after ${x}"
+print "after %{x}"
 
 var counter: int = 0
 do[5]

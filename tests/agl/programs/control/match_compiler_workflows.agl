@@ -18,7 +18,7 @@ def pick() -> Pair = ask("Pick a pair.", agent = picker)
 case pick() of
   | pair(right = zero) => print "right-zero first"
   | pair(left = zero) => print "left-zero second"
-  | pair(left, right) => print "default binders ${left}/${right}"
+  | pair(left, right) => print "default binders %{left}/%{right}"
 
 # Numeric pattern keys use runtime semantic equality across int/decimal
 # spellings while remaining typed by the subject domain.

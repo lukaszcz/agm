@@ -6,7 +6,7 @@ The scanner handles:
 - CODE mode: keywords, identifiers, numbers, operators (maximal munch), and
   horizontal whitespace / ``#`` comments.
 - Template mode: single- and triple-quoted string literals with
-  ``${...}`` interpolation and the JSON escape set plus ``\\$``.
+  ``%{...}`` interpolation and the JSON escape set plus ``\\%``.
 - Layout signalling: ``_NEWLINE`` tokens carrying the next real line's leading
   indentation width (tabs expanded at ``tab_len=4``, comments skipped).
 
@@ -199,7 +199,7 @@ def _is_operator_name_char(ch: str) -> bool:
     return unicodedata.category(ch)[0] in ("P", "S")
 
 
-# JSON escape decoding table (excluding \uXXXX and \$, handled separately)
+# JSON escape decoding table (excluding \uXXXX, handled separately)
 _JSON_ESCAPES: dict[str, str] = {
     '"': '"',
     "'": "'",
@@ -210,6 +210,7 @@ _JSON_ESCAPES: dict[str, str] = {
     "n": "\n",
     "r": "\r",
     "t": "\t",
+    "%": "%",
 }
 
 
@@ -237,9 +238,9 @@ class _LitSeg:
 class _InterpSeg:
     """An interpolation hole of a triple-quoted template.
 
-    ``tokens`` are the code tokens scanned inside ``${...}`` followed by the
+    ``tokens`` are the code tokens scanned inside ``%{...}`` followed by the
     closing ``INTERP_END`` token (already carrying real positions).
-    ``start_pos``/``start_line``/``start_col`` mark the ``$`` of ``${``.
+    ``start_pos``/``start_line``/``start_col`` mark the ``%`` of ``%{``.
     """
 
     tokens: list[Token]
@@ -443,8 +444,6 @@ class _Scanner:
         ch = self._advance()
         if ch in _JSON_ESCAPES:
             return _JSON_ESCAPES[ch]
-        if ch == "$":
-            return "$"
         if ch == "u":
             # \uXXXX
             hex_digits = ""
@@ -528,12 +527,12 @@ class _Scanner:
             if ch == "\\":
                 self._advance()
                 buf.append(self._decode_escape())
-            elif ch == "$" and self._peek(1) == "{":
+            elif ch == "%" and self._peek(1) == "{":
                 # Start of interpolation
                 interp_pos = self._pos
                 interp_line = self._line
                 interp_col = self._col
-                self._advance()  # consume '$'
+                self._advance()  # consume '%'
                 self._advance()  # consume '{'
                 yield self._make_token(
                     STRING_FRAGMENT,
@@ -542,7 +541,7 @@ class _Scanner:
                     frag_start_line,
                     frag_start_col,
                 )
-                yield self._make_token(INTERP_START, "${", interp_pos, interp_line, interp_col)
+                yield self._make_token(INTERP_START, "%{", interp_pos, interp_line, interp_col)
                 buf = []
                 yield from self._scan_interp_code()
                 frag_start_pos = self._pos
@@ -554,7 +553,7 @@ class _Scanner:
                 buf.append(ch)
 
     def _scan_interp_code(self) -> Iterator[Token]:
-        """Scan code tokens inside ``${...}`` up to and including the closing ``}``.
+        """Scan code tokens inside ``%{...}`` up to and including the closing ``}``.
 
         Tracks nested ``{...}`` so that a dict literal inside the interpolation
         does not prematurely close it.  Yields all code tokens then an
@@ -651,12 +650,12 @@ class _Scanner:
                 self._advance()
                 decoded = self._decode_escape()
                 current_lit.append(decoded)
-            elif ch == "$" and self._peek(1) == "{":
-                # Start interpolation; remember the '$' position.
+            elif ch == "%" and self._peek(1) == "{":
+                # Start interpolation; remember the '%' position.
                 interp_start_pos = self._pos
                 interp_start_line = self._line
                 interp_start_col = self._col
-                self._advance()  # consume '$'
+                self._advance()  # consume '%'
                 self._advance()  # consume '{'
                 segments.append(
                     _LitSeg("".join(current_lit), lit_start_pos, lit_start_line, lit_start_col)
@@ -697,7 +696,7 @@ class _Scanner:
         # Build an indent probe for hole-aware min-indent measurement.
         # Each interpolation hole is replaced by a single non-whitespace
         # placeholder ("X") so that a line whose only non-whitespace content
-        # is a hole (e.g. "  ${x}") is treated as non-blank.  The probe is
+        # is a hole (e.g. "  %{x}") is treated as non-blank.  The probe is
         # used ONLY for measuring indentation — never for reassembly — so a
         # placeholder collision with literal content is irrelevant.
         indent_probe = "".join(seg.text if isinstance(seg, _LitSeg) else "X" for seg in segments)
@@ -734,7 +733,7 @@ class _Scanner:
                 interp_seg = interp_segs[part_idx]
                 yield Token(
                     INTERP_START,
-                    "${",
+                    "%{",
                     start_pos=interp_seg.start_pos,
                     line=interp_seg.start_line,
                     column=interp_seg.start_col,

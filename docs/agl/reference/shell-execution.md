@@ -7,8 +7,8 @@
 
 <!-- agl-check: fragment -->
 ```agl
-let res = exec "ls -la ${dir}"       # res : ExecResult (default)
-let out: text = exec "cat ${path}"   # parsed form: stdout verbatim
+let res = exec "ls -la %{dir}"       # res : ExecResult (default)
+let out: text = exec "cat %{path}"   # parsed form: stdout verbatim
 let completed: unit = exec "make build" # unit form; raises ExecError on nonzero
 ```
 
@@ -37,7 +37,7 @@ The command template uses the same uniform rendering as all other templates
 interpolate verbatim; `int`, `decimal`, and `bool` as plain scalar text;
 structured values (`list`, `dict`, record, enum, exception) in AgL form —
 single-line, no injected newlines. To interpolate a structured value as JSON,
-use an explicit cast: `${value as json}`.
+use an explicit cast: `%{value as json}`.
 
 Interpolated values are inserted **verbatim** into the command string —
 there is **no automatic shell quoting**. The workflow author is responsible
@@ -69,7 +69,7 @@ A **nonzero exit does not raise** in this form — the caller branches on
 let res = exec "ls -la"             # res : ExecResult
 print(res.stdout)
 if res.exit_code != 0 =>
-  print("command failed: ${res.stderr}")
+  print("command failed: %{res.stderr}")
 ```
 
 A spawn failure or timeout raises `ExecError` in this form. A timeout does
@@ -83,7 +83,7 @@ into that type (honouring `format`, `strict_json`, and `on_parse_error`) and
 
 <!-- agl-check: fragment -->
 ```agl
-let out: text = exec "cat ${path}"          # stdout verbatim; raises on nonzero
+let out: text = exec "cat %{path}"          # stdout verbatim; raises on nonzero
 let data: dict[text, int] = exec(           # JSON parsed; raises on nonzero
   "compute-stats --json",
   on_parse_error = Retry(n = 1)
@@ -147,9 +147,9 @@ and independently catchable:
 try
   let data: dict[text, int] = exec "compute-stats --json"
 catch ExecError as e =>
-  print "command failed (${e.exit_code}): ${e.stderr}"
+  print "command failed (%{e.exit_code}): %{e.stderr}"
 catch AgentParseError as e =>
-  print "not valid JSON: ${e.raw}"
+  print "not valid JSON: %{e.raw}"
 ```
 
 In the structured form, `ExecError` is raised for a spawn failure (the shell

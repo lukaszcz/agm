@@ -96,7 +96,7 @@ _KEYWORDS: tuple[str, ...] = tuple(sorted(KEYWORDS))
 
 # Word-prefix pattern for completion: AgL identifiers, including the hyphenated
 # built-in call name ``ask-request``.  It is anchored to the cursor so
-# punctuation such as `${` is not treated as an empty identifier completion
+# punctuation such as `%{` is not treated as an empty identifier completion
 # site.
 _IDENT_PREFIX: re.Pattern[str] = re.compile(r"[A-Za-z0-9_-]+$")
 

@@ -21,9 +21,9 @@ try
   print cfg.timeout
   print cfg.retries
 catch CastError as e =>
-  print "config invalid: ${e.source_type} -> ${e.target_type}"
+  print "config invalid: %{e.source_type} -> %{e.target_type}"
 catch JsonParseError as e =>
-  print "config json error: ${e.raw}"
+  print "config json error: %{e.raw}"
 
 # json → enum: parse_json + cast
 try
@@ -33,9 +33,9 @@ try
     print "priority: low"
   else =>
     case p of
-      | High(reason) => print "priority: high (${reason})"
+      | High(reason) => print "priority: high (%{reason})"
       | Low          => ()
 catch CastError as e =>
-  print "priority invalid: ${e.source_type} -> ${e.target_type}"
+  print "priority invalid: %{e.source_type} -> %{e.target_type}"
 catch JsonParseError as e =>
-  print "priority json error: ${e.raw}"
+  print "priority json error: %{e.raw}"

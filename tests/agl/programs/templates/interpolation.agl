@@ -1,4 +1,4 @@
-# Interpolation: expressions inside ${...}, adjacency, nested braces, structured
+# Interpolation: expressions inside %{...}, adjacency, nested braces, structured
 # value rendering inside prompts.
 record Item
   name: text
@@ -14,13 +14,13 @@ let item = Item(name = "bolt", qty = 7)
 let items = ["alpha", "beta"]
 let pick: Pick = One(item = item)
 
-let a = ask "Hello ${who}, qty ${item.qty}, sum ${1 + 2 * 3}."
-let b = ask "${who}${item.qty}"
-let c = ask "data: ${ {kind: "demo", tags: items} }"
+let a = ask "Hello %{who}, qty %{item.qty}, sum %{1 + 2 * 3}."
+let b = ask "%{who}%{item.qty}"
+let c = ask "data: %{ {kind: "demo", tags: items} }"
 let d = ask """
-Report for ${who}:
-${item}
-${pick}
+Report for %{who}:
+%{item}
+%{pick}
 """
 print a
 print b

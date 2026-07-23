@@ -864,7 +864,7 @@ class TestExecLowersGraphOnce:
         capsys: pytest.CaptureFixture[str],
     ) -> None:
         lowerings = self._count_lowerings(monkeypatch)
-        (tmp_path / "helper.agl").write_text('def greet(who: text) -> text = "hi ${who}"\n')
+        (tmp_path / "helper.agl").write_text('def greet(who: text) -> text = "hi %{who}"\n')
         agl_file = tmp_path / "prog.agl"
         agl_file.write_text(
             'open import helper\nparam who: text = "world"\nprint helper::greet(who)\n'
@@ -901,7 +901,7 @@ class TestExecLowersGraphOnce:
     ) -> None:
         """A param failure preempts the run: no trace file, no program output."""
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text('param n: int\nprint "n=${n}"\n')
+        agl_file.write_text('param n: int\nprint "n=%{n}"\n')
         log_path = tmp_path / "trace.jsonl"
 
         with pytest.raises(SystemExit) as exc_info:
@@ -2317,7 +2317,7 @@ class TestExecAgentPrecedence:
 
         agl_file = tmp_path / "prog.agl"
         agl_file.write_text(
-            'agent impl = "source-runner %{PROMPT_FILE}"\n'
+            'agent impl = "source-runner \\%{PROMPT_FILE}"\n'
             'let x = ask("do it", agent = impl)\n'
             "print x\n"
         )
@@ -2368,8 +2368,8 @@ class TestExecAgentPrecedence:
 
         agl_file = tmp_path / "prog.agl"
         agl_file.write_text(
-            'agent a = "source-a %{PROMPT_FILE}"\n'  # config override → CONFIG-A
-            'agent b = "source-b %{PROMPT_FILE}"\n'  # no config entry → SOURCE-B
+            'agent a = "source-a \\%{PROMPT_FILE}"\n'  # config override → CONFIG-A
+            'agent b = "source-b \\%{PROMPT_FILE}"\n'  # no config entry → SOURCE-B
             "agent c\n"  # bare, no config entry → DEFAULT
             'let ra = ask("first", agent = a)\n'
             'let rb = ask("second", agent = b)\n'
@@ -2401,7 +2401,7 @@ class TestExecAgentPrecedence:
 
         agl_file = tmp_path / "prog.agl"
         agl_file.write_text(
-            'agent impl = "source-runner %{PROMPT_FILE}"\n'
+            'agent impl = "source-runner \\%{PROMPT_FILE}"\n'
             'let x = ask("do it", agent = impl)\n'
             "print x\n"
         )
@@ -2443,7 +2443,7 @@ class TestExecAgentPrecedence:
 
         agl_file = tmp_path / "prog.agl"
         agl_file.write_text(
-            'agent impl = "source-runner --file=%{PROMPT_FILE}"\n'
+            'agent impl = "source-runner --file=\\%{PROMPT_FILE}"\n'
             'let x = ask("do it", agent = impl)\n'
             "print x\n"
         )

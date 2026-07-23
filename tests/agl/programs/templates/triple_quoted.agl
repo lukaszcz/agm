@@ -16,7 +16,7 @@ else =>
 
 let mixed = ask("""
 Wrap:
-${body}
+%{body}
 End.
 """, agent = critic)
 print "mixed sent"

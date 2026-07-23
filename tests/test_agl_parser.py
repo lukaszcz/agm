@@ -299,7 +299,7 @@ class TestLiterals:
         assert isinstance(s, StringLit) and s.value == "hello"
 
     def test_string_interpolated(self) -> None:
-        tmpl = first(parse('"hello ${name}"'))
+        tmpl = first(parse('"hello %{name}"'))
         assert isinstance(tmpl, Template)
         assert len(tmpl.segments) == 2
         assert isinstance(tmpl.segments[0], TextSegment)
@@ -668,7 +668,7 @@ class TestDeclarations:
         assert ag.runner is None
 
     def test_agent_decl_with_runner(self) -> None:
-        ag = first(parse('agent planner = "claude -p %{PROMPT_FILE}"'))
+        ag = first(parse('agent planner = "claude -p \\%{PROMPT_FILE}"'))
         assert isinstance(ag, AgentDecl)
         assert ag.runner == "claude -p %{PROMPT_FILE}"
 
@@ -2306,23 +2306,23 @@ class TestTemplates:
         assert s.value == "hello world"
 
     def test_interpolated_template(self) -> None:
-        t = first(parse('"Hello ${name}"'))
+        t = first(parse('"Hello %{name}"'))
         assert isinstance(t, Template)
         assert any(isinstance(seg, InterpSegment) for seg in t.segments)
 
     def test_multi_interp_template(self) -> None:
-        t = first(parse('"${a} and ${b}"'))
+        t = first(parse('"%{a} and %{b}"'))
         assert isinstance(t, Template)
         interps = [s for s in t.segments if isinstance(s, InterpSegment)]
         assert len(interps) == 2
 
     def test_interpolated_agent_runner_raises(self) -> None:
         with pytest.raises(AglSyntaxError, match="literal string"):
-            parse('agent reviewer = "runner ${x}"')
+            parse('agent reviewer = "runner %{x}"')
 
     def test_pattern_interpolated_string_raises(self) -> None:
         with pytest.raises(AglSyntaxError, match="interpolation"):
-            parse('case x of | "${y}" => ok')
+            parse('case x of | "%{y}" => ok')
 
 
 # ---------------------------------------------------------------------------

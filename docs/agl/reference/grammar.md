@@ -161,10 +161,10 @@ body after `=>`, parenthesize it or use the suite form:
 
 <!-- agl-check: fragment -->
 ```agl
-| 1 => (let doubled = k * 2; print "doubled:${doubled}")
+| 1 => (let doubled = k * 2; print "doubled:%{doubled}")
 | 2 =>
     let doubled = k * 2
-    print "doubled:${doubled}"
+    print "doubled:%{doubled}"
 ```
 
 Parentheses directly after a callee are that call's argument list, so a
@@ -222,7 +222,7 @@ ordinary name in scope as a type throughout the declaration's body. See
 [Generics](generics.md).
 
 The runner string of an `agent` declaration must be a literal string with no
-`${…}` interpolation; an interpolation hole is a static error.
+`%{…}` interpolation; an interpolation hole is a static error.
 
 ## Type expressions
 
@@ -584,13 +584,13 @@ template      ::= '"' (text_fragment | interpolation)* '"'
                 | '"""' (text_fragment | interpolation)* '"""'
                 | "'''" (text_fragment | interpolation)* "'''"
 
-interpolation ::= "${" expr "}"
+interpolation ::= "%{" expr "}"
 ```
 
 A `text_fragment` is literal template text between the surrounding quote
 delimiters and any interpolation; its escapes and, for triple-quoted templates,
 dedent are described in [Lexical structure](lexical-structure.md). Newlines are
-not permitted inside `${…}`.
+not permitted inside `%{…}`.
 
 ## Deterministic-parse notes
 

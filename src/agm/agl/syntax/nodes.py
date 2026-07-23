@@ -150,11 +150,11 @@ class TextSegment:
 
 @dataclass(frozen=True, slots=True)
 class InterpSegment:
-    """An interpolated expression inside a template string (``${expr}``).
+    """An interpolated expression inside a template string (``%{expr}``).
 
     ``expr`` is an arbitrary expression; interpolation renders it with the
     default program-output options (single-line, unquoted top-level text).
-    There is no ``as <renderer>`` override: the grammar accepts only ``${expr}``.
+    There is no ``as <renderer>`` override: the grammar accepts only ``%{expr}``.
     """
 
     expr: Expr

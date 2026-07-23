@@ -499,11 +499,11 @@ class TestSimpleTemplates:
         ]
 
     def test_single_interpolation(self) -> None:
-        result = tok('"hello ${name}"')
+        result = tok('"hello %{name}"')
         assert result == [
             ("TEMPLATE_START", '"'),
             ("STRING_FRAGMENT", "hello "),
-            ("INTERP_START", "${"),
+            ("INTERP_START", "%{"),
             ("NAME", "name"),
             ("INTERP_END", "}"),
             ("STRING_FRAGMENT", ""),
@@ -511,15 +511,15 @@ class TestSimpleTemplates:
         ]
 
     def test_multi_interpolation(self) -> None:
-        result = tok('"${a} and ${b}"')
+        result = tok('"%{a} and %{b}"')
         assert result == [
             ("TEMPLATE_START", '"'),
             ("STRING_FRAGMENT", ""),
-            ("INTERP_START", "${"),
+            ("INTERP_START", "%{"),
             ("NAME", "a"),
             ("INTERP_END", "}"),
             ("STRING_FRAGMENT", " and "),
-            ("INTERP_START", "${"),
+            ("INTERP_START", "%{"),
             ("NAME", "b"),
             ("INTERP_END", "}"),
             ("STRING_FRAGMENT", ""),
@@ -532,12 +532,21 @@ class TestSimpleTemplates:
         assert len(frags) == 1
         assert frags[0] == ("STRING_FRAGMENT", "$x")
 
-    def test_escaped_dollar(self) -> None:
-        # \$ produces a literal dollar in the fragment
-        result = tok(r'"\$"')
+    def test_percent_not_followed_by_brace_is_literal(self) -> None:
+        result = tok('"%x"')
         frags = [(t, v) for t, v in result if t == "STRING_FRAGMENT"]
         assert len(frags) == 1
-        assert frags[0] == ("STRING_FRAGMENT", "$")
+        assert frags[0] == ("STRING_FRAGMENT", "%x")
+
+    def test_escaped_percent(self) -> None:
+        result = tok(r'"\%"')
+        frags = [(t, v) for t, v in result if t == "STRING_FRAGMENT"]
+        assert len(frags) == 1
+        assert frags[0] == ("STRING_FRAGMENT", "%")
+
+    def test_escaped_dollar_is_lex_error(self) -> None:
+        with pytest.raises(LexError):
+            tok(r'"\$"')
 
     def test_escape_sequences(self) -> None:
         # JSON set: \" \\ \/ \b \f \n \r \t
@@ -568,14 +577,14 @@ class TestSimpleTemplates:
         assert "'q'" not in msg
 
     def test_nested_braces_inside_interpolation(self) -> None:
-        # nested { } inside ${ } should not prematurely close the interpolation
-        result = tok('"${foo}"')
+        # nested { } inside %{ } should not prematurely close the interpolation
+        result = tok('"%{foo}"')
         types = [t for t, _ in result]
         assert "INTERP_START" in types
         assert "INTERP_END" in types
 
     def test_expression_tokens_inside_interp(self) -> None:
-        result = tok('"${x + 1}"')
+        result = tok('"%{x + 1}"')
         inner_types = []
         in_interp = False
         for t, v in result:
@@ -597,15 +606,15 @@ class TestSimpleTemplates:
 
 class TestNestedBracesInInterp:
     def test_lbrace_rbrace_inside_interp(self) -> None:
-        # "${foo}" — the VAR_NAME is seen, not a dict literal brace confusion
-        result = tok('"${foo}"')
+        # "%{foo}" — the VAR_NAME is seen, not a dict literal brace confusion
+        result = tok('"%{foo}"')
         types = [t for t, _ in result]
         assert types.index("INTERP_START") < types.index("NAME")
         assert types.index("NAME") < types.index("INTERP_END")
 
     def test_dict_literal_inside_interp(self) -> None:
-        # "${{}}" — empty dict literal inside interpolation
-        result = tok('"${{}}"')
+        # "%{{}}" — empty dict literal inside interpolation
+        result = tok('"%{{}}"')
         types = [t for t, _ in result]
         # Should have INTERP_START, LBRACE, RBRACE, INTERP_END
         assert "INTERP_START" in types
@@ -665,7 +674,7 @@ class TestTripleQuotedStrings:
         assert content == "hello\n\nworld"
 
     def test_triple_quoted_with_interpolation(self) -> None:
-        source = '"""\nhello ${name}\n"""'
+        source = '"""\nhello %{name}\n"""'
         result = tok(source)
         types = [t for t, _ in result]
         assert "INTERP_START" in types
@@ -674,7 +683,7 @@ class TestTripleQuotedStrings:
     def test_triple_quoted_interp_hole_not_dedented(self) -> None:
         # Interpolation holes occupy their line; values inside are never dedented
         # The literal skeleton around interp holes gets dedented, not the interp tokens
-        source = '"""\n    hello\n    ${x}\n    world\n    """'
+        source = '"""\n    hello\n    %{x}\n    world\n    """'
         result = tok(source)
         frags = [v for t, v in result if t == "STRING_FRAGMENT"]
         # Content before interp should be "hello\n"
@@ -724,22 +733,23 @@ class TestSingleQuotedStrings:
         assert frags == ["'"]
 
     def test_single_quoted_with_interpolation(self) -> None:
-        result = tok("'hello ${name}'")
+        result = tok("'hello %{name}'")
         assert result == [
             ("TEMPLATE_START", "'"),
             ("STRING_FRAGMENT", "hello "),
-            ("INTERP_START", "${"),
+            ("INTERP_START", "%{"),
             ("NAME", "name"),
             ("INTERP_END", "}"),
             ("STRING_FRAGMENT", ""),
             ("TEMPLATE_END", "'"),
         ]
 
-    def test_triple_single_quoted_string(self) -> None:
-        source = "'''hello'''"
+    def test_triple_single_quoted_with_interpolation(self) -> None:
+        source = "'''hello %{name}'''"
         result = tok(source)
-        frags = [v for t, v in result if t == "STRING_FRAGMENT"]
-        assert "".join(frags) == "hello"
+        types = [t for t, _ in result]
+        assert "INTERP_START" in types
+        assert "INTERP_END" in types
 
     def test_triple_single_quoted_with_dedent(self) -> None:
         source = "'''\n    hello\n    '''"
@@ -1136,9 +1146,9 @@ class TestLexErrorSpan:
         assert exc_info.value.span is not None
 
     def test_unterminated_interpolation(self) -> None:
-        # ${ without any closing } — EOF inside interp
+        # %{ without any closing } — EOF inside interp
         with pytest.raises(LexError) as exc_info:
-            tok('"${')
+            tok('"%{')
         assert exc_info.value.span is not None
 
     def test_unterminated_triple_quoted_string(self) -> None:
@@ -1171,12 +1181,11 @@ class TestLexErrorSpan:
             tok("\u200b")
         assert exc_info.value.span is not None
 
-    def test_triple_quoted_with_escape(self) -> None:
-        # Escape inside a triple-quoted string
-        result = tok('"""\\$hello"""')
+    @pytest.mark.parametrize("source", ['"""\\%hello"""', "'''\\%hello'''"])
+    def test_triple_quoted_with_escaped_percent(self, source: str) -> None:
+        result = tok(source)
         frags = [v for t, v in result if t == "STRING_FRAGMENT"]
-        content = "".join(frags)
-        assert content == "$hello"
+        assert "".join(frags) == "%hello"
 
     def test_eof_after_newline_no_content(self) -> None:
         # Trailing whitespace-only after newline (EOF during indentation
@@ -1254,7 +1263,7 @@ class TestAgLSnippets:
         assert "COLON" in types
 
     def test_agent_call_expression(self) -> None:
-        result = tok('reviewer "Review ${artifact}"')
+        result = tok('reviewer "Review %{artifact}"')
         types = [t for t, _ in result]
         assert types[0] == "NAME"
         assert "TEMPLATE_START" in types
@@ -1338,7 +1347,7 @@ class TestAgLSnippets:
         assert "ARROW" in types
 
     def test_multiline_template_with_interpolation(self) -> None:
-        source = '"""\nhello\n${name}\nworld\n"""'
+        source = '"""\nhello\n%{name}\nworld\n"""'
         result = tok(source)
         types = [t for t, _ in result]
         assert "TEMPLATE_START" in types
@@ -1366,7 +1375,7 @@ class TestAgLSnippets:
   | Pass
   | Fail
 
-let review: Review = reviewer "Review ${artifact}"
+let review: Review = reviewer "Review %{artifact}"
 
 case review of
   | Pass => pass
@@ -1498,7 +1507,7 @@ class TestLeadingNewlineSuppression:
 class TestNewlineInsideInterpolation:
     def test_newline_in_single_quoted_interp_is_rejected(self) -> None:
         with pytest.raises(LexError) as exc_info:
-            tok('"${a\nb}"')
+            tok('"%{a\nb}"')
         err = exc_info.value
         assert err.span is not None
         assert "interpolation" in str(err)
@@ -1506,7 +1515,7 @@ class TestNewlineInsideInterpolation:
 
     def test_newline_in_triple_quoted_interp_is_rejected(self) -> None:
         with pytest.raises(LexError) as exc_info:
-            tok('"""${a\nb}"""')
+            tok('"""%{a\nb}"""')
         err = exc_info.value
         assert err.span is not None
         assert "interpolation" in str(err)
@@ -1519,7 +1528,7 @@ class TestNewlineInsideInterpolation:
 
 class TestTripleTemplatePositions:
     def test_triple_template_tokens_have_positions_in_source_range(self) -> None:
-        source = '"""\n  hello ${name}\n  world\n  """'
+        source = '"""\n  hello %{name}\n  world\n  """'
         tokens = [
             t
             for t in tokenize(source)
@@ -1536,7 +1545,7 @@ class TestTripleTemplatePositions:
             assert 0 <= t.end_pos <= len(source)
 
     def test_triple_template_positions_monotonic_non_decreasing(self) -> None:
-        source = '"""\n  a ${x} b ${y} c\n  """'
+        source = '"""\n  a %{x} b %{y} c\n  """'
         starts = [
             t.start_pos
             for t in tokenize(source)
@@ -1614,7 +1623,7 @@ class TestTripleDedentPlaceholderCollision:
         # Same placeholder embedded alongside a real interpolation.
         # With the old split-on-sentinel approach this produces too many parts
         # and crashes on lit_segs[part_idx] — must not crash.
-        source = '"""\n\\u0000INTERP\\u0000 ${x}\n"""'
+        source = '"""\n\\u0000INTERP\\u0000 %{x}\n"""'
         result = tok(source)
         frags = [v for t, v in result if t == "STRING_FRAGMENT"]
         interp_starts = [(t, v) for t, v in result if t == "INTERP_START"]
@@ -1625,7 +1634,7 @@ class TestTripleDedentPlaceholderCollision:
     def test_multiple_placeholder_sequences_with_interp_no_crash(self) -> None:
         # Two placeholder sequences, one interpolation.  The old code split on
         # "\x00INTERP\x00" and got 3 literal parts for 1 literal segment -> crash.
-        source = '"""\\u0000INTERP\\u0000${x}\\u0000INTERP\\u0000"""'
+        source = '"""\\u0000INTERP\\u0000%{x}\\u0000INTERP\\u0000"""'
         result = tok(source)
         frags = [v for t, v in result if t == "STRING_FRAGMENT"]
         assert frags[0] == "\x00INTERP\x00"
@@ -1782,9 +1791,9 @@ class TestIdentifierUnicodeAndSymbols:
 
 class TestTripleDedentHoleAwareMinIndent:
     """The dedent rule must treat a line containing only an interpolation hole
-    (e.g. ``  ${x}``) as non-blank when computing min-indent.  Previously,
+    (e.g. ``  %{x}``) as non-blank when computing min-indent.  Previously,
     holes were stripped from the combined literal before computing min-indent,
-    turning ``  ${x}`` into pure whitespace ``  `` which was classified as a
+    turning ``  %{x}`` into pure whitespace ``  `` which was classified as a
     blank line and excluded.  This caused the wrong (larger) indent to be
     stripped, over-removing indentation from other content lines.
 
@@ -1796,17 +1805,17 @@ class TestTripleDedentHoleAwareMinIndent:
         # Source (indent shown as explicit spaces):
         #   """
         #       deep    <- indent 6
-        #   ${x}        <- indent 2 (the true minimum)
+        #   %{x}        <- indent 2 (the true minimum)
         #   """         <- closing at indent 2 (same as hole)
         #
         # Correct dedent: strip 2.  "deep" ends up with 4 leading spaces.
         # Buggy dedent: strip 6.  "deep" ends up with 0 leading spaces.
-        source = '"""\n      deep\n  ${x}\n  """'
+        source = '"""\n      deep\n  %{x}\n  """'
         result = tok(source)
         frags = [v for t, v in result if t == "STRING_FRAGMENT"]
-        # Fragment before ${x}: "    deep\n" (4 leading spaces kept after strip 2)
+        # Fragment before %{x}: "    deep\n" (4 leading spaces kept after strip 2)
         assert frags[0] == "    deep\n"
-        # Fragment after ${x}: "" — the closing "  """ segment strips to nothing
+        # Fragment after %{x}: "" — the closing "  """ segment strips to nothing
         # ("\n  " → "\n" after strip 2 → trailing \n removed → "").
         assert frags[1] == ""
 
@@ -1814,27 +1823,27 @@ class TestTripleDedentHoleAwareMinIndent:
         # Source:
         #   """
         #     content   <- indent 4
-        #   ${x}        <- indent 2 (minimum)
+        #   %{x}        <- indent 2 (minimum)
         #     more      <- indent 4
         #   """         <- closing at indent 2 (same as hole)
         #
         # Correct dedent: strip 2.  Both content lines keep 2 leading spaces.
-        source = '"""\n    content\n  ${x}\n    more\n  """'
+        source = '"""\n    content\n  %{x}\n    more\n  """'
         result = tok(source)
         frags = [v for t, v in result if t == "STRING_FRAGMENT"]
         assert frags[0] == "  content\n"
-        # Fragment after ${x}: "\n  more" — newline + 2 spaces before "more"
+        # Fragment after %{x}: "\n  more" — newline + 2 spaces before "more"
         assert frags[1] == "\n  more"
 
     def test_hole_at_line_start_with_trailing_literal_text(self) -> None:
         # Source:
         #   """
         #     prefix    <- indent 4
-        #   ${x}tail    <- indent 2 (minimum, hole at col 2, literal "tail" follows)
+        #   %{x}tail    <- indent 2 (minimum, hole at col 2, literal "tail" follows)
         #   """         <- closing at indent 2
         #
         # Correct dedent: strip 2.
-        source = '"""\n    prefix\n  ${x}tail\n  """'
+        source = '"""\n    prefix\n  %{x}tail\n  """'
         result = tok(source)
         frags = [v for t, v in result if t == "STRING_FRAGMENT"]
         # Before the hole: "  prefix\n" (4-2=2 leading spaces preserved)
@@ -1854,7 +1863,7 @@ class TestTripleDedentHoleAwareMinIndent:
     def test_sentinel_collision_still_passes(self) -> None:
         # Literal \x00INTERP\x00 content alongside a real interpolation must
         # still work (verifies the old sentinel-collision regression fix).
-        source = '"""\n\\u0000INTERP\\u0000 ${x}\n"""'
+        source = '"""\n\\u0000INTERP\\u0000 %{x}\n"""'
         result = tok(source)
         frags = [v for t, v in result if t == "STRING_FRAGMENT"]
         assert frags[0] == "\x00INTERP\x00 "
@@ -1928,9 +1937,9 @@ class TestTabWarnings:
         assert lex_tab_warnings('let x = """\n\tindented body\n"""') == []
 
     def test_tab_in_interpolation_is_code_and_warned(self) -> None:
-        # An interpolation hole is CODE, so a TAB inside ``${ ... }`` warns even
+        # An interpolation hole is CODE, so a TAB inside ``%{ ... }`` warns even
         # though it sits within a string literal.
-        warnings = lex_tab_warnings('let y = 1\nlet x = "${y\t}"')
+        warnings = lex_tab_warnings('let y = 1\nlet x = "%{y\t}"')
         assert len(warnings) == 1
         assert warnings[0].line == 2
 

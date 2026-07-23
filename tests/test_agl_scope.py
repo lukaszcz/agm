@@ -315,7 +315,7 @@ class TestAcceptance:
         assert _ref(r, "x").kind == BinderKind.let_binding
 
     def test_let_with_interpolation(self) -> None:
-        r = parse_and_resolve('param name\nlet greeting = "Hello ${name}"\ngreeting')
+        r = parse_and_resolve('param name\nlet greeting = "Hello %{name}"\ngreeting')
         assert _ref(r, "greeting").kind == BinderKind.let_binding
 
     def test_multiple_inputs(self) -> None:
@@ -510,7 +510,7 @@ class TestUndefinedRead:
         assert "undeclared" in msg
 
     def test_undefined_in_interpolation(self) -> None:
-        err = reject_scope('let x = "Hi ${ghost}"\nx')
+        err = reject_scope('let x = "Hi %{ghost}"\nx')
         line, msg = diag(err)
         assert line == 1
         assert "ghost" in msg
@@ -1464,7 +1464,7 @@ class TestResolutionSideTable:
         assert not ref.mutable
 
     def test_interp_varref_resolved(self) -> None:
-        r = parse_and_resolve('param name\nlet q = "Hello ${name}"\nq')
+        r = parse_and_resolve('param name\nlet q = "Hello %{name}"\nq')
         let_q = r.program.body.items[1]
         assert isinstance(let_q, LetDecl)
         tmpl = let_q.value

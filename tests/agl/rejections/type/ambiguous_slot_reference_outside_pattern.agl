@@ -12,6 +12,6 @@ enum Wrap
 let w = wrap(Color::Blue)
 case w of
   | wrap(Red) =>
-    print "${Red()}"
+    print "%{Red()}"
   | wrap(Blue) =>
     print "blue"

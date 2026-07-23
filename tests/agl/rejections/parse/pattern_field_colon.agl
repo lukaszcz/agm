@@ -2,5 +2,5 @@ enum E
   | A(x: int)
 def describe(e: E) -> text =
   case e of
-    | A(x: y) => "${y}"
+    | A(x: y) => "%{y}"
 ()

@@ -17,6 +17,6 @@ try
   else =>
     print "no error"
 catch Boom as e =>
-  print "boom code ${e.code}"
+  print "boom code %{e.code}"
 catch Exception as e =>
   print "other"

@@ -1,4 +1,4 @@
-# String escapes: the JSON set plus \$; bare $ without { is literal.
+# String escapes use the JSON set; dollar sequences are literal.
 param n: int
 
 let s1 = "quote=\" backslash=\\ slash=\/ tab=\tend"
@@ -6,11 +6,11 @@ let s2 = "bell=\b feed=\f"
 let s3 = "newline=\nnext"
 let s4 = "return=\rdone"
 let s5 = "unicode=\u0041\u00e9"
-let s6 = "dollar=\${not_interp} and $5 and ${1 + 1}"
+let s6 = "dollar=${not_interp} and $5 and %{1 + 1}"
 print s1
 print s2
 print s3
 print s4
 print s5
 print s6
-print "mix \$${n} costs $${n}"
+print "mix $%{n} costs $%{n}"

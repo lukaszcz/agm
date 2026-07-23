@@ -16,8 +16,8 @@ try
     | else =>
         print "ok"
 catch BoomDetail as e =>
-  print "detail ${e.code} ${e.detail}"
+  print "detail %{e.code} %{e.detail}"
 catch Boom as e =>
-  print "boom ${e.code} ${e.message}"
+  print "boom %{e.code} %{e.message}"
 catch Exception as e =>
-  print "other ${e.message}"
+  print "other %{e.message}"

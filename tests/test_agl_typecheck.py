@@ -3801,39 +3801,39 @@ class TestTemplate:
         assert r.resolved.program is not None
 
     def test_interpolated_template(self) -> None:
-        r = accept_type('let x = 42\nlet s = "${x}"\ns')
+        r = accept_type('let x = 42\nlet s = "%{x}"\ns')
         assert r.resolved.program is not None
 
     def test_interpolated_function_accepted(self) -> None:
-        accept_type('let f = fn(x: int) -> int => x\n"${f}"')
+        accept_type('let f = fn(x: int) -> int => x\n"%{f}"')
 
     def test_interpolated_agent_accepted(self) -> None:
-        accept_type('agent a\n"${a}"')
+        accept_type('agent a\n"%{a}"')
 
     def test_interpolated_int_is_ok(self) -> None:
-        r = accept_type('let n = 1\n"n is ${n}"')
+        r = accept_type('let n = 1\n"n is %{n}"')
         assert r.resolved.program is not None
 
     def test_interpolated_null_is_ok(self) -> None:
-        r = accept_type('"${null}"')
+        r = accept_type('"%{null}"')
         assert r.resolved.program is not None
 
     def test_interpolated_list_literal(self) -> None:
-        r = accept_type('"${[1, 2, 3]}"')
+        r = accept_type('"%{[1, 2, 3]}"')
         assert r.resolved.program is not None
 
     def test_interpolated_dict_literal(self) -> None:
-        # dict in template uses double-brace: ${{ key: val }}
-        r = accept_type('"${{"a": 1}}"')
+        # dict in template uses double-brace: %{{ key: val }}
+        r = accept_type('"%{{"a": 1}}"')
         assert r.resolved.program is not None
 
     def test_interpolated_nested_json(self) -> None:
         # nested dict inside template interpolation
-        r = accept_type('let n = 42\n"${{"a": n}}"')
+        r = accept_type('let n = 42\n"%{{"a": n}}"')
         assert r.resolved.program is not None
 
     def test_interpolated_non_json_in_dict_rejected(self) -> None:
-        err = reject_type('record R\n  x: int\nlet r = R(x = 1)\n"${{"a": r}}"')
+        err = reject_type('record R\n  x: int\nlet r = R(x = 1)\n"%{{"a": r}}"')
         assert "json" in str(err).lower() or "mismatch" in str(err).lower()
 
 
@@ -5533,11 +5533,11 @@ class TestMisc:
 
     def test_template_empty_dict_in_template(self) -> None:
         # An empty dict inside a template needs annotation context
-        r = accept_type('let d: json = {}\n"${d}"')
+        r = accept_type('let d: json = {}\n"%{d}"')
         assert r.resolved.program is not None
 
     def test_template_nested_json_in_dict(self) -> None:
-        r = accept_type('let n = 42\n"${{"a": n}}"')
+        r = accept_type('let n = 42\n"%{{"a": n}}"')
         assert r.resolved.program is not None
 
     def test_select_codec_no_match_raises(self) -> None:
@@ -5717,16 +5717,16 @@ class TestMisc:
 
     def test_template_empty_list_in_dict_value(self) -> None:
         # Exercises empty-list in _check_template_literal_child
-        r = accept_type('"${{ "a": []}}"')
+        r = accept_type('"%{{ "a": []}}"')
         assert r.resolved.program is not None
 
     def test_template_empty_dict_as_list_child(self) -> None:
         # Exercises empty-dict in _check_template_literal_child
-        r = accept_type('"${[{}]}"')
+        r = accept_type('"%{[{}]}"')
         assert r.resolved.program is not None
 
     def test_template_dup_key_in_interp_dict(self) -> None:
-        err = reject_type('"${{"a": 1, "a": 2}}"')
+        err = reject_type('"%{{"a": 1, "a": 2}}"')
         assert "duplicate" in str(err).lower() or "key" in str(err).lower()
 
     def test_is_test_with_correct_qualifier(self) -> None:
@@ -5858,12 +5858,12 @@ class TestMisc:
 
     def test_template_nested_list_in_list(self) -> None:
         # Exercises a non-empty ListLit as a child of a template list.
-        r = accept_type('"${[1, [2, 3]]}"')
+        r = accept_type('"%{[1, [2, 3]]}"')
         assert r.resolved.program is not None
 
     def test_template_nested_dict_in_dict(self) -> None:
         # Exercises a non-empty DictLit as a child of a template dict.
-        r = accept_type('"${{"a": {"b": 1}}}"')
+        r = accept_type('"%{{"a": {"b": 1}}}"')
         assert r.resolved.program is not None
 
     def test_is_test_without_qualifier(self) -> None:
@@ -7634,7 +7634,7 @@ class TestGenerics:
         accept_type("def show[T](x: T) -> unit = print(x)")
 
     def test_d2_interpolation_on_T_accepted(self) -> None:
-        accept_type('def show[T](x: T) -> text = "${x}"')
+        accept_type('def show[T](x: T) -> text = "%{x}"')
 
     def test_d2_field_access_on_T_rejected(self) -> None:
         err = reject_type("def get[T](x: T) -> int = x.field")

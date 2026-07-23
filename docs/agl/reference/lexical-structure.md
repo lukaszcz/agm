@@ -31,7 +31,7 @@ The layout rules:
    previously in effect — a misaligned dedent is a lexical error.
 2. **Blank lines and comment-only lines** are ignored for layout purposes.
 3. **Implicit continuation inside brackets.** While any `(`, `[`, `{`, or
-   `${` interpolation is open, newlines do not terminate the item; the
+   `%{` interpolation is open, newlines do not terminate the item; the
    logical line continues until the bracket closes. List literals, dictionary
    literals, constructor argument lists, and function call argument lists may
    therefore span multiple lines.
@@ -47,12 +47,12 @@ The layout rules:
    ```agl
    if
      | status is Complete => ()
-     | status is Blocked => (let report = ask("Explain ${status}", agent = critic); print report)
+     | status is Blocked => (let report = ask("Explain %{status}", agent = critic); print report)
      | else => ()
 
    var r: Review = Pass
    do[5]
-     r := ask("Review ${artifact}", agent = reviewer)
+     r := ask("Review %{artifact}", agent = reviewer)
    until r is Pass
    ```
 
@@ -284,7 +284,7 @@ operator: `-3` is `-` applied to the literal `3`.
 
 ## Strings and templates
 
-All string literals are **templates**: they may contain `${expr}`
+All string literals are **templates**: they may contain `%{expr}`
 interpolation. Both `"` and `'` are valid delimiter characters, giving four
 forms:
 

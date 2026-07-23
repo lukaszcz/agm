@@ -13,9 +13,9 @@ let o: Maybe[int] = mk(n)
 # Bare `none` is an open-imported nullary variant → a constructor pattern.
 case o of
   | none => print "none"
-  | some(value) => print "value ${value}"
+  | some(value) => print "value %{value}"
 
 # Imported generic RECORD constructor as a value, called positionally.
 let mkp: (int, text) -> Pair[int, text] = Pair
 let p: Pair[int, text] = mkp(n, "tag")
-print "${p.first}:${p.second}"
+print "%{p.first}:%{p.second}"

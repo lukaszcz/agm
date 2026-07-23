@@ -17,6 +17,7 @@ from .diagnostics import (
     MatchWitness,
     NonExhaustiveIssue,
     OpenComplementWitness,
+    RecordWitness,
     RedundantArmIssue,
     WildcardWitness,
     WitnessField,
@@ -57,8 +58,10 @@ from .model import (
     Occurrence,
     OccurrenceId,
     OpenSignature,
+    RecordConstructor,
     SourceAction,
     WildcardCell,
+    field_bearing_constructor_fields,
 )
 from .normalize import (
     MatchCompileInvariantError,
@@ -364,7 +367,9 @@ def _witness_for_occurrence(
     if isinstance(constructor, LiteralConstructor):
         return LiteralWitness(constructor.kind, constructor.value)
     spelling = _source_spelling(constructor, case_context)
-    if spelling.owner_name is None and not spelling.bare:
+    if spelling.owner_name is None and (
+        isinstance(constructor, RecordConstructor) or not spelling.bare
+    ):
         return WildcardWitness()
     children_by_index = {
         child.provenance.field_index: child
@@ -382,8 +387,9 @@ def _witness_for_occurrence(
             if index in children_by_index
             else WildcardWitness(),
         )
-        for index, field in enumerate(constructor.fields)
+        for index, field in enumerate(field_bearing_constructor_fields(constructor))
     )
+    assert spelling is not None
     if spelling.bare:
         qualification = None
     else:
@@ -393,6 +399,8 @@ def _witness_for_occurrence(
             module_qualifier=spelling.module_qualifier,
             qualifier_anchored=spelling.qualifier_anchored,
         )
+    if isinstance(constructor, RecordConstructor):
+        return RecordWitness(constructor.record_type, fields, qualification)
     return EnumWitness(
         constructor.enum_type,
         constructor.variant,
@@ -416,23 +424,31 @@ def _short_spelling_blocked(
 
 
 def _source_spelling(
-    constructor: EnumConstructor, case_context: MatchCaseContext
+    constructor: EnumConstructor | RecordConstructor, case_context: MatchCaseContext
 ) -> EnumConstructorSpelling:
-    """Select the shortest valid source owner for one concrete enum type."""
-    enum_type = constructor.enum_type
-    declaration_identity = (
-        enum_type.module_id,
-        enum_type.name,
-        constructor.variant,
+    """Select the shortest valid source owner for a concrete nominal constructor."""
+    nominal_type = (
+        constructor.enum_type
+        if isinstance(constructor, EnumConstructor)
+        else constructor.record_type
     )
-    if declaration_identity in case_context.bare_enum_constructors:
-        return EnumConstructorSpelling(None, None, bare=True)
+    if isinstance(constructor, EnumConstructor):
+        declaration_identity = (
+            nominal_type.module_id,
+            nominal_type.name,
+            constructor.variant,
+        )
+        if declaration_identity in case_context.bare_enum_constructors:
+            return EnumConstructorSpelling(None, None, bare=True)
 
     matches = tuple(
         form
         for form in case_context.enum_owner_forms
-        if form.match(enum_type) is not None
-        and not _short_spelling_blocked(form, constructor.variant, case_context)
+        if form.match(nominal_type) is not None
+        and (
+            not isinstance(constructor, EnumConstructor)
+            or not _short_spelling_blocked(form, constructor.variant, case_context)
+        )
     )
     if not matches:
         return EnumConstructorSpelling(None, None)
@@ -689,7 +705,7 @@ def _validate_occurrence_ledger(
             ),
             None,
         )
-        if not isinstance(canonical, EnumConstructor):
+        if not isinstance(canonical, (EnumConstructor, RecordConstructor)):
             raise MatchCompileInvariantError(
                 "field occurrence constructor does not match its parent's checked signature"
             )
@@ -710,7 +726,7 @@ def _validate_occurrence_ledger(
     complete_groups: dict[tuple[OccurrenceId, Constructor], tuple[Occurrence, ...]] = {}
     for key, indexed_children in groups.items():
         constructor = key[1]
-        assert isinstance(constructor, EnumConstructor)
+        assert isinstance(constructor, (EnumConstructor, RecordConstructor))
         expected_indices = set(range(constructor.arity))
         if set(indexed_children) != expected_indices:
             raise MatchCompileInvariantError(
@@ -901,7 +917,7 @@ def _validate_compiled_decisions(
                 )
 
             for branch, canonical in zip(decision.keyed_children, canonical_keys, strict=True):
-                if isinstance(canonical, EnumConstructor) and canonical.arity:
+                if isinstance(canonical, (EnumConstructor, RecordConstructor)) and canonical.arity:
                     group_key = (decision.occurrence.id, canonical)
                     if group_key not in occurrence_groups:
                         raise MatchCompileInvariantError(

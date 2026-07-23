@@ -4,11 +4,11 @@ The match compiler turns every checked source `case` into an immutable decision 
 
 ## Compilation Model
 
-Source patterns are normalized from the checker's final binder/constructor classifications into typed pattern matrices, retaining every binder for each matched occurrence, and compilation decomposes the matrices into a decision DAG: it preserves source priority while choosing tests with a deterministic heuristic (the `qba` composite from Maranget's decision-tree paper), and shares decision nodes rather than expanding paths, so compiled decisions stay compact even for overlapping patterns. Enum and boolean domains use their complete checked signatures from the type table; scalar and type-variable domains remain open.
+Source patterns are normalized from the checker's final binder/constructor classifications into typed pattern matrices, retaining every binder for each matched occurrence, and compilation decomposes the matrices into a decision DAG: it preserves source priority while choosing tests with a deterministic heuristic (the `qba` composite from Maranget's decision-tree paper), and shares decision nodes rather than expanding paths, so compiled decisions stay compact even for overlapping patterns. Enum, record, and boolean domains use complete checked signatures from the type table; scalar and type-variable domains remain open. A record is its nominal type's one closed constructor, with declaration-order fields and exact module/name/type-argument identity; enum variants and records share the field-bearing constructor machinery. Record decision lowering remains deferred, so this stage can produce and validate record decisions without extending lowerer's runtime switch contract.
 
 ## Diagnostics Cannot Disagree with Execution
 
-The same DAG provides reachable-arm information and deterministic structured witnesses, so exhaustiveness and redundancy diagnostics are derived from the exact decision structure that will execute — they can never disagree with it. Diagnostics carry structured issues and witnesses adapted into ordinary static diagnostics, with rendering-only type qualification kept separate from the type checker's enum-owner forms.
+The same DAG provides reachable-arm information and deterministic structured witnesses, so exhaustiveness and redundancy diagnostics are derived from the exact decision structure that will execute — they can never disagree with it. Diagnostics carry structured issues and witnesses adapted into ordinary static diagnostics. Enum and record witnesses retain a checked, import-aware source owner spelling so rendered patterns remain checker-accepted.
 
 ## Whole-Program Artifacts
 
@@ -29,6 +29,7 @@ The implementation follows Luc Maranget's pattern-matching compilation work:
 
 ## Code Entry Points
 
+- `src/agm/agl/matchcompile/model.py` — canonical constructor identities, including singleton record constructors.
 - `src/agm/agl/matchcompile/normalize.py` — checked patterns and closed signatures.
 - `src/agm/agl/matchcompile/matrix.py` — matrix decomposition and column selection.
 - `src/agm/agl/matchcompile/compiler.py` and `diagnostics.py` — decision DAGs, issues, and witnesses.

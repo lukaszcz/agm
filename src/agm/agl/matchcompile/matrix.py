@@ -15,6 +15,7 @@ from agm.agl.self_validation import self_validation_enabled
 from agm.agl.semantics.type_table import TypeTable
 from agm.agl.semantics.types import (
     EnumType,
+    RecordType,
     Type,
 )
 
@@ -25,6 +26,8 @@ from .model import (
     ConstructorCell,
     ConstructorField,
     EnumConstructor,
+    FieldBearingConstructorKey,
+    FieldBearingNominalConstructor,
     FieldOccurrenceProvenance,
     LiteralKind,
     MatchCaseContext,
@@ -35,18 +38,16 @@ from .model import (
     PathDecomposition,
     PatternCell,
     PatternProvenance,
+    RecordConstructor,
     WildcardCell,
+    field_bearing_constructor_fields,
+    field_bearing_constructor_key,
+    field_bearing_constructor_sort_key,
 )
 from .normalize import (
     MatchCompileInvariantError,
     constructor_inhabits_type,
 )
-
-
-@dataclass(frozen=True, slots=True)
-class _EnumConstructorKey:
-    enum_type: EnumType
-    variant: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -60,7 +61,9 @@ class _LiteralConstructorKey:
     value: decimal.Decimal | str | None
 
 
-_ConstructorKey: TypeAlias = _EnumConstructorKey | _BoolConstructorKey | _LiteralConstructorKey
+_ConstructorKey: TypeAlias = (
+    FieldBearingConstructorKey | _BoolConstructorKey | _LiteralConstructorKey
+)
 _ConstructorSortKey: TypeAlias = tuple[
     int,
     tuple[str, ...],
@@ -71,8 +74,8 @@ _ConstructorSortKey: TypeAlias = tuple[
 
 
 def _constructor_key(constructor: Constructor) -> _ConstructorKey:
-    if isinstance(constructor, EnumConstructor):
-        return _EnumConstructorKey(constructor.enum_type, constructor.variant)
+    if isinstance(constructor, (EnumConstructor, RecordConstructor)):
+        return field_bearing_constructor_key(constructor)
     if isinstance(constructor, BoolConstructor):
         return _BoolConstructorKey(constructor.value)
     return _LiteralConstructorKey(constructor.kind, constructor.value)
@@ -80,17 +83,11 @@ def _constructor_key(constructor: Constructor) -> _ConstructorKey:
 
 def _constructor_sort_key(constructor: Constructor) -> _ConstructorSortKey:
     """Return a total, stable ordering key for a constructor's semantic identity."""
-    if isinstance(constructor, EnumConstructor):
-        return (
-            0,
-            constructor.enum_type.module_id.segments,
-            constructor.enum_type.name,
-            tuple(repr(argument) for argument in constructor.enum_type.type_args),
-            constructor.variant,
-        )
+    if isinstance(constructor, (EnumConstructor, RecordConstructor)):
+        return field_bearing_constructor_sort_key(constructor)
     if isinstance(constructor, BoolConstructor):
-        return (1, (), "", (), "true" if constructor.value else "false")
-    return (2, (), constructor.kind.value, (), repr(constructor.value))
+        return (2, (), "", (), "true" if constructor.value else "false")
+    return (3, (), constructor.kind.value, (), repr(constructor.value))
 
 
 def _canonical_constructor(
@@ -100,28 +97,42 @@ def _canonical_constructor(
         raise MatchCompileInvariantError(
             f"constructor is incompatible with or uninhabited by occurrence type {subject_type!r}"
         )
-    if not isinstance(constructor, EnumConstructor):
+    if not isinstance(constructor, (EnumConstructor, RecordConstructor)):
         return constructor
 
-    assert isinstance(subject_type, EnumType)
-    try:
-        fields = type_table.enum_variants(subject_type).get(constructor.variant)
-    except (KeyError, AssertionError) as exc:
-        raise MatchCompileInvariantError(
-            f"cannot resolve enum signature for checked type {subject_type!r}"
-        ) from exc
-    if fields is None:
-        raise MatchCompileInvariantError(
-            "enum constructor does not exactly match its checked signature"
+    if isinstance(constructor, EnumConstructor):
+        assert isinstance(subject_type, EnumType)
+        try:
+            fields = type_table.enum_variants(subject_type).get(constructor.variant)
+        except (KeyError, AssertionError) as exc:
+            raise MatchCompileInvariantError(
+                f"cannot resolve enum signature for checked type {subject_type!r}"
+            ) from exc
+        if fields is None:
+            raise MatchCompileInvariantError(
+                "enum constructor does not exactly match its checked signature"
+            )
+        canonical: FieldBearingNominalConstructor = EnumConstructor(
+            subject_type,
+            constructor.variant,
+            tuple(ConstructorField(name, field_type) for name, field_type in fields.items()),
         )
-    canonical = EnumConstructor(
-        subject_type,
-        constructor.variant,
-        tuple(ConstructorField(name, field_type) for name, field_type in fields.items()),
-    )
+    else:
+        assert isinstance(constructor, RecordConstructor)
+        assert isinstance(subject_type, RecordType)
+        try:
+            fields = type_table.record_fields(subject_type)
+        except (KeyError, AssertionError) as exc:
+            raise MatchCompileInvariantError(
+                f"cannot resolve record signature for checked type {subject_type!r}"
+            ) from exc
+        canonical = RecordConstructor(
+            subject_type,
+            tuple(ConstructorField(name, field_type) for name, field_type in fields.items()),
+        )
     if canonical != constructor:
         raise MatchCompileInvariantError(
-            "enum constructor does not exactly match its checked signature"
+            "nominal constructor does not exactly match its checked signature"
         )
     return canonical
 
@@ -395,7 +406,7 @@ def _allocate_children(
     constructor: Constructor,
     sources: tuple[PatternProvenance, ...],
 ) -> tuple[tuple[Occurrence, ...], OccurrenceAllocator]:
-    if not isinstance(constructor, EnumConstructor) or not constructor.fields:
+    if not isinstance(constructor, (EnumConstructor, RecordConstructor)) or not constructor.fields:
         return (), allocator
     group = (parent.id, _constructor_key(constructor))
     existing = allocator.index.children_by_group.get(group)
@@ -415,7 +426,7 @@ def _allocate_children(
                 source=sources[index],
             ),
         )
-        for index, field in enumerate(constructor.fields)
+        for index, field in enumerate(field_bearing_constructor_fields(constructor))
     )
     return children, OccurrenceAllocator(
         index=allocator.index.extended(group, children),
@@ -637,8 +648,10 @@ def _validate_cell(cell: PatternCell, subject_type: Type, type_table: TypeTable)
     if isinstance(cell, WildcardCell):
         return
     constructor = _canonical_constructor(cell.constructor, subject_type, type_table)
-    if isinstance(constructor, EnumConstructor):
-        for field, argument in zip(constructor.fields, cell.arguments, strict=True):
+    if isinstance(constructor, (EnumConstructor, RecordConstructor)):
+        for field, argument in zip(
+            field_bearing_constructor_fields(constructor), cell.arguments, strict=True
+        ):
             _validate_cell(argument, field.type, type_table)
 
 
@@ -717,8 +730,8 @@ def _validate_path_decompositions(
                 )
 
         fields = (
-            canonical_constructor.fields
-            if isinstance(canonical_constructor, EnumConstructor)
+            field_bearing_constructor_fields(canonical_constructor)
+            if isinstance(canonical_constructor, (EnumConstructor, RecordConstructor))
             else ()
         )
         if len(decomposition.children) != len(fields):

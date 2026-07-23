@@ -16,7 +16,7 @@ from typing import TypeAlias
 from agm.agl.modules.ids import ENTRY_ID, ModuleId
 from agm.agl.self_validation import self_validation_enabled
 from agm.agl.semantics.type_table import TypeTable
-from agm.agl.semantics.types import EnumOwnerForm, EnumType, Type
+from agm.agl.semantics.types import EnumOwnerForm, EnumType, RecordType, Type
 from agm.agl.syntax.nodes import Program
 from agm.agl.syntax.spans import SourceSpan
 
@@ -34,7 +34,7 @@ class OccurrenceId:
 
 @dataclass(frozen=True, slots=True)
 class ConstructorField:
-    """One declaration-order child exposed by an enum constructor."""
+    """One declaration-order child exposed by an enum or record constructor."""
 
     name: str
     type: Type
@@ -51,6 +51,59 @@ class EnumConstructor:
     @property
     def arity(self) -> int:
         return len(self.fields)
+
+
+@dataclass(frozen=True, slots=True)
+class RecordConstructor:
+    """The sole typed constructor head for a nominal record."""
+
+    record_type: RecordType
+    fields: tuple[ConstructorField, ...]
+
+    @property
+    def arity(self) -> int:
+        return len(self.fields)
+
+
+FieldBearingNominalConstructor: TypeAlias = EnumConstructor | RecordConstructor
+
+
+@dataclass(frozen=True, slots=True)
+class FieldBearingConstructorKey:
+    """Runtime identity shared by enum variants and singleton record constructors."""
+
+    nominal_type: EnumType | RecordType
+    variant: str | None
+
+
+def field_bearing_constructor_key(
+    constructor: FieldBearingNominalConstructor,
+) -> FieldBearingConstructorKey:
+    """Return the equality key independent of declaration field metadata."""
+    if isinstance(constructor, EnumConstructor):
+        return FieldBearingConstructorKey(constructor.enum_type, constructor.variant)
+    return FieldBearingConstructorKey(constructor.record_type, None)
+
+
+def field_bearing_constructor_sort_key(
+    constructor: FieldBearingNominalConstructor,
+) -> tuple[int, tuple[str, ...], str, tuple[str, ...], str]:
+    """Return a stable order for a nominal constructor identity."""
+    key = field_bearing_constructor_key(constructor)
+    return (
+        0 if isinstance(key.nominal_type, EnumType) else 1,
+        key.nominal_type.module_id.segments,
+        key.nominal_type.name,
+        tuple(repr(argument) for argument in key.nominal_type.type_args),
+        key.variant or "",
+    )
+
+
+def field_bearing_constructor_fields(
+    constructor: FieldBearingNominalConstructor,
+) -> tuple[ConstructorField, ...]:
+    """Return declaration-order fields for either field-bearing nominal head."""
+    return constructor.fields
 
 
 @dataclass(frozen=True, slots=True)
@@ -103,7 +156,7 @@ class LiteralConstructor:
         return 0
 
 
-Constructor: TypeAlias = EnumConstructor | BoolConstructor | LiteralConstructor
+Constructor: TypeAlias = FieldBearingNominalConstructor | BoolConstructor | LiteralConstructor
 
 
 @dataclass(frozen=True, slots=True)
@@ -415,6 +468,8 @@ __all__ = [
     "DecisionSwitch",
     "EnumConstructor",
     "EnumConstructorSpelling",
+    "FieldBearingConstructorKey",
+    "FieldBearingNominalConstructor",
     "FieldOccurrenceProvenance",
     "LiteralConstructor",
     "LiteralKind",
@@ -430,9 +485,13 @@ __all__ = [
     "PathDecomposition",
     "PatternCell",
     "PatternProvenance",
+    "RecordConstructor",
     "RootOccurrenceProvenance",
     "Signature",
     "SourceAction",
     "SourcePatternProvenance",
     "WildcardCell",
+    "field_bearing_constructor_fields",
+    "field_bearing_constructor_key",
+    "field_bearing_constructor_sort_key",
 ]

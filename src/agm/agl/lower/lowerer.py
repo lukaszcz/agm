@@ -153,6 +153,7 @@ from agm.agl.matchcompile import (
     MatchCompiledModule,
     Occurrence,
     OccurrenceId,
+    RecordConstructor,
 )
 from agm.agl.modules.ids import ENTRY_ID, PRELUDE_ID, ModuleId
 from agm.agl.scope.symbols import BinderKind, BindingRef, BuiltinKind
@@ -2605,6 +2606,8 @@ class _Lowerer:
                 )
             if isinstance(constructor, BoolConstructor):
                 return IrLiteralCaseKey(IrLiteralKind.BOOL, constructor.value)
+            if isinstance(constructor, RecordConstructor):
+                raise AssertionError("record pattern decision lowering is not implemented")
             if constructor.kind is LiteralKind.NUMERIC:
                 assert isinstance(constructor.value, decimal.Decimal)
                 return IrLiteralCaseKey(IrLiteralKind.NUMERIC, constructor.value)

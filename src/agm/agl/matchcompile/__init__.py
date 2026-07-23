@@ -15,6 +15,7 @@ from .diagnostics import (
     MatchWitness,
     NonExhaustiveIssue,
     OpenComplementWitness,
+    RecordWitness,
     RedundantArmIssue,
     WildcardWitness,
     WitnessField,
@@ -31,6 +32,7 @@ from .model import (
     LiteralKind,
     Occurrence,
     OccurrenceId,
+    RecordConstructor,
 )
 from .stage import (
     MatchCompilationResult,
@@ -69,6 +71,8 @@ __all__ = [
     "Occurrence",
     "OccurrenceId",
     "OpenComplementWitness",
+    "RecordConstructor",
+    "RecordWitness",
     "RedundantArmIssue",
     "WildcardWitness",
     "WitnessField",

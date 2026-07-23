@@ -17,6 +17,7 @@ from agm.agl.matchcompile.model import (
     ClosedSignature,
     Constructor,
     ConstructorCell,
+    ConstructorField,
     DecisionBranch,
     DecisionFail,
     DecisionLeaf,
@@ -29,6 +30,7 @@ from agm.agl.matchcompile.model import (
     OccurrenceId,
     OmittedFieldProvenance,
     OpenSignature,
+    RecordConstructor,
     SourcePatternProvenance,
     WildcardCell,
 )
@@ -44,7 +46,7 @@ from agm.agl.modules.ids import ENTRY_ID, ModuleId
 from agm.agl.parser import parse_program
 from agm.agl.scope import resolve_module
 from agm.agl.scope.program import resolve_program
-from agm.agl.semantics.type_table import TypeDef
+from agm.agl.semantics.type_table import TypeDef, TypeTable
 from agm.agl.semantics.types import (
     AgentType,
     BoolType,
@@ -65,7 +67,7 @@ from agm.agl.semantics.types import (
     UnitType,
 )
 from agm.agl.semantics.values import DecimalValue, EnumValue, TextValue
-from agm.agl.syntax.nodes import Case, ConstructorPattern, Pattern
+from agm.agl.syntax.nodes import AsPattern, Case, ConstructorPattern, Pattern
 from agm.agl.syntax.spans import SourceSpan
 from agm.agl.syntax.visitor import walk
 from agm.agl.typecheck import CheckedModule, check_module, check_program
@@ -142,7 +144,6 @@ def test_signatures_are_closed_for_boolean_and_enum_in_declaration_order() -> No
         TypeVarType("T"),
         ListType(IntType()),
         DictType(IntType()),
-        RecordType("R"),
         ExceptionType("E"),
         UnitType(),
         AgentType(),
@@ -154,6 +155,152 @@ def test_every_current_non_closed_type_has_an_explicit_open_signature(
 ) -> None:
     checked = _check("()")
     assert signature_for_type(subject_type, checked.type_env.type_table) == OpenSignature()
+
+
+def test_record_signature_and_pattern_normalization_use_canonical_nominal_identity() -> None:
+    checked = _check(
+        "record Inner[T]\n"
+        "  value: T\n"
+        "record Outer[T]\n"
+        "  first: T\n"
+        "  inner: Inner[T]\n"
+        "  label: text\n"
+        "type Alias[T] = Outer[T]\n"
+        'let value: Alias[int] = Outer(first = 1, inner = Inner(value = 2), label = "x")\n'
+        "case value of | Alias(inner = Inner(value = _ as captured)) as whole => captured"
+    )
+    case = _only_case(checked.resolved.program)
+    subject_type = checked.node_types[case.subject.node_id]
+    assert isinstance(subject_type, RecordType)
+
+    signature = signature_for_type(subject_type, checked.type_env.type_table)
+
+    assert signature == ClosedSignature(
+        (
+            RecordConstructor(
+                RecordType("Outer", (IntType(),), ENTRY_ID),
+                (
+                    ConstructorField("first", IntType()),
+                    ConstructorField("inner", RecordType("Inner", (IntType(),), ENTRY_ID)),
+                    ConstructorField("label", TextType()),
+                ),
+            ),
+        )
+    )
+    outer = normalize_case(case, checked).rows[0].cells[0]
+    assert isinstance(outer, ConstructorCell)
+    assert isinstance(outer.constructor, RecordConstructor)
+    assert outer.constructor.record_type == RecordType("Outer", (IntType(),), ENTRY_ID)
+    assert [field.name for field in outer.constructor.fields] == ["first", "inner", "label"]
+    assert isinstance(outer.arguments[0], WildcardCell)
+    inner = outer.arguments[1]
+    assert isinstance(inner, ConstructorCell)
+    assert isinstance(inner.constructor, RecordConstructor)
+    assert [binder.name for binder in inner.arguments[0].binders] == ["captured"]
+    assert isinstance(outer.arguments[2], WildcardCell)
+    assert [binder.name for binder in outer.binders] == ["whole"]
+
+    source_pattern = case.branches[0].pattern
+    assert isinstance(source_pattern, AsPattern)
+    constructor_pattern = source_pattern.pattern
+    assert isinstance(constructor_pattern, ConstructorPattern)
+    constructor_ref = checked.pattern_constructor_ref_for(constructor_pattern.node_id)
+    assert constructor_ref is not None
+    with pytest.raises(MatchCompileInvariantError, match="missing final constructor"):
+        normalize_case(
+            case,
+            replace(checked, pattern_constructor_refs={}),
+        )
+    with pytest.raises(MatchCompileInvariantError, match="invalid final constructor"):
+        normalize_case(
+            case,
+            replace(
+                checked,
+                pattern_constructor_refs={
+                    constructor_pattern.node_id: replace(constructor_ref, variant="not-a-record")
+                },
+            ),
+        )
+    for malformed_ref in (
+        replace(constructor_ref, owner_name="Inner"),
+        replace(constructor_ref, owner_decl_node_id=-1),
+        replace(constructor_ref, type_params=()),
+        replace(constructor_ref, owner_module_id=ModuleId.from_path("other")),
+    ):
+        with pytest.raises(MatchCompileInvariantError, match="invalid final constructor"):
+            normalize_case(
+                case,
+                replace(
+                    checked,
+                    pattern_constructor_refs={
+                        **checked.pattern_constructor_refs,
+                        constructor_pattern.node_id: malformed_ref,
+                    },
+                ),
+            )
+
+
+def test_record_signatures_keep_modules_and_generic_instantiations_distinct() -> None:
+    table = TypeTable()
+    left_module = ModuleId.from_path("left")
+    right_module = ModuleId.from_path("right")
+    table.register(
+        TypeDef(
+            kind="record",
+            name="Box",
+            module_id=left_module,
+            type_params=("T",),
+            fields=(("value", TypeVarType("T")),),
+        )
+    )
+    table.register(
+        TypeDef(
+            kind="record",
+            name="Box",
+            module_id=right_module,
+            type_params=("T",),
+            fields=(("value", TypeVarType("T")),),
+        )
+    )
+
+    left_int = signature_for_type(RecordType("Box", (IntType(),), left_module), table)
+    left_text = signature_for_type(RecordType("Box", (TextType(),), left_module), table)
+    right_int = signature_for_type(RecordType("Box", (IntType(),), right_module), table)
+
+    assert left_int != left_text
+    assert left_int != right_int
+    assert left_int == ClosedSignature(
+        (
+            RecordConstructor(
+                RecordType("Box", (IntType(),), left_module),
+                (ConstructorField("value", IntType()),),
+            ),
+        )
+    )
+
+
+def test_record_signature_cache_preserves_identity_and_invalidates_redeclarations() -> None:
+    table = TypeTable()
+    record_type = RecordType("Box")
+    table.register(
+        TypeDef(kind="record", name="Box", module_id=ENTRY_ID, fields=(("value", IntType()),))
+    )
+
+    original = signature_for_type(record_type, table)
+
+    assert original is signature_for_type(record_type, table)
+
+    table.unregister(ENTRY_ID, "Box")
+    table.register(
+        TypeDef(kind="record", name="Box", module_id=ENTRY_ID, fields=(("label", TextType()),))
+    )
+
+    redeclared = signature_for_type(record_type, table)
+
+    assert redeclared is not original
+    assert redeclared == ClosedSignature(
+        (RecordConstructor(record_type, (ConstructorField("label", TextType()),)),)
+    )
 
 
 def test_bottom_has_an_empty_closed_signature_and_no_inhabiting_patterns() -> None:
@@ -580,6 +727,8 @@ def test_missing_enum_and_subject_metadata_raise_compiler_invariants() -> None:
 
     with pytest.raises(MatchCompileInvariantError, match="cannot resolve enum signature"):
         signature_for_type(EnumType("Missing"), checked.type_env.type_table)
+    with pytest.raises(MatchCompileInvariantError, match="cannot resolve record signature"):
+        signature_for_type(RecordType("Missing"), checked.type_env.type_table)
     without_subject = replace(
         checked,
         node_types={
@@ -674,6 +823,19 @@ def test_malformed_checked_constructor_metadata_raise_invariants() -> None:
     unknown_variant = replace(pattern, name="missing")
     with pytest.raises(MatchCompileInvariantError, match="unknown variant"):
         normalize_case(_replace_case_pattern(case, unknown_variant), checked)
+
+    constructor_ref = checked.pattern_constructor_ref_for(pattern.node_id)
+    assert constructor_ref is not None
+    with pytest.raises(MatchCompileInvariantError, match="invalid final constructor"):
+        normalize_case(
+            case,
+            replace(
+                checked,
+                pattern_constructor_refs={
+                    pattern.node_id: replace(constructor_ref, variant="not-the-pattern-variant")
+                },
+            ),
+        )
 
     no_bindings = replace(
         checked.argument_bindings,

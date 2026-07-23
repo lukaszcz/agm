@@ -61,6 +61,16 @@ def _public_binding(program: ExecutableProgram, name: str) -> IrBind:
     raise AssertionError(f"missing public binding {name!r}")
 
 
+def test_record_decisions_remain_explicitly_outside_lowering() -> None:
+    with pytest.raises(AssertionError, match="record pattern decision lowering"):
+        _lower(
+            "record Box\n"
+            "  value: int\n"
+            "let value = Box(value = 1)\n"
+            "case value of | Box(value = _) => 1"
+        )
+
+
 def test_wildcard_case_still_binds_root_subject_before_leaf() -> None:
     program = _lower("let value = 1\nlet result = case value of | _ => 2\n()")
     lowered = _public_binding(program, "result").value

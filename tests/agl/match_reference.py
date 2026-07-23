@@ -18,16 +18,18 @@ from agm.agl.matchcompile.model import (
     LiteralConstructor,
     LiteralKind,
     PatternCell,
+    RecordConstructor,
     WildcardCell,
 )
 from agm.agl.matchcompile.normalize import CheckedPatternOwner
-from agm.agl.semantics.types import EnumType, Type
+from agm.agl.semantics.types import EnumType, RecordType, Type
 from agm.agl.semantics.values import (
     BoolValue,
     DecimalValue,
     EnumValue,
     IntValue,
     JsonValue,
+    RecordValue,
     TextValue,
     Value,
 )
@@ -90,15 +92,23 @@ def _matches(
         case LiteralPattern():
             return value_eq(value, _literal_value(pattern))
         case ConstructorPattern(node_id=node_id, name=variant):
-            if not isinstance(subject_type, EnumType) or not isinstance(value, EnumValue):
+            if isinstance(subject_type, EnumType) and isinstance(value, EnumValue):
+                if (
+                    value.nominal.module_id != subject_type.module_id
+                    or value.nominal.declared_name != subject_type.name
+                    or value.variant != variant
+                ):
+                    return False
+                fields = checked.type_env.type_table.enum_variants(subject_type)[variant]
+            elif isinstance(subject_type, RecordType) and isinstance(value, RecordValue):
+                if (
+                    value.nominal.module_id != subject_type.module_id
+                    or value.nominal.declared_name != subject_type.name
+                ):
+                    return False
+                fields = checked.type_env.type_table.record_fields(subject_type)
+            else:
                 return False
-            if (
-                value.nominal.module_id != subject_type.module_id
-                or value.nominal.declared_name != subject_type.name
-                or value.variant != variant
-            ):
-                return False
-            fields = checked.type_env.type_table.enum_variants(subject_type)[variant]
             return all(
                 _matches(child, fields[field_name], value.fields[field_name], checked)
                 for field_name, child in checked.argument_bindings.constructor_patterns[node_id]
@@ -136,13 +146,20 @@ def canonical_cell_matches(cell: PatternCell, value: Value) -> bool:
         return isinstance(value, BoolValue) and value.value is constructor.value
     if isinstance(constructor, LiteralConstructor):
         return value_eq(value, _constructor_literal_value(constructor))
-    if not isinstance(constructor, EnumConstructor) or not isinstance(value, EnumValue):
-        return False
-    if (
-        value.nominal.module_id != constructor.enum_type.module_id
-        or value.nominal.declared_name != constructor.enum_type.name
-        or value.variant != constructor.variant
-    ):
+    if isinstance(constructor, EnumConstructor) and isinstance(value, EnumValue):
+        if (
+            value.nominal.module_id != constructor.enum_type.module_id
+            or value.nominal.declared_name != constructor.enum_type.name
+            or value.variant != constructor.variant
+        ):
+            return False
+    elif isinstance(constructor, RecordConstructor) and isinstance(value, RecordValue):
+        if (
+            value.nominal.module_id != constructor.record_type.module_id
+            or value.nominal.declared_name != constructor.record_type.name
+        ):
+            return False
+    else:
         return False
     return all(
         canonical_cell_matches(argument, value.fields[field.name])

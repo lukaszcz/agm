@@ -85,6 +85,8 @@ def test_matchcompile_public_exports_are_narrow_and_stable() -> None:
         "Occurrence",
         "OccurrenceId",
         "OpenComplementWitness",
+        "RecordConstructor",
+        "RecordWitness",
         "RedundantArmIssue",
         "WildcardWitness",
         "WitnessField",

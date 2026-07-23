@@ -22,6 +22,7 @@ from agm.agl.matchcompile import (
     LiteralWitness,
     NonExhaustiveIssue,
     OpenComplementWitness,
+    RecordWitness,
     RedundantArmIssue,
     WildcardWitness,
     WitnessField,
@@ -842,6 +843,33 @@ def test_local_enum_witness_prefers_bare_constructor_over_blocked_short_owner(
 
     assert witness.qualification is None
     assert render_witness(witness) == "Missing"
+
+
+def test_imported_record_witness_preserves_a_checker_accepted_source_qualification(
+    tmp_path: Path,
+) -> None:
+    modules = {
+        "library/remote": "record Remote\n  value: bool",
+        "entry": (
+            "import library/remote as r\n"
+            "let value: r::Remote = r::Remote(value = false)\n"
+            "case value of | r::Remote(value = true) => 0\n"
+        ),
+    }
+    compiled = _compile_graph_case(tmp_path, modules)
+    witness = cast(RecordWitness, cast(NonExhaustiveIssue, compiled.issues[0]).witness)
+
+    rendered = render_witness(witness)
+
+    assert witness.qualification == EnumWitnessQualification("Remote", ("r",))
+    assert rendered == "r::Remote(value = false)"
+    modules["entry"] = (
+        "import library/remote as r\n"
+        "let value: r::Remote = r::Remote(value = false)\n"
+        f"case value of | {rendered} => 0 | _ => 1\n"
+    )
+    checked = check_program(resolve_program(make_graph_from_files(tmp_path, modules)), _CAPS)
+    assert ENTRY_ID in checked.modules
 
 
 def test_qualified_only_imported_enum_witness_uses_source_alias(tmp_path: Path) -> None:

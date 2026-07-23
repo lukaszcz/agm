@@ -7,7 +7,7 @@ import json
 from dataclasses import dataclass
 from typing import TypeAlias
 
-from agm.agl.semantics.types import EnumType, Type
+from agm.agl.semantics.types import EnumType, RecordType, Type
 from agm.agl.syntax.spans import SourceSpan
 from agm.agl.syntax.types import render_qualifier
 
@@ -92,6 +92,15 @@ class EnumWitness:
 
 
 @dataclass(frozen=True, slots=True)
+class RecordWitness:
+    """A concrete record constructor with structural child witnesses."""
+
+    record_type: RecordType
+    fields: tuple[WitnessField, ...]
+    qualification: EnumWitnessQualification | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class OpenComplementWitness:
     """The remainder of an open domain after excluding observed literals."""
 
@@ -100,7 +109,12 @@ class OpenComplementWitness:
 
 
 MatchWitness: TypeAlias = (
-    WildcardWitness | BoolWitness | LiteralWitness | EnumWitness | OpenComplementWitness
+    WildcardWitness
+    | BoolWitness
+    | LiteralWitness
+    | EnumWitness
+    | RecordWitness
+    | OpenComplementWitness
 )
 
 
@@ -153,6 +167,16 @@ def render_witness(witness: MatchWitness) -> str:
             f"{field.name} = {render_witness(field.witness)}" for field in witness.fields
         )
         return f"{constructor_name}({fields})"
+    if isinstance(witness, RecordWitness):
+        fields = ", ".join(
+            f"{field.name} = {render_witness(field.witness)}" for field in witness.fields
+        )
+        constructor_name = (
+            witness.record_type.name
+            if witness.qualification is None
+            else witness.qualification.owner_spelling
+        )
+        return f"{constructor_name}({fields})"
     excluded = ", ".join(
         _render_literal(constructor.kind, constructor.value) for constructor in witness.excluded
     )
@@ -188,6 +212,7 @@ __all__ = [
     "NonExhaustiveIssue",
     "OpenComplementWitness",
     "RedundantArmIssue",
+    "RecordWitness",
     "WildcardWitness",
     "WitnessField",
     "issue_sort_key",

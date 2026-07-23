@@ -2073,16 +2073,12 @@ class TestFuncDef:
 
         assert "inferred return type" in str(err).lower()
         assert "annotation" in str(err).lower()
+        # The primary error stays at the failing expression, not the callee's
+        # declaration, and the inferred function is identified through notes.
         assert err.span is not None
-        assert source[err.span.start_offset : err.span.end_offset].startswith("def recurse")
-        assert any("underlying type error" in message.lower() for message, _ in err.related)
+        assert source[err.span.start_offset : err.span.end_offset] == 'recurse(n) < "x"'
         assert any("candidate return type" in message.lower() for message, _ in err.related)
         assert any("candidate return evidence" in message.lower() for message, _ in err.related)
-        assert any(
-            source[span.start_offset : span.end_offset] == 'recurse(n) < "x"'
-            for message, span in err.related
-            if "underlying type error" in message.lower()
-        )
 
     def test_nested_failed_operations_keep_the_original_candidate_frame(self) -> None:
         err = reject_type(
@@ -2111,7 +2107,7 @@ class TestFuncDef:
         err = reject_type(source)
 
         assert "inferred return type" in str(err).lower()
-        assert any("underlying type error" in message.lower() for message, _ in err.related)
+        assert any("candidate return type" in message.lower() for message, _ in err.related)
 
     def test_generic_and_common_type_results_preserve_candidate_provenance(self) -> None:
         generic = reject_type(
@@ -2180,7 +2176,7 @@ class TestFuncDef:
         err = reject_type(source)
 
         assert "inferred return type" in str(err).lower()
-        assert any("underlying type error" in message.lower() for message, _ in err.related)
+        assert any("candidate return type" in message.lower() for message, _ in err.related)
 
     def test_fixed_result_choices_clear_candidate_provenance(self) -> None:
         sources = (
@@ -2276,7 +2272,7 @@ class TestFuncDef:
         )
 
         assert "inferred return type" in str(err).lower()
-        assert any("underlying type error" in message.lower() for message, _ in err.related)
+        assert any("candidate return type" in message.lower() for message, _ in err.related)
 
     @pytest.mark.parametrize(
         "source",
@@ -2320,7 +2316,7 @@ class TestFuncDef:
         err = reject_type(source)
 
         assert "inferred return type" in str(err).lower()
-        assert any("underlying type error" in message.lower() for message, _ in err.related)
+        assert any("candidate return type" in message.lower() for message, _ in err.related)
 
     def test_unrelated_concrete_error_in_inferred_function_is_unchanged(self) -> None:
         err = reject_type(
@@ -2387,7 +2383,7 @@ class TestFuncDef:
         err = reject_type(source)
 
         assert "inferred return type" in str(err).lower()
-        assert any("underlying type error" in message.lower() for message, _ in err.related)
+        assert any("candidate return type" in message.lower() for message, _ in err.related)
 
     @pytest.mark.parametrize(
         "source",
@@ -2547,7 +2543,7 @@ class TestFuncDef:
         )
 
         assert "inferred return types" in str(err).lower()
-        assert any("underlying type error" in message.lower() for message, _ in err.related)
+        assert any("candidate return type" in message.lower() for message, _ in err.related)
 
     def test_for_element_binding_preserves_type_dependent_candidate_provenance(self) -> None:
         err = reject_type(
@@ -2660,6 +2656,55 @@ class TestFuncDef:
         )
 
         assert checked.function_signatures["recurse"].result == DecimalType()
+
+    @pytest.mark.parametrize(
+        "body",
+        (
+            "  let d: decimal = recurse(n - 1)\n  let i: int = recurse(n - 1)\n  1",
+            "  let i: int = recurse(n - 1)\n  let d: decimal = recurse(n - 1)\n  1",
+        ),
+        ids=("decimal-first", "int-first"),
+    )
+    def test_direct_recursive_local_annotations_do_not_over_constrain_result(
+        self, body: str
+    ) -> None:
+        # A local annotation consuming the recursive result is a use-site, not
+        # return evidence: it must not pin the result var, regardless of order.
+        checked = accept_type(f"def recurse(n: int) =\n{body}\nrecurse")
+
+        assert checked.function_signatures["recurse"].result == IntType()
+
+    def test_mutual_recursion_mixed_numeric_operands_are_accepted(self) -> None:
+        # ``f + g`` where the operands resolve to int and decimal must not force
+        # the two provisional results equal.
+        checked = accept_type(
+            "def f(n: int) =\n"
+            "  if n < 1 => 0\n"
+            "  else =>\n"
+            "    let _ = f(n - 1) + g(n - 1)\n"
+            "    f(n - 1)\n"
+            "def g(n: int) =\n"
+            "  if n < 1 => 0.0\n"
+            "  else =>\n"
+            "    let _ = f(n - 1) + g(n - 1)\n"
+            "    g(n - 1)\n"
+            "f"
+        )
+
+        assert checked.function_signatures["f"].result == IntType()
+        assert checked.function_signatures["g"].result == DecimalType()
+
+    def test_candidate_binding_referencing_inferred_function_reports_clean_error(self) -> None:
+        # A top-level value binding that reads a function still being inferred
+        # cannot be typed best-effort; it must ask for an annotation, not crash.
+        err = reject_type(
+            "def f(n: int) = if n < 1 => 0 else => g(n - 1)\n"
+            "let cache = g\n"
+            "def g(n: int) = if n < 1 => 0 else => f(cache(n - 1))\n"
+            "f"
+        )
+
+        assert "annotation" in str(err).lower()
 
     def test_direct_recursive_membership_defers_provisional_operand(self) -> None:
         checked = accept_type(

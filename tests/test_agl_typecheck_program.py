@@ -318,6 +318,36 @@ def test_single_module_equivalence(tmp_path: Path) -> None:
     assert len(entry_checked.node_types) == len(single.node_types)
 
 
+def test_program_warnings_follow_module_presentation_order(tmp_path: Path) -> None:
+    """Cross-module warnings are ordered by module presentation, not import-SCC order.
+
+    ``libA`` and ``libB`` appear in the opposite relative order in the import-SCC
+    sequence (dependency-first) than in the presented module list, so a warning
+    from each exposes any ordering that follows inference order instead.
+    """
+    cg = _check_program(
+        tmp_path,
+        {
+            "entry": "import libB\nlibB::b()",
+            "libB": (
+                "import libA\n"
+                "def b() -> text =\n"
+                "  let _ = libA::a()\n"
+                '  ask("Q", on_parse_error = Abort())\n'
+            ),
+            "libA": 'def a() -> text = ask("Q", on_parse_error = Abort())\n',
+        },
+    )
+
+    per_module_warnings = tuple(
+        warning for module in cg.modules.values() for warning in module.warnings
+    )
+    # Both libraries emit a warning, and the program surfaces them grouped in the
+    # same order the modules are presented.
+    assert len(per_module_warnings) == 2
+    assert cg.warnings == per_module_warnings
+
+
 # ---------------------------------------------------------------------------
 # 6. check_program basic: cross-module record type used in entry
 # ---------------------------------------------------------------------------

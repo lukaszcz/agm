@@ -182,7 +182,6 @@ from agm.agl.typecheck.env import (
 )
 from agm.agl.typecheck.function_inference import (
     CandidateSession,
-    FunctionReturnSource,
     FunctionSignatureRecord,
     ModuleCandidateComponent,
     infer_module_component_candidates,
@@ -483,11 +482,10 @@ class _Checker:
         self._caps = capabilities
         self._module_id = module_id
         self._candidate_session = candidate_session
-        self._candidate_records = {
-            declaration_id: record
-            for declaration_id, record in (candidate_records or {}).items()
-            if record.return_source is FunctionReturnSource.CANDIDATE
-        }
+        # Callers pass only candidate-inferred records here (see
+        # ``candidate_records_for`` at each construction site); the checker keys
+        # inferred-return provenance by declaration id off this table.
+        self._candidate_records = dict(candidate_records or {})
         # Checker-only provenance for final validation. It never leaves this
         # checker or participates in semantic type identity.
         self._inferred_return_expr_provenance: dict[int, set[int]] = {}
@@ -1559,6 +1557,18 @@ class _Checker:
                 "Add a return type annotation.",
                 span=None,
             )
+        if typ is None and self._candidate_session is not None:
+            # During candidate discovery a top-level value binding is left untyped
+            # when it reads a function whose return type is still being inferred in
+            # this component (see ``_seed_candidate_visible_bindings``). Such a body
+            # cannot be inferred best-effort; ask for an annotation rather than
+            # crashing. The authoritative pass types the binding once signatures
+            # are concrete.
+            raise AglTypeError(
+                f"Cannot infer return type: binding '{ref.name}' depends on a function whose "
+                "return type is still being inferred. Add a return type annotation.",
+                span=None,
+            )
         assert typ is not None, f"Binding {ref!r} has no recorded type; checker invariant violated."
         return typ
 
@@ -2093,16 +2103,21 @@ class _Checker:
 
         names = ", ".join(f"'{record.name}'" for record in records)
         singular = len(records) == 1
-        message = (
-            f"Could not validate inferred return type for function {names}. "
-            "Add an explicit return type annotation."
+        # Keep the real type error as the primary diagnostic at its own source
+        # span so the failure is reported where it happens; append guidance that
+        # names the inferred function(s) the value's type came from, and point to
+        # each declaration and its evidence through related notes. The annotation
+        # hint is conditional — it helps only when the inferred type is actually
+        # the mistake, not when a consumer's explicit annotation disagrees.
+        guidance = (
+            f"{exc} The value's inferred return type here comes from function {names}; "
+            "add an explicit return type annotation there if that inferred type is wrong."
             if singular
-            else f"Could not validate inferred return types for functions {names}. "
-            "Add explicit return type annotations."
+            else f"{exc} The value's inferred return types here come from functions {names}; "
+            "add explicit return type annotations there if those inferred types are wrong."
         )
         assert exc.span is not None, "checker operation errors must carry a source span"
-        related: list[tuple[str, SourceSpan]] = [(f"Underlying type error: {exc}", exc.span)]
-        related.extend(exc.related)
+        related: list[tuple[str, SourceSpan]] = list(exc.related)
         for record in records:
             related.append(
                 (
@@ -2115,9 +2130,9 @@ class _Checker:
                 for evidence in record.candidate_evidence
             )
         return _FramedCandidateEvidenceError(
-            message,
+            guidance,
             original=exc,
-            span=records[0].declaration_span,
+            span=exc.span,
             related=related,
         )
 
@@ -3062,12 +3077,13 @@ class _Checker:
             if any(isinstance(typ, DecimalType) for typ in concrete):
                 return DecimalType()
             return IntType()
-        engine.unify(
-            left,
-            right,
-            engine.origin(span, role=ConstraintRole.EXPECTED_RESULT, subject=subject),
-        )
-        return engine.zonk(left)
+        # Both operands are still unresolved provisional results. Their families
+        # need not agree (``int + decimal`` is legal and widens to ``decimal``),
+        # so forcing them equal would spuriously reject valid mixed-numeric mutual
+        # recursion. Yield a fresh provisional result and leave the operation's
+        # type for later concrete evidence; an unsolved result requires an
+        # annotation like any other underconstrained group.
+        return engine.fresh(subject)
 
     def _candidate_operation_can_defer(
         self,
@@ -4165,16 +4181,12 @@ class _Checker:
 
         result_type: Type = non_bottom[0]
         for branch_type in non_bottom[1:]:
-            provisional = (
-                self._unify_provisional_common_types(
-                    result_type,
-                    branch_type,
-                    span=span,
-                    subject=f"{construct} branches",
-                    engine=engine,
-                )
-                if engine is not None
-                else None
+            provisional = self._unify_provisional_common_types(
+                result_type,
+                branch_type,
+                span=span,
+                subject=f"{construct} branches",
+                engine=engine,
             )
             if provisional is not None:
                 result_type = provisional
@@ -4208,17 +4220,12 @@ class _Checker:
         if self._candidate_session is not None and (
             contains_inference_var(value_type) or contains_inference_var(target_type)
         ):
-            engine = self._active_inference_engine()
-            try:
-                engine.unify(
-                    value_type,
-                    target_type,
-                    engine.origin(
-                        span, role=ConstraintRole.EXPECTED_RESULT, subject="expected type"
-                    ),
-                )
-            except InferenceError as exc:
-                raise AglTypeError(str(exc), span=exc.span, related=exc.related) from exc
+            # Candidate return inference is definition-local: a use-site
+            # assignability check (an annotation or a callee's parameter slot)
+            # must not pin a still-flexible provisional result. Exact unification
+            # here would drop a widening assignability such as ``int`` into
+            # ``decimal`` and make later evidence conflict, so defer to the
+            # authoritative pass, which validates once the result is concrete.
             return
         if is_assignable(value_type, target_type):
             return
@@ -4266,6 +4273,33 @@ class _Checker:
 # ---------------------------------------------------------------------------
 
 
+def prepare_module_headers(
+    resolved: ModuleResolution,
+    capabilities: HostCapabilities,
+    *,
+    env: TypeEnvironment,
+    module_id: ModuleId,
+    check_inhabitation: bool,
+) -> None:
+    """Build a module's type table and pre-register its function headers.
+
+    The standalone boundary and the program driver share this step so header
+    pre-registration stays identical across single-module and program checking.
+    """
+    _TypeBuilder(env, module_id=module_id).collect(
+        resolved.program, check_inhabitation=check_inhabitation
+    )
+    header_checker = _Checker(
+        env=env,
+        resolved=resolved,
+        capabilities=capabilities,
+        module_id=module_id,
+    )
+    for item in resolved.program.body.items:
+        if isinstance(item, FuncDef):
+            header_checker._preregister_funcdef(item)
+
+
 def _check_prepared_module(
     resolved: ModuleResolution,
     capabilities: HostCapabilities,
@@ -4289,18 +4323,13 @@ def _check_prepared_module(
     seeded this environment before candidate inference.
     """
     if prepare_headers:
-        builder = _TypeBuilder(env, module_id=module_id)
-        builder.collect(resolved.program, check_inhabitation=check_inhabitation)
-
-        header_checker = _Checker(
+        prepare_module_headers(
+            resolved,
+            capabilities,
             env=env,
-            resolved=resolved,
-            capabilities=capabilities,
             module_id=module_id,
+            check_inhabitation=check_inhabitation,
         )
-        for item in resolved.program.body.items:
-            if isinstance(item, FuncDef):
-                header_checker._preregister_funcdef(item)
     if infer_candidates:
         inferred_records = infer_module_component_candidates(
             ModuleCandidateComponent.singleton(resolved, env, capabilities, module_id)

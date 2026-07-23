@@ -8,7 +8,7 @@ signatures outside that import SCC.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import TYPE_CHECKING
@@ -167,6 +167,22 @@ class FunctionSignatureRecord:
     module_id: ModuleId
     declaration_span: SourceSpan
     candidate_evidence: tuple[SourceSpan, ...] = ()
+
+
+def candidate_records_for(
+    records: Mapping[int, FunctionSignatureRecord],
+) -> dict[int, FunctionSignatureRecord]:
+    """Return only the candidate-inferred records, keyed by declaration id.
+
+    The program signature table mixes explicitly declared and candidate-inferred
+    records; the final checker keys inferred-return provenance off the candidate
+    subset alone, so callers filter once and share the result.
+    """
+    return {
+        declaration_id: record
+        for declaration_id, record in records.items()
+        if record.return_source is FunctionReturnSource.CANDIDATE
+    }
 
 
 def _declaration_key(node: FuncDef) -> tuple[int, int]:

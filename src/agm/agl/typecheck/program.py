@@ -82,7 +82,7 @@ from agm.agl.syntax.nodes import (
 )
 from agm.agl.syntax.spans import SourceSpan
 from agm.agl.typecheck.builder import _TypeBuilder
-from agm.agl.typecheck.checker import _check_prepared_module, _Checker
+from agm.agl.typecheck.checker import _check_prepared_module, prepare_module_headers
 from agm.agl.typecheck.env import (
     AglTypeError,
     CheckedModule,
@@ -99,6 +99,7 @@ from agm.agl.typecheck.function_inference import (
     FunctionReturnSource,
     FunctionSignatureRecord,
     ModuleCandidateComponent,
+    candidate_records_for,
     infer_module_component_candidates,
     resolve_function_header,
 )
@@ -888,25 +889,21 @@ def check_program(
         )
 
     for mid in ordered_mids:
-        rmod = resolved.modules[mid]
-        _TypeBuilder(module_envs[mid], module_id=mid).collect(
-            rmod.resolved.program, check_inhabitation=False
-        )
-        header_checker = _Checker(
+        prepare_module_headers(
+            resolved.modules[mid].resolved,
+            capabilities,
             env=module_envs[mid],
-            resolved=rmod.resolved,
-            capabilities=capabilities,
             module_id=mid,
+            check_inhabitation=False,
         )
-        for item in rmod.resolved.program.body.items:
-            if isinstance(item, FuncDef):
-                header_checker._preregister_funcdef(item)
 
     # Candidate discovery follows the preserved reverse-topological import SCC
     # sequence. A cycle is one cross-module function graph; a dependency SCC's
-    # concrete records are available before its importers are considered.
-    publication_envs = tuple(module_envs.values())
-    for import_scc in resolved.import_sccs:
+    # concrete records are available before its importers are considered. Each
+    # SCC's closed signatures are published only into itself and the later SCCs
+    # (their potential importers); earlier SCCs are dependencies that cannot
+    # reference it, so registering there would be wasted work.
+    for index, import_scc in enumerate(resolved.import_sccs):
         candidates = tuple(
             CandidateModule(
                 resolved.modules[mid].resolved,
@@ -916,14 +913,19 @@ def check_program(
             )
             for mid in import_scc
         )
+        publication_envs = tuple(
+            module_envs[mid] for later_scc in resolved.import_sccs[index:] for mid in later_scc
+        )
         for record in infer_module_component_candidates(
             ModuleCandidateComponent(candidates, publication_envs)
         ):
             program_func_sig_table[record.declaration_node_id] = record
 
     # Phase 4: ordinary body checking is the sole source of checked artifacts.
+    # The full program table mixes declared and candidate records; filter to the
+    # candidate subset once and share it across every module check.
+    candidate_records = candidate_records_for(program_func_sig_table)
     checked_modules: dict[ModuleId, CheckedModule] = {}
-    all_warnings: list[Diagnostic] = []
     for mid in ordered_mids:
         rmod = resolved.modules[mid]
         cp = _check_prepared_module(
@@ -934,7 +936,7 @@ def check_program(
             check_inhabitation=False,
             prepare_headers=False,
             infer_candidates=False,
-            candidate_records=program_func_sig_table,
+            candidate_records=candidate_records,
         )
         cm = replace(
             cp,
@@ -944,10 +946,10 @@ def check_program(
             function_signatures=_module_function_signatures(rmod.resolved.program, cp.type_env),
         )
         checked_modules[mid] = cm
-        all_warnings.extend(cm.warnings)
 
     # Preserve the established checked-module presentation order independently
-    # from dependency-ordered inference and validation above.
+    # from dependency-ordered inference and validation above. Warnings follow the
+    # same presentation order so multi-module diagnostics stay stable.
     presentation_order = tuple(mid for mid in resolved.modules if not mid.is_entry) + (
         resolved.entry_id,
     )
@@ -955,7 +957,9 @@ def check_program(
         modules={mid: checked_modules[mid] for mid in presentation_order},
         entry_id=resolved.entry_id,
         program_type_table=program_type_table,
-        warnings=tuple(all_warnings),
+        warnings=tuple(
+            warning for mid in presentation_order for warning in checked_modules[mid].warnings
+        ),
         capabilities=capabilities,
     )
     assert_checked_program_closed(checked)

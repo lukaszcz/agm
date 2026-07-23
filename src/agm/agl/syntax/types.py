@@ -10,8 +10,12 @@ from __future__ import annotations
 
 import enum
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
 from agm.agl.syntax.spans import SourceSpan
+
+if TYPE_CHECKING:
+    from agm.agl.syntax.nodes import QualifierChain
 
 # The builtin type spellings that lex as a plain ``NAME`` in type position
 # (the parser maps them to primitive/container TypeExpr nodes — see the
@@ -73,50 +77,13 @@ class ImportMode(enum.Enum):
 
 
 @dataclass(frozen=True, slots=True)
-class Qualifier:
-    """A module qualifier prefix, as parsed from ``MODQUAL`` or leading ``::``.
-
-    ``segments == ()`` means the current module (written as ``::name``).
-    ``anchored`` distinguishes ``/foo/bar::name`` from an ordinary suffix
-    qualifier with the same segments. Scope resolution determines the target.
-    """
-
-    segments: tuple[str, ...]
-    span: SourceSpan = field(compare=False)
-    node_id: int = field(compare=False)
-    anchored: bool = False
-
-    def render(self) -> str:
-        """Render this qualifier as it would be written in source."""
-        return render_qualifier(self.segments, anchored=self.anchored)
-
-
-def render_qualifier(qualifier: tuple[str, ...], *, anchored: bool = False) -> str:
-    """Render a source qualifier with its slash route and optional anchor."""
-    return ("/" if anchored else "") + "/".join(qualifier)
-
-
-@dataclass(frozen=True, slots=True)
-class TypeQualifier:
-    """A static type qualifier in ``Type::Ctor`` or ``Type[T]::Ctor``.
-
-    ``type_args is None`` means the source omitted brackets.
-    """
-
-    name: str
-    type_args: tuple[TypeExpr, ...] | None
-    span: SourceSpan = field(compare=False)
-    node_id: int = field(compare=False)
-
-
-@dataclass(frozen=True, slots=True)
 class NameT:
     """A named type reference (record, enum, or type-alias name)."""
 
     name: str
     span: SourceSpan = field(compare=False)
     node_id: int = field(compare=False)
-    module_qualifier: Qualifier | None = None
+    qualifier: QualifierChain | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -170,13 +137,13 @@ class FuncT:
 
 @dataclass(frozen=True, slots=True)
 class AppliedT:
-    """A type application ``Name[args]`` or ``module::Name[args]``."""
+    """A type application ``Name[args]`` or qualified ``Name[args]``."""
 
     name: str
     args: tuple[TypeExpr, ...]
     span: SourceSpan = field(compare=False)
     node_id: int = field(compare=False)
-    module_qualifier: Qualifier | None = None
+    qualifier: QualifierChain | None = None
 
 
 # Closed union of all type-expression nodes.

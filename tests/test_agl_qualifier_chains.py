@@ -4,9 +4,19 @@ from __future__ import annotations
 
 import pytest
 
-from agm.agl.parser import AglSyntaxError, parse_program
+from agm.agl.parser import parse_program
 from agm.agl.scope import AglScopeError, resolve_module
-from agm.agl.syntax import AssignStmt, Block, NameTarget, QualifierAnchor, VarRef
+from agm.agl.syntax import (
+    AssignStmt,
+    Block,
+    Case,
+    IsTest,
+    LetDecl,
+    NameT,
+    NameTarget,
+    QualifierAnchor,
+    VarRef,
+)
 
 
 def _ref(source: str) -> VarRef:
@@ -53,6 +63,113 @@ def test_current_module_anchored_chain_keeps_all_qualifier_segments() -> None:
     assert ref.qualifier.member == "C"
 
 
+def test_qualified_patterns_keep_segment_spans_and_type_arguments() -> None:
+    source = "case value of | module::Option[int]::None => 1"
+    program = parse_program(source)
+
+    assert isinstance(program.body, Block)
+    (case,) = program.body.items
+    assert isinstance(case, Case)
+    qualifier = case.branches[0].pattern.qualifier
+    assert qualifier is not None
+    assert qualifier.member == "None"
+    assert [segment.name for segment in qualifier.segments] == ["module", "Option"]
+    assert qualifier.segments[1].type_args is not None
+    assert (
+        source[qualifier.segments[0].span.start_offset : qualifier.segments[0].span.end_offset]
+        == "module"
+    )
+    assert (
+        source[qualifier.segments[1].span.start_offset : qualifier.segments[1].span.end_offset]
+        == "Option[int]"
+    )
+
+
+def test_qualified_type_references_keep_segment_spans_and_type_arguments() -> None:
+    source = "let value: module::Option[int]::Result = null"
+    program = parse_program(source)
+
+    assert isinstance(program.body, Block)
+    (decl,) = program.body.items
+    assert isinstance(decl, LetDecl)
+    assert isinstance(decl.type_ann, NameT)
+    qualifier = decl.type_ann.qualifier
+    assert qualifier is not None
+    assert qualifier.member == "Result"
+    assert [segment.name for segment in qualifier.segments] == ["module", "Option"]
+    assert qualifier.segments[1].type_args is not None
+    assert (
+        source[qualifier.segments[0].span.start_offset : qualifier.segments[0].span.end_offset]
+        == "module"
+    )
+    assert (
+        source[qualifier.segments[1].span.start_offset : qualifier.segments[1].span.end_offset]
+        == "Option[int]"
+    )
+
+
+def test_qualified_is_tests_keep_segment_spans_and_type_arguments() -> None:
+    source = "value is module::Option[int]::None"
+    program = parse_program(source)
+
+    assert isinstance(program.body, Block)
+    (test,) = program.body.items
+    assert isinstance(test, IsTest)
+    qualifier = test.qualifier
+    assert qualifier is not None
+    assert qualifier.member == "None"
+    assert [segment.name for segment in qualifier.segments] == ["module", "Option"]
+    assert qualifier.segments[1].type_args is not None
+    assert (
+        source[qualifier.segments[0].span.start_offset : qualifier.segments[0].span.end_offset]
+        == "module"
+    )
+    assert (
+        source[qualifier.segments[1].span.start_offset : qualifier.segments[1].span.end_offset]
+        == "Option[int]"
+    )
+
+
+@pytest.mark.parametrize(
+    "source",
+    (
+        "case value of | First::Second::Third::member => 1",
+        "let value: First::Second::Third::member = null",
+        "let value: Option[int]::Result = null",
+        "value is First::Second::Third::member",
+    ),
+)
+def test_unsupported_qualifier_chains_report_scope_errors_in_each_position(source: str) -> None:
+    with pytest.raises(AglScopeError, match="Unsupported qualifier chain"):
+        resolve_module(parse_program(source))
+
+
+@pytest.mark.parametrize(
+    "source",
+    (
+        "case value of | Option[int]::None => 1",
+        "value is Option[int]::None",
+    ),
+)
+def test_applied_pattern_and_is_qualifiers_report_unsupported_chains(source: str) -> None:
+    with pytest.raises(AglScopeError, match="Unsupported qualifier chain"):
+        resolve_module(parse_program(source))
+
+
+@pytest.mark.parametrize(
+    "source",
+    (
+        "::/foo::Baz",
+        "::foo/bar::Baz",
+        "foo::/bar::Baz",
+        "foo::bar/baz::Baz",
+    ),
+)
+def test_nonleading_anchor_and_route_segments_report_unsupported_chains(source: str) -> None:
+    with pytest.raises(AglScopeError, match="Unsupported qualifier chain"):
+        resolve_module(parse_program(source))
+
+
 def test_current_module_qualified_assignment_remains_an_assignment_target() -> None:
     program = parse_program("::value := 1")
 
@@ -60,13 +177,13 @@ def test_current_module_qualified_assignment_remains_an_assignment_target() -> N
     (assignment,) = program.body.items
     assert isinstance(assignment, AssignStmt)
     assert isinstance(assignment.target, NameTarget)
-    assert assignment.target.module_qualifier is not None
-    assert assignment.target.module_qualifier.segments == ()
+    assert assignment.target.qualifier is not None
+    assert assignment.target.qualifier.segments == ()
 
 
-def test_non_expression_type_qualifiers_retain_their_existing_validation() -> None:
-    with pytest.raises(AglSyntaxError, match="single type name"):
-        parse_program("case value of | module::owner/name::member => 1")
+def test_non_expression_unsupported_chains_reach_scope_validation() -> None:
+    with pytest.raises(AglScopeError, match="Unsupported qualifier chain"):
+        resolve_module(parse_program("case value of | module::owner/name::member => 1"))
 
 
 def test_long_qualified_expression_retains_all_segments() -> None:

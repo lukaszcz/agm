@@ -3047,19 +3047,19 @@ class TestBareTypeEntry:
         )
         local_expr = parse_type_expr("::Box")
         assert isinstance(local_expr, NameT)
-        assert local_expr.module_qualifier is not None
+        assert local_expr.qualifier is not None
 
         local_env = TypeEnvironment()
         local_env.register_generic_type("Box", local_def)
         assert local_env.resolve_qualified_unapplied_generic_type(
-            local_expr.module_qualifier,
+            local_expr.qualifier,
             "Box",
         ) == ("Box", local_def)
 
         empty_env = TypeEnvironment()
         assert (
             empty_env.resolve_qualified_unapplied_generic_type(
-                local_expr.module_qualifier,
+                local_expr.qualifier,
                 "Box",
             )
             is None
@@ -3067,21 +3067,21 @@ class TestBareTypeEntry:
 
         graph_env = TypeEnvironment(program_generic_table={(ENTRY_ID, "Box"): local_def})
         assert graph_env.resolve_qualified_unapplied_generic_type(
-            local_expr.module_qualifier,
+            local_expr.qualifier,
             "Box",
         ) == ("Box", local_def)
 
         lib = ModuleId(("lib",))
         qualified_expr = parse_type_expr("missing::Box")
         assert isinstance(qualified_expr, NameT)
-        assert qualified_expr.module_qualifier is not None
+        assert qualified_expr.qualifier is not None
         no_handle_env = TypeEnvironment(
             program_generic_table={},
             import_env=ImportEnv(contributions={}, unqualified={}),
         )
         assert (
             no_handle_env.resolve_qualified_unapplied_generic_type(
-                qualified_expr.module_qualifier,
+                qualified_expr.qualifier,
                 "Box",
             )
             is None
@@ -3098,7 +3098,7 @@ class TestBareTypeEntry:
         )
         assert (
             no_name_env.resolve_qualified_unapplied_generic_type(
-                qualified_expr.module_qualifier,
+                qualified_expr.qualifier,
                 "Box",
             )
             is None
@@ -3117,7 +3117,7 @@ class TestBareTypeEntry:
         )
         assert (
             no_generic_env.resolve_qualified_unapplied_generic_type(
-                qualified_expr.module_qualifier,
+                qualified_expr.qualifier,
                 "Box",
             )
             is None

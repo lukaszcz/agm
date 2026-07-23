@@ -355,9 +355,9 @@ type_ann: COLON type_expr
           | type_atom THIN_ARROW type_expr                  -> unary_func_type
           | type_atom
 
-?type_atom: qual_prefix name type_lsqb type_arg_list RSQB   -> qual_applied_type
+?type_atom: qual_ref_chain type_lsqb type_arg_list RSQB -> qual_applied_type
           | name type_lsqb type_arg_list RSQB               -> applied_type
-          | qual_prefix name                                -> qual_named_type
+          | qual_ref_chain                                  -> qual_named_type
           | name                                            -> prim_or_name
           | AGENT                                           -> agent_type
 
@@ -577,10 +577,10 @@ infix_operand: not_prefix* is_expr
 
 // comparison: non-associative.
 // Qualified variant tests use static namespace qualification.
-?is_expr: cast "is" "not" qual_prefix type_qual? name     -> is_not_test_qualified
-        | cast "is" "not" name                           -> is_not_test_simple
-        | cast "is" qual_prefix type_qual? name           -> is_test_qualified
-        | cast "is" name                                 -> is_test_simple
+?is_expr: cast "is" "not" qual_ref_chain -> is_not_test_qualified
+        | cast "is" "not" name           -> is_not_test_simple
+        | cast "is" qual_ref_chain         -> is_test_qualified
+        | cast "is" name                   -> is_test_simple
         | cast
 
 not_prefix: "not" -> not_prefix
@@ -777,12 +777,12 @@ dict_entry: template COLON expr     -> dict_entry_str
 // Pattern `as` binders wrap the complete preceding pattern and associate left.
 // Disambiguation of pattern_atom:
 //   name with value "_" → wildcard (handled in AstBuilder.pat_var_or_wild)
-//   qual_prefix type_qual? name + optional fields → qualified constructor pattern
+//   qualifier chain + optional fields → qualified constructor pattern
 //   name LPAR ... RPAR → unqualified constructor pattern with payload
 //   name (other) → a bare top-level constructor or field-directed nested pattern
 //   literal → literal pattern
 pattern: pattern_atom ("as" name)* -> pat_as
-pattern_atom: qual_prefix type_qual? name (LPAR pattern_fields? RPAR)? -> pat_qual_constructor
+pattern_atom: qual_ref_chain (LPAR pattern_fields? RPAR)? -> pat_qual_constructor
             | name LPAR pattern_fields? RPAR                     -> pat_constructor
             | name                                               -> pat_var_or_wild
             | INT                                                -> pat_lit_int
@@ -844,17 +844,12 @@ private_extern_func_def : PRIVATE _NEWLINE? extern_func_def
 // Qualified references in expressions, types, and patterns
 // ---------------------------------------------------------------------------
 
-// qual_prefix: MODQUAL (foo/bar:: or /foo/bar::) or bare DCOLON (self-reference ::)
-qual_prefix : MODQUAL | DCOLON
-
-// type_qual: second-position type qualifier in module::Type::Ctor.
-type_qual : MODQUAL
-
-// Qualified expression references are chains. A MODQUAL preserves one
-// slash-qualified module route as a segment; every applied segment retains
-// its type arguments. A leading DCOLON anchors the chain in the current module.
+// Qualified references are chains. A MODQUAL preserves one slash-qualified
+// module route as a segment; every applied segment retains its type arguments.
+// A leading DCOLON anchors the chain in the current module.
 ?qualifier_segment : MODQUAL -> qualifier_mod_segment
                    | applied_qual_ref
 applied_qual_ref : NAME TYPEARG_LSQB type_arg_list RSQB DCOLON -> qualifier_applied_segment
-qual_var_ref : DCOLON qualifier_segment* name
-             | qualifier_segment+ name
+qual_ref_chain : DCOLON qualifier_segment* name
+               | qualifier_segment+ name
+qual_var_ref : qual_ref_chain

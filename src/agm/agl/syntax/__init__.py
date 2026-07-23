@@ -113,10 +113,8 @@ from agm.agl.syntax.types import (
     JsonT,
     ListT,
     NameT,
-    Qualifier,
     TextT,
     TypeExpr,
-    TypeQualifier,
     UnitT,
 )
 from agm.agl.syntax.visitor import Visitor, walk
@@ -140,8 +138,6 @@ __all__ = [
     "TypeExpr",
     # module system
     "ImportMode",
-    "Qualifier",
-    "TypeQualifier",
     "ImportItem",
     "ImportDecl",
     "ExportItem",

@@ -398,8 +398,8 @@ class TestBinders:
         assignment = first(parse("std/config::max-iters := 3"))
         assert isinstance(assignment, AssignStmt)
         assert isinstance(assignment.target, NameTarget)
-        assert assignment.target.module_qualifier is not None
-        assert assignment.target.module_qualifier.segments == ("std", "config")
+        assert assignment.target.qualifier is not None
+        assert assignment.target.qualifier.route_segments == ("std", "config")
 
     @pytest.mark.parametrize(
         "source",
@@ -973,8 +973,8 @@ class TestParseTypeExpr:
         result = parse_type_expr("mymod::Box[int]")
         assert isinstance(result, AppliedT)
         assert result.name == "Box"
-        assert result.module_qualifier is not None
-        assert result.module_qualifier.segments == ("mymod",)
+        assert result.qualifier is not None
+        assert result.qualifier.route_segments == ("mymod",)
 
     def test_invalid_raises_syntax_error(self) -> None:
         with pytest.raises(AglSyntaxError):
@@ -2015,8 +2015,8 @@ class TestBinaryOperators:
     def test_is_qualified(self) -> None:
         e = first(parse("x is Review::Pass"))
         assert isinstance(e, IsTest)
-        assert e.module_qualifier is not None
-        assert e.module_qualifier.segments == ("Review",)
+        assert e.qualifier is not None
+        assert e.qualifier.route_segments == ("Review",)
         assert e.variant == "Pass"
 
     def test_in(self) -> None:
@@ -2421,8 +2421,8 @@ class TestPatterns:
         assert isinstance(e, Case)
         pat = e.branches[0].pattern
         assert isinstance(pat, ConstructorPattern)
-        assert pat.module_qualifier is not None
-        assert pat.module_qualifier.segments == ("Review",)
+        assert pat.qualifier is not None
+        assert pat.qualifier.route_segments == ("Review",)
 
 
 # ---------------------------------------------------------------------------
@@ -2698,8 +2698,8 @@ class TestBinaryOperatorsCoverage:
         "x is not Review::Pass produces a negated, qualified IsTest."
         e = first(parse("x is not Review::Pass"))
         assert isinstance(e, IsTest)
-        assert e.module_qualifier is not None
-        assert e.module_qualifier.segments == ("Review",)
+        assert e.qualifier is not None
+        assert e.qualifier.route_segments == ("Review",)
         assert e.variant == "Pass"
         assert e.negated
 
@@ -3242,8 +3242,8 @@ class TestCaseNeutralPatterns:
         assert isinstance(case, Case)
         pat = case.branches[0].pattern
         assert isinstance(pat, ConstructorPattern)
-        assert pat.module_qualifier is not None
-        assert pat.module_qualifier.segments == ("Option",)
+        assert pat.qualifier is not None
+        assert pat.qualifier.route_segments == ("Option",)
         assert pat.name == "none"
 
     def test_constructor_pattern_with_fields(self) -> None:
@@ -3626,7 +3626,7 @@ class TestQualifiedRefs:
         (argument,) = expr.right.args
         assert isinstance(argument, VarRef)
         assert argument.qualifier is not None
-        assert argument.qualifier.segments == ()
+        assert argument.qualifier.route_segments == ()
 
     def test_anchored_qual_var_ref(self) -> None:
         (expr,) = items(parse("/foo/bar::baz"))
@@ -3657,7 +3657,7 @@ class TestQualifiedRefs:
         assert isinstance(expr, syntax.VarRef)
         assert expr.name == "myvar"
         assert expr.qualifier is not None
-        assert expr.qualifier.segments == ()
+        assert expr.qualifier.route_segments == ()
 
     def test_self_ref_constructor(self) -> None:
         # ::MyType has a current-module anchor and no qualifier segments.
@@ -3666,7 +3666,7 @@ class TestQualifiedRefs:
         assert isinstance(expr, syntax.VarRef)
         assert expr.name == "MyType"
         assert expr.qualifier is not None
-        assert expr.qualifier.segments == ()
+        assert expr.qualifier.route_segments == ()
 
     def test_qual_constructor_with_payload(self) -> None:
         # m::Color(r = 1) → Call(VarRef("Color", mq=...), named_args=[NamedArg("r", 1)])
@@ -3725,9 +3725,10 @@ class TestQualifiedRefs:
         assert callee.qualifier is None
 
     @pytest.mark.parametrize("source", ("m::foo/bar::Baz", "m::/foo::Baz"))
-    def test_type_qualifier_after_module_must_be_single_unanchored_name(self, source: str) -> None:
-        with pytest.raises(AglSyntaxError, match="single type name"):
-            parse(source)
+    def test_non_expression_unsupported_chains_parse_for_scope_validation(
+        self, source: str
+    ) -> None:
+        parse(source)
 
 
 # ---------------------------------------------------------------------------
@@ -3744,8 +3745,8 @@ class TestQualifiedTypeRefs:
         assert isinstance(decl, LetDecl)
         assert isinstance(decl.type_ann, NameT)
         assert decl.type_ann.name == "MyType"
-        assert decl.type_ann.module_qualifier is not None
-        assert decl.type_ann.module_qualifier.segments == ("m",)
+        assert decl.type_ann.qualifier is not None
+        assert decl.type_ann.qualifier.route_segments == ("m",)
 
     def test_qual_applied_type_in_annotation(self) -> None:
         prog = parse("let x: m::Box[int] = null")
@@ -3753,8 +3754,8 @@ class TestQualifiedTypeRefs:
         assert isinstance(decl, LetDecl)
         assert isinstance(decl.type_ann, syntax.AppliedT)
         assert decl.type_ann.name == "Box"
-        assert decl.type_ann.module_qualifier is not None
-        assert decl.type_ann.module_qualifier.segments == ("m",)
+        assert decl.type_ann.qualifier is not None
+        assert decl.type_ann.qualifier.route_segments == ("m",)
 
     def test_qualified_enum_constructor_with_type_args(self) -> None:
         prog = parse("Option[int]::some(value = 1)")
@@ -3771,22 +3772,22 @@ class TestQualifiedTypeRefs:
         assert isinstance(decl, LetDecl)
         assert isinstance(decl.type_ann, NameT)
         assert decl.type_ann.name == "text"
-        assert decl.type_ann.module_qualifier is not None
+        assert decl.type_ann.qualifier is not None
 
     def test_self_ref_named_type(self) -> None:
         prog = parse("let x: ::MyT = null")
         (decl,) = items(prog)
         assert isinstance(decl, LetDecl)
         assert isinstance(decl.type_ann, NameT)
-        assert decl.type_ann.module_qualifier is not None
-        assert decl.type_ann.module_qualifier.segments == ()
+        assert decl.type_ann.qualifier is not None
+        assert decl.type_ann.qualifier.route_segments == ()
 
     def test_qual_named_type_in_func_return(self) -> None:
         prog = parse("def f() -> m::Result = null")
         (decl,) = items(prog)
         assert isinstance(decl, FuncDef)
         assert isinstance(decl.return_type, NameT)
-        assert decl.return_type.module_qualifier is not None
+        assert decl.return_type.qualifier is not None
 
     def test_qual_pattern_constructor(self) -> None:
         prog = parse("case x of | m::Foo => 1")
@@ -3795,8 +3796,8 @@ class TestQualifiedTypeRefs:
         pat = expr.branches[0].pattern
         assert isinstance(pat, ConstructorPattern)
         assert pat.name == "Foo"
-        assert pat.module_qualifier is not None
-        assert pat.module_qualifier.segments == ("m",)
+        assert pat.qualifier is not None
+        assert pat.qualifier.route_segments == ("m",)
 
     def test_self_ref_pattern_constructor(self) -> None:
         prog = parse("case x of | ::Bar => 2")
@@ -3804,8 +3805,8 @@ class TestQualifiedTypeRefs:
         assert isinstance(expr, Case)
         pat = expr.branches[0].pattern
         assert isinstance(pat, ConstructorPattern)
-        assert pat.module_qualifier is not None
-        assert pat.module_qualifier.segments == ()
+        assert pat.qualifier is not None
+        assert pat.qualifier.route_segments == ()
 
     def test_qual_pattern_enum_variant(self) -> None:
         # Qualified enum variant: m::Color::Red (type qualifier after qual_prefix)
@@ -3814,10 +3815,9 @@ class TestQualifiedTypeRefs:
         assert isinstance(expr, Case)
         pat = expr.branches[0].pattern
         assert isinstance(pat, ConstructorPattern)
-        assert pat.qualifier == "Color"
+        assert pat.qualifier is not None
+        assert [segment.name for segment in pat.qualifier.segments] == ["m", "Color"]
         assert pat.name == "Red"
-        assert pat.module_qualifier is not None
-        assert pat.module_qualifier.segments == ("m",)
 
     def test_qual_pattern_constructor_with_fields(self) -> None:
         # Qualified constructor pattern with payload fields
@@ -3828,7 +3828,7 @@ class TestQualifiedTypeRefs:
         assert isinstance(pat, ConstructorPattern)
         assert pat.name == "Foo"
         assert len(pat.named) == 1
-        assert pat.module_qualifier is not None
+        assert pat.qualifier is not None
 
 
 # ---------------------------------------------------------------------------

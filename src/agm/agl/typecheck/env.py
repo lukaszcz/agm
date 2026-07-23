@@ -62,9 +62,8 @@ from agm.agl.semantics.types import (
     UnitType,
     contains_inference_var,
 )
-from agm.agl.syntax.nodes import Expr, ParamKind, Pattern
+from agm.agl.syntax.nodes import Expr, ParamKind, Pattern, QualifierChain
 from agm.agl.syntax.spans import SourceSpan
-from agm.agl.syntax.types import Qualifier
 
 # ---------------------------------------------------------------------------
 # ParamSpec — per-parameter descriptor in a FunctionSignature
@@ -679,15 +678,15 @@ class TypeEnvironment:
     def get_type(self, name: str) -> Type | None:
         return self._types.get(name)
 
-    def has_qualified_import_member(self, qualifier: Qualifier, name: str) -> bool:
+    def has_qualified_import_member(self, qualifier: QualifierChain, name: str) -> bool:
         """Return whether a qualifier route contributes *name* after filtering."""
         return self._import_env is not None and qualifier_contributes(
-            self._import_env, qualifier.segments, name, anchored=qualifier.anchored
+            self._import_env, qualifier.route_segments, name, anchored=qualifier.anchored
         )
 
     def _resolve_import_qname(
         self,
-        qualifier: "Qualifier",
+        qualifier: QualifierChain,
         name: str,
         *,
         span: SourceSpan | None,
@@ -696,12 +695,15 @@ class TypeEnvironment:
         """Resolve a qualified member through the shared contribution resolver."""
         import_env = cast(ImportEnv, self._import_env)
         if not required:
-            return try_resolve_qualified_member(import_env, qualifier, name)
+            return try_resolve_qualified_member(
+                import_env, qualifier.route_segments, name, anchored=qualifier.anchored
+            )
         return resolve_qualified_member(
             import_env,
-            qualifier,
+            qualifier.route_segments,
             name,
             self._private_info,
+            anchored=qualifier.anchored,
             unknown_qualifier=lambda rendered: AglTypeError(
                 f"Unknown module qualifier '{rendered}::'.", span=span
             ),
@@ -874,7 +876,7 @@ class TypeEnvironment:
             target = self._alias_targets.get(name)
             if target is None:
                 return name
-            if isinstance(target, (NameT, AppliedT)) and target.module_qualifier is None:
+            if isinstance(target, (NameT, AppliedT)) and target.qualifier is None:
                 name = target.name
                 continue
             return None
@@ -1217,9 +1219,9 @@ class TypeEnvironment:
             return DictType(value=val)
         if isinstance(type_expr, NameT):
             eff_span = span if span is not None else type_expr.span
-            if type_expr.module_qualifier is not None:
+            if type_expr.qualifier is not None:
                 return self._resolve_qualified_name_type(
-                    type_expr.module_qualifier, type_expr.name, span=eff_span
+                    type_expr.qualifier, type_expr.name, span=eff_span
                 )
             return self._resolve_name_type(
                 type_expr.name,
@@ -1234,8 +1236,8 @@ class TypeEnvironment:
                 self.resolve_type_expr(a, span=None, _resolving=_resolving, type_vars=type_vars)
                 for a in type_expr.args
             )
-            qualifier = type_expr.module_qualifier
-            if qualifier is not None and qualifier.segments:
+            qualifier = type_expr.qualifier
+            if qualifier is not None and qualifier.route_segments:
                 return self._resolve_qualified_applied_type(
                     qualifier, name, resolved_args, span=eff_span
                 )
@@ -1329,16 +1331,13 @@ class TypeEnvironment:
 
     def _resolve_qualified_applied_type(
         self,
-        qualifier: object,
+        qualifier: QualifierChain,
         name: str,
         args: tuple[Type, ...],
         *,
         span: SourceSpan | None,
     ) -> Type:
         """Resolve ``module::Name[args]`` through the module import environment."""
-        from agm.agl.syntax.types import Qualifier
-
-        assert isinstance(qualifier, Qualifier)
         rendered = qualifier.render()
         if self._import_env is None or self._program_generic_table is None:
             raise AglTypeError(
@@ -1447,7 +1446,7 @@ class TypeEnvironment:
 
     def _resolve_qualified_name_type(
         self,
-        qualifier: object,  # Qualifier from agm.agl.syntax.types
+        qualifier: QualifierChain,
         name: str,
         *,
         span: SourceSpan | None,
@@ -1458,15 +1457,12 @@ class TypeEnvironment:
         (prelude / built-ins) when the qualifier is empty (``::Name``
         self-reference to the current module) and no program context exists.
         """
-        from agm.agl.syntax.types import Qualifier
-
-        assert isinstance(qualifier, Qualifier)
         rendered = qualifier.render()
 
         if self._program_type_table is None:
             # Single-module path: module qualifiers have no program table to consult.
             # ::Name (empty segments) = current module's own type.
-            if not qualifier.segments:
+            if not qualifier.route_segments:
                 return self._resolve_name_type(name, span=span, _resolving=frozenset())
             raise AglTypeError(
                 f"Module qualifier '{rendered}::' cannot be resolved outside of a module graph.",
@@ -1474,7 +1470,7 @@ class TypeEnvironment:
             )
 
         # ``::Name`` — self-reference to the current module's own type.
-        if not qualifier.segments:
+        if not qualifier.route_segments:
             key = (self._module_id, name)
             t = self._program_type_table.get(key)
             if t is not None:
@@ -1627,7 +1623,7 @@ class TypeEnvironment:
         self,
         kind: EnumOwnerFormKind,
         owner_name: str,
-        module_qualifier: Qualifier | None = None,
+        module_qualifier: QualifierChain | None = None,
         *,
         span: SourceSpan | None = None,
     ) -> EnumOwnerForm | None:
@@ -1657,7 +1653,7 @@ class TypeEnvironment:
             if (
                 self._import_env is None
                 or module_qualifier is None
-                or not module_qualifier.segments
+                or not module_qualifier.route_segments
             ):
                 return None
             # A qualified enum spelling must preserve the shared resolver's
@@ -1668,7 +1664,7 @@ class TypeEnvironment:
             if not self._is_program_type_candidate(qname):
                 return None
             source_module_id, source_name = qname
-            expected_qualifier = module_qualifier.segments
+            expected_qualifier = module_qualifier.route_segments
         template = self.source_type_template_qname(source_module_id, source_name)
         assert template is not None
         return EnumOwnerForm(
@@ -1848,16 +1844,13 @@ class TypeEnvironment:
 
     def resolve_qualified_unapplied_generic_type(
         self,
-        qualifier: object,
+        qualifier: QualifierChain,
         name: str,
         *,
         span: SourceSpan | None = None,
     ) -> tuple[str, GenericTypeDef] | None:
         """Resolve a module-qualified generic type name without applying arguments."""
-        from agm.agl.syntax.types import Qualifier
-
-        assert isinstance(qualifier, Qualifier)
-        if not qualifier.segments:
+        if not qualifier.route_segments:
             gdef = self._generic_types.get(name)
             if gdef is not None:
                 return name, gdef

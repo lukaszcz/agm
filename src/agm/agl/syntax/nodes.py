@@ -34,7 +34,7 @@ from dataclasses import dataclass
 from dataclasses import field as dc_field
 
 from agm.agl.syntax.spans import SourceSpan
-from agm.agl.syntax.types import ImportMode, Qualifier, TypeExpr
+from agm.agl.syntax.types import ImportMode, TypeExpr
 
 # ---------------------------------------------------------------------------
 # Sentinel for the else-branch of If
@@ -188,23 +188,42 @@ class QualifierAnchor(enum.Enum):
 
 @dataclass(frozen=True, slots=True)
 class QualifierSegment:
-    """One qualifier-chain segment, optionally applied to type arguments."""
+    """One qualifier-chain segment, optionally applied to type arguments.
+
+    ``anchored`` retains a slash prefix so validation can reject an anchor that
+    appears after another chain prefix.
+    """
 
     name: str
     type_args: tuple[TypeExpr, ...] | None
     span: SourceSpan = dc_field(compare=False)
     node_id: int = dc_field(compare=False)
+    anchored: bool = False
 
 
 @dataclass(frozen=True, slots=True)
 class QualifierChain:
-    """Qualified expression reference prefix and its selected member."""
+    """Qualified reference prefix and its selected member."""
 
     anchor: QualifierAnchor | None
     segments: tuple[QualifierSegment, ...]
     member: str
     span: SourceSpan = dc_field(compare=False)
     node_id: int = dc_field(compare=False)
+
+    @property
+    def route_segments(self) -> tuple[str, ...]:
+        """Return the slash-expanded route represented by the chain segments."""
+        return tuple(part for segment in self.segments for part in segment.name.split("/"))
+
+    @property
+    def anchored(self) -> bool:
+        """Whether the chain uses an absolute module anchor."""
+        return self.anchor is QualifierAnchor.MODULE
+
+    def render(self) -> str:
+        """Render the chain's qualifier prefix without its selected member."""
+        return ("/" if self.anchored else "") + "/".join(self.route_segments)
 
 
 @dataclass(frozen=True, slots=True)
@@ -314,15 +333,14 @@ class Cast:
 
 @dataclass(frozen=True, slots=True)
 class IsTest:
-    """Pattern membership test: ``expr is [not] [Qualifier::]Variant``."""
+    """Pattern membership test: ``expr is [not] [qualifier chain]``."""
 
     expr: Expr
-    qualifier: str | None
     variant: str
     negated: bool
     span: SourceSpan = dc_field(compare=False)
     node_id: int = dc_field(compare=False)
-    module_qualifier: Qualifier | None = None
+    qualifier: QualifierChain | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -862,13 +880,12 @@ class ConstructorPattern:
     Partial patterns are allowed — unmentioned fields are wildcards.
     """
 
-    qualifier: str | None
     name: str
     positional: tuple[Pattern, ...]
     named: tuple[PatternField, ...]
     span: SourceSpan = dc_field(compare=False)
     node_id: int = dc_field(compare=False)
-    module_qualifier: Qualifier | None = None
+    qualifier: QualifierChain | None = None
 
 
 # Closed union of all pattern nodes.
@@ -906,14 +923,14 @@ class VarDecl:
 class NameTarget:
     """Assignment target for ``name := expr``.
 
-    ``module_qualifier`` is set for a qualified assignment target such as
+    ``qualifier`` is set for a qualified assignment target such as
     ``std/config::max-iters := expr``; it is ``None`` for a plain local target.
     """
 
     name: str
     span: SourceSpan = dc_field(compare=False)
     node_id: int = dc_field(compare=False)
-    module_qualifier: Qualifier | None = None
+    qualifier: QualifierChain | None = None
 
 
 @dataclass(frozen=True, slots=True)

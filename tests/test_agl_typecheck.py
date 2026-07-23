@@ -616,7 +616,8 @@ class TestTypeEnvironment:
             env.resolve_type_expr(NameT(name="A", span=sp, node_id=3))
 
     def test_constructor_owner_resolution_rejects_qualified_alias_target(self) -> None:
-        from agm.agl.syntax.types import NameT, Qualifier
+        from agm.agl.syntax import QualifierChain, QualifierSegment
+        from agm.agl.syntax.types import NameT
 
         env = TypeEnvironment()
         span = mk_span()
@@ -626,7 +627,13 @@ class TestTypeEnvironment:
                 name="Remote",
                 span=span,
                 node_id=1,
-                module_qualifier=Qualifier(segments=("lib",), span=span, node_id=2),
+                qualifier=QualifierChain(
+                    anchor=None,
+                    segments=(QualifierSegment("lib", None, span, 2),),
+                    member="Remote",
+                    span=span,
+                    node_id=2,
+                ),
             ),
         )
 
@@ -4189,6 +4196,17 @@ class TestIsTest:
         r = accept_type("enum Status\n  | Pass\n  | Fail\nlet s = Pass()\ns is ::Status::Pass")
         assert r.resolved.program is not None
 
+    def test_current_module_qualified_variant_without_owner_is_valid_in_is_test(self) -> None:
+        r = accept_type("enum Status\n  | Pass\n  | Fail\nlet s = Pass()\ns is ::Pass")
+        assert r.resolved.program is not None
+
+    def test_current_module_qualified_variant_without_owner_is_valid_in_pattern(self) -> None:
+        r = accept_type(
+            "enum Status\n  | Pass\n  | Fail\nlet s = Pass()\n"
+            "case s of\n  | ::Pass => 1\n  | ::Fail => 0"
+        )
+        assert r.resolved.program is not None
+
 
 # ---------------------------------------------------------------------------
 # Constructor expressions
@@ -7039,7 +7057,8 @@ class TestFunctionSignatureTypeParams:
 
 class TestResolveTypeExprTypeVars:
     def test_qualified_applied_type_requires_graph_context(self) -> None:
-        from agm.agl.syntax.types import AppliedT, Qualifier
+        from agm.agl.syntax import QualifierChain, QualifierSegment
+        from agm.agl.syntax.types import AppliedT
 
         sp = mk_span()
         expr = AppliedT(
@@ -7047,7 +7066,13 @@ class TestResolveTypeExprTypeVars:
             args=(IntT(span=sp, node_id=1),),
             span=sp,
             node_id=2,
-            module_qualifier=Qualifier(segments=("lib",), span=sp, node_id=3),
+            qualifier=QualifierChain(
+                anchor=None,
+                segments=(QualifierSegment("lib", None, sp, 3),),
+                member="Box",
+                span=sp,
+                node_id=3,
+            ),
         )
         with pytest.raises(AglTypeError, match="outside of a module graph"):
             TypeEnvironment().resolve_type_expr(expr)

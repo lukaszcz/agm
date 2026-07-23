@@ -13,8 +13,8 @@ from agm.agl.modules.roots import RootSet
 from agm.agl.scope.program import resolve_program
 from agm.agl.scope.symbols import AglScopeError
 from agm.agl.semantics.types import EnumOwnerFormKind
+from agm.agl.syntax import QualifierAnchor, QualifierChain, QualifierSegment
 from agm.agl.syntax.spans import UNKNOWN_SOURCE, SourceSpan
-from agm.agl.syntax.types import Qualifier
 from agm.agl.typecheck import AglTypeError
 from agm.agl.typecheck.program import check_program
 from tests.agl.ir_harness import base_caps, make_graph_from_files, write_module_file
@@ -250,10 +250,12 @@ def test_anchored_enum_owner_form_preserves_its_route(tmp_path: Path) -> None:
     )
     checked = check_program(resolve_program(graph), base_caps())
     env = checked.modules[graph.entry_id].type_env
-    qualifier = Qualifier(
-        segments=("remote", "config"),
-        anchored=True,
-        span=SourceSpan(1, 1, 1, 1, 0, 0, UNKNOWN_SOURCE),
+    span = SourceSpan(1, 1, 1, 1, 0, 0, UNKNOWN_SOURCE)
+    qualifier = QualifierChain(
+        anchor=QualifierAnchor.MODULE,
+        segments=(QualifierSegment("remote/config", None, span, 0),),
+        member="",
+        span=span,
         node_id=0,
     )
 
@@ -278,10 +280,12 @@ def test_qualified_enum_owner_form_rejects_a_non_type_member(tmp_path: Path) -> 
         },
     )
     checked = check_program(resolve_program(graph), base_caps())
-    qualifier = Qualifier(
-        segments=("remote", "config"),
-        anchored=False,
-        span=SourceSpan(1, 1, 1, 1, 0, 0, UNKNOWN_SOURCE),
+    span = SourceSpan(1, 1, 1, 1, 0, 0, UNKNOWN_SOURCE)
+    qualifier = QualifierChain(
+        anchor=None,
+        segments=(QualifierSegment("remote/config", None, span, 0),),
+        member="",
+        span=span,
         node_id=0,
     )
 

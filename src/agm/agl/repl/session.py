@@ -410,14 +410,14 @@ class ReplSession:
         if not isinstance(type_expr, NameT):
             return None
         try:
-            if type_expr.module_qualifier is None:
+            if type_expr.qualifier is None:
                 resolved = type_env.resolve_unapplied_generic_type(
                     type_expr.name,
                     span=type_expr.span,
                 )
             else:
                 resolved = type_env.resolve_qualified_unapplied_generic_type(
-                    type_expr.module_qualifier,
+                    type_expr.qualifier,
                     type_expr.name,
                     span=type_expr.span,
                 )

@@ -150,7 +150,8 @@ from agm.agl.syntax.nodes import (
     assign_target_root_name,
 )
 from agm.agl.syntax.spans import SourceSpan
-from agm.agl.syntax.types import AppliedT, NameT, Qualifier, TypeQualifier
+from agm.agl.syntax.types import AppliedT, NameT
+from agm.agl.syntax.visitor import walk
 
 # ---------------------------------------------------------------------------
 # Built-in names and reserved-name enforcement
@@ -314,6 +315,7 @@ class _Resolver:
         scope_region = _first_scope_region(program.body.items)
         if scope_region is not None:
             raise AglScopeError("scope regions are not supported here yet.", span=scope_region.span)
+        self._validate_qualifier_chains(program)
 
         # Seed ambient constructor candidates (from prior REPL entries) before
         # running the local pre-passes so local declarations can shadow them.
@@ -1112,7 +1114,7 @@ class _Resolver:
 
     def _resolve_assign(self, node: AssignStmt) -> None:
         target = node.target
-        if isinstance(target, NameTarget) and target.module_qualifier is not None:
+        if isinstance(target, NameTarget) and target.qualifier is not None:
             self._resolve_qualified_assign(node, target)
             return
         name = assign_target_root_name(node.target)
@@ -1146,9 +1148,9 @@ class _Resolver:
         (they are the sole mutable exported bindings); assigning any other
         cross-module binding is rejected as immutable.
         """
-        assert target.module_qualifier is not None
-        qualifier = target.module_qualifier
-        if self._import_env is None or qualifier.segments == ():
+        assert target.qualifier is not None
+        qualifier = target.qualifier
+        if self._import_env is None or not qualifier.route_segments:
             raise AglScopeError(
                 f"'{target.name}' is not declared; assignment requires an existing "
                 f"mutable binding.",
@@ -1330,7 +1332,7 @@ class _Resolver:
             if self._import_env is not None:
                 self._resolve_varref_qualified(node, module_qualifier)
                 return
-            if module_qualifier.segments != ():
+            if module_qualifier.route_segments:
                 qualifier_str = module_qualifier.render()
                 raise AglScopeError(
                     f"No module imported under qualifier '{qualifier_str}' or type named "
@@ -1378,71 +1380,94 @@ class _Resolver:
         if ref.kind is BinderKind.agent_binding and ref.name in self._declared_agents:
             self._referenced_agents.add(ref.name)
 
+    def _validate_qualifier_chains(self, program: Program) -> None:
+        """Reject parsed chain shapes whose semantics are not available yet."""
+
+        def has_unsupported_route_shape(chain: QualifierChain) -> bool:
+            nonleading_segments = chain.segments[1:]
+            if any(segment.anchored or "/" in segment.name for segment in nonleading_segments):
+                return True
+            return bool(
+                chain.anchor is QualifierAnchor.CURRENT_MODULE
+                and chain.segments
+                and (chain.segments[0].anchored or "/" in chain.segments[0].name)
+            )
+
+        def validate(node: object) -> None:
+            chain: QualifierChain | None = None
+            maximum_segments = 2
+            allows_applied_segments = False
+            if isinstance(node, VarRef):
+                chain = node.qualifier
+                allows_applied_segments = True
+            elif isinstance(node, (ConstructorPattern, IsTest)):
+                chain = node.qualifier
+            elif isinstance(node, (NameT, AppliedT, NameTarget)):
+                chain = node.qualifier
+                maximum_segments = 1
+            if chain is None:
+                return
+            if (
+                len(chain.segments) > maximum_segments
+                or (chain.anchor is QualifierAnchor.CURRENT_MODULE and len(chain.segments) > 1)
+                or has_unsupported_route_shape(chain)
+                or (
+                    not allows_applied_segments
+                    and any(segment.type_args is not None for segment in chain.segments)
+                )
+            ):
+                raise AglScopeError("Unsupported qualifier chain.", span=chain.span)
+
+        walk(program, validate)
+
     def _expression_qualifier_parts(
         self, chain: QualifierChain | None
-    ) -> tuple[Qualifier | None, TypeQualifier | None]:
-        """Map supported expression chains to the established resolver forms."""
+    ) -> tuple[QualifierChain | None, QualifierSegment | None]:
+        """Split supported chains into a module route and optional type owner."""
         if chain is None:
             return (None, None)
-        if len(chain.segments) > 2 or (
-            chain.anchor is QualifierAnchor.CURRENT_MODULE and len(chain.segments) > 1
-        ):
-            raise AglScopeError("Unsupported qualifier chain.", span=chain.span)
         for segment in chain.segments[:-1]:
             if segment.type_args is not None:
                 raise AglScopeError("Unsupported qualifier chain.", span=segment.span)
 
-        def module_qualifier(segment: QualifierSegment) -> Qualifier:
-            return Qualifier(
-                segments=tuple(segment.name.split("/")),
-                span=segment.span,
-                node_id=segment.node_id,
-                anchored=chain.anchor is QualifierAnchor.MODULE,
-            )
-
-        def type_qualifier(segment: QualifierSegment) -> TypeQualifier:
-            return TypeQualifier(
-                name=segment.name,
-                type_args=segment.type_args,
+        def module_chain(segment: QualifierSegment) -> QualifierChain:
+            return QualifierChain(
+                anchor=chain.anchor,
+                segments=(segment,),
+                member="",
                 span=segment.span,
                 node_id=segment.node_id,
             )
 
         if not chain.segments:
             assert chain.anchor is QualifierAnchor.CURRENT_MODULE
-            return (
-                Qualifier(
-                    segments=(),
-                    span=SourceSpan(
-                        start_line=chain.span.start_line,
-                        start_col=chain.span.start_col,
-                        end_line=chain.span.start_line,
-                        end_col=chain.span.start_col + 2,
-                        start_offset=chain.span.start_offset,
-                        end_offset=chain.span.start_offset + 2,
-                        source=chain.span.source,
-                    ),
-                    node_id=chain.node_id,
-                ),
-                None,
-            )
+            return (chain, None)
 
         if len(chain.segments) == 1:
             (segment,) = chain.segments
             if chain.anchor is QualifierAnchor.CURRENT_MODULE:
                 return (
-                    Qualifier(segments=(), span=chain.span, node_id=chain.node_id),
-                    type_qualifier(segment),
+                    QualifierChain(
+                        anchor=chain.anchor,
+                        segments=(),
+                        member="",
+                        span=chain.span,
+                        node_id=chain.node_id,
+                    ),
+                    segment,
                 )
             if segment.type_args is not None:
-                return (None, type_qualifier(segment))
-            return (module_qualifier(segment), None)
+                return (None, segment)
+            return (module_chain(segment), None)
 
         module_segment, type_segment = chain.segments
-        return (module_qualifier(module_segment), type_qualifier(type_segment))
+        return (module_chain(module_segment), type_segment)
 
     def _resolve_type_qualified_constructor(
-        self, node: VarRef, module_qualifier: Qualifier | None, type_qualifier: TypeQualifier
+        self,
+        node: VarRef,
+        module_qualifier: QualifierChain | None,
+        type_qualifier: QualifierSegment,
     ) -> None:
         """Resolve an explicit ``[module::]Type[args]::Ctor`` reference."""
         type_name = type_qualifier.name
@@ -1454,7 +1479,7 @@ class _Resolver:
                 )
             self._qualified_constructor_refs[node.node_id] = (type_name, node.name, None)
             return
-        if module_qualifier.segments == ():
+        if not module_qualifier.route_segments:
             if type_name not in self._declared_type_names:
                 raise self._spaced_qualifier_repair(
                     self._spaced_qualifier_at(module_qualifier.span), module_qualifier.span
@@ -1477,10 +1502,10 @@ class _Resolver:
         self._qualified_constructor_refs[node.node_id] = (src_name, node.name, owning_module)
 
     def _resolve_single_qualifier_constructor(
-        self, node: VarRef, module_qualifier: Qualifier
+        self, node: VarRef, module_qualifier: QualifierChain
     ) -> bool:
         """Resolve ``Type::Ctor`` when the qualifier denotes a type name."""
-        segments = module_qualifier.segments
+        segments = module_qualifier.route_segments
         if module_qualifier.anchored or len(segments) != 1:
             return False
         type_name = segments[0]
@@ -1503,7 +1528,7 @@ class _Resolver:
         return True
 
     def _resolve_qualified_type_name(
-        self, qualifier: Qualifier, type_name: str, span: SourceSpan
+        self, qualifier: QualifierChain, type_name: str, span: SourceSpan
     ) -> tuple[str, ModuleId]:
         """Resolve ``qualifier::type_name`` as a constructible type owner."""
         qname = self._resolve_qualified_qname(qualifier, type_name, span)
@@ -1545,11 +1570,11 @@ class _Resolver:
         qname = next(iter(qnames))
         return self._make_cross_module_ref(qname[0], name, qname[1], span)
 
-    def _resolve_varref_qualified(self, node: VarRef, module_qualifier: Qualifier) -> None:
+    def _resolve_varref_qualified(self, node: VarRef, module_qualifier: QualifierChain) -> None:
         """Resolve a qualified VarRef (``::name`` or ``MODQUAL::name``) in program context."""
         assert self._import_env is not None
 
-        if module_qualifier.segments == ():
+        if not module_qualifier.route_segments:
             # Self-reference: ::name — look up in own root scope.
             ref = self._lookup_own_root(node.name)
             if ref is None:
@@ -1568,22 +1593,23 @@ class _Resolver:
         self._resolution[node.node_id] = ref
 
     def _lookup_qualified_binding(
-        self, qualifier: Qualifier, name: str, span: SourceSpan
+        self, qualifier: QualifierChain, name: str, span: SourceSpan
     ) -> BindingRef:
         """Resolve a qualified value or assignment target through the shared resolver."""
         qname = self._resolve_qualified_qname(qualifier, name, span)
         return self._make_cross_module_ref(qname[0], name, qname[1], span)
 
     def _resolve_qualified_qname(
-        self, qualifier: Qualifier, name: str, span: SourceSpan
+        self, qualifier: QualifierChain, name: str, span: SourceSpan
     ) -> tuple[ModuleId, str]:
         """Resolve one contributed member and translate its shared verdict to scope errors."""
         assert self._import_env is not None
         return resolve_qualified_member(
             self._import_env,
-            qualifier,
+            qualifier.route_segments,
             name,
             self._private_info,
+            anchored=qualifier.anchored,
             unknown_qualifier=lambda rendered: AglScopeError(
                 f"No module imported under qualifier '{rendered}'.", span=span
             ),

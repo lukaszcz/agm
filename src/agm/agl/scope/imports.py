@@ -9,7 +9,7 @@ from typing import Callable, Mapping, TypeVar
 from agm.agl.modules.ids import ModuleId
 from agm.agl.scope.symbols import AglScopeError
 from agm.agl.syntax.nodes import ImportDecl
-from agm.agl.syntax.types import ImportMode, Qualifier, render_qualifier
+from agm.agl.syntax.types import ImportMode
 
 __all__ = [
     "ImportEnv",
@@ -37,6 +37,11 @@ __all__ = [
 ]
 
 QName = tuple[ModuleId, str]
+
+
+def render_qualifier(qualifier: tuple[str, ...], *, anchored: bool = False) -> str:
+    """Render a source qualifier with its slash route and optional anchor."""
+    return ("/" if anchored else "") + "/".join(qualifier)
 
 
 @dataclass(frozen=True, slots=True)
@@ -402,18 +407,21 @@ def private_missing_member_module(
     return None
 
 
-def try_resolve_qualified_member(env: ImportEnv, qualifier: Qualifier, member: str) -> QName | None:
+def try_resolve_qualified_member(
+    env: ImportEnv, qualifier: tuple[str, ...], member: str, *, anchored: bool = False
+) -> QName | None:
     """Resolve ``qualifier::member``, returning ``None`` for any non-unique verdict."""
-    result = resolve_qualified(env, qualifier.segments, member, anchored=qualifier.anchored)
+    result = resolve_qualified(env, qualifier, member, anchored=anchored)
     return result.qname if isinstance(result, QualResolutionFound) else None
 
 
 def resolve_qualified_member(
     env: ImportEnv,
-    qualifier: Qualifier,
+    qualifier: tuple[str, ...],
     member: str,
     private_info: Mapping[QName, bool],
     *,
+    anchored: bool = False,
     unknown_qualifier: Callable[[str], Exception],
     private_member: Callable[[ModuleId], Exception],
     missing_member: Callable[[str], Exception],
@@ -426,10 +434,10 @@ def resolve_qualified_member(
     scope and typecheck can keep their own exception classes and phrasing while
     sharing one walk over the resolution verdicts.
     """
-    result = resolve_qualified(env, qualifier.segments, member, anchored=qualifier.anchored)
+    result = resolve_qualified(env, qualifier, member, anchored=anchored)
     if isinstance(result, QualResolutionFound):
         return result.qname
-    rendered = qualifier.render()
+    rendered = render_qualifier(qualifier, anchored=anchored)
     if isinstance(result, QualResolutionUnknownQualifier):
         raise unknown_qualifier(rendered)
     if isinstance(result, QualResolutionMissingMember):
@@ -438,9 +446,7 @@ def resolve_qualified_member(
             raise private_member(module)
         raise missing_member(rendered)
     raise ambiguous(
-        ambiguous_qualification_message(
-            qualifier.segments, member, result.candidates, anchored=qualifier.anchored
-        )
+        ambiguous_qualification_message(qualifier, member, result.candidates, anchored=anchored)
     )
 
 

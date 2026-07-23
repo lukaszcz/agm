@@ -49,10 +49,8 @@ from agm.agl.syntax.types import (
     JsonT,
     ListT,
     NameT,
-    Qualifier,
     TextT,
     TypeExpr,
-    TypeQualifier,
     UnitT,
 )
 
@@ -993,8 +991,8 @@ class AstBuilder(Transformer):
                 "assignment target must be a variable or indexed variable.",
                 span=lhs.span,
             )
-        module_qualifier = self._assignment_module_qualifier(root)
-        if module_qualifier is not None and isinstance(lhs, syntax.IndexAccess):
+        qualifier = self._assignment_qualifier(root)
+        if qualifier is not None and isinstance(lhs, syntax.IndexAccess):
             raise AglSyntaxError(
                 "assignment target cannot combine a module qualifier with indexing; "
                 "a qualified assignment target must be a bare name.",
@@ -1005,7 +1003,7 @@ class AstBuilder(Transformer):
                 name=lhs.name,
                 span=lhs.span,
                 node_id=self._next_id(),
-                module_qualifier=module_qualifier,
+                qualifier=qualifier,
             )
         else:
             assert isinstance(lhs, syntax.IndexAccess)
@@ -1023,22 +1021,16 @@ class AstBuilder(Transformer):
             node_id=self._next_id(),
         )
 
-    def _assignment_module_qualifier(self, ref: syntax.VarRef) -> Qualifier | None:
-        """Convert a simple expression chain into a qualified assignment target."""
+    def _assignment_qualifier(self, ref: syntax.VarRef) -> syntax.QualifierChain | None:
+        """Return a simple expression chain for a qualified assignment target."""
         chain = ref.qualifier
         if chain is None:
             return None
         if not chain.segments:
             assert chain.anchor is syntax.QualifierAnchor.CURRENT_MODULE
-            return Qualifier(segments=(), span=chain.span, node_id=chain.node_id)
+            return chain
         if len(chain.segments) == 1 and chain.segments[0].type_args is None:
-            segment = chain.segments[0]
-            return Qualifier(
-                segments=tuple(segment.name.split("/")),
-                span=segment.span,
-                node_id=segment.node_id,
-                anchored=chain.anchor is syntax.QualifierAnchor.MODULE,
-            )
+            return chain
         raise AglSyntaxError(
             "assignment target must be a variable or indexed variable.", span=ref.span
         )
@@ -1111,9 +1103,8 @@ class AstBuilder(Transformer):
         return AppliedT(name=name, args=type_args, span=span, node_id=nid)
 
     def qual_applied_type(self, meta: Meta, args: _Args) -> AppliedT:
-        """qual_prefix name type_lsqb type_arg_list RSQB — qualified application."""
-        qual = next(a for a in args if isinstance(a, Qualifier))
-        name_tok = next(a for a in args if _is_name_token(a))
+        """qual_ref_chain type_lsqb type_arg_list RSQB — qualified application."""
+        qualifier = next(a for a in args if isinstance(a, syntax.QualifierChain))
         type_args = cast(
             tuple[TypeExpr, ...],
             next(
@@ -1126,11 +1117,11 @@ class AstBuilder(Transformer):
             ),
         )
         return AppliedT(
-            name=str(name_tok),
+            name=qualifier.member,
             args=type_args,
             span=self._span_from_meta(meta),
             node_id=self._next_id(),
-            module_qualifier=qual,
+            qualifier=qualifier,
         )
 
     def agent_type(self, meta: Meta, args: _Args) -> AgentT:
@@ -1759,24 +1750,19 @@ class AstBuilder(Transformer):
         self, meta: Meta, args: _Args, *, qualified: bool, negated: bool
     ) -> syntax.IsTest:
         left = cast(syntax.Expr, args[0])
-        name_toks = [a for a in args if _is_name_token(a)]
-        module_qual = next((a for a in args if isinstance(a, Qualifier)), None)
-        type_qual = next((a for a in args if isinstance(a, TypeQualifier)), None)
+        qualifier = next((a for a in args if isinstance(a, syntax.QualifierChain)), None)
         if qualified:
-            assert module_qual is not None
-            qualifier = type_qual.name if type_qual is not None else None
-            variant = str(name_toks[-1])
+            assert qualifier is not None
+            variant = qualifier.member
         else:
-            qualifier = None
-            variant = str(name_toks[0])
+            variant = str(next(a for a in args if _is_name_token(a)))
         return syntax.IsTest(
             expr=left,
-            qualifier=qualifier,
             variant=variant,
             negated=negated,
             span=self._span_from_meta(meta),
             node_id=self._next_id(),
-            module_qualifier=module_qual,
+            qualifier=qualifier,
         )
 
     def is_test_simple(self, meta: Meta, args: _Args) -> syntax.IsTest:
@@ -2665,44 +2651,6 @@ class AstBuilder(Transformer):
     # Qualified refs
     # ------------------------------------------------------------------
 
-    def qual_prefix(self, meta: Meta, args: _Args) -> Qualifier:
-        """qual_prefix: MODQUAL | DCOLON"""
-        tok = args[0]
-        assert isinstance(tok, Token)
-        if tok.type == "MODQUAL":
-            spelling = str(tok)
-            anchored = spelling.startswith("/")
-            segments = tuple(spelling.removeprefix("/").split("/"))
-        else:
-            # DCOLON — self-reference, empty segments
-            anchored = False
-            segments = ()
-        return Qualifier(
-            segments=segments,
-            span=self._span_from_token(tok),
-            node_id=self._next_id(),
-            anchored=anchored,
-        )
-
-    def type_qual(self, meta: Meta, args: _Args) -> TypeQualifier:
-        """type_qual: MODQUAL."""
-        tok = args[0]
-        assert isinstance(tok, Token)
-        spelling = str(tok)
-        anchored = spelling.startswith("/")
-        segments = tuple(spelling.removeprefix("/").split("/"))
-        if anchored or len(segments) != 1:
-            raise AglSyntaxError(
-                "A type qualifier after '::' must be a single type name.",
-                span=self._span_from_token(tok),
-            )
-        return TypeQualifier(
-            name=segments[0],
-            type_args=None,
-            span=self._span_from_token(tok),
-            node_id=self._next_id(),
-        )
-
     def qualifier_mod_segment(self, meta: Meta, args: _Args) -> _QualifierChainSegment:
         """Build one chain segment from a lexer-merged qualifier token."""
         token = args[0]
@@ -2725,6 +2673,7 @@ class AstBuilder(Transformer):
                 type_args=None,
                 span=span,
                 node_id=self._next_id(),
+                anchored=anchored,
             ),
             anchored=anchored,
         )
@@ -2778,16 +2727,10 @@ class AstBuilder(Transformer):
             node_id=self._next_id(),
         )
 
-    def qual_var_ref(self, meta: Meta, args: _Args) -> syntax.VarRef:
-        """qual_var_ref: DCOLON qualifier_segment* name | qualifier_segment+ name"""
+    def qual_ref_chain(self, meta: Meta, args: _Args) -> syntax.QualifierChain:
+        """Build a qualified-reference chain for every qualified position."""
         name_tok = next(arg for arg in reversed(args) if _is_name_token(arg))
         segments = [arg for arg in args if isinstance(arg, _QualifierChainSegment)]
-        for segment in segments[1:]:
-            if segment.anchored or "/" in segment.segment.name:
-                raise AglSyntaxError(
-                    "A type qualifier after '::' must be a single type name.",
-                    span=segment.segment.span,
-                )
         first = args[0]
         anchor = (
             syntax.QualifierAnchor.CURRENT_MODULE
@@ -2798,26 +2741,28 @@ class AstBuilder(Transformer):
                 else None
             )
         )
-        span = self._span_from_meta(meta)
-        chain = self._expression_chain(anchor, segments, name_tok, span)
-        return syntax.VarRef(name=chain.member, span=span, node_id=self._next_id(), qualifier=chain)
+        return self._expression_chain(anchor, segments, name_tok, self._span_from_meta(meta))
+
+    def qual_var_ref(self, meta: Meta, args: _Args) -> syntax.VarRef:
+        """qual_var_ref: qual_ref_chain"""
+        chain = cast(syntax.QualifierChain, args[0])
+        return syntax.VarRef(
+            name=chain.member, span=chain.span, node_id=self._next_id(), qualifier=chain
+        )
 
     def qual_named_type(self, meta: Meta, args: _Args) -> NameT:
-        """qual_prefix NAME in type position."""
-        qual = next(a for a in args if isinstance(a, Qualifier))
-        name_tok = next(a for a in args if _is_name_token(a))
+        """qual_ref_chain in type position."""
+        qualifier = cast(syntax.QualifierChain, args[0])
         return NameT(
-            name=str(name_tok),
+            name=qualifier.member,
             span=self._span_from_meta(meta),
             node_id=self._next_id(),
-            module_qualifier=qual,
+            qualifier=qualifier,
         )
 
     def pat_qual_constructor(self, meta: Meta, args: _Args) -> syntax.ConstructorPattern:
-        """pat_qual_constructor: qual_prefix type_qual? NAME (LPAR pattern_fields? RPAR)?"""
-        qual = next(a for a in args if isinstance(a, Qualifier))
-        type_qual = next((a for a in args if isinstance(a, TypeQualifier)), None)
-        name_tok = next(a for a in args if _is_name_token(a))
+        """pat_qual_constructor: qual_ref_chain (LPAR pattern_fields? RPAR)?"""
+        qualifier = next(a for a in args if isinstance(a, syntax.QualifierChain))
         positional: tuple[syntax.Pattern, ...] = ()
         named: tuple[syntax.PatternField, ...] = ()
         for a in args:
@@ -2825,13 +2770,12 @@ class AstBuilder(Transformer):
                 positional = a.positional
                 named = a.named
         return syntax.ConstructorPattern(
-            qualifier=type_qual.name if type_qual is not None else None,
-            name=str(name_tok),
+            name=qualifier.member,
             positional=positional,
             named=named,
             span=self._span_from_meta(meta),
             node_id=self._next_id(),
-            module_qualifier=qual,
+            qualifier=qualifier,
         )
 
     # ------------------------------------------------------------------

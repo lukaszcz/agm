@@ -139,6 +139,8 @@ from agm.agl.syntax.nodes import (
     Placeholder,
     Program,
     ProgramDecl,
+    QualifierAnchor,
+    QualifierChain,
     Raise,
     RecordDef,
     Return,
@@ -156,7 +158,7 @@ from agm.agl.syntax.nodes import (
     WildcardPattern,
 )
 from agm.agl.syntax.spans import SourceSpan
-from agm.agl.syntax.types import Qualifier, TypeExpr
+from agm.agl.syntax.types import TypeExpr
 from agm.agl.syntax.visitor import walk
 from agm.agl.typecheck.arguments import bind_call_args, bind_pattern_args
 from agm.agl.typecheck.builder import _BUILTIN_TYPE_NAMES as _BUILTIN_TYPE_NAMES
@@ -3436,7 +3438,6 @@ class _Checker:
                 )
             self._check_variant_qualification(
                 qualifier=node.qualifier,
-                module_qualifier=node.module_qualifier,
                 variant=node.variant,
                 enum_type=expr_type,
                 span=node.span,
@@ -3455,19 +3456,41 @@ class _Checker:
     def _check_variant_qualification(
         self,
         *,
-        qualifier: str | None,
-        module_qualifier: Qualifier | None,
+        qualifier: QualifierChain | None,
         variant: str,
         enum_type: EnumType,
         span: SourceSpan,
     ) -> None:
         """Validate the optional enum-type qualifier on a variant reference."""
-        if qualifier is not None and module_qualifier is not None:
-            self._check_module_qualified_variant(module_qualifier, qualifier, enum_type, span)
-        elif module_qualifier is not None:
-            self._check_qualified_variant_prefix(
-                module_qualifier, enum_type.name, variant, enum_type, span
+        if qualifier is None:
+            return
+        if len(qualifier.segments) == 2:
+            module_qualifier = QualifierChain(
+                anchor=qualifier.anchor,
+                segments=(qualifier.segments[0],),
+                member=qualifier.member,
+                span=qualifier.span,
+                node_id=qualifier.node_id,
             )
+            self._check_module_qualified_variant(
+                module_qualifier, qualifier.segments[1].name, enum_type, span
+            )
+            return
+        if qualifier.anchor is QualifierAnchor.CURRENT_MODULE and qualifier.segments:
+            self._check_module_qualified_variant(
+                QualifierChain(
+                    anchor=qualifier.anchor,
+                    segments=(),
+                    member=qualifier.member,
+                    span=qualifier.span,
+                    node_id=qualifier.node_id,
+                ),
+                qualifier.segments[0].name,
+                enum_type,
+                span,
+            )
+            return
+        self._check_qualified_variant_prefix(qualifier, enum_type.name, variant, enum_type, span)
 
     def _require_enum_owner_match(
         self,
@@ -3493,15 +3516,15 @@ class _Checker:
 
     def _check_qualified_variant_prefix(
         self,
-        module_qualifier: Qualifier,
+        module_qualifier: QualifierChain,
         enum_name: str,
         variant: str,
         enum_type: EnumType,
         span: SourceSpan,
     ) -> None:
         """Validate a lone ``prefix::Variant`` qualifier."""
-        if not module_qualifier.anchored and len(module_qualifier.segments) == 1:
-            qualifier = module_qualifier.segments[0]
+        if not module_qualifier.anchored and len(module_qualifier.route_segments) == 1:
+            qualifier = module_qualifier.route_segments[0]
             form = self._env.resolve_unqualified_enum_owner_form(qualifier)
             # A route competes with a type only when it contributes the enum
             # owner being requested.  Merely sharing a suffix must not make a
@@ -3521,7 +3544,7 @@ class _Checker:
 
     def _check_module_qualified_variant(
         self,
-        module_qualifier: Qualifier,
+        module_qualifier: QualifierChain,
         enum_name: str,
         enum_type: EnumType,
         span: SourceSpan,
@@ -3529,14 +3552,16 @@ class _Checker:
         """Validate a module-qualified enum-type qualifier, e.g. ``mylib::Color``."""
         kind = (
             EnumOwnerFormKind.SELF
-            if not module_qualifier.segments
+            if not module_qualifier.route_segments
             else EnumOwnerFormKind.QUALIFIED_IMPORT
         )
         form = self._env.resolve_enum_owner_form(kind, enum_name, module_qualifier, span=span)
         if form is not None:
             rendered = module_qualifier.render()
             owner = (
-                f"::{enum_name}" if not module_qualifier.segments else f"{rendered}::{enum_name}"
+                f"::{enum_name}"
+                if not module_qualifier.route_segments
+                else f"{rendered}::{enum_name}"
             )
             self._require_enum_owner_match(form, enum_type, owner, span)
             return
@@ -3924,7 +3949,6 @@ class _Checker:
         enum_type = self._require_enum_scrutinee(pattern.name, subj_type, pattern.span)
         self._check_variant_qualification(
             qualifier=pattern.qualifier,
-            module_qualifier=pattern.module_qualifier,
             variant=pattern.name,
             enum_type=enum_type,
             span=pattern.span,

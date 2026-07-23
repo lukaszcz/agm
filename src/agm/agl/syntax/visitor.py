@@ -111,7 +111,6 @@ from agm.agl.syntax.types import (
     JsonT,
     ListT,
     NameT,
-    Qualifier,
     TextT,
     UnitT,
 )
@@ -170,7 +169,6 @@ class Visitor:
     def visit_AppliedT(self, node: AppliedT) -> None: ...
 
     # Module system nodes
-    def visit_Qualifier(self, node: Qualifier) -> None: ...
     def visit_QualifierSegment(self, node: QualifierSegment) -> None: ...
     def visit_QualifierChain(self, node: QualifierChain) -> None: ...
     def visit_ImportItem(self, node: ImportItem) -> None: ...
@@ -280,7 +278,6 @@ _KNOWN_NODE_TYPES: frozenset[type] = frozenset(
         FuncT,
         AppliedT,
         # module system nodes
-        Qualifier,
         QualifierSegment,
         QualifierChain,
         ImportItem,
@@ -391,8 +388,8 @@ def walk(node: object, callback: Callable[[object], None]) -> None:
         pass  # leaves
 
     elif isinstance(node, NameT):
-        if node.module_qualifier is not None:
-            walk(node.module_qualifier, callback)
+        if node.qualifier is not None:
+            walk(node.qualifier, callback)
 
     elif isinstance(node, ListT):
         walk(node.elem, callback)
@@ -409,15 +406,12 @@ def walk(node: object, callback: Callable[[object], None]) -> None:
         walk(node.result, callback)
 
     elif isinstance(node, AppliedT):
-        if node.module_qualifier is not None:
-            walk(node.module_qualifier, callback)
+        if node.qualifier is not None:
+            walk(node.qualifier, callback)
         for arg in node.args:
             walk(arg, callback)
 
     # --- Module system nodes ---
-    elif isinstance(node, Qualifier):
-        pass  # leaf — segments are plain strings
-
     elif isinstance(node, QualifierSegment):
         for type_arg in node.type_args or ():
             walk(type_arg, callback)
@@ -510,7 +504,8 @@ def walk(node: object, callback: Callable[[object], None]) -> None:
         walk(node.value, callback)
 
     elif isinstance(node, NameTarget):
-        pass
+        if node.qualifier is not None:
+            walk(node.qualifier, callback)
 
     elif isinstance(node, IndexTarget):
         walk(node.obj, callback)
@@ -577,6 +572,8 @@ def walk(node: object, callback: Callable[[object], None]) -> None:
 
     elif isinstance(node, IsTest):
         walk(node.expr, callback)
+        if node.qualifier is not None:
+            walk(node.qualifier, callback)
 
     elif isinstance(node, TypeApply):
         walk(node.expr, callback)
@@ -675,8 +672,8 @@ def walk(node: object, callback: Callable[[object], None]) -> None:
         walk(node.pattern, callback)
 
     elif isinstance(node, ConstructorPattern):
-        if node.module_qualifier is not None:
-            walk(node.module_qualifier, callback)
+        if node.qualifier is not None:
+            walk(node.qualifier, callback)
         for p in node.positional:
             walk(p, callback)
         for pf in node.named:

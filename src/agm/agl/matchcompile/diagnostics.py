@@ -7,9 +7,9 @@ import json
 from dataclasses import dataclass
 from typing import TypeAlias
 
+from agm.agl.scope.imports import render_qualifier
 from agm.agl.semantics.types import EnumType, Type
 from agm.agl.syntax.spans import SourceSpan
-from agm.agl.syntax.types import render_qualifier
 
 from .model import LiteralConstructor, LiteralKind
 

@@ -2428,42 +2428,22 @@ class TestVisitorWalk:
         walk(prog, visited.append)
         assert any(isinstance(n, QualifierChain) for n in visited)
 
-    def test_walk_qual_name_t_visits_qualifier(self) -> None:
-        """walk() on a NameT with a module_qualifier must visit the Qualifier node."""
+    @pytest.mark.parametrize(
+        "source",
+        (
+            "let x: foo/bar::MyType = null",
+            "let x: foo/bar::Box[int] = null",
+            "case x of | m::Foo => 1",
+        ),
+    )
+    def test_walk_qualified_references_visits_qualifier_chains(self, source: str) -> None:
         from agm.agl.parser import parse_program
-        from agm.agl.syntax import Qualifier
+        from agm.agl.syntax import QualifierChain
         from agm.agl.syntax.visitor import walk
 
-        # A qualified type annotation forces a NameT with module_qualifier set.
-        prog = parse_program("let x: foo/bar::MyType = null")
         visited: list[object] = []
-        walk(prog, visited.append)
-        assert any(isinstance(n, Qualifier) for n in visited), (
-            "Qualifier node not visited when walking a qualified NameT"
-        )
-
-    def test_walk_qual_applied_t_visits_qualifier(self) -> None:
-        from agm.agl.parser import parse_program
-        from agm.agl.syntax import Qualifier
-        from agm.agl.syntax.visitor import walk
-
-        prog = parse_program("let x: foo/bar::Box[int] = null")
-        visited: list[object] = []
-        walk(prog, visited.append)
-        assert any(isinstance(node, Qualifier) for node in visited)
-
-    def test_walk_qual_constructor_pattern_visits_qualifier(self) -> None:
-        """walk() on a ConstructorPattern with module_qualifier must visit the Qualifier."""
-        from agm.agl.parser import parse_program
-        from agm.agl.syntax import Qualifier
-        from agm.agl.syntax.visitor import walk
-
-        prog = parse_program("case x of | m::Foo => 1")
-        visited: list[object] = []
-        walk(prog, visited.append)
-        assert any(isinstance(n, Qualifier) for n in visited), (
-            "Qualifier node not visited when walking a qualified ConstructorPattern"
-        )
+        walk(parse_program(source), visited.append)
+        assert any(isinstance(node, QualifierChain) for node in visited)
 
     def test_walk_constructor_pattern_visits_positional(self) -> None:
         """walk() on a ConstructorPattern with positional sub-patterns visits each one."""
@@ -2746,7 +2726,7 @@ class TestCastNode:
 
 
 class TestModuleSystemNodes:
-    """Tests for ImportMode, Qualifier, ImportItem, ImportDecl AST nodes."""
+    """Tests for ImportMode, import, and export AST nodes."""
 
     def _sp(self) -> SourceSpan:
         return SourceSpan(1, 0, 1, 1, 0, 1)
@@ -2757,33 +2737,6 @@ class TestModuleSystemNodes:
         assert ImportMode.ALL.value == "ALL"
         assert ImportMode.USING.value == "USING"
         assert ImportMode.HIDING.value == "HIDING"
-
-    def test_qualifier_empty_segments_is_self_ref(self) -> None:
-        from agm.agl.syntax import Qualifier
-
-        q = Qualifier(segments=(), span=self._sp(), node_id=0)
-        assert q.segments == ()
-
-    def test_qualifier_slash_segments_and_anchor(self) -> None:
-        from agm.agl.syntax import Qualifier
-
-        q = Qualifier(segments=("foo", "bar"), anchored=True, span=self._sp(), node_id=0)
-        assert q.segments == ("foo", "bar")
-        assert q.anchored is True
-
-    def test_qualifier_equality_ignores_span_and_node_id(self) -> None:
-        from agm.agl.syntax import Qualifier
-
-        q1 = Qualifier(segments=("mod",), span=SourceSpan(1, 0, 1, 3, 0, 3), node_id=0)
-        q2 = Qualifier(segments=("mod",), span=SourceSpan(2, 0, 2, 3, 0, 3), node_id=99)
-        assert q1 == q2
-
-    def test_qualifier_immutable(self) -> None:
-        from agm.agl.syntax import Qualifier
-
-        q = Qualifier(segments=("a",), span=self._sp(), node_id=0)
-        with pytest.raises((FrozenInstanceError, AttributeError)):
-            setattr(q, "segments", ("b",))
 
     def test_import_item_with_rename(self) -> None:
         from agm.agl.syntax import ImportItem
@@ -3010,15 +2963,6 @@ class TestModuleSystemNodes:
         walk(decl, visited.append)
         assert visited == [decl]
 
-    def test_qualifier_walk_is_leaf(self) -> None:
-        from agm.agl.syntax import Qualifier
-        from agm.agl.syntax.visitor import walk
-
-        q = Qualifier(segments=("a", "b"), span=self._sp(), node_id=0)
-        visited: list[object] = []
-        walk(q, visited.append)
-        assert visited == [q]
-
     def test_func_def_is_private_default_false(self) -> None:
         """FuncDef.is_private defaults to False."""
         func = FuncDef(
@@ -3074,12 +3018,8 @@ class TestModuleSystemNodes:
         ref = VarRef(name="x", span=self._sp(), node_id=2, qualifier=chain)
         assert ref.qualifier is chain
 
-    def test_name_t_module_qualifier_default_none(self) -> None:
+    def test_qualified_reference_defaults_to_none(self) -> None:
         t = NameT(name="MyType", span=self._sp(), node_id=0)
-        assert t.module_qualifier is None
-
-    def test_constructor_pattern_module_qualifier_default_none(self) -> None:
-        pat = ConstructorPattern(
-            qualifier=None, name="Foo", positional=(), named=(), span=self._sp(), node_id=0
-        )
-        assert pat.module_qualifier is None
+        pat = ConstructorPattern(name="Foo", positional=(), named=(), span=self._sp(), node_id=0)
+        assert t.qualifier is None
+        assert pat.qualifier is None

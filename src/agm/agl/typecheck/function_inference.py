@@ -23,7 +23,17 @@ from agm.agl.semantics.types import (
     contains_inference_var,
     substitute,
 )
-from agm.agl.syntax.nodes import FuncDef, Param, ParamKind, Program, VarRef
+from agm.agl.syntax.nodes import (
+    AgentDecl,
+    FuncDef,
+    LetDecl,
+    Param,
+    ParamDecl,
+    ParamKind,
+    Program,
+    VarDecl,
+    VarRef,
+)
 from agm.agl.syntax.visitor import walk
 from agm.agl.typecheck.inference import ConstraintRole, InferenceEngine, InferenceError
 from agm.util.graph import sccs
@@ -60,6 +70,9 @@ class CandidateSession:
     provisional_declaration_ids: frozenset[int]
     evidence: list[SourceSpan] = field(default_factory=list)
     binding_snapshots: dict[ModuleId, PersistentDict[int, Type]] = field(default_factory=dict)
+    visible_binding_snapshots: dict[tuple[ModuleId, int], PersistentDict[int, Type]] = field(
+        default_factory=dict
+    )
     current_declaration_id: int | None = None
     generic_edges: list[GenericCandidateEdge] = field(default_factory=list)
 
@@ -257,6 +270,30 @@ def _register_signature(
     env.set_binding_type(node.node_id, function_type)
 
 
+def _seed_candidate_visible_bindings(
+    component: ModuleCandidateComponent, session: CandidateSession
+) -> None:
+    """Capture source-visible top-level value bindings for each function body."""
+    from agm.agl.typecheck.checker import _Checker
+
+    for module in component.modules:
+        program = module.resolved.program
+        assert isinstance(program, Program)
+        checker = _Checker(
+            env=module.env,
+            resolved=module.resolved,
+            capabilities=module.capabilities,
+            module_id=module.module_id,
+        )
+        for item in program.body.items:
+            if isinstance(item, FuncDef):
+                session.visible_binding_snapshots[(module.module_id, item.node_id)] = (
+                    module.env.snapshot_binding_types()
+                )
+            elif isinstance(item, (AgentDecl, LetDecl, ParamDecl, VarDecl)):
+                checker._check_item(item, expected=None)
+
+
 def _infer_function_component(
     component: ModuleCandidateComponent,
     functions: tuple[_CandidateFunction, ...],
@@ -290,7 +327,11 @@ def _infer_function_component(
         module.module_id: module.env.snapshot_binding_types() for module in component.modules
     }
     try:
+        _seed_candidate_visible_bindings(component, session)
         for module, node, result, signature in provisional:
+            module.env.restore_binding_types(
+                session.visible_binding_snapshots[(module.module_id, node.node_id)]
+            )
             checker = _Checker(
                 env=module.env,
                 resolved=module.resolved,

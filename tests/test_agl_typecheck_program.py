@@ -172,6 +172,24 @@ def test_single_module_program_infers_forward_and_mutual_returns(tmp_path: Path)
     assert signatures["is_odd"].result == BoolType()
 
 
+@pytest.mark.parametrize(
+    ("binding", "expected"),
+    [
+        ("let value = 1", IntType()),
+        ("var value = 1", IntType()),
+        ("param value: int = 1", IntType()),
+        ("agent value", AgentType()),
+    ],
+)
+def test_candidate_inference_reads_preceding_top_level_binding(
+    binding: str, expected: Type
+) -> None:
+    """An inferred function can capture a source-visible top-level value."""
+    checked = _check(f"{binding}\ndef capture() = value\ncapture()")
+
+    assert checked.function_signatures["capture"].result == expected
+
+
 def test_program_signature_prepass_preserves_builtin_header_metadata(tmp_path: Path) -> None:
     """Builtin declarations receive the same program-header record as ordinary defs."""
     from agm.agl.syntax.nodes import FuncDef

@@ -387,11 +387,12 @@ class ModuleResolution:
         ``ModuleId`` for cross-module references.  The checker validates
         enum-ness and variant.
     ``pattern_constructor_candidates``
-        Maps bare ``VarPattern`` and constructor-pattern node ids that name
-        visible constructors to all viable candidates. Candidates are
-        independent of ordinary value bindings; the checker selects a bare
-        name's final interpretation from the matched occurrence's type and
-        field name.
+        Maps bare ``VarPattern`` and constructor-pattern node ids to viable
+        candidates. Constructor patterns retain an empty tuple when their
+        named owner is unavailable, preventing fallback to an unqualified
+        spelling. Candidates are independent of ordinary value bindings; the
+        checker selects a bare name's final interpretation from the matched
+        occurrence's type and field name.
     ``pattern_slots``
         Scope-created field-directed pattern-slot metadata keyed by slot id.
         Branch-body references resolve directly to the shared slot binding.

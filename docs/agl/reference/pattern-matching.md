@@ -3,8 +3,8 @@
 [← Index](index.md)
 
 Patterns appear in `case` expressions ([Control flow](control-flow.md),
-[Expressions](expressions.md)). The `|` before the first branch is optional;
-each additional branch is introduced by `|`.
+[Expressions](expressions.md)) and immutable `let` bindings. The `|` before
+the first branch is optional; each additional branch is introduced by `|`.
 
 ## Pattern forms
 
@@ -99,13 +99,15 @@ Restrictions:
 
 ### Constructor patterns
 
-A constructor pattern matches one enum variant and optionally destructures its
-payload. A pattern is a constructor pattern when it is one of:
+A constructor pattern matches one enum variant or one record value and
+optionally destructures its fields. A pattern is a constructor pattern when it
+is one of:
 
 - a **bare top-level name that denotes a visible constructor** — matches that
-  variant (nullary variants only; see below),
+  enum variant (nullary variants only; see below),
 - a **call form** `name(…)`, where the parentheses may be empty, or
-- a **qualified** `Enum::variant` or `module::Enum::variant` form.
+- a **qualified** `Enum::variant`, `Record::Record(…)`,
+  `module::Enum::variant`, or `module::Record` form.
 
 ```agl
 enum Review
@@ -124,12 +126,15 @@ The first branch could equivalently use bare `Pass` or explicit `Pass()`.
 A **bare** constructor name matches **nullary** variants only. A bare name for a
 variant that has fields is a static error directing you to an explicit form, so
 the discarded payload is acknowledged: write `Fail()` or destructure the
-fields. Empty parentheses ignore every payload field, including named-only fields. The call and qualified forms apply to every variant;
-the bare form is a convenience for the common nullary case.
+fields. Empty parentheses ignore every payload field, including named-only fields. The call and qualified forms apply to every variant and to records;
+the bare form is a convenience for the common nullary case. A local record
+constructor such as `Record(…)` is an unqualified call form; its owner-qualified
+form repeats the record name: `Record::Record(…)`.
 
-Constructor ownership in patterns is directed by the scrutinee's static enum
-type. When two enums share an unqualified variant spelling, the scrutinee type
-selects the intended enum, so the pattern needs no qualification. This differs
+Constructor ownership in patterns is directed by the scrutinee's static
+nominal type. When two enums share an unqualified variant spelling, or a record
+constructor spelling collides with an enum variant, the scrutinee type selects
+the intended constructor, so the pattern needs no qualification. This differs
 from a bare reference in expression position, where the same situation is a
 static ambiguity error ([Bindings and scope](bindings-and-scope.md)).
 
@@ -148,13 +153,14 @@ case value of
   | mylib::Color::Blue => print "blue"
 ```
 
-The prefix may name an owning type (`Color::Red`), a module and owning type
-(`mylib::Color::Red`), or the current module (`::Color::Red`). A module may
-also qualify an exposed constructor directly (`mylib::Red`). Qualification
-states the owner explicitly but is not required to resolve same-spelled variants;
-when present, it must identify the scrutinee's enum. A module route uses slash segments, as in
-`company/colors::Color::Red`; constructor qualification itself uses `::`,
-never `.`.
+The prefix may name an owning enum type (`Color::Red`), a module and owning
+type (`mylib::Color::Red` or `mylib::Point`), or the current module
+(`::Color::Red` or `::Point`). A module may also qualify an exposed enum
+constructor directly (`mylib::Red`). Qualification states the owner explicitly
+but is not required to resolve same-spelled constructors; when present, it must
+identify the scrutinee's exact nominal type. A module route uses slash segments,
+as in `company/colors::Color::Red` or `company/colors::Point`; constructor
+qualification itself uses `::`, never `.`.
 
 **Payload sub-patterns** follow the same positional-greedy binding as calls:
 
@@ -207,10 +213,12 @@ def describe(response: Response) -> text =
 
 Static rules:
 
-1. A constructor pattern requires an **enum-typed scrutinee**; matching one
-   against any other type is a static error.
-2. The variant must belong to the scrutinee's enum; a qualifier must resolve
-   (alias-transparently) to that enum.
+1. A constructor pattern requires a **record- or enum-typed scrutinee**;
+   matching one against any other type, including an exception, is a static error.
+2. An enum variant must belong to the scrutinee's enum. A record constructor
+   must denote the scrutinee's exact record type. Qualifiers and type aliases
+   resolve transparently, but module identity and instantiated type arguments
+   still must agree.
 3. Each field may appear at most once in a pattern.
 4. Fields not mentioned in the pattern are simply ignored (patterns need not
    be complete).
@@ -219,13 +227,15 @@ Static rules:
    expression that lands on a named-only field (with no positional slots available)
    is a static error unless it is a bare name (which is reinterpreted as `name = name`).
 
-### Patterns on generic enums
+### Patterns on generic nominal types
 
-Constructor patterns work on instances of **generic** enums
+Constructor patterns work on instances of **generic** enums and records
 ([Generics](generics.md)) exactly as on monomorphic ones, in both unqualified
-and qualified form. When the scrutinee is a concrete instance such as
-`Option[int]`, a destructured payload is bound at the **instantiated** type —
-matching `some(value)` against an `Option[int]` binds `value: int`:
+and qualified form. A transparent record alias is also a constructor-pattern
+spelling for its target. When the scrutinee is a concrete instance such as
+`Option[int]` or `Box[int]`, a destructured field is bound at the
+**instantiated** type — matching `some(value)` against an `Option[int]` binds
+`value: int`:
 
 ```agl
 enum Option[T]
@@ -240,7 +250,22 @@ def describe_option(o: Option[int]) -> text =
 
 The qualifier (`Option::`) explicitly names the owning enum. It is optional
 because the scrutinee's static enum type determines constructor ownership; when
-present, it must agree with that type.
+present, it must agree with that type. Records use the same rule:
+
+<!-- agl-check: fragment -->
+```agl
+record Box[T]
+  value: T
+
+type IntBox = Box[int]
+
+let box: IntBox = Box(value = 1)
+let IntBox(value) = box       # value: int
+
+case box of
+  | Box(value) => value
+  | _ => 0
+```
 
 ## Matching semantics
 

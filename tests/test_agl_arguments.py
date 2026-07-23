@@ -173,6 +173,31 @@ def test_pattern_binding_keeps_each_nested_pattern_in_its_selected_field() -> No
     assert bound == (left, right)
 
 
+def test_pattern_binding_leaves_partial_record_fields_wild_and_uses_named_only_shorthand() -> None:
+    """Record patterns use the shared declaration-order partial binding contract."""
+    left = VarPattern("left", _SPAN, 1)
+    label = VarPattern("label", _SPAN, 2)
+    middle = WildcardPattern(_SPAN, 3)
+
+    partial = bind_pattern_args(
+        (("left", STANDARD), ("middle", STANDARD), ("label", NAMED_ONLY)),
+        (left,),
+        (),
+        call_span=_CALL_SPAN,
+        context_desc="pattern for constructor 'Record'",
+    )
+    bound = bind_pattern_args(
+        (("left", STANDARD), ("middle", STANDARD), ("label", NAMED_ONLY)),
+        (left, middle, label),
+        (),
+        call_span=_CALL_SPAN,
+        context_desc="pattern for constructor 'Record'",
+    )
+
+    assert partial == (left, None, None)
+    assert bound == (left, middle, label)
+
+
 def test_positional_skips_leading_named_only() -> None:
     """A positional arg binds to a positional-capable param even when a named-only
     param precedes it (non-contiguous case: e.g. an exception's inherited named-only

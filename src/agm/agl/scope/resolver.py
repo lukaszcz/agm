@@ -1889,40 +1889,51 @@ class _Resolver:
             if not isinstance(node, ConstructorPattern):
                 return
             candidates = tuple(self._constructor_candidates.get(node.name, ()))
-            if node.module_qualifier is not None and node.module_qualifier.segments:
-                qualifier_segments = node.module_qualifier.segments
-                if (
-                    len(qualifier_segments) == 1
-                    and qualifier_segments[0] in self._declared_type_names
-                ):
+            if node.module_qualifier is not None:
+                owner_name = node.qualifier if node.qualifier is not None else node.name
+                if not node.module_qualifier.segments:
                     candidates = tuple(
                         candidate
                         for candidate in candidates
-                        if candidate.owner_name == qualifier_segments[0]
+                        if candidate.owner_module_id == self._module_id
+                        and candidate.owner_name == owner_name
                     )
-                elif self._import_env is not None:
-                    owner_name = node.qualifier if node.qualifier is not None else node.name
-                    resolved_owner = resolve_qualified(
-                        self._import_env,
-                        node.module_qualifier.segments,
-                        owner_name,
-                        anchored=node.module_qualifier.anchored,
-                    )
-                    if isinstance(resolved_owner, QualResolutionFound):
-                        owner_module_id, owner_name = resolved_owner.qname
+                else:
+                    qualifier_segments = node.module_qualifier.segments
+                    if (
+                        len(qualifier_segments) == 1
+                        and qualifier_segments[0] in self._declared_type_names
+                    ):
                         candidates = tuple(
                             candidate
-                            for candidate in self._qualified_constructor_candidates.get(
-                                (owner_module_id, owner_name), ()
-                            )
-                            if candidate.variant is None or candidate.variant == node.name
+                            for candidate in candidates
+                            if candidate.owner_module_id == self._module_id
+                            and candidate.owner_name == qualifier_segments[0]
                         )
-            elif node.qualifier is not None:
-                candidates = tuple(
-                    candidate for candidate in candidates if candidate.owner_name == node.qualifier
-                )
-            if candidates:
-                self._pattern_constructor_candidates[node.node_id] = candidates
+                    elif self._import_env is not None:
+                        resolved_owner = resolve_qualified(
+                            self._import_env,
+                            qualifier_segments,
+                            owner_name,
+                            anchored=node.module_qualifier.anchored,
+                        )
+                        if isinstance(resolved_owner, QualResolutionFound):
+                            owner_module_id, owner_name = resolved_owner.qname
+                            candidates = tuple(
+                                candidate
+                                for candidate in self._qualified_constructor_candidates.get(
+                                    (owner_module_id, owner_name), ()
+                                )
+                                if candidate.variant is None or candidate.variant == node.name
+                            )
+                        else:
+                            candidates = ()
+                    else:
+                        candidates = ()
+                # An explicit module qualifier must never fall back to a bare
+                # spelling. Preserve an empty result so type checking can
+                # reject an absent or wrong owner.
+            self._pattern_constructor_candidates[node.node_id] = candidates
 
         walk(pattern, record_constructor_candidates)
         for candidate in pattern_binder_candidates(pattern):

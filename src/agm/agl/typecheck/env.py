@@ -61,6 +61,7 @@ from agm.agl.semantics.types import (
     TypeVarType,
     UnitType,
     contains_inference_var,
+    match_nominal_owner_template,
 )
 from agm.agl.syntax.nodes import Expr, ParamKind, Pattern
 from agm.agl.syntax.spans import SourceSpan
@@ -1580,7 +1581,7 @@ class TypeEnvironment:
         nominal declarations all share the exact template matcher.
         """
         template = self.source_type_template_qname(module_id, name)
-        return None if template is None else template.match(concrete)
+        return None if template is None else match_nominal_owner_template(template, concrete)
 
     def source_type_template(self, name: str) -> TypeTemplate | None:
         """Return immutable checked template data for an own-module source type."""

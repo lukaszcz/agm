@@ -546,11 +546,13 @@ class EnumOwnerForm:
         """
         if self.type_template is None:
             return None
-        return _match_enum_owner_template(self.type_template, concrete)
+        return match_nominal_owner_template(self.type_template, concrete)
 
 
-def _match_enum_owner_template(template: TypeTemplate, concrete: Type) -> TypeTemplateMatch | None:
-    """Match enum owner templates while permitting uninferred phantom parameters."""
+def match_nominal_owner_template(
+    template: TypeTemplate, concrete: Type
+) -> TypeTemplateMatch | None:
+    """Match a nominal owner template while permitting uninferred phantom parameters."""
     bindings = match_type_template(template.template, concrete, ())
     if bindings is not None:
         return bindings

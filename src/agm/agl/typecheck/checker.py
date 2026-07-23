@@ -12,7 +12,7 @@ Rules implemented
     (required before defaulted); FunctionSignature registered.
 3.  Binding type inference:
     - ``let pattern: T = e`` — check ``e`` once against the complete matched
-      type and type every selected binder in the supported enum-pattern forms.
+      type and type every selected binder in the supported nominal-pattern forms.
       This records static classifications only; it makes no irrefutability or
       execution-stage conclusion.
     - ``var name: T = e`` — check ``e`` against ``T``.
@@ -4013,50 +4013,36 @@ class _Checker:
         assert isinstance(pattern, ConstructorPattern), (
             f"Unexpected pattern kind: {type(pattern).__name__}"
         )
-        enum_type = self._require_enum_scrutinee(pattern.name, subj_type, pattern.span)
-        self._check_variant_qualification(
-            qualifier=pattern.qualifier,
-            module_qualifier=pattern.module_qualifier,
-            variant=pattern.name,
-            enum_type=enum_type,
-            span=pattern.span,
+        owner_type, variant_name, fields, context_desc, constructor_ref = (
+            self._resolve_nominal_pattern_constructor(pattern, subj_type)
         )
-        constructor_ref = self._constructor_pattern_ref(pattern, enum_type)
-        if constructor_ref is not None:
-            self._record_pattern_constructor_ref(pattern.node_id, constructor_ref)
-        variant_name = pattern.name
-        enum_variants = self._env.type_table.enum_variants(enum_type)
-        if variant_name not in enum_variants:
-            raise _variant_not_in_enum(variant_name, enum_type, pattern.span)
-        vfields = enum_variants[variant_name]
-        field_kinds = self._env.get_constructor_field_kinds(
-            enum_type.name, variant_name, module_id=enum_type.module_id
+        self._record_pattern_constructor_ref(pattern.node_id, constructor_ref)
+        field_kinds = self._env.get_constructor_field_kinds_for_type(
+            owner_type, owner_type.name, variant_name
         )
-        assert field_kinds is not None, (
-            f"field kinds not registered for {enum_type.name}.{variant_name}"
-        )
+        assert field_kinds is not None, f"field kinds not registered for {context_desc}"
         binding = bind_pattern_args(
             field_kinds,
             pattern.positional,
             pattern.named,
             call_span=pattern.span,
-            context_desc=f"pattern for variant '{variant_name}'",
+            context_desc=f"pattern for {context_desc}",
         )
         bound_pairs: list[tuple[str, Pattern]] = []
-        constructor_field_names = frozenset(vfields)
+        constructor_field_names = frozenset(fields)
         for (name, _), bound_pattern in zip(field_kinds, binding):
             if bound_pattern is not None:
                 bound_pairs.append((name, bound_pattern))
                 self._bind_pattern_types(
                     bound_pattern,
-                    vfields[name],
+                    fields[name],
                     pattern,
                     field_name=name,
                     field_names=constructor_field_names,
                     candidate_provenance=(
                         candidate_provenance
                         if self._constructor_field_depends_on_owner_type(
-                            enum_type, variant_name, name
+                            owner_type, variant_name, name
                         )
                         else set()
                     ),
@@ -4077,23 +4063,96 @@ class _Checker:
             )
         return subj_type
 
-    def _constructor_pattern_ref(
-        self, pattern: ConstructorPattern, enum_type: EnumType
-    ) -> ConstructorRef | None:
-        """Select the scope-published constructor candidate for an enum pattern.
+    def _resolve_nominal_pattern_constructor(
+        self, pattern: ConstructorPattern, subj_type: Type
+    ) -> tuple[RecordType | EnumType, str | None, Mapping[str, Type], str, ConstructorRef]:
+        """Resolve one applied pattern to its exact record or enum constructor shape.
 
-        Older resolved artifacts did not retain qualified constructor-pattern
-        candidates. Falling back to the namespace inventory preserves their
-        existing case behavior while current match sites use their occurrence
-        candidates directly.
+        Scope supplies the source-spelling candidates. Their source type templates
+        are matched against the concrete scrutinee, so transparent aliases still
+        select the underlying nominal handle while module, name, and instantiated
+        arguments retain exact identity. Enum qualification remains validated by
+        the enum-specific owner-form metadata used by match compilation.
         """
-        candidates = (*self._resolved.pattern_constructor_candidates.get(pattern.node_id, ()),)
-        if not candidates:
-            candidates = self._resolved.constructor_candidates.get(pattern.name, ())
-        return next(
-            (candidate for candidate in candidates if candidate.matches(enum_type, pattern.name)),
-            None,
+        owner_type: RecordType | EnumType
+        variant_name: str | None
+        fields: Mapping[str, Type]
+        context_desc: str
+        if isinstance(subj_type, EnumType):
+            self._check_variant_qualification(
+                qualifier=pattern.qualifier,
+                module_qualifier=pattern.module_qualifier,
+                variant=pattern.name,
+                enum_type=subj_type,
+                span=pattern.span,
+            )
+            variants = self._env.type_table.enum_variants(subj_type)
+            if pattern.name not in variants:
+                raise _variant_not_in_enum(pattern.name, subj_type, pattern.span)
+            owner_type = subj_type
+            variant_name = pattern.name
+            fields = variants[variant_name]
+            context_desc = f"variant '{owner_type.name}.{variant_name}'"
+        elif isinstance(subj_type, RecordType):
+            owner_type = subj_type
+            variant_name = None
+            fields = self._env.type_table.record_fields(owner_type)
+            context_desc = f"constructor '{owner_type.name}'"
+        else:
+            raise AglTypeError(
+                f"Cannot match constructor pattern '{pattern.name}' against non-record or non-enum "
+                f"type '{subj_type!r}'.",
+                span=pattern.span,
+            )
+        constructor_ref = self._constructor_pattern_ref(pattern, owner_type, variant_name)
+        if (
+            constructor_ref is None
+            and isinstance(owner_type, EnumType)
+            and pattern.module_qualifier
+        ):
+            typedef = self._env.type_table.get(owner_type.module_id, owner_type.name)
+            assert typedef is not None
+            constructor_ref = ConstructorRef(
+                owner_name=owner_type.name,
+                variant=variant_name,
+                owner_decl_node_id=-1,
+                type_params=typedef.type_params,
+                owner_module_id=owner_type.module_id,
+            )
+        if constructor_ref is None:
+            raise AglTypeError(
+                f"Constructor pattern '{pattern.name}' does not belong to '{owner_type!r}'.",
+                span=pattern.span,
+            )
+        return owner_type, variant_name, fields, context_desc, constructor_ref
+
+    def _constructor_pattern_ref(
+        self,
+        pattern: ConstructorPattern,
+        owner_type: RecordType | EnumType,
+        variant: str | None,
+    ) -> ConstructorRef | None:
+        """Select the scope-published candidate matching this exact nominal constructor.
+
+        Candidate owner names retain the spelling written by the user, including
+        aliases. ``match_source_type_qname`` resolves that spelling transparently
+        and matches its full nominal template against the concrete scrutinee.
+        """
+        candidates = self._resolved.pattern_constructor_candidates.get(
+            pattern.node_id, self._resolved.constructor_candidates.get(pattern.name, ())
         )
+        for candidate in candidates:
+            if (
+                self._env.match_source_type_qname(
+                    candidate.owner_module_id, candidate.owner_name, owner_type
+                )
+                is None
+            ):
+                continue
+            if candidate.variant == variant:
+                return candidate
+            return replace(candidate, variant=variant)
+        return None
 
     def _candidate_for_field_type(
         self, pattern: VarPattern, field_type: Type

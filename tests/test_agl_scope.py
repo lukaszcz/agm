@@ -416,15 +416,46 @@ class TestBlockScoping:
 
 
 class TestLetPatternCompatibility:
-    def test_destructuring_let_is_rejected_before_it_creates_bindings(self) -> None:
-        err = reject_scope("let Pair(left, right) = value\nleft")
-        line, _ = diag(err)
-        assert line == 1
+    def test_destructuring_let_creates_continuation_slots_before_later_rejection(self) -> None:
+        resolved = parse_and_resolve("let value = 0\nlet Pair(left, right) = value\nleft")
+        assert _ref(resolved, "left").kind is BinderKind.pattern_slot
 
     def test_wildcard_let_resolves_its_rhs_without_creating_a_binding(self) -> None:
         resolved = parse_and_resolve("let value = 1\nlet _ = value\n()")
         assert _ref(resolved, "value").kind is BinderKind.let_binding
         assert "_" not in resolved.root_scope.bindings
+
+
+class TestLetPatternScope:
+    def test_root_let_name_binds_despite_a_visible_constructor(self) -> None:
+        resolved = parse_and_resolve("enum Flag\n  | on\nlet on = 1\nlet copied = on\ncopied")
+        assert _ref(resolved, "on").kind is BinderKind.let_binding
+        declaration = resolved.program.body.items[1]
+        assert isinstance(declaration, LetDecl)
+        assert resolved.pattern_constructor_candidates[declaration.pattern.node_id]
+
+    def test_let_initializer_cannot_see_its_own_pattern(self) -> None:
+        reject_scope("let value = value\nvalue")
+
+    def test_ast_wildcard_name_does_not_create_a_binding(self) -> None:
+        resolved = resolve_program(_make_let("_", _make_intlit()))
+        assert "_" not in resolved.root_scope.bindings
+
+    def test_unimported_qualified_constructor_pattern_stays_a_checker_concern(self) -> None:
+        parse_and_resolve("let value = 1\ncase value of | missing::packet(_) => 1")
+
+    def test_destructuring_let_resolves_nested_binders_for_its_continuation(self) -> None:
+        resolved = parse_and_resolve(
+            "let value = 0\nlet Pair(left, _ as right) = value\nleft\nright"
+        )
+        assert _ref(resolved, "left").kind is BinderKind.pattern_slot
+        assert _ref(resolved, "right").kind is BinderKind.pattern_slot
+        assert {slot.binder_kind for slot in resolved.pattern_slots.values()} == {
+            BinderKind.let_binding
+        }
+        declaration = resolved.program.body.items[1]
+        assert isinstance(declaration, LetDecl)
+        assert resolved.match_site_pattern_slots[declaration.node_id]
 
 
 class TestWildcardBinders:

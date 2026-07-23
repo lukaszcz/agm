@@ -238,16 +238,20 @@ class SlotCandidate:
 
 @dataclass(frozen=True, slots=True)
 class PatternSlot:
-    """Parallel metadata for field-directed pattern candidates.
+    """Parallel metadata for candidates owned by one pattern match site.
 
-    ``alternative`` is either an enclosing ordinary binding or an outer
-    pattern-slot binding, if one is visible.
+    ``match_site_node_id`` identifies the owning case branch or ``let``
+    declaration. ``binder_kind`` records the binding kind requested by that
+    site when checking selects a candidate. ``alternative`` is an enclosing
+    ordinary binding or an outer pattern-slot binding, if one is visible.
     """
 
     slot_id: int
     name: str
     candidates: tuple[SlotCandidate, ...]
     alternative: BindingRef | None
+    match_site_node_id: int
+    binder_kind: BinderKind
 
 
 # ---------------------------------------------------------------------------
@@ -383,17 +387,18 @@ class ModuleResolution:
         ``ModuleId`` for cross-module references.  The checker validates
         enum-ness and variant.
     ``pattern_constructor_candidates``
-        Maps every bare ``VarPattern.node_id`` that names one or more visible
-        constructors to its candidate constructors. Constructor candidates are
-        independent of ordinary value bindings; the checker selects the final
-        interpretation from the matched occurrence's type and field name.
+        Maps bare ``VarPattern`` and constructor-pattern node ids that name
+        visible constructors to all viable candidates. Candidates are
+        independent of ordinary value bindings; the checker selects a bare
+        name's final interpretation from the matched occurrence's type and
+        field name.
     ``pattern_slots``
         Scope-created field-directed pattern-slot metadata keyed by slot id.
         Branch-body references resolve directly to the shared slot binding.
-    ``branch_pattern_slots``
-        Maps each case branch's node id to the slot ids that branch's pattern
-        created, in creation (outer-to-inner) order. The checker selects
-        exactly these once the branch's patterns are classified.
+    ``match_site_pattern_slots``
+        Maps each owning case-branch or ``let`` declaration node id to the
+        slot ids its pattern created, in creation (outer-to-inner) order. The
+        checker selects exactly these after that match site is classified.
     """
 
     program: Program
@@ -414,7 +419,7 @@ class ModuleResolution:
         default_factory=dict
     )
     pattern_slots: dict[int, PatternSlot] = field(default_factory=dict)
-    branch_pattern_slots: dict[int, tuple[int, ...]] = field(default_factory=dict)
+    match_site_pattern_slots: dict[int, tuple[int, ...]] = field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------

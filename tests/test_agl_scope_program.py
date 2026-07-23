@@ -2038,6 +2038,28 @@ def test_imported_nullary_variant_defers_duplicate_pattern_binders(
     )
 
 
+@pytest.mark.parametrize("owner", ("Token", "Alias"))
+def test_plain_import_retains_qualified_constructor_pattern_candidates(
+    tmp_path: Path, owner: str
+) -> None:
+    graph = _make_graph_from_files(
+        tmp_path,
+        {
+            "library": "record Token\n  value: int\ntype Alias = Token",
+            "entry": (
+                f"import library\nlet value = 0\nlet library::{owner}({owner}) = value\n{owner}"
+            ),
+        },
+    )
+
+    entry = resolve_program(graph).modules[ENTRY_ID].resolved
+    let_decl = entry.program.body.items[-2]
+    assert isinstance(let_decl.pattern, ConstructorPattern)
+    candidates = entry.pattern_constructor_candidates[let_decl.pattern.node_id]
+    assert candidates[0].owner_module_id == ModuleId.from_path("library")
+    assert candidates[0].owner_name == owner
+
+
 def test_bare_pattern_constructor_shared_spelling_defers_to_scrutinee(tmp_path: Path) -> None:
     # 'same' is a variant of both the imported Foreign and the local Local.
     # A bare pattern on a Local scrutinee is not an ambiguity error at scope

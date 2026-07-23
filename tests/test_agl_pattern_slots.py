@@ -18,6 +18,12 @@ from agm.agl.capabilities import HostCapabilities
 from agm.agl.parser import parse_program
 from agm.agl.scope import resolve_module
 from agm.agl.scope.symbols import AglScopeError, BinderKind
+from agm.agl.syntax import (
+    ConstructorPattern,
+    pattern_binder_candidates,
+    pattern_binder_names,
+    pattern_binding_node_ids,
+)
 from agm.agl.typecheck import AglTypeError, check_module
 
 
@@ -40,6 +46,27 @@ def _slot_reference(resolved) -> int:
         for node_id, ref in resolved.resolution.items()
         if ref.kind is BinderKind.pattern_slot
     )
+
+
+# ---------------------------------------------------------------------------
+# Shared pattern helpers
+# ---------------------------------------------------------------------------
+
+
+def test_pattern_binder_helpers_preserve_preorder_and_pattern_depth() -> None:
+    program = parse_program("let Packet(value, _ as whole) = source")
+    declaration = program.body.items[0]
+    assert isinstance(declaration.pattern, ConstructorPattern)
+
+    candidates = pattern_binder_candidates(declaration.pattern)
+    assert [(candidate.name, candidate.nested) for candidate in candidates] == [
+        ("value", True),
+        ("whole", True),
+    ]
+    assert pattern_binding_node_ids(declaration.pattern) == tuple(
+        candidate.node_id for candidate in candidates
+    )
+    assert pattern_binder_names(declaration.pattern) == ("value", "whole")
 
 
 # ---------------------------------------------------------------------------

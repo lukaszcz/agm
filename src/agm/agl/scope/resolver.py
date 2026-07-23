@@ -5,8 +5,8 @@ building the lexical scope chain and populating side tables:
 
 - ``resolution``:     ``VarRef.node_id`` / ``AssignStmt.node_id`` → ``BindingRef``
 - ``builtin_calls``:  ``Call.node_id`` → ``BuiltinKind``  (for contextual built-ins)
-- ``pattern_slots``: metadata for branch-local shared field-directed bindings
-- ``branch_pattern_slots``: ``Case`` branch node id → the slot ids it created
+- ``pattern_slots``: metadata for shared bindings owned by a pattern match site
+- ``match_site_pattern_slots``: match-site node id → the slot ids it created
 
 Scope rules
 -----------
@@ -44,7 +44,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from contextlib import contextmanager
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING
 
 from agm.agl.diagnostics import Diagnostic
@@ -88,7 +88,6 @@ if TYPE_CHECKING:
     from agm.agl.syntax.spans import SourceSpan
 from agm.agl.syntax.nodes import (
     AgentDecl,
-    AsPattern,
     AssignStmt,
     BinaryOp,
     Block,
@@ -143,15 +142,33 @@ from agm.agl.syntax.nodes import (
     VarDecl,
     VarPattern,
     VarRef,
+    WildcardPattern,
     assign_target_root_name,
-    simple_let_pattern_name,
+    pattern_binder_candidates,
 )
 from agm.agl.syntax.spans import SourceSpan
 from agm.agl.syntax.types import AppliedT, NameT, Qualifier
+from agm.agl.syntax.visitor import walk
 
 # ---------------------------------------------------------------------------
 # Built-in names and reserved-name enforcement
 # ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class _PatternResolutionPolicy:
+    """Name-resolution policy for one pattern-owning syntax site."""
+
+    root_bare_binds: bool
+    binder_kind: BinderKind
+
+
+_CASE_PATTERN_POLICY = _PatternResolutionPolicy(
+    root_bare_binds=False, binder_kind=BinderKind.pattern_binding
+)
+_LET_PATTERN_POLICY = _PatternResolutionPolicy(
+    root_bare_binds=True, binder_kind=BinderKind.let_binding
+)
 
 # Built-in call names: recognised in call position, not bindable as values.
 # Sourced from ``symbols.BUILTIN_CALL_NAMES`` (the single source of truth).
@@ -185,6 +202,8 @@ class _Resolver:
         import_env: ImportEnv | None = None,
         decl_info: dict[tuple[ModuleId, str], tuple[int, SourceSpan, BinderKind]] | None = None,
         private_info: dict[tuple[ModuleId, str], bool] | None = None,
+        qualified_constructor_candidates: dict[tuple[ModuleId, str], tuple[ConstructorRef, ...]]
+        | None = None,
         is_entry: bool = True,
         repl_session_scope: ScopeNode | None = None,
         origin_path: Path | None = None,
@@ -201,6 +220,11 @@ class _Resolver:
         self._private_info: dict[tuple[ModuleId, str], bool] = (
             private_info if private_info is not None else {}
         )
+        # Imported constructor candidates keyed by their semantic owner. Unlike
+        # bare candidates, these include types reached only through plain paths.
+        self._qualified_constructor_candidates: dict[
+            tuple[ModuleId, str], tuple[ConstructorRef, ...]
+        ] = qualified_constructor_candidates if qualified_constructor_candidates is not None else {}
         # Whether this module is the entry module (program context only).
         self._is_entry: bool = is_entry
         # Optional REPL session scope for ``::name`` self-ref fallback.
@@ -253,12 +277,14 @@ class _Resolver:
         # checker classifies them after constructor fields have been mapped;
         # candidates do not depend on ordinary lexical value bindings.
         self._pattern_constructor_candidates: dict[int, tuple[ConstructorRef, ...]] = {}
-        # Each case branch creates one shared slot binding for every
-        # field-directed name. The checker selects its final target once field
-        # types are known.
+        # Each pattern-owning case branch or let declaration creates one shared
+        # slot per binding name. The checker selects its final target after the
+        # match site has been classified.
         self._pattern_slots: dict[int, PatternSlot] = {}
-        self._branch_pattern_slots_by_node: dict[int, tuple[int, ...]] = {}
-        self._active_branch_pattern_slots: dict[str, int] | None = None
+        self._match_site_pattern_slots_by_node: dict[int, tuple[int, ...]] = {}
+        self._active_match_site_pattern_slots: dict[str, int] | None = None
+        self._active_match_site_node_id: int | None = None
+        self._active_match_site_binder_kind: BinderKind | None = None
         self._next_pattern_slot_id: int = 0
         # Loop-context flag: True when resolving inside a loop body (while_cond,
         # body, or until_cond). Reset to False across fn/def boundaries so that
@@ -357,7 +383,7 @@ class _Resolver:
             qualified_constructor_refs=dict(self._qualified_constructor_refs),
             pattern_constructor_candidates=dict(self._pattern_constructor_candidates),
             pattern_slots=dict(self._pattern_slots),
-            branch_pattern_slots=dict(self._branch_pattern_slots_by_node),
+            match_site_pattern_slots=dict(self._match_site_pattern_slots_by_node),
         )
 
     # ------------------------------------------------------------------
@@ -1069,12 +1095,33 @@ class _Resolver:
     # ------------------------------------------------------------------
 
     def _resolve_let(self, node: LetDecl) -> None:
-        name = simple_let_pattern_name(node.pattern)
-        if name is None:
-            raise AglScopeError(
-                "Destructuring let patterns are not supported yet.", span=node.pattern.span
-            )
-        self._resolve_binding(node, name=name, mutable=False, kind=BinderKind.let_binding)
+        # A let initializer is non-recursive: no part of its pattern exists
+        # until its RHS has resolved. Simple lets retain their ordinary direct
+        # binding; broader patterns use declaration-owned slots until their
+        # later pattern implementation can select them.
+        self._resolve_expr(node.value)
+        if isinstance(node.pattern, VarPattern):
+            candidates = tuple(self._constructor_candidates.get(node.pattern.name, ()))
+            if candidates:
+                self._pattern_constructor_candidates[node.pattern.node_id] = candidates
+            self._check_not_reserved(node.pattern.name, node.span)
+            if node.pattern.name != "_":
+                self._define(
+                    node.pattern.name,
+                    BindingRef(
+                        name=node.pattern.name,
+                        mutable=False,
+                        decl_span=node.span,
+                        decl_node_id=node.node_id,
+                        kind=BinderKind.let_binding,
+                        module_id=self._module_id,
+                    ),
+                )
+            return
+        if isinstance(node.pattern, WildcardPattern):
+            return
+        with self._match_site_pattern_slots(node.node_id, _LET_PATTERN_POLICY):
+            self._bind_pattern_vars(node.pattern, self._current_scope(), _LET_PATTERN_POLICY)
 
     def _resolve_var(self, node: VarDecl) -> None:
         self._resolve_binding(node, name=node.name, mutable=True, kind=BinderKind.var_binding)
@@ -1692,8 +1739,8 @@ class _Resolver:
         self._resolve_expr(node.subject)
         for branch in node.branches:
             with self._child_scope(branch.node_id) as branch_scope:
-                with self._branch_pattern_slots(branch.node_id):
-                    self._bind_pattern_vars(branch.pattern, branch_scope)
+                with self._match_site_pattern_slots(branch.node_id, _CASE_PATTERN_POLICY):
+                    self._bind_pattern_vars(branch.pattern, branch_scope, _CASE_PATTERN_POLICY)
                 self._resolve_expr_or_block(branch.body)
 
     def _resolve_loop(self, node: Loop) -> None:
@@ -1829,71 +1876,98 @@ class _Resolver:
     # ------------------------------------------------------------------
 
     def _bind_pattern_vars(
-        self, pattern: Pattern, scope: ScopeNode, *, nested: bool = False
+        self, pattern: Pattern, scope: ScopeNode, policy: _PatternResolutionPolicy
     ) -> None:
-        """Bind nested field-directed names to their shared branch slots.
+        """Bind candidates according to a case or let match-site policy.
 
-        A top-level bare name is constructor-only. Each nested name resolves
-        directly to the slot created for its branch, so no later pass has to
-        repair lexical resolution. The shared slot eagerly rejects duplicate
-        binders unless at least one candidate can match a bare nullary enum
-        variant; otherwise type checking defers diagnosis until field-directed
-        classification.
+        The syntax helper is the sole pattern walker. Case roots remain
+        constructor-only, let roots always bind, nested bare names remain
+        field-directed, and ``as`` names always bind.
         """
-        if isinstance(pattern, VarPattern):
-            candidates = tuple(self._constructor_candidates.get(pattern.name, ()))
-            if candidates:
-                self._pattern_constructor_candidates[pattern.node_id] = candidates
-            if not nested:
-                if not candidates:
-                    raise AglScopeError(
-                        f"Bare case pattern '{pattern.name}' is not a visible constructor. "
-                        "Use '_' or '_ as name' for a catch-all binder.",
-                        span=pattern.span,
-                    )
+
+        def record_constructor_candidates(node: object) -> None:
+            if not isinstance(node, ConstructorPattern):
                 return
+            candidates = tuple(self._constructor_candidates.get(node.name, ()))
+            if node.qualifier is not None:
+                candidates = tuple(
+                    candidate for candidate in candidates if candidate.owner_name == node.qualifier
+                )
+            elif node.module_qualifier is not None and node.module_qualifier.segments:
+                qualifier_segments = node.module_qualifier.segments
+                if (
+                    len(qualifier_segments) == 1
+                    and qualifier_segments[0] in self._declared_type_names
+                ):
+                    candidates = tuple(
+                        candidate
+                        for candidate in candidates
+                        if candidate.owner_name == qualifier_segments[0]
+                    )
+                elif self._import_env is not None:
+                    owner_name = node.qualifier if node.qualifier is not None else node.name
+                    owner_name, owner_module_id = self._resolve_qualified_type_name(
+                        node.module_qualifier, owner_name, node.span
+                    )
+                    candidates = tuple(
+                        candidate
+                        for candidate in self._qualified_constructor_candidates.get(
+                            (owner_module_id, owner_name), ()
+                        )
+                        if candidate.variant is None or candidate.variant == node.name
+                    )
+            if candidates:
+                self._pattern_constructor_candidates[node.node_id] = candidates
+
+        walk(pattern, record_constructor_candidates)
+        for candidate in pattern_binder_candidates(pattern):
+            constructor_candidates = (
+                tuple(self._constructor_candidates.get(candidate.name, ()))
+                if not candidate.is_as_pattern
+                else ()
+            )
+            if constructor_candidates:
+                self._pattern_constructor_candidates[candidate.node_id] = constructor_candidates
+            binds = candidate.is_as_pattern or candidate.nested or policy.root_bare_binds
+            if not binds:
+                if not constructor_candidates:
+                    raise AglScopeError(
+                        f"Bare case pattern '{candidate.name}' is not a visible constructor. "
+                        "Use '_' or '_ as name' for a catch-all binder.",
+                        span=candidate.span,
+                    )
+                continue
             self._add_pattern_slot_candidate(
-                pattern.name,
-                pattern.span,
-                pattern.node_id,
+                candidate.name,
+                candidate.span,
+                candidate.node_id,
                 scope,
                 can_match_bare_pattern=any(
-                    candidate.can_match_bare_pattern for candidate in candidates
+                    constructor.can_match_bare_pattern for constructor in constructor_candidates
                 ),
             )
-        elif isinstance(pattern, AsPattern):
-            self._bind_pattern_vars(pattern.pattern, scope, nested=nested)
-            self._add_pattern_slot_candidate(
-                pattern.name,
-                pattern.span,
-                pattern.node_id,
-                scope,
-                can_match_bare_pattern=False,
-            )
-        elif isinstance(pattern, ConstructorPattern):
-            for child in pattern.positional:
-                self._bind_pattern_vars(child, scope, nested=True)
-            for field in pattern.named:
-                self._bind_pattern_vars(field.pattern, scope, nested=True)
-        # WildcardPattern, LiteralPattern — no bindings introduced.
 
     @contextmanager
-    def _branch_pattern_slots(self, branch_node_id: int) -> Iterator[None]:
-        """Collect one shared pattern slot per name in the active branch.
-
-        The slot ids created here are published under *branch_node_id* so the
-        checker can select exactly this branch's slots instead of rescanning
-        every slot in the module.
-        """
-        parent_slots = self._active_branch_pattern_slots
-        self._active_branch_pattern_slots = {}
+    def _match_site_pattern_slots(
+        self, match_site_node_id: int, policy: _PatternResolutionPolicy
+    ) -> Iterator[None]:
+        """Collect slots owned by one case branch or let declaration."""
+        parent_slots = self._active_match_site_pattern_slots
+        parent_node_id = self._active_match_site_node_id
+        parent_binder_kind = self._active_match_site_binder_kind
+        self._active_match_site_pattern_slots = {}
+        self._active_match_site_node_id = match_site_node_id
+        self._active_match_site_binder_kind = policy.binder_kind
         try:
             yield
         finally:
-            self._branch_pattern_slots_by_node[branch_node_id] = tuple(
-                sorted(self._active_branch_pattern_slots.values())
+            assert self._active_match_site_pattern_slots is not None
+            self._match_site_pattern_slots_by_node[match_site_node_id] = tuple(
+                sorted(self._active_match_site_pattern_slots.values())
             )
-            self._active_branch_pattern_slots = parent_slots
+            self._active_match_site_pattern_slots = parent_slots
+            self._active_match_site_node_id = parent_node_id
+            self._active_match_site_binder_kind = parent_binder_kind
 
     def _add_pattern_slot_candidate(
         self,
@@ -1904,27 +1978,33 @@ class _Resolver:
         *,
         can_match_bare_pattern: bool,
     ) -> None:
-        """Join a candidate to its branch-local shared binding.
+        """Join a candidate to its match-site-local shared binding.
 
         Reject duplicate binders immediately only when neither the arriving
         candidate nor any prior slot candidate can match a bare pattern.
         """
         self._check_not_reserved(name, span)
-        branch_slots = self._active_branch_pattern_slots
-        assert branch_slots is not None
-        slot_id = branch_slots.get(name)
+        match_site_slots = self._active_match_site_pattern_slots
+        match_site_node_id = self._active_match_site_node_id
+        binder_kind = self._active_match_site_binder_kind
+        assert match_site_slots is not None
+        assert match_site_node_id is not None
+        assert binder_kind is not None
+        slot_id = match_site_slots.get(name)
         if slot_id is None:
             slot_id = self._next_pattern_slot_id
             self._next_pattern_slot_id += 1
-            branch_slots[name] = slot_id
+            match_site_slots[name] = slot_id
             alternative = scope.parent.lookup(name) if scope.parent is not None else None
             self._pattern_slots[slot_id] = PatternSlot(
                 slot_id=slot_id,
                 name=name,
                 candidates=(),
                 alternative=alternative,
+                match_site_node_id=match_site_node_id,
+                binder_kind=binder_kind,
             )
-            scope.define(
+            self._define(
                 name,
                 BindingRef(
                     name=name,

@@ -178,7 +178,6 @@ from agm.agl.semantics.types import (
 )
 from agm.agl.syntax.nodes import (
     AgentDecl,
-    AsPattern,
     AssignStmt,
     AssignTarget,
     BinaryOp,
@@ -192,7 +191,6 @@ from agm.agl.syntax.nodes import (
     CaseBranch,
     Cast,
     CatchClause,
-    ConstructorPattern,
     Continue,
     DecimalLit,
     DictLit,
@@ -216,7 +214,6 @@ from agm.agl.syntax.nodes import (
     Lambda,
     LetDecl,
     ListLit,
-    LiteralPattern,
     Loop,
     NamedArg,
     NameTarget,
@@ -242,6 +239,7 @@ from agm.agl.syntax.nodes import (
     VarPattern,
     VarRef,
     WildcardPattern,
+    pattern_binder_candidates,
 )
 from agm.agl.syntax.spans import SourceSpan
 from agm.agl.type_schema import (
@@ -519,26 +517,11 @@ class _Lowerer:
     )
 
     def _pattern_binding_ids(self, pattern: Pattern, out: set[int]) -> None:
-        """Collect node_ids of the variable binders a pattern introduces."""
-        match pattern:
-            case AsPattern():
-                # An as-binder always binds; the checker classifies every
-                # AsPattern as a binder rather than a constructor spelling.
-                out.add(pattern.node_id)
-                self._pattern_binding_ids(pattern.pattern, out)
-            case VarPattern():
-                classifications = self._checked.pattern_classifications
-                if pattern.node_id in classifications and classifications[pattern.node_id] is None:
-                    out.add(pattern.node_id)
-            case ConstructorPattern():
-                for p in pattern.positional:
-                    self._pattern_binding_ids(p, out)
-                for pf in pattern.named:
-                    self._pattern_binding_ids(pf.pattern, out)
-            case WildcardPattern() | LiteralPattern():
-                pass
-            case _ as unreachable:  # pragma: no cover
-                assert_never(unreachable)
+        """Collect node ids of binders through the shared syntax helper."""
+        classifications = self._checked.pattern_classifications
+        for candidate in pattern_binder_candidates(pattern):
+            if candidate.is_as_pattern or classifications.get(candidate.node_id) is None:
+                out.add(candidate.node_id)
 
     def _record_capture(
         self, node_id: int, local_ids: set[int], captured: dict[int, BindingRef]

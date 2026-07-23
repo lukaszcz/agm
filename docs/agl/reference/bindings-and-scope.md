@@ -14,10 +14,18 @@ assignment: `x = e` as an item is a syntax error — use `let`/`var` to bind or
 let_decl ::= "let" pattern (":" type_expr)? "=" expr
 ```
 
-The annotation follows the complete pattern. The parser accepts every
-[pattern](grammar.md#patterns) shape here; this release retains execution
-semantics only for simple name and `_` roots, while destructuring-let checking
-and execution are introduced separately.
+The annotation applies to the complete pattern. The initializer is evaluated
+before any name introduced by the pattern becomes visible in the continuation.
+
+A bare name at a `let` root always introduces a binding, even when a visible
+constructor has the same spelling. Write `Only()` or a qualified constructor
+pattern when the pattern must test a constructor instead. Within a constructor
+pattern, bare names follow the same field-directed rules as nested `case`
+patterns; an `as` name always binds and `_` never binds.
+
+For now, a `let` root may be only a bare name or `_`. Destructuring `let`
+patterns are reserved syntax and are rejected until their evaluation semantics
+are available.
 
 `let` evaluates the initializer, checks it against the annotation (if any),
 and creates an **immutable** binding in the current scope. It scopes over the

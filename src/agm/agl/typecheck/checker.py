@@ -47,7 +47,7 @@ import keyword
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
-from typing import Literal, TypeGuard, assert_never
+from typing import Literal, TypeGuard, assert_never, cast
 
 from agm.agl.capabilities import HostCapabilities
 from agm.agl.diagnostics import Diagnostic
@@ -1006,6 +1006,10 @@ class _Checker:
             else ()
         )
         self._set_extern_binding_targets(stmt.node_id, targets)
+        if isinstance(stmt, LetDecl):
+            assert isinstance(stmt.pattern, VarPattern)
+            self._record_pattern_classification(stmt.pattern.node_id, None)
+            self._select_match_site_pattern_slots(stmt)
         return self._binder_result(val_type)
 
     def _check_assign_stmt(self, stmt: AssignStmt) -> Type:
@@ -2802,7 +2806,7 @@ class _Checker:
                 self._bind_pattern_types(
                     branch.pattern, subj_type, branch, candidate_provenance=subject_provenance
                 )
-                self._select_branch_pattern_slots(branch)
+                self._select_match_site_pattern_slots(branch)
             except AglTypeError as exc:
                 raise self._frame_inferred_return_error(exc, exprs=(node.subject,)) from exc
             bt = self._check_expr(branch.body, expected=expected)
@@ -4062,18 +4066,17 @@ class _Checker:
                 span=pattern.span,
             )
 
-    def _select_branch_pattern_slots(self, branch: CaseBranch) -> None:
-        """Publish the slots *branch*'s pattern created, once it is classified.
+    def _select_match_site_pattern_slots(self, match_site: CaseBranch | LetDecl) -> None:
+        """Publish slots owned by a classified case branch or simple let.
 
-        Binding the branch pattern classifies every one of its candidates, so
-        the branch's own slots are exactly the ones ready to select.  Scope
-        publishes them outer-to-inner, which is the order a nested slot needs
-        to find its enclosing slot's selection already made.
+        Scope publishes slots outer-to-inner, which lets a nested slot use an
+        enclosing slot's already-selected fallback. Broader let patterns still
+        stop at the current typechecking boundary before any selection.
         """
-        for slot_id in self._resolved.branch_pattern_slots.get(branch.node_id, ()):
-            self._select_pattern_slot(self._resolved.pattern_slots[slot_id], branch)
+        for slot_id in self._resolved.match_site_pattern_slots.get(match_site.node_id, ()):
+            self._select_pattern_slot(self._resolved.pattern_slots[slot_id], match_site)
 
-    def _select_pattern_slot(self, slot: PatternSlot, branch: CaseBranch) -> None:
+    def _select_pattern_slot(self, slot: PatternSlot, match_site: CaseBranch | LetDecl) -> None:
         """Select and publish one slot's fully dereferenced final meaning."""
         binders = [
             candidate
@@ -4087,8 +4090,12 @@ class _Checker:
                 name=slot.name,
                 mutable=False,
                 decl_span=binders[0].span,
-                decl_node_id=binders[0].pattern_node_id,
-                kind=BinderKind.pattern_binding,
+                decl_node_id=(
+                    slot.match_site_node_id
+                    if slot.binder_kind is BinderKind.let_binding
+                    else binders[0].pattern_node_id
+                ),
+                kind=slot.binder_kind,
                 module_id=self._module_id,
             )
             constructor = None
@@ -4101,7 +4108,7 @@ class _Checker:
             ):
                 raise AglTypeError(
                     f"'{slot.name}' is ambiguous outside the pattern; qualify the reference.",
-                    span=self._slot_reference_span(branch, slot),
+                    span=self._slot_reference_span(cast(CaseBranch, match_site), slot),
                 )
         self._record_side_table_addition("slot_resolution", self._slot_resolution, slot.slot_id)
         self._slot_resolution[slot.slot_id] = binding

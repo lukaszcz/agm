@@ -140,58 +140,77 @@ class ResolvedProgram:
 def _build_cross_module_constructor_candidates(
     import_env: ImportEnv,
     all_public_types: dict[tuple[ModuleId, str], RecordDef | EnumDef | ExceptionDef | TypeAlias],
-) -> tuple[dict[str, tuple[ConstructorRef, ...]], frozenset[str]]:
-    """Build constructor candidates from open-imported types for a module.
+) -> tuple[
+    dict[str, tuple[ConstructorRef, ...]],
+    frozenset[str],
+    dict[tuple[ModuleId, str], tuple[ConstructorRef, ...]],
+]:
+    """Build bare and qualified constructor candidates from imports.
 
-    For each type exposed via unqualified (open) import:
-    - RecordDef: add the record name as a candidate (e.g. ``Foo(x:1)``).
-    - EnumDef: add each variant name as a candidate (e.g. ``Red``).
-    - TypeAlias: not constructible, skip.
-
-    Returns ``(candidates, type_names)`` where ``type_names`` is the set of
-    open-imported type names (for qualified constructor access like ``Color::Red``).
+    Bare candidates and type names come only from open imports. Qualified
+    candidates cover every imported member, including members reachable solely
+    through a plain import route.
     """
-    candidates: dict[str, list[ConstructorRef]] = {}
-    type_names: set[str] = set()
-    seen: set[tuple[ModuleId, str]] = set()
-    for exposed_name, qnames in import_env.unqualified.items():
-        for mid, src_name in qnames:
-            key = (mid, src_name)
-            if key in seen:
-                continue
-            seen.add(key)
-            decl = all_public_types.get(key)
-            if decl is None:
-                continue
-            type_names.add(exposed_name)
-            if isinstance(decl, (RecordDef, ExceptionDef)):
-                cref = ConstructorRef(
+
+    def candidates_for(
+        mid: ModuleId, decl: RecordDef | EnumDef | ExceptionDef | TypeAlias
+    ) -> tuple[ConstructorRef, ...]:
+        if isinstance(decl, (RecordDef, ExceptionDef)) or (
+            isinstance(decl, TypeAlias) and isinstance(decl.type_expr, (NameT, AppliedT))
+        ):
+            return (
+                ConstructorRef(
                     owner_name=decl.name,
                     variant=None,
                     owner_decl_node_id=decl.node_id,
                     type_params=decl.type_params,
                     owner_module_id=mid,
+                ),
+            )
+        if isinstance(decl, EnumDef):
+            return tuple(
+                ConstructorRef(
+                    owner_name=decl.name,
+                    variant=variant.name,
+                    owner_decl_node_id=decl.node_id,
+                    type_params=decl.type_params,
+                    owner_module_id=mid,
+                    can_match_bare_pattern=not variant.fields,
                 )
-                candidates.setdefault(exposed_name, []).append(cref)
-            elif isinstance(decl, EnumDef):
-                for variant in decl.variants:
-                    if (mid, variant.name) in all_public_types and isinstance(
-                        all_public_types[(mid, variant.name)], ExceptionDef
-                    ):
-                        continue
-                    cref = ConstructorRef(
-                        owner_name=decl.name,
-                        variant=variant.name,
-                        owner_decl_node_id=decl.node_id,
-                        type_params=decl.type_params,
-                        owner_module_id=mid,
-                        can_match_bare_pattern=not variant.fields,
-                    )
-                    candidates.setdefault(variant.name, []).append(cref)
-    return (
-        {name: tuple(refs) for name, refs in candidates.items()},
-        frozenset(type_names),
-    )
+                for variant in decl.variants
+                if not (
+                    (mid, variant.name) in all_public_types
+                    and isinstance(all_public_types[(mid, variant.name)], ExceptionDef)
+                )
+            )
+        return ()
+
+    qualified: dict[tuple[ModuleId, str], tuple[ConstructorRef, ...]] = {}
+    for contribution in import_env.contributions.values():
+        for qname in contribution.members.values():
+            if qname in qualified:
+                continue
+            decl = all_public_types.get(qname)
+            if decl is not None:
+                qualified[qname] = candidates_for(qname[0], decl)
+
+    bare: dict[str, list[ConstructorRef]] = {}
+    type_names: set[str] = set()
+    for exposed_name, qnames in import_env.unqualified.items():
+        for qname in qnames:
+            decl = all_public_types.get(qname)
+            if decl is None:
+                continue
+            type_names.add(exposed_name)
+            refs = qualified.get(qname, ())
+            if isinstance(decl, EnumDef):
+                for ref in refs:
+                    assert ref.variant is not None
+                    bare.setdefault(ref.variant, []).append(ref)
+            else:
+                bare.setdefault(exposed_name, []).extend(refs)
+
+    return ({name: tuple(refs) for name, refs in bare.items()}, frozenset(type_names), qualified)
 
 
 def _compute_local_exports(self_id: ModuleId, program: Program) -> dict[str, QName]:
@@ -465,10 +484,13 @@ def resolve_program(
 
     for mid, loaded in graph.modules.items():
         is_entry = mid.is_entry
-        # Build cross-module constructor candidates from open imports.
-        cross_module_candidates, cross_module_type_names = (
-            _build_cross_module_constructor_candidates(import_envs[mid], all_public_types)
-        )
+        # Bare candidates come from open imports; qualified pattern candidates
+        # also cover types available only through plain import routes.
+        (
+            cross_module_candidates,
+            cross_module_type_names,
+            qualified_constructor_candidates,
+        ) = _build_cross_module_constructor_candidates(import_envs[mid], all_public_types)
         constructor_candidates = cross_module_candidates
         type_names = cross_module_type_names
         if is_entry:
@@ -481,6 +503,7 @@ def resolve_program(
             import_env=import_envs[mid],
             decl_info=decl_info,
             private_info=private_info,
+            qualified_constructor_candidates=qualified_constructor_candidates,
             is_entry=is_entry,
             repl_session_scope=entry_repl_session_scope if is_entry else None,
             origin_path=loaded.path,

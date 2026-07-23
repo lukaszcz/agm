@@ -16,9 +16,11 @@ they describe a line break and indentation change, not text written in source.
 name       ::= NAME | OP_NAME
 field_name ::= NAME | "agent" | "to" | "downto" | "by"
 
-program    ::= block EOF
+program      ::= module_block EOF
 
-block      ::= item ((NEWLINE | ";") item)* (NEWLINE | ";")?
+module_block ::= module_item ((NEWLINE | ";") module_item)* (NEWLINE | ";")?
+module_item   ::= scope_region | item
+block         ::= item ((NEWLINE | ";") item)* (NEWLINE | ";")?
 
 item       ::= import_decl                  (* header position only *)
              | builtin_var_def              (* root only; standard library only *)
@@ -46,6 +48,28 @@ A block's value is its last item. A final `let_decl` or `var_decl` has type
 `unit` (or bottom when its initializer exits); its binding remains visible to
 any enclosing construct that evaluates a continuation after the block, such as
 a loop's `until` condition.
+
+### Scope regions
+
+```ebnf
+scope_region ::= "scope" scope_path NEWLINE scope_item (NEWLINE scope_item)* NEWLINE? "end" scope_path
+scope_path   ::= NAME ("::" NAME)*
+scope_item   ::= scope_region
+               | private_modifier? record_def | private_modifier? enum_def
+               | private_modifier? exception_def | private_modifier? type_alias
+               | private_modifier? func_def | private_modifier? extern_func_def
+               | agent_decl
+```
+
+A scope region has a mandatory matching closer: `scope A::B` closes with
+`end A::B`. Regions may appear only as module-root items or as items of another
+scope region. They may nest, and repeating a path extends that named region. A
+multi-segment header is equivalent to nested single-segment regions. Scope
+regions contain only nested regions and static declarations; bindings,
+expressions, infix declarations, imports, exports, `program`, and `param`
+declarations are not permitted. `scope` is contextual at item start before a
+scope path, and `end` is contextual only for a complete closer at an open
+region's layout level; both remain ordinary names in expression positions.
 
 `"private"` and `"builtin"` are **declaration modifiers** that behave like
 decorators: they may sit on the same line as the declaration they adorn

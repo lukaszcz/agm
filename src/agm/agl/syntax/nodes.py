@@ -134,6 +134,15 @@ class ExportDecl:
     node_id: int = dc_field(compare=False)
 
 
+@dataclass(frozen=True, slots=True)
+class ScopeSegment:
+    """One named segment of a scope-region header path."""
+
+    name: str
+    span: SourceSpan = dc_field(compare=False)
+    node_id: int = dc_field(compare=False)
+
+
 # ---------------------------------------------------------------------------
 # Template segments
 # ---------------------------------------------------------------------------
@@ -1060,6 +1069,20 @@ class InfixDecl:
     node_id: int = dc_field(compare=False)
 
 
+@dataclass(frozen=True, slots=True)
+class ScopeRegion:
+    """A named scope region containing static declarations or nested regions.
+
+    A multi-segment source header is normalized into nested single-segment
+    regions, so each node owns exactly one :class:`ScopeSegment`.
+    """
+
+    segment: ScopeSegment
+    items: tuple[ScopeItem, ...]
+    span: SourceSpan = dc_field(compare=False)
+    node_id: int = dc_field(compare=False)
+
+
 # Closed union of declaration nodes.
 # FuncDef is a declaration (top-level or block-level named function).
 Declaration = (
@@ -1079,12 +1102,17 @@ Declaration = (
 
 
 # ---------------------------------------------------------------------------
-# Item union — element type of Block.items
+# Item unions
 # ---------------------------------------------------------------------------
 
+# Scope-region items are static declarations or nested regions. The parser
+# enforces this restricted subset before it crosses the AST firewall.
+ScopeItem = ScopeRegion | FuncDef | RecordDef | EnumDef | ExceptionDef | TypeAlias | AgentDecl
+
 # An item is anything that can appear in a block sequence:
-# declarations (introduce names), binders (scope over the rest), or expressions.
-Item = Declaration | Binder | Expr
+# declarations (introduce names), binders (scope over the rest), expressions,
+# or a named scope region.
+Item = Declaration | Binder | Expr | ScopeRegion
 
 
 # ---------------------------------------------------------------------------

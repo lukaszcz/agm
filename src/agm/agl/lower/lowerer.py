@@ -229,6 +229,7 @@ from agm.agl.syntax.nodes import (
     Raise,
     RecordDef,
     Return,
+    ScopeRegion,
     StringLit,
     Template,
     TextSegment,
@@ -578,6 +579,7 @@ class _Lowerer:
                 | ParamDecl()
                 | ProgramDecl()
                 | AgentDecl()
+                | ScopeRegion()
                 | BuiltinVarDecl()
                 | ImportDecl()
                 | ExportDecl()
@@ -2937,6 +2939,7 @@ class _Lowerer:
                 | ExportDecl()
                 | InfixDecl()
                 | BuiltinVarDecl()
+                | ScopeRegion()
             ):
                 # ``builtin var`` is declaration-only: it introduces no
                 # initializer (reads/writes go through IrBuiltinLoad/Store).

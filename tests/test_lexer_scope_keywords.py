@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from agm.agl.lexer import spaced_qualifier_collector, tokenize
+from agm.agl.lexer import spaced_qualifier_collector, tokenize, unclosed_scope_path
 
 
 def _tokens(source: str) -> list[tuple[str, str]]:
@@ -63,6 +63,53 @@ def test_nested_scope_regions_track_depth_until_the_last_end() -> None:
         ("NAME", "end"),
         ("NAME", "Stray"),
     ]
+
+
+def test_end_is_promoted_only_at_the_open_region_layout_level() -> None:
+    assert _non_layout_tokens("scope Point\nrecord R\n  end: int\nend Point") == [
+        ("SCOPE", "scope"),
+        ("NAME", "Point"),
+        ("record", "record"),
+        ("NAME", "R"),
+        ("NAME", "end"),
+        ("COLON", ":"),
+        ("NAME", "int"),
+        ("END", "end"),
+        ("NAME", "Point"),
+    ]
+
+
+def test_end_expression_in_a_declaration_suite_remains_names() -> None:
+    assert _non_layout_tokens("scope Point\ndef f() -> int\n  end Thing\nend Point") == [
+        ("SCOPE", "scope"),
+        ("NAME", "Point"),
+        ("def", "def"),
+        ("NAME", "f"),
+        ("LPAR", "("),
+        ("RPAR", ")"),
+        ("THIN_ARROW", "->"),
+        ("NAME", "int"),
+        ("NAME", "end"),
+        ("NAME", "Thing"),
+        ("END", "end"),
+        ("NAME", "Point"),
+    ]
+
+
+def test_end_requires_a_complete_closer_line() -> None:
+    assert _non_layout_tokens("scope Point\nend Point extra\nend Point") == [
+        ("SCOPE", "scope"),
+        ("NAME", "Point"),
+        ("NAME", "end"),
+        ("NAME", "Point"),
+        ("NAME", "extra"),
+        ("END", "end"),
+        ("NAME", "Point"),
+    ]
+
+
+def test_unclosed_scope_path_accounts_for_nested_closers() -> None:
+    assert unclosed_scope_path("scope Outer\nscope Inner\nend Inner") == "Outer"
 
 
 def test_multi_segment_qualifier_chain_emits_modqual_sequence() -> None:

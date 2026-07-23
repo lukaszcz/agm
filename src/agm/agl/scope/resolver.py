@@ -45,7 +45,7 @@ from __future__ import annotations
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import replace
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from agm.agl.diagnostics import Diagnostic
 from agm.agl.modules.ids import ENTRY_ID, PRELUDE_ID, STD_CONFIG_ID, ModuleId
@@ -132,6 +132,7 @@ from agm.agl.syntax.nodes import (
     Raise,
     RecordDef,
     Return,
+    ScopeRegion,
     StringLit,
     Template,
     Try,
@@ -163,6 +164,11 @@ _BUILTIN_CONSTRUCTOR_NODE_ID = -1
 
 # The set of names that may NOT be used as any kind of binding.
 _RESERVED_NAMES: frozenset[str] = frozenset(_BUILTIN_CALL_NAMES)
+
+
+def _first_scope_region(items: tuple[Item, ...]) -> ScopeRegion | None:
+    """Return the first scope region in source order."""
+    return next((item for item in items if isinstance(item, ScopeRegion)), None)
 
 
 # ---------------------------------------------------------------------------
@@ -300,6 +306,12 @@ class _Resolver:
         qualified constructor access (``Owner::variant``) resolves for types
         declared in earlier REPL entries.
         """
+        # Scope-region syntax is available before its namespace semantics. Reject
+        # it at this pass boundary so later passes never receive an unfamiliar node.
+        scope_region = _first_scope_region(program.body.items)
+        if scope_region is not None:
+            raise AglScopeError("scope regions are not supported here yet.", span=scope_region.span)
+
         # Seed ambient constructor candidates (from prior REPL entries) before
         # running the local pre-passes so local declarations can shadow them.
         if ambient_constructor_candidates:
@@ -1008,7 +1020,7 @@ class _Resolver:
                         "library module.",
                         span=item.span,
                     )
-                self._resolve_expr(item)
+                self._resolve_expr(cast(Expr, item))
 
     # ------------------------------------------------------------------
     # Declaration handlers

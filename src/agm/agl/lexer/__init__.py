@@ -25,6 +25,7 @@ from agm.agl.lexer.lexer import (
     apply_module_passes,
     spaced_qualifier_collector,
     tab_warning_collector,
+    unclosed_scope_path,
 )
 from agm.agl.lexer.scanner import lex_tab_warnings, scan
 from agm.agl.syntax.advisories import SpacedQualifier
@@ -36,6 +37,7 @@ __all__ = [
     "lex_tab_warnings",
     "spaced_qualifier_collector",
     "tab_warning_collector",
+    "unclosed_scope_path",
     "tokenize",
 ]
 

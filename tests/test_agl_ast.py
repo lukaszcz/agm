@@ -99,6 +99,8 @@ from agm.agl.syntax import (
     RecordDef,
     Return,
     # spans
+    ScopeRegion,
+    ScopeSegment,
     SourceSpan,
     StringLit,
     Template,
@@ -1251,6 +1253,20 @@ class TestDeclarations:
         a = AgentDecl(name="impl", runner=None, span=span(), node_id=1)
         b = AgentDecl(name="impl", runner="claude -p", span=span(), node_id=1)
         assert a != b
+
+    def test_scope_region_is_an_item_with_a_precise_segment_and_walkable_contents(self) -> None:
+        s = self._s()
+        segment = ScopeSegment(name="Point", span=s, node_id=2)
+        member = AgentDecl(name="reviewer", runner=None, span=s, node_id=3)
+        region = ScopeRegion(segment=segment, items=(member,), span=s, node_id=1)
+
+        assert region.segment is segment
+        assert region.items == (member,)
+        from agm.agl.syntax.visitor import walk
+
+        visited: list[object] = []
+        walk(region, visited.append)
+        assert visited == [region, segment, member]
 
     def test_func_def_is_declaration(self) -> None:
         import typing

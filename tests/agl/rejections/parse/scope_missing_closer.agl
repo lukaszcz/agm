@@ -1,0 +1,2 @@
+scope Point
+def value() -> int = 1

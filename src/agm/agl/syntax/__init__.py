@@ -76,6 +76,9 @@ from agm.agl.syntax.nodes import (
     Raise,
     RecordDef,
     Return,
+    ScopeItem,
+    ScopeRegion,
+    ScopeSegment,
     StringLit,
     Template,
     TemplateSegment,
@@ -140,6 +143,7 @@ __all__ = [
     "ImportDecl",
     "ExportItem",
     "ExportDecl",
+    "ScopeSegment",
     # program
     "Program",
     # declarations
@@ -155,6 +159,7 @@ __all__ = [
     "BuiltinVarDecl",
     "InfixAssoc",
     "InfixDecl",
+    "ScopeRegion",
     # binders
     "LetDecl",
     "VarDecl",
@@ -221,6 +226,7 @@ __all__ = [
     "Binder",
     "Declaration",
     "Item",
+    "ScopeItem",
     "Pattern",
     "TemplateSegment",
     # visitor

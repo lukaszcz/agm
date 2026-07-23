@@ -170,16 +170,29 @@ def _retype(tok: Token, new_type: str) -> Token:
     )
 
 
-def _is_scope_path(tokens: list[Token], index: int) -> bool:
-    """Whether ``tokens[index:]`` begins with a NAME (DCOLON NAME)* scope path."""
+def _scope_path_end(tokens: list[Token], index: int) -> int | None:
+    """Return the index after a NAME (DCOLON NAME)* scope path, if present."""
     if index >= len(tokens) or tokens[index].type != NAME:
-        return False
+        return None
     index += 1
     while index < len(tokens) and tokens[index].type == DCOLON:
         if index + 1 >= len(tokens) or tokens[index + 1].type != NAME:
-            return False
+            return None
         index += 2
-    return True
+    return index
+
+
+def _is_scope_path(tokens: list[Token], index: int) -> bool:
+    """Whether ``tokens[index:]`` begins with a complete scope path."""
+    return _scope_path_end(tokens, index) is not None
+
+
+def _is_scope_closer(tokens: list[Token], index: int) -> bool:
+    """Whether ``tokens[index]`` is followed by a complete, line-ending scope path."""
+    path_end = _scope_path_end(tokens, index + 1)
+    return path_end is not None and (
+        path_end == len(tokens) or tokens[path_end].type in {"_NEWLINE", "SEMICOLON"}
+    )
 
 
 def _promote_soft_keywords(tokens: list[Token]) -> list[Token]:
@@ -191,16 +204,22 @@ def _promote_soft_keywords(tokens: list[Token]) -> list[Token]:
     - 'private' → PRIVATE and 'export' → EXPORT at item-start.
     - 'using' → USING and 'hiding' → HIDING within import or export declarations.
     - 'scope' → SCOPE at item-start before a scope path.
-    - 'end' → END at item-start while a scope region is open.
+    - 'end' → END only for a complete closer at its region's layout level.
     """
     result: list[Token] = []
     in_module_header = False
-    scope_depth = 0
+    scope_layouts: list[int] = []
+    layout_depth = 0
     prev_type: str | None = None  # None means start-of-stream
 
     for index, tok in enumerate(tokens):
         tt = tok.type
         tv = str(tok)
+
+        if tt == "_INDENT":
+            layout_depth += 1
+        elif tt == "_DEDENT":
+            layout_depth -= 1
 
         # Track the module-header window: close on line/stmt terminators
         if tt in ("_NEWLINE", "_INDENT", "_DEDENT", "SEMICOLON"):
@@ -226,10 +245,16 @@ def _promote_soft_keywords(tokens: list[Token]) -> list[Token]:
                 tok = _retype(tok, PRIVATE)
             elif tv == "scope" and at_item_start and _is_scope_path(tokens, index + 1):
                 tok = _retype(tok, SCOPE)
-                scope_depth += 1
-            elif tv == "end" and at_item_start and scope_depth > 0:
+                scope_layouts.append(layout_depth)
+            elif (
+                tv == "end"
+                and at_item_start
+                and scope_layouts
+                and layout_depth == scope_layouts[-1]
+                and _is_scope_closer(tokens, index)
+            ):
                 tok = _retype(tok, END)
-                scope_depth -= 1
+                scope_layouts.pop()
             elif in_module_header:
                 if tv == "using":
                     tok = _retype(tok, USING)
@@ -572,6 +597,28 @@ def apply_module_passes(tokens: list[Token], source: str) -> list[Token]:
     return _reject_clinging_slash(
         _merge_modqual(_merge_modpath(_promote_soft_keywords(tokens)), source)
     )
+
+
+def unclosed_scope_path(source: str) -> str | None:
+    """Return the innermost promoted scope path still open at end of *source*."""
+    tokens = apply_module_passes(list(layout(_Scanner(source).scan())), source)
+    open_paths: list[str] = []
+    index = 0
+    while index < len(tokens):
+        token = tokens[index]
+        if token.type not in (SCOPE, END):
+            index += 1
+            continue
+        names: list[str] = []
+        index += 1
+        while index < len(tokens) and tokens[index].type in (MODQUAL, NAME):
+            names.append(str(tokens[index]))
+            index += 1
+        if token.type == SCOPE:
+            open_paths.append("::".join(names))
+        else:
+            open_paths.pop()
+    return open_paths[-1] if open_paths else None
 
 
 def _remap_adjacent_brackets(tokens: list[Token]) -> list[Token]:

@@ -80,7 +80,7 @@
 // ---------------------------------------------------------------------------
 
 %declare NAME OP_NAME
-%declare OPEN IMPORT USING HIDING EXPORT PRIVATE MODQUAL MODPATH WILDCARD
+%declare OPEN IMPORT USING HIDING EXPORT PRIVATE SCOPE END MODQUAL MODPATH WILDCARD
 %declare PLACEHOLDER PLACEHOLDER_NUM
 %declare AS_QUESTION
 // AGENT: the reserved word `agent`.  Declared (rather than written as the
@@ -105,9 +105,15 @@
 // Program root
 // ---------------------------------------------------------------------------
 
-start: block
+start: module_block
 
-// A block is a sequence of items separated by newlines or semicolons.
+// The module root is the only normal block that admits scope regions.
+module_block: module_item (_sep module_item)* _sep?
+
+?module_item: scope_region
+            | item
+
+// A block is a sequence of non-region items separated by newlines or semicolons.
 // The block's value is its last item.
 block: item (_sep item)* _sep?
 
@@ -148,6 +154,24 @@ _sep: _NEWLINE | SEMICOLON
             | private_type_alias
             | private_func_def
             | private_extern_func_def
+
+// ---------------------------------------------------------------------------
+// Scope regions
+// ---------------------------------------------------------------------------
+
+// A region is flat rather than indented: its items share the enclosing layout
+// level and a matching ``end`` closes it. Scope paths arrive as a sequence of
+// MODQUAL tokens followed by a final NAME because the lexer merges each tight
+// ``NAME::`` run before parsing.
+scope_region: SCOPE scope_path _sep END scope_path
+            | SCOPE scope_path _sep scope_item (_sep scope_item)* _sep? END scope_path
+
+scope_path: MODQUAL* NAME
+
+?scope_item: scope_region
+           | declaration
+           | binder
+           | expr
 
 // ---------------------------------------------------------------------------
 // Type declarations

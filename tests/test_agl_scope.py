@@ -283,6 +283,18 @@ def reject_program(*items: Item) -> AglScopeError:
 
 
 # ---------------------------------------------------------------------------
+# Scope regions
+# ---------------------------------------------------------------------------
+
+
+class TestScopeRegions:
+    def test_scope_resolution_reports_regions_as_unsupported(self) -> None:
+        err = reject_scope("scope Point\ndef distance() -> int = 0\nend Point")
+
+        assert "scope regions are not supported" in err.to_diagnostic().message
+
+
+# ---------------------------------------------------------------------------
 # Basic acceptance
 # ---------------------------------------------------------------------------
 

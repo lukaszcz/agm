@@ -89,6 +89,7 @@ from agm.agl.syntax import (
     Raise,
     RecordDef,
     Return,
+    ScopeRegion,
     StringLit,
     Template,
     TextSegment,
@@ -730,6 +731,137 @@ class TestDeclarations:
         assert en.name == "Status"
         assert en.is_builtin is True
         assert len(en.variants) == 2
+
+
+# ---------------------------------------------------------------------------
+# Scope regions
+# ---------------------------------------------------------------------------
+
+
+class TestScopeRegions:
+    def test_flat_region_contains_declarations(self) -> None:
+        region = first(parse("scope Point\ndef distance() -> int = 0\nend Point"))
+
+        assert isinstance(region, ScopeRegion)
+        assert region.segment.name == "Point"
+        assert region.segment.span.start_line == 1
+        assert len(region.items) == 1
+        assert isinstance(region.items[0], FuncDef)
+
+    def test_textually_nested_regions_preserve_nesting(self) -> None:
+        region = first(
+            parse("scope Outer\nscope Inner\ndef value() -> int = 1\nend Inner\nend Outer")
+        )
+
+        assert isinstance(region, ScopeRegion)
+        inner = region.items[0]
+        assert isinstance(inner, ScopeRegion)
+        assert (region.segment.name, inner.segment.name) == ("Outer", "Inner")
+
+    def test_multisegment_region_normalizes_to_nested_regions(self) -> None:
+        region = first(parse("scope A::B\ndef value() -> int = 1\nend A::B"))
+
+        assert isinstance(region, ScopeRegion)
+        inner = region.items[0]
+        assert isinstance(inner, ScopeRegion)
+        assert (region.segment.name, inner.segment.name) == ("A", "B")
+        assert (region.segment.span.start_col, region.segment.span.end_col) == (7, 8)
+        assert (inner.segment.span.start_col, inner.segment.span.end_col) == (10, 11)
+
+    def test_region_path_rejects_module_path_separators(self) -> None:
+        with pytest.raises(AglSyntaxError, match="scope paths"):
+            parse("scope foo/bar::Point\nend foo")
+
+    def test_repeated_region_paths_remain_distinct_ast_regions(self) -> None:
+        program = parse(
+            "scope Point\ndef x() -> int = 1\nend Point\nscope Point\ndef y() -> int = 2\nend Point"
+        )
+
+        assert len(program.body.items) == 2
+        assert all(isinstance(item, ScopeRegion) for item in program.body.items)
+
+    @pytest.mark.parametrize(
+        ("source", "expected"),
+        (
+            ("scope Point\ndef value() -> int = 1\nend Line", "end Point"),
+            ("scope Point\ndef value() -> int = 1", "end Point"),
+            ("end Point", "scope region"),
+        ),
+        ids=("mismatched-closer", "missing-closer", "stray-closer"),
+    )
+    def test_region_closer_errors_name_the_problem(self, source: str, expected: str) -> None:
+        with pytest.raises(AglSyntaxError, match=expected):
+            parse(source)
+
+    def test_scope_and_end_remain_identifiers_in_expression_positions(self) -> None:
+        program = parse("let scope = 1\nlet end = scope\nend")
+
+        assert isinstance(program.body.items[1], LetDecl)
+        assert isinstance(program.body.items[2], VarRef)
+
+    @pytest.mark.parametrize(
+        "source",
+        (
+            "def f() -> int\n  scope Inner\n  def value() -> int = 1\n  end Inner",
+            "if true\n  scope Inner\n  def value() -> int = 1\n  end Inner",
+        ),
+        ids=("function-suite", "branch-suite"),
+    )
+    def test_regions_are_rejected_outside_module_root(self, source: str) -> None:
+        with pytest.raises(AglSyntaxError):
+            parse(source)
+
+    def test_normal_function_suite_remains_valid_without_a_region(self) -> None:
+        funcdef = first(parse("def f() -> int\n  let value = 1\n  value"))
+
+        assert isinstance(funcdef, FuncDef)
+        assert isinstance(funcdef.body, Block)
+
+    @pytest.mark.parametrize(
+        "item",
+        (
+            "1",
+            "1 + 2",
+            "let value = 1",
+            "var value = 1",
+            "infixl %%",
+            "import package",
+            "export package",
+            "program app",
+            "param value",
+            "builtin def native() -> int",
+        ),
+        ids=(
+            "expression",
+            "infix-expression",
+            "let",
+            "var",
+            "infix",
+            "import",
+            "export",
+            "program",
+            "param",
+            "builtin-declaration",
+        ),
+    )
+    def test_region_rejects_non_declaration_items(self, item: str) -> None:
+        with pytest.raises(AglSyntaxError, match="scope regions"):
+            parse(f"scope Point\n{item}\nend Point")
+
+    def test_region_preserves_end_identifiers_in_declaration_suites(self) -> None:
+        region = first(
+            parse("scope Point\nrecord R\n  end: int\ndef f() -> int\n  end Thing\nend Point")
+        )
+
+        assert isinstance(region, ScopeRegion)
+        record, funcdef = region.items
+        assert isinstance(record, RecordDef)
+        assert record.fields[0].name == "end"
+        assert isinstance(funcdef, FuncDef)
+        assert isinstance(funcdef.body, Block)
+        assert isinstance(funcdef.body.items[0], Call)
+        assert isinstance(funcdef.body.items[0].callee, VarRef)
+        assert funcdef.body.items[0].callee.name == "end"
 
 
 # ---------------------------------------------------------------------------

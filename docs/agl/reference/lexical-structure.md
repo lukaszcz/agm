@@ -101,9 +101,9 @@ reserved for standard-library declarations that are implemented by the host.
 `extern` is reserved for declarations implemented by a companion Python file
 (see [Python FFI](ffi.md)).
 
-**Module system soft keywords** — `open`, `import`, `export`, `private`,
-`using`, and `hiding` are **not reserved**. They remain valid identifiers in all
-positions except:
+**Module and scope soft keywords** — `open`, `import`, `export`, `private`,
+`using`, `hiding`, `scope`, and `end` are **not reserved**. They remain valid
+identifiers in all positions except:
 
 | Keyword | Promoted to | Window |
 |---------|-------------|--------|
@@ -113,6 +113,13 @@ positions except:
 | `private` | `PRIVATE` | At item-start |
 | `using` | `USING` | Within an import or export declaration |
 | `hiding` | `HIDING` | Within an import or export declaration |
+| `scope` | `SCOPE` | At item-start, before a complete `NAME (:: NAME)*` scope path |
+| `end` | `END` | At a region's layout level, while that region is open, before a complete closer path ending the item |
+
+A scope closer must repeat exactly the path of the region it closes. At other
+layout levels, `end` remains a name;
+for example it can be a record field or the first expression in a declaration
+suite.
 
 Examples where they remain plain identifiers:
 
@@ -121,6 +128,7 @@ let import = 1          # 'import' not at item-start → VAR_NAME
 let export = "hello"    # 'export' not at item-start → VAR_NAME
 let using = "hello"     # 'using' not in an import/export declaration → VAR_NAME
 def private() -> text = "x"  # 'private' not at item-start → VAR_NAME
+record R(end: int)            # 'end' is a field name, not a closer
 ```
 
 ## Module qualifiers

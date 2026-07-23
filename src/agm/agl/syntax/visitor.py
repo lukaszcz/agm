@@ -81,6 +81,8 @@ from agm.agl.syntax.nodes import (
     Raise,
     RecordDef,
     Return,
+    ScopeRegion,
+    ScopeSegment,
     StringLit,
     Template,
     TextSegment,
@@ -171,6 +173,7 @@ class Visitor:
     def visit_ImportDecl(self, node: ImportDecl) -> None: ...
     def visit_ExportItem(self, node: ExportItem) -> None: ...
     def visit_ExportDecl(self, node: ExportDecl) -> None: ...
+    def visit_ScopeSegment(self, node: ScopeSegment) -> None: ...
 
     # Declaration nodes
     def visit_RecordDef(self, node: RecordDef) -> None: ...
@@ -184,6 +187,7 @@ class Visitor:
     def visit_FuncDef(self, node: FuncDef) -> None: ...
     def visit_BuiltinVarDecl(self, node: BuiltinVarDecl) -> None: ...
     def visit_InfixDecl(self, node: InfixDecl) -> None: ...
+    def visit_ScopeRegion(self, node: ScopeRegion) -> None: ...
 
     # Binder nodes
     def visit_LetDecl(self, node: LetDecl) -> None: ...
@@ -277,6 +281,7 @@ _KNOWN_NODE_TYPES: frozenset[type] = frozenset(
         ImportDecl,
         ExportItem,
         ExportDecl,
+        ScopeSegment,
         # declaration nodes
         RecordDef,
         VariantDef,
@@ -289,6 +294,7 @@ _KNOWN_NODE_TYPES: frozenset[type] = frozenset(
         FuncDef,
         BuiltinVarDecl,
         InfixDecl,
+        ScopeRegion,
         # binder nodes
         LetDecl,
         VarDecl,
@@ -420,6 +426,9 @@ def walk(node: object, callback: Callable[[object], None]) -> None:
         for export_item in node.items:
             walk(export_item, callback)
 
+    elif isinstance(node, ScopeSegment):
+        pass  # leaf — name is a plain string
+
     # --- Declaration nodes ---
     elif isinstance(node, RecordDef):
         for f in node.fields:
@@ -465,6 +474,11 @@ def walk(node: object, callback: Callable[[object], None]) -> None:
 
     elif isinstance(node, InfixDecl):
         pass  # leaf — operator metadata only
+
+    elif isinstance(node, ScopeRegion):
+        walk(node.segment, callback)
+        for scope_item in node.items:
+            walk(scope_item, callback)
 
     # --- Binder nodes ---
     elif isinstance(node, LetDecl):
@@ -577,8 +591,8 @@ def walk(node: object, callback: Callable[[object], None]) -> None:
         walk(node.body, callback)
 
     elif isinstance(node, Block):
-        for item in node.items:
-            walk(item, callback)
+        for block_item in node.items:
+            walk(block_item, callback)
 
     elif isinstance(node, IfBranch):
         walk(node.cond, callback)

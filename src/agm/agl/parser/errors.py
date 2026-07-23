@@ -263,6 +263,12 @@ def syntax_error_from_lark(
             source_text=source_text, token_pos=pos, expected=set(exc.expected)
         ):
             return _make_missing_else_arrow_error(span)
+        if tok.type == "$END" and "END" in exc.expected and source_text is not None:
+            from agm.agl.lexer import unclosed_scope_path
+
+            scope_path = unclosed_scope_path(source_text)
+            assert scope_path is not None
+            return AglSyntaxError(f"Missing scope closer; expected 'end {scope_path}'.", span=span)
         if _is_placeholder_position_error(
             token_type=tok.type, source_text=source_text, token_pos=pos
         ):

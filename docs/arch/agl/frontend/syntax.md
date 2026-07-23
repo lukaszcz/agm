@@ -18,9 +18,11 @@ Each node carries a stable id assigned at build time. Later passes never mutate 
 
 The parser accepts blocks ending in a `let` or `var` binder and preserves those binders in the AST, including suite blocks and the marked inline bodies used by loops, parenthesized blocks, and `try` bodies. Typechecking gives a trailing binder a unit result (or bottom when its initializer exits); lowering supplies that result without altering the AST.
 
+Scope-region headers become nested single-segment `ScopeRegion` nodes, with each `ScopeSegment` retaining its own source span. This canonicalizes multi-segment and textual nesting before later passes see the AST; the parser admits regions only at module root or in another region, and validates matching closers and declaration-only contents. Closer promotion tracks the opener's layout level, leaving `end` usable in nested declaration suites.
+
 ## Code Entry Points
 
 - `src/agm/agl/lexer/` — the indentation-aware lexer; `tokens.py` is the token-contract source of truth.
 - `src/agm/agl/grammar/` and `src/agm/agl/parser/` — the Lark grammar and the AST builder.
-- `src/agm/agl/syntax/` — the AST dataclasses, type nodes, source-id-stamped spans, and lexical advisories.
+- `src/agm/agl/syntax/` — the AST dataclasses, including canonical scope regions, type nodes, source-id-stamped spans, and lexical advisories.
 - Tests: `tests/test_agl_lexer.py`, `tests/test_agl_parser.py`, `tests/test_agl_ast.py`.

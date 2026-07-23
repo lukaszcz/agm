@@ -68,6 +68,17 @@ class _RawPlaceholder:
     span: SourceSpan
 
 
+@dataclass(frozen=True, slots=True)
+class _ScopePath:
+    """Transformer-internal scope path retaining each header segment's span."""
+
+    segments: tuple[tuple[str, SourceSpan], ...]
+
+    @property
+    def spelling(self) -> str:
+        return "::".join(name for name, _span in self.segments)
+
+
 # ---------------------------------------------------------------------------
 # Transformer-internal marker sentinel (never leaks into the AST)
 # ---------------------------------------------------------------------------
@@ -232,6 +243,49 @@ def _is_str_tuple(a: object) -> bool:
     return isinstance(a, tuple) and len(a) > 0 and all(isinstance(x, str) for x in a)
 
 
+def _is_stray_scope_end(item: syntax.Item) -> bool:
+    """Whether a root item has the unpromoted spelling of a stray closer."""
+    return (
+        isinstance(item, syntax.Call)
+        and isinstance(item.callee, syntax.VarRef)
+        and item.callee.name == "end"
+        and len(item.args) == 1
+        and isinstance(item.args[0], syntax.VarRef)
+        and not item.named_args
+    )
+
+
+def _is_builtin_scope_declaration(item: object) -> bool:
+    """Whether *item* is a root-only builtin declaration."""
+    return (
+        isinstance(item, (syntax.FuncDef, syntax.RecordDef, syntax.EnumDef, syntax.ExceptionDef))
+        and item.is_builtin
+    )
+
+
+def _scope_item_error_span(item: object, fallback: SourceSpan) -> SourceSpan:
+    """Return the offending scope item's span, or the region span as fallback."""
+    if isinstance(item, _RawInfixChain):
+        return item.span
+    if isinstance(
+        item,
+        (
+            syntax.ParamDecl,
+            syntax.ProgramDecl,
+            syntax.BuiltinVarDecl,
+            syntax.InfixDecl,
+            syntax.ImportDecl,
+            syntax.ExportDecl,
+            syntax.LetDecl,
+            syntax.VarDecl,
+            syntax.AssignStmt,
+            syntax.Expr,
+        ),
+    ):
+        return item.span
+    return fallback
+
+
 def _span_from_meta(meta: Meta) -> SourceSpan:
     """Build a SourceSpan from Lark tree Meta (propagate_positions=True)."""
     return SourceSpan(
@@ -336,24 +390,123 @@ class AstBuilder(Transformer):
     def start(self, meta: Meta, args: _Args) -> syntax.Program:
         (block,) = args
         assert isinstance(block, syntax.Block)
+        stray_end = next((item for item in block.items if _is_stray_scope_end(item)), None)
+        if stray_end is not None:
+            raise AglSyntaxError("stray 'end'; no scope region is open.", span=stray_end.span)
         span = self._span_from_meta(meta)
         table = _operator_table_from_decls(block.items, self._ambient_infix)
         body = _rewrite_block_infix(block, table, self)
         return syntax.Program(body=body, span=span, node_id=self._next_id())
 
-    def block(self, meta: Meta, args: _Args) -> syntax.Block:
-        """block: item (_sep item)* _sep?
-
-        _NEWLINE tokens are filtered by leading underscore convention.
-        SEMICOLON tokens are %declare'd and appear in tree — drop them.
-        items are Declaration | Binder | Expr (all are AST nodes, not Tokens).
-        """
-        items = tuple(cast(_RawItem, a) for a in args if a is not None and not isinstance(a, Token))
+    def _build_block(self, meta: Meta, args: _Args) -> syntax.Block:
+        """Build a root or suite block from its non-layout children."""
+        items = tuple(
+            cast(_RawItem, arg) for arg in args if arg is not None and not isinstance(arg, Token)
+        )
         return syntax.Block(
             items=cast(tuple[syntax.Item, ...], items),
             span=self._span_from_meta(meta),
             node_id=self._next_id(),
         )
+
+    def module_block(self, meta: Meta, args: _Args) -> syntax.Block:
+        """Build the module-root block, whose items may include scope regions."""
+        return self._build_block(meta, args)
+
+    def block(self, meta: Meta, args: _Args) -> syntax.Block:
+        """Build a regular suite block, which cannot contain scope regions."""
+        return self._build_block(meta, args)
+
+    # ------------------------------------------------------------------
+    # Scope regions
+    # ------------------------------------------------------------------
+
+    def scope_path(self, meta: Meta, args: _Args) -> _ScopePath:
+        """Build a raw scope path from lexer-merged qualifier segments."""
+        segments: list[tuple[str, SourceSpan]] = []
+        for arg in cast(list[Token], args):
+            name = str(arg)
+            if arg.type == "MODQUAL":
+                if "/" in name:
+                    raise AglSyntaxError(
+                        "scope paths use '::' between name segments.",
+                        span=self._span_from_token(arg),
+                    )
+                token_span = self._span_from_token(arg)
+                segments.append(
+                    (
+                        name,
+                        SourceSpan(
+                            start_line=token_span.start_line,
+                            start_col=token_span.start_col,
+                            end_line=token_span.start_line,
+                            end_col=token_span.start_col + len(name),
+                            start_offset=token_span.start_offset,
+                            end_offset=token_span.start_offset + len(name),
+                            source=token_span.source,
+                        ),
+                    )
+                )
+            else:
+                segments.append((name, self._span_from_token(arg)))
+        return _ScopePath(segments=tuple(segments))
+
+    def scope_region(self, meta: Meta, args: _Args) -> syntax.ScopeRegion:
+        """Build and normalize a scope region with a matching closer."""
+        paths = [arg for arg in args if isinstance(arg, _ScopePath)]
+        header, closer = paths
+        if tuple(name for name, _span in closer.segments) != tuple(
+            name for name, _span in header.segments
+        ):
+            closer_span = closer.segments[0][1]
+            raise AglSyntaxError(
+                f"scope closer does not match; expected 'end {header.spelling}'.",
+                span=closer_span,
+            )
+
+        allowed_items = (
+            syntax.ScopeRegion,
+            syntax.FuncDef,
+            syntax.RecordDef,
+            syntax.EnumDef,
+            syntax.ExceptionDef,
+            syntax.TypeAlias,
+            syntax.AgentDecl,
+        )
+        items = tuple(arg for arg in args if isinstance(arg, allowed_items))
+        disallowed = next(
+            (
+                arg
+                for arg in args
+                if arg is not None
+                and (
+                    not isinstance(arg, (Token, _ScopePath, allowed_items))
+                    or _is_builtin_scope_declaration(arg)
+                )
+            ),
+            None,
+        )
+        if disallowed is not None:
+            span = _scope_item_error_span(disallowed, self._span_from_meta(meta))
+            raise AglSyntaxError(
+                "scope regions may contain only functions, externs, types, and agents.",
+                span=span,
+            )
+
+        segments = tuple(
+            syntax.ScopeSegment(name=name, span=segment_span, node_id=self._next_id())
+            for name, segment_span in header.segments
+        )
+        region: syntax.ScopeRegion | None = None
+        for segment in reversed(segments):
+            region = syntax.ScopeRegion(
+                segment=segment,
+                items=items if region is None else (region,),
+                span=self._span_from_meta(meta),
+                node_id=self._next_id(),
+            )
+        assert region is not None
+        return region
 
     # ------------------------------------------------------------------
     # Declarations
@@ -2976,6 +3129,13 @@ def _rewrite_item(
 ) -> syntax.Item:
     if isinstance(item, _RawInfixChain):
         return _resolve_infix_chain(item, table, builder)
+    if isinstance(item, syntax.ScopeRegion):
+        scope_items = cast(tuple[_RawItem, ...], item.items)
+        rewritten_scope_items = tuple(_rewrite_item(child, table, builder) for child in scope_items)
+        return replace(
+            item,
+            items=cast(tuple[syntax.ScopeItem, ...], rewritten_scope_items),
+        )
     if isinstance(item, syntax.Expr):
         return _rewrite_expr(item, table, builder)
     if isinstance(item, syntax.LetDecl):

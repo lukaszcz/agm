@@ -45,7 +45,7 @@ import keyword
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
-from typing import Literal, TypeGuard, assert_never
+from typing import Literal, TypeGuard, assert_never, cast
 
 from agm.agl.capabilities import HostCapabilities
 from agm.agl.diagnostics import Diagnostic
@@ -723,7 +723,7 @@ class _Checker:
         if isinstance(item, AssignStmt):
             return self._check_assign_stmt(item)
         # --- Expr ---
-        return self._check_expr(item, expected=expected)
+        return self._check_expr(cast(Expr, item), expected=expected)
 
     # ------------------------------------------------------------------
     # Declaration checkers

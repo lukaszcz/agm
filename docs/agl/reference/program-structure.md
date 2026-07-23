@@ -14,6 +14,7 @@ expression-oriented sequence.
 program    ::= block EOF
 block      ::= item ((NEWLINE | ";") item)* (NEWLINE | ";")?
 item       ::= import_decl                        (* header position only *)
+             | open_decl                          (* header position only *)
              | export_decl                        (* root only *)
              | nominal_modifier? record_def        (* root only *)
              | nominal_modifier? enum_def          (* root only *)
@@ -36,9 +37,9 @@ private_modifier ::= "private" NEWLINE?
 
 ### Import declarations
 
-`import` declarations are **header-only**: they must appear before any
-other declaration or expression. See [Modules](modules.md) for the full
-import syntax and semantics.
+`import` and `open` declarations are **header-only**: they must appear before
+any other declaration or expression. See [Modules](modules.md) and
+[Grammar](grammar.md#import-and-export-declarations) for their syntax.
 
 ### Declarations
 

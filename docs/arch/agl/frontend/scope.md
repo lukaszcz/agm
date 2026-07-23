@@ -4,7 +4,7 @@ The scope pass performs full name resolution and records its results in side tab
 
 ## Namespace-Directed Resolution
 
-Scope-region syntax already crosses the parser firewall as canonical AST nodes. Until namespace resolution gains region support, the scope pass rejects a module containing one at its entry boundary with a clear diagnostic; this prevents later static passes from receiving an unsupported node.
+Scope-region syntax and declaration-path shorthand cross the parser firewall in canonical AST forms. Until namespace resolution gains region support, program resolution validates every loaded AST before deriving export maps or import environments, rejecting regions, non-empty declaration paths, `open` declarations, and path atoms in import/export selections with clear diagnostics; the per-module worker applies the same validation. This prevents later static passes from receiving unsupported nodes.
 
 Resolution is namespace- and scope-directed, never capitalization-directed — a direct consequence of AgL's case-neutral name model:
 

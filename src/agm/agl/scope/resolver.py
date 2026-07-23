@@ -124,6 +124,7 @@ from agm.agl.syntax.nodes import (
     Loop,
     NameTarget,
     NullLit,
+    OpenDecl,
     ParamDecl,
     Pattern,
     Placeholder,
@@ -170,9 +171,40 @@ _BUILTIN_CONSTRUCTOR_NODE_ID = -1
 _RESERVED_NAMES: frozenset[str] = frozenset(_BUILTIN_CALL_NAMES)
 
 
-def _first_scope_region(items: tuple[Item, ...]) -> ScopeRegion | None:
-    """Return the first scope region in source order."""
-    return next((item for item in items if isinstance(item, ScopeRegion)), None)
+def validate_scope_syntax(program: Program) -> None:
+    """Reject parsed scope forms whose namespace semantics are not available.
+
+    Program resolution invokes this for every loaded module before it derives
+    exports or import environments. ``resolve_module`` invokes it too, keeping
+    the per-module worker safe when used directly.
+    """
+    unsupported: tuple[str, SourceSpan] | None = None
+
+    def inspect(node: object) -> None:
+        nonlocal unsupported
+        if unsupported is not None:
+            return
+        if isinstance(node, ScopeRegion):
+            unsupported = ("scope regions are not supported here yet.", node.span)
+        elif isinstance(node, OpenDecl):
+            unsupported = ("open declarations are not supported here yet.", node.span)
+        elif (
+            isinstance(node, (FuncDef, RecordDef, EnumDef, ExceptionDef, TypeAlias, AgentDecl))
+            and node.scope_path
+        ):
+            unsupported = ("scope-path declarations are not supported here yet.", node.span)
+        elif isinstance(node, (ImportDecl, ExportDecl)) and any(
+            item.scope_path for item in node.items
+        ):
+            unsupported = (
+                "path atoms in import and export selections are not supported here yet.",
+                node.span,
+            )
+
+    walk(program, inspect)
+    if unsupported is not None:
+        message, span = unsupported
+        raise AglScopeError(message, span=span)
 
 
 # ---------------------------------------------------------------------------
@@ -310,11 +342,7 @@ class _Resolver:
         qualified constructor access (``Owner::variant``) resolves for types
         declared in earlier REPL entries.
         """
-        # Scope-region syntax is available before its namespace semantics. Reject
-        # it at this pass boundary so later passes never receive an unfamiliar node.
-        scope_region = _first_scope_region(program.body.items)
-        if scope_region is not None:
-            raise AglScopeError("scope regions are not supported here yet.", span=scope_region.span)
+        validate_scope_syntax(program)
         self._validate_qualifier_chains(program)
 
         # Seed ambient constructor candidates (from prior REPL entries) before

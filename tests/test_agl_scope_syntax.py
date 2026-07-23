@@ -1,0 +1,244 @@
+"""Behavioral coverage for scoped declaration and selection syntax."""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+import pytest
+
+from agm.agl import PipelineDriver
+from agm.agl.modules.roots import RootSet
+from agm.agl.parser import AglSyntaxError, parse_program
+from agm.agl.scope import AglScopeError, resolve_module
+from agm.agl.syntax import (
+    AgentDecl,
+    EnumDef,
+    ExceptionDef,
+    ExportDecl,
+    FuncDef,
+    ImportDecl,
+    OpenDecl,
+    RecordDef,
+    ScopeRegion,
+    TypeAlias,
+)
+from tests.agl.ir_harness import write_module_file
+
+
+def _declaration(source: str) -> object:
+    (declaration,) = parse_program(source).body.items
+    return declaration
+
+
+@pytest.mark.parametrize(
+    ("source", "kind"),
+    (
+        ("def A::B::value() -> int = 0", FuncDef),
+        ("extern def A::B::value() -> int", FuncDef),
+        ("record A::B::Point(x: int)", RecordDef),
+        ("enum A::B::Result = ok", EnumDef),
+        ("exception A::B::Failure(message: text)", ExceptionDef),
+        ("type A::B::Count = int", TypeAlias),
+        ('agent A::B::reviewer = "runner"', AgentDecl),
+    ),
+)
+def test_name_headed_declarations_accept_scope_path_shorthand(
+    source: str, kind: type[object]
+) -> None:
+    declaration = _declaration(source)
+
+    assert isinstance(declaration, kind)
+    assert declaration.name in {"value", "Point", "Result", "Failure", "Count", "reviewer"}
+    assert [segment.name for segment in declaration.scope_path] == ["A", "B"]
+    with pytest.raises(AglScopeError, match="scope-path declarations"):
+        resolve_module(parse_program(source))
+
+
+@pytest.mark.parametrize(
+    ("source", "kind", "name"),
+    (
+        ("def Inner::value() -> int = 0", FuncDef, "value"),
+        ("extern def Inner::value() -> int", FuncDef, "value"),
+        ("record Inner::Point(x: int)", RecordDef, "Point"),
+        ("enum Inner::Result = ok", EnumDef, "Result"),
+        ("exception Inner::Failure(message: text)", ExceptionDef, "Failure"),
+        ("type Inner::Count = int", TypeAlias, "Count"),
+        ('agent Inner::reviewer = "runner"', AgentDecl, "reviewer"),
+    ),
+)
+def test_scope_region_declarations_accumulate_shorthand_scope_paths(
+    source: str, kind: type[object], name: str
+) -> None:
+    program = parse_program(f"scope Outer\n{source}\nend Outer")
+
+    (region,) = program.body.items
+    assert isinstance(region, ScopeRegion)
+    (declaration,) = region.items
+    assert isinstance(declaration, kind)
+    assert declaration.name == name
+    assert [segment.name for segment in declaration.scope_path] == ["Outer", "Inner"]
+
+
+def test_region_and_shorthand_declarations_have_the_same_scope_path() -> None:
+    block_form = parse_program("scope A::B\ndef value() -> int = 0\nend A::B")
+    shorthand = parse_program("def A::B::value() -> int = 0")
+
+    (region,) = block_form.body.items
+    assert isinstance(region, ScopeRegion)
+    (block_declaration,) = region.items[0].items
+    assert isinstance(block_declaration, FuncDef)
+    (shorthand_declaration,) = shorthand.body.items
+    assert isinstance(shorthand_declaration, FuncDef)
+
+    assert block_declaration == shorthand_declaration
+
+
+def test_nested_region_declarations_accumulate_the_enclosing_scope_path() -> None:
+    program = parse_program("scope A\nscope B\ndef C::value() -> int = 0\nend B\nend A")
+
+    (outer,) = program.body.items
+    assert isinstance(outer, ScopeRegion)
+    (inner,) = outer.items
+    assert isinstance(inner, ScopeRegion)
+    (declaration,) = inner.items
+    assert isinstance(declaration, FuncDef)
+    assert [segment.name for segment in declaration.scope_path] == ["A", "B", "C"]
+
+
+@pytest.mark.parametrize(
+    ("source", "module_route", "scope_path", "mode", "items"),
+    (
+        ("open Point", (), ("Point",), "all", ()),
+        ("open Point using distance", (), ("Point",), "using", (("distance", None),)),
+        (
+            "open Point using distance as d, length as l",
+            (),
+            ("Point",),
+            "using",
+            (("distance", "d"), ("length", "l")),
+        ),
+        ("open Point hiding internal", (), ("Point",), "hiding", (("internal", None),)),
+        (
+            "open geo/shapes::Point::Metrics using distance as d",
+            ("geo", "shapes"),
+            ("Point", "Metrics"),
+            "using",
+            (("distance", "d"),),
+        ),
+    ),
+)
+def test_open_declarations_accept_scope_references_and_clauses(
+    source: str,
+    module_route: tuple[str, ...],
+    scope_path: tuple[str, ...],
+    mode: str,
+    items: tuple[tuple[str, str | None], ...],
+) -> None:
+    declaration = _declaration(source)
+
+    assert isinstance(declaration, OpenDecl)
+    assert declaration.scope_ref.module_route == module_route
+    assert tuple(segment.name for segment in declaration.scope_ref.scope_path) == scope_path
+    assert declaration.mode.name.lower() == mode
+    assert tuple((item.name, item.rename) for item in declaration.items) == items
+
+
+def test_open_declarations_are_allowed_at_the_start_of_scope_regions() -> None:
+    program = parse_program("scope A\nopen B using value as b\ndef value() -> int = 0\nend A")
+
+    (region,) = program.body.items
+    assert isinstance(region, ScopeRegion)
+    assert isinstance(region.items[0], OpenDecl)
+
+
+@pytest.mark.parametrize(
+    "source",
+    (
+        "def value() -> int =\n    open Point\n    0",
+        "if true =>\n    open Point\n    ()",
+        "do\n    open Point\n    ()\ndone",
+    ),
+)
+def test_open_declarations_are_rejected_outside_module_and_scope_regions(source: str) -> None:
+    with pytest.raises(AglSyntaxError, match="only allowed at module root or in scope regions"):
+        parse_program(source)
+
+
+@pytest.mark.parametrize(
+    "source",
+    (
+        "open Point using value hiding hidden",
+        "def value() -> int = 0\nopen Point",
+        "scope A\ndef value() -> int = 0\nopen B\nend A",
+    ),
+)
+def test_open_clause_shapes_and_placement_are_rejected(source: str) -> None:
+    with pytest.raises(AglSyntaxError):
+        parse_program(source)
+
+
+@pytest.mark.parametrize(
+    ("source", "kind"),
+    (
+        ("import library using Point::distance as d, Point", ImportDecl),
+        ("import library hiding Point::internal", ImportDecl),
+        ("export library using Point::distance as d, Point", ExportDecl),
+        ("export library hiding Point::internal", ExportDecl),
+    ),
+)
+def test_import_and_export_clauses_accept_path_atoms(source: str, kind: type[object]) -> None:
+    declaration = _declaration(source)
+
+    assert isinstance(declaration, kind)
+    atoms = tuple(
+        (item.name, item.rename, tuple(segment.name for segment in item.scope_path))
+        for item in declaration.items
+    )
+    expected = (
+        (("distance", "d", ("Point",)), ("Point", None, ()))
+        if "using" in source
+        else (("internal", None, ("Point",)),)
+    )
+    assert atoms == expected
+
+
+@pytest.mark.parametrize(
+    ("source", "diagnostic"),
+    (
+        ("def Point::distance() -> int = 0", "scope-path declarations"),
+        ("open Point", "open declarations"),
+        ("import library using Point::distance", "path atoms"),
+        ("export library hiding Point::internal", "path atoms"),
+    ),
+)
+def test_new_scope_syntax_stops_at_the_scope_pass(source: str, diagnostic: str) -> None:
+    with pytest.raises(AglScopeError, match=diagnostic):
+        resolve_module(parse_program(source))
+
+
+@pytest.mark.parametrize(
+    ("entry", "library"),
+    (
+        ("import library using Point::distance\n()", "record Point()"),
+        ("export library hiding Point::distance\n()", "record Point()"),
+        ("import library\n()", "import dependency using Point::distance\ndef value() -> int = 0"),
+    ),
+)
+def test_production_pipeline_rejects_path_atoms_before_import_environment_construction(
+    tmp_path: Path, entry: str, library: str
+) -> None:
+    root = tmp_path / "modules"
+    root.mkdir()
+    write_module_file(root, "library", library)
+    if "dependency" in library:
+        write_module_file(root, "dependency", "record Point()")
+
+    result = PipelineDriver().run(
+        entry,
+        roots=RootSet(roots=frozenset({root})),
+        default_stdlib=False,
+    )
+
+    assert not result.ok
+    assert len(result.diagnostics) == 1
+    assert "path atoms in import and export selections" in result.diagnostics[0].message

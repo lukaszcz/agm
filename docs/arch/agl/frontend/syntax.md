@@ -20,7 +20,7 @@ Qualified references use `QualifierChain`: an optional module or current-module 
 
 The parser accepts blocks ending in a `let` or `var` binder and preserves those binders in the AST, including suite blocks and the marked inline bodies used by loops, parenthesized blocks, and `try` bodies. Typechecking gives a trailing binder a unit result (or bottom when its initializer exits); lowering supplies that result without altering the AST.
 
-Scope-region headers become nested single-segment `ScopeRegion` nodes, with each `ScopeSegment` retaining its own source span. This canonicalizes multi-segment and textual nesting before later passes see the AST; the parser admits regions only at module root or in another region, and validates matching closers and declaration-only contents. Closer promotion tracks the opener's layout level, leaving `end` usable in nested declaration suites.
+Scope-region headers become nested single-segment `ScopeRegion` nodes, with each `ScopeSegment` retaining its own source span. Name-headed declarations carry a canonical `scope_path`, so a region and `A::B::name` shorthand reach later passes in the same form. `OpenDecl` and import/export selection items likewise retain structured scope paths. The parser admits regions only at module root or in another region, validates matching closers, and keeps `open` items in the region header. Closer promotion tracks the opener's layout level, leaving `end` usable in nested declaration suites.
 
 ## Code Entry Points
 

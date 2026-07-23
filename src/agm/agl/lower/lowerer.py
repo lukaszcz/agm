@@ -221,6 +221,7 @@ from agm.agl.syntax.nodes import (
     NamedArg,
     NameTarget,
     NullLit,
+    OpenDecl,
     Param,
     ParamDecl,
     Pattern,
@@ -583,6 +584,7 @@ class _Lowerer:
                 | BuiltinVarDecl()
                 | ImportDecl()
                 | ExportDecl()
+                | OpenDecl()
                 | InfixDecl()
             ):
                 return
@@ -2937,6 +2939,7 @@ class _Lowerer:
                 | ProgramDecl()
                 | ImportDecl()
                 | ExportDecl()
+                | OpenDecl()
                 | InfixDecl()
                 | BuiltinVarDecl()
                 | ScopeRegion()

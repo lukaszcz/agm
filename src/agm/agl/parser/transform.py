@@ -68,13 +68,37 @@ class _RawPlaceholder:
 
 @dataclass(frozen=True, slots=True)
 class _ScopePath:
-    """Transformer-internal scope path retaining each header segment's span."""
+    """Transformer-internal path retaining each segment's span."""
 
     segments: tuple[tuple[str, SourceSpan], ...]
 
     @property
     def spelling(self) -> str:
         return "::".join(name for name, _span in self.segments)
+
+
+_SCOPED_DECLARATIONS = (
+    syntax.FuncDef,
+    syntax.RecordDef,
+    syntax.EnumDef,
+    syntax.ExceptionDef,
+    syntax.TypeAlias,
+    syntax.AgentDecl,
+)
+
+
+def _prefix_scope_path(
+    item: syntax.ScopeItem, prefix: tuple[syntax.ScopeSegment, ...]
+) -> syntax.ScopeItem:
+    """Add *prefix* to every declaration path contained by a scope item."""
+    if isinstance(item, syntax.ScopeRegion):
+        return replace(
+            item,
+            items=tuple(_prefix_scope_path(child, prefix) for child in item.items),
+        )
+    if isinstance(item, _SCOPED_DECLARATIONS):
+        return replace(item, scope_path=prefix + item.scope_path)
+    return item
 
 
 # ---------------------------------------------------------------------------
@@ -417,23 +441,46 @@ class AstBuilder(Transformer):
 
     def module_block(self, meta: Meta, args: _Args) -> syntax.Block:
         """Build the module-root block, whose items may include scope regions."""
-        return self._build_block(meta, args)
+        block = self._build_block(meta, args)
+        self._validate_open_placement(block.items)
+        return block
+
+    def _validate_open_placement(self, items: tuple[syntax.Item, ...]) -> None:
+        """Require scope opens to remain in the header portion of a region."""
+        seen_non_header = False
+        for item in items:
+            if isinstance(item, syntax.OpenDecl):
+                if seen_non_header:
+                    raise AglSyntaxError(
+                        "open declarations must precede non-header items.", span=item.span
+                    )
+            elif not isinstance(item, (syntax.ImportDecl, syntax.ExportDecl)):
+                seen_non_header = True
 
     def block(self, meta: Meta, args: _Args) -> syntax.Block:
-        """Build a regular suite block, which cannot contain scope regions."""
-        return self._build_block(meta, args)
+        """Build a regular suite block, which cannot contain scope regions or opens."""
+        block = self._build_block(meta, args)
+        misplaced_open = next(
+            (item for item in block.items if isinstance(item, syntax.OpenDecl)), None
+        )
+        if misplaced_open is not None:
+            raise AglSyntaxError(
+                "open declarations are only allowed at module root or in scope regions.",
+                span=misplaced_open.span,
+            )
+        return block
 
     # ------------------------------------------------------------------
     # Scope regions
     # ------------------------------------------------------------------
 
-    def scope_path(self, meta: Meta, args: _Args) -> _ScopePath:
-        """Build a raw scope path from lexer-merged qualifier segments."""
+    def _path_from_tokens(self, args: _Args, *, reject_module_routes: bool) -> _ScopePath:
+        """Build a path from names and lexer-merged qualifier segments."""
         segments: list[tuple[str, SourceSpan]] = []
         for arg in cast(list[Token], args):
             name = str(arg)
             if arg.type == "MODQUAL":
-                if "/" in name:
+                if reject_module_routes and "/" in name:
                     raise AglSyntaxError(
                         "scope paths use '::' between name segments.",
                         span=self._span_from_token(arg),
@@ -457,6 +504,30 @@ class AstBuilder(Transformer):
                 segments.append((name, self._span_from_token(arg)))
         return _ScopePath(segments=tuple(segments))
 
+    def scope_path(self, meta: Meta, args: _Args) -> _ScopePath:
+        """Build a scope path, rejecting slash-separated module routes."""
+        return self._path_from_tokens(args, reject_module_routes=True)
+
+    def decl_head(self, meta: Meta, args: _Args) -> _ScopePath:
+        """Build a declaration head with an optional scope-path prefix."""
+        return self._path_from_tokens(args, reject_module_routes=True)
+
+    def path_atom(self, meta: Meta, args: _Args) -> _ScopePath:
+        """Build a module-selection path atom."""
+        return self._path_from_tokens(args, reject_module_routes=True)
+
+    def _scope_segments(self, path: _ScopePath) -> tuple[syntax.ScopeSegment, ...]:
+        return tuple(
+            syntax.ScopeSegment(name=name, span=span, node_id=self._next_id())
+            for name, span in path.segments
+        )
+
+    def _declaration_head(self, args: _Args) -> tuple[str, tuple[syntax.ScopeSegment, ...]]:
+        path = next(arg for arg in args if isinstance(arg, _ScopePath))
+        assert path.segments
+        name, _span = path.segments[-1]
+        return name, self._scope_segments(_ScopePath(path.segments[:-1]))
+
     def scope_region(self, meta: Meta, args: _Args) -> syntax.ScopeRegion:
         """Build and normalize a scope region with a matching closer."""
         paths = [arg for arg in args if isinstance(arg, _ScopePath)]
@@ -472,6 +543,7 @@ class AstBuilder(Transformer):
 
         allowed_items = (
             syntax.ScopeRegion,
+            syntax.OpenDecl,
             syntax.FuncDef,
             syntax.RecordDef,
             syntax.EnumDef,
@@ -480,6 +552,7 @@ class AstBuilder(Transformer):
             syntax.AgentDecl,
         )
         items = tuple(arg for arg in args if isinstance(arg, allowed_items))
+        self._validate_open_placement(cast(tuple[syntax.Item, ...], items))
         disallowed = next(
             (
                 arg
@@ -499,10 +572,7 @@ class AstBuilder(Transformer):
                 span=span,
             )
 
-        segments = tuple(
-            syntax.ScopeSegment(name=name, span=segment_span, node_id=self._next_id())
-            for name, segment_span in header.segments
-        )
+        segments = self._scope_segments(header)
         region: syntax.ScopeRegion | None = None
         for segment in reversed(segments):
             region = syntax.ScopeRegion(
@@ -512,7 +582,7 @@ class AstBuilder(Transformer):
                 node_id=self._next_id(),
             )
         assert region is not None
-        return region
+        return cast(syntax.ScopeRegion, _prefix_scope_path(region, segments))
 
     # ------------------------------------------------------------------
     # Declarations
@@ -543,7 +613,7 @@ class AstBuilder(Transformer):
 
     def agent_decl(self, meta: Meta, args: _Args) -> syntax.AgentDecl:
         # Grammar: AGENT name (EQ template)?
-        name_tok = next(a for a in args if _is_name_token(a))
+        name, scope_path = self._declaration_head(args)
         runner_node = next(
             (a for a in args if isinstance(a, (syntax.StringLit, syntax.Template))),
             None,
@@ -558,8 +628,9 @@ class AstBuilder(Transformer):
         )
         span = self._span_from_meta(meta)
         return syntax.AgentDecl(
-            name=str(name_tok),
+            name=name,
             runner=runner,
+            scope_path=scope_path,
             span=span,
             node_id=self._next_id(),
         )
@@ -628,18 +699,19 @@ class AstBuilder(Transformer):
 
     def record_def(self, meta: Meta, args: _Args) -> syntax.RecordDef:
         # Grammar: "record" name type_params? EQ? record_body
-        name_tok = _find_name_token(args)
+        name, scope_path = self._declaration_head(args)
         type_params_val: tuple[str, ...] = ()
         for a in args:
             if _is_str_tuple(a):
                 type_params_val = cast(tuple[str, ...], a)
         fields = _find_field_tuple(args)
         return syntax.RecordDef(
-            name=str(name_tok),
+            name=name,
             fields=fields,
             type_params=type_params_val,
             span=self._span_from_meta(meta),
             node_id=self._next_id(),
+            scope_path=scope_path,
         )
 
     # ------------------------------------------------------------------
@@ -718,18 +790,19 @@ class AstBuilder(Transformer):
 
     def enum_def(self, meta: Meta, args: _Args) -> syntax.EnumDef:
         # Grammar: "enum" name type_params? EQ? enum_body
-        name_tok = _find_name_token(args)
+        name, scope_path = self._declaration_head(args)
         type_params_val: tuple[str, ...] = ()
         for a in args:
             if _is_str_tuple(a):
                 type_params_val = cast(tuple[str, ...], a)
         variants = _find_variant_tuple(args)
         return syntax.EnumDef(
-            name=str(name_tok),
+            name=name,
             variants=variants,
             type_params=type_params_val,
             span=self._span_from_meta(meta),
             node_id=self._next_id(),
+            scope_path=scope_path,
         )
 
     def enum_body(self, meta: Meta, args: _Args) -> tuple[syntax.VariantDef, ...]:
@@ -781,15 +854,16 @@ class AstBuilder(Transformer):
 
     def exception_def(self, meta: Meta, args: _Args) -> syntax.ExceptionDef:
         # Grammar: "exception" name exception_base? exception_body
-        name_tok = _find_name_token(args)
+        name, scope_path = self._declaration_head(args)
         base = next((a for a in args if type(a) is str), None)
         fields = _find_field_tuple(args)
         return syntax.ExceptionDef(
-            name=str(name_tok),
+            name=name,
             fields=fields,
             base=base,
             span=self._span_from_meta(meta),
             node_id=self._next_id(),
+            scope_path=scope_path,
         )
 
     def exception_base(self, meta: Meta, args: _Args) -> str:
@@ -806,18 +880,19 @@ class AstBuilder(Transformer):
 
     def type_alias(self, meta: Meta, args: _Args) -> syntax.TypeAlias:
         # Grammar: "type" name type_params? EQ type_expr
-        name_tok = _find_name_token(args)
+        name, scope_path = self._declaration_head(args)
         type_params_val: tuple[str, ...] = ()
         for a in args:
             if _is_str_tuple(a):
                 type_params_val = cast(tuple[str, ...], a)
         type_expr = _find_type_expr(args)
         return syntax.TypeAlias(
-            name=str(name_tok),
+            name=name,
             type_expr=type_expr,
             type_params=type_params_val,
             span=self._span_from_meta(meta),
             node_id=self._next_id(),
+            scope_path=scope_path,
         )
 
     # ------------------------------------------------------------------
@@ -828,7 +903,7 @@ class AstBuilder(Transformer):
         """func_def: "def" name type_params? LPAR param_list? RPAR
         (THIN_ARROW type_expr)? (EQ func_body | suite_expr)
         """
-        name_tok = _find_name_token(args)
+        name, scope_path = self._declaration_head(args)
         type_params_val: tuple[str, ...] = ()
         for a in args:
             if _is_str_tuple(a):
@@ -836,13 +911,14 @@ class AstBuilder(Transformer):
         params, return_type, body = self._split_params_type_body(args)
         assert body is not None, "func_def: no body"
         return syntax.FuncDef(
-            name=str(name_tok),
+            name=name,
             params=params,
             return_type=return_type,
             body=body,
             type_params=type_params_val,
             span=self._span_from_meta(meta),
             node_id=self._next_id(),
+            scope_path=scope_path,
         )
 
     def _bodyless_func_def(
@@ -854,7 +930,7 @@ class AstBuilder(Transformer):
         "def" name type_params? (params) -> type_expr with no body; only the
         leading modifier and the resulting flag differ.
         """
-        name_tok = _find_name_token(args)
+        name, scope_path = self._declaration_head(args)
         type_params_val: tuple[str, ...] = ()
         for a in args:
             if _is_str_tuple(a):
@@ -863,7 +939,7 @@ class AstBuilder(Transformer):
         assert return_type is not None, "bodyless func def: no return type"
         assert body is None, "bodyless func def: unexpected body"
         return syntax.FuncDef(
-            name=str(name_tok),
+            name=name,
             params=params,
             return_type=return_type,
             body=None,
@@ -872,6 +948,7 @@ class AstBuilder(Transformer):
             node_id=self._next_id(),
             is_builtin=is_builtin,
             is_extern=is_extern,
+            scope_path=scope_path,
         )
 
     def builtin_func_def(self, meta: Meta, args: _Args) -> syntax.FuncDef:
@@ -1225,7 +1302,7 @@ class AstBuilder(Transformer):
                 params = cast(tuple[syntax.Param, ...], a)
             elif isinstance(a, _ALL_TYPE_EXPRS):
                 return_type = a
-            elif a is not None and not isinstance(a, Token) and not isinstance(a, tuple):
+            elif a is not None and not isinstance(a, (Token, tuple, _ScopePath)):
                 body = cast(syntax.Expr, a)
         return params, return_type, body
 
@@ -2387,17 +2464,20 @@ class AstBuilder(Transformer):
         tok = next(a for a in args if _is_name_token(a))
         return str(tok)
 
+    def _import_item(self, meta: Meta, path: _ScopePath, rename: str | None) -> syntax.ImportItem:
+        name, _span = path.segments[-1]
+        return syntax.ImportItem(
+            name=name,
+            rename=rename,
+            scope_path=self._scope_segments(_ScopePath(path.segments[:-1])),
+            span=self._span_from_meta(meta),
+            node_id=self._next_id(),
+        )
+
     def _hiding_items(self, meta: Meta, args: _Args) -> tuple[syntax.ImportItem, ...]:
-        """Build hiding ImportItem tuples from the names in a HIDING clause."""
-        hiding_names = [str(a) for a in args if _is_name_token(a)]
+        """Build hiding ImportItem tuples from selection path atoms."""
         return tuple(
-            syntax.ImportItem(
-                name=name,
-                rename=None,
-                span=self._span_from_meta(meta),
-                node_id=self._next_id(),
-            )
-            for name in hiding_names
+            self._import_item(meta, path, None) for path in args if isinstance(path, _ScopePath)
         )
 
     def import_clause_using(
@@ -2410,25 +2490,44 @@ class AstBuilder(Transformer):
     def import_clause_hiding(
         self, meta: Meta, args: _Args
     ) -> tuple[ImportMode, tuple[syntax.ImportItem, ...]]:
-        """import_clause_hiding: HIDING name (COMMA name)*"""
+        """import_clause_hiding: HIDING path_atom (COMMA path_atom)*"""
         return (ImportMode.HIDING, self._hiding_items(meta, args))
 
     def import_item_rename(self, meta: Meta, args: _Args) -> syntax.ImportItem:
-        """import_item_rename: name "as" name"""
-        name_toks = [str(a) for a in args if _is_name_token(a)]
-        return syntax.ImportItem(
-            name=name_toks[0],
-            rename=name_toks[1],
+        """import_item_rename: path_atom "as" name"""
+        path = next(a for a in args if isinstance(a, _ScopePath))
+        rename = str(next(a for a in args if _is_name_token(a)))
+        return self._import_item(meta, path, rename)
+
+    def import_item_plain(self, meta: Meta, args: _Args) -> syntax.ImportItem:
+        """import_item_plain: path_atom"""
+        path = next(a for a in args if isinstance(a, _ScopePath))
+        return self._import_item(meta, path, None)
+
+    def scope_ref(self, meta: Meta, args: _Args) -> syntax.ScopeRef:
+        """Build an open target, splitting an unambiguous slash module route."""
+        path = self._path_from_tokens(args, reject_module_routes=False)
+        module_route: tuple[str, ...] = ()
+        scope_segments = path.segments
+        if len(path.segments) > 1 and "/" in path.segments[0][0]:
+            module_route = tuple(part for part in path.segments[0][0].split("/") if part)
+            scope_segments = path.segments[1:]
+        return syntax.ScopeRef(
+            module_route=module_route,
+            scope_path=self._scope_segments(_ScopePath(scope_segments)),
             span=self._span_from_meta(meta),
             node_id=self._next_id(),
         )
 
-    def import_item_plain(self, meta: Meta, args: _Args) -> syntax.ImportItem:
-        """import_item_plain: name"""
-        name_toks = [str(a) for a in args if _is_name_token(a)]
-        return syntax.ImportItem(
-            name=name_toks[0],
-            rename=None,
+    def open_decl(self, meta: Meta, args: _Args) -> syntax.OpenDecl:
+        """Build an ``open`` declaration using the import-clause grammar."""
+        scope_ref = next(a for a in args if isinstance(a, syntax.ScopeRef))
+        clause = next((a for a in args if isinstance(a, tuple)), (ImportMode.ALL, tuple()))
+        mode, items = cast(tuple[ImportMode, tuple[syntax.ImportItem, ...]], clause)
+        return syntax.OpenDecl(
+            scope_ref=scope_ref,
+            mode=mode,
+            items=items,
             span=self._span_from_meta(meta),
             node_id=self._next_id(),
         )
@@ -2475,17 +2574,20 @@ class AstBuilder(Transformer):
         """export_decl_wildcard: EXPORT MODPATH WILDCARD export_clause?"""
         return self._export_decl_from_args(meta, args, wildcard=True)
 
+    def _export_item(self, meta: Meta, path: _ScopePath, rename: str | None) -> syntax.ExportItem:
+        name, _span = path.segments[-1]
+        return syntax.ExportItem(
+            name=name,
+            rename=rename,
+            scope_path=self._scope_segments(_ScopePath(path.segments[:-1])),
+            span=self._span_from_meta(meta),
+            node_id=self._next_id(),
+        )
+
     def _export_hiding_items(self, meta: Meta, args: _Args) -> tuple[syntax.ExportItem, ...]:
-        """Build hiding ExportItem tuples from the names in a HIDING clause."""
-        hiding_names = [str(a) for a in args if _is_name_token(a)]
+        """Build hiding ExportItem tuples from selection path atoms."""
         return tuple(
-            syntax.ExportItem(
-                name=name,
-                rename=None,
-                span=self._span_from_meta(meta),
-                node_id=self._next_id(),
-            )
-            for name in hiding_names
+            self._export_item(meta, path, None) for path in args if isinstance(path, _ScopePath)
         )
 
     def export_clause_using(
@@ -2498,28 +2600,19 @@ class AstBuilder(Transformer):
     def export_clause_hiding(
         self, meta: Meta, args: _Args
     ) -> tuple[ImportMode, tuple[syntax.ExportItem, ...]]:
-        """export_clause_hiding: HIDING name (COMMA name)*"""
+        """export_clause_hiding: HIDING path_atom (COMMA path_atom)*"""
         return (ImportMode.HIDING, self._export_hiding_items(meta, args))
 
     def export_item_rename(self, meta: Meta, args: _Args) -> syntax.ExportItem:
-        """export_item_rename: name "as" name"""
-        name_toks = [str(a) for a in args if _is_name_token(a)]
-        return syntax.ExportItem(
-            name=name_toks[0],
-            rename=name_toks[1],
-            span=self._span_from_meta(meta),
-            node_id=self._next_id(),
-        )
+        """export_item_rename: path_atom "as" name"""
+        path = next(a for a in args if isinstance(a, _ScopePath))
+        rename = str(next(a for a in args if _is_name_token(a)))
+        return self._export_item(meta, path, rename)
 
     def export_item_plain(self, meta: Meta, args: _Args) -> syntax.ExportItem:
-        """export_item_plain: name"""
-        name_toks = [str(a) for a in args if _is_name_token(a)]
-        return syntax.ExportItem(
-            name=name_toks[0],
-            rename=None,
-            span=self._span_from_meta(meta),
-            node_id=self._next_id(),
-        )
+        """export_item_plain: path_atom"""
+        path = next(a for a in args if isinstance(a, _ScopePath))
+        return self._export_item(meta, path, None)
 
     # ------------------------------------------------------------------
     # Private declarations
@@ -2536,6 +2629,7 @@ class AstBuilder(Transformer):
             node_id=self._next_id(),
             is_private=True,
             is_builtin=rec.is_builtin,
+            scope_path=rec.scope_path,
         )
 
     def private_enum_def(self, meta: Meta, args: _Args) -> syntax.EnumDef:
@@ -2549,6 +2643,7 @@ class AstBuilder(Transformer):
             node_id=self._next_id(),
             is_private=True,
             is_builtin=e.is_builtin,
+            scope_path=e.scope_path,
         )
 
     def private_exception_def(self, meta: Meta, args: _Args) -> syntax.ExceptionDef:
@@ -2563,6 +2658,7 @@ class AstBuilder(Transformer):
             node_id=self._next_id(),
             is_private=True,
             is_builtin=exc.is_builtin,
+            scope_path=exc.scope_path,
         )
 
     def private_type_alias(self, meta: Meta, args: _Args) -> syntax.TypeAlias:
@@ -2575,6 +2671,7 @@ class AstBuilder(Transformer):
             span=self._span_from_meta(meta),
             node_id=self._next_id(),
             is_private=True,
+            scope_path=ta.scope_path,
         )
 
     def _private_wrap_func_def(self, meta: Meta, f: syntax.FuncDef) -> syntax.FuncDef:
@@ -2595,6 +2692,7 @@ class AstBuilder(Transformer):
             is_private=True,
             is_builtin=f.is_builtin,
             is_extern=f.is_extern,
+            scope_path=f.scope_path,
         )
 
     def private_func_def(self, meta: Meta, args: _Args) -> syntax.FuncDef:
@@ -2618,6 +2716,7 @@ class AstBuilder(Transformer):
             node_id=self._next_id(),
             is_private=rec.is_private,
             is_builtin=True,
+            scope_path=rec.scope_path,
         )
 
     def builtin_enum_def(self, meta: Meta, args: _Args) -> syntax.EnumDef:
@@ -2631,6 +2730,7 @@ class AstBuilder(Transformer):
             node_id=self._next_id(),
             is_private=e.is_private,
             is_builtin=True,
+            scope_path=e.scope_path,
         )
 
     def builtin_exception_def(self, meta: Meta, args: _Args) -> syntax.ExceptionDef:
@@ -2645,6 +2745,7 @@ class AstBuilder(Transformer):
             node_id=self._next_id(),
             is_private=exc.is_private,
             is_builtin=True,
+            scope_path=exc.scope_path,
         )
 
     # ------------------------------------------------------------------

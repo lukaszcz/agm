@@ -148,6 +148,7 @@ _sep: _NEWLINE | SEMICOLON
             | extern_func_def
             | import_decl
             | export_decl
+            | open_decl
             | private_record_def
             | private_enum_def
             | private_exception_def
@@ -181,7 +182,7 @@ scope_path: MODQUAL* NAME
 // The custom lexer emits _INDENT directly after the name (no _NEWLINE before _INDENT).
 // param_marker? allows an optional leading zone-marker before the indent block.
 // ?block_entry allows a marker on its own line inside the indent block.
-record_def: "record" name type_params? EQ? record_body
+record_def: "record" decl_head type_params? EQ? record_body
 
 record_body: param_marker? _INDENT block_entry (_NEWLINE block_entry)* _NEWLINE? _DEDENT -> record_indent_body
            | LPAR field_list? RPAR                                                        -> record_paren_body
@@ -206,7 +207,7 @@ field_def: field_name COLON type_expr
 // enum_def: flat variant list using the |-continuation layout rule.
 // The |-continuation layout rule suppresses every _NEWLINE / _INDENT / _DEDENT
 // before each | so the entire variant list is a flat token sequence.
-enum_def: "enum" name type_params? EQ? enum_body
+enum_def: "enum" decl_head type_params? EQ? enum_body
 
 enum_body: enum_variant_seq
          | _INDENT enum_variant_seq _NEWLINE? _DEDENT
@@ -227,7 +228,7 @@ field_list: field_entry (COMMA field_entry)* COMMA?
 field_inline: field_name COLON type_expr
 
 // exception_def: record-like throwable nominal with an optional base exception.
-exception_def: "exception" name exception_base? exception_body
+exception_def: "exception" decl_head exception_base? exception_body
 
 exception_base: "extends" name
 
@@ -237,7 +238,7 @@ exception_body: param_marker? _INDENT block_entry (_NEWLINE block_entry)* _NEWLI
               | field_list                                                                   -> exception_inline_body
 
 // type_alias: "type" name type_params? = type_expr
-type_alias: "type" name type_params? EQ type_expr
+type_alias: "type" decl_head type_params? EQ type_expr
 
 type_params: type_lsqb type_param_list RSQB
 type_param_list: name (COMMA name)*
@@ -250,7 +251,7 @@ program_decl: "program" name
 
 // agent_decl: "agent" name [= template]
 // The optional runner string must be a static literal (checked in transformer).
-agent_decl: AGENT name (EQ template)?
+agent_decl: AGENT decl_head (EQ template)?
 
 // infix declaration: user-defined symbolic binary operator associativity and priority.
 // Priority may be a literal integer or relative to an existing operator priority.
@@ -271,18 +272,18 @@ priority_delta: PLUS INT  -> priority_delta_plus
 // The return type may be omitted when it can be inferred from the body.
 // Inline bodies require `=`. Suite bodies may either keep `=` before the newline
 // or omit it, because _INDENT does not start any expr form.
-func_def: "def" name type_params? LPAR param_list? RPAR (THIN_ARROW type_expr)? (EQ func_body | suite_expr)
+func_def: "def" decl_head type_params? LPAR param_list? RPAR (THIN_ARROW type_expr)? (EQ func_body | suite_expr)
 
 // Host-implemented builtin function declaration. It has a signature but no body.
 // `builtin` is a decorator-style modifier: the `_NEWLINE?` makes the newline
 // after it insignificant, so the modifier may sit on its own line above the
 // declaration (`builtin\nenum …`) or on the same line (`builtin enum …`).
-builtin_func_def: "builtin" _NEWLINE? "def" name type_params? LPAR param_list? RPAR THIN_ARROW type_expr
+builtin_func_def: "builtin" _NEWLINE? "def" decl_head type_params? LPAR param_list? RPAR THIN_ARROW type_expr
 
 // Python-implemented extern function declaration. Same body-less shape as
 // `builtin_func_def`: no body, mandatory return type. The `_NEWLINE?` lets
 // the modifier sit on its own line above the declaration.
-extern_func_def: "extern" _NEWLINE? "def" name type_params? LPAR param_list? RPAR THIN_ARROW type_expr
+extern_func_def: "extern" _NEWLINE? "def" decl_head type_params? LPAR param_list? RPAR THIN_ARROW type_expr
 
 // Host-implemented builtin mutable-setting declaration. Body-less: a name and a
 // mandatory type annotation, no `= expr`. `builtin` is a decorator-style
@@ -816,19 +817,24 @@ import_decl : OPEN? IMPORT MODPATH WILDCARD import_alias? import_clause? -> impo
 import_alias : "as" name
 
 import_clause : USING import_item (COMMA import_item)* -> import_clause_using
-              | HIDING name (COMMA name)*              -> import_clause_hiding
+              | HIDING path_atom (COMMA path_atom)*    -> import_clause_hiding
 
-import_item : name "as" name -> import_item_rename
-            | name           -> import_item_plain
+import_item : path_atom "as" name -> import_item_rename
+            | path_atom           -> import_item_plain
 
 export_decl : EXPORT MODPATH WILDCARD export_clause? -> export_decl_wildcard
             | EXPORT MODPATH export_clause?          -> export_decl_plain
 
 export_clause : USING export_item (COMMA export_item)* -> export_clause_using
-              | HIDING name (COMMA name)*              -> export_clause_hiding
+              | HIDING path_atom (COMMA path_atom)*    -> export_clause_hiding
 
-export_item : name "as" name -> export_item_rename
-            | name           -> export_item_plain
+export_item : path_atom "as" name -> export_item_rename
+            | path_atom           -> export_item_plain
+
+open_decl : OPEN scope_ref import_clause?
+scope_ref : MODQUAL* NAME
+path_atom : MODQUAL* name
+decl_head : MODQUAL* name
 
 // Private declaration wrappers.  `private` is a decorator-style modifier: the
 // `_NEWLINE?` makes the newline after it insignificant, so the modifier may sit

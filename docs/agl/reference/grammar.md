@@ -23,6 +23,7 @@ module_item   ::= scope_region | item
 block         ::= item ((NEWLINE | ";") item)* (NEWLINE | ";")?
 
 item       ::= import_decl                  (* header position only *)
+             | open_decl                    (* module-root or scope-region header only *)
              | builtin_var_def              (* root only; standard library only *)
              | nominal_modifier? record_def (* root only *)
              | nominal_modifier? enum_def   (* root only *)
@@ -54,7 +55,7 @@ a loop's `until` condition.
 ```ebnf
 scope_region ::= "scope" scope_path NEWLINE scope_item (NEWLINE scope_item)* NEWLINE? "end" scope_path
 scope_path   ::= NAME ("::" NAME)*
-scope_item   ::= scope_region
+scope_item   ::= scope_region | open_decl
                | private_modifier? record_def | private_modifier? enum_def
                | private_modifier? exception_def | private_modifier? type_alias
                | private_modifier? func_def | private_modifier? extern_func_def
@@ -63,11 +64,11 @@ scope_item   ::= scope_region
 
 A scope region has a mandatory matching closer: `scope A::B` closes with
 `end A::B`. Regions may appear only as module-root items or as items of another
-scope region. They may nest, and repeating a path extends that named region. A
-multi-segment header is equivalent to nested single-segment regions. Scope
-regions contain only nested regions and static declarations; bindings,
-expressions, infix declarations, imports, exports, `program`, and `param`
-declarations are not permitted. `scope` is contextual at item start before a
+scope region. They may nest, and a multi-segment header is equivalent to
+nested single-segment regions. Scope
+regions contain only nested regions, header `open` declarations, and static
+declarations; bindings, expressions, infix declarations, imports, exports,
+`program`, and `param` declarations are not permitted. `scope` is contextual at item start before a
 scope path, and `end` is contextual only for a complete closer at an open
 region's layout level; both remain ordinary names in expression positions.
 
@@ -93,15 +94,18 @@ export_decl ::= "export" module_path ["/*"]
 module_path ::= NAME ("/" NAME)*    (* byte-adjacent, as is a trailing "/*" *)
 ref_name    ::= name
 
-using_clause  ::= "using" import_item ("," import_item)*
-hiding_clause ::= "hiding" ref_name ("," ref_name)*
-import_item   ::= ref_name ("as" ref_name)?
+open_decl   ::= "open" scope_ref [using_clause | hiding_clause]
+scope_ref    ::= [module_path "::"] scope_path
+scope_path   ::= NAME ("::" NAME)*
+using_clause ::= "using" path_atom ("as" ref_name)? ("," path_atom ("as" ref_name)?)*
+hiding_clause ::= "hiding" path_atom ("," path_atom)*
+path_atom    ::= scope_path
 ```
 
-`"open"` is a contextual soft keyword only when it directly precedes an
-item-start `"import"`. `"import"`, `"export"`, and `"private"` are
+`"open"` is a contextual soft keyword at item start before an import or scope
+reference. `"import"`, `"export"`, and `"private"` are
 contextual at item-start; `"using"` and `"hiding"` are contextual within
-import and export declarations. They remain valid identifiers elsewhere.
+import, export, and `open` declarations. They remain valid identifiers elsewhere.
 
 Examples:
 
@@ -116,6 +120,7 @@ import foo/*
 import foo/bar/* as A
 export foo/bar using x as X, y
 export foo/bar/* hiding internal
+open Point using distance as d
 ```
 
 ### Suites (indented blocks)
@@ -198,14 +203,15 @@ parenthesized block passed as an argument carries its own parentheses:
 ## Type declarations
 
 ```ebnf
-record_def       ::= "record" name type_params? "="? record_body
+decl_head        ::= [scope_path "::"] name
+record_def       ::= "record" decl_head type_params? "="? record_body
 record_body      ::= param_marker? NEWLINE INDENT block_entry (NEWLINE block_entry)* NEWLINE? DEDENT
                    | "(" field_list? ")"
                    | field_list
 block_entry      ::= field_def | param_marker
 field_def        ::= field_name ":" type_expr
 
-enum_def         ::= "enum" name type_params? "="? enum_body
+enum_def         ::= "enum" decl_head type_params? "="? enum_body
 enum_body        ::= enum_variant_seq
                    | NEWLINE INDENT enum_variant_seq NEWLINE? DEDENT
 enum_variant_seq ::= first_variant_def ("|" variant_def)*
@@ -216,13 +222,13 @@ field_list       ::= field_entry ("," field_entry)* ","?
 field_entry      ::= field_inline | param_marker
 field_inline     ::= field_name ":" type_expr
 
-exception_def    ::= "exception" name exception_base? exception_body
+exception_def    ::= "exception" decl_head exception_base? exception_body
 exception_base   ::= "extends" name
 exception_body   ::= param_marker? NEWLINE INDENT block_entry (NEWLINE block_entry)* NEWLINE? DEDENT
                    | "(" field_list? ")"
                    | field_list
 
-type_alias       ::= "type" name type_params? "=" type_expr
+type_alias       ::= "type" decl_head type_params? "=" type_expr
 
 type_params      ::= "[" name ("," name)* "]"
 
@@ -231,7 +237,7 @@ param_marker     ::= "/" | "*" | "@" NAME    (* NAME must be pos, std, or named 
 param_decl       ::= "param" name type_ann? ("=" expr)?
 program_decl     ::= "program" name
 
-agent_decl       ::= "agent" name ("=" STRING)?
+agent_decl       ::= "agent" decl_head ("=" STRING)?
 ```
 
 A `param_marker` splits a parameter or field list into **zones**: `/` (≡ `@std`)
@@ -284,9 +290,9 @@ concrete type arguments (`Box[int]`, `Outcome[int, text]`). The built-in
 ## Function declarations
 
 ```ebnf
-func_def         ::= "def" name type_params? "(" param_list? ")" ("->" type_expr)? ("=" func_body | suite)
-builtin_func_def ::= "builtin" NEWLINE? "def" name type_params? "(" param_list? ")" "->" type_expr
-extern_func_def  ::= "extern" NEWLINE? "def" name type_params? "(" param_list? ")" "->" type_expr
+func_def         ::= "def" decl_head type_params? "(" param_list? ")" ("->" type_expr)? ("=" func_body | suite)
+builtin_func_def ::= "builtin" NEWLINE? "def" decl_head type_params? "(" param_list? ")" "->" type_expr
+extern_func_def  ::= "extern" NEWLINE? "def" decl_head type_params? "(" param_list? ")" "->" type_expr
 func_body        ::= expr | suite
 param_list      ::= param_entry ("," param_entry)* ","?
 param_entry     ::= param | param_marker

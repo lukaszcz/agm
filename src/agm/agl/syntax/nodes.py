@@ -90,12 +90,13 @@ class InfixAssoc(enum.Enum):
 
 @dataclass(frozen=True, slots=True)
 class ImportItem:
-    """A single item in a ``using`` import clause: ``name [as rename]``."""
+    """A selected import member: ``scope_path::name [as rename]``."""
 
     name: str
     rename: str | None
     span: SourceSpan = dc_field(compare=False)
     node_id: int = dc_field(compare=False)
+    scope_path: tuple[ScopeSegment, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -114,12 +115,13 @@ class ImportDecl:
 
 @dataclass(frozen=True, slots=True)
 class ExportItem:
-    """A single item in a ``using`` export clause: ``name [as rename]``."""
+    """A selected export member: ``scope_path::name [as rename]``."""
 
     name: str
     rename: str | None
     span: SourceSpan = dc_field(compare=False)
     node_id: int = dc_field(compare=False)
+    scope_path: tuple[ScopeSegment, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -136,9 +138,30 @@ class ExportDecl:
 
 @dataclass(frozen=True, slots=True)
 class ScopeSegment:
-    """One named segment of a scope-region header path."""
+    """One named segment of a scope path."""
 
     name: str
+    span: SourceSpan = dc_field(compare=False)
+    node_id: int = dc_field(compare=False)
+
+
+@dataclass(frozen=True, slots=True)
+class ScopeRef:
+    """A scope reference, with an optional unambiguous slash module route."""
+
+    module_route: tuple[str, ...]
+    scope_path: tuple[ScopeSegment, ...]
+    span: SourceSpan = dc_field(compare=False)
+    node_id: int = dc_field(compare=False)
+
+
+@dataclass(frozen=True, slots=True)
+class OpenDecl:
+    """``open scope_ref [using…|hiding…]`` declaration."""
+
+    scope_ref: ScopeRef
+    mode: ImportMode
+    items: tuple[ImportItem, ...]
     span: SourceSpan = dc_field(compare=False)
     node_id: int = dc_field(compare=False)
 
@@ -424,6 +447,7 @@ class FuncDef:
     is_private: bool = False
     is_builtin: bool = False
     is_extern: bool = False
+    scope_path: tuple[ScopeSegment, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -985,6 +1009,7 @@ class RecordDef:
     type_params: tuple[str, ...] = ()
     is_private: bool = False
     is_builtin: bool = False
+    scope_path: tuple[ScopeSegment, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -1008,6 +1033,7 @@ class EnumDef:
     type_params: tuple[str, ...] = ()
     is_private: bool = False
     is_builtin: bool = False
+    scope_path: tuple[ScopeSegment, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -1022,6 +1048,7 @@ class ExceptionDef:
     type_params: tuple[str, ...] = ()
     is_private: bool = False
     is_builtin: bool = False
+    scope_path: tuple[ScopeSegment, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -1034,6 +1061,7 @@ class TypeAlias:
     node_id: int = dc_field(compare=False)
     type_params: tuple[str, ...] = ()
     is_private: bool = False
+    scope_path: tuple[ScopeSegment, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -1077,6 +1105,7 @@ class AgentDecl:
     runner: str | None
     span: SourceSpan = dc_field(compare=False)
     node_id: int = dc_field(compare=False)
+    scope_path: tuple[ScopeSegment, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -1142,6 +1171,7 @@ Declaration = (
     | InfixDecl
     | ImportDecl
     | ExportDecl
+    | OpenDecl
 )
 
 
@@ -1151,7 +1181,9 @@ Declaration = (
 
 # Scope-region items are static declarations or nested regions. The parser
 # enforces this restricted subset before it crosses the AST firewall.
-ScopeItem = ScopeRegion | FuncDef | RecordDef | EnumDef | ExceptionDef | TypeAlias | AgentDecl
+ScopeItem = (
+    ScopeRegion | OpenDecl | FuncDef | RecordDef | EnumDef | ExceptionDef | TypeAlias | AgentDecl
+)
 
 # An item is anything that can appear in a block sequence:
 # declarations (introduce names), binders (scope over the rest), expressions,

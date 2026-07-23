@@ -199,7 +199,7 @@ def _promote_soft_keywords(tokens: list[Token]) -> list[Token]:
     """Contextually promote soft keywords in the post-layout token stream.
 
     Rules:
-    - 'open' → OPEN only at item-start and only directly before 'import'.
+    - 'open' → OPEN at item-start before an import or scope reference.
     - 'import' → IMPORT at item-start, or immediately after OPEN.
     - 'private' → PRIVATE and 'export' → EXPORT at item-start.
     - 'using' → USING and 'hiding' → HIDING within import or export declarations.
@@ -232,9 +232,9 @@ def _promote_soft_keywords(tokens: list[Token]) -> list[Token]:
                 and at_item_start
                 and index + 1 < len(tokens)
                 and tokens[index + 1].type == NAME
-                and str(tokens[index + 1]) == "import"
             ):
                 tok = _retype(tok, OPEN)
+                in_module_header = str(tokens[index + 1]) != "import"
             elif tv == "import" and (at_item_start or prev_type == OPEN):
                 tok = _retype(tok, IMPORT)
                 in_module_header = True

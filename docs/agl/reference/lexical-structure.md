@@ -107,12 +107,12 @@ identifiers in all positions except:
 
 | Keyword | Promoted to | Window |
 |---------|-------------|--------|
-| `open` | `OPEN` | At item-start, directly before `import` |
+| `open` | `OPEN` | At item-start, before an import or scope reference |
 | `import` | `IMPORT` | At item-start, or directly after `open` |
 | `export` | `EXPORT` | At item-start |
 | `private` | `PRIVATE` | At item-start |
-| `using` | `USING` | Within an import or export declaration |
-| `hiding` | `HIDING` | Within an import or export declaration |
+| `using` | `USING` | Within an import, export, or open declaration |
+| `hiding` | `HIDING` | Within an import, export, or open declaration |
 | `scope` | `SCOPE` | At item-start, before a complete `NAME (:: NAME)*` scope path |
 | `end` | `END` | At a region's layout level, while that region is open, before a complete closer path ending the item |
 

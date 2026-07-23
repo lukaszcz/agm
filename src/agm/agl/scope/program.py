@@ -39,7 +39,7 @@ from agm.agl.scope.imports import (
     WildcardTarget,
     build_import_env,
 )
-from agm.agl.scope.resolver import _Resolver
+from agm.agl.scope.resolver import _Resolver, validate_scope_syntax
 from agm.agl.scope.symbols import (
     AglScopeError,
     BinderKind,
@@ -372,6 +372,11 @@ def resolve_program(
     AglScopeError
         On the first static scope violation (first-error abort).
     """
+    # Scope syntax reaches the parser before its namespace semantics. Validate
+    # every loaded module before deriving any import-dependent program tables.
+    for loaded in graph.modules.values():
+        validate_scope_syntax(loaded.program)
+
     # ------------------------------------------------------------------
     # Step 1: Build local export maps (own declarations only).
     # ------------------------------------------------------------------

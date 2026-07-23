@@ -1889,11 +1889,7 @@ class _Resolver:
             if not isinstance(node, ConstructorPattern):
                 return
             candidates = tuple(self._constructor_candidates.get(node.name, ()))
-            if node.qualifier is not None:
-                candidates = tuple(
-                    candidate for candidate in candidates if candidate.owner_name == node.qualifier
-                )
-            elif node.module_qualifier is not None and node.module_qualifier.segments:
+            if node.module_qualifier is not None and node.module_qualifier.segments:
                 qualifier_segments = node.module_qualifier.segments
                 if (
                     len(qualifier_segments) == 1
@@ -1906,16 +1902,25 @@ class _Resolver:
                     )
                 elif self._import_env is not None:
                     owner_name = node.qualifier if node.qualifier is not None else node.name
-                    owner_name, owner_module_id = self._resolve_qualified_type_name(
-                        node.module_qualifier, owner_name, node.span
+                    resolved_owner = resolve_qualified(
+                        self._import_env,
+                        node.module_qualifier.segments,
+                        owner_name,
+                        anchored=node.module_qualifier.anchored,
                     )
-                    candidates = tuple(
-                        candidate
-                        for candidate in self._qualified_constructor_candidates.get(
-                            (owner_module_id, owner_name), ()
+                    if isinstance(resolved_owner, QualResolutionFound):
+                        owner_module_id, owner_name = resolved_owner.qname
+                        candidates = tuple(
+                            candidate
+                            for candidate in self._qualified_constructor_candidates.get(
+                                (owner_module_id, owner_name), ()
+                            )
+                            if candidate.variant is None or candidate.variant == node.name
                         )
-                        if candidate.variant is None or candidate.variant == node.name
-                    )
+            elif node.qualifier is not None:
+                candidates = tuple(
+                    candidate for candidate in candidates if candidate.owner_name == node.qualifier
+                )
             if candidates:
                 self._pattern_constructor_candidates[node.node_id] = candidates
 

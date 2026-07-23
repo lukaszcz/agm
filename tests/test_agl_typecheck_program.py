@@ -192,6 +192,19 @@ def test_candidate_inference_reads_preceding_top_level_binding(
     assert checked.function_signatures["capture"].result == expected
 
 
+def test_candidate_inference_reads_a_preceding_destructuring_let_binder() -> None:
+    """Candidate seeding tracks every selected binder node, not just the let site."""
+    checked = _check(
+        "enum Option[T]\n"
+        "  | some(value: T)\n"
+        "let some(value = value): Option[int] = some(value = 1)\n"
+        "def capture() = value\n"
+        "capture()"
+    )
+
+    assert checked.function_signatures["capture"].result == IntType()
+
+
 def test_program_signature_prepass_preserves_builtin_header_metadata(tmp_path: Path) -> None:
     """Builtin declarations receive the same program-header record as ordinary defs."""
     from agm.agl.syntax.nodes import FuncDef
@@ -476,6 +489,40 @@ def test_qualified_type_ref_in_constructor_pattern(tmp_path: Path) -> None:
     cg = _check_program(tmp_path, modules)
     # Pin c's binding type as mylib::Color — not an any(TextType) scan over "red"/"blue".
     assert _binding_value_type(cg, ENTRY_ID, "c") == EnumType("Color", module_id=mylib_id)
+
+
+@pytest.mark.parametrize(
+    ("import_decl", "route"),
+    (
+        ("import mylib", "mylib"),
+        ("import mylib as colors", "colors"),
+        ("open import mylib", "mylib"),
+    ),
+    ids=("plain", "alias", "open"),
+)
+def test_module_qualified_imported_enum_pattern_publishes_constructor_ref(
+    tmp_path: Path, import_decl: str, route: str
+) -> None:
+    """A qualified imported enum pattern publishes its selected variant reference."""
+    checked = _check_program(
+        tmp_path,
+        {
+            "entry": f"{import_decl}\nlet {route}::Flag::on = {route}::Flag::on\n()",
+            "mylib": "enum Flag\n  | on\n  | off",
+        },
+    )
+    from agm.agl.syntax.nodes import ConstructorPattern, LetDecl
+
+    entry = checked.modules[ENTRY_ID]
+    let_decl = next(item for item in entry.resolved.program.body.items if isinstance(item, LetDecl))
+    assert isinstance(let_decl.pattern, ConstructorPattern)
+    constructor = entry.pattern_constructor_ref_for(let_decl.pattern.node_id)
+    assert constructor is not None
+    assert (constructor.owner_module_id, constructor.owner_name, constructor.variant) == (
+        ModuleId.from_path("mylib"),
+        "Flag",
+        "on",
+    )
 
 
 # ---------------------------------------------------------------------------

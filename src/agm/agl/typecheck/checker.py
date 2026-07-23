@@ -11,8 +11,10 @@ Rules implemented
 2.  Function declarations: parameter/return types resolved; ordering enforced
     (required before defaulted); FunctionSignature registered.
 3.  Binding type inference:
-    - ``let pattern: T = e`` — check ``e`` against ``T``; currently only name
-      and wildcard patterns are supported.
+    - ``let pattern: T = e`` — check ``e`` once against the complete matched
+      type and type every selected binder in the supported enum-pattern forms.
+      This records static classifications only; it makes no irrefutability or
+      execution-stage conclusion.
     - ``var name: T = e`` — check ``e`` against ``T``.
     - Other untyped initializers infer from the literal/expression.
     - ``param name[: T] [= default]`` — defaults to ``text`` when unannotated
@@ -47,7 +49,7 @@ import keyword
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
-from typing import Literal, TypeGuard, assert_never, cast
+from typing import Literal, TypeGuard, assert_never
 
 from agm.agl.capabilities import HostCapabilities
 from agm.agl.diagnostics import Diagnostic
@@ -520,6 +522,12 @@ class _Checker:
         # values are fully dereferenced ordinary binders or constructors.
         self._slot_resolution: dict[int, BindingRef] = {}
         self._slot_constructor_refs: dict[int, ConstructorRef] = {}
+        # Complete matched types and selected meanings for immutable let
+        # patterns. These are checked artifacts; inference-region rollback
+        # prevents candidate-session state from publishing through them.
+        self._let_matched_types: dict[int, Type] = {}
+        self._pattern_binding_refs: dict[int, BindingRef] = {}
+        self._pattern_constructor_refs: dict[int, ConstructorRef] = {}
         # Slot ids some branch-body reference resolves to.  Scope output is
         # immutable during checking, so this is derived once up front instead of
         # rescanning the whole resolution table per slot selection.
@@ -959,58 +967,100 @@ class _Checker:
         return BottomType() if isinstance(value_type, BottomType) else UnitType()
 
     def _check_binding(self, stmt: LetDecl | VarDecl) -> Type:
-        if isinstance(stmt, LetDecl):
-            name = simple_let_pattern_name(stmt.pattern)
-            if name is None:
-                raise AglTypeError(
-                    "Destructuring let patterns are not supported yet.", span=stmt.pattern.span
-                )
-        else:
-            name = stmt.name
-        if name == "_":
-            val_type = self._check_boundary_expr(stmt.value, expected=None)
-            return self._binder_result(val_type)
+        """Check a single-name mutable var or a complete immutable let pattern."""
+        if isinstance(stmt, VarDecl):
+            return self._check_var_binding(stmt)
+        return self._check_let_binding(stmt)
+
+    def _check_var_binding(self, stmt: VarDecl) -> Type:
+        """Check the intentionally single-name mutable binding form."""
+        if stmt.name == "_":
+            return self._binder_result(self._check_boundary_expr(stmt.value, expected=None))
+        ann_type = self._resolve_annotation(stmt.type_ann, stmt.span)
+        value_type = self._check_boundary_expr(stmt.value, expected=ann_type)
+        declared_type = self._binding_declared_type(stmt, value_type, ann_type)
+        self._install_binding_metadata(stmt.node_id, stmt.value, declared_type, ann_type)
+        return self._binder_result(value_type)
+
+    def _check_let_binding(self, stmt: LetDecl) -> Type:
+        """Check a let RHS once, then type every selected pattern binder."""
+        if simple_let_pattern_name(stmt.pattern) == "_":
+            # Discard has deliberately never supplied an initializer expectation.
+            return self._binder_result(self._check_boundary_expr(stmt.value, expected=None))
 
         ann_type = self._resolve_annotation(stmt.type_ann, stmt.span)
-        val_type = self._check_boundary_expr(stmt.value, expected=ann_type)
+        value_type = self._check_boundary_expr(stmt.value, expected=ann_type)
+        matched_type = self._binding_declared_type(stmt, value_type, ann_type)
+        self._record_let_matched_type(stmt.node_id, matched_type)
+        self._install_binding_metadata(stmt.node_id, stmt.value, matched_type, ann_type)
+        provenance = (
+            set(self._inferred_return_expr_provenance.get(stmt.value.node_id, ()))
+            if ann_type is None
+            else set()
+        )
+        self._bind_pattern_types(
+            stmt.pattern,
+            matched_type,
+            stmt,
+            candidate_provenance=provenance,
+            root_bare_binds=True,
+        )
+        self._select_match_site_pattern_slots(stmt)
+        if isinstance(stmt.pattern, VarPattern):
+            self._record_pattern_binding_ref(
+                stmt.pattern.node_id,
+                BindingRef(
+                    name=stmt.pattern.name,
+                    mutable=False,
+                    decl_span=stmt.pattern.span,
+                    decl_node_id=stmt.node_id,
+                    kind=BinderKind.let_binding,
+                    module_id=self._module_id,
+                ),
+            )
+        return self._binder_result(value_type)
+
+    def _binding_declared_type(
+        self, stmt: LetDecl | VarDecl, value_type: Type, ann_type: Type | None
+    ) -> Type:
+        """Return the concrete declaration/matched type, rejecting untyped bottom."""
         if ann_type is not None:
-            self._assert_assignable_from(val_type, ann_type, stmt.span, stmt.value)
-            declared_type = ann_type
-        else:
-            if isinstance(val_type, BottomType):
-                raise AglTypeError(
-                    "Cannot infer type of binding: value always raises. Add a type annotation.",
-                    span=stmt.span,
-                )
-            declared_type = val_type
-        self._env.set_binding_type(stmt.node_id, declared_type)
+            self._assert_assignable_from(value_type, ann_type, stmt.span, stmt.value)
+            return ann_type
+        if isinstance(value_type, BottomType):
+            raise AglTypeError(
+                "Cannot infer type of binding: value always raises. Add a type annotation.",
+                span=stmt.span,
+            )
+        return value_type
+
+    def _install_binding_metadata(
+        self, node_id: int, value: Expr, typ: Type, ann_type: Type | None
+    ) -> None:
+        """Install ordinary binding metadata shared by vars and let sites."""
+        self._env.set_binding_type(node_id, typ)
         self._set_generic_function_binding_result_dependencies(
-            stmt.node_id,
+            node_id,
             (
-                self._generic_function_expr_result_dependencies.get(stmt.value.node_id, ())
-                if isinstance(declared_type, FunctionType)
+                self._generic_function_expr_result_dependencies.get(value.node_id, ())
+                if isinstance(typ, FunctionType)
                 else ()
             ),
         )
         self._set_inferred_return_binding_provenance(
-            stmt.node_id,
+            node_id,
             (
-                set(self._inferred_return_expr_provenance.get(stmt.value.node_id, ()))
+                set(self._inferred_return_expr_provenance.get(value.node_id, ()))
                 if ann_type is None
                 else set()
             ),
         )
         targets = (
-            self._extern_expr_targets.get(stmt.value.node_id, ())
-            if isinstance(declared_type, FunctionType)
+            self._extern_expr_targets.get(value.node_id, ())
+            if isinstance(typ, FunctionType)
             else ()
         )
-        self._set_extern_binding_targets(stmt.node_id, targets)
-        if isinstance(stmt, LetDecl):
-            assert isinstance(stmt.pattern, VarPattern)
-            self._record_pattern_classification(stmt.pattern.node_id, None)
-            self._select_match_site_pattern_slots(stmt)
-        return self._binder_result(val_type)
+        self._set_extern_binding_targets(node_id, targets)
 
     def _check_assign_stmt(self, stmt: AssignStmt) -> Type:
         if isinstance(stmt.target, NameTarget):
@@ -1782,6 +1832,9 @@ class _Checker:
             ("pattern_classifications", self._pattern_classifications),
             ("slot_resolution", self._slot_resolution),
             ("slot_constructor_refs", self._slot_constructor_refs),
+            ("let_matched_types", self._let_matched_types),
+            ("pattern_binding_refs", self._pattern_binding_refs),
+            ("pattern_constructor_refs", self._pattern_constructor_refs),
             ("partial_calls", self._partial_calls),
             ("contract_specs", self._contract_specs),
             ("cast_specs", self._cast_specs),
@@ -1831,6 +1884,27 @@ class _Checker:
             "pattern_classifications", self._pattern_classifications, node_id
         )
         self._pattern_classifications[node_id] = constructor
+        if constructor is not None:
+            self._record_pattern_constructor_ref(node_id, constructor)
+
+    def _record_let_matched_type(self, node_id: int, typ: Type) -> None:
+        """Publish one concrete complete-value type for an immutable let site."""
+        self._record_side_table_addition("let_matched_types", self._let_matched_types, node_id)
+        self._let_matched_types[node_id] = typ
+
+    def _record_pattern_binding_ref(self, node_id: int, binding: BindingRef) -> None:
+        """Publish the selected immutable binding for one pattern occurrence."""
+        self._record_side_table_addition(
+            "pattern_binding_refs", self._pattern_binding_refs, node_id
+        )
+        self._pattern_binding_refs[node_id] = binding
+
+    def _record_pattern_constructor_ref(self, node_id: int, constructor: ConstructorRef) -> None:
+        """Publish the selected constructor for one pattern occurrence."""
+        self._record_side_table_addition(
+            "pattern_constructor_refs", self._pattern_constructor_refs, node_id
+        )
+        self._pattern_constructor_refs[node_id] = constructor
 
     def _record_constructor_call_binding(self, node_id: int, binding: dict[str, Expr]) -> None:
         """Store a region-owned constructor-call argument binding."""
@@ -3891,6 +3965,7 @@ class _Checker:
         field_name: str | None = None,
         field_names: frozenset[str] = frozenset(),
         candidate_provenance: set[int] | None = None,
+        root_bare_binds: bool = False,
     ) -> None:
         """Type and finally classify one pattern at its matched occurrence."""
         if isinstance(pattern, WildcardPattern):
@@ -3912,6 +3987,7 @@ class _Checker:
                 field_name=field_name,
                 field_names=field_names,
                 candidate_provenance=candidate_provenance,
+                root_bare_binds=root_bare_binds,
             )
             self._env.set_binding_type(pattern.node_id, subj_type)
             self._set_inferred_return_binding_provenance(
@@ -3920,7 +3996,13 @@ class _Checker:
             self._record_pattern_classification(pattern.node_id, None)
             return
         if isinstance(pattern, VarPattern):
-            if field_name is None:
+            if field_name is None and root_bare_binds:
+                self._env.set_binding_type(pattern.node_id, subj_type)
+                self._set_inferred_return_binding_provenance(
+                    pattern.node_id, candidate_provenance or set()
+                )
+                self._record_pattern_classification(pattern.node_id, None)
+            elif field_name is None:
                 self._check_top_level_bare_constructor(pattern, subj_type)
             else:
                 self._check_field_bare_pattern(
@@ -3939,6 +4021,9 @@ class _Checker:
             enum_type=enum_type,
             span=pattern.span,
         )
+        constructor_ref = self._constructor_pattern_ref(pattern, enum_type)
+        if constructor_ref is not None:
+            self._record_pattern_constructor_ref(pattern.node_id, constructor_ref)
         variant_name = pattern.name
         enum_variants = self._env.type_table.enum_variants(enum_type)
         if variant_name not in enum_variants:
@@ -3991,6 +4076,24 @@ class _Checker:
                 span=span,
             )
         return subj_type
+
+    def _constructor_pattern_ref(
+        self, pattern: ConstructorPattern, enum_type: EnumType
+    ) -> ConstructorRef | None:
+        """Select the scope-published constructor candidate for an enum pattern.
+
+        Older resolved artifacts did not retain qualified constructor-pattern
+        candidates. Falling back to the namespace inventory preserves their
+        existing case behavior while current match sites use their occurrence
+        candidates directly.
+        """
+        candidates = (*self._resolved.pattern_constructor_candidates.get(pattern.node_id, ()),)
+        if not candidates:
+            candidates = self._resolved.constructor_candidates.get(pattern.name, ())
+        return next(
+            (candidate for candidate in candidates if candidate.matches(enum_type, pattern.name)),
+            None,
+        )
 
     def _candidate_for_field_type(
         self, pattern: VarPattern, field_type: Type
@@ -4067,11 +4170,10 @@ class _Checker:
             )
 
     def _select_match_site_pattern_slots(self, match_site: CaseBranch | LetDecl) -> None:
-        """Publish slots owned by a classified case branch or simple let.
+        """Publish slots owned by a classified case branch or let pattern.
 
         Scope publishes slots outer-to-inner, which lets a nested slot use an
-        enclosing slot's already-selected fallback. Broader let patterns still
-        stop at the current typechecking boundary before any selection.
+        enclosing slot's already-selected fallback.
         """
         for slot_id in self._resolved.match_site_pattern_slots.get(match_site.node_id, ()):
             self._select_pattern_slot(self._resolved.pattern_slots[slot_id], match_site)
@@ -4090,15 +4192,12 @@ class _Checker:
                 name=slot.name,
                 mutable=False,
                 decl_span=binders[0].span,
-                decl_node_id=(
-                    slot.match_site_node_id
-                    if slot.binder_kind is BinderKind.let_binding
-                    else binders[0].pattern_node_id
-                ),
+                decl_node_id=binders[0].pattern_node_id,
                 kind=slot.binder_kind,
                 module_id=self._module_id,
             )
             constructor = None
+            self._record_pattern_binding_ref(binders[0].pattern_node_id, binding)
         else:
             binding, constructor = self._select_pattern_slot_fallback(slot)
             if (
@@ -4108,7 +4207,7 @@ class _Checker:
             ):
                 raise AglTypeError(
                     f"'{slot.name}' is ambiguous outside the pattern; qualify the reference.",
-                    span=self._slot_reference_span(cast(CaseBranch, match_site), slot),
+                    span=self._slot_reference_span(match_site, slot),
                 )
         self._record_side_table_addition("slot_resolution", self._slot_resolution, slot.slot_id)
         self._slot_resolution[slot.slot_id] = binding
@@ -4121,13 +4220,31 @@ class _Checker:
     def _select_pattern_slot_fallback(
         self, slot: PatternSlot
     ) -> tuple[BindingRef, ConstructorRef | None]:
-        """Select *slot*'s lexical fallback without consulting scope again.
+        """Select a checked constructor or lexical fallback for *slot*.
 
-        A ``constructor_binding`` fallback paired with ``None`` means the
-        constructor spelling stayed ambiguous outside the pattern.
+        A ``constructor_binding`` paired with ``None`` means the constructor
+        spelling stayed ambiguous outside the pattern.
         """
         alternative = slot.alternative
-        assert alternative is not None, f"pattern slot '{slot.name}' has no final alternative"
+        if alternative is None:
+            constructors = tuple(
+                constructor
+                for candidate in slot.candidates
+                if (constructor := self._pattern_classifications[candidate.pattern_node_id])
+                is not None
+            )
+            constructor = constructors[0]
+            binding = BindingRef(
+                name=slot.name,
+                mutable=False,
+                decl_span=slot.candidates[0].span,
+                decl_node_id=constructor.owner_decl_node_id,
+                kind=BinderKind.constructor_binding,
+                module_id=constructor.owner_module_id,
+            )
+            return binding, constructor if all(
+                item == constructor for item in constructors
+            ) else None
         if alternative.kind is BinderKind.pattern_slot:
             assert alternative.slot_id is not None, (
                 f"pattern slot '{slot.name}' has an unidentifiable final alternative"
@@ -4147,12 +4264,18 @@ class _Checker:
         """Whether a branch-body reference directly resolves to *slot*."""
         return slot.slot_id in self._referenced_slot_ids
 
-    def _slot_reference_span(self, branch: CaseBranch, slot: PatternSlot) -> SourceSpan:
+    def _slot_reference_span(
+        self, match_site: CaseBranch | LetDecl, slot: PatternSlot
+    ) -> SourceSpan:
         """Span of the first branch-body reference that resolves to *slot*.
 
         The pattern occurrence is unambiguous where it stands, so an ambiguity
-        diagnostic belongs at the reference the user has to qualify.
+        diagnostic belongs at the reference the user has to qualify. A let
+        slot scopes over its continuation, which the declaration does not own,
+        so its pattern occurrence is the available diagnostic location.
         """
+        if isinstance(match_site, LetDecl):
+            return slot.candidates[0].span
         spans: list[SourceSpan] = []
 
         def collect(node: object) -> None:
@@ -4168,7 +4291,7 @@ class _Checker:
             if ref is not None and ref.slot_id == slot.slot_id:
                 spans.append(span)
 
-        walk(branch.body, collect)
+        walk(match_site.body, collect)
         return spans[0] if spans else slot.candidates[0].span
 
     # ------------------------------------------------------------------
@@ -4283,6 +4406,9 @@ class _Checker:
             partial_calls=self._partial_calls,
             slot_resolution=self._slot_resolution,
             slot_constructor_refs=self._slot_constructor_refs,
+            let_matched_types=self._let_matched_types,
+            pattern_binding_refs=self._pattern_binding_refs,
+            pattern_constructor_refs=self._pattern_constructor_refs,
         )
 
 

@@ -1396,25 +1396,57 @@ class TestAsk:
         assert isinstance(decl, LetDecl)
         assert r.type_env.get_binding_type(decl.node_id) is None
 
-    def test_checker_rejects_a_destructuring_let_from_a_resolved_artifact(self) -> None:
-        resolved = resolve_module(parse_program("let value = 1"))
-        (let,) = resolved.program.body.items
+    def test_destructuring_let_uses_the_complete_annotation_and_publishes_binders(self) -> None:
+        checked = accept_type(
+            "enum Option[T]\n"
+            "  | none\n"
+            "  | some(value: T)\n"
+            "enum Pair\n"
+            "  | pair(left: int, right: Option[int])\n"
+            "let pair(left, some(value = _ as value) as whole): Pair = "
+            "pair(left = 1, right = some(value = 2))\n"
+            "left + value"
+        )
+        let = checked.resolved.program.body.items[2]
         assert isinstance(let, LetDecl)
-        pattern = ConstructorPattern(
-            qualifier=None,
-            name="Pair",
-            positional=(),
-            named=(),
-            span=let.pattern.span,
-            node_id=let.pattern.node_id,
-        )
-        program = replace(
-            resolved.program,
-            body=replace(resolved.program.body, items=(replace(let, pattern=pattern),)),
-        )
+        pattern = let.pattern
+        assert isinstance(pattern, ConstructorPattern)
+        left, right = pattern.positional
+        assert isinstance(left, VarPattern)
+        assert isinstance(right, AsPattern)
+        nested = right.pattern
+        assert isinstance(nested, ConstructorPattern)
+        (value_field,) = nested.named
+        assert isinstance(value_field.pattern, AsPattern)
 
-        with pytest.raises(AglTypeError):
-            check_module(replace(resolved, program=program), default_capabilities())
+        assert checked.let_matched_types[let.node_id] == EnumType("Pair")
+        assert checked.type_env.get_binding_type(left.node_id) == IntType()
+        assert checked.type_env.get_binding_type(right.node_id) == EnumType("Option", (IntType(),))
+        assert checked.type_env.get_binding_type(value_field.pattern.node_id) == IntType()
+        assert checked.pattern_binding_for(left.node_id).kind is BinderKind.let_binding
+        assert checked.pattern_constructor_ref_for(pattern.node_id) is not None
+        assert checked.pattern_constructor_ref_for(nested.node_id) is not None
+
+    def test_destructuring_let_bottom_uses_annotation_but_discard_stays_unconstrained(self) -> None:
+        checked = accept_type(
+            "enum Option[T]\n"
+            "  | some(value: T)\n"
+            'let some(value = value): Option[int] = raise Abort(message = "stop")\n'
+            "value"
+        )
+        let = checked.resolved.program.body.items[1]
+        assert isinstance(let, LetDecl)
+        assert isinstance(let.pattern, ConstructorPattern)
+        field = let.pattern.named[0].pattern
+        assert isinstance(field, VarPattern)
+        assert checked.let_matched_types[let.node_id] == EnumType("Option", (IntType(),))
+        assert checked.type_env.get_binding_type(field.node_id) == IntType()
+
+        reject_type("let _: list[int] = []")
+        reject_type(
+            "enum Option[T]\n  | some(value: T)\nlet some(value = value) = "
+            'raise Abort(message = "stop")'
+        )
 
     def test_ask_with_explicit_agent(self) -> None:
         r = accept_type('agent reviewer\nask("Q", agent = reviewer)')

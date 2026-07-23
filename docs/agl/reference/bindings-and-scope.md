@@ -23,12 +23,19 @@ pattern when the pattern must test a constructor instead. Within a constructor
 pattern, bare names follow the same field-directed rules as nested `case`
 patterns; an `as` name always binds and `_` never binds.
 
-For now, a `let` root may be only a bare name or `_`. Destructuring `let`
-patterns are reserved syntax and are rejected until their evaluation semantics
-are available.
+The checker accepts `let` patterns using enum constructors, literals,
+wildcards, and `as` binders; record constructor patterns are invalid. Its
+annotation describes the complete value being matched, not any individual
+binder: the initializer is checked once against it, then each selected binder
+receives its field or whole-value type. Without an annotation, the complete
+matched type is inferred from the initializer. A bottom initializer needs that
+annotation to type binders. `let _` remains a discard: its annotation does not
+constrain the initializer. This is frontend support only: lowering currently
+accepts only bare-name and wildcard `let` roots, so destructuring lets are not
+yet executable.
 
-`let` evaluates the initializer, checks it against the annotation (if any),
-and creates an **immutable** binding in the current scope. It scopes over the
+`let` evaluates the initializer, checks it against the complete annotation (if
+any), and creates **immutable** bindings in the current scope. It scopes over the
 **continuation** — the remaining items in the block and any enclosing
 continuation that consumes the block. A block ending in a bare `let` has type
 `unit` unless its initializer exits, in which case it has bottom type:
@@ -150,10 +157,11 @@ A `def` inside a nested block is a static error. See
 
 ## Typing of bindings
 
-- With an annotation, the initializer is checked against the annotated type
-  (`int → decimal` widening applies; see [Types](types.md)), and the
-  binding's declared type is the annotation.
-- Without an annotation, the binding's type is inferred from the initializer.
+- With an annotation, the initializer is checked against the annotated complete
+  type (`int → decimal` widening applies; see [Types](types.md)); every pattern
+  binder receives its selected concrete type.
+- Without an annotation, the complete matched type and each binder type are
+  inferred from the initializer.
   **An untyped `ask` defaults to `text`; an untyped `exec` defaults to the
   structured `ExecResult`**:
 

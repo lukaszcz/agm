@@ -9,9 +9,9 @@ from __future__ import annotations
 
 import pytest
 
-from agm.agl.syntax.nodes import ParamKind
+from agm.agl.syntax.nodes import ParamKind, VarPattern, WildcardPattern
 from agm.agl.syntax.spans import SourceSpan
-from agm.agl.typecheck.arguments import BindParam, BoundName, bind_arguments
+from agm.agl.typecheck.arguments import BindParam, BoundName, bind_arguments, bind_pattern_args
 from agm.agl.typecheck.env import AglTypeError
 
 # ---------------------------------------------------------------------------
@@ -155,6 +155,22 @@ def test_named_only_shorthand_bare_positional() -> None:
     result = _bind(params, [x_val, z_val], [])
     assert result[0] is x_val
     assert result[1] is z_val  # the bare item itself, not a wrapper
+
+
+def test_pattern_binding_keeps_each_nested_pattern_in_its_selected_field() -> None:
+    """Pattern argument binding preserves distinct nested let binders."""
+    left = VarPattern("left", _SPAN, 1)
+    right = WildcardPattern(_SPAN, 2)
+
+    bound = bind_pattern_args(
+        (("left", STANDARD), ("right", STANDARD)),
+        (left, right),
+        (),
+        call_span=_CALL_SPAN,
+        context_desc="pattern for variant 'pair'",
+    )
+
+    assert bound == (left, right)
 
 
 def test_positional_skips_leading_named_only() -> None:

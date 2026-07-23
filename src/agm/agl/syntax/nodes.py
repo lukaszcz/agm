@@ -916,9 +916,9 @@ def pattern_binder_names(pattern: Pattern) -> tuple[str, ...]:
 class LetDecl:
     """``let pattern [: type] = expr`` — immutable binding (scopes over continuation).
 
-    Pattern-bearing lets are represented uniformly in the AST. Downstream
-    pattern-binding semantics are introduced by later frontend stages; simple
-    variable and wildcard roots retain the existing binding behavior.
+    Pattern-bearing lets are represented uniformly in the AST. Scope and
+    typechecking resolve supported patterns and record their selected bindings;
+    the AST itself makes no claim about later-stage execution support.
     """
 
     pattern: Pattern
@@ -929,7 +929,7 @@ class LetDecl:
 
 
 def simple_let_pattern_name(pattern: Pattern) -> str | None:
-    """Return the compatibility binding name for a simple let root, if any."""
+    """Return a simple let root's name, with ``_`` for a wildcard root."""
     if isinstance(pattern, VarPattern):
         return pattern.name
     if isinstance(pattern, WildcardPattern):

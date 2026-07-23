@@ -196,6 +196,44 @@ def test_a_bare_nullary_variant_name_tests_the_variant() -> None:
     assert out == "2\n"
 
 
+def test_top_level_let_nested_nullary_constructor_selects_its_slot() -> None:
+    """A nested let pattern preserves its selected constructor in the continuation."""
+    resolved = _resolve(
+        "enum Flag\n"
+        "  | on\n"
+        "enum Packet\n"
+        "  | packet(flag: Flag)\n"
+        "let packet(on) = packet(on())\n"
+        "on\n"
+    )
+    reference = _slot_reference(resolved)
+
+    checked = check_module(resolved, HostCapabilities())
+
+    binding = checked.binding_for(reference)
+    constructor = checked.constructor_ref_for(reference)
+    assert binding is not None
+    assert binding.kind is BinderKind.constructor_binding
+    assert constructor is not None
+    assert (constructor.owner_name, constructor.variant) == ("Flag", "on")
+
+
+def test_top_level_let_rejects_an_ambiguous_constructor_slot_reference() -> None:
+    resolved = _resolve(
+        "enum First\n"
+        "  | on\n"
+        "enum Second\n"
+        "  | on\n"
+        "enum Pair\n"
+        "  | pair(first: First, second: Second)\n"
+        "let pair(on, on) = pair(First::on, Second::on)\n"
+        "on\n"
+    )
+
+    with pytest.raises(AglTypeError):
+        check_module(resolved, HostCapabilities())
+
+
 @pytest.mark.parametrize(
     ("declaration", "name"),
     (

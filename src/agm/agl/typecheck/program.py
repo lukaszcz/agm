@@ -145,6 +145,7 @@ def _assert_checked_module_closed(module: CheckedModule) -> None:
         function_signatures=module.function_signatures,
         cast_specs=module.cast_specs,
         argument_bindings=module.argument_bindings,
+        let_matched_types=module.let_matched_types,
         owner=f"checked module {module.module_id.path_str()}",
     )
 

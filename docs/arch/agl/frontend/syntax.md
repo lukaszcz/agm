@@ -14,7 +14,7 @@ The AST is plain frozen dataclasses with no parser types — the firewall every 
 
 Each node carries a stable id assigned at build time. Later passes never mutate nodes; they record conclusions in side tables keyed by that id. This is the universal annotation convention — it is why nodes can be frozen and shared, and why `id()`-based identity is never used.
 
-The parser accepts blocks ending in a `let` or `var` binder and preserves those binders in the AST, including suite blocks and the marked inline bodies used by loops, parenthesized blocks, and `try` bodies. `LetDecl` carries one `Pattern` root (rather than a name); `VarDecl` remains name-bearing. Scope resolves every let pattern while checking and lowering retain simple variable and wildcard roots, leaving destructuring-let semantics to the pattern pipeline work. Typechecking gives a trailing binder a unit result (or bottom when its initializer exits); lowering supplies that result without altering the AST.
+The parser accepts blocks ending in a `let` or `var` binder and preserves those binders in the AST, including suite blocks and the marked inline bodies used by loops, parenthesized blocks, and `try` bodies. `LetDecl` carries one `Pattern` root (rather than a name); `VarDecl` remains name-bearing. Scope resolves every let pattern and typechecking records the selected meanings and types for supported enum-pattern forms. Lowering currently accepts only simple variable and wildcard roots, so this frontend support does not itself make destructuring lets executable. Typechecking gives a trailing binder a unit result (or bottom when its initializer exits); lowering supplies that result without altering the AST.
 
 ## Code Entry Points
 

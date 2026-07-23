@@ -779,6 +779,154 @@ class TestSingleQuotedStrings:
 
 
 # ---------------------------------------------------------------------------
+# Raw-tail forms
+# ---------------------------------------------------------------------------
+
+
+class TestRawTailForms:
+    @pytest.mark.parametrize("name", ("exec!", "ask!"))
+    def test_inline_payload_and_interpolation(self, name: str) -> None:
+        assert tok(f"{name} echo %{'{'}value}}  ") == [
+            ("RAW_TAIL_NAME", name),
+            ("RAW_TAIL_START", ""),
+            ("RAW_FRAGMENT", "echo "),
+            ("INTERP_START", "%{"),
+            ("NAME", "value"),
+            ("INTERP_END", "}"),
+            ("RAW_TAIL_END", ""),
+        ]
+
+    @pytest.mark.parametrize("name", ("exec!", "ask!"))
+    def test_inline_payload_is_verbatim_except_interpolation_escape(self, name: str) -> None:
+        source = rf"""{name} echo '#; "quoted"' \\ \%{{ $HOME ${{shell}} $(date) $1"""
+        assert tok(source) == [
+            ("RAW_TAIL_NAME", name),
+            ("RAW_TAIL_START", ""),
+            ("RAW_FRAGMENT", "echo '#; \"quoted\"' \\\\ %{ $HOME ${shell} $(date) $1"),
+            ("RAW_TAIL_END", ""),
+        ]
+
+    @pytest.mark.parametrize("name", ("exec!", "ask!"))
+    def test_type_args_are_code_tokens_before_payload(self, name: str) -> None:
+        assert tok(f"{name}::[Map[Result]] run") == [
+            ("RAW_TAIL_NAME", name),
+            ("DCOLON", "::"),
+            ("LSQB", "["),
+            ("NAME", "Map"),
+            ("LSQB", "["),
+            ("NAME", "Result"),
+            ("RSQB", "]"),
+            ("RSQB", "]"),
+            ("RAW_TAIL_START", ""),
+            ("RAW_FRAGMENT", "run"),
+            ("RAW_TAIL_END", ""),
+        ]
+
+    @pytest.mark.parametrize("name", ("exec!", "ask!"))
+    def test_type_args_allow_whitespace_inside_the_group(self, name: str) -> None:
+        assert tok(f"{name}::[ T ] run") == [
+            ("RAW_TAIL_NAME", name),
+            ("DCOLON", "::"),
+            ("LSQB", "["),
+            ("NAME", "T"),
+            ("RSQB", "]"),
+            ("RAW_TAIL_START", ""),
+            ("RAW_FRAGMENT", "run"),
+            ("RAW_TAIL_END", ""),
+        ]
+
+    @pytest.mark.parametrize("name", ("exec!", "ask!"))
+    def test_unterminated_type_args_raise_lex_error(self, name: str) -> None:
+        with pytest.raises(LexError) as exc_info:
+            tok(f"{name}::[T")
+        assert exc_info.value.span is not None
+
+    @pytest.mark.parametrize("name", ("exec!", "ask!"))
+    def test_block_payload_is_dedented_and_inert_to_layout(self, name: str) -> None:
+        source = f"{name}\n  first %{{value}}\n    done\n\n  else\nafter"
+        assert tok(source) == [
+            ("RAW_TAIL_NAME", name),
+            ("RAW_TAIL_START", ""),
+            ("RAW_FRAGMENT", "first "),
+            ("INTERP_START", "%{"),
+            ("NAME", "value"),
+            ("INTERP_END", "}"),
+            ("RAW_FRAGMENT", "\n  done\n\nelse"),
+            ("RAW_TAIL_END", ""),
+            ("_NEWLINE", "0"),
+            ("NAME", "after"),
+        ]
+
+    def test_block_preserves_leading_and_interior_blank_lines(self) -> None:
+        assert tok("exec!\n\n  first\n\n  last") == [
+            ("RAW_TAIL_NAME", "exec!"),
+            ("RAW_TAIL_START", ""),
+            ("RAW_FRAGMENT", "\nfirst\n\nlast"),
+            ("RAW_TAIL_END", ""),
+        ]
+
+    def test_block_followed_by_comment_emits_one_layout_newline(self) -> None:
+        assert tok("exec!\n  echo hi\n# outside\nafter") == [
+            ("RAW_TAIL_NAME", "exec!"),
+            ("RAW_TAIL_START", ""),
+            ("RAW_FRAGMENT", "echo hi"),
+            ("RAW_TAIL_END", ""),
+            ("_NEWLINE", "0"),
+            ("NAME", "after"),
+        ]
+
+    def test_tab_indentation_is_dedented_by_visual_width(self) -> None:
+        assert ("RAW_FRAGMENT", "text") in tok("exec!\n\ttext")
+
+    def test_under_indented_block_line_is_rejected(self) -> None:
+        with pytest.raises(LexError):
+            tok("exec!\n  first\n next")
+
+    @pytest.mark.parametrize("source", ("exec!", "ask!   ", "exec!\n", "exec!\nnext"))
+    def test_empty_payload_is_rejected(self, source: str) -> None:
+        with pytest.raises(LexError):
+            tok(source)
+
+    def test_raw_tail_is_rejected_inside_brackets(self) -> None:
+        with pytest.raises(LexError) as exc_info:
+            tok("(exec! echo hi)")
+        assert exc_info.value.span is not None
+
+    @pytest.mark.parametrize("name", ("exec!", "ask!"))
+    def test_qualified_name_does_not_trigger_raw_tail(self, name: str) -> None:
+        assert tok(f"target.{name}") == [
+            ("NAME", "target"),
+            ("DOT", "."),
+            ("NAME", name),
+        ]
+        assert tok(f"module::{name}") == [("MODQUAL", "module"), ("NAME", name)]
+        assert tok(f"module:: {name} echo") == [
+            ("MODQUAL", "module"),
+            ("NAME", name),
+            ("NAME", "echo"),
+        ]
+
+    @pytest.mark.parametrize("name", ("exec!", "ask!"))
+    def test_spaced_dcolon_does_not_suppress_raw_tail(self, name: str) -> None:
+        assert tok(f"module :: {name} echo hi") == [
+            ("NAME", "module"),
+            ("DCOLON", "::"),
+            ("RAW_TAIL_NAME", name),
+            ("RAW_TAIL_START", ""),
+            ("RAW_FRAGMENT", "echo hi"),
+            ("RAW_TAIL_END", ""),
+        ]
+
+    @pytest.mark.parametrize("name", ("exec!x", "ask!x"))
+    def test_raw_tail_prefix_identifier_does_not_trigger(self, name: str) -> None:
+        assert tok(name) == [("NAME", name)]
+
+    def test_newline_in_raw_tail_hole_is_rejected(self) -> None:
+        with pytest.raises(LexError):
+            tok("exec! %{value\n  }")
+
+
+# ---------------------------------------------------------------------------
 # Comments
 # ---------------------------------------------------------------------------
 

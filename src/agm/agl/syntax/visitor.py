@@ -78,6 +78,8 @@ from agm.agl.syntax.nodes import (
     Placeholder,
     Program,
     ProgramDecl,
+    QualifierChain,
+    QualifierSegment,
     Raise,
     RecordDef,
     Return,
@@ -169,6 +171,8 @@ class Visitor:
 
     # Module system nodes
     def visit_Qualifier(self, node: Qualifier) -> None: ...
+    def visit_QualifierSegment(self, node: QualifierSegment) -> None: ...
+    def visit_QualifierChain(self, node: QualifierChain) -> None: ...
     def visit_ImportItem(self, node: ImportItem) -> None: ...
     def visit_ImportDecl(self, node: ImportDecl) -> None: ...
     def visit_ExportItem(self, node: ExportItem) -> None: ...
@@ -277,6 +281,8 @@ _KNOWN_NODE_TYPES: frozenset[type] = frozenset(
         AppliedT,
         # module system nodes
         Qualifier,
+        QualifierSegment,
+        QualifierChain,
         ImportItem,
         ImportDecl,
         ExportItem,
@@ -412,6 +418,14 @@ def walk(node: object, callback: Callable[[object], None]) -> None:
     elif isinstance(node, Qualifier):
         pass  # leaf — segments are plain strings
 
+    elif isinstance(node, QualifierSegment):
+        for type_arg in node.type_args or ():
+            walk(type_arg, callback)
+
+    elif isinstance(node, QualifierChain):
+        for segment in node.segments:
+            walk(segment, callback)
+
     elif isinstance(node, ImportItem):
         pass  # leaf — name and rename are plain strings
 
@@ -531,8 +545,8 @@ def walk(node: object, callback: Callable[[object], None]) -> None:
 
     # --- Expression nodes ---
     elif isinstance(node, VarRef):
-        if node.module_qualifier is not None:
-            walk(node.module_qualifier, callback)
+        if node.qualifier is not None:
+            walk(node.qualifier, callback)
 
     elif isinstance(node, FieldAccess):
         walk(node.obj, callback)

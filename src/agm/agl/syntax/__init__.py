@@ -73,6 +73,9 @@ from agm.agl.syntax.nodes import (
     Placeholder,
     Program,
     ProgramDecl,
+    QualifierAnchor,
+    QualifierChain,
+    QualifierSegment,
     Raise,
     RecordDef,
     Return,
@@ -144,6 +147,9 @@ __all__ = [
     "ExportItem",
     "ExportDecl",
     "ScopeSegment",
+    "QualifierAnchor",
+    "QualifierSegment",
+    "QualifierChain",
     # program
     "Program",
     # declarations

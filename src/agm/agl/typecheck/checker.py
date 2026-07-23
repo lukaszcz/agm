@@ -1335,12 +1335,17 @@ class _Checker:
             owner_name, variant, owner_module_id = self._resolved.qualified_constructor_refs[
                 node.node_id
             ]
-            if node.type_qualifier is not None and node.type_qualifier.type_args is not None:
+            type_args = (
+                node.qualifier.segments[-1].type_args
+                if node.qualifier is not None and node.qualifier.segments
+                else None
+            )
+            if type_args is not None:
                 return self._constructors.check_qualified_constructor_type_apply(
                     owner_name=owner_name,
                     variant=variant,
                     owner_module_id=owner_module_id,
-                    type_args=node.type_qualifier.type_args,
+                    type_args=type_args,
                     span=node.span,
                 )
             return self._constructors.check_qualified_constructor_as_value(

@@ -2406,31 +2406,27 @@ class TestVisitorWalk:
         with pytest.raises(TypeError):
             walk(NotANode(), lambda n: None)
 
-    def test_walk_qual_var_ref_visits_qualifier(self) -> None:
-        """walk() on a slash-qualified VarRef must visit the Qualifier node."""
+    def test_walk_qual_var_ref_visits_qualifier_chain(self) -> None:
+        """walk() on a slash-qualified VarRef visits its qualifier chain."""
         from agm.agl.parser import parse_program
-        from agm.agl.syntax import Qualifier
+        from agm.agl.syntax import QualifierChain
         from agm.agl.syntax.visitor import walk
 
         prog = parse_program("foo/bar::thing")
         visited: list[object] = []
         walk(prog, visited.append)
-        assert any(isinstance(n, Qualifier) for n in visited), (
-            "Qualifier node not visited when walking foo/bar::thing"
-        )
+        assert any(isinstance(n, QualifierChain) for n in visited)
 
-    def test_walk_qual_constructor_visits_qualifier(self) -> None:
-        """walk() on a slash-qualified reference must visit the Qualifier node."""
+    def test_walk_qual_constructor_visits_qualifier_chain(self) -> None:
+        """walk() on a slash-qualified reference visits its qualifier chain."""
         from agm.agl.parser import parse_program
-        from agm.agl.syntax import Qualifier
+        from agm.agl.syntax import QualifierChain
         from agm.agl.syntax.visitor import walk
 
         prog = parse_program("foo/bar::Color")
         visited: list[object] = []
         walk(prog, visited.append)
-        assert any(isinstance(n, Qualifier) for n in visited), (
-            "Qualifier node not visited when walking foo/bar::Color"
-        )
+        assert any(isinstance(n, QualifierChain) for n in visited)
 
     def test_walk_qual_name_t_visits_qualifier(self) -> None:
         """walk() on a NameT with a module_qualifier must visit the Qualifier node."""
@@ -3064,16 +3060,19 @@ class TestModuleSystemNodes:
         )
         assert ta.is_private is False
 
-    def test_var_ref_module_qualifier_default_none(self) -> None:
+    def test_var_ref_qualifier_chain_default_none(self) -> None:
         ref = VarRef(name="x", span=self._sp(), node_id=0)
-        assert ref.module_qualifier is None
+        assert ref.qualifier is None
 
-    def test_var_ref_with_module_qualifier(self) -> None:
-        from agm.agl.syntax import Qualifier
+    def test_var_ref_with_qualifier_chain(self) -> None:
+        from agm.agl.syntax import QualifierChain, QualifierSegment
 
-        q = Qualifier(segments=("foo",), span=self._sp(), node_id=0)
-        ref = VarRef(name="x", span=self._sp(), node_id=1, module_qualifier=q)
-        assert ref.module_qualifier is q
+        segment = QualifierSegment(name="foo", type_args=None, span=self._sp(), node_id=0)
+        chain = QualifierChain(
+            anchor=None, segments=(segment,), member="x", span=self._sp(), node_id=1
+        )
+        ref = VarRef(name="x", span=self._sp(), node_id=2, qualifier=chain)
+        assert ref.qualifier is chain
 
     def test_name_t_module_qualifier_default_none(self) -> None:
         t = NameT(name="MyType", span=self._sp(), node_id=0)

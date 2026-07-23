@@ -16,6 +16,8 @@ The AST is plain frozen dataclasses with no parser types — the firewall every 
 
 Each node carries a stable id assigned at build time. Later passes never mutate nodes; they record conclusions in side tables keyed by that id. This is the universal annotation convention — it is why nodes can be frozen and shared, and why `id()`-based identity is never used.
 
+Expression references use `QualifierChain`: an optional module or current-module anchor, ordered `QualifierSegment` nodes (each retaining its own span and optional type arguments), and a member name. The parser preserves every lexer-merged `MODQUAL` run as a segment. Scope maps the established one- and two-segment forms to module routes and type-qualified constructors; longer or otherwise unsupported chains stop there with a scope diagnostic. Type references, patterns, and `is` tests retain their separate qualifier forms.
+
 The parser accepts blocks ending in a `let` or `var` binder and preserves those binders in the AST, including suite blocks and the marked inline bodies used by loops, parenthesized blocks, and `try` bodies. Typechecking gives a trailing binder a unit result (or bottom when its initializer exits); lowering supplies that result without altering the AST.
 
 Scope-region headers become nested single-segment `ScopeRegion` nodes, with each `ScopeSegment` retaining its own source span. This canonicalizes multi-segment and textual nesting before later passes see the AST; the parser admits regions only at module root or in another region, and validates matching closers and declaration-only contents. Closer promotion tracks the opener's layout level, leaving `end` usable in nested declaration suites.

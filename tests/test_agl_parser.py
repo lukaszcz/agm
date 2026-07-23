@@ -1626,8 +1626,8 @@ class TestCalls:
         assert isinstance(arg, Call)
         assert isinstance(arg.callee, VarRef)
         assert arg.callee.name == "Some"
-        assert arg.callee.module_qualifier is not None
-        assert arg.callee.module_qualifier.segments == ("Opt",)
+        assert arg.callee.qualifier is not None
+        assert [segment.name for segment in arg.callee.qualifier.segments] == ["Opt"]
         assert arg.args == ()
         assert len(arg.named_args) == 1
         assert arg.named_args[0].name == "x"
@@ -1769,9 +1769,9 @@ class TestTypedCalls:
         arg = call.args[0]
         assert isinstance(arg, Call)
         assert isinstance(arg.callee, VarRef)
-        assert arg.callee.type_qualifier is not None
-        assert len(arg.callee.type_qualifier.type_args or ()) == 1
-        assert isinstance((arg.callee.type_qualifier.type_args or ())[0], IntT)
+        assert arg.callee.qualifier is not None
+        assert len(arg.callee.qualifier.segments[-1].type_args or ()) == 1
+        assert isinstance((arg.callee.qualifier.segments[-1].type_args or ())[0], IntT)
         assert arg.args == ()
 
     def test_typed_call_with_args_allowed_as_juxt_argument(self) -> None:
@@ -1839,8 +1839,8 @@ class TestFieldAccessAndConstructors:
         c = first(parse("Review::Pass"))
         assert isinstance(c, VarRef)
         assert c.name == "Pass"
-        assert c.module_qualifier is not None
-        assert c.module_qualifier.segments == ("Review",)
+        assert c.qualifier is not None
+        assert [segment.name for segment in c.qualifier.segments] == ["Review"]
 
 
 class TestIndexAccess:
@@ -3177,8 +3177,8 @@ class TestCaseNeutralNamesParser:
         ref = first(prog)
         assert isinstance(ref, VarRef)
         assert ref.name == "some"
-        assert ref.module_qualifier is not None
-        assert ref.module_qualifier.segments == ("Option",)
+        assert ref.qualifier is not None
+        assert [segment.name for segment in ref.qualifier.segments] == ["Option"]
 
     def test_qualified_call_becomes_call_with_var_ref(self) -> None:
         prog = parse("Option::some(value = 1)")
@@ -3186,8 +3186,8 @@ class TestCaseNeutralNamesParser:
         assert isinstance(c, Call)
         assert isinstance(c.callee, VarRef)
         assert c.callee.name == "some"
-        assert c.callee.module_qualifier is not None
-        assert c.callee.module_qualifier.segments == ("Option",)
+        assert c.callee.qualifier is not None
+        assert [segment.name for segment in c.callee.qualifier.segments] == ["Option"]
 
 
 class TestCaseNeutralPatterns:
@@ -3604,16 +3604,16 @@ class TestQualifiedRefs:
         (expr,) = items(prog)
         assert isinstance(expr, syntax.VarRef)
         assert expr.name == "bar"
-        assert expr.module_qualifier is not None
-        assert expr.module_qualifier.segments == ("foo",)
+        assert expr.qualifier is not None
+        assert [segment.name for segment in expr.qualifier.segments] == ["foo"]
 
     def test_qual_var_ref_slash(self) -> None:
         (expr,) = items(parse("foo/bar::baz"))
         assert isinstance(expr, syntax.VarRef)
         assert expr.name == "baz"
-        assert expr.module_qualifier is not None
-        assert expr.module_qualifier.segments == ("foo", "bar")
-        assert expr.module_qualifier.anchored is False
+        assert expr.qualifier is not None
+        assert [segment.name for segment in expr.qualifier.segments] == ["foo/bar"]
+        assert expr.qualifier.anchor is None
 
     def test_multi_segment_qualifier_requires_a_tight_final_dcolon(self) -> None:
         (expr,) = items(parse("foo/bar ::x"))
@@ -3625,48 +3625,48 @@ class TestQualifiedRefs:
         assert len(expr.right.args) == 1
         (argument,) = expr.right.args
         assert isinstance(argument, VarRef)
-        assert argument.module_qualifier is not None
-        assert argument.module_qualifier.segments == ()
+        assert argument.qualifier is not None
+        assert argument.qualifier.segments == ()
 
     def test_anchored_qual_var_ref(self) -> None:
         (expr,) = items(parse("/foo/bar::baz"))
         assert isinstance(expr, syntax.VarRef)
-        assert expr.module_qualifier is not None
-        assert expr.module_qualifier.segments == ("foo", "bar")
-        assert expr.module_qualifier.anchored is True
+        assert expr.qualifier is not None
+        assert [segment.name for segment in expr.qualifier.segments] == ["foo/bar"]
+        assert expr.qualifier.anchor is syntax.QualifierAnchor.MODULE
 
     def test_qual_constructor_simple(self) -> None:
-        # foo::Bar → VarRef(name="Bar", module_qualifier=Qualifier(["foo"]))
+        # foo::Bar retains foo as the qualifier chain's only segment.
         prog = parse("foo::Bar")
         (expr,) = items(prog)
         assert isinstance(expr, syntax.VarRef)
         assert expr.name == "Bar"
-        assert expr.module_qualifier is not None
-        assert expr.module_qualifier.segments == ("foo",)
+        assert expr.qualifier is not None
+        assert [segment.name for segment in expr.qualifier.segments] == ["foo"]
 
     def test_qual_constructor_slash(self) -> None:
         (expr,) = items(parse("my/mod::Baz"))
         assert isinstance(expr, syntax.VarRef)
         assert expr.name == "Baz"
-        assert expr.module_qualifier is not None
-        assert expr.module_qualifier.segments == ("my", "mod")
+        assert expr.qualifier is not None
+        assert [segment.name for segment in expr.qualifier.segments] == ["my/mod"]
 
     def test_self_ref_var(self) -> None:
         prog = parse("::myvar")
         (expr,) = items(prog)
         assert isinstance(expr, syntax.VarRef)
         assert expr.name == "myvar"
-        assert expr.module_qualifier is not None
-        assert expr.module_qualifier.segments == ()
+        assert expr.qualifier is not None
+        assert expr.qualifier.segments == ()
 
     def test_self_ref_constructor(self) -> None:
-        # ::MyType → VarRef(name="MyType", module_qualifier=Qualifier(segments=()))
+        # ::MyType has a current-module anchor and no qualifier segments.
         prog = parse("::MyType")
         (expr,) = items(prog)
         assert isinstance(expr, syntax.VarRef)
         assert expr.name == "MyType"
-        assert expr.module_qualifier is not None
-        assert expr.module_qualifier.segments == ()
+        assert expr.qualifier is not None
+        assert expr.qualifier.segments == ()
 
     def test_qual_constructor_with_payload(self) -> None:
         # m::Color(r = 1) → Call(VarRef("Color", mq=...), named_args=[NamedArg("r", 1)])
@@ -3676,8 +3676,8 @@ class TestQualifiedRefs:
         callee = call.callee
         assert isinstance(callee, syntax.VarRef)
         assert callee.name == "Color"
-        assert callee.module_qualifier is not None
-        assert callee.module_qualifier.segments == ("m",)
+        assert callee.qualifier is not None
+        assert [segment.name for segment in callee.qualifier.segments] == ["m"]
         assert len(call.named_args) == 1
         assert call.named_args[0].name == "r"
 
@@ -3687,27 +3687,42 @@ class TestQualifiedRefs:
         assert isinstance(call, syntax.Call)
         callee = call.callee
         assert isinstance(callee, syntax.VarRef)
-        assert callee.module_qualifier is not None
+        assert callee.qualifier is not None
 
     def test_qual_enum_variant_access(self) -> None:
         prog = parse("m::Color::Red")
         (expr,) = items(prog)
         assert isinstance(expr, syntax.VarRef)
         assert expr.name == "Red"
-        assert expr.module_qualifier is not None
-        assert expr.module_qualifier.segments == ("m",)
-        assert expr.type_qualifier is not None
-        assert expr.type_qualifier.name == "Color"
+        assert expr.qualifier is not None
+        assert [segment.name for segment in expr.qualifier.segments] == ["m", "Color"]
+
+    def test_qualifier_chain_retains_type_args_and_spans_on_each_segment(self) -> None:
+        source = "A[int]::B[text]::C[decimal]::member"
+        (expr,) = items(parse(source))
+        assert isinstance(expr, VarRef)
+        assert expr.qualifier is not None
+        segments = expr.qualifier.segments
+        assert [segment.name for segment in segments] == ["A", "B", "C"]
+        segment_arg_types = [
+            type(segment.type_args[0]) if segment.type_args else None for segment in segments
+        ]
+        assert segment_arg_types == [IntT, TextT, DecimalT]
+        segment_spellings = [
+            source[segment.span.start_offset : segment.span.end_offset] for segment in segments
+        ]
+        assert segment_spellings == ["A[int]", "B[text]", "C[decimal]"]
+        assert source[expr.qualifier.span.start_offset : expr.qualifier.span.end_offset] == source
 
     def test_typed_call_not_confused_with_qual(self) -> None:
         # foo::[int](...) is typed call, not a MODQUAL
         prog = parse("foo::[int](1)")
         (call,) = items(prog)
         assert isinstance(call, syntax.Call)
-        # module_qualifier on callee should be None (plain VarRef)
+        # Typed calls retain a plain, unqualified callee.
         callee = call.callee
         assert isinstance(callee, syntax.VarRef)
-        assert callee.module_qualifier is None
+        assert callee.qualifier is None
 
     @pytest.mark.parametrize("source", ("m::foo/bar::Baz", "m::/foo::Baz"))
     def test_type_qualifier_after_module_must_be_single_unanchored_name(self, source: str) -> None:
@@ -3747,8 +3762,8 @@ class TestQualifiedTypeRefs:
         assert isinstance(call, syntax.Call)
         assert isinstance(call.callee, syntax.VarRef)
         assert call.callee.name == "some"
-        assert call.callee.type_qualifier is not None
-        assert len(call.callee.type_qualifier.type_args or ()) == 1
+        assert call.callee.qualifier is not None
+        assert len(call.callee.qualifier.segments[-1].type_args or ()) == 1
 
     def test_qual_prim_type_in_annotation(self) -> None:
         prog = parse("let x: m::text = null")

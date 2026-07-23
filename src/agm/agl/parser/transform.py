@@ -172,6 +172,14 @@ _RawEntries: TypeAlias = tuple[syntax.Param | _ParamMarker, ...]
 
 
 @dataclass(frozen=True, slots=True)
+class _QualifierChainSegment:
+    """Transformer-internal qualifier segment retaining its leading anchor."""
+
+    segment: syntax.QualifierSegment
+    anchored: bool = False
+
+
+@dataclass(frozen=True, slots=True)
 class _PatternFieldsSplit:
     """Transformer-internal split of pattern_fields into positional and named.
 
@@ -980,12 +988,13 @@ class AstBuilder(Transformer):
         root = lhs
         while isinstance(root, syntax.IndexAccess):
             root = root.obj
-        if not isinstance(root, syntax.VarRef) or root.type_qualifier is not None:
+        if not isinstance(root, syntax.VarRef):
             raise AglSyntaxError(
                 "assignment target must be a variable or indexed variable.",
                 span=lhs.span,
             )
-        if root.module_qualifier is not None and isinstance(lhs, syntax.IndexAccess):
+        module_qualifier = self._assignment_module_qualifier(root)
+        if module_qualifier is not None and isinstance(lhs, syntax.IndexAccess):
             raise AglSyntaxError(
                 "assignment target cannot combine a module qualifier with indexing; "
                 "a qualified assignment target must be a bare name.",
@@ -996,7 +1005,7 @@ class AstBuilder(Transformer):
                 name=lhs.name,
                 span=lhs.span,
                 node_id=self._next_id(),
-                module_qualifier=lhs.module_qualifier,
+                module_qualifier=module_qualifier,
             )
         else:
             assert isinstance(lhs, syntax.IndexAccess)
@@ -1012,6 +1021,26 @@ class AstBuilder(Transformer):
             value=value,
             span=span,
             node_id=self._next_id(),
+        )
+
+    def _assignment_module_qualifier(self, ref: syntax.VarRef) -> Qualifier | None:
+        """Convert a simple expression chain into a qualified assignment target."""
+        chain = ref.qualifier
+        if chain is None:
+            return None
+        if not chain.segments:
+            assert chain.anchor is syntax.QualifierAnchor.CURRENT_MODULE
+            return Qualifier(segments=(), span=chain.span, node_id=chain.node_id)
+        if len(chain.segments) == 1 and chain.segments[0].type_args is None:
+            segment = chain.segments[0]
+            return Qualifier(
+                segments=tuple(segment.name.split("/")),
+                span=segment.span,
+                node_id=segment.node_id,
+                anchored=chain.anchor is syntax.QualifierAnchor.MODULE,
+            )
+        raise AglSyntaxError(
+            "assignment target must be a variable or indexed variable.", span=ref.span
         )
 
     # ------------------------------------------------------------------
@@ -2674,18 +2703,104 @@ class AstBuilder(Transformer):
             node_id=self._next_id(),
         )
 
-    def qual_var_ref(self, meta: Meta, args: _Args) -> syntax.VarRef:
-        """qual_var_ref: qual_prefix type_qual? NAME"""
-        qual = next(a for a in args if isinstance(a, Qualifier))
-        type_qual = next((a for a in args if isinstance(a, TypeQualifier)), None)
-        name_tok = next(a for a in args if _is_name_token(a))
-        return syntax.VarRef(
-            name=str(name_tok),
-            span=self._span_from_meta(meta),
-            node_id=self._next_id(),
-            module_qualifier=qual,
-            type_qualifier=type_qual,
+    def qualifier_mod_segment(self, meta: Meta, args: _Args) -> _QualifierChainSegment:
+        """Build one chain segment from a lexer-merged qualifier token."""
+        token = args[0]
+        assert isinstance(token, Token)
+        spelling = str(token)
+        anchored = spelling.startswith("/")
+        token_span = self._span_from_token(token)
+        span = SourceSpan(
+            start_line=token_span.start_line,
+            start_col=token_span.start_col + (1 if anchored else 0),
+            end_line=token_span.end_line,
+            end_col=token_span.end_col - 2,
+            start_offset=token_span.start_offset + (1 if anchored else 0),
+            end_offset=token_span.end_offset - 2,
+            source=token_span.source,
         )
+        return _QualifierChainSegment(
+            segment=syntax.QualifierSegment(
+                name=spelling.removeprefix("/"),
+                type_args=None,
+                span=span,
+                node_id=self._next_id(),
+            ),
+            anchored=anchored,
+        )
+
+    def qualifier_applied_segment(self, meta: Meta, args: _Args) -> _QualifierChainSegment:
+        """Build one type-applied qualifier-chain segment."""
+        name_tok = next(arg for arg in args if _is_name_token(arg))
+        type_args = cast(
+            tuple[TypeExpr, ...],
+            next(
+                arg
+                for arg in args
+                if isinstance(arg, tuple) and (not arg or isinstance(arg[0], _ALL_TYPE_EXPRS))
+            ),
+        )
+        end_token = next(
+            arg for arg in reversed(args) if isinstance(arg, Token) and arg.type == "RSQB"
+        )
+        type_start = self._span_from_token(name_tok)
+        type_end = self._span_from_token(end_token)
+        return _QualifierChainSegment(
+            segment=syntax.QualifierSegment(
+                name=str(name_tok),
+                type_args=type_args,
+                span=SourceSpan(
+                    start_line=type_start.start_line,
+                    start_col=type_start.start_col,
+                    end_line=type_end.end_line,
+                    end_col=type_end.end_col,
+                    start_offset=type_start.start_offset,
+                    end_offset=type_end.end_offset,
+                    source=type_start.source,
+                ),
+                node_id=self._next_id(),
+            )
+        )
+
+    def _expression_chain(
+        self,
+        anchor: syntax.QualifierAnchor | None,
+        segments: list[_QualifierChainSegment],
+        member: Token,
+        span: SourceSpan,
+    ) -> syntax.QualifierChain:
+        """Build a chain from its parsed segments and optional anchor."""
+        return syntax.QualifierChain(
+            anchor=anchor,
+            segments=tuple(segment.segment for segment in segments),
+            member=str(member),
+            span=span,
+            node_id=self._next_id(),
+        )
+
+    def qual_var_ref(self, meta: Meta, args: _Args) -> syntax.VarRef:
+        """qual_var_ref: DCOLON qualifier_segment* name | qualifier_segment+ name"""
+        name_tok = next(arg for arg in reversed(args) if _is_name_token(arg))
+        segments = [arg for arg in args if isinstance(arg, _QualifierChainSegment)]
+        for segment in segments[1:]:
+            if segment.anchored or "/" in segment.segment.name:
+                raise AglSyntaxError(
+                    "A type qualifier after '::' must be a single type name.",
+                    span=segment.segment.span,
+                )
+        first = args[0]
+        anchor = (
+            syntax.QualifierAnchor.CURRENT_MODULE
+            if isinstance(first, Token) and first.type == "DCOLON"
+            else (
+                syntax.QualifierAnchor.MODULE
+                if isinstance(first, _QualifierChainSegment) and first.anchored
+                else None
+            )
+        )
+        span = self._span_from_meta(meta)
+        chain = self._expression_chain(anchor, segments, name_tok, span)
+        return syntax.VarRef(name=chain.member, span=span, node_id=self._next_id(), qualifier=chain)
 
     def qual_named_type(self, meta: Meta, args: _Args) -> NameT:
         """qual_prefix NAME in type position."""
@@ -2696,39 +2811,6 @@ class AstBuilder(Transformer):
             span=self._span_from_meta(meta),
             node_id=self._next_id(),
             module_qualifier=qual,
-        )
-
-    def applied_qual_ref(self, meta: Meta, args: _Args) -> syntax.VarRef:
-        """Type-qualified constructor with explicit type arguments."""
-        qual = next((a for a in args if isinstance(a, Qualifier)), None)
-        name_toks = [a for a in args if _is_name_token(a)]
-        type_name = str(name_toks[0])
-        variant_name = str(name_toks[-1])
-        type_args_val = cast(
-            tuple[TypeExpr, ...],
-            next(
-                (
-                    arg
-                    for arg in args
-                    if isinstance(arg, tuple)
-                    and len(arg) > 0
-                    and isinstance(arg[0], _ALL_TYPE_EXPRS)
-                ),
-                (),
-            ),
-        )
-        type_qual = TypeQualifier(
-            name=type_name,
-            type_args=type_args_val,
-            span=self._span_from_meta(meta),
-            node_id=self._next_id(),
-        )
-        return syntax.VarRef(
-            name=variant_name,
-            span=self._span_from_meta(meta),
-            node_id=self._next_id(),
-            module_qualifier=qual,
-            type_qualifier=type_qual,
         )
 
     def pat_qual_constructor(self, meta: Meta, args: _Args) -> syntax.ConstructorPattern:

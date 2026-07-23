@@ -686,14 +686,10 @@ class TestSelfReference:
         from agm.agl.syntax.nodes import Block, Call, FuncDef, VarRef
 
         def find_self_ref_varref(node: object) -> VarRef | None:
-            """Find the first VarRef named 'foo' with a non-None module_qualifier."""
+            """Find the first VarRef named 'foo' with a qualifier chain."""
             from agm.agl.syntax.nodes import Program
 
-            if (
-                isinstance(node, VarRef)
-                and node.name == "foo"
-                and (node.module_qualifier is not None)
-            ):
+            if isinstance(node, VarRef) and node.name == "foo" and (node.qualifier is not None):
                 return node
             if isinstance(node, Program):
                 return find_self_ref_varref(node.body)

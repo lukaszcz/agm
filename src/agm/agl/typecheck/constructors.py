@@ -1097,12 +1097,9 @@ class ConstructorChecker:
         owner_name, variant, owner_module_id = self._ctx._resolved.qualified_constructor_refs[
             node.callee.node_id
         ]
-        type_args: tuple[TypeExpr, ...] = ()
-        if (
-            node.callee.type_qualifier is not None
-            and node.callee.type_qualifier.type_args is not None
-        ):
-            type_args = node.callee.type_qualifier.type_args
+        qualifier = node.callee.qualifier
+        assert qualifier is not None and qualifier.segments
+        type_args = qualifier.segments[-1].type_args or ()
         return self._resolve_qualified_constructor_and_call(
             owner_name=owner_name,
             variant=variant,

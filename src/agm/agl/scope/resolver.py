@@ -129,6 +129,9 @@ from agm.agl.syntax.nodes import (
     Placeholder,
     Program,
     ProgramDecl,
+    QualifierAnchor,
+    QualifierChain,
+    QualifierSegment,
     Raise,
     RecordDef,
     Return,
@@ -147,7 +150,7 @@ from agm.agl.syntax.nodes import (
     assign_target_root_name,
 )
 from agm.agl.syntax.spans import SourceSpan
-from agm.agl.syntax.types import AppliedT, NameT, Qualifier
+from agm.agl.syntax.types import AppliedT, NameT, Qualifier, TypeQualifier
 
 # ---------------------------------------------------------------------------
 # Built-in names and reserved-name enforcement
@@ -1305,15 +1308,15 @@ class _Resolver:
         - Exactly 1 candidate → record in constructor_refs.
         - ≥ 2 candidates → ambiguity error.
 
-        In program context (when ``_import_env`` is set):
-        - ``node.module_qualifier is None`` → lexical scope first, then open imports.
-        - ``node.module_qualifier.segments == ()`` (``::name``) → self-ref to own scope.
-        - ``node.module_qualifier.segments != ()`` → qualified cross-module access.
+        In program context (when ``_import_env`` is set), a bare reference uses
+        lexical scope then open imports; a current-module chain uses the own
+        root scope; and a module-route chain uses qualified cross-module access.
         """
         if node.name == "_":
             raise AglScopeError("'_' is not defined.", span=node.span)
-        if node.type_qualifier is not None:
-            self._resolve_type_qualified_constructor(node)
+        module_qualifier, type_qualifier = self._expression_qualifier_parts(node.qualifier)
+        if type_qualifier is not None:
+            self._resolve_type_qualified_constructor(node, module_qualifier, type_qualifier)
             return
         if node.name in _BUILTIN_CALL_NAMES and self._current_scope().lookup(node.name) is None:
             raise AglScopeError(
@@ -1321,18 +1324,18 @@ class _Resolver:
             )
 
         # Single-segment qualifiers can name either a type or an import handle.
-        if node.module_qualifier is not None:
-            if self._resolve_single_qualifier_constructor(node):
+        if module_qualifier is not None:
+            if self._resolve_single_qualifier_constructor(node, module_qualifier):
                 return
             if self._import_env is not None:
-                self._resolve_varref_qualified(node)
+                self._resolve_varref_qualified(node, module_qualifier)
                 return
-            if node.module_qualifier.segments != ():
-                qualifier_str = node.module_qualifier.render()
+            if module_qualifier.segments != ():
+                qualifier_str = module_qualifier.render()
                 raise AglScopeError(
                     f"No module imported under qualifier '{qualifier_str}' or type named "
                     f"'{qualifier_str}'.",
-                    span=node.module_qualifier.span,
+                    span=module_qualifier.span,
                 )
 
         # Standard lexical lookup (module mode or bare name in program context).
@@ -1375,46 +1378,110 @@ class _Resolver:
         if ref.kind is BinderKind.agent_binding and ref.name in self._declared_agents:
             self._referenced_agents.add(ref.name)
 
-    def _resolve_type_qualified_constructor(self, node: VarRef) -> None:
+    def _expression_qualifier_parts(
+        self, chain: QualifierChain | None
+    ) -> tuple[Qualifier | None, TypeQualifier | None]:
+        """Map supported expression chains to the established resolver forms."""
+        if chain is None:
+            return (None, None)
+        if len(chain.segments) > 2 or (
+            chain.anchor is QualifierAnchor.CURRENT_MODULE and len(chain.segments) > 1
+        ):
+            raise AglScopeError("Unsupported qualifier chain.", span=chain.span)
+        for segment in chain.segments[:-1]:
+            if segment.type_args is not None:
+                raise AglScopeError("Unsupported qualifier chain.", span=segment.span)
+
+        def module_qualifier(segment: QualifierSegment) -> Qualifier:
+            return Qualifier(
+                segments=tuple(segment.name.split("/")),
+                span=segment.span,
+                node_id=segment.node_id,
+                anchored=chain.anchor is QualifierAnchor.MODULE,
+            )
+
+        def type_qualifier(segment: QualifierSegment) -> TypeQualifier:
+            return TypeQualifier(
+                name=segment.name,
+                type_args=segment.type_args,
+                span=segment.span,
+                node_id=segment.node_id,
+            )
+
+        if not chain.segments:
+            assert chain.anchor is QualifierAnchor.CURRENT_MODULE
+            return (
+                Qualifier(
+                    segments=(),
+                    span=SourceSpan(
+                        start_line=chain.span.start_line,
+                        start_col=chain.span.start_col,
+                        end_line=chain.span.start_line,
+                        end_col=chain.span.start_col + 2,
+                        start_offset=chain.span.start_offset,
+                        end_offset=chain.span.start_offset + 2,
+                        source=chain.span.source,
+                    ),
+                    node_id=chain.node_id,
+                ),
+                None,
+            )
+
+        if len(chain.segments) == 1:
+            (segment,) = chain.segments
+            if chain.anchor is QualifierAnchor.CURRENT_MODULE:
+                return (
+                    Qualifier(segments=(), span=chain.span, node_id=chain.node_id),
+                    type_qualifier(segment),
+                )
+            if segment.type_args is not None:
+                return (None, type_qualifier(segment))
+            return (module_qualifier(segment), None)
+
+        module_segment, type_segment = chain.segments
+        return (module_qualifier(module_segment), type_qualifier(type_segment))
+
+    def _resolve_type_qualified_constructor(
+        self, node: VarRef, module_qualifier: Qualifier | None, type_qualifier: TypeQualifier
+    ) -> None:
         """Resolve an explicit ``[module::]Type[args]::Ctor`` reference."""
-        assert node.type_qualifier is not None
-        type_name = node.type_qualifier.name
-        if node.module_qualifier is None:
+        type_name = type_qualifier.name
+        if module_qualifier is None:
             if type_name not in self._declared_type_names:
                 raise AglScopeError(
                     f"'{type_name}' is not a known type.",
-                    span=node.type_qualifier.span,
+                    span=type_qualifier.span,
                 )
             self._qualified_constructor_refs[node.node_id] = (type_name, node.name, None)
             return
-        if node.module_qualifier.segments == ():
+        if module_qualifier.segments == ():
             if type_name not in self._declared_type_names:
                 raise self._spaced_qualifier_repair(
-                    self._spaced_qualifier_at(node.module_qualifier.span),
-                    node.module_qualifier.span,
+                    self._spaced_qualifier_at(module_qualifier.span), module_qualifier.span
                 ) or AglScopeError(
                     f"'{type_name}' is not defined in this module.",
-                    span=node.type_qualifier.span,
+                    span=type_qualifier.span,
                 )
             owner_module = self._module_id if self._import_env is not None else None
             self._qualified_constructor_refs[node.node_id] = (type_name, node.name, owner_module)
             return
         if self._import_env is None:
-            qualifier_str = node.module_qualifier.render()
+            qualifier_str = module_qualifier.render()
             raise AglScopeError(
                 f"No module imported under qualifier '{qualifier_str}'.",
-                span=node.module_qualifier.span,
+                span=module_qualifier.span,
             )
         src_name, owning_module = self._resolve_qualified_type_name(
-            node.module_qualifier, type_name, node.type_qualifier.span
+            module_qualifier, type_name, type_qualifier.span
         )
         self._qualified_constructor_refs[node.node_id] = (src_name, node.name, owning_module)
 
-    def _resolve_single_qualifier_constructor(self, node: VarRef) -> bool:
+    def _resolve_single_qualifier_constructor(
+        self, node: VarRef, module_qualifier: Qualifier
+    ) -> bool:
         """Resolve ``Type::Ctor`` when the qualifier denotes a type name."""
-        assert node.module_qualifier is not None
-        segments = node.module_qualifier.segments
-        if node.module_qualifier.anchored or len(segments) != 1:
+        segments = module_qualifier.segments
+        if module_qualifier.anchored or len(segments) != 1:
             return False
         type_name = segments[0]
         type_match = type_name in self._declared_type_names
@@ -1428,7 +1495,7 @@ class _Resolver:
             raise AglScopeError(
                 f"Qualifier '{type_name}' is both a type name and a module route for "
                 f"'{node.name}'. {qualification_repair_guidance()}",
-                span=node.module_qualifier.span,
+                span=module_qualifier.span,
             )
         if not type_match:
             return False
@@ -1478,18 +1545,17 @@ class _Resolver:
         qname = next(iter(qnames))
         return self._make_cross_module_ref(qname[0], name, qname[1], span)
 
-    def _resolve_varref_qualified(self, node: VarRef) -> None:
+    def _resolve_varref_qualified(self, node: VarRef, module_qualifier: Qualifier) -> None:
         """Resolve a qualified VarRef (``::name`` or ``MODQUAL::name``) in program context."""
         assert self._import_env is not None
-        assert node.module_qualifier is not None
 
-        if node.module_qualifier.segments == ():
+        if module_qualifier.segments == ():
             # Self-reference: ::name — look up in own root scope.
             ref = self._lookup_own_root(node.name)
             if ref is None:
                 raise self._spaced_qualifier_repair(
-                    self._spaced_qualifier_at(node.module_qualifier.span),
-                    node.module_qualifier.span,
+                    self._spaced_qualifier_at(module_qualifier.span),
+                    module_qualifier.span,
                 ) or AglScopeError(
                     f"'{node.name}' is not defined in this module.",
                     span=node.span,
@@ -1498,7 +1564,7 @@ class _Resolver:
             return
 
         # Qualified access: MODQUAL::name
-        ref = self._lookup_qualified_binding(node.module_qualifier, node.name, node.span)
+        ref = self._lookup_qualified_binding(module_qualifier, node.name, node.span)
         self._resolution[node.node_id] = ref
 
     def _lookup_qualified_binding(
@@ -1663,7 +1729,7 @@ class _Resolver:
 
     def _resolve_field_access(self, expr: FieldAccess) -> None:
         """Resolve a field-access expression by resolving its object as a value."""
-        if isinstance(expr.obj, VarRef) and expr.obj.module_qualifier is None:
+        if isinstance(expr.obj, VarRef) and expr.obj.qualifier is None:
             existing = self._current_scope().lookup(expr.obj.name)
             if expr.obj.name in self._declared_type_names and (
                 existing is None or existing.kind is BinderKind.constructor_binding

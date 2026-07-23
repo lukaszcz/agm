@@ -642,7 +642,6 @@ juxt_suffix: DOT field_name       -> juxt_field_suffix
           | lit_false
           | lit_null
           | template
-          | applied_qual_ref
           | qual_var_ref
           | juxt_var_ref
           | lit_list
@@ -693,7 +692,6 @@ juxt_var_ref: NAME -> var_ref
      | template
      | lit_list
      | lit_dict
-     | applied_qual_ref
      | var_ref
      | qual_var_ref
      | paren_expr_or_unit
@@ -852,9 +850,11 @@ qual_prefix : MODQUAL | DCOLON
 // type_qual: second-position type qualifier in module::Type::Ctor.
 type_qual : MODQUAL
 
-// Qualified variable/constructor reference in expression position
-qual_var_ref : qual_prefix type_qual? name
-
-// Type-qualified constructor with explicit type arguments on the type name.
-applied_qual_ref : NAME TYPEARG_LSQB type_arg_list RSQB DCOLON NAME
-                 | qual_prefix NAME TYPEARG_LSQB type_arg_list RSQB DCOLON NAME
+// Qualified expression references are chains. A MODQUAL preserves one
+// slash-qualified module route as a segment; every applied segment retains
+// its type arguments. A leading DCOLON anchors the chain in the current module.
+?qualifier_segment : MODQUAL -> qualifier_mod_segment
+                   | applied_qual_ref
+applied_qual_ref : NAME TYPEARG_LSQB type_arg_list RSQB DCOLON -> qualifier_applied_segment
+qual_var_ref : DCOLON qualifier_segment* name
+             | qualifier_segment+ name

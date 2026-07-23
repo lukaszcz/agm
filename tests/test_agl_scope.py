@@ -2427,6 +2427,13 @@ class TestConstructorBindings:
         err = reject_scope("m::Missing::Ctor")
         assert "No module imported" in err.to_diagnostic().message
 
+    def test_unsupported_qualifier_chain_reaches_scope_diagnostic(self) -> None:
+        source = "A::B::C[int]::member"
+        err = reject_scope(source)
+        diagnostic = err.to_diagnostic()
+        assert "unsupported qualifier chain" in diagnostic.message.lower()
+        assert diagnostic.line == 1
+
     def test_qualified_constructor_recorded(self) -> None:
         """Qualified access Owner::member is recorded in qualified_constructor_refs."""
         r = parse_and_resolve("enum Option\n  | none\n  | some\nlet x = Option::some\nx\n")

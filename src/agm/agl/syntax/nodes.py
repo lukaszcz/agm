@@ -34,7 +34,7 @@ from dataclasses import dataclass
 from dataclasses import field as dc_field
 
 from agm.agl.syntax.spans import SourceSpan
-from agm.agl.syntax.types import ImportMode, Qualifier, TypeExpr, TypeQualifier
+from agm.agl.syntax.types import ImportMode, Qualifier, TypeExpr
 
 # ---------------------------------------------------------------------------
 # Sentinel for the else-branch of If
@@ -179,6 +179,34 @@ TemplateSegment = TextSegment | InterpSegment
 # ---------------------------------------------------------------------------
 
 
+class QualifierAnchor(enum.Enum):
+    """The explicit anchor of an expression qualifier chain."""
+
+    MODULE = "/"
+    CURRENT_MODULE = "::"
+
+
+@dataclass(frozen=True, slots=True)
+class QualifierSegment:
+    """One qualifier-chain segment, optionally applied to type arguments."""
+
+    name: str
+    type_args: tuple[TypeExpr, ...] | None
+    span: SourceSpan = dc_field(compare=False)
+    node_id: int = dc_field(compare=False)
+
+
+@dataclass(frozen=True, slots=True)
+class QualifierChain:
+    """Qualified expression reference prefix and its selected member."""
+
+    anchor: QualifierAnchor | None
+    segments: tuple[QualifierSegment, ...]
+    member: str
+    span: SourceSpan = dc_field(compare=False)
+    node_id: int = dc_field(compare=False)
+
+
 @dataclass(frozen=True, slots=True)
 class VarRef:
     """Reference to a variable, param binding, or qualified constructor."""
@@ -186,8 +214,7 @@ class VarRef:
     name: str
     span: SourceSpan = dc_field(compare=False)
     node_id: int = dc_field(compare=False)
-    module_qualifier: Qualifier | None = None
-    type_qualifier: TypeQualifier | None = None
+    qualifier: QualifierChain | None = None
 
 
 @dataclass(frozen=True, slots=True)

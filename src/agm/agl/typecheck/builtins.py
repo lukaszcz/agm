@@ -31,6 +31,7 @@ from agm.agl.syntax.nodes import (
     Expr,
     IntLit,
     NamedArg,
+    QualifierAnchor,
     StringLit,
     VarRef,
 )
@@ -597,24 +598,33 @@ class BuiltinCallChecker:
     def _extract_parse_policy_str(self, arg: Expr, span: SourceSpan) -> str:
         """Extract a static ``ParsePolicy`` constructor as an inventory string."""
         if isinstance(arg, Call) and isinstance(arg.callee, VarRef):
-            if arg.callee.module_qualifier is not None:
-                if arg.callee.module_qualifier.segments not in ((), ("ParsePolicy",)):
-                    raise AglTypeError(
-                        "'on_parse_error' must be a static ParsePolicy constructor "
-                        "(Abort or Retry(n: <int>)).",
-                        span=span,
-                    )
+            if not self._is_parse_policy_qualifier(arg.callee):
+                raise AglTypeError(
+                    "'on_parse_error' must be a static ParsePolicy constructor "
+                    "(Abort or Retry(n: <int>)).",
+                    span=span,
+                )
             return self._extract_parse_policy_variant(arg.callee.name, arg.named_args, span)
         # Bare VarRef: ``Abort`` or ``ParsePolicy::Abort`` (no parens) is also accepted.
-        if isinstance(arg, VarRef) and arg.name == "Abort":
-            if arg.module_qualifier is None or arg.module_qualifier.segments in (
-                (),
-                ("ParsePolicy",),
-            ):
-                return "abort"
+        if isinstance(arg, VarRef) and arg.name == "Abort" and self._is_parse_policy_qualifier(arg):
+            return "abort"
         raise AglTypeError(
             "'on_parse_error' must be a static ParsePolicy constructor (Abort or Retry(n: <int>)).",
             span=span,
+        )
+
+    @staticmethod
+    def _is_parse_policy_qualifier(ref: VarRef) -> bool:
+        """Return whether *ref* uses an accepted ParsePolicy qualifier spelling."""
+        chain = ref.qualifier
+        return (
+            chain is None
+            or chain.anchor is QualifierAnchor.CURRENT_MODULE
+            or (
+                len(chain.segments) == 1
+                and chain.segments[0].type_args is None
+                and chain.segments[0].name == "ParsePolicy"
+            )
         )
 
     def _extract_parse_policy_variant(

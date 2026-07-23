@@ -43,6 +43,7 @@ from agm.agl.lexer.tokens import (
     DCOLON,
     DECIMAL,
     DO_LSQB,
+    END,
     EXPORT,
     GRAMMAR_TOKEN_REMAP,
     HIDING,
@@ -60,6 +61,7 @@ from agm.agl.lexer.tokens import (
     PRIVATE,
     RPAR,
     RSQB,
+    SCOPE,
     SLASH,
     TYPEARG_LSQB,
     USING,
@@ -168,6 +170,18 @@ def _retype(tok: Token, new_type: str) -> Token:
     )
 
 
+def _is_scope_path(tokens: list[Token], index: int) -> bool:
+    """Whether ``tokens[index:]`` begins with a NAME (DCOLON NAME)* scope path."""
+    if index >= len(tokens) or tokens[index].type != NAME:
+        return False
+    index += 1
+    while index < len(tokens) and tokens[index].type == DCOLON:
+        if index + 1 >= len(tokens) or tokens[index + 1].type != NAME:
+            return False
+        index += 2
+    return True
+
+
 def _promote_soft_keywords(tokens: list[Token]) -> list[Token]:
     """Contextually promote soft keywords in the post-layout token stream.
 
@@ -176,9 +190,12 @@ def _promote_soft_keywords(tokens: list[Token]) -> list[Token]:
     - 'import' → IMPORT at item-start, or immediately after OPEN.
     - 'private' → PRIVATE and 'export' → EXPORT at item-start.
     - 'using' → USING and 'hiding' → HIDING within import or export declarations.
+    - 'scope' → SCOPE at item-start before a scope path.
+    - 'end' → END at item-start while a scope region is open.
     """
     result: list[Token] = []
     in_module_header = False
+    scope_depth = 0
     prev_type: str | None = None  # None means start-of-stream
 
     for index, tok in enumerate(tokens):
@@ -207,6 +224,12 @@ def _promote_soft_keywords(tokens: list[Token]) -> list[Token]:
                 in_module_header = True
             elif tv == "private" and at_item_start:
                 tok = _retype(tok, PRIVATE)
+            elif tv == "scope" and at_item_start and _is_scope_path(tokens, index + 1):
+                tok = _retype(tok, SCOPE)
+                scope_depth += 1
+            elif tv == "end" and at_item_start and scope_depth > 0:
+                tok = _retype(tok, END)
+                scope_depth -= 1
             elif in_module_header:
                 if tv == "using":
                     tok = _retype(tok, USING)

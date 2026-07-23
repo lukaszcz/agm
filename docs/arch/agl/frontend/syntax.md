@@ -8,6 +8,8 @@ The implementation-level token contract lives in `src/agm/agl/lexer/tokens.py` (
 
 Adjacency also makes near-misses invisible downstream: whitespace before a `::` silently turns a qualifier into unrelated syntax, and the AST no longer records the gap. The lexer is the only pass that observes it, so it records such runs as *lexical advisories* (`syntax/advisories.py`) delivered through an ambient collector — the same `ContextVar` sink pattern used for TAB advisories. The module loader attaches them to each `LoadedModule`; the scope pass consumes them. Advisories never change the token stream.
 
+Item-start soft keywords are promoted after layout. Alongside module headers, `scope` becomes `SCOPE` only before a `NAME (:: NAME)*` path; the same lexer state tracks nested promoted regions so item-start `end` becomes `END` only while a region remains open. Elsewhere both words stay `NAME` tokens.
+
 ## The AST
 
 The AST is plain frozen dataclasses with no parser types — the firewall every later pass depends on. Because AgL is expression-oriented there is no statement/expression split: one unified node family covers blocks, bindings, control flow, and a single call node for every kind of invocation. Surface forms that need dedicated representation — partial-application placeholders, value-position type application, qualified constructor references, casts, divergence expressions, and as-pattern binders — are explicit nodes whose shape the AST builder validates before they cross the firewall.

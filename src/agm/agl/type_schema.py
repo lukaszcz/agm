@@ -433,7 +433,12 @@ def _direct_neighbours(handle: Instantiation, type_table: TypeTable) -> frozense
 def _instantiation_sort_key(handle: Instantiation) -> tuple[object, ...]:
     """Deterministic sort key for :func:`~agm.util.graph.sccs` — never Python object identity."""
     type_args = handle.type_args if isinstance(handle, (RecordType, EnumType)) else ()
-    return (handle.module_id.segments, handle.name, tuple(repr(arg) for arg in type_args))
+    return (
+        handle.module_id.segments,
+        handle.scope_path,
+        handle.name,
+        tuple(repr(arg) for arg in type_args),
+    )
 
 
 # JSON-Schema-safe `$defs` key characters: letters, digits, ``_``, ``.``,
@@ -453,8 +458,8 @@ def _bare_display(handle: Instantiation, type_table: TypeTable | None = None) ->
         )
     if type_args:
         args = ", ".join(repr(arg) for arg in type_args)
-        return f"{handle.name}[{args}]"
-    return handle.name
+        return f"{'::'.join((*handle.scope_path, handle.name))}[{args}]"
+    return "::".join((*handle.scope_path, handle.name))
 
 
 def _sanitize_key(raw: str) -> str:
@@ -564,8 +569,8 @@ def _emit_decode_body(typ: Type, type_table: TypeTable, plan: "_SchemaPlan") -> 
     if isinstance(typ, RecordType):
         fields = type_table.record_fields(typ)
         return RecordDecode(
-            nominal=NominalId(typ.module_id, typ.name),
-            display_name=typ.name,
+            nominal=NominalId(typ.module_id, typ.name, typ.scope_path),
+            display_name="::".join((*typ.scope_path, typ.name)),
             fields=tuple(
                 (fname, _emit_decode(ftype, type_table, plan)) for fname, ftype in fields.items()
             ),
@@ -573,8 +578,8 @@ def _emit_decode_body(typ: Type, type_table: TypeTable, plan: "_SchemaPlan") -> 
     if isinstance(typ, EnumType):
         variants = type_table.enum_variants(typ)
         return EnumDecode(
-            nominal=NominalId(typ.module_id, typ.name),
-            display_name=typ.name,
+            nominal=NominalId(typ.module_id, typ.name, typ.scope_path),
+            display_name="::".join((*typ.scope_path, typ.name)),
             variants=tuple(
                 VariantDecode(
                     name=vname,
@@ -711,8 +716,8 @@ def _emit_boundary_body(typ: Type, type_table: TypeTable, plan: "_SchemaPlan") -
         return BoundaryDict(_emit_boundary(typ.value, type_table, plan))
     if isinstance(typ, RecordType):
         return BoundaryRecord(
-            nominal=NominalId(typ.module_id, typ.name),
-            display_name=typ.name,
+            nominal=NominalId(typ.module_id, typ.name, typ.scope_path),
+            display_name="::".join((*typ.scope_path, typ.name)),
             fields=tuple(
                 (fname, _emit_boundary(ftype, type_table, plan))
                 for fname, ftype in type_table.record_fields(typ).items()
@@ -720,8 +725,8 @@ def _emit_boundary_body(typ: Type, type_table: TypeTable, plan: "_SchemaPlan") -
         )
     if isinstance(typ, EnumType):
         return BoundaryEnum(
-            nominal=NominalId(typ.module_id, typ.name),
-            display_name=typ.name,
+            nominal=NominalId(typ.module_id, typ.name, typ.scope_path),
+            display_name="::".join((*typ.scope_path, typ.name)),
             variants=tuple(
                 BoundaryVariantShape(
                     name=vname,
@@ -738,8 +743,8 @@ def _emit_boundary_body(typ: Type, type_table: TypeTable, plan: "_SchemaPlan") -
         # their declaring module, exactly as the lowerer keys exception nominals
         # (``NominalId(typ.module_id, typ.name)``).
         return BoundaryException(
-            nominal=NominalId(typ.module_id, typ.name),
-            display_name=typ.name,
+            nominal=NominalId(typ.module_id, typ.name, typ.scope_path),
+            display_name="::".join((*typ.scope_path, typ.name)),
             fields=tuple(
                 (fname, _emit_boundary(ftype, type_table, plan))
                 for fname, ftype in type_table.exception_fields(typ).items()

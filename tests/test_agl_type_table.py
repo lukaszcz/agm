@@ -93,7 +93,8 @@ def test_type_references_inside_a_scope_use_the_nearest_scoped_type() -> None:
         "A::build(A::T(value = 1))"
     )
 
-    assert checked.node_types[checked.resolved.program.body.items[-1].node_id] == RecordType("A::T")
+    result_type = checked.node_types[checked.resolved.program.body.items[-1].node_id]
+    assert result_type == RecordType("T", scope_path=("A",))
 
 
 def _check_program(tmp_path: Path, modules: dict[str, str]):
@@ -135,16 +136,18 @@ def test_current_module_generic_type_anchor_rejects_unknown_root_type() -> None:
         _check("def f(value: ::A::Missing[int]) -> int = 0\nf(1)")
 
 
-def test_scoped_record_does_not_enter_program_type_tables(tmp_path: Path) -> None:
+def test_program_type_table_keys_keep_root_and_scoped_nominals_distinct(tmp_path: Path) -> None:
     checked = _check_program(
         tmp_path,
         {
-            "entry": "record A::Hidden(value: int)\nrecord Visible(value: int)\n()",
+            "entry": "record A::Visible(value: int)\nrecord Visible(value: text)\n()",
         },
     )
 
-    assert (ENTRY_ID, "Hidden") not in checked.program_type_table
-    assert (ENTRY_ID, "Visible") in checked.program_type_table
+    assert checked.program_type_table[(ENTRY_ID, (), "Visible")] == RecordType("Visible")
+    assert checked.program_type_table[(ENTRY_ID, ("A",), "Visible")] == RecordType(
+        "Visible", scope_path=("A",)
+    )
 
 
 def test_scoped_type_context_restores_after_a_type_error(tmp_path: Path) -> None:
@@ -552,7 +555,7 @@ class TestExceptionAccessors:
         assert root_def.base is None
         child_def = table.exception_def(ExceptionType(name="Child", module_id=ENTRY_ID))
         assert child_def.abstract is False
-        assert child_def.base == (ENTRY_ID, "Root")
+        assert child_def.base == (ENTRY_ID, (), "Root")
 
     def test_exception_def_missing_def_raises_keyerror(self) -> None:
         table = TypeTable()
@@ -1485,7 +1488,7 @@ class TestInhabitationAnalysis:
             )
         )
 
-        assert compute_uninhabited(table) == frozenset({(ENTRY_ID, "R")})
+        assert compute_uninhabited(table) == frozenset({(ENTRY_ID, (), "R")})
 
     def test_exception_with_missing_base_stays_uninhabited(self) -> None:
         """A malformed exception base link is not treated as constructible evidence."""
@@ -1499,7 +1502,7 @@ class TestInhabitationAnalysis:
             )
         )
 
-        assert compute_uninhabited(table) == frozenset({(ENTRY_ID, "E")})
+        assert compute_uninhabited(table) == frozenset({(ENTRY_ID, (), "E")})
 
 
 class TestFiniteClosure:
@@ -2059,10 +2062,10 @@ class TestFiniteClosure:
             )
         )
         result = compute_finite_closure(table)
-        perfect_key = (ENTRY_ID, "Perfect")
+        perfect_key = (ENTRY_ID, (), "Perfect")
         assert perfect_key in result.infinite
         assert result.successors[perfect_key] == frozenset(
-            {(ENTRY_ID, "Perfect"), (ENTRY_ID, "Pair")}
+            {(ENTRY_ID, (), "Perfect"), (ENTRY_ID, (), "Pair")}
         )
 
     def test_caches_result_and_invalidates_on_register(self) -> None:
@@ -2385,7 +2388,7 @@ class TestFiniteClosure:
     def test_first_infinite_declaration_names_root_itself(self) -> None:
         table = self._perfect_table()
         perfect_int = RecordType("Perfect", type_args=(IntType(),), module_id=ENTRY_ID)
-        assert table.first_infinite_declaration(perfect_int) == (ENTRY_ID, "Perfect")
+        assert table.first_infinite_declaration(perfect_int) == (ENTRY_ID, (), "Perfect")
 
     def test_first_infinite_declaration_names_culprit_reached_through_field(self) -> None:
         table = self._perfect_table()
@@ -2398,7 +2401,7 @@ class TestFiniteClosure:
             )
         )
         holder = RecordType("Holder", module_id=ENTRY_ID)
-        assert table.first_infinite_declaration(holder) == (ENTRY_ID, "Perfect")
+        assert table.first_infinite_declaration(holder) == (ENTRY_ID, (), "Perfect")
 
     def test_no_finite_schema_message_is_none_for_finite_type(self) -> None:
         table = self._perfect_table()

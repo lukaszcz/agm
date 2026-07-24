@@ -1,0 +1,7 @@
+record Token()
+
+scope Left
+record Token()
+end Left
+
+let token: Token = Left::Token()

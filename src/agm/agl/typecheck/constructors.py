@@ -12,7 +12,6 @@ from collections.abc import Mapping
 from dataclasses import replace
 from typing import Literal, Protocol
 
-from agm.agl.modules.ids import ModuleId
 from agm.agl.scope.symbols import BindingRef, ConstructorRef, ModuleResolution
 from agm.agl.semantics.types import (
     EnumType,
@@ -199,10 +198,12 @@ class ConstructorChecker:
         gdef = self._ctx._env.get_generic_type_from_module(ctor_ref.owner_module_id, owner_name)
         if gdef is not None:
             sig = self._ctx._env.get_ctor_sig_from_module(
-                ctor_ref.owner_module_id, owner_name, variant
+                ctor_ref.owner_module_id, owner_name, variant, scope_path=ctor_ref.owner_path
             )
             if sig is None:
-                sig = self._ctx._env.get_constructor_signature(owner_name, variant)
+                sig = self._ctx._env.get_constructor_signature(
+                    owner_name, variant, scope_path=ctor_ref.owner_path
+                )
             assert sig is not None, f"No constructor signature for {owner_name}.{variant}"
             return ctor_ref, sig, gdef
 
@@ -214,10 +215,12 @@ class ConstructorChecker:
                 target_gdef = self._ctx._env.get_generic_type(target.name)
             if target_gdef is not None:
                 target_sig = self._ctx._env.get_ctor_sig_from_module(
-                    target.module_id, target.name, variant
+                    target.module_id, target.name, variant, scope_path=target.scope_path
                 )
                 if target_sig is None:
-                    target_sig = self._ctx._env.get_constructor_signature(target.name, variant)
+                    target_sig = self._ctx._env.get_constructor_signature(
+                        target.name, variant, scope_path=target.scope_path
+                    )
                 assert target_sig is not None, (
                     f"No constructor signature for {owner_name}.{variant}"
                 )
@@ -233,7 +236,9 @@ class ConstructorChecker:
                     target_gdef,
                 )
 
-        sig = self._ctx._env.get_constructor_signature(owner_name, variant)
+        sig = self._ctx._env.get_constructor_signature(
+            owner_name, variant, scope_path=ctor_ref.owner_path
+        )
         assert sig is not None, f"No constructor signature for {owner_name}.{variant}"
         return ctor_ref, sig, None
 
@@ -319,16 +324,10 @@ class ConstructorChecker:
         variant: str | None,
         gdef: GenericTypeDef | None,
     ) -> tuple[tuple[str, ParamKind], ...]:
-        owner_module_id_for_kinds: ModuleId | None = (
-            gdef.template.module_id if gdef is not None else None
-        )
-        actual_name_for_kinds = (
-            gdef.template.name
-            if gdef is not None and isinstance(gdef.template, (RecordType, EnumType))
-            else owner_name
-        )
-        field_kinds = self._ctx._env.get_constructor_field_kinds(
-            actual_name_for_kinds, variant, module_id=owner_module_id_for_kinds
+        field_kinds = (
+            self._ctx._env.get_constructor_field_kinds_for_type(gdef.template, owner_name, variant)
+            if gdef is not None
+            else self._ctx._env.get_constructor_field_kinds(owner_name, variant)
         )
         assert field_kinds is not None, (
             f"compiler bug: no field-kinds for generic constructor '{owner_name}'"
@@ -635,7 +634,9 @@ class ConstructorChecker:
         """Resolve a generic constructor while retaining its source alias template."""
         owner, target_gdef = self._resolve_cross_module_nominal_constructor(callee_ref, span)
         assert target_gdef is not None
-        signature = self._ctx._env.get_ctor_sig_from_module(owner.module_id, owner.name, None)
+        signature = self._ctx._env.get_ctor_sig_from_module(
+            owner.module_id, owner.name, None, scope_path=owner.scope_path
+        )
         assert signature is not None
         source = self._ctx._env.source_type_template_qname(callee_ref.module_id, callee_ref.name)
         assert source is not None
@@ -662,7 +663,7 @@ class ConstructorChecker:
                     span=span,
                 )
             sig = self._ctx._env.get_ctor_sig_from_module(
-                callee_ref.module_id, callee_ref.name, None
+                callee_ref.module_id, callee_ref.name, None, scope_path=gdef.template.scope_path
             )
             assert sig is not None, (
                 f"GenericTypeDef '{callee_ref.name}' in '{callee_ref.module_id.path_str()}' "

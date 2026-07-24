@@ -52,7 +52,7 @@ class LinkImage:
         """Restore selected nominal descriptors from *snapshot*.
 
         Runtime-failed REPL entries may have linked type declarations that were
-        not promoted statically. Nominals are keyed by stable module/name rather
+        not promoted statically. Nominals are keyed by stable module/scope-path/name rather
         than declaration node id, so unpromoted redeclarations must be restored
         explicitly to keep constructor values in later entries consistent with
         the restored type environment.

@@ -79,6 +79,35 @@ def _constructor_args(fields: dict[str, Type]) -> str:
 
 
 class TestPersistence:
+    def test_scope_only_entry_is_a_declaration_without_an_initializer(self) -> None:
+        result = ReplSession().eval_entry("scope A\nend A")
+
+        assert result.ok, result.diagnostics
+        assert result.kind == "declaration"
+        assert result.value is None
+
+    def test_scoped_type_persists_with_a_same_named_root_type(self) -> None:
+        s = ReplSession()
+        assert s.eval_entry("scope A\nrecord Token()\nend A").ok
+        assert s.eval_entry("record Token()").ok
+
+        scoped = s.eval_entry("let token: A::Token = A::Token()")
+        root = s.eval_entry("let token: Token = Token()")
+        mismatch = s.eval_entry("let token: Token = A::Token()")
+
+        assert scoped.ok, scoped.diagnostics
+        assert root.ok, root.diagnostics
+        assert not mismatch.ok
+
+    def test_later_entry_extends_a_retained_scope_with_a_generic_type(self) -> None:
+        s = ReplSession()
+        assert s.eval_entry("scope A\nend A").ok
+        assert s.eval_entry("scope A\nrecord Box[T]\n  value: T\nend A").ok
+
+        result = s.eval_entry("let box: A::Box[int] = A::Box(value = 1)")
+
+        assert result.ok, result.diagnostics
+
     def test_top_level_return_rejected_and_session_continues(self) -> None:
         s = ReplSession()
         bad = s.eval_entry("return 1")
@@ -432,16 +461,18 @@ class TestRecursiveTypesAcrossEntries:
             TextType,
         )
 
-        names = frozenset({"R"})
+        identities = frozenset({((), "R")})
 
-        assert ReplSession._type_mentions_entry_nominal(ExceptionType("R"), names)
-        assert ReplSession._type_mentions_entry_nominal(ListType(RecordType("R")), names)
-        assert ReplSession._type_mentions_entry_nominal(DictType(RecordType("R")), names)
+        assert ReplSession._type_mentions_entry_nominal(ExceptionType("R"), identities)
+        assert ReplSession._type_mentions_entry_nominal(ListType(RecordType("R")), identities)
+        assert ReplSession._type_mentions_entry_nominal(DictType(RecordType("R")), identities)
         assert ReplSession._type_mentions_entry_nominal(
-            FunctionType((RecordType("R"),), TextType()), names
+            FunctionType((RecordType("R"),), TextType()), identities
         )
-        assert ReplSession._type_mentions_entry_nominal(FunctionType((), RecordType("R")), names)
-        assert not ReplSession._type_mentions_entry_nominal(TextType(), names)
+        assert ReplSession._type_mentions_entry_nominal(
+            FunctionType((), RecordType("R")), identities
+        )
+        assert not ReplSession._type_mentions_entry_nominal(TextType(), identities)
 
     def test_record_redefinition_invalidates_old_nominal_values(self) -> None:
         s = ReplSession()
@@ -571,6 +602,12 @@ class TestTypeOf:
         s.eval_entry('let p = Point(x = 1, y = "north")')
 
         assert s.type_of("p") == "record Point\n  x: int\n  y: text"
+
+    def test_type_of_scoped_nominal_displays_its_path(self) -> None:
+        s = ReplSession()
+        assert s.eval_entry("scope Left\nrecord Token()\nend Left\nlet token = Left::Token()").ok
+
+        assert s.type_of("token") == "record Left::Token()"
 
     def test_type_of_displays_enum_constructors(self) -> None:
         s = ReplSession()
@@ -1904,6 +1941,14 @@ class TestFuncDef:
         assert not bad.ok
         r = s.eval_entry("broken(1)")
         assert not r.ok  # broken not in scope
+
+    def test_runtime_failure_removes_unpromoted_scoped_nominal_metadata(self) -> None:
+        s = ReplSession()
+        failed = s.eval_entry("scope A\nrecord Token()\nend A\n1 / 0")
+
+        assert not failed.ok
+        later = s.eval_entry("A::Token()")
+        assert not later.ok
 
 
 # ---------------------------------------------------------------------------

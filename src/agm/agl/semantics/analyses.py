@@ -75,8 +75,7 @@ from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 from typing import assert_never
 
-from agm.agl.modules.ids import ModuleId
-from agm.agl.semantics.type_table import TypeDef, TypeDefKind, TypeTable, decl_key_sort_key
+from agm.agl.semantics.type_table import DeclKey, TypeDef, TypeDefKind, TypeTable, decl_key_sort_key
 from agm.agl.semantics.types import (
     AgentType,
     BoolType,
@@ -99,8 +98,6 @@ from agm.agl.semantics.types import (
 )
 from agm.util.graph import sccs
 
-# A declaration's identity in the shared type table.
-DeclKey = tuple[ModuleId, str]
 TypeEnv = Mapping[str, Type]
 InstantiationKey = tuple[DeclKey, tuple[Type, ...]]
 
@@ -162,7 +159,7 @@ def _decl_inhabited(
         {},
         inhabited,
         defs,
-        stack=frozenset({((typedef.module_id, typedef.name), args)}),
+        stack=frozenset({((typedef.module_id, typedef.scope_path, typedef.name), args)}),
     )
 
 
@@ -194,7 +191,7 @@ def _exception_decl_inhabited(
     *,
     stack: frozenset[InstantiationKey],
 ) -> bool:
-    key = (typedef.module_id, typedef.name)
+    key = (typedef.module_id, typedef.scope_path, typedef.name)
     if typedef.abstract:
         return any(
             child.kind == "exception" and child.base == key and child_key in inhabited
@@ -258,7 +255,7 @@ def _template_inhabited(
         case InferenceVarType():
             return True
         case RecordType() | EnumType():
-            key = (t.module_id, t.name)
+            key = (t.module_id, t.scope_path, t.name)
             if any(stack_key == key for stack_key, _args in stack):
                 return False
             target = defs.get(key)
@@ -275,7 +272,7 @@ def _template_inhabited(
                 stack=stack | frozenset({instantiation}),
             )
         case ExceptionType():
-            key = (t.module_id, t.name)
+            key = (t.module_id, t.scope_path, t.name)
             if any(stack_key == key for stack_key, _args in stack):
                 return False
             return key in inhabited
@@ -433,9 +430,9 @@ def _template_no_eq(
         case DictType():
             return _template_no_eq(t.value, no_eq, relevant, defs)
         case ExceptionType():
-            return (t.module_id, t.name) in no_eq
+            return (t.module_id, t.scope_path, t.name) in no_eq
         case RecordType() | EnumType():
-            key = (t.module_id, t.name)
+            key = (t.module_id, t.scope_path, t.name)
             if key in no_eq:
                 return True
             target = defs.get(key)
@@ -484,7 +481,7 @@ def _template_relevant_params(
             result |= _template_relevant_params(t.result, own_params, relevant, defs)
             return result
         case RecordType() | EnumType():
-            key = (t.module_id, t.name)
+            key = (t.module_id, t.scope_path, t.name)
             target = defs.get(key)
             if target is None:
                 return set()
@@ -656,7 +653,7 @@ def nominal_references_for_schema(
     match t:
         case RecordType() | EnumType():
             yield t
-            key = (t.module_id, t.name)
+            key = (t.module_id, t.scope_path, t.name)
             typedef = defs.get(key)
             if typedef is None:
                 return
@@ -721,7 +718,7 @@ def _reference_edges(
         found: list[_RefEdge] = []
         for template in _own_field_templates(typedef):
             for ref in nominal_references_for_schema(template, defs, frozen_relevant):
-                target = (ref.module_id, ref.name)
+                target = (ref.module_id, ref.scope_path, ref.name)
                 arg_templates = ref.type_args if isinstance(ref, (RecordType, EnumType)) else ()
                 found.append(_RefEdge(target=target, arg_templates=arg_templates))
         if typedef.kind == "exception" and typedef.base is not None:
@@ -838,7 +835,7 @@ def _param_occurrences(
             )
             return merged
         case RecordType() | EnumType():
-            key = (t.module_id, t.name)
+            key = (t.module_id, t.scope_path, t.name)
             target = defs.get(key)
             if target is None:
                 relevant_args = t.type_args
@@ -891,4 +888,7 @@ def _merge_growing(a: dict[str, bool], b: dict[str, bool]) -> dict[str, bool]:
 
 def _all_defs(table: TypeTable) -> dict[DeclKey, TypeDef]:
     """Return every registered ``TypeDef`` in *table*, keyed by its identity."""
-    return {(typedef.module_id, typedef.name): typedef for typedef in table.entries()}
+    return {
+        (typedef.module_id, typedef.scope_path, typedef.name): typedef
+        for typedef in table.entries()
+    }

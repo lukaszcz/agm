@@ -46,6 +46,7 @@ from agm.agl.scope.symbols import (
     ConstructorRef,
     ModuleResolution,
     ScopeNode,
+    ScopePath,
 )
 from agm.agl.syntax.nodes import (
     AgentDecl,
@@ -340,6 +341,8 @@ def resolve_program(
     entry_ambient_type_names: frozenset[str] = frozenset(),
     entry_parent_scope: ScopeNode | None = None,
     entry_repl_session_scope: ScopeNode | None = None,
+    entry_repl_session_scope_nodes: Mapping[ScopePath, ScopeNode] | None = None,
+    entry_repl_session_type_paths: frozenset[ScopePath] = frozenset(),
 ) -> ResolvedProgram:
     """Run the full scope-resolution pass over a :class:`~agm.agl.modules.loader.ModuleGraph`.
 
@@ -363,6 +366,11 @@ def resolve_program(
     entry_repl_session_scope:
         When given, passed to the entry resolver so ``::name`` self-references
         can fall back to prior session bindings (REPL program context).
+    entry_repl_session_scope_nodes:
+        Named scope layers promoted by prior REPL entries. They are copied into
+        the entry's resolver so qualified members remain available.
+    entry_repl_session_type_paths:
+        Type-owned scope paths among the retained layers.
 
     Returns
     -------
@@ -494,6 +502,8 @@ def resolve_program(
             private_info=private_info,
             is_entry=is_entry,
             repl_session_scope=entry_repl_session_scope if is_entry else None,
+            repl_session_scope_nodes=entry_repl_session_scope_nodes if is_entry else None,
+            repl_session_type_paths=entry_repl_session_type_paths if is_entry else frozenset(),
             origin_path=loaded.path,
             spaced_qualifiers=loaded.spaced_qualifiers,
         )

@@ -42,7 +42,7 @@ normal binding.  A bare ``VarRef("print")`` (not in call position) raises
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import replace
 from typing import TYPE_CHECKING, cast
@@ -228,6 +228,8 @@ class _Resolver:
         private_info: dict[tuple[ModuleId, str], bool] | None = None,
         is_entry: bool = True,
         repl_session_scope: ScopeNode | None = None,
+        repl_session_scope_nodes: Mapping[ScopePath, ScopeNode] | None = None,
+        repl_session_type_paths: frozenset[ScopePath] = frozenset(),
         origin_path: Path | None = None,
         spaced_qualifiers: tuple[SpacedQualifier, ...] = (),
     ) -> None:
@@ -249,6 +251,11 @@ class _Resolver:
         # in the entry's own root scope, allowing ``::name`` to resolve to a
         # prior session binding.
         self._repl_session_scope: ScopeNode | None = repl_session_scope
+        # Named scope layers retained by prior REPL entries. They are copied
+        # into this entry's fresh resolver image and committed only after a
+        # successful evaluation, so a failed entry cannot mutate session state.
+        self._repl_session_scope_nodes = dict(repl_session_scope_nodes or {})
+        self._repl_session_type_paths = repl_session_type_paths
         # This module's canonical source file, or None for a module with no
         # backing file (inline `-c` sources, direct REPL entries). Drives the
         # `extern def` placement check — externs require a file-backed module.
@@ -294,9 +301,11 @@ class _Resolver:
             DeclarationKey, FuncDef | RecordDef | EnumDef | ExceptionDef | TypeAlias | AgentDecl
         ] = {}
         self._scope_entity_kinds: dict[DeclarationKey, str] = {}
-        self._scope_paths: set[ScopePath] = {()}
-        self._scope_node_ids: dict[ScopePath, int] = {}
-        self._type_paths: set[ScopePath] = set()
+        self._scope_paths: set[ScopePath] = {(), *self._repl_session_scope_nodes}
+        self._scope_node_ids: dict[ScopePath, int] = {
+            path: node.node_id for path, node in self._repl_session_scope_nodes.items() if path
+        }
+        self._type_paths: set[ScopePath] = set(self._repl_session_type_paths)
         self._type_declarations: list[
             tuple[RecordDef | EnumDef | ExceptionDef | TypeAlias, ScopePath]
         ] = []
@@ -364,7 +373,15 @@ class _Resolver:
         if ambient_constructor_candidates:
             for cname, crefs in ambient_constructor_candidates.items():
                 for cref in crefs:
-                    self._add_constructor_candidate(cname, cref)
+                    if cref.owner_path:
+                        owner_scope = cref.owner_path + (
+                            (cref.owner_name,) if cref.variant is not None else ()
+                        )
+                        self._add_constructor_candidate(
+                            cname, cref, scope_path=owner_scope, inject_bare=False
+                        )
+                    else:
+                        self._add_constructor_candidate(cname, cref)
         # Seed ambient type names (from prior REPL entries).
         if ambient_type_names:
             self._declared_type_names.update(ambient_type_names)
@@ -552,11 +569,17 @@ class _Resolver:
         for path in sorted(self._scope_paths, key=_scope_path_sort_key):
             if not path:
                 continue
+            retained = self._repl_session_scope_nodes.get(path)
             nodes[path] = ScopeNode(
                 node_id=self._scope_node_ids[path],
                 parent=nodes[path[:-1]],
                 scope_path=path,
+                members={} if retained is None else dict(retained.members),
             )
+        # A replacement type declaration owns a fresh member layer: stale enum
+        # variants from its prior definition must not survive into this entry.
+        for item, path in self._type_declarations:
+            nodes[path + (item.name,)].members.clear()
         for (_module_id, path, name), declaration in self._declarations.items():
             nodes[path].members[name] = declaration
         return nodes
@@ -1890,11 +1913,24 @@ class _Resolver:
     def _constructor_for_type_path(self, path: ScopePath, variant: str) -> ConstructorRef:
         """Return the constructor-shaped chain result owned by local *path*."""
         owner_name = "::".join(path)
-        declaration = self._declaration_items[(self._module_id, path[:-1], path[-1])]
-        assert isinstance(declaration, (RecordDef, EnumDef, ExceptionDef, TypeAlias))
         candidates = self._scoped_constructor_candidates.get((path, variant), ())
         if candidates:
             return replace(candidates[0], owner_name=owner_name)
+        declaration = self._declaration_items.get((self._module_id, path[:-1], path[-1]))
+        if declaration is None:
+            retained = next(
+                (
+                    candidate
+                    for candidate in self._constructor_candidates.get(variant, ())
+                    if candidate.owner_module_id == self._module_id
+                    and candidate.owner_path == path[:-1]
+                    and candidate.owner_name == path[-1]
+                ),
+                None,
+            )
+            assert retained is not None
+            return replace(retained, owner_name=owner_name)
+        assert isinstance(declaration, (RecordDef, EnumDef, ExceptionDef, TypeAlias))
         return ConstructorRef(
             owner_name=owner_name,
             variant=variant,

@@ -1971,10 +1971,12 @@ class _Checker:
         if not owner_type.type_args:
             return False
         signature = self._env.get_ctor_sig_from_module(
-            owner_type.module_id, owner_type.name, variant
+            owner_type.module_id, owner_type.name, variant, scope_path=owner_type.scope_path
         )
         if signature is None:
-            signature = self._env.get_constructor_signature(owner_type.name, variant)
+            signature = self._env.get_constructor_signature(
+                owner_type.name, variant, scope_path=owner_type.scope_path
+            )
         assert signature is not None
         assert field in signature.field_names
         field_template = signature.field_templates[signature.field_names.index(field)]
@@ -3503,7 +3505,13 @@ class _Checker:
                     )
                 if not isinstance(local_enum, EnumType):
                     raise AglTypeError(f"'{local_owner}' is not a known enum type.", span=span)
-                if local_enum != enum_type:
+                same_generic_owner = (
+                    local_enum.module_id == enum_type.module_id
+                    and local_enum.scope_path == enum_type.scope_path
+                    and local_enum.name == enum_type.name
+                    and all(isinstance(arg, TypeVarType) for arg in local_enum.type_args)
+                )
+                if local_enum != enum_type and not same_generic_owner:
                     raise AglTypeError(
                         f"Qualifier '{local_owner}' resolves to enum '{local_enum.name}', "
                         f"but the value has enum type '{enum_type.name}'.",
@@ -3574,16 +3582,6 @@ class _Checker:
         if not module_qualifier.anchored and len(module_qualifier.route_segments) == 1:
             qualifier = module_qualifier.route_segments[0]
             form = self._env.resolve_unqualified_enum_owner_form(qualifier)
-            # A route competes with a type only when it contributes the enum
-            # owner being requested.  Merely sharing a suffix must not make a
-            # valid local enum spelling unusable.
-            module_member = self._env.has_qualified_import_member(module_qualifier, variant)
-            if form is not None and module_member:
-                raise AglTypeError(
-                    f"Qualifier '{qualifier}' is both a type name and a module route for "
-                    f"enum '{enum_name}'. {qualification_repair_guidance()}",
-                    span=span,
-                )
             if form is not None:
                 self._require_enum_owner_match(form, enum_type, qualifier, span)
                 return
@@ -4008,8 +4006,8 @@ class _Checker:
         if variant_name not in enum_variants:
             raise _variant_not_in_enum(variant_name, enum_type, pattern.span)
         vfields = enum_variants[variant_name]
-        field_kinds = self._env.get_constructor_field_kinds(
-            enum_type.name, variant_name, module_id=enum_type.module_id
+        field_kinds = self._env.get_constructor_field_kinds_for_type(
+            enum_type, enum_type.name, variant_name
         )
         assert field_kinds is not None, (
             f"field kinds not registered for {enum_type.name}.{variant_name}"

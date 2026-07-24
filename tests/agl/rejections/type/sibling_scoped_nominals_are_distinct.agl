@@ -1,0 +1,9 @@
+scope Left
+record Token()
+end Left
+
+scope Right
+record Token()
+end Right
+
+let token: Left::Token = Right::Token()

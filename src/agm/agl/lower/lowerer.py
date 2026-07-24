@@ -1079,8 +1079,12 @@ class _Lowerer:
                     assert isinstance(node_typ.result, RecordType)
                     return IrMakeConstructor(
                         location=self._loc(span),
-                        nominal=NominalId(node_typ.result.module_id, node_typ.result.name),
-                        display_name=node_typ.result.name,
+                        nominal=NominalId(
+                            node_typ.result.module_id,
+                            node_typ.result.name,
+                            node_typ.result.scope_path,
+                        ),
+                        display_name="::".join((*node_typ.result.scope_path, node_typ.result.name)),
                         variant=None,
                     )
                 sym = self._sym_for_decl(ref.decl_node_id)
@@ -1201,7 +1205,9 @@ class _Lowerer:
                 )
                 return IrVariantIs(
                     location=self._loc(span),
-                    nominal=NominalId(operand_type.module_id, operand_type.name),
+                    nominal=NominalId(
+                        operand_type.module_id, operand_type.name, operand_type.scope_path
+                    ),
                     variant=variant,
                     value=self.lower_expr(operand),
                     negated=negated,
@@ -1858,7 +1864,9 @@ class _Lowerer:
     def _nominal_for_constructor_result(self, typ: Type) -> tuple[NominalId, str]:
         """Return the runtime nominal represented by a constructor function result."""
         if isinstance(typ, (RecordType, EnumType, ExceptionType)):
-            return NominalId(typ.module_id, typ.name), typ.name
+            return NominalId(typ.module_id, typ.name, typ.scope_path), "::".join(
+                (*typ.scope_path, typ.name)
+            )
         raise AssertionError(f"constructor function has non-nominal result {typ!r}")
 
     def _lower_nullary_constructor(
@@ -2134,7 +2142,7 @@ class _Lowerer:
         loc = self._loc(span)
 
         if isinstance(typ, RecordType):
-            nominal = NominalId(typ.module_id, typ.name)
+            nominal = NominalId(typ.module_id, typ.name, typ.scope_path)
             # Build fields in declaration order via the shared TypeTable (its
             # TypeDef stores fields as a declaration-ordered tuple).
             ir_fields = tuple(
@@ -2143,12 +2151,12 @@ class _Lowerer:
             return IrMakeRecord(
                 location=loc,
                 nominal=nominal,
-                display_name=typ.name,
+                display_name="::".join((*typ.scope_path, typ.name)),
                 fields=ir_fields,
             )
 
         if isinstance(typ, ExceptionType):
-            nominal = NominalId(typ.module_id, typ.name)
+            nominal = NominalId(typ.module_id, typ.name, typ.scope_path)
             # ONE trace id allocation sentinel per construction (auto-fill any
             # declared field not present in arg_slots).
             exc_fields: list[tuple[str, IrExpr | AutoTraceField]] = []
@@ -2160,19 +2168,19 @@ class _Lowerer:
             return IrMakeException(
                 location=loc,
                 nominal=nominal,
-                display_name=typ.name,
+                display_name="::".join((*typ.scope_path, typ.name)),
                 fields=tuple(exc_fields),
             )
 
         if isinstance(typ, EnumType):
             assert variant is not None, "compiler bug: enum constructor must have variant"
-            nominal = NominalId(typ.module_id, typ.name)
+            nominal = NominalId(typ.module_id, typ.name, typ.scope_path)
             variant_fields = self._type_table.enum_variants(typ).get(variant, {})
             enum_fields = tuple((fname, arg_slots[fname]) for fname in variant_fields)
             return IrMakeEnum(
                 location=loc,
                 nominal=nominal,
-                display_name=typ.name,
+                display_name="::".join((*typ.scope_path, typ.name)),
                 variant=variant,
                 fields=enum_fields,
             )
@@ -2495,7 +2503,7 @@ class _Lowerer:
             assert isinstance(resolved, ExceptionType), (
                 f"compiler bug: catch clause type {exc_type!r} did not resolve to an ExceptionType"
             )
-            nominal = NominalId(resolved.module_id, resolved.name)
+            nominal = NominalId(resolved.module_id, resolved.name, resolved.scope_path)
             display_name = resolved.name
 
         # Allocate a SymbolId for the binding variable when present.
@@ -2603,6 +2611,7 @@ class _Lowerer:
                     NominalId(
                         constructor.enum_type.module_id,
                         constructor.enum_type.name,
+                        constructor.enum_type.scope_path,
                     ),
                     constructor.variant,
                 )
@@ -3083,32 +3092,32 @@ class _Lowerer:
         # User-declared nominals for this lowering unit.
         for name, typ in self._checked.type_env.non_builtin_type_items():
             if isinstance(typ, RecordType):
-                nominal = NominalId(typ.module_id, name)
+                nominal = NominalId(typ.module_id, typ.name, typ.scope_path)
                 self._link.nominals[nominal] = NominalDescriptor(
                     nominal=nominal,
-                    display_name=name,
+                    display_name="::".join((*typ.scope_path, typ.name)),
                     kind=NominalKind.RECORD,
                     fields=tuple(table.record_fields(typ).keys()),
                     variants=(),
                 )
             elif isinstance(typ, EnumType):
-                nominal = NominalId(typ.module_id, name)
+                nominal = NominalId(typ.module_id, typ.name, typ.scope_path)
                 variants = tuple(
                     VariantDescriptor(name=vname, fields=tuple(vfields.keys()))
                     for vname, vfields in table.enum_variants(typ).items()
                 )
                 self._link.nominals[nominal] = NominalDescriptor(
                     nominal=nominal,
-                    display_name=name,
+                    display_name="::".join((*typ.scope_path, typ.name)),
                     kind=NominalKind.ENUM,
                     fields=(),
                     variants=variants,
                 )
             elif isinstance(typ, ExceptionType):
-                nominal = NominalId(typ.module_id, name)
+                nominal = NominalId(typ.module_id, typ.name, typ.scope_path)
                 self._link.nominals[nominal] = NominalDescriptor(
                     nominal=nominal,
-                    display_name=name,
+                    display_name="::".join((*typ.scope_path, typ.name)),
                     kind=NominalKind.EXCEPTION,
                     fields=tuple(table.exception_fields(typ).keys()),
                     variants=(),
@@ -3130,22 +3139,22 @@ class _Lowerer:
         # type_args to substitute).
         for name, generic in self._checked.type_env.all_generic_types().items():
             typ = generic.template
-            nominal = NominalId(typ.module_id, name)
-            typedef = table.get(typ.module_id, name)
+            nominal = NominalId(typ.module_id, typ.name, typ.scope_path)
+            typedef = table.get(typ.module_id, typ.name, typ.scope_path)
             assert typedef is not None, (
                 f"compiler bug: generic type {name!r} has no TypeDef registered"
             )
             if isinstance(typ, RecordType):
                 self._link.nominals[nominal] = NominalDescriptor(
                     nominal=nominal,
-                    display_name=name,
+                    display_name="::".join((*typ.scope_path, typ.name)),
                     kind=NominalKind.RECORD,
                     fields=tuple(fname for fname, _ in typedef.fields),
                 )
             else:
                 self._link.nominals[nominal] = NominalDescriptor(
                     nominal=nominal,
-                    display_name=name,
+                    display_name="::".join((*typ.scope_path, typ.name)),
                     kind=NominalKind.ENUM,
                     variants=tuple(
                         VariantDescriptor(vname, tuple(fname for fname, _ in vfields))

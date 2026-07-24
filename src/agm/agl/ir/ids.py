@@ -80,14 +80,15 @@ class NominalId:
     """Identity key for a named nominal type (record, enum, or exception).
 
     Allocated by the linker.  Equality and hash are by field values
-    (``module_id`` + ``declared_name``), making two descriptors from the same
-    module with the same declared name structurally equal — which is the
-    correct behaviour since module + declared name uniquely identifies a type.
+    (``module_id`` + ``scope_path`` + ``declared_name``), making two
+    descriptors from the same declaration path structurally equal. Scope paths
+    remain tuples rather than encoded name strings.
 
     """
 
     module_id: ModuleId
     declared_name: str
+    scope_path: tuple[str, ...] = ()
 
 
 # ---------------------------------------------------------------------------

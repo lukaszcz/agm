@@ -433,11 +433,12 @@ directly or through another alias — see [Type aliases](#type-aliases). An
 alias has no nominal identity of its own to anchor a cycle; recursion must
 always pass through a named `record`, `enum`, or `exception`.
 
-## Module-qualified type identity
+## Module- and scope-qualified type identity
 
-Record types and enum types are identified by **both their name and their
-defining module**. Two types with the same name are distinct types if they
-come from different modules:
+Record types and enum types are identified by their **defining module, scope
+path, and name**. Two types with the same name are distinct when they come
+from different modules or different named scopes, including a module root and
+a scope in that same module:
 
 <!-- agl-check: fragment -->
 ```agl
@@ -460,13 +461,14 @@ let p: foo::Point = foo::Point(x = 0, y = 0)
 # let q: bar::Point = p
 ```
 
-This is **deep nominal identity**: two `Point` types from different modules are
-never interchangeable regardless of structural similarity.
+This is **deep nominal identity**: two `Point` types from different modules or
+scope paths are never interchangeable regardless of structural similarity.
 
 ### Qualified type references
 
 A type from an imported module may be named explicitly using the module
-qualifier:
+qualifier. A type in a named scope uses its complete scope path, such as
+`A::Token`, in annotations and constructor expressions:
 
 <!-- agl-check: fragment -->
 ```agl
@@ -476,6 +478,11 @@ import mylib as M
 # These are equivalent:
 let p1: mylib::Point = mylib::origin()
 let p2: M::Point     = M::origin()
+
+scope A
+record Token()
+end A
+let token: A::Token = A::Token()
 ```
 
 A plain import provides suffix routes; `as` provides its alias route. Qualified

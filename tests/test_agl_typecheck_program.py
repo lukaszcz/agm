@@ -1653,7 +1653,7 @@ def test_find_type_decl_span_missing_module_returns_none(tmp_path: Path) -> None
     mg = _make_graph_from_files(tmp_path, modules)
     rg = resolve_program(mg)
     missing_mid = ModuleId.from_path("does_not_exist")
-    assert _find_type_decl_span(rg, (missing_mid, "Whatever")) is None
+    assert _find_type_decl_span(rg, (missing_mid, (), "Whatever")) is None
 
 
 def test_find_type_decl_span_missing_name_returns_none(tmp_path: Path) -> None:
@@ -1663,7 +1663,7 @@ def test_find_type_decl_span_missing_name_returns_none(tmp_path: Path) -> None:
     modules = {"entry": "record R\n  x: int\n()"}
     mg = _make_graph_from_files(tmp_path, modules)
     rg = resolve_program(mg)
-    assert _find_type_decl_span(rg, (ENTRY_ID, "NoSuchType")) is None
+    assert _find_type_decl_span(rg, (ENTRY_ID, (), "NoSuchType")) is None
 
 
 def test_cross_module_generic_argument_cycle_is_uninhabitable(tmp_path: Path) -> None:
@@ -2974,7 +2974,7 @@ def test_cross_module_generic_record_template_has_module_id(tmp_path: Path) -> N
     _gtt, program_generic_table, _gat, _gcts, _gckft = _build_program_type_table(rg)
 
     lib_id = ModuleId.from_path("lib")
-    gdef = program_generic_table.get((lib_id, "Box"))
+    gdef = program_generic_table.get((lib_id, (), "Box"))
     assert gdef is not None, "lib::Box must appear in program_generic_table"
     assert gdef.template.module_id == lib_id, (
         f"lib::Box template must have module_id={lib_id!r}, "
@@ -3004,7 +3004,7 @@ def test_cross_module_generic_enum_template_has_module_id(tmp_path: Path) -> Non
     _gtt, program_generic_table, _gat, _gcts, _gckft = _build_program_type_table(rg)
 
     lib_id = ModuleId.from_path("lib")
-    gdef = program_generic_table.get((lib_id, "Opt"))
+    gdef = program_generic_table.get((lib_id, (), "Opt"))
     assert gdef is not None, "lib::Opt must appear in program_generic_table"
     assert gdef.template.module_id == lib_id, (
         f"lib::Opt template must have module_id={lib_id!r}, "

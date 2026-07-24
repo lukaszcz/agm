@@ -2,7 +2,7 @@
 
 ## Lowering and Linking
 
-Lowering consumes a `MatchCompiledModule` or `MatchCompiledProgram` and emits one linked executable program. It translates expressions directed by expected types, allocates stable program-local identities (symbols, functions, contracts, sources, nominal types), and links modules in dependency order, initializing top-level function closures before ordinary initializers so forward references work. Type arguments are erased; nominal identity survives as module-qualified identity, with shapes resolved through the shared `TypeTable` from checking. Lowering reads the checker's side tables — argument bindings, parameter types, output contracts — rather than re-binding or re-inferring; that is what keeps the IR and evaluator typeless.
+Lowering consumes a `MatchCompiledModule` or `MatchCompiledProgram` and emits one linked executable program. It translates expressions directed by expected types, allocates stable program-local identities (symbols, functions, contracts, sources, nominal types), and links modules in dependency order, initializing top-level function closures before ordinary initializers so forward references work. Type arguments are erased; nominal identity survives as the structured module, scope-path, and declaration-name key, with shapes resolved through the shared `TypeTable` from checking. Display names and schema `$defs` are derived at the execution boundary, so root-type schema names remain stable while scoped types remain distinct. Lowering reads the checker's side tables — argument bindings, parameter types, output contracts — rather than re-binding or re-inferring; that is what keeps the IR and evaluator typeless.
 
 ## The IR
 

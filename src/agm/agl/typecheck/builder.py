@@ -205,7 +205,12 @@ class _TypeBuilder:
                 self._env.unregister_name(item.name)
                 module_id = self._owning_module_id(item.is_builtin)
                 self._env.register_type(
-                    item.name, ExceptionType(name=item.name, module_id=module_id)
+                    item.name,
+                    ExceptionType(
+                        name=item.name.rsplit("::", maxsplit=1)[-1],
+                        module_id=module_id,
+                        scope_path=tuple(segment.name for segment in item.scope_path),
+                    ),
                 )
                 self._exception_defs[item.name] = item
             else:
@@ -215,12 +220,24 @@ class _TypeBuilder:
 
     def _register_record_or_enum_handle(self, item: RecordDef | EnumDef, *, is_enum: bool) -> None:
         module_id = self._owning_module_id(item.is_builtin)
+        declared_name = item.name.rsplit("::", maxsplit=1)[-1]
+        scope_path = tuple(segment.name for segment in item.scope_path)
         if item.type_params:
             type_args = tuple(TypeVarType(p) for p in item.type_params)
             template: RecordType | EnumType = (
-                EnumType(name=item.name, type_args=type_args, module_id=module_id)
+                EnumType(
+                    name=declared_name,
+                    type_args=type_args,
+                    module_id=module_id,
+                    scope_path=scope_path,
+                )
                 if is_enum
-                else RecordType(name=item.name, type_args=type_args, module_id=module_id)
+                else RecordType(
+                    name=declared_name,
+                    type_args=type_args,
+                    module_id=module_id,
+                    scope_path=scope_path,
+                )
             )
             gdef = GenericTypeDef(
                 kind="enum" if is_enum else "record",
@@ -230,9 +247,9 @@ class _TypeBuilder:
             self._env.register_generic_type(item.name, gdef)
         else:
             handle: RecordType | EnumType = (
-                EnumType(name=item.name, module_id=module_id)
+                EnumType(name=declared_name, module_id=module_id, scope_path=scope_path)
                 if is_enum
-                else RecordType(name=item.name, module_id=module_id)
+                else RecordType(name=declared_name, module_id=module_id, scope_path=scope_path)
             )
             self._env.register_type(item.name, handle)
 
@@ -292,8 +309,9 @@ class _TypeBuilder:
         module_id = self._owning_module_id(stmt.is_builtin)
         typedef = TypeDef(
             kind="record",
-            name=stmt.name,
+            name=stmt.name.rsplit("::", maxsplit=1)[-1],
             module_id=module_id,
+            scope_path=tuple(segment.name for segment in stmt.scope_path),
             fields=tuple(fields.items()),
         )
         self._validate_builtin_shape(stmt, typedef, BUILTIN_PRELUDE_TYPE_DEFS)
@@ -322,8 +340,9 @@ class _TypeBuilder:
         module_id = self._owning_module_id(stmt.is_builtin)
         typedef = TypeDef(
             kind="enum",
-            name=stmt.name,
+            name=stmt.name.rsplit("::", maxsplit=1)[-1],
             module_id=module_id,
+            scope_path=tuple(segment.name for segment in stmt.scope_path),
             variants=tuple((vname, tuple(vfields.items())) for vname, vfields in variants.items()),
         )
         self._validate_builtin_shape(stmt, typedef, BUILTIN_PRELUDE_TYPE_DEFS)
@@ -337,13 +356,13 @@ class _TypeBuilder:
         """Resolve and register an exception's own ``TypeDef`` (no ordering).
 
         Reuses the record-path field resolution and duplicate-own-field
-        check.  ``base`` is resolved to a ``(module_id, name)`` key — no
+        check.  ``base`` is resolved to a ``(module_id, scope_path, name)`` key — no
         ordering is required to do so, since only the base's *identity* (not
         its shape) is needed here.  Own-vs-inherited field duplication and
         constructor-callability are checked later, once every exception's
         shape is buildable (see :meth:`_finalize_exceptions`).
         """
-        base_key: tuple[ModuleId, str] | None = None
+        base_key: tuple[ModuleId, tuple[str, ...], str] | None = None
         if stmt.base is not None:
             base_type = self._env.resolve_named_type(stmt.base)
             if not isinstance(base_type, ExceptionType):
@@ -351,7 +370,7 @@ class _TypeBuilder:
                     f"Exception '{stmt.name}' extends unknown exception '{stmt.base}'.",
                     span=stmt.span,
                 )
-            base_key = (base_type.module_id, base_type.name)
+            base_key = (base_type.module_id, base_type.scope_path, base_type.name)
         fields: dict[str, Type] = {}
         seen_fields: dict[str, SourceSpan] = {}
         for fd in stmt.fields:
@@ -377,8 +396,9 @@ class _TypeBuilder:
         # ``TypeDef.base``, no build-ordering step needed).
         typedef = TypeDef(
             kind="exception",
-            name=stmt.name,
+            name=stmt.name.rsplit("::", maxsplit=1)[-1],
             module_id=module_id,
+            scope_path=tuple(segment.name for segment in stmt.scope_path),
             fields=tuple(fields.items()),
             abstract=stmt.base is None,
             base=base_key,
@@ -406,10 +426,16 @@ class _TypeBuilder:
                 continue
             module_id = self._owning_module_id(item.is_builtin)
             typedef = self._env.type_table.exception_def(
-                ExceptionType(name=item.name, module_id=module_id)
+                ExceptionType(
+                    name=item.name.rsplit("::", maxsplit=1)[-1],
+                    module_id=module_id,
+                    scope_path=tuple(segment.name for segment in item.scope_path),
+                )
             )
             assert typedef.base is not None
-            base_handle = ExceptionType(name=typedef.base[1], module_id=typedef.base[0])
+            base_handle = ExceptionType(
+                name=typedef.base[2], module_id=typedef.base[0], scope_path=typedef.base[1]
+            )
             base_fields = self._env.type_table.exception_fields(base_handle)
             for fd in item.fields:
                 if fd.name in base_fields:
@@ -468,8 +494,9 @@ class _TypeBuilder:
         self._env.type_table.register(
             TypeDef(
                 kind="record",
-                name=stmt.name,
+                name=stmt.name.rsplit("::", maxsplit=1)[-1],
                 module_id=self._module_id,
+                scope_path=tuple(segment.name for segment in stmt.scope_path),
                 type_params=stmt.type_params,
                 fields=tuple(fields.items()),
             )
@@ -516,8 +543,9 @@ class _TypeBuilder:
         self._env.type_table.register(
             TypeDef(
                 kind="enum",
-                name=stmt.name,
+                name=stmt.name.rsplit("::", maxsplit=1)[-1],
                 module_id=self._module_id,
+                scope_path=tuple(segment.name for segment in stmt.scope_path),
                 type_params=stmt.type_params,
                 variants=tuple(
                     (vname, tuple(vfields.items())) for vname, vfields in variants.items()
@@ -576,10 +604,12 @@ class _TypeBuilder:
             if not isinstance(item, (RecordDef, EnumDef, ExceptionDef)):
                 continue
             module_id = self._owning_module_id(item.is_builtin)
-            key = (module_id, item.name)
+            scope_path = tuple(segment.name for segment in item.scope_path)
+            declared_name = item.name.rsplit("::", maxsplit=1)[-1]
+            key = (module_id, scope_path, declared_name)
             if key not in uninhabited:
                 continue
-            typedef = self._env.type_table.get(module_id, item.name)
+            typedef = self._env.type_table.get(module_id, declared_name, scope_path)
             assert typedef is not None
             raise AglTypeError(uninhabitable_message(typedef.kind, item.name), span=item.span)
         raise AssertionError(  # pragma: no cover

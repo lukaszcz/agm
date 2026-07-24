@@ -19,7 +19,7 @@ from types import MappingProxyType
 from typing import Literal, cast
 
 from agm.agl.diagnostics import AglError, Diagnostic
-from agm.agl.modules.ids import ENTRY_ID, ModuleId
+from agm.agl.modules.ids import ENTRY_ID, PRELUDE_ID, ModuleId
 from agm.agl.scope.imports import (
     ImportEnv,
     QName,
@@ -36,6 +36,7 @@ from agm.agl.scope.symbols import BindingRef, ConstructorRef, ModuleResolution, 
 from agm.agl.semantics.persistent import PersistentDict
 from agm.agl.semantics.type_table import (
     BUILTIN_PRELUDE_TYPE_DEFS,
+    DeclKey,
     TypeTable,
     create_seeded_type_table,
 )
@@ -67,6 +68,13 @@ from agm.agl.semantics.types import (
 )
 from agm.agl.syntax.nodes import Expr, ParamKind, Pattern, QualifierAnchor, QualifierChain
 from agm.agl.syntax.spans import SourceSpan
+
+
+def _split_scoped_type_name(name: str) -> tuple[ScopePath, str]:
+    """Split a source spelling only at the environment's UI boundary."""
+    *scope_path, declared_name = name.split("::")
+    return tuple(scope_path), declared_name
+
 
 # ---------------------------------------------------------------------------
 # ParamSpec — per-parameter descriptor in a FunctionSignature
@@ -524,16 +532,16 @@ class TypeEnvironment:
     def __init__(
         self,
         *,
-        program_type_table: Mapping[tuple[ModuleId, str], Type] | None = None,
-        program_generic_table: Mapping[tuple[ModuleId, str], GenericTypeDef] | None = None,
-        program_alias_table: Mapping[tuple[ModuleId, str], GenericAliasDef] | None = None,
-        program_alias_keys: frozenset[tuple[ModuleId, str]] | None = None,
+        program_type_table: Mapping[DeclKey, Type] | None = None,
+        program_generic_table: Mapping[DeclKey, GenericTypeDef] | None = None,
+        program_alias_table: Mapping[DeclKey, GenericAliasDef] | None = None,
+        program_alias_keys: frozenset[DeclKey] | None = None,
         program_alias_resolver: Callable[[ModuleId, str, SourceSpan | None], Type | None]
         | None = None,
-        program_ctor_sig_table: Mapping[tuple[ModuleId, str, str | None], ConstructorSignature]
+        program_ctor_sig_table: Mapping[tuple[DeclKey, str | None], ConstructorSignature]
         | None = None,
         program_ctor_field_kinds_table: Mapping[
-            tuple[ModuleId, str, str | None], tuple[tuple[str, ParamKind], ...]
+            tuple[DeclKey, str | None], tuple[tuple[str, ParamKind], ...]
         ]
         | None = None,
         import_env: ImportEnv | None = None,
@@ -558,8 +566,8 @@ class TypeEnvironment:
         self._function_signatures: dict[str, FunctionSignature] = {}
         # Generic type definitions — name → GenericTypeDef.
         self._generic_types: dict[str, GenericTypeDef] = {}
-        # Constructor signatures — (owner_name, variant | None) → ConstructorSignature.
-        self._constructor_sigs: dict[tuple[str, str | None], ConstructorSignature] = {}
+        # Constructor signatures — ((module, scope path, owner), variant) → signature.
+        self._constructor_sigs: dict[tuple[DeclKey, str | None], ConstructorSignature] = {}
         # Alias type-params — name → tuple of type-param names.
         self._alias_type_params: dict[str, tuple[str, ...]] = {}
         # Node-id-keyed function signatures — decl_node_id → FunctionSignature.
@@ -576,37 +584,54 @@ class TypeEnvironment:
         # externs).  Consulted by ``_check_declared_name_call`` to decide whether a
         # declared-name call site is an extern call site to record.
         self._extern_node_ids: set[int] = set()
-        # Constructor field-kinds registry — (owner_name, variant | None) → ordered
-        # (field_name, ParamKind) pairs.  Populated by _TypeBuilder for every
-        # record/enum/exception; consumed by the checker and lowerer to build
-        # bind_arguments param lists without round-tripping through the AST.
+        # Constructor field-kinds registry — ((module, scope path, owner), variant)
+        # → ordered (field_name, ParamKind) pairs. Populated by _TypeBuilder
+        # and consumed without encoding declaration paths into strings.
         self._constructor_field_kinds: dict[
-            tuple[str, str | None], tuple[tuple[str, ParamKind], ...]
+            tuple[DeclKey, str | None], tuple[tuple[str, ParamKind], ...]
         ] = {}
-        # Cross-module constructor field-kinds table: (ModuleId, owner_name, variant) → kinds.
+        # Cross-module constructor field-kinds table keyed by declaration identity.
         self._program_ctor_field_kinds_table: (
-            Mapping[tuple[ModuleId, str, str | None], tuple[tuple[str, ParamKind], ...]] | None
+            Mapping[tuple[DeclKey, str | None], tuple[tuple[str, ParamKind], ...]] | None
         ) = program_ctor_field_kinds_table
         # Program context: None in module path.
-        self._program_type_table: Mapping[tuple[ModuleId, str], Type] | None = program_type_table
+        self._program_type_table: Mapping[DeclKey, Type] | None = program_type_table
         # Cross-module generic type definitions: (ModuleId, name) → GenericTypeDef.
         # Populated by the program type pre-pass for qualified generic constructor calls.
-        self._program_generic_table: Mapping[tuple[ModuleId, str], GenericTypeDef] | None = (
-            program_generic_table
+        self._program_generic_table: Mapping[DeclKey, GenericTypeDef] | None = (
+            None
+            if program_generic_table is None
+            else (
+                program_generic_table
+                if all(len(key) == 3 for key in program_generic_table)
+                else {
+                    key if len(key) == 3 else (key[0], (), key[1]): value
+                    for key, value in program_generic_table.items()
+                }
+            )
         )
         # Cross-module parameterized type aliases: (ModuleId, name) → GenericAliasDef.
-        self._program_alias_table: Mapping[tuple[ModuleId, str], GenericAliasDef] = (
-            program_alias_table if program_alias_table is not None else {}
+        self._program_alias_table: Mapping[DeclKey, GenericAliasDef] = (
+            {}
+            if program_alias_table is None
+            else (
+                program_alias_table
+                if all(len(key) == 3 for key in program_alias_table)
+                else {
+                    key if len(key) == 3 else (key[0], (), key[1]): value
+                    for key, value in program_alias_table.items()
+                }
+            )
         )
-        self._program_alias_keys: frozenset[tuple[ModuleId, str]] = (
+        self._program_alias_keys: frozenset[DeclKey] = (
             program_alias_keys if program_alias_keys is not None else frozenset()
         )
         self._program_alias_resolver: (
             Callable[[ModuleId, str, SourceSpan | None], Type | None] | None
         ) = program_alias_resolver
-        # Cross-module constructor signatures: (ModuleId, owner_name, variant) → sig.
+        # Cross-module constructor signatures keyed by declaration identity.
         self._program_ctor_sig_table: (
-            Mapping[tuple[ModuleId, str, str | None], ConstructorSignature] | None
+            Mapping[tuple[DeclKey, str | None], ConstructorSignature] | None
         ) = program_ctor_sig_table
         self._import_env: ImportEnv | None = import_env
         # Scope collects this once from declarations; sharing it here preserves
@@ -647,12 +672,12 @@ class TypeEnvironment:
             self._types[prelude_name] = prelude_type
             typedef = BUILTIN_PRELUDE_TYPE_DEFS[prelude_name]
             if typedef.kind == "record":
-                self._constructor_field_kinds[(prelude_name, None)] = tuple(
+                self._constructor_field_kinds[((PRELUDE_ID, (), prelude_name), None)] = tuple(
                     (fname, ParamKind.STANDARD) for fname, _ in typedef.fields
                 )
                 continue
             for variant, vfields in typedef.variants:
-                self._constructor_field_kinds[(prelude_name, variant)] = tuple(
+                self._constructor_field_kinds[((PRELUDE_ID, (), prelude_name), variant)] = tuple(
                     (fname, ParamKind.STANDARD) for fname, _ in vfields
                 )
         # Exception constructor field kinds are NOT pre-registered here: each
@@ -762,13 +787,15 @@ class TypeEnvironment:
         self._alias_targets.pop(name, None)
         self._generic_types.pop(name, None)
         self._alias_type_params.pop(name, None)
+        scope_path, declared_name = _split_scoped_type_name(name)
+        nominal_key = (self._module_id, scope_path, declared_name)
         for key in tuple(self._constructor_sigs):
-            if key[0] == name:
+            if key[0] == nominal_key:
                 self._constructor_sigs.pop(key, None)
         for key in tuple(self._constructor_field_kinds):
-            if key[0] == name:
+            if key[0] == nominal_key:
                 self._constructor_field_kinds.pop(key, None)
-        self._type_table.unregister(self._module_id, name)
+        self._type_table.unregister(self._module_id, declared_name, scope_path)
 
     def register_alias(
         self, name: str, target_expr: object, *, type_params: tuple[str, ...] = ()
@@ -844,8 +871,18 @@ class TypeEnvironment:
         # registered TypeDef's templates on demand).
         template = gdef.template
         if isinstance(template, RecordType):
-            return RecordType(name=name, type_args=args, module_id=template.module_id)
-        return EnumType(name=name, type_args=args, module_id=template.module_id)
+            return RecordType(
+                name=template.name,
+                type_args=args,
+                module_id=template.module_id,
+                scope_path=template.scope_path,
+            )
+        return EnumType(
+            name=template.name,
+            type_args=args,
+            module_id=template.module_id,
+            scope_path=template.scope_path,
+        )
 
     def instantiate_alias(
         self,
@@ -867,16 +904,31 @@ class TypeEnvironment:
 
     # --- Constructor signature registry ---
 
+    @staticmethod
+    def _constructor_key(
+        module_id: ModuleId, owner_name: str, scope_path: ScopePath, variant: str | None
+    ) -> tuple[DeclKey, str | None]:
+        """Build a constructor key without using display spellings as identity."""
+        if "::" in owner_name:
+            *segments, owner_name = owner_name.split("::")
+            scope_path = tuple(segments)
+        return ((module_id, scope_path, owner_name), variant)
+
     def register_constructor_signature(self, sig: ConstructorSignature) -> None:
-        """Register a constructor signature for a record or enum variant."""
+        """Register a constructor signature under its result type's identity."""
         self._assert_mutable()
-        self._constructor_sigs[(sig.owner_name, sig.variant)] = sig
+        result = sig.result_template
+        assert isinstance(result, (RecordType, EnumType))
+        key = self._constructor_key(result.module_id, result.name, result.scope_path, sig.variant)
+        self._constructor_sigs[key] = sig
 
     def get_constructor_signature(
-        self, owner_name: str, variant: str | None
+        self, owner_name: str, variant: str | None, *, scope_path: ScopePath = ()
     ) -> ConstructorSignature | None:
-        """Return the constructor signature for *owner_name* / *variant*, or ``None``."""
-        return self._constructor_sigs.get((owner_name, variant))
+        """Return a local constructor signature by structured owner identity."""
+        return self._constructor_sigs.get(
+            self._constructor_key(self._module_id, owner_name, scope_path, variant)
+        )
 
     def resolve_constructor_owner_name(self, name: str) -> str | None:
         """Resolve local nominal aliases to the name holding their constructor metadata."""
@@ -908,6 +960,8 @@ class TypeEnvironment:
         found locally.
         """
         local_name = self._lexical_type_name(name)
+        if local_name in self._generic_types:
+            return self._generic_types[local_name].template
         if local_name in self._types or local_name in self._alias_targets:
             try:
                 return self._resolve_name_type(
@@ -930,7 +984,7 @@ class TypeEnvironment:
 
     def _is_program_type_candidate(self, qname: QName) -> bool:
         """Return whether a program-qualified name denotes any type-namespace declaration."""
-        key = (qname[0], qname[1])
+        key = (qname[0], (), qname[1])
         return (
             (self._program_type_table is not None and key in self._program_type_table)
             or (self._program_generic_table is not None and key in self._program_generic_table)
@@ -942,7 +996,7 @@ class TypeEnvironment:
         self, module_id: ModuleId, name: str, span: SourceSpan | None
     ) -> Type | None:
         """Resolve a program alias lazily when the program pre-pass is still building it."""
-        key = (module_id, name)
+        key = (module_id, (), name)
         if key not in self._program_alias_keys or self._program_alias_resolver is None:
             return None
         return self._program_alias_resolver(module_id, name, span)
@@ -952,7 +1006,7 @@ class TypeEnvironment:
     ) -> Type | None:
         """Resolve a program-qualified name used as an unapplied type expression."""
         assert self._program_type_table is not None
-        key = (qname[0], qname[1])
+        key = (qname[0], (), qname[1])
         typ = self._program_type_table.get(key)
         if typ is not None:
             return typ
@@ -1174,13 +1228,13 @@ class TypeEnvironment:
                 or candidate in self._alias_targets
                 or (
                     self._program_type_table is not None
-                    and (self._module_id, candidate) in self._program_type_table
+                    and (self._module_id, (), candidate) in self._program_type_table
                 )
                 or (
                     self._program_generic_table is not None
-                    and (self._module_id, candidate) in self._program_generic_table
+                    and (self._module_id, (), candidate) in self._program_generic_table
                 )
-                or (self._module_id, candidate) in self._program_alias_table
+                or (self._module_id, (), candidate) in self._program_alias_table
             ):
                 return candidate
         return name
@@ -1193,13 +1247,13 @@ class TypeEnvironment:
             or name in self._alias_targets
             or (
                 self._program_type_table is not None
-                and (self._module_id, name) in self._program_type_table
+                and (self._module_id, (), name) in self._program_type_table
             )
             or (
                 self._program_generic_table is not None
-                and (self._module_id, name) in self._program_generic_table
+                and (self._module_id, (), name) in self._program_generic_table
             )
-            or (self._module_id, name) in self._program_alias_table
+            or (self._module_id, (), name) in self._program_alias_table
         )
 
     def _local_qualified_type_name(self, qualifier: QualifierChain, name: str) -> str | None:
@@ -1407,7 +1461,7 @@ class TypeEnvironment:
                     resolved_args,
                     span=eff_span,
                 )
-            program_alias_def = self._program_alias_table.get((self._module_id, name))
+            program_alias_def = self._program_alias_table.get((self._module_id, (), name))
             if program_alias_def is not None:
                 return self.instantiate_alias(name, program_alias_def, resolved_args, span=eff_span)
             if name in self._types:
@@ -1452,13 +1506,14 @@ class TypeEnvironment:
         if not type_candidates:
             return None
         module_id, source_name = type_candidates[0]
-        gdef = self._program_generic_table.get((module_id, source_name))
+        key = (module_id, (), source_name)
+        gdef = self._program_generic_table.get(key)
         if gdef is not None:
             return self.instantiate_from_gdef(source_name, gdef, args, span=span)
-        alias_def = self._program_alias_table.get((module_id, source_name))
-        if alias_def is None and (module_id, source_name) in self._program_alias_keys:
+        alias_def = self._program_alias_table.get(key)
+        if alias_def is None and key in self._program_alias_keys:
             self._ensure_program_alias_resolved(module_id, source_name, span)
-            alias_def = self._program_alias_table.get((module_id, source_name))
+            alias_def = self._program_alias_table.get(key)
         if alias_def is not None:
             return self.instantiate_alias(source_name, alias_def, args, span=span)
         raise AglTypeError(
@@ -1485,19 +1540,17 @@ class TypeEnvironment:
             )
         qname = self._resolve_import_qname(qualifier, name, span=span)
         assert qname is not None
-        gdef = self._program_generic_table.get((qname[0], qname[1]))
+        key = (qname[0], (), qname[1])
+        gdef = self._program_generic_table.get(key)
         if gdef is not None:
             return self.instantiate_from_gdef(qname[1], gdef, args, span=span)
-        alias_def = self._program_alias_table.get((qname[0], qname[1]))
-        if alias_def is None and (qname[0], qname[1]) in self._program_alias_keys:
+        alias_def = self._program_alias_table.get(key)
+        if alias_def is None and key in self._program_alias_keys:
             self._ensure_program_alias_resolved(qname[0], qname[1], span)
-            alias_def = self._program_alias_table.get((qname[0], qname[1]))
+            alias_def = self._program_alias_table.get(key)
         if alias_def is not None:
             return self.instantiate_alias(qname[1], alias_def, args, span=span)
-        if (
-            self._program_type_table is not None
-            and (qname[0], qname[1]) in self._program_type_table
-        ):
+        if self._program_type_table is not None and key in self._program_type_table:
             raise AglTypeError(
                 f"Type '{rendered}::{name}' does not take type arguments.",
                 span=span,
@@ -1548,7 +1601,7 @@ class TypeEnvironment:
                 _resolving=_resolving | {name},
                 type_vars=type_vars,
             )
-        program_alias_def = self._program_alias_table.get((self._module_id, name))
+        program_alias_def = self._program_alias_table.get((self._module_id, (), name))
         if program_alias_def is not None:
             raise AglTypeError(
                 f"Parameterized alias '{name}' requires "
@@ -1691,7 +1744,7 @@ class TypeEnvironment:
         program boundary. Own-module fallback supports the module path
         without exposing any mutable type-environment registry.
         """
-        key = (module_id, name)
+        key = (module_id, (), name)
         alias_def = self._program_alias_table.get(key)
         if alias_def is not None:
             return TypeTemplate(alias_def.template, alias_def.type_params)
@@ -1726,17 +1779,21 @@ class TypeEnvironment:
             return cached
         names = set(self._types) | set(self._alias_targets) | set(self._generic_types)
         names.update(
-            name for module_id, name in self._program_alias_table if module_id == self._module_id
+            "::".join((*scope_path, name))
+            for module_id, scope_path, name in self._program_alias_table
+            if module_id == self._module_id
         )
         if self._program_generic_table is not None:
             names.update(
-                name
-                for module_id, name in self._program_generic_table
+                "::".join((*scope_path, name))
+                for module_id, scope_path, name in self._program_generic_table
                 if module_id == self._module_id
             )
         if self._program_type_table is not None:
             names.update(
-                name for module_id, name in self._program_type_table if module_id == self._module_id
+                "::".join((*scope_path, name))
+                for module_id, scope_path, name in self._program_type_table
+                if module_id == self._module_id
             )
         own_names = frozenset(names)
         if self._sealed:
@@ -1805,9 +1862,8 @@ class TypeEnvironment:
 
     def resolve_unqualified_enum_owner_form(self, owner_name: str) -> EnumOwnerForm | None:
         """Resolve ``Owner::variant`` with local-before-open precedence."""
-        if owner_name in self._own_source_type_names():
-            return self.resolve_enum_owner_form(EnumOwnerFormKind.LOCAL, owner_name)
-        return self.resolve_enum_owner_form(EnumOwnerFormKind.OPEN_IMPORT, owner_name)
+        local = self.resolve_enum_owner_form(EnumOwnerFormKind.LOCAL, owner_name)
+        return local or self.resolve_enum_owner_form(EnumOwnerFormKind.OPEN_IMPORT, owner_name)
 
     def _blocked_short_variants(self, form: EnumOwnerForm) -> frozenset[str]:
         """Return variants whose short owner spelling is occupied by a module route.
@@ -1926,7 +1982,7 @@ class TypeEnvironment:
         """
         if self._program_generic_table is None:
             return None
-        return self._program_generic_table.get((module_id, name))
+        return self._program_generic_table.get((module_id, (), name))
 
     def get_open_imported_generic_type(
         self, exposed_name: str
@@ -1980,14 +2036,14 @@ class TypeEnvironment:
                 return name, gdef
             if self._program_generic_table is None:
                 return None
-            gdef = self._program_generic_table.get((self._module_id, name))
+            gdef = self._program_generic_table.get((self._module_id, (), name))
             return (name, gdef) if gdef is not None else None
         if self._import_env is None or self._program_generic_table is None:
             return None
         qname = self._resolve_import_qname(qualifier, name, span=span, required=False)
         if qname is None:
             return None
-        gdef = self._program_generic_table.get((qname[0], qname[1]))
+        gdef = self._program_generic_table.get((qname[0], (), qname[1]))
         if gdef is None:
             return None
         rendered = qualifier.render()
@@ -2001,33 +2057,38 @@ class TypeEnvironment:
             return []
         matches: list[tuple[ModuleId, str, GenericTypeDef]] = []
         for module_id, source_name in self._import_env.unqualified.get(exposed_name, frozenset()):
-            gdef = self._program_generic_table.get((module_id, source_name))
+            gdef = self._program_generic_table.get((module_id, (), source_name))
             if gdef is not None:
                 matches.append((module_id, source_name, gdef))
         return matches
 
     def get_ctor_sig_from_module(
-        self, module_id: ModuleId, owner_name: str, variant: str | None
+        self,
+        module_id: ModuleId,
+        owner_name: str,
+        variant: str | None,
+        *,
+        scope_path: ScopePath = (),
     ) -> ConstructorSignature | None:
-        """Look up a cross-module ``ConstructorSignature`` by owning module, name, and variant.
-
-        Companion to :meth:`get_generic_type_from_module` for checking cross-module
-        generic constructor calls.  Returns ``None`` in module mode or when
-        not found.
-        """
+        """Look up a cross-module constructor signature by structured owner identity."""
         if self._program_ctor_sig_table is None:
             return None
-        return self._program_ctor_sig_table.get((module_id, owner_name, variant))
+        return self._program_ctor_sig_table.get(
+            self._constructor_key(module_id, owner_name, scope_path, variant)
+        )
 
     def register_constructor_field_kinds(
         self,
         owner_name: str,
         variant: str | None,
         fields: tuple[tuple[str, ParamKind], ...],
+        *,
+        scope_path: ScopePath = (),
     ) -> None:
-        """Register ordered (field_name, ParamKind) pairs for a constructor."""
+        """Register ordered field kinds under structured owner identity."""
         self._assert_mutable()
-        self._constructor_field_kinds[(owner_name, variant)] = fields
+        key = self._constructor_key(self._module_id, owner_name, scope_path, variant)
+        self._constructor_field_kinds[key] = fields
 
     def get_constructor_field_kinds(
         self,
@@ -2042,11 +2103,13 @@ class TypeEnvironment:
         when ``module_id`` is provided (used for cross-module constructor calls where the
         owner type carries its declaring module's ``module_id``).
         """
-        result = self._constructor_field_kinds.get((owner_name, variant))
+        owner_module_id = self._module_id if module_id is None else module_id
+        key = self._constructor_key(owner_module_id, owner_name, (), variant)
+        result = self._constructor_field_kinds.get(key)
         if result is not None:
             return result
         if module_id is not None and self._program_ctor_field_kinds_table is not None:
-            return self._program_ctor_field_kinds_table.get((module_id, owner_name, variant))
+            return self._program_ctor_field_kinds_table.get(key)
         return None
 
     def get_constructor_field_kinds_for_type(
@@ -2078,14 +2141,17 @@ class TypeEnvironment:
                 (fname, ParamKind(kind_value))
                 for fname, kind_value in self._type_table.exception_field_kinds(typ)
             )
+        assert isinstance(typ, (RecordType, EnumType)), f"unexpected constructor owner type {typ!r}"
+        scoped_owner_name = "::".join((*typ.scope_path, typ.name))
         if isinstance(typ, EnumType):
-            return self.get_constructor_field_kinds(owner_name, variant, module_id=typ.module_id)
-        assert isinstance(typ, RecordType), f"unexpected constructor owner type {typ!r}"
-        return self.get_constructor_field_kinds(owner_name, None, module_id=typ.module_id)
+            return self.get_constructor_field_kinds(
+                scoped_owner_name, variant, module_id=typ.module_id
+            )
+        return self.get_constructor_field_kinds(scoped_owner_name, None, module_id=typ.module_id)
 
     def all_constructor_field_kinds(
         self,
-    ) -> list[tuple[tuple[str, str | None], tuple[tuple[str, ParamKind], ...]]]:
+    ) -> list[tuple[tuple[DeclKey, str | None], tuple[tuple[str, ParamKind], ...]]]:
         """Return all own-module constructor field-kind entries as (key, kinds) pairs."""
         return list(self._constructor_field_kinds.items())
 
@@ -2093,7 +2159,7 @@ class TypeEnvironment:
         """Return the own-module generic type map (name → GenericTypeDef)."""
         return self._generic_types
 
-    def all_constructor_sigs(self) -> list[tuple[tuple[str, str | None], ConstructorSignature]]:
+    def all_constructor_sigs(self) -> list[tuple[tuple[DeclKey, str | None], ConstructorSignature]]:
         """Return all own-module constructor signatures as (key, sig) pairs."""
         return list(self._constructor_sigs.items())
 
@@ -2125,9 +2191,15 @@ class TypeEnvironment:
             | set(other._generic_types)
             | set(other._alias_type_params)
         )
-        incoming_type_names |= {owner_name for owner_name, _variant in other._constructor_sigs}
         incoming_type_names |= {
-            owner_name for owner_name, _variant in other._constructor_field_kinds
+            "::".join((*scope_path, owner_name))
+            for ((module_id, scope_path, owner_name), _variant) in other._constructor_sigs
+            if module_id == self._module_id
+        }
+        incoming_type_names |= {
+            "::".join((*scope_path, owner_name))
+            for ((module_id, scope_path, owner_name), _variant) in other._constructor_field_kinds
+            if module_id == self._module_id
         }
         for name in incoming_type_names:
             self.unregister_name(name)
@@ -2160,7 +2232,8 @@ class TypeEnvironment:
             if name in builtin:
                 continue
             self.unregister_name(name)
-            typedef = other._type_table.get(other._module_id, name)
+            scope_path, declared_name = _split_scoped_type_name(name)
+            typedef = other._type_table.get(other._module_id, declared_name, scope_path)
             if typedef is not None:
                 self._type_table.register(typedef)
             if name in other._types:
@@ -2172,8 +2245,8 @@ class TypeEnvironment:
             if name in other._alias_type_params:
                 self._alias_type_params[name] = other._alias_type_params[name]
             for key, sig in other._constructor_sigs.items():
-                if key[0] == name:
+                if key[0] == (other._module_id, scope_path, declared_name):
                     self._constructor_sigs[key] = sig
             for key, kinds in other._constructor_field_kinds.items():
-                if key[0] == name:
+                if key[0] == (other._module_id, scope_path, declared_name):
                     self._constructor_field_kinds[key] = kinds

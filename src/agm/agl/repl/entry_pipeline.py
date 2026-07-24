@@ -9,7 +9,7 @@ by ``ReplSession`` via the narrow ``EntryPipelineCtx`` Protocol. Must NOT import
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from typing import TYPE_CHECKING, Protocol
 
 from agm.agl.diagnostics import Diagnostic
@@ -53,6 +53,8 @@ class EntryPipelineCtx(Protocol):
     _link_image: LinkImage
     _ir_base_frame: Frame
     _session_scope: ScopeNode
+    _session_scope_nodes: dict[tuple[str, ...], ScopeNode]
+    _session_type_paths: frozenset[tuple[str, ...]]
     _type_env: TypeEnvironment
     _ambient_constructor_candidates: dict[str, tuple[ConstructorRef, ...]]
     _ambient_type_names: frozenset[str]
@@ -197,6 +199,8 @@ class EntryPipeline:
                 entry_ambient_type_names=self._ctx._ambient_type_names,
                 entry_parent_scope=self._ctx._session_scope,
                 entry_repl_session_scope=self._ctx._session_scope,
+                entry_repl_session_scope_nodes=self._ctx._session_scope_nodes,
+                entry_repl_session_type_paths=self._ctx._session_type_paths,
             )
         except AglScopeError as exc:
             return self._ctx._fail([exc.to_diagnostic()], tab_warnings)
@@ -307,6 +311,8 @@ class EntryPipeline:
             entry_ambient_type_names=self._ctx._ambient_type_names,
             entry_parent_scope=self._ctx._session_scope,
             entry_repl_session_scope=self._ctx._session_scope,
+            entry_repl_session_scope_nodes=self._ctx._session_scope_nodes,
+            entry_repl_session_type_paths=self._ctx._session_type_paths,
         )
         return check_program(
             resolved_program, host_env.capabilities, entry_seed_env=self._ctx._type_env
@@ -598,9 +604,10 @@ class EntryPipeline:
         )
         self._replace_accumulated_imports(entry_imports)
         marker = lowered.trailing_expression
+        initializer_values = interp.module_initializer_values.get(lowered.program.entry_module)
         captured = (
-            interp.module_initializer_values[lowered.program.entry_module][marker]
-            if marker is not None
+            initializer_values[marker]
+            if marker is not None and initializer_values is not None
             else None
         )
         kind, name = self._ctx._classify(orig_program)
@@ -711,13 +718,20 @@ class EntryPipeline:
         """Rollback entry nominal descriptors for type declarations after a failure."""
         from agm.agl.ir.ids import NominalId
         from agm.agl.modules.ids import ENTRY_ID
-        from agm.agl.syntax.nodes import EnumDef, ExceptionDef, RecordDef
+        from agm.agl.syntax.nodes import EnumDef, ExceptionDef, RecordDef, ScopeRegion
+
+        def type_declarations(
+            items: tuple[object, ...],
+        ) -> Iterator[RecordDef | EnumDef | ExceptionDef]:
+            for item in items:
+                if isinstance(item, ScopeRegion):
+                    yield from type_declarations(item.items)
+                elif isinstance(item, (RecordDef, EnumDef, ExceptionDef)):
+                    yield item
 
         nominal_ids = tuple(
-            NominalId(ENTRY_ID, item.name)
-            for item in program.body.items
-            if isinstance(item, (RecordDef, EnumDef, ExceptionDef))
-            and not item.scope_path
-            and not (failure_span is not None and item.span.end_offset <= failure_span.start_offset)
+            NominalId(ENTRY_ID, item.name, tuple(segment.name for segment in item.scope_path))
+            for item in type_declarations(program.body.items)
+            if not (failure_span is not None and item.span.end_offset <= failure_span.start_offset)
         )
         self._ctx._link_image.restore_nominals(nominal_snapshot, nominal_ids)

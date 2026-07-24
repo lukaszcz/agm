@@ -1,0 +1,36 @@
+# Scoped nominals retain their declaration paths through checking, lowering,
+# schema generation, decoding, and enum case dispatch.
+param expected: int
+
+record Token(value: int)
+
+scope Left
+record Token(value: int)
+
+record Tree[T](value: T, children: list[Left::Tree[T]])
+
+enum Flag
+  | on
+  | off
+end Left
+
+scope Right
+record Token(value: int)
+end Right
+
+let root = Token(value = 1)
+let left = Left::Token(value = 2)
+let right = Right::Token(value = 3)
+
+let decoded: Left::Tree[int] = ask("Return a tree.")
+let flag = Left::Flag::on
+let matched = case flag of
+  | Left::Flag::on => "on"
+  | Left::Flag::off => "off"
+
+print(root.value)
+print(left.value)
+print(right.value)
+print(decoded.children[0].value)
+print(decoded.children[0].value == expected)
+print(matched)

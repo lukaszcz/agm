@@ -15,7 +15,7 @@ Type hierarchy
 - ``DictType(value)`` — ``dict[text, V]`` (keys are always ``text`` in AgL).
 - ``RecordType(name, type_args, module_id)`` — a ``record`` nominal type
   handle; field shapes live in the shared ``TypeTable``
-  (``semantics.type_table``), keyed by ``(module_id, name)``.
+  (``semantics.type_table``), keyed by ``(module_id, scope_path, name)``.
 - ``EnumType(name, type_args, module_id)`` — an ``enum`` nominal type handle;
   variant shapes live in the shared ``TypeTable``.
 - ``ExceptionType(name, module_id)`` — an exception nominal type handle
@@ -163,7 +163,7 @@ class RecordType:
     """A ``record`` nominal type handle.
 
     A ``RecordType`` carries no field data — it is a lightweight handle whose
-    identity is ``(module_id, name, type_args)``.  Field types are looked up
+    identity is ``(module_id, scope_path, name, type_args)``. Field types are looked up
     by handle in the shared ``TypeTable`` (``semantics.type_table.TypeTable
     .record_fields``).  ``type_args`` holds the resolved type arguments for a
     generic instantiation (empty tuple for non-generic records).
@@ -174,6 +174,7 @@ class RecordType:
     name: str
     type_args: tuple[Type, ...] = ()
     module_id: ModuleId = field(default_factory=lambda: ENTRY_ID)
+    scope_path: tuple[str, ...] = ()
 
     @property
     def kind(self) -> str:
@@ -181,10 +182,11 @@ class RecordType:
 
     def __repr__(self) -> str:
         prefix = "" if self.module_id.is_entry else f"{self.module_id.path_str()}::"
+        scoped_name = "::".join((*self.scope_path, self.name))
         if self.type_args:
             args_str = ", ".join(repr(a) for a in self.type_args)
-            return f"{prefix}{self.name}[{args_str}]"
-        return f"{prefix}{self.name}"
+            return f"{prefix}{scoped_name}[{args_str}]"
+        return f"{prefix}{scoped_name}"
 
 
 @dataclass(frozen=True, slots=True)
@@ -192,7 +194,7 @@ class EnumType:
     """An ``enum`` nominal type handle.
 
     An ``EnumType`` carries no variant data — it is a lightweight handle
-    whose identity is ``(module_id, name, type_args)``.  Variant shapes are
+    whose identity is ``(module_id, scope_path, name, type_args)``. Variant shapes are
     looked up by handle in the shared ``TypeTable``
     (``semantics.type_table.TypeTable.enum_variants``).  ``type_args`` holds
     the resolved type arguments for a generic instantiation (empty tuple for
@@ -203,6 +205,7 @@ class EnumType:
     name: str
     type_args: tuple[Type, ...] = ()
     module_id: ModuleId = field(default_factory=lambda: ENTRY_ID)
+    scope_path: tuple[str, ...] = ()
 
     @property
     def kind(self) -> str:
@@ -210,10 +213,11 @@ class EnumType:
 
     def __repr__(self) -> str:
         prefix = "" if self.module_id.is_entry else f"{self.module_id.path_str()}::"
+        scoped_name = "::".join((*self.scope_path, self.name))
         if self.type_args:
             args_str = ", ".join(repr(a) for a in self.type_args)
-            return f"{prefix}{self.name}[{args_str}]"
-        return f"{prefix}{self.name}"
+            return f"{prefix}{scoped_name}[{args_str}]"
+        return f"{prefix}{scoped_name}"
 
 
 @dataclass(frozen=True, slots=True)
@@ -221,7 +225,7 @@ class ExceptionType:
     """An exception nominal type handle.
 
     An ``ExceptionType`` carries no field data — it is a lightweight handle
-    whose identity is ``(module_id, name)``; exceptions are never generic, so
+    whose identity is ``(module_id, scope_path, name)``; exceptions are never generic, so
     there is no ``type_args`` component (unlike ``RecordType``/``EnumType``).
     Field shapes and hierarchy metadata (``abstract``, ``base``) are looked
     up by handle in the shared ``TypeTable``
@@ -236,6 +240,7 @@ class ExceptionType:
 
     name: str
     module_id: ModuleId = field(default_factory=lambda: ENTRY_ID)
+    scope_path: tuple[str, ...] = ()
 
     @property
     def kind(self) -> str:
@@ -245,9 +250,10 @@ class ExceptionType:
         # Built-in/prelude exceptions always render as the bare name (matching
         # today's user-visible diagnostics); a module-owned user exception
         # matches the record/enum qualification style.
+        scoped_name = "::".join((*self.scope_path, self.name))
         if self.module_id.is_entry or self.module_id == PRELUDE_ID:
-            return self.name
-        return f"{self.module_id.path_str()}::{self.name}"
+            return scoped_name
+        return f"{self.module_id.path_str()}::{scoped_name}"
 
 
 # ---------------------------------------------------------------------------
@@ -440,6 +446,7 @@ def match_type_template(
     def visit_nominal(pattern: RecordType | EnumType, actual: RecordType | EnumType) -> bool:
         return (
             pattern.module_id == actual.module_id
+            and pattern.scope_path == actual.scope_path
             and pattern.name == actual.name
             and len(pattern.type_args) == len(actual.type_args)
             and all(
@@ -615,10 +622,14 @@ def replace_type_children(t: Type, children: tuple[Type, ...]) -> Type:
             return DictType(children[0])
         case FunctionType(params=params):
             return FunctionType(params=children[: len(params)], result=children[-1])
-        case RecordType(name=name, module_id=module_id):
-            return RecordType(name=name, type_args=children, module_id=module_id)
-        case EnumType(name=name, module_id=module_id):
-            return EnumType(name=name, type_args=children, module_id=module_id)
+        case RecordType(name=name, module_id=module_id, scope_path=scope_path):
+            return RecordType(
+                name=name, type_args=children, module_id=module_id, scope_path=scope_path
+            )
+        case EnumType(name=name, module_id=module_id, scope_path=scope_path):
+            return EnumType(
+                name=name, type_args=children, module_id=module_id, scope_path=scope_path
+            )
         case (
             TextType()
             | JsonType()

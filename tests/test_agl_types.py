@@ -1146,6 +1146,18 @@ class TestNominalEquality:
         e2 = EnumType(name="Color", module_id=mod_bar)
         assert e1 != e2
 
+    def test_scoped_nominals_are_distinct_from_root_and_siblings(self) -> None:
+        root = RecordType(name="Node")
+        left = RecordType(name="Node", scope_path=("Left",))
+        right = RecordType(name="Node", scope_path=("Right",))
+
+        assert root != left
+        assert left != right
+        assert repr(left) == "Left::Node"
+        assert repr(RecordType(name="Node", scope_path=("Left",), type_args=(IntType(),))) == (
+            "Left::Node[int]"
+        )
+
     def test_record_different_name_not_equal(self) -> None:
         from agm.agl.semantics.types import RecordType
 

@@ -32,7 +32,7 @@ from agm.agl.lower.lowerer import (
 from agm.agl.matchcompile import MatchCompiledProgram
 from agm.agl.modules.ids import STD_CORE_ID, ModuleId
 from agm.agl.self_validation import self_validation_enabled
-from agm.agl.semantics.types import EnumType, ExceptionType, RecordType
+from agm.agl.semantics.types import ExceptionType, RecordType
 from agm.agl.syntax.nodes import AgentDecl, FuncDef, ScopeRegion
 from agm.util.text import normalize_newlines
 
@@ -82,46 +82,38 @@ def lower_program(
         )
         module_source_ids[mid] = source_id
 
-    # Step 2: Build nominals from program_type_table + builtins.
-    for (mid, name), typ in checked.program_type_table.items():
-        # Skip type aliases: only register the canonical declaration site.
-        # A type alias `type Foo = Bar` creates an entry (mid, "Foo") -> RecordType(Bar)
-        # where Bar's name differs from "Foo"; skipping it avoids a spurious nominal.
-        if isinstance(typ, RecordType):
-            if name != typ.name or mid != typ.module_id:
-                continue
-            nominal = NominalId(typ.module_id, name)
+    # Step 2: Build nominals from the authoritative TypeTable declarations.
+    # Aliases do not have a TypeDef, so this also excludes their transparent
+    # source spellings without comparing concatenated scope names.
+    for typedef in type_table.entries():
+        nominal = NominalId(typedef.module_id, typedef.name, typedef.scope_path)
+        display_name = "::".join((*typedef.scope_path, typedef.name))
+        if typedef.kind == "record":
             link.nominals[nominal] = NominalDescriptor(
                 nominal=nominal,
-                display_name=name,
+                display_name=display_name,
                 kind=NominalKind.RECORD,
-                fields=tuple(type_table.record_fields(typ).keys()),
+                fields=tuple(name for name, _ in typedef.fields),
                 variants=(),
             )
-        elif isinstance(typ, EnumType):
-            if name != typ.name or mid != typ.module_id:
-                continue
-            nominal = NominalId(typ.module_id, name)
-            variants = tuple(
-                VariantDescriptor(name=vname, fields=tuple(vfields.keys()))
-                for vname, vfields in type_table.enum_variants(typ).items()
-            )
+        elif typedef.kind == "enum":
             link.nominals[nominal] = NominalDescriptor(
                 nominal=nominal,
-                display_name=name,
+                display_name=display_name,
                 kind=NominalKind.ENUM,
                 fields=(),
-                variants=variants,
+                variants=tuple(
+                    VariantDescriptor(name, tuple(field for field, _ in fields))
+                    for name, fields in typedef.variants
+                ),
             )
-        elif isinstance(typ, ExceptionType):
-            if name != typ.name or mid != typ.module_id:
-                continue
-            nominal = NominalId(typ.module_id, name)
+        else:
+            handle = ExceptionType(typedef.name, typedef.module_id, scope_path=typedef.scope_path)
             link.nominals[nominal] = NominalDescriptor(
                 nominal=nominal,
-                display_name=name,
+                display_name=display_name,
                 kind=NominalKind.EXCEPTION,
-                fields=tuple(type_table.exception_fields(typ).keys()),
+                fields=tuple(type_table.exception_fields(handle).keys()),
                 variants=(),
             )
 
@@ -134,26 +126,26 @@ def lower_program(
     for cm in checked.modules.values():
         for name, generic in cm.type_env.all_generic_types().items():
             typ = generic.template
-            nominal = NominalId(typ.module_id, name)
-            typedef = type_table.get(typ.module_id, name)
-            assert typedef is not None, (
+            nominal = NominalId(typ.module_id, typ.name, typ.scope_path)
+            generic_typedef = type_table.get(typ.module_id, typ.name, typ.scope_path)
+            assert generic_typedef is not None, (
                 f"compiler bug: generic type {name!r} has no TypeDef registered"
             )
             if isinstance(typ, RecordType):
                 link.nominals[nominal] = NominalDescriptor(
                     nominal=nominal,
-                    display_name=name,
+                    display_name="::".join((*typ.scope_path, typ.name)),
                     kind=NominalKind.RECORD,
-                    fields=tuple(fname for fname, _ in typedef.fields),
+                    fields=tuple(fname for fname, _ in generic_typedef.fields),
                 )
             else:
                 link.nominals[nominal] = NominalDescriptor(
                     nominal=nominal,
-                    display_name=name,
+                    display_name="::".join((*typ.scope_path, typ.name)),
                     kind=NominalKind.ENUM,
                     variants=tuple(
                         VariantDescriptor(vname, tuple(fname for fname, _ in vfields))
-                        for vname, vfields in typedef.variants
+                        for vname, vfields in generic_typedef.variants
                     ),
                 )
 

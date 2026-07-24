@@ -1,0 +1,26 @@
+{
+  "scenarios": [
+    {
+      "name": "scoped_nominals_decode_and_match",
+      "params": {"expected": 2},
+      "agents": {"ask": ["{\"value\": 1, \"children\": [{\"value\": 2, \"children\": []}]}" ]},
+      "expect": {
+        "ok": true,
+        "stdout": "1\n2\n3\n2\ntrue\non\n",
+        "calls": {"ask": 1},
+        "prompts": [{"agent": "ask", "call": 0, "schema_contains": ["Left_Tree_int"]}]
+      }
+    },
+    {
+      "name": "scoped_schema_decodes_another_recursive_value",
+      "params": {"expected": 7},
+      "agents": {"ask": ["{\"value\": 6, \"children\": [{\"value\": 7, \"children\": []}]}" ]},
+      "expect": {
+        "ok": true,
+        "stdout": "1\n2\n3\n7\ntrue\non\n",
+        "calls": {"ask": 1},
+        "prompts": [{"agent": "ask", "call": 0, "schema_contains": ["Left_Tree_int"]}]
+      }
+    }
+  ]
+}

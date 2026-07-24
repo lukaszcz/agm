@@ -179,7 +179,7 @@ class ConstructorValue:
     represented at runtime.  Like ``AgentValue`` it is not renderable or
     comparable by the language.
 
-    ``nominal`` is the ``NominalId`` (module + declared name) of the owning
+    ``nominal`` is the ``NominalId`` (module + scope path + declared name) of the owning
     type.  ``display_name`` is the user-facing name for rendering.  ``variant``
     is the enum variant name, or ``None`` for a record constructor.
 
@@ -233,7 +233,7 @@ class DictValue:
 class RecordValue:
     """A record-typed value.
 
-    ``nominal`` is the ``NominalId`` (module + declared name) — the identity
+    ``nominal`` is the ``NominalId`` (module + scope path + declared name) — the identity
     key.  ``display_name`` is the user-facing name for rendering and
     diagnostics; it is excluded from equality and hash.  ``fields`` holds
     the record's field values.
@@ -262,7 +262,7 @@ class RecordValue:
 class EnumValue:
     """An enum-typed value: the active variant name plus any payload fields.
 
-    ``nominal`` is the ``NominalId`` (module + declared name) — the identity
+    ``nominal`` is the ``NominalId`` (module + scope path + declared name) — the identity
     key.  ``display_name`` is the user-facing name for rendering and
     diagnostics; it is excluded from equality and hash.  ``variant`` is the
     active variant name.  ``fields`` holds the variant's payload field values.
@@ -300,7 +300,7 @@ class EnumValue:
 class ExceptionValue:
     """A built-in AgL exception value.
 
-    ``nominal`` is the ``NominalId`` (module + declared name) — the identity
+    ``nominal`` is the ``NominalId`` (module + scope path + declared name) — the identity
     key.  Built-in exceptions use ``NominalId(PRELUDE_ID, name)``.
     ``display_name`` is the user-facing exception class name (e.g.
     ``"AgentParseError"``); it is excluded from equality and hash.

@@ -165,6 +165,8 @@ class ReplSession:
 
         # Persistent session environment.
         self._session_scope: ScopeNode = ScopeNode(node_id=-1, parent=None)
+        self._session_scope_nodes: dict[tuple[str, ...], ScopeNode] = {(): self._session_scope}
+        self._session_type_paths: frozenset[tuple[str, ...]] = frozenset()
         self._type_env: TypeEnvironment = TypeEnvironment()
         # Ambient agents injected by the scope pass carry a synthetic decl_node_id
         # of -1 (no real AST declaration).  Pre-register AgentType() for this
@@ -230,8 +232,10 @@ class ReplSession:
         return AgentType()
 
     @staticmethod
-    def _type_mentions_entry_nominal(typ: "Type", names: frozenset[str]) -> bool:
-        """Return whether *typ* contains an entry-module nominal in *names*."""
+    def _type_mentions_entry_nominal(
+        typ: "Type", identities: frozenset[tuple[tuple[str, ...], str]]
+    ) -> bool:
+        """Return whether *typ* contains an entry nominal with one of *identities*."""
         from agm.agl.semantics.types import (
             DictType,
             EnumType,
@@ -242,19 +246,19 @@ class ReplSession:
         )
 
         if isinstance(typ, (RecordType, EnumType)):
-            return (typ.module_id.is_entry and typ.name in names) or any(
-                ReplSession._type_mentions_entry_nominal(arg, names) for arg in typ.type_args
+            return (typ.module_id.is_entry and (typ.scope_path, typ.name) in identities) or any(
+                ReplSession._type_mentions_entry_nominal(arg, identities) for arg in typ.type_args
             )
         if isinstance(typ, ExceptionType):
-            return typ.module_id.is_entry and typ.name in names
+            return typ.module_id.is_entry and (typ.scope_path, typ.name) in identities
         if isinstance(typ, ListType):
-            return ReplSession._type_mentions_entry_nominal(typ.elem, names)
+            return ReplSession._type_mentions_entry_nominal(typ.elem, identities)
         if isinstance(typ, DictType):
-            return ReplSession._type_mentions_entry_nominal(typ.value, names)
+            return ReplSession._type_mentions_entry_nominal(typ.value, identities)
         if isinstance(typ, FunctionType):
             return any(
-                ReplSession._type_mentions_entry_nominal(param, names) for param in typ.params
-            ) or ReplSession._type_mentions_entry_nominal(typ.result, names)
+                ReplSession._type_mentions_entry_nominal(param, identities) for param in typ.params
+            ) or ReplSession._type_mentions_entry_nominal(typ.result, identities)
         return False
 
     @staticmethod
@@ -704,6 +708,7 @@ class ReplSession:
         failure_span: "SourceSpan | Location | None",
     ) -> tuple[str, ...]:
         """Advance static state in lockstep with installed IR frame symbols."""
+        from agm.agl.scope.symbols import ScopeNode
         from agm.agl.syntax.nodes import (
             AgentDecl,
             EnumDef,
@@ -713,12 +718,23 @@ class ReplSession:
             ParamDecl,
             ProgramDecl,
             RecordDef,
+            ScopeRegion,
             TypeAlias,
             VarDecl,
             is_scoped_declaration,
         )
         from agm.agl.typecheck.env import TypeEnvironment
 
+        def declarations(items: tuple[object, ...]) -> list[object]:
+            result: list[object] = []
+            for item in items:
+                if isinstance(item, ScopeRegion):
+                    result.extend(declarations(item.items))
+                else:
+                    result.append(item)
+            return result
+
+        entry_declarations = declarations(program.body.items)
         self._assert_checked_state_closed(checked)
         entry_root = checked.resolved.root_scope
         named_declarations = (
@@ -747,26 +763,35 @@ class ReplSession:
                 failure_span is not None and end_offset <= failure_span.start_offset
             )
 
-        entry_type_names = frozenset(
-            item.name
-            for item in program.body.items
+        def type_identity(
+            item: RecordDef | EnumDef | ExceptionDef | TypeAlias,
+        ) -> tuple[tuple[str, ...], str]:
+            return tuple(segment.name for segment in item.scope_path), item.name
+
+        entry_type_identities = frozenset(
+            type_identity(item)
+            for item in entry_declarations
             if isinstance(item, (RecordDef, EnumDef, ExceptionDef, TypeAlias))
-            and not item.scope_path
         )
-        promoted_type_names = frozenset(
-            item.name
-            for item in program.body.items
+        promoted_type_identities = frozenset(
+            type_identity(item)
+            for item in entry_declarations
             if isinstance(item, (RecordDef, EnumDef, ExceptionDef, TypeAlias))
-            and not item.scope_path
             and _before_failure(item.span.end_offset)
+            and (not partial or not item.scope_path)
         )
-        unpromoted_type_names = entry_type_names - promoted_type_names
+        unpromoted_type_names = {
+            "::".join((*path, name))
+            for path, name in entry_type_identities - promoted_type_identities
+        }
         stale_binding_names: set[str] = set()
         stale_binding_node_ids: set[int] = set()
-        if promoted_type_names:
+        if promoted_type_identities:
             for name, ref in self._session_scope.bindings.items():
                 typ = self._type_env.resolve_binding(ref)
-                if typ is not None and self._type_mentions_entry_nominal(typ, promoted_type_names):
+                if typ is not None and self._type_mentions_entry_nominal(
+                    typ, promoted_type_identities
+                ):
                     stale_binding_names.add(name)
                     stale_binding_node_ids.add(ref.decl_node_id)
             for name in stale_binding_names:
@@ -774,10 +799,14 @@ class ReplSession:
             self._declared_params = {
                 name: typ
                 for name, typ in self._declared_params.items()
-                if not self._type_mentions_entry_nominal(typ, promoted_type_names)
+                if not self._type_mentions_entry_nominal(typ, promoted_type_identities)
             }
             self._ambient_constructor_candidates = {
-                cname: tuple(ref for ref in crefs if ref.owner_name not in promoted_type_names)
+                cname: tuple(
+                    ref
+                    for ref in crefs
+                    if (ref.owner_path, ref.owner_name) not in promoted_type_identities
+                )
                 for cname, crefs in self._ambient_constructor_candidates.items()
             }
             self._ambient_constructor_candidates = {
@@ -810,6 +839,55 @@ class ReplSession:
                 self._session_scope.bindings[name] = ref
                 if partial and name in entry_names:
                     installed.append(name)
+
+        from agm.agl.syntax.nodes import ElseSentinel
+        from agm.agl.syntax.visitor import walk
+
+        entry_node_ends: dict[int, int] = {}
+
+        def record_node_end(node: object) -> None:
+            if isinstance(node, ElseSentinel):
+                return
+            typed_node = cast("Program", node)
+            entry_node_ends[typed_node.node_id] = typed_node.span.end_offset
+
+        walk(program, record_node_end)
+
+        def is_promoted_node(node_id: int, end_offset: int) -> bool:
+            return node_id not in entry_node_ends or not partial or _before_failure(end_offset)
+
+        for path, node in checked.resolved.scope_nodes.items():
+            if not path:
+                continue
+            if path not in self._session_scope_nodes:
+                if path in {
+                    scope_path + (name,)
+                    for scope_path, name in entry_type_identities - promoted_type_identities
+                } or not is_promoted_node(node.node_id, entry_node_ends.get(node.node_id, 0)):
+                    continue
+                self._session_scope_nodes[path] = ScopeNode(
+                    node_id=node.node_id,
+                    parent=self._session_scope_nodes[path[:-1]],
+                    scope_path=path,
+                )
+        for path, name in promoted_type_identities:
+            self._session_scope_nodes[path + (name,)].members.clear()
+        for path, node in checked.resolved.scope_nodes.items():
+            session_node = self._session_scope_nodes.get(path)
+            if session_node is None:
+                continue
+            for name, ref in node.members.items():
+                if (
+                    ref.scope_path,
+                    ref.name,
+                ) not in entry_type_identities - promoted_type_identities and is_promoted_node(
+                    ref.decl_node_id, ref.decl_span.end_offset
+                ):
+                    session_node.members[name] = ref
+        self._session_type_paths |= frozenset(
+            path + (name,) for path, name in promoted_type_identities
+        )
+
         if not partial and not stale_binding_node_ids:
             # The checked environment already includes the prior sealed session
             # state and is itself sealed at the checked-output boundary. Reuse it
@@ -830,10 +908,8 @@ class ReplSession:
                 unpromoted_binding_node_ids |= self._node_ids_from_failure(program, failure_span)
                 unpromoted_function_names = (
                     item.name
-                    for item in program.body.items
-                    if isinstance(item, FuncDef)
-                    and not item.scope_path
-                    and not _before_failure(item.span.end_offset)
+                    for item in entry_declarations
+                    if isinstance(item, FuncDef) and not _before_failure(item.span.end_offset)
                 )
                 new_type_env.restore_binding_metadata_from(
                     previous_type_env,
@@ -852,12 +928,24 @@ class ReplSession:
             and _before_failure(item.span.end_offset)
         }
         self._declared_agents.update(promoted_agents)
-        if promoted_type_names:
-            for cname, crefs in checked.resolved.constructor_candidates.items():
-                crefs = tuple(ref for ref in crefs if ref.owner_name in promoted_type_names)
-                if crefs:
-                    self._ambient_constructor_candidates[cname] = crefs
-            self._ambient_type_names |= promoted_type_names
+        if promoted_type_identities:
+            promoted_candidates: dict[str, tuple[ConstructorRef, ...]] = {}
+            for (_path, cname), crefs in checked.resolved.constructor_candidates_by_path.items():
+                selected = tuple(
+                    ref
+                    for ref in crefs
+                    if (ref.owner_path, ref.owner_name) in promoted_type_identities
+                )
+                if selected:
+                    promoted_candidates[cname] = (*promoted_candidates.get(cname, ()), *selected)
+            for cname, crefs in promoted_candidates.items():
+                self._ambient_constructor_candidates[cname] = (
+                    *self._ambient_constructor_candidates.get(cname, ()),
+                    *crefs,
+                )
+            self._ambient_type_names |= frozenset(
+                name for path, name in promoted_type_identities if not path
+            )
         for item in program.body.items:
             if isinstance(item, ParamDecl):
                 symbol = self._link_image.symbol_for_decl(item.node_id)
@@ -927,6 +1015,7 @@ class ReplSession:
             ParamDecl,
             ProgramDecl,
             RecordDef,
+            ScopeRegion,
             TypeAlias,
             VarDecl,
         )
@@ -935,7 +1024,7 @@ class ReplSession:
         # source fails parsing earlier).
         last = program.body.items[-1]
         # Bare expression (not a binder or declaration) → "expression"
-        if not isinstance(last, (Binder, Declaration)):
+        if not isinstance(last, (Binder, Declaration, ScopeRegion)):
             return "expression", None
         if isinstance(last, (LetDecl, VarDecl)):
             return "binding", last.name
@@ -952,6 +1041,8 @@ class ReplSession:
             ),
         ):
             return "declaration", last.name
+        if isinstance(last, ScopeRegion):
+            return "declaration", None
         # AssignStmt → "statement"
         if isinstance(last, AssignStmt):
             return "statement", None
@@ -1132,6 +1223,8 @@ class ReplSession:
         from agm.agl.typecheck.env import TypeEnvironment
 
         self._session_scope = ScopeNode(node_id=-1, parent=None)
+        self._session_scope_nodes = {(): self._session_scope}
+        self._session_type_paths = frozenset()
         self._type_env = TypeEnvironment()
         # Re-seed the sentinel AgentType for ambient agents (see __init__).
         self._type_env.set_binding_type(-1, self._make_agent_type())

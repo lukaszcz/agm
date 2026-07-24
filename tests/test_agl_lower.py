@@ -208,6 +208,30 @@ def test_scoped_functions_link_while_unused_scoped_agents_remain_deferred() -> N
     assert len(program.functions) == 3
 
 
+def test_lowering_preserves_scoped_nominal_identity_for_generic_and_enum_types() -> None:
+    from agm.agl.ir.ids import NominalId
+    from agm.agl.modules.ids import ENTRY_ID
+
+    source = """
+record Token()
+scope Left
+record Token()
+record Box[T](value: T)
+enum Flag | on
+end Left
+let box: Left::Box[int] = Left::Box(value = 1)
+let flag = Left::Flag::on
+case flag of | Left::Flag::on => box.value
+"""
+
+    program = _lower(source)
+
+    assert NominalId(ENTRY_ID, "Token") in program.nominals
+    assert NominalId(ENTRY_ID, "Token", ("Left",)) in program.nominals
+    assert NominalId(ENTRY_ID, "Box", ("Left",)) in program.nominals
+    assert NominalId(ENTRY_ID, "Flag", ("Left",)) in program.nominals
+
+
 def _contains_flexible_inference_state(value: object, seen: set[int]) -> bool:
     """Recursively inspect IR data without treating declared rigid variables as leaks."""
     from agm.agl.semantics.types import InferenceVarType

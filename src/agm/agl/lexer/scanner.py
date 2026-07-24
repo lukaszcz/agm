@@ -85,6 +85,7 @@ from agm.agl.lexer.tokens import (
     TEMPLATE_START,
     THIN_ARROW,
 )
+from agm.agl.semantics.text_literal import ESCAPE_DECODE, INTERP_OPEN, INTERP_TRIGGER
 from agm.raw_tail_catalog import RAW_TAIL_BUILTINS
 from agm.util.text import normalize_newlines
 
@@ -147,7 +148,7 @@ _TAB_LEN = 4
 
 # Characters that end a verbatim run inside a raw-tail payload: ``%`` may open a
 # hole and ``\`` may escape one.  Everything between them is copied wholesale.
-_RAW_RUN_STOP_RE = re.compile(r"[\\%]")
+_RAW_RUN_STOP_RE = re.compile(rf"[\\{re.escape(INTERP_TRIGGER)}]")
 
 
 def _is_ascii_digit(ch: str) -> bool:
@@ -210,18 +211,7 @@ def _is_operator_name_char(ch: str) -> bool:
 
 
 # JSON escape decoding table (excluding \uXXXX, handled separately)
-_JSON_ESCAPES: dict[str, str] = {
-    '"': '"',
-    "'": "'",
-    "\\": "\\",
-    "/": "/",
-    "b": "\b",
-    "f": "\f",
-    "n": "\n",
-    "r": "\r",
-    "t": "\t",
-    "%": "%",
-}
+_JSON_ESCAPES: dict[str, str] = dict(ESCAPE_DECODE)
 
 
 # ---------------------------------------------------------------------------
@@ -558,8 +548,9 @@ class _Scanner:
             if ch == "\\":
                 self._advance()
                 buf.append(self._decode_escape())
-            elif ch == "%" and self._peek(1) == "{":
+            elif self._src.startswith(INTERP_OPEN, self._pos):
                 # Start of interpolation
+                # AgL's trigger is separate from ``agm.agent.runner`` placeholders.
                 interp_pos = self._pos
                 interp_line = self._line
                 interp_col = self._col
@@ -572,7 +563,9 @@ class _Scanner:
                     frag_start_line,
                     frag_start_col,
                 )
-                yield self._make_token(INTERP_START, "%{", interp_pos, interp_line, interp_col)
+                yield self._make_token(
+                    INTERP_START, INTERP_OPEN, interp_pos, interp_line, interp_col
+                )
                 buf = []
                 yield from self._scan_interp_code()
                 frag_start_pos = self._pos
@@ -695,7 +688,7 @@ class _Scanner:
                 self._advance()
                 decoded = self._decode_escape()
                 current_lit.append(decoded)
-            elif ch == "%" and self._peek(1) == "{":
+            elif self._src.startswith(INTERP_OPEN, self._pos):
                 # Start interpolation; remember the '%' position.
                 interp_start_pos = self._pos
                 interp_start_line = self._line
@@ -778,7 +771,7 @@ class _Scanner:
                 interp_seg = interp_segs[part_idx]
                 yield Token(
                     INTERP_START,
-                    "%{",
+                    INTERP_OPEN,
                     start_pos=interp_seg.start_pos,
                     line=interp_seg.start_line,
                     column=interp_seg.start_col,
@@ -895,23 +888,23 @@ class _Scanner:
                     ch = self._peek()
                     if (
                         ch == "\\"
-                        and self._pos + 2 < raw_line.end_pos
-                        and self._src[self._pos + 1 : self._pos + 3] == "%{"
+                        and self._pos + len(INTERP_OPEN) < raw_line.end_pos
+                        and self._src.startswith(INTERP_OPEN, self._pos + 1)
                     ):
                         start_fragment()
-                        buf.append("%{")
+                        buf.append(INTERP_OPEN)
                         self._advance(in_string=True)
-                        self._advance(in_string=True)
-                        self._advance(in_string=True)
-                    elif ch == "%" and self._peek(1) == "{":
+                        for _ in INTERP_OPEN:
+                            self._advance(in_string=True)
+                    elif self._src.startswith(INTERP_OPEN, self._pos):
                         fragment = emit_fragment()
                         if fragment is not None:
                             yield fragment
                         interp_pos, interp_line, interp_col = self._pos, self._line, self._col
-                        self._advance(in_string=True)
-                        self._advance(in_string=True)
+                        for _ in INTERP_OPEN:
+                            self._advance(in_string=True)
                         yield self._make_token(
-                            INTERP_START, "%{", interp_pos, interp_line, interp_col
+                            INTERP_START, INTERP_OPEN, interp_pos, interp_line, interp_col
                         )
                         yield from self._scan_interp_code()
                     else:

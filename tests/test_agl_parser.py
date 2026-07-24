@@ -146,6 +146,24 @@ def first(prog: Program) -> object:
     return prog.body.items[0]
 
 
+def assert_raw_tail_name_span(error: AglSyntaxError, source: str) -> None:
+    """Assert that a raw-tail reservation error covers its reserved name."""
+    span = error.span
+    assert span is not None
+    name = next(name for name in ("exec!", "ask!") if name in source)
+    offset = source.index(name)
+    line = source.count("\n", 0, offset) + 1
+    col = offset - source.rfind("\n", 0, offset)
+    assert (
+        span.start_line,
+        span.start_col,
+        span.end_line,
+        span.end_col,
+        span.start_offset,
+        span.end_offset,
+    ) == (line, col, line, col + len(name), offset, offset + len(name))
+
+
 def _collect_node_ids(obj: object, result: list[int]) -> None:
     """Recursively collect every node_id into *result*, preserving duplicates.
 
@@ -4001,22 +4019,52 @@ print exec! true
         assert isinstance(loop.body.items[0], Call)
 
     @pytest.mark.parametrize(
-        "source",
+        ("source", "expected_span"),
         (
-            "exec!",
-            "1 + exec!",
-            "1 + exec! true",
-            "if true => exec! date | else => 0",
-            "case true of true => exec! date | false => 0",
-            "try exec! date catch _ => 0",
-            "if true => return exec! date | else => 0",
-            "case true of true => return exec! date | false => 0",
-            "try return exec! date catch _ => 0",
+            ("exec!", (1, 6, 1, 6)),
+            ("ask!   ", (1, 8, 1, 8)),
+            ("exec!\n", (2, 1, 2, 1)),
+            ("exec!\nnext", (2, 1, 2, 1)),
         ),
     )
-    def test_non_line_final_position_has_targeted_guidance(self, source: str) -> None:
-        with pytest.raises(AglSyntaxError, match="call form.*block form"):
+    def test_empty_payload_is_rejected_at_its_location(
+        self, source: str, expected_span: tuple[int, int, int, int]
+    ) -> None:
+        with pytest.raises(AglSyntaxError) as exc_info:
+            parse_program(source)
+        assert exc_info.value.span is not None
+        assert (
+            exc_info.value.span.start_line,
+            exc_info.value.span.start_col,
+            exc_info.value.span.end_line,
+            exc_info.value.span.end_col,
+        ) == expected_span
+
+    @pytest.mark.parametrize(
+        ("source", "expected_span"),
+        (
+            ("1 + exec!", (1, 5, 1, 10)),
+            ("1 + exec! true", (1, 5, 1, 10)),
+            ("if true => exec! date | else => 0", (1, 12, 1, 17)),
+            ("case true of true => exec! date | false => 0", (1, 22, 1, 27)),
+            ("try exec! date catch _ => 0", (1, 5, 1, 10)),
+            ("if true => return exec! date | else => 0", (1, 19, 1, 24)),
+            ("case true of true => return exec! date | false => 0", (1, 29, 1, 34)),
+            ("try return exec! date catch _ => 0", (1, 12, 1, 17)),
+        ),
+    )
+    def test_non_line_final_position_is_rejected_at_its_location(
+        self, source: str, expected_span: tuple[int, int, int, int]
+    ) -> None:
+        with pytest.raises(AglSyntaxError) as exc_info:
             parse(source)
+        assert exc_info.value.span is not None
+        assert (
+            exc_info.value.span.start_line,
+            exc_info.value.span.start_col,
+            exc_info.value.span.end_line,
+            exc_info.value.span.end_col,
+        ) == expected_span
 
     @pytest.mark.parametrize(
         "source",
@@ -4048,12 +4096,20 @@ print exec! true
         ),
     )
     def test_reserved_raw_name_has_a_frontend_diagnostic(self, source: str) -> None:
-        with pytest.raises(AglSyntaxError, match="exec!|ask!"):
+        with pytest.raises(AglSyntaxError) as exc_info:
             parse(source)
+        assert_raw_tail_name_span(exc_info.value, source)
 
-    def test_raw_tail_default_is_rejected_inside_parameter_brackets(self) -> None:
-        with pytest.raises(AglSyntaxError, match="brackets.*call form.*block form"):
+    def test_raw_tail_default_is_rejected_inside_parameter_brackets_at_its_location(self) -> None:
+        with pytest.raises(AglSyntaxError) as exc_info:
             parse("def f(x: int = exec! true) -> int = x")
+        assert exc_info.value.span is not None
+        assert (
+            exc_info.value.span.start_line,
+            exc_info.value.span.start_col,
+            exc_info.value.span.end_line,
+            exc_info.value.span.end_col,
+        ) == (1, 16, 1, 16)
 
     @pytest.mark.parametrize("declaration", ("record", "exception"))
     @pytest.mark.parametrize("marker", ("/", "*", "@named"))
@@ -4061,12 +4117,21 @@ print exec! true
         self, declaration: str, marker: str
     ) -> None:
         source = f"{declaration} R\n  x: int\n  {marker}\n  exec!: int"
-        with pytest.raises(AglSyntaxError, match="exec!.*reserved"):
+        with pytest.raises(AglSyntaxError) as exc_info:
             parse(source)
+        assert_raw_tail_name_span(exc_info.value, source)
 
-    def test_raw_tail_in_unsupported_lambda_suite_has_targeted_guidance(self) -> None:
-        with pytest.raises(AglSyntaxError, match="call form.*block form"):
-            parse("let f = fn() =>\n  exec! date")
+    def test_raw_tail_in_unsupported_lambda_suite_is_rejected_at_its_location(self) -> None:
+        source = "let f = fn() =>\n  exec! date"
+        with pytest.raises(AglSyntaxError) as exc_info:
+            parse(source)
+        assert exc_info.value.span is not None
+        assert (
+            exc_info.value.span.start_line,
+            exc_info.value.span.start_col,
+            exc_info.value.span.end_line,
+            exc_info.value.span.end_col,
+        ) == (1, 16, 1, 17)
 
     @pytest.mark.parametrize(
         "source",
@@ -4076,16 +4141,24 @@ print exec! true
         ),
     )
     def test_reserved_raw_parameter_names_reach_frontend(self, source: str) -> None:
-        with pytest.raises(AglSyntaxError, match="(exec!|ask!).*reserved"):
+        with pytest.raises(AglSyntaxError) as exc_info:
             parse(source)
+        assert_raw_tail_name_span(exc_info.value, source)
 
     @pytest.mark.parametrize("declaration", ("record", "exception"))
     def test_inline_field_declaration_does_not_leak_to_next_expression(
         self, declaration: str
     ) -> None:
         source = f"{declaration} R x: int\nfoo(exec! true)"
-        with pytest.raises(AglSyntaxError, match="brackets.*call form.*block form"):
+        with pytest.raises(AglSyntaxError) as exc_info:
             parse(source)
+        assert exc_info.value.span is not None
+        assert (
+            exc_info.value.span.start_line,
+            exc_info.value.span.start_col,
+            exc_info.value.span.end_line,
+            exc_info.value.span.end_col,
+        ) == (2, 5, 2, 5)
 
     def test_desugaring_assigns_node_ids_in_source_order(self) -> None:
         raw_call = first(parse("exec! true"))

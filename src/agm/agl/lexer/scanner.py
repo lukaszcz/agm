@@ -1148,7 +1148,8 @@ class _Scanner:
                     )
                 elif not blank and indent < margin:
                     raise self._raw_tail_error(
-                        "raw-tail block line is under-indented",
+                        "raw-tail block line is under-indented; "
+                        "align it with the first block line.",
                         line_start + indent_chars,
                         line_no,
                         line_col + indent_chars,

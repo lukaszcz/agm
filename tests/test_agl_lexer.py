@@ -878,9 +878,16 @@ class TestRawTailForms:
     def test_tab_indentation_is_dedented_by_visual_width(self) -> None:
         assert ("RAW_FRAGMENT", "text") in tok("exec!\n\ttext")
 
-    def test_under_indented_block_line_is_rejected(self) -> None:
-        with pytest.raises(LexError):
+    def test_under_indented_block_line_is_rejected_at_its_location(self) -> None:
+        with pytest.raises(LexError) as exc_info:
             tok("exec!\n  first\n next")
+        assert exc_info.value.span is not None
+        assert (
+            exc_info.value.span.start_line,
+            exc_info.value.span.start_col,
+            exc_info.value.span.end_line,
+            exc_info.value.span.end_col,
+        ) == (3, 2, 3, 2)
 
     @pytest.mark.parametrize("source", ("exec!", "ask!   ", "exec!\n", "exec!\nnext"))
     def test_empty_payload_reaches_the_parser(self, source: str) -> None:
@@ -888,10 +895,16 @@ class TestRawTailForms:
         assert ("RAW_TAIL_START", "") in tokens
         assert ("RAW_TAIL_END", "") in tokens
 
-    def test_raw_tail_is_rejected_inside_brackets(self) -> None:
+    def test_raw_tail_is_rejected_inside_brackets_at_its_location(self) -> None:
         with pytest.raises(LexError) as exc_info:
             tok("(exec! echo hi)")
         assert exc_info.value.span is not None
+        assert (
+            exc_info.value.span.start_line,
+            exc_info.value.span.start_col,
+            exc_info.value.span.end_line,
+            exc_info.value.span.end_col,
+        ) == (1, 2, 1, 2)
 
     def test_raw_tail_after_completed_paren_and_semicolon_is_scanned(self) -> None:
         for source in ("(1 + 1) exec! true", "1 + 1; exec! true"):
@@ -914,8 +927,15 @@ class TestRawTailForms:
 
     def test_parameter_name_stays_a_name_but_its_default_is_rejected_in_brackets(self) -> None:
         assert ("NAME", "exec!") in tok("def f(exec!: int) -> int = 1")
-        with pytest.raises(LexError, match="brackets"):
+        with pytest.raises(LexError) as exc_info:
             tok("def f(x: int = exec! true) -> int = x")
+        assert exc_info.value.span is not None
+        assert (
+            exc_info.value.span.start_line,
+            exc_info.value.span.start_col,
+            exc_info.value.span.end_line,
+            exc_info.value.span.end_col,
+        ) == (1, 16, 1, 16)
 
     @pytest.mark.parametrize("name", ("exec!", "ask!"))
     def test_enum_variant_payload_field_name_stays_a_name(self, name: str) -> None:

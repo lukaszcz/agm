@@ -30,6 +30,48 @@ exec "make build"                    # equivalent to exec("make build")
 
 With named arguments, parentheses are required.
 
+## Raw-tail `exec!`
+
+`exec!` writes the command directly after the keyword rather than inside a
+string template. The inline form takes the rest of its line; the block form
+collects one dedented, newline-joined shell script. Both produce the same call
+as `exec(<template>)` and accept explicit type arguments. Type arguments must
+touch the name (`exec!::[T]`); in `exec! ::[T]`, the spaced `::[T]` is command
+payload:
+
+```agl
+let directory = "."
+let listing: text = exec! printf '%s\n' %{directory}
+
+let home_listing: text = exec!
+  for file in "$HOME"/*; do
+    printf '%s\n' "$file"
+  done
+```
+
+The payload is verbatim shell text, except that inline payloads discard
+trailing spaces and tabs. Quotes, parentheses, `#`, `;`, every dollar form such
+as `$HOME`, `${name}`, `$(date)`, and `$1`, and ordinary backslashes all reach
+the shell unchanged. Only `%{expr}` interpolates; write `\%{` for a literal
+`%{`. A raw call needs a nonempty inline command or a block with at least one
+nonblank line. For example, this command passes `%{literal}` to the shell:
+
+```agl
+let marker: text = exec! printf '\%{literal}'
+```
+
+Raw-tail calls are permitted only in line-final expression positions: block
+items, binding or assignment right-hand sides, inline function bodies, eligible
+`return` operands, and the final juxtaposition argument (`print exec! date`).
+They cannot appear inside brackets or before more AgL syntax on the same line.
+See [Grammar](grammar.md#raw-tail-calls) for the complete position rule.
+
+`exec!` has the same typing behavior as `exec`: without an expected type it
+returns `ExecResult`; a non-`ExecResult`/non-`unit` target parses stdout; and a
+`unit` target discards successful output. Use `exec(...)` instead when the
+command needs named parsing options (`format`, `strict_json`, or
+`on_parse_error`) or must occur outside a raw-tail position.
+
 ## Interpolation in shell templates
 
 The command template uses the same uniform rendering as all other templates

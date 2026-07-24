@@ -448,6 +448,39 @@ that lands on a named-only field is reinterpreted as the shorthand `name = name`
 
 A `STRING` pattern may not contain interpolation.
 
+## Raw-tail calls
+
+```ebnf
+raw_call  ::= ("exec!" | "ask!") type_args? raw_tail
+type_args ::= "::" "[" type_expr ("," type_expr)* "]"
+raw_tail  ::= inline_raw_tail | block_raw_tail
+```
+
+The optional `type_args` group is recognized only when its `::` is immediately
+adjacent to the raw name: `exec!::[T]` and `ask!::[T]`. Whitespace before the
+`::` makes it payload text instead, so `exec! ::[T]` and `ask! ::[T]` have no
+type arguments.
+
+An inline raw tail is all text from its first non-whitespace character through
+the end of the line, except that trailing spaces and tabs are removed. A block
+raw tail follows the name (and optional type arguments) with a newline and a
+more-indented block; its dedented lines become one newline-joined payload. A
+raw call requires a nonempty inline tail or a block with at least one nonblank
+line. Raw text is tokenized as fragments and `%{expr}` interpolations, not as
+ordinary AgL expressions.
+
+A raw call is valid only where the grammar guarantees that nothing else follows
+on its line: as a block item; as a `let`, `var`, or assignment RHS; as an
+inline `def` body; as a `return` operand at a block-item or function-body tail;
+or as the final single-argument juxtaposition argument. It is not valid inside
+brackets, branch/catch inline bodies, or another inline expression. Use the
+ordinary call form there.
+
+```agl
+let path = "."
+let output: text = exec! printf '%s' %{path}
+```
+
 ## Expressions
 
 ```ebnf

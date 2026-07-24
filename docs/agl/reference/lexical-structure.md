@@ -91,7 +91,8 @@ catch binders. This preserves existing uses such as `tagged(by: value)`.
 lex as plain `NAME` tokens and are given their built-in meaning during scope
 resolution. They may not be declared with `let`, `var`, or `param`, may not be
 declared as agents or functions, and may not appear as pattern or catch
-binders — but they remain legal as field names.
+binders — but they remain legal as field names. The distinct raw-tail spellings
+`exec!` and `ask!` are reserved for their raw forms and cannot be used as names.
 
 **Type-annotation keywords** — `text`, `json`, `bool`, `int`, `decimal`,
 `list`, `dict`, and `unit` are **not** reserved; they are recognized
@@ -293,6 +294,25 @@ forms:
 
 Escape sequences, triple-quoted dedent normalization, and interpolation
 semantics are covered in [Strings and interpolation](strings-and-interpolation.md).
+
+## Raw-tail forms
+
+`exec!` and `ask!` begin raw-tail calls. The lexer emits a `RAW_TAIL_NAME`,
+then `RAW_TAIL_START`, one or more `RAW_FRAGMENT` and interpolation-token
+runs, and `RAW_TAIL_END`. Optional type arguments must be byte-adjacent to the
+name: `exec!::[T]` and `ask!::[T]`. In `exec! ::[T]` or `ask! ::[T]`, the
+spaced `::[T]` instead begins the payload. The payload is either the rest of
+that line or a following indented block. In both cases it is one template: its
+text is verbatim except that `%{expr}` interpolates and `\%{` is a literal
+`%{`. Inline payloads discard trailing spaces and tabs.
+
+A raw-tail call requires a nonempty inline payload or a block with at least one
+nonblank line. It is only recognized at bracket depth zero and must occupy a
+line-final expression position. Its payload therefore owns `#`, `;`, quotes,
+parentheses, dollar forms, and ordinary backslashes rather than treating them
+as AgL syntax. The [Grammar](grammar.md#raw-tail-calls) lists the allowed
+positions; [Shell execution](shell-execution.md#raw-tail-exec) and [Agent
+calls](agent-calls.md#raw-tail-ask) describe the two forms.
 
 ## Operators and punctuation
 

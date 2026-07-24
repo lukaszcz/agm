@@ -48,6 +48,32 @@ With named arguments, parentheses are required:
 let r: Review = ask("Review %{artifact}", agent = reviewer)
 ```
 
+## Raw-tail `ask!`
+
+`ask!` writes a prompt directly after the keyword. Inline form consumes the
+rest of its line; block form consumes one dedented, newline-joined prompt.
+It desugars to the same call as `ask(<template>)`, so explicit type arguments
+and target-type inference work exactly as for `ask`. Type arguments must touch
+the name (`ask!::[T]`); in `ask! ::[T]`, the spaced `::[T]` is prompt payload:
+
+```agl
+record Review
+  summary: text
+
+let subject = "the release notes"
+let summary: text = ask! Summarize %{subject}.
+let review: Review = ask!::[Review]
+  Review %{subject} and provide a concise summary.
+```
+
+Raw-tail prompt text is verbatim except for `%{expr}` interpolation and
+trailing spaces and tabs in an inline prompt; `\%{` writes a literal `%{`.
+A raw call needs a nonempty inline prompt or a block with at least one nonblank
+line. `ask!` always uses the configured default agent and default parsing
+options. Use `ask(...)` when selecting an agent with `agent =` or when setting
+`format`, `strict_json`, or `on_parse_error`; it is also the form to use
+outside a raw-tail line-final position.
+
 ## Agents as values
 
 Declared agents are **values** of the opaque type `agent`. An `agent`
@@ -88,8 +114,8 @@ optional `= "…"` string attaches a *runner hint* consumed by the host and
 has no language effect. The runner string must be a static literal — no
 `%{…}` interpolation.
 
-Declaring the same agent name twice, or declaring `ask` or `exec` as an
-agent name, is a static error.
+Declaring the same agent name twice, or declaring `ask`, `exec`, `ask!`,
+or `exec!` as an agent name, is a static error.
 
 ### The default agent
 

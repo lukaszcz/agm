@@ -289,9 +289,10 @@ again as though the session were new.
 ### Entry editing
 
 - Multiline editing is **AgL-aware**: pressing Enter on an unterminated block
-  (`record`, `enum`, `if`, `case`, `try`, `do`, …) opens a continuation line (`...>`);
-  a complete entry submits. Pressing Enter on a blank continuation line force-submits
-  even an unfinished buffer so you can always escape.
+  (`record`, `enum`, `if`, `case`, `try`, `do`, …) or a line-final raw-tail header
+  such as `exec!`/`ask!` opens a continuation line (`...>`); a complete entry submits.
+  Pressing Enter on a blank continuation line force-submits even an unfinished buffer
+  so you can always escape.
 - Syntax highlighting and tab-completion are driven from the live session.
   Highlighting colours keywords, string/number literals, operators, the builtin types
   (`text`, `int`, `decimal`, `bool`, `json`, `list`, `dict`, `unit`), and the types and

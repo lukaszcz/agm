@@ -189,7 +189,7 @@ type catchable:
 <!-- agl-check: fragment -->
 ```agl
 catch Exception as e =>
-  raise (e with message = "while deploying: ${e.message}")
+  raise (e with message = "while deploying: %{e.message}")
 ```
 
 ## Built-in exception catalog

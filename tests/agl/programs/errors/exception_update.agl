@@ -14,8 +14,8 @@ try
     else =>
       print "calm"
   catch Exception as e =>
-    let wrapped = e with message = "ctx: ${e.message}"
+    let wrapped = e with message = "ctx: %{e.message}"
     raise wrapped
 catch Boom as e =>
   let bumped = e with code = e.code + bump, message = "final"
-  print "boom ${bumped.message} ${bumped.code} (${e.message})"
+  print "boom %{bumped.message} %{bumped.code} (%{e.message})"

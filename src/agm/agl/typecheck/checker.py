@@ -158,6 +158,7 @@ from agm.agl.syntax.nodes import (
     VarPattern,
     VarRef,
     WildcardPattern,
+    pattern_binder_candidates,
     simple_let_pattern_name,
 )
 from agm.agl.syntax.spans import SourceSpan
@@ -1021,7 +1022,26 @@ class _Checker:
                     module_id=self._module_id,
                 ),
             )
+        self._propagate_pattern_callable_metadata(stmt.pattern, stmt.value)
         return self._binder_result(value_type)
+
+    def _propagate_pattern_callable_metadata(self, pattern: Pattern, value: Expr) -> None:
+        """Copy callable provenance from a let initializer to selected pattern bindings."""
+        for candidate in pattern_binder_candidates(pattern):
+            binding = self._pattern_binding_refs.get(candidate.node_id)
+            if binding is None:
+                continue
+            binding_type = self._env.get_binding_type(binding.decl_node_id)
+            if not isinstance(binding_type, FunctionType):
+                continue
+            self._set_generic_function_binding_result_dependencies(
+                binding.decl_node_id,
+                self._generic_function_expr_result_dependencies.get(value.node_id, ()),
+            )
+            self._set_extern_binding_targets(
+                binding.decl_node_id,
+                self._extern_expr_targets.get(value.node_id, ()),
+            )
 
     def _binding_declared_type(
         self, stmt: LetDecl | VarDecl, value_type: Type, ann_type: Type | None

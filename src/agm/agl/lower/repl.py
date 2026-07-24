@@ -244,7 +244,7 @@ def _declaration_dependencies(
         node_id = cast(Item, node).node_id
         if (
             isinstance(node, (AppliedT, NameT))
-            and node.module_qualifier is None
+            and (node.module_qualifier is None or not node.module_qualifier.segments)
             and node.name not in type_parameters
         ):
             dependency = type_declaration_ids.get(node.name)

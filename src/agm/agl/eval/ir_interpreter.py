@@ -442,6 +442,7 @@ class IrInterpreter:
         self.initializer_values: list[Value] = []
         self.module_initializer_values: dict[ModuleId, list[Value]] = {}
         self.entry_initializers_started: bool = False
+        self.entry_param_symbols_installed: set[SymbolId] = set()
         self._call_depth: int = 0
         self._trace: TraceStore = trace if trace is not None else noop_trace()
         self._max_call_depth: int = max_call_depth
@@ -664,9 +665,10 @@ class IrInterpreter:
 
         return result
 
-    def _install_entry_function_closures(self) -> None:
-        """Pre-install available entry-module function closures for param defaults."""
+    def _install_entry_function_closures(self) -> bool:
+        """Pre-install entry closures and report whether any completed."""
         entry_module = self._program.modules[self._program.entry_module]
+        installed = False
         for node in entry_module.initializers:
             match node:
                 case IrBind(
@@ -678,8 +680,10 @@ class IrInterpreter:
                         continue
                     value = self._eval(closure_node)
                     self._frames[0][sym] = value
+                    installed = True
                 case _:
                     continue
+        return installed
 
     def _recursion_error(self) -> AglRaise:
         """Build the catchable AgL ``RecursionError`` for an exceeded call depth.
@@ -873,7 +877,7 @@ class IrInterpreter:
         sys.setrecursionlimit(max(previous_limit, target))
         try:
             with decimal.localcontext(AGL_DECIMAL_CONTEXT):
-                self._install_entry_function_closures()
+                self.entry_initializers_started = self._install_entry_function_closures()
                 self._install_entry_params()
                 self.entry_initializers_started = True
 
@@ -909,6 +913,7 @@ class IrInterpreter:
                     f"Required param {ir_param.public_name!r} has no value;"
                     " the host must supply a value for required params before calling run()"
                 )
+            self.entry_param_symbols_installed.add(ir_param.symbol)
 
     def _eval_initializer(self, node: IrExpr) -> Value:
         match node:

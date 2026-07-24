@@ -918,6 +918,28 @@ class TestFailureEffects:
         assert not result.ok
         assert s.declared_params() == []
 
+    def test_runtime_raise_does_not_promote_param_with_unpromoted_self_qualified_type(self) -> None:
+        s = ReplSession()
+
+        result = s.eval_entry(
+            'param p: ::R\nlet stop: int = raise Abort(message = "stop")\nrecord R\n  value: int'
+        )
+
+        assert not result.ok
+        assert s.declared_params() == []
+        assert not s.eval_entry("p").ok
+
+    def test_runtime_raise_promotes_preinstalled_function_before_failing_param_default(
+        self,
+    ) -> None:
+        s = ReplSession()
+
+        result = s.eval_entry("def f() -> int = 1\nparam p: decimal = 1 / 0")
+
+        assert not result.ok
+        assert result.installed == ("f",)
+        assert s.eval_entry("f()").value == IntValue(1)
+
     def test_runtime_raise_does_not_promote_later_type(self) -> None:
         s = ReplSession()
         result = s.eval_entry("let z: decimal = 1 / 0\nrecord After\n  value: int")

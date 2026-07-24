@@ -513,11 +513,24 @@ class EntryPipeline:
         )
 
         def completed_declaration_ids() -> frozenset[int]:
+            from agm.agl.syntax.nodes import ParamDecl
+
             if not interp.entry_initializers_started:
                 return frozenset()
-            return lowered.promotion_plan.completed_declaration_ids(
+            completed = lowered.promotion_plan.completed_declaration_ids(
                 len(interp.module_initializer_values.get(lowered.program.entry_module, ()))
             )
+            completed_param_names = frozenset(
+                param.public_name
+                for param in lowered.program.params
+                if param.symbol in interp.entry_param_symbols_installed
+            )
+            incomplete_param_ids = {
+                item.node_id
+                for item in orig_program.body.items
+                if isinstance(item, ParamDecl) and item.name not in completed_param_names
+            }
+            return completed - incomplete_param_ids
 
         try:
             interp.run()

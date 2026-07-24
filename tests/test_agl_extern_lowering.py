@@ -238,6 +238,13 @@ class TestDryRunInventory:
         assert entry.callee == "id"
         assert entry.target_type_label == "int"
 
+    def test_pattern_bound_extern_is_included_in_dry_run_inventory(self) -> None:
+        executable = _lower_source(
+            "extern def f(value: int) -> int\nlet _ as g: (int) -> int = f\ng(1)"
+        )
+
+        assert [entry.callee for entry in executable.dry_run_inventory] == ["f"]
+
     def test_pipeline_check_only_lists_the_extern_call_site(self, tmp_path: Path) -> None:
         root = tmp_path / "root"
         write_module_file(root, "lib/mod", "extern def f(x: int) -> int")

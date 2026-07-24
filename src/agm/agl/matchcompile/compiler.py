@@ -1,4 +1,4 @@
-"""Memoized pattern-matrix compilation to immutable case-local decision DAGs."""
+"""Memoized pattern-matrix compilation to immutable match-site decision DAGs."""
 
 from __future__ import annotations
 
@@ -19,6 +19,7 @@ from .diagnostics import (
     OpenComplementWitness,
     RecordWitness,
     RedundantArmIssue,
+    RefutableLetIssue,
     WildcardWitness,
     WitnessField,
     issue_sort_key,
@@ -54,8 +55,11 @@ from .model import (
     FieldOccurrenceProvenance,
     LiteralConstructor,
     MatchCaseContext,
+    MatchSiteAction,
+    MatchSiteKind,
     MatrixRow,
     NormalizedCase,
+    NormalizedMatchSite,
     Occurrence,
     OccurrenceId,
     OpenSignature,
@@ -72,24 +76,49 @@ from .normalize import (
 
 
 @dataclass(frozen=True, slots=True)
-class CompiledCase:
-    """One compiled source case, retained even when static issues are present."""
+class CompiledMatchSite:
+    """One compiled source match site, retained even when static issues are present."""
 
-    normalized: NormalizedCase
+    normalized: NormalizedMatchSite
     root: Decision
     occurrences: tuple[Occurrence, ...]
     reachable_action_ids: tuple[int, ...]
     issues: tuple[MatchIssue, ...]
 
     @property
-    def case_node_id(self) -> int:
+    def site_node_id(self) -> int:
         """Stable source identity used as the later artifact mapping key."""
-        return self.normalized.case_node_id
+        return self.normalized.site_node_id
 
     @property
-    def actions(self) -> tuple[SourceAction, ...]:
-        """Source-priority action metadata consumed by diagnostics and lowering."""
+    def case_node_id(self) -> int:
+        """Compatibility spelling for case-only consumers."""
+        return self.site_node_id
+
+    @property
+    def source_kind(self) -> MatchSiteKind:
+        """The source construct that owns this decision DAG."""
+        return self.normalized.source_kind
+
+    @property
+    def actions(self) -> tuple[MatchSiteAction, ...]:
+        """Source-priority action metadata retained for later consumers."""
         return self.normalized.actions
+
+    @property
+    def case_actions(self) -> tuple[SourceAction, ...]:
+        """Ordered arm actions for the case-only lowering consumer."""
+        if self.source_kind is not MatchSiteKind.CASE:
+            raise MatchCompileInvariantError("let sites have binding actions, not case actions")
+        actions = tuple(
+            action for action in self.normalized.actions if isinstance(action, SourceAction)
+        )
+        if len(actions) != len(self.normalized.actions):
+            raise MatchCompileInvariantError("case site carries a non-case action")
+        return actions
+
+
+CompiledCase: TypeAlias = CompiledMatchSite
 
 
 @dataclass(frozen=True, slots=True)
@@ -215,7 +244,7 @@ def _switch_free_occurrences(
 
 
 class _CaseCompiler:
-    """Mutable tables scoped to exactly one source case compilation."""
+    """Mutable tables scoped to exactly one source match-site compilation."""
 
     def __init__(self) -> None:
         self._memo: dict[_CompileStateKey, Decision] = {}
@@ -607,7 +636,7 @@ def _reachable_actions(root: Decision) -> set[int]:
 
 
 def _issues(
-    normalized: NormalizedCase,
+    normalized: NormalizedMatchSite,
     root: Decision,
     occurrences: tuple[Occurrence, ...],
 ) -> tuple[tuple[int, ...], tuple[MatchIssue, ...]]:
@@ -616,9 +645,9 @@ def _issues(
         action.action_id for action in normalized.actions if action.action_id in reachable
     )
     issues: list[MatchIssue] = [
-        RedundantArmIssue(normalized.case_node_id, action.action_id, action.pattern_span)
+        RedundantArmIssue(normalized.site_node_id, action.action_id, action.pattern_span)
         for action in normalized.actions
-        if action.action_id not in reachable
+        if normalized.source_kind is MatchSiteKind.CASE and action.action_id not in reachable
     ]
     constraints = _first_failure_constraints(root, normalized.type_table)
     root_signature = signature_for_type(normalized.root.type, normalized.type_table)
@@ -627,29 +656,43 @@ def _issues(
     ):
         constraint_map = dict(constraints)
         issues.append(
-            NonExhaustiveIssue(
-                normalized.case_node_id,
-                normalized.span,
-                _witness_for_root(
-                    normalized.root,
-                    constraint_map,
-                    occurrences,
-                    normalized.type_table,
-                    normalized.case_context,
-                ),
+            (
+                NonExhaustiveIssue(
+                    normalized.site_node_id,
+                    normalized.span,
+                    _witness_for_root(
+                        normalized.root,
+                        constraint_map,
+                        occurrences,
+                        normalized.type_table,
+                        normalized.case_context,
+                    ),
+                )
+                if normalized.source_kind is MatchSiteKind.CASE
+                else RefutableLetIssue(
+                    normalized.site_node_id,
+                    normalized.span,
+                    _witness_for_root(
+                        normalized.root,
+                        constraint_map,
+                        occurrences,
+                        normalized.type_table,
+                        normalized.case_context,
+                    ),
+                )
             )
         )
     return reachable_in_source_order, tuple(sorted(issues, key=issue_sort_key))
 
 
-def compile_case(normalized: NormalizedCase) -> CompiledCase:
-    """Compile one normalized source case and derive all structured issues from its DAG.
+def compile_match_site(normalized: NormalizedMatchSite) -> CompiledMatchSite:
+    """Compile one normalized source match site and derive issues from its DAG.
 
     The decision DAG and its structured issues are the compiler's product.
     ``validate_compiled_case`` is the single self-check entry point over that
     product: it re-verifies the DAG as well as the ledger and the issues. The
-    whole-program stage runs it once per compiled case — at whichever boundary
-    that case reaches — when optional match-compilation validation is enabled
+    whole-program stage runs it once per compiled match site — at whichever
+    boundary that site reaches — when optional match-compilation validation is enabled
     (see :mod:`agm.agl.self_validation`).
     """
     compiler = _CaseCompiler()
@@ -658,7 +701,12 @@ def compile_case(normalized: NormalizedCase) -> CompiledCase:
     )
     occurrences = allocator.occurrences
     reachable, issues = _issues(normalized, root, occurrences)
-    return CompiledCase(normalized, root, occurrences, reachable, issues)
+    return CompiledMatchSite(normalized, root, occurrences, reachable, issues)
+
+
+# Compatibility entry point for focused case compiler tests and lowering seams.
+def compile_case(normalized: NormalizedCase) -> CompiledCase:
+    return compile_match_site(normalized)
 
 
 # ---------------------------------------------------------------------------
@@ -1266,11 +1314,11 @@ def validate_compiled_case(
     expected_normalized: NormalizedCase | None = None,
     require_success: bool = False,
 ) -> None:
-    """Validate the complete compiler and source contract of one compiled case.
+    """Validate the complete compiler and source contract of one compiled match site.
 
-    ``expected_normalized`` lets an artifact boundary bind the case back to a
-    freshly normalized checked source case. Invalid per-case compilation results
-    remain inspectable unless ``require_success`` is requested.
+    ``expected_normalized`` lets an artifact boundary bind the match site back to a
+    freshly normalized checked source match site. Invalid per-match-site compilation
+    results remain inspectable unless ``require_success`` is requested.
     """
     normalized = compiled.normalized
     if expected_normalized is not None:
@@ -1369,7 +1417,9 @@ def validate_decision_dag(root: Decision) -> None:
 
 __all__ = [
     "CompiledCase",
+    "CompiledMatchSite",
     "compile_case",
+    "compile_match_site",
     "validate_compiled_case",
     "validate_decision_dag",
 ]

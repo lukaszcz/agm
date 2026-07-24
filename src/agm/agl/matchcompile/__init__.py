@@ -5,7 +5,7 @@ helpers are implementation details available only from their defining
 submodules.
 """
 
-from .compiler import CompiledCase
+from .compiler import CompiledCase, CompiledMatchSite
 from .diagnostics import (
     BoolWitness,
     EnumWitness,
@@ -17,6 +17,7 @@ from .diagnostics import (
     OpenComplementWitness,
     RecordWitness,
     RedundantArmIssue,
+    RefutableLetIssue,
     WildcardWitness,
     WitnessField,
     render_witness,
@@ -30,7 +31,10 @@ from .model import (
     DecisionSwitch,
     EnumConstructor,
     FieldOccurrenceProvenance,
+    LetBindingAction,
     LiteralKind,
+    MatchSiteKind,
+    NormalizedMatchSite,
     Occurrence,
     OccurrenceId,
     RecordConstructor,
@@ -53,6 +57,7 @@ __all__ = [
     "BoolWitness",
     "Constructor",
     "CompiledCase",
+    "CompiledMatchSite",
     "Decision",
     "DecisionDecompose",
     "DecisionLeaf",
@@ -61,6 +66,7 @@ __all__ = [
     "EnumWitness",
     "FieldOccurrenceProvenance",
     "EnumWitnessQualification",
+    "LetBindingAction",
     "LiteralKind",
     "LiteralWitness",
     "MatchCompilationResult",
@@ -68,14 +74,17 @@ __all__ = [
     "MatchCompiledProgram",
     "MatchCompiledModule",
     "MatchIssue",
+    "MatchSiteKind",
     "MatchWitness",
     "NonExhaustiveIssue",
+    "NormalizedMatchSite",
     "Occurrence",
     "OccurrenceId",
     "OpenComplementWitness",
     "RecordConstructor",
     "RecordWitness",
     "RedundantArmIssue",
+    "RefutableLetIssue",
     "WildcardWitness",
     "WitnessField",
     "compile_program_matches",

@@ -284,13 +284,17 @@ value of the scrutinee type. Coverage includes the complete nested pattern,
 not only the outer constructor. For example, matching `Some(true)` and `None`
 does not cover `Some(false)`.
 
-Enum variants and the two boolean values form closed domains and can be
-covered by listing every remaining constructor or literal. This rule applies
-recursively to enum payloads: a payload of enum or `bool` type may itself be
-covered with a complete set of nested patterns.
+Enum variants, record constructors, and the two boolean values form closed
+domains and can be covered by listing every remaining constructor or literal. A
+record type has exactly one constructor, so its empty constructor pattern (for
+example, `Point()`) covers every `Point` value, regardless of its field domains.
+A record pattern that constrains fields is exhaustive only if its nested patterns
+cover those fields; an empty record-constructor pattern can cover the remainder.
+This rule applies recursively to enum payloads: a payload of enum or `bool` type
+may itself be covered with a complete set of nested patterns.
 
-The domains of `int`, `decimal`, `text`, `json`, lists, dictionaries, records,
-exceptions, `unit`, agents, functions, and an unresolved type parameter are open.
+The domains of `int`, `decimal`, `text`, `json`, lists, dictionaries, exceptions,
+`unit`, agents, functions, and an unresolved type parameter are open.
 
 `bottom` has an empty domain: a diverging expression (`raise`, `return`, `break`,
 or `continue`) produces no value to match. Consequently, every arm written for

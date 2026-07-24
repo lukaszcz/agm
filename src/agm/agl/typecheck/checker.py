@@ -985,8 +985,11 @@ class _Checker:
     def _check_let_binding(self, stmt: LetDecl) -> Type:
         """Check a let RHS once, then type every selected pattern binder."""
         if simple_let_pattern_name(stmt.pattern) == "_":
-            # Discard has deliberately never supplied an initializer expectation.
-            return self._binder_result(self._check_boundary_expr(stmt.value, expected=None))
+            # Discard deliberately supplies no initializer expectation, but it
+            # still has a complete matched type for match compilation.
+            value_type = self._check_boundary_expr(stmt.value, expected=None)
+            self._record_let_matched_type(stmt.node_id, value_type)
+            return self._binder_result(value_type)
 
         ann_type = self._resolve_annotation(stmt.type_ann, stmt.span)
         value_type = self._check_boundary_expr(stmt.value, expected=ann_type)

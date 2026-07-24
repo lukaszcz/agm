@@ -37,6 +37,7 @@ from agm.agl.syntax.nodes import (
     ConstructorPattern,
     DecimalLit,
     IntLit,
+    LetDecl,
     LiteralPattern,
     NullLit,
     Pattern,
@@ -55,11 +56,14 @@ from .model import (
     ConstructorField,
     EnumConstructor,
     FieldBearingNominalConstructor,
+    LetBindingAction,
     LiteralConstructor,
     LiteralKind,
     MatchCaseContext,
+    MatchSiteKind,
     MatrixRow,
     NormalizedCase,
+    NormalizedMatchSite,
     Occurrence,
     OccurrenceId,
     OmittedFieldProvenance,
@@ -487,7 +491,7 @@ def normalize_case(
         creation_order=0,
         type=subject_type,
         provenance=RootOccurrenceProvenance(
-            case_node_id=case.node_id,
+            site_node_id=case.node_id,
             subject_node_id=case.subject.node_id,
             span=case.subject.span,
         ),
@@ -535,8 +539,9 @@ def normalize_case(
         bare_enum_constructors=bare_constructors,
         owner_program=checked.resolved.program,
     )
-    return NormalizedCase(
-        case_node_id=case.node_id,
+    return NormalizedMatchSite(
+        site_node_id=case.node_id,
+        source_kind=MatchSiteKind.CASE,
         span=case.span,
         root=root,
         occurrences=(root,),
@@ -547,11 +552,90 @@ def normalize_case(
     )
 
 
+def normalize_let(
+    let: LetDecl,
+    checked: CheckedPatternOwner,
+    *,
+    enum_owner_forms: tuple[EnumOwnerForm, ...] | None = None,
+    blocked_enum_variants: Mapping[tuple[str, ...], frozenset[str]] | None = None,
+    bare_enum_constructors: frozenset[tuple[ModuleId, str, str]] | None = None,
+) -> NormalizedMatchSite:
+    """Normalize one checked ``let`` as its complete one-row match matrix.
+
+    A let's initializer remains source-owned: this artifact records its identity
+    but neither captures it nor represents its continuation.
+    """
+    try:
+        matched_type = checked.let_matched_types[let.node_id]
+    except KeyError as exc:
+        raise MatchCompileInvariantError(
+            f"missing checked matched type for let node {let.node_id}"
+        ) from exc
+    root = Occurrence(
+        id=OccurrenceId(0),
+        creation_order=0,
+        type=matched_type,
+        provenance=RootOccurrenceProvenance(
+            site_node_id=let.node_id,
+            subject_node_id=let.value.node_id,
+            span=let.value.span,
+        ),
+    )
+    cell = normalize_pattern(let.pattern, matched_type, checked)
+    action = LetBindingAction(
+        action_id=let.node_id,
+        source_index=0,
+        initializer_node_id=let.value.node_id,
+        pattern_node_id=let.pattern.node_id,
+        binding_span=let.span,
+        pattern_span=let.pattern.span,
+    )
+    module_id = checked.module_id if isinstance(checked, CheckedModule) else ENTRY_ID
+    owner_forms = (
+        checked.type_env.enum_owner_forms() if enum_owner_forms is None else enum_owner_forms
+    )
+    blocked_variants = (
+        checked.type_env.blocked_enum_variants()
+        if blocked_enum_variants is None
+        else blocked_enum_variants
+    )
+    bare_constructors = (
+        resolve_bare_enum_constructors(checked)
+        if bare_enum_constructors is None
+        else bare_enum_constructors
+    )
+    return NormalizedMatchSite(
+        site_node_id=let.node_id,
+        source_kind=MatchSiteKind.LET,
+        span=let.span,
+        root=root,
+        occurrences=(root,),
+        rows=(
+            MatrixRow(
+                cells=(cell,),
+                action_id=action.action_id,
+                source_index=action.source_index,
+                source_pattern_id=let.pattern.node_id,
+            ),
+        ),
+        actions=(action,),
+        type_table=checked.type_env.type_table,
+        case_context=MatchCaseContext(
+            module_id=module_id,
+            enum_owner_forms=owner_forms,
+            blocked_enum_variants=blocked_variants,
+            bare_enum_constructors=bare_constructors,
+            owner_program=checked.resolved.program,
+        ),
+    )
+
+
 __all__ = [
     "CheckedPatternOwner",
     "MatchCompileInvariantError",
     "constructor_inhabits_type",
     "normalize_case",
+    "normalize_let",
     "normalize_pattern",
     "pattern_cell_inhabits_type",
     "resolve_bare_enum_constructors",

@@ -2547,9 +2547,9 @@ class _Lowerer:
                 field_children_by_group.setdefault(
                     (provenance.parent, provenance.constructor), []
                 ).append(occurrence)
-        actions = {action.action_id: action for action in compiled.actions}
+        actions = {action.action_id: action for action in compiled.case_actions}
         branch_by_action = {
-            action.action_id: branches[action.source_index] for action in compiled.actions
+            action.action_id: branches[action.source_index] for action in compiled.case_actions
         }
         decision_memo: dict[int, IrExpr] = {}
         action_body_memo: dict[int, IrExpr] = {}

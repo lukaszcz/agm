@@ -24,6 +24,7 @@ from agm.agl.matchcompile import (
     OpenComplementWitness,
     RecordWitness,
     RedundantArmIssue,
+    RefutableLetIssue,
     WildcardWitness,
     WitnessField,
     render_witness,
@@ -31,6 +32,7 @@ from agm.agl.matchcompile import (
 from agm.agl.matchcompile.compiler import (
     CompiledCase,
     compile_case,
+    compile_match_site,
     validate_compiled_case,
     validate_decision_dag,
 )
@@ -64,6 +66,7 @@ from agm.agl.matchcompile.model import (
 from agm.agl.matchcompile.normalize import (
     MatchCompileInvariantError,
     normalize_case,
+    normalize_let,
     signature_for_type,
 )
 from agm.agl.modules.ids import ENTRY_ID, PRELUDE_ID
@@ -73,7 +76,7 @@ from agm.agl.scope.program import resolve_program
 from agm.agl.semantics.type_table import TypeTable
 from agm.agl.semantics.types import EnumType, IntType, Type, TypeTemplate
 from agm.agl.semantics.values import BoolValue, EnumValue, RecordValue, Value
-from agm.agl.syntax.nodes import Case
+from agm.agl.syntax.nodes import Case, LetDecl
 from agm.agl.syntax.visitor import walk
 from agm.agl.typecheck import (
     CheckedModule,
@@ -108,6 +111,51 @@ def _compile(source: str) -> tuple[CheckedModule, Case, CompiledCase]:
     assert len(cases) == 1
     case = cases[0]
     return checked, case, compile_case(normalize_case(case, checked))
+
+
+def test_compiler_marks_a_refutable_let_with_its_decision_witness() -> None:
+    checked = check_module(resolve_module(parse_program("let true = false")), _CAPS)
+    lets: list[LetDecl] = []
+
+    def collect(node: object) -> None:
+        if isinstance(node, LetDecl):
+            lets.append(node)
+
+    walk(checked.resolved.program, collect)
+    (let,) = lets
+    compiled = compile_match_site(normalize_let(let, checked))
+
+    assert isinstance(compiled.issues[0], RefutableLetIssue)
+    assert isinstance(compiled.issues[0].witness, BoolWitness)
+    assert compiled.issues[0].witness.value is False
+    with pytest.raises(MatchCompileInvariantError, match="binding actions"):
+        _ = compiled.case_actions
+    with pytest.raises(MatchCompileInvariantError, match="non-case action"):
+        _ = replace(
+            compiled,
+            normalized=replace(compiled.normalized, source_kind=compiler_module.MatchSiteKind.CASE),
+        ).case_actions
+
+    checked_case, _, irrefutable = _compile("case true of | _ => 1")
+    with pytest.raises(MatchCompileInvariantError, match="begin with"):
+        compiler_module._validate_occurrence_ledger(irrefutable.normalized, ())
+    ledger, groups = compiler_module._validate_occurrence_ledger(
+        irrefutable.normalized, irrefutable.occurrences
+    )
+    with pytest.raises(MatchCompileInvariantError, match="does not belong"):
+        compiler_module._validate_compiled_decisions(
+            replace(irrefutable, root=DecisionLeaf(999, ())), ledger, groups
+        )
+    with pytest.raises(MatchCompileInvariantError, match="irrefutable"):
+        compiler_module._validate_semantic_replay(replace(irrefutable, root=DecisionFail()))
+    _, _, decomposed = _compile(
+        "record Pair\n  left: int\n  right: int\nlet value = Pair(left = 1, right = 2)\n"
+        "case value of | Pair(left = _, right = _) => 1"
+    )
+    root = cast(DecisionDecompose, decomposed.root)
+    assert root.default is None
+    assert root.keyed_children[0].decision is root.child
+    del checked_case
 
 
 def _compile_graph_case(tmp_path: Path, modules: dict[str, str]) -> CompiledCase:
@@ -2131,7 +2179,7 @@ def test_strong_compiled_case_validator_rejects_internal_corruption() -> None:
     with pytest.raises(MatchCompileInvariantError, match="normalized source"):
         compiler_module.validate_compiled_case(
             pair_compiled,
-            expected_normalized=replace(normalized, case_node_id=normalized.case_node_id + 1),
+            expected_normalized=replace(normalized, site_node_id=normalized.site_node_id + 1),
         )
     with pytest.raises(MatchCompileInvariantError, match="type context"):
         compiler_module.validate_compiled_case(

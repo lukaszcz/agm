@@ -1,6 +1,6 @@
 # AgL Match Compilation
 
-The match compiler turns every checked source `case` into an immutable decision DAG — the artifact lowering consumes to emit executable switches. It is the last static pass: it runs after type checking, consumes checked pattern metadata only, and depends on nothing downstream — not lowering, the IR, the evaluator, or runtime services. See [index.md](agl/index.md) for the surrounding pipeline.
+The match compiler turns every checked source match site — a `case` or immutable `let` — into an immutable decision DAG. Case decisions are the artifact lowering currently consumes to emit executable switches; let decisions are static proof artifacts until binding-mode lowering is added. It is the last static pass: it runs after type checking, consumes checked pattern metadata only, and depends on nothing downstream — not lowering, the IR, the evaluator, or runtime services. See [index.md](agl/index.md) for the surrounding pipeline.
 
 ## Compilation Model
 
@@ -12,9 +12,11 @@ The same DAG provides reachable-arm information and deterministic structured wit
 
 ## Whole-Program Artifacts
 
-Whole-program entry points visit every nested case after type checking, including cases in all reachable modules — entry code never calling a case does not exempt it. Success yields a `MatchCompiledModule` or `MatchCompiledProgram` wrapping the exact checked artifact plus a total case-to-DAG mapping; any issue yields sorted static diagnostics and no artifact, so lowering can only ever see fully compiled programs. Downstream pipelines reuse a static artifact only when its resolved-program identity and host capabilities match the consuming pipeline; otherwise they recheck before lowering.
+Whole-program entry points visit every nested case and immutable let after type checking, including sites in all reachable modules — entry code never calling a site does not exempt it. Success yields a `MatchCompiledModule` or `MatchCompiledProgram` wrapping the exact checked artifact plus a total immutable match-site-to-DAG mapping. Each site preserves its source kind: cases retain their ordered arm actions, while a let retains one binding action with its initializer and pattern identities and checker-published matched type. Case-only consumers receive an immutable filtered decision view.
 
-Artifact validation — source ownership, mapping totality, and decision semantics — is a self-check gated by the AgL self-validation toggle ([testing.md](testing.md)), so the suite re-verifies every compiled case while production lowering trusts the artifact.
+A let is normalized as one row over its initializer occurrence. A reachable DAG failure is a static refutable-let diagnostic carrying the same structured missing-pattern witness as case exhaustiveness; accepted lets therefore have failure-free decisions. No runtime match failure, continuation capture, lowering, or evaluation is introduced at this stage. Any issue yields sorted static diagnostics and no artifact, so lowering can only ever see fully compiled programs. Downstream pipelines reuse a static artifact only when its resolved-program identity and host capabilities match the consuming pipeline; otherwise they recheck before lowering.
+
+Artifact validation — source kind and ownership, mapping totality, provenance, and decision semantic replay — is a self-check gated by the AgL self-validation toggle ([testing.md](testing.md)), so the suite re-verifies every compiled match site while production lowering trusts the artifact.
 
 ## Package Boundary
 

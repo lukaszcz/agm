@@ -30,9 +30,10 @@ binder: the initializer is checked once against it, then each selected binder
 receives its field or whole-value type. Without an annotation, the complete
 matched type is inferred from the initializer. A bottom initializer needs that
 annotation to type binders. `let _` remains a discard: its annotation does not
-constrain the initializer. Destructuring `let` patterns are not yet
-match-compiled or executable: lowering currently accepts only bare-name and
-wildcard `let` roots.
+constrain the initializer. Every `let` pattern is statically compiled and must
+be irrefutable; a refutable pattern is a static error. Destructuring lets are
+not yet lowered or executable, so lowering currently accepts only bare-name
+and wildcard `let` roots.
 
 `let` evaluates the initializer, checks it against the complete annotation (if
 any), and creates **immutable** bindings in the current scope. It scopes over the

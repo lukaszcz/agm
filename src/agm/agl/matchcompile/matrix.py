@@ -293,7 +293,7 @@ def _build_column_profiles(matrix: PatternMatrix) -> tuple[_ColumnProfile, ...]:
 
 
 def matrix_from_normalized(case: NormalizedCase) -> PatternMatrix:
-    """Construct the initial matrix state for a normalized source case."""
+    """Construct the initial matrix state for a normalized match site."""
     return PatternMatrix(
         case.occurrences,
         case.rows,
@@ -308,7 +308,7 @@ _OccurrenceGroup: TypeAlias = tuple[OccurrenceId, _ConstructorKey]
 
 @dataclass(frozen=True, slots=True)
 class OccurrenceIndex:
-    """A case-local occurrence ledger with its identity and child lookups.
+    """A match-site-local occurrence ledger with its identity and child lookups.
 
     Both maps are maintained as occurrences are allocated so that neither a
     switch's free-occurrence interface nor a branch's field children require a
@@ -361,7 +361,7 @@ class OccurrenceIndex:
 
 @dataclass(frozen=True, slots=True)
 class OccurrenceAllocator:
-    """Persistent case-local allocator for stable structural child occurrences."""
+    """Persistent match-site-local allocator for stable structural child occurrences."""
 
     index: OccurrenceIndex
     next_id: int
@@ -371,7 +371,7 @@ class OccurrenceAllocator:
 
     @classmethod
     def for_case(cls, case: NormalizedCase) -> OccurrenceAllocator:
-        """Create the sole root allocator for one normalized source case."""
+        """Create the sole root allocator for one normalized match site."""
         next_id = (
             max(
                 (occurrence.id.value for occurrence in case.occurrences),
@@ -396,7 +396,7 @@ class OccurrenceAllocator:
 
     @property
     def occurrences(self) -> tuple[Occurrence, ...]:
-        """Return every case-local occurrence allocated so far in creation order."""
+        """Return every match-site-local occurrence allocated so far in creation order."""
         return self.index.occurrences
 
 

@@ -38,6 +38,7 @@ from agm.agl.matchcompile.normalize import (
     MatchCompileInvariantError,
     constructor_inhabits_type,
     normalize_case,
+    normalize_let,
     normalize_pattern,
     pattern_cell_inhabits_type,
     signature_for_type,
@@ -67,7 +68,7 @@ from agm.agl.semantics.types import (
     UnitType,
 )
 from agm.agl.semantics.values import DecimalValue, EnumValue, TextValue
-from agm.agl.syntax.nodes import AsPattern, Case, ConstructorPattern, Pattern
+from agm.agl.syntax.nodes import AsPattern, Case, ConstructorPattern, LetDecl, Pattern
 from agm.agl.syntax.spans import SourceSpan
 from agm.agl.syntax.visitor import walk
 from agm.agl.typecheck import CheckedModule, check_module, check_program
@@ -99,6 +100,31 @@ def _only_case(program: object) -> Case:
     walk(program, collect)
     assert len(cases) == 1
     return cases[0]
+
+
+def test_let_normalization_retains_its_initializer_pattern_and_matched_type() -> None:
+    checked = _check("let value: bool = true")
+    lets: list[LetDecl] = []
+
+    def collect(node: object) -> None:
+        if isinstance(node, LetDecl):
+            lets.append(node)
+
+    walk(checked.resolved.program, collect)
+    (let,) = lets
+
+    normalized = normalize_let(let, checked)
+
+    assert normalized.site_node_id == let.node_id
+    assert normalized.source_kind.value == "let"
+    assert normalized.root.type == checked.let_matched_types[let.node_id]
+    assert len(normalized.rows) == len(normalized.actions) == 1
+    action = normalized.actions[0]
+    assert action.initializer_node_id == let.value.node_id
+    assert action.pattern_node_id == let.pattern.node_id
+    assert normalized.root.provenance.case_node_id == let.node_id
+    with pytest.raises(MatchCompileInvariantError, match="matched type"):
+        normalize_let(let, replace(checked, let_matched_types={}))
 
 
 def test_signatures_are_closed_for_boolean_and_enum_in_declaration_order() -> None:

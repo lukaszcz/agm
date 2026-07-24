@@ -14,12 +14,15 @@ import agm.agl.matchcompile as matchcompile
 import agm.agl.matchcompile.compiler as compiler_module
 import agm.agl.matchcompile.stage as stage_module
 from agm.agl.matchcompile import (
+    CompiledMatchSite,
     MatchCompilationResult,
     MatchCompiledModule,
     MatchCompiledProgram,
     MatchIssue,
+    MatchSiteKind,
     NonExhaustiveIssue,
     RedundantArmIssue,
+    RefutableLetIssue,
     compile_module_matches,
     compile_program_matches,
     diagnostic_from_match_issue,
@@ -66,6 +69,7 @@ def test_matchcompile_public_exports_are_narrow_and_stable() -> None:
         "BoolConstructor",
         "BoolWitness",
         "CompiledCase",
+        "CompiledMatchSite",
         "Constructor",
         "Decision",
         "DecisionDecompose",
@@ -75,6 +79,7 @@ def test_matchcompile_public_exports_are_narrow_and_stable() -> None:
         "EnumWitness",
         "EnumWitnessQualification",
         "FieldOccurrenceProvenance",
+        "LetBindingAction",
         "LiteralKind",
         "LiteralWitness",
         "MatchCompilationResult",
@@ -82,14 +87,17 @@ def test_matchcompile_public_exports_are_narrow_and_stable() -> None:
         "MatchCompiledProgram",
         "MatchCompiledModule",
         "MatchIssue",
+        "MatchSiteKind",
         "MatchWitness",
         "NonExhaustiveIssue",
+        "NormalizedMatchSite",
         "Occurrence",
         "OccurrenceId",
         "OpenComplementWitness",
         "RecordConstructor",
         "RecordWitness",
         "RedundantArmIssue",
+        "RefutableLetIssue",
         "WildcardWitness",
         "WitnessField",
         "compile_program_matches",
@@ -277,6 +285,65 @@ def test_empty_case_program_produces_valid_empty_artifact() -> None:
     assert compiled.cases == {}
 
 
+def test_compiles_nested_cases_and_lets_as_source_kind_preserving_sites() -> None:
+    checked = _checked(
+        "let outer = true\n"
+        "case outer of\n"
+        "  | true =>\n"
+        "      let inner = false\n"
+        "      case inner of | false => 1 | true => 2\n"
+        "  | false => 3\n"
+    )
+    result = compile_module_matches(checked)
+    assert isinstance(result.compiled, MatchCompiledModule)
+    compiled = result.compiled
+
+    assert len(compiled.sites) == 4
+    assert {site.source_kind for site in compiled.sites.values()} == {
+        MatchSiteKind.CASE,
+        MatchSiteKind.LET,
+    }
+    assert len(compiled.cases) == 2
+    lets = tuple(site for site in compiled.sites.values() if site.source_kind is MatchSiteKind.LET)
+    assert len(lets) == 2
+    assert all(isinstance(site, CompiledMatchSite) for site in lets)
+    for site in lets:
+        action = site.actions[0]
+        assert len(site.actions) == 1
+        assert action.initializer_node_id == site.normalized.root.provenance.subject_node_id
+        assert action.pattern_node_id == site.normalized.rows[0].source_pattern_id
+        assert site.normalized.root.type == checked.let_matched_types[site.site_node_id]
+
+    mutable_sites = cast(MutableMapping[int, CompiledMatchSite], compiled.sites)
+    with pytest.raises(TypeError):
+        mutable_sites[999] = next(iter(compiled.sites.values()))
+
+
+def test_refutable_let_is_rejected_with_a_structured_missing_pattern_witness() -> None:
+    checked = _checked("let true = false")
+    result = compile_module_matches(checked)
+
+    assert result.compiled is None
+    assert len(result.issues) == 1
+    issue = result.issues[0]
+    assert isinstance(issue, RefutableLetIssue)
+    assert isinstance(issue.witness, matchcompile.BoolWitness)
+    assert issue.witness.value is False
+    assert "Refutable let" in diagnostic_from_match_issue(issue).message
+
+
+def test_artifact_rejects_a_match_site_with_the_wrong_source_kind() -> None:
+    compiled = _compiled("let value = true")
+    site_id, site = next(iter(compiled.sites.items()))
+    wrong_kind = replace(
+        site,
+        normalized=replace(site.normalized, source_kind=MatchSiteKind.CASE),
+    )
+
+    with pytest.raises(MatchCompileInvariantError, match="source kind"):
+        MatchCompiledModule(compiled.checked, {site_id: wrong_kind})
+
+
 def test_source_issues_are_all_sorted_adapted_and_prevent_artifact() -> None:
     checked = _checked(
         "let _ = case true of\n  | true => 1\n  | true => 2\ncase false of\n  | false => 3\n"
@@ -422,7 +489,7 @@ def test_program_artifact_rejects_missing_extra_mismatched_and_cross_program_cas
 
     mismatched = replace(
         compiled_case,
-        normalized=replace(compiled_case.normalized, case_node_id=case_id + 1),
+        normalized=replace(compiled_case.normalized, site_node_id=case_id + 1),
     )
     with pytest.raises(MatchCompileInvariantError, match="does not match"):
         MatchCompiledModule(first.checked, {case_id: mismatched})
@@ -442,7 +509,7 @@ def test_program_artifact_rejects_missing_extra_mismatched_and_cross_program_cas
 
     second_checked = _checked("case true of | true => 1 | false => 2")
     with pytest.raises(MatchCompileInvariantError, match="different checked program"):
-        MatchCompiledModule(second_checked, first.cases)
+        MatchCompiledModule(second_checked, first.sites)
 
     invalid_checked = _checked("case true of | true => 1")
     invalid_case = _first_case(invalid_checked)
@@ -502,12 +569,12 @@ def test_program_artifact_replays_source_semantics_against_every_decision_edge()
     case_ids = tuple(compiled.cases)
     cases = tuple(compiled.cases.values())
 
-    MatchCompiledModule(compiled.checked, compiled.cases)
+    MatchCompiledModule(compiled.checked, compiled.sites)
     for _, case_index, corrupted_case in _semantic_replay_corruptions(cases):
-        corrupted_cases = dict(compiled.cases)
-        corrupted_cases[case_ids[case_index]] = corrupted_case
+        corrupted_sites = dict(compiled.sites)
+        corrupted_sites[case_ids[case_index]] = corrupted_case
         with pytest.raises(MatchCompileInvariantError, match="semantic replay|forged demanded"):
-            MatchCompiledModule(compiled.checked, corrupted_cases)
+            MatchCompiledModule(compiled.checked, corrupted_sites)
 
 
 def test_semantic_replay_rejects_terminal_and_ledger_rule_corruption() -> None:
@@ -587,7 +654,7 @@ def test_valid_shared_dag_passes_strong_compiled_case_validation() -> None:
 
     assert right.default is left.default
     validate_compiled_case(compiled_case)
-    MatchCompiledModule(compiled.checked, compiled.cases)
+    MatchCompiledModule(compiled.checked, compiled.sites)
 
 
 def test_valid_shared_dag_passes_graph_semantic_replay_validation(tmp_path: Path) -> None:
@@ -612,7 +679,7 @@ def test_valid_shared_dag_passes_graph_semantic_replay_validation(tmp_path: Path
     right = cast(DecisionSwitch, left.keyed_children[0].decision)
 
     assert right.default is left.default
-    MatchCompiledProgram(checked, compiled.cases_by_module)
+    MatchCompiledProgram(checked, compiled.sites_by_module)
 
 
 def test_duplicate_source_case_ids_are_rejected_by_compilation_and_validation(
@@ -746,11 +813,11 @@ def test_graph_artifact_replays_source_semantics_against_every_decision_edge(
     case_ids = tuple(entry_cases)
     cases = tuple(entry_cases.values())
 
-    MatchCompiledProgram(checked, compiled.cases_by_module)
+    MatchCompiledProgram(checked, compiled.sites_by_module)
     for _, case_index, corrupted_case in _semantic_replay_corruptions(cases):
         corrupted_modules = {
-            module_id: dict(module_cases)
-            for module_id, module_cases in compiled.cases_by_module.items()
+            module_id: dict(module_sites)
+            for module_id, module_sites in compiled.sites_by_module.items()
         }
         corrupted_modules[ENTRY_ID][case_ids[case_index]] = corrupted_case
         with pytest.raises(MatchCompileInvariantError, match="semantic replay|forged demanded"):

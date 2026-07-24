@@ -136,7 +136,16 @@ class RedundantArmIssue:
     span: SourceSpan
 
 
-MatchIssue: TypeAlias = NonExhaustiveIssue | RedundantArmIssue
+@dataclass(frozen=True, slots=True)
+class RefutableLetIssue:
+    """One immutable ``let`` pattern has a reachable non-matching value."""
+
+    let_node_id: int
+    span: SourceSpan
+    witness: MatchWitness
+
+
+MatchIssue: TypeAlias = NonExhaustiveIssue | RedundantArmIssue | RefutableLetIssue
 
 
 def _render_literal(kind: LiteralKind, value: decimal.Decimal | str | None) -> str:
@@ -188,8 +197,12 @@ def render_witness(witness: MatchWitness) -> str:
 
 def issue_sort_key(issue: MatchIssue) -> tuple[str, int, int, int, int, int, int]:
     """Return the deterministic cross-source ordering key used by the stage adapter."""
-    kind_order = 0 if isinstance(issue, NonExhaustiveIssue) else 1
-    action_id = -1 if isinstance(issue, NonExhaustiveIssue) else issue.action_id
+    if isinstance(issue, (NonExhaustiveIssue, RefutableLetIssue)):
+        kind_order = 0
+        action_id = -1
+    else:
+        kind_order = 1
+        action_id = issue.action_id
     span = issue.span
     return (
         span.source.label,
@@ -213,6 +226,7 @@ __all__ = [
     "OpenComplementWitness",
     "RedundantArmIssue",
     "RecordWitness",
+    "RefutableLetIssue",
     "WildcardWitness",
     "WitnessField",
     "issue_sort_key",

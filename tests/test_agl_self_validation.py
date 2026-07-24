@@ -109,15 +109,15 @@ def test_graph_lowering_trusts_the_artifact_that_already_validated_itself(
     # Constructing the artifact is the checkpoint, so corruption applied behind
     # its back afterwards is rejected there ...
     corrupt = {
-        module_id: dict(module_cases)
-        for module_id, module_cases in compiled.cases_by_module.items()
+        module_id: dict(module_sites)
+        for module_id, module_sites in compiled.sites_by_module.items()
     }
     corrupt[ENTRY_ID][case_id] = replace(entry_cases[case_id], reachable_action_ids=())
     with pytest.raises(MatchCompileInvariantError, match="reachable action ids"):
         MatchCompiledProgram(compiled.checked, corrupt)
 
     # ... and not re-checked by lowering, which never repeats the check.
-    object.__setattr__(compiled, "cases_by_module", corrupt)
+    object.__setattr__(compiled, "sites_by_module", corrupt)
     assert lower_program(compiled).symbols
 
 
@@ -126,7 +126,7 @@ def test_program_lowering_trusts_the_artifact_that_already_validated_itself() ->
     source = "case true of | true => 1 | false => 2"
     compiled = _compiled_program(source)
     (case_id,) = tuple(compiled.cases)
-    corrupt = dict(compiled.cases)
+    corrupt = dict(compiled.sites)
     corrupt[case_id] = replace(compiled.cases[case_id], reachable_action_ids=())
 
     # Constructing the artifact is the checkpoint, so corruption applied behind
@@ -135,7 +135,7 @@ def test_program_lowering_trusts_the_artifact_that_already_validated_itself() ->
         MatchCompiledModule(compiled.checked, corrupt)
 
     # ... and not re-checked by lowering, which never repeats the check.
-    object.__setattr__(compiled, "cases", corrupt)
+    object.__setattr__(compiled, "sites", corrupt)
     assert lower_module(compiled, source_text=source, source_label="<test>").symbols
 
 
@@ -144,13 +144,13 @@ def test_repl_entry_lowering_trusts_the_artifact_that_already_validated_itself()
     source = "case true of | true => 1 | false => 2"
     compiled = _compiled_program(source)
     (case_id,) = tuple(compiled.cases)
-    corrupt = dict(compiled.cases)
+    corrupt = dict(compiled.sites)
     corrupt[case_id] = replace(compiled.cases[case_id], reachable_action_ids=())
 
     with pytest.raises(MatchCompileInvariantError, match="reachable action ids"):
         MatchCompiledModule(compiled.checked, corrupt)
 
-    object.__setattr__(compiled, "cases", corrupt)
+    object.__setattr__(compiled, "sites", corrupt)
     entry = lower_repl_entry(
         compiled,
         image=LinkImage(),

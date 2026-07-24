@@ -21,9 +21,16 @@ from agm.agl.syntax.nodes import Program
 from agm.agl.syntax.spans import SourceSpan
 
 
+class MatchSiteKind(enum.Enum):
+    """The source construct represented by a compiled pattern match site."""
+
+    CASE = "case"
+    LET = "let"
+
+
 @dataclass(frozen=True, slots=True, order=True)
 class OccurrenceId:
-    """Stable, case-local identity of a value occurrence."""
+    """Stable, match-site-local identity of a value occurrence."""
 
     value: int
 
@@ -217,11 +224,16 @@ PatternProvenance: TypeAlias = SourcePatternProvenance | OmittedFieldProvenance
 
 @dataclass(frozen=True, slots=True)
 class RootOccurrenceProvenance:
-    """Provenance for the root scrutinee occurrence of one source case."""
+    """Provenance for the root value occurrence of one source match site."""
 
-    case_node_id: int
+    site_node_id: int
     subject_node_id: int
     span: SourceSpan
+
+    @property
+    def case_node_id(self) -> int:
+        """Compatibility spelling for consumers that only accept case sites."""
+        return self.site_node_id
 
 
 @dataclass(frozen=True, slots=True)
@@ -314,6 +326,21 @@ class SourceAction:
     pattern_span: SourceSpan
 
 
+@dataclass(frozen=True, slots=True)
+class LetBindingAction:
+    """The sole binding leaf of a source ``let`` match site."""
+
+    action_id: int
+    source_index: int
+    initializer_node_id: int
+    pattern_node_id: int
+    binding_span: SourceSpan
+    pattern_span: SourceSpan
+
+
+MatchSiteAction: TypeAlias = SourceAction | LetBindingAction
+
+
 EnumConstructorSpelling: TypeAlias = EnumOwnerForm
 
 
@@ -330,7 +357,7 @@ class MatrixRow:
 
 @dataclass(frozen=True, slots=True)
 class MatchCaseContext:
-    """Per-case frontend context used only for diagnostics and allocation identity."""
+    """Per-match-site frontend context used only for diagnostics and allocation identity."""
 
     module_id: ModuleId
     enum_owner_forms: tuple[EnumOwnerForm, ...] = ()
@@ -346,15 +373,16 @@ class MatchCaseContext:
 
 
 @dataclass(frozen=True, slots=True)
-class NormalizedCase:
-    """The normalized one-column matrix and source identities for a source case."""
+class NormalizedMatchSite:
+    """The normalized one-column matrix and source identities for one match site."""
 
-    case_node_id: int
+    site_node_id: int
+    source_kind: MatchSiteKind
     span: SourceSpan
     root: Occurrence
     occurrences: tuple[Occurrence, ...]
     rows: tuple[MatrixRow, ...]
-    actions: tuple[SourceAction, ...]
+    actions: tuple[MatchSiteAction, ...]
     type_table: TypeTable = field(repr=False, compare=False, hash=False)
     case_context: MatchCaseContext = field(
         default_factory=lambda: MatchCaseContext(ENTRY_ID),
@@ -363,9 +391,18 @@ class NormalizedCase:
         hash=False,
     )
 
+    @property
+    def case_node_id(self) -> int:
+        """Compatibility spelling for consumers that only accept case sites."""
+        return self.site_node_id
+
     def __post_init__(self) -> None:
         if self_validation_enabled():
             _validate_normalized_case(self)
+
+
+# Compatibility alias for case-only consumers during the staged lowering work.
+NormalizedCase: TypeAlias = NormalizedMatchSite
 
 
 @dataclass(frozen=True, slots=True)
@@ -468,7 +505,7 @@ def _validate_constructor_cell(cell: ConstructorCell) -> None:
         )
 
 
-def _validate_normalized_case(case: NormalizedCase) -> None:
+def _validate_normalized_case(case: NormalizedMatchSite) -> None:
     if case.occurrences != (case.root,):
         raise ValueError("a freshly normalized case must contain only its root occurrence")
     if any(len(row.cells) != len(case.occurrences) for row in case.rows):
@@ -508,9 +545,13 @@ __all__ = [
     "LiteralConstructor",
     "LiteralKind",
     "LiteralValue",
+    "LetBindingAction",
     "MatchCaseContext",
+    "MatchSiteAction",
+    "MatchSiteKind",
     "MatrixRow",
     "NormalizedCase",
+    "NormalizedMatchSite",
     "Occurrence",
     "OccurrenceId",
     "OccurrenceProvenance",

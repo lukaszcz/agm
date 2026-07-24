@@ -57,7 +57,11 @@ def _run_program(
     rt = _make_runtime(default_agent=default_agent)
     if agents:
         for name, fn in agents.items():
-            rt.register_agent(name, fn)
+            declarations = [item for item in prepared.declared_agents if item.name == name]
+            if len(declarations) == 1:
+                rt.register_scoped_agent(declarations[0].scope_path, name, fn)
+            else:
+                rt.register_agent(name, fn)
     return rt.run_prepared(prepared, param_values=param_values)
 
 
@@ -1245,3 +1249,50 @@ class TestExternMultiFile:
         result = _run_program(source, roots_dirs=[MULTI_FILE_DIR])
         assert result.ok is True
         assert "42" in capsys.readouterr().out
+
+
+class TestScopedExecutionFixtures:
+    """Scoped imports, opened members, and agents execute across modules."""
+
+    @pytest.mark.parametrize(
+        ("responses", "expected"),
+        (
+            (
+                (
+                    '{"name": "root", "children": [{"name": "ready", "children": []}]}',
+                    '{"$case": "completed"}',
+                ),
+                "true\ncompleted\ntrue\n",
+            ),
+            (
+                (
+                    '{"name": "root", "children": [{"name": "later", "children": []}]}',
+                    '{"$case": "waiting"}',
+                ),
+                "false\nwaiting\nfalse\n",
+            ),
+        ),
+        ids=("completed_task", "waiting_task"),
+    )
+    def test_path_selected_and_opened_scoped_workflow_executes(
+        self,
+        responses: tuple[str, str],
+        expected: str,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        entry = MULTI_FILE_DIR / "scoped_execution" / "entry.agl"
+        scripted = iter(responses)
+
+        def reviewer(request: Any) -> str:
+            del request
+            return next(scripted)
+
+        result = _run_program(
+            entry.read_text(),
+            entry_path=entry,
+            roots_dirs=[MULTI_FILE_DIR],
+            agents={"reviewer": reviewer},
+        )
+
+        assert result.ok is True
+        assert capsys.readouterr().out == expected

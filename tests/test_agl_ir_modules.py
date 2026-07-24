@@ -6,11 +6,20 @@ from pathlib import Path
 
 import pytest
 
-from agm.agl.ir.ids import NominalId
+from agm.agl.ir.ids import FunctionId, NominalId
+from agm.agl.ir.nodes import IrDirectCall, IrPrint
+from agm.agl.ir.validate import validate_ir
+from agm.agl.lower.program import lower_program
 from agm.agl.modules.ids import ENTRY_ID, ModuleId
 from agm.agl.semantics.values import BoolValue, EnumValue, IntValue, RecordValue, TextValue
 from agm.agl.typecheck import AglTypeError
-from tests.agl.ir_harness import evaluate_ir, evaluate_ir_graph, evaluate_ir_graph_raises
+from tests.agl.ir_harness import (
+    _checked,
+    _compiled_checked,
+    evaluate_ir,
+    evaluate_ir_graph,
+    evaluate_ir_graph_raises,
+)
 
 
 def test_imported_function_and_local_let(tmp_path: Path) -> None:
@@ -59,6 +68,37 @@ box
     assert result["box"] == RecordValue(
         NominalId(ModuleId.from_path("lib"), "Box"), "Box", {"value": IntValue(1)}
     )
+
+
+def test_scoped_linked_calls_use_function_handles_and_validate(tmp_path: Path) -> None:
+    """Cross-module scoped calls lower to linked handles accepted by IR validation."""
+    workflow = (
+        Path(__file__).parent / "agl" / "multi_file" / "scoped_execution" / "workflow.agl"
+    ).read_text()
+    entry = (
+        "import scoped_execution/workflow\n"
+        "import scoped_execution/workflow using Workflow::Task\n"
+        "open import scoped_execution/workflow\n"
+        "open scoped_execution/workflow::Workflow\n"
+        "open scoped_execution/workflow::Workflow::Status\n"
+        'let task = Task(name = "root", children = [Task(name = "ready", children = [])])\n'
+        "let status: Status = completed\n"
+        "print(score(task))\n"
+        "print(label(status))\n"
+    )
+    checked = _checked(entry, {"scoped_execution/workflow": workflow}, tmp_path)
+    executable = lower_program(_compiled_checked(checked))
+
+    validate_ir(executable, deep=True)
+    calls = [
+        initializer.value
+        for initializer in executable.modules[executable.entry_module].initializers
+        if isinstance(initializer, IrPrint) and isinstance(initializer.value, IrDirectCall)
+    ]
+    assert len(calls) == 2
+    assert all(isinstance(call.function_id, FunctionId) for call in calls)
+    assert all(call.function_id in executable.functions for call in calls)
+    assert all(not hasattr(call, "function_name") for call in calls)
 
 
 def test_cross_module_mutual_recursion(tmp_path: Path) -> None:

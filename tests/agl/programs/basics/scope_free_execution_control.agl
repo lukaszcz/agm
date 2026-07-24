@@ -1,0 +1,22 @@
+# The same boundary workflow without named scopes remains unchanged.
+record Task
+  name: text
+  children: list[Task]
+
+enum Status
+  | waiting
+  | completed
+
+agent reviewer = "reviewer"
+
+def score(task: Task) -> bool = task.children[0].name == "ready"
+def label(status: Status) -> text =
+  case status of
+    | Status::waiting => "waiting"
+    | Status::completed => "completed"
+
+let task: Task = ask("Return a recursive task.", agent = reviewer)
+let status: Status = ask("Return a workflow status.", agent = reviewer)
+print(score(task))
+print(label(status))
+print(status is Status::completed)

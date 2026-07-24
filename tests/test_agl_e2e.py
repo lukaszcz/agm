@@ -69,7 +69,7 @@ class ScriptedAgent:
     Schema from the output contract for that same call. It is a SEPARATE list
     from ``prompts`` so existing ``equals``/``contains`` assertions against the
     literal user prompt are unaffected; a scenario that wants to assert on the
-    schema instead uses ``schema_contains``.
+    schema instead uses ``schema_contains`` or ``schema_paths``.
     """
 
     name: str
@@ -261,6 +261,49 @@ def _schema_contains(schema: Any, needle: str) -> bool:
     return schema == needle
 
 
+def _assert_schema_paths(schema: Any, assertions: list[dict[str, Any]]) -> None:
+    """Assert exact JSON Schema values at dictionary-key paths."""
+    for assertion in assertions:
+        actual = schema
+        path = assertion["path"]
+        for key in path:
+            assert isinstance(actual, dict), f"{path!r} is not a dictionary path in {schema!r}"
+            assert key in actual, f"{path!r} is absent from schema {schema!r}"
+            actual = actual[key]
+        assert actual == assertion["equals"], (
+            f"schema at {path!r}: expected {assertion['equals']!r}, got {actual!r}"
+        )
+
+
+def test_schema_paths_assert_exact_nested_values() -> None:
+    schema = {
+        "$ref": "#/$defs/Workflow_Task",
+        "$defs": {
+            "Workflow_Task": {
+                "properties": {"children": {"items": {"$ref": "#/$defs/Workflow_Task"}}}
+            }
+        },
+    }
+
+    _assert_schema_paths(
+        schema,
+        [
+            {"path": ["$ref"], "equals": "#/$defs/Workflow_Task"},
+            {
+                "path": [
+                    "$defs",
+                    "Workflow_Task",
+                    "properties",
+                    "children",
+                    "items",
+                    "$ref",
+                ],
+                "equals": "#/$defs/Workflow_Task",
+            },
+        ],
+    )
+
+
 def _assert_calls(agents: dict[str, ScriptedAgent], expect: dict[str, Any]) -> None:
     for name, agent in agents.items():
         assert not agent.overflowed, f"agent {name!r} was called more times than scripted"
@@ -286,9 +329,10 @@ def _assert_calls(agents: dict[str, ScriptedAgent], expect: dict[str, Any]) -> N
             assert needle in prompt, f"{needle!r} not in prompt {prompt!r}"
         for needle in spec.get("not_contains", []):
             assert needle not in prompt, f"{needle!r} unexpectedly in prompt {prompt!r}"
+        schema = agents[spec["agent"]].schemas[call]
         for needle in spec.get("schema_contains", []):
-            schema = agents[spec["agent"]].schemas[call]
             assert _schema_contains(schema, needle), f"{needle!r} not in schema {schema!r}"
+        _assert_schema_paths(schema, spec.get("schema_paths", []))
 
 
 def _scenario_params() -> list[Any]:

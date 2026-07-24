@@ -1,0 +1,30 @@
+{
+  "scenarios": [
+    {
+      "name": "keeps_scope_free_completed_workflow_behavior",
+      "agents": {
+        "reviewer": [
+          "{\"name\": \"root\", \"children\": [{\"name\": \"ready\", \"children\": []}]}",
+          "{\"$case\": \"completed\"}"
+        ]
+      },
+      "expect": {
+        "stdout": "true\ncompleted\ntrue\n",
+        "calls": {"reviewer": 2}
+      }
+    },
+    {
+      "name": "keeps_scope_free_waiting_workflow_behavior",
+      "agents": {
+        "reviewer": [
+          "{\"name\": \"root\", \"children\": [{\"name\": \"later\", \"children\": []}]}",
+          "{\"$case\": \"waiting\"}"
+        ]
+      },
+      "expect": {
+        "stdout": "false\nwaiting\nfalse\n",
+        "calls": {"reviewer": 2}
+      }
+    }
+  ]
+}

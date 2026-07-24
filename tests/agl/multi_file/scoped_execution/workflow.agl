@@ -1,0 +1,15 @@
+scope Workflow
+record Task
+  name: text
+  children: list[Task]
+end Workflow
+
+enum Workflow::Status
+  | waiting
+  | completed
+
+def Workflow::score(task: Workflow::Task) -> bool = task.children[0].name == "ready"
+def Workflow::Status::label(status: Workflow::Status) -> text =
+  case status of
+    | Workflow::Status::waiting => "waiting"
+    | Workflow::Status::completed => "completed"

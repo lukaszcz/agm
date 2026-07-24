@@ -60,7 +60,10 @@ Layout:
           {"agent": "reviewer", "call": 0,
            "equals": "exact rendered prompt",
            "contains": ["fragment"], "not_contains": ["fragment"],
-           "schema_contains": ["fragment"]}
+           "schema_contains": ["fragment"],
+           "schema_paths": [
+             {"path": ["$ref"], "equals": "#/$defs/Task"}
+           ]}
         ],
         "raises": {"type": "MaxIterationsExceeded",
                    "fields": {"limit": 3},
@@ -93,10 +96,11 @@ Field notes:
 - `expect.calls` — exact number of calls per listed agent (retries count as calls).
 - `expect.prompts` — assertions on the rendered user prompt (`request.prompt`) an
   agent received on a given 0-based call index. `schema_contains` instead checks
-  that call's output contract `format_instructions` (the format-instructions/JSON
-  Schema channel a real runner-backed agent appends to the message; see
-  `runtime/agents.py`) — the mechanism to assert a JSON target's derived schema,
-  including `$defs`/`$ref` for a recursive type, reached the agent.
+  that call's output contract JSON Schema (the format-instructions/JSON Schema
+  channel a real runner-backed agent appends to the message; see
+  `runtime/agents.py`). `schema_paths` asserts exact values at dictionary-key
+  paths in that schema, such as a recursive root and child `$ref` pointing to the
+  same `$defs` entry.
 - `expect.raises` — the uncaught AgL exception ending the run: its type name, an
   exact-match subset of its fields, and substrings of its `message` field.
 - `expect.host_error` — the run must fail pre-execution (param validation): no agent

@@ -1,0 +1,16 @@
+import scoped_execution/workflow
+import scoped_execution/workflow using Workflow::Task
+open import scoped_execution/workflow
+open scoped_execution/workflow::Workflow
+open scoped_execution/workflow::Workflow::Status
+
+scope Dispatch
+agent reviewer = "reviewer"
+def fetch() -> Task = ask("Return a recursive task.", agent = reviewer)
+end Dispatch
+
+let task = Dispatch::fetch()
+let status: Status = ask("Return a workflow status.", agent = Dispatch::reviewer)
+print(score(task))
+print(label(status))
+print(status is completed)

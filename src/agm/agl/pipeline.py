@@ -119,7 +119,7 @@ class PreparedProgram:
         Non-fatal lex (TAB) and scope warnings; present even on failure.
     ``companion_paths``
         Each loaded module's Python companion path (``None`` when the module
-        declares no extern), keyed by module id.  Empty when loading failed.
+        declares no root extern), keyed by module id. Empty when loading failed.
         Consumed by ``run_prepared`` to import and resolve every
         declared extern before evaluation.
     """
@@ -1268,7 +1268,7 @@ def _extern_declaration_sort_key(pair: "tuple[ModuleId, str]") -> "tuple[tuple[s
 def _extern_declarations(
     checked: "CheckedProgram",
 ) -> list[tuple["ModuleId", str]]:
-    """Return ``(module_id, name)`` for every ``extern def`` in *checked*.
+    """Return ``(module_id, name)`` for every root ``extern def`` in *checked*.
 
     Sorted for deterministic diagnostic ordering; the checked AST (not the
     IR) is the source of truth here since the IR has no extern table yet.
@@ -1293,17 +1293,17 @@ def _wire_extern_registry(
     """Import every companion and resolve every declared extern, up front.
 
     Returns diagnostics — a single capability-gate diagnostic when the host
-    disables ``supports_extern`` and the program declares any extern, or one
+    disables ``supports_extern`` and the program declares any root extern, or one
     diagnostic per companion that fails to import or resolve — collected
     before any evaluation.  Returns ``[]`` immediately when the program
-    declares no extern, regardless of the capability (non-extern programs are
+    declares no root extern, regardless of the capability (non-extern programs are
     never affected).  Mutates *registry* in place, so a ``PipelineDriver``
     that reuses the same ``HostEnvironment`` across multiple runs (e.g. the
     REPL) imports each companion only once.
     """
     from agm.agl.runtime.externs import ExternImportError, ExternResolutionError
 
-    # A companion path is recorded (non-``None``) exactly for extern-declaring
+    # A companion path is recorded (non-``None``) exactly for root-extern-declaring
     # modules, so this cheap check short-circuits the common no-extern program
     # before the full declared-function walk in ``_extern_declarations`` — and,
     # equivalently, gates the capability diagnostic without that walk.

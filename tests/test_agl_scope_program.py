@@ -918,6 +918,29 @@ class TestDeclarationOnly:
         mylib_id = ModuleId.from_path("mylib")
         assert "foo" in result.modules[mylib_id].exports
 
+    def test_empty_scope_region_in_library_is_allowed(self, tmp_path: Path) -> None:
+        graph = _make_graph_from_files(
+            tmp_path,
+            {
+                "entry": "open import mylib\n()",
+                "mylib": "scope Team\nend Team",
+            },
+        )
+
+        assert ModuleId.from_path("mylib") in resolve_program(graph).modules
+
+    def test_agent_in_nested_library_scope_region_errors(self, tmp_path: Path) -> None:
+        graph = _make_graph_from_files(
+            tmp_path,
+            {
+                "entry": "open import mylib\n()",
+                "mylib": "scope Team\nscope Review\nend Review\nagent bot\nend Team",
+            },
+        )
+
+        with pytest.raises(AglScopeError, match="agent"):
+            resolve_program(graph)
+
 
 # ---------------------------------------------------------------------------
 # Test: entry-only constructs

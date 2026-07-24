@@ -1,1 +1,0 @@
-def Point::distance() -> int = 0

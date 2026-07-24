@@ -715,6 +715,7 @@ class ReplSession:
             RecordDef,
             TypeAlias,
             VarDecl,
+            is_scoped_declaration,
         )
         from agm.agl.typecheck.env import TypeEnvironment
 
@@ -733,10 +734,12 @@ class ReplSession:
             VarDecl,
         )
         entry_names = {
-            item.name for item in program.body.items if isinstance(item, named_declarations)
+            item.name
+            for item in program.body.items
+            if isinstance(item, named_declarations) and not is_scoped_declaration(item)
         }
         for item in program.body.items:
-            if isinstance(item, EnumDef):
+            if isinstance(item, EnumDef) and not item.scope_path:
                 entry_names.update(variant.name for variant in item.variants)
 
         def _before_failure(end_offset: int) -> bool:
@@ -748,11 +751,13 @@ class ReplSession:
             item.name
             for item in program.body.items
             if isinstance(item, (RecordDef, EnumDef, ExceptionDef, TypeAlias))
+            and not item.scope_path
         )
         promoted_type_names = frozenset(
             item.name
             for item in program.body.items
             if isinstance(item, (RecordDef, EnumDef, ExceptionDef, TypeAlias))
+            and not item.scope_path
             and _before_failure(item.span.end_offset)
         )
         unpromoted_type_names = entry_type_names - promoted_type_names
@@ -787,6 +792,7 @@ class ReplSession:
             for item in program.body.items
             if partial
             and isinstance(item, named_declarations)
+            and not is_scoped_declaration(item)
             and not _before_failure(item.span.end_offset)
         }
         for name, ref in entry_root.bindings.items():
@@ -825,7 +831,9 @@ class ReplSession:
                 unpromoted_function_names = (
                     item.name
                     for item in program.body.items
-                    if isinstance(item, FuncDef) and not _before_failure(item.span.end_offset)
+                    if isinstance(item, FuncDef)
+                    and not item.scope_path
+                    and not _before_failure(item.span.end_offset)
                 )
                 new_type_env.restore_binding_metadata_from(
                     previous_type_env,
@@ -839,7 +847,9 @@ class ReplSession:
         promoted_agents = {
             item.name
             for item in program.body.items
-            if isinstance(item, AgentDecl) and _before_failure(item.span.end_offset)
+            if isinstance(item, AgentDecl)
+            and not item.scope_path
+            and _before_failure(item.span.end_offset)
         }
         self._declared_agents.update(promoted_agents)
         if promoted_type_names:

@@ -34,7 +34,7 @@ from agm.agl.modules.resolver import expand_wildcard, resolve_module
 from agm.agl.modules.roots import RootSet
 from agm.agl.parser.parser import parse_program_seeded
 from agm.agl.syntax.advisories import SpacedQualifier
-from agm.agl.syntax.nodes import ExportDecl, FuncDef, ImportDecl
+from agm.agl.syntax.nodes import ExportDecl, FuncDef, ImportDecl, is_scoped_declaration
 from agm.agl.syntax.spans import SourceId, SourceSpan
 from agm.agl.syntax.types import ImportMode
 from agm.core import fs
@@ -71,7 +71,7 @@ class LoadedModule:
     companion_path:
         The canonical Python companion file path (this module's path with its
         suffix replaced by ``.py``) when ``program`` declares at least one
-        ``extern def``; ``None`` otherwise.  Always ``None`` for an
+        root ``extern def``; ``None`` otherwise. Always ``None`` for an
         inline/REPL module (``path is None``) since such a module can never
         declare an extern (the scope pass rejects it for lack of a backing
         file).  Verified to exist at load time — see
@@ -144,18 +144,26 @@ def _companion_path_for(
 ) -> Path | None:
     """Derive and verify *module_id*'s Python companion path, if it needs one.
 
-    A module needs a companion iff it declares at least one top-level
-    ``extern def``.  Returns ``None`` for modules with no extern
+    A module needs a companion iff it declares at least one root-level
+    ``extern def``. Scoped declarations are collection-only until scoped
+    member resolution is available, so their externs are deferred with them.
+    Returns ``None`` for modules with no root extern
     declarations and for inline/REPL modules (``path is None``) — the scope
     pass rejects ``extern def`` in a module with no backing file, so such a
     module never needs a companion.
 
-    :raises MissingExternCompanion: when the module declares an extern but
-        the derived ``.py`` sibling file does not exist.
+    :raises MissingExternCompanion: when the module declares a root extern
+        but the derived ``.py`` sibling file does not exist.
     """
     if path is None:
         return None
-    externs = [item for item in program.body.items if isinstance(item, FuncDef) and item.is_extern]
+    externs: list[FuncDef] = []
+
+    def collect_root_extern(node: object) -> None:
+        if isinstance(node, FuncDef) and node.is_extern and not is_scoped_declaration(node):
+            externs.append(node)
+
+    syntax.walk(program, collect_root_extern)
     if not externs:
         return None
     companion_path = path.with_suffix(".py")

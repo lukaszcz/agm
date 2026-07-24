@@ -32,6 +32,7 @@ import decimal
 import enum
 from dataclasses import dataclass
 from dataclasses import field as dc_field
+from typing import TypeGuard
 
 from agm.agl.syntax.spans import SourceSpan
 from agm.agl.syntax.types import ImportMode, TypeExpr
@@ -1154,6 +1155,16 @@ class ScopeRegion:
     items: tuple[ScopeItem, ...]
     span: SourceSpan = dc_field(compare=False)
     node_id: int = dc_field(compare=False)
+
+
+ScopedDeclaration = FuncDef | RecordDef | EnumDef | ExceptionDef | TypeAlias | AgentDecl
+
+
+def is_scoped_declaration(node: object) -> TypeGuard[ScopedDeclaration]:
+    """Whether *node* is a declaration owned by a non-root named scope."""
+    return isinstance(
+        node, (FuncDef, RecordDef, EnumDef, ExceptionDef, TypeAlias, AgentDecl)
+    ) and bool(node.scope_path)
 
 
 # Closed union of declaration nodes.

@@ -50,8 +50,7 @@ def test_name_headed_declarations_accept_scope_path_shorthand(
     assert isinstance(declaration, kind)
     assert declaration.name in {"value", "Point", "Result", "Failure", "Count", "reviewer"}
     assert [segment.name for segment in declaration.scope_path] == ["A", "B"]
-    with pytest.raises(AglScopeError, match="scope-path declarations"):
-        resolve_module(parse_program(source))
+    resolve_module(parse_program(source), origin_path=Path("module.agl"))
 
 
 @pytest.mark.parametrize(
@@ -205,15 +204,34 @@ def test_import_and_export_clauses_accept_path_atoms(source: str, kind: type[obj
 @pytest.mark.parametrize(
     ("source", "diagnostic"),
     (
-        ("def Point::distance() -> int = 0", "scope-path declarations"),
         ("open Point", "open declarations"),
         ("import library using Point::distance", "path atoms"),
         ("export library hiding Point::internal", "path atoms"),
     ),
 )
-def test_new_scope_syntax_stops_at_the_scope_pass(source: str, diagnostic: str) -> None:
+def test_unsupported_scope_forms_stop_at_the_scope_pass(source: str, diagnostic: str) -> None:
     with pytest.raises(AglScopeError, match=diagnostic):
         resolve_module(parse_program(source))
+
+
+def test_scoped_declarations_do_not_generate_runtime_initializers() -> None:
+    result = PipelineDriver().run("def A::f() -> int = 0\n()", default_stdlib=False)
+
+    assert result.ok
+
+
+def test_library_scope_regions_apply_entry_only_declaration_restrictions(tmp_path: Path) -> None:
+    root = tmp_path / "modules"
+    root.mkdir()
+    write_module_file(root, "library", "scope A\nagent bot\nend A")
+
+    result = PipelineDriver().run(
+        "import library\n()",
+        roots=RootSet(roots=frozenset({root})),
+        default_stdlib=False,
+    )
+
+    assert not result.ok
 
 
 @pytest.mark.parametrize(

@@ -25,7 +25,7 @@ import pytest
 from agm.agl.capabilities import HostCapabilities
 from agm.agl.modules.ids import ENTRY_ID
 from agm.agl.parser import parse_program
-from agm.agl.scope import resolve_module
+from agm.agl.scope import AglScopeError, resolve_module
 from agm.agl.scope.symbols import BinderKind, BindingRef, ScopeNode
 from agm.agl.scope.symbols import ModuleResolution as _ModuleResolution
 from agm.agl.semantics.type_table import (
@@ -5143,9 +5143,9 @@ class TestTypeDeclarations:
         err = reject_type("record R\n  x: int\n  x: text\nR(x = 1)")
         assert "duplicate" in str(err).lower() or "field" in str(err).lower()
 
-    def test_enum_duplicate_variant_raises(self) -> None:
-        err = reject_type("enum E\n  | A\n  | A\nA()")
-        assert "duplicate" in str(err).lower() or "variant" in str(err).lower()
+    def test_enum_duplicate_variant_is_rejected_during_scope_collection(self) -> None:
+        with pytest.raises(AglScopeError):
+            resolve_module(parse_program("enum E\n  | A\n  | A\nA()"))
 
     def test_alias_cycle_raises(self) -> None:
         err = reject_type("type A = B\ntype B = A\n1")
@@ -8077,9 +8077,9 @@ class TestGenericTypeDecl:
         err = reject_type("record Bad[T]\n  x: T\n  x: int\nBad(x = 1)")
         assert "duplicate" in str(err).lower() or "field" in str(err).lower()
 
-    def test_generic_enum_duplicate_variant_rejected(self) -> None:
-        err = reject_type("enum Bad[T]\n  | Foo\n  | Foo\nFoo()")
-        assert "duplicate" in str(err).lower() or "variant" in str(err).lower()
+    def test_generic_enum_duplicate_variant_is_rejected_during_scope_collection(self) -> None:
+        with pytest.raises(AglScopeError):
+            resolve_module(parse_program("enum Bad[T]\n  | Foo\n  | Foo\nFoo()"))
 
 
 class TestGenericConstructorInference:

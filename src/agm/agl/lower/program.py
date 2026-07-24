@@ -32,7 +32,7 @@ from agm.agl.matchcompile import MatchCompiledProgram
 from agm.agl.modules.ids import STD_CORE_ID, ModuleId
 from agm.agl.self_validation import self_validation_enabled
 from agm.agl.semantics.types import EnumType, ExceptionType, RecordType
-from agm.agl.syntax.nodes import AgentDecl, FuncDef
+from agm.agl.syntax.nodes import AgentDecl, FuncDef, is_scoped_declaration
 from agm.util.text import normalize_newlines
 
 __all__ = ["lower_program"]
@@ -156,7 +156,7 @@ def lower_program(
                     ),
                 )
 
-    # Step 3: Phase 1 — pre-allocate FunctionId + symbol for every FuncDef
+    # Step 3: Phase 1 — pre-allocate FunctionId + symbol for every root FuncDef
     # across ALL modules before any body is lowered (enables cross-module calls).
     module_lowerers: dict[ModuleId, _Lowerer] = {}
     for mid, cm in checked.modules.items():
@@ -177,9 +177,13 @@ def lower_program(
         module_lowerers[mid] = lowerer
         body = cm.resolved.program.body
         for item in body.items:
-            if isinstance(item, FuncDef) and not item.is_builtin:
+            if (
+                isinstance(item, FuncDef)
+                and not is_scoped_declaration(item)
+                and not item.is_builtin
+            ):
                 lowerer._prealloc_funcdef(item)
-            elif isinstance(item, AgentDecl):
+            elif isinstance(item, AgentDecl) and not is_scoped_declaration(item):
                 lowerer._alloc_sym(
                     item.node_id,
                     name=item.name,

@@ -4,7 +4,7 @@ The semantic type model lives in the `semantics` foundation package and is consu
 
 ## Nominal Types Are Handles; the TypeTable Holds Shapes
 
-Record, enum, and exception types are lightweight handles — nominal identity is name plus owning module (plus type arguments), never structure — carrying no field or variant data of their own. Every shape lookup goes through the shared `TypeTable` (`semantics/type_table.py`), the single source of record/enum field-and-variant shapes and exception field/hierarchy shapes, consumed by typecheck, match compilation, compile-time schema derivation, and lowering. Built-in prelude and exception shapes are registered in the same table, so host-produced and source-constructed values share one definition.
+Record, enum, and exception types are lightweight handles — nominal identity is name plus owning module (plus type arguments), never structure — carrying no field or variant data of their own. Scope collection records each type as establishing a same-named namespace and records enum variants as its members; that namespace metadata is separate from the nominal handles. Every shape lookup goes through the shared `TypeTable` (`semantics/type_table.py`), the single source of record/enum field-and-variant shapes and exception field/hierarchy shapes, consumed by typecheck, match compilation, compile-time schema derivation, and lowering. Built-in prelude and exception shapes are registered in the same table, so host-produced and source-constructed values share one definition.
 
 Because handles resolve regardless of build order, recursive declarations — same-module, mutual, generic, and cross-module — are legal without any acyclicity requirement on the declaration graph.
 

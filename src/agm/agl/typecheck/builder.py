@@ -65,6 +65,7 @@ from agm.agl.syntax.nodes import (
     Program,
     RecordDef,
     TypeAlias,
+    is_scoped_declaration,
 )
 from agm.agl.syntax.spans import SourceSpan
 from agm.agl.typecheck.env import (
@@ -98,7 +99,7 @@ class _TypeBuilder:
     Populates a ``TypeEnvironment`` with all user-declared types.  Raises
     ``AglTypeError`` on:
     - Duplicate type names (user vs user, or user shadowing a built-in).
-    - Duplicate record fields or enum variants/fields.
+    - Duplicate record and enum-variant fields.
     - Unknown type references inside field/variant definitions.
     - An uninhabited record, enum, or exception declaration (see
       :meth:`_check_inhabitation`).
@@ -145,6 +146,8 @@ class _TypeBuilder:
         self.collect_shells_only(program)
 
         for item in program.body.items:
+            if is_scoped_declaration(item):
+                continue
             if isinstance(item, RecordDef):
                 self._build_record(item)
             elif isinstance(item, EnumDef):
@@ -171,6 +174,8 @@ class _TypeBuilder:
         the template carries no shape either.  Exceptions are never generic.
         """
         for item in program.body.items:
+            if is_scoped_declaration(item):
+                continue
             if isinstance(item, RecordDef):
                 self._register_name(item.name, item.span, is_builtin=item.is_builtin)
                 self._env.unregister_name(item.name)
@@ -288,14 +293,7 @@ class _TypeBuilder:
             self._build_generic_enum(stmt)
             return
         variants: dict[str, dict[str, Type]] = {}
-        seen_variants: dict[str, SourceSpan] = {}
         for vd in stmt.variants:
-            if vd.name in seen_variants:
-                raise AglTypeError(
-                    f"Duplicate variant '{vd.name}' in enum '{stmt.name}'.",
-                    span=vd.span,
-                )
-            seen_variants[vd.name] = vd.span
             vfields: dict[str, Type] = {}
             seen_vfields: dict[str, SourceSpan] = {}
             for fd in vd.fields:
@@ -485,13 +483,7 @@ class _TypeBuilder:
         """
         type_vars = frozenset(stmt.type_params)
         variants: dict[str, dict[str, Type]] = {}
-        seen_variants: dict[str, SourceSpan] = {}
         for vd in stmt.variants:
-            if vd.name in seen_variants:
-                raise AglTypeError(
-                    f"Duplicate variant '{vd.name}' in enum '{stmt.name}'.", span=vd.span
-                )
-            seen_variants[vd.name] = vd.span
             vfields: dict[str, Type] = {}
             seen_vfields: dict[str, SourceSpan] = {}
             for fd in vd.fields:

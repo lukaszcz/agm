@@ -1,0 +1,9 @@
+scope Block
+def hidden() -> int = 0
+agent helper
+end Block
+
+def Shorthand::hidden() -> int = 0
+agent Shorthand::helper
+
+print "scope declarations are deferred"

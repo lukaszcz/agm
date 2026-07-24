@@ -28,6 +28,9 @@ from agm.agl.semantics.types import EnumType
 from agm.agl.syntax.nodes import AgentDecl, FuncDef, Program
 from agm.agl.syntax.spans import SourceSpan
 
+ScopePath = tuple[str, ...]
+DeclarationKey = tuple[ModuleId, ScopePath, str]
+
 # ---------------------------------------------------------------------------
 # BuiltinKind — classification of a built-in Call node
 # ---------------------------------------------------------------------------
@@ -202,6 +205,7 @@ class ConstructorRef:
     type_params: tuple[str, ...]
     owner_module_id: ModuleId = ENTRY_ID
     can_match_bare_pattern: bool = False
+    owner_path: ScopePath = ()
 
     def matches(self, enum_type: EnumType, variant: str) -> bool:
         """Whether this reference denotes *variant* of *enum_type*.
@@ -277,6 +281,9 @@ class BindingRef:
         local bindings, this is always :data:`~agm.agl.modules.ids.ENTRY_ID`.
         For cross-module resolution via ``resolve_program()``, cross-module
         references carry the owning library module's id.
+    ``scope_path``
+        The named scope path that owns this binding. The empty path is the
+        module root.
     ``slot_id``
         The :class:`PatternSlot` id when this reference is a field-directed
         pattern slot, or ``None`` for an ordinary resolved binding.
@@ -288,6 +295,7 @@ class BindingRef:
     decl_node_id: int
     kind: BinderKind
     module_id: ModuleId = ENTRY_ID
+    scope_path: ScopePath = ()
     slot_id: int | None = None
 
 
@@ -301,16 +309,20 @@ class ScopeNode:
     """A lexical scope in the scope tree.
 
     Each ``ScopeNode`` tracks:
-    - ``bindings``: the names introduced *directly* in this scope.
+    - ``members``: static declarations owned by this named scope path.
+    - ``bindings``: lexical value bindings introduced *directly* in this scope.
     - ``parent``: the enclosing scope (``None`` for the root scope).
     - ``node_id``: the ``node_id`` of the AST construct that opened this scope.
 
-    Lookup walks the parent chain.
+    Membership is collected before resolution. Lookup walks the lexical binding
+    parent chain; member-reference resolution is introduced separately.
     """
 
     node_id: int
     parent: ScopeNode | None = None
     bindings: dict[str, BindingRef] = field(default_factory=dict)
+    scope_path: ScopePath = ()
+    members: dict[str, BindingRef] = field(default_factory=dict)
 
     def lookup(self, name: str) -> BindingRef | None:
         """Search upward through the scope chain for *name*."""
@@ -361,10 +373,14 @@ class ModuleResolution:
     ``warnings``
         Non-fatal scope-pass diagnostics (severity ``"warning"``), e.g. an
         agent that is declared but never referenced.  Empty by default.
+    ``declarations``
+        Every named declaration keyed by ``(module_id, scope_path, name)``.
+        Root declarations use the empty path just like any other scope.
+    ``scope_nodes``
+        Named scope-region layers keyed by path, rooted at ``()``.
     ``declared_type_names``
         Names of all root-level ``RecordDef`` / ``EnumDef`` / ``TypeAlias``
-        declarations.  Used by the scope pass to classify qualified
-        ``Owner::member`` constructor references.
+        declarations.  Used by the existing root-only constructor resolver.
     ``constructor_candidates``
         Maps each constructor name to an ordered tuple of all
         :class:`ConstructorRef` candidates (one per record/enum that declares
@@ -400,12 +416,18 @@ class ModuleResolution:
     resolution: dict[int, BindingRef]
     builtin_calls: dict[int, BuiltinKind]
     root_scope: ScopeNode
+    declarations: dict[DeclarationKey, BindingRef] = field(default_factory=dict)
+    scope_nodes: dict[ScopePath, ScopeNode] = field(default_factory=dict)
     declared_agents: dict[str, AgentDecl] = field(default_factory=dict)
     declared_functions: dict[str, FuncDef] = field(default_factory=dict)
     program_name: str | None = None
     warnings: tuple[Diagnostic, ...] = ()
     declared_type_names: frozenset[str] = frozenset()
+    declared_type_paths: frozenset[ScopePath] = frozenset()
     constructor_candidates: dict[str, tuple[ConstructorRef, ...]] = field(default_factory=dict)
+    constructor_candidates_by_path: dict[tuple[ScopePath, str], tuple[ConstructorRef, ...]] = field(
+        default_factory=dict
+    )
     constructor_refs: dict[int, ConstructorRef] = field(default_factory=dict)
     qualified_constructor_refs: dict[int, tuple[str, str, ModuleId | None]] = field(
         default_factory=dict

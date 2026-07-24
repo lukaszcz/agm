@@ -1,10 +1,10 @@
 # AgL Name Resolution
 
-The scope pass performs full name resolution and records its results in side tables. Pre-passes collect agents, top-level functions, and constructors before any expression body is resolved, so declarations are visible regardless of order and mutual recursion works.
+The scope pass performs full name resolution and records its results in side tables. Its collection pre-passes key declarations by module, named-scope path, and name; the empty path is the module root. They collect agents, functions, types, and constructors before expression bodies are resolved, so root declarations remain visible regardless of order and mutual recursion works.
 
 ## Namespace-Directed Resolution
 
-Scope-region syntax and declaration-path shorthand cross the parser firewall in canonical AST forms. Until namespace resolution gains region support, program resolution validates every loaded AST before deriving export maps or import environments, rejecting regions, non-empty declaration paths, `open` declarations, and path atoms in import/export selections with clear diagnostics; the per-module worker applies the same validation. This prevents later static passes from receiving unsupported nodes.
+Scope-region syntax and declaration-path shorthand cross the parser firewall in canonical AST forms. Collection materializes a `ScopeNode` layer and static member map for each named path, merging repeated regions, shorthand paths, and same-named type scopes. A type's enum variants are collected as members of that type scope, while record and exception construction retains its bare declaration spelling. Scoped declarations still receive declaration validation, but remain out of root bindings, type tables, exports, and runtime initialization until member-reference resolution is available. Member-reference resolution, scope `open`, and path-aware import/export selection remain separate concerns; program resolution continues to reject the latter two forms before deriving import environments.
 
 Resolution is namespace- and scope-directed, never capitalization-directed — a direct consequence of AgL's case-neutral name model:
 

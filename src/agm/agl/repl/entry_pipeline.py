@@ -717,6 +717,7 @@ class EntryPipeline:
             NominalId(ENTRY_ID, item.name)
             for item in program.body.items
             if isinstance(item, (RecordDef, EnumDef, ExceptionDef))
+            and not item.scope_path
             and not (failure_span is not None and item.span.end_offset <= failure_span.start_offset)
         )
         self._ctx._link_image.restore_nominals(nominal_snapshot, nominal_ids)

@@ -125,6 +125,32 @@ class TestCompanionPathDerivation:
         )
         assert graph.modules[ENTRY_ID].companion_path == tmp_path / "entry.py"
 
+    @pytest.mark.parametrize(
+        "source",
+        (
+            "scope Group\nextern def f(x: int) -> int\nend Group\n()",
+            "extern def Group::f(x: int) -> int\n()",
+        ),
+        ids=("region", "shorthand"),
+    )
+    def test_scoped_externs_do_not_require_a_companion(self, tmp_path: Path, source: str) -> None:
+        graph = load_graph(
+            source,
+            entry_path=tmp_path / "entry.agl",
+            roots=_roots(tmp_path),
+            default_stdlib=False,
+        )
+
+        assert graph.modules[ENTRY_ID].companion_path is None
+
+        result = PipelineDriver().run(
+            source,
+            entry_path=tmp_path / "entry.agl",
+            roots=_roots(tmp_path),
+            default_stdlib=False,
+        )
+        assert result.ok
+
     def test_missing_companion_raises_naming_the_module(self, tmp_path: Path) -> None:
         root = tmp_path / "root"
         write_module_file(root, "lib/mod", "extern def f(x: int) -> int")

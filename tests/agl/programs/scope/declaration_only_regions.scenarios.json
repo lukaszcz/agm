@@ -1,0 +1,10 @@
+{
+  "scenarios": [
+    {
+      "name": "scoped_declarations_do_not_execute",
+      "expect": {
+        "stdout": "scope declarations are deferred\n"
+      }
+    }
+  ]
+}

@@ -244,6 +244,7 @@ from agm.agl.syntax.nodes import (
     VarPattern,
     VarRef,
     WildcardPattern,
+    is_scoped_declaration,
 )
 from agm.agl.syntax.spans import SourceSpan
 from agm.agl.type_schema import (
@@ -491,7 +492,7 @@ class _Lowerer:
         )
 
     def _prealloc_funcdef(self, funcdef: "FuncDef") -> None:
-        """Pre-allocate SymbolId and FunctionId for a top-level FuncDef."""
+        """Pre-allocate SymbolId and FunctionId for a root ``FuncDef``."""
         fn_id = self._alloc_fn()
         sym = self._alloc_sym(
             funcdef.node_id,
@@ -773,7 +774,7 @@ class _Lowerer:
     def _lower_funcdef(self, funcdef: "FuncDef") -> IrExpr:
         """Lower a FuncDef to IrBind(sym, IrMakeClosure(fn_id, captures)).
 
-        All top-level FuncDefs are pre-allocated before any body is lowered (phase 1),
+        All root FuncDefs are pre-allocated before any body is lowered (phase 1),
         so the symbol + function-id are always present; nested ``def`` is rejected by
         the scope checker.
         """
@@ -2883,6 +2884,8 @@ class _Lowerer:
             default ``False`` so future control-flow nodes inherit safe behaviour
             automatically.
         """
+        if is_scoped_declaration(item):
+            return None
         match item:
             # ----------------------------------------------------------
             # Binders
@@ -3179,12 +3182,16 @@ class _Lowerer:
 
         body = self._checked.resolved.program.body
 
-        # Phase 1: pre-allocate function symbols and IDs for mutual recursion,
-        # and allocate agent symbols so they are resolvable in function bodies.
+        # Phase 1: pre-allocate root function symbols and IDs for mutual recursion,
+        # and root agent symbols so they are resolvable in function bodies.
         for item in body.items:
-            if isinstance(item, FuncDef) and not item.is_builtin:
+            if (
+                isinstance(item, FuncDef)
+                and not is_scoped_declaration(item)
+                and not item.is_builtin
+            ):
                 self._prealloc_funcdef(item)
-            elif isinstance(item, AgentDecl):
+            elif isinstance(item, AgentDecl) and not is_scoped_declaration(item):
                 self._alloc_sym(
                     item.node_id,
                     name=item.name,
@@ -3201,7 +3208,9 @@ class _Lowerer:
             if ir is not None:
                 target = (
                     function_initializers
-                    if isinstance(item, FuncDef) and not item.is_builtin
+                    if isinstance(item, FuncDef)
+                    and not is_scoped_declaration(item)
+                    and not item.is_builtin
                     else other_initializers
                 )
                 target.append(ir)

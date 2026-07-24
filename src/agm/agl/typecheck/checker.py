@@ -144,6 +144,7 @@ from agm.agl.syntax.nodes import (
     Raise,
     RecordDef,
     Return,
+    ScopeRegion,
     StringLit,
     Template,
     Try,
@@ -156,6 +157,7 @@ from agm.agl.syntax.nodes import (
     VarPattern,
     VarRef,
     WildcardPattern,
+    is_scoped_declaration,
 )
 from agm.agl.syntax.spans import SourceSpan
 from agm.agl.syntax.types import TypeExpr
@@ -662,7 +664,7 @@ class _Checker:
         # so a call may reference any top-level function regardless of
         # declaration order, including mutually recursive pairs.
         for item in program.body.items:
-            if isinstance(item, FuncDef):
+            if isinstance(item, FuncDef) and not item.scope_path:
                 self._preregister_funcdef(item)
 
         self._check_block(program.body, expected=None)
@@ -699,6 +701,10 @@ class _Checker:
 
     def _check_item(self, item: Item, *, expected: Type | None) -> Type:
         """Dispatch a single block item, returning its type contribution."""
+        # Scoped declaration collection has no executable/type-visible behavior
+        # until qualified scope resolution is introduced.
+        if is_scoped_declaration(item) or isinstance(item, ScopeRegion):
+            return UnitType()
         # --- Declarations ---
         if isinstance(item, FuncDef):
             # Signature already registered in pre-pass; check body now.
@@ -4325,7 +4331,7 @@ def prepare_module_headers(
         module_id=module_id,
     )
     for item in resolved.program.body.items:
-        if isinstance(item, FuncDef):
+        if isinstance(item, FuncDef) and not item.scope_path:
             header_checker._preregister_funcdef(item)
 
 

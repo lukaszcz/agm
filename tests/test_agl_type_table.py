@@ -69,11 +69,37 @@ def _check(src: str) -> CheckedModule:
     return check_module(resolve_module(parse_program(src)), _CAPS)
 
 
+def test_scoped_generic_enum_does_not_claim_the_root_type_or_constructor_namespace() -> None:
+    checked = _check(
+        "enum A::Choice[T]\n"
+        "  | hidden(value: T)\n"
+        "enum Choice[T]\n"
+        "  | visible(value: T)\n"
+        "let result = visible(value = 1)\n"
+        "result"
+    )
+
+    assert "Choice" in checked.type_env.all_generic_types()
+    assert "hidden" not in checked.resolved.constructor_candidates
+
+
 def _check_program(tmp_path: Path, modules: dict[str, str]):
     """Build and typecheck a multi-module graph; returns CheckedProgram."""
     graph = make_graph_from_files(tmp_path, modules)
     resolved_program = resolve_program(graph)
     return check_program(resolved_program, _CAPS)
+
+
+def test_scoped_record_does_not_enter_program_type_tables(tmp_path: Path) -> None:
+    checked = _check_program(
+        tmp_path,
+        {
+            "entry": "record A::Hidden(value: int)\nrecord Visible(value: int)\n()",
+        },
+    )
+
+    assert (ENTRY_ID, "Hidden") not in checked.program_type_table
+    assert (ENTRY_ID, "Visible") in checked.program_type_table
 
 
 def _binding_value_type(checked: CheckedModule, name: str):

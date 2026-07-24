@@ -64,9 +64,11 @@ from agm.agl.scope.symbols import (
     BindingRef,
     BuiltinKind,
     ConstructorRef,
+    DeclarationKey,
     ModuleResolution,
     PatternSlot,
     ScopeNode,
+    ScopePath,
     SlotCandidate,
     duplicate_binder_message,
     immutable_binder_phrase,
@@ -171,6 +173,11 @@ _BUILTIN_CONSTRUCTOR_NODE_ID = -1
 _RESERVED_NAMES: frozenset[str] = frozenset(_BUILTIN_CALL_NAMES)
 
 
+def _scope_path_sort_key(path: ScopePath) -> tuple[int, ScopePath]:
+    """Order scope paths by depth, then lexical spelling."""
+    return (len(path), path)
+
+
 def validate_scope_syntax(program: Program) -> None:
     """Reject parsed scope forms whose namespace semantics are not available.
 
@@ -184,15 +191,8 @@ def validate_scope_syntax(program: Program) -> None:
         nonlocal unsupported
         if unsupported is not None:
             return
-        if isinstance(node, ScopeRegion):
-            unsupported = ("scope regions are not supported here yet.", node.span)
-        elif isinstance(node, OpenDecl):
+        if isinstance(node, OpenDecl):
             unsupported = ("open declarations are not supported here yet.", node.span)
-        elif (
-            isinstance(node, (FuncDef, RecordDef, EnumDef, ExceptionDef, TypeAlias, AgentDecl))
-            and node.scope_path
-        ):
-            unsupported = ("scope-path declarations are not supported here yet.", node.span)
         elif isinstance(node, (ImportDecl, ExportDecl)) and any(
             item.scope_path for item in node.items
         ):
@@ -284,6 +284,23 @@ class _Resolver:
         self._program_name: str | None = None
         # Names of all root-level type declarations (RecordDef/EnumDef/TypeAlias).
         self._declared_type_names: set[str] = set()
+        # Named declarations are keyed uniformly by module and scope path; the
+        # root is simply the empty path.
+        self._declarations: dict[DeclarationKey, BindingRef] = {}
+        # The declaration item accompanies its path-keyed binding so legacy
+        # root-only tables can be derived from the same collection without
+        # admitting scoped members.
+        self._declaration_items: dict[
+            DeclarationKey, FuncDef | RecordDef | EnumDef | ExceptionDef | TypeAlias | AgentDecl
+        ] = {}
+        self._scope_entity_kinds: dict[DeclarationKey, str] = {}
+        self._scope_paths: set[ScopePath] = {()}
+        self._scope_node_ids: dict[ScopePath, int] = {}
+        self._type_paths: set[ScopePath] = set()
+        self._type_declarations: list[
+            tuple[RecordDef | EnumDef | ExceptionDef | TypeAlias, ScopePath]
+        ] = []
+        self._scoped_constructor_candidates: dict[tuple[ScopePath, str], list[ConstructorRef]] = {}
         # Constructor candidates: name -> ordered list of ConstructorRef.
         self._constructor_candidates: dict[str, list[ConstructorRef]] = {}
         # Resolved single-candidate constructor refs: VarRef.node_id -> ConstructorRef.
@@ -355,20 +372,26 @@ class _Resolver:
         if ambient_type_names:
             self._declared_type_names.update(ambient_type_names)
 
-        # Pre-pass 1: collect root-level agent declarations into the declared
+        # Pre-pass 1: collect every named declaration and scope mention. This
+        # establishes path-keyed membership before the legacy root worker
+        # builds its scope-free resolution tables.
+        self._collect_declarations(program)
+
+        # Pre-pass 2: collect root-level agent declarations into the declared
         # table and define as value bindings (before body resolution).
         self._ambient_agents = ambient_agents
         self._collect_agent_decls(program)
-        # Pre-pass 2: collect top-level def names for mutual recursion.
+        # Pre-pass 3: collect top-level def names for mutual recursion.
         self._collect_func_decls(program)
-        # Pre-pass 3: collect type-declaration names and validate type_params.
+        # Pre-pass 4: collect type-declaration names and validate type_params.
         self._collect_type_decl_names(program)
-        # Pre-pass 4: collect constructor candidates from RecordDef/EnumDef.
+        # Pre-pass 5: collect constructor candidates from RecordDef/EnumDef.
         self._collect_constructor_candidates(program)
 
-        root = ScopeNode(node_id=program.node_id, parent=parent_scope)
+        root = ScopeNode(node_id=program.node_id, parent=parent_scope, scope_path=())
         self._push_scope(root)
         self._root_scope = root
+        self._scope_nodes = self._build_scope_nodes(root)
         self._at_root = True
 
         # Define all collected agents and functions as value bindings in root.
@@ -389,13 +412,19 @@ class _Resolver:
             resolution=self._resolution,
             builtin_calls=self._builtin_calls,
             root_scope=root,
+            declarations=dict(self._declarations),
+            scope_nodes=dict(self._scope_nodes),
             declared_agents=dict(self._declared_agents),
             declared_functions=dict(self._declared_functions),
             program_name=self._program_name,
             warnings=self._unused_agent_warnings(),
             declared_type_names=frozenset(self._declared_type_names),
+            declared_type_paths=frozenset(self._type_paths),
             constructor_candidates={
                 name: tuple(refs) for name, refs in self._constructor_candidates.items()
+            },
+            constructor_candidates_by_path={
+                key: tuple(refs) for key, refs in self._scoped_constructor_candidates.items()
             },
             constructor_refs=dict(self._constructor_refs),
             qualified_constructor_refs=dict(self._qualified_constructor_refs),
@@ -408,34 +437,166 @@ class _Resolver:
     # Pre-passes
     # ------------------------------------------------------------------
 
-    def _collect_agent_decls(self, program: Program) -> None:
-        """Collect root-level ``agent`` declarations into the declared table."""
-        for item in program.body.items:
-            if isinstance(item, AgentDecl):
-                self._declare_agent(item)
+    def _collect_declarations(self, program: Program) -> None:
+        """Collect static declarations into one path-keyed namespace.
 
-    def _declare_agent(self, decl: AgentDecl) -> None:
-        """Validate and record an agent declaration."""
+        Region and shorthand syntax both arrive as declarations with a scope
+        path. Regions additionally contribute their own path, so an empty
+        region and a shorthand-only path have identical namespace identity.
+        """
+        for item in program.body.items:
+            self._collect_item_declaration(item, ())
+
+    def _collect_item_declaration(self, item: Item, enclosing_path: ScopePath) -> None:
+        if isinstance(item, ScopeRegion):
+            path = enclosing_path + (item.segment.name,)
+            self._ensure_scope_path(path, item.segment.node_id, item.span)
+            for child in item.items:
+                self._collect_item_declaration(child, path)
+            return
+        if isinstance(item, (FuncDef, RecordDef, EnumDef, ExceptionDef, TypeAlias, AgentDecl)):
+            path = tuple(segment.name for segment in item.scope_path)
+            self._ensure_scope_path(path, item.node_id, item.span)
+            self._register_declaration(item, path)
+
+    def _ensure_scope_path(self, path: ScopePath, node_id: int, span: SourceSpan) -> None:
+        """Create every scope layer in *path*, rejecting ordinary-name clashes."""
+        for index, name in enumerate(path):
+            parent_path = path[:index]
+            scope_path = path[: index + 1]
+            key = (self._module_id, parent_path, name)
+            existing = self._scope_entity_kinds.get(key)
+            if existing == "ordinary":
+                raise AglScopeError(f"Name '{name}' is already declared in this scope.", span=span)
+            self._scope_entity_kinds.setdefault(key, "scope")
+            self._scope_paths.add(scope_path)
+            self._scope_node_ids.setdefault(scope_path, node_id)
+
+    def _register_declaration(
+        self,
+        item: FuncDef | RecordDef | EnumDef | ExceptionDef | TypeAlias | AgentDecl,
+        path: ScopePath,
+    ) -> None:
+        """Register one declaration and its type members at *path*."""
+        key = (self._module_id, path, item.name)
+        is_type = isinstance(item, (RecordDef, EnumDef, ExceptionDef, TypeAlias))
+        existing_entity = self._scope_entity_kinds.get(key)
+        if is_type:
+            if existing_entity == "ordinary" or existing_entity == "type":
+                raise AglScopeError(
+                    f"Name '{item.name}' is already declared in this scope.", span=item.span
+                )
+            self._scope_entity_kinds[key] = "type"
+        else:
+            if existing_entity is not None:
+                raise AglScopeError(
+                    f"Name '{item.name}' is already declared in this scope.", span=item.span
+                )
+            self._scope_entity_kinds[key] = "ordinary"
+
+        kind = (
+            BinderKind.constructor_binding
+            if is_type
+            else BinderKind.function_binding
+            if isinstance(item, FuncDef)
+            else BinderKind.agent_binding
+        )
+        self._declarations[key] = BindingRef(
+            name=item.name,
+            mutable=False,
+            decl_span=item.span,
+            decl_node_id=item.node_id,
+            kind=kind,
+            module_id=self._module_id,
+            scope_path=path,
+        )
+        self._declaration_items[key] = item
+        if isinstance(item, FuncDef):
+            self._validate_function_decl(item)
+            self._validate_type_params(item)
+        elif isinstance(item, AgentDecl):
+            self._validate_agent_decl(item)
+        else:
+            self._validate_type_params(item)
+        if not is_type:
+            return
+
+        type_item = cast(RecordDef | EnumDef | ExceptionDef | TypeAlias, item)
+        self._type_declarations.append((type_item, path))
+        type_scope = path + (item.name,)
+        self._scope_paths.add(type_scope)
+        self._scope_node_ids.setdefault(type_scope, item.node_id)
+        self._type_paths.add(type_scope)
+        if isinstance(item, EnumDef):
+            for variant in item.variants:
+                variant_key = (self._module_id, type_scope, variant.name)
+                if self._scope_entity_kinds.get(variant_key) is not None:
+                    raise AglScopeError(
+                        f"Name '{variant.name}' is already declared in this scope.",
+                        span=variant.span,
+                    )
+                self._scope_entity_kinds[variant_key] = "ordinary"
+                self._declarations[variant_key] = BindingRef(
+                    name=variant.name,
+                    mutable=False,
+                    decl_span=variant.span,
+                    decl_node_id=variant.node_id,
+                    kind=BinderKind.constructor_binding,
+                    module_id=self._module_id,
+                    scope_path=type_scope,
+                )
+
+    def _build_scope_nodes(self, root: ScopeNode) -> dict[ScopePath, ScopeNode]:
+        """Build named-scope layers and populate their declaration memberships."""
+        nodes: dict[ScopePath, ScopeNode] = {(): root}
+        for path in sorted(self._scope_paths, key=_scope_path_sort_key):
+            if not path:
+                continue
+            nodes[path] = ScopeNode(
+                node_id=self._scope_node_ids[path],
+                parent=nodes[path[:-1]],
+                scope_path=path,
+            )
+        for (_module_id, path, name), declaration in self._declarations.items():
+            nodes[path].members[name] = declaration
+        return nodes
+
+    def _root_declaration_items(
+        self,
+        declaration_type: type[FuncDef]
+        | type[AgentDecl]
+        | type[RecordDef]
+        | type[EnumDef]
+        | type[ExceptionDef]
+        | type[TypeAlias],
+    ) -> Iterator[FuncDef | AgentDecl | RecordDef | EnumDef | ExceptionDef | TypeAlias]:
+        """Yield collected declarations of *declaration_type* at the root path."""
+        for (module_id, path, _name), item in self._declaration_items.items():
+            if module_id == self._module_id and not path and isinstance(item, declaration_type):
+                yield item
+
+    def _collect_agent_decls(self, program: Program) -> None:
+        """Populate the legacy agent table from root-path declarations only."""
+        for item in self._root_declaration_items(AgentDecl):
+            assert isinstance(item, AgentDecl)
+            self._declared_agents[item.name] = item
+
+    def _validate_agent_decl(self, decl: AgentDecl) -> None:
+        """Apply agent declaration validation independently of its scope path."""
         if decl.name in _RESERVED_NAMES:
             raise AglScopeError(
                 f"'{decl.name}' is built-in and cannot be declared as an agent.",
                 span=decl.span,
             )
-        if decl.name in self._declared_agents:
-            raise AglScopeError(
-                f"agent '{decl.name}' is already declared.",
-                span=decl.span,
-            )
-        self._declared_agents[decl.name] = decl
 
     def _collect_func_decls(self, program: Program) -> None:
-        """Collect root-level ``def`` declarations for the mutual-recursion pre-pass."""
-        for item in program.body.items:
-            if isinstance(item, FuncDef):
-                self._declare_function(item)
+        """Populate the legacy function table from root-path declarations only."""
+        for item in self._root_declaration_items(FuncDef):
+            assert isinstance(item, FuncDef)
+            self._declared_functions[item.name] = item
 
-    def _declare_function(self, decl: FuncDef) -> None:
-        """Validate and record a function declaration."""
+    def _validate_function_decl(self, decl: FuncDef) -> None:
+        """Apply function declaration validation independently of its scope path."""
         if decl.name in _RESERVED_NAMES and not decl.is_builtin:
             raise AglScopeError(
                 f"'{decl.name}' is a built-in name and cannot be used as a function name.",
@@ -447,44 +608,21 @@ class _Resolver:
                 f"externs are not allowed in inline sources or REPL entries.",
                 span=decl.span,
             )
-        if decl.name in self._declared_functions:
-            raise AglScopeError(
-                f"Name '{decl.name}' is already declared in this scope.",
-                span=decl.span,
-            )
-        if decl.name in self._declared_agents:
-            raise AglScopeError(
-                f"Name '{decl.name}' is already declared in this scope.",
-                span=decl.span,
-            )
-        self._declared_functions[decl.name] = decl
 
     def _collect_type_decl_names(self, program: Program) -> None:
-        """Collect names of root-level type declarations and validate type_params.
+        """Collect root type names for the existing constructor resolver.
 
-        Populates ``_declared_type_names`` and raises ``AglScopeError`` when
-        a declaration has duplicate type-parameter names or when two local
-        type declarations use the same name.
-
-        Builtin prelude type names are seeded first so that qualified
-        constructor access (e.g. ``ParsePolicy::Abort``) resolves correctly.
+        Duplicate declarations and type parameters were already validated by
+        path-keyed collection. Builtin names are seeded so root-qualified
+        prelude constructors remain available.
         """
-        for type_name in BUILTIN_PRELUDE_TYPES:
-            self._declared_type_names.add(type_name)
-
-        local_type_names: set[str] = set()
-        for item in program.body.items:
-            if isinstance(item, (RecordDef, EnumDef, ExceptionDef, TypeAlias)):
-                if item.name in local_type_names:
-                    raise AglScopeError(
-                        f"Type name '{item.name}' is already declared in this scope.",
-                        span=item.span,
-                    )
-                local_type_names.add(item.name)
-                self._declared_type_names.add(item.name)
-                self._validate_type_params(item)
-            elif isinstance(item, FuncDef):
-                self._validate_type_params(item)
+        self._declared_type_names.update(BUILTIN_PRELUDE_TYPES)
+        self._declared_type_names.update(
+            item.name
+            for item in self._declaration_items.values()
+            if isinstance(item, (RecordDef, EnumDef, ExceptionDef, TypeAlias))
+            and not item.scope_path
+        )
 
     def _validate_type_params(
         self, decl: FuncDef | RecordDef | EnumDef | ExceptionDef | TypeAlias
@@ -559,7 +697,14 @@ class _Resolver:
                 )
                 self._add_constructor_candidate(type_name, cref)
 
-    def _add_constructor_candidate(self, ctor_key: str, cref: ConstructorRef) -> None:
+    def _add_constructor_candidate(
+        self,
+        ctor_key: str,
+        cref: ConstructorRef,
+        *,
+        scope_path: ScopePath = (),
+        inject_bare: bool = True,
+    ) -> None:
         """Add *cref* to the candidates list for *ctor_key*.
 
         Skips the entry if another candidate with the same ``owner_name`` is
@@ -567,6 +712,17 @@ class _Resolver:
         raise a clear "already declared" error for that; we must not conflate it
         with genuine constructor overloading across distinct types).
         """
+        scoped_key = (scope_path, ctor_key)
+        scoped_existing = self._scoped_constructor_candidates.get(scoped_key, [])
+        if not any(
+            (candidate.owner_module_id, candidate.owner_path, candidate.owner_name)
+            == (cref.owner_module_id, cref.owner_path, cref.owner_name)
+            for candidate in scoped_existing
+        ):
+            scoped_existing.append(cref)
+            self._scoped_constructor_candidates[scoped_key] = scoped_existing
+        if not inject_bare:
+            return
         existing = self._constructor_candidates.get(ctor_key, [])
         if any(
             (c.owner_module_id, c.owner_name) == (cref.owner_module_id, cref.owner_name)
@@ -584,15 +740,9 @@ class _Resolver:
         self._constructor_candidates[ctor_key] = existing
 
     def _collect_constructor_candidates(self, program: Program) -> None:
-        """Build the constructor-candidates map from root-level RecordDef/EnumDef.
-
-        For each RecordDef, the record NAME is a constructor candidate.
-        For each EnumDef, each VARIANT NAME is a candidate (the enum name is NOT).
-        Multiple candidates for the same name form an ordered overload set.
-        Builtin exception and prelude types are seeded first.
-        """
+        """Build constructor candidates for every collected declaration path."""
         self._seed_builtin_constructor_candidates()
-        for item in program.body.items:
+        for item, path in self._type_declarations:
             if isinstance(item, RecordDef):
                 cref = ConstructorRef(
                     owner_name=item.name,
@@ -600,9 +750,13 @@ class _Resolver:
                     owner_decl_node_id=item.node_id,
                     type_params=item.type_params,
                     owner_module_id=self._module_id,
+                    owner_path=path,
                 )
-                self._add_constructor_candidate(item.name, cref)
+                self._add_constructor_candidate(
+                    item.name, cref, scope_path=path, inject_bare=not path
+                )
             elif isinstance(item, EnumDef):
+                type_scope = path + (item.name,)
                 for variant in item.variants:
                     cref = ConstructorRef(
                         owner_name=item.name,
@@ -611,8 +765,14 @@ class _Resolver:
                         type_params=item.type_params,
                         owner_module_id=self._module_id,
                         can_match_bare_pattern=not variant.fields,
+                        owner_path=path,
                     )
-                    self._add_constructor_candidate(variant.name, cref)
+                    self._add_constructor_candidate(
+                        variant.name,
+                        cref,
+                        scope_path=type_scope,
+                        inject_bare=not path,
+                    )
             elif isinstance(item, ExceptionDef):
                 cref = ConstructorRef(
                     owner_name=item.name,
@@ -620,8 +780,11 @@ class _Resolver:
                     owner_decl_node_id=item.node_id,
                     type_params=(),
                     owner_module_id=self._module_id,
+                    owner_path=path,
                 )
-                self._add_constructor_candidate(item.name, cref)
+                self._add_constructor_candidate(
+                    item.name, cref, scope_path=path, inject_bare=not path
+                )
             elif isinstance(item, TypeAlias) and isinstance(item.type_expr, (NameT, AppliedT)):
                 cref = ConstructorRef(
                     owner_name=item.name,
@@ -629,8 +792,11 @@ class _Resolver:
                     owner_decl_node_id=item.node_id,
                     type_params=item.type_params,
                     owner_module_id=self._module_id,
+                    owner_path=path,
                 )
-                self._add_constructor_candidate(item.name, cref)
+                self._add_constructor_candidate(
+                    item.name, cref, scope_path=path, inject_bare=not path
+                )
 
     def _root_declaring_candidates(self, name: str) -> tuple[ConstructorRef, ...]:
         """Candidates that declare *name* itself in this module's root.
@@ -663,14 +829,10 @@ class _Resolver:
         scope = self._current_scope()
         for name, crefs in self._constructor_candidates.items():
             if name in scope.bindings:
-                if self._root_declaring_candidates(name):
-                    raise AglScopeError(
-                        f"Name '{name}' is already declared in this scope.",
-                        span=None,
-                    )
-                # An enum variant's bare spelling yields to a value binding that
-                # already claimed it; `Owner::variant` still reaches the variant
-                # and pattern position still classifies it.
+                # Path-keyed collection has already rejected same-module
+                # declaration collisions. An enum variant's bare spelling yields
+                # to a value binding that already claimed it; `Owner::variant`
+                # still reaches the variant and pattern position still classifies it.
                 continue
             parent_ref = scope.parent.lookup(name) if scope.parent is not None else None
             if parent_ref is not None and parent_ref.kind is not BinderKind.constructor_binding:
@@ -983,8 +1145,11 @@ class _Resolver:
             # Non-entry enforcement: track that a non-import item has been seen.
             if is_non_entry_root:
                 self._seen_non_import_item = True
-            if isinstance(item, FuncDef):
-                self._resolve_funcdef(item)
+            if isinstance(item, ScopeRegion):
+                self._resolve_scope_region(item)
+            elif isinstance(item, FuncDef):
+                if not item.scope_path:
+                    self._resolve_funcdef(item)
             elif isinstance(item, BuiltinVarDecl):
                 # Placement in the canonical standard-library module is
                 # enforced by the declaration handler.
@@ -996,9 +1161,11 @@ class _Resolver:
                         f"not in library modules (found 'agent {item.name}' here).",
                         span=item.span,
                     )
-                self._resolve_agent_decl(item)
+                if not item.scope_path:
+                    self._resolve_agent_decl(item)
             elif isinstance(item, (RecordDef, EnumDef, ExceptionDef, TypeAlias)):
-                self._resolve_type_decl(item)
+                if not item.scope_path:
+                    self._resolve_type_decl(item)
             elif isinstance(item, LetDecl):
                 if is_non_entry_root:
                     raise AglScopeError(
@@ -1058,6 +1225,21 @@ class _Resolver:
     # ------------------------------------------------------------------
     # Declaration handlers
     # ------------------------------------------------------------------
+
+    def _resolve_scope_region(self, region: ScopeRegion) -> None:
+        """Apply module-kind restrictions without resolving scope references yet."""
+        if self._is_entry:
+            return
+
+        def reject_agent(node: object) -> None:
+            if isinstance(node, AgentDecl):
+                raise AglScopeError(
+                    "'agent' declarations are only allowed in the entry module, "
+                    f"not in library modules (found 'agent {node.name}' here).",
+                    span=node.span,
+                )
+
+        walk(region, reject_agent)
 
     def _resolve_agent_decl(self, node: AgentDecl) -> None:
         """Enforce root-only placement for an ``agent`` declaration.

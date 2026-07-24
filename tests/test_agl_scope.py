@@ -15,6 +15,7 @@ from typing import cast
 
 import pytest
 
+from agm.agl.modules.ids import ENTRY_ID
 from agm.agl.parser import parse_program
 from agm.agl.scope import (
     AglScopeError,
@@ -288,10 +289,130 @@ def reject_program(*items: Item) -> AglScopeError:
 
 
 class TestScopeRegions:
-    def test_scope_resolution_reports_regions_as_unsupported(self) -> None:
-        err = reject_scope("scope Point\ndef distance() -> int = 0\nend Point")
+    def test_regions_and_shorthand_collect_members_in_one_scope(self) -> None:
+        resolved = parse_and_resolve(
+            "scope Point\ndef distance() -> int = 0\nend Point\ndef Point::length() -> int = 0\n()"
+        )
 
-        assert "scope regions are not supported" in err.to_diagnostic().message
+        members = {
+            name
+            for (module_id, path, name) in resolved.declarations
+            if module_id == ENTRY_ID and path == ("Point",)
+        }
+        assert members == {"distance", "length"}
+        assert resolved.scope_nodes[("Point",)].parent is resolved.root_scope
+
+    def test_repeated_regions_extend_the_same_scope(self) -> None:
+        resolved = parse_and_resolve(
+            "scope Point\ndef x() -> int = 0\nend Point\n"
+            "scope Point\ndef y() -> int = 0\nend Point\n()"
+        )
+
+        assert {
+            name for (_module_id, path, name) in resolved.declarations if path == ("Point",)
+        } == {"x", "y"}
+
+    def test_type_scope_merges_with_a_region_and_collects_variants(self) -> None:
+        resolved = parse_and_resolve(
+            "scope Result\ndef describe() -> int = 0\nend Result\nenum Result = ok | error\n()"
+        )
+
+        assert (ENTRY_ID, (), "Result") in resolved.declarations
+        assert (ENTRY_ID, ("Result",), "describe") in resolved.declarations
+        assert (ENTRY_ID, ("Result",), "ok") in resolved.declarations
+        assert (ENTRY_ID, ("Result",), "error") in resolved.declarations
+
+    def test_type_then_region_merges_into_the_type_scope(self) -> None:
+        resolved = parse_and_resolve(
+            "enum Result = ok | error\nscope Result\ndef describe() -> int = 0\nend Result\n()"
+        )
+
+        assert set(resolved.scope_nodes[("Result",)].members) == {"ok", "error", "describe"}
+
+    def test_nested_type_establishes_a_nested_scope(self) -> None:
+        resolved = parse_and_resolve("scope A\nenum T = value\nend A\n()")
+
+        assert (ENTRY_ID, ("A",), "T") in resolved.declarations
+        assert (ENTRY_ID, ("A", "T"), "value") in resolved.declarations
+        assert resolved.scope_nodes[("A", "T")].parent is resolved.scope_nodes[("A",)]
+
+    def test_shorthand_declarations_are_members_of_their_declared_scope(self) -> None:
+        resolved = parse_and_resolve(
+            "def A::f() -> int = 0\n"
+            "record A::R()\n"
+            "enum A::E = item\n"
+            "exception A::Failure()\n"
+            "type A::Count = int\n"
+            'agent A::bot = "runner"\n'
+            "()"
+        )
+
+        members = resolved.scope_nodes[("A",)].members
+        assert set(members) == {"f", "R", "E", "Failure", "Count", "bot"}
+        assert all(member.scope_path == ("A",) for member in members.values())
+        assert set(resolved.scope_nodes[("A", "E")].members) == {"item"}
+        assert not resolved.root_scope.members
+
+    @pytest.mark.parametrize(
+        "source",
+        (
+            "def A::f() -> int = 0\nf()",
+            'agent A::bot = "runner"\nbot',
+            "enum A::Choice[T]\n  | picked(value: T)\npicked(value = 1)",
+        ),
+        ids=("function", "agent", "generic-enum-constructor"),
+    )
+    def test_scoped_shorthand_names_do_not_leak_into_root_resolution(self, source: str) -> None:
+        with pytest.raises(AglScopeError, match="not defined"):
+            parse_and_resolve(source)
+
+    def test_scoped_enum_variant_yields_to_an_enclosing_scope_member(self) -> None:
+        parse_and_resolve("enum A::Choice = picked\ndef A::picked() -> int = 0\n()")
+
+    @pytest.mark.parametrize(
+        "source",
+        (
+            "scope A\nextern def f() -> int\nend A",
+            "extern def A::f() -> int",
+            "scope A\ndef ask() -> int = 0\nend A",
+            "def A::ask() -> int = 0",
+            "scope A\nagent ask\nend A",
+            "agent A::ask",
+        ),
+        ids=(
+            "region-extern",
+            "shorthand-extern",
+            "region-reserved-function",
+            "shorthand-reserved-function",
+            "region-reserved-agent",
+            "shorthand-reserved-agent",
+        ),
+    )
+    def test_scoped_declarations_apply_root_declaration_validation(self, source: str) -> None:
+        with pytest.raises(AglScopeError):
+            parse_and_resolve(source)
+
+    def test_scoped_members_are_not_resolved_before_scope_reference_resolution_exists(self) -> None:
+        with pytest.raises(AglScopeError, match="not defined|No module"):
+            parse_and_resolve("def A::f() -> int = 0\nA::f()")
+
+    @pytest.mark.parametrize(
+        "source",
+        (
+            "scope Point\ndef distance() -> int = 0\nend Point\ndef Point::distance() -> int = 1",
+            "scope Point\nend Point\ndef Point() -> int = 0",
+            "record Point()\ndef Point() -> int = 0",
+            "enum Point = one | one",
+            "enum Point = one\nscope Point::one\nend Point::one",
+        ),
+    )
+    def test_same_path_declaration_collisions_are_rejected(self, source: str) -> None:
+        err = reject_scope(source)
+
+        assert "already declared" in err.to_diagnostic().message
+
+    def test_enum_member_spelling_can_be_claimed_in_its_enclosing_scope(self) -> None:
+        parse_and_resolve("enum Point = origin\ndef origin() -> int = 0\n()")
 
 
 # ---------------------------------------------------------------------------

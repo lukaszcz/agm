@@ -203,7 +203,10 @@ def _compute_local_exports(self_id: ModuleId, program: Program) -> dict[str, QNa
     """
     result: dict[str, QName] = {}
     for item in program.body.items:
-        if isinstance(item, (FuncDef, RecordDef, EnumDef, ExceptionDef, TypeAlias)):
+        if (
+            isinstance(item, (FuncDef, RecordDef, EnumDef, ExceptionDef, TypeAlias))
+            and not item.scope_path
+        ):
             if not item.is_private:
                 result[item.name] = (self_id, item.name)
         elif isinstance(item, BuiltinVarDecl):
@@ -429,14 +432,17 @@ def resolve_program(
 
     for mid, loaded in graph.modules.items():
         for item in loaded.program.body.items:
-            if isinstance(item, FuncDef):
+            if isinstance(item, FuncDef) and not item.scope_path:
                 key = (mid, item.name)
                 if item.is_private:
                     private_info[key] = True
                 else:
                     all_public_funcs[key] = item
                     decl_info[key] = (item.node_id, item.span, BinderKind.function_binding)
-            elif isinstance(item, (RecordDef, EnumDef, ExceptionDef, TypeAlias)):
+            elif (
+                isinstance(item, (RecordDef, EnumDef, ExceptionDef, TypeAlias))
+                and not item.scope_path
+            ):
                 key = (mid, item.name)
                 if item.is_private:
                     private_info[key] = True

@@ -79,6 +79,7 @@ from agm.agl.syntax.nodes import (
     Program,
     RecordDef,
     TypeAlias,
+    is_scoped_declaration,
 )
 from agm.agl.syntax.spans import SourceSpan
 from agm.agl.typecheck.builder import _TypeBuilder
@@ -220,6 +221,8 @@ def _resolve_body_for_one(
     assert isinstance(program, Program)
 
     for item in program.body.items:
+        if is_scoped_declaration(item):
+            continue
         if isinstance(item, RecordDef) and item.name == name:
             builder.build_record(item.name)
             t = cross_env.get_type(item.name)
@@ -294,7 +297,10 @@ def _collect_all_type_keys(
         program = rmod.resolved.program
         assert isinstance(program, Program)
         for item in program.body.items:
-            if isinstance(item, (RecordDef, EnumDef, ExceptionDef, TypeAlias)):
+            if (
+                isinstance(item, (RecordDef, EnumDef, ExceptionDef, TypeAlias))
+                and not item.scope_path
+            ):
                 # Builtin/prelude shadowing is rejected in _collect_shells_only
                 # (Step A of _build_program_type_table), which is called before this
                 # function.  Only non-builtin types reach this point.
@@ -319,7 +325,11 @@ def _find_type_decl_span(resolved: ResolvedProgram, key: tuple[ModuleId, str]) -
     program = rmod.resolved.program
     assert isinstance(program, Program)
     for item in program.body.items:
-        if isinstance(item, (RecordDef, EnumDef, ExceptionDef)) and item.name == name:
+        if (
+            isinstance(item, (RecordDef, EnumDef, ExceptionDef))
+            and not item.scope_path
+            and item.name == name
+        ):
             return item.span
     return None
 
@@ -438,7 +448,7 @@ def _build_program_type_table(
         program = rmod.resolved.program
         assert isinstance(program, Program)
         for item in program.body.items:
-            if isinstance(item, TypeAlias):
+            if isinstance(item, TypeAlias) and not item.scope_path:
                 alias_decls[(mid, item.name)] = item
     program_alias_keys = frozenset(alias_decls)
     program_ctor_sig_table: dict[tuple[ModuleId, str, str | None], ConstructorSignature] = {}
@@ -615,7 +625,7 @@ def _build_program_func_sig_table(
                 env.register_generic_type(g_name, gdef)
 
         for item in program.body.items:
-            if not isinstance(item, FuncDef):
+            if not isinstance(item, FuncDef) or item.scope_path:
                 continue
             # Defer invalid user shadowing declarations to the ordinary checker,
             # which reports them at the declaration. A ``builtin def`` deliberately
@@ -686,7 +696,7 @@ def _module_function_signatures(
     """
     signatures: dict[str, FunctionSignature] = {}
     for item in program.body.items:
-        if not isinstance(item, FuncDef):
+        if not isinstance(item, FuncDef) or item.scope_path:
             continue
         signature = env.get_function_signature_by_node_id(item.node_id)
         assert signature is not None, f"No checked signature for '{item.name}'"

@@ -104,6 +104,17 @@ from tests._agl_helpers import enum_type, record_type, type_table_for
 from tests.agl.ir_harness import _compiled_checked
 
 _REPO_STDLIB_ROOT = Path(__file__).resolve().parents[1] / "stdlib"
+_MIXED_ROOT_AND_SCOPED_DECLARATIONS = (
+    "def root() -> int = 0\n"
+    "agent root_agent\n"
+    "scope Group\n"
+    "def block_function() -> int = 0\n"
+    "agent block_agent\n"
+    "end Group\n"
+    "def Group::shorthand_function() -> int = 0\n"
+    "agent Group::shorthand_agent\n"
+    "()"
+)
 
 # ---------------------------------------------------------------------------
 # Pipeline helper
@@ -183,6 +194,13 @@ def _lower(source: str) -> ExecutableProgram:
         source_text=source,
         source_label="<test>",
     )
+
+
+def test_scoped_functions_and_agents_do_not_allocate_runtime_symbols() -> None:
+    program = _lower(_MIXED_ROOT_AND_SCOPED_DECLARATIONS)
+
+    assert {symbol.public_name for symbol in program.symbols.values()} == {"root", "root_agent"}
+    assert len(program.functions) == 1
 
 
 def _contains_flexible_inference_state(value: object, seen: set[int]) -> bool:
@@ -1844,6 +1862,25 @@ class TestPartialCallLowering:
 
 class TestLowerGraph:
     """Golden tests for lower_program."""
+
+    def test_lower_program_excludes_scoped_declarations_from_public_symbols(self) -> None:
+        from agm.agl.lower.program import lower_program
+        from agm.agl.modules.loader import load_graph
+        from agm.agl.modules.roots import RootSet
+        from agm.agl.scope.program import resolve_program
+        from agm.agl.typecheck.program import check_program
+
+        graph = load_graph(
+            _MIXED_ROOT_AND_SCOPED_DECLARATIONS,
+            entry_path=None,
+            roots=RootSet(roots=frozenset()),
+            default_stdlib=False,
+        )
+
+        program = lower_program(_compiled_checked(check_program(resolve_program(graph), _caps())))
+
+        assert {symbol.public_name for symbol in program.symbols.values()} == {"root", "root_agent"}
+        assert len(program.functions) == 1
 
     def test_lower_program_simple(self, tmp_path: Path) -> None:
         """lower_program on a two-module program builds a valid ExecutableProgram.

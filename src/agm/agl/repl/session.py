@@ -30,7 +30,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable, Iterable
     from pathlib import Path
 
-    from agm.agl.ir.ids import Location
+    from agm.agl.ir.ids import AgentId, Location
     from agm.agl.modules.ids import ModuleId
     from agm.agl.modules.loader import LoadedModule
     from agm.agl.modules.roots import RootSet
@@ -183,13 +183,11 @@ class ReplSession:
         self._declared_params: dict[str, Type] = {}
         # Source log of successfully-promoted entries (for dump_source / :save).
         self._source_log: list[str] = []
-        # Agents declared by SOURCE ``agent X`` statements in prior promoted
-        # entries.  In the REPL, host registration both declares AND backs an
-        # agent, so the ambient agent set passed to ``resolve`` is the union of
-        # the host-registered names and these cross-entry source declarations.
-        # Declarations from a failed/rolled-back entry never land here (merged
-        # only on successful promotion).
-        self._declared_agents: set[str] = set()
+        # Agents declared by source in prior promoted entries, keyed by their
+        # complete structured identity. Root declarations become ambient names;
+        # scoped declarations remain available through retained scope members.
+        # Declarations from a failed/rolled-back entry never land here.
+        self._declared_agents: set[AgentId] = set()
         # Constructor candidates from prior promoted entries, keyed by constructor
         # name → ordered tuple of ConstructorRef.  Passed to resolve() as ambient
         # so that subsequent entries can reference constructors from prior entries.
@@ -295,8 +293,12 @@ class ReplSession:
     # ------------------------------------------------------------------
 
     def register_agent(self, name: str, fn: "AgentFn") -> None:
-        """Register a named agent (shares ``PipelineDriver`` validation)."""
+        """Register a root agent (shares ``PipelineDriver`` validation)."""
         self._runtime.register_agent(name, fn)
+
+    def register_scoped_agent(self, scope_path: tuple[str, ...], name: str, fn: "AgentFn") -> None:
+        """Register an agent for one exact named-scope path."""
+        self._runtime.register_scoped_agent(scope_path, name, fn)
 
     def register_codec(self, codec: "OutputCodec") -> None:
         """Register a custom output codec (shares ``PipelineDriver`` validation)."""
@@ -526,7 +528,9 @@ class ReplSession:
         which excludes the ``ask``/``exec`` built-ins) is ambient, unioned with
         agents declared by ``agent X`` statements in prior promoted entries.
         """
-        return host_env.capabilities.agent_names | self._declared_agents
+        return host_env.capabilities.agent_names | frozenset(
+            agent_id.declared_name for agent_id in self._declared_agents if not agent_id.scope_path
+        )
 
     def _fail(self, diagnostics: list[Diagnostic], warnings: list[Diagnostic]) -> EntryResult:
         """Build a clean pre-execution failure result (no promotion)."""
@@ -920,12 +924,12 @@ class ReplSession:
             new_type_env.seal()
             self._type_env = new_type_env
 
+        from agm.agl.ir.ids import AgentId
+
         promoted_agents = {
-            item.name
-            for item in program.body.items
-            if isinstance(item, AgentDecl)
-            and not item.scope_path
-            and _before_failure(item.span.end_offset)
+            AgentId(name, scope_path)
+            for (scope_path, name), declaration in checked.resolved.declared_agents.items()
+            if _before_failure(declaration.span.end_offset)
         }
         self._declared_agents.update(promoted_agents)
         if promoted_type_identities:

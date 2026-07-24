@@ -25,6 +25,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from agm.agl.ir.ids import AgentId
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -338,7 +340,7 @@ class TestAgentCallErrorSeam:
                 elapsed=elapsed,
             )
 
-        return AgentRegistry(named={"tester": failing_agent}, default_agent=None)
+        return AgentRegistry(named={AgentId("tester"): failing_agent}, default_agent=None)
 
     def test_nonzero_exit_raises_agl_raise(self) -> None:
         from agm.agl.runtime import AgentRequest

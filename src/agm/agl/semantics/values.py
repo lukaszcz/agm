@@ -25,7 +25,7 @@ import decimal
 from dataclasses import dataclass, field
 from typing import TypeAlias
 
-from agm.agl.ir.ids import FunctionId, NominalId, SymbolId
+from agm.agl.ir.ids import AgentId, FunctionId, NominalId, SymbolId
 
 # ---------------------------------------------------------------------------
 # JSON-tree comparison helpers
@@ -162,6 +162,7 @@ class AgentValue:
     """A first-class agent handle — opaque; not renderable or comparable."""
 
     name: str
+    agent_id: AgentId | None = None
 
 
 # ---------------------------------------------------------------------------

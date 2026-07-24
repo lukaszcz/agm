@@ -12,7 +12,7 @@ import json
 from collections.abc import Mapping, Sequence
 from typing import NoReturn, Protocol, cast
 
-from agm.agl.ir.ids import ContractId, Location, NominalId
+from agm.agl.ir.ids import AgentId, ContractId, Location, NominalId
 from agm.agl.ir.nodes import IrAsk, IrAskRequest, IrExec, IrExpr
 from agm.agl.ir.program import ExecutableProgram, ExternFunctionBody
 from agm.agl.modules.ids import PRELUDE_ID, ModuleId
@@ -101,7 +101,9 @@ class EffectHandlers:
     # Agent call helpers
     # ------------------------------------------------------------------
 
-    def _dispatch_agent(self, agent_name: str, request: AgentRequest, node: IrAsk) -> AgentResponse:
+    def _dispatch_agent(
+        self, agent_id: AgentId, request: AgentRequest, node: IrAsk
+    ) -> AgentResponse:
         """Dispatch an agent call, annotating cancellation with the ask span.
 
         ``AgentCancelled`` (and a bare ``KeyboardInterrupt`` from an unwrapped
@@ -115,12 +117,12 @@ class EffectHandlers:
         from agm.agl.runtime.request import AgentCancelled
 
         try:
-            return self._ctx._registry.dispatch(agent_name, request)
+            return self._ctx._registry.dispatch(agent_id, request)
         except AgentCancelled as exc:
             exc.span = node.location
             raise
         except KeyboardInterrupt as exc:
-            raise AgentCancelled(agent_name, "interrupted", span=node.location) from exc
+            raise AgentCancelled(agent_id.display_name, "interrupted", span=node.location) from exc
 
     @staticmethod
     def _classify_parse_errors(result: ParseResult) -> tuple[ReqValidationError, ...]:
@@ -181,7 +183,12 @@ class EffectHandlers:
     ) -> Value:
         """Handle IrAsk: dispatch agent and parse output."""
         agent_val = self._ctx._eval(agent_expr)
-        agent_name = agent_val.name if isinstance(agent_val, AgentValue) else "ask"
+        agent_id = (
+            agent_val.agent_id
+            if isinstance(agent_val, AgentValue) and agent_val.agent_id is not None
+            else AgentId(agent_val.name if isinstance(agent_val, AgentValue) else "ask")
+        )
+        agent_name = agent_id.display_name
 
         prompt_val = self._ctx._eval(prompt_expr)
         if not isinstance(prompt_val, TextValue):
@@ -196,9 +203,10 @@ class EffectHandlers:
             request = AgentRequest(
                 agent=agent_name,
                 prompt=prompt_text,
+                agent_id=agent_id,
                 output_contract=None,
             )
-            self._dispatch_agent(agent_name, request, _node)
+            self._dispatch_agent(agent_id, request, _node)
             return VOID_VALUE
 
         effective_strict = (
@@ -236,12 +244,13 @@ class EffectHandlers:
             request = AgentRequest(
                 agent=agent_name,
                 prompt=prompt_text,
+                agent_id=agent_id,
                 attempt=attempt,
                 previous_invalid_output=last_raw,
                 validation_errors=list(last_errors),
                 output_contract=output_contract,
             )
-            response = self._dispatch_agent(agent_name, request, _node)
+            response = self._dispatch_agent(agent_id, request, _node)
             raw = response.content
 
             result = self._ctx._parse_host_output(
@@ -287,7 +296,12 @@ class EffectHandlers:
     ) -> Value:
         """Handle IrAskRequest: build AgentRequest record without dispatching."""
         agent_val = self._ctx._eval(agent_expr)
-        agent_name = agent_val.name if isinstance(agent_val, AgentValue) else "ask"
+        agent_id = (
+            agent_val.agent_id
+            if isinstance(agent_val, AgentValue) and agent_val.agent_id is not None
+            else AgentId(agent_val.name if isinstance(agent_val, AgentValue) else "ask")
+        )
+        agent_name = agent_id.display_name
 
         prompt_val = self._ctx._eval(prompt_expr)
         if not isinstance(prompt_val, TextValue):

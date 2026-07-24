@@ -31,7 +31,7 @@ from dataclasses import dataclass
 from typing import TypeAlias
 
 from agm.agl.ir.contracts import ConversionFailureMode, ConversionRecipe
-from agm.agl.ir.ids import ContractId, FunctionId, Location, NominalId, SymbolId
+from agm.agl.ir.ids import AgentId, ContractId, FunctionId, Location, NominalId, SymbolId
 from agm.agl.ir.operations import (
     ArithKind,
     ArithOp,
@@ -974,14 +974,20 @@ class IrParseJson:
 
 @dataclass(frozen=True, slots=True)
 class IrAgentHandle:
-    """IR host-op: evaluate to an AgentValue for the named agent.
+    """IR host-op: evaluate to an AgentValue for one declared agent.
 
-    Emitted for AgentDecl lowering (agents are entry-only, bound once).
-    Evaluates to ``AgentValue(name=agent_name)``.
+    Emitted for ``AgentDecl`` lowering.  The structured identity keeps same-
+    named scoped declarations distinct; its display name is used only at the
+    host-facing boundary.
     """
 
     location: Location
-    agent_name: str
+    agent_id: "AgentId"
+
+    @property
+    def agent_name(self) -> str:
+        """Return the agent's source-facing display name."""
+        return self.agent_id.display_name
 
 
 @dataclass(frozen=True, slots=True)

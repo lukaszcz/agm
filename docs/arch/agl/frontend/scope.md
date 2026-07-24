@@ -35,7 +35,9 @@ juxtaposition expressions.
 
 ## Static Guarantees
 
-Agents must be declared in source; the pass binds each declared agent as a first-class value of agent type. `let _ = value` and `var _ = value` still resolve their right-hand sides but register no binding, so `_` may be repeated. `_` never resolves as a readable identifier, even when another binding form uses that name in an enclosing scope. Register-backed `builtin var` declarations are admitted only in the canonical `std/config` module. The pass enforces lexical control-flow boundaries — `break`/`continue` must stay within a loop in the same function, `return` must appear inside a function body — and the extern (Python FFI) placement rule that externs are only allowed in file-backed modules.
+Agents must be declared in source; the pass retains every declaration and
+unused-agent warning by its scope path and member name, and binds it as a
+first-class value of agent type, including named-scope members. Scoped externs resolve their member names through the declaring module's companion, and collection rejects duplicate scoped companion symbols. `let _ = value` and `var _ = value` still resolve their right-hand sides but register no binding, so `_` may be repeated. `_` never resolves as a readable identifier, even when another binding form uses that name in an enclosing scope. Register-backed `builtin var` declarations are admitted only in the canonical `std/config` module. The pass enforces lexical control-flow boundaries — `break`/`continue` must stay within a loop in the same function, `return` must appear inside a function body — and the extern (Python FFI) placement rule that externs are only allowed in file-backed modules.
 
 Program resolution extends this pass across modules and preserves the loader's immutable,
 reverse-topological import-SCC sequence on `ResolvedProgram`. Typecheck consumes that exact sequence

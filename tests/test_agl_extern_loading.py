@@ -133,7 +133,9 @@ class TestCompanionPathDerivation:
         ),
         ids=("region", "shorthand"),
     )
-    def test_scoped_externs_do_not_require_a_companion(self, tmp_path: Path, source: str) -> None:
+    def test_scoped_externs_use_the_module_companion(self, tmp_path: Path, source: str) -> None:
+        companion = tmp_path / "entry.py"
+        companion.write_text("def f(x):\n    return x\n")
         graph = load_graph(
             source,
             entry_path=tmp_path / "entry.agl",
@@ -141,7 +143,7 @@ class TestCompanionPathDerivation:
             default_stdlib=False,
         )
 
-        assert graph.modules[ENTRY_ID].companion_path is None
+        assert graph.modules[ENTRY_ID].companion_path == companion
 
         result = PipelineDriver().run(
             source,

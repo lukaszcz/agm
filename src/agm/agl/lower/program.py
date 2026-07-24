@@ -46,6 +46,7 @@ def lower_program(
     _already_linked: frozenset[ModuleId] = frozenset(),
     _entry_source_text: str | None = None,
     contract_payloads: Mapping[int, ContractPayload] | None = None,
+    _eager_scoped_agents: bool = False,
 ) -> ExecutableProgram:
     """Lower a whole-program match-compiled artifact to an
     :class:`~agm.agl.ir.program.ExecutableProgram`.
@@ -149,8 +150,9 @@ def lower_program(
                     ),
                 )
 
-    # Step 3: Phase 1 — pre-allocate FunctionId + symbol for every root FuncDef
-    # across ALL modules before any body is lowered (enables cross-module calls).
+    # Step 3: Phase 1 — pre-allocate FunctionId + symbol for every static
+    # FuncDef across all modules before any body is lowered (enables calls
+    # across root and named-scope declaration paths).
     module_lowerers: dict[ModuleId, _Lowerer] = {}
     for mid, cm in checked.modules.items():
         if mid in _already_linked or mid == STD_CORE_ID:
@@ -173,7 +175,9 @@ def lower_program(
             if isinstance(item, FuncDef) and not item.is_builtin:
                 lowerer._prealloc_funcdef(item)
             elif isinstance(item, AgentDecl) and (
-                not item.scope_path or lowerer._scoped_agent_is_referenced(item)
+                _eager_scoped_agents
+                or not item.scope_path
+                or lowerer._scoped_agent_is_referenced(item)
             ):
                 lowerer._alloc_sym(
                     item.node_id,
@@ -203,7 +207,9 @@ def lower_program(
             items = _static_items((item,)) if isinstance(item, ScopeRegion) else (item,)
             for nested_item in items:
                 if isinstance(nested_item, AgentDecl) and (
-                    nested_item.scope_path and not lowerer._scoped_agent_is_referenced(nested_item)
+                    nested_item.scope_path
+                    and not _eager_scoped_agents
+                    and not lowerer._scoped_agent_is_referenced(nested_item)
                 ):
                     continue
                 if mid.is_entry or isinstance(nested_item, (FuncDef, AgentDecl)):

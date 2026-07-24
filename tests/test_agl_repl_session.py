@@ -990,6 +990,24 @@ class TestAgentDeclarations:
         assert r2.ok, r2.diagnostics
         assert _text({name: value for name, _typ, value in s.bindings()}["out"]) == "done"
 
+    def test_scoped_declaration_retains_its_handle_across_entries(self) -> None:
+        agent = CountingAgent("done")
+        s = ReplSession()
+        s.register_scoped_agent(("Tools",), "helper", agent)
+
+        declared = s.eval_entry("scope Tools\nagent helper\nend Tools")
+        assert declared.ok, declared.diagnostics
+        ref = s._session_scope_nodes[("Tools",)].members["helper"]
+        handle = s._link_image.symbol_for_decl(ref.decl_node_id)
+        assert handle is not None
+
+        called = s.eval_entry('let out = ask("""go""", agent = Tools::helper)')
+
+        assert called.ok, called.diagnostics
+        assert s._link_image.symbol_for_decl(ref.decl_node_id) == handle
+        assert _text({name: value for name, _typ, value in s.bindings()}["out"]) == "done"
+        assert agent.calls == 1
+
     def test_failed_entry_declaration_does_not_persist(self) -> None:
         # A declaration in an entry that fails to promote must NOT leak into the
         # ambient set: a later call relying on it is still a scope error.

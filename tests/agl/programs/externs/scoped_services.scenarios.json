@@ -1,0 +1,20 @@
+{
+  "scenarios": [
+    {
+      "name": "runs_scoped_recursion_extern_agent_and_typed_call",
+      "agents": {"reviewer": ["approved"]},
+      "expect": {
+        "stdout": "120\nfalse\ntyped chain\n42\napproved\n",
+        "calls": {"reviewer": 1}
+      }
+    },
+    {
+      "name": "reuses_scoped_service_declarations_across_runs",
+      "agents": {"reviewer": ["revised"]},
+      "expect": {
+        "stdout": "120\nfalse\ntyped chain\n42\nrevised\n",
+        "calls": {"reviewer": 1}
+      }
+    }
+  ]
+}

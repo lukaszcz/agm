@@ -698,6 +698,7 @@ def _build_program_func_sig_table(
                 return_source=FunctionReturnSource.DECLARED,
                 module_id=mid,
                 declaration_span=item.span,
+                scope_path=tuple(segment.name for segment in item.scope_path),
             )
 
     return result
@@ -835,7 +836,7 @@ def _prepare_module_environment(
     for node_id, record in program_func_sig_table.items():
         env.set_binding_type(node_id, record.function_type)
         env.register_function_signature_by_node_id(node_id, record.signature)
-        env.register_function_signature(record.name, record.signature)
+        env.register_function_signature(record.name, record.signature, scope_path=record.scope_path)
         if record.is_extern:
             env.register_extern_node_id(node_id)
 

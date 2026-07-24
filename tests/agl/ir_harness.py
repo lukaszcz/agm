@@ -11,7 +11,7 @@ from pathlib import Path
 
 from agm.agl.capabilities import HostCapabilities
 from agm.agl.eval.ir_interpreter import IrInterpreter
-from agm.agl.ir.ids import SymbolId
+from agm.agl.ir.ids import AgentId, SymbolId
 from agm.agl.ir.program import ExecutableProgram, ExternFunctionBody
 from agm.agl.lower import lower_module
 from agm.agl.lower.program import lower_program
@@ -282,7 +282,7 @@ def _make_scripted_registry(
 
         return agent
 
-    named = {name: make_agent(name, responses) for name, responses in scripts.items()}
+    named = {AgentId(name): make_agent(name, responses) for name, responses in scripts.items()}
     default = (
         make_agent("__default__", default_responses) if default_responses is not None else None
     )

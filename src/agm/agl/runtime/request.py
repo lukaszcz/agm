@@ -14,7 +14,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Literal
 
-from agm.agl.ir.ids import Location
+from agm.agl.ir.ids import AgentId, Location
 
 if TYPE_CHECKING:
     from agm.agl.runtime.contract import OutputContract, TypelessOutputContract
@@ -119,6 +119,7 @@ class AgentRequest:
 
     agent: str
     prompt: str
+    agent_id: AgentId | None = None
     attempt: int = 0
     previous_invalid_output: str | None = None
     validation_errors: list[ValidationError] = field(default_factory=list)

@@ -112,10 +112,11 @@ Static rules, all checked before execution:
 func_def ::= ["private"] "def" name type_params? "(" param_list? ")" ("->" type_expr)? ("=" func_body | suite)
 ```
 
-`def` is a root-only declaration. It introduces an immutable binding of
-function type in the top-level scope. All `def`s at the program root are
-collected in a pre-pass so they are mutually visible — every `def` may call
-every other `def` (and itself) without forward declaration.
+`def` is a static declaration valid at the module root and in named scope
+regions. It introduces an immutable function binding in its declaration layer.
+All root `def`s, and all `def`s in the same named scope, are collected in a
+pre-pass so they are mutually visible — every such `def` may call every other
+member (and itself) without a forward declaration.
 
 A `def` may be prefixed with `private`, making it invisible to other modules
 (see [Modules](modules.md)). The `private` modifier has no effect on lexical
@@ -223,13 +224,14 @@ layers.
 ## `agent` — declared agents
 
 ```ebnf
-agent_decl ::= "agent" name ("=" STRING)?
+agent_decl ::= "agent" decl_head ("=" STRING)?
 ```
 
-`agent` declarations are root-only and **entry-module only** — they are a
-static error inside an imported library module (see [Modules](modules.md)).
-Each declared name enters the root scope as an **immutable binding of type
-`agent`**. Agent values may be stored in bindings, passed to `def` parameters,
+`agent` declarations are **entry-module only** — they are a static error
+inside an imported library module (see [Modules](modules.md)). They are valid
+at the module root and in named scope regions. Each declaration enters its
+declaration layer as an **immutable binding of type `agent`**. A qualified
+head declares that member in its exact scope path. Agent values may be stored in bindings, passed to `def` parameters,
 and held in `list[agent]`:
 
 ```agl
@@ -249,12 +251,13 @@ let r: Review = ask("Review ${artifact}", agent = reviewer)
 
 Rules:
 
-1. `agent` declarations are valid **only at the program root**.
+1. `agent` declarations are valid at the entry module root and in its named
+   scope regions, never in an ordinary block.
 2. Agent names and variable names share the same value namespace — both are
    looked up by the same name resolution. An `agent impl` declaration and a
-   `let impl` declaration cannot coexist in the same scope (redeclaration
-   error).
-3. Declaring the same agent name twice is a static error.
+   `let impl` declaration cannot coexist in the same declaration layer.
+3. Declaring the same agent name twice in one declaration layer is a static
+   error; agents in different scope paths are distinct.
 4. `ask` and `exec` cannot be declared as agents.
 5. An unused declared agent produces a non-fatal **warning**.
 6. The runner hint must be a static string literal with no interpolation.

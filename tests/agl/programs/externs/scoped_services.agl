@@ -1,0 +1,27 @@
+scope Math
+
+def factorial(n: int) =
+  if n == 0 => 1
+  else => n * factorial(n - 1)
+
+def even(n: int) =
+  if n == 0 => true
+  else => odd(n - 1)
+
+def odd(n: int) =
+  if n == 0 => false
+  else => even(n - 1)
+
+def echo[T](value: T) = value
+
+extern def increment(value: int) -> int
+
+agent reviewer = "reviewer"
+
+end Math
+
+print(Math::factorial(5))
+print(Math::even(7))
+print(Math::echo::[text]("typed chain"))
+print(Math::increment(41))
+print(ask("Review the scoped service.", agent = Math::reviewer))

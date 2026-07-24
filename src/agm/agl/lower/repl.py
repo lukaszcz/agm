@@ -139,6 +139,7 @@ def lower_repl_program(
         _already_linked=frozenset(image._linked_modules),
         _entry_source_text=source_text,
         contract_payloads=contract_payloads,
+        _eager_scoped_agents=True,
     )
     checked = compiled.checked
     entry = checked.modules[checked.entry_id].resolved.program

@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from agm.agl.modules.ids import ModuleId
 
 __all__ = [
+    "AgentId",
     "ContractId",
     "FunctionId",
     "Location",
@@ -71,8 +72,25 @@ class ContractId:
 
 
 # ---------------------------------------------------------------------------
-# Nominal identity
+# Declaration identities
 # ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class AgentId:
+    """Structured identity of an agent declaration within the entry module.
+
+    The empty scope path denotes a root agent.  ``display_name`` is only for
+    user-facing labels; runtime lookup always uses this structured value.
+    """
+
+    declared_name: str
+    scope_path: tuple[str, ...] = ()
+
+    @property
+    def display_name(self) -> str:
+        """Return the source spelling for diagnostics and host-facing requests."""
+        return "::".join((*self.scope_path, self.declared_name))
 
 
 @dataclass(frozen=True, slots=True)

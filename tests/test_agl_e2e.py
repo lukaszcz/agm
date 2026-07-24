@@ -160,9 +160,17 @@ def _run_program(
     if "ask" in agents:
         kwargs["default_agent"] = agents["ask"]
     runtime = PipelineDriver(**kwargs)
-    for name, agent in agents.items():
-        if name != "ask":
-            runtime.register_agent(name, agent)
+
+    def register_agents(declarations: tuple[Any, ...]) -> None:
+        for name, agent in agents.items():
+            if name == "ask":
+                continue
+            matches = [declaration for declaration in declarations if declaration.name == name]
+            if len(matches) == 1:
+                runtime.register_scoped_agent(matches[0].scope_path, name, agent)
+            else:
+                runtime.register_agent(name, agent)
+
     module_roots = scenario.get("module_roots", [])
     with unittest.mock.patch("agm.core.process.run_capture_result", side_effect=shell):
         if module_roots:
@@ -177,6 +185,7 @@ def _run_program(
                 )
             )
             prepared = PipelineDriver.prepare_program(source, entry_path=None, roots=roots)
+            register_agents(prepared.declared_agents)
             result = runtime.run_prepared(prepared, param_values=scenario.get("params", {}))
         elif program.is_relative_to(EXTERNS_PROGRAMS_DIR):
             # Three branches, in order: `module_roots` above builds a graph from
@@ -189,8 +198,10 @@ def _run_program(
 
             roots = RootSet(roots=frozenset({program.parent.resolve(), REPO_STDLIB_ROOT}))
             prepared = PipelineDriver.prepare_program(source, entry_path=program, roots=roots)
+            register_agents(prepared.declared_agents)
             result = runtime.run_prepared(prepared, param_values=scenario.get("params", {}))
         else:
+            register_agents(runtime.declared_agents(source))
             result = runtime.run(source, param_values=scenario.get("params", {}))
     return result, agents, shell
 

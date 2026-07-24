@@ -250,7 +250,7 @@ class TestResolvedProgramShape:
             },
         )
         result = resolve_program(graph)
-        assert "bot" in result.entry_agents
+        assert ((), "bot") in result.entry_agents
 
     @pytest.mark.parametrize(
         "modules",
@@ -1127,7 +1127,7 @@ class TestEntryOnlyConstructs:
             },
         )
         result = resolve_program(graph)
-        assert "bot" in result.entry_agents
+        assert ((), "bot") in result.entry_agents
 
 
 # ---------------------------------------------------------------------------

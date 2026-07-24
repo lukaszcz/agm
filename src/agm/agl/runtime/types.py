@@ -88,12 +88,16 @@ class AgentDeclInfo:
         1-based source line of the declaration (``span.start_line``).
     ``col``
         1-based source column of the declaration (``span.start_col``).
+    ``scope_path``
+        The structured scope path; empty for a root declaration. This trailing
+        default preserves the original four positional constructor fields.
     """
 
     name: str
     runner: str | None
     line: int
     col: int
+    scope_path: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)

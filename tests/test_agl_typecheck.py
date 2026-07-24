@@ -682,6 +682,14 @@ class TestTypeEnvironment:
         assert env.get_function_signature("f") == sig
         assert env.get_function_signature("g") is None
 
+    def test_scoped_function_signature_uses_its_declaration_path(self) -> None:
+        env = TypeEnvironment()
+        sig = FunctionSignature(params=(), result=IntType())
+        env.register_function_signature("f", sig, scope_path=("Tools",))
+
+        assert env.get_function_signature("f", scope_path=("Tools",)) == sig
+        assert env.get_function_signature("f") is None
+
     def test_all_function_signatures(self) -> None:
         env = TypeEnvironment()
         sig = FunctionSignature(params=(), result=UnitType())

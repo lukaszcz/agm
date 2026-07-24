@@ -283,8 +283,15 @@ def run(args: ExecArgs) -> None:
     # The runner command resolves CLI flag > [exec] config > shared loop default
     # (the same default used by agm loop/review).
     decls = prepared.declared_agents
-    source_hints = {d.name: d.runner for d in decls if d.runner is not None}
-    per_agent_cmds = {**source_hints, **config.agents}
+    from agm.agl.ir.ids import AgentId
+
+    source_hints = {
+        AgentId(declaration.name, declaration.scope_path): declaration.runner
+        for declaration in decls
+        if declaration.runner is not None
+    }
+    config_overrides = {AgentId(name): command for name, command in config.agents.items()}
+    per_agent_cmds = {**source_hints, **config_overrides}
     runner_cmd = args.runner or config.runner or base_runner_cmd
     # Validate the resolved runner command eagerly: malformed quoting (e.g.
     # unclosed quote) and whitespace-only values are caught here via
@@ -292,7 +299,7 @@ def run(args: ExecArgs) -> None:
     # honours the exit-1 = pre-execution contract.
     split_command(runner_cmd, kind="runner")
     for declaration in decls:
-        cmd = per_agent_cmds.get(declaration.name)
+        cmd = per_agent_cmds.get(AgentId(declaration.name, declaration.scope_path))
         if cmd is not None:
             split_command(cmd, kind="runner")
 
@@ -317,8 +324,9 @@ def run(args: ExecArgs) -> None:
     # set: reconciliation always passes; config-only agents the source never
     # declares stay inert (NOT registered).
     for declaration in decls:
-        if declaration.name in per_agent_cmds:
-            runtime.register_agent(declaration.name, factory)
+        agent_id = AgentId(declaration.name, declaration.scope_path)
+        if agent_id in per_agent_cmds:
+            runtime.register_scoped_agent(declaration.scope_path, declaration.name, factory)
 
     discovery = runtime.discover_params(prepared)
     for diag in discovery.warnings:

@@ -20,6 +20,7 @@ from typing import TYPE_CHECKING, TypeVar
 
 from agm.agl.diagnostics import AglError, Diagnostic
 from agm.agl.eval.ir_interpreter import IrInterpreter
+from agm.agl.ir.ids import AgentId
 from agm.agl.runtime.agents import AgentFn
 from agm.agl.runtime.params import _materialize_ir_contracts, _prepare_ir_params
 from agm.agl.runtime.types import (
@@ -119,7 +120,7 @@ class PreparedProgram:
         Non-fatal lex (TAB) and scope warnings; present even on failure.
     ``companion_paths``
         Each loaded module's Python companion path (``None`` when the module
-        declares no root extern), keyed by module id. Empty when loading failed.
+        declares no extern), keyed by module id. Empty when loading failed.
         Consumed by ``run_prepared`` to import and resolve every
         declared extern before evaluation.
     """
@@ -143,11 +144,12 @@ class PreparedProgram:
         infos = [
             AgentDeclInfo(
                 name=decl.name,
+                scope_path=scope_path,
                 runner=decl.runner,
                 line=decl.span.start_line,
                 col=decl.span.start_col,
             )
-            for decl in self.resolved.entry_agents.values()
+            for (scope_path, _name), decl in self.resolved.entry_agents.items()
         ]
         infos.sort(key=lambda info: (info.line, info.col))
         return tuple(infos)
@@ -306,7 +308,7 @@ class PipelineDriver:
             if default_call_depth_limit is not None
             else IrInterpreter.DEFAULT_MAX_CALL_DEPTH
         )
-        self._agents: dict[str, AgentFn] = {}
+        self._agents: dict[AgentId, AgentFn] = {}
         self._extern_registry = extern_registry
         # Extra codecs registered by the host (beyond the built-ins).
         self._extra_codecs: dict[str, "OutputCodec"] = {}
@@ -316,22 +318,26 @@ class PipelineDriver:
         self._host_env_cache: HostEnvironment | None = None
 
     def register_agent(self, name: str, fn: AgentFn) -> None:
-        """Register a named agent callable.
+        """Register a root-level named agent callable.
 
-        Raises ``ValueError`` if ``name`` is a reserved name (``ask`` or
-        ``exec``) or if an agent with that name has already been registered.
+        Raises ``ValueError`` if ``name`` is reserved or already registered.
         """
+        self.register_scoped_agent((), name, fn)
+
+    def register_scoped_agent(self, scope_path: tuple[str, ...], name: str, fn: AgentFn) -> None:
+        """Register a callable for the agent declared at *scope_path* and *name*."""
         if name in _RESERVED_AGENT_NAMES:
             raise ValueError(
                 f"Cannot register agent with reserved name {name!r}. "
                 f"Reserved names: {sorted(_RESERVED_AGENT_NAMES)}"
             )
-        if name in self._agents:
+        agent_id = AgentId(name, scope_path)
+        if agent_id in self._agents:
             raise ValueError(
-                f"An agent named {name!r} is already registered. "
+                f"An agent named {agent_id.display_name!r} is already registered. "
                 "Duplicate registrations are not allowed."
             )
-        self._agents[name] = fn
+        self._agents[agent_id] = fn
         self._host_env_cache = None
 
     def register_codec(self, codec: "OutputCodec") -> None:
@@ -931,8 +937,20 @@ class PipelineDriver:
 
         registry = host_env.registry
 
-        # Agent reconciliation against entry module's declared agents.
-        reconciliation_errors = _reconcile_agents(registry, resolved.entry_agents)
+        # Agent reconciliation against entry module's declared agents. Scoped
+        # declarations are retained for reporting, while lowering only needs a
+        # backing for those whose handle is referenced.
+        from agm.agl.scope.symbols import BinderKind
+
+        entry_resolution = resolved.modules[resolved.entry_id].resolved
+        referenced_agents = frozenset(
+            AgentId(ref.name, ref.scope_path)
+            for ref in entry_resolution.resolution.values()
+            if ref.kind is BinderKind.agent_binding
+        )
+        reconciliation_errors = _reconcile_agents(
+            registry, resolved.entry_agents, referenced_agents=referenced_agents
+        )
         if reconciliation_errors:
             return (
                 RunResult(
@@ -1268,16 +1286,27 @@ def _extern_declaration_sort_key(pair: "tuple[ModuleId, str]") -> "tuple[tuple[s
 def _extern_declarations(
     checked: "CheckedProgram",
 ) -> list[tuple["ModuleId", str]]:
-    """Return ``(module_id, name)`` for every root ``extern def`` in *checked*.
+    """Return ``(module_id, member_name)`` for every declared extern.
 
-    Sorted for deterministic diagnostic ordering; the checked AST (not the
-    IR) is the source of truth here since the IR has no extern table yet.
+    Scoped externs resolve their unqualified member name in the declaring
+    module's companion. The scope pass rejects duplicate scoped symbols, so
+    this list remains one-to-one with companion callables.
     """
-    declarations: list[tuple[ModuleId, str]] = [
-        (mid, name)
+    from agm.agl.syntax.nodes import FuncDef, ScopeRegion
+
+    def collect(items: tuple[object, ...]) -> list[FuncDef]:
+        declarations: list[FuncDef] = []
+        for item in items:
+            if isinstance(item, ScopeRegion):
+                declarations.extend(collect(item.items))
+            elif isinstance(item, FuncDef) and item.is_extern:
+                declarations.append(item)
+        return declarations
+
+    declarations = [
+        (mid, funcdef.name)
         for mid, mod in checked.modules.items()
-        for name, funcdef in mod.resolved.declared_functions.items()
-        if funcdef.is_extern
+        for funcdef in collect(mod.resolved.program.body.items)
     ]
     declarations.sort(key=_extern_declaration_sort_key)
     return declarations
@@ -1293,17 +1322,17 @@ def _wire_extern_registry(
     """Import every companion and resolve every declared extern, up front.
 
     Returns diagnostics — a single capability-gate diagnostic when the host
-    disables ``supports_extern`` and the program declares any root extern, or one
+    disables ``supports_extern`` and the program declares any extern, or one
     diagnostic per companion that fails to import or resolve — collected
     before any evaluation.  Returns ``[]`` immediately when the program
-    declares no root extern, regardless of the capability (non-extern programs are
+    declares no extern, regardless of the capability (non-extern programs are
     never affected).  Mutates *registry* in place, so a ``PipelineDriver``
     that reuses the same ``HostEnvironment`` across multiple runs (e.g. the
     REPL) imports each companion only once.
     """
     from agm.agl.runtime.externs import ExternImportError, ExternResolutionError
 
-    # A companion path is recorded (non-``None``) exactly for root-extern-declaring
+    # A companion path is recorded (non-``None``) exactly for extern-declaring
     # modules, so this cheap check short-circuits the common no-extern program
     # before the full declared-function walk in ``_extern_declarations`` — and,
     # equivalently, gates the capability diagnostic without that walk.
@@ -1352,7 +1381,9 @@ def _wire_extern_registry(
 
 def _reconcile_agents(
     registry: "AgentRegistry",
-    declared_agents: "Mapping[str, AgentDeclNode]",
+    declared_agents: "Mapping[tuple[tuple[str, ...], str], AgentDeclNode]",
+    *,
+    referenced_agents: frozenset[AgentId] = frozenset(),
 ) -> list[Diagnostic]:
     """Enforce the source↔host agent contract.
 
@@ -1362,19 +1393,26 @@ def _reconcile_agents(
     - **Registered-but-undeclared** (decision 1): a name in
       ``registry.agent_names`` that the source never declares.  Reported at
       ``line=1`` (a registration has no source span).
-    - **Declared-but-unbacked** (decision 11): a declared agent with no
-      dedicated registration AND no default agent.  Reported at the
-      declaration's ``span.start_line``.  When a default agent IS present every
-      declared name is backed by it, so this never fires.
+    - **Declared-but-unbacked** (decision 11): a root declaration, or a
+      referenced scoped declaration, with no dedicated registration AND no
+      default agent. Reported at the declaration's ``span.start_line``.
+      Unreferenced scoped declarations remain visible for warnings but their
+      runtime handles are deferred by lowering.
 
     Order is deterministic: registered-but-undeclared first (sorted by name),
-    then declared-but-unbacked (sorted by name).  ``declared_agents`` maps a
-    declared name to its ``AgentDecl`` (only ``.span.start_line`` is read).
+    then declared-but-unbacked (sorted by display name). ``declared_agents``
+    maps structured declaration paths to their ``AgentDecl`` nodes (only the
+    declaration span is read).
     """
     errors: list[Diagnostic] = []
 
-    declared_names = set(declared_agents)
-    for name in sorted(registry.agent_names - declared_names):
+    def agent_sort_key(agent_id: AgentId) -> tuple[tuple[str, ...], str]:
+        return (agent_id.scope_path, agent_id.declared_name)
+
+    declared_ids = {AgentId(name, scope_path) for scope_path, name in declared_agents}
+    unrecognized_ids = (agent_id for agent_id in registry.agent_ids if agent_id not in declared_ids)
+    for agent_id in sorted(unrecognized_ids, key=agent_sort_key):
+        name = agent_id.display_name
         errors.append(
             Diagnostic(
                 message=(
@@ -1387,7 +1425,18 @@ def _reconcile_agents(
         )
 
     if not registry.has_default_agent:
-        for name in sorted(declared_names - registry.agent_names):
+        unbacked = sorted(
+            (
+                agent_id
+                for agent_id in declared_ids
+                if (not agent_id.scope_path or agent_id in referenced_agents)
+                and not registry.backs(agent_id)
+            ),
+            key=agent_sort_key,
+        )
+        for agent_id in unbacked:
+            name = agent_id.display_name
+            declaration = declared_agents[(agent_id.scope_path, agent_id.declared_name)]
             errors.append(
                 Diagnostic(
                     message=(
@@ -1395,10 +1444,10 @@ def _reconcile_agents(
                         "register it with register_agent or configure a "
                         "default agent."
                     ),
-                    line=declared_agents[name].span.start_line,
-                    column=declared_agents[name].span.start_col,
-                    end_line=declared_agents[name].span.end_line,
-                    end_column=declared_agents[name].span.end_col,
+                    line=declaration.span.start_line,
+                    column=declaration.span.start_col,
+                    end_line=declaration.span.end_line,
+                    end_column=declaration.span.end_col,
                 )
             )
 
@@ -1407,7 +1456,7 @@ def _reconcile_agents(
 
 def assemble_host_environment(
     *,
-    agents: dict[str, AgentFn],
+    agents: dict[AgentId, AgentFn],
     default_agent: AgentFn | None,
     extra_codecs: dict[str, "OutputCodec"],
     extern_registry: "ExternRegistry | None" = None,

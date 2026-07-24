@@ -31,6 +31,7 @@ from agm.agl.syntax.nodes import (
     ParamDecl,
     ParamKind,
     Program,
+    ScopeRegion,
     VarDecl,
     VarRef,
 )
@@ -166,6 +167,7 @@ class FunctionSignatureRecord:
     return_source: FunctionReturnSource
     module_id: ModuleId
     declaration_span: SourceSpan
+    scope_path: tuple[str, ...] = ()
     candidate_evidence: tuple[SourceSpan, ...] = ()
 
 
@@ -193,13 +195,24 @@ def _declaration_key(node: FuncDef) -> tuple[int, int]:
 _CandidateFunction = tuple[CandidateModule, FuncDef]
 
 
+def _static_items(items: tuple[object, ...]) -> tuple[object, ...]:
+    """Flatten named scope regions while retaining their declaration paths."""
+    result: list[object] = []
+    for item in items:
+        if isinstance(item, ScopeRegion):
+            result.extend(_static_items(item.items))
+        else:
+            result.append(item)
+    return tuple(result)
+
+
 def _candidate_functions(component: ModuleCandidateComponent) -> dict[int, _CandidateFunction]:
     """Return this import SCC's unannotated ordinary functions by declaration id."""
     functions: dict[int, _CandidateFunction] = {}
     for module in component.modules:
         program = module.resolved.program
         assert isinstance(program, Program)
-        for item in program.body.items:
+        for item in _static_items(program.body.items):
             if (
                 isinstance(item, FuncDef)
                 and item.return_type is None
@@ -279,9 +292,10 @@ def _register_signature(
     signature: FunctionSignature,
     function_type: FunctionType,
 ) -> None:
-    """Install a declaration-id-keyed signature without changing visibility."""
+    """Install a declaration-id- and path-keyed signature without changing visibility."""
+    scope_path = tuple(segment.name for segment in node.scope_path)
     if env is module.env:
-        env.register_function_signature(node.name, signature)
+        env.register_function_signature(node.name, signature, scope_path=scope_path)
     env.register_function_signature_by_node_id(node.node_id, signature)
     env.set_binding_type(node.node_id, function_type)
 
@@ -324,7 +338,7 @@ def _seed_candidate_visible_bindings(
         # dependents — are typed by the authoritative pass once every signature
         # is concrete.
         tainted = set(session.provisional_declaration_ids)
-        for item in program.body.items:
+        for item in _static_items(program.body.items):
             if isinstance(item, FuncDef):
                 session.visible_binding_snapshots[(module.module_id, item.node_id)] = (
                     module.env.snapshot_binding_types()
@@ -360,7 +374,8 @@ def _infer_function_component(
         )
         checker._validate_funcdef_header(node)
         result = engine.fresh(f"{node.name} result")
-        signature, function_type = resolve_function_header(module.env, node, result_type=result)
+        with module.env.type_scope(tuple(segment.name for segment in node.scope_path)):
+            signature, function_type = resolve_function_header(module.env, node, result_type=result)
         for env in discovery_envs:
             _register_signature(env, module, node, signature, function_type)
         provisional.append((module, node, result, signature))
@@ -380,7 +395,8 @@ def _infer_function_component(
                 capabilities=module.capabilities,
                 module_id=module.module_id,
             )
-            candidate_type = checker.check_candidate_funcdef_body(node, signature, session)
+            with module.env.type_scope(tuple(segment.name for segment in node.scope_path)):
+                candidate_type = checker.check_candidate_funcdef_body(node, signature, session)
             try:
                 engine.unify(
                     result,
@@ -452,6 +468,7 @@ def _infer_function_component(
                 return_source=FunctionReturnSource.CANDIDATE,
                 module_id=module.module_id,
                 declaration_span=node.span,
+                scope_path=tuple(segment.name for segment in node.scope_path),
                 candidate_evidence=(node.body.span,) if node.body is not None else (),
             )
         )

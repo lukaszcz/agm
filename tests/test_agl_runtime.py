@@ -22,7 +22,7 @@ import pytest
 
 from agm.agl import AglError, PipelineDriver, SourceSpan
 from agm.agl.diagnostics import Diagnostic, format_diagnostic, format_diagnostic_location
-from agm.agl.ir.ids import NominalId
+from agm.agl.ir.ids import AgentId, NominalId
 from agm.agl.modules.ids import ENTRY_ID, PRELUDE_ID
 from agm.agl.pipeline import RunResult
 from agm.agl.runtime import AgentRequest
@@ -979,7 +979,7 @@ class TestAgentRegistryDispatch:
         def named(req: AgentRequest) -> str:
             return f"named:{req.prompt}"
 
-        registry = AgentRegistry(named={"reviewer": named}, default_agent=None)
+        registry = AgentRegistry(named={AgentId("reviewer"): named}, default_agent=None)
         resp = registry.dispatch("reviewer", AgentRequest(agent="reviewer", prompt="hi"))
         assert resp.content == "named:hi"
 
@@ -1006,6 +1006,20 @@ class TestAgentRegistryDispatch:
         registry = AgentRegistry(named={}, default_agent=None)
         with pytest.raises(KeyError, match="No agent registered"):
             registry.dispatch("ghost", AgentRequest(agent="ghost", prompt="q"))
+
+    def test_root_registration_does_not_back_a_scoped_agent(self) -> None:
+        from agm.agl.ir.ids import AgentId
+        from agm.agl.runtime import AgentRequest
+        from agm.agl.runtime.agents import AgentRegistry
+
+        registry = AgentRegistry(
+            named={AgentId("bot"): lambda _request: "root"}, default_agent=None
+        )
+        scoped = AgentId("bot", ("Tools",))
+
+        assert not registry.backs(scoped)
+        with pytest.raises(KeyError, match="No agent registered"):
+            registry.dispatch(scoped, AgentRequest(agent="Tools::bot", prompt="q"))
 
 
 class TestParamBindingInvariant:
@@ -1843,7 +1857,7 @@ class TestAgentResponseDirectReturn:
         def agent_fn(req: AgentRequest) -> AgentResponse:
             return AgentResponse(content="direct", metadata={"k": "v"})
 
-        registry = AgentRegistry(named={"myagent": agent_fn}, default_agent=None)
+        registry = AgentRegistry(named={AgentId("myagent"): agent_fn}, default_agent=None)
         result = registry.dispatch("myagent", AgentRequest(agent="myagent", prompt="q"))
         assert result.content == "direct"
         assert result.metadata == {"k": "v"}
@@ -2580,6 +2594,19 @@ class TestDeclaredAgentsApi:
         assert impl.line == 1
         assert impl.col == 1
         assert reviewer.line == 2
+
+    def test_agent_decl_info_preserves_legacy_positional_fields(self) -> None:
+        from agm.agl import AgentDeclInfo
+
+        info = AgentDeclInfo("reviewer", None, 3, 5)
+
+        assert (info.name, info.runner, info.line, info.col, info.scope_path) == (
+            "reviewer",
+            None,
+            3,
+            5,
+            (),
+        )
 
     def test_no_declarations_returns_empty(self) -> None:
         rt = PipelineDriver()
@@ -3751,3 +3778,28 @@ class TestRunPreparedDefensivePaths:
         assert isinstance(match_result.compiled, MatchCompiledProgram)
         result = rt.run_prepared(prepared, param_values={"n": 7}, compiled=match_result.compiled)
         assert result.ok
+
+
+class TestScopedAgentIdentity:
+    def test_same_named_scoped_agents_keep_distinct_backings(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Scoped agent paths distinguish registrations, reconciliation, and dispatch."""
+        source = """\
+scope A
+agent bot
+end A
+scope B
+agent bot
+end B
+print(ask("first", agent = A::bot))
+print(ask("second", agent = B::bot))
+"""
+        runtime = PipelineDriver()
+        runtime.register_scoped_agent(("A",), "bot", lambda _request: "from A")
+        runtime.register_scoped_agent(("B",), "bot", lambda _request: "from B")
+
+        result = runtime.run(source)
+
+        assert result.ok
+        assert capsys.readouterr().out == "from A\nfrom B\n"

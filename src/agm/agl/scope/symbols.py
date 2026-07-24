@@ -29,6 +29,7 @@ from agm.agl.syntax.nodes import AgentDecl, FuncDef, Program
 from agm.agl.syntax.spans import SourceSpan
 
 ScopePath = tuple[str, ...]
+AgentKey = tuple[ScopePath, str]
 DeclarationKey = tuple[ModuleId, ScopePath, str]
 
 # ---------------------------------------------------------------------------
@@ -363,9 +364,8 @@ class ModuleResolution:
         The root ``ScopeNode`` (tree root).  Nested scopes are linked via
         ``ScopeNode.parent``.
     ``declared_agents``
-        Maps each agent name declared in THIS program (via an ``agent``
-        declaration) to its :class:`AgentDecl` node.  Always populated by the
-        resolver.
+        Maps each declared agent's ``(scope_path, name)`` identity to its
+        :class:`AgentDecl` node. Always populated by the resolver.
     ``declared_functions``
         Maps each top-level ``def`` name to its :class:`FuncDef` node.
         Populated in the pre-pass; useful for downstream typecheck and eval.
@@ -413,7 +413,7 @@ class ModuleResolution:
     root_scope: ScopeNode
     declarations: dict[DeclarationKey, BindingRef] = field(default_factory=dict)
     scope_nodes: dict[ScopePath, ScopeNode] = field(default_factory=dict)
-    declared_agents: dict[str, AgentDecl] = field(default_factory=dict)
+    declared_agents: dict[AgentKey, AgentDecl] = field(default_factory=dict)
     declared_functions: dict[str, FuncDef] = field(default_factory=dict)
     program_name: str | None = None
     warnings: tuple[Diagnostic, ...] = ()

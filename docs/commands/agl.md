@@ -118,17 +118,19 @@ like any other static error.
 
 ### Agents and runner precedence
 
-Named agents must be **declared in the program source** with `agent NAME`, optionally
-carrying a runner hint as `agent NAME = "runner"`. Calling an undeclared name is a
-static binding error (exit 1). The contextual `ask` (default agent) and `exec` (shell)
-are built in and need no declaration.
+Named agents must be **declared in the program source** with `agent NAME`,
+optionally carrying a runner hint as `agent NAME = "runner"`. Declarations are
+valid at the entry-module root or in named scope regions; scoped references use
+their full path (for example `Tools::reviewer`). Calling an undeclared name is
+a static binding error (exit 1). The contextual `ask` (default agent) and
+`exec` (shell) are built in and need no declaration.
 
 For each declared agent, `agm exec` resolves the command that runs it by the following
 precedence (highest to lowest):
 
 | Rung | Source |
 |------|--------|
-| 1 | `[exec.agents.<name>]` (config, per-agent) — backs a declared name, overriding any source hint |
+| 1 | `[exec.agents.<name>]` (config, root-agent only) — overrides that root declaration's source hint |
 | 2 | the source `agent NAME = "…"` runner string |
 | 3 | a source `std/config::runner := "…"` write (default runner for all agents) |
 | 4 | `--runner COMMAND` (CLI flag) |
@@ -140,11 +142,14 @@ A `std/config::runner` write applies **positionally**: it rebuilds the default
 agent used by subsequent unnamed `ask` calls and by later-dispatched declared
 agents without their own command, from the write point onward.
 
-A `[exec.agents.<name>]` entry for a name the program never declares is a host
-configuration error. Because the default runner is always the floor (rung 7), every
-declared agent resolves under `agm exec` even with no config and no source hint. Runner
-strings (config or source hint) support the `%%` / `%{PROMPT_FILE}` placeholders for
-the rendered prompt-file path.
+A `[exec.agents.<name>]` entry for a root name the program never declares is
+a host configuration error. Scoped agents use their own source hint or the
+default runner; their identity is their scope path and name, not a flattened
+configuration key. Because the default runner is always the floor (rung 7),
+every root or referenced scoped agent resolves under `agm exec` even with no
+config and no source hint. Unreferenced scoped declarations remain static and
+do not start a runner. Runner strings (config or source hint) support the `%%` /
+`%{PROMPT_FILE}` placeholders for the rendered prompt-file path.
 
 ### Configuration
 
@@ -161,9 +166,9 @@ log = false                 # trace logging off by default; set true to enable
 # log-file = "trace.jsonl" # explicit trace path (omit for auto timestamped path)
 
 [exec.agents]
-reviewer = "claude -p"      # per-agent runner commands; the name must be
-                            # declared in the program source (`agent reviewer`),
-                            # and this entry overrides any source runner hint
+reviewer = "claude -p"      # root-agent runner command; requires
+                            # `agent reviewer` at the program root and
+                            # overrides that declaration's source hint
 ```
 
 `[exec.<command>]` sub-tables provide per-command overrides of the base `[exec]`

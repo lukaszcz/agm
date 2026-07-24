@@ -3,7 +3,7 @@
 [← Index](index.md)
 
 AgL supports **user-defined functions**: named `def` declarations at the
-program root and anonymous `fn` expressions. Functions are first-class
+module root or in named scope regions, and anonymous `fn` expressions. Functions are first-class
 values; they may be stored in bindings, passed as arguments, and returned
 from other functions. The type of a function value is written
 `(A, B) -> C`.
@@ -186,8 +186,9 @@ def with_named_default(x: int, *, tag: text = "ok") -> text =
 ### Scope and forward references
 
 `def` declarations are collected before any expressions are evaluated, so
-every top-level `def` is in scope for every other (and for itself). Mutual
-recursion among top-level `def`s is therefore unrestricted:
+every root `def` and every member of one named scope is in scope for its
+siblings (and for itself). Mutual recursion among root or same-scope `def`s
+is therefore unrestricted:
 
 ```agl
 def is_even(n: int) -> bool =
@@ -197,9 +198,9 @@ def is_odd(n: int) -> bool =
   if n == 0 => false else => is_even(n - 1)
 ```
 
-`def` is **not** a valid declaration inside a block (`do` body, `if`
-branch, etc.); it is root-only. A static error is raised if a `def` is
-nested.
+`def` is valid at the program root and in named scope regions, but not inside
+a block (`do` body, `if` branch, etc.). A static error is raised if a `def` is
+nested in a block.
 
 ## `fn` — anonymous functions (lambdas)
 

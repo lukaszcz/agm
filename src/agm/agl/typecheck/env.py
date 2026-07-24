@@ -98,13 +98,13 @@ class ParamSpec:
 
 
 # ---------------------------------------------------------------------------
-# FunctionSignature — full declared signature of a top-level def
+# FunctionSignature — full declared signature of a static def
 # ---------------------------------------------------------------------------
 
 
 @dataclass(frozen=True, slots=True)
 class FunctionSignature:
-    """Full declared signature of a top-level ``def``.
+    """Full declared signature of a root or named-scope ``def``.
 
     Carries named/default/kind information needed for declared-name call sites.
     The value type (FunctionType) erases names/defaults/kinds.
@@ -562,8 +562,11 @@ class TypeEnvironment:
         self._alias_targets: dict[str, object] = {}  # stores raw TypeExpr until resolved
         # Binding node_id → Type (populated as declarations are checked).
         self._binding_types: PersistentDict[int, Type] = PersistentDict()
-        # Function signatures — name → FunctionSignature (for declared-name calls).
+        # Function signatures indexed by their owner path and member name. The
+        # root compatibility map remains for standalone callers that only know
+        # an unqualified spelling; resolved calls use declaration ids.
         self._function_signatures: dict[str, FunctionSignature] = {}
+        self._function_signatures_by_path: dict[tuple[ScopePath, str], FunctionSignature] = {}
         # Generic type definitions — name → GenericTypeDef.
         self._generic_types: dict[str, GenericTypeDef] = {}
         # Constructor signatures — ((module, scope path, owner), variant) → signature.
@@ -1025,11 +1028,21 @@ class TypeEnvironment:
 
     # --- Function signature table ---
 
-    def register_function_signature(self, name: str, sig: FunctionSignature) -> None:
+    def register_function_signature(
+        self, name: str, sig: FunctionSignature, *, scope_path: ScopePath = ()
+    ) -> None:
+        """Register a signature under its declaration path and member name."""
         self._assert_mutable()
-        self._function_signatures[name] = sig
+        self._function_signatures_by_path[(scope_path, name)] = sig
+        if not scope_path:
+            self._function_signatures[name] = sig
 
-    def get_function_signature(self, name: str) -> FunctionSignature | None:
+    def get_function_signature(
+        self, name: str, *, scope_path: ScopePath = ()
+    ) -> FunctionSignature | None:
+        """Return a signature selected by its declaration path and member name."""
+        if scope_path:
+            return self._function_signatures_by_path.get((scope_path, name))
         return self._function_signatures.get(name)
 
     def all_function_signatures(self) -> dict[str, FunctionSignature]:
@@ -2210,6 +2223,7 @@ class TypeEnvironment:
         self._alias_targets.update(other._alias_targets)
         self._binding_types = other._binding_types.fork()
         self._function_signatures.update(other._function_signatures)
+        self._function_signatures_by_path.update(other._function_signatures_by_path)
         self._generic_types.update(other._generic_types)
         self._constructor_sigs.update(other._constructor_sigs)
         self._constructor_field_kinds.update(other._constructor_field_kinds)

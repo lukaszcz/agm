@@ -42,9 +42,10 @@ This design keeps conversion at the dispatch boundary:
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from pathlib import Path
 
+from agm.agl.ir.ids import AgentId
 from agm.agl.runtime.request import AgentRequest, AgentResponse
 from agm.core.env import clone_env
 
@@ -102,7 +103,7 @@ class AgentRegistry:
     Parameters
     ----------
     named:
-        Pre-validated mapping from agent name → callable.
+        Pre-validated mapping from structured agent identity to callable.
     default_agent:
         The callable for the built-in ``ask`` keyword (or ``None`` if
         no default agent is configured).
@@ -111,10 +112,10 @@ class AgentRegistry:
     def __init__(
         self,
         *,
-        named: dict[str, AgentFn],
+        named: Mapping[AgentId, AgentFn],
         default_agent: AgentFn | None,
     ) -> None:
-        self._named = named
+        self._named = dict(named)
         self._default = default_agent
 
     def set_default_agent(self, fn: AgentFn | None) -> None:
@@ -132,14 +133,25 @@ class AgentRegistry:
 
     @property
     def agent_names(self) -> frozenset[str]:
-        """Names of explicitly registered named agents."""
+        """Root names of explicitly registered agents for host compatibility."""
+        return frozenset(
+            agent_id.declared_name for agent_id in self._named if not agent_id.scope_path
+        )
+
+    @property
+    def agent_ids(self) -> frozenset[AgentId]:
+        """Structured identities of all explicitly registered agents."""
         return frozenset(self._named)
 
-    def dispatch(self, name: str, request: AgentRequest) -> AgentResponse:
+    def backs(self, agent_id: AgentId) -> bool:
+        """Whether an exact structured registration backs an agent."""
+        return agent_id in self._named
+
+    def dispatch(self, agent_id: AgentId | str, request: AgentRequest) -> AgentResponse:
         """Dispatch a call to the appropriate agent callable.
 
         Resolution order:
-        1. Named agents (exact match).
+        1. Named agents (exact structured identity).
         2. Default agent: backs any *declared* name without a dedicated
            registration (scope guarantees only declared names reach here).
 
@@ -152,19 +164,20 @@ class AgentRegistry:
         ``AglRaise`` propagates directly to the interpreter's ``try/catch`` or
         the top-level ``PipelineDriver.run`` dispatcher.
         """
-        fn: AgentFn | None = self._named.get(name)
+        identity = agent_id if isinstance(agent_id, AgentId) else AgentId(agent_id)
+        fn: AgentFn | None = self._named.get(identity)
         if fn is None:
             # ``ask`` and any declared named agent without a dedicated
             # registration both fall back to the default agent when configured.
             if self._default is not None:
                 fn = self._default
             else:
-                raise KeyError(f"No agent registered for name {name!r}")
+                raise KeyError(f"No agent registered for {identity.display_name!r}")
         try:
             raw = fn(request)
         except AgentCallHostError as host_err:
             # Convert transport failure to a catchable AgL AgentCallError.
-            _raise_agent_call_error(name, host_err)
+            _raise_agent_call_error(identity.display_name, host_err)
         if isinstance(raw, str):
             return AgentResponse(content=raw)
         return raw
@@ -216,7 +229,7 @@ def _raise_agent_call_error(agent_name: str, err: AgentCallHostError) -> None:
 def runner_backed_agent_factory(
     *,
     default_runner_cmd: str,
-    per_agent_cmds: dict[str, str],
+    per_agent_cmds: Mapping[AgentId, str] | Mapping[str, str],
     idle_timeout: float | None,
 ) -> AgentFn:
     """Return an ``AgentFn`` that dispatches calls to an external runner process.
@@ -227,12 +240,17 @@ def runner_backed_agent_factory(
         The shell command used for agents not listed in *per_agent_cmds*.
         Split via ``shlex`` into ``argv``.
     per_agent_cmds:
-        Per-agent command overrides (``[exec.agents]`` map from config).
-        Keys are agent names; values are shell command strings.
+        Per-agent command overrides. Root-name compatibility keys are
+        normalized to root identities; scoped identities stay distinct.
     idle_timeout:
         Idle timeout (seconds) passed to ``run_prepared_prompt_result``.
         ``None`` means no timeout.
     """
+
+    commands = {
+        key if isinstance(key, AgentId) else AgentId(key): command
+        for key, command in per_agent_cmds.items()
+    }
 
     def agent_fn(request: AgentRequest) -> AgentResponse:
         from agm.agent.runner import (
@@ -242,7 +260,8 @@ def runner_backed_agent_factory(
         )
 
         # 1. Resolve the runner command for this agent.
-        runner_cmd = per_agent_cmds.get(request.agent, default_runner_cmd)
+        agent_id = request.agent_id if request.agent_id is not None else AgentId(request.agent)
+        runner_cmd = commands.get(agent_id, default_runner_cmd)
 
         # 2. Compose the message text: rendered prompt + format_instructions
         #    + corrective feedback on retry.

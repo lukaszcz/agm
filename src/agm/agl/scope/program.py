@@ -41,6 +41,7 @@ from agm.agl.scope.imports import (
 )
 from agm.agl.scope.resolver import _Resolver, validate_scope_syntax
 from agm.agl.scope.symbols import (
+    AgentKey,
     AglScopeError,
     BinderKind,
     ConstructorRef,
@@ -115,7 +116,8 @@ class ResolvedProgram:
         Whole-program pre-pass table mapping ``(ModuleId, name)`` to the
         type declaration node (``RecordDef | EnumDef | TypeAlias``).
     ``entry_agents``
-        Agent declarations from the entry module (name → ``AgentDecl``).
+        Agent declarations from the entry module
+        (``(scope_path, name)`` → ``AgentDecl``).
     ``import_sccs``
         Loader-computed import strongly-connected components, retained in their
         deterministic reverse-topological order for downstream program passes.
@@ -127,7 +129,7 @@ class ResolvedProgram:
     entry_id: ModuleId
     all_public_funcs: dict[tuple[ModuleId, str], FuncDef]
     all_public_types: dict[tuple[ModuleId, str], RecordDef | EnumDef | ExceptionDef | TypeAlias]
-    entry_agents: dict[str, AgentDecl]
+    entry_agents: dict[AgentKey, AgentDecl]
     import_sccs: tuple[tuple[ModuleId, ...], ...]
     warnings: tuple[Diagnostic, ...]
     private_info: Mapping[tuple[ModuleId, str], bool]
@@ -480,7 +482,7 @@ def resolve_program(
     # ------------------------------------------------------------------
     resolved_modules: dict[ModuleId, ResolvedModule] = {}
     all_warnings: list[Diagnostic] = []
-    entry_agents: dict[str, AgentDecl] = {}
+    entry_agents: dict[AgentKey, AgentDecl] = {}
 
     for mid, loaded in graph.modules.items():
         is_entry = mid.is_entry

@@ -1,0 +1,4 @@
+scope Tools
+builtin def print[T](value: T) -> unit
+infixl %%
+end Tools

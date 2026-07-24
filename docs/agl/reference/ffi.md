@@ -23,7 +23,7 @@ def to_slug(title):
 ## Declaration syntax
 
 ```ebnf
-extern_func_def ::= "extern" NEWLINE? "def" name type_params? "(" param_list? ")" "->" type_expr
+extern_func_def ::= "extern" NEWLINE? "def" decl_head type_params? "(" param_list? ")" "->" type_expr
 ```
 
 An `extern def` has the same signature surface as an ordinary `def` —
@@ -64,8 +64,10 @@ load-time diagnostic naming the module and the extern, never a mid-run
 surprise. In an interactive session the companion imports once per session,
 regardless of how many entries import or call it.
 
-The companion must define a **plain function with exactly the extern's
-declared name**; there is no separate mapping clause. Arguments are always
+The companion must define a **plain function with the extern's final declared
+member name**; there is no separate mapping clause. Thus `extern def
+Tools::slug(...)` resolves `slug` in the companion. Two scoped externs in one
+module cannot use the same final member name. Arguments are always
 passed **positionally, in declaration order** — named arguments, zones, and
 defaults are all AgL-side call mechanics that resolve to a plain positional
 argument list before the call crosses the boundary, so the companion's own

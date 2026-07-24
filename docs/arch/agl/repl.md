@@ -16,7 +16,8 @@ The REPL uses the program pipeline ([modules.md](agl/modules.md)) by default so 
 
 ## Agent Declaration and Reconciliation
 
-Agents must be declared in source; the host backs declared names but never owns the name set. The pipeline prepares a program once (lex, parse, scope) and reuses that prepared object for both parameter discovery and execution. Before execution it reconciles declared agents against the host's registrations: a registration with no matching declaration, or a declared agent with no backing, is an error; a declared-but-uncalled agent is a warning. `agm exec` registers each declared name with a runner-backed factory, choosing the runner command by precedence across config, a source runner hint, CLI flags, and the built-in default floor (see [agents.md](agents.md)).
+Agents must be declared in source; the host backs structured declaration paths
+but never owns the agent set. The pipeline prepares a program once (lex, parse, scope) and reuses that prepared object for both parameter discovery and execution. Before execution it reconciles declared agents against the host's registrations: a registration with no matching declaration, or a root or referenced scoped declaration with no backing, is an error; every declared-but-uncalled agent is a warning. Unreferenced scoped handles remain deferred in whole-program lowering, while REPL promotion retains them for later entries. `agm exec` registers each declared name with a runner-backed factory, choosing the runner command by precedence across config, a source runner hint, CLI flags, and the built-in default floor (see [agents.md](agents.md)).
 
 ## Engine Settings
 

@@ -1471,8 +1471,8 @@ class IrInterpreter:
                     ) from exc
                 return JsonValue(obj)
 
-            case IrAgentHandle(agent_name=agent_name):
-                return AgentValue(name=agent_name)
+            case IrAgentHandle(agent_id=agent_id):
+                return AgentValue(name=agent_id.display_name, agent_id=agent_id)
 
             case IrAsk(
                 agent=agent_expr,

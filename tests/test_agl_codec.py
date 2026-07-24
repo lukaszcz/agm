@@ -248,7 +248,12 @@ def _run_with_json_codec(
         text_codec.name: text_codec,
         json_codec.name: json_codec,
     }
-    registry = AgentRegistry(named=named or {}, default_agent=default_agent)
+    from agm.agl.ir.ids import AgentId
+
+    registry = AgentRegistry(
+        named={AgentId(name): agent for name, agent in (named or {}).items()},
+        default_agent=default_agent,
+    )
     executable = lower_module(
         _compiled_checked(checked),
         source_text="<direct-ast>",

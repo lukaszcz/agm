@@ -42,7 +42,7 @@ from agm.agl.ir.contracts import (
     ConversionFailureMode,
     DecodeSchema,
 )
-from agm.agl.ir.ids import ContractId, FunctionId, Location, NominalId, SourceId, SymbolId
+from agm.agl.ir.ids import AgentId, ContractId, FunctionId, Location, NominalId, SourceId, SymbolId
 from agm.agl.ir.nodes import (
     AutoTraceField,
     IrAgentHandle,
@@ -500,7 +500,7 @@ class _Lowerer:
         )
 
     def _prealloc_funcdef(self, funcdef: "FuncDef") -> None:
-        """Pre-allocate SymbolId and FunctionId for a root ``FuncDef``."""
+        """Pre-allocate SymbolId and FunctionId for a static ``FuncDef``."""
         fn_id = self._alloc_fn()
         sym = self._alloc_sym(
             funcdef.node_id,
@@ -2428,7 +2428,7 @@ class _Lowerer:
         so any ``let``/``var`` binders they declare are allocated with
         ``public=False`` and do not appear in ``_collect_results``.  Only the
         top-level module-initializer driver passes ``top_level=True``.  Scope
-        rejects root-only declarations in nested blocks, so every reachable item
+        rejects static declarations in ordinary blocks, so every reachable item
         must lower to a runtime expression.
         """
         real: list[IrExpr] = []
@@ -2860,7 +2860,7 @@ class _Lowerer:
         that have no IR representation.
 
         Module-initializer construction filters out the ``None`` values;
-        nested blocks reject root-only declarations before lowering.
+        ordinary blocks reject static declarations before lowering.
 
         Parameters
         ----------
@@ -2919,7 +2919,13 @@ class _Lowerer:
                 return IrBind(
                     location=loc,
                     symbol=sym,
-                    value=IrAgentHandle(location=loc, agent_name=agent_decl.name),
+                    value=IrAgentHandle(
+                        location=loc,
+                        agent_id=AgentId(
+                            agent_decl.name,
+                            tuple(segment.name for segment in agent_decl.scope_path),
+                        ),
+                    ),
                 )
 
             case (
@@ -3167,9 +3173,9 @@ class _Lowerer:
     def _scoped_agent_is_referenced(self, agent: AgentDecl) -> bool:
         """Whether a scoped agent needs a runtime handle in this module.
 
-        A region is a declaration namespace, not eager runtime setup.  Unlike
-        root agents, an unused scoped agent therefore does not require host
-        backing merely because its region was declared.
+        Whole-program lowering emits scoped handles lazily after agent
+        reconciliation has validated every declaration. REPL lowering opts
+        into eager handles so a promoted scope member remains usable later.
         """
         return any(
             ref.decl_node_id == agent.node_id for ref in self._checked.resolved.resolution.values()
@@ -3181,8 +3187,8 @@ class _Lowerer:
 
         body = self._checked.resolved.program.body
 
-        # Phase 1: pre-allocate root function symbols and IDs for mutual recursion,
-        # and root agent symbols so they are resolvable in function bodies.
+        # Phase 1: pre-allocate static function symbols and IDs for mutual
+        # recursion, plus every needed agent handle before bodies are lowered.
         for item in _static_items(body.items):
             if isinstance(item, FuncDef) and not item.is_builtin:
                 self._prealloc_funcdef(item)

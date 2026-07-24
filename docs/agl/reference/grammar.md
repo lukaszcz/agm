@@ -32,11 +32,11 @@ item       ::= import_decl                  (* header position only *)
              | export_decl                  (* root only *)
              | param_decl                   (* root only *)
              | program_decl                 (* root only *)
-             | agent_decl                   (* root only *)
+             | agent_decl                   (* entry module root; scope_item also permits it *)
              | infix_decl                   (* root only *)
              | private_modifier? func_def   (* root only *)
              | builtin_func_def             (* root only *)
-             | private_modifier? extern_func_def  (* root only; file-backed modules only *)
+             | private_modifier? extern_func_def  (* module root only; file-backed modules only *)
              | let_decl | var_decl | assign_stmt
              | expr
 
@@ -67,8 +67,8 @@ A scope region has a mandatory matching closer: `scope A::B` closes with
 scope region. They may nest, and a multi-segment header is equivalent to
 nested single-segment regions. Scope
 regions contain only nested regions, header `open` declarations, and static
-declarations; bindings, expressions, infix declarations, imports, exports,
-`program`, and `param` declarations are not permitted. `scope` is contextual at item start before a
+declarations; bindings, expressions, `builtin` declarations, infix declarations,
+imports, exports, `program`, and `param` declarations are not permitted. `scope` is contextual at item start before a
 scope path, and `end` is contextual only for a complete closer at an open
 region's layout level; both remain ordinary names in expression positions.
 

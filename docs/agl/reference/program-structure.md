@@ -22,12 +22,12 @@ item       ::= import_decl                        (* header position only *)
              | nominal_modifier? exception_def     (* root only *)
              | param_decl                          (* root only *)
              | program_decl                        (* root only *)
-             | agent_decl                          (* root only *)
+             | agent_decl                          (* entry module root only *)
              | infix_decl                          (* root only *)
              | builtin_var_def                     (* root only; std/config only *)
              | private_modifier? func_def          (* root only *)
              | builtin_func_def                    (* root only *)
-             | private_modifier? extern_func_def   (* root only; file-backed modules *)
+             | private_modifier? extern_func_def   (* module root only; file-backed modules *)
              | let_decl | var_decl | assign_stmt
              | expr
 
@@ -43,7 +43,9 @@ any other declaration or expression. See [Modules](modules.md) and
 
 ### Declarations
 
-The following are **root-only**: a static error if nested inside a block.
+The following are **root-only unless noted**: a static error if nested inside
+an ordinary block or, for forms without a scope-region exception, a named scope
+region.
 
 - **Type declarations** (`record`, `enum`, `exception`, `type`) — collected
   program-wide before checking begins; forward references are fine. `record`,
@@ -59,13 +61,16 @@ The following are **root-only**: a static error if nested inside a block.
 - **`program` declaration** — the program name used for params config lookup.
   Entry-module only.
 - **`agent` declarations** — the names of the agents the program may call.
-  Entry-module only (see [Modules](modules.md)).
+  Entry-module only (see [Modules](modules.md)); they may also be members of a
+  named scope region in an entry module.
 - **`builtin var` declarations** — body-less engine-backed mutable bindings.
   They are reserved to the canonical standard-library `std/config` module;
   entry programs and ordinary libraries cannot declare them.
-- **Function declarations** — ordinary `def`s, body-less host-recognized
-  `builtin def`s, and body-less companion-backed `extern def`s. Like type
-  declarations, root `def`s are collected before any expression is evaluated,
+- **`builtin def`s and `infix` declarations** — root-only host and parser
+  declarations.
+- **Function declarations** — ordinary `def`s and body-less companion-backed
+  `extern def`s. They may be declared at the root or in named scope regions.
+  Like type declarations, root and same-scope `def`s are collected before any expression is evaluated,
   enabling mutual recursion (see [Functions](functions.md)). An ordinary `def`
   may be **generic** (`def id[T](x: T) -> T = x`); see [Generics](generics.md).
   `private` may prefix ordinary and extern functions; `builtin` introduces only

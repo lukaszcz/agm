@@ -51,7 +51,7 @@ let r: Review = ask("Review ${artifact}", agent = reviewer)
 ## Agents as values
 
 Declared agents are **values** of the opaque type `agent`. An `agent`
-declaration introduces a name binding of type `agent` in the top-level scope:
+declaration introduces a name binding of type `agent` in its declaring scope:
 
 ```agl
 agent reviewer
@@ -76,17 +76,20 @@ cannot be passed to `ask` except via the `agent` parameter.
 ### Agent declarations
 
 ```ebnf
-agent_decl ::= "agent" name ("=" STRING)?
+agent_decl ::= "agent" decl_head ("=" STRING)?
 ```
 
-`agent` declarations are valid **only at the program root**. Each declared
-name enters the root scope as an immutable binding of type `agent`. The
-optional `= "…"` string attaches a *runner hint* consumed by the host and
-has no language effect. The runner string must be a static literal — no
+`agent` declarations are valid at the program root and in named scope
+regions of an entry module. Each declaration enters its declaring scope as
+an immutable binding of type `agent`; a qualified head declares its exact
+scope member, and a scoped agent is selected with its full
+scope path, such as `Tools::reviewer`. The optional `= "…"` string attaches a
+*runner hint* consumed by the host and has no language effect. The runner string must be a static literal — no
 `${…}` interpolation.
 
-Declaring the same agent name twice, or declaring `ask` or `exec` as an
-agent name, is a static error.
+Declaring the same agent name twice in one declaration layer, or declaring
+`ask` or `exec` as an agent name, is a static error. Agents at different scope
+paths remain distinct even when their final names match.
 
 ### The default agent
 

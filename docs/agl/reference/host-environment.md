@@ -30,8 +30,9 @@ prevent execution.
 ## Agents
 
 **The program owns the set of named agents.** Every named agent a program
-calls must be declared at the program root with an `agent` declaration
-([Bindings and scope](bindings-and-scope.md)); a call to an undeclared name
+calls must be declared with an `agent` declaration at the entry-module root
+or in a named scope region ([Bindings and scope](bindings-and-scope.md)); a
+call to an undeclared name
 is a static binding error. The host does *not* contribute names and there is
 **no implicit fallback** that makes arbitrary names resolve. Two names need
 no declaration:
@@ -40,7 +41,9 @@ no declaration:
 - **`exec`** denotes the shell executor ([Shell execution](shell-execution.md)).
 
 The host's role is to **supply a backing** — the actual agent that runs — for
-each declared name. A declaration may also carry an optional *runner hint*, an
+each root declaration and each referenced scoped agent path. An unreferenced
+scoped declaration remains a static member and may warn, but lowering defers
+its runtime handle. A declaration may also carry an optional *runner hint*, an
 opaque static string the host may use to launch the agent; the host ignores
 it if it has its own backing, and host configuration for a given name always
 takes precedence over the source hint. The hint is never interpreted by the
@@ -50,10 +53,11 @@ Because the program owns the names and the host owns the backings, two
 mismatches are **host configuration errors**, reported before anything
 executes:
 
-- a backing supplied for a name the program never declares (*registered but
-  undeclared*), and
-- a declared agent for which the host provides neither a dedicated backing
-  nor a default agent to fall back on (*declared but unbacked*).
+- a backing supplied for an agent path the program never declares
+  (*registered but undeclared*), and
+- a root declaration or referenced scoped agent for which the host provides
+  neither a dedicated backing nor a default agent to fall back on (*declared
+  but unbacked*).
 
 An `ask` call requires a default agent to be configured, or it is a static
 error. The names `ask` and `exec` can never be declared as agents.

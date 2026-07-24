@@ -666,7 +666,9 @@ class _Checker:
                     f"Builtin function '{node.name}' has an invalid signature.",
                     span=node.span,
                 )
-        self._env.register_function_signature(node.name, sig)
+        self._env.register_function_signature(
+            node.name, sig, scope_path=self._declaration_scope_path(node)
+        )
         self._env.register_function_signature_by_node_id(node.node_id, sig)
         self._env.set_binding_type(node.node_id, func_type)
 

@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
+from agm.agl.ir.ids import AgentId
 from agm.agl.semantics.values import (
     BoolValue,
     EnumValue,
@@ -1617,7 +1618,7 @@ def test_ir_ask_non_text_prompt_renders_to_string() -> None:
         captured_prompts.append(r.prompt)
         return AgentResponse(content="99")
 
-    registry = AgentRegistry(named={"ask": _agent_fn}, default_agent=None)
+    registry = AgentRegistry(named={AgentId("ask"): _agent_fn}, default_agent=None)
     interp = IrInterpreter(prog, registry=registry)
     bindings = interp.run()
     # The prompt "42" (rendered IntValue) was sent.
@@ -1919,7 +1920,7 @@ def test_ir_ask_no_errors_when_failed_covers_else_branch() -> None:
     def _agent_fn(r: AgentRequest) -> AgentResponse:
         return AgentResponse(content="invalid")
 
-    registry = AgentRegistry(named={"ask": _agent_fn}, default_agent=None)
+    registry = AgentRegistry(named={AgentId("ask"): _agent_fn}, default_agent=None)
     interp = IrInterpreter(prog, registry=registry)
 
     # Patch _parse_contract_output to return failure with EMPTY errors AND EMPTY error_msg.

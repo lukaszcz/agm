@@ -1156,7 +1156,7 @@ class TestAgentValueBindings:
     def test_agent_decl_creates_value_binding(self) -> None:
         """An agent declaration creates a value binding in the root scope."""
         r = parse_and_resolve("agent reviewer\n()")
-        assert "reviewer" in r.declared_agents
+        assert ((), "reviewer") in r.declared_agents
         assert "reviewer" in r.root_scope.bindings
         ref = r.root_scope.bindings["reviewer"]
         assert ref.kind == BinderKind.agent_binding
@@ -1191,12 +1191,19 @@ class TestAgentValueBindings:
 
     def test_declared_but_unused_warns(self) -> None:
         r = parse_and_resolve("agent unused\n()")
-        assert "unused" in r.declared_agents
+        assert ((), "unused") in r.declared_agents
         assert len(r.warnings) == 1
         warning = r.warnings[0]
         assert warning.severity == "warning"
         assert "unused" in warning.message
         assert warning.line == 1
+
+    def test_scoped_agent_is_retained_and_warned_when_unused(self) -> None:
+        r = parse_and_resolve("scope Tools\nagent unused\nend Tools\n()")
+
+        assert (("Tools",), "unused") in r.declared_agents
+        assert len(r.warnings) == 1
+        assert "unused" in r.warnings[0].message
 
     def test_agent_not_at_root_rejected(self) -> None:
         err = reject_scope("if true =>\n  agent late\n| else =>\n  ()\n")
@@ -2224,7 +2231,7 @@ class TestAmbientAgentBindingEdgeCases:
         )
         # The local declared_agents entry takes precedence; "bot" resolves as agent_binding.
         assert _ref(r, "bot").kind == BinderKind.agent_binding
-        assert "bot" in r.declared_agents
+        assert ((), "bot") in r.declared_agents
 
     def test_def_name_collides_with_ambient_agent_rejected(self) -> None:
         """A top-level def whose name matches an ambient agent is rejected.

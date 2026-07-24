@@ -41,7 +41,7 @@ if TYPE_CHECKING:
     from agm.agl.scope.symbols import ConstructorRef, ScopeNode
     from agm.agl.semantics.types import Type
     from agm.agl.semantics.values import EnumValue, Frame, Value
-    from agm.agl.syntax.nodes import ImportDecl, InfixAssoc, Program
+    from agm.agl.syntax.nodes import ImportDecl, InfixAssoc, OpenDecl, Program, ScopeRegion
     from agm.agl.syntax.spans import SourceSpan
     from agm.agl.syntax.types import TypeExpr
     from agm.agl.typecheck.env import CheckedModule, TypeEnvironment
@@ -213,8 +213,9 @@ class ReplSession:
         # one retained generation per entry, kept as written so a wildcard keeps
         # tracking the module set. Declarations for a module named in a later
         # generation replace earlier ones; the rest are prepended in program
-        # context for reuse.
+        # context for reuse. Scope opens use the same entry retention model.
         self._accumulated_imports: list[tuple["ImportDecl", ...]] = []
+        self._accumulated_opens: list[tuple["OpenDecl | ScopeRegion", ...]] = []
         # Resolved user infix fixity declared in prior promoted entries
         # (operator name → ``(priority, associativity)``). Passed to the parser
         # as ambient fixity so an ``infixl``/``infixr`` declaration made in one
@@ -1266,6 +1267,7 @@ class ReplSession:
         self._roots = None
         self._loaded_lib_modules = {}
         self._accumulated_imports = []
+        self._accumulated_opens = []
         self._accumulated_infix = {}
         # Discard the session's extern (Python FFI) registry like every other
         # session-scoped binding: a companion resolves and imports again on

@@ -34,7 +34,7 @@ if TYPE_CHECKING:
     from agm.agl.semantics.types import Type
     from agm.agl.semantics.values import EnumValue, Frame, Value
     from agm.agl.syntax.advisories import SpacedQualifier
-    from agm.agl.syntax.nodes import ImportDecl, Item, Program
+    from agm.agl.syntax.nodes import ImportDecl, Item, OpenDecl, Program, ScopeRegion
     from agm.agl.syntax.spans import SourceSpan
     from agm.agl.typecheck.env import CheckedModule, TypeEnvironment
     from agm.agl.typecheck.program import CheckedProgram
@@ -50,6 +50,7 @@ class EntryPipelineCtx(Protocol):
 
     _loaded_lib_modules: dict[ModuleId, LoadedModule]
     _accumulated_imports: list[tuple[ImportDecl, ...]]
+    _accumulated_opens: list[tuple[OpenDecl | ScopeRegion, ...]]
     _link_image: LinkImage
     _ir_base_frame: Frame
     _session_scope: ScopeNode
@@ -164,7 +165,7 @@ class EntryPipeline:
         roots = self._ctx._ensure_roots()
 
         try:
-            entry_program, next_start_id, entry_imports = self._prepare_entry_program(
+            entry_program, next_start_id, entry_imports, entry_opens = self._prepare_entry_program(
                 pipeline_program, next_start_id, roots
             )
             graph, new_next_id, new_modules = build_repl_graph(
@@ -264,6 +265,7 @@ class EntryPipeline:
             new_next_id=new_next_id,
             new_modules=new_modules,
             entry_imports=entry_imports,
+            entry_opens=entry_opens,
             param_values=param_values,
             entry_program_name=entry_program_name,
             entry_active_config=entry_active_config,
@@ -292,7 +294,7 @@ class EntryPipeline:
         from agm.agl.typecheck.program import check_program
 
         roots = self._ctx._ensure_roots()
-        entry_program, next_start_id, _entry_imports = self._prepare_entry_program(
+        entry_program, next_start_id, _entry_imports, _entry_opens = self._prepare_entry_program(
             program, next_start_id, roots
         )
         graph, _next_start_id, _new_modules = build_repl_graph(
@@ -344,8 +346,8 @@ class EntryPipeline:
         program: Program,
         next_start_id: int,
         roots: RootSet,
-    ) -> tuple[Program, int, tuple[ImportDecl, ...]]:
-        """Expand current wildcards, then inject imports retained by module identity.
+    ) -> tuple[Program, int, tuple[ImportDecl, ...], tuple[OpenDecl | ScopeRegion, ...]]:
+        """Expand current wildcards, then inject retained imports and scope opens.
 
         REPL replacement is finer grained than batch import merging: each
         wildcard expands to exact target modules before retained declarations
@@ -359,17 +361,21 @@ class EntryPipeline:
         """
         from agm.agl.syntax.nodes import ImportDecl
 
-        entry_raw = tuple(item for item in program.body.items if isinstance(item, ImportDecl))
-        expanded, next_start_id, entry_imports = self._expand_entry_wildcards(
+        entry_imports = tuple(item for item in program.body.items if isinstance(item, ImportDecl))
+        entry_opens = self._retained_open_items(program.body.items)
+        expanded, next_start_id, _expanded_imports = self._expand_entry_wildcards(
             program, next_start_id, roots
         )
-        preamble, next_start_id = self._retained_import_preamble(
+        import_preamble, next_start_id = self._retained_import_preamble(
             entry_imports, roots, next_start_id
         )
+        open_preamble = self._retained_open_preamble()
+        preamble: list[Item] = [*import_preamble, *open_preamble]
         return (
-            self._prepend_imports(expanded, preamble),
+            self._prepend_items(expanded, preamble),
             next_start_id,
-            entry_raw,
+            entry_imports,
+            entry_opens,
         )
 
     @staticmethod
@@ -410,8 +416,8 @@ class EntryPipeline:
         )
 
     @staticmethod
-    def _prepend_imports(program: Program, preamble: list[ImportDecl]) -> Program:
-        """Prepend *preamble* declarations to *program*'s body."""
+    def _prepend_items(program: Program, preamble: list[Item]) -> Program:
+        """Prepend retained header items to *program*'s body."""
         from agm.agl.syntax.nodes import Block, Program
 
         if not preamble:
@@ -440,6 +446,7 @@ class EntryPipeline:
         new_next_id: int,
         new_modules: dict[ModuleId, LoadedModule],
         entry_imports: tuple[ImportDecl, ...],
+        entry_opens: tuple[OpenDecl | ScopeRegion, ...],
         param_values: dict[str, Value],
         entry_program_name: str | None,
         entry_active_config: dict[str, object],
@@ -603,6 +610,7 @@ class EntryPipeline:
             mid for mid in checked_program.modules if not mid.is_entry
         )
         self._replace_accumulated_imports(entry_imports)
+        self._retain_open_declarations(entry_opens)
         marker = lowered.trailing_expression
         initializer_values = interp.module_initializer_values.get(lowered.program.entry_module)
         captured = (
@@ -681,6 +689,27 @@ class EntryPipeline:
                 next_start_id += 1
         return expanded, next_start_id
 
+    @staticmethod
+    def _retained_open_items(items: tuple[Item, ...]) -> tuple[OpenDecl | ScopeRegion, ...]:
+        """Extract scope opens, retaining their enclosing scope regions."""
+        from dataclasses import replace
+
+        from agm.agl.syntax.nodes import OpenDecl, ScopeRegion
+
+        retained: list[OpenDecl | ScopeRegion] = []
+        for item in items:
+            if isinstance(item, OpenDecl):
+                retained.append(item)
+            elif isinstance(item, ScopeRegion):
+                nested = EntryPipeline._retained_open_items(item.items)
+                if nested:
+                    retained.append(replace(item, items=nested))
+        return tuple(retained)
+
+    def _retained_open_preamble(self) -> list[OpenDecl | ScopeRegion]:
+        """Return every successful entry's scope opens in entry order."""
+        return [item for generation in self._ctx._accumulated_opens for item in generation]
+
     def _replace_accumulated_imports(self, entry_imports: tuple[ImportDecl, ...]) -> None:
         """Retain this entry's declarations as written, as the newest generation.
 
@@ -691,6 +720,11 @@ class EntryPipeline:
         """
         if entry_imports:
             self._ctx._accumulated_imports.append(entry_imports)
+
+    def _retain_open_declarations(self, entry_opens: tuple[OpenDecl | ScopeRegion, ...]) -> None:
+        """Retain successful scope opens for every later REPL entry."""
+        if entry_opens:
+            self._ctx._accumulated_opens.append(entry_opens)
 
     def _persist_interpreter_settings(self, interp: "IrInterpreter", trace: "TraceStore") -> None:
         """Persist completed setting writes and the live trace destination."""

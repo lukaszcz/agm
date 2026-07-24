@@ -13,7 +13,7 @@ from agm.agl.lower.lowerer import _LinkState, _Lowerer
 from agm.agl.matchcompile import MatchCompiledModule, MatchCompiledProgram
 from agm.agl.modules.ids import ENTRY_ID, ModuleId
 from agm.agl.self_validation import self_validation_enabled
-from agm.agl.syntax.nodes import Binder, Declaration
+from agm.agl.syntax.nodes import Binder, Declaration, ScopeRegion
 from agm.util.text import normalize_newlines
 
 __all__ = ["LinkImage", "LoweredReplEntry", "lower_repl_entry", "lower_repl_program"]
@@ -110,7 +110,7 @@ def lower_repl_entry(
     last = items[-1]
     trailing_expression = (
         len(program.modules[ENTRY_ID].initializers) - 1
-        if not isinstance(last, (Binder, Declaration))
+        if not isinstance(last, (Binder, Declaration, ScopeRegion))
         else None
     )
     if self_validation_enabled():
@@ -146,7 +146,7 @@ def lower_repl_program(
     last = entry.body.items[-1]
     marker = (
         len(program.modules[program.entry_module].initializers) - 1
-        if not isinstance(last, (Binder, Declaration))
+        if not isinstance(last, (Binder, Declaration, ScopeRegion))
         else None
     )
     return LoweredReplEntry(program=program, trailing_expression=marker)

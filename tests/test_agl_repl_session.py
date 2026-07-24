@@ -108,6 +108,77 @@ class TestPersistence:
 
         assert result.ok, result.diagnostics
 
+    def test_scope_region_must_close_in_the_same_entry(self) -> None:
+        s = ReplSession()
+
+        unclosed = s.eval_entry("scope Point\ndef distance() -> int = 1")
+        stray_closer = s.eval_entry("end Point")
+        ordinary_entry = s.eval_entry("let distance = 1")
+
+        assert not unclosed.ok
+        assert not stray_closer.ok
+        assert ordinary_entry.ok, ordinary_entry.diagnostics
+
+    def test_scoped_members_accumulate_by_path_across_block_and_shorthand_entries(self) -> None:
+        s = ReplSession()
+        assert s.eval_entry("def Shape::area() -> int = 1").ok
+        assert s.eval_entry("scope Shape\ndef perimeter() -> int = 2\nend Shape").ok
+
+        result = s.eval_entry("Shape::area() + Shape::perimeter()")
+
+        assert result.ok, result.diagnostics
+        assert result.value == IntValue(3)
+
+    def test_replacing_scoped_member_keeps_siblings_at_the_same_path(self) -> None:
+        s = ReplSession()
+        assert s.eval_entry(
+            "scope Shape\ndef area() -> int = 1\ndef perimeter() -> int = 2\nend Shape"
+        ).ok
+        assert s.eval_entry("def Shape::area() -> int = 3").ok
+
+        result = s.eval_entry("Shape::area() + Shape::perimeter()")
+
+        assert result.ok, result.diagnostics
+        assert result.value == IntValue(5)
+
+    def test_replacing_one_scoped_path_does_not_replace_a_same_named_sibling_path(self) -> None:
+        s = ReplSession()
+        assert s.eval_entry("def Left::measure() -> int = 1").ok
+        assert s.eval_entry("def Right::measure() -> int = 2").ok
+        assert s.eval_entry("scope Left\ndef measure() -> int = 3\nend Left").ok
+
+        result = s.eval_entry("Left::measure() + Right::measure()")
+
+        assert result.ok, result.diagnostics
+        assert result.value == IntValue(5)
+
+    def test_opened_scope_members_persist_into_later_entries(self) -> None:
+        s = ReplSession()
+        assert s.eval_entry("scope Tools\ndef twice(x: int) -> int = x * 2\nend Tools").ok
+        assert s.eval_entry("open Tools").ok
+
+        result = s.eval_entry("twice(3)")
+
+        assert result.ok, result.diagnostics
+        assert result.value == IntValue(6)
+
+    def test_opened_scope_members_persist_in_later_scope_extensions(self) -> None:
+        s = ReplSession()
+        assert s.eval_entry("def Source::value() -> int = 2").ok
+        assert s.eval_entry("scope Target\nopen Source\nend Target").ok
+        assert s.eval_entry("scope Target\ndef doubled() -> int = value() * 2\nend Target").ok
+
+        result = s.eval_entry("Target::doubled()")
+
+        assert result.ok, result.diagnostics
+        assert result.value == IntValue(4)
+
+    def test_type_of_scoped_record_displays_its_qualified_name(self) -> None:
+        s = ReplSession()
+        assert s.eval_entry("scope Geometry\nrecord Point(x: int)\nend Geometry").ok
+
+        assert s.type_of("Geometry::Point(x = 1)") == "record Geometry::Point\n  x: int"
+
     def test_top_level_return_rejected_and_session_continues(self) -> None:
         s = ReplSession()
         bad = s.eval_entry("return 1")
@@ -1147,6 +1218,18 @@ class TestReset:
         r = s.eval_entry("let a = 2")
         assert r.ok
         assert _int({name: value for name, _typ, value in s.bindings()}["a"]) == 2
+
+    def test_reset_clears_retained_scope_opens(self) -> None:
+        s = ReplSession()
+        assert s.eval_entry("scope Tools\ndef twice(x: int) -> int = x * 2\nend Tools").ok
+        assert s.eval_entry("open Tools").ok
+        assert s.eval_entry("twice(3)").ok
+
+        s.reset()
+
+        assert s.eval_entry("scope Tools\ndef twice(x: int) -> int = x * 2\nend Tools").ok
+        result = s.eval_entry("twice(3)")
+        assert not result.ok
 
 
 # ---------------------------------------------------------------------------

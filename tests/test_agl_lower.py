@@ -186,6 +186,19 @@ def test_lower_repl_trailing_binder_has_no_expression_marker() -> None:
     assert entry.trailing_expression is None
 
 
+def test_lower_repl_trailing_scope_region_has_no_expression_marker() -> None:
+    source = "scope Tools\ndef helper() -> int = 1\nend Tools"
+    program, _next_id = parse_program_seeded(source, start_id=0)
+    entry = lower_repl_entry(
+        _compiled_checked(check_module(resolve_module(program), _caps())),
+        image=LinkImage(),
+        source_text=source,
+        source_label="<repl:1>",
+    )
+
+    assert entry.trailing_expression is None
+
+
 def _lower(source: str) -> ExecutableProgram:
     """Parse → check → lower the source; return ExecutableProgram."""
     checked = _check(source)

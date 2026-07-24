@@ -1,0 +1,24 @@
+{
+  "scenarios": [
+    {
+      "name": "nonzero_exit_fields_match_call_form",
+      "shell": [
+        {"command": "raw-failure", "returncode": 7, "stdout": "raw-out", "stderr": "raw-err"},
+        {"command": "call-failure", "returncode": 7, "stdout": "call-out", "stderr": "call-err"}
+      ],
+      "expect": {
+        "stdout": "raw raw-failure 7 raw-out raw-err false\ncall call-failure 7 call-out call-err false\n"
+      }
+    },
+    {
+      "name": "different_exit_code_remains_catchable_in_both_forms",
+      "shell": [
+        {"command": "raw-failure", "returncode": 2, "stdout": "left", "stderr": "raw diagnostics"},
+        {"command": "call-failure", "returncode": 2, "stdout": "right", "stderr": "call diagnostics"}
+      ],
+      "expect": {
+        "stdout": "raw raw-failure 2 left raw diagnostics false\ncall call-failure 2 right call diagnostics false\n"
+      }
+    }
+  ]
+}

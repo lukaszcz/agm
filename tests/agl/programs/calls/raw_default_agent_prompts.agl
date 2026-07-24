@@ -1,0 +1,28 @@
+# Raw and call-form asks use the default agent; an explicit-agent call remains available.
+record Review
+  approved: bool
+  summary: text
+
+agent reviewer
+param document: text
+
+let summary = ask! Summarize %{document} in one line.
+print summary
+
+let explicit: Review = ask::[Review]("Explicit review for %{document}.", agent = reviewer)
+print explicit.summary
+
+try
+  let markdown: Review = ask!::[Review]
+    # Review %{document}
+    - correctness
+    - style
+  print markdown.approved
+catch AgentParseError as error =>
+  print "raw %{error.agent} %{error.attempts} %{error.target_type}"
+
+try
+  let call_form: Review = ask::[Review]("Call-form review for %{document}.")
+  print call_form.approved
+catch AgentParseError as error =>
+  print "call %{error.agent} %{error.attempts} %{error.target_type}"

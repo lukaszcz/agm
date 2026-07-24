@@ -1,0 +1,30 @@
+# Raw shell payloads preserve shell syntax while interpolating only %{...}.
+param file: text
+param label: text
+
+let inline: text = exec! printf '%s' $VAR "${var}" $(echo shell) $1 "My File Name With Spaces"; # raw tail text remains shell text
+print inline
+
+let interpolated: text = exec! printf '%s' $VAR "${var}" $(echo shell) $1 %{file}-%{1 + 2}
+print interpolated
+
+let curl_status: text = exec! curl -w '\%{http_code}' %{file}
+print curl_status
+
+let script = exec!
+  for item in one two; do
+    if [ "$item" = "one" ]; then
+      printf '%s:' "$item"
+    else
+      printf '%s;' "$item"
+    fi
+  done
+print script.stdout
+
+let metadata = exec!::[json] cat data.json
+let metadata_fields: dict[text, json] = metadata as dict[text, json]
+let metadata_name: text = metadata_fields["name"] as text
+print metadata_name
+
+let contextual: text = exec! printf '<%s>' "%{label}"
+print contextual

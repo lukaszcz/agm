@@ -29,8 +29,10 @@ from lark.exceptions import (
 )
 
 import agm.agl.syntax as syntax
+from agm.agl.lexer import tokenize
 from agm.agl.lexer.errors import LexError
 from agm.agl.lexer.lexer import AglLexer
+from agm.agl.lexer.tokens import RAW_TAIL_END, RAW_TAIL_START
 from agm.agl.parser.errors import AglSyntaxError, syntax_error_from_lark
 from agm.agl.parser.transform import AstBuilder
 from agm.agl.syntax.spans import SourceId
@@ -104,6 +106,31 @@ def has_unterminated_triple_quoted_string(text: str) -> bool:
         return str(exc) == "Unterminated triple-quoted string literal"
     except LarkError:
         return False
+    return False
+
+
+def has_open_raw_tail_block(text: str) -> bool:
+    """Return ``True`` when a raw-tail block payload runs to the end of *text*.
+
+    An unclosed raw-tail block is not a parse failure — the lexer happily ends
+    the payload at end of input — so :func:`is_incomplete_source` cannot see it.
+    A REPL still needs to keep prompting, which is what this answers.  Only the
+    *last* payload can reach the buffer end, and it is a block (rather than an
+    inline tail that is already complete) exactly when its header line has no
+    text after the raw-tail name.
+    """
+    try:
+        tokens = list(tokenize(text))
+    except LexError:
+        return False
+    payload_starts: list[int] = []
+    for token in tokens:
+        if token.type == RAW_TAIL_START:
+            payload_starts.append(token.start_pos if token.start_pos is not None else 0)
+        elif token.type == RAW_TAIL_END and token.end_pos == len(text) and payload_starts:
+            line_end = text.find("\n", payload_starts[-1])
+            header_tail = text[payload_starts[-1] : len(text) if line_end < 0 else line_end]
+            return header_tail.strip() == ""
     return False
 
 

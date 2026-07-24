@@ -33,7 +33,7 @@ from agm.agl.runtime.types import (
     ParamDeclInfo,
 )
 from agm.agl.self_validation import self_validation_enabled
-from agm.agl.syntax.raw_tail import RAW_TAIL_NAMES
+from agm.raw_tail_catalog import RAW_TAIL_NAMES
 
 if TYPE_CHECKING:
     from pathlib import Path

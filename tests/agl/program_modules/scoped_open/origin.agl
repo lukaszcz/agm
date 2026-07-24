@@ -1,0 +1,10 @@
+scope Shapes
+scope Nested
+record Point(x: int)
+record Box[T](value: T)
+end Nested
+
+def measure() -> int = 3
+end Shapes
+
+record Empty()

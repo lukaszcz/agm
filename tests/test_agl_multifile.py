@@ -902,6 +902,294 @@ class TestCrossModuleScopedPaths:
 # ---------------------------------------------------------------------------
 
 
+class TestOpenedScopes:
+    """Opening local and imported named scopes exposes only selected public members."""
+
+    def test_imported_scope_opens_public_members_and_type_variants(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        (tmp_path / "geo.agl").write_text(
+            "def Point::distance() -> int = 7\n"
+            "private def Point::secret() -> int = 99\n"
+            "enum Flag | Ready\n"
+            'def Flag::label() -> text = "ready"\n'
+        )
+
+        result = _run_program(
+            "import geo\n"
+            "open geo::Point\n"
+            "open geo::Flag\n"
+            "print distance()\n"
+            "print Ready\n"
+            "print label()\n",
+            roots_dirs=[tmp_path],
+        )
+
+        assert result.ok is True
+        assert capsys.readouterr().out == "7\nFlag::Ready\nready\n"
+
+    def test_nearer_opened_enum_variant_keeps_its_scoped_owner(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        result = _run_program(
+            "open A::Flag\n"
+            "scope B\n"
+            "open Flag\n"
+            "def value() -> B::Flag = Ready\n"
+            "enum Flag | Ready\n"
+            "end B\n"
+            "def root_value() -> A::Flag = Ready\n"
+            "scope A\n"
+            "enum Flag | Ready\n"
+            "end A\n"
+            "print B::value()\n"
+            "print root_value()\n",
+            roots_dirs=[tmp_path],
+        )
+
+        assert result.ok is True
+        assert capsys.readouterr().out == "B::Flag::Ready\nA::Flag::Ready\n"
+
+    def test_ambiguous_imported_scope_route_is_rejected(self, tmp_path: Path) -> None:
+        for directory in ("one", "two"):
+            module_dir = tmp_path / directory
+            module_dir.mkdir()
+            (module_dir / "geo.agl").write_text("def Point::distance() -> int = 1\n")
+
+        result = _run_program(
+            "import one/geo\nimport two/geo\nopen geo::Point\n()\n", roots_dirs=[tmp_path]
+        )
+
+        assert result.ok is False
+        assert "ambiguous" in result.diagnostics[0].message
+
+    def test_opened_variant_merges_with_the_same_selected_import(self, tmp_path: Path) -> None:
+        (tmp_path / "geo.agl").write_text("enum Flag | Ready\n")
+
+        result = _run_program(
+            "import geo\nimport geo using Flag::Ready as Ready\nopen geo::Flag\nReady\n",
+            roots_dirs=[tmp_path],
+        )
+
+        assert result.ok is True
+
+    @pytest.mark.parametrize(
+        "source",
+        (
+            "import geo\nopen geo::Point using secret\n()",
+            "import geo\nopen geo::Missing\n()",
+            "scope Point\ndef distance() -> int = 1\nend Point\nopen Point using missing\n()",
+            "scope Point\ndef secret() -> int = 1\nend Point\nopen Point hiding secret\nsecret()",
+        ),
+    )
+    def test_open_rejects_private_unknown_and_unknown_scope_members(
+        self, tmp_path: Path, source: str
+    ) -> None:
+        (tmp_path / "geo.agl").write_text(
+            "def Point::distance() -> int = 7\nprivate def Point::secret() -> int = 99\n"
+        )
+
+        assert _run_program(source, roots_dirs=[tmp_path]).ok is False
+
+    def test_scope_open_composes_with_open_import_without_transitive_reexport(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        (tmp_path / "geo.agl").write_text(
+            "def root() -> int = 1\ndef Point::distance() -> int = 7\n"
+        )
+        (tmp_path / "facade.agl").write_text(
+            "import geo\nopen geo::Point\ndef value() -> int = 2\n"
+        )
+
+        result = _run_program(
+            "open import geo\nopen geo::Point\nprint root()\nprint distance()\n",
+            roots_dirs=[tmp_path],
+        )
+        assert result.ok is True
+        assert capsys.readouterr().out == "1\n7\n"
+
+        assert _run_program("open import facade\ndistance()\n", roots_dirs=[tmp_path]).ok is False
+
+    def test_open_scope_and_open_import_clash_when_the_name_is_used(self, tmp_path: Path) -> None:
+        (tmp_path / "geo.agl").write_text(
+            "def distance() -> int = 1\ndef Point::distance() -> int = 7\n"
+        )
+
+        result = _run_program(
+            "open import geo\nopen geo::Point\ndistance()\n", roots_dirs=[tmp_path]
+        )
+
+        assert result.ok is False
+        assert "ambiguous" in result.diagnostics[0].message
+
+    def test_open_rename_collision_reports_each_contributing_member(self, tmp_path: Path) -> None:
+        (tmp_path / "geo.agl").write_text(
+            "def Point::distance() -> int = 1\ndef Point::length() -> int = 2\n"
+        )
+
+        result = _run_program(
+            "import geo\nopen geo::Point using distance as measure, length as measure\nmeasure()\n",
+            roots_dirs=[tmp_path],
+        )
+
+        assert result.ok is False
+        assert "ambiguous" in result.diagnostics[0].message
+        assert "Point::distance" in result.diagnostics[0].message
+        assert "Point::length" in result.diagnostics[0].message
+
+    def test_opened_local_scope_type_is_available_only_in_its_region(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        source = (
+            "scope Shapes\n"
+            "record Point\n"
+            "  value: int\n"
+            "end Shapes\n"
+            "scope Measurements\n"
+            "open Shapes\n"
+            "def value(point: Point) -> int = point.value\n"
+            "end Measurements\n"
+            "print Measurements::value(Shapes::Point(value = 3))\n"
+        )
+
+        result = _run_program(source, roots_dirs=[tmp_path])
+
+        assert result.ok is True
+        assert capsys.readouterr().out == "3\n"
+
+    def test_opened_scope_type_does_not_leak_from_its_region(self, tmp_path: Path) -> None:
+        source = (
+            "scope Shapes\n"
+            "record Point\n"
+            "  value: int\n"
+            "end Shapes\n"
+            "scope Measurements\n"
+            "open Shapes\n"
+            "def value(point: Point) -> int = point.value\n"
+            "end Measurements\n"
+            "def leaked(point: Point) -> int = point.value\n"
+            "()\n"
+        )
+
+        assert _run_program(source, roots_dirs=[tmp_path]).ok is False
+
+    def test_opened_imported_scope_type_honors_selection_and_rename(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        (tmp_path / "geo.agl").write_text("scope Shapes\nrecord Point\n  value: int\nend Shapes\n")
+
+        result = _run_program(
+            "import geo\n"
+            "scope Measurements\n"
+            "open geo::Shapes using Point as Coordinate\n"
+            "def value(point: Coordinate) -> int = point.value\n"
+            "end Measurements\n"
+            "print Measurements::value(geo::Shapes::Point(value = 5))\n",
+            roots_dirs=[tmp_path],
+        )
+
+        assert result.ok is True
+        assert capsys.readouterr().out == "5\n"
+
+    def test_opened_imported_scope_does_not_expose_private_types(self, tmp_path: Path) -> None:
+        (tmp_path / "geo.agl").write_text(
+            "scope Shapes\n"
+            "record Point\n"
+            "  value: int\n"
+            "private record Secret\n"
+            "  value: int\n"
+            "end Shapes\n"
+        )
+
+        source = (
+            "import geo\nopen geo::Shapes\ndef reveal(value: Secret) -> int = value.value\n()\n"
+        )
+
+        assert _run_program(source, roots_dirs=[tmp_path]).ok is False
+
+    def test_opened_generic_type_is_resolved_by_its_bare_rename(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        source = (
+            "open Shapes using Box as Container\n"
+            "scope Shapes\n"
+            "record Box[T]\n"
+            "  value: T\n"
+            "end Shapes\n"
+            "def value(box: Container[int]) -> int = box.value\n"
+            "print value(Shapes::Box(value = 7))\n"
+        )
+
+        result = _run_program(source, roots_dirs=[tmp_path])
+
+        assert result.ok is True
+        assert capsys.readouterr().out == "7\n"
+
+    def test_opened_scope_function_does_not_resolve_as_a_type(self, tmp_path: Path) -> None:
+        (tmp_path / "geo.agl").write_text("scope Shapes\ndef Point() -> int = 1\nend Shapes\n")
+
+        source = "import geo\nopen geo::Shapes\ndef value(point: Point) -> int = point\n()\n"
+
+        assert _run_program(source, roots_dirs=[tmp_path]).ok is False
+
+    def test_opened_generic_type_requires_arguments(self, tmp_path: Path) -> None:
+        source = (
+            "open Shapes using Box as Container\n"
+            "scope Shapes\n"
+            "record Box[T]\n"
+            "  value: T\n"
+            "end Shapes\n"
+            "def value(box: Container) -> int = box.value\n"
+            "()\n"
+        )
+
+        assert _run_program(source, roots_dirs=[tmp_path]).ok is False
+
+    def test_opened_non_generic_type_rejects_arguments(self, tmp_path: Path) -> None:
+        source = (
+            "open Shapes using Point as Coordinate\n"
+            "scope Shapes\n"
+            "record Point\n"
+            "  value: int\n"
+            "end Shapes\n"
+            "def value(point: Coordinate[int]) -> int = point.value\n"
+            "()\n"
+        )
+
+        assert _run_program(source, roots_dirs=[tmp_path]).ok is False
+
+    def test_opened_type_rename_collision_is_ambiguous_at_its_use(self, tmp_path: Path) -> None:
+        source = (
+            "open First using Point as Coordinate\n"
+            "open Second using Point as Coordinate\n"
+            "scope First\nrecord Point\n  value: int\nend First\n"
+            "scope Second\nrecord Point\n  value: int\nend Second\n"
+            "def value(point: Coordinate) -> int = point.value\n"
+            "()\n"
+        )
+
+        assert _run_program(source, roots_dirs=[tmp_path]).ok is False
+
+    def test_opened_generic_alias_is_resolved_by_its_bare_rename(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        source = (
+            "open Shapes using Wrapper as Container\n"
+            "scope Shapes\n"
+            "record Box[T]\n"
+            "  value: T\n"
+            "type Wrapper[T] = Shapes::Box[T]\n"
+            "end Shapes\n"
+            "def value(box: Container[int]) -> int = box.value\n"
+            "print value(Shapes::Box(value = 9))\n"
+        )
+
+        result = _run_program(source, roots_dirs=[tmp_path])
+
+        assert result.ok is True
+        assert capsys.readouterr().out == "9\n"
+
+
 class TestExternMultiFile:
     """A library module's ``extern def`` through qualified/open imports and re-export."""
 

@@ -1,0 +1,33 @@
+# Opening named scopes contributes their selected members as bare names.
+open Math
+open Text using show as format
+open Hidden hiding secret
+open Flag
+
+scope Math
+def add(left: int, right: int) -> int = left + right
+scope Metrics
+def scale(value: int) -> int = value * 2
+end Metrics
+end Math
+
+scope Text
+def show(value: int) -> text = "value ${value}"
+def hidden_format() -> text = "hidden"
+end Text
+
+scope Hidden
+def visible() -> int = 7
+def secret() -> int = 99
+end Hidden
+
+enum Flag
+  | Ready
+def Flag::label() -> text = "ready"
+
+print add(2, 3)
+print Metrics::scale(3)
+print format(4)
+print visible()
+print Ready
+print label()

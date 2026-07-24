@@ -1,0 +1,10 @@
+{
+  "scenarios": [
+    {
+      "name": "opens_plain_selective_hidden_and_type_members",
+      "expect": {
+        "stdout": "5\n6\nvalue 4\n7\nFlag::Ready\nready\n"
+      }
+    }
+  ]
+}

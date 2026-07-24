@@ -1,0 +1,10 @@
+scope Inner
+def member() -> int = 1
+end Inner
+
+scope Outer
+open Inner
+def use() -> int = member()
+end Outer
+
+member()

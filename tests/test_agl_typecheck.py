@@ -23,7 +23,7 @@ from typing import cast
 import pytest
 
 from agm.agl.capabilities import HostCapabilities
-from agm.agl.modules.ids import ENTRY_ID
+from agm.agl.modules.ids import ENTRY_ID, ModuleId
 from agm.agl.parser import parse_program
 from agm.agl.scope import AglScopeError, resolve_module
 from agm.agl.scope.symbols import BinderKind, BindingRef, ScopeNode
@@ -120,7 +120,12 @@ from agm.agl.typecheck import (
     check_module,
 )
 from agm.agl.typecheck.builder import _TypeBuilder
-from agm.agl.typecheck.env import ConstructorSignature, GenericTypeDef, OutputContractSpec
+from agm.agl.typecheck.env import (
+    ConstructorSignature,
+    GenericAliasDef,
+    GenericTypeDef,
+    OutputContractSpec,
+)
 from tests._agl_helpers import all_node_ids
 
 # ---------------------------------------------------------------------------
@@ -501,6 +506,28 @@ def test_missing_type_under_recognized_local_scope_is_focused_without_module_gra
         parse_resolve_check(source)
 
 
+def test_opened_local_scope_type_resolves_without_module_graph() -> None:
+    parse_resolve_check(
+        "open Shapes\n"
+        "scope Shapes\n"
+        "record Point\n"
+        "  value: int\n"
+        "end Shapes\n"
+        "def identity(value: Point) -> Point = value"
+    )
+
+
+def test_opened_local_generic_type_resolves_without_module_graph() -> None:
+    parse_resolve_check(
+        "open Shapes using Box as Container\n"
+        "scope Shapes\n"
+        "record Box[T]\n"
+        "  value: T\n"
+        "end Shapes\n"
+        "def identity(value: Container[int]) -> Container[int] = value"
+    )
+
+
 # ---------------------------------------------------------------------------
 # TypeEnvironment
 # ---------------------------------------------------------------------------
@@ -524,6 +551,70 @@ class TestTypeEnvironment:
         rt = RecordType(name="Foo")
         env.register_type("Foo", rt)
         assert env.get_type("Foo") == rt
+
+    def test_opened_non_generic_type_rejects_type_arguments(self) -> None:
+        scope = ScopeNode(node_id=_mk_node_id())
+        scope.contribute_bare(
+            "Exposed",
+            BindingRef(
+                name="Point",
+                mutable=False,
+                decl_span=mk_span(),
+                decl_node_id=_mk_node_id(),
+                kind=BinderKind.constructor_binding,
+                scope_path=("Shapes",),
+            ),
+        )
+        env = TypeEnvironment(
+            program_type_table={
+                (ENTRY_ID, ("Shapes",), "Point"): RecordType(name="Point", scope_path=("Shapes",))
+            },
+            scope_nodes={(): scope},
+        )
+        program = parse_program("def value(point: Exposed[int]) -> int = 1")
+        annotation = cast(FuncDef, program.body.items[0]).params[0].type_expr
+
+        with pytest.raises(AglTypeError):
+            env.resolve_type_expr(annotation)
+        with pytest.raises(AglTypeError):
+            env._resolve_opened_applied_type("Exposed", (IntType(),), None)
+
+        alias_env = TypeEnvironment(
+            program_alias_table={
+                (ENTRY_ID, ("Shapes",), "Point"): GenericAliasDef(
+                    type_params=("T",), template=RecordType(name="Point")
+                )
+            },
+            scope_nodes={(): scope},
+        )
+        assert isinstance(
+            alias_env._resolve_opened_applied_type("Exposed", (IntType(),), None), RecordType
+        )
+
+        library = ModuleId.from_path("library")
+        foreign_scope = ScopeNode(node_id=_mk_node_id())
+        foreign_scope.contribute_bare(
+            "Exposed",
+            BindingRef(
+                name="Point",
+                mutable=False,
+                decl_span=mk_span(),
+                decl_node_id=_mk_node_id(),
+                kind=BinderKind.constructor_binding,
+                module_id=library,
+                scope_path=("Shapes",),
+            ),
+        )
+        foreign_env = TypeEnvironment(
+            program_type_table={
+                (library, ("Shapes",), "Point"): RecordType(
+                    name="Point", module_id=library, scope_path=("Shapes",)
+                )
+            },
+            scope_nodes={(): foreign_scope},
+        )
+        with pytest.raises(AglTypeError):
+            foreign_env._resolve_opened_applied_type("Exposed", (IntType(),), None)
 
     def test_enum_owner_forms_track_declarations_until_sealed(self) -> None:
         """An unsealed env re-enumerates; a sealed one serves a stable answer."""

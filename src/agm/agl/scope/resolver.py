@@ -43,7 +43,7 @@ normal binding.  A bare ``VarRef("print")`` (not in call position) raises
 
 from __future__ import annotations
 
-from collections.abc import Iterator, Mapping
+from collections.abc import Collection, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import replace
 from typing import TYPE_CHECKING, cast
@@ -157,7 +157,7 @@ from agm.agl.syntax.nodes import (
     assign_target_root_name,
 )
 from agm.agl.syntax.spans import SourceSpan
-from agm.agl.syntax.types import AppliedT, NameT
+from agm.agl.syntax.types import AppliedT, ImportMode, NameT
 from agm.agl.syntax.visitor import walk
 
 # ---------------------------------------------------------------------------
@@ -182,23 +182,14 @@ def _scope_path_sort_key(path: ScopePath) -> tuple[int, ScopePath]:
     return (len(path), path)
 
 
-def validate_scope_syntax(program: Program) -> None:
-    """Reject parsed scope forms whose runtime semantics are deferred.
+def _bare_atom(path: ScopePath) -> NameAtom:
+    """Keep single bare names compact while retaining nested paths."""
+    return path[0] if len(path) == 1 else path
 
-    Program resolution invokes this for every loaded module before it derives
-    exports or import environments. ``resolve_module`` invokes it too, keeping
-    the per-module worker safe when used directly.
-    """
-    unsupported: SourceSpan | None = None
 
-    def inspect(node: object) -> None:
-        nonlocal unsupported
-        if unsupported is None and isinstance(node, OpenDecl):
-            unsupported = node.span
-
-    walk(program, inspect)
-    if unsupported is not None:
-        raise AglScopeError("open declarations are not supported here yet.", span=unsupported)
+def _bare_path(atom: NameAtom) -> ScopePath:
+    """Normalize a bare contribution atom to its structured path."""
+    return (atom,) if isinstance(atom, str) else atom
 
 
 # ---------------------------------------------------------------------------
@@ -224,6 +215,7 @@ class _Resolver:
         cross_module_constructor_refs: Mapping[tuple[ModuleId, NameAtom], ConstructorRef]
         | None = None,
         cross_module_constructible_types: frozenset[tuple[ModuleId, NameAtom]] = frozenset(),
+        cross_module_type_scopes: frozenset[tuple[ModuleId, NameAtom]] = frozenset(),
         is_entry: bool = True,
         repl_session_scope: ScopeNode | None = None,
         repl_session_scope_nodes: Mapping[ScopePath, ScopeNode] | None = None,
@@ -246,6 +238,9 @@ class _Resolver:
             cross_module_constructor_refs if cross_module_constructor_refs is not None else {}
         )
         self._cross_module_constructible_types = cross_module_constructible_types
+        # Public type declarations establish scope paths even when they have
+        # no separately public child members.
+        self._cross_module_type_scopes = cross_module_type_scopes
         # Whether this module is the entry module (program context only).
         self._is_entry: bool = is_entry
         # Optional REPL session scope for ``::name`` self-ref fallback.
@@ -371,8 +366,6 @@ class _Resolver:
         qualified constructor access (``Owner::variant``) resolves for types
         declared in earlier REPL entries.
         """
-        validate_scope_syntax(program)
-
         # Seed ambient constructor candidates (from prior REPL entries) before
         # running the local pre-passes so local declarations can shadow them.
         if ambient_constructor_candidates:
@@ -1180,6 +1173,9 @@ class _Resolver:
         is_non_entry_root = has_import_context and not self._is_entry and self._at_root
 
         for item in items:
+            if isinstance(item, OpenDecl):
+                self._resolve_open_decl(item)
+                continue
             if isinstance(item, (ImportDecl, ExportDecl)):
                 if not self._at_root:
                     kind = "import" if isinstance(item, ImportDecl) else "export"
@@ -1288,11 +1284,133 @@ class _Resolver:
                         "library module.",
                         span=item.span,
                     )
-                self._resolve_expr(cast(Expr, item))
+                self._resolve_expr(item)
 
     # ------------------------------------------------------------------
     # Declaration handlers
     # ------------------------------------------------------------------
+
+    def _resolve_open_decl(self, decl: OpenDecl) -> None:
+        """Contribute a selected scope subtree to the current region."""
+        target = self._open_target_members(decl)
+        selected: list[tuple[NameAtom, BindingRef, ConstructorRef | None]] = []
+        if decl.mode is ImportMode.ALL:
+            selected = [(atom, ref, constructor) for atom, (ref, constructor) in target.items()]
+        else:
+            selected_paths: set[ScopePath] = set()
+            for item in decl.items:
+                prefix = (*tuple(segment.name for segment in item.scope_path), item.name)
+                matches = [atom for atom in target if _bare_path(atom)[: len(prefix)] == prefix]
+                if not matches:
+                    raise AglScopeError(
+                        f"'{'::'.join(prefix)}' is not a public member of the opened scope.",
+                        span=item.span,
+                    )
+                selected_paths.add(prefix)
+            if decl.mode is ImportMode.USING:
+                for item in decl.items:
+                    prefix = (*tuple(segment.name for segment in item.scope_path), item.name)
+                    for atom, value in target.items():
+                        path = _bare_path(atom)
+                        if path[: len(prefix)] == prefix:
+                            exposed = _bare_atom(
+                                (item.rename, *path[len(prefix) :])
+                                if item.rename is not None
+                                else path
+                            )
+                            ref, constructor = value
+                            selected.append((exposed, ref, constructor))
+            else:
+                selected = [
+                    (atom, ref, constructor)
+                    for atom, (ref, constructor) in target.items()
+                    if not any(
+                        _bare_path(atom)[: len(prefix)] == prefix for prefix in selected_paths
+                    )
+                ]
+
+        for atom, ref, constructor in selected:
+            self._current_scope().contribute_bare(atom, ref)
+            if constructor is not None:
+                self._current_scope().contribute_bare_constructor(atom, constructor)
+
+    def _open_target_members(
+        self, decl: OpenDecl
+    ) -> dict[NameAtom, tuple[BindingRef, ConstructorRef | None]]:
+        """Return the relative public subtree of an opened local or imported scope."""
+        requested_path = tuple(segment.name for segment in decl.scope_ref.scope_path)
+        local_path = self._open_local_scope_path(requested_path)
+        if local_path is not None:
+            local_members: dict[NameAtom, tuple[BindingRef, ConstructorRef | None]] = {}
+            for path, node in self._scope_nodes.items():
+                if path[: len(local_path)] != local_path:
+                    continue
+                for name, ref in node.members.items():
+                    relative = (*path[len(local_path) :], name)
+                    atom = _bare_atom(relative)
+                    local_members[atom] = (
+                        ref,
+                        next(iter(self._scoped_constructor_candidates.get((path, name), ())), None),
+                    )
+            return local_members
+
+        route = decl.scope_ref.module_route
+        scope_path = requested_path
+        if not route and len(requested_path) > 1:
+            route, scope_path = (requested_path[0],), requested_path[1:]
+        if self._import_env is None or not route or not scope_path:
+            raise AglScopeError(
+                f"Unknown scope path '{'::'.join(requested_path)}'.", span=decl.scope_ref.span
+            )
+
+        matching: list[dict[NameAtom, tuple[BindingRef, ConstructorRef | None]]] = []
+        for module in qualifier_candidates(self._import_env, route, anchored=False):
+            contribution = self._import_env.contributions[module]
+            imported_members: dict[NameAtom, tuple[BindingRef, ConstructorRef | None]] = {}
+            is_public_type_scope = False
+            for exposed, qname in contribution.members.items():
+                path = _bare_path(exposed)
+                if path == scope_path and qname in self._cross_module_type_scopes:
+                    is_public_type_scope = True
+                    continue
+                if path[: len(scope_path)] != scope_path or len(path) == len(scope_path):
+                    continue
+                atom = _bare_atom(path[len(scope_path) :])
+                constructor = self._cross_module_constructor_refs.get(qname)
+                ref = self._make_cross_module_ref(
+                    qname[0], _bare_path(atom)[-1], qname[1], decl.span
+                )
+                if constructor is not None:
+                    ref = replace(
+                        ref,
+                        decl_node_id=constructor.owner_decl_node_id,
+                        kind=BinderKind.constructor_binding,
+                        scope_path=constructor.owner_path,
+                    )
+                imported_members[atom] = (ref, constructor)
+            if imported_members or is_public_type_scope:
+                matching.append(imported_members)
+        if not matching:
+            rendered = "::".join(scope_path)
+            raise AglScopeError(
+                f"Unknown or non-public scope '{rendered}'.", span=decl.scope_ref.span
+            )
+        if len(matching) > 1:
+            raise AglScopeError(
+                f"Opened scope '{'::'.join(scope_path)}' is ambiguous across imported modules.",
+                span=decl.scope_ref.span,
+            )
+        return matching[0]
+
+    def _open_local_scope_path(self, requested_path: ScopePath) -> ScopePath | None:
+        """Find an exact lexical scope target for an ``open`` declaration."""
+        scope: ScopeNode | None = self._current_scope()
+        while scope is not None:
+            candidate = scope.scope_path + requested_path
+            if candidate in self._scope_nodes:
+                return candidate
+            scope = scope.parent
+        return None
 
     def _resolve_scope_region(self, region: ScopeRegion) -> None:
         """Resolve a named region in its member layer."""
@@ -1416,9 +1534,10 @@ class _Resolver:
             )
         ref = self._current_scope().lookup(name)
         if ref is None:
-            # In program context with import_env, try open imports as fallback, so a
-            # bare target reaches an imported mutable binding just like a read.
-            if self._import_env is not None:
+            ref = self._lookup_bare_contribution(name, node.span)
+            # In program context with import_env, try structured open imports as fallback,
+            # so a bare target reaches an imported mutable binding just like a read.
+            if ref is None and self._import_env is not None:
                 ref = self._lookup_import_env_unqualified(name, node.span)
             if ref is None:
                 raise AglScopeError(
@@ -1634,8 +1753,15 @@ class _Resolver:
 
         # Standard lexical lookup (module mode or bare name in program context).
         ref = self._current_scope().lookup(node.name)
+        regional_candidates = self._current_scope().bare_constructor_candidates(node.name)
+        if ref is None or (
+            ref.kind is BinderKind.constructor_binding and regional_candidates is not None
+        ):
+            contributed = self._lookup_bare_contribution(node.name, node.span)
+            if contributed is not None:
+                ref = contributed
         if ref is None:
-            # In program context with import_env, try open imports as fallback.
+            # In program context with import_env, try structured open imports as fallback.
             if self._import_env is not None:
                 ref = self._lookup_import_env_unqualified(node.name, node.span)
             if ref is None:
@@ -1645,25 +1771,35 @@ class _Resolver:
                     f"'{node.name}' is not defined.",
                     span=node.span,
                 )
-        self._record_varref_binding(node, ref)
+        self._record_varref_binding(node, ref, candidates=regional_candidates)
 
-    def _record_varref_binding(self, node: VarRef, ref: BindingRef) -> None:
+    def _record_varref_binding(
+        self,
+        node: VarRef,
+        ref: BindingRef,
+        *,
+        candidates: Collection[ConstructorRef] | None = None,
+    ) -> None:
         """Record an ordinary value binding and its constructor metadata."""
         self._track_agent_reference(ref)
         self._resolution[node.node_id] = ref
         if ref.kind != BinderKind.constructor_binding:
             return
-        candidates = self._constructor_candidates.get(node.name, [])
-        if len(candidates) >= 2:
-            owner_names = ", ".join(f"'{candidate.owner_name}'" for candidate in candidates)
+        resolved_candidates = tuple(
+            self._constructor_candidates.get(node.name, ()) if candidates is None else candidates
+        )
+        if len(resolved_candidates) >= 2:
+            owner_names = ", ".join(
+                f"'{candidate.owner_name}'" for candidate in resolved_candidates
+            )
             raise AglScopeError(
                 f"'{node.name}' is ambiguous: it is declared as a constructor "
                 f"in multiple types ({owner_names}). "
-                f"Qualify the reference, e.g. '{candidates[0].owner_name}::{node.name}'.",
+                f"Qualify the reference, e.g. '{resolved_candidates[0].owner_name}::{node.name}'.",
                 span=node.span,
             )
-        if len(candidates) == 1:
-            self._constructor_refs[node.node_id] = candidates[0]
+        if len(resolved_candidates) == 1:
+            self._constructor_refs[node.node_id] = resolved_candidates[0]
 
     def _track_agent_reference(self, ref: BindingRef) -> None:
         """Preserve agent usage hidden behind constructor-selected pattern slots."""
@@ -1768,9 +1904,13 @@ class _Resolver:
             has_module_route = self._import_env is not None and bool(
                 qualifier_candidates(self._import_env, relative_path, anchored=chain.anchored)
             )
+            has_opened_member = (
+                self._current_scope().bare_candidates(_bare_atom((*relative_path, node.name)))
+                is not None
+            )
             known_segment = any(relative_path[0] in scope_path for scope_path in self._scope_nodes)
             if (chain.anchor is QualifierAnchor.CURRENT_MODULE and len(chain.segments) > 1) or (
-                known_segment and not has_module_route
+                known_segment and not has_module_route and not has_opened_member
             ):
                 raise AglScopeError(
                     f"Unknown scope path '{'::'.join(relative_path)}'.", span=chain.span
@@ -1818,6 +1958,16 @@ class _Resolver:
         """
         chain = node.qualifier
         assert chain is not None
+        if chain.anchor is None:
+            atom = _bare_atom((*tuple(segment.name for segment in chain.segments), node.name))
+            ref = self._lookup_bare_contribution(atom, node.span)
+            if ref is not None:
+                self._record_varref_binding(
+                    node,
+                    ref,
+                    candidates=self._current_scope().bare_constructor_candidates(atom),
+                )
+                return
         direct_error: AglScopeError | None = None
         local_type_path = self._validate_local_scope_chain(chain)
         if (
@@ -2046,6 +2196,45 @@ class _Resolver:
                 owner_module_id=owner_ref.module_id,
             )
         return replace(candidate, variant=variant)
+
+    def _lookup_bare_contribution(self, name: NameAtom, span: SourceSpan) -> BindingRef | None:
+        """Resolve one region's bare contributions, deferring clashes to use sites."""
+        candidates = self._current_scope().bare_candidates(name)
+        if candidates is None:
+            return None
+        assert self._root_scope is not None
+        resolved = set(candidates)
+        if name in self._root_scope.bare_contributions and self._import_env is not None:
+            for module, source in self._import_env.unqualified.get(name, frozenset()):
+                constructor = self._cross_module_constructor_refs.get((module, source))
+                ref = self._make_cross_module_ref(module, _bare_path(name)[-1], source, span)
+                if constructor is not None:
+                    ref = replace(
+                        ref,
+                        decl_node_id=constructor.owner_decl_node_id,
+                        kind=BinderKind.constructor_binding,
+                        scope_path=constructor.owner_path,
+                    )
+                if not any(
+                    (existing.module_id, existing.scope_path, existing.decl_node_id, existing.kind)
+                    == (ref.module_id, ref.scope_path, ref.decl_node_id, ref.kind)
+                    for existing in resolved
+                ):
+                    resolved.add(ref)
+        if len(resolved) == 1:
+            return next(iter(resolved))
+        qualifiers = ", ".join(
+            sorted(
+                ref.module_id.path_str() + "::" + "::".join((*ref.scope_path, ref.name))
+                for ref in resolved
+            )
+        )
+        rendered = "::".join(_bare_path(name))
+        raise AglScopeError(
+            f"'{rendered}' is ambiguous: contributed by multiple opened scopes. "
+            f"Use a qualified reference to disambiguate: {qualifiers}",
+            span=span,
+        )
 
     def _lookup_import_env_unqualified(self, name: str, span: SourceSpan) -> BindingRef | None:
         """Look up a bare name in the open-import environment (program context).
@@ -2446,7 +2635,12 @@ class _Resolver:
         classification.
         """
         if isinstance(pattern, VarPattern):
-            candidates = tuple(self._constructor_candidates.get(pattern.name, ()))
+            regional_candidates = scope.bare_constructor_candidates(pattern.name)
+            candidates = (
+                tuple(regional_candidates)
+                if regional_candidates is not None
+                else tuple(self._constructor_candidates.get(pattern.name, ()))
+            )
             if candidates:
                 self._pattern_constructor_candidates[pattern.node_id] = candidates
             if not nested:

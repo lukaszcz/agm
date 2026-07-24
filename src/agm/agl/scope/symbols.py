@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import enum
 from dataclasses import dataclass, field
+from typing import TypeAlias
 
 from agm.agl.diagnostics import AglError, Diagnostic
 from agm.agl.modules.ids import ENTRY_ID, ModuleId
@@ -29,6 +30,7 @@ from agm.agl.syntax.nodes import AgentDecl, FuncDef, Program
 from agm.agl.syntax.spans import SourceSpan
 
 ScopePath = tuple[str, ...]
+BareAtom: TypeAlias = str | ScopePath
 AgentKey = tuple[ScopePath, str]
 DeclarationKey = tuple[ModuleId, ScopePath, str]
 
@@ -211,12 +213,13 @@ class ConstructorRef:
     def matches(self, enum_type: EnumType, variant: str) -> bool:
         """Whether this reference denotes *variant* of *enum_type*.
 
-        Constructor identity is module-aware: same-named constructors declared
-        in different modules are distinct, so the owning module must agree as
-        well as the enum name and the variant spelling.
+        Constructor identity is structured: same-named constructors from
+        different modules or scope paths are distinct, so module, owner path,
+        enum name, and variant spelling must all agree.
         """
         return (
             self.owner_module_id == enum_type.module_id
+            and self.owner_path == enum_type.scope_path
             and self.owner_name == enum_type.name
             and self.variant == variant
         )
@@ -324,6 +327,10 @@ class ScopeNode:
     bindings: dict[str, BindingRef] = field(default_factory=dict)
     scope_path: ScopePath = ()
     members: dict[str, BindingRef] = field(default_factory=dict)
+    bare_contributions: dict[BareAtom, set[BindingRef]] = field(default_factory=dict)
+    bare_constructor_contributions: dict[BareAtom, set[ConstructorRef]] = field(
+        default_factory=dict
+    )
 
     def lookup(self, name: str) -> BindingRef | None:
         """Search lexical bindings and named-scope members outward."""
@@ -336,6 +343,34 @@ class ScopeNode:
                 return ref
             scope = scope.parent
         return None
+
+    def bare_candidates(self, name: BareAtom) -> set[BindingRef] | None:
+        """Return the nearest region's contributed bare candidates for *name*."""
+        scope: ScopeNode | None = self
+        while scope is not None:
+            candidates = scope.bare_contributions.get(name)
+            if candidates is not None:
+                return candidates
+            scope = scope.parent
+        return None
+
+    def contribute_bare(self, name: BareAtom, ref: BindingRef) -> None:
+        """Add one use-site-resolved bare contribution to this region."""
+        self.bare_contributions.setdefault(name, set()).add(ref)
+
+    def bare_constructor_candidates(self, name: BareAtom) -> set[ConstructorRef] | None:
+        """Return the nearest region's contributed constructor candidates for *name*."""
+        scope: ScopeNode | None = self
+        while scope is not None:
+            candidates = scope.bare_constructor_contributions.get(name)
+            if candidates is not None:
+                return candidates
+            scope = scope.parent
+        return None
+
+    def contribute_bare_constructor(self, name: BareAtom, ref: ConstructorRef) -> None:
+        """Add one constructor candidate contributed bare to this region."""
+        self.bare_constructor_contributions.setdefault(name, set()).add(ref)
 
     def define(self, name: str, ref: BindingRef) -> None:
         """Add *name* → *ref* to this scope's binding table."""

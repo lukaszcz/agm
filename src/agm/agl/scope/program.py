@@ -41,7 +41,7 @@ from agm.agl.scope.imports import (
     WildcardTarget,
     build_import_env,
 )
-from agm.agl.scope.resolver import _Resolver, validate_scope_syntax
+from agm.agl.scope.resolver import _Resolver
 from agm.agl.scope.symbols import (
     AgentKey,
     AglScopeError,
@@ -490,11 +490,6 @@ def resolve_program(
     AglScopeError
         On the first static scope violation (first-error abort).
     """
-    # Scope syntax reaches the parser before its namespace semantics. Validate
-    # every loaded module before deriving any import-dependent program tables.
-    for loaded in graph.modules.values():
-        validate_scope_syntax(loaded.program)
-
     # ------------------------------------------------------------------
     # Step 1: Build local export maps (own declarations only).
     # ------------------------------------------------------------------
@@ -603,6 +598,7 @@ def resolve_program(
             private_info=private_info,
             cross_module_constructor_refs=cross_module_constructor_refs,
             cross_module_constructible_types=cross_module_constructible_types,
+            cross_module_type_scopes=frozenset(all_public_types),
             is_entry=is_entry,
             repl_session_scope=entry_repl_session_scope if is_entry else None,
             repl_session_scope_nodes=entry_repl_session_scope_nodes if is_entry else None,

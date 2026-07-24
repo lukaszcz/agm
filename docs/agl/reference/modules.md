@@ -77,6 +77,31 @@ exposes `P::…`, while `using Point::distance as d` exposes `d`. The original
 path is inaccessible through that import. `hiding` removes a path and its
 subtree from both channels, so it can also remove a qualification ambiguity.
 
+## Opening scopes
+
+An `open` declaration makes a scope's selected members available bare in its
+enclosing module or scope region:
+
+<!-- agl-check: fragment -->
+```agl
+open Point
+open Text using render as format
+open geo/shapes::Point hiding internal-distance
+```
+
+A plain `open` selects every member. `using` selects only the listed paths;
+its `as` renames re-root the selected path, so a direct member becomes the new
+plain name. `hiding` selects every member except its listed paths. Members of
+nested scopes retain their relative paths. An `open` in a scope region affects
+only that region and its nested regions.
+
+An opened scope may be local or reached through an imported module route. A
+cross-module opening sees public members only; selecting an unknown or private
+member is an error. Type-named scopes include enum variants and extension
+members. Opens neither export their members nor make another module's opens
+transitively available. Bare-name collisions are reported when the name is
+used, including collisions with an `open import` contribution.
+
 ## Aliases
 
 `as A` gives an import the single-name alias `A` instead of a path route. It

@@ -129,6 +129,26 @@ def test_check_program_importable() -> None:
     assert CheckedModule is not None
 
 
+def test_opened_alias_resolves_while_its_type_body_is_being_built(tmp_path: Path) -> None:
+    _check_program(
+        tmp_path,
+        {
+            "entry": (
+                "scope Z\n"
+                "record Box[T]\n"
+                "  value: T\n"
+                "type Alias[T] = Z::Box[T]\n"
+                "end Z\n"
+                "scope A\n"
+                "open Z using Alias as Bare\n"
+                "type Wrapper[T] = Bare[T]\n"
+                "end A\n"
+                "()"
+            )
+        },
+    )
+
+
 def test_graph_func_signature_prepass_skips_inferred_return_type(tmp_path: Path) -> None:
     """Program context lets an unannotated def infer inside its own module."""
     cg = _check_program(

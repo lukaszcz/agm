@@ -20,6 +20,7 @@ from agm.agl.syntax import (
     OpenDecl,
     RecordDef,
     ScopeRegion,
+    ScopeSegment,
     TypeAlias,
 )
 from tests.agl.ir_harness import write_module_file
@@ -201,9 +202,38 @@ def test_import_and_export_clauses_accept_path_atoms(source: str, kind: type[obj
     assert atoms == expected
 
 
-def test_scope_pass_only_rejects_the_deferred_open_form() -> None:
-    with pytest.raises(AglScopeError, match="open declarations"):
-        resolve_module(parse_program("open Point"))
+def test_scope_pass_opens_local_scope_members() -> None:
+    resolved = resolve_module(
+        parse_program("open Point\nscope Point\ndef distance() -> int = 1\nend Point\ndistance()")
+    )
+
+    assert len(resolved.root_scope.bare_candidates("distance") or ()) == 1
+
+
+def test_opened_scope_members_clash_at_their_use_site() -> None:
+    source = (
+        "open Point\nopen Vector\n"
+        "scope Point\ndef distance() -> int = 1\nend Point\n"
+        "scope Vector\ndef distance() -> int = 2\nend Vector\ndistance()"
+    )
+
+    with pytest.raises(AglScopeError, match="ambiguous"):
+        resolve_module(parse_program(source))
+
+
+def test_ast_walk_visits_open_and_export_selection_paths() -> None:
+    from agm.agl.syntax.visitor import walk
+
+    program = parse_program(
+        "open Point using Nested::member as m\nexport library using Point::distance"
+    )
+    visited: list[object] = []
+
+    walk(program, visited.append)
+
+    assert sum(isinstance(node, OpenDecl) for node in visited) == 1
+    assert sum(isinstance(node, ExportDecl) for node in visited) == 1
+    assert sum(isinstance(node, ScopeSegment) for node in visited) == 3
 
 
 @pytest.mark.parametrize(

@@ -33,7 +33,7 @@ from agm.agl.scope.imports import (
     resolve_qualified_member,
     try_resolve_qualified_member,
 )
-from agm.agl.scope.symbols import BindingRef, ConstructorRef, ModuleResolution, ScopePath
+from agm.agl.scope.symbols import BindingRef, ConstructorRef, ModuleResolution, ScopeNode, ScopePath
 from agm.agl.semantics.persistent import PersistentDict
 from agm.agl.semantics.type_table import (
     BUILTIN_PRELUDE_TYPE_DEFS,
@@ -75,6 +75,16 @@ def _split_scoped_type_name(name: str) -> tuple[ScopePath, str]:
     """Split a source spelling only at the environment's UI boundary."""
     *scope_path, declared_name = name.split("::")
     return tuple(scope_path), declared_name
+
+
+def _type_path_atom(path: ScopePath) -> NameAtom:
+    """Represent a contributed type path without flattening its identity."""
+    return path[0] if len(path) == 1 else path
+
+
+def _render_type_atom(atom: NameAtom) -> str:
+    """Render a structured type atom for diagnostics only."""
+    return atom if isinstance(atom, str) else "::".join(atom)
 
 
 # ---------------------------------------------------------------------------
@@ -547,6 +557,7 @@ class TypeEnvironment:
         import_env: ImportEnv | None = None,
         private_info: Mapping[QName, bool] | None = None,
         local_scope_paths: frozenset[ScopePath] = frozenset(),
+        scope_nodes: Mapping[ScopePath, ScopeNode] | None = None,
         module_id: ModuleId = ENTRY_ID,
         type_table: TypeTable | None = None,
     ) -> None:
@@ -645,6 +656,9 @@ class TypeEnvironment:
         # type declarations, so failed qualified type references retain their
         # scoped diagnostic instead of being mistaken for module routes.
         self._local_scope_paths = local_scope_paths
+        # Scope's bare contribution layers are shared by value and type lookup.
+        # They retain selection, renaming, provenance, and region boundaries.
+        self._scope_nodes = scope_nodes if scope_nodes is not None else {}
         # Type references inside a named scope use the same lexical layers as
         # value references.  Scoped declarations remain stored under their
         # full path; this frame only maps a bare source spelling to that path.
@@ -1238,6 +1252,93 @@ class TypeEnvironment:
         finally:
             self._type_scope = previous
 
+    def _opened_type_key(self, name: NameAtom, span: SourceSpan | None) -> DeclKey | None:
+        """Return the unique type declaration contributed to this type region."""
+        scope = self._scope_nodes.get(self._type_scope)
+        candidates = () if scope is None else scope.bare_candidates(name) or ()
+        keys = {
+            (ref.module_id, ref.scope_path, ref.name)
+            for ref in candidates
+            if self._is_type_contribution(ref)
+        }
+        if not keys:
+            return None
+        if len(keys) == 1:
+            return next(iter(keys))
+        labels = ", ".join(
+            sorted(
+                f"{module.path_str()}::{'::'.join((*path, declared_name))}"
+                for module, path, declared_name in keys
+            )
+        )
+        raise AglTypeError(
+            f"Ambiguous type '{_render_type_atom(name)}': contributed by multiple opened scopes "
+            f"({labels}). Use a qualified reference to disambiguate.",
+            span=span,
+        )
+
+    def _is_type_contribution(self, ref: BindingRef) -> bool:
+        """Whether a shared bare contribution refers to a type declaration."""
+        key = (ref.module_id, ref.scope_path, ref.name)
+        if self._program_type_table is not None and key in self._program_type_table:
+            return True
+        if self._program_generic_table is not None and key in self._program_generic_table:
+            return True
+        if key in self._program_alias_keys or key in self._program_alias_table:
+            return True
+        local_name = "::".join((*ref.scope_path, ref.name))
+        return ref.module_id == self._module_id and (
+            local_name in self._types
+            or local_name in self._generic_types
+            or local_name in self._alias_targets
+        )
+
+    def _resolve_opened_type(self, name: NameAtom, span: SourceSpan | None) -> Type | None:
+        """Resolve an opened relative type path through shared contributions."""
+        key = self._opened_type_key(name, span)
+        if key is None:
+            return None
+        module, path, source_name = key
+        if self._program_type_table is not None:
+            qname: QName = (module, source_name if not path else (*path, source_name))
+            generic = (self._program_generic_table or {}).get(key)
+            if generic is not None:
+                raise AglTypeError(
+                    f"Generic type '{_render_type_atom(name)}' requires "
+                    f"{len(generic.type_params)} type argument(s); "
+                    f"use '{_render_type_atom(name)}[...]' to apply it.",
+                    span=span,
+                )
+            return self._resolve_program_qname_as_bare_type(
+                qname, _render_type_atom(name), span=span
+            )
+        return self._resolve_name_type(
+            "::".join((*path, source_name)), span=span, _resolving=frozenset(), lexical=False
+        )
+
+    def _resolve_opened_applied_type(
+        self, name: NameAtom, args: tuple[Type, ...], span: SourceSpan | None
+    ) -> Type | None:
+        """Resolve an opened relative generic path through shared contributions."""
+        key = self._opened_type_key(name, span)
+        if key is None:
+            return None
+        generic = (self._program_generic_table or {}).get(key)
+        if generic is not None:
+            return self.instantiate_from_gdef(key[2], generic, args, span=span)
+        self._ensure_program_alias_resolved(key, span)
+        alias = self._program_alias_table.get(key)
+        if alias is not None:
+            return self.instantiate_alias(key[2], alias, args, span=span)
+        if key[0] == self._module_id:
+            local_name = "::".join((*key[1], key[2]))
+            generic = self._generic_types.get(local_name)
+            if generic is not None:
+                return self.instantiate_from_gdef(key[2], generic, args, span=span)
+        raise AglTypeError(
+            f"Type '{_render_type_atom(name)}' does not take type arguments.", span=span
+        )
+
     def _lexical_type_name(self, name: str) -> str:
         """Return the nearest scoped spelling of an unqualified type name."""
         for end in range(len(self._type_scope), 0, -1):
@@ -1448,6 +1549,16 @@ class TypeEnvironment:
                 self.resolve_type_expr(a, span=None, _resolving=_resolving, type_vars=type_vars)
                 for a in type_expr.args
             )
+            if qualifier is not None and qualifier.anchor is None:
+                opened = self._resolve_opened_applied_type(
+                    _type_path_atom(
+                        (*tuple(segment.name for segment in qualifier.segments), type_expr.name)
+                    ),
+                    resolved_args,
+                    span=eff_span,
+                )
+                if opened is not None:
+                    return opened
             if qualifier is not None and qualifier.route_segments:
                 return self._resolve_qualified_applied_type(
                     qualifier, name, resolved_args, span=eff_span
@@ -1490,6 +1601,11 @@ class TypeEnvironment:
                     span=eff_span,
                 )
             if qualifier is None:
+                opened = self._resolve_opened_applied_type(
+                    type_expr.name, resolved_args, span=eff_span
+                )
+                if opened is not None:
+                    return opened
                 imported = self._resolve_open_imported_applied_type(
                     name, resolved_args, span=eff_span
                 )
@@ -1635,6 +1751,9 @@ class TypeEnvironment:
         typ = self._types.get(name)
         if typ is not None:
             return typ
+        opened = self._resolve_opened_type(name, span)
+        if opened is not None:
+            return opened
         # Program context: unqualified lookup through open-imported names.
         if self._import_env is not None and self._program_type_table is not None:
             candidates = self._import_env.unqualified.get(name, frozenset())
@@ -1687,6 +1806,13 @@ class TypeEnvironment:
                 local_name, span=span, _resolving=frozenset(), lexical=False
             )
 
+        if qualifier.anchor is None:
+            opened = self._resolve_opened_type(
+                _type_path_atom((*tuple(segment.name for segment in qualifier.segments), name)),
+                span,
+            )
+            if opened is not None:
+                return opened
         if self._is_missing_local_scoped_type(qualifier):
             raise AglTypeError(self._unknown_scoped_type_message(qualifier, name), span=span)
         if self._program_type_table is None or self._import_env is None:

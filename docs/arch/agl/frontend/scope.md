@@ -20,8 +20,14 @@ Assignment follows the same split. Scope resolves an unqualified `:=` target and
 `scope/imports.py` is the pure import-policy seam. Its contribution environment
 merges every declaration for a module into its selected path atoms, bare injection, aliases,
 and plain-path routes. Scoped paths retain their structure through selection and re-exporting; policy expands scope-prefix selections and re-roots renamed subtrees. Wildcard declarations retain root-member selection only. The selected set bounds both routes and bare injection: plain
-imports are qualified-only, while `using` and `open import` inject bare names. One shared
-suffix/anchored resolver serves value reads and writes,
+imports are qualified-only, while `using` and `open import` inject bare names. Scope `open`
+declarations use the same structured bare-contribution layers on their enclosing `ScopeNode`.
+Constructor contributions retain their owner path in a parallel region-local candidate layer, so a
+nearer opened enum variant wins without changing global bare-constructor candidates. Local or
+directly imported scope subtrees are selected there, and collisions remain deferred
+to the use site. Value and type lookup both consume those layers, so selected and renamed
+type members follow the same region boundaries and provenance; they never alter export maps
+or import contributions. One shared suffix/anchored resolver serves value reads and writes,
 constructors, and type qualification, retaining ambiguity and route identity until the use
 site; its diagnostics distinguish private declarations from names outside a contribution.
 One shared translator walks those verdicts and raises an error the caller constructs, so

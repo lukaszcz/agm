@@ -276,7 +276,8 @@ def _resolve_body_for_one(
     display_name = "::".join((*key[1], key[2]))
     for item in _static_type_items(program.body.items):
         if isinstance(item, RecordDef) and _decl_key(mid, item) == key:
-            builder.build_record(display_name)
+            with cross_env.type_scope(key[1]):
+                builder.build_record(display_name)
             t = cross_env.get_type(display_name)
             if t is not None:
                 # Non-generic record: update the program table with the fully-built type.
@@ -286,32 +287,35 @@ def _resolve_body_for_one(
             # constructor calls use _program_generic_table / _program_ctor_sig_table instead.
             break
         if isinstance(item, EnumDef) and _decl_key(mid, item) == key:
-            builder.build_enum(display_name)
+            with cross_env.type_scope(key[1]):
+                builder.build_enum(display_name)
             t = cross_env.get_type(display_name)
             if t is not None:
                 program_type_table[key] = t
             break
         if isinstance(item, ExceptionDef) and _decl_key(mid, item) == key:
-            builder.build_exception(display_name)
+            with cross_env.type_scope(key[1]):
+                builder.build_exception(display_name)
             typ = cross_env.get_type(display_name)
             assert typ is not None, f"Exception type {key[2]!r} not registered"
             program_type_table[key] = typ
             break
         if isinstance(item, TypeAlias) and _decl_key(mid, item) == key:
-            if item.type_params:
-                builder.validate_alias(item)
-                template = cross_env.resolve_type_expr(
-                    item.type_expr,
-                    span=item.span,
-                    type_vars=frozenset(item.type_params),
-                )
-                program_alias_table[key] = GenericAliasDef(
-                    type_params=item.type_params,
-                    template=template,
-                )
-            else:
-                alias_type = cross_env.resolve_type_expr(item.type_expr, span=item.span)
-                program_type_table[key] = alias_type
+            with cross_env.type_scope(key[1]):
+                if item.type_params:
+                    builder.validate_alias(item)
+                    template = cross_env.resolve_type_expr(
+                        item.type_expr,
+                        span=item.span,
+                        type_vars=frozenset(item.type_params),
+                    )
+                    program_alias_table[key] = GenericAliasDef(
+                        type_params=item.type_params,
+                        template=template,
+                    )
+                else:
+                    alias_type = cross_env.resolve_type_expr(item.type_expr, span=item.span)
+                    program_type_table[key] = alias_type
             break
     else:
         # Unreachable: called only for keys produced by _collect_all_type_keys,
@@ -454,7 +458,11 @@ def _build_program_type_table(
     per_module_envs: dict[ModuleId, TypeEnvironment] = {}
 
     for mid, rmod in resolved.modules.items():
-        env = TypeEnvironment(module_id=mid, local_scope_paths=frozenset(rmod.resolved.scope_nodes))
+        env = TypeEnvironment(
+            module_id=mid,
+            local_scope_paths=frozenset(rmod.resolved.scope_nodes),
+            scope_nodes=rmod.resolved.scope_nodes,
+        )
         if mid.is_entry and entry_seed_env is not None:
             env.seed_from(entry_seed_env)
         # The builder is transient: it only collects headers into ``env``
@@ -547,6 +555,7 @@ def _build_program_type_table(
             import_env=import_env,
             private_info=resolved.private_info,
             local_scope_paths=frozenset(rmod.resolved.scope_nodes),
+            scope_nodes=rmod.resolved.scope_nodes,
             module_id=mid,
             type_table=shared_type_table,
         )
@@ -655,6 +664,7 @@ def _build_program_func_sig_table(
             import_env=import_env,
             private_info=resolved.private_info,
             local_scope_paths=frozenset(rmod.resolved.scope_nodes),
+            scope_nodes=rmod.resolved.scope_nodes,
             module_id=mid,
         )
         if mid.is_entry and entry_seed_env is not None:
@@ -794,6 +804,7 @@ def _prepare_module_environment(
         import_env=import_env,
         private_info=private_info,
         local_scope_paths=frozenset(resolved.scope_nodes),
+        scope_nodes=resolved.scope_nodes,
         module_id=mid,
         type_table=type_table,
     )

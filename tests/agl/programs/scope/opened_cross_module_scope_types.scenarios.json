@@ -1,0 +1,11 @@
+{
+  "scenarios": [
+    {
+      "name": "opens_reexported_scopes_with_nested_types_and_empty_type_scopes",
+      "module_roots": ["program_modules/scoped_open"],
+      "expect": {
+        "stdout": "7\n5\n"
+      }
+    }
+  ]
+}

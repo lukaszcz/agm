@@ -133,6 +133,7 @@ from agm.agl.syntax.nodes import (
     Loop,
     NameTarget,
     NullLit,
+    OpenDecl,
     ParamDecl,
     ParamKind,
     Pattern,
@@ -748,7 +749,7 @@ class _Checker:
             return UnitType()
         if isinstance(item, ProgramDecl):
             return UnitType()
-        if isinstance(item, (ImportDecl, ExportDecl, InfixDecl)):
+        if isinstance(item, (ImportDecl, ExportDecl, OpenDecl, InfixDecl)):
             return UnitType()  # The program module-system pass processes imports/exports.
         # --- Binders ---
         if isinstance(item, (LetDecl, VarDecl)):
@@ -756,7 +757,7 @@ class _Checker:
         if isinstance(item, AssignStmt):
             return self._check_assign_stmt(item)
         # --- Expr ---
-        return self._check_expr(cast(Expr, item), expected=expected)
+        return self._check_expr(item, expected=expected)
 
     # ------------------------------------------------------------------
     # Declaration checkers
@@ -4462,7 +4463,9 @@ def check_module(
     AglTypeError
         On the first static type violation (first-error abort).
     """
-    env = TypeEnvironment(local_scope_paths=frozenset(resolved.scope_nodes))
+    env = TypeEnvironment(
+        local_scope_paths=frozenset(resolved.scope_nodes), scope_nodes=resolved.scope_nodes
+    )
     if seed_env is not None:
         env.seed_from(seed_env)
     return _check_prepared_module(resolved, capabilities, env=env)

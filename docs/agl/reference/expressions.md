@@ -2,9 +2,9 @@
 
 [← Index](index.md)
 
-This chapter covers literals, constructors, field access, operators, calls,
-and `case`/`if` expressions, together with the static typing rules and runtime
-semantics of each. Operator precedence is tabulated in
+This chapter covers literals, constructors, field access, record updates,
+operators, calls, and `case`/`if` expressions, together with the static typing
+rules and runtime semantics of each. Operator precedence is tabulated in
 [Lexical structure](lexical-structure.md).
 
 In AgL **everything is an expression**: there is no separate statement
@@ -296,6 +296,52 @@ let code = res.exit_code
 
 Field access is statically checked. It does not apply to enums (use pattern
 matching to extract variant payloads), dictionaries, or lists.
+
+## Record update
+
+`target with field = value, ...` builds a copy of a **record** or
+**exception** value with the listed fields replaced; all other fields keep
+their values. The target itself is unchanged (values are immutable):
+
+<!-- agl-check: fragment -->
+```agl
+let base = Issue(title = "Bug", severity = 2, description = "...")
+let urgent = base with severity = 5, title = "Bug!"
+```
+
+The result has the target's static type. Every listed field must exist on
+that type, each value must be assignable to the declared field type (with the
+usual expected-type propagation and `int` → `decimal` coercion), and listing
+the same field twice in one update is a static error. `with` does not apply
+to enums (match and reconstruct instead), dictionaries, lists, or `json`
+values. The target is evaluated once, then the update values left to right.
+
+Update values are ordinary expressions in the enclosing scope — there is no
+implicit field scope. To derive a new value from an old field, read it off the
+target:
+
+<!-- agl-check: fragment -->
+```agl
+let louder = issue with severity = issue.severity + 1
+```
+
+**Binding and chaining.** `with` binds looser than every operator, on both
+sides: the target is the whole operator expression before `with`, and the
+update list extends to the end of the enclosing expression. Comparing an
+updated value therefore requires parentheses — `(r with x = 1) == r2`.
+Chaining is left-associative: `r with x = 1 with y = 2` updates the result of
+the first update. An update as an update *value* must be parenthesized:
+`r with inner = (r.inner with x = 1)`.
+
+**Restricted positions.** In comma-separated element positions — call
+arguments, list and dict literal elements — and in inline `=>` branch bodies,
+a bare `with` would be ambiguous against the enclosing list or branch
+separator, so the whole update expression must be parenthesized there:
+`f((r with x = 1), y = 2)`. Suite (indented) bodies have no such restriction.
+
+Updating an exception through a binding typed as a base exception preserves
+the value's concrete exception type — see
+[Exceptions](exceptions.md).
 
 ## Indexing
 

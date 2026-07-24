@@ -113,6 +113,7 @@ from agm.agl.ir.nodes import (
     IrTemplateValue,
     IrTry,
     IrUnary,
+    IrUpdateRecord,
     IrVariantIs,
     UseDefault,
 )
@@ -254,6 +255,7 @@ __all__ = [
     "IrTemplateValue",
     "IrTry",
     "IrUnary",
+    "IrUpdateRecord",
     "IrVariantIs",
     "ListDecode",
     "Location",

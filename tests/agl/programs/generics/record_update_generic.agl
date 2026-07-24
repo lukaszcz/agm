@@ -1,0 +1,28 @@
+# Generic record update: substituted field types, nested updates, and bare
+# `with` inside suite branch bodies.
+record Pair[A, B]
+  first: A
+  second: B
+
+record Box[T]
+  label: text
+  content: T
+
+param threshold: int
+
+def relabel(b: Box[Pair[int, int]], t: int) -> Box[Pair[int, int]]
+  if b.content.first >= t =>
+    b with content = (b.content with first = 0)
+  else =>
+    b with label = "kept"
+
+let pr = Pair(first = 2, second = "two")
+let doubled = pr with first = pr.first * 10, second = "twenty"
+print doubled.first
+print doubled.second
+
+let box = Box(label = "nums", content = Pair(first = 1, second = 2))
+let moved = relabel(box, threshold)
+print moved.label
+print moved.content.first
+print moved.content.second

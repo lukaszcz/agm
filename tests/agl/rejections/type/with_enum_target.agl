@@ -1,0 +1,6 @@
+enum Status
+  | Open(days: int)
+  | Closed
+let s = Open(days = 3)
+let t = s with days = 4
+print "done"

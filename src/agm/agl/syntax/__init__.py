@@ -76,6 +76,7 @@ from agm.agl.syntax.nodes import (
     ProgramDecl,
     Raise,
     RecordDef,
+    RecordUpdate,
     Return,
     StringLit,
     Template,
@@ -149,6 +150,7 @@ __all__ = [
     # declarations
     "FuncDef",
     "RecordDef",
+    "RecordUpdate",
     "EnumDef",
     "ExceptionDef",
     "TypeAlias",

@@ -65,6 +65,7 @@ from agm.agl.ir import (
     IrPrint,
     IrRaise,
     IrSequence,
+    IrUpdateRecord,
     Location,
     MapDictValues,
     MapEnumFields,
@@ -1222,6 +1223,87 @@ class TestIrField:
             },
         )
         with pytest.raises(InvalidIrError, match="IrField"):
+            IrInterpreter(prog).run()
+
+
+# ---------------------------------------------------------------------------
+# IrUpdateRecord — functional update on RecordValue / ExceptionValue
+# ---------------------------------------------------------------------------
+
+
+class TestIrUpdateRecord:
+    """Tests for the IrUpdateRecord node in IrInterpreter."""
+
+    def test_ir_update_record_replaces_listed_fields(self) -> None:
+        """IrUpdateRecord copies the record with listed fields replaced."""
+        rec_sym, rec_desc = _let_sym(0, "rec")
+        out_sym, out_desc = _let_sym(1, "out")
+        nominal = NominalId(ENTRY_ID, "Point")
+        make_record = IrMakeRecord(
+            location=_LOC,
+            nominal=nominal,
+            display_name="Point",
+            fields=(
+                ("x", IrConstInt(_LOC, 1)),
+                ("y", IrConstInt(_LOC, 2)),
+            ),
+        )
+        prog = _make_program(
+            (
+                IrBind(_LOC, rec_sym, make_record),
+                IrBind(
+                    _LOC,
+                    out_sym,
+                    IrUpdateRecord(
+                        _LOC,
+                        value=IrLoad(_LOC, rec_sym),
+                        updates=(("x", IrConstInt(_LOC, 7)),),
+                    ),
+                ),
+            ),
+            {rec_sym: rec_desc, out_sym: out_desc},
+            nominals={
+                nominal: NominalDescriptor(
+                    nominal=nominal,
+                    display_name="Point",
+                    kind=NominalKind.RECORD,
+                    fields=("x", "y"),
+                )
+            },
+        )
+        bindings = IrInterpreter(prog).run()
+        out = bindings["out"]
+        assert isinstance(out, RecordValue)
+        assert out.fields == {"x": IntValue(7), "y": IntValue(2)}
+        original = bindings["rec"]
+        assert isinstance(original, RecordValue)
+        assert original.fields == {"x": IntValue(1), "y": IntValue(2)}
+
+    def test_ir_update_record_on_non_record_raises(self) -> None:
+        """IrUpdateRecord on a non-Record/non-Exception value raises InvalidIrError."""
+        prog = _make_program(
+            (
+                IrBind(_LOC, SymbolId(0), IrConstInt(_LOC, 42)),
+                IrBind(
+                    _LOC,
+                    SymbolId(1),
+                    IrUpdateRecord(
+                        _LOC,
+                        value=IrLoad(_LOC, SymbolId(0)),
+                        updates=(("x", IrConstInt(_LOC, 7)),),
+                    ),
+                ),
+            ),
+            {
+                SymbolId(0): SymbolDescriptor(
+                    symbol_id=SymbolId(0), mutable=False, public_name="n", owner=ENTRY_ID
+                ),
+                SymbolId(1): SymbolDescriptor(
+                    symbol_id=SymbolId(1), mutable=False, public_name="out", owner=ENTRY_ID
+                ),
+            },
+        )
+        with pytest.raises(InvalidIrError, match="IrUpdateRecord"):
             IrInterpreter(prog).run()
 
 

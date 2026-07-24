@@ -1,0 +1,4 @@
+record P(x: int, y: int)
+let p = P(1, 2)
+let q = p with x = 1, x = 2
+print q.x

@@ -131,6 +131,7 @@ from agm.agl.ir.nodes import (
     IrTemplateValue,
     IrTry,
     IrUnary,
+    IrUpdateRecord,
     IrVariantIs,
     UseDefault,
     is_canonical_literal_scalar,
@@ -907,6 +908,12 @@ def _validate_expr_node(node: IrExpr, ctx: _Context) -> None:
                 _check_nominal_in_table(nominal, ctx)
                 _check_nominal_field(nominal, field, mode, ctx)
             _validate_expr(val, ctx)
+
+        case IrUpdateRecord(value=val, updates=updates):
+            _validate_location(node.location, ctx)
+            _validate_expr(val, ctx)
+            for _fname, fexpr in updates:
+                _validate_expr(fexpr, ctx)
 
         case IrIndex(kind=_kind, value=val, index=idx):
             _validate_location(node.location, ctx)

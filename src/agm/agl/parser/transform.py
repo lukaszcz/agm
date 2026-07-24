@@ -1462,6 +1462,32 @@ class AstBuilder(Transformer):
         )
 
     # ------------------------------------------------------------------
+    # Record update
+    # ------------------------------------------------------------------
+
+    def with_expr(self, meta: Meta, args: _Args) -> syntax.RecordUpdate:
+        """with_expr: with_target "with" with_update (COMMA with_update)*"""
+        target = _find_expr(args)
+        updates = tuple(a for a in args if isinstance(a, syntax.NamedArg))
+        return syntax.RecordUpdate(
+            target=target,
+            updates=updates,
+            span=self._span_from_meta(meta),
+            node_id=self._next_id(),
+        )
+
+    def with_update(self, meta: Meta, args: _Args) -> syntax.NamedArg:
+        """with_update: field_name EQ or_expr"""
+        name_tok = _find_name_token(args)
+        value = _find_expr(args[1:])
+        return syntax.NamedArg(
+            name=str(name_tok),
+            value=value,
+            span=self._span_from_meta(meta),
+            node_id=self._next_id(),
+        )
+
+    # ------------------------------------------------------------------
     # Binary operators
     # ------------------------------------------------------------------
 
@@ -3075,6 +3101,12 @@ def _rewrite_expr(
             callee=_rewrite_expr(expr.callee, table, builder),
             args=tuple(_rewrite_expr(arg, table, builder) for arg in expr.args),
             named_args=tuple(_rewrite_named_arg(arg, table, builder) for arg in expr.named_args),
+        )
+    if isinstance(expr, syntax.RecordUpdate):
+        return replace(
+            expr,
+            target=_rewrite_expr(expr.target, table, builder),
+            updates=tuple(_rewrite_named_arg(u, table, builder) for u in expr.updates),
         )
     if isinstance(expr, syntax.Lambda):
         return replace(

@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from agm.agl.capabilities import HostCapabilities
+from agm.agl.ir.ids import NominalId
 from agm.agl.modules.ids import ENTRY_ID
 from agm.agl.parser import parse_program
 from agm.agl.scope import resolve_module
@@ -105,6 +106,29 @@ def test_generic_record_alias_pattern_uses_concrete_field_type_and_selected_cons
     constructor = checked.pattern_constructor_ref_for(let.pattern.node_id)
     assert constructor is not None
     assert constructor.owner_name == "Alias"
+    assert checked.pattern_constructor_owner_for(let.pattern.node_id) == NominalId(ENTRY_ID, "Box")
+
+
+def test_generic_record_patterns_publish_owner_without_type_arguments() -> None:
+    checked = accept(
+        "record Box[T]\n"
+        "  value: T\n"
+        "let int_box: Box[int] = Box(value = 1)\n"
+        "let Box(value = _) = int_box\n"
+        'let text_box: Box[text] = Box(value = "x")\n'
+        "let Box(value = _) = text_box\n"
+        "int_box\n"
+    )
+    pattern_lets = [
+        item
+        for item in checked.resolved.program.body.items
+        if isinstance(item, LetDecl) and isinstance(item.pattern, ConstructorPattern)
+    ]
+    assert len(pattern_lets) == 2
+    assert [checked.pattern_constructor_owner_for(let.pattern.node_id) for let in pattern_lets] == [
+        NominalId(ENTRY_ID, "Box"),
+        NominalId(ENTRY_ID, "Box"),
+    ]
 
 
 def test_record_patterns_support_imported_and_qualified_alias_spellings(tmp_path: Path) -> None:

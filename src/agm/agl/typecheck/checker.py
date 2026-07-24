@@ -53,6 +53,7 @@ from typing import Literal, TypeGuard, assert_never
 
 from agm.agl.capabilities import HostCapabilities
 from agm.agl.diagnostics import Diagnostic
+from agm.agl.ir.ids import NominalId
 from agm.agl.modules.ids import ENTRY_ID, ModuleId
 from agm.agl.scope.imports import qualification_repair_guidance
 from agm.agl.scope.symbols import (
@@ -529,6 +530,11 @@ class _Checker:
         self._let_matched_types: dict[int, Type] = {}
         self._pattern_binding_refs: dict[int, BindingRef] = {}
         self._pattern_constructor_refs: dict[int, ConstructorRef] = {}
+        # The concrete nominal selected by the checker for each applied
+        # constructor pattern.  ``ConstructorRef`` retains source spelling,
+        # which may be a transparent alias; downstream passes compare this
+        # identity instead of re-running candidate selection.
+        self._pattern_constructor_owners: dict[int, NominalId] = {}
         # Slot ids some branch-body reference resolves to.  Scope output is
         # immutable during checking, so this is derived once up front instead of
         # rescanning the whole resolution table per slot selection.
@@ -1858,6 +1864,7 @@ class _Checker:
             ("let_matched_types", self._let_matched_types),
             ("pattern_binding_refs", self._pattern_binding_refs),
             ("pattern_constructor_refs", self._pattern_constructor_refs),
+            ("pattern_constructor_owners", self._pattern_constructor_owners),
             ("partial_calls", self._partial_calls),
             ("contract_specs", self._contract_specs),
             ("cast_specs", self._cast_specs),
@@ -1922,12 +1929,25 @@ class _Checker:
         )
         self._pattern_binding_refs[node_id] = binding
 
-    def _record_pattern_constructor_ref(self, node_id: int, constructor: ConstructorRef) -> None:
-        """Publish the selected constructor for one pattern occurrence."""
+    def _record_pattern_constructor_ref(
+        self,
+        node_id: int,
+        constructor: ConstructorRef,
+        *,
+        owner_type: RecordType | EnumType | None = None,
+    ) -> None:
+        """Publish the selected constructor and, when available, its owner."""
         self._record_side_table_addition(
             "pattern_constructor_refs", self._pattern_constructor_refs, node_id
         )
         self._pattern_constructor_refs[node_id] = constructor
+        if owner_type is not None:
+            self._record_side_table_addition(
+                "pattern_constructor_owners", self._pattern_constructor_owners, node_id
+            )
+            self._pattern_constructor_owners[node_id] = NominalId(
+                owner_type.module_id, owner_type.name
+            )
 
     def _record_constructor_call_binding(self, node_id: int, binding: dict[str, Expr]) -> None:
         """Store a region-owned constructor-call argument binding."""
@@ -4039,7 +4059,9 @@ class _Checker:
         owner_type, variant_name, fields, context_desc, constructor_ref = (
             self._resolve_nominal_pattern_constructor(pattern, subj_type)
         )
-        self._record_pattern_constructor_ref(pattern.node_id, constructor_ref)
+        self._record_pattern_constructor_ref(
+            pattern.node_id, constructor_ref, owner_type=owner_type
+        )
         field_kinds = self._env.get_constructor_field_kinds_for_type(
             owner_type, owner_type.name, variant_name
         )
@@ -4159,7 +4181,9 @@ class _Checker:
 
         Candidate owner names retain the spelling written by the user, including
         aliases. ``match_source_type_qname`` resolves that spelling transparently
-        and matches its full nominal template against the concrete scrutinee.
+        and matches its full nominal template against the concrete scrutinee;
+        the matched concrete owner is published with the selected reference so
+        later passes do not repeat this resolution.
         """
         candidates = self._resolved.pattern_constructor_candidates.get(
             pattern.node_id, self._resolved.constructor_candidates.get(pattern.name, ())
@@ -4491,6 +4515,7 @@ class _Checker:
             let_matched_types=self._let_matched_types,
             pattern_binding_refs=self._pattern_binding_refs,
             pattern_constructor_refs=self._pattern_constructor_refs,
+            pattern_constructor_owners=self._pattern_constructor_owners,
         )
 
 

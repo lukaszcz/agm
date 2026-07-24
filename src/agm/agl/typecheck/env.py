@@ -18,6 +18,7 @@ from types import MappingProxyType
 from typing import Literal, cast
 
 from agm.agl.diagnostics import AglError, Diagnostic
+from agm.agl.ir.ids import NominalId
 from agm.agl.modules.ids import ENTRY_ID, ModuleId
 from agm.agl.scope.imports import (
     ImportEnv,
@@ -387,7 +388,11 @@ class CheckedModule:
     ``pattern_binding_refs`` / ``pattern_constructor_refs``
         Checker-selected meanings for individual pattern occurrences. They
         preserve scope's immutable candidates while making final selections
-        available to later frontend stages.
+        available to later frontend stages. ``pattern_constructor_owners``
+        publishes the concrete nominal identity selected for each applied
+        constructor pattern because a source-spelling ``ConstructorRef`` can
+        name a transparent alias; downstream passes compare this identity
+        instead of re-running candidate selection.
     """
 
     resolved: ModuleResolution
@@ -409,6 +414,7 @@ class CheckedModule:
     let_matched_types: dict[int, Type] = field(default_factory=dict)
     pattern_binding_refs: dict[int, BindingRef] = field(default_factory=dict)
     pattern_constructor_refs: dict[int, ConstructorRef] = field(default_factory=dict)
+    pattern_constructor_owners: dict[int, NominalId] = field(default_factory=dict)
 
     def binding_for(self, node_id: int) -> BindingRef | None:
         """Return *node_id*'s checked binding, dereferencing a pattern slot."""
@@ -434,6 +440,10 @@ class CheckedModule:
     def pattern_constructor_ref_for(self, node_id: int) -> ConstructorRef | None:
         """Return the constructor selected for one pattern occurrence."""
         return self.pattern_constructor_refs.get(node_id)
+
+    def pattern_constructor_owner_for(self, node_id: int) -> NominalId | None:
+        """Return the resolved nominal owner, distinct from source spelling."""
+        return self.pattern_constructor_owners.get(node_id)
 
 
 def _assert_checked_types_closed(types: Iterable[Type], *, owner: str) -> None:

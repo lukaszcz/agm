@@ -146,35 +146,6 @@ def record_constructor(record_type: RecordType, table: TypeTable) -> RecordConst
     )
 
 
-def _is_selected_record_constructor_ref(
-    pattern: ConstructorPattern,
-    record_type: RecordType,
-    checked: CheckedPatternOwner,
-) -> bool:
-    """Return whether the checker-selected ref identifies this record pattern.
-
-    A record source name may be a transparent alias, so the ref's source owner
-    cannot simply equal ``record_type.name``.  Its complete resolver identity
-    must instead remain one of this pattern's scoped candidates and its source
-    type template must match the checked concrete record handle.
-    """
-    constructor_ref = checked.pattern_constructor_ref_for(pattern.node_id)
-    if constructor_ref is None or constructor_ref.variant is not None:
-        return False
-    candidates = checked.resolved.pattern_constructor_candidates.get(
-        pattern.node_id,
-        checked.resolved.constructor_candidates.get(pattern.name, ()),
-    )
-    return (
-        constructor_ref in candidates
-        and constructor_ref.owner_name == pattern.name
-        and checked.type_env.match_source_type_qname(
-            constructor_ref.owner_module_id, constructor_ref.owner_name, record_type
-        )
-        is not None
-    )
-
-
 def constructor_inhabits_type(constructor: Constructor, subject_type: Type) -> bool:
     """Return whether a constructor denotes any runtime value of ``subject_type``.
 
@@ -411,20 +382,30 @@ def normalize_pattern(
                 raise MatchCompileInvariantError(
                     "missing final constructor classification for applied pattern"
                 )
+            if not isinstance(subject_type, (EnumType, RecordType)):
+                raise MatchCompileInvariantError(
+                    "checked constructor pattern has a non-enum or non-record occurrence type"
+                )
+            # Compare checker-published nominal identity; normalization does not
+            # re-select the constructor from scope candidates.
+            selected_owner = checked.pattern_constructor_owner_for(pattern.node_id)
+            if (
+                selected_owner is None
+                or selected_owner.module_id != subject_type.module_id
+                or selected_owner.declared_name != subject_type.name
+            ):
+                raise MatchCompileInvariantError(
+                    "invalid final constructor classification: published nominal owner disagrees "
+                    "with the checked occurrence type"
+                )
             if isinstance(subject_type, EnumType):
                 nominal_constructor: FieldBearingNominalConstructor = enum_constructor(
                     subject_type, variant, checked.type_env.type_table
                 )
                 if constructor_ref.variant != variant:
                     raise MatchCompileInvariantError("invalid final constructor classification")
-            elif isinstance(subject_type, RecordType):
-                nominal_constructor = record_constructor(subject_type, checked.type_env.type_table)
-                if not _is_selected_record_constructor_ref(pattern, subject_type, checked):
-                    raise MatchCompileInvariantError("invalid final constructor classification")
             else:
-                raise MatchCompileInvariantError(
-                    "checked constructor pattern has a non-enum or non-record occurrence type"
-                )
+                nominal_constructor = record_constructor(subject_type, checked.type_env.type_table)
             supplied_pairs = checked.argument_bindings.constructor_patterns.get(pattern.node_id)
             if supplied_pairs is None:
                 raise MatchCompileInvariantError(

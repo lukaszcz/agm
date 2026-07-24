@@ -335,6 +335,7 @@ class EntryPipeline:
             let_matched_types=entry.let_matched_types,
             pattern_binding_refs=entry.pattern_binding_refs,
             pattern_constructor_refs=entry.pattern_constructor_refs,
+            pattern_constructor_owners=entry.pattern_constructor_owners,
         )
 
     def _prepare_entry_program(

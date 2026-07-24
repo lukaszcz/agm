@@ -39,7 +39,7 @@ from agm.agl.eval.conversions import AglCastConversion, run_recipe
 from agm.agl.eval.effects import EffectHandlers
 from agm.agl.eval.indexing import AglIndexOutOfRange, AglMissingKey, index_get, index_set
 from agm.agl.ir.contracts import ContractRequest, ConversionFailureMode
-from agm.agl.ir.ids import ContractId, FunctionId, Location, SymbolId
+from agm.agl.ir.ids import ContractId, FunctionId, Location, NominalId, SymbolId
 from agm.agl.ir.nodes import (
     AutoTraceField,
     IrAgentHandle,
@@ -123,7 +123,7 @@ from agm.agl.ir.program import (
     IrFunctionBody,
 )
 from agm.agl.ir.validate import InvalidIrError
-from agm.agl.modules.ids import ModuleId
+from agm.agl.modules.ids import PRELUDE_ID, ModuleId
 from agm.agl.runtime.agents import AgentRegistry
 from agm.agl.runtime.codec import ParseResult, _parse_contract_output
 from agm.agl.runtime.convert import StrictJsonParseError, parse_json_strict
@@ -256,6 +256,28 @@ def _make_literal_key_value(key: IrLiteralCaseKey) -> Value:
         return TextValue(key.scalar_value)
     assert key.scalar_value is None
     return JsonValue(None)
+
+
+def _project_nominal_field(value: Value, nominal: NominalId, field: str) -> Value:
+    """Read one declared field from a nominal runtime value.
+
+    Records, enum payloads, and exceptions all retain their nominal identity and
+    field mapping at runtime, so this is the one typeless projection mechanism.
+    """
+    if not isinstance(value, (RecordValue, EnumValue, ExceptionValue)):
+        raise InvalidIrError(
+            "IrField: expected RecordValue, EnumValue, or ExceptionValue, "
+            f"got {type(value).__name__}"
+        )
+    is_exception_base = isinstance(value, ExceptionValue) and nominal == NominalId(
+        PRELUDE_ID, "Exception"
+    )
+    if value.nominal != nominal and not is_exception_base:
+        raise InvalidIrError(f"IrField: expected nominal {nominal!r}, got {value.nominal!r}")
+    try:
+        return value.fields[field]
+    except KeyError:
+        raise InvalidIrError(f"IrField: nominal value lacks field {field!r}") from None
 
 
 # The tree-walking evaluator descends through several Python stack frames per AgL
@@ -1135,13 +1157,8 @@ class IrInterpreter:
                     case _ as _unreachable_unary:  # pragma: no cover
                         assert_never(_unreachable_unary)
 
-            case IrField(value=val_expr, field=field_name):
-                val = self._eval(val_expr)
-                if not isinstance(val, (RecordValue, ExceptionValue)):
-                    raise InvalidIrError(
-                        f"IrField: expected RecordValue or ExceptionValue, got {type(val).__name__}"
-                    )
-                return val.fields[field_name]
+            case IrField(value=val_expr, nominal=nominal, field=field_name):
+                return _project_nominal_field(self._eval(val_expr), nominal, field_name)
 
             case IrIndex(kind=kind, value=val_expr, index=idx_expr):
                 container = self._eval(val_expr)
@@ -1292,13 +1309,13 @@ class IrInterpreter:
                             raise InvalidIrError(
                                 "IrCase: selected payload arm for a non-enum subject"
                             )
+                        assert isinstance(key, IrEnumCaseKey)
                         for field_name, symbol in arm.field_bindings:
-                            field_value = subject_val.fields.get(field_name)
-                            if field_value is None:
-                                raise InvalidIrError(
-                                    f"IrCase: selected enum value lacks field {field_name!r}"
-                                )
-                            self._frame[symbol] = field_value
+                            self._frame[symbol] = _project_nominal_field(
+                                subject_val,
+                                key.nominal,
+                                field_name,
+                            )
                     return self._eval(arm.body)
                 if default is not None:
                     return self._eval(default)

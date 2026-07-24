@@ -1137,7 +1137,7 @@ class TestIrFieldValidation:
     def test_ir_field_valid_passes(self) -> None:
         """IrField with valid location and sub-expr passes validation."""
         prog = _make_program(
-            initializers=(IrBind(LOC, SYM0, IrField(LOC, IrConstInt(LOC, 1), "x")),)
+            initializers=(IrBind(LOC, SYM0, IrField(LOC, IrConstInt(LOC, 1), NOM0, "x")),)
         )
         validate_ir(prog, deep=False)  # no exception
 
@@ -1147,10 +1147,70 @@ class TestIrFieldValidation:
             source_id=SourceId(999), start_offset=0, end_offset=1, start_line=1, start_col=0
         )
         prog = _make_program(
-            initializers=(IrBind(LOC, SYM0, IrField(bad_loc, IrConstInt(LOC, 1), "x")),)
+            initializers=(IrBind(LOC, SYM0, IrField(bad_loc, IrConstInt(LOC, 1), NOM0, "x")),)
         )
         with pytest.raises(InvalidIrError, match="source_id"):
             validate_ir(prog, deep=True)
+
+    @pytest.mark.parametrize(
+        "descriptor",
+        (
+            NominalDescriptor(
+                nominal=NOM0,
+                display_name="Foo",
+                kind=NominalKind.RECORD,
+                fields=("x",),
+            ),
+            NominalDescriptor(
+                nominal=NOM0,
+                display_name="Foo",
+                kind=NominalKind.ENUM,
+                variants=(VariantDescriptor("some", ("x",)),),
+            ),
+        ),
+    )
+    def test_ir_field_registered_record_or_enum_payload_passes_deep_validation(
+        self, descriptor: NominalDescriptor
+    ) -> None:
+        prog = _make_program(
+            initializers=(IrBind(LOC, SYM0, IrField(LOC, IrConstInt(LOC, 1), NOM0, "x")),),
+            nominals={NOM0: descriptor},
+        )
+        validate_ir(prog, deep=True)
+
+    @pytest.mark.parametrize(
+        "descriptor",
+        (
+            NominalDescriptor(
+                nominal=NOM0,
+                display_name="Foo",
+                kind=NominalKind.RECORD,
+                fields=("x",),
+            ),
+            NominalDescriptor(
+                nominal=NOM0,
+                display_name="Foo",
+                kind=NominalKind.ENUM,
+                variants=(VariantDescriptor("some", ("x",)),),
+            ),
+        ),
+    )
+    def test_ir_field_unknown_nominal_field_fails_deep_validation(
+        self, descriptor: NominalDescriptor
+    ) -> None:
+        prog = _make_program(
+            initializers=(IrBind(LOC, SYM0, IrField(LOC, IrConstInt(LOC, 1), NOM0, "missing")),),
+            nominals={NOM0: descriptor},
+        )
+        with pytest.raises(InvalidIrError, match="unknown field"):
+            validate_ir(prog, deep=True)
+
+    def test_ir_field_empty_name_fails_shallow_validation(self) -> None:
+        prog = _make_program(
+            initializers=(IrBind(LOC, SYM0, IrField(LOC, IrConstInt(LOC, 1), NOM0, "")),)
+        )
+        with pytest.raises(InvalidIrError, match="non-empty"):
+            validate_ir(prog, deep=False)
 
 
 class TestIrIndexValidation:

@@ -400,10 +400,16 @@ class IrUnary:
 
 @dataclass(frozen=True, slots=True)
 class IrField:
-    """IR field read: obj.field on a record or exception value."""
+    """IR nominal field projection from a record, enum payload, or exception.
+
+    ``nominal`` identifies the expected field-bearing nominal shape.  It keeps
+    this otherwise typeless operation independently validatable; enum fields
+    are validated against the union of their variant payload shapes.
+    """
 
     location: Location
     value: "IrExpr"
+    nominal: NominalId
     field: str
 
 

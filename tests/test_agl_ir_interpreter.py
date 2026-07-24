@@ -57,6 +57,7 @@ from agm.agl.ir import (
     IrLoad,
     IrMakeClosure,
     IrMakeDict,
+    IrMakeEnum,
     IrMakeException,
     IrMakeList,
     IrMakeRecord,
@@ -76,6 +77,7 @@ from agm.agl.ir import (
     SymbolId,
     ToJson,
     UseDefault,
+    VariantDescriptor,
 )
 from agm.agl.ir.ids import NominalId
 from agm.agl.modules.ids import ENTRY_ID
@@ -1041,6 +1043,7 @@ class TestIrField:
         *,
         x_val: int,
         y_val: int,
+        expected_nominal: NominalId | None = None,
     ) -> Value:
         """Run an IrField read by constructing a RecordValue via IrMakeRecord.
 
@@ -1066,7 +1069,12 @@ class TestIrField:
                 IrBind(
                     _LOC,
                     out_sym,
-                    IrField(_LOC, value=IrLoad(_LOC, rec_sym), field=field_name),
+                    IrField(
+                        _LOC,
+                        value=IrLoad(_LOC, rec_sym),
+                        nominal=expected_nominal if expected_nominal is not None else nominal,
+                        field=field_name,
+                    ),
                 ),
             ),
             {rec_sym: rec_desc, out_sym: out_desc},
@@ -1091,15 +1099,66 @@ class TestIrField:
         result = self._run_with_record_via_make("y", x_val=3, y_val=7)
         assert result == IntValue(7)
 
-    def test_ir_field_on_non_record_raises(self) -> None:
-        """IrField on a non-RecordValue/non-ExceptionValue raises InvalidIrError."""
+    def test_ir_field_with_wrong_nominal_raises(self) -> None:
+        """IrField rejects a nominal value outside its projection contract."""
+        with pytest.raises(InvalidIrError, match="expected nominal"):
+            self._run_with_record_via_make(
+                "x",
+                x_val=3,
+                y_val=4,
+                expected_nominal=NominalId(ENTRY_ID, "Other"),
+            )
+
+    def test_ir_field_reads_enum_payload_field(self) -> None:
+        """IrField uses the same nominal projection contract for enum payloads."""
+        enum_sym, enum_desc = _let_sym(0, "wrapped")
+        out_sym, out_desc = _let_sym(1, "out")
+        nominal = NominalId(ENTRY_ID, "Wrapper")
+        prog = _make_program(
+            (
+                IrBind(
+                    _LOC,
+                    enum_sym,
+                    IrMakeEnum(
+                        _LOC,
+                        nominal,
+                        "Wrapper",
+                        "wrap",
+                        (("value", IrConstInt(_LOC, 9)),),
+                    ),
+                ),
+                IrBind(
+                    _LOC,
+                    out_sym,
+                    IrField(_LOC, IrLoad(_LOC, enum_sym), nominal, "value"),
+                ),
+            ),
+            {enum_sym: enum_desc, out_sym: out_desc},
+            nominals={
+                nominal: NominalDescriptor(
+                    nominal=nominal,
+                    display_name="Wrapper",
+                    kind=NominalKind.ENUM,
+                    variants=(VariantDescriptor("wrap", ("value",)),),
+                )
+            },
+        )
+        assert IrInterpreter(prog).run()["out"] == IntValue(9)
+
+    def test_ir_field_on_non_nominal_raises(self) -> None:
+        """IrField on a non-nominal value raises InvalidIrError."""
         prog = _make_program(
             (
                 IrBind(_LOC, SymbolId(0), IrConstInt(_LOC, 42)),
                 IrBind(
                     _LOC,
                     SymbolId(1),
-                    IrField(_LOC, value=IrLoad(_LOC, SymbolId(0)), field="x"),
+                    IrField(
+                        _LOC,
+                        value=IrLoad(_LOC, SymbolId(0)),
+                        nominal=NominalId(ENTRY_ID, "Point"),
+                        field="x",
+                    ),
                 ),
             ),
             {

@@ -4,6 +4,8 @@
 
 Lowering consumes a `MatchCompiledModule` or `MatchCompiledProgram` and emits one linked executable program. It translates expressions directed by expected types, allocates stable program-local identities (symbols, functions, contracts, sources, nominal types), and links modules in dependency order, initializing top-level function closures before ordinary initializers so forward references work. Type arguments are erased; nominal identity survives as module-qualified identity, with shapes resolved through the shared `TypeTable` from checking. Lowering reads the checker's side tables — argument bindings, parameter types, output contracts — rather than re-binding or re-inferring; that is what keeps the IR and evaluator typeless.
 
+Case lowering traverses the compiled decision DAG. Refutable enum and literal choices remain `IrCase` switches; singleton records and singleton-enum decisions instead project only the child's demanded fields, in declaration order, before continuing. `IrField` is the single nominal projection contract: its nominal and field identify a validated record, exception, or enum-payload field, so decomposition needs neither record case keys nor synthetic enum variants.
+
 ## The IR
 
 The IR is a runtime-neutral data model: program-local identities and source locations, a closed family of expression nodes, and a program container holding modules, symbols, functions, sources, nominals, contracts, and the dry-run inventory. Host operations carry typeless contract requests — codec selection, format instructions, JSON schema, and a decode walk — compiled from checker types during lowering; a recursive target type's decode walk mirrors its JSON Schema `$defs`/`$ref` shape so it closes exactly where the schema does.

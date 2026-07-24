@@ -1356,6 +1356,7 @@ class TestIrFieldLowering:
         unit_lit = UnitLit(span=span, node_id=fake_node_id + 1)
         field_access = FieldAccess(obj=unit_lit, field="myfield", span=span, node_id=fake_node_id)
 
+        checked.node_types[unit_lit.node_id] = RecordType("Point")
         lowerer = _make_lowerer(checked, "()")
         result = lowerer.lower_expr(field_access)
 

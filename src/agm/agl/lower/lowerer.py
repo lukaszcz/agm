@@ -145,6 +145,7 @@ from agm.agl.matchcompile import (
     CompiledCase,
     Constructor,
     Decision,
+    DecisionDecompose,
     DecisionLeaf,
     DecisionSwitch,
     EnumConstructor,
@@ -1105,9 +1106,12 @@ class _Lowerer:
             # Field access → IrField
             # ----------------------------------------------------------
             case FieldAccess(obj=obj_expr, field=field_name, span=span):
+                obj_type = self._node_type(obj_expr.node_id)
+                nominal, _display = self._nominal_for_constructor_result(obj_type)
                 return IrField(
                     location=self._loc(span),
                     value=self.lower_expr(obj_expr),
+                    nominal=nominal,
                     field=field_name,
                 )
 
@@ -2538,8 +2542,8 @@ class _Lowerer:
         }
         occurrences = {occurrence.id: occurrence for occurrence in compiled.occurrences}
         # Group each field occurrence under its (parent occurrence, constructor)
-        # once, in occurrence order, so a switch branch can look up its field
-        # children directly instead of rescanning every occurrence per branch.
+        # once. Both switches and irrefutable decompositions use this ledger to
+        # materialize exactly their child's demanded fields.
         field_children_by_group: dict[tuple[OccurrenceId, Constructor], list[Occurrence]] = {}
         for occurrence in compiled.occurrences:
             provenance = occurrence.provenance
@@ -2577,11 +2581,16 @@ class _Lowerer:
                     binder = assignment.binder
                     binder_names.setdefault(binder.node_id, binder.name)
                 return
-            switch = cast(DecisionSwitch, decision)
-            for decision_branch in switch.keyed_children:
-                collect_binders(decision_branch.decision)
-            if switch.default is not None:
-                collect_binders(switch.default)
+            if isinstance(decision, DecisionDecompose):
+                collect_binders(decision.child)
+                return
+            if isinstance(decision, DecisionSwitch):
+                for decision_branch in decision.keyed_children:
+                    collect_binders(decision_branch.decision)
+                if decision.default is not None:
+                    collect_binders(decision.default)
+                return
+            return  # DecisionFail carries no source binders.
 
         collect_binders(compiled.root)
         binder_symbols = {
@@ -2607,7 +2616,7 @@ class _Lowerer:
             if isinstance(constructor, BoolConstructor):
                 return IrLiteralCaseKey(IrLiteralKind.BOOL, constructor.value)
             if isinstance(constructor, RecordConstructor):
-                raise AssertionError("record pattern decision lowering is not implemented")
+                raise AssertionError("compiler bug: records must lower through DecisionDecompose")
             if constructor.kind is LiteralKind.NUMERIC:
                 assert isinstance(constructor.value, decimal.Decimal)
                 return IrLiteralCaseKey(IrLiteralKind.NUMERIC, constructor.value)
@@ -2616,6 +2625,51 @@ class _Lowerer:
                 return IrLiteralCaseKey(IrLiteralKind.TEXT, constructor.value)
             assert constructor.value is None
             return IrLiteralCaseKey(IrLiteralKind.NULL, None)
+
+        def field_index(occurrence: Occurrence) -> int:
+            """Return one ledger field's declaration index."""
+            provenance = occurrence.provenance
+            assert isinstance(provenance, FieldOccurrenceProvenance), (
+                "compiler bug: field group contains a non-field occurrence"
+            )
+            return provenance.field_index
+
+        def demanded_children(
+            parent: OccurrenceId,
+            constructor: EnumConstructor | RecordConstructor,
+            demanded: tuple[OccurrenceId, ...],
+        ) -> tuple[Occurrence, ...]:
+            """Return demanded child occurrences in stable declaration order."""
+            children = field_children_by_group.get((parent, constructor), ())
+            return tuple(
+                child for child in sorted(children, key=field_index) if child.id in demanded
+            )
+
+        def projection_bindings(
+            parent: OccurrenceId,
+            constructor: EnumConstructor | RecordConstructor,
+            demanded: tuple[OccurrenceId, ...],
+        ) -> tuple[IrBind, ...]:
+            """Project demanded nominal fields into their occurrence symbols."""
+            nominal = (
+                NominalId(constructor.enum_type.module_id, constructor.enum_type.name)
+                if isinstance(constructor, EnumConstructor)
+                else NominalId(constructor.record_type.module_id, constructor.record_type.name)
+            )
+            return tuple(
+                IrBind(
+                    location,
+                    symbol_for_occurrence(occurrence.id),
+                    IrField(
+                        location,
+                        IrLoad(location, symbol_for_occurrence(parent)),
+                        nominal,
+                        occurrence.provenance.field_name,
+                    ),
+                )
+                for occurrence in demanded_children(parent, constructor, demanded)
+                if isinstance(occurrence.provenance, FieldOccurrenceProvenance)
+            )
 
         def lower_decision(decision: Decision) -> IrExpr:
             cached = decision_memo.get(id(decision))
@@ -2638,41 +2692,56 @@ class _Lowerer:
                 decision_memo[id(decision)] = lowered_leaf
                 return lowered_leaf
 
-            switch = cast(DecisionSwitch, decision)
-            arms: list[IrCaseArm] = []
-            for decision_branch in switch.keyed_children:
-                child = decision_branch.decision
-                demanded_children = tuple(
-                    occurrence
-                    for occurrence in field_children_by_group.get(
-                        (switch.occurrence.id, decision_branch.constructor), ()
-                    )
-                    if occurrence.id in child.free_occurrences
+            if isinstance(decision, DecisionDecompose):
+                bindings = projection_bindings(
+                    decision.occurrence.id,
+                    decision.constructor,
+                    decision.demanded_occurrences,
                 )
-                field_bindings = tuple(
-                    (
-                        occurrence.provenance.field_name,
-                        symbol_for_occurrence(occurrence.id),
-                    )
-                    for occurrence in demanded_children
-                    if isinstance(occurrence.provenance, FieldOccurrenceProvenance)
+                decomposition_child = lower_decision(decision.child)
+                lowered_decomposition: IrExpr = (
+                    IrSequence(location, (*bindings, decomposition_child))
+                    if bindings
+                    else decomposition_child
                 )
-                arms.append(
-                    IrCaseArm(
-                        case_key(decision_branch.constructor),
-                        field_bindings,
-                        lower_decision(child),
+                decision_memo[id(decision)] = lowered_decomposition
+                return lowered_decomposition
+
+            if isinstance(decision, DecisionSwitch):
+                arms: list[IrCaseArm] = []
+                for decision_branch in decision.keyed_children:
+                    constructor = decision_branch.constructor
+                    branch_child = decision_branch.decision
+                    if isinstance(constructor, (EnumConstructor, RecordConstructor)):
+                        field_bindings = tuple(
+                            (occurrence.provenance.field_name, symbol_for_occurrence(occurrence.id))
+                            for occurrence in demanded_children(
+                                decision.occurrence.id,
+                                constructor,
+                                branch_child.free_occurrences,
+                            )
+                            if isinstance(occurrence.provenance, FieldOccurrenceProvenance)
+                        )
+                    else:
+                        field_bindings = ()
+                    arms.append(
+                        IrCaseArm(
+                            case_key(constructor),
+                            field_bindings,
+                            lower_decision(branch_child),
+                        )
                     )
+                default = lower_decision(decision.default) if decision.default is not None else None
+                lowered_switch = IrCase(
+                    location,
+                    IrLoad(location, symbol_for_occurrence(decision.occurrence.id)),
+                    tuple(arms),
+                    default,
                 )
-            default = lower_decision(switch.default) if switch.default is not None else None
-            lowered_switch = IrCase(
-                location,
-                IrLoad(location, symbol_for_occurrence(switch.occurrence.id)),
-                tuple(arms),
-                default,
-            )
-            decision_memo[id(decision)] = lowered_switch
-            return lowered_switch
+                decision_memo[id(decision)] = lowered_switch
+                return lowered_switch
+
+            raise AssertionError("compiler bug: failed case decision reached lowering")
 
         decision = lower_decision(compiled.root)
         return IrSequence(

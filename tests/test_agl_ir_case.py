@@ -298,6 +298,21 @@ r"""
     assert ir["r"] == IntValue(3)
 
 
+def test_case_record_and_singleton_enum_decompositions_execute_without_discriminants() -> None:
+    """Closed records and singleton enums destructure through their payload fields."""
+    src = """\
+record Pair
+  left: int
+  right: int
+enum Wrapper | wrap(pair: Pair)
+let wrapped = wrap(pair = Pair(left = 2, right = 3))
+let result = case wrapped of
+  | wrap(pair = Pair(left = _ as left)) => left
+result
+"""
+    assert evaluate_ir(src)["result"] == IntValue(2)
+
+
 # ---------------------------------------------------------------------------
 # Static match-compilation failures
 # ---------------------------------------------------------------------------

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import decimal
+from dataclasses import replace
 
 import pytest
 
@@ -11,7 +12,7 @@ from agm.agl.ir import (
     ExecutableProgram,
     IrBind,
     IrCase,
-    IrEnumCaseKey,
+    IrField,
     IrLiteralCaseKey,
     IrLiteralKind,
     IrLoad,
@@ -19,10 +20,18 @@ from agm.agl.ir import (
 )
 from agm.agl.lower import lower_module
 from agm.agl.matchcompile import (
+    DecisionDecompose,
     MatchCompiledModule,
     compile_module_matches,
 )
-from agm.agl.matchcompile.model import Occurrence, OccurrenceId, PathDecomposition
+from agm.agl.matchcompile.model import (
+    DecisionBranch,
+    DecisionFail,
+    DecisionSwitch,
+    Occurrence,
+    OccurrenceId,
+    PathDecomposition,
+)
 from agm.agl.parser import parse_program
 from agm.agl.scope import resolve_module
 from agm.agl.syntax.nodes import (
@@ -61,14 +70,69 @@ def _public_binding(program: ExecutableProgram, name: str) -> IrBind:
     raise AssertionError(f"missing public binding {name!r}")
 
 
-def test_record_decisions_remain_explicitly_outside_lowering() -> None:
-    with pytest.raises(AssertionError, match="record pattern decision lowering"):
-        _lower(
-            "record Box\n"
-            "  value: int\n"
-            "let value = Box(value = 1)\n"
-            "case value of | Box(value = _) => 1"
-        )
+def test_record_root_decomposition_projects_only_demanded_fields_without_a_switch() -> None:
+    program = _lower(
+        "record Box\n"
+        "  first: int\n"
+        "  second: int\n"
+        "let value = Box(first = 1, second = 2)\n"
+        "let result = case value of | Box(first = _ as selected) => selected\n"
+        "()\n"
+    )
+    lowered = _public_binding(program, "result").value
+    assert isinstance(lowered, IrSequence)
+    decomposition = lowered.items[1]
+    assert isinstance(decomposition, IrSequence)
+    projection = decomposition.items[0]
+    assert isinstance(projection, IrBind)
+    assert isinstance(projection.value, IrField)
+    assert projection.value.field == "first"
+    assert not isinstance(decomposition, IrCase)
+
+
+def test_lowering_rejects_a_forged_failed_decision(self_validation_disabled: None) -> None:
+    """A failed decision path cannot become executable IR."""
+    source = "let value = 1\ncase value of | _ => 1\n"
+    checked = check_module(resolve_module(parse_program(source)), HostCapabilities())
+    result = compile_module_matches(checked)
+    assert isinstance(result.compiled, MatchCompiledModule)
+    case_id, compiled_case = next(iter(result.compiled.cases.items()))
+    forged = replace(
+        result.compiled,
+        sites={**result.compiled.sites, case_id: replace(compiled_case, root=DecisionFail())},
+    )
+    with pytest.raises(AssertionError):
+        lower_module(forged, source_text=source, source_label="<test>")
+
+
+def test_lowering_rejects_a_forged_record_switch(self_validation_disabled: None) -> None:
+    """Records are decomposition-only and cannot acquire a runtime case key."""
+    source = (
+        "record Box\n  value: int\nlet value = Box(value = 1)\n"
+        "case value of | Box(value = _) => 1\n"
+    )
+    checked = check_module(resolve_module(parse_program(source)), HostCapabilities())
+    result = compile_module_matches(checked)
+    assert isinstance(result.compiled, MatchCompiledModule)
+    case_id, compiled_case = next(iter(result.compiled.cases.items()))
+    root = compiled_case.root
+    assert isinstance(root, DecisionDecompose)
+    forged = replace(
+        result.compiled,
+        sites={
+            **result.compiled.sites,
+            case_id: replace(
+                compiled_case,
+                root=DecisionSwitch(
+                    root.occurrence,
+                    (DecisionBranch(root.constructor, root.child),),
+                    None,
+                ),
+            ),
+        },
+    )
+    with pytest.raises(AssertionError):
+        lower_module(forged, source_text=source, source_label="<test>")
 
 
 def test_wildcard_case_still_binds_root_subject_before_leaf() -> None:
@@ -101,25 +165,27 @@ def test_as_patterns_lower_every_chained_binder_at_the_matched_occurrence() -> N
     assert bindings[0].value.symbol == bindings[1].value.symbol
 
 
-def test_enum_arm_binds_only_demanded_immediate_field_for_nested_switch() -> None:
+def test_singleton_enum_decomposition_projects_demanded_fields_before_nested_switch() -> None:
     program = _lower(
         "enum Pair\n"
         "  | pair(left: bool, right: bool)\n"
         "let value = pair(left = false, right = true)\n"
         "let result = case value of\n"
         "  | pair(left = false) => 1\n"
-        "  | _ => 2\n"
+        "  | pair(left = true) => 2\n"
         "()\n"
     )
     lowered = _public_binding(program, "result").value
     assert isinstance(lowered, IrSequence)
-    enum_switch = lowered.items[1]
-    assert isinstance(enum_switch, IrCase)
-    enum_arm = enum_switch.arms[0]
-    assert isinstance(enum_arm.key, IrEnumCaseKey)
-    assert tuple(name for name, _ in enum_arm.field_bindings) == ("left",)
-    assert isinstance(enum_arm.body, IrCase)
-    assert all(isinstance(arm.key, IrLiteralCaseKey) for arm in enum_arm.body.arms)
+    decomposition = lowered.items[1]
+    assert isinstance(decomposition, IrSequence)
+    projection = decomposition.items[0]
+    assert isinstance(projection, IrBind)
+    assert isinstance(projection.value, IrField)
+    assert projection.value.field == "left"
+    nested_switch = decomposition.items[1]
+    assert isinstance(nested_switch, IrCase)
+    assert all(isinstance(arm.key, IrLiteralCaseKey) for arm in nested_switch.arms)
 
 
 @pytest.mark.parametrize(
@@ -173,9 +239,9 @@ def test_shared_decision_node_remains_shared_ir_object() -> None:
     )
     lowered = _public_binding(program, "result").value
     assert isinstance(lowered, IrSequence)
-    enum_switch = lowered.items[1]
-    assert isinstance(enum_switch, IrCase)
-    left_switch = enum_switch.arms[0].body
+    decomposition = lowered.items[1]
+    assert isinstance(decomposition, IrSequence)
+    left_switch = decomposition.items[-1]
     assert isinstance(left_switch, IrCase)
     right_switch = left_switch.arms[0].body
     assert isinstance(right_switch, IrCase)

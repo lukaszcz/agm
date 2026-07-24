@@ -1105,9 +1105,8 @@ class _Resolver:
 
     def _resolve_let(self, node: LetDecl) -> None:
         # A let initializer is non-recursive: no part of its pattern exists
-        # until its RHS has resolved. Simple lets retain their ordinary direct
-        # binding; broader patterns use declaration-owned slots until their
-        # later pattern implementation can select them.
+        # until its RHS has resolved. A simple name is still a pattern binder;
+        # only its slot handling differs from a broader pattern.
         self._resolve_expr(node.value)
         if isinstance(node.pattern, VarPattern):
             candidates = tuple(self._constructor_candidates.get(node.pattern.name, ()))
@@ -1115,7 +1114,11 @@ class _Resolver:
                 self._pattern_constructor_candidates[node.pattern.node_id] = candidates
             self._check_not_reserved(node.pattern.name, node.span)
             self._define_binder(
-                node, name=node.pattern.name, mutable=False, kind=BinderKind.let_binding
+                node,
+                decl_node_id=node.pattern.node_id,
+                name=node.pattern.name,
+                mutable=False,
+                kind=BinderKind.let_binding,
             )
             return
         if isinstance(node.pattern, WildcardPattern):
@@ -1127,17 +1130,28 @@ class _Resolver:
         self._check_not_reserved(node.name, node.span)
         # Resolve RHS before defining the name (lambda non-recursion).
         self._resolve_expr(node.value)
-        self._define_binder(node, name=node.name, mutable=True, kind=BinderKind.var_binding)
+        self._define_binder(
+            node,
+            decl_node_id=node.node_id,
+            name=node.name,
+            mutable=True,
+            kind=BinderKind.var_binding,
+        )
 
     def _define_binder(
         self,
         node: LetDecl | VarDecl,
         *,
+        decl_node_id: int,
         name: str,
         mutable: bool,
         kind: BinderKind,
     ) -> None:
-        """Define one simple-name binder whose initializer has already resolved."""
+        """Define a resolved simple-name binder using its own identity node.
+
+        Let callers pass the pattern node; var callers pass the declaration node
+        because ``var`` has no pattern.
+        """
         if name == "_":
             return
         self._define(
@@ -1146,7 +1160,7 @@ class _Resolver:
                 name=name,
                 mutable=mutable,
                 decl_span=node.span,
-                decl_node_id=node.node_id,
+                decl_node_id=decl_node_id,
                 kind=kind,
                 module_id=self._module_id,
             ),

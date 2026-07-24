@@ -185,9 +185,9 @@ def _item_declaration_ids(item: Item, checked: "CheckedModule") -> frozenset[int
     """Return session-promotable declaration ids introduced by one source item."""
     if isinstance(item, LetDecl):
         return frozenset(
-            binding.decl_node_id
+            candidate.node_id
             for candidate in pattern_binder_candidates(item.pattern)
-            if (binding := checked.pattern_binding_for(candidate.node_id)) is not None
+            if checked.pattern_binding_for(candidate.node_id) is not None
         )
     if isinstance(
         item,

@@ -336,11 +336,12 @@ def _seed_candidate_visible_bindings(
                 )
             elif isinstance(item, (AgentDecl, LetDecl, ParamDecl, VarDecl)):
                 if _references_tainted_binding(module, item, tainted):
-                    tainted.add(item.node_id)
                     if isinstance(item, LetDecl):
-                        # A pattern's selected binders are the declaration ids
-                        # referenced by later code, not merely its let site.
+                        # A let site's selected binders are the declaration ids
+                        # referenced by later code, not the match-site id.
                         tainted.update(pattern_binding_node_ids(item.pattern))
+                    else:
+                        tainted.add(item.node_id)
                     continue
                 checker._check_item(item, expected=None)
         session.slot_resolution_snapshots[module.module_id] = dict(checker._slot_resolution)

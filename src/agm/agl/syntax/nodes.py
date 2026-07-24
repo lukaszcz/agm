@@ -913,7 +913,9 @@ class LetDecl:
 
     Pattern-bearing lets are represented uniformly in the AST. Scope and
     typechecking resolve supported patterns and record their selected bindings;
-    the AST itself makes no claim about later-stage execution support.
+    the AST itself makes no claim about later-stage execution support. ``node_id``
+    identifies the let match site, not any individual binder; binder identities
+    come from the pattern nodes.
     """
 
     pattern: Pattern

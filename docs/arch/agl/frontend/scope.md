@@ -13,6 +13,11 @@ Resolution is namespace- and scope-directed, never capitalization-directed — a
 
 Assignment follows the same split. Scope resolves an unqualified `:=` target and rejects an undeclared name, but leaves assignability to typechecking, which alone knows which binding a pattern slot selected. A qualified target is settled in scope, since only `builtin var` is assignable across a module boundary and no qualified name is a pattern slot.
 
+Every `let` binder is identified by its own pattern node, whether the pattern is a
+single name or a destructuring form. The `let` item's node identifies the match
+site, never a binder. A `var` binder has no pattern and is identified by its
+declaration node.
+
 ## Import Environments
 
 `scope/imports.py` is the pure import-policy seam. Its contribution environment

@@ -1007,7 +1007,8 @@ class _Checker:
         value_type = self._check_boundary_expr(stmt.value, expected=ann_type)
         matched_type = self._binding_declared_type(stmt, value_type, ann_type)
         self._record_let_matched_type(stmt.node_id, matched_type)
-        self._install_binding_metadata(stmt.node_id, stmt.value, matched_type, ann_type)
+        if isinstance(stmt.pattern, VarPattern):
+            self._install_binding_metadata(stmt.pattern.node_id, stmt.value, matched_type, ann_type)
         provenance = (
             set(self._inferred_return_expr_provenance.get(stmt.value.node_id, ()))
             if ann_type is None
@@ -1022,13 +1023,16 @@ class _Checker:
         )
         self._select_match_site_pattern_slots(stmt)
         if isinstance(stmt.pattern, VarPattern):
+            # Simple lets have no resolver-created pattern slot. Publish the
+            # selected binding directly under its pattern identity; this is an
+            # identity entry, not a translation from the let match site.
             self._record_pattern_binding_ref(
                 stmt.pattern.node_id,
                 BindingRef(
                     name=stmt.pattern.name,
                     mutable=False,
                     decl_span=stmt.pattern.span,
-                    decl_node_id=stmt.node_id,
+                    decl_node_id=stmt.pattern.node_id,
                     kind=BinderKind.let_binding,
                     module_id=self._module_id,
                 ),
@@ -1071,7 +1075,7 @@ class _Checker:
     def _install_binding_metadata(
         self, node_id: int, value: Expr, typ: Type, ann_type: Type | None
     ) -> None:
-        """Install ordinary binding metadata shared by vars and let sites."""
+        """Install ordinary metadata keyed by a binder's identity node."""
         self._env.set_binding_type(node_id, typ)
         self._set_generic_function_binding_result_dependencies(
             node_id,

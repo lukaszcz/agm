@@ -539,12 +539,19 @@ class _Lowerer:
     )
 
     def _pattern_binding_ids(self, pattern: Pattern, out: set[int]) -> None:
-        """Collect checker-selected declaration ids for source pattern binders."""
+        """Collect declaration ids for checker-selected source pattern binders.
+
+        The pattern side table is total over selected binders, so every returned
+        id comes directly from its uniform binder identity.
+        """
         classifications = self._checked.pattern_classifications
         for candidate in pattern_binder_candidates(pattern):
             if candidate.is_as_pattern or classifications.get(candidate.node_id) is None:
                 binding = self._checked.pattern_binding_for(candidate.node_id)
-                out.add(binding.decl_node_id if binding is not None else candidate.node_id)
+                assert binding is not None, (
+                    f"compiler bug: no selected binding for pattern node {candidate.node_id}"
+                )
+                out.add(binding.decl_node_id)
 
     def _record_capture(
         self, node_id: int, local_ids: set[int], captured: dict[int, BindingRef]

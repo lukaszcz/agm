@@ -1197,13 +1197,13 @@ class TestUnitPropagation:
         prog = r.resolved.program
         let_decl = prog.body.items[0]
         assert isinstance(let_decl, LetDecl)
-        assert r.type_env.get_binding_type(let_decl.node_id) == UnitType()
+        assert r.type_env.get_binding_type(let_decl.pattern.node_id) == UnitType()
 
     def test_if_no_else_yields_unit(self) -> None:
         r = accept_type("let u: unit = if true => ()\nu")
         let_decl = r.resolved.program.body.items[0]
         assert isinstance(let_decl, LetDecl)
-        assert r.type_env.get_binding_type(let_decl.node_id) == UnitType()
+        assert r.type_env.get_binding_type(let_decl.pattern.node_id) == UnitType()
 
     def test_if_no_else_branch_body_must_be_unit(self) -> None:
         err = reject_type("if true => 1\n()")
@@ -1213,7 +1213,7 @@ class TestUnitPropagation:
         r = accept_type("let u: unit = ()\nu")
         let_decl = r.resolved.program.body.items[0]
         assert isinstance(let_decl, LetDecl)
-        assert r.type_env.get_binding_type(let_decl.node_id) == UnitType()
+        assert r.type_env.get_binding_type(let_decl.pattern.node_id) == UnitType()
 
     def test_agent_decl_yields_agent_type(self) -> None:
         r = accept_type("agent reviewer\nreviewer")
@@ -1244,37 +1244,37 @@ class TestLiterals:
         r = accept_type("let x = 42\nx")
         decl = r.resolved.program.body.items[0]
         assert isinstance(decl, LetDecl)
-        assert r.type_env.get_binding_type(decl.node_id) == IntType()
+        assert r.type_env.get_binding_type(decl.pattern.node_id) == IntType()
 
     def test_decimal_literal(self) -> None:
         r = accept_type("let x = 3.14\nx")
         decl = r.resolved.program.body.items[0]
         assert isinstance(decl, LetDecl)
-        assert r.type_env.get_binding_type(decl.node_id) == DecimalType()
+        assert r.type_env.get_binding_type(decl.pattern.node_id) == DecimalType()
 
     def test_bool_literal(self) -> None:
         r = accept_type("let x = true\nx")
         decl = r.resolved.program.body.items[0]
         assert isinstance(decl, LetDecl)
-        assert r.type_env.get_binding_type(decl.node_id) == BoolType()
+        assert r.type_env.get_binding_type(decl.pattern.node_id) == BoolType()
 
     def test_null_is_json(self) -> None:
         r = accept_type("let x: json = null\nx")
         decl = r.resolved.program.body.items[0]
         assert isinstance(decl, LetDecl)
-        assert r.type_env.get_binding_type(decl.node_id) == JsonType()
+        assert r.type_env.get_binding_type(decl.pattern.node_id) == JsonType()
 
     def test_string_is_text(self) -> None:
         r = accept_type('let x = "hello"\nx')
         decl = r.resolved.program.body.items[0]
         assert isinstance(decl, LetDecl)
-        assert r.type_env.get_binding_type(decl.node_id) == TextType()
+        assert r.type_env.get_binding_type(decl.pattern.node_id) == TextType()
 
     def test_int_widens_to_decimal_annotation(self) -> None:
         r = accept_type("let d: decimal = 3\nd")
         decl = r.resolved.program.body.items[0]
         assert isinstance(decl, LetDecl)
-        assert r.type_env.get_binding_type(decl.node_id) == DecimalType()
+        assert r.type_env.get_binding_type(decl.pattern.node_id) == DecimalType()
 
     def test_mismatch_text_vs_int(self) -> None:
         err = reject_type("let x: text = 42\nx")
@@ -1341,7 +1341,7 @@ class TestRenderBuiltin:
         r = accept_type("let s: text = render([1, 2])\ns")
         decl = r.resolved.program.body.items[0]
         assert isinstance(decl, LetDecl)
-        assert r.type_env.get_binding_type(decl.node_id) == TextType()
+        assert r.type_env.get_binding_type(decl.pattern.node_id) == TextType()
 
     def test_render_accepts_options(self) -> None:
         accept_type('render("hello", pretty = false, quote_strings = false)')
@@ -1653,7 +1653,7 @@ class TestAskRequest:
         r = accept_type('let r = ask-request::[text]("Q")\nr')
         decl = r.resolved.program.body.items[0]
         assert isinstance(decl, LetDecl)
-        binding_type = r.type_env.get_binding_type(decl.node_id)
+        binding_type = r.type_env.get_binding_type(decl.pattern.node_id)
         assert binding_type == r.type_env.get_type("AgentRequest")
 
     def test_contextual_expected_type_ignored(self) -> None:
@@ -2039,6 +2039,53 @@ class TestFuncDef:
 
         assert checked.function_signatures["use_later"].result == IntType()
         assert checked.function_signatures["later"].result == IntType()
+
+    def test_candidate_inference_reads_simple_let_binding(self) -> None:
+        checked = accept_type("let value = 1\ndef capture() = value\ncapture()")
+
+        assert checked.function_signatures["capture"].result == IntType()
+
+    def test_candidate_inference_reads_destructuring_let_binding(self) -> None:
+        checked = accept_type(
+            "record Pair\n"
+            "  value: int\n"
+            "let Pair(value) = Pair(value = 1)\n"
+            "def capture() = value\n"
+            "capture()"
+        )
+
+        assert checked.function_signatures["capture"].result == IntType()
+
+    def test_checked_simple_let_binding_identity_is_its_pattern_node(self) -> None:
+        checked = accept_type("let value = 1\nvalue")
+        declaration = checked.resolved.program.body.items[0]
+        assert isinstance(declaration, LetDecl)
+        binding = checked.pattern_binding_for(declaration.pattern.node_id)
+        assert binding is not None
+
+        assert binding.decl_node_id == declaration.pattern.node_id
+
+    def test_checked_destructuring_let_binding_identity_is_its_pattern_node(self) -> None:
+        checked = accept_type(
+            "record Pair\n"
+            "  left: int\n"
+            "  right: int\n"
+            "let Pair(left, right) = Pair(left = 1, right = 2)\n"
+            "left"
+        )
+        declaration = checked.resolved.program.body.items[1]
+        assert isinstance(declaration, LetDecl)
+        assert isinstance(declaration.pattern, ConstructorPattern)
+        left_pattern, right_pattern = declaration.pattern.positional
+        assert isinstance(left_pattern, VarPattern)
+        assert isinstance(right_pattern, VarPattern)
+
+        left_binding = checked.pattern_binding_for(left_pattern.node_id)
+        right_binding = checked.pattern_binding_for(right_pattern.node_id)
+        assert left_binding is not None
+        assert right_binding is not None
+        assert left_binding.decl_node_id == left_pattern.node_id
+        assert right_binding.decl_node_id == right_pattern.node_id
 
     def test_unannotated_first_class_forward_reference_is_inferred(self) -> None:
         checked = accept_type(
@@ -4887,7 +4934,7 @@ class TestListLiterals:
         r = accept_type("let xs: list[int] = []\nxs")
         decl = r.resolved.program.body.items[0]
         assert isinstance(decl, LetDecl)
-        assert r.type_env.get_binding_type(decl.node_id) == ListType(elem=IntType())
+        assert r.type_env.get_binding_type(decl.pattern.node_id) == ListType(elem=IntType())
 
     def test_list_empty_no_annotation_raises(self) -> None:
         err = reject_type("[]")
@@ -4926,7 +4973,7 @@ class TestDictLiterals:
         r = accept_type("let d: dict[text, int] = {}\nd")
         decl = r.resolved.program.body.items[0]
         assert isinstance(decl, LetDecl)
-        assert r.type_env.get_binding_type(decl.node_id) == DictType(value=IntType())
+        assert r.type_env.get_binding_type(decl.pattern.node_id) == DictType(value=IntType())
 
     def test_dict_empty_no_annotation_raises(self) -> None:
         err = reject_type("{}")
@@ -4969,8 +5016,8 @@ class TestProvisionalContainerLiterals:
         xs, values = checked.resolved.program.body.items[1:3]
         assert isinstance(xs, LetDecl)
         assert isinstance(values, LetDecl)
-        assert checked.type_env.get_binding_type(xs.node_id) == ListType(IntType())
-        assert checked.type_env.get_binding_type(values.node_id) == DictType(IntType())
+        assert checked.type_env.get_binding_type(xs.pattern.node_id) == ListType(IntType())
+        assert checked.type_env.get_binding_type(values.pattern.node_id) == DictType(IntType())
         self._assert_finalized(checked)
 
     def test_empty_literals_are_solved_by_enclosing_results_and_constructor_fields(self) -> None:
@@ -4989,9 +5036,9 @@ class TestProvisionalContainerLiterals:
         assert isinstance(xs, LetDecl)
         assert isinstance(values, LetDecl)
         assert isinstance(bundle, LetDecl)
-        assert checked.type_env.get_binding_type(xs.node_id) == ListType(IntType())
-        assert checked.type_env.get_binding_type(values.node_id) == DictType(IntType())
-        assert checked.type_env.get_binding_type(bundle.node_id) == RecordType(
+        assert checked.type_env.get_binding_type(xs.pattern.node_id) == ListType(IntType())
+        assert checked.type_env.get_binding_type(values.pattern.node_id) == DictType(IntType())
+        assert checked.type_env.get_binding_type(bundle.pattern.node_id) == RecordType(
             "Bundle", (IntType(),)
         )
         self._assert_finalized(checked)
@@ -5001,8 +5048,8 @@ class TestProvisionalContainerLiterals:
         xs, values = checked.resolved.program.body.items[:2]
         assert isinstance(xs, LetDecl)
         assert isinstance(values, LetDecl)
-        assert checked.type_env.get_binding_type(xs.node_id) == ListType(IntType())
-        assert checked.type_env.get_binding_type(values.node_id) == DictType(IntType())
+        assert checked.type_env.get_binding_type(xs.pattern.node_id) == ListType(IntType())
+        assert checked.type_env.get_binding_type(values.pattern.node_id) == DictType(IntType())
         self._assert_finalized(checked)
 
     def test_empty_literals_are_solved_by_branch_common_types(self) -> None:
@@ -5015,8 +5062,8 @@ class TestProvisionalContainerLiterals:
         xs, values = checked.resolved.program.body.items[1:3]
         assert isinstance(xs, LetDecl)
         assert isinstance(values, LetDecl)
-        assert checked.type_env.get_binding_type(xs.node_id) == ListType(IntType())
-        assert checked.type_env.get_binding_type(values.node_id) == DictType(IntType())
+        assert checked.type_env.get_binding_type(xs.pattern.node_id) == ListType(IntType())
+        assert checked.type_env.get_binding_type(values.pattern.node_id) == DictType(IntType())
         self._assert_finalized(checked)
 
     def test_populated_literals_unify_provisional_generic_values(self) -> None:
@@ -5032,8 +5079,8 @@ class TestProvisionalContainerLiterals:
         option_int = EnumType("Option", (IntType(),))
         assert isinstance(xs, LetDecl)
         assert isinstance(values, LetDecl)
-        assert checked.type_env.get_binding_type(xs.node_id) == ListType(option_int)
-        assert checked.type_env.get_binding_type(values.node_id) == DictType(option_int)
+        assert checked.type_env.get_binding_type(xs.pattern.node_id) == ListType(option_int)
+        assert checked.type_env.get_binding_type(values.pattern.node_id) == DictType(option_int)
         self._assert_finalized(checked)
 
     def test_branches_unify_provisional_generic_values(self) -> None:
@@ -5101,8 +5148,8 @@ class TestProvisionalContainerLiterals:
         xs, value = checked.resolved.program.body.items[1:3]
         assert isinstance(xs, LetDecl)
         assert isinstance(value, LetDecl)
-        assert checked.type_env.get_binding_type(xs.node_id) == ListType(DecimalType())
-        assert checked.type_env.get_binding_type(value.node_id) == DecimalType()
+        assert checked.type_env.get_binding_type(xs.pattern.node_id) == ListType(DecimalType())
+        assert checked.type_env.get_binding_type(value.pattern.node_id) == DecimalType()
 
 
 # ---------------------------------------------------------------------------
@@ -5145,7 +5192,9 @@ class TestTypeDeclarations:
         )
         value = checked.resolved.program.body.items[-2]
         assert isinstance(value, LetDecl)
-        assert checked.type_env.get_binding_type(value.node_id) == EnumType("Option", (IntType(),))
+        assert checked.type_env.get_binding_type(value.pattern.node_id) == EnumType(
+            "Option", (IntType(),)
+        )
 
     def test_parameterized_alias_arity_mismatch_rejected(self) -> None:
         err = reject_type("type Wrap[A] = list[A]\nlet w: Wrap[int, text] = [1]\nw")
@@ -6064,7 +6113,7 @@ class TestIndexTypechecking:
         ref = self._binding_ref(
             "xs",
             mutable=mutable,
-            decl_node_id=decl.node_id,
+            decl_node_id=(decl.pattern.node_id if isinstance(decl, LetDecl) else decl.node_id),
             kind=BinderKind.var_binding if mutable else BinderKind.let_binding,
         )
         return decl, ref_expr, ref
@@ -6099,7 +6148,7 @@ class TestIndexTypechecking:
         ref = self._binding_ref(
             "d",
             mutable=mutable,
-            decl_node_id=decl.node_id,
+            decl_node_id=(decl.pattern.node_id if isinstance(decl, LetDecl) else decl.node_id),
             kind=BinderKind.var_binding if mutable else BinderKind.let_binding,
         )
         return decl, ref_expr, ref
@@ -6161,7 +6210,7 @@ class TestIndexTypechecking:
         ref = self._binding_ref(
             "n",
             mutable=False,
-            decl_node_id=decl.node_id,
+            decl_node_id=decl.pattern.node_id,
             kind=BinderKind.let_binding,
         )
         non_container = IndexAccess(
@@ -7424,7 +7473,7 @@ class TestGenericFunctionInferenceRegions:
         )
         binding = checked.resolved.program.body.items[2]
         assert isinstance(binding, LetDecl)
-        assert checked.type_env.get_binding_type(binding.node_id) == IntType()
+        assert checked.type_env.get_binding_type(binding.pattern.node_id) == IntType()
         self._assert_finalized(checked)
 
     def test_declared_call_accepts_generic_argument_for_concrete_slot(self) -> None:
@@ -7457,7 +7506,7 @@ class TestGenericFunctionInferenceRegions:
         )
         for item in checked.resolved.program.body.items[3:6]:
             assert isinstance(item, LetDecl)
-            assert checked.type_env.get_binding_type(item.node_id) == IntType()
+            assert checked.type_env.get_binding_type(item.pattern.node_id) == IntType()
         self._assert_finalized(checked)
 
     def test_nested_generic_occurrences_are_fresh(self) -> None:
@@ -7477,8 +7526,8 @@ class TestGenericFunctionInferenceRegions:
         values = checked.resolved.program.body.items[5]
         assert isinstance(nested, LetDecl)
         assert isinstance(values, LetDecl)
-        assert checked.type_env.get_binding_type(nested.node_id) == IntType()
-        assert checked.type_env.get_binding_type(values.node_id) == RecordType(
+        assert checked.type_env.get_binding_type(nested.pattern.node_id) == IntType()
+        assert checked.type_env.get_binding_type(values.pattern.node_id) == RecordType(
             "Duo", (IntType(), TextType())
         )
         self._assert_finalized(checked)
@@ -7498,7 +7547,7 @@ class TestGenericFunctionInferenceRegions:
         binding = checked.resolved.program.body.items[1]
         assert isinstance(binding, LetDecl)
         assert checked.node_types[binding.value.node_id] == IntType()
-        assert checked.type_env.get_binding_type(binding.node_id) == DecimalType()
+        assert checked.type_env.get_binding_type(binding.pattern.node_id) == DecimalType()
         self._assert_finalized(checked)
 
     def test_generic_arguments_reject_coercions_and_json_as_equality_evidence(self) -> None:
@@ -7518,8 +7567,8 @@ class TestGenericFunctionInferenceRegions:
         values = checked.resolved.program.body.items[2]
         assert isinstance(xs, LetDecl)
         assert isinstance(values, LetDecl)
-        assert checked.type_env.get_binding_type(xs.node_id) == ListType(IntType())
-        assert checked.type_env.get_binding_type(values.node_id) == DictType(IntType())
+        assert checked.type_env.get_binding_type(xs.pattern.node_id) == ListType(IntType())
+        assert checked.type_env.get_binding_type(values.pattern.node_id) == DictType(IntType())
         self._assert_finalized(checked)
 
     def test_bottom_requires_context_but_can_be_completed_by_it(self) -> None:
@@ -7537,7 +7586,7 @@ class TestGenericFunctionInferenceRegions:
         )
         result = checked.resolved.program.body.items[1]
         assert isinstance(result, LetDecl)
-        assert checked.type_env.get_binding_type(result.node_id) == IntType()
+        assert checked.type_env.get_binding_type(result.pattern.node_id) == IntType()
         self._assert_finalized(checked)
 
     def test_unannotated_generic_value_cannot_escape_binding_region(self) -> None:
@@ -7601,21 +7650,21 @@ class TestGenerics:
         r = accept_type("def id[T](x: T) -> T = x\nlet n = id(1)\nn")
         decl = r.resolved.program.body.items[1]
         assert isinstance(decl, LetDecl)
-        assert r.type_env.get_binding_type(decl.node_id) == IntType()
+        assert r.type_env.get_binding_type(decl.pattern.node_id) == IntType()
 
     def test_inference_result_only_from_expected(self) -> None:
         # T only appears in the result; context provides the binding
         r = accept_type("def empty[T]() -> list[T] = []\nlet xs: list[int] = empty()\nxs")
         decl = r.resolved.program.body.items[1]
         assert isinstance(decl, LetDecl)
-        assert r.type_env.get_binding_type(decl.node_id) == ListType(elem=IntType())
+        assert r.type_env.get_binding_type(decl.pattern.node_id) == ListType(elem=IntType())
 
     def test_inference_context_doesnt_override_arg(self) -> None:
         # let x: decimal = id(1) infers T=int, then coerces int → decimal
         r = accept_type("def id[T](x: T) -> T = x\nlet x: decimal = id(1)\nx")
         decl = r.resolved.program.body.items[1]
         assert isinstance(decl, LetDecl)
-        assert r.type_env.get_binding_type(decl.node_id) == DecimalType()
+        assert r.type_env.get_binding_type(decl.pattern.node_id) == DecimalType()
 
     def test_explicit_type_args_single(self) -> None:
         r = accept_type("def id[T](x: T) -> T = x\nid::[int](1)")
@@ -8210,7 +8259,7 @@ class TestGenericConstructorInference:
         r = accept_type("record Box[T]\n  value: T\nlet b = Box(value = 1)\nb")
         decl = r.resolved.program.body.items[1]
         assert isinstance(decl, LetDecl)
-        binding = r.type_env.get_binding_type(decl.node_id)
+        binding = r.type_env.get_binding_type(decl.pattern.node_id)
         assert isinstance(binding, RecordType)
         assert binding.type_args == (IntType(),)
 
@@ -8241,15 +8290,21 @@ class TestGenericConstructorInference:
         box_type = checked.type_env.instantiate_nominal("Box", (IntType(),))
         option_type = checked.type_env.instantiate_nominal("Option", (IntType(),))
         assert (
-            checked.type_env.get_binding_type(checked.resolved.program.body.items[5].node_id)
+            checked.type_env.get_binding_type(
+                checked.resolved.program.body.items[5].pattern.node_id
+            )
             == box_type
         )
         assert (
-            checked.type_env.get_binding_type(checked.resolved.program.body.items[6].node_id)
+            checked.type_env.get_binding_type(
+                checked.resolved.program.body.items[6].pattern.node_id
+            )
             == option_type
         )
         assert (
-            checked.type_env.get_binding_type(checked.resolved.program.body.items[7].node_id)
+            checked.type_env.get_binding_type(
+                checked.resolved.program.body.items[7].pattern.node_id
+            )
             == option_type
         )
 
@@ -8266,7 +8321,7 @@ class TestGenericConstructorInference:
         pair_type = checked.type_env.instantiate_nominal("Pair", (IntType(),))
         pair_call = checked.resolved.program.body.items[2]
         assert isinstance(pair_call, LetDecl)
-        assert checked.type_env.get_binding_type(pair_call.node_id) == pair_type
+        assert checked.type_env.get_binding_type(pair_call.pattern.node_id) == pair_type
         assert isinstance(pair_call.value, Call)
         constructor_call = pair_call.value.args[0]
         assert isinstance(constructor_call, Call)
@@ -8284,7 +8339,7 @@ class TestGenericConstructorInference:
             "box"
         )
         assert checked.type_env.get_binding_type(
-            checked.resolved.program.body.items[2].node_id
+            checked.resolved.program.body.items[2].pattern.node_id
         ) == checked.type_env.instantiate_nominal("Box", (IntType(),))
 
     def test_generic_constructor_conflicts_include_solver_provenance(self) -> None:
@@ -8307,7 +8362,9 @@ class TestGenericConstructorInference:
         )
         both = checked.resolved.program.body.items[3]
         assert isinstance(both, LetDecl)
-        assert checked.type_env.get_binding_type(both.node_id) == checked.type_env.get_type("Both")
+        assert checked.type_env.get_binding_type(both.pattern.node_id) == checked.type_env.get_type(
+            "Both"
+        )
 
     def test_generic_constructor_never_queries_type_table_with_flexible_owner(
         self, monkeypatch: pytest.MonkeyPatch
@@ -8327,7 +8384,7 @@ class TestGenericConstructorInference:
             "box"
         )
         assert checked.type_env.get_binding_type(
-            checked.resolved.program.body.items[2].node_id
+            checked.resolved.program.body.items[2].pattern.node_id
         ) == checked.type_env.instantiate_nominal("Box", (IntType(),))
 
         from agm.agl.typecheck.checker import _Checker, _InferenceRegion
@@ -8986,7 +9043,7 @@ class TestNestedGenericInference:
         )
         decl = r.resolved.program.body.items[2]
         assert isinstance(decl, LetDecl)
-        binding = r.type_env.get_binding_type(decl.node_id)
+        binding = r.type_env.get_binding_type(decl.pattern.node_id)
         assert isinstance(binding, RecordType)
         assert binding.type_args == (IntType(),)
 

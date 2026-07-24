@@ -829,9 +829,12 @@ class ReplSession:
         if not isinstance(last, (Binder, Declaration)):
             return captured, value_type
         if isinstance(last, LetDecl):
-            if simple_let_pattern_name(last.pattern) is None:
+            simple_name = simple_let_pattern_name(last.pattern)
+            if simple_name is None or simple_name == "_":
                 return captured, value_type
-            return self._declaration_value(last.node_id), value_type
+            binding = checked.pattern_binding_for(last.pattern.node_id)
+            assert binding is not None, "compiler bug: no selected simple-let binding"
+            return self._declaration_value(binding.decl_node_id), value_type
         if isinstance(last, VarDecl):
             return self._declaration_value(last.node_id), value_type
         return None, None
@@ -908,7 +911,13 @@ class ReplSession:
         that an initializer which always exits reports ``bottom``. Shared by the
         check-only result builder and the success echo so the two agree.
         """
-        from agm.agl.syntax.nodes import Binder, Declaration, LetDecl, VarDecl
+        from agm.agl.syntax.nodes import (
+            Binder,
+            Declaration,
+            LetDecl,
+            VarDecl,
+            simple_let_pattern_name,
+        )
 
         # A parsed program always has at least one item (empty/comment-only
         # source fails parsing earlier).
@@ -923,6 +932,10 @@ class ReplSession:
             initializer_type = checked.node_types.get(last.value.node_id)
             if isinstance(initializer_type, BottomType):
                 return initializer_type
+            if isinstance(last, LetDecl):
+                if simple_let_pattern_name(last.pattern) == "_":
+                    return None
+                return checked.let_matched_types.get(last.node_id)
             return checked.type_env.get_binding_type(last.node_id)
         return None
 

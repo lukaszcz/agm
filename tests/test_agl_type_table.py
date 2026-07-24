@@ -47,9 +47,9 @@ from agm.agl.semantics.types import (
     UnitType,
 )
 from agm.agl.syntax.nodes import LetDecl, ParamKind, VarDecl
-from agm.agl.typecheck import CheckedModule, check_module
+from agm.agl.typecheck import AglTypeError, CheckedModule, check_module
 from agm.agl.typecheck.program import check_program
-from tests.agl.ir_harness import make_graph_from_files
+from tests.agl.ir_harness import evaluate_ir_output, make_graph_from_files
 
 _CAPS = HostCapabilities(
     agent_names=frozenset(),
@@ -83,11 +83,56 @@ def test_scoped_generic_enum_does_not_claim_the_root_type_or_constructor_namespa
     assert "hidden" not in checked.resolved.constructor_candidates
 
 
+def test_type_references_inside_a_scope_use_the_nearest_scoped_type() -> None:
+    checked = _check(
+        "record T(value: text)\n"
+        "scope A\n"
+        "record T(value: int)\n"
+        "def build(value: T) -> T = value\n"
+        "end A\n"
+        "A::build(A::T(value = 1))"
+    )
+
+    assert checked.node_types[checked.resolved.program.body.items[-1].node_id] == RecordType("A::T")
+
+
 def _check_program(tmp_path: Path, modules: dict[str, str]):
     """Build and typecheck a multi-module graph; returns CheckedProgram."""
     graph = make_graph_from_files(tmp_path, modules)
     resolved_program = resolve_program(graph)
     return check_program(resolved_program, _CAPS)
+
+
+def test_standalone_current_module_type_anchor_bypasses_nested_scope_during_lowering() -> None:
+    assert (
+        evaluate_ir_output(
+            "record T(value: int)\n"
+            "scope A\n"
+            "record T(value: text)\n"
+            "def root(value: ::T) -> ::T = value\n"
+            "end A\n"
+            "print(A::root(T(value = 1)).value)"
+        )
+        == "1\n"
+    )
+
+
+def test_scoped_aliases_are_available_to_scoped_function_signatures() -> None:
+    checked = _check(
+        "scope A\n"
+        "type Count = int\n"
+        "record Marker()\n"
+        "def keep(value: Count) -> Count = value\n"
+        "end A\n"
+        "A::keep(1)"
+    )
+
+    assert checked.node_types
+
+
+def test_current_module_generic_type_anchor_rejects_unknown_root_type() -> None:
+    with pytest.raises(AglTypeError, match="Unknown scoped type"):
+        _check("def f(value: ::A::Missing[int]) -> int = 0\nf(1)")
 
 
 def test_scoped_record_does_not_enter_program_type_tables(tmp_path: Path) -> None:
@@ -100,6 +145,30 @@ def test_scoped_record_does_not_enter_program_type_tables(tmp_path: Path) -> Non
 
     assert (ENTRY_ID, "Hidden") not in checked.program_type_table
     assert (ENTRY_ID, "Visible") in checked.program_type_table
+
+
+def test_scoped_type_context_restores_after_a_type_error(tmp_path: Path) -> None:
+    source = "scope A\nrecord Broken(value: Missing)\nend A"
+
+    with pytest.raises(AglTypeError):
+        _check(source)
+    with pytest.raises(AglTypeError):
+        _check_program(tmp_path, {"entry": source})
+
+
+def test_scoped_generic_type_applications_resolve_in_module_and_program_contexts(
+    tmp_path: Path,
+) -> None:
+    source = (
+        "scope A\n"
+        "record G[T](value: T)\n"
+        "def keep(value: A::G[int]) -> A::G[int] = value\n"
+        "end A\n"
+        "A::G::[int](value = 1)"
+    )
+
+    assert _check(source).node_types
+    assert _check_program(tmp_path, {"entry": source}).modules[ENTRY_ID].node_types
 
 
 def _binding_value_type(checked: CheckedModule, name: str):

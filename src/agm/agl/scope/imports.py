@@ -64,8 +64,9 @@ ImportTarget = SingleTarget | WildcardTarget
 def qualification_repair_guidance() -> str:
     """Return the common, source-level repairs for a qualifier ambiguity."""
     return (
-        "Use hiding to remove a conflicting member, a longer suffix or a /-anchored path "
-        "to select a module, or as to give one import a distinct name."
+        "Use a :: anchor to select the current module, hiding to remove a conflicting member, "
+        "a longer suffix or a /-anchored path to select a module, or as to give one import "
+        "a distinct name."
     )
 
 

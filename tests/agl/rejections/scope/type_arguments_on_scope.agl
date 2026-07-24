@@ -1,0 +1,5 @@
+scope Tools
+def value() -> int = 0
+end Tools
+
+Tools[int]::value()

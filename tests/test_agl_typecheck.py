@@ -487,6 +487,21 @@ class TestIsAssignable:
 
 
 # ---------------------------------------------------------------------------
+# Scoped type diagnostics
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("type_ref", ("A::Missing", "A::Missing[int]"))
+def test_missing_type_under_recognized_local_scope_is_focused_without_module_graph(
+    type_ref: str,
+) -> None:
+    source = f"scope A\ndef member() -> int = 1\nend A\ndef use(value: {type_ref}) -> int = 1"
+
+    with pytest.raises(AglTypeError, match="Unknown scoped type 'A::Missing'"):
+        parse_resolve_check(source)
+
+
+# ---------------------------------------------------------------------------
 # TypeEnvironment
 # ---------------------------------------------------------------------------
 

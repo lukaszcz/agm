@@ -27,12 +27,13 @@ from agm.agl.lower.lowerer import (
     _contract_has_schema,
     _LinkState,
     _Lowerer,
+    _static_items,
 )
 from agm.agl.matchcompile import MatchCompiledProgram
 from agm.agl.modules.ids import STD_CORE_ID, ModuleId
 from agm.agl.self_validation import self_validation_enabled
 from agm.agl.semantics.types import EnumType, ExceptionType, RecordType
-from agm.agl.syntax.nodes import AgentDecl, FuncDef, is_scoped_declaration
+from agm.agl.syntax.nodes import AgentDecl, FuncDef, ScopeRegion
 from agm.util.text import normalize_newlines
 
 __all__ = ["lower_program"]
@@ -176,14 +177,12 @@ def lower_program(
         )
         module_lowerers[mid] = lowerer
         body = cm.resolved.program.body
-        for item in body.items:
-            if (
-                isinstance(item, FuncDef)
-                and not is_scoped_declaration(item)
-                and not item.is_builtin
-            ):
+        for item in _static_items(body.items):
+            if isinstance(item, FuncDef) and not item.is_builtin:
                 lowerer._prealloc_funcdef(item)
-            elif isinstance(item, AgentDecl) and not is_scoped_declaration(item):
+            elif isinstance(item, AgentDecl) and (
+                not item.scope_path or lowerer._scoped_agent_is_referenced(item)
+            ):
                 lowerer._alloc_sym(
                     item.node_id,
                     name=item.name,
@@ -209,13 +208,21 @@ def lower_program(
         function_initializers: list[IrExpr] = []
         other_initializers: list[IrExpr] = []
         for item in body.items:
-            if mid.is_entry or isinstance(item, FuncDef):
-                ir = lowerer.lower_item(item, top_level=mid.is_entry)
-                if ir is not None:
-                    target = (
-                        function_initializers if isinstance(item, FuncDef) else other_initializers
-                    )
-                    target.append(ir)
+            items = _static_items((item,)) if isinstance(item, ScopeRegion) else (item,)
+            for nested_item in items:
+                if isinstance(nested_item, AgentDecl) and (
+                    nested_item.scope_path and not lowerer._scoped_agent_is_referenced(nested_item)
+                ):
+                    continue
+                if mid.is_entry or isinstance(nested_item, (FuncDef, AgentDecl)):
+                    ir = lowerer.lower_item(nested_item, top_level=mid.is_entry)
+                    if ir is not None:
+                        target = (
+                            function_initializers
+                            if isinstance(nested_item, FuncDef)
+                            else other_initializers
+                        )
+                        target.append(ir)
         executable_modules[mid] = ExecutableModule(
             module_id=mid,
             initializers=tuple((*function_initializers, *other_initializers)),

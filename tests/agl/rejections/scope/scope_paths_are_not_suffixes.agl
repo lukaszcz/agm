@@ -1,0 +1,7 @@
+scope Area
+scope Point
+def distance() -> int = 0
+end Point
+end Area
+
+Point::distance()

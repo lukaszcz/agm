@@ -9,12 +9,15 @@ from agm.agl.scope import AglScopeError, resolve_module
 from agm.agl.syntax import (
     AssignStmt,
     Block,
+    Call,
     Case,
+    FuncDef,
     IsTest,
     LetDecl,
     NameT,
     NameTarget,
     QualifierAnchor,
+    ScopeRegion,
     VarRef,
 )
 
@@ -133,27 +136,14 @@ def test_qualified_is_tests_keep_segment_spans_and_type_arguments() -> None:
 @pytest.mark.parametrize(
     "source",
     (
-        "case value of | First::Second::Third::member => 1",
         "let value: First::Second::Third::member = null",
         "let value: Option[int]::Result = null",
-        "value is First::Second::Third::member",
+        "let value = 1\ncase value of | First::Second::Third::member => 1",
+        "let value = 1\nvalue is First::Second::Third::member",
     ),
 )
-def test_unsupported_qualifier_chains_report_scope_errors_in_each_position(source: str) -> None:
-    with pytest.raises(AglScopeError, match="Unsupported qualifier chain"):
-        resolve_module(parse_program(source))
-
-
-@pytest.mark.parametrize(
-    "source",
-    (
-        "case value of | Option[int]::None => 1",
-        "value is Option[int]::None",
-    ),
-)
-def test_applied_pattern_and_is_qualifiers_report_unsupported_chains(source: str) -> None:
-    with pytest.raises(AglScopeError, match="Unsupported qualifier chain"):
-        resolve_module(parse_program(source))
+def test_long_qualifier_chains_are_not_rejected_by_legacy_shape_validation(source: str) -> None:
+    resolve_module(parse_program(source))
 
 
 @pytest.mark.parametrize(
@@ -165,8 +155,8 @@ def test_applied_pattern_and_is_qualifiers_report_unsupported_chains(source: str
         "foo::bar/baz::Baz",
     ),
 )
-def test_nonleading_anchor_and_route_segments_report_unsupported_chains(source: str) -> None:
-    with pytest.raises(AglScopeError, match="Unsupported qualifier chain"):
+def test_nonleading_anchor_and_route_segments_report_route_errors(source: str) -> None:
+    with pytest.raises(AglScopeError, match="Only the leading qualifier"):
         resolve_module(parse_program(source))
 
 
@@ -181,9 +171,11 @@ def test_current_module_qualified_assignment_remains_an_assignment_target() -> N
     assert assignment.target.qualifier.segments == ()
 
 
-def test_non_expression_unsupported_chains_reach_scope_validation() -> None:
-    with pytest.raises(AglScopeError, match="Unsupported qualifier chain"):
-        resolve_module(parse_program("case value of | module::owner/name::member => 1"))
+def test_non_expression_chain_routes_reject_only_invalid_nonleading_routes() -> None:
+    with pytest.raises(AglScopeError, match="Only the leading qualifier"):
+        resolve_module(
+            parse_program("let value = 1\ncase value of | module::owner/name::member => 1")
+        )
 
 
 def test_long_qualified_expression_retains_all_segments() -> None:
@@ -191,6 +183,35 @@ def test_long_qualified_expression_retains_all_segments() -> None:
 
     assert ref.qualifier is not None
     assert [segment.name for segment in ref.qualifier.segments] == ["First", "Second", "Third"]
+
+
+def test_current_module_anchor_uses_root_binding_without_import_environment() -> None:
+    program = parse_program(
+        "def root() -> int = 1\nscope Nested\ndef use(root: int) -> int = ::root()\nend Nested"
+    )
+
+    resolution = resolve_module(program)
+    nested = next(item for item in program.body.items if isinstance(item, ScopeRegion))
+    nested_use = next(item for item in nested.items if isinstance(item, FuncDef))
+    assert nested_use.name == "use"
+    assert isinstance(nested_use.body, Call)
+    assert isinstance(nested_use.body.callee, VarRef)
+    assert resolution.resolution[nested_use.body.callee.node_id].kind.name == "function_binding"
+
+
+def test_generic_constructor_ignores_unrelated_same_named_scope() -> None:
+    program = parse_program(
+        "scope Other\n"
+        "scope A\n"
+        "def ignored() -> int = 0\n"
+        "end A\n"
+        "end Other\n"
+        "enum A[T]\n"
+        "  | make(value: T)\n"
+        "A[int]::make(value = 1)"
+    )
+
+    resolve_module(program)
 
 
 def test_current_module_anchored_type_constructor_remains_supported() -> None:
@@ -203,16 +224,36 @@ def test_current_module_anchored_type_constructor_remains_supported() -> None:
     assert resolution.qualified_constructor_refs[expr.node_id] == ("Option", "some", None)
 
 
-def test_current_module_anchored_multi_segment_chain_has_a_clear_scope_error() -> None:
-    with pytest.raises(AglScopeError) as exc_info:
+def test_current_module_anchored_multi_segment_chain_reports_its_unknown_path() -> None:
+    with pytest.raises(AglScopeError, match="scope path"):
         resolve_module(parse_program("::A::B::C"))
 
-    diagnostic = exc_info.value.to_diagnostic()
-    assert "unsupported qualifier chain" in diagnostic.message.lower()
-    assert diagnostic.line == 1
+
+def test_nonconstructible_scoped_type_falls_back_to_the_legacy_constructor_diagnostic() -> None:
+    with pytest.raises(AglScopeError):
+        resolve_module(parse_program("type A::Count = int\nA::Count"))
+
+
+@pytest.mark.parametrize(
+    "source",
+    (
+        "scope Tools\ndef f() -> int = 0\nend Tools\nTools[int]::f()",
+        "scope Tools\ndef f() -> int = 0\nend Tools\nlet value: Tools[int]::T = null",
+        (
+            "scope Tools\ndef f() -> int = 0\nend Tools\nlet value = 1\n"
+            "case value of | Tools[int]::f => 1"
+        ),
+        "scope Tools\ndef f() -> int = 0\nend Tools\nvalue is Tools[int]::f",
+    ),
+)
+def test_type_arguments_on_a_plain_scope_are_rejected_in_every_chain_position(
+    source: str,
+) -> None:
+    with pytest.raises(AglScopeError, match="Type arguments cannot be applied to scope"):
+        resolve_module(parse_program(source))
 
 
 @pytest.mark.parametrize("source", ("First::Second::Third::member", "Type[int]::Second::member"))
-def test_unsupported_expression_qualifier_chain_has_a_clear_scope_error(source: str) -> None:
-    with pytest.raises(AglScopeError, match="Unsupported qualifier chain"):
+def test_long_expression_qualifier_chain_reports_the_unresolved_name(source: str) -> None:
+    with pytest.raises(AglScopeError, match="not defined|No module"):
         resolve_module(parse_program(source))

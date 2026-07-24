@@ -1,0 +1,5 @@
+scope Point
+def distance() -> int = 0
+end Point
+
+Point::missing()

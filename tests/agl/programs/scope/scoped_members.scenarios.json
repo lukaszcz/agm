@@ -1,0 +1,20 @@
+{
+  "scenarios": [
+    {
+      "name": "resolves_block_and_shorthand_members",
+      "agents": {"helper": ["scoped reply"]},
+      "expect": {
+        "stdout": "25\n25\n12\n3\n5\n7\ntrue\ntrue\nhello\nscoped reply\ntrue\n",
+        "calls": {"helper": 1}
+      }
+    },
+    {
+      "name": "runs_scoped_functions_and_agents",
+      "agents": {"helper": ["second scoped reply"]},
+      "expect": {
+        "stdout": "25\n25\n12\n3\n5\n7\ntrue\ntrue\nhello\nsecond scoped reply\ntrue\n",
+        "calls": {"helper": 1}
+      }
+    }
+  ]
+}

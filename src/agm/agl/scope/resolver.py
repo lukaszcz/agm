@@ -52,6 +52,7 @@ from agm.agl.modules.ids import ENTRY_ID, PRELUDE_ID, STD_CONFIG_ID, ModuleId
 from agm.agl.scope.imports import (
     QualResolutionFound,
     qualification_repair_guidance,
+    qualifier_candidates,
     qualifier_contributes,
     render_qualifier,
     resolve_qualified,
@@ -360,7 +361,6 @@ class _Resolver:
         declared in earlier REPL entries.
         """
         validate_scope_syntax(program)
-        self._validate_qualifier_chains(program)
 
         # Seed ambient constructor candidates (from prior REPL entries) before
         # running the local pre-passes so local declarations can shadow them.
@@ -373,8 +373,8 @@ class _Resolver:
             self._declared_type_names.update(ambient_type_names)
 
         # Pre-pass 1: collect every named declaration and scope mention. This
-        # establishes path-keyed membership before the legacy root worker
-        # builds its scope-free resolution tables.
+        # establishes path-keyed membership before qualifier validation and the
+        # legacy root worker build their compatibility tables.
         self._collect_declarations(program)
 
         # Pre-pass 2: collect root-level agent declarations into the declared
@@ -414,7 +414,11 @@ class _Resolver:
             root_scope=root,
             declarations=dict(self._declarations),
             scope_nodes=dict(self._scope_nodes),
-            declared_agents=dict(self._declared_agents),
+            declared_agents={
+                name: decl
+                for name, decl in self._declared_agents.items()
+                if not decl.scope_path or name in self._referenced_agents
+            },
             declared_functions=dict(self._declared_functions),
             program_name=self._program_name,
             warnings=self._unused_agent_warnings(),
@@ -576,10 +580,10 @@ class _Resolver:
                 yield item
 
     def _collect_agent_decls(self, program: Program) -> None:
-        """Populate the legacy agent table from root-path declarations only."""
-        for item in self._root_declaration_items(AgentDecl):
-            assert isinstance(item, AgentDecl)
-            self._declared_agents[item.name] = item
+        """Collect agents from every static scope for runtime registration."""
+        for item in self._declaration_items.values():
+            if isinstance(item, AgentDecl):
+                self._declared_agents[item.name] = item
 
     def _validate_agent_decl(self, decl: AgentDecl) -> None:
         """Apply agent declaration validation independently of its scope path."""
@@ -865,8 +869,10 @@ class _Resolver:
             scope.define(name, ref)
 
     def _define_agent_bindings(self) -> None:
-        """Define each collected agent as a value binding in the current scope."""
+        """Define root agents; scoped agents already live in scope memberships."""
         for name, decl in self._declared_agents.items():
+            if decl.scope_path:
+                continue
             ref = BindingRef(
                 name=name,
                 mutable=False,
@@ -943,7 +949,7 @@ class _Resolver:
         """Warn for each program-declared agent never referenced."""
         warnings: list[Diagnostic] = []
         for name, decl in self._declared_agents.items():
-            if name not in self._referenced_agents:
+            if not decl.scope_path and name not in self._referenced_agents:
                 warnings.append(
                     Diagnostic(
                         message=f"agent '{name}' is declared but never called.",
@@ -999,6 +1005,17 @@ class _Resolver:
     def _current_scope(self) -> ScopeNode:
         assert self._scope is not None, "resolver used outside of run()"
         return self._scope
+
+    @contextmanager
+    def _named_scope(self, path: ScopePath) -> Iterator[ScopeNode]:
+        """Resolve a region or shorthand body in its named lexical layer."""
+        named = self._scope_nodes[path]
+        previous = self._current_scope()
+        self._push_scope(named)
+        try:
+            yield named
+        finally:
+            self._push_scope(previous)
 
     @contextmanager
     def _child_scope(self, node_id: int) -> Iterator[ScopeNode]:
@@ -1145,11 +1162,18 @@ class _Resolver:
             # Non-entry enforcement: track that a non-import item has been seen.
             if is_non_entry_root:
                 self._seen_non_import_item = True
+            # Named declarations switch to their declaration's lexical scope
+            # in their own handlers. Every other item belongs to the current
+            # layer, so validate its qualifier chains here.
+            if not isinstance(
+                item,
+                (ScopeRegion, FuncDef, RecordDef, EnumDef, ExceptionDef, TypeAlias),
+            ):
+                self._validate_qualifier_chains(item)
             if isinstance(item, ScopeRegion):
                 self._resolve_scope_region(item)
             elif isinstance(item, FuncDef):
-                if not item.scope_path:
-                    self._resolve_funcdef(item)
+                self._resolve_funcdef(item)
             elif isinstance(item, BuiltinVarDecl):
                 # Placement in the canonical standard-library module is
                 # enforced by the declaration handler.
@@ -1161,11 +1185,9 @@ class _Resolver:
                         f"not in library modules (found 'agent {item.name}' here).",
                         span=item.span,
                     )
-                if not item.scope_path:
-                    self._resolve_agent_decl(item)
+                self._resolve_agent_decl(item)
             elif isinstance(item, (RecordDef, EnumDef, ExceptionDef, TypeAlias)):
-                if not item.scope_path:
-                    self._resolve_type_decl(item)
+                self._resolve_type_decl(item)
             elif isinstance(item, LetDecl):
                 if is_non_entry_root:
                     raise AglScopeError(
@@ -1227,26 +1249,26 @@ class _Resolver:
     # ------------------------------------------------------------------
 
     def _resolve_scope_region(self, region: ScopeRegion) -> None:
-        """Apply module-kind restrictions without resolving scope references yet."""
-        if self._is_entry:
-            return
+        """Resolve a named region in its member layer."""
+        if not self._is_entry:
 
-        def reject_agent(node: object) -> None:
-            if isinstance(node, AgentDecl):
-                raise AglScopeError(
-                    "'agent' declarations are only allowed in the entry module, "
-                    f"not in library modules (found 'agent {node.name}' here).",
-                    span=node.span,
-                )
+            def reject_agent(node: object) -> None:
+                if isinstance(node, AgentDecl):
+                    raise AglScopeError(
+                        "'agent' declarations are only allowed in the entry module, "
+                        f"not in library modules (found 'agent {node.name}' here).",
+                        span=node.span,
+                    )
 
-        walk(region, reject_agent)
+            walk(region, reject_agent)
+        path = self._current_scope().scope_path + (region.segment.name,)
+        with self._named_scope(path):
+            self._resolve_block_items(cast(tuple[Item, ...], region.items))
 
     def _resolve_agent_decl(self, node: AgentDecl) -> None:
-        """Enforce root-only placement for an ``agent`` declaration.
-
-        At the root the pre-pass already recorded and defined the binding,
-        so this branch is a no-op there.
-        """
+        """Enforce root-only placement for unscoped ``agent`` declarations."""
+        if node.scope_path:
+            return
         if not self._at_root:
             raise AglScopeError(
                 f"'agent' declarations are only allowed at the program root, "
@@ -1261,6 +1283,11 @@ class _Resolver:
         just resolve the body with a fresh param scope.
         Nested in a block: rejected (def is root-only).
         """
+        if node.scope_path:
+            with self._named_scope(tuple(segment.name for segment in node.scope_path)):
+                self._validate_qualifier_chains(node)
+                self._resolve_params_and_body(node)
+            return
         if not self._at_root:
             raise AglScopeError(
                 f"'def' declarations are only allowed at the program root, "
@@ -1269,6 +1296,7 @@ class _Resolver:
             )
         # Defaults are resolved in the enclosing (root) scope — they are
         # evaluated in the function's definition scope.
+        self._validate_qualifier_chains(node)
         self._resolve_params_and_body(node)
 
     def _resolve_type_decl(self, node: RecordDef | EnumDef | ExceptionDef | TypeAlias) -> None:
@@ -1288,7 +1316,14 @@ class _Resolver:
                 f"program, not inside a nested block (found '{kind_word}' here).",
                 span=node.span,
             )
-        # At root: ignored here; the typecheck pass handles type names.
+        # Type declarations do not otherwise participate in value resolution,
+        # but their annotations still need qualifier validation in the actual
+        # lexical owner layer.
+        if node.scope_path:
+            with self._named_scope(tuple(segment.name for segment in node.scope_path)):
+                self._validate_qualifier_chains(node)
+        else:
+            self._validate_qualifier_chains(node)
 
     # ------------------------------------------------------------------
     # Binder handlers
@@ -1495,6 +1530,7 @@ class _Resolver:
         elif isinstance(expr, UnaryNeg):
             self._resolve_expr(expr.operand)
         elif isinstance(expr, IsTest):
+            self._validate_local_scope_chain(expr.qualifier)
             self._resolve_expr(expr.expr)
         elif isinstance(expr, Cast):
             self._resolve_expr(expr.expr)
@@ -1526,6 +1562,20 @@ class _Resolver:
         """
         if node.name == "_":
             raise AglScopeError("'_' is not defined.", span=node.span)
+        if (
+            node.qualifier is not None
+            and node.qualifier.anchor is QualifierAnchor.CURRENT_MODULE
+            and not node.qualifier.segments
+        ):
+            ref = self._lookup_own_root(node.name)
+            if ref is None:
+                raise self._spaced_qualifier_repair(
+                    self._spaced_qualifier_at(node.qualifier.span), node.qualifier.span
+                ) or AglScopeError(f"'{node.name}' is not defined in this module.", span=node.span)
+            self._record_varref_binding(node, ref)
+            return
+        if self._resolve_local_scope_member(node):
+            return
         module_qualifier, type_qualifier = self._expression_qualifier_parts(node.qualifier)
         if type_qualifier is not None:
             self._resolve_type_qualified_constructor(node, module_qualifier, type_qualifier)
@@ -1542,13 +1592,12 @@ class _Resolver:
             if self._import_env is not None:
                 self._resolve_varref_qualified(node, module_qualifier)
                 return
-            if module_qualifier.route_segments:
-                qualifier_str = module_qualifier.render()
-                raise AglScopeError(
-                    f"No module imported under qualifier '{qualifier_str}' or type named "
-                    f"'{qualifier_str}'.",
-                    span=module_qualifier.span,
-                )
+            qualifier_str = module_qualifier.render()
+            raise AglScopeError(
+                f"No module imported under qualifier '{qualifier_str}' or type named "
+                f"'{qualifier_str}'.",
+                span=module_qualifier.span,
+            )
 
         # Standard lexical lookup (module mode or bare name in program context).
         ref = self._current_scope().lookup(node.name)
@@ -1563,21 +1612,25 @@ class _Resolver:
                     f"'{node.name}' is not defined.",
                     span=node.span,
                 )
+        self._record_varref_binding(node, ref)
+
+    def _record_varref_binding(self, node: VarRef, ref: BindingRef) -> None:
+        """Record an ordinary value binding and its constructor metadata."""
         self._track_agent_reference(ref)
         self._resolution[node.node_id] = ref
-        # If the resolved binding is a constructor, check for overload ambiguity.
-        if ref.kind == BinderKind.constructor_binding:
-            candidates = self._constructor_candidates.get(node.name, [])
-            if len(candidates) >= 2:
-                owner_names = ", ".join(f"'{c.owner_name}'" for c in candidates)
-                raise AglScopeError(
-                    f"'{node.name}' is ambiguous: it is declared as a constructor "
-                    f"in multiple types ({owner_names}). "
-                    f"Qualify the reference, e.g. '{candidates[0].owner_name}::{node.name}'.",
-                    span=node.span,
-                )
-            elif len(candidates) == 1:
-                self._constructor_refs[node.node_id] = candidates[0]
+        if ref.kind != BinderKind.constructor_binding:
+            return
+        candidates = self._constructor_candidates.get(node.name, [])
+        if len(candidates) >= 2:
+            owner_names = ", ".join(f"'{candidate.owner_name}'" for candidate in candidates)
+            raise AglScopeError(
+                f"'{node.name}' is ambiguous: it is declared as a constructor "
+                f"in multiple types ({owner_names}). "
+                f"Qualify the reference, e.g. '{candidates[0].owner_name}::{node.name}'.",
+                span=node.span,
+            )
+        if len(candidates) == 1:
+            self._constructor_refs[node.node_id] = candidates[0]
 
     def _track_agent_reference(self, ref: BindingRef) -> None:
         """Preserve agent usage hidden behind constructor-selected pattern slots."""
@@ -1590,45 +1643,147 @@ class _Resolver:
         if ref.kind is BinderKind.agent_binding and ref.name in self._declared_agents:
             self._referenced_agents.add(ref.name)
 
-    def _validate_qualifier_chains(self, program: Program) -> None:
-        """Reject parsed chain shapes whose semantics are not available yet."""
+    def _validate_qualifier_chains(self, program: object) -> None:
+        """Validate qualifier syntax in the current lexical scope layer."""
 
-        def has_unsupported_route_shape(chain: QualifierChain) -> bool:
+        def validate(node: object) -> None:
+            chain = (
+                node.qualifier
+                if isinstance(
+                    node, (VarRef, NameTarget, ConstructorPattern, IsTest, NameT, AppliedT)
+                )
+                else None
+            )
+            if chain is None:
+                return
             nonleading_segments = chain.segments[1:]
-            if any(segment.anchored or "/" in segment.name for segment in nonleading_segments):
-                return True
-            return bool(
+            if any(segment.anchored or "/" in segment.name for segment in nonleading_segments) or (
                 chain.anchor is QualifierAnchor.CURRENT_MODULE
                 and chain.segments
                 and (chain.segments[0].anchored or "/" in chain.segments[0].name)
-            )
-
-        def validate(node: object) -> None:
-            chain: QualifierChain | None = None
-            maximum_segments = 2
-            allows_applied_segments = False
-            if isinstance(node, VarRef):
-                chain = node.qualifier
-                allows_applied_segments = True
-            elif isinstance(node, (ConstructorPattern, IsTest)):
-                chain = node.qualifier
-            elif isinstance(node, (NameT, AppliedT, NameTarget)):
-                chain = node.qualifier
-                maximum_segments = 1
-            if chain is None:
-                return
-            if (
-                len(chain.segments) > maximum_segments
-                or (chain.anchor is QualifierAnchor.CURRENT_MODULE and len(chain.segments) > 1)
-                or has_unsupported_route_shape(chain)
-                or (
-                    not allows_applied_segments
-                    and any(segment.type_args is not None for segment in chain.segments)
-                )
             ):
-                raise AglScopeError("Unsupported qualifier chain.", span=chain.span)
+                raise AglScopeError(
+                    "Only the leading qualifier segment may name a module route.", span=chain.span
+                )
+            self._validate_local_scope_chain(chain)
 
         walk(program, validate)
+
+    def _scope_bases(self, chain: QualifierChain) -> list[ScopePath]:
+        """Return lexical bases from which an unanchored scope path may start."""
+        if chain.anchor is QualifierAnchor.CURRENT_MODULE:
+            return [()]
+        bases: list[ScopePath] = []
+        scope: ScopeNode | None = self._current_scope()
+        while scope is not None:
+            if scope.scope_path not in bases:
+                bases.append(scope.scope_path)
+            scope = scope.parent
+        return bases
+
+    def _validate_local_scope_chain(
+        self, chain: QualifierChain | None, *, bases: list[ScopePath] | None = None
+    ) -> ScopePath | None:
+        """Find a local scope path and reject applications to plain scopes.
+
+        The caller supplies lexical bases when one is meaningful.  The
+        declaration pre-pass uses the module root, while expression and
+        ``is`` resolution use the active lexical layers.  A non-local chain is
+        deliberately left for module-route and constructor compatibility
+        resolution.
+        """
+        if chain is None or chain.anchor is QualifierAnchor.MODULE or not chain.segments:
+            return None
+        relative_path = tuple(segment.name for segment in chain.segments)
+        paths = [base + relative_path for base in (bases or self._scope_bases(chain))]
+        known_paths = self._scope_nodes if hasattr(self, "_scope_nodes") else self._scope_paths
+        path = next((candidate for candidate in paths if candidate in known_paths), None)
+        if path is None:
+            return None
+        prefix_length = len(path) - len(relative_path)
+        for index, segment in enumerate(chain.segments, start=1):
+            if (
+                segment.type_args is not None
+                and path[: prefix_length + index] not in self._type_paths
+            ):
+                raise AglScopeError(
+                    f"Type arguments cannot be applied to scope segment '{segment.name}'.",
+                    span=segment.span,
+                )
+        return path
+
+    def _resolve_local_scope_member(self, node: VarRef) -> bool:
+        """Resolve a scoped member through ordered lexical scope layers.
+
+        Local paths are considered before import routes.  A type-owned member
+        absent from its scope deliberately falls through to the established
+        constructor resolver, which owns constructor-specific diagnostics until
+        constructor-chain migration is complete.
+        """
+        chain = node.qualifier
+        if chain is None or chain.anchor is QualifierAnchor.MODULE or not chain.segments:
+            return False
+
+        relative_path = tuple(segment.name for segment in chain.segments)
+        path = self._validate_local_scope_chain(chain)
+        if path is None:
+            # Scopes only match exact lexical paths. A scope nested under a
+            # different owner must not mask a module route sharing its suffix.
+            # Keep a genuine route intact so its ordinary member diagnostics
+            # remain available.
+            has_module_route = self._import_env is not None and bool(
+                qualifier_candidates(self._import_env, relative_path, anchored=chain.anchored)
+            )
+            known_segment = any(relative_path[0] in scope_path for scope_path in self._scope_nodes)
+            if (chain.anchor is QualifierAnchor.CURRENT_MODULE and len(chain.segments) > 1) or (
+                known_segment and not has_module_route
+            ):
+                raise AglScopeError(
+                    f"Unknown scope path '{'::'.join(relative_path)}'.", span=chain.span
+                )
+            return False
+
+        ref = self._scope_nodes[path].members.get(node.name)
+        rendered = "::".join(path)
+        if ref is None:
+            if path in self._type_paths:
+                return False
+            raise AglScopeError(
+                f"Unknown member '{node.name}' in scope path '{rendered}'.", span=node.span
+            )
+        if (
+            chain.anchor is None
+            and self._import_env is not None
+            and qualifier_contributes(self._import_env, relative_path, node.name)
+        ):
+            local_kind = "a type name" if path in self._type_paths else "a local scope"
+            raise AglScopeError(
+                f"Qualifier '{relative_path[0]}' is both {local_kind} and a module route for "
+                f"'{node.name}'. {qualification_repair_guidance()}",
+                span=chain.span,
+            )
+        if ref.kind is BinderKind.constructor_binding:
+            candidates = self._scoped_constructor_candidates.get((path, node.name), ())
+            if len(candidates) == 1:
+                (candidate,) = candidates
+                owner_name = "::".join((*candidate.owner_path, candidate.owner_name))
+                if candidate.variant is None:
+                    # Records, exceptions, and constructor aliases retain the
+                    # ordinary constructor path.  The legacy qualified table
+                    # is enum-variant-specific until constructor migration.
+                    self._resolution[node.node_id] = ref
+                    self._constructor_refs[node.node_id] = replace(candidate, owner_name=owner_name)
+                else:
+                    self._qualified_constructor_refs[node.node_id] = (
+                        owner_name,
+                        candidate.variant,
+                        None,
+                    )
+                return True
+            return False
+        self._track_agent_reference(ref)
+        self._resolution[node.node_id] = ref
+        return True
 
     def _expression_qualifier_parts(
         self, chain: QualifierChain | None
@@ -1636,9 +1791,6 @@ class _Resolver:
         """Split supported chains into a module route and optional type owner."""
         if chain is None:
             return (None, None)
-        for segment in chain.segments[:-1]:
-            if segment.type_args is not None:
-                raise AglScopeError("Unsupported qualifier chain.", span=segment.span)
 
         def module_chain(segment: QualifierSegment) -> QualifierChain:
             return QualifierChain(
@@ -1648,10 +1800,6 @@ class _Resolver:
                 span=segment.span,
                 node_id=segment.node_id,
             )
-
-        if not chain.segments:
-            assert chain.anchor is QualifierAnchor.CURRENT_MODULE
-            return (chain, None)
 
         if len(chain.segments) == 1:
             (segment,) = chain.segments
@@ -1670,8 +1818,14 @@ class _Resolver:
                 return (None, segment)
             return (module_chain(segment), None)
 
-        module_segment, type_segment = chain.segments
-        return (module_chain(module_segment), type_segment)
+        if len(chain.segments) == 2:
+            module_segment, type_segment = chain.segments
+            return (module_chain(module_segment), type_segment)
+
+        # A longer non-local chain cannot be a legacy type-owner form. Keep
+        # its full route intact so the import resolver can issue its ordinary
+        # diagnostic; crucially, never unpack it as a two-segment chain.
+        return (chain, None)
 
     def _resolve_type_qualified_constructor(
         self,
@@ -1781,24 +1935,8 @@ class _Resolver:
         return self._make_cross_module_ref(qname[0], name, qname[1], span)
 
     def _resolve_varref_qualified(self, node: VarRef, module_qualifier: QualifierChain) -> None:
-        """Resolve a qualified VarRef (``::name`` or ``MODQUAL::name``) in program context."""
+        """Resolve an imported qualified VarRef in program context."""
         assert self._import_env is not None
-
-        if not module_qualifier.route_segments:
-            # Self-reference: ::name — look up in own root scope.
-            ref = self._lookup_own_root(node.name)
-            if ref is None:
-                raise self._spaced_qualifier_repair(
-                    self._spaced_qualifier_at(module_qualifier.span),
-                    module_qualifier.span,
-                ) or AglScopeError(
-                    f"'{node.name}' is not defined in this module.",
-                    span=node.span,
-                )
-            self._resolution[node.node_id] = ref
-            return
-
-        # Qualified access: MODQUAL::name
         ref = self._lookup_qualified_binding(module_qualifier, node.name, node.span)
         self._resolution[node.node_id] = ref
 

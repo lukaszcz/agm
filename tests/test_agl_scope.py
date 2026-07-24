@@ -392,9 +392,14 @@ class TestScopeRegions:
         with pytest.raises(AglScopeError):
             parse_and_resolve(source)
 
-    def test_scoped_members_are_not_resolved_before_scope_reference_resolution_exists(self) -> None:
-        with pytest.raises(AglScopeError, match="not defined|No module"):
-            parse_and_resolve("def A::f() -> int = 0\nA::f()")
+    def test_scoped_members_resolve_from_their_exact_path(self) -> None:
+        resolved = parse_and_resolve("def A::f() -> int = 0\nA::f()")
+        assert resolved.resolution
+        assert next(iter(resolved.resolution.values())).decl_node_id == next(
+            declaration.decl_node_id
+            for (module_id, path, name), declaration in resolved.declarations.items()
+            if module_id == ENTRY_ID and path == ("A",) and name == "f"
+        )
 
     @pytest.mark.parametrize(
         "source",
@@ -2548,11 +2553,12 @@ class TestConstructorBindings:
         err = reject_scope("m::Missing::Ctor")
         assert "No module imported" in err.to_diagnostic().message
 
-    def test_unsupported_qualifier_chain_reaches_scope_diagnostic(self) -> None:
+    def test_long_unknown_qualifier_chain_reports_a_regular_resolution_error(self) -> None:
         source = "A::B::C[int]::member"
         err = reject_scope(source)
         diagnostic = err.to_diagnostic()
-        assert "unsupported qualifier chain" in diagnostic.message.lower()
+        assert "unsupported qualifier chain" not in diagnostic.message.lower()
+        assert "no module" in diagnostic.message.lower()
         assert diagnostic.line == 1
 
     def test_qualified_constructor_recorded(self) -> None:

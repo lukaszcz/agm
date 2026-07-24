@@ -1,0 +1,71 @@
+record Point(x: decimal, y: decimal)
+
+def sqrt(value: decimal) -> decimal = value
+
+scope Point
+
+def distance(p1: Point, p2: Point) -> decimal =
+  let dx = p1.x - p2.x
+  let dy = p1.y - p2.y
+  sqrt (dx * dx + dy * dy)
+
+end Point
+
+def Point::distance'(p1: Point, p2: Point) -> decimal =
+  let dx = p1.x - p2.x
+  let dy = p1.y - p2.y
+  sqrt (dx * dx + dy * dy)
+
+scope Point
+def scale(value: int) -> int = value * 2
+end Point
+
+scope Tools
+record Token()
+enum Signal
+  | ready
+agent helper = "helper"
+def greeting() -> text = "hello"
+def retain(value: Tools::Token) -> Tools::Token = value
+end Tools
+
+def root_value() -> int = 3
+
+scope Outer
+def root_value() -> int = 4
+
+scope Utility
+def nested_value() -> int = 7
+end Utility
+
+scope Inner
+def root_value() -> int = 5
+def enclosing_value() -> int = ::root_value()
+def nearest_value() -> int = root_value()
+def sibling_value() -> int = Utility::nested_value()
+enum Flag | inner
+
+def nearest_flag(flag: Flag) -> bool =
+  case flag of
+    | Flag::inner => flag is Flag::inner
+end Inner
+
+enum Flag | outer
+
+def outer_flag(flag: ::Outer::Flag) -> bool =
+  case flag of
+    | ::Outer::Flag::outer => flag is ::Outer::Flag::outer
+end Outer
+
+print(Point::distance(Point(3, 4), Point(0, 0)))
+print(Point::distance'(Point(3, 4), Point(0, 0)))
+print(Point::scale(6))
+print(Outer::Inner::enclosing_value())
+print(Outer::Inner::nearest_value())
+print(Outer::Inner::sibling_value())
+print(Outer::Inner::nearest_flag(Outer::Inner::Flag::inner))
+print(Outer::outer_flag(Outer::Flag::outer))
+print(Tools::greeting())
+print(ask("Reply with scoped agent.", agent = Tools::helper))
+let signal = Tools::Signal::ready
+print(signal is Tools::Signal::ready)

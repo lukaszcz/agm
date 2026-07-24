@@ -157,7 +157,6 @@ from agm.agl.syntax.nodes import (
     VarPattern,
     VarRef,
     WildcardPattern,
-    is_scoped_declaration,
 )
 from agm.agl.syntax.spans import SourceSpan
 from agm.agl.syntax.types import TypeExpr
@@ -197,6 +196,20 @@ from agm.agl.typecheck.inference import (
     InferenceEngine,
     InferenceError,
 )
+
+# ---------------------------------------------------------------------------
+# Static declaration traversal
+# ---------------------------------------------------------------------------
+
+
+def _static_items(items: tuple[Item, ...]) -> Iterator[Item]:
+    """Yield static declarations nested in named scope regions."""
+    for item in items:
+        if isinstance(item, ScopeRegion):
+            yield from _static_items(cast(tuple[Item, ...], item.items))
+        else:
+            yield item
+
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -485,6 +498,9 @@ class _Checker:
         self._resolved = resolved
         self._caps = capabilities
         self._module_id = module_id
+        self._declaration_scope_paths = {
+            ref.decl_node_id: ref.scope_path for ref in resolved.declarations.values()
+        }
         self._candidate_session = candidate_session
         # Callers pass only candidate-inferred records here (see
         # ``candidate_records_for`` at each construction site); the checker keys
@@ -658,14 +674,20 @@ class _Checker:
     # Program-level check
     # ------------------------------------------------------------------
 
+    def _declaration_scope_path(self, item: FuncDef) -> tuple[str, ...]:
+        """Return the collected namespace path for a static declaration."""
+        return self._declaration_scope_paths.get(
+            item.node_id, tuple(segment.name for segment in item.scope_path)
+        )
+
     def check_module(self, program: Program) -> None:
         """Type-check the entire program."""
-        # Pre-pass: register all FuncDef signatures before any body is checked,
-        # so a call may reference any top-level function regardless of
-        # declaration order, including mutually recursive pairs.
-        for item in program.body.items:
-            if isinstance(item, FuncDef) and not item.scope_path:
-                self._preregister_funcdef(item)
+        # Pre-pass: register static function signatures before any body is
+        # checked, including members collected from named scope regions.
+        for item in _static_items(program.body.items):
+            if isinstance(item, FuncDef):
+                with self._env.type_scope(self._declaration_scope_path(item)):
+                    self._preregister_funcdef(item)
 
         self._check_block(program.body, expected=None)
 
@@ -701,14 +723,15 @@ class _Checker:
 
     def _check_item(self, item: Item, *, expected: Type | None) -> Type:
         """Dispatch a single block item, returning its type contribution."""
-        # Scoped declaration collection has no executable/type-visible behavior
-        # until qualified scope resolution is introduced.
-        if is_scoped_declaration(item) or isinstance(item, ScopeRegion):
+        if isinstance(item, ScopeRegion):
+            for child in item.items:
+                self._check_item(cast(Item, child), expected=None)
             return UnitType()
         # --- Declarations ---
         if isinstance(item, FuncDef):
             # Signature already registered in pre-pass; check body now.
-            self._check_funcdef_body(item)
+            with self._env.type_scope(self._declaration_scope_path(item)):
+                self._check_funcdef_body(item)
             return UnitType()
         if isinstance(item, (RecordDef, EnumDef, ExceptionDef, TypeAlias)):
             return UnitType()
@@ -3470,6 +3493,27 @@ class _Checker:
         """Validate the optional enum-type qualifier on a variant reference."""
         if qualifier is None:
             return
+        if qualifier.anchor is not QualifierAnchor.MODULE:
+            local_owner = "::".join(segment.name for segment in qualifier.segments)
+            local_enum = self._env.resolve_named_type(local_owner)
+            if local_enum is not None:
+                if qualifier.anchor is None and self._env.has_qualified_import_member(
+                    qualifier, variant
+                ):
+                    raise AglTypeError(
+                        f"Qualifier '{local_owner}' is both a type name and a module route for "
+                        f"'{variant}'. {qualification_repair_guidance()}",
+                        span=span,
+                    )
+                if not isinstance(local_enum, EnumType):
+                    raise AglTypeError(f"'{local_owner}' is not a known enum type.", span=span)
+                if local_enum != enum_type:
+                    raise AglTypeError(
+                        f"Qualifier '{local_owner}' resolves to enum '{local_enum.name}', "
+                        f"but the value has enum type '{enum_type.name}'.",
+                        span=span,
+                    )
+                return
         if len(qualifier.segments) == 2:
             module_qualifier = QualifierChain(
                 anchor=qualifier.anchor,
@@ -4330,9 +4374,10 @@ def prepare_module_headers(
         capabilities=capabilities,
         module_id=module_id,
     )
-    for item in resolved.program.body.items:
-        if isinstance(item, FuncDef) and not item.scope_path:
-            header_checker._preregister_funcdef(item)
+    for item in _static_items(resolved.program.body.items):
+        if isinstance(item, FuncDef):
+            with env.type_scope(header_checker._declaration_scope_path(item)):
+                header_checker._preregister_funcdef(item)
 
 
 def _check_prepared_module(
@@ -4417,7 +4462,7 @@ def check_module(
     AglTypeError
         On the first static type violation (first-error abort).
     """
-    env = TypeEnvironment()
+    env = TypeEnvironment(local_scope_paths=frozenset(resolved.scope_nodes))
     if seed_env is not None:
         env.seed_from(seed_env)
     return _check_prepared_module(resolved, capabilities, env=env)

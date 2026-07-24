@@ -40,7 +40,8 @@ existing alias-cycle check in ``typecheck/env.py``.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
+from dataclasses import replace
 
 from agm.agl.modules.ids import ENTRY_ID, PRELUDE_ID, ModuleId
 from agm.agl.semantics.analyses import compute_uninhabited, uninhabitable_message
@@ -64,8 +65,8 @@ from agm.agl.syntax.nodes import (
     Param,
     Program,
     RecordDef,
+    ScopeRegion,
     TypeAlias,
-    is_scoped_declaration,
 )
 from agm.agl.syntax.spans import SourceSpan
 from agm.agl.typecheck.env import (
@@ -123,6 +124,21 @@ class _TypeBuilder:
         """Module a declaration belongs to: the prelude if built-in, else this module."""
         return PRELUDE_ID if is_builtin else self._module_id
 
+    def _static_type_items(
+        self, items: tuple[object, ...]
+    ) -> Iterator[RecordDef | EnumDef | ExceptionDef | TypeAlias]:
+        """Yield type declarations with their scope path included in their identity."""
+        for item in items:
+            if isinstance(item, ScopeRegion):
+                yield from self._static_type_items(item.items)
+            elif isinstance(item, (RecordDef, EnumDef, ExceptionDef, TypeAlias)):
+                if item.scope_path:
+                    path = tuple(segment.name for segment in item.scope_path)
+                    name = "::".join((*path, item.name))
+                    yield replace(item, name=name)
+                else:
+                    yield item
+
     def collect(self, program: Program, *, check_inhabitation: bool = True) -> None:
         """Scan *program* and populate ``self._env``.
 
@@ -145,17 +161,17 @@ class _TypeBuilder:
         """
         self.collect_shells_only(program)
 
-        for item in program.body.items:
-            if is_scoped_declaration(item):
-                continue
-            if isinstance(item, RecordDef):
-                self._build_record(item)
-            elif isinstance(item, EnumDef):
-                self._build_enum(item)
-            elif isinstance(item, ExceptionDef):
-                self._build_exception(item)
-            elif isinstance(item, TypeAlias):
-                self._validate_alias(item)
+        for item in self._static_type_items(program.body.items):
+            path = tuple(segment.name for segment in item.scope_path)
+            with self._env.type_scope(path):
+                if isinstance(item, RecordDef):
+                    self._build_record(item)
+                elif isinstance(item, EnumDef):
+                    self._build_enum(item)
+                elif isinstance(item, ExceptionDef):
+                    self._build_exception(item)
+                else:
+                    self._validate_alias(item)
 
         if check_inhabitation:
             self._check_inhabitation(program)
@@ -173,9 +189,7 @@ class _TypeBuilder:
         with ``TypeVarType`` args) registered instead — likewise final, since
         the template carries no shape either.  Exceptions are never generic.
         """
-        for item in program.body.items:
-            if is_scoped_declaration(item):
-                continue
+        for item in self._static_type_items(program.body.items):
             if isinstance(item, RecordDef):
                 self._register_name(item.name, item.span, is_builtin=item.is_builtin)
                 self._env.unregister_name(item.name)
@@ -194,7 +208,7 @@ class _TypeBuilder:
                     item.name, ExceptionType(name=item.name, module_id=module_id)
                 )
                 self._exception_defs[item.name] = item
-            elif isinstance(item, TypeAlias):
+            else:
                 self._register_name(item.name, item.span)
                 self._env.unregister_name(item.name)
                 self._env.register_alias(item.name, item.type_expr, type_params=item.type_params)
@@ -558,7 +572,7 @@ class _TypeBuilder:
         uninhabited = compute_uninhabited(self._env.type_table)
         if not uninhabited:
             return
-        for item in program.body.items:
+        for item in self._static_type_items(program.body.items):
             if not isinstance(item, (RecordDef, EnumDef, ExceptionDef)):
                 continue
             module_id = self._owning_module_id(item.is_builtin)

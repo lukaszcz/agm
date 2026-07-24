@@ -31,8 +31,14 @@ from agm.agl.parser import parse_program
 from agm.agl.scope import resolve_module
 from agm.agl.scope.program import ResolvedModule, ResolvedProgram, resolve_program
 from agm.agl.scope.symbols import AglScopeError, BinderKind
+from agm.agl.semantics.values import IntValue
 from agm.agl.syntax.nodes import Case, ConstructorPattern, VarPattern, VarRef
-from tests.agl.ir_harness import make_graph_from_files as _make_graph_from_files
+from tests.agl.ir_harness import (
+    evaluate_ir_graph,
+)
+from tests.agl.ir_harness import (
+    make_graph_from_files as _make_graph_from_files,
+)
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -493,6 +499,134 @@ class TestQualifiedAccess:
         )
         with pytest.raises(AglScopeError, match="nomodule"):
             resolve_program(graph)
+
+    def test_local_scope_and_module_route_clash_requires_an_anchor(self, tmp_path: Path) -> None:
+        graph = _make_graph_from_files(
+            tmp_path,
+            {
+                "entry": "import mylib\nscope mylib\ndef foo() -> int = 1\nend mylib\nmylib::foo()",
+                "mylib": "def foo() -> int = 2",
+            },
+        )
+
+        with pytest.raises(AglScopeError, match="both a local scope and a module route"):
+            resolve_program(graph)
+
+    def test_nested_scope_and_complete_import_route_clash_requires_anchor(
+        self, tmp_path: Path
+    ) -> None:
+        graph = _make_graph_from_files(
+            tmp_path,
+            {
+                "entry": (
+                    "import alpha/beta\n"
+                    "scope alpha\n"
+                    "scope beta\n"
+                    "def member() -> int = 1\n"
+                    "end beta\n"
+                    "end alpha\n"
+                    "alpha::beta::member()"
+                ),
+                "alpha/beta": "def member() -> int = 2",
+            },
+        )
+
+        with pytest.raises(AglScopeError, match="both a local scope and a module route"):
+            resolve_program(graph)
+
+    def test_import_route_is_not_a_suffix_matched_local_scope(self, tmp_path: Path) -> None:
+        entry_source = (
+            "import beta\n"
+            "scope alpha\n"
+            "scope beta\n"
+            "def local() -> int = 1\n"
+            "end beta\n"
+            "end alpha\n"
+            "let result = beta::remote()"
+        )
+
+        result = evaluate_ir_graph(entry_source, {"beta": "def remote() -> int = 2"}, tmp_path)
+
+        assert result["result"] == IntValue(2)
+
+    def test_anchor_repairs_nested_scope_and_complete_import_route_clash(
+        self, tmp_path: Path
+    ) -> None:
+        graph = _make_graph_from_files(
+            tmp_path,
+            {
+                "entry": (
+                    "import alpha/beta\n"
+                    "scope alpha\n"
+                    "scope beta\n"
+                    "def member() -> int = 1\n"
+                    "end beta\n"
+                    "end alpha\n"
+                    "::alpha::beta::member()"
+                ),
+                "alpha/beta": "def member() -> int = 2",
+            },
+        )
+
+        assert resolve_program(graph).entry_id == ENTRY_ID
+
+    def test_constructor_path_and_complete_import_route_clash_requires_anchor(
+        self, tmp_path: Path
+    ) -> None:
+        graph = _make_graph_from_files(
+            tmp_path,
+            {
+                "entry": (
+                    "import alpha/beta/Color\n"
+                    "scope alpha\n"
+                    "scope beta\n"
+                    "enum Color\n"
+                    "  | red\n"
+                    "end beta\n"
+                    "end alpha\n"
+                    "alpha::beta::Color::red"
+                ),
+                "alpha/beta/Color": "def red() -> int = 2",
+            },
+        )
+
+        with pytest.raises(AglScopeError, match="module route"):
+            resolve_program(graph)
+
+    def test_anchor_repairs_constructor_path_and_complete_import_route_clash(
+        self, tmp_path: Path
+    ) -> None:
+        graph = _make_graph_from_files(
+            tmp_path,
+            {
+                "entry": (
+                    "import alpha/beta/Color\n"
+                    "scope alpha\n"
+                    "scope beta\n"
+                    "enum Color\n"
+                    "  | red\n"
+                    "end beta\n"
+                    "end alpha\n"
+                    "::alpha::beta::Color::red"
+                ),
+                "alpha/beta/Color": "def red() -> int = 2",
+            },
+        )
+
+        assert resolve_program(graph).entry_id == ENTRY_ID
+
+    def test_current_module_anchor_repairs_scope_and_route_clash(self, tmp_path: Path) -> None:
+        graph = _make_graph_from_files(
+            tmp_path,
+            {
+                "entry": (
+                    "import mylib\nscope mylib\ndef foo() -> int = 1\nend mylib\n::mylib::foo()"
+                ),
+                "mylib": "def foo() -> int = 2",
+            },
+        )
+
+        assert resolve_program(graph).entry_id == ENTRY_ID
 
 
 # ---------------------------------------------------------------------------
@@ -1114,6 +1248,30 @@ class TestWildcardImports:
         )
         with pytest.raises(AglScopeError, match="both a type name and a module route"):
             resolve_program(graph)
+
+    def test_type_owner_constructor_compatibility_paths_remain_available(
+        self, tmp_path: Path
+    ) -> None:
+        self_qualified = _make_graph_from_files(
+            tmp_path,
+            {
+                "entry": "import lib\nenum E | value\n::E::missing",
+                "lib": "def ignored() -> int = 1",
+            },
+        )
+        resolved = resolve_program(self_qualified)
+        entry = resolved.modules[ENTRY_ID].resolved
+        assert entry.qualified_constructor_refs
+
+        clashing_route = _make_graph_from_files(
+            tmp_path,
+            {
+                "entry": "import lib as Color\nrecord Color()\nColor::make",
+                "lib": "def make() -> int = 1",
+            },
+        )
+        with pytest.raises(AglScopeError, match="both a type name and a module route"):
+            resolve_program(clashing_route)
 
     def test_wildcard_compatible_overlap_idempotent(self, tmp_path: Path) -> None:
         """Two wildcards that expose same QName from same module are idempotent (no error)."""

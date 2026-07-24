@@ -58,6 +58,7 @@ entry's :class:`~agm.agl.scope.symbols.ModuleResolution`.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from dataclasses import dataclass, replace
 from typing import Mapping
 
@@ -78,8 +79,8 @@ from agm.agl.syntax.nodes import (
     ParamKind,
     Program,
     RecordDef,
+    ScopeRegion,
     TypeAlias,
-    is_scoped_declaration,
 )
 from agm.agl.syntax.spans import SourceSpan
 from agm.agl.typecheck.builder import _TypeBuilder
@@ -166,6 +167,30 @@ def assert_checked_program_closed(checked: CheckedProgram) -> None:
 # ---------------------------------------------------------------------------
 
 
+def _static_type_items(
+    items: tuple[object, ...],
+) -> Iterator[RecordDef | EnumDef | ExceptionDef | TypeAlias]:
+    """Yield type declarations with scope paths represented in their local name."""
+    for item in items:
+        if isinstance(item, ScopeRegion):
+            yield from _static_type_items(item.items)
+        elif isinstance(item, (RecordDef, EnumDef, ExceptionDef, TypeAlias)):
+            if item.scope_path:
+                name = "::".join((*tuple(segment.name for segment in item.scope_path), item.name))
+                yield replace(item, name=name)
+            else:
+                yield item
+
+
+def _static_function_items(items: tuple[object, ...]) -> Iterator[FuncDef]:
+    """Yield functions nested in named scope regions."""
+    for item in items:
+        if isinstance(item, ScopeRegion):
+            yield from _static_function_items(item.items)
+        elif isinstance(item, FuncDef):
+            yield item
+
+
 def _collect_shells_only(builder: _TypeBuilder, program: object) -> None:
     """Run only phase 1 (shell registration) of ``_TypeBuilder.collect``.
 
@@ -220,9 +245,7 @@ def _resolve_body_for_one(
     program = resolved.modules[mid].resolved.program
     assert isinstance(program, Program)
 
-    for item in program.body.items:
-        if is_scoped_declaration(item):
-            continue
+    for item in _static_type_items(program.body.items):
         if isinstance(item, RecordDef) and item.name == name:
             builder.build_record(item.name)
             t = cross_env.get_type(item.name)
@@ -296,15 +319,11 @@ def _collect_all_type_keys(
     for mid, rmod in resolved.modules.items():
         program = rmod.resolved.program
         assert isinstance(program, Program)
-        for item in program.body.items:
-            if (
-                isinstance(item, (RecordDef, EnumDef, ExceptionDef, TypeAlias))
-                and not item.scope_path
-            ):
-                # Builtin/prelude shadowing is rejected in _collect_shells_only
-                # (Step A of _build_program_type_table), which is called before this
-                # function.  Only non-builtin types reach this point.
-                all_keys.add((mid, item.name))
+        for item in _static_type_items(program.body.items):
+            # Builtin/prelude shadowing is rejected in _collect_shells_only
+            # (Step A of _build_program_type_table), which is called before this
+            # function. Only non-builtin types reach this point.
+            all_keys.add((mid, item.name))
     return all_keys
 
 
@@ -324,12 +343,8 @@ def _find_type_decl_span(resolved: ResolvedProgram, key: tuple[ModuleId, str]) -
         return None
     program = rmod.resolved.program
     assert isinstance(program, Program)
-    for item in program.body.items:
-        if (
-            isinstance(item, (RecordDef, EnumDef, ExceptionDef))
-            and not item.scope_path
-            and item.name == name
-        ):
+    for item in _static_type_items(program.body.items):
+        if isinstance(item, (RecordDef, EnumDef, ExceptionDef)) and item.name == name:
             return item.span
     return None
 
@@ -410,7 +425,7 @@ def _build_program_type_table(
     per_module_envs: dict[ModuleId, TypeEnvironment] = {}
 
     for mid, rmod in resolved.modules.items():
-        env = TypeEnvironment(module_id=mid)
+        env = TypeEnvironment(module_id=mid, local_scope_paths=frozenset(rmod.resolved.scope_nodes))
         if mid.is_entry and entry_seed_env is not None:
             env.seed_from(entry_seed_env)
         # The builder is transient: it only collects headers into ``env``
@@ -447,8 +462,8 @@ def _build_program_type_table(
     for mid, rmod in resolved.modules.items():
         program = rmod.resolved.program
         assert isinstance(program, Program)
-        for item in program.body.items:
-            if isinstance(item, TypeAlias) and not item.scope_path:
+        for item in _static_type_items(program.body.items):
+            if isinstance(item, TypeAlias):
                 alias_decls[(mid, item.name)] = item
     program_alias_keys = frozenset(alias_decls)
     program_ctor_sig_table: dict[tuple[ModuleId, str, str | None], ConstructorSignature] = {}
@@ -505,6 +520,7 @@ def _build_program_type_table(
             program_ctor_field_kinds_table=program_ctor_field_kinds_table,
             import_env=import_env,
             private_info=resolved.private_info,
+            local_scope_paths=frozenset(rmod.resolved.scope_nodes),
             module_id=mid,
             type_table=shared_type_table,
         )
@@ -610,6 +626,7 @@ def _build_program_func_sig_table(
             program_alias_table=program_alias_table,
             import_env=import_env,
             private_info=resolved.private_info,
+            local_scope_paths=frozenset(rmod.resolved.scope_nodes),
             module_id=mid,
         )
         if mid.is_entry and entry_seed_env is not None:
@@ -624,9 +641,7 @@ def _build_program_func_sig_table(
             if g_mid == mid:
                 env.register_generic_type(g_name, gdef)
 
-        for item in program.body.items:
-            if not isinstance(item, FuncDef) or item.scope_path:
-                continue
+        for item in _static_function_items(program.body.items):
             # Defer invalid user shadowing declarations to the ordinary checker,
             # which reports them at the declaration. A ``builtin def`` deliberately
             # uses a builtin call name, so it must still receive program metadata.
@@ -637,9 +652,10 @@ def _build_program_func_sig_table(
             if item.return_type is None:
                 continue
 
-            signature, function_type = resolve_function_header(
-                env, item, result_type=item.return_type
-            )
+            with env.type_scope(tuple(segment.name for segment in item.scope_path)):
+                signature, function_type = resolve_function_header(
+                    env, item, result_type=item.return_type
+                )
             result[item.node_id] = FunctionSignatureRecord(
                 declaration_node_id=item.node_id,
                 name=item.name,
@@ -748,6 +764,7 @@ def _prepare_module_environment(
         program_ctor_field_kinds_table=program_ctor_field_kinds_table,
         import_env=import_env,
         private_info=private_info,
+        local_scope_paths=frozenset(resolved.scope_nodes),
         module_id=mid,
         type_table=type_table,
     )

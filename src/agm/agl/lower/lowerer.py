@@ -244,7 +244,6 @@ from agm.agl.syntax.nodes import (
     VarPattern,
     VarRef,
     WildcardPattern,
-    is_scoped_declaration,
 )
 from agm.agl.syntax.spans import SourceSpan
 from agm.agl.type_schema import (
@@ -350,6 +349,15 @@ _CMP_OP_MAP: dict[BinOp, CmpOp] = {
     BinOp.GT: CmpOp.GT,
     BinOp.GE: CmpOp.GE,
 }
+
+
+def _static_items(items: tuple[Item, ...]) -> Iterator[Item]:
+    """Yield static declarations nested in named scope regions."""
+    for item in items:
+        if isinstance(item, ScopeRegion):
+            yield from _static_items(cast(tuple[Item, ...], item.items))
+        else:
+            yield item
 
 
 class _Lowerer:
@@ -2884,8 +2892,6 @@ class _Lowerer:
             default ``False`` so future control-flow nodes inherit safe behaviour
             automatically.
         """
-        if is_scoped_declaration(item):
-            return None
         match item:
             # ----------------------------------------------------------
             # Binders
@@ -3176,6 +3182,17 @@ class _Lowerer:
 
         _add_builtin_nominals(self._link.nominals, table)
 
+    def _scoped_agent_is_referenced(self, agent: AgentDecl) -> bool:
+        """Whether a scoped agent needs a runtime handle in this module.
+
+        A region is a declaration namespace, not eager runtime setup.  Unlike
+        root agents, an unused scoped agent therefore does not require host
+        backing merely because its region was declared.
+        """
+        return any(
+            ref.decl_node_id == agent.node_id for ref in self._checked.resolved.resolution.values()
+        )
+
     def lower(self) -> ExecutableProgram:
         """Lower this validated program payload to an ``ExecutableProgram``."""
         self._build_nominals()
@@ -3184,14 +3201,12 @@ class _Lowerer:
 
         # Phase 1: pre-allocate root function symbols and IDs for mutual recursion,
         # and root agent symbols so they are resolvable in function bodies.
-        for item in body.items:
-            if (
-                isinstance(item, FuncDef)
-                and not is_scoped_declaration(item)
-                and not item.is_builtin
-            ):
+        for item in _static_items(body.items):
+            if isinstance(item, FuncDef) and not item.is_builtin:
                 self._prealloc_funcdef(item)
-            elif isinstance(item, AgentDecl) and not is_scoped_declaration(item):
+            elif isinstance(item, AgentDecl) and (
+                not item.scope_path or self._scoped_agent_is_referenced(item)
+            ):
                 self._alloc_sym(
                     item.node_id,
                     name=item.name,
@@ -3204,16 +3219,20 @@ class _Lowerer:
         function_initializers: list[IrExpr] = []
         other_initializers: list[IrExpr] = []
         for item in body.items:
-            ir = self.lower_item(item, top_level=True)
-            if ir is not None:
-                target = (
-                    function_initializers
-                    if isinstance(item, FuncDef)
-                    and not is_scoped_declaration(item)
-                    and not item.is_builtin
-                    else other_initializers
-                )
-                target.append(ir)
+            items = _static_items((item,)) if isinstance(item, ScopeRegion) else (item,)
+            for nested_item in items:
+                if isinstance(nested_item, AgentDecl) and (
+                    nested_item.scope_path and not self._scoped_agent_is_referenced(nested_item)
+                ):
+                    continue
+                ir = self.lower_item(nested_item, top_level=True)
+                if ir is not None:
+                    target = (
+                        function_initializers
+                        if isinstance(nested_item, FuncDef) and not nested_item.is_builtin
+                        else other_initializers
+                    )
+                    target.append(ir)
 
         entry_mod = ExecutableModule(
             module_id=self._module_id,

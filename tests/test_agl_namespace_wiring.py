@@ -99,6 +99,93 @@ def test_typecheck_routes_qualified_types_patterns_and_is_tests(tmp_path: Path) 
     assert ModuleId.from_path("services/flags/config") in checked.modules
 
 
+def test_type_anchors_select_module_routes_over_same_named_local_scopes(tmp_path: Path) -> None:
+    graph = make_graph_from_files(
+        tmp_path,
+        {
+            "entry": (
+                "import A\n"
+                "scope A\n"
+                "record T(value: text)\n"
+                "end A\n"
+                "def keep(value: /A::T) -> /A::T = value\n"
+                "keep(/A::T(value = 1))"
+            ),
+            "A": "record T(value: int)",
+        },
+    )
+
+    assert check_program(resolve_program(graph), base_caps()).entry_id == graph.entry_id
+
+
+def test_unanchored_type_scope_and_module_route_clash_requires_an_anchor(tmp_path: Path) -> None:
+    graph = make_graph_from_files(
+        tmp_path,
+        {
+            "entry": (
+                "import A\n"
+                "scope A\n"
+                "record T(value: text)\n"
+                "def keep(value: A::T) -> A::T = value\n"
+                "end A\n"
+                "()"
+            ),
+            "A": "record T(value: int)",
+        },
+    )
+
+    with pytest.raises(AglTypeError, match="both a type name and a module route") as exc_info:
+        check_program(resolve_program(graph), base_caps())
+
+    for repair in ("hiding", "longer suffix", "/-anchored", "as"):
+        assert repair in str(exc_info.value)
+
+
+def test_imported_type_route_keeps_its_missing_member_error_over_a_local_scope(
+    tmp_path: Path,
+) -> None:
+    graph = make_graph_from_files(
+        tmp_path,
+        {
+            "entry": (
+                "import A\n"
+                "scope A\n"
+                "def member() -> int = 1\n"
+                "end A\n"
+                "def use(value: A::Missing) -> int = 1"
+            ),
+            "A": "record Present()",
+        },
+    )
+
+    with pytest.raises(AglTypeError, match="not accessible") as exc_info:
+        check_program(resolve_program(graph), base_caps())
+
+    assert "Unknown scoped type" not in str(exc_info.value)
+
+
+def test_unanchored_generic_type_scope_and_module_route_clash_requires_an_anchor(
+    tmp_path: Path,
+) -> None:
+    graph = make_graph_from_files(
+        tmp_path,
+        {
+            "entry": (
+                "import A\n"
+                "scope A\n"
+                "record T[V](value: V)\n"
+                "def keep(value: A::T[int]) -> A::T[int] = value\n"
+                "end A\n"
+                "()"
+            ),
+            "A": "record T[V](value: V)",
+        },
+    )
+
+    with pytest.raises(AglTypeError, match="both a type name and a module route"):
+        check_program(resolve_program(graph), base_caps())
+
+
 def test_type_qualifier_beats_route_without_the_requested_member(tmp_path: Path) -> None:
     """A shared route is irrelevant until it contributes the constructor member."""
     graph = make_graph_from_files(
@@ -118,6 +205,27 @@ def test_type_qualifier_beats_route_without_the_requested_member(tmp_path: Path)
     )
 
     assert check_program(resolve_program(graph), base_caps()).entry_id == graph.entry_id
+
+
+def test_generic_is_test_type_and_module_constructor_member_collision_is_ambiguous(
+    tmp_path: Path,
+) -> None:
+    graph = make_graph_from_files(
+        tmp_path,
+        {
+            "entry": (
+                "import support/Owner\n"
+                "enum Owner[T] | On\n"
+                "let flag = ::Owner[int]::On\n"
+                "flag is Owner::On"
+            ),
+            "support/Owner": "def On() -> int = 1",
+        },
+    )
+
+    resolved = resolve_program(graph)
+    with pytest.raises(AglTypeError, match="both a type name and a module route"):
+        check_program(resolved, base_caps())
 
 
 def test_is_test_type_and_module_constructor_member_collision_is_ambiguous(

@@ -12,7 +12,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import Literal, cast
@@ -24,12 +25,14 @@ from agm.agl.scope.imports import (
     QName,
     QualResolutionFound,
     contribution_routes,
+    qualification_repair_guidance,
+    qualifier_candidates,
     qualifier_contributes,
     resolve_qualified,
     resolve_qualified_member,
     try_resolve_qualified_member,
 )
-from agm.agl.scope.symbols import BindingRef, ConstructorRef, ModuleResolution
+from agm.agl.scope.symbols import BindingRef, ConstructorRef, ModuleResolution, ScopePath
 from agm.agl.semantics.persistent import PersistentDict
 from agm.agl.semantics.type_table import (
     BUILTIN_PRELUDE_TYPE_DEFS,
@@ -62,7 +65,7 @@ from agm.agl.semantics.types import (
     UnitType,
     contains_inference_var,
 )
-from agm.agl.syntax.nodes import Expr, ParamKind, Pattern, QualifierChain
+from agm.agl.syntax.nodes import Expr, ParamKind, Pattern, QualifierAnchor, QualifierChain
 from agm.agl.syntax.spans import SourceSpan
 
 # ---------------------------------------------------------------------------
@@ -535,6 +538,7 @@ class TypeEnvironment:
         | None = None,
         import_env: ImportEnv | None = None,
         private_info: Mapping[tuple[ModuleId, str], bool] | None = None,
+        local_scope_paths: frozenset[ScopePath] = frozenset(),
         module_id: ModuleId = ENTRY_ID,
         type_table: TypeTable | None = None,
     ) -> None:
@@ -611,6 +615,14 @@ class TypeEnvironment:
             private_info if private_info is not None else {}
         )
         self._module_id: ModuleId = module_id
+        # Scope resolution supplies every local path, including regions with no
+        # type declarations, so failed qualified type references retain their
+        # scoped diagnostic instead of being mistaken for module routes.
+        self._local_scope_paths = local_scope_paths
+        # Type references inside a named scope use the same lexical layers as
+        # value references.  Scoped declarations remain stored under their
+        # full path; this frame only maps a bare source spelling to that path.
+        self._type_scope: tuple[str, ...] = ()
         self._sealed = False
         # Memo for the own-type-name enumeration, which rebuilds a whole-namespace
         # answer and is asked for repeatedly (once per owner-form resolution).  It
@@ -895,9 +907,12 @@ class TypeEnvironment:
         In program context, also searches open-imported types when the name is not
         found locally.
         """
-        if name in self._types or name in self._alias_targets:
+        local_name = self._lexical_type_name(name)
+        if local_name in self._types or local_name in self._alias_targets:
             try:
-                return self._resolve_name_type(name, span=None, _resolving=frozenset())
+                return self._resolve_name_type(
+                    local_name, span=None, _resolving=frozenset(), lexical=False
+                )
             except AglTypeError:
                 return None
         # Program context: look up via open imports.
@@ -1139,6 +1154,111 @@ class TypeEnvironment:
 
     # --- Type expression resolution ---
 
+    @contextmanager
+    def type_scope(self, path: tuple[str, ...]) -> Iterator[None]:
+        """Resolve type expressions with *path* as their lexical scope layer."""
+        previous = self._type_scope
+        self._type_scope = path
+        try:
+            yield
+        finally:
+            self._type_scope = previous
+
+    def _lexical_type_name(self, name: str) -> str:
+        """Return the nearest scoped spelling of an unqualified type name."""
+        for end in range(len(self._type_scope), 0, -1):
+            candidate = "::".join((*self._type_scope[:end], name))
+            if (
+                candidate in self._types
+                or candidate in self._generic_types
+                or candidate in self._alias_targets
+                or (
+                    self._program_type_table is not None
+                    and (self._module_id, candidate) in self._program_type_table
+                )
+                or (
+                    self._program_generic_table is not None
+                    and (self._module_id, candidate) in self._program_generic_table
+                )
+                or (self._module_id, candidate) in self._program_alias_table
+            ):
+                return candidate
+        return name
+
+    def _has_own_type_name(self, name: str) -> bool:
+        """Whether *name* is declared by this module in any type namespace."""
+        return (
+            name in self._types
+            or name in self._generic_types
+            or name in self._alias_targets
+            or (
+                self._program_type_table is not None
+                and (self._module_id, name) in self._program_type_table
+            )
+            or (
+                self._program_generic_table is not None
+                and (self._module_id, name) in self._program_generic_table
+            )
+            or (self._module_id, name) in self._program_alias_table
+        )
+
+    def _local_qualified_type_name(self, qualifier: QualifierChain, name: str) -> str | None:
+        """Find the local type selected by *qualifier* without routing imports.
+
+        ``::`` starts at this module's root, ``/`` always denotes an import
+        route, and an unanchored qualifier walks the active lexical layers.
+        Keeping this selection separate from route resolution prevents a type
+        lookup from inheriting a stale lexical context or treating a module
+        anchor as a local path.
+        """
+        if qualifier.anchor is QualifierAnchor.MODULE:
+            return None
+        bases = (
+            ((),)
+            if qualifier.anchor is QualifierAnchor.CURRENT_MODULE
+            else tuple(self._type_scope[:end] for end in range(len(self._type_scope), -1, -1))
+        )
+        for base in bases:
+            candidate = "::".join((*base, *qualifier.route_segments, name))
+            if self._has_own_type_name(candidate):
+                return candidate
+        return None
+
+    def _has_local_scope_prefix(self, qualifier: QualifierChain) -> bool:
+        """Whether a local scope begins the qualifier in an active lexical layer."""
+        if qualifier.anchor is QualifierAnchor.MODULE:
+            return False
+        bases = (
+            ((),)
+            if qualifier.anchor is QualifierAnchor.CURRENT_MODULE
+            else tuple(self._type_scope[:end] for end in range(len(self._type_scope), -1, -1))
+        )
+        for base in bases:
+            path = (*base, *qualifier.route_segments)
+            if any(
+                len(scope_path) > len(base)
+                and len(scope_path) <= len(path)
+                and path[: len(scope_path)] == scope_path
+                for scope_path in self._local_scope_paths
+            ):
+                return True
+        return False
+
+    def _is_missing_local_scoped_type(self, qualifier: QualifierChain) -> bool:
+        """Whether an unresolved qualifier belongs to a local scope, not a route."""
+        if qualifier.anchor is QualifierAnchor.CURRENT_MODULE:
+            return True
+        return self._has_local_scope_prefix(qualifier) and not (
+            self._import_env is not None
+            and qualifier_candidates(
+                self._import_env, qualifier.route_segments, anchored=qualifier.anchored
+            )
+        )
+
+    @staticmethod
+    def _unknown_scoped_type_message(qualifier: QualifierChain, name: str) -> str:
+        return f"Unknown scoped type '{'::'.join((*qualifier.route_segments, name))}'."
+
     def resolve_type_expr(
         self,
         type_expr: object,
@@ -1230,13 +1350,30 @@ class TypeEnvironment:
                 type_vars=type_vars,
             )
         if isinstance(type_expr, AppliedT):
-            name = type_expr.name
+            name = (
+                self._lexical_type_name(type_expr.name)
+                if type_expr.qualifier is None
+                else type_expr.name
+            )
             eff_span = span if span is not None else type_expr.span
+            qualifier = type_expr.qualifier
+            if qualifier is not None:
+                local_name = self._local_qualified_type_name(qualifier, name)
+                if local_name is not None:
+                    if qualifier.anchor is None and self.has_qualified_import_member(
+                        qualifier, name
+                    ):
+                        raise AglTypeError(
+                            f"Qualifier '{qualifier.render()}' is both a type name and a module "
+                            f"route for '{name}'. {qualification_repair_guidance()}",
+                            span=eff_span,
+                        )
+                    name = local_name
+                    qualifier = None
             resolved_args = tuple(
                 self.resolve_type_expr(a, span=None, _resolving=_resolving, type_vars=type_vars)
                 for a in type_expr.args
             )
-            qualifier = type_expr.qualifier
             if qualifier is not None and qualifier.route_segments:
                 return self._resolve_qualified_applied_type(
                     qualifier, name, resolved_args, span=eff_span
@@ -1339,6 +1476,8 @@ class TypeEnvironment:
     ) -> Type:
         """Resolve ``module::Name[args]`` through the module import environment."""
         rendered = qualifier.render()
+        if self._is_missing_local_scoped_type(qualifier):
+            raise AglTypeError(self._unknown_scoped_type_message(qualifier, name), span=span)
         if self._import_env is None or self._program_generic_table is None:
             raise AglTypeError(
                 f"Module qualifier '{rendered}::' cannot be resolved outside of a module graph.",
@@ -1372,10 +1511,13 @@ class TypeEnvironment:
         span: SourceSpan | None,
         _resolving: frozenset[str],
         type_vars: frozenset[str] = frozenset(),
+        lexical: bool = True,
     ) -> Type:
         # Type variables take priority over the type namespace.
         if name in type_vars:
             return TypeVarType(name)
+        if lexical:
+            name = self._lexical_type_name(name)
         # Reject a bare reference to a generic type that requires type arguments.
         gdef = self._generic_types.get(name)
         if gdef is not None and len(gdef.type_params) > 0:
@@ -1458,28 +1600,26 @@ class TypeEnvironment:
         self-reference to the current module) and no program context exists.
         """
         rendered = qualifier.render()
+        local_name = self._local_qualified_type_name(qualifier, name)
+        if local_name is not None:
+            if qualifier.anchor is None and self.has_qualified_import_member(qualifier, name):
+                raise AglTypeError(
+                    f"Qualifier '{rendered}' is both a type name and a module route for "
+                    f"'{name}'. {qualification_repair_guidance()}",
+                    span=span,
+                )
+            return self._resolve_name_type(
+                local_name, span=span, _resolving=frozenset(), lexical=False
+            )
 
-        if self._program_type_table is None:
-            # Single-module path: module qualifiers have no program table to consult.
-            # ::Name (empty segments) = current module's own type.
-            if not qualifier.route_segments:
-                return self._resolve_name_type(name, span=span, _resolving=frozenset())
+        if self._is_missing_local_scoped_type(qualifier):
+            raise AglTypeError(self._unknown_scoped_type_message(qualifier, name), span=span)
+        if self._program_type_table is None or self._import_env is None:
             raise AglTypeError(
                 f"Module qualifier '{rendered}::' cannot be resolved outside of a module graph.",
                 span=span,
             )
 
-        # ``::Name`` — self-reference to the current module's own type.
-        if not qualifier.route_segments:
-            key = (self._module_id, name)
-            t = self._program_type_table.get(key)
-            if t is not None:
-                return t
-            # Fall back to own local types (covers built-ins and prelude).
-            return self._resolve_name_type(name, span=span, _resolving=frozenset())
-
-        # Qualified reference: resolve through the contribution environment.
-        assert self._import_env is not None
         qname = self._resolve_import_qname(qualifier, name, span=span)
         assert qname is not None
         if not self._is_program_type_candidate(qname):

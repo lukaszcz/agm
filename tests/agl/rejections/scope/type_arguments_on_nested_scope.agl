@@ -1,0 +1,8 @@
+scope Outer
+scope Inner
+record T(value: int)
+def invalid(value: Inner[int]::T) -> int = 0
+end Inner
+end Outer
+
+0

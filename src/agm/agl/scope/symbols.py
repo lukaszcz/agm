@@ -325,10 +325,12 @@ class ScopeNode:
     members: dict[str, BindingRef] = field(default_factory=dict)
 
     def lookup(self, name: str) -> BindingRef | None:
-        """Search upward through the scope chain for *name*."""
+        """Search lexical bindings and named-scope members outward."""
         scope: ScopeNode | None = self
         while scope is not None:
             ref = scope.bindings.get(name)
+            if ref is None and scope.scope_path:
+                ref = scope.members.get(name)
             if ref is not None:
                 return ref
             scope = scope.parent

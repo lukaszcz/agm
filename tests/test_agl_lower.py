@@ -196,11 +196,16 @@ def _lower(source: str) -> ExecutableProgram:
     )
 
 
-def test_scoped_functions_and_agents_do_not_allocate_runtime_symbols() -> None:
+def test_scoped_functions_link_while_unused_scoped_agents_remain_deferred() -> None:
     program = _lower(_MIXED_ROOT_AND_SCOPED_DECLARATIONS)
 
-    assert {symbol.public_name for symbol in program.symbols.values()} == {"root", "root_agent"}
-    assert len(program.functions) == 1
+    assert {symbol.public_name for symbol in program.symbols.values()} == {
+        "root",
+        "root_agent",
+        "block_function",
+        "shorthand_function",
+    }
+    assert len(program.functions) == 3
 
 
 def _contains_flexible_inference_state(value: object, seen: set[int]) -> bool:
@@ -1863,7 +1868,7 @@ class TestPartialCallLowering:
 class TestLowerGraph:
     """Golden tests for lower_program."""
 
-    def test_lower_program_excludes_scoped_declarations_from_public_symbols(self) -> None:
+    def test_lower_program_links_scoped_functions_without_eager_scoped_agents(self) -> None:
         from agm.agl.lower.program import lower_program
         from agm.agl.modules.loader import load_graph
         from agm.agl.modules.roots import RootSet
@@ -1879,8 +1884,13 @@ class TestLowerGraph:
 
         program = lower_program(_compiled_checked(check_program(resolve_program(graph), _caps())))
 
-        assert {symbol.public_name for symbol in program.symbols.values()} == {"root", "root_agent"}
-        assert len(program.functions) == 1
+        assert {symbol.public_name for symbol in program.symbols.values()} == {
+            "root",
+            "root_agent",
+            "block_function",
+            "shorthand_function",
+        }
+        assert len(program.functions) == 3
 
     def test_lower_program_simple(self, tmp_path: Path) -> None:
         """lower_program on a two-module program builds a valid ExecutableProgram.

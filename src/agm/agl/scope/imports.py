@@ -4,17 +4,19 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from types import MappingProxyType
-from typing import Callable, Mapping, TypeVar
+from typing import Callable, Mapping, TypeAlias
 
 from agm.agl.modules.ids import ModuleId
 from agm.agl.scope.symbols import AglScopeError
-from agm.agl.syntax.nodes import ImportDecl
+from agm.agl.syntax.nodes import ImportDecl, ImportItem
 from agm.agl.syntax.types import ImportMode
 
 __all__ = [
     "ImportEnv",
     "ImportTarget",
     "ModuleContribution",
+    "NameAtom",
+    "PathAtom",
     "QName",
     "QualResolution",
     "QualResolutionAmbiguous",
@@ -36,7 +38,27 @@ __all__ = [
     "try_resolve_qualified_member",
 ]
 
-QName = tuple[ModuleId, str]
+PathAtom: TypeAlias = tuple[str, ...]
+# Root members retain their historical string representation at this boundary;
+# scoped members use a structured tuple.  All policy operations normalize it.
+NameAtom: TypeAlias = str | PathAtom
+QName: TypeAlias = tuple[ModuleId, NameAtom]
+
+
+def _path(atom: NameAtom) -> PathAtom:
+    return (atom,) if isinstance(atom, str) else atom
+
+
+def _atom(path: PathAtom) -> NameAtom:
+    return path[0] if len(path) == 1 else path
+
+
+def _item_path(item: ImportItem) -> PathAtom:
+    return (*tuple(segment.name for segment in item.scope_path), item.name)
+
+
+def _path_sort_key(atom: NameAtom) -> str:
+    return "::".join(_path(atom))
 
 
 def render_qualifier(qualifier: tuple[str, ...], *, anchored: bool = False) -> str:
@@ -72,7 +94,7 @@ def qualification_repair_guidance() -> str:
 
 def ambiguous_qualification_message(
     qualifier: tuple[str, ...],
-    member: str,
+    member: NameAtom,
     candidates: tuple[ModuleId, ...],
     *,
     anchored: bool = False,
@@ -80,46 +102,14 @@ def ambiguous_qualification_message(
     """Render the common repair-oriented diagnostic for a shared verdict."""
     rendered = render_qualifier(qualifier, anchored=anchored)
     paths = ", ".join(module.path_str() for module in candidates)
-    message = f"'{rendered}::{member}' is ambiguous across imported modules: {paths}."
+    name = "::".join(_path(member))
+    message = f"'{rendered}::{name}' is ambiguous across imported modules: {paths}."
     return f"{message} {qualification_repair_guidance()}"
-
-
-def _build_rename_map(decl: ImportDecl) -> dict[str, str]:
-    """Map selected source names to their canonical exposed names."""
-    if decl.mode is not ImportMode.USING:
-        return {}
-    return {item.name: item.rename for item in decl.items if item.rename is not None}
-
-
-def _exposed_name(source_name: str, rename_map: Mapping[str, str]) -> str:
-    """Return the canonical name exposed for *source_name*."""
-    return rename_map.get(source_name, source_name)
-
-
-# ---------------------------------------------------------------------------
-# Contribution import model
-# ---------------------------------------------------------------------------
-
-
-_K = TypeVar("_K")
-_V = TypeVar("_V")
-
-
-def _by_name(name: str) -> str:
-    """Order a string-keyed mapping by its own keys."""
-    return name
-
-
-def _frozen_sorted(mapping: Mapping[_K, _V], key: Callable[[_K], str]) -> Mapping[_K, _V]:
-    """Copy *mapping* into a deterministically ordered read-only mapping."""
-    ordered: dict[_K, _V] = {entry: mapping[entry] for entry in sorted(mapping, key=key)}
-    return MappingProxyType(ordered)
 
 
 def _frozen_routes(
     routes: Mapping[tuple[str, ...], set[ModuleId]],
 ) -> Mapping[tuple[str, ...], tuple[ModuleId, ...]]:
-    """Freeze a route index, ordering each candidate list for stable diagnostics."""
     return MappingProxyType(
         {
             qualifier: tuple(sorted(modules, key=ModuleId.path_str))
@@ -130,38 +120,28 @@ def _frozen_routes(
 
 @dataclass(frozen=True, slots=True)
 class ModuleContribution:
-    """The merged contribution of one imported module.
-
-    ``members`` is the module's unioned contributed set S, keyed by its
-    canonical exposed names. ``bare_names`` is the subset injected into the
-    unqualified namespace by ``using`` or an ``open`` import. ``path_enabled``
-    records whether a plain import makes the module available to suffix and
-    anchored qualification; aliases are instead listed in ``aliases``.
-    """
+    """One imported module's selected, path-keyed contribution."""
 
     module: ModuleId
-    members: Mapping[str, QName]
-    bare_names: frozenset[str]
+    members: Mapping[NameAtom, QName]
+    bare_names: frozenset[NameAtom]
     path_enabled: bool
     aliases: frozenset[str]
+    complete_public_set: bool = False
 
     def __post_init__(self) -> None:
-        members = _frozen_sorted(self.members, _by_name)
+        members: Mapping[NameAtom, QName] = MappingProxyType(
+            {atom: self.members[atom] for atom in sorted(self.members, key=_path_sort_key)}
+        )
         object.__setattr__(self, "members", members)
 
 
 @dataclass(frozen=True, slots=True)
 class ImportEnv:
-    """Pure contribution import environment.
-
-    Contributions are indexed by imported module so repeated declarations union
-    their selected sets. The unqualified map retains lazy-clash candidates.
-    """
+    """Pure contribution environment, including structured public paths."""
 
     contributions: Mapping[ModuleId, ModuleContribution]
-    unqualified: Mapping[str, frozenset[QName]]
-    # Route indexes derived from the contributions, so qualified resolution is a
-    # dict lookup instead of a scan over every imported module.
+    unqualified: Mapping[NameAtom, frozenset[QName]]
     suffix_routes: Mapping[tuple[str, ...], tuple[ModuleId, ...]] = field(
         init=False, repr=False, compare=False
     )
@@ -170,19 +150,24 @@ class ImportEnv:
     )
 
     def __post_init__(self) -> None:
-        contributions = _frozen_sorted(self.contributions, ModuleId.path_str)
+        contributions: Mapping[ModuleId, ModuleContribution] = MappingProxyType(
+            {
+                module: self.contributions[module]
+                for module in sorted(self.contributions, key=ModuleId.path_str)
+            }
+        )
+        unqualified: Mapping[NameAtom, frozenset[QName]] = MappingProxyType(
+            {atom: self.unqualified[atom] for atom in sorted(self.unqualified, key=_path_sort_key)}
+        )
         object.__setattr__(self, "contributions", contributions)
-        unqualified = _frozen_sorted(self.unqualified, _by_name)
         object.__setattr__(self, "unqualified", unqualified)
-
         suffix: dict[tuple[str, ...], set[ModuleId]] = {}
         anchored: dict[tuple[str, ...], set[ModuleId]] = {}
         for module, contribution in contributions.items():
             if contribution.path_enabled:
-                segments = module.segments
-                for index in range(len(segments)):
-                    suffix.setdefault(segments[index:], set()).add(module)
-                anchored.setdefault(segments, set()).add(module)
+                for index in range(len(module.segments)):
+                    suffix.setdefault(module.segments[index:], set()).add(module)
+                anchored.setdefault(module.segments, set()).add(module)
             for alias in contribution.aliases:
                 suffix.setdefault((alias,), set()).add(module)
         object.__setattr__(self, "suffix_routes", _frozen_routes(suffix))
@@ -191,34 +176,26 @@ class ImportEnv:
 
 @dataclass(frozen=True, slots=True)
 class QualResolutionFound:
-    """A qualified reference resolved to one contributed member."""
-
     module: ModuleId
     qname: QName
 
 
 @dataclass(frozen=True, slots=True)
 class QualResolutionUnknownQualifier:
-    """No imported route matches the qualifier."""
-
     qualifier: tuple[str, ...]
 
 
 @dataclass(frozen=True, slots=True)
 class QualResolutionMissingMember:
-    """The qualifier matches imports, but none contributes the requested member."""
-
     qualifier: tuple[str, ...]
-    member: str
+    member: NameAtom
     candidates: tuple[ModuleId, ...]
 
 
 @dataclass(frozen=True, slots=True)
 class QualResolutionAmbiguous:
-    """Several matching modules contribute the requested member."""
-
     qualifier: tuple[str, ...]
-    member: str
+    member: NameAtom
     candidates: tuple[ModuleId, ...]
 
 
@@ -232,186 +209,161 @@ QualResolution = (
 
 @dataclass(slots=True)
 class _ContributionAccumulator:
-    """Mutable builder state for one module's merged contribution."""
-
-    members: dict[str, QName]
-    bare_names: set[str]
+    members: dict[NameAtom, QName]
+    bare_names: set[NameAtom]
     path_enabled: bool
     aliases: set[str]
+    complete_public_set: bool
 
 
-def _compute_set(
-    decl: ImportDecl,
-    module: ModuleId,
-    module_exports: Mapping[str, QName],
-) -> frozenset[str]:
-    """Select one declaration's S for one target-module expansion.
+def _matching_atoms(exports: Mapping[NameAtom, QName], prefix: PathAtom) -> tuple[NameAtom, ...]:
+    return tuple(atom for atom in exports if _path(atom)[: len(prefix)] == prefix)
 
-    Wildcard imports expand per module, so a ``using`` or ``hiding`` item
-    must be public in every expanded module just as it must be
-    for a non-wildcard import.
-    """
-    exported_names = frozenset(module_exports)
-    if decl.mode == ImportMode.ALL:
-        return exported_names
 
-    selected_names = frozenset(item.name for item in decl.items)
-    for name in selected_names:
-        if name not in exported_names:
+def _selected_atoms(
+    decl: ImportDecl, module: ModuleId, exports: Mapping[NameAtom, QName]
+) -> tuple[NameAtom, ...]:
+    """Expand selection atoms to public paths, including complete subtrees."""
+    if decl.mode is ImportMode.ALL:
+        return tuple(exports)
+    matched: dict[NameAtom, None] = {}
+    for item in decl.items:
+        paths = _matching_atoms(exports, _item_path(item))
+        if not paths:
+            rendered = "::".join(_item_path(item))
             raise AglScopeError(
-                f"name {name!r} is not exported by module {module.path_str()!r}",
-                span=decl.span,
+                f"name {rendered!r} is not exported by module {module.path_str()!r}", span=decl.span
             )
-    if decl.mode == ImportMode.USING:
-        return selected_names
-    return exported_names - selected_names
+        for atom in paths:
+            matched[atom] = None
+    if decl.mode is ImportMode.USING:
+        return tuple(matched)
+    return tuple(atom for atom in exports if atom not in matched)
+
+
+def _exposed_atom(source: NameAtom, decl: ImportDecl) -> NameAtom:
+    """Apply the matching ``using … as`` path re-rooting, if any."""
+    source_path = _path(source)
+    for item in decl.items:
+        prefix = _item_path(item)
+        if item.rename is not None and source_path[: len(prefix)] == prefix:
+            return _atom((item.rename, *source_path[len(prefix) :]))
+    return source
 
 
 def _targets(target: ImportTarget) -> tuple[ModuleId, ...]:
-    """Return a deterministic per-module expansion of an import target."""
-    if isinstance(target, SingleTarget):
-        return (target.module,)
-    return tuple(sorted(target.modules, key=ModuleId.path_str))
+    return (
+        (target.module,)
+        if isinstance(target, SingleTarget)
+        else tuple(sorted(target.modules, key=ModuleId.path_str))
+    )
 
 
 def _add_member(
-    accumulator: _ContributionAccumulator,
-    exposed_name: str,
-    qname: QName,
-    decl: ImportDecl,
+    acc: _ContributionAccumulator, exposed: NameAtom, qname: QName, decl: ImportDecl
 ) -> None:
-    """Merge a canonical exposed member, rejecting distinct origins."""
-    existing = accumulator.members.get(exposed_name)
+    existing = acc.members.get(exposed)
     if existing is not None and existing != qname:
         raise AglScopeError(
-            f"conflicting origins for exposed name {exposed_name!r}"
-            f" ({existing[0].path_str()!r} and {qname[0].path_str()!r})",
-            span=decl.span,
+            f"conflicting origins for exposed name {_path_sort_key(exposed)!r}", span=decl.span
         )
-    accumulator.members[exposed_name] = qname
+    acc.members[exposed] = qname
 
 
 def build_import_env(
     decls: tuple[ImportDecl, ...],
     targets: Mapping[int, ImportTarget],
-    exports: Mapping[ModuleId, Mapping[str, QName]],
+    exports: Mapping[ModuleId, Mapping[NameAtom, QName]],
 ) -> ImportEnv:
-    """Build the contribution environment from resolved imports.
-
-    Plain imports contribute qualified members only; ``using`` and ``open``
-    declarations inject their selected members into the bare namespace.
-    """
+    """Build contributions. Selection, hiding, and renaming operate on paths."""
     accumulators: dict[ModuleId, _ContributionAccumulator] = {}
-
     for decl in decls:
-        is_open = decl.is_open
-
-        rename_map = _build_rename_map(decl)
-        inject_bare = is_open or decl.mode == ImportMode.USING
-
         for module in _targets(targets[decl.node_id]):
-            accumulator = accumulators.setdefault(
-                module,
-                _ContributionAccumulator(
-                    members={}, bare_names=set(), path_enabled=False, aliases=set()
-                ),
+            acc = accumulators.setdefault(
+                module, _ContributionAccumulator({}, set(), False, set(), False)
             )
             if decl.alias is None:
-                accumulator.path_enabled = True
+                acc.path_enabled = True
             else:
-                accumulator.aliases.add(decl.alias)
-
-            module_exports = exports.get(module, {})
-            selected = _compute_set(decl, module, module_exports)
-            for source_name in sorted(selected):
-                exposed_name = _exposed_name(source_name, rename_map)
-                _add_member(accumulator, exposed_name, module_exports[source_name], decl)
-                if inject_bare:
-                    accumulator.bare_names.add(exposed_name)
+                acc.aliases.add(decl.alias)
+            acc.complete_public_set |= decl.mode is ImportMode.ALL
+            for source in _selected_atoms(decl, module, exports.get(module, {})):
+                exposed = _exposed_atom(source, decl) if decl.mode is ImportMode.USING else source
+                _add_member(acc, exposed, exports[module][source], decl)
+                if decl.is_open or decl.mode is ImportMode.USING:
+                    acc.bare_names.add(exposed)
 
     contributions: dict[ModuleId, ModuleContribution] = {}
-    unqualified_acc: dict[str, set[QName]] = {}
-    for module, accumulator in accumulators.items():
+    unqualified: dict[NameAtom, set[QName]] = {}
+    for module, acc in accumulators.items():
         contribution = ModuleContribution(
-            module=module,
-            members=accumulator.members,
-            bare_names=frozenset(accumulator.bare_names),
-            path_enabled=accumulator.path_enabled,
-            aliases=frozenset(accumulator.aliases),
+            module,
+            acc.members,
+            frozenset(acc.bare_names),
+            acc.path_enabled,
+            frozenset(acc.aliases),
+            acc.complete_public_set,
         )
         contributions[module] = contribution
         for name in contribution.bare_names:
-            unqualified_acc.setdefault(name, set()).add(contribution.members[name])
-
+            unqualified.setdefault(name, set()).add(contribution.members[name])
     return ImportEnv(
-        contributions=contributions,
-        unqualified={name: frozenset(qnames) for name, qnames in unqualified_acc.items()},
+        contributions, {name: frozenset(qnames) for name, qnames in unqualified.items()}
     )
 
 
 def qualifier_candidates(
-    env: ImportEnv,
-    qualifier: tuple[str, ...],
-    *,
-    anchored: bool,
+    env: ImportEnv, qualifier: tuple[str, ...], *, anchored: bool
 ) -> tuple[ModuleId, ...]:
-    """Collect every route matching a qualifier, without applying precedence."""
-    index = env.anchored_routes if anchored else env.suffix_routes
-    return index.get(qualifier, ())
+    return (env.anchored_routes if anchored else env.suffix_routes).get(qualifier, ())
 
 
 def contribution_routes(
     contribution: ModuleContribution,
 ) -> tuple[tuple[tuple[str, ...], bool], ...]:
-    """Enumerate every ``(qualifier, anchored)`` route that reaches *contribution*.
-
-    This is the writable inverse of :func:`qualifier_candidates`: a plain import
-    exposes every suffix of its path plus the ``/``-anchored full path, and each
-    alias exposes a single-segment route.
-    """
     routes: list[tuple[tuple[str, ...], bool]] = [
         ((alias,), False) for alias in sorted(contribution.aliases)
     ]
     if contribution.path_enabled:
-        segments = contribution.module.segments
-        routes.extend((segments[index:], False) for index in range(len(segments)))
-        routes.append((segments, True))
+        routes.extend(
+            (contribution.module.segments[index:], False)
+            for index in range(len(contribution.module.segments))
+        )
+        routes.append((contribution.module.segments, True))
     return tuple(routes)
 
 
-def qualifier_contributes(
-    env: ImportEnv, qualifier: tuple[str, ...], member: str, *, anchored: bool = False
-) -> bool:
-    """Return whether some route under *qualifier* contributes *member*.
+def _member_qname(contribution: ModuleContribution, member: NameAtom) -> QName | None:
+    member_path = _path(member)
+    return next(
+        (qname for exposed, qname in contribution.members.items() if _path(exposed) == member_path),
+        None,
+    )
 
-    True for both a unique resolution and an ambiguity: the qualifier does name
-    the member either way, which is what qualifier-shadowing checks care about.
-    """
-    return isinstance(
-        resolve_qualified(env, qualifier, member, anchored=anchored),
-        (QualResolutionFound, QualResolutionAmbiguous),
+
+def qualifier_contributes(
+    env: ImportEnv, qualifier: tuple[str, ...], member: NameAtom, *, anchored: bool = False
+) -> bool:
+    return any(
+        _member_qname(env.contributions[module], member) is not None
+        for module in qualifier_candidates(env, qualifier, anchored=anchored)
     )
 
 
 def private_missing_member_module(
-    result: QualResolutionMissingMember,
-    private_info: Mapping[QName, bool],
+    result: QualResolutionMissingMember, private_info: Mapping[QName, bool]
 ) -> ModuleId | None:
-    """Return the candidate module that declares the missing member private.
-
-    A privacy miss is reported in preference to a plain "not in the imported
-    set" miss, because it names the actual reason the member is unreachable.
-    """
+    requested = _path(result.member)
     for module in result.candidates:
-        if private_info.get((module, result.member)):
-            return module
+        for (owner, atom), private in private_info.items():
+            if owner == module and private and requested[: len(_path(atom))] == _path(atom):
+                return module
     return None
 
 
 def try_resolve_qualified_member(
-    env: ImportEnv, qualifier: tuple[str, ...], member: str, *, anchored: bool = False
+    env: ImportEnv, qualifier: tuple[str, ...], member: NameAtom, *, anchored: bool = False
 ) -> QName | None:
-    """Resolve ``qualifier::member``, returning ``None`` for any non-unique verdict."""
     result = resolve_qualified(env, qualifier, member, anchored=anchored)
     return result.qname if isinstance(result, QualResolutionFound) else None
 
@@ -419,7 +371,7 @@ def try_resolve_qualified_member(
 def resolve_qualified_member(
     env: ImportEnv,
     qualifier: tuple[str, ...],
-    member: str,
+    member: NameAtom,
     private_info: Mapping[QName, bool],
     *,
     anchored: bool = False,
@@ -428,13 +380,6 @@ def resolve_qualified_member(
     missing_member: Callable[[str], Exception],
     ambiguous: Callable[[str], Exception],
 ) -> QName:
-    """Resolve ``qualifier::member`` or raise a caller-supplied error for the verdict.
-
-    Each callback receives only what its wording needs — the rendered qualifier,
-    the module declaring a private member, or the shared ambiguity message — so
-    scope and typecheck can keep their own exception classes and phrasing while
-    sharing one walk over the resolution verdicts.
-    """
     result = resolve_qualified(env, qualifier, member, anchored=anchored)
     if isinstance(result, QualResolutionFound):
         return result.qname
@@ -452,30 +397,36 @@ def resolve_qualified_member(
 
 
 def resolve_qualified(
-    env: ImportEnv,
-    qualifier: tuple[str, ...],
-    member: str,
-    *,
-    anchored: bool = False,
+    env: ImportEnv, qualifier: tuple[str, ...], member: NameAtom, *, anchored: bool = False
 ) -> QualResolution:
-    """Resolve one qualified reference with suffix/anchor semantics.
-
-    Routes are collected before their members are considered. Member filtering
-    can therefore rescue a shared suffix or alias facade, while multiple
-    surviving candidates always remain an ambiguity: there is no route, suffix,
-    alias, or declaration-order preference.
-    """
     candidates = qualifier_candidates(env, qualifier, anchored=anchored)
-    if not candidates:
-        return QualResolutionUnknownQualifier(qualifier)
-
-    member_candidates = tuple(
-        module for module in candidates if member in env.contributions[module].members
+    route_members = tuple(
+        (module, qname)
+        for module in candidates
+        if (qname := _member_qname(env.contributions[module], member)) is not None
     )
-    if not member_candidates:
-        return QualResolutionMissingMember(qualifier, member, candidates)
-    if len(member_candidates) > 1:
-        return QualResolutionAmbiguous(qualifier, member, member_candidates)
+    bare_atom = _atom((*qualifier, *_path(member)))
+    bare_qnames = frozenset() if anchored else env.unqualified.get(bare_atom, frozenset())
 
-    module = member_candidates[0]
-    return QualResolutionFound(module, env.contributions[module].members[member])
+    if route_members:
+        route_qnames = {qname for _module, qname in route_members}
+        if len(route_members) > 1 or len(route_qnames | bare_qnames) > 1:
+            modules = {module for module, _qname in route_members}
+            modules.update(module for module, _atom in bare_qnames)
+            return QualResolutionAmbiguous(
+                qualifier, member, tuple(sorted(modules, key=ModuleId.path_str))
+            )
+        module, qname = route_members[0]
+        return QualResolutionFound(module, qname)
+    if bare_qnames:
+        if len(bare_qnames) > 1:
+            return QualResolutionAmbiguous(
+                qualifier,
+                member,
+                tuple(sorted((module for module, _atom in bare_qnames), key=ModuleId.path_str)),
+            )
+        qname = next(iter(bare_qnames))
+        return QualResolutionFound(qname[0], qname)
+    if candidates:
+        return QualResolutionMissingMember(qualifier, member, candidates)
+    return QualResolutionUnknownQualifier(qualifier)

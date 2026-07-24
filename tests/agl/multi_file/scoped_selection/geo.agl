@@ -1,0 +1,10 @@
+record Point(x: int)
+def Point::distance() -> int = 7
+def Point::bearing() -> int = 3
+private def Point::secret() -> int = 99
+def Point::public_secret() -> int = secret()
+enum Point::Color
+  | red
+scope Shapes
+record Point(x: int)
+end Shapes

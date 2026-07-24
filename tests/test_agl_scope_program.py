@@ -1696,6 +1696,19 @@ class TestFieldAccessCoverage:
         with pytest.raises(AglScopeError):
             resolve_program(graph)
 
+    def test_is_test_defers_non_constructible_imported_owner_to_typecheck(
+        self, tmp_path: Path
+    ) -> None:
+        graph = _make_graph_from_files(
+            tmp_path,
+            {
+                "entry": "import library\nlet value = 1\nvalue is library::owner::Variant",
+                "library": "def owner() -> int = 1",
+            },
+        )
+
+        assert resolve_program(graph).entry_id == ENTRY_ID
+
     def test_private_type_in_qualified_constructor_errors(self, tmp_path: Path) -> None:
         graph = _make_graph_from_files(
             tmp_path,

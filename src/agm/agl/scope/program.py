@@ -34,6 +34,8 @@ from agm.agl.modules.loader import ModuleGraph
 from agm.agl.scope.imports import (
     ImportEnv,
     ImportTarget,
+    NameAtom,
+    PathAtom,
     QName,
     SingleTarget,
     WildcardTarget,
@@ -55,10 +57,12 @@ from agm.agl.syntax.nodes import (
     EnumDef,
     ExceptionDef,
     ExportDecl,
+    ExportItem,
     FuncDef,
     ImportDecl,
     Program,
     RecordDef,
+    ScopeRegion,
     TypeAlias,
 )
 from agm.agl.syntax.spans import SourceSpan
@@ -95,7 +99,7 @@ class ResolvedModule:
     module_id: ModuleId
     resolved: ModuleResolution
     import_env: ImportEnv
-    exports: dict[str, QName]
+    exports: dict[NameAtom, QName]
     source_text: str
 
 
@@ -127,12 +131,12 @@ class ResolvedProgram:
 
     modules: dict[ModuleId, ResolvedModule]
     entry_id: ModuleId
-    all_public_funcs: dict[tuple[ModuleId, str], FuncDef]
-    all_public_types: dict[tuple[ModuleId, str], RecordDef | EnumDef | ExceptionDef | TypeAlias]
+    all_public_funcs: dict[QName, FuncDef]
+    all_public_types: dict[QName, RecordDef | EnumDef | ExceptionDef | TypeAlias]
     entry_agents: dict[AgentKey, AgentDecl]
     import_sccs: tuple[tuple[ModuleId, ...], ...]
     warnings: tuple[Diagnostic, ...]
-    private_info: Mapping[tuple[ModuleId, str], bool]
+    private_info: Mapping[QName, bool]
 
 
 # ---------------------------------------------------------------------------
@@ -142,7 +146,7 @@ class ResolvedProgram:
 
 def _build_cross_module_constructor_candidates(
     import_env: ImportEnv,
-    all_public_types: dict[tuple[ModuleId, str], RecordDef | EnumDef | ExceptionDef | TypeAlias],
+    all_public_types: dict[QName, RecordDef | EnumDef | ExceptionDef | TypeAlias],
 ) -> tuple[dict[str, tuple[ConstructorRef, ...]], frozenset[str]]:
     """Build constructor candidates from open-imported types for a module.
 
@@ -156,8 +160,10 @@ def _build_cross_module_constructor_candidates(
     """
     candidates: dict[str, list[ConstructorRef]] = {}
     type_names: set[str] = set()
-    seen: set[tuple[ModuleId, str]] = set()
+    seen: set[QName] = set()
     for exposed_name, qnames in import_env.unqualified.items():
+        if not isinstance(exposed_name, str):
+            continue
         for mid, src_name in qnames:
             key = (mid, src_name)
             if key in seen:
@@ -197,30 +203,94 @@ def _build_cross_module_constructor_candidates(
     )
 
 
-def _compute_local_exports(self_id: ModuleId, program: Program) -> dict[str, QName]:
-    """Compute the local export map for a module from its own declarations.
+def _atom(path: PathAtom) -> NameAtom:
+    """Keep root atoms compatible while representing scoped atoms structurally."""
+    return path[0] if len(path) == 1 else path
 
-    Returns a dict mapping each non-private top-level name to the QName
-    ``(self_id, name)``.  Re-exported names are NOT included here;
-    they are added by :func:`_resolve_reexports` in a subsequent pass.
-    """
-    result: dict[str, QName] = {}
-    for item in program.body.items:
-        if (
-            isinstance(item, (FuncDef, RecordDef, EnumDef, ExceptionDef, TypeAlias))
-            and not item.scope_path
-        ):
+
+def _declaration_items(items: tuple[object, ...]) -> tuple[object, ...]:
+    """Flatten static scope regions into their normalized declaration members."""
+    result: list[object] = []
+    for item in items:
+        if isinstance(item, ScopeRegion):
+            result.extend(_declaration_items(item.items))
+        else:
+            result.append(item)
+    return tuple(result)
+
+
+def _item_atom(item: FuncDef | RecordDef | EnumDef | ExceptionDef | TypeAlias) -> NameAtom:
+    return _atom((*tuple(segment.name for segment in item.scope_path), item.name))
+
+
+def _compute_local_exports(self_id: ModuleId, program: Program) -> dict[NameAtom, QName]:
+    """Compute public declaration paths, including members below named scopes."""
+    result: dict[NameAtom, QName] = {}
+    for item in _declaration_items(program.body.items):
+        if isinstance(item, (FuncDef, RecordDef, EnumDef, ExceptionDef, TypeAlias)):
+            atom = _item_atom(item)
             if not item.is_private:
-                result[item.name] = (self_id, item.name)
+                result[atom] = (self_id, atom)
+            if isinstance(item, EnumDef) and not item.is_private:
+                for variant in item.variants:
+                    variant_atom = _atom(
+                        (
+                            *tuple(segment.name for segment in item.scope_path),
+                            item.name,
+                            variant.name,
+                        )
+                    )
+                    result[variant_atom] = (self_id, variant_atom)
         elif isinstance(item, BuiltinVarDecl):
-            # The resolver admits these only in ``std/config``; its engine
-            # settings are public so callers can use ``std/config::name``.
             result[item.name] = (self_id, item.name)
     return result
 
 
+def _cross_module_constructor_refs(
+    all_public_types: Mapping[QName, RecordDef | EnumDef | ExceptionDef | TypeAlias],
+) -> dict[QName, ConstructorRef]:
+    """Build constructor results for publicly selected declaration paths."""
+    result: dict[QName, ConstructorRef] = {}
+    for (module_id, atom), declaration in all_public_types.items():
+        path = (atom,) if isinstance(atom, str) else atom
+        if isinstance(declaration, (RecordDef, ExceptionDef)) and path[:-1]:
+            result[(module_id, atom)] = ConstructorRef(
+                owner_name=declaration.name,
+                variant=None,
+                owner_decl_node_id=declaration.node_id,
+                type_params=declaration.type_params,
+                owner_module_id=module_id,
+                owner_path=path[:-1],
+            )
+        elif isinstance(declaration, EnumDef):
+            for variant in declaration.variants:
+                variant_path = (*path, variant.name)
+                variant_atom = _atom(variant_path)
+                result[(module_id, variant_atom)] = ConstructorRef(
+                    owner_name=declaration.name,
+                    variant=variant.name,
+                    owner_decl_node_id=declaration.node_id,
+                    type_params=declaration.type_params,
+                    owner_module_id=module_id,
+                    owner_path=path[:-1],
+                    can_match_bare_pattern=not variant.fields,
+                )
+    return result
+
+
+def _raise_reexport_conflict(
+    exposed: NameAtom, existing: QName, origin: QName, decl: ExportDecl
+) -> None:
+    raise AglScopeError(
+        f"re-export name {exposed!r} has conflicting origins:"
+        f" {existing[0].path_str()!r}::{existing[1]!r}"
+        f" and {origin[0].path_str()!r}::{origin[1]!r}",
+        span=decl.span,
+    )
+
+
 def _resolve_reexports(
-    export_maps: dict[ModuleId, dict[str, QName]],
+    export_maps: dict[ModuleId, dict[NameAtom, QName]],
     all_targets: dict[int, ImportTarget],
     graph: ModuleGraph,
 ) -> None:
@@ -246,7 +316,9 @@ def _resolve_reexports(
 
                 for target_mid in target_mids:
                     target_exports = export_maps.get(target_mid, {})
-                    additions = _compute_reexport_additions(decl, target_exports)
+                    additions = _compute_reexport_additions(
+                        decl, target_exports, allow_missing=True
+                    )
                     current_exports = export_maps[mid]
                     for exposed, qname in additions.items():
                         existing = current_exports.get(exposed)
@@ -254,46 +326,79 @@ def _resolve_reexports(
                             current_exports[exposed] = qname
                             changed = True
                         elif existing != qname:
-                            raise AglScopeError(
-                                f"re-export name {exposed!r} has conflicting origins:"
-                                f" {existing[0].path_str()!r}::{existing[1]!r}"
-                                f" and {qname[0].path_str()!r}::{qname[1]!r}",
-                                span=decl.span,
-                            )
+                            _raise_reexport_conflict(exposed, existing, qname, decl)
+
+    # A selection may target a re-export which is populated later in the
+    # fixed point. Validate only after every reachable export has propagated.
+    for _mid, loaded in graph.modules.items():
+        for decl in loaded.export_decls:
+            target = all_targets[decl.node_id]
+            validation_targets = (
+                (target.module,)
+                if isinstance(target, SingleTarget)
+                else tuple(sorted(target.modules, key=_mid_sort_key))
+            )
+            for target_mid in validation_targets:
+                _compute_reexport_additions(decl, export_maps.get(target_mid, {}))
 
 
 def _compute_reexport_additions(
     decl: ExportDecl,
-    target_exports: dict[str, QName],
-) -> dict[str, QName]:
+    target_exports: dict[NameAtom, QName],
+    *,
+    allow_missing: bool = False,
+) -> dict[NameAtom, QName]:
     """Compute names to add to the current module's exports from one ExportDecl.
 
     Returns a dict of ``exposed_name → origin_qname``.  This is called once
     per (module, export-decl, target-module) triple during the fixed-point.
     """
-    result: dict[str, QName] = {}
+    result: dict[NameAtom, QName] = {}
 
-    if decl.mode == ImportMode.HIDING:
-        hidden = frozenset(item.name for item in decl.items)
-        selected = frozenset(target_exports.keys()) - hidden
-    elif decl.mode == ImportMode.USING:
-        selected = frozenset(item.name for item in decl.items)
+    def item_path(item: ExportItem) -> PathAtom:
+        return (*tuple(segment.name for segment in item.scope_path), item.name)
+
+    def matches(prefix: PathAtom) -> tuple[NameAtom, ...]:
+        return tuple(
+            atom
+            for atom in target_exports
+            if ((atom,) if isinstance(atom, str) else atom)[: len(prefix)] == prefix
+        )
+
+    selected: dict[NameAtom, None] = {}
+    if decl.mode is ImportMode.ALL:
+        selected = dict.fromkeys(target_exports)
     else:
-        selected = frozenset(target_exports.keys())
-
-    rename_map: dict[str, str] = {}
-    if decl.mode == ImportMode.USING:
         for item in decl.items:
-            if item.rename is not None:
-                rename_map[item.name] = item.rename
+            matched = matches(item_path(item))
+            if not matched:
+                if allow_missing:
+                    continue
+                raise AglScopeError(
+                    f"name {'::'.join(item_path(item))!r} is not exported by module "
+                    f"{'/'.join(decl.module_path)!r}",
+                    span=decl.span,
+                )
+            for atom in matched:
+                selected[atom] = None
+        if decl.mode is ImportMode.HIDING:
+            selected = {atom: None for atom in target_exports if atom not in selected}
 
-    for src_name in selected:
-        origin = target_exports.get(src_name)
-        if origin is None:
-            continue  # name not yet propagated; fixed-point will retry
-        exposed = rename_map.get(src_name, src_name)
+    for source in selected:
+        source_path = (source,) if isinstance(source, str) else source
+        exposed: NameAtom = source
+        if decl.mode is ImportMode.USING:
+            for item in decl.items:
+                prefix = item_path(item)
+                if item.rename is not None and source_path[: len(prefix)] == prefix:
+                    routed = (item.rename, *source_path[len(prefix) :])
+                    exposed = routed[0] if len(routed) == 1 else routed
+                    break
+        origin = target_exports[source]
+        existing = result.get(exposed)
+        if existing is not None and existing != origin:
+            _raise_reexport_conflict(exposed, existing, origin, decl)
         result[exposed] = origin
-
     return result
 
 
@@ -324,10 +429,10 @@ def _decl_to_import_target(
 
 # Maps (module_id, name) → (decl_node_id, decl_span, binder_kind) for use
 # when building BindingRef for cross-module references.
-_DeclInfo = dict[tuple[ModuleId, str], tuple[int, SourceSpan, BinderKind]]
+_DeclInfo = dict[QName, tuple[int, SourceSpan, BinderKind]]
 
 # Maps (module_id, name) → True for private decls (for private-access error messages).
-_PrivateInfo = dict[tuple[ModuleId, str], bool]
+_PrivateInfo = dict[QName, bool]
 
 
 # ---------------------------------------------------------------------------
@@ -393,7 +498,7 @@ def resolve_program(
     # ------------------------------------------------------------------
     # Step 1: Build local export maps (own declarations only).
     # ------------------------------------------------------------------
-    export_maps: dict[ModuleId, dict[str, QName]] = {}
+    export_maps: dict[ModuleId, dict[NameAtom, QName]] = {}
     for mid, loaded in graph.modules.items():
         export_maps[mid] = _compute_local_exports(mid, loaded.program)
 
@@ -430,10 +535,8 @@ def resolve_program(
     # Step 5: Whole-program pre-pass — collect public funcs/types and
     # build decl_info for cross-module BindingRef construction.
     # ------------------------------------------------------------------
-    all_public_funcs: dict[tuple[ModuleId, str], FuncDef] = {}
-    all_public_types: dict[
-        tuple[ModuleId, str], RecordDef | EnumDef | ExceptionDef | TypeAlias
-    ] = {}
+    all_public_funcs: dict[QName, FuncDef] = {}
+    all_public_types: dict[QName, RecordDef | EnumDef | ExceptionDef | TypeAlias] = {}
 
     # decl_info: (mid, name) → (node_id, span, kind) for building BindingRefs
     decl_info: _DeclInfo = {}
@@ -441,29 +544,20 @@ def resolve_program(
     private_info: _PrivateInfo = {}
 
     for mid, loaded in graph.modules.items():
-        for item in loaded.program.body.items:
-            if isinstance(item, FuncDef) and not item.scope_path:
-                key = (mid, item.name)
+        for item in _declaration_items(loaded.program.body.items):
+            if isinstance(item, FuncDef):
+                key = (mid, _item_atom(item))
                 if item.is_private:
                     private_info[key] = True
                 else:
                     all_public_funcs[key] = item
                     decl_info[key] = (item.node_id, item.span, BinderKind.function_binding)
-            elif (
-                isinstance(item, (RecordDef, EnumDef, ExceptionDef, TypeAlias))
-                and not item.scope_path
-            ):
-                key = (mid, item.name)
+            elif isinstance(item, (RecordDef, EnumDef, ExceptionDef, TypeAlias)):
+                key = (mid, _item_atom(item))
                 if item.is_private:
                     private_info[key] = True
                 else:
                     all_public_types[key] = item
-                    # A syntactically nominal alias can transparently name a
-                    # record, enum, or another alias. Scope admits that shape
-                    # as a possible constructor owner and leaves semantic
-                    # target validation to type checking. Container,
-                    # function, and primitive aliases remain definitively
-                    # non-constructible at this boundary.
                     kind = (
                         BinderKind.constructor_binding
                         if not isinstance(item, TypeAlias)
@@ -472,10 +566,15 @@ def resolve_program(
                     )
                     decl_info[key] = (item.node_id, item.span, kind)
             elif isinstance(item, BuiltinVarDecl):
-                # The resolver admits this declaration only in ``std/config``.
-                # Record its mutable kind so qualified reads and writes resolve.
                 key = (mid, item.name)
                 decl_info[key] = (item.node_id, item.span, BinderKind.builtin_var_binding)
+
+    cross_module_constructor_refs = _cross_module_constructor_refs(all_public_types)
+    cross_module_constructible_types = frozenset(
+        qname
+        for qname, declaration in all_public_types.items()
+        if isinstance(declaration, (RecordDef, EnumDef, ExceptionDef))
+    )
 
     # ------------------------------------------------------------------
     # Step 6: Resolve each module's bodies.
@@ -502,6 +601,8 @@ def resolve_program(
             import_env=import_envs[mid],
             decl_info=decl_info,
             private_info=private_info,
+            cross_module_constructor_refs=cross_module_constructor_refs,
+            cross_module_constructible_types=cross_module_constructible_types,
             is_entry=is_entry,
             repl_session_scope=entry_repl_session_scope if is_entry else None,
             repl_session_scope_nodes=entry_repl_session_scope_nodes if is_entry else None,

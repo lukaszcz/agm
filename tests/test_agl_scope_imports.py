@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from agm.agl.modules.ids import ModuleId
 from agm.agl.scope.imports import (
+    ImportEnv,
     QualResolutionAmbiguous,
     QualResolutionFound,
     QualResolutionMissingMember,
@@ -211,6 +212,27 @@ def test_wildcard_distributes_contributions_and_open_names() -> None:
     }
     assert resolve_qualified(env, ("alpha",), "alpha") == QualResolutionFound(
         alpha, (alpha, "alpha")
+    )
+
+
+def test_bare_scoped_paths_clash_at_use() -> None:
+    left = _module("left")
+    right = _module("right")
+    atom = ("Point", "distance")
+    env = ImportEnv(
+        {},
+        {
+            atom: frozenset(
+                {
+                    (left, atom),
+                    (right, atom),
+                }
+            )
+        },
+    )
+
+    assert resolve_qualified(env, ("Point",), "distance") == QualResolutionAmbiguous(
+        ("Point",), "distance", (left, right)
     )
 
 

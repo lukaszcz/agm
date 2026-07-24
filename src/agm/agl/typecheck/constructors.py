@@ -195,7 +195,9 @@ class ConstructorChecker:
         """
         owner_name = ctor_ref.owner_name
         variant = ctor_ref.variant
-        gdef = self._ctx._env.get_generic_type_from_module(ctor_ref.owner_module_id, owner_name)
+        gdef = self._ctx._env.get_generic_type_from_module(
+            ctor_ref.owner_module_id, owner_name, scope_path=ctor_ref.owner_path
+        )
         if gdef is not None:
             sig = self._ctx._env.get_ctor_sig_from_module(
                 ctor_ref.owner_module_id, owner_name, variant, scope_path=ctor_ref.owner_path
@@ -207,10 +209,14 @@ class ConstructorChecker:
             assert sig is not None, f"No constructor signature for {owner_name}.{variant}"
             return ctor_ref, sig, gdef
 
-        source = self._ctx._env.source_type_template_qname(ctor_ref.owner_module_id, owner_name)
+        source = self._ctx._env.source_type_template_qname(
+            ctor_ref.owner_module_id, owner_name, scope_path=ctor_ref.owner_path
+        )
         if source is not None and isinstance(source.template, (RecordType, EnumType)):
             target = source.template
-            target_gdef = self._ctx._env.get_generic_type_from_module(target.module_id, target.name)
+            target_gdef = self._ctx._env.get_generic_type_from_module(
+                target.module_id, target.name, scope_path=target.scope_path
+            )
             if target_gdef is None:
                 target_gdef = self._ctx._env.get_generic_type(target.name)
             if target_gdef is not None:
@@ -538,10 +544,14 @@ class ConstructorChecker:
         """Attach generic metadata discovered from the resolved owner identity."""
         if ref.type_params:
             return ref
-        gdef = self._ctx._env.get_generic_type_from_module(ref.owner_module_id, ref.owner_name)
+        gdef = self._ctx._env.get_generic_type_from_module(
+            ref.owner_module_id, ref.owner_name, scope_path=ref.owner_path
+        )
         if gdef is not None:
             return replace(ref, type_params=gdef.type_params)
-        source = self._ctx._env.source_type_template_qname(ref.owner_module_id, ref.owner_name)
+        source = self._ctx._env.source_type_template_qname(
+            ref.owner_module_id, ref.owner_name, scope_path=ref.owner_path
+        )
         if source is not None and isinstance(source.template, (RecordType, EnumType)):
             return replace(ref, type_params=source.type_params)
         return ref
@@ -555,7 +565,7 @@ class ConstructorChecker:
         are open-imported but not registered in the local environment.
         """
         owner = self._ctx._env.resolve_constructible_type_by_module_id(
-            ref.owner_module_id, ref.owner_name
+            ref.owner_module_id, ref.owner_name, scope_path=ref.owner_path
         )
         if owner is None:
             candidate = self._ctx._env.get_type(ref.owner_name)
@@ -617,14 +627,16 @@ class ConstructorChecker:
     ) -> tuple[RecordType | EnumType | ExceptionType, GenericTypeDef | None]:
         """Resolve a tentative cross-module constructor binding to its nominal target."""
         owner = self._ctx._env.resolve_constructible_type_by_module_id(
-            callee_ref.module_id, callee_ref.name
+            callee_ref.module_id, callee_ref.name, scope_path=callee_ref.scope_path
         )
         if owner is None:
             raise AglTypeError(
                 f"'{callee_ref.name}' is a type name, not a constructible nominal type.",
                 span=span,
             )
-        return owner, self._ctx._env.get_generic_type_from_module(owner.module_id, owner.name)
+        return owner, self._ctx._env.get_generic_type_from_module(
+            owner.module_id, owner.name, scope_path=owner.scope_path
+        )
 
     def _resolve_cross_module_generic_constructor(
         self, callee_ref: BindingRef, span: SourceSpan
@@ -638,7 +650,9 @@ class ConstructorChecker:
             owner.module_id, owner.name, None, scope_path=owner.scope_path
         )
         assert signature is not None
-        source = self._ctx._env.source_type_template_qname(callee_ref.module_id, callee_ref.name)
+        source = self._ctx._env.source_type_template_qname(
+            callee_ref.module_id, callee_ref.name, scope_path=callee_ref.scope_path
+        )
         assert source is not None
         effective_signature = self._alias_constructor_signature(
             target_gdef=target_gdef,
@@ -653,7 +667,9 @@ class ConstructorChecker:
         self, callee_ref: BindingRef, *, span: SourceSpan, expected: Type | None
     ) -> Type:
         """Type a module-qualified record constructor used as a value."""
-        gdef = self._ctx._env.get_generic_type_from_module(callee_ref.module_id, callee_ref.name)
+        gdef = self._ctx._env.get_generic_type_from_module(
+            callee_ref.module_id, callee_ref.name, scope_path=callee_ref.scope_path
+        )
         if gdef is not None:
             if not isinstance(gdef.template, RecordType):
                 raise AglTypeError(

@@ -65,7 +65,7 @@ from typing import Generic, Mapping, TypeVar, cast
 from agm.agl.capabilities import HostCapabilities
 from agm.agl.diagnostics import Diagnostic
 from agm.agl.modules.ids import ModuleId
-from agm.agl.scope.imports import ImportEnv
+from agm.agl.scope.imports import ImportEnv, QName
 from agm.agl.scope.program import ResolvedProgram
 from agm.agl.scope.symbols import ModuleResolution
 from agm.agl.semantics.analyses import compute_uninhabited, uninhabitable_message
@@ -508,16 +508,12 @@ def _build_program_type_table(
     cross_builders: dict[ModuleId, _TypeBuilder] = {}
     resolving_aliases: set[DeclKey] = set()
 
-    def _resolve_program_alias(
-        alias_mid: ModuleId, alias_name: str, span: SourceSpan | None
-    ) -> Type | None:
-        key = (alias_mid, (), alias_name)
+    def _resolve_program_alias(key: DeclKey, span: SourceSpan | None) -> Type | None:
+        alias_mid, scope_path, alias_name = key
         item = alias_decls[key]
         if key in resolving_aliases:
-            raise AglTypeError(
-                f"Type alias '{alias_name}' is part of a cycle.",
-                span=span,
-            )
+            rendered = "::".join((*scope_path, alias_name))
+            raise AglTypeError(f"Type alias '{rendered}' is part of a cycle.", span=span)
         resolving_aliases.add(key)
         try:
             env = cross_envs[alias_mid]
@@ -758,7 +754,7 @@ def _prepare_module_environment(
     resolved: ModuleResolution,
     program_type_table: dict[DeclKey, Type],
     import_env_map: Mapping[ModuleId, object],
-    private_info: Mapping[tuple[ModuleId, str], bool],
+    private_info: Mapping[QName, bool],
     program_func_sig_table: dict[int, FunctionSignatureRecord],
     program_builtin_var_table: dict[int, Type],
     program_generic_table: dict[DeclKey, GenericTypeDef],

@@ -1,0 +1,5 @@
+scope Empty
+end Empty
+scope Hidden
+private def value() -> int = 1
+end Hidden

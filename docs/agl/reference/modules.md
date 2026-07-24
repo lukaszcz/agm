@@ -52,10 +52,10 @@ import utils/strings
 import utils/strings using trim
 ```
 
-`using` and `hiding` name top-level declarations. Enum variants travel with
-their enum: selecting `Color` makes `Color::Red` available, while selecting
-`Red` alone is invalid. A bare name contributed by several imports is an error
-when used, not when imported.
+`using` and `hiding` name public declaration paths. Selecting a scope path
+selects its complete public subtree, including a same-named type and its enum
+variants. Selecting a path with no public content is an error. A bare name
+contributed by several imports is an error when used, not when imported.
 
 ## `open`, `using`, and `hiding`
 
@@ -70,10 +70,11 @@ open import app/vocabulary hiding internal-word
 import text/format using render as format
 ```
 
-A `using N as M` rename is canonical: `M` is the member name for both bare and
-qualified access through that import, and `N` is inaccessible through it.
-`hiding` removes a member from both channels, so it can also remove a
-qualification ambiguity.
+A `using N as M` rename is canonical: it replaces the selected path prefix
+for both bare and qualified access through that import. Thus `using Point as P`
+exposes `P::…`, while `using Point::distance as d` exposes `d`. The original
+path is inaccessible through that import. `hiding` removes a path and its
+subtree from both channels, so it can also remove a qualification ambiguity.
 
 ## Aliases
 
@@ -96,9 +97,10 @@ alias makes both routes available.
 ## Wildcards
 
 `import prefix/*` expands to one import per module whose slash path is `prefix`
-or starts with `prefix/`. The import's
-`open`, selection clause, and alias apply independently to every matched
-module. A `using` or `hiding` name must be public in every matched module.
+or starts with `prefix/`. The import's `open`, root-member selection clause,
+and alias apply independently to every matched module. A `using` or `hiding`
+name must be public in every matched module. Scoped selections use a
+non-wildcard import.
 
 <!-- agl-check: fragment -->
 ```agl
@@ -150,9 +152,9 @@ in-scope type or a module route and is resolved at the use site.
 
 ## Re-exports and visibility
 
-Public top-level `def`, `record`, `enum`, `exception`, and `type` declarations
-are exported by default. Prefix a declaration with `private` to keep it within
-its defining module.
+Public `def`, `record`, `enum`, `exception`, and `type` declarations are
+exported by default under their full declaration paths. Prefix a declaration
+with `private` to keep it within its defining module.
 
 `export` re-exports public members without injecting them into the exporting
 module's local scope:

@@ -201,17 +201,32 @@ def test_import_and_export_clauses_accept_path_atoms(source: str, kind: type[obj
     assert atoms == expected
 
 
+def test_scope_pass_only_rejects_the_deferred_open_form() -> None:
+    with pytest.raises(AglScopeError, match="open declarations"):
+        resolve_module(parse_program("open Point"))
+
+
 @pytest.mark.parametrize(
-    ("source", "diagnostic"),
+    "source",
     (
-        ("open Point", "open declarations"),
-        ("import library using Point::distance", "path atoms"),
-        ("export library hiding Point::internal", "path atoms"),
+        "import library/* using Point::distance",
+        "export library/* hiding Point::internal",
     ),
 )
-def test_unsupported_scope_forms_stop_at_the_scope_pass(source: str, diagnostic: str) -> None:
-    with pytest.raises(AglScopeError, match=diagnostic):
+def test_scope_pass_rejects_deferred_wildcard_scoped_selection(source: str) -> None:
+    with pytest.raises(AglScopeError, match="wildcard"):
         resolve_module(parse_program(source))
+
+
+@pytest.mark.parametrize(
+    "source",
+    (
+        "import library using Point::distance",
+        "export library hiding Point::internal",
+    ),
+)
+def test_scope_pass_accepts_path_selection_atoms(source: str) -> None:
+    resolve_module(parse_program(source))
 
 
 def test_scoped_declarations_do_not_generate_runtime_initializers() -> None:
@@ -242,7 +257,7 @@ def test_library_scope_regions_apply_entry_only_declaration_restrictions(tmp_pat
         ("import library\n()", "import dependency using Point::distance\ndef value() -> int = 0"),
     ),
 )
-def test_production_pipeline_rejects_path_atoms_before_import_environment_construction(
+def test_production_pipeline_validates_path_atoms_against_public_content(
     tmp_path: Path, entry: str, library: str
 ) -> None:
     root = tmp_path / "modules"
@@ -259,4 +274,4 @@ def test_production_pipeline_rejects_path_atoms_before_import_environment_constr
 
     assert not result.ok
     assert len(result.diagnostics) == 1
-    assert "path atoms in import and export selections" in result.diagnostics[0].message
+    assert "is not exported" in result.diagnostics[0].message

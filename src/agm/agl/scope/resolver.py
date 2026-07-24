@@ -51,6 +51,7 @@ from typing import TYPE_CHECKING, cast
 from agm.agl.diagnostics import Diagnostic
 from agm.agl.modules.ids import ENTRY_ID, PRELUDE_ID, STD_CONFIG_ID, ModuleId
 from agm.agl.scope.imports import (
+    NameAtom,
     QualResolutionFound,
     qualification_repair_guidance,
     qualifier_candidates,
@@ -58,6 +59,7 @@ from agm.agl.scope.imports import (
     render_qualifier,
     resolve_qualified,
     resolve_qualified_member,
+    try_resolve_qualified_member,
 )
 from agm.agl.scope.symbols import (
     BUILTIN_CALL_NAMES,
@@ -195,11 +197,13 @@ def validate_scope_syntax(program: Program) -> None:
             return
         if isinstance(node, OpenDecl):
             unsupported = ("open declarations are not supported here yet.", node.span)
-        elif isinstance(node, (ImportDecl, ExportDecl)) and any(
-            item.scope_path for item in node.items
+        elif (
+            isinstance(node, (ImportDecl, ExportDecl))
+            and node.wildcard
+            and any(item.scope_path for item in node.items)
         ):
             unsupported = (
-                "path atoms in import and export selections are not supported here yet.",
+                "scoped selections on wildcard module declarations are not supported here yet.",
                 node.span,
             )
 
@@ -226,8 +230,12 @@ class _Resolver:
         self,
         module_id: ModuleId = ENTRY_ID,
         import_env: ImportEnv | None = None,
-        decl_info: dict[tuple[ModuleId, str], tuple[int, SourceSpan, BinderKind]] | None = None,
-        private_info: dict[tuple[ModuleId, str], bool] | None = None,
+        decl_info: dict[tuple[ModuleId, NameAtom], tuple[int, SourceSpan, BinderKind]]
+        | None = None,
+        private_info: dict[tuple[ModuleId, NameAtom], bool] | None = None,
+        cross_module_constructor_refs: Mapping[tuple[ModuleId, NameAtom], ConstructorRef]
+        | None = None,
+        cross_module_constructible_types: frozenset[tuple[ModuleId, NameAtom]] = frozenset(),
         is_entry: bool = True,
         repl_session_scope: ScopeNode | None = None,
         repl_session_scope_nodes: Mapping[ScopePath, ScopeNode] | None = None,
@@ -239,13 +247,17 @@ class _Resolver:
         self._module_id: ModuleId = module_id
         self._import_env: ImportEnv | None = import_env
         # Maps (module_id, name) → (node_id, span, kind) for cross-module refs.
-        self._decl_info: dict[tuple[ModuleId, str], tuple[int, SourceSpan, BinderKind]] = (
+        self._decl_info: dict[tuple[ModuleId, NameAtom], tuple[int, SourceSpan, BinderKind]] = (
             decl_info if decl_info is not None else {}
         )
         # Maps (module_id, name) → True for private declarations.
-        self._private_info: dict[tuple[ModuleId, str], bool] = (
+        self._private_info: dict[tuple[ModuleId, NameAtom], bool] = (
             private_info if private_info is not None else {}
         )
+        self._cross_module_constructor_refs: Mapping[tuple[ModuleId, NameAtom], ConstructorRef] = (
+            cross_module_constructor_refs if cross_module_constructor_refs is not None else {}
+        )
+        self._cross_module_constructible_types = cross_module_constructible_types
         # Whether this module is the entry module (program context only).
         self._is_entry: bool = is_entry
         # Optional REPL session scope for ``::name`` self-ref fallback.
@@ -1811,15 +1823,45 @@ class _Resolver:
     def _resolve_qualified_chain(self, node: VarRef) -> None:
         """Resolve a qualified value through one ordered scope-or-route chain.
 
-        A type is simply a chain segment that owns constructor members.  The
-        result is the same ``BindingRef``/``ConstructorRef`` pair used by bare
-        constructors; type checking validates enum-ness and the requested
-        variant without re-resolving the chain.
+        An imported route owns the complete requested path atom. Resolving it
+        first keeps ordinary members of a type-owned scope distinct from enum
+        variants and record construction, while also ensuring selection filters
+        apply to the final atom rather than only its type owner.
         """
         chain = node.qualifier
         assert chain is not None
+        direct_error: AglScopeError | None = None
+        local_type_path = self._validate_local_scope_chain(chain)
+        if (
+            self._import_env is not None
+            and chain.anchor is not QualifierAnchor.CURRENT_MODULE
+            and chain.segments
+            and local_type_path not in self._type_paths
+        ):
+            route = tuple(part for part in chain.segments[0].name.split("/"))
+            try:
+                self._resolve_varref_qualified(node, chain)
+                return
+            except AglScopeError as error:
+                direct_error = error
+                atom_path = (*tuple(segment.name for segment in chain.segments[1:]), node.name)
+                if len(atom_path) > 1:
+                    owner_atom: NameAtom = atom_path[0] if len(atom_path) == 2 else atom_path[:-1]
+                    owner = try_resolve_qualified_member(
+                        self._import_env, route, owner_atom, anchored=chain.anchored
+                    )
+                    route_is_complete = all(
+                        self._import_env.contributions[module].complete_public_set
+                        for module in qualifier_candidates(
+                            self._import_env, route, anchored=chain.anchored
+                        )
+                    )
+                    if owner in self._cross_module_constructible_types and not route_is_complete:
+                        raise
         if self._resolve_constructor_chain(node.node_id, chain, node.name):
             return
+        if direct_error is not None:
+            raise direct_error
         if (
             chain.anchor is QualifierAnchor.CURRENT_MODULE
             and len(chain.segments) == 1
@@ -1831,7 +1873,7 @@ class _Resolver:
             )
         ):
             segment = chain.segments[0]
-            error = AglScopeError(
+            missing_error = AglScopeError(
                 f"'{segment.name}' is not defined in this module.", span=segment.span
             )
             raise (
@@ -1840,22 +1882,9 @@ class _Resolver:
                     or self._spaced_qualifier_around(node.span),
                     node.span,
                 )
-                or error
+                or missing_error
             )
 
-        if self._import_env is not None:
-            try:
-                self._resolve_varref_qualified(node, chain)
-            except AglScopeError as error:
-                raise (
-                    self._spaced_qualifier_repair(
-                        self._spaced_qualifier_at(chain.span)
-                        or self._spaced_qualifier_around(node.span),
-                        node.span,
-                    )
-                    or error
-                )
-            return
         if len(chain.segments) == 1 and chain.segments[0].type_args is not None:
             raise AglScopeError(
                 f"'{chain.segments[0].name}' is not a known type.", span=chain.segments[0].span
@@ -1996,7 +2025,15 @@ class _Resolver:
                 span=chain.span,
                 node_id=chain.node_id,
             )
-            owner_ref = self._lookup_qualified_binding(route, chain.segments[-1].name, chain.span)
+            try:
+                owner_ref = self._lookup_qualified_binding(
+                    route, chain.segments[-1].name, chain.span
+                )
+            except AglScopeError:
+                # The final scope segment can be part of a selected path atom
+                # rather than a separately selected type owner. Let the normal
+                # module-path resolver consume the complete atom.
+                return None
             if owner_ref.kind is not BinderKind.constructor_binding:
                 rendered = chain.render()
                 raise AglScopeError(f"'{rendered}' is not a constructible type.", span=chain.span)
@@ -2037,7 +2074,10 @@ class _Resolver:
             return None
         if len(qnames) > 1:
             # Clash-on-use: more than one module exposes this name.
-            qualifiers = sorted(qn[0].path_str() + "::" + qn[1] for qn in qnames)
+            qualifiers = sorted(
+                qn[0].path_str() + "::" + "::".join((qn[1],) if isinstance(qn[1], str) else qn[1])
+                for qn in qnames
+            )
             hint = ", ".join(qualifiers)
             raise AglScopeError(
                 f"'{name}' is ambiguous: imported from multiple modules. "
@@ -2051,8 +2091,14 @@ class _Resolver:
     def _resolve_varref_qualified(self, node: VarRef, module_qualifier: QualifierChain) -> None:
         """Resolve an imported qualified VarRef in program context."""
         assert self._import_env is not None
-        ref = self._lookup_qualified_binding(module_qualifier, node.name, node.span)
-        self._resolution[node.node_id] = ref
+        qname = self._resolve_qualified_qname(module_qualifier, node.name, node.span)
+        constructor = self._cross_module_constructor_refs.get(qname)
+        if constructor is not None:
+            self._constructor_refs[node.node_id] = constructor
+            return
+        self._resolution[node.node_id] = self._make_cross_module_ref(
+            qname[0], node.name, qname[1], node.span
+        )
 
     def _lookup_qualified_binding(
         self, qualifier: QualifierChain, name: str, span: SourceSpan
@@ -2063,13 +2109,16 @@ class _Resolver:
 
     def _resolve_qualified_qname(
         self, qualifier: QualifierChain, name: str, span: SourceSpan
-    ) -> tuple[ModuleId, str]:
-        """Resolve one contributed member and translate its shared verdict to scope errors."""
+    ) -> tuple[ModuleId, NameAtom]:
+        """Resolve a module route followed by one structured declaration path."""
         assert self._import_env is not None
+        route = tuple(part for part in qualifier.segments[0].name.split("/"))
+        atom_path = (*tuple(segment.name for segment in qualifier.segments[1:]), name)
+        atom: NameAtom = atom_path[0] if len(atom_path) == 1 else atom_path
         return resolve_qualified_member(
             self._import_env,
-            qualifier.route_segments,
-            name,
+            route,
+            atom,
             self._private_info,
             anchored=qualifier.anchored,
             unknown_qualifier=lambda rendered: AglScopeError(
@@ -2109,7 +2158,7 @@ class _Resolver:
         self,
         owning_module: ModuleId,
         exposed_name: str,
-        src_name: str,
+        src_name: NameAtom,
         span: SourceSpan,
     ) -> BindingRef:
         """Build a ``BindingRef`` for a cross-module name resolution.
@@ -2129,8 +2178,9 @@ class _Resolver:
         decl_node_id, decl_span, kind = self._decl_info.get(
             key, (-1, span, BinderKind.function_binding)
         )
+        path = (src_name,) if isinstance(src_name, str) else src_name
         return BindingRef(
-            name=src_name,
+            name=path[-1],
             # Only ``builtin var`` bindings are mutable across a module boundary;
             # every other exported binding (functions, constructors, …) is
             # immutable at the reference site.
@@ -2139,6 +2189,7 @@ class _Resolver:
             decl_node_id=decl_node_id,
             kind=kind,
             module_id=owning_module,
+            scope_path=path[:-1],
         )
 
     def _spaced_qualifier_repair(

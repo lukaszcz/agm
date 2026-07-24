@@ -17,6 +17,10 @@ from typing import Any
 
 import pytest
 
+from agm.agl.modules.ids import ModuleId
+from agm.agl.scope.program import resolve_program
+from tests.agl.ir_harness import make_graph_from_files as _make_graph_from_files
+
 MULTI_FILE_DIR = Path(__file__).parent / "agl" / "multi_file"
 REPO_STDLIB_ROOT = Path(__file__).resolve().parents[1] / "stdlib"
 
@@ -513,6 +517,248 @@ class TestWildcardImportUsingHiding:
         result = _run_program(source, roots_dirs=[lib_dir])
         assert result.ok is False
         assert result.diagnostics
+
+
+# ---------------------------------------------------------------------------
+# Scoped module selections
+# ---------------------------------------------------------------------------
+
+
+class TestScopedModuleSelections:
+    """Scoped public members retain their paths across module boundaries."""
+
+    def _write_geo(self, root: Path) -> None:
+        source = MULTI_FILE_DIR / "scoped_selection" / "geo.agl"
+        (root / "geo.agl").write_text(source.read_text())
+
+    def test_selecting_a_scoped_member_keeps_its_full_route(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        self._write_geo(tmp_path)
+
+        result = _run_program(
+            "import geo using Point::distance\nlet value = geo::Point::distance()\nprint value\n",
+            roots_dirs=[tmp_path],
+        )
+
+        assert result.ok is True
+        assert capsys.readouterr().out == "7\n"
+
+    def test_selecting_a_scope_exposes_its_public_subtree(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        self._write_geo(tmp_path)
+
+        result = _run_program(
+            "import geo using Point\nprint geo::Point::distance()\nprint geo::Point::bearing()\n",
+            roots_dirs=[tmp_path],
+        )
+
+        assert result.ok is True
+        assert capsys.readouterr().out == "7\n3\n"
+
+    def test_variant_selection_filters_the_complete_path(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        self._write_geo(tmp_path)
+
+        result = _run_program(
+            "import geo using Point::Color::red\nprint geo::Point::Color::red\n",
+            roots_dirs=[tmp_path],
+        )
+
+        assert result.ok is True
+        assert capsys.readouterr().out == "Point::Color::red\n"
+
+    def test_hiding_a_variant_removes_its_complete_path(self, tmp_path: Path) -> None:
+        self._write_geo(tmp_path)
+
+        result = _run_program(
+            "import geo hiding Point::Color::red\ngeo::Point::Color::red\n",
+            roots_dirs=[tmp_path],
+        )
+
+        assert result.ok is False
+
+    def test_hiding_a_scope_removes_its_public_subtree(self, tmp_path: Path) -> None:
+        self._write_geo(tmp_path)
+
+        result = _run_program(
+            "import geo hiding Point\ngeo::Point::distance()\n",
+            roots_dirs=[tmp_path],
+        )
+
+        assert result.ok is False
+
+    @pytest.mark.parametrize(
+        ("selection", "reference"),
+        (
+            ("Point::distance as d", "d()"),
+            ("Point::distance", "Point::distance()"),
+            ("Point as P", "P::distance()"),
+        ),
+    )
+    def test_scoped_using_contributes_full_paths(
+        self,
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture[str],
+        selection: str,
+        reference: str,
+    ) -> None:
+        self._write_geo(tmp_path)
+
+        result = _run_program(
+            f"import geo using {selection}\nprint {reference}\n",
+            roots_dirs=[tmp_path],
+        )
+
+        assert result.ok is True
+        assert capsys.readouterr().out == "7\n"
+
+    def test_scoped_generic_alias_resolves_before_its_origin_body(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        (tmp_path / "library.agl").write_text("type Point::Values[T] = list[T]\n")
+
+        result = _run_program(
+            "import library using Point\n"
+            "record Holder\n"
+            "  values: library::Point::Values[int]\n"
+            "let holder = Holder(values = [7])\n"
+            "print holder.values\n",
+            roots_dirs=[tmp_path],
+        )
+
+        assert result.ok is True
+        assert capsys.readouterr().out == "[7]\n"
+
+    def test_rerooted_subtrees_with_different_origins_conflict_on_reexport(
+        self, tmp_path: Path
+    ) -> None:
+        (tmp_path / "library.agl").write_text(
+            "def Point::distance() -> int = 1\ndef Other::distance() -> int = 2\n"
+        )
+        (tmp_path / "facade.agl").write_text(
+            "export library using Point as Location, Other as Location\n"
+        )
+
+        result = _run_program("import facade\n()\n", roots_dirs=[tmp_path])
+
+        assert result.ok is False
+
+    def test_rerooted_subtree_reexports_same_origin_through_multiple_facades(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        (tmp_path / "origin.agl").write_text("def Point::distance() -> int = 7\n")
+        (tmp_path / "left.agl").write_text("export origin using Point\n")
+        (tmp_path / "right.agl").write_text("export origin using Point\n")
+        (tmp_path / "facade.agl").write_text(
+            "export left using Point as Location\nexport right using Point as Location\n"
+        )
+
+        result = _run_program(
+            "import facade using Location\nprint facade::Location::distance()\n",
+            roots_dirs=[tmp_path],
+        )
+
+        assert result.ok is True
+        assert capsys.readouterr().out == "7\n"
+
+    def test_reexport_rename_preserves_scoped_origin_identity(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        self._write_geo(tmp_path)
+        (tmp_path / "facade.agl").write_text("export geo using Point as Location\n")
+
+        result = _run_program(
+            "import facade using Location\nprint facade::Location::distance()\n",
+            roots_dirs=[tmp_path],
+        )
+
+        assert result.ok is True
+        assert capsys.readouterr().out == "7\n"
+
+        graph = _make_graph_from_files(
+            tmp_path,
+            {
+                "entry": "import facade using Location\n()",
+                "facade": "export geo using Point as Location",
+                "geo": (tmp_path / "geo.agl").read_text(),
+            },
+        )
+        resolved = resolve_program(graph)
+        assert resolved.modules[ModuleId.from_path("facade")].exports[("Location", "distance")] == (
+            ModuleId.from_path("geo"),
+            ("Point", "distance"),
+        )
+
+    def test_wildcard_import_rejects_scoped_selection(self, tmp_path: Path) -> None:
+        self._write_geo(tmp_path)
+
+        result = _run_program(
+            "import geo/* using Point::distance\ngeo::Point::distance()\n",
+            roots_dirs=[tmp_path],
+        )
+
+        assert result.ok is False
+
+    def test_type_owned_members_and_nested_construction_execute(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        self._write_geo(tmp_path)
+
+        result = _run_program(
+            "import geo using Point, Shapes::Point\n"
+            "let point = geo::Point(x = 4)\n"
+            "let nested = geo::Shapes::Point(x = 5)\n"
+            "print geo::Point::distance()\n"
+            "print point.x\n"
+            "print nested.x\n",
+            roots_dirs=[tmp_path],
+        )
+
+        assert result.ok is True
+        assert capsys.readouterr().out == "7\n4\n5\n"
+
+    def test_private_scoped_members_remain_module_visible(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        self._write_geo(tmp_path)
+
+        result = _run_program(
+            "import geo using Point::public_secret\nprint geo::Point::public_secret()\n",
+            roots_dirs=[tmp_path],
+        )
+
+        assert result.ok is True
+        assert capsys.readouterr().out == "99\n"
+
+    def test_private_scoped_members_are_not_selected(self, tmp_path: Path) -> None:
+        self._write_geo(tmp_path)
+
+        result = _run_program(
+            "import geo using Point::secret\ngeo::Point::secret()\n",
+            roots_dirs=[tmp_path],
+        )
+
+        assert result.ok is False
+
+    @pytest.mark.parametrize(
+        "selection",
+        ("Empty", "Hidden"),
+    )
+    def test_selecting_a_scope_without_public_content_fails(
+        self, tmp_path: Path, selection: str
+    ) -> None:
+        source = MULTI_FILE_DIR / "scoped_selection" / "empty.agl"
+        (tmp_path / "geo.agl").write_text(source.read_text())
+
+        result = _run_program(
+            f"import geo using {selection}\n()\n",
+            roots_dirs=[tmp_path],
+        )
+
+        assert result.ok is False
 
 
 # ---------------------------------------------------------------------------

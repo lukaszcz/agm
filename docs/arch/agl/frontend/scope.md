@@ -4,7 +4,7 @@ The scope pass performs full name resolution and records its results in side tab
 
 ## Namespace-Directed Resolution
 
-Scope-region syntax and declaration-path shorthand cross the parser firewall in canonical AST forms. Collection materializes a `ScopeNode` layer and static member map for each named path, merging repeated regions, shorthand paths, and same-named type scopes. A type's enum variants are collected as members of that type scope, while record and exception construction retains its bare declaration spelling. One ordered chain resolver first considers exact local paths through the active scope layers, then import routes; type-owning segments emit the same `ConstructorRef` result as bare constructor candidates. The checker consumes that result for values and calls, validating variant shape and signatures without re-resolving names. Patterns and `is` tests record a valid owner through the same chain, while unresolved routes and clashes defer to the checker's historic qualification and enum diagnostics. The type environment applies the same local/module anchor and clash policy. `::` starts at the module root, and scope paths never suffix-match. Plain scope segments reject type arguments in expression, type, pattern, and `is` chains. Scope `open` and path-aware import/export selection remain rejected before import environments are built.
+Scope-region syntax and declaration-path shorthand cross the parser firewall in canonical AST forms. Collection materializes a `ScopeNode` layer and static member map for each named path, merging repeated regions, shorthand paths, and same-named type scopes. A type's enum variants are collected as members of that type scope, while record and exception construction retains its bare declaration spelling. One ordered chain resolver first considers exact local paths through the active scope layers, then import routes; type-owning segments emit the same `ConstructorRef` result as bare constructor candidates. The checker consumes that result for values and calls, validating variant shape and signatures without re-resolving names. Patterns and `is` tests record a valid owner through the same chain, while unresolved routes and clashes defer to the checker's historic qualification and enum diagnostics. The type environment applies the same local/module anchor and clash policy. `::` starts at the module root, and scope paths never suffix-match. Plain scope segments reject type arguments in expression, type, pattern, and `is` chains. Module-boundary selection is path-aware: scoped declaration paths are public atoms, selecting a scope expands its public subtree, and selection renames re-root that subtree.
 
 Resolution is namespace- and scope-directed, never capitalization-directed — a direct consequence of AgL's case-neutral name model:
 
@@ -18,8 +18,8 @@ Assignment follows the same split. Scope resolves an unqualified `:=` target and
 ## Import Environments
 
 `scope/imports.py` is the pure import-policy seam. Its contribution environment
-merges every declaration for a module into its selected members, bare injection, aliases,
-and plain-path routes. The selected set bounds both routes and bare injection: plain
+merges every declaration for a module into its selected path atoms, bare injection, aliases,
+and plain-path routes. Scoped paths retain their structure through selection and re-exporting; policy expands scope-prefix selections and re-roots renamed subtrees. Wildcard declarations retain root-member selection only. The selected set bounds both routes and bare injection: plain
 imports are qualified-only, while `using` and `open import` inject bare names. One shared
 suffix/anchored resolver serves value reads and writes,
 constructors, and type qualification, retaining ambiguity and route identity until the use

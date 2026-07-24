@@ -1261,7 +1261,7 @@ class TestWildcardImports:
         )
         resolved = resolve_program(self_qualified)
         entry = resolved.modules[ENTRY_ID].resolved
-        assert entry.qualified_constructor_refs
+        assert entry.constructor_refs
 
         clashing_route = _make_graph_from_files(
             tmp_path,
@@ -1667,10 +1667,10 @@ class TestFieldAccessCoverage:
         )
         result = resolve_program(graph)
         assert ENTRY_ID in result.modules
-        # The self-ref ::Color::Red within mylib is in mylib's qualified_constructor_refs
+        # The self-ref ::Color::Red within mylib has a constructor-chain result.
         mylib_id = ModuleId.from_path("mylib")
         mylib_resolved = result.modules[mylib_id].resolved
-        assert len(mylib_resolved.qualified_constructor_refs) > 0
+        assert len(mylib_resolved.constructor_refs) > 0
 
     def test_unrecognized_qualifier_in_field_access_errors(self, tmp_path: Path) -> None:
         """An unknown module qualifier in a constructor ref is rejected."""

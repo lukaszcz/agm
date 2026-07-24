@@ -393,13 +393,6 @@ class ModuleResolution:
         constructor ``VarRef``) to the single :class:`ConstructorRef` it
         resolved to (only present when the candidate set has exactly one entry
         and no nearer non-constructor binding shadows it).
-    ``qualified_constructor_refs``
-        Maps a ``VarRef.node_id`` to ``(owner_name, member, owner_module_id)``
-        when the reference is a type-qualified constructor reference
-        (``Option::some`` or ``mylib::Color::Red``).  ``owner_module_id`` is
-        ``None`` for locally-declared/open-imported types and the owning
-        ``ModuleId`` for cross-module references.  The checker validates
-        enum-ness and variant.
     ``pattern_constructor_candidates``
         Maps every bare ``VarPattern.node_id`` that names one or more visible
         constructors to its candidate constructors. Constructor candidates are
@@ -431,9 +424,6 @@ class ModuleResolution:
         default_factory=dict
     )
     constructor_refs: dict[int, ConstructorRef] = field(default_factory=dict)
-    qualified_constructor_refs: dict[int, tuple[str, str, ModuleId | None]] = field(
-        default_factory=dict
-    )
     pattern_constructor_candidates: dict[int, tuple[ConstructorRef, ...]] = field(
         default_factory=dict
     )

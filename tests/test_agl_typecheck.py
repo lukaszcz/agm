@@ -630,6 +630,9 @@ class TestTypeEnvironment:
         with pytest.raises(AglTypeError, match="cycle"):
             env.resolve_type_expr(NameT(name="A", span=sp, node_id=3))
 
+    def test_constructor_owner_resolution_keeps_a_nominal_name(self) -> None:
+        assert TypeEnvironment().resolve_constructor_owner_name("Record") == "Record"
+
     def test_constructor_owner_resolution_rejects_qualified_alias_target(self) -> None:
         from agm.agl.syntax import QualifierChain, QualifierSegment
         from agm.agl.syntax.types import NameT
@@ -934,14 +937,6 @@ class TestTypeEnvironment:
         env = TypeEnvironment(program_type_table=graph_table, import_env=import_env)
         # Both entries are in graph_table → type_candidates has 2 elements → False branch.
         result = env.resolve_named_type("Color")
-        assert result is None
-
-    def test_resolve_type_by_module_id_no_graph_table(self) -> None:
-        # Coverage: resolve_type_by_module_id returns None in module mode (no graph table).
-        from agm.agl.modules.ids import ModuleId
-
-        env = TypeEnvironment()  # no program_type_table
-        result = env.resolve_type_by_module_id(ModuleId.from_path("mymod"), "Color")
         assert result is None
 
     def test_cross_module_constructible_lookup_rejects_missing_and_non_nominal_types(self) -> None:
@@ -7121,6 +7116,13 @@ class TestResolveTypeExprTypeVars:
         )
         assert env.get_open_imported_generic_type("Point") is None
         assert env.get_open_imported_generic_type("Box") is None
+        env = TypeEnvironment(
+            import_env=ImportEnv(
+                unqualified={"Box": frozenset({(lib_a, "Box")})}, contributions={}
+            ),
+            program_generic_table={(lib_a, "Box"): gdef},
+        )
+        assert env.get_open_imported_generic_type("Box") == (lib_a, "Box", gdef)
 
     def test_name_in_type_vars_resolves_to_typevar(self) -> None:
         from agm.agl.syntax.types import NameT
@@ -8680,18 +8682,14 @@ class TestGenericEnumQualifiersAndTypeVarScoping:
 class TestGenericCoverageEdgeCases:
     """Tests for code paths not yet exercised by the main test classes."""
 
-    def test_generic_constructor_value_keeps_owner_when_alias_is_not_local(self) -> None:
+    def test_generic_constructor_value_uses_registered_signature_without_module_metadata(
+        self,
+    ) -> None:
         from unittest.mock import MagicMock
 
         from agm.agl.scope.symbols import ConstructorRef
         from agm.agl.typecheck.constructors import ConstructorChecker
 
-        ctx = MagicMock()
-        ctx._env.source_type_template.return_value = None
-        ctx._env.resolve_constructor_owner_name.return_value = None
-        expected = FunctionType((IntType(),), RecordType("Alias", (IntType(),)))
-        ctx._instantiate_generic_constructor_value.return_value = expected
-        checker = ConstructorChecker(ctx)
         signature = ConstructorSignature(
             owner_name="Alias",
             variant=None,
@@ -8700,6 +8698,13 @@ class TestGenericCoverageEdgeCases:
             result_template=RecordType("Alias", (TypeVarType("T"),)),
             type_params=("T",),
         )
+        ctx = MagicMock()
+        ctx._env.get_generic_type_from_module.return_value = None
+        ctx._env.source_type_template_qname.return_value = None
+        ctx._env.get_constructor_signature.return_value = signature
+        expected = FunctionType((IntType(),), RecordType("Alias", (IntType(),)))
+        ctx._instantiate_generic_constructor_value.return_value = expected
+        checker = ConstructorChecker(ctx)
 
         result = checker.check_generic_constructor_as_value(
             ctor_ref=ConstructorRef(
@@ -8710,7 +8715,6 @@ class TestGenericCoverageEdgeCases:
             ),
             span=mk_span(),
             expected=expected,
-            sig=signature,
         )
 
         assert result == expected

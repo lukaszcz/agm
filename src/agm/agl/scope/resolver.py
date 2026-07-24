@@ -135,7 +135,6 @@ from agm.agl.syntax.nodes import (
     ProgramDecl,
     QualifierAnchor,
     QualifierChain,
-    QualifierSegment,
     Raise,
     RecordDef,
     Return,
@@ -306,8 +305,6 @@ class _Resolver:
         self._constructor_candidates: dict[str, list[ConstructorRef]] = {}
         # Resolved single-candidate constructor refs: VarRef.node_id -> ConstructorRef.
         self._constructor_refs: dict[int, ConstructorRef] = {}
-        # Qualified constructor refs: VarRef.node_id -> (owner_name, member, owner_module_id).
-        self._qualified_constructor_refs: dict[int, tuple[str, str, ModuleId | None]] = {}
         # Scope records constructor candidates for bare pattern names. The
         # checker classifies them after constructor fields have been mapped;
         # candidates do not depend on ordinary lexical value bindings.
@@ -431,7 +428,6 @@ class _Resolver:
                 key: tuple(refs) for key, refs in self._scoped_constructor_candidates.items()
             },
             constructor_refs=dict(self._constructor_refs),
-            qualified_constructor_refs=dict(self._qualified_constructor_refs),
             pattern_constructor_candidates=dict(self._pattern_constructor_candidates),
             pattern_slots=dict(self._pattern_slots),
             branch_pattern_slots=dict(self._branch_pattern_slots_by_node),
@@ -1530,7 +1526,9 @@ class _Resolver:
         elif isinstance(expr, UnaryNeg):
             self._resolve_expr(expr.operand)
         elif isinstance(expr, IsTest):
-            self._validate_local_scope_chain(expr.qualifier)
+            self._resolve_constructor_chain(
+                expr.node_id, expr.qualifier, expr.variant, defer_route_diagnostics=True
+            )
             self._resolve_expr(expr.expr)
         elif isinstance(expr, Cast):
             self._resolve_expr(expr.expr)
@@ -1576,27 +1574,12 @@ class _Resolver:
             return
         if self._resolve_local_scope_member(node):
             return
-        module_qualifier, type_qualifier = self._expression_qualifier_parts(node.qualifier)
-        if type_qualifier is not None:
-            self._resolve_type_qualified_constructor(node, module_qualifier, type_qualifier)
+        if node.qualifier is not None:
+            self._resolve_qualified_chain(node)
             return
         if node.name in _BUILTIN_CALL_NAMES and self._current_scope().lookup(node.name) is None:
             raise AglScopeError(
                 f"Built-in function '{node.name}' cannot be used as a value.", span=node.span
-            )
-
-        # Single-segment qualifiers can name either a type or an import handle.
-        if module_qualifier is not None:
-            if self._resolve_single_qualifier_constructor(node, module_qualifier):
-                return
-            if self._import_env is not None:
-                self._resolve_varref_qualified(node, module_qualifier)
-                return
-            qualifier_str = module_qualifier.render()
-            raise AglScopeError(
-                f"No module imported under qualifier '{qualifier_str}' or type named "
-                f"'{qualifier_str}'.",
-                span=module_qualifier.span,
             )
 
         # Standard lexical lookup (module mode or bare name in program context).
@@ -1767,146 +1750,213 @@ class _Resolver:
             if len(candidates) == 1:
                 (candidate,) = candidates
                 owner_name = "::".join((*candidate.owner_path, candidate.owner_name))
-                if candidate.variant is None:
-                    # Records, exceptions, and constructor aliases retain the
-                    # ordinary constructor path.  The legacy qualified table
-                    # is enum-variant-specific until constructor migration.
-                    self._resolution[node.node_id] = ref
-                    self._constructor_refs[node.node_id] = replace(candidate, owner_name=owner_name)
-                else:
-                    self._qualified_constructor_refs[node.node_id] = (
-                        owner_name,
-                        candidate.variant,
-                        None,
-                    )
+                self._constructor_refs[node.node_id] = replace(candidate, owner_name=owner_name)
                 return True
             return False
         self._track_agent_reference(ref)
         self._resolution[node.node_id] = ref
         return True
 
-    def _expression_qualifier_parts(
-        self, chain: QualifierChain | None
-    ) -> tuple[QualifierChain | None, QualifierSegment | None]:
-        """Split supported chains into a module route and optional type owner."""
-        if chain is None:
-            return (None, None)
+    def _resolve_qualified_chain(self, node: VarRef) -> None:
+        """Resolve a qualified value through one ordered scope-or-route chain.
 
-        def module_chain(segment: QualifierSegment) -> QualifierChain:
-            return QualifierChain(
-                anchor=chain.anchor,
-                segments=(segment,),
-                member="",
-                span=segment.span,
-                node_id=segment.node_id,
+        A type is simply a chain segment that owns constructor members.  The
+        result is the same ``BindingRef``/``ConstructorRef`` pair used by bare
+        constructors; type checking validates enum-ness and the requested
+        variant without re-resolving the chain.
+        """
+        chain = node.qualifier
+        assert chain is not None
+        if self._resolve_constructor_chain(node.node_id, chain, node.name):
+            return
+        if (
+            chain.anchor is QualifierAnchor.CURRENT_MODULE
+            and len(chain.segments) == 1
+            and not any(
+                candidate.owner_name == chain.segments[0].name
+                and candidate.owner_module_id in (self._module_id, PRELUDE_ID)
+                for candidates in self._constructor_candidates.values()
+                for candidate in candidates
+            )
+        ):
+            segment = chain.segments[0]
+            error = AglScopeError(
+                f"'{segment.name}' is not defined in this module.", span=segment.span
+            )
+            raise (
+                self._spaced_qualifier_repair(
+                    self._spaced_qualifier_at(chain.span)
+                    or self._spaced_qualifier_around(node.span),
+                    node.span,
+                )
+                or error
             )
 
-        if len(chain.segments) == 1:
-            (segment,) = chain.segments
-            if chain.anchor is QualifierAnchor.CURRENT_MODULE:
-                return (
-                    QualifierChain(
-                        anchor=chain.anchor,
-                        segments=(),
-                        member="",
-                        span=chain.span,
-                        node_id=chain.node_id,
-                    ),
-                    segment,
-                )
-            if segment.type_args is not None:
-                return (None, segment)
-            return (module_chain(segment), None)
-
-        if len(chain.segments) == 2:
-            module_segment, type_segment = chain.segments
-            return (module_chain(module_segment), type_segment)
-
-        # A longer non-local chain cannot be a legacy type-owner form. Keep
-        # its full route intact so the import resolver can issue its ordinary
-        # diagnostic; crucially, never unpack it as a two-segment chain.
-        return (chain, None)
-
-    def _resolve_type_qualified_constructor(
-        self,
-        node: VarRef,
-        module_qualifier: QualifierChain | None,
-        type_qualifier: QualifierSegment,
-    ) -> None:
-        """Resolve an explicit ``[module::]Type[args]::Ctor`` reference."""
-        type_name = type_qualifier.name
-        if module_qualifier is None:
-            if type_name not in self._declared_type_names:
-                raise AglScopeError(
-                    f"'{type_name}' is not a known type.",
-                    span=type_qualifier.span,
-                )
-            self._qualified_constructor_refs[node.node_id] = (type_name, node.name, None)
-            return
-        if not module_qualifier.route_segments:
-            if type_name not in self._declared_type_names:
-                raise self._spaced_qualifier_repair(
-                    self._spaced_qualifier_at(module_qualifier.span), module_qualifier.span
-                ) or AglScopeError(
-                    f"'{type_name}' is not defined in this module.",
-                    span=type_qualifier.span,
-                )
-            owner_module = self._module_id if self._import_env is not None else None
-            self._qualified_constructor_refs[node.node_id] = (type_name, node.name, owner_module)
-            return
-        if self._import_env is None:
-            qualifier_str = module_qualifier.render()
-            raise AglScopeError(
-                f"No module imported under qualifier '{qualifier_str}'.",
-                span=module_qualifier.span,
-            )
-        src_name, owning_module = self._resolve_qualified_type_name(
-            module_qualifier, type_name, type_qualifier.span
-        )
-        self._qualified_constructor_refs[node.node_id] = (src_name, node.name, owning_module)
-
-    def _resolve_single_qualifier_constructor(
-        self, node: VarRef, module_qualifier: QualifierChain
-    ) -> bool:
-        """Resolve ``Type::Ctor`` when the qualifier denotes a type name."""
-        segments = module_qualifier.route_segments
-        if module_qualifier.anchored or len(segments) != 1:
-            return False
-        type_name = segments[0]
-        type_match = type_name in self._declared_type_names
-        module_match = False
         if self._import_env is not None:
-            # The test is intentionally asymmetric: a type name is a candidate
-            # on its own, but an import route is a candidate only when it
-            # actually contributes the requested constructor/variant member.
-            module_match = qualifier_contributes(self._import_env, segments, node.name)
-        if type_match and module_match:
+            try:
+                self._resolve_varref_qualified(node, chain)
+            except AglScopeError as error:
+                raise (
+                    self._spaced_qualifier_repair(
+                        self._spaced_qualifier_at(chain.span)
+                        or self._spaced_qualifier_around(node.span),
+                        node.span,
+                    )
+                    or error
+                )
+            return
+        if len(chain.segments) == 1 and chain.segments[0].type_args is not None:
             raise AglScopeError(
-                f"Qualifier '{type_name}' is both a type name and a module route for "
-                f"'{node.name}'. {qualification_repair_guidance()}",
-                span=module_qualifier.span,
+                f"'{chain.segments[0].name}' is not a known type.", span=chain.segments[0].span
             )
-        if not type_match:
-            return False
-        self._qualified_constructor_refs[node.node_id] = (type_name, node.name, None)
-        return True
-
-    def _resolve_qualified_type_name(
-        self, qualifier: QualifierChain, type_name: str, span: SourceSpan
-    ) -> tuple[str, ModuleId]:
-        """Resolve ``qualifier::type_name`` as a constructible type owner."""
-        qname = self._resolve_qualified_qname(qualifier, type_name, span)
-        owning_module, src_name = qname
-        _decl_node_id, _decl_span, kind = self._decl_info.get(
-            (owning_module, src_name), (-1, span, BinderKind.let_binding)
+        qualifier_str = chain.render()
+        raise AglScopeError(
+            f"No module imported under qualifier '{qualifier_str}' or type named "
+            f"'{qualifier_str}'.",
+            span=chain.span,
         )
-        if kind is not BinderKind.constructor_binding:
-            rendered = qualifier.render()
-            raise AglScopeError(
-                f"'{rendered}::{type_name}' is not a constructible type.",
-                span=span,
+
+    def _resolve_constructor_chain(
+        self,
+        node_id: int,
+        chain: QualifierChain | None,
+        variant: str,
+        *,
+        defer_route_diagnostics: bool = False,
+    ) -> bool:
+        """Record a constructor result when *chain* ends at a type owner.
+
+        Patterns and ``is`` tests retain type-checker qualification verdicts.
+        They resolve a valid owner here, but defer a bad imported route or a
+        local/import clash until the checker can assess it against the enum
+        being matched.
+        """
+        if chain is None:
+            return False
+        local_path = self._validate_local_scope_chain(chain)
+        if local_path in self._type_paths:
+            if (
+                chain.anchor is None
+                and self._import_env is not None
+                and qualifier_contributes(
+                    self._import_env,
+                    tuple(segment.name for segment in chain.segments),
+                    variant,
+                )
+            ):
+                rendered = "::".join(segment.name for segment in chain.segments)
+                if defer_route_diagnostics:
+                    return False
+                raise AglScopeError(
+                    f"Qualifier '{rendered}' is both a type name and a module route for "
+                    f"'{variant}'. {qualification_repair_guidance()}",
+                    span=chain.span,
+                )
+            self._constructor_refs[node_id] = self._constructor_for_type_path(local_path, variant)
+            return True
+        try:
+            owner = self._imported_chain_owner(chain, variant)
+        except AglScopeError:
+            if defer_route_diagnostics:
+                return False
+            raise
+        if owner is not None:
+            self._constructor_refs[node_id] = owner
+            return True
+        if (
+            chain.anchor is not QualifierAnchor.MODULE
+            and len(chain.segments) == 1
+            and chain.segments[0].name in self._declared_type_names
+        ):
+            type_name = chain.segments[0].name
+            candidate = next(
+                (
+                    candidate
+                    for candidates in self._constructor_candidates.values()
+                    for candidate in candidates
+                    if candidate.owner_name == type_name
+                    and (
+                        chain.anchor is not QualifierAnchor.CURRENT_MODULE
+                        or candidate.owner_module_id in (self._module_id, PRELUDE_ID)
+                    )
+                ),
+                None,
             )
-        return (src_name, owning_module)
+            if candidate is not None:
+                self._constructor_refs[node_id] = replace(candidate, variant=variant)
+                return True
+        return False
+
+    def _constructor_for_type_path(self, path: ScopePath, variant: str) -> ConstructorRef:
+        """Return the constructor-shaped chain result owned by local *path*."""
+        owner_name = "::".join(path)
+        declaration = self._declaration_items[(self._module_id, path[:-1], path[-1])]
+        assert isinstance(declaration, (RecordDef, EnumDef, ExceptionDef, TypeAlias))
+        candidates = self._scoped_constructor_candidates.get((path, variant), ())
+        if candidates:
+            return replace(candidates[0], owner_name=owner_name)
+        return ConstructorRef(
+            owner_name=owner_name,
+            variant=variant,
+            owner_decl_node_id=declaration.node_id,
+            type_params=declaration.type_params,
+            owner_module_id=self._module_id,
+            owner_path=path[:-1],
+        )
+
+    def _imported_chain_owner(self, chain: QualifierChain, variant: str) -> ConstructorRef | None:
+        """Resolve a type-owning segment reached through imports.
+
+        The final chain segment is selected as a normal imported member; any
+        preceding segments are its route.  A one-segment chain may instead
+        name an open-imported type.  This is the same chain walk used for
+        ordinary qualified values, with only the resulting member kind
+        determining whether it owns a constructor.
+        """
+        if (
+            self._import_env is None
+            or chain.anchor is QualifierAnchor.CURRENT_MODULE
+            or not chain.segments
+        ):
+            return None
+        owner_ref: BindingRef | None = None
+        if len(chain.segments) == 1 and not chain.anchored:
+            owner_ref = self._lookup_import_env_unqualified(chain.segments[0].name, chain.span)
+            if owner_ref is not None and owner_ref.kind is not BinderKind.constructor_binding:
+                return None
+        elif len(chain.segments) > 1:
+            route = QualifierChain(
+                anchor=chain.anchor,
+                segments=chain.segments[:-1],
+                member="",
+                span=chain.span,
+                node_id=chain.node_id,
+            )
+            owner_ref = self._lookup_qualified_binding(route, chain.segments[-1].name, chain.span)
+            if owner_ref.kind is not BinderKind.constructor_binding:
+                rendered = chain.render()
+                raise AglScopeError(f"'{rendered}' is not a constructible type.", span=chain.span)
+        if owner_ref is None:
+            return None
+        candidate = next(
+            (
+                candidate
+                for candidates in self._constructor_candidates.values()
+                for candidate in candidates
+                if candidate.owner_module_id == owner_ref.module_id
+                and candidate.owner_name == owner_ref.name
+            ),
+            None,
+        )
+        if candidate is None:
+            return ConstructorRef(
+                owner_name=owner_ref.name,
+                variant=variant,
+                owner_decl_node_id=owner_ref.decl_node_id,
+                type_params=(),
+                owner_module_id=owner_ref.module_id,
+            )
+        return replace(candidate, variant=variant)
 
     def _lookup_import_env_unqualified(self, name: str, span: SourceSpan) -> BindingRef | None:
         """Look up a bare name in the open-import environment (program context).
@@ -2137,6 +2187,13 @@ class _Resolver:
         self._resolve_expr(node.subject)
         for branch in node.branches:
             with self._child_scope(branch.node_id) as branch_scope:
+                if isinstance(branch.pattern, ConstructorPattern):
+                    self._resolve_constructor_chain(
+                        branch.pattern.node_id,
+                        branch.pattern.qualifier,
+                        branch.pattern.name,
+                        defer_route_diagnostics=True,
+                    )
                 with self._branch_pattern_slots(branch.node_id):
                     self._bind_pattern_vars(branch.pattern, branch_scope)
                 self._resolve_expr_or_block(branch.body)

@@ -1354,40 +1354,29 @@ class _Checker:
 
     def _constructor_ref_for(self, node_id: int) -> ConstructorRef | None:
         """Return a checked constructor reference, dereferencing a slot."""
-        return dereference_slot_constructor_ref(
+        ref = dereference_slot_constructor_ref(
             node_id,
             resolution=self._resolved.resolution,
             constructor_refs=self._resolved.constructor_refs,
             slot_constructor_refs=self._slot_constructor_refs,
         )
+        return None if ref is None else self._constructors.normalize_constructor_ref(ref)
+
+    @staticmethod
+    def _constructor_type_args(node: VarRef) -> tuple[TypeExpr, ...] | None:
+        """Return type arguments attached to the type-owning chain segment."""
+        if node.qualifier is None or not node.qualifier.segments:
+            return None
+        return node.qualifier.segments[-1].type_args
 
     def _check_varref(self, node: VarRef, *, expected: Type | None = None) -> Type:
-        if node.node_id in self._resolved.qualified_constructor_refs:
-            owner_name, variant, owner_module_id = self._resolved.qualified_constructor_refs[
-                node.node_id
-            ]
-            type_args = (
-                node.qualifier.segments[-1].type_args
-                if node.qualifier is not None and node.qualifier.segments
-                else None
-            )
-            if type_args is not None:
-                return self._constructors.check_qualified_constructor_type_apply(
-                    owner_name=owner_name,
-                    variant=variant,
-                    owner_module_id=owner_module_id,
-                    type_args=type_args,
-                    span=node.span,
-                )
-            return self._constructors.check_qualified_constructor_as_value(
-                owner_name=owner_name,
-                variant=variant,
-                owner_module_id=owner_module_id,
-                span=node.span,
-                expected=expected,
-            )
-        # Bare constructor reference → zero-arg construction or generic constructor as value.
+        # Constructor references, qualified or bare, share one scope result.
         if (ctor_ref := self._constructor_ref_for(node.node_id)) is not None:
+            type_args = self._constructor_type_args(node)
+            if type_args is not None:
+                return self._constructors.check_constructor_type_apply(
+                    ctor_ref=ctor_ref, type_args=type_args, span=node.span
+                )
             if ctor_ref.type_params:
                 return self._constructors.check_generic_constructor_as_value(
                     ctor_ref=ctor_ref, span=node.span, expected=expected
@@ -1638,17 +1627,18 @@ class _Checker:
         if (
             isinstance(node.expr, VarRef)
             and (ctor_ref := self._constructor_ref_for(node.expr.node_id)) is not None
+            and node.expr.qualifier is not None
+        ):
+            raise self._qualified_constructor_typed_call_error(node.span)
+        if (
+            isinstance(node.expr, VarRef)
+            and (ctor_ref := self._constructor_ref_for(node.expr.node_id)) is not None
         ):
             typ = self._constructors.check_constructor_type_apply(
                 ctor_ref=ctor_ref, type_args=node.type_args, span=node.span
             )
             self._record_node_type(node.expr.node_id, typ)
             return typ
-        if (
-            isinstance(node.expr, VarRef)
-            and node.expr.node_id in self._resolved.qualified_constructor_refs
-        ):
-            raise self._qualified_constructor_typed_call_error(node.span)
         if isinstance(node.expr, VarRef):
             constructor_ref = self._binding_for(node.expr.node_id)
             if (
@@ -2336,17 +2326,21 @@ class _Checker:
             isinstance(node.callee, VarRef)
             and (ctor_ref := self._constructor_ref_for(node.callee.node_id)) is not None
         ):
-            return self._constructors.check_constructor_callee_call(
-                node, ctor_ref=ctor_ref, expected=expected, hole_indices=hole_indices
-            )
-        if (
-            isinstance(node.callee, VarRef)
-            and node.callee.node_id in self._resolved.qualified_constructor_refs
-        ):
-            if node.type_args:
+            if (
+                node.type_args
+                and node.callee.qualifier is not None
+                and ctor_ref.variant is not None
+            ):
                 raise self._qualified_constructor_typed_call_error(node.span)
-            return self._constructors.check_qualified_constructor_callee_call(
-                node, expected=expected, hole_indices=hole_indices
+            constructor_type_args = self._constructor_type_args(node.callee)
+            if constructor_type_args is None:
+                constructor_type_args = node.type_args
+            return self._constructors.check_constructor_callee_call(
+                node,
+                ctor_ref=ctor_ref,
+                constructor_type_args=constructor_type_args,
+                expected=expected,
+                hole_indices=hole_indices,
             )
 
         # Declared function or cross-module constructor by name?
@@ -3465,12 +3459,14 @@ class _Checker:
                     f"'is' / 'is not' requires an enum-typed left-hand side; got '{expr_type!r}'.",
                     span=node.span,
                 )
-            self._check_variant_qualification(
-                qualifier=node.qualifier,
-                variant=node.variant,
-                enum_type=expr_type,
-                span=node.span,
-            )
+            constructor = self._constructor_ref_for(node.node_id)
+            if constructor is None or not constructor.matches(expr_type, node.variant):
+                self._check_variant_qualification(
+                    qualifier=node.qualifier,
+                    variant=node.variant,
+                    enum_type=expr_type,
+                    span=node.span,
+                )
             if node.variant not in self._env.type_table.enum_variants(expr_type):
                 raise _variant_not_in_enum(node.variant, expr_type, node.span)
             return BoolType()
@@ -3539,8 +3535,10 @@ class _Checker:
                 enum_type,
                 span,
             )
-            return
-        self._check_qualified_variant_prefix(qualifier, enum_type.name, variant, enum_type, span)
+        else:
+            self._check_qualified_variant_prefix(
+                qualifier, enum_type.name, variant, enum_type, span
+            )
 
     def _require_enum_owner_match(
         self,
@@ -3997,12 +3995,14 @@ class _Checker:
             f"Unexpected pattern kind: {type(pattern).__name__}"
         )
         enum_type = self._require_enum_scrutinee(pattern.name, subj_type, pattern.span)
-        self._check_variant_qualification(
-            qualifier=pattern.qualifier,
-            variant=pattern.name,
-            enum_type=enum_type,
-            span=pattern.span,
-        )
+        constructor = self._constructor_ref_for(pattern.node_id)
+        if constructor is None or not constructor.matches(enum_type, pattern.name):
+            self._check_variant_qualification(
+                qualifier=pattern.qualifier,
+                variant=pattern.name,
+                enum_type=enum_type,
+                span=pattern.span,
+            )
         variant_name = pattern.name
         enum_variants = self._env.type_table.enum_variants(enum_type)
         if variant_name not in enum_variants:

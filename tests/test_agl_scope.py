@@ -1543,8 +1543,8 @@ class TestParentScopeSeam:
         assert isinstance(fn_node, _FD)
         fa_node = fn_node.body
         assert isinstance(fa_node, _FA)
-        # NOT in qualified_constructor_refs (it's a value field access on the param).
-        assert fa_node.node_id not in entry.qualified_constructor_refs
+        # Field access on a parameter creates no constructor reference.
+        assert fa_node.node_id not in entry.constructor_refs
 
     def test_ambient_type_names_resolve_qualified_prior_entry_ctor(self) -> None:
         """Qualified constructor from a prior REPL entry resolves via ambient_type_names."""
@@ -1568,7 +1568,7 @@ class TestParentScopeSeam:
         call_node = entry.program.body.items[0]
         assert isinstance(call_node, _Call)
         assert isinstance(call_node.callee, _VarRef)
-        assert call_node.callee.node_id in entry.qualified_constructor_refs
+        assert call_node.callee.node_id in entry.constructor_refs
 
 
 # ---------------------------------------------------------------------------
@@ -2538,10 +2538,9 @@ class TestConstructorBindings:
         call_node = r.program.body.items[2]
         assert isinstance(call_node, Call)
         assert isinstance(call_node.callee, VarRef)
-        assert call_node.callee.node_id in r.qualified_constructor_refs
-        owner, member, _ = r.qualified_constructor_refs[call_node.callee.node_id]
-        assert owner == "Option"
-        assert member == "some"
+        ref = r.constructor_refs[call_node.callee.node_id]
+        assert ref.owner_name == "Option"
+        assert ref.variant == "some"
 
     # --- Qualified constructor access ---
 
@@ -2562,35 +2561,32 @@ class TestConstructorBindings:
         assert diagnostic.line == 1
 
     def test_qualified_constructor_recorded(self) -> None:
-        """Qualified access Owner::member is recorded in qualified_constructor_refs."""
+        """Qualified access Owner::member records the shared constructor reference."""
         r = parse_and_resolve("enum Option\n  | none\n  | some\nlet x = Option::some\nx\n")
         let_decl = r.program.body.items[1]
         assert isinstance(let_decl, LetDecl)
         fa = let_decl.value
         assert isinstance(fa, VarRef)
-        assert fa.node_id in r.qualified_constructor_refs
-        owner, member, _mid = r.qualified_constructor_refs[fa.node_id]
-        assert owner == "Option"
-        assert member == "some"
+        ref = r.constructor_refs[fa.node_id]
+        assert ref.owner_name == "Option"
+        assert ref.variant == "some"
 
     def test_qualified_access_does_not_raise_undefined_for_owner(self) -> None:
         "Option::some does NOT raise 'Option is not defined'."
         r = parse_and_resolve("enum Option\n  | none\n  | some\nOption::some\n")
         last = r.program.body.items[1]
         assert isinstance(last, VarRef)
-        assert last.node_id in r.qualified_constructor_refs
-        owner, member, _ = r.qualified_constructor_refs[last.node_id]
-        assert owner == "Option" and member == "some"
+        ref = r.constructor_refs[last.node_id]
+        assert ref.owner_name == "Option" and ref.variant == "some"
 
     def test_qualified_access_none_variant(self) -> None:
-        "Option::none is recorded in qualified_constructor_refs."
+        "Option::none records the shared constructor reference."
         r = parse_and_resolve("enum Option\n  | none\n  | some\nOption::none\n")
         last = r.program.body.items[1]
         assert isinstance(last, VarRef)
-        assert last.node_id in r.qualified_constructor_refs
-        type_name, variant_name, _mod = r.qualified_constructor_refs[last.node_id]
-        assert type_name == "Option"
-        assert variant_name == "none"
+        ref = r.constructor_refs[last.node_id]
+        assert ref.owner_name == "Option"
+        assert ref.variant == "none"
 
     def test_dot_access_with_type_name_is_rejected(self) -> None:
         err = reject_scope("record Box\n  value: int\nBox.value\n")
@@ -2666,9 +2662,9 @@ class TestConstructorBindings:
         "Lowercase 'option::none' and uppercase 'Option::None' behave identically."
         r_lower = parse_and_resolve("enum option\n  | none\n  | some\noption::none\n")
         r_upper = parse_and_resolve("enum Option\n  | None\n  | Some\nOption::None\n")
-        # Both should have a single qualified_constructor_ref
-        assert len(r_lower.qualified_constructor_refs) == 1
-        assert len(r_upper.qualified_constructor_refs) == 1
+        # Both have one constructor-chain result.
+        assert len(r_lower.constructor_refs) == 1
+        assert len(r_upper.constructor_refs) == 1
 
     def test_no_capitalization_rule_for_constructor_lookup(self) -> None:
         """Neither lowercase nor uppercase variants require capitalization to resolve."""
@@ -2804,17 +2800,16 @@ class TestConstructorBindings:
         assert len(r.constructor_candidates["val"]) == 2
 
     def test_qualified_constructor_via_ast(self) -> None:
-        """VarRef with a type qualifier is recorded as a qualified_constructor_ref."""
+        """VarRef with a type qualifier records a constructor reference."""
         r = parse_and_resolve("enum Color\n  | red\n  | blue\nColor::red")
         ref = r.program.body.items[1]
         assert isinstance(ref, VarRef)
-        assert ref.node_id in r.qualified_constructor_refs
-        type_name2, variant_name2, _mod2 = r.qualified_constructor_refs[ref.node_id]
-        assert type_name2 == "Color"
-        assert variant_name2 == "red"
+        constructor = r.constructor_refs[ref.node_id]
+        assert constructor.owner_name == "Color"
+        assert constructor.variant == "red"
 
     def test_ordinary_field_access_not_qualified_ref(self) -> None:
-        """FieldAccess on a regular value is NOT recorded in qualified_constructor_refs."""
+        """FieldAccess on a regular value creates no constructor reference."""
         let_x = _make_let("x", _make_intlit(1))
         fa = FieldAccess(
             obj=_make_varref("x"),
@@ -2823,7 +2818,7 @@ class TestConstructorBindings:
             node_id=_nid(),
         )
         r = resolve_program(let_x, fa)
-        assert fa.node_id not in r.qualified_constructor_refs
+        assert fa.node_id not in r.constructor_refs
 
 
 # ---------------------------------------------------------------------------

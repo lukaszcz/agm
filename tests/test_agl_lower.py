@@ -1334,8 +1334,8 @@ class TestIrFieldLowering:
     def test_field_access_lowers_to_ir_field(self) -> None:
         """Non-constructor FieldAccess lowers to IrField with correct field name.
 
-        We construct a minimal FieldAccess AST node whose node_id is NOT in
-        qualified_constructor_refs, pair it with a UnitLit obj (so lower_expr
+        We construct a minimal FieldAccess AST node whose node_id has no
+        constructor reference, pair it with a UnitLit obj (so lower_expr
         can recurse cleanly), and assert the result is IrField.
         """
         from agm.agl.ir.nodes import IrField
@@ -1346,9 +1346,9 @@ class TestIrFieldLowering:
         # resolved/type-table scaffolding, not the actual program body.
         checked = _check("()")
 
-        # A fresh node_id not present in qualified_constructor_refs.
+        # A fresh node id has no constructor reference.
         fake_node_id = 99999
-        assert fake_node_id not in checked.resolved.qualified_constructor_refs
+        assert fake_node_id not in checked.resolved.constructor_refs
 
         span = SourceSpan(
             start_line=1,

@@ -214,19 +214,63 @@ def test_generic_constructor_ignores_unrelated_same_named_scope() -> None:
     resolve_module(program)
 
 
-def test_current_module_anchored_type_constructor_remains_supported() -> None:
+def test_current_module_anchored_type_constructor_uses_the_chain_constructor_ref() -> None:
     program = parse_program("enum Option\n  | some\n::Option::some")
     assert isinstance(program.body, Block)
     expr = program.body.items[-1]
     assert isinstance(expr, VarRef)
 
     resolution = resolve_module(program)
-    assert resolution.qualified_constructor_refs[expr.node_id] == ("Option", "some", None)
+    assert resolution.constructor_refs[expr.node_id].owner_name == "Option"
+    assert resolution.constructor_refs[expr.node_id].variant == "some"
+
+
+@pytest.mark.parametrize("source", ("::Unknown::On", "::Unknown[int]::On"))
+def test_current_module_unknown_constructor_owner_reports_its_segment(source: str) -> None:
+    program = parse_program(source)
+    assert isinstance(program.body, Block)
+    expr = program.body.items[-1]
+    assert isinstance(expr, VarRef)
+    assert expr.qualifier is not None
+
+    with pytest.raises(AglScopeError) as exc_info:
+        resolve_module(program)
+
+    assert exc_info.value.to_diagnostic().message == "'Unknown' is not defined in this module."
+    assert exc_info.value.span == expr.qualifier.segments[0].span
+
+
+def test_scoped_enum_members_and_nested_type_members_run_through_the_full_pipeline() -> None:
+    from tests.agl.ir_harness import evaluate_ir_output
+
+    output = evaluate_ir_output(
+        "enum Option[T] | none | some(value: T)\n"
+        "scope Option\n"
+        "def is_empty(value: Option[int]) -> bool = value is Option[int]::none\n"
+        "end Option\n"
+        "scope A\n"
+        "enum T[U] | value\n"
+        "end A\n"
+        "let option = Option[int]::some(value = 1)\n"
+        "case option of\n"
+        "  | Option[int]::some(value) => print value\n"
+        "  | Option[int]::none => print 0\n"
+        "print(Option::is_empty(Option[int]::none))\n"
+        "let nested: A::T[int] = A::T[int]::value\n"
+        "print(nested is A::T[int]::value)"
+    )
+
+    assert output == "1\ntrue\ntrue\n"
 
 
 def test_current_module_anchored_multi_segment_chain_reports_its_unknown_path() -> None:
     with pytest.raises(AglScopeError, match="scope path"):
         resolve_module(parse_program("::A::B::C"))
+
+
+def test_module_anchored_constructor_chain_never_falls_back_to_a_local_type() -> None:
+    with pytest.raises(AglScopeError, match="No module"):
+        resolve_module(parse_program("enum A | value\n/A::value"))
 
 
 def test_nonconstructible_scoped_type_falls_back_to_the_legacy_constructor_diagnostic() -> None:

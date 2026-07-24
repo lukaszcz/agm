@@ -1049,20 +1049,6 @@ class _Lowerer:
             # Variable reference — constructor ref or IrLoad
             # ----------------------------------------------------------
             case VarRef(node_id=nid, span=span):
-                qcr = self._checked.resolved.qualified_constructor_refs.get(nid)
-                if qcr is not None:
-                    owner_name, variant_name, qcr_mid = qcr
-                    node_typ = self._node_type(nid)
-                    if isinstance(node_typ, FunctionType):
-                        nominal, display = self._nominal_for_constructor_result(node_typ.result)
-                        return IrMakeConstructor(
-                            location=self._loc(span),
-                            nominal=nominal,
-                            display_name=display,
-                            variant=variant_name,
-                        )
-                    return self._lower_nullary_constructor(nid, owner_name, variant_name, span)
-
                 # Check for constructor reference FIRST (mirrors legacy _eval_var_ref).
                 cref = self._checked.constructor_ref_for(nid)
                 if cref is not None:
@@ -1962,15 +1948,6 @@ class _Lowerer:
 
         # (a) VarRef callee resolving to a constructor.
         if isinstance(callee, VarRef):
-            qcr = self._checked.resolved.qualified_constructor_refs.get(callee.node_id)
-            if qcr is not None:
-                owner_name, variant_name, _qcr_mid = qcr
-                return self._lower_named_constructor_call(
-                    nid,
-                    owner_name,
-                    variant_name,
-                    span,
-                )
             cref = self._checked.constructor_ref_for(callee.node_id)
             if cref is not None:
                 return self._lower_named_constructor_call(
@@ -2341,10 +2318,6 @@ class _Lowerer:
     def _partial_constructor_owner(self, call_node: Call) -> tuple[str, str | None]:
         callee = call_node.callee
         assert isinstance(callee, VarRef)
-        qcr = self._checked.resolved.qualified_constructor_refs.get(callee.node_id)
-        if qcr is not None:
-            owner_name, variant, _owner_module = qcr
-            return owner_name, variant
         cref = self._checked.constructor_ref_for(callee.node_id)
         if cref is not None:
             return cref.owner_name, cref.variant

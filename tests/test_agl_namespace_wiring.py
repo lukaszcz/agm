@@ -254,6 +254,44 @@ def test_is_test_type_and_module_constructor_member_collision_is_ambiguous(
         assert repair in diagnostic
 
 
+def test_nonconstructible_open_import_is_not_a_constructor_owner(tmp_path: Path) -> None:
+    graph = make_graph_from_files(
+        tmp_path,
+        {"entry": "import lib using Alias\nAlias::value", "lib": "type Alias = int"},
+    )
+
+    with pytest.raises(AglScopeError):
+        resolve_program(graph)
+
+
+def test_current_module_anchor_does_not_resolve_an_imported_constructor_owner(
+    tmp_path: Path,
+) -> None:
+    graph = make_graph_from_files(
+        tmp_path,
+        {"entry": "open import library\n::Unknown::On", "library": "enum Unknown | On"},
+    )
+
+    with pytest.raises(AglScopeError) as exc_info:
+        resolve_program(graph)
+
+    assert exc_info.value.to_diagnostic().message == "'Unknown' is not defined in this module."
+
+
+def test_invalid_qualified_pattern_and_is_routes_reach_typecheck(tmp_path: Path) -> None:
+    for use in (
+        "case flag of | ::Unknown::On => 1 | _ => 2",
+        "flag is ::Unknown::On",
+        "flag is /Unknown::Flag::On",
+    ):
+        graph = make_graph_from_files(
+            tmp_path,
+            {"entry": f"enum Flag | On | Off\nlet flag = Flag::On\n{use}"},
+        )
+        with pytest.raises(AglTypeError):
+            check_program(resolve_program(graph), base_caps())
+
+
 def test_is_test_does_not_treat_an_imported_enum_owner_as_its_variant_route(
     tmp_path: Path,
 ) -> None:

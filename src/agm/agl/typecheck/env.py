@@ -1649,18 +1649,6 @@ class TypeEnvironment:
         """
         return frozenset(self._types) | frozenset(self._alias_targets)
 
-    def resolve_type_by_module_id(self, module_id: ModuleId, name: str) -> Type | None:
-        """Directly look up a type by owning module and name in the program type table.
-
-        Used for cross-module constructor references when the owning module is
-        already known from scope resolution (e.g. ``mylib::Color::Red``).
-
-        Returns ``None`` in module mode or if not found.
-        """
-        if self._program_type_table is None:
-            return None
-        return self._program_type_table.get((module_id, name))
-
     def resolve_constructible_type_by_module_id(
         self, module_id: ModuleId, name: str
     ) -> RecordType | EnumType | ExceptionType | None:
@@ -1695,10 +1683,6 @@ class TypeEnvironment:
         """
         template = self.source_type_template_qname(module_id, name)
         return None if template is None else template.match(concrete)
-
-    def source_type_template(self, name: str) -> TypeTemplate | None:
-        """Return immutable checked template data for an own-module source type."""
-        return self.source_type_template_qname(self._module_id, name)
 
     def source_type_template_qname(self, module_id: ModuleId, name: str) -> TypeTemplate | None:
         """Return immutable checked template data for one source type QName.

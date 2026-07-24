@@ -41,7 +41,7 @@ from prompt_toolkit.lexers import Lexer
 from prompt_toolkit.output import Output
 
 from agm.agl.lexer import tokenize
-from agm.agl.lexer.tokens import KEYWORDS
+from agm.agl.lexer.tokens import KEYWORDS, RAW_TAIL_END, RAW_TAIL_NAME, RAW_TAIL_START
 from agm.agl.parser import has_unterminated_triple_quoted_string, is_incomplete_source
 from agm.agl.repl import meta as meta_mod
 from agm.agl.repl import render as render_mod
@@ -50,6 +50,7 @@ from agm.agl.repl.agentmode import AgentMode
 from agm.agl.repl.themes import get_style
 from agm.agl.scope.symbols import BUILTIN_CALL_NAMES
 from agm.agl.syntax import BUILTIN_TYPE_NAMES
+from agm.agl.syntax.raw_tail import RAW_TAIL_BUILTINS
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -558,6 +559,25 @@ def _completion_word_before_cursor(text_before_cursor: str) -> str | None:
 # ---------------------------------------------------------------------------
 
 
+def _has_open_raw_tail_block(text: str) -> bool:
+    """Return whether a registered raw-tail header's block reaches buffer end."""
+    try:
+        tokens = list(tokenize(text))
+    except Exception:
+        return False
+
+    names = (
+        token for token in tokens if token.type == RAW_TAIL_NAME and str(token) in RAW_TAIL_BUILTINS
+    )
+    starts = (token for token in tokens if token.type == RAW_TAIL_START)
+    ends = (token for token in tokens if token.type == RAW_TAIL_END)
+    return any(
+        text[start.start_pos :].split("\n", maxsplit=1)[0].strip() == ""
+        and end.end_pos == len(text)
+        for _name, start, end in zip(names, starts, ends)
+    )
+
+
 def is_incomplete(text: str) -> bool:
     """Return ``True`` when *text* is a prefix of a valid entry (keep prompting).
 
@@ -568,13 +588,14 @@ def is_incomplete(text: str) -> bool:
     Enter on an empty continuation line, so the buffer ends with ``\\n`` —
     likewise force-submits so the user can always escape a continuation even when
     the buffer is still syntactically incomplete.  Otherwise the structured
-    parser signal decides.
+    parser signal decides, except that a registered raw-tail block stays open
+    until its payload is closed by a blank line or dedent.
     """
     if not text.strip():
         return False
     if text.endswith("\n") and not has_unterminated_triple_quoted_string(text):
         return False
-    return is_incomplete_source(text)
+    return is_incomplete_source(text) or _has_open_raw_tail_block(text)
 
 
 # ``has_runnable_statements`` (the blank/comment-only-entry predicate) lives in

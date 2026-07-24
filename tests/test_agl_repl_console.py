@@ -17,6 +17,7 @@ import io
 import signal
 from collections.abc import Callable, Iterator
 from types import FrameType
+from unittest.mock import patch
 
 import pytest
 from prompt_toolkit.completion import CompleteEvent
@@ -39,6 +40,7 @@ from agm.agl.repl.console import (
     run_console,
 )
 from agm.agl.runtime.request import AgentRequest, AgentResponse
+from agm.core.process import ProcessCaptureResult
 
 
 class _CountingAgent:
@@ -47,11 +49,40 @@ class _CountingAgent:
     def __init__(self, reply: str = "ok") -> None:
         self._reply = reply
         self.calls = 0
+        self.prompts: list[str] = []
 
     def __call__(self, request: AgentRequest) -> AgentResponse:
-        del request
         self.calls += 1
+        self.prompts.append(request.prompt)
         return AgentResponse(content=self._reply)
+
+
+class _RecordingShell:
+    """A fake shell boundary recording commands issued by ``exec``."""
+
+    def __init__(self, stdout: str = "") -> None:
+        self._stdout = stdout
+        self.commands: list[str] = []
+
+    def __call__(
+        self,
+        args: list[str],
+        *,
+        idle_timeout: float | None = None,
+        isolate_process_group: bool = False,
+    ) -> ProcessCaptureResult:
+        del idle_timeout, isolate_process_group
+        assert args[:2] == ["sh", "-c"]
+        self.commands.append(args[2])
+        return ProcessCaptureResult(
+            returncode=0,
+            stdout=self._stdout,
+            stderr="",
+            elapsed=0.01,
+            timed_out=False,
+            spawn_error=None,
+            spawn_errno=None,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -249,8 +280,35 @@ class TestMultiline:
         assert "first" in output
         assert "second" in output
 
+    def test_raw_tail_block_continues_until_blank_line_then_executes(self) -> None:
+        # A raw-tail header opens an interactive block. Enter after each content
+        # line must keep collecting the payload; the blank continuation line
+        # closes it and runs one shell call.
+        shell = _RecordingShell()
+        with patch("agm.core.process.run_capture_result", side_effect=shell):
+            output = drive("exec!\r  echo one\r  echo two\r\r\x04")
+
+        assert ": error:" not in output.lower()
+        assert shell.commands == ["echo one\necho two"]
+
+    def test_raw_tail_ask_block_continues_and_uses_mocked_default_agent(self) -> None:
+        agent = _CountingAgent("mocked reply")
+        output = drive("ask!\r  summarize this\r\r\x04", session=ReplSession(default_agent=agent))
+
+        assert agent.calls == 1
+        assert agent.prompts == ["summarize this"]
+        assert "mocked reply" in output
+
 
 class TestIsIncomplete:
+    @pytest.mark.parametrize("source", ["exec!", "ask!::[text]", "let reply = ask!"])
+    def test_raw_tail_headers_open_blocks(self, source: str) -> None:
+        assert is_incomplete(source) is True
+
+    @pytest.mark.parametrize("source", ["exec! echo hi", "exec!\n  echo hi\nnext"])
+    def test_closed_raw_tail_blocks_submit(self, source: str) -> None:
+        assert is_incomplete(source) is False
+
     @pytest.mark.parametrize(
         "source",
         ["record R", "enum E", "case x of", "try", "do agent", "if x == 1 =>", "1 +"],
@@ -610,6 +668,14 @@ class TestCompleter:
 
 
 class TestEvalOutput:
+    def test_inline_raw_tail_exec_evaluates_through_the_console(self) -> None:
+        shell = _RecordingShell()
+        with patch("agm.core.process.run_capture_result", side_effect=shell):
+            output = drive("exec! echo hi\r\x04")
+
+        assert ": error:" not in output.lower()
+        assert shell.commands == ["echo hi"]
+
     def test_binding_echo_shows_name_type_value(self) -> None:
         output = drive("let x = 5\r\x04")
 

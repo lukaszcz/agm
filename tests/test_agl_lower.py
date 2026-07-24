@@ -263,7 +263,9 @@ def _lower(source: str) -> ExecutableProgram:
 
 
 def _let_root_capture(initializer: object) -> IrBind:
-    """Return the private root capture from a compiled simple-let initializer."""
+    """Return the initializer bind from a simple or destructuring let."""
+    if isinstance(initializer, IrBind):
+        return initializer
     assert isinstance(initializer, IrSequence)
     root_capture = initializer.items[0]
     assert isinstance(root_capture, IrBind)
@@ -271,7 +273,9 @@ def _let_root_capture(initializer: object) -> IrBind:
 
 
 def _simple_let_binder(initializer: object) -> IrBind:
-    """Return the public binding leaf from a compiled simple-let initializer."""
+    """Return the public binding from a simple or destructuring let."""
+    if isinstance(initializer, IrBind):
+        return initializer
     assert isinstance(initializer, IrSequence)
     leaf = initializer.items[1]
     assert isinstance(leaf, IrSequence)
@@ -857,23 +861,30 @@ class TestDictLitLowering:
 
 
 class TestBindingLowering:
-    def test_simple_let_uses_the_shared_match_decision_and_private_root_capture(self) -> None:
+    def test_simple_let_lowers_to_one_bind_without_a_match_decision(self) -> None:
         prog = _lower("let _x: int = 5\n()")
         (lowered, _) = prog.modules[prog.entry_module].initializers
 
-        assert isinstance(lowered, IrSequence)
-        root_capture, leaf = lowered.items
-        assert isinstance(root_capture, IrBind)
-        assert prog.symbols[root_capture.symbol].public_name is None
-        assert isinstance(root_capture.value, IrConstInt)
-        assert root_capture.value.value == 5
-        assert isinstance(leaf, IrSequence)
-        (binder, result) = leaf.items
-        assert isinstance(binder, IrBind)
-        assert prog.symbols[binder.symbol].public_name == "_x"
-        assert not prog.symbols[binder.symbol].mutable
-        assert isinstance(binder.value, IrLoad)
-        assert isinstance(result, IrConstUnit)
+        assert isinstance(lowered, IrBind)
+        assert len(prog.symbols) == 1
+        assert prog.symbols[lowered.symbol].public_name == "_x"
+        assert not prog.symbols[lowered.symbol].mutable
+        assert isinstance(lowered.value, IrConstInt)
+        assert lowered.value.value == 5
+
+    def test_nested_simple_let_uses_a_private_direct_bind(self) -> None:
+        prog = _lower("def f() -> int =\n  let inner = 1\n  inner\nf()")
+        function = next(
+            descriptor
+            for descriptor in prog.functions.values()
+            if prog.symbols[descriptor.function_symbol].public_name == "f"
+        )
+        body = _function_body(function)
+        assert isinstance(body, IrBlock)
+        bind = body.items[0]
+        assert isinstance(bind, IrBind)
+        assert prog.symbols[bind.symbol].public_name is None
+        assert isinstance(bind.value, IrConstInt)
 
     def test_let_binding_int_to_decimal(self) -> None:
         # let d: decimal = 1 → private root capture coerces before the public leaf.
@@ -928,20 +939,18 @@ class TestBindingLowering:
         assert isinstance(bind, IrBind)
         assert prog.symbols[bind.symbol].mutable
 
-    def test_wildcard_let_uses_the_shared_match_decision_without_public_bindings(self) -> None:
+    def test_wildcard_let_evaluates_for_effects_without_a_symbol(self) -> None:
         prog = _lower("let _ = 1\nvar _ = 2\n()")
         first, second, _unit = prog.modules[prog.entry_module].initializers
 
         assert isinstance(first, IrSequence)
-        root_capture, result = first.items
-        assert isinstance(root_capture, IrBind)
-        assert isinstance(root_capture.value, IrConstInt)
-        assert root_capture.value.value == 1
-        assert prog.symbols[root_capture.symbol].public_name is None
+        initializer, result = first.items
+        assert isinstance(initializer, IrConstInt)
+        assert initializer.value == 1
         assert isinstance(result, IrConstUnit)
         assert isinstance(second, IrConstInt)
         assert second.value == 2
-        assert all(symbol.public_name is None for symbol in prog.symbols.values())
+        assert len(prog.symbols) == 0
 
     def test_wildcard_binders_evaluate_effects_without_public_bindings(self) -> None:
         from tests.agl.ir_harness import evaluate_ir_output
@@ -1102,9 +1111,9 @@ class TestBlockLowering:
         # We use lower_expr on the Block which calls lower_item on each child.
         ir = lowerer.lower_expr(block)
         assert isinstance(ir, IrBlock)
-        # IrBlock contains the compiled let decision followed by its IrLoad.
+        # IrBlock contains the direct let bind followed by its IrLoad.
         assert len(ir.items) == 2
-        assert isinstance(ir.items[0], IrSequence)
+        assert isinstance(ir.items[0], IrBind)
         assert isinstance(ir.items[1], IrLoad)
 
     def test_trailing_binder_appends_unit_value(self) -> None:
@@ -1124,8 +1133,7 @@ class TestBlockLowering:
         body = loop.body.items[0]
         assert isinstance(body, IrBlock)
         assert len(body.items) == 1
-        assert isinstance(body.items[0], IrSequence)
-        assert isinstance(body.items[0].items[0], IrBind)
+        assert isinstance(body.items[0], IrBind)
 
     def test_trailing_loop_binder_remains_available_to_until_condition(self) -> None:
         from agm.agl.semantics.values import IntValue
@@ -1560,7 +1568,8 @@ class TestLowerFunctions:
         indirect_binds = [
             _let_root_capture(n)
             for n in inits
-            if isinstance(n, IrSequence) and isinstance(_let_root_capture(n).value, IrIndirectCall)
+            if isinstance(n, (IrSequence, IrBind))
+            and isinstance(_let_root_capture(n).value, IrIndirectCall)
         ]
         assert len(indirect_binds) == 1
 
@@ -2272,7 +2281,7 @@ class TestHostOpLowering:
         ask_binds = [
             _let_root_capture(n)
             for n in inits
-            if isinstance(n, IrSequence) and isinstance(_let_root_capture(n).value, IrAsk)
+            if isinstance(n, (IrSequence, IrBind)) and isinstance(_let_root_capture(n).value, IrAsk)
         ]
         assert len(ask_binds) == 1
         assert len(prog.contracts) == 1
@@ -2328,7 +2337,8 @@ class TestHostOpLowering:
         ask_req_binds = [
             _let_root_capture(n)
             for n in inits
-            if isinstance(n, IrSequence) and isinstance(_let_root_capture(n).value, IrAskRequest)
+            if isinstance(n, (IrSequence, IrBind))
+            and isinstance(_let_root_capture(n).value, IrAskRequest)
         ]
         assert len(ask_req_binds) == 1, (
             f"Expected exactly 1 IrBind(IrAskRequest), got {len(ask_req_binds)}"
@@ -2377,7 +2387,7 @@ class TestLambdaCapturePositive:
         # Find the IrMakeClosure in the function body (the nested lambda)
         lambda_closure: IrMakeClosure | None = None
         for item in body.items:
-            if isinstance(item, IrSequence):
+            if isinstance(item, (IrSequence, IrBind)):
                 captured_value = _let_root_capture(item).value
                 if isinstance(captured_value, IrMakeClosure):
                     lambda_closure = captured_value
@@ -2416,7 +2426,7 @@ class TestLambdaCapturePositive:
         assert isinstance(body, IrBlock)
         lambda_closure = None
         for item in body.items:
-            if isinstance(item, IrSequence):
+            if isinstance(item, (IrSequence, IrBind)):
                 captured_value = _let_root_capture(item).value
                 if isinstance(captured_value, IrMakeClosure):
                     lambda_closure = captured_value
@@ -2454,7 +2464,7 @@ class TestLambdaCapturePositive:
         assert isinstance(body, IrBlock)
         lambda_closure = None
         for item in body.items:
-            if isinstance(item, IrSequence):
+            if isinstance(item, (IrSequence, IrBind)):
                 captured_value = _let_root_capture(item).value
                 if isinstance(captured_value, IrMakeClosure):
                     lambda_closure = captured_value
@@ -3507,7 +3517,7 @@ class TestRangeForDesugar:
         # The nested lambda _g is captured by its compiled let site's private root.
         g_closure: IrMakeClosure | None = None
         for item in body.items:
-            if isinstance(item, IrSequence):
+            if isinstance(item, (IrSequence, IrBind)):
                 captured_value = _let_root_capture(item).value
                 if isinstance(captured_value, IrMakeClosure):
                     g_closure = captured_value

@@ -242,6 +242,7 @@ from agm.agl.syntax.nodes import (
     VarDecl,
     VarRef,
     pattern_binder_candidates,
+    simple_let_pattern_name,
 )
 from agm.agl.syntax.spans import SourceSpan
 from agm.agl.type_schema import (
@@ -973,6 +974,25 @@ class _Lowerer:
         t = self._checked.type_env.get_binding_type(decl_node_id)
         assert t is not None, f"compiler bug: no binding type for decl_node_id={decl_node_id!r}"
         return t
+
+    def _lower_named_binding(
+        self,
+        *,
+        decl_node_id: int,
+        name: str,
+        rhs: Expr,
+        span: SourceSpan,
+        binding_type: Type,
+        mutable: bool,
+        public: bool,
+    ) -> IrBind:
+        """Lower one named binding with its checker-selected coercion target."""
+        sym = self._alloc_sym(decl_node_id, name=name, mutable=mutable, public=public)
+        return IrBind(
+            location=self._loc(span),
+            symbol=sym,
+            value=self.lower_coerced(rhs, binding_type),
+        )
 
     def _node_type(self, node_id: int) -> Type:
         """Return the checker-recorded type for an expression node (compiler-error if missing)."""
@@ -2608,7 +2628,7 @@ class _Lowerer:
         return sequence
 
     def _lower_pattern_let(self, let: LetDecl, *, top_level: bool) -> IrSequence:
-        """Lower one irrefutable immutable pattern binding through its decision DAG."""
+        """Lower one destructuring irrefutable immutable pattern through its DAG."""
         compiled = self._compiled_sites.get(let.node_id)
         assert compiled is not None, (
             f"compiler bug: no compiled decision for let node {let.node_id}"
@@ -3022,18 +3042,50 @@ class _Lowerer:
             case VarDecl(name="_", value=rhs):
                 return self.lower_expr(rhs)
 
-            # Every immutable let, including simple-name and discard patterns,
-            # lowers through its compiled match site. This captures its RHS once
-            # in the private root occurrence and lets the shared decision DAG
-            # select the checked binding(s) and unit result.
             case LetDecl() as let:
+                simple_name = simple_let_pattern_name(let.pattern)
+                if simple_name == "_":
+                    # Nothing is bound, so avoid allocating a symbol while still
+                    # evaluating the initializer for its effects.
+                    location = self._loc(let.span)
+                    return IrSequence(
+                        location=location,
+                        items=(self.lower_expr(let.value), IrConstUnit(location)),
+                    )
+                if simple_name is not None:
+                    binding = self._checked.pattern_binding_for(let.pattern.node_id)
+                    assert binding is not None and binding.kind is BinderKind.let_binding, (
+                        f"compiler bug: no selected immutable binding for let node {let.node_id}"
+                    )
+                    matched_type = self._checked.let_matched_types.get(let.node_id)
+                    assert matched_type is not None, (
+                        f"compiler bug: no matched type for let node {let.node_id}"
+                    )
+                    # Simple lets share the direct bind path with var. Only a
+                    # destructuring let needs the decision traversal, so this
+                    # avoids the synthetic root symbol, occurrence ledger, and
+                    # surrounding sequence nodes on the evaluator's hot path.
+                    return self._lower_named_binding(
+                        decl_node_id=binding.decl_node_id,
+                        name=simple_name,
+                        rhs=let.value,
+                        span=let.span,
+                        binding_type=matched_type,
+                        mutable=False,
+                        public=top_level,
+                    )
                 return self._lower_pattern_let(let, top_level=top_level)
 
             case VarDecl(name=name, value=rhs, span=span, node_id=nid):
-                sym = self._alloc_sym(nid, name=name, mutable=True, public=top_level)
-                binding_type = self._binding_type(nid)
-                ir_val = self.lower_coerced(rhs, binding_type)
-                return IrBind(location=self._loc(span), symbol=sym, value=ir_val)
+                return self._lower_named_binding(
+                    decl_node_id=nid,
+                    name=name,
+                    rhs=rhs,
+                    span=span,
+                    binding_type=self._binding_type(nid),
+                    mutable=True,
+                    public=top_level,
+                )
 
             case AssignStmt(target=target, value=rhs, span=span, node_id=nid):
                 return self._lower_assign(target, rhs, span, nid)

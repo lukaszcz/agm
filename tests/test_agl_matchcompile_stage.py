@@ -281,15 +281,18 @@ def test_compiles_every_nested_case_once_into_immutable_total_mapping() -> None:
 
 def test_empty_case_program_produces_valid_empty_artifact() -> None:
     compiled = _compiled("let x = 1\nx")
+    assert compiled.sites == {}
     assert case_sites(compiled.sites) == {}
 
 
 def test_compiles_nested_cases_and_lets_as_sealed_source_payloads() -> None:
     checked = _checked(
-        "let outer = true\n"
+        "record Box\n"
+        "  value: bool\n"
+        "let Box(value = _ as outer) = Box(value = true)\n"
         "case outer of\n"
         "  | true =>\n"
-        "      let inner = false\n"
+        "      let Box(value = _ as inner) = Box(value = false)\n"
         "      case inner of | false => 1 | true => 2\n"
         "  | false => 3\n"
     )
@@ -312,6 +315,17 @@ def test_compiles_nested_cases_and_lets_as_sealed_source_payloads() -> None:
         mutable_sites[999] = next(iter(compiled.sites.values()))
 
 
+def test_artifact_validation_skips_simple_lets_but_requires_destructuring_lets() -> None:
+    simple = _compiled("let value = true\nvalue")
+    MatchCompiledModule(simple.checked, {})
+
+    destructuring = _compiled(
+        "record Box\n  value: bool\nlet Box(value) = Box(value = true)\nvalue"
+    )
+    with pytest.raises(MatchCompileInvariantError, match="missing"):
+        MatchCompiledModule(destructuring.checked, {})
+
+
 def test_refutable_let_is_rejected_with_a_structured_missing_pattern_witness() -> None:
     checked = _checked("let true = false")
     result = compile_module_matches(checked)
@@ -326,7 +340,7 @@ def test_refutable_let_is_rejected_with_a_structured_missing_pattern_witness() -
 
 
 def test_artifact_rejects_a_match_site_with_the_wrong_source_payload() -> None:
-    compiled = _compiled("let value = true")
+    compiled = _compiled("record Box\n  value: bool\nlet Box(value) = Box(value = true)")
     site_id, site = next(iter(compiled.sites.items()))
     assert isinstance(site.source, LetSite)
     wrong_action = SourceAction(

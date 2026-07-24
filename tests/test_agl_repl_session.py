@@ -79,6 +79,19 @@ def _constructor_args(fields: dict[str, Type]) -> str:
 
 
 class TestPersistence:
+    def test_simple_let_uses_one_frame_slot_per_entry(self) -> None:
+        session = ReplSession()
+
+        first = session.eval_entry("let value = 1")
+        assert first.ok, first.diagnostics
+        assert len(session._ir_base_frame) == 1
+        assert session.bindings() == [("value", IntType(), IntValue(1))]
+
+        second = session.eval_entry("let value = 2")
+        assert second.ok, second.diagnostics
+        assert len(session._ir_base_frame) == 2
+        assert session.bindings() == [("value", IntType(), IntValue(2))]
+
     def test_top_level_return_rejected_and_session_continues(self) -> None:
         s = ReplSession()
         bad = s.eval_entry("return 1")

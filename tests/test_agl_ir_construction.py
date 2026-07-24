@@ -13,6 +13,7 @@ import pytest
 from agm.agl.ir.ids import NominalId
 from agm.agl.ir.nodes import (
     AutoTraceField,
+    IrBind,
     IrMakeConstructor,
     IrMakeEnum,
     IrMakeException,
@@ -568,7 +569,9 @@ let p = Point(x = 3, y = 4)
     entry = prog.modules[prog.entry_module]
     found = False
     for node in entry.initializers:
-        if isinstance(node, IrSequence) and isinstance(let_root_capture(node).value, IrMakeRecord):
+        if isinstance(node, (IrSequence, IrBind)) and isinstance(
+            let_root_capture(node).value, IrMakeRecord
+        ):
             mr = let_root_capture(node).value
             assert mr.display_name == "Point"
             assert mr.nominal.declared_name == "Point"
@@ -590,7 +593,9 @@ let c = Color::Red()
     entry = prog.modules[prog.entry_module]
     found = False
     for node in entry.initializers:
-        if isinstance(node, IrSequence) and isinstance(let_root_capture(node).value, IrMakeEnum):
+        if isinstance(node, (IrSequence, IrBind)) and isinstance(
+            let_root_capture(node).value, IrMakeEnum
+        ):
             me = let_root_capture(node).value
             assert me.display_name == "Color"
             assert me.variant == "Red"
@@ -613,7 +618,7 @@ let e = ArithmeticError(message = "oops", operation = "/")
     entry = prog.modules[prog.entry_module]
     found = False
     for node in entry.initializers:
-        if isinstance(node, IrSequence) and isinstance(
+        if isinstance(node, (IrSequence, IrBind)) and isinstance(
             let_root_capture(node).value, IrMakeException
         ):
             me = let_root_capture(node).value
@@ -646,7 +651,9 @@ let s = Score(name = "Bob", value = 5)
     entry = prog.modules[prog.entry_module]
     found = False
     for node in entry.initializers:
-        if isinstance(node, IrSequence) and isinstance(let_root_capture(node).value, IrMakeRecord):
+        if isinstance(node, (IrSequence, IrBind)) and isinstance(
+            let_root_capture(node).value, IrMakeRecord
+        ):
             for fname, fexpr in let_root_capture(node).value.fields:
                 if fname == "value":
                     assert isinstance(fexpr, IrCoerce), (
@@ -669,7 +676,7 @@ let mk = Pt
     entry = prog.modules[prog.entry_module]
     found = False
     for node in entry.initializers:
-        if isinstance(node, IrSequence) and isinstance(
+        if isinstance(node, (IrSequence, IrBind)) and isinstance(
             let_root_capture(node).value, IrMakeConstructor
         ):
             mc = let_root_capture(node).value

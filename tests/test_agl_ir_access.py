@@ -470,7 +470,7 @@ def test_golden_field_access_lowers_to_ir_field() -> None:
     to IrMakeRecord, and then p.x lowers to IrField.
     The IrField node is also tested directly in test_agl_ir_interpreter.py::TestIrField.
     """
-    from agm.agl.ir.nodes import IrField, IrSequence
+    from agm.agl.ir.nodes import IrBind, IrField, IrSequence
 
     source = """\
 record Point
@@ -484,7 +484,7 @@ let px = p.x
     entry = prog.modules[prog.entry_module]
     found = False
     for node in entry.initializers:
-        if isinstance(node, IrSequence):
+        if isinstance(node, (IrSequence, IrBind)):
             value = let_root_capture(node).value
             if isinstance(value, IrField):
                 assert value.field == "x"
@@ -494,7 +494,7 @@ let px = p.x
 
 def test_golden_index_access_lowers_to_ir_index() -> None:
     """IndexAccess lowers to IrIndex with correct kind."""
-    from agm.agl.ir.nodes import IrIndex, IrSequence
+    from agm.agl.ir.nodes import IrBind, IrIndex, IrSequence
 
     source = """\
 let xs = [10, 20, 30]
@@ -505,7 +505,7 @@ let x = xs[1]
     entry = prog.modules[prog.entry_module]
     found = False
     for node in entry.initializers:
-        if isinstance(node, IrSequence):
+        if isinstance(node, (IrSequence, IrBind)):
             value = let_root_capture(node).value
             if isinstance(value, IrIndex):
                 assert value.kind is IndexKind.LIST
@@ -515,14 +515,20 @@ let x = xs[1]
 
 def test_golden_template_lowers_to_ir_render_template() -> None:
     """Template lowers to IrRenderTemplate."""
-    from agm.agl.ir.nodes import IrRenderTemplate, IrSequence, IrTemplateText, IrTemplateValue
+    from agm.agl.ir.nodes import (
+        IrBind,
+        IrRenderTemplate,
+        IrSequence,
+        IrTemplateText,
+        IrTemplateValue,
+    )
 
     source = 'let x: text = "val: ${42}"\n()'
     prog = _lower(source)
     entry = prog.modules[prog.entry_module]
     found = False
     for node in entry.initializers:
-        if isinstance(node, IrSequence):
+        if isinstance(node, (IrSequence, IrBind)):
             value = let_root_capture(node).value
             if isinstance(value, IrRenderTemplate):
                 segs = value.segments

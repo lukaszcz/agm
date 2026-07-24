@@ -235,6 +235,11 @@ def _bound_value(source: str, name: str):
     prog = _lower(source)
     entry = prog.modules[prog.entry_module]
     for node in entry.initializers:
+        if isinstance(node, IrBind):
+            desc = prog.symbols.get(node.symbol)
+            if desc is not None and desc.public_name == name:
+                return node.value
+            continue
         if not isinstance(node, IrSequence):
             continue
         root_capture, leaf = node.items

@@ -34,7 +34,9 @@ from agm.agl.syntax.nodes import Program
 
 
 def let_root_capture(initializer: IrExpr) -> IrBind:
-    """Return a simple immutable let's private compiled-match root capture."""
+    """Return the binding IR for a simple or destructuring immutable let."""
+    if isinstance(initializer, IrBind):
+        return initializer
     assert isinstance(initializer, IrSequence)
     root_capture = initializer.items[0]
     assert isinstance(root_capture, IrBind)

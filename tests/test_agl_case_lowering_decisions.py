@@ -64,6 +64,10 @@ def _lower(source: str) -> ExecutableProgram:
 
 def _public_binding(program: ExecutableProgram, name: str) -> IrBind:
     for initializer in program.modules[program.entry_module].initializers:
+        if isinstance(initializer, IrBind):
+            if program.symbols[initializer.symbol].public_name == name:
+                return initializer
+            continue
         if not isinstance(initializer, IrSequence):
             continue
         root_capture, leaf = initializer.items

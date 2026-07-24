@@ -269,7 +269,7 @@ def test_t9_exec_inside_function() -> None:
 
 def test_t10_golden_lowering() -> None:
     """Lowering exec() produces an IrExec node and populates dry_run_inventory."""
-    from agm.agl.ir.nodes import IrExec, IrSequence
+    from agm.agl.ir.nodes import IrBind, IrExec, IrSequence
     from agm.agl.lower import lower_module
     from agm.agl.parser import parse_program
     from agm.agl.scope import resolve_module
@@ -291,7 +291,8 @@ def test_t10_golden_lowering() -> None:
     exec_nodes = [
         let_root_capture(init).value
         for init in entry_mod.initializers
-        if isinstance(init, IrSequence) and isinstance(let_root_capture(init).value, IrExec)
+        if isinstance(init, (IrSequence, IrBind))
+        and isinstance(let_root_capture(init).value, IrExec)
     ]
     assert len(exec_nodes) == 1, f"Expected 1 IrExec node, found {len(exec_nodes)}"
 

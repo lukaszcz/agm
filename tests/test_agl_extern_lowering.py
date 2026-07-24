@@ -181,7 +181,7 @@ class TestExternCalls:
         result_bind = next(
             let_root_capture(item)
             for item in inits
-            if isinstance(item, IrSequence)
+            if isinstance(item, (IrSequence, IrBind))
             and isinstance(let_root_capture(item).value, IrIndirectCall)
         )
         assert isinstance(result_bind.value, IrIndirectCall)

@@ -10,7 +10,7 @@ from typing import TypeAlias
 from agm.agl.diagnostics import Diagnostic, diagnostic_from_span
 from agm.agl.modules.ids import ENTRY_ID, ModuleId
 from agm.agl.self_validation import self_validation_enabled
-from agm.agl.syntax.nodes import Case, LetDecl, Program
+from agm.agl.syntax.nodes import Case, LetDecl, Program, simple_let_pattern_name
 from agm.agl.syntax.visitor import walk
 from agm.agl.typecheck.env import CheckedModule
 from agm.agl.typecheck.program import CheckedProgram
@@ -90,10 +90,18 @@ class MatchCompilationResult:
 
 
 def _source_sites(program: Program) -> dict[int, SourceMatchSite]:
-    """Collect every source case and immutable let, keyed by unique node id."""
+    """Collect match sites, excluding irrefutable simple-name and discard lets.
+
+    A bare-name or ``_`` let is an irrefutable single-binder site by
+    construction. Compiling it would spend normalization, matrix construction,
+    occurrence allocation, and DAG derivation to describe one lowering
+    instruction, so only cases and destructuring lets enter this artifact.
+    """
     sites: dict[int, SourceMatchSite] = {}
 
     def collect(node: object) -> None:
+        if isinstance(node, LetDecl) and simple_let_pattern_name(node.pattern) is not None:
+            return
         if not isinstance(node, (Case, LetDecl)):
             return
         if node.node_id in sites:

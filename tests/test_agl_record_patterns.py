@@ -13,7 +13,7 @@ from agm.agl.parser import parse_program
 from agm.agl.scope import resolve_module
 from agm.agl.scope.program import resolve_program
 from agm.agl.scope.symbols import BinderKind
-from agm.agl.semantics.types import IntType, RecordType
+from agm.agl.semantics.types import EnumType, IntType, RecordType
 from agm.agl.syntax.nodes import AsPattern, Case, ConstructorPattern, FuncDef, LetDecl, VarPattern
 from agm.agl.typecheck import AglTypeError, CheckedProgram, check_module, check_program
 from tests.agl.ir_harness import make_graph_from_files
@@ -129,6 +129,15 @@ def test_generic_record_patterns_publish_owner_without_type_arguments() -> None:
         NominalId(ENTRY_ID, "Box"),
         NominalId(ENTRY_ID, "Box"),
     ]
+
+
+def test_simple_let_name_binds_even_when_it_matches_a_nullary_constructor() -> None:
+    checked = accept("enum Opt\n  | none\nlet value: Opt = none\nlet none = value\nnone\n")
+    let = checked.resolved.program.body.items[2]
+    assert isinstance(let, LetDecl)
+    assert isinstance(let.pattern, VarPattern)
+    assert checked.pattern_classifications[let.pattern.node_id] is None
+    assert checked.type_env.get_binding_type(let.pattern.node_id) == EnumType("Opt")
 
 
 def test_record_patterns_support_imported_and_qualified_alias_spellings(tmp_path: Path) -> None:

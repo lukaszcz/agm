@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 
 from agm.agl.ir.ids import Location, NominalId, SourceId
-from agm.agl.ir.nodes import IrConstInt, IrSequence, IrVariantIs
+from agm.agl.ir.nodes import IrBind, IrConstInt, IrSequence, IrVariantIs
 from agm.agl.ir.program import (
     ExecutableModule,
     ExecutableProgram,
@@ -134,7 +134,9 @@ let r = c is not Blue
     entry = prog.modules[prog.entry_module]
     found = False
     for node in entry.initializers:
-        if isinstance(node, IrSequence) and isinstance(let_root_capture(node).value, IrVariantIs):
+        if isinstance(node, (IrSequence, IrBind)) and isinstance(
+            let_root_capture(node).value, IrVariantIs
+        ):
             vi = let_root_capture(node).value
             assert vi.nominal == NominalId(ENTRY_ID, "Color")
             assert vi.variant == "Blue"

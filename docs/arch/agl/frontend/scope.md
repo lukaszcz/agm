@@ -27,6 +27,12 @@ contribution.
 One shared translator walks those verdicts and raises an error the caller constructs, so
 the scope and typecheck passes share the walk while keeping their own exception types and
 wording.
+Constructor *owner* selection shares that seam: one helper decides whether a qualifier names
+an own-module type, the self-module anchor, or an imported route, including the type-name versus
+module-route clash and the owner's privacy, and returns a verdict. Expression positions
+translate that verdict into a scope error; pattern positions translate every failure into an
+empty candidate set because a pattern's owner cannot be settled before its subject type is
+known, leaving typecheck to produce the more specific diagnostic.
 Whitespace-separated qualifier near-misses are reported from the lexer's advisories
 rather than reconstructed from AST shapes: when a reference fails to resolve at an offset
 an advisory covers, the pass offers the tight spelling — but only when re-resolving that

@@ -15,22 +15,30 @@ __all__ = [
     "ImportEnv",
     "ImportTarget",
     "ModuleContribution",
+    "OwnerAmbiguousTypeOrRoute",
+    "OwnerImported",
+    "OwnerLocalType",
+    "OwnerSelfModule",
     "QName",
     "QualResolution",
     "QualResolutionAmbiguous",
     "QualResolutionFound",
     "QualResolutionMissingMember",
+    "QualResolutionPrivateMember",
     "QualResolutionUnknownQualifier",
     "SingleTarget",
     "WildcardTarget",
     "ambiguous_qualification_message",
     "build_import_env",
+    "ConstructorOwnerResolution",
+    "ConstructorOwnerFailure",
     "contribution_routes",
     "private_missing_member_module",
     "qualification_repair_guidance",
     "qualifier_candidates",
     "qualifier_contributes",
     "render_qualifier",
+    "resolve_constructor_owner",
     "resolve_qualified",
     "resolve_qualified_member",
     "try_resolve_qualified_member",
@@ -224,6 +232,60 @@ QualResolution = (
 )
 
 
+@dataclass(frozen=True, slots=True)
+class QualResolutionPrivateMember:
+    """A qualified route reaches a member that is private to one module."""
+
+    qualifier: tuple[str, ...]
+    member: str
+    module: ModuleId
+
+
+@dataclass(frozen=True, slots=True)
+class OwnerLocalType:
+    """An unanchored one-segment qualifier names a local type."""
+
+    type_name: str
+
+
+@dataclass(frozen=True, slots=True)
+class OwnerSelfModule:
+    """An empty qualifier selects a type declared in the current module."""
+
+    type_name: str
+
+
+@dataclass(frozen=True, slots=True)
+class OwnerImported:
+    """A qualified route selects one imported owner or constructor member."""
+
+    qname: QName
+
+
+@dataclass(frozen=True, slots=True)
+class OwnerAmbiguousTypeOrRoute:
+    """A local type and an import route both claim one constructor spelling."""
+
+    qualifier: tuple[str, ...]
+    member: str
+
+
+ConstructorOwnerFailure = (
+    QualResolutionUnknownQualifier
+    | QualResolutionMissingMember
+    | QualResolutionAmbiguous
+    | QualResolutionPrivateMember
+)
+
+ConstructorOwnerResolution = (
+    OwnerLocalType
+    | OwnerSelfModule
+    | OwnerImported
+    | OwnerAmbiguousTypeOrRoute
+    | ConstructorOwnerFailure
+)
+
+
 @dataclass(slots=True)
 class _ContributionAccumulator:
     """Mutable builder state for one module's merged contribution."""
@@ -400,6 +462,61 @@ def private_missing_member_module(
         if private_info.get((module, result.member)):
             return module
     return None
+
+
+def resolve_constructor_owner(
+    env: ImportEnv,
+    qualifier: Qualifier,
+    owner_name: str,
+    member: str,
+    *,
+    is_local_type: Callable[[str], bool],
+    private_info: Mapping[QName, bool],
+) -> ConstructorOwnerResolution:
+    """Select one constructor or variant owner without raising.
+
+    This is the single owner-selection policy for constructor and variant
+    qualification. An empty qualifier selects the current module, an
+    unanchored one-segment qualifier selects a local type unless its route
+    contributes the requested member, and every other spelling resolves its
+    owner through the contribution routes. The helper returns a verdict —
+    including privacy and type/route ambiguity — so scope and typecheck can
+    translate it into their own diagnostics.
+
+    For a one-segment qualifier that is not a local type, the route contributes
+    the constructor or variant itself. When the qualifier also carries an
+    explicit owner name, the route instead contributes that owner name (for
+    example, ``Pal::Secret::hidden`` resolves ``Pal::Secret``).
+    """
+    segments = qualifier.segments
+    if not segments:
+        if is_local_type(owner_name):
+            return OwnerSelfModule(owner_name)
+        return QualResolutionUnknownQualifier(segments)
+
+    if (
+        not qualifier.anchored
+        and len(segments) == 1
+        and owner_name == segments[0]
+        and is_local_type(owner_name)
+    ):
+        if qualifier_contributes(env, segments, member):
+            return OwnerAmbiguousTypeOrRoute(segments, member)
+        return OwnerLocalType(owner_name)
+
+    route_member = owner_name
+    if len(segments) == 1 and (
+        owner_name == member or (not qualifier.anchored and owner_name == segments[0])
+    ):
+        route_member = member
+    result = resolve_qualified(env, segments, route_member, anchored=qualifier.anchored)
+    if isinstance(result, QualResolutionFound):
+        return OwnerImported(result.qname)
+    if isinstance(result, QualResolutionMissingMember):
+        module = private_missing_member_module(result, private_info)
+        if module is not None:
+            return QualResolutionPrivateMember(result.qualifier, result.member, module)
+    return result
 
 
 def try_resolve_qualified_member(env: ImportEnv, qualifier: Qualifier, member: str) -> QName | None:

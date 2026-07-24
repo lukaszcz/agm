@@ -45,15 +45,25 @@ from __future__ import annotations
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, NoReturn
 
 from agm.agl.diagnostics import Diagnostic
 from agm.agl.modules.ids import ENTRY_ID, PRELUDE_ID, STD_CONFIG_ID, ModuleId
 from agm.agl.scope.imports import (
+    ConstructorOwnerFailure,
+    ImportEnv,
+    OwnerAmbiguousTypeOrRoute,
+    OwnerImported,
+    OwnerLocalType,
+    OwnerSelfModule,
     QualResolutionFound,
+    QualResolutionMissingMember,
+    QualResolutionPrivateMember,
+    QualResolutionUnknownQualifier,
+    ambiguous_qualification_message,
     qualification_repair_guidance,
-    qualifier_contributes,
     render_qualifier,
+    resolve_constructor_owner,
     resolve_qualified,
     resolve_qualified_member,
 )
@@ -84,7 +94,6 @@ from agm.agl.syntax.advisories import SpacedQualifier
 if TYPE_CHECKING:
     from pathlib import Path
 
-    from agm.agl.scope.imports import ImportEnv
     from agm.agl.syntax.spans import SourceSpan
 from agm.agl.syntax.nodes import (
     AgentDecl,
@@ -1423,70 +1432,115 @@ class _Resolver:
                 )
             self._qualified_constructor_refs[node.node_id] = (type_name, node.name, None)
             return
-        if node.module_qualifier.segments == ():
-            if type_name not in self._declared_type_names:
+        qualifier = node.module_qualifier
+        owner_result = resolve_constructor_owner(
+            self._import_env or ImportEnv(contributions={}, unqualified={}),
+            qualifier,
+            type_name,
+            type_name,
+            is_local_type=lambda name: not qualifier.segments and name in self._declared_type_names,
+            private_info=self._private_info,
+        )
+        if isinstance(owner_result, OwnerSelfModule):
+            owner_module = self._module_id if self._import_env is not None else None
+            self._qualified_constructor_refs[node.node_id] = (type_name, node.name, owner_module)
+            return
+        if not isinstance(owner_result, OwnerImported):
+            if not qualifier.segments and isinstance(owner_result, QualResolutionUnknownQualifier):
                 raise self._spaced_qualifier_repair(
-                    self._spaced_qualifier_at(node.module_qualifier.span),
-                    node.module_qualifier.span,
+                    self._spaced_qualifier_at(qualifier.span), qualifier.span
                 ) or AglScopeError(
                     f"'{type_name}' is not defined in this module.",
                     span=node.type_qualifier.span,
                 )
-            owner_module = self._module_id if self._import_env is not None else None
-            self._qualified_constructor_refs[node.node_id] = (type_name, node.name, owner_module)
-            return
-        if self._import_env is None:
-            qualifier_str = node.module_qualifier.render()
-            raise AglScopeError(
-                f"No module imported under qualifier '{qualifier_str}'.",
-                span=node.module_qualifier.span,
+            assert isinstance(owner_result, ConstructorOwnerFailure)
+            self._raise_constructor_owner_scope_error(
+                owner_result,
+                qualifier,
+                member=type_name,
+                span=node.type_qualifier.span,
             )
-        src_name, owning_module = self._resolve_qualified_type_name(
-            node.module_qualifier, type_name, node.type_qualifier.span
-        )
-        self._qualified_constructor_refs[node.node_id] = (src_name, node.name, owning_module)
-
-    def _resolve_single_qualifier_constructor(self, node: VarRef) -> bool:
-        """Resolve ``Type::Ctor`` when the qualifier denotes a type name."""
-        assert node.module_qualifier is not None
-        segments = node.module_qualifier.segments
-        if node.module_qualifier.anchored or len(segments) != 1:
-            return False
-        type_name = segments[0]
-        type_match = type_name in self._declared_type_names
-        module_match = False
-        if self._import_env is not None:
-            # The test is intentionally asymmetric: a type name is a candidate
-            # on its own, but an import route is a candidate only when it
-            # actually contributes the requested constructor/variant member.
-            module_match = qualifier_contributes(self._import_env, segments, node.name)
-        if type_match and module_match:
-            raise AglScopeError(
-                f"Qualifier '{type_name}' is both a type name and a module route for "
-                f"'{node.name}'. {qualification_repair_guidance()}",
-                span=node.module_qualifier.span,
-            )
-        if not type_match:
-            return False
-        self._qualified_constructor_refs[node.node_id] = (type_name, node.name, None)
-        return True
-
-    def _resolve_qualified_type_name(
-        self, qualifier: Qualifier, type_name: str, span: SourceSpan
-    ) -> tuple[str, ModuleId]:
-        """Resolve ``qualifier::type_name`` as a constructible type owner."""
-        qname = self._resolve_qualified_qname(qualifier, type_name, span)
-        owning_module, src_name = qname
+        owning_module, src_name = owner_result.qname
         _decl_node_id, _decl_span, kind = self._decl_info.get(
-            (owning_module, src_name), (-1, span, BinderKind.let_binding)
+            (owning_module, src_name),
+            (-1, node.type_qualifier.span, BinderKind.let_binding),
         )
         if kind is not BinderKind.constructor_binding:
             rendered = qualifier.render()
             raise AglScopeError(
                 f"'{rendered}::{type_name}' is not a constructible type.",
+                span=node.type_qualifier.span,
+            )
+        self._qualified_constructor_refs[node.node_id] = (src_name, node.name, owning_module)
+
+    def _resolve_single_qualifier_constructor(self, node: VarRef) -> bool:
+        """Resolve ``Type::Ctor`` when the qualifier denotes a type name."""
+        assert node.module_qualifier is not None
+        qualifier = node.module_qualifier
+        segments = qualifier.segments
+        if node.module_qualifier.anchored or len(segments) != 1:
+            return False
+        # The shared owner policy is intentionally asymmetric: a local type
+        # stands alone, while a route competes only when it contributes this
+        # constructor member. A route-only spelling continues through the
+        # ordinary qualified-member path below.
+        owner_result = resolve_constructor_owner(
+            self._import_env or ImportEnv(contributions={}, unqualified={}),
+            qualifier,
+            segments[0],
+            node.name,
+            is_local_type=lambda name: name in self._declared_type_names,
+            private_info=self._private_info,
+        )
+        if isinstance(owner_result, OwnerLocalType):
+            self._qualified_constructor_refs[node.node_id] = (
+                owner_result.type_name,
+                node.name,
+                None,
+            )
+            return True
+        if isinstance(owner_result, OwnerAmbiguousTypeOrRoute):
+            raise AglScopeError(
+                f"Qualifier '{owner_result.qualifier[0]}' is both a type name and a module route "
+                f"for '{owner_result.member}'. {qualification_repair_guidance()}",
+                span=qualifier.span,
+            )
+        return False
+
+    def _raise_constructor_owner_scope_error(
+        self,
+        result: ConstructorOwnerFailure,
+        qualifier: Qualifier,
+        *,
+        member: str,
+        span: SourceSpan,
+    ) -> NoReturn:
+        """Translate an owner verdict into the expression path's scope error."""
+        if isinstance(result, QualResolutionUnknownQualifier):
+            raise AglScopeError(
+                f"No module imported under qualifier '{qualifier.render()}'.",
+                span=qualifier.span,
+            )
+        if isinstance(result, QualResolutionPrivateMember):
+            raise AglScopeError(
+                f"'{result.member}' in module '{result.module.path_str()}' is declared private "
+                "and cannot be accessed from outside the module.",
                 span=span,
             )
-        return (src_name, owning_module)
+        if isinstance(result, QualResolutionMissingMember):
+            raise AglScopeError(
+                f"'{member}' is not in the imported set of '{qualifier.render()}'.",
+                span=span,
+            )
+        raise AglScopeError(
+            ambiguous_qualification_message(
+                result.qualifier,
+                result.member,
+                result.candidates,
+                anchored=qualifier.anchored,
+            ),
+            span=span,
+        )
 
     def _lookup_import_env_unqualified(self, name: str, span: SourceSpan) -> BindingRef | None:
         """Look up a bare name in the open-import environment (program context).
@@ -1884,49 +1938,43 @@ class _Resolver:
                 return
             candidates = tuple(self._constructor_candidates.get(node.name, ()))
             if node.module_qualifier is not None:
-                owner_name = node.qualifier if node.qualifier is not None else node.name
-                if not node.module_qualifier.segments:
+                qualifier = node.module_qualifier
+                if node.qualifier is not None:
+                    owner_name = node.qualifier
+                elif not qualifier.anchored and len(qualifier.segments) == 1:
+                    owner_name = qualifier.segments[0]
+                else:
+                    owner_name = node.name
+                owner_result = resolve_constructor_owner(
+                    self._import_env or ImportEnv(contributions={}, unqualified={}),
+                    qualifier,
+                    owner_name,
+                    node.name,
+                    is_local_type=lambda name: name in self._declared_type_names,
+                    private_info=self._private_info,
+                )
+                if isinstance(owner_result, (OwnerSelfModule, OwnerLocalType)):
                     candidates = tuple(
                         candidate
                         for candidate in candidates
                         if candidate.owner_module_id == self._module_id
                         and candidate.owner_name == owner_name
                     )
+                elif isinstance(owner_result, OwnerImported):
+                    owner_module_id, resolved_owner_name = owner_result.qname
+                    candidates = tuple(
+                        candidate
+                        for candidate in self._qualified_constructor_candidates.get(
+                            (owner_module_id, resolved_owner_name), ()
+                        )
+                        if candidate.variant is None or candidate.variant == node.name
+                    )
                 else:
-                    qualifier_segments = node.module_qualifier.segments
-                    if (
-                        len(qualifier_segments) == 1
-                        and qualifier_segments[0] in self._declared_type_names
-                    ):
-                        candidates = tuple(
-                            candidate
-                            for candidate in candidates
-                            if candidate.owner_module_id == self._module_id
-                            and candidate.owner_name == qualifier_segments[0]
-                        )
-                    elif self._import_env is not None:
-                        resolved_owner = resolve_qualified(
-                            self._import_env,
-                            qualifier_segments,
-                            owner_name,
-                            anchored=node.module_qualifier.anchored,
-                        )
-                        if isinstance(resolved_owner, QualResolutionFound):
-                            owner_module_id, owner_name = resolved_owner.qname
-                            candidates = tuple(
-                                candidate
-                                for candidate in self._qualified_constructor_candidates.get(
-                                    (owner_module_id, owner_name), ()
-                                )
-                                if candidate.variant is None or candidate.variant == node.name
-                            )
-                        else:
-                            candidates = ()
-                    else:
-                        candidates = ()
+                    candidates = ()
                 # An explicit module qualifier must never fall back to a bare
-                # spelling. Preserve an empty result so type checking can
-                # reject an absent or wrong owner.
+                # spelling. Every failure verdict — including privacy and the
+                # type-name/module-route clash — maps to an empty result so
+                # typechecking can produce its subject-directed diagnostic.
             self._pattern_constructor_candidates[node.node_id] = candidates
 
         walk(pattern, record_constructor_candidates)

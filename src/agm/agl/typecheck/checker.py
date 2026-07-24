@@ -55,7 +55,12 @@ from agm.agl.capabilities import HostCapabilities
 from agm.agl.diagnostics import Diagnostic
 from agm.agl.ir.ids import NominalId
 from agm.agl.modules.ids import ENTRY_ID, ModuleId
-from agm.agl.scope.imports import qualification_repair_guidance
+from agm.agl.scope.imports import (
+    OwnerAmbiguousTypeOrRoute,
+    OwnerLocalType,
+    OwnerSelfModule,
+    qualification_repair_guidance,
+)
 from agm.agl.scope.symbols import (
     BUILTIN_CALL_NAMES,
     BinderKind,
@@ -3629,18 +3634,22 @@ class _Checker:
         """Validate a lone ``prefix::Variant`` qualifier."""
         if not module_qualifier.anchored and len(module_qualifier.segments) == 1:
             qualifier = module_qualifier.segments[0]
-            form = self._env.resolve_unqualified_enum_owner_form(qualifier)
-            # A route competes with a type only when it contributes the enum
-            # owner being requested.  Merely sharing a suffix must not make a
-            # valid local enum spelling unusable.
-            module_member = self._env.has_qualified_import_member(module_qualifier, variant)
-            if form is not None and module_member:
+            owner_result = self._env.resolve_constructor_owner(
+                module_qualifier,
+                qualifier,
+                variant,
+                allow_unqualified=True,
+                span=span,
+            )
+            if isinstance(owner_result, OwnerAmbiguousTypeOrRoute):
                 raise AglTypeError(
                     f"Qualifier '{qualifier}' is both a type name and a module route for "
                     f"enum '{enum_name}'. {qualification_repair_guidance()}",
                     span=span,
                 )
-            if form is not None:
+            if isinstance(owner_result, OwnerLocalType):
+                form = self._env.resolve_unqualified_enum_owner_form(qualifier)
+                assert form is not None
                 self._require_enum_owner_match(form, enum_type, qualifier, span)
                 return
 
@@ -3654,6 +3663,23 @@ class _Checker:
         span: SourceSpan,
     ) -> None:
         """Validate a module-qualified enum-type qualifier, e.g. ``mylib::Color``."""
+        if not module_qualifier.segments:
+            owner_result = self._env.resolve_constructor_owner(
+                module_qualifier,
+                enum_name,
+                enum_name,
+                span=span,
+            )
+            if isinstance(owner_result, OwnerSelfModule):
+                form = self._env.resolve_enum_owner_form(
+                    EnumOwnerFormKind.SELF,
+                    enum_name,
+                    module_qualifier,
+                    span=span,
+                )
+                assert form is not None
+                self._require_enum_owner_match(form, enum_type, f"::{enum_name}", span)
+                return
         kind = (
             EnumOwnerFormKind.SELF
             if not module_qualifier.segments

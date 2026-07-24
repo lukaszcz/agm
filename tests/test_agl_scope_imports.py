@@ -4,18 +4,26 @@ from __future__ import annotations
 
 from agm.agl.modules.ids import ModuleId
 from agm.agl.scope.imports import (
+    ImportEnv,
+    ModuleContribution,
+    OwnerAmbiguousTypeOrRoute,
+    OwnerImported,
+    OwnerLocalType,
+    OwnerSelfModule,
     QualResolutionAmbiguous,
     QualResolutionFound,
     QualResolutionMissingMember,
+    QualResolutionPrivateMember,
     QualResolutionUnknownQualifier,
     SingleTarget,
     WildcardTarget,
     build_import_env,
+    resolve_constructor_owner,
     resolve_qualified,
 )
 from agm.agl.syntax.nodes import ImportDecl, ImportItem
 from agm.agl.syntax.spans import UNKNOWN_SOURCE, SourceSpan
-from agm.agl.syntax.types import ImportMode
+from agm.agl.syntax.types import ImportMode, Qualifier
 
 
 def _span() -> SourceSpan:
@@ -63,6 +71,29 @@ def _module(path: str) -> ModuleId:
 def _exports(path: str, *names: str) -> dict[str, tuple[ModuleId, str]]:
     module = _module(path)
     return {name: (module, name) for name in names}
+
+
+def _qualifier(*segments: str, anchored: bool = False) -> Qualifier:
+    return Qualifier(
+        segments=segments,
+        span=_span(),
+        node_id=_node_id(),
+        anchored=anchored,
+    )
+
+
+def _env_with_members(*modules: tuple[str, tuple[str, ...]]) -> ImportEnv:
+    contributions: dict[ModuleId, ModuleContribution] = {}
+    for path, names in modules:
+        module = _module(path)
+        contributions[module] = ModuleContribution(
+            module=module,
+            members={name: (module, name) for name in names},
+            bare_names=frozenset(),
+            path_enabled=True,
+            aliases=frozenset(),
+        )
+    return ImportEnv(contributions=contributions, unqualified={})
 
 
 def _build(
@@ -190,6 +221,107 @@ def test_anchored_route_requires_the_exact_plain_path() -> None:
     assert resolve_qualified(env, ("std", "config"), "timeout", anchored=True) == (
         QualResolutionFound(base, (base, "timeout"))
     )
+
+
+def test_constructor_owner_resolves_local_and_self_forms() -> None:
+    env = ImportEnv(contributions={}, unqualified={})
+
+    assert resolve_constructor_owner(
+        env,
+        _qualifier("Color"),
+        "Color",
+        "Red",
+        is_local_type=lambda name: name == "Color",
+        private_info={},
+    ) == OwnerLocalType("Color")
+    assert resolve_constructor_owner(
+        env,
+        _qualifier(),
+        "Color",
+        "Red",
+        is_local_type=lambda name: name == "Color",
+        private_info={},
+    ) == OwnerSelfModule("Color")
+
+
+def test_constructor_owner_resolves_imported_owner() -> None:
+    env = _env_with_members(("pkg/types", ("Color",)))
+    module = _module("pkg/types")
+
+    result = resolve_constructor_owner(
+        env,
+        _qualifier("types"),
+        "Color",
+        "Red",
+        is_local_type=lambda _name: False,
+        private_info={},
+    )
+
+    assert result == OwnerImported((module, "Color"))
+
+
+def test_constructor_owner_returns_each_route_failure_verdict() -> None:
+    missing_member_env = _env_with_members(("pkg/types", ("Other",)))
+    ambiguous_env = _env_with_members(
+        ("one/types", ("Color",)),
+        ("two/types", ("Color",)),
+    )
+    private_env = _env_with_members(("pkg/types", ("Public",)))
+
+    unknown = resolve_constructor_owner(
+        ImportEnv(contributions={}, unqualified={}),
+        _qualifier("missing"),
+        "Color",
+        "Red",
+        is_local_type=lambda _name: False,
+        private_info={},
+    )
+    missing = resolve_constructor_owner(
+        missing_member_env,
+        _qualifier("types"),
+        "Color",
+        "Red",
+        is_local_type=lambda _name: False,
+        private_info={},
+    )
+    ambiguous = resolve_constructor_owner(
+        ambiguous_env,
+        _qualifier("types"),
+        "Color",
+        "Red",
+        is_local_type=lambda _name: False,
+        private_info={},
+    )
+    private = resolve_constructor_owner(
+        private_env,
+        _qualifier("types"),
+        "Color",
+        "Red",
+        is_local_type=lambda _name: False,
+        private_info={(_module("pkg/types"), "Color"): True},
+    )
+
+    assert unknown == QualResolutionUnknownQualifier(("missing",))
+    assert missing == QualResolutionMissingMember(("types",), "Color", (_module("pkg/types"),))
+    assert ambiguous == QualResolutionAmbiguous(
+        ("types",), "Color", (_module("one/types"), _module("two/types"))
+    )
+    assert private == QualResolutionPrivateMember(("types",), "Color", _module("pkg/types"))
+
+
+def test_constructor_owner_reports_type_route_ambiguity() -> None:
+    env = _env_with_members(("pkg/Foo", ("local",)))
+
+    result = resolve_constructor_owner(
+        env,
+        _qualifier("Foo"),
+        "Foo",
+        "local",
+        is_local_type=lambda name: name == "Foo",
+        private_info={},
+    )
+
+    assert result == OwnerAmbiguousTypeOrRoute(("Foo",), "local")
 
 
 def test_wildcard_distributes_contributions_and_open_names() -> None:

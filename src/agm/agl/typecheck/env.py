@@ -15,20 +15,30 @@ from __future__ import annotations
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from types import MappingProxyType
-from typing import Literal, cast
+from typing import Literal, NoReturn, cast
 
 from agm.agl.diagnostics import AglError, Diagnostic
 from agm.agl.ir.ids import NominalId
 from agm.agl.modules.ids import ENTRY_ID, ModuleId
 from agm.agl.scope.imports import (
+    ConstructorOwnerFailure,
+    ConstructorOwnerResolution,
     ImportEnv,
+    OwnerImported,
     QName,
     QualResolutionFound,
+    QualResolutionMissingMember,
+    QualResolutionPrivateMember,
+    QualResolutionUnknownQualifier,
+    ambiguous_qualification_message,
     contribution_routes,
     qualifier_contributes,
     resolve_qualified,
     resolve_qualified_member,
     try_resolve_qualified_member,
+)
+from agm.agl.scope.imports import (
+    resolve_constructor_owner as resolve_constructor_owner_verdict,
 )
 from agm.agl.scope.symbols import BindingRef, ConstructorRef, ModuleResolution
 from agm.agl.semantics.persistent import PersistentDict
@@ -716,6 +726,77 @@ class TypeEnvironment:
         """Return whether a qualifier route contributes *name* after filtering."""
         return self._import_env is not None and qualifier_contributes(
             self._import_env, qualifier.segments, name, anchored=qualifier.anchored
+        )
+
+    def resolve_constructor_owner(
+        self,
+        qualifier: Qualifier,
+        owner_name: str,
+        member: str,
+        *,
+        allow_unqualified: bool = False,
+        span: SourceSpan | None = None,
+    ) -> ConstructorOwnerResolution:
+        """Resolve one enum-owner spelling through the shared scope verdicts.
+
+        Enum owner forms add checked visibility on top of the contribution
+        resolver. The optional unqualified mode lets pattern checking treat an
+        open-imported enum owner like a local owner for the short
+        ``Owner::Variant`` spelling; explicit module routes remain ordinary
+        qualified resolutions.
+        """
+        if not qualifier.segments:
+
+            def is_local_type(name: str) -> bool:
+                return self.resolve_enum_owner_form(EnumOwnerFormKind.LOCAL, name) is not None
+        elif allow_unqualified and not qualifier.anchored and len(qualifier.segments) == 1:
+
+            def is_local_type(name: str) -> bool:
+                return self.resolve_unqualified_enum_owner_form(name) is not None
+        else:
+
+            def is_local_type(name: str) -> bool:
+                return False
+
+        return resolve_constructor_owner_verdict(
+            self._import_env or ImportEnv(contributions={}, unqualified={}),
+            qualifier,
+            owner_name,
+            member,
+            is_local_type=is_local_type,
+            private_info=self._private_info,
+        )
+
+    def _raise_constructor_owner_type_error(
+        self,
+        result: ConstructorOwnerFailure,
+        qualifier: Qualifier,
+        *,
+        owner_name: str,
+        span: SourceSpan | None,
+    ) -> NoReturn:
+        """Translate a shared owner failure into the typecheck wording."""
+        if isinstance(result, QualResolutionUnknownQualifier):
+            raise AglTypeError(f"Unknown module qualifier '{qualifier.render()}::'.", span=span)
+        if isinstance(result, QualResolutionPrivateMember):
+            raise AglTypeError(
+                f"Type '{result.member}' in module '{result.module.path_str()}' is declared "
+                "private and cannot be accessed from outside the module.",
+                span=span,
+            )
+        if isinstance(result, QualResolutionMissingMember):
+            raise AglTypeError(
+                f"Type '{owner_name}' is not accessible via qualifier '{qualifier.render()}::'.",
+                span=span,
+            )
+        raise AglTypeError(
+            ambiguous_qualification_message(
+                result.qualifier,
+                result.member,
+                result.candidates,
+                anchored=qualifier.anchored,
+            ),
+            span=span,
         )
 
     def _resolve_import_qname(
@@ -1693,11 +1774,21 @@ class TypeEnvironment:
                 or not module_qualifier.segments
             ):
                 return None
-            # A qualified enum spelling must preserve the shared resolver's
-            # verdict.  In particular, an unknown route or ambiguity is not a
-            # statement that the subject is "not an enum".
-            qname = self._resolve_import_qname(module_qualifier, owner_name, span=span)
-            assert qname is not None
+            owner_result = self.resolve_constructor_owner(
+                module_qualifier,
+                owner_name,
+                owner_name,
+                span=span,
+            )
+            if not isinstance(owner_result, OwnerImported):
+                assert isinstance(owner_result, ConstructorOwnerFailure)
+                self._raise_constructor_owner_type_error(
+                    owner_result,
+                    module_qualifier,
+                    owner_name=owner_name,
+                    span=span,
+                )
+            qname = owner_result.qname
             if not self._is_program_type_candidate(qname):
                 return None
             source_module_id, source_name = qname

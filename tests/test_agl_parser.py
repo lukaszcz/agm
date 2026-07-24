@@ -2866,6 +2866,33 @@ class TestSyntaxErrorFromLarkDirect:
         assert span.start_line == 1
         assert span.start_col == 1
 
+    def test_empty_raw_tail_names_the_generic_form_without_parser_state(self) -> None:
+        """With no parse stack exposed, the empty-payload message names no spelling."""
+        from lark.exceptions import UnexpectedToken
+
+        from agm.agl.parser.errors import syntax_error_from_lark
+
+        token = Token("RAW_TAIL_END", "", start_pos=5, line=1, column=6)
+        err = syntax_error_from_lark(UnexpectedToken(token, expected={"RAW_FRAGMENT"}))
+        assert "raw-tail form" in str(err)
+        assert "cannot be empty" in str(err)
+
+    def test_empty_raw_tail_falls_back_when_stack_has_no_raw_callee(self) -> None:
+        """A parse stack without a ``raw_callee`` subtree yields the generic name."""
+        import types
+
+        from lark.exceptions import UnexpectedToken
+
+        from agm.agl.parser.errors import syntax_error_from_lark
+
+        token = Token("RAW_TAIL_END", "", start_pos=5, line=1, column=6)
+        exc = UnexpectedToken(token, expected={"RAW_FRAGMENT"})
+        exc.interactive_parser = types.SimpleNamespace(
+            parser_state=types.SimpleNamespace(value_stack=[])
+        )
+        err = syntax_error_from_lark(exc)
+        assert "raw-tail form" in str(err)
+
 
 # ---------------------------------------------------------------------------
 # Generics / parametric polymorphism
@@ -4085,6 +4112,7 @@ print exec! true
             "program exec!",
             "for exec! in [] do 1 done",
             "case x of value as ask! => 1",
+            "case x of ask! => 1",
             "::ask!",
             "let x = ::ask!",
             "module::exec!",
@@ -4097,6 +4125,45 @@ print exec! true
         with pytest.raises(AglSyntaxError) as exc_info:
             parse(source)
         assert_raw_tail_name_span(exc_info.value, source)
+
+    @pytest.mark.parametrize(
+        "source",
+        (
+            "let a = (1 + 2\nlet b: text = exec! echo hi\nprint(b)\n",
+            "let a = [1, 2\nlet b: text = exec! echo hi\n",
+        ),
+    )
+    def test_unclosed_bracket_is_reported_where_the_expression_breaks(self, source: str) -> None:
+        # A missing closing bracket must not be reported as a misplaced raw tail
+        # on a later line; the diagnostic belongs to the item that cannot continue.
+        with pytest.raises(AglSyntaxError) as exc_info:
+            parse(source)
+        span = exc_info.value.span
+        assert span is not None
+        assert (span.start_line, span.start_col) == (2, 1)
+
+    def test_arrow_body_raw_tail_is_rejected_over_its_shell_quotes(self) -> None:
+        with pytest.raises(AglSyntaxError) as exc_info:
+            parse("if true => exec! echo 'oops")
+        span = exc_info.value.span
+        assert span is not None
+        assert (span.start_line, span.start_col) == (1, 12)
+
+    def test_empty_payload_names_the_form_after_nested_type_arguments(self) -> None:
+        with pytest.raises(AglSyntaxError) as exc_info:
+            parse_program("let x: list[int] = exec!::[list[int]]\nnext")
+        assert "exec!" in str(exc_info.value)
+
+    @pytest.mark.parametrize(
+        "source",
+        ("let x = 1\n  exec! echo hi", "print 1\n  exec! echo hi"),
+    )
+    def test_stray_indentation_before_a_raw_tail_is_reported_as_indentation(
+        self, source: str
+    ) -> None:
+        with pytest.raises(AglSyntaxError) as exc_info:
+            parse(source)
+        assert "indent" in str(exc_info.value).lower()
 
     def test_raw_tail_default_is_rejected_inside_parameter_brackets_at_its_location(self) -> None:
         with pytest.raises(AglSyntaxError) as exc_info:

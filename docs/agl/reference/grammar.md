@@ -464,10 +464,11 @@ type arguments.
 An inline raw tail is all text from its first non-whitespace character through
 the end of the line, except that trailing spaces and tabs are removed. A block
 raw tail follows the name (and optional type arguments) with a newline and a
-more-indented block; its dedented lines become one newline-joined payload. A
-raw call requires a nonempty inline tail or a block with at least one nonblank
-line. Raw text is tokenized as fragments and `%{expr}` interpolations, not as
-ordinary AgL expressions.
+more-indented block; its dedented lines become one newline-joined payload,
+dropping the blank lines that trail its last content line while keeping any
+before and between content lines. A raw call requires a nonempty inline tail or
+a block with at least one nonblank line. Raw text is tokenized as fragments and
+`%{expr}` interpolations, not as ordinary AgL expressions.
 
 A raw call is valid only where the grammar guarantees that nothing else follows
 on its line: as a block item; as a `let`, `var`, or assignment RHS; as an

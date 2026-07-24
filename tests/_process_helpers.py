@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Any, Protocol
+from typing import Any
 
 from agm.core.process import ProcessCaptureResult
 
@@ -31,17 +31,35 @@ def process_result(
     )
 
 
-class _ResponsePolicy(Protocol):
-    def __call__(self, index: int, command: str) -> ProcessCaptureResult: ...
+@dataclass
+class FakeShell:
+    """Fake ``sh -c`` boundary, in one of two modes.
 
-    def assert_complete(self, commands: list[str]) -> None: ...
+    With *responses*, each incoming command must equal the next expected
+    ``command`` and yields that spec's scripted result; :meth:`assert_complete`
+    then checks every response was consumed (an empty list therefore asserts
+    that no command ran).  With *responses* left ``None``, every command
+    succeeds with *stdout* and nothing is asserted about which commands ran.
+    """
 
+    responses: Sequence[Mapping[str, Any]] | None = None
+    stdout: str = ""
+    commands: list[str] = field(default_factory=list)
 
-@dataclass(frozen=True)
-class _Scripted:
-    responses: Sequence[Mapping[str, Any]]
-
-    def __call__(self, index: int, command: str) -> ProcessCaptureResult:
+    def __call__(
+        self,
+        args: list[str],
+        *,
+        idle_timeout: float | None = None,
+        isolate_process_group: bool = False,
+    ) -> ProcessCaptureResult:
+        del idle_timeout, isolate_process_group
+        assert args[:2] == ["sh", "-c"]
+        command = args[2]
+        index = len(self.commands)
+        self.commands.append(command)
+        if self.responses is None:
+            return process_result(stdout=self.stdout)
         assert index < len(self.responses), f"unexpected shell command: {command!r}"
         spec = self.responses[index]
         assert command == spec["command"], (
@@ -56,54 +74,9 @@ class _Scripted:
             spawn_errno=spec.get("spawn_errno"),
         )
 
-    def assert_complete(self, commands: list[str]) -> None:
-        assert len(commands) == len(self.responses), (
-            f"expected {len(self.responses)} shell commands, got {len(commands)}"
-        )
-
-
-@dataclass(frozen=True)
-class _Constant:
-    stdout: str
-
-    def __call__(self, index: int, command: str) -> ProcessCaptureResult:
-        del index, command
-        return process_result(stdout=self.stdout)
-
-    def assert_complete(self, commands: list[str]) -> None:
-        del commands
-
-
-def scripted(responses: Sequence[Mapping[str, Any]]) -> _ResponsePolicy:
-    """Return a policy that replays expected commands and process results."""
-    return _Scripted(responses)
-
-
-def constant(*, stdout: str = "") -> _ResponsePolicy:
-    """Return a policy that succeeds with the same output for every command."""
-    return _Constant(stdout)
-
-
-@dataclass
-class FakeShell:
-    """Fake ``sh -c`` boundary parameterized by a process-result policy."""
-
-    response: _ResponsePolicy
-    commands: list[str] = field(default_factory=list)
-
-    def __call__(
-        self,
-        args: list[str],
-        *,
-        idle_timeout: float | None = None,
-        isolate_process_group: bool = False,
-    ) -> ProcessCaptureResult:
-        del idle_timeout, isolate_process_group
-        assert args[:2] == ["sh", "-c"]
-        command = args[2]
-        self.commands.append(command)
-        return self.response(len(self.commands) - 1, command)
-
     def assert_complete(self) -> None:
-        """Assert that the configured response policy consumed every command."""
-        self.response.assert_complete(self.commands)
+        """Assert every scripted response was consumed (no-op when accepting any)."""
+        if self.responses is not None:
+            assert len(self.commands) == len(self.responses), (
+                f"expected {len(self.responses)} shell commands, got {len(self.commands)}"
+            )

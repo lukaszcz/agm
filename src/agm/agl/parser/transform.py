@@ -900,17 +900,7 @@ class AstBuilder(Transformer):
         """name type_lsqb type_arg_list RSQB — applied generic type."""
         name_tok = next(a for a in args if _is_name_token(a))
         name = str(name_tok)
-        type_args: tuple[TypeExpr, ...] = cast(
-            tuple[TypeExpr, ...],
-            next(
-                (
-                    a
-                    for a in args
-                    if isinstance(a, tuple) and len(a) > 0 and isinstance(a[0], _ALL_TYPE_EXPRS)
-                ),
-                (),
-            ),
-        )
+        type_args = _find_type_args(args)
         span = self._span_from_meta(meta)
         nid = self._next_id()
         if name == "list":
@@ -933,17 +923,7 @@ class AstBuilder(Transformer):
         """qual_prefix name type_lsqb type_arg_list RSQB — qualified application."""
         qual = next(a for a in args if isinstance(a, Qualifier))
         name_tok = next(a for a in args if _is_name_token(a))
-        type_args = cast(
-            tuple[TypeExpr, ...],
-            next(
-                (
-                    a
-                    for a in args
-                    if isinstance(a, tuple) and len(a) > 0 and isinstance(a[0], _ALL_TYPE_EXPRS)
-                ),
-                (),
-            ),
-        )
+        type_args = _find_type_args(args)
         return AppliedT(
             name=str(name_tok),
             args=type_args,
@@ -1184,12 +1164,16 @@ class AstBuilder(Transformer):
         return cast(syntax.Expr, inner)
 
     def juxt_call(self, meta: Meta, args: _Args) -> syntax.Call:
-        """juxt: postfix juxt_arg -> juxt_call
+        """Single-arg call sugar shared by ``juxt`` and ``raw_juxt``.
 
-        Single-arg sugar: `f x` desugars to `Call(callee=f, args=(x,), named_args=())`.
+        Both ``juxt: postfix juxt_arg`` and ``raw_juxt: postfix raw_call`` alias
+        here: `f x` and `print exec! date` alike desugar to
+        `Call(callee=f, args=(arg,), named_args=())`, where the second argument
+        is the juxtaposed expression (an ordinary ``juxt_arg`` Expr, or the
+        ``raw_call`` desugared to its builtin Call).
         """
-        # args[0] is the callee (postfix result)
-        # args[1] is the juxt_arg result (an Expr)
+        # args[0] is the callee (postfix result); args[1] is the juxtaposed
+        # expression — a juxt_arg Expr or a raw_call Call.
         callee = cast(syntax.Expr, args[0])
         arg_expr = cast(syntax.Expr, args[1])
         return syntax.Call(
@@ -1266,40 +1250,14 @@ class AstBuilder(Transformer):
 
     def juxt_typed_call_suffix(self, meta: Meta, args: _Args) -> _JuxtSuffix:
         """juxt_suffix: DCOLON LSQB type_arg_list RSQB LPAR arg_list? RPAR."""
-        type_args_val = cast(
-            tuple[TypeExpr, ...],
-            next(
-                (
-                    arg
-                    for arg in args
-                    if isinstance(arg, tuple)
-                    and len(arg) > 0
-                    and isinstance(arg[0], _ALL_TYPE_EXPRS)
-                ),
-                (),
-            ),
-        )
-        return ("typed_call", (type_args_val, self._juxt_finalized_arg_lists(meta, args)))
+        return ("typed_call", (_find_type_args(args), self._juxt_finalized_arg_lists(meta, args)))
 
     def type_apply(self, meta: Meta, args: _Args) -> syntax.TypeApply:
         """Apply explicit type arguments to a value without calling it."""
         expr = cast(syntax.Expr, args[0])
-        type_args_val = cast(
-            tuple[TypeExpr, ...],
-            next(
-                (
-                    arg
-                    for arg in args
-                    if isinstance(arg, tuple)
-                    and len(arg) > 0
-                    and isinstance(arg[0], _ALL_TYPE_EXPRS)
-                ),
-                (),
-            ),
-        )
         return syntax.TypeApply(
             expr=expr,
-            type_args=type_args_val,
+            type_args=_find_type_args(args),
             span=self._span_from_meta(meta),
             node_id=self._next_id(),
         )
@@ -2552,22 +2510,9 @@ class AstBuilder(Transformer):
         name_toks = [a for a in args if _is_name_token(a)]
         type_name = str(name_toks[0])
         variant_name = str(name_toks[-1])
-        type_args_val = cast(
-            tuple[TypeExpr, ...],
-            next(
-                (
-                    arg
-                    for arg in args
-                    if isinstance(arg, tuple)
-                    and len(arg) > 0
-                    and isinstance(arg[0], _ALL_TYPE_EXPRS)
-                ),
-                (),
-            ),
-        )
         type_qual = TypeQualifier(
             name=type_name,
-            type_args=type_args_val,
+            type_args=_find_type_args(args),
             span=self._span_from_meta(meta),
             node_id=self._next_id(),
         )
@@ -2643,26 +2588,10 @@ class AstBuilder(Transformer):
             text=str(tok), span=self._span_from_meta(meta), node_id=self._next_id()
         )
 
-    @staticmethod
-    def _first_type_args(args: _Args) -> tuple[TypeExpr, ...]:
-        """Return the type-argument group among *args*, or ``()`` when absent."""
-        return cast(
-            tuple[TypeExpr, ...],
-            next(
-                (
-                    arg
-                    for arg in args
-                    if isinstance(arg, tuple)
-                    and all(isinstance(item, _ALL_TYPE_EXPRS) for item in arg)
-                ),
-                (),
-            ),
-        )
-
     def type_args(self, meta: Meta, args: _Args) -> tuple[TypeExpr, ...]:
         """Pass an explicit raw-tail type-argument group through to its call."""
         del meta
-        return self._first_type_args(args)
+        return _find_type_args(args)
 
     def raw_callee(self, meta: Meta, args: _Args) -> syntax.VarRef:
         """Build the synthetic builtin callee before its raw payload subtree."""
@@ -2683,7 +2612,7 @@ class AstBuilder(Transformer):
             callee=callee,
             args=(payload,),
             named_args=(),
-            type_args=self._first_type_args(args),
+            type_args=_find_type_args(args),
             span=self._span_from_meta(meta),
             node_id=self._next_id(),
         )
@@ -2779,6 +2708,24 @@ def _find_type_expr(args: _Args) -> TypeExpr:
         if isinstance(a, _ALL_TYPE_EXPRS):
             return a
     raise AssertionError(f"_find_type_expr: no TypeExpr found in {args!r}")  # pragma: no cover
+
+
+def _find_type_args(args: _Args) -> tuple[TypeExpr, ...]:
+    """Return the explicit type-argument group among *args*, or ``()`` when absent.
+
+    A ``type_arg_list`` result is the sole nonempty tuple of TypeExprs the
+    grammar produces, so every rule with an optional ``::[...]`` group — applied
+    types, typed calls, ``type_apply``, and raw-tail calls — locates it the same
+    way here rather than re-spelling the predicate inline.
+    """
+    for a in args:
+        if (
+            isinstance(a, tuple)
+            and len(a) > 0
+            and all(isinstance(item, _ALL_TYPE_EXPRS) for item in a)
+        ):
+            return cast(tuple[TypeExpr, ...], a)
+    return ()
 
 
 def _find_name_token(args: _Args) -> Token:

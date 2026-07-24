@@ -40,7 +40,7 @@ from agm.agl.repl.console import (
     run_console,
 )
 from agm.agl.runtime.request import AgentRequest, AgentResponse
-from tests._process_helpers import FakeShell, constant
+from tests._process_helpers import FakeShell
 
 
 class _CountingAgent:
@@ -256,7 +256,7 @@ class TestMultiline:
         # A raw-tail header opens an interactive block. Enter after each content
         # line must keep collecting the payload; the blank continuation line
         # closes it and runs one shell call.
-        shell = FakeShell(constant())
+        shell = FakeShell()
         with patch("agm.core.process.run_capture_result", side_effect=shell):
             output = drive("exec!\r  echo one\r  echo two\r\r\x04")
 
@@ -278,7 +278,14 @@ class TestIsIncomplete:
     def test_raw_tail_headers_open_blocks(self, source: str) -> None:
         assert is_incomplete(source) is True
 
-    @pytest.mark.parametrize("source", ["exec! echo hi", "exec!\n  echo hi\nnext"])
+    @pytest.mark.parametrize(
+        "source",
+        [
+            "exec! echo hi",
+            "exec!\n  echo hi\nnext",
+            "let x: text = exec!\n    echo hi\n# trailing comment",
+        ],
+    )
     def test_closed_raw_tail_blocks_submit(self, source: str) -> None:
         assert is_incomplete(source) is False
 
@@ -642,7 +649,7 @@ class TestCompleter:
 
 class TestEvalOutput:
     def test_inline_raw_tail_exec_evaluates_through_the_console(self) -> None:
-        shell = FakeShell(constant())
+        shell = FakeShell()
         with patch("agm.core.process.run_capture_result", side_effect=shell):
             output = drive("exec! echo hi\r\x04")
 

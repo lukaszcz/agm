@@ -1,6 +1,6 @@
 # AgL Raw-Tail Builtins (`exec!`, `ask!`) and `%{}` Interpolation — Implementation Plan
 
-Status: planned · Date: 2026-07-23 · **Every** design decision below is owner-approved.
+Status: implemented · Date: 2026-07-23 · **Every** design decision below is owner-approved.
 
 This is the standalone, authoritative design and implementation plan for the raw-tail syntax
 (`exec!` for shell commands, `ask!` for agent prompts) and the accompanying global

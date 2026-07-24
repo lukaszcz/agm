@@ -46,7 +46,7 @@ from typing import Any
 
 import pytest
 
-from tests._process_helpers import FakeShell, scripted
+from tests._process_helpers import FakeShell
 
 AGL_DIR = Path(__file__).parent / "agl"
 PROGRAMS_DIR = AGL_DIR / "programs"
@@ -110,7 +110,7 @@ def _run_program(
     agents = {
         name: _agent_from_spec(name, spec) for name, spec in scenario.get("agents", {}).items()
     }
-    shell = FakeShell(scripted(scenario.get("shell", [])))
+    shell = FakeShell(scenario.get("shell", []))
     kwargs: dict[str, Any] = {}
     runtime_cfg = scenario.get("runtime", {})
     if "default_call_depth_limit" in runtime_cfg:

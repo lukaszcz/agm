@@ -304,7 +304,8 @@ name: `exec!::[T]` and `ask!::[T]`. In `exec! ::[T]` or `ask! ::[T]`, the
 spaced `::[T]` instead begins the payload. The payload is either the rest of
 that line or a following indented block. In both cases it is one template: its
 text is verbatim except that `%{expr}` interpolates and `\%{` is a literal
-`%{`. Inline payloads discard trailing spaces and tabs.
+`%{`. Inline payloads discard trailing spaces and tabs; block payloads drop the
+blank lines that trail the last content line.
 
 A raw-tail call requires a nonempty inline payload or a block with at least one
 nonblank line. It is only recognized at bracket depth zero and must occupy a

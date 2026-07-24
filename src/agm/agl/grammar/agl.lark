@@ -615,7 +615,7 @@ juxt_arg: juxt_atom juxt_suffix*
 juxt_suffix: DOT field_name       -> juxt_field_suffix
            | INDEX_LSQB expr RSQB -> juxt_index_suffix
            | LPAR arg_list? RPAR -> juxt_call_suffix
-           | DCOLON LSQB type_arg_list RSQB LPAR arg_list? RPAR -> juxt_typed_call_suffix
+           | type_args LPAR arg_list? RPAR -> juxt_typed_call_suffix
 
 // juxt_atom: the simple (no-paren, no-unary-minus) primaries allowed as juxt arg.
 // Qualified refs are valid juxt arguments; the lexer pre-merges qualifiers
@@ -641,7 +641,7 @@ juxt_var_ref: NAME -> var_ref
 ?postfix: postfix LPAR arg_list? RPAR  -> call
         | postfix DOT field_name       -> field_access
         | postfix INDEX_LSQB expr RSQB -> index_access
-        | postfix DCOLON LSQB type_arg_list RSQB -> type_apply
+        | postfix type_args            -> type_apply
         | atom
 
 // ---------------------------------------------------------------------------

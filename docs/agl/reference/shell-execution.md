@@ -50,14 +50,26 @@ let home_listing: text = exec!
 ```
 
 The payload is verbatim shell text, except that inline payloads discard
-trailing spaces and tabs. Quotes, parentheses, `#`, `;`, every dollar form such
-as `$HOME`, `${name}`, `$(date)`, and `$1`, and ordinary backslashes all reach
-the shell unchanged. Only `%{expr}` interpolates; write `\%{` for a literal
-`%{`. A raw call needs a nonempty inline command or a block with at least one
-nonblank line. For example, this command passes `%{literal}` to the shell:
+trailing spaces and tabs, and a block form drops blank lines that trail its
+last content line (blank lines before and between content lines are kept).
+Quotes, parentheses, `#`, `;`, every dollar form such as `$HOME`, `${name}`,
+`$(date)`, and `$1`, and ordinary backslashes all reach the shell unchanged.
+Only `%{expr}` interpolates; write `\%{` for a literal `%{`. A raw call needs a
+nonempty inline command or a block with at least one nonblank line. For example,
+this command passes `%{literal}` to the shell:
 
 ```agl
 let marker: text = exec! printf '\%{literal}'
+```
+
+The backslash in `\%{` is consumed by the escape, so a payload cannot spell a
+literal backslash immediately followed by an interpolation as `\\%{expr}` —
+that is a literal backslash followed by a literal `%{expr}`. Interpolate the
+backslash from a text literal instead:
+
+```agl
+let subdir: text = "docs"
+let path: text = exec! printf '%s' "C:%{"\\"}%{subdir}"
 ```
 
 Raw-tail calls are permitted only in line-final expression positions: block

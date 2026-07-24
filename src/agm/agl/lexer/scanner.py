@@ -262,6 +262,9 @@ class _RawBlockLine:
     end_pos: int
     line: int
     column: int
+    # Spaces standing in for the part of a TAB the dedent margin split in two;
+    # empty for every line whose indentation ends on the margin.
+    prefix: str = ""
 
 
 class _Scanner:
@@ -288,8 +291,14 @@ class _Scanner:
         # to suppress the leading ``_NEWLINE`` of comment/blank-only prefixes.
         self._emitted_real = False
         self._bracket_depth = 0
-        self._previous_significant: Token | None = None
         self._pending_raw_newline: Token | None = None
+        # End of the payload most recently consumed by a raw-tail block, so the
+        # closing token spans the payload rather than the next item's start.
+        self._raw_payload_end: tuple[int, int, int] | None = None
+        # A raw tail seen at nonzero bracket depth.  Held until the scan ends
+        # because an unclosed bracket earlier in the file produces the same
+        # depth without the raw tail being bracketed at all.
+        self._deferred_raw_tail_error: LexError | None = None
 
     @property
     def tab_warnings(self) -> list[Diagnostic]:
@@ -303,15 +312,23 @@ class _Scanner:
         the reported column is the simple (non-expanded) 1-based offset within
         the current line.
         """
-        col = self._pos - self._line_start_pos + 1
+        self._record_tab_at(self._pos, self._line)
+
+    def _record_tab_at(self, pos: int, line: int) -> None:
+        """Record a TAB advisory for the ``\\t`` at *pos* on *line*.
+
+        Used where the tab is not at the scan position, such as the indentation
+        a raw-tail block strips ahead of the scanner.
+        """
+        col = pos - self._line_start_pos + 1
         self._tab_warnings.append(
             Diagnostic(
                 message=(
                     f"TAB character at column {col} is not allowed; use spaces for indentation"
                 ),
-                line=self._line,
+                line=line,
                 column=col,
-                end_line=self._line,
+                end_line=line,
                 end_column=col + 1,
                 severity="warning",
             )
@@ -356,12 +373,11 @@ class _Scanner:
         )
 
     def _track_code_token(self, token: Token) -> None:
-        """Track bracket depth and the previous significant code token."""
+        """Track bracket depth from a code-mode token."""
         if token.type in (LPAR, LSQB, LBRACE):
             self._bracket_depth += 1
         elif token.type in (RPAR, RSQB, RBRACE):
             self._bracket_depth -= 1
-        self._previous_significant = token
 
     def _make_token(
         self,
@@ -884,6 +900,9 @@ class _Scanner:
                 self._line = raw_line.line
                 self._col = raw_line.column
                 self._line_start_pos = raw_line.start_pos - (raw_line.column - 1)
+                if raw_line.prefix:
+                    start_fragment()
+                    buf.append(raw_line.prefix)
                 while self._pos < raw_line.end_pos:
                     ch = self._peek()
                     if (
@@ -927,8 +946,49 @@ class _Scanner:
         finally:
             self._pos, self._line, self._col, self._line_start_pos = saved_state
 
+    def _dedented_block_line(
+        self, line_start: int, line_end: int, line_no: int, line_col: int, margin: int
+    ) -> _RawBlockLine:
+        """Strip *margin* visual columns from a block line, keeping the remainder.
+
+        A TAB whose expansion straddles the margin is consumed whole, so the
+        columns it contributes past the margin come back as leading spaces.
+        """
+        consumed_width = 0
+        strip_chars = 0
+        while consumed_width < margin:
+            ch = self._src[line_start + strip_chars]
+            if ch == "\t":
+                consumed_width += _TAB_LEN - (consumed_width % _TAB_LEN)
+                self._record_tab_at(line_start + strip_chars, line_no)
+            else:
+                consumed_width += 1
+            strip_chars += 1
+        content_start = line_start + strip_chars
+        return _RawBlockLine(
+            content_start,
+            line_end,
+            line_no,
+            line_col + (content_start - line_start),
+            prefix=" " * (consumed_width - margin),
+        )
+
+    def _raw_newline_token(self, pos: int, line: int, col: int, indent: int) -> Token:
+        """Build the layout ``_NEWLINE`` that follows a consumed raw-tail block."""
+        return Token(
+            NEWLINE,
+            str(indent),
+            start_pos=pos,
+            line=line,
+            column=col,
+            end_line=line,
+            end_column=col + 1,
+            end_pos=pos + 1,
+        )
+
     def _scan_raw_block(self, parent_indent: int) -> Iterator[Token]:
         """Consume an indented raw-tail block and emit its single payload."""
+        header_newline = (self._pos, self._line, self._col)
         self._advance()  # header newline
         margin: int | None = None
         lines: list[_RawBlockLine] = []
@@ -947,16 +1007,17 @@ class _Scanner:
             if not blank and indent <= parent_indent:
                 next_indent = self._measure_indentation()
                 break
-            if blank and margin is None:
-                # A leading blank line contributes an empty slice at its end.
+            if blank:
+                # Held back until a later content line proves the line interior:
+                # a blank run before the dedent separates the block from the
+                # next item and is not part of the payload.
                 pending_blank_lines.append(
                     _RawBlockLine(line_end, line_end, line_no, line_col + (line_end - line_start))
                 )
             else:
                 if margin is None:
                     margin = indent
-                    lines.extend(pending_blank_lines)
-                elif not blank and indent < margin:
+                elif indent < margin:
                     raise self._raw_tail_error(
                         "raw-tail block line is under-indented; "
                         "align it with the first block line.",
@@ -964,24 +1025,12 @@ class _Scanner:
                         line_no,
                         line_col + indent_chars,
                     )
-
-                if blank:
-                    content_start = line_end
-                else:
-                    consumed_width = 0
-                    strip_chars = 0
-                    while consumed_width < margin:
-                        ch = self._src[line_start + strip_chars]
-                        consumed_width += (
-                            _TAB_LEN - (consumed_width % _TAB_LEN) if ch == "\t" else 1
-                        )
-                        strip_chars += 1
-                    content_start = line_start + strip_chars
+                lines.extend(pending_blank_lines)
+                pending_blank_lines.clear()
                 lines.append(
-                    _RawBlockLine(
-                        content_start, line_end, line_no, line_col + (content_start - line_start)
-                    )
+                    self._dedented_block_line(line_start, line_end, line_no, line_col, margin)
                 )
+                self._raw_payload_end = (line_end, line_no, line_col + (line_end - line_start))
 
             self._skip_to_line_end(line_end)
             if self._at_end():
@@ -991,28 +1040,20 @@ class _Scanner:
             self._advance(in_string=True)
 
         if margin is None:
+            # No payload; the parser reports the empty raw tail.  The header's
+            # own line break still has to separate it from the next item.
+            self._pending_raw_newline = self._raw_newline_token(*header_newline, next_indent)
             return
 
         yield from self._scan_raw_lines(lines)
         if last_newline is not None:
-            newline_pos, newline_line, newline_col = last_newline
-            self._pending_raw_newline = Token(
-                NEWLINE,
-                str(next_indent),
-                start_pos=newline_pos,
-                line=newline_line,
-                column=newline_col,
-                end_line=newline_line,
-                end_column=newline_col + 1,
-                end_pos=newline_pos + 1,
-            )
+            self._pending_raw_newline = self._raw_newline_token(*last_newline, next_indent)
 
     def _scan_raw_tail(
         self, start_pos: int, start_line: int, start_col: int, name: str
     ) -> Iterator[Token]:
         """Scan the generic inline-or-block payload following a registered name."""
         yield self._make_token(RAW_TAIL_NAME, name, start_pos, start_line, start_col)
-        self._track_code_token(Token(RAW_TAIL_NAME, name))
         yield from self._scan_raw_type_args()
 
         while self._peek() in (" ", "\t"):
@@ -1020,11 +1061,18 @@ class _Scanner:
         payload_start, payload_line, payload_col = self._pos, self._line, self._col
         yield self._make_token(RAW_TAIL_START, "", payload_start, payload_line, payload_col)
 
+        # Where the payload itself ends, which is where the closing token goes:
+        # the scanner is by then past the block's terminating line break and the
+        # next line's indentation, and past an inline payload's trailing spaces.
+        payload_end_state: tuple[int, int, int]
         if self._at_end():
-            pass
+            payload_end_state = (self._pos, self._line, self._col)
         elif self._peek() == "\n":
             parent_indent, _ = self._indent_info(self._line_start_pos)
+            self._raw_payload_end = None
             yield from self._scan_raw_block(parent_indent)
+            payload_end_state = self._raw_payload_end or (self._pos, self._line, self._col)
+            self._raw_payload_end = None
         else:
             line_end = self._src.find("\n", self._pos)
             if line_end == -1:
@@ -1032,12 +1080,22 @@ class _Scanner:
             payload_end = line_end
             while payload_end > self._pos and self._src[payload_end - 1] in (" ", "\t"):
                 payload_end -= 1
+            payload_end_state = (payload_end, self._line, self._col + (payload_end - self._pos))
             raw_line = _RawBlockLine(self._pos, payload_end, self._line, self._col)
             yield from self._scan_raw_lines([raw_line])
             self._skip_to_line_end(line_end)
 
-        end_pos, end_line, end_col = self._pos, self._line, self._col
-        yield self._make_token(RAW_TAIL_END, "", end_pos, end_line, end_col)
+        end_pos, end_line, end_col = payload_end_state
+        yield Token(
+            RAW_TAIL_END,
+            "",
+            start_pos=end_pos,
+            line=end_line,
+            column=end_col,
+            end_line=end_line,
+            end_column=end_col,
+            end_pos=end_pos,
+        )
         if self._pending_raw_newline is not None:
             yield self._pending_raw_newline
             self._pending_raw_newline = None
@@ -1071,18 +1129,18 @@ class _Scanner:
                 typ = NAME
             if typ == NAME and word in RAW_TAIL_BUILTINS:
                 if self._bracket_depth > 0:
-                    raise self._raw_tail_error(
-                        "raw-tail forms are not allowed inside brackets; use the call form "
-                        "or an indented block form.",
-                        start_pos,
-                        start_line,
-                        start_col,
-                    )
-                previous = self._previous_significant
-                if previous is not None and previous.type == ARROW and previous.line == start_line:
-                    # An `=>` body has no raw-tail grammar alternative; leave
-                    # its continuation marker visible for the parser's targeted
-                    # diagnostic instead of absorbing a branch.
+                    # Brackets suppress line breaks, so "to end of line" has no
+                    # meaning here.  The error waits for the end of the scan:
+                    # an unclosed bracket earlier in the file raises the depth
+                    # just the same, and that is the parser's error to report.
+                    if self._deferred_raw_tail_error is None:
+                        self._deferred_raw_tail_error = self._raw_tail_error(
+                            "raw-tail forms are not allowed inside brackets; use the call form "
+                            "or an indented block form.",
+                            start_pos,
+                            start_line,
+                            start_col,
+                        )
                     yield self._make_token(RAW_TAIL_NAME, word, start_pos, start_line, start_col)
                     return
                 yield from self._scan_raw_tail(start_pos, start_line, start_col, word)
@@ -1174,7 +1232,22 @@ class _Scanner:
         Produces ``_NEWLINE`` tokens that carry the next real line's indentation
         width as their value.  The layout filter converts these into
         ``_INDENT``/``_DEDENT``/``_NEWLINE`` tokens.
+
+        A raw tail scanned at nonzero bracket depth is diagnosed here rather
+        than where it was seen: only brackets that close somewhere really did
+        enclose it, and an unclosed one belongs to the parser's diagnostic.
         """
+        try:
+            yield from self._scan_code()
+        except LexError:
+            if self._deferred_raw_tail_error is not None:
+                raise self._deferred_raw_tail_error from None
+            raise
+        if self._deferred_raw_tail_error is not None and self._bracket_depth == 0:
+            raise self._deferred_raw_tail_error
+
+    def _scan_code(self) -> Iterator[Token]:
+        """Yield every CODE-mode token, leaving deferred diagnostics to ``scan``."""
         while not self._at_end():
             ch = self._peek()
 

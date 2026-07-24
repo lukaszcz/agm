@@ -30,6 +30,11 @@ def tok(source: str) -> list[tuple[str, str]]:
     return [(t.type, str(t)) for t in tokenize(source)]
 
 
+def raw_fragments(source: str) -> list[str]:
+    """Return the raw-tail payload fragments of *source*, in order."""
+    return [value for typ, value in tok(source) if typ == "RAW_FRAGMENT"]
+
+
 def lark_tok(source: str) -> list[tuple[str, str]]:
     """Return parser-facing ``(type, value)`` pairs for every token in *source*."""
     lexer = AglLexer(None)
@@ -865,6 +870,56 @@ class TestRawTailForms:
             ("RAW_TAIL_END", ""),
         ]
 
+    @pytest.mark.parametrize(
+        "source",
+        (
+            "exec!\n  echo hi\n\nlet y = 1",
+            "exec!\n  echo hi\n\n\nlet y = 1",
+            "exec!\n  echo hi\n\n",
+            "exec!\n  echo hi\n  \n",
+        ),
+    )
+    def test_block_drops_trailing_blank_lines(self, source: str) -> None:
+        assert raw_fragments(source) == ["echo hi"]
+
+    def test_block_tab_straddling_the_margin_keeps_relative_indentation(self) -> None:
+        assert raw_fragments("ask!\n echo start\n\tnested") == ["echo start\n   nested"]
+
+    def test_block_indentation_tab_is_advised_against(self) -> None:
+        assert lex_tab_warnings("exec!\n\ttext") != []
+
+    def test_block_payload_span_ends_at_the_last_payload_line(self) -> None:
+        end = next(t for t in tokenize("exec!\n  echo hi\nlet z = 1") if t.type == "RAW_TAIL_END")
+        assert (end.line, end.column, end.end_line, end.end_column) == (2, 10, 2, 10)
+
+    def test_inline_payload_span_ends_at_the_payload(self) -> None:
+        end = next(t for t in tokenize("exec! echo hi   ") if t.type == "RAW_TAIL_END")
+        assert (end.line, end.column, end.end_line, end.end_column) == (1, 14, 1, 14)
+
+    def test_empty_block_payload_keeps_the_statement_separator(self) -> None:
+        assert ("_NEWLINE", "0") in tok("exec!\nnext")
+
+    def test_raw_tail_under_an_unclosed_bracket_is_left_to_the_parser(self) -> None:
+        tokens = tok("let a = (1 + 2\nlet b: text = exec! echo hi\nprint(b)\n")
+        assert ("RAW_TAIL_NAME", "exec!") in tokens
+
+    def test_bracketed_raw_tail_error_points_at_the_first_occurrence(self) -> None:
+        # Two raw tails inside one bracket: the closed bracket really does
+        # enclose them, so the error is reported — anchored at the first.
+        with pytest.raises(LexError) as exc_info:
+            tok("(exec! a exec! b)")
+        assert "brackets" in str(exc_info.value)
+        span = exc_info.value.span
+        assert span is not None
+        assert (span.start_line, span.start_col) == (1, 2)
+
+    def test_bracketed_raw_tail_error_wins_over_a_later_lex_error(self) -> None:
+        # A closed bracket encloses the raw tail, so its diagnostic is raised
+        # even though a later unterminated string would otherwise be the failure.
+        with pytest.raises(LexError) as exc_info:
+            tok("[exec! a] 'oops")
+        assert "brackets" in str(exc_info.value)
+
     def test_block_followed_by_comment_emits_one_layout_newline(self) -> None:
         assert tok("exec!\n  echo hi\n# outside\nafter") == [
             ("RAW_TAIL_NAME", "exec!"),
@@ -938,18 +993,21 @@ class TestRawTailForms:
         assert exc_info.value.span is not None
         assert "brackets" in str(exc_info.value)
 
-    def test_raw_tail_after_branch_arrow_remains_code(self) -> None:
+    def test_raw_tail_after_branch_arrow_scans_its_payload(self) -> None:
+        # The payload is shell/prompt text wherever it appears, so it is never
+        # re-read as code; the parser rejects the position.
         assert tok("if true => exec! date | else => 0") == [
             ("if", "if"),
             ("true", "true"),
             ("ARROW", "=>"),
             ("RAW_TAIL_NAME", "exec!"),
-            ("NAME", "date"),
-            ("PIPE", "|"),
-            ("else", "else"),
-            ("ARROW", "=>"),
-            ("INT", "0"),
+            ("RAW_TAIL_START", ""),
+            ("RAW_FRAGMENT", "date | else => 0"),
+            ("RAW_TAIL_END", ""),
         ]
+
+    def test_raw_tail_after_branch_arrow_does_not_lex_shell_quotes(self) -> None:
+        assert ("RAW_FRAGMENT", "echo 'oops") in tok("if true => exec! echo 'oops")
 
     def test_raw_tail_on_arrow_suite_line_is_scanned(self) -> None:
         tokens = tok("if true =>\n  exec! true")

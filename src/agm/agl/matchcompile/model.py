@@ -401,7 +401,7 @@ class NormalizedMatchSite:
             _validate_normalized_case(self)
 
 
-# Compatibility alias for case-only consumers during the staged lowering work.
+# Compatibility alias for case-only consumers.
 NormalizedCase: TypeAlias = NormalizedMatchSite
 
 
@@ -468,12 +468,10 @@ class DecisionDecompose:
 
     @property
     def keyed_children(self) -> tuple[DecisionBranch, ...]:
-        """Expose the temporary lowering-compatible singleton edge.
+        """Expose the singleton constructor edge for generic decision consumers.
 
-        Lowering has no native decomposition operation yet; its existing
-        switch consumer can represent the singleton enum edge unchanged.
-        Match compilation itself never treats this node as a discriminant
-        switch.
+        Lowering handles decompositions natively. This node is not a
+        discriminant switch and has no default edge.
         """
         return (DecisionBranch(self.constructor, self.child),)
 
@@ -507,20 +505,20 @@ def _validate_constructor_cell(cell: ConstructorCell) -> None:
 
 def _validate_normalized_case(case: NormalizedMatchSite) -> None:
     if case.occurrences != (case.root,):
-        raise ValueError("a freshly normalized case must contain only its root occurrence")
+        raise ValueError("a freshly normalized match site must contain only its root occurrence")
     if any(len(row.cells) != len(case.occurrences) for row in case.rows):
         raise ValueError("normalized matrix row width does not match occurrence width")
     if tuple(action.source_index for action in case.actions) != tuple(range(len(case.actions))):
-        raise ValueError("source actions must retain contiguous source priority")
+        raise ValueError("match-site actions must retain contiguous source priority")
     row_indices = tuple(row.source_index for row in case.rows)
     if row_indices != tuple(sorted(set(row_indices))) or any(
         not 0 <= source_index < len(case.actions) for source_index in row_indices
     ):
         raise ValueError(
-            "normalized matrix rows must retain an ordered unique subsequence of source actions"
+            "normalized matrix rows must retain an ordered unique subsequence of match-site actions"
         )
     if any(row.action_id != case.actions[row.source_index].action_id for row in case.rows):
-        raise ValueError("normalized rows and source actions must agree for each retained row")
+        raise ValueError("normalized rows and match-site actions must agree for each retained row")
 
 
 __all__ = [

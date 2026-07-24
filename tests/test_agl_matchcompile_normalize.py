@@ -673,17 +673,17 @@ def test_model_rejects_invalid_occurrences_cells_and_normalized_matrices() -> No
     with pytest.raises(ValueError, match="actions must retain"):
         bad_action = replace(normalized.actions[0], source_index=1)
         replace(normalized, actions=(bad_action, normalized.actions[1]))
-    with pytest.raises(ValueError, match="rows and source actions"):
+    with pytest.raises(ValueError, match="rows and match-site actions"):
         bad_action = replace(normalized.actions[0], action_id=-1)
         replace(normalized, actions=(bad_action, normalized.actions[1]))
 
-    # Rows are the surviving ordered, unique subsequence of source actions.
+    # Rows are the surviving ordered, unique subsequence of match-site actions.
     assert replace(normalized, rows=(normalized.rows[1],)).rows[0].source_index == 1
     with pytest.raises(ValueError, match="ordered unique subsequence"):
         replace(normalized, rows=(normalized.rows[1], normalized.rows[0]))
     with pytest.raises(ValueError, match="ordered unique subsequence"):
         replace(normalized, rows=(normalized.rows[0], normalized.rows[0]))
-    with pytest.raises(ValueError, match="source action"):
+    with pytest.raises(ValueError, match="match-site action"):
         replace(normalized, rows=(replace(normalized.rows[0], action_id=-1),))
 
 

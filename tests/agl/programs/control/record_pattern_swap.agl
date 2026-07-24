@@ -1,0 +1,10 @@
+# An irrefutable record let inside a function uses the match pipeline end to end.
+record R
+  x: int
+  y: int
+
+def swap(r: R) -> R =
+  let R(x, y) = r
+  R(y, x)
+
+print swap(R(1, 2))

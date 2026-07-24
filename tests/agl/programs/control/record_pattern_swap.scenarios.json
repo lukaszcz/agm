@@ -1,0 +1,11 @@
+{
+  "scenarios": [
+    {
+      "name": "function_record_pattern_let_swaps_fields",
+      "expect": {
+        "stdout": "R(x = 2, y = 1)\n",
+        "calls": {}
+      }
+    }
+  ]
+}

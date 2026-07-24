@@ -132,17 +132,20 @@ config-file layers.
 
 ## Binders: `let` and `var`
 
-`let` carries a pattern; `var` binds a single mutable name. Both scope their
-binding over the **continuation** — the rest of the block and any enclosing
-continuation that consumes the block. Currently, only a name or `_` is
-supported as a `let` pattern; destructuring patterns are parsed but rejected.
-A final binder makes its block `unit`-valued unless its initializer exits, in
-which case the block is bottom-valued.
+`let` carries an immutable pattern; `var` binds a single mutable name. Both
+scope their binding over the **continuation** — the rest of the block and any
+enclosing continuation that consumes the block. A `let` pattern must be
+irrefutable for its complete initializer type, so destructuring has no runtime
+match failure. A final binder makes its block `unit`-valued unless its
+initializer exits, in which case the block is bottom-valued.
 
 ```agl
-let x = 3          # x is in scope below
-let y = x + 1      # y is in scope below
-y                  # block ends here; its value is y
+record Pair
+  left: int
+  right: int
+
+let Pair(left, right) = Pair(left = 3, right = 4)
+left + right       # the block's value is 7
 ```
 
 ## Inline forms

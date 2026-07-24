@@ -12,7 +12,7 @@ the first branch is optional; each additional branch is introduced by `|`.
 pattern        ::= pattern_atom ("as" name)*
 pattern_atom   ::= "_"                                    (* wildcard *)
                  | literal                                (* literal pattern *)
-                 | name                                   (* field-directed name or bare constructor *)
+                 | name                                   (* field-directed binder, let-root binder, or bare constructor *)
                  | name "(" pattern_fields? ")"          (* unqualified constructor *)
                  | qual_prefix type_qual? name
                      ("(" pattern_fields? ")")?           (* qualified constructor *)
@@ -59,9 +59,9 @@ case shape of
 
 ### Variable binders
 
-A variable binder is explicit: use an `as`-pattern. `_ as name` is the
-catch-all binder; a constructor or literal may also be followed by `as name`.
-The binder is immutable and branch-local.
+At a `case` branch root, a variable binder is explicit: use an `as`-pattern.
+`_ as name` is the catch-all binder; a constructor or literal may also be
+followed by `as name`. The binder is immutable and branch-local.
 
 <!-- agl-check: fragment -->
 ```agl
@@ -70,10 +70,12 @@ case result of
   | _ as other => print other
 ```
 
-A bare top-level name is never a variable binder. It must denote a visible
-nullary enum constructor. Ordinary value bindings do not alter constructor
-lookup in pattern position; capitalization carries no meaning
-([Lexical structure](lexical-structure.md)).
+At a `case` branch root, a bare name is never a variable binder: it must
+denote a visible nullary enum constructor. By contrast, a bare `let`-root name
+always introduces an immutable binder visible in the continuation; see
+[Bindings and scope](bindings-and-scope.md#let--immutable-binding). Ordinary
+value bindings do not alter case-constructor lookup; capitalization carries no
+meaning ([Lexical structure](lexical-structure.md)).
 
 ### Literal patterns
 
@@ -103,8 +105,8 @@ A constructor pattern matches one enum variant or one record value and
 optionally destructures its fields. A pattern is a constructor pattern when it
 is one of:
 
-- a **bare top-level name that denotes a visible constructor** — matches that
-  enum variant (nullary variants only; see below),
+- a **bare name at a `case` branch root that denotes a visible constructor** —
+  matches that enum variant (nullary variants only; see below),
 - a **call form** `name(…)`, where the parentheses may be empty, or
 - a **qualified** `Enum::variant`, `Record::Record(…)`,
   `module::Enum::variant`, or `module::Record` form.
@@ -123,13 +125,14 @@ def summarize(review: Review) -> text =
 
 The first branch could equivalently use bare `Pass` or explicit `Pass()`.
 
-A **bare** constructor name matches **nullary** variants only. A bare name for a
-variant that has fields is a static error directing you to an explicit form, so
-the discarded payload is acknowledged: write `Fail()` or destructure the
-fields. Empty parentheses ignore every payload field, including named-only fields. The call and qualified forms apply to every variant and to records;
-the bare form is a convenience for the common nullary case. A local record
-constructor such as `Record(…)` is an unqualified call form; its owner-qualified
-form repeats the record name: `Record::Record(…)`.
+When a bare name is classified as a constructor, it matches **nullary**
+variants only. A bare name for a variant that has fields is a static error
+directing you to an explicit form, so the discarded payload is acknowledged:
+write `Fail()` or destructure the fields. Empty parentheses ignore every payload
+field, including named-only fields. The call and qualified forms apply to every
+variant and to records; the bare form is a convenience for the common nullary
+case. A local record constructor such as `Record(…)` is an unqualified call
+form; its owner-qualified form repeats the record name: `Record::Record(…)`.
 
 Constructor ownership in patterns is directed by the scrutinee's static
 nominal type. When two enums share an unqualified variant spelling, or a record

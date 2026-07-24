@@ -436,9 +436,10 @@ A qualified variant pattern (`Option::some(value)`,
 owning enum and variant with `::`. A leading `/` is an anchored qualifier;
 without it, the qualifier is resolved as a suffix. The complete qualifier
 through `::` is byte-adjacent.
-Unqualified constructor ownership is selected by the scrutinee's static enum
-type, even when multiple enums share the variant name; a qualifier is optional
-and must agree with that type when present ([Generics](generics.md),
+Unqualified constructor ownership is selected by the scrutinee's static nominal
+type, even when multiple enums share a variant name or a record constructor
+spelling collides with an enum variant; a qualifier is optional and must agree
+with that type when present ([Generics](generics.md),
 [Pattern matching](pattern-matching.md)). Type arguments are carried by the
 scrutinee type rather than written in a pattern.
 

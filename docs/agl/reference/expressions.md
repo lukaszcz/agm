@@ -649,12 +649,12 @@ expression. A function declared `-> unit` has its body checked against
 
 ## `let` and `var` as expressions
 
-`let` and `var` are **binders**: `let` carries a pattern, while `var` binds a
-single mutable name. Both scope their binding over the *continuation* — the
-remaining items in the block. The type and value of a `let`/`var` binding is
-the type and value of the continuation, not of the bound expression. Currently,
-only a name or `_` is supported as a `let` pattern; destructuring patterns are
-parsed but rejected:
+`let` and `var` are **binders**: `let` carries an immutable pattern, while
+`var` binds a single mutable name. Both scope their binding over the
+*continuation* — the remaining items in the block. The type and value of a
+`let`/`var` binding is the type and value of the continuation, not of the bound
+expression. A `let` pattern may destructure records or enums, but must be
+irrefutable for the complete initializer type:
 
 ```agl
 let x = 3

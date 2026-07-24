@@ -8,6 +8,8 @@ The evaluator interprets the linked program and nothing else — it never import
 
 Recursion is bounded by a `max_call_depth` guard that raises a catchable `RecursionError`. Because the tree-walker spans several Python frames per AgL call, `run()` raises Python's recursion limit so the AgL guard is reached first; a Python `RecursionError` that still escapes (the limit is capped) is converted to the same catchable AgL exception (`ir_interpreter.py`).
 
+An `IrField` projection carries either exact nominal identity or a static upper-bound mode. The evaluator enforces identity only for exact projections; it does not name or implement any specific nominal hierarchy.
+
 ## Host-Backed Operations
 
 Host operations are dispatched by contract identity:

@@ -43,6 +43,8 @@ from agm.agl.ir.nodes import (
     IrConvert,
     IrDirectCall,
     IrEnumCaseKey,
+    IrField,
+    IrFieldMode,
     IrIf,
     IrIndirectCall,
     IrIterHasNext,
@@ -91,6 +93,7 @@ from agm.agl.semantics.types import (
     BoolType,
     DecimalType,
     DictType,
+    ExceptionType,
     IntType,
     JsonType,
     ListType,
@@ -282,6 +285,21 @@ def _simple_let_binder(initializer: object) -> IrBind:
     binder = leaf.items[0]
     assert isinstance(binder, IrBind)
     return binder
+
+
+def _ir_fields(value: object) -> tuple[IrField, ...]:
+    """Collect nested ``IrField`` nodes from one IR expression."""
+    if isinstance(value, IrField):
+        return (value,)
+    if isinstance(value, tuple):
+        return tuple(field_node for item in value for field_node in _ir_fields(item))
+    if not is_dataclass(value):
+        return ()
+    return tuple(
+        field_node
+        for data_field in fields(value)
+        for field_node in _ir_fields(getattr(value, data_field.name))
+    )
 
 
 def _contains_flexible_inference_state(value: object, seen: set[int]) -> bool:
@@ -975,6 +993,13 @@ class TestBindingLowering:
         assert prog.symbols[root_capture.symbol].public_name is None
         assert isinstance(decomposition, IrSequence)
         projections_and_leaf = decomposition.items
+        projected_fields = [
+            item.value
+            for item in projections_and_leaf[:-1]
+            if isinstance(item, IrBind) and isinstance(item.value, IrField)
+        ]
+        assert projected_fields
+        assert all(field.mode is IrFieldMode.EXACT for field in projected_fields)
         assert all(
             not isinstance(item, IrBind) or prog.symbols[item.symbol].public_name is None
             for item in projections_and_leaf[:-1]
@@ -1438,9 +1463,10 @@ class TestIrFieldLowering:
         from agm.agl.syntax.nodes import FieldAccess, UnitLit
         from agm.agl.syntax.spans import UNKNOWN_SOURCE, SourceSpan
 
-        # Build a CheckedModule from the trivial source "()" — we only need the
-        # resolved/type-table scaffolding, not the actual program body.
-        checked = _check("()")
+        # Build a CheckedModule with a concrete record declaration — we only
+        # need the resolved/type-table scaffolding, not the actual program body.
+        source = "record Point\n  myfield: int\n()"
+        checked = _check(source)
 
         # A fresh node_id not present in qualified_constructor_refs.
         fake_node_id = 99999
@@ -1459,11 +1485,60 @@ class TestIrFieldLowering:
         field_access = FieldAccess(obj=unit_lit, field="myfield", span=span, node_id=fake_node_id)
 
         checked.node_types[unit_lit.node_id] = RecordType("Point")
-        lowerer = _make_lowerer(checked, "()")
+        lowerer = _make_lowerer(checked, source)
         result = lowerer.lower_expr(field_access)
 
         assert isinstance(result, IrField)
         assert result.field == "myfield"
+        assert result.mode is IrFieldMode.EXACT
+
+    def test_abstract_exception_field_access_uses_upper_bound_mode(self) -> None:
+        """Field access on abstract Exception records a static upper bound."""
+        from agm.agl.modules.ids import PRELUDE_ID
+        from agm.agl.syntax.nodes import FieldAccess, UnitLit
+        from agm.agl.syntax.spans import UNKNOWN_SOURCE, SourceSpan
+
+        source = "()"
+        checked = _check(source)
+        fake_node_id = 99999
+        span = SourceSpan(
+            start_line=1,
+            start_col=1,
+            end_line=1,
+            end_col=5,
+            start_offset=0,
+            end_offset=4,
+            source=UNKNOWN_SOURCE,
+        )
+        unit_lit = UnitLit(span=span, node_id=fake_node_id + 1)
+        field_access = FieldAccess(obj=unit_lit, field="message", span=span, node_id=fake_node_id)
+
+        checked.node_types[unit_lit.node_id] = ExceptionType("Exception", PRELUDE_ID)
+        lowerer = _make_lowerer(checked, source)
+        result = lowerer.lower_expr(field_access)
+
+        assert isinstance(result, IrField)
+        assert result.mode is IrFieldMode.UPPER_BOUND
+
+    def test_base_exception_catch_field_access_lowers_to_upper_bound(self) -> None:
+        """A source catch binder uses the abstract declaration as its bound."""
+        source = """\
+let result = try
+  raise Abort(message = "failed")
+catch Exception as error =>
+  error.message
+result
+"""
+        program = _lower(source)
+        projections = tuple(
+            field
+            for initializer in program.modules[program.entry_module].initializers
+            for field in _ir_fields(initializer)
+            if field.field == "message"
+        )
+
+        assert projections
+        assert all(field.mode is IrFieldMode.UPPER_BOUND for field in projections)
 
     def test_kind_for_non_container_raises_assertion(self) -> None:
         """_kind_for_container raises AssertionError for a non-container type.

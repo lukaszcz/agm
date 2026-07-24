@@ -99,6 +99,7 @@ from agm.agl.ir.nodes import (
     IrExec,
     IrExpr,
     IrField,
+    IrFieldMode,
     IrFunctionParam,
     IrIf,
     IrIndex,
@@ -272,11 +273,21 @@ def _check_nominal_in_table(nominal: NominalId, ctx: _Context) -> None:
         )
 
 
-def _check_nominal_field(nominal: NominalId, field: str, ctx: _Context) -> None:
-    """Reject a field projection outside a registered nominal's shape."""
+def _check_nominal_field(nominal: NominalId, field: str, mode: IrFieldMode, ctx: _Context) -> None:
+    """Reject a projection outside the declaring nominal's field shape.
+
+    Exact and upper-bound projections use the same declaration descriptor for
+    field existence. The mode changes runtime identity checking, not which
+    fields the statically selected nominal declares.
+    """
     desc = ctx.program.nominals.get(nominal)
     if desc is None:  # pragma: no cover
         return  # already caught by _check_nominal_in_table
+    match mode:
+        case IrFieldMode.EXACT | IrFieldMode.UPPER_BOUND:
+            pass
+        case _ as _unreachable_mode:  # pragma: no cover
+            assert_never(_unreachable_mode)
     if desc.kind is NominalKind.ENUM:
         known_fields = {name for variant in desc.variants for name in variant.fields}
     else:
@@ -888,13 +899,13 @@ def _validate_expr_node(node: IrExpr, ctx: _Context) -> None:
                 raise InvalidIrError("IrUnary NEG: kind must not be None")
             _validate_expr(val, ctx)
 
-        case IrField(value=val, nominal=nominal, field=field):
+        case IrField(value=val, nominal=nominal, field=field, mode=mode):
             _validate_location(node.location, ctx)
             if not field:
                 raise InvalidIrError("IrField field must be non-empty")
             if ctx.deep:
                 _check_nominal_in_table(nominal, ctx)
-                _check_nominal_field(nominal, field, ctx)
+                _check_nominal_field(nominal, field, mode, ctx)
             _validate_expr(val, ctx)
 
         case IrIndex(kind=_kind, value=val, index=idx):

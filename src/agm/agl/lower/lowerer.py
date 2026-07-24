@@ -77,6 +77,7 @@ from agm.agl.ir.nodes import (
     IrExec,
     IrExpr,
     IrField,
+    IrFieldMode,
     IrFunctionParam,
     IrIf,
     IrIfBranch,
@@ -1158,12 +1159,13 @@ class _Lowerer:
             # ----------------------------------------------------------
             case FieldAccess(obj=obj_expr, field=field_name, span=span):
                 obj_type = self._node_type(obj_expr.node_id)
-                nominal, _display = self._nominal_for_constructor_result(obj_type)
+                nominal, _display, mode = self._nominal_for_field_projection(obj_type)
                 return IrField(
                     location=self._loc(span),
                     value=self.lower_expr(obj_expr),
                     nominal=nominal,
                     field=field_name,
+                    mode=mode,
                 )
 
             # ----------------------------------------------------------
@@ -1900,6 +1902,16 @@ class _Lowerer:
         if isinstance(typ, (RecordType, EnumType, ExceptionType)):
             return NominalId(typ.module_id, typ.name), typ.name
         raise AssertionError(f"constructor function has non-nominal result {typ!r}")
+
+    def _nominal_for_field_projection(self, typ: Type) -> tuple[NominalId, str, IrFieldMode]:
+        """Return a nominal and mode from declaration metadata, never a name test."""
+        nominal, display_name = self._nominal_for_constructor_result(typ)
+        typedef = self._checked.type_env.type_table.get(nominal.module_id, nominal.declared_name)
+        assert typedef is not None, (
+            f"compiler bug: no nominal declaration for field projection {nominal!r}"
+        )
+        mode = IrFieldMode.UPPER_BOUND if typedef.abstract else IrFieldMode.EXACT
+        return nominal, display_name, mode
 
     def _lower_nullary_constructor(
         self,
@@ -2776,6 +2788,7 @@ class _Lowerer:
                         IrLoad(location, symbol_for_occurrence(parent)),
                         nominal,
                         occurrence.provenance.field_name,
+                        mode=IrFieldMode.EXACT,
                     ),
                 )
                 for occurrence in demanded_children(parent, constructor, demanded)

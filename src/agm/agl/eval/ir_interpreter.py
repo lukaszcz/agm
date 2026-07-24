@@ -70,6 +70,7 @@ from agm.agl.ir.nodes import (
     IrExec,
     IrExpr,
     IrField,
+    IrFieldMode,
     IrFunctionParam,
     IrIf,
     IrIndex,
@@ -123,7 +124,7 @@ from agm.agl.ir.program import (
     IrFunctionBody,
 )
 from agm.agl.ir.validate import InvalidIrError
-from agm.agl.modules.ids import PRELUDE_ID, ModuleId
+from agm.agl.modules.ids import ModuleId
 from agm.agl.runtime.agents import AgentRegistry
 from agm.agl.runtime.codec import ParseResult, _parse_contract_output
 from agm.agl.runtime.convert import StrictJsonParseError, parse_json_strict
@@ -258,24 +259,32 @@ def _make_literal_key_value(key: IrLiteralCaseKey) -> Value:
     return JsonValue(None)
 
 
-_EXCEPTION_NOMINAL = NominalId(PRELUDE_ID, "Exception")
-
-
-def _project_nominal_field(value: Value, nominal: NominalId, field: str) -> Value:
+def _project_nominal_field(
+    value: Value, nominal: NominalId, field: str, mode: IrFieldMode
+) -> Value:
     """Read one declared field from a nominal runtime value.
 
     Records, enum payloads, and exceptions all retain their nominal identity and
     field mapping at runtime, so this is the one typeless projection mechanism.
+    Exact projections require identity equality; upper-bound projections do not
+    check identity because the static layer already proved the field exists on
+    every value admitted by the bound.
     """
     if not isinstance(value, (RecordValue, EnumValue, ExceptionValue)):
         raise InvalidIrError(
             "IrField: expected RecordValue, EnumValue, or ExceptionValue, "
             f"got {type(value).__name__}"
         )
-    if value.nominal != nominal and not (
-        isinstance(value, ExceptionValue) and nominal == _EXCEPTION_NOMINAL
-    ):
-        raise InvalidIrError(f"IrField: expected nominal {nominal!r}, got {value.nominal!r}")
+    match mode:
+        case IrFieldMode.EXACT:
+            if value.nominal != nominal:
+                raise InvalidIrError(
+                    f"IrField: expected nominal {nominal!r}, got {value.nominal!r}"
+                )
+        case IrFieldMode.UPPER_BOUND:
+            pass
+        case _ as _unreachable_mode:  # pragma: no cover
+            assert_never(_unreachable_mode)
     try:
         return value.fields[field]
     except KeyError:
@@ -1171,8 +1180,8 @@ class IrInterpreter:
                     case _ as _unreachable_unary:  # pragma: no cover
                         assert_never(_unreachable_unary)
 
-            case IrField(value=val_expr, nominal=nominal, field=field_name):
-                return _project_nominal_field(self._eval(val_expr), nominal, field_name)
+            case IrField(value=val_expr, nominal=nominal, field=field_name, mode=mode):
+                return _project_nominal_field(self._eval(val_expr), nominal, field_name, mode)
 
             case IrIndex(kind=kind, value=val_expr, index=idx_expr):
                 container = self._eval(val_expr)
@@ -1329,6 +1338,7 @@ class IrInterpreter:
                                 subject_val,
                                 key.nominal,
                                 field_name,
+                                IrFieldMode.EXACT,
                             )
                     return self._eval(arm.body)
                 if default is not None:

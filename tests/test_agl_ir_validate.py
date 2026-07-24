@@ -46,6 +46,7 @@ from agm.agl.ir import (
     IrDirectCall,
     IrEnumCaseKey,
     IrField,
+    IrFieldMode,
     IrFunctionBody,
     IrFunctionParam,
     IrIndex,
@@ -1195,15 +1196,55 @@ class TestIrFieldValidation:
             ),
         ),
     )
+    @pytest.mark.parametrize("mode", (IrFieldMode.EXACT, IrFieldMode.UPPER_BOUND))
     def test_ir_field_unknown_nominal_field_fails_deep_validation(
-        self, descriptor: NominalDescriptor
+        self, descriptor: NominalDescriptor, mode: IrFieldMode
     ) -> None:
         prog = _make_program(
-            initializers=(IrBind(LOC, SYM0, IrField(LOC, IrConstInt(LOC, 1), NOM0, "missing")),),
+            initializers=(
+                IrBind(
+                    LOC,
+                    SYM0,
+                    IrField(
+                        LOC,
+                        IrConstInt(LOC, 1),
+                        NOM0,
+                        "missing",
+                        mode=mode,
+                    ),
+                ),
+            ),
             nominals={NOM0: descriptor},
         )
         with pytest.raises(InvalidIrError, match="unknown field"):
             validate_ir(prog, deep=True)
+
+    def test_ir_field_upper_bound_uses_declaring_nominal_fields(self) -> None:
+        """Upper-bound mode validates against the bound nominal descriptor."""
+        prog = _make_program(
+            initializers=(
+                IrBind(
+                    LOC,
+                    SYM0,
+                    IrField(
+                        LOC,
+                        IrConstInt(LOC, 1),
+                        NOM0,
+                        "x",
+                        mode=IrFieldMode.UPPER_BOUND,
+                    ),
+                ),
+            ),
+            nominals={
+                NOM0: NominalDescriptor(
+                    nominal=NOM0,
+                    display_name="Foo",
+                    kind=NominalKind.RECORD,
+                    fields=("x",),
+                )
+            },
+        )
+        validate_ir(prog, deep=True)
 
     def test_ir_field_empty_name_fails_shallow_validation(self) -> None:
         prog = _make_program(

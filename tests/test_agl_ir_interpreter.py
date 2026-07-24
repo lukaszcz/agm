@@ -49,6 +49,7 @@ from agm.agl.ir import (
     IrDirectCall,
     IrExpr,
     IrField,
+    IrFieldMode,
     IrFunctionBody,
     IrFunctionParam,
     IrIndex,
@@ -80,7 +81,7 @@ from agm.agl.ir import (
     VariantDescriptor,
 )
 from agm.agl.ir.ids import NominalId
-from agm.agl.modules.ids import ENTRY_ID
+from agm.agl.modules.ids import ENTRY_ID, PRELUDE_ID
 from agm.agl.semantics.values import (
     VOID_VALUE,
     BoolValue,
@@ -1108,6 +1109,56 @@ class TestIrField:
                 y_val=4,
                 expected_nominal=NominalId(ENTRY_ID, "Other"),
             )
+
+    def _run_with_exception_field(self, field: str, mode: IrFieldMode) -> Value:
+        """Project *field* from a concrete exception using *mode*."""
+        exception_nominal = NominalId(PRELUDE_ID, "Abort")
+        base_nominal = NominalId(PRELUDE_ID, "Exception")
+        rec_sym, rec_desc = _let_sym(0, "exc")
+        out_sym, out_desc = _let_sym(1, "out")
+        prog = _make_program(
+            (
+                IrBind(
+                    _LOC,
+                    rec_sym,
+                    IrMakeException(
+                        _LOC,
+                        exception_nominal,
+                        "Abort",
+                        (("message", IrConstText(_LOC, "stop")),),
+                    ),
+                ),
+                IrBind(
+                    _LOC,
+                    out_sym,
+                    IrField(
+                        _LOC,
+                        IrLoad(_LOC, rec_sym),
+                        base_nominal,
+                        field,
+                        mode=mode,
+                    ),
+                ),
+            ),
+            {rec_sym: rec_desc, out_sym: out_desc},
+        )
+        return IrInterpreter(prog).run()["out"]
+
+    def test_ir_field_exact_rejects_exception_subtype_as_base(self) -> None:
+        """Exact projections do not use exception hierarchy relationships."""
+        with pytest.raises(InvalidIrError, match="expected nominal"):
+            self._run_with_exception_field("message", IrFieldMode.EXACT)
+
+    def test_ir_field_upper_bound_reads_base_exception_field(self) -> None:
+        """Upper-bound projections read fields declared by the static bound."""
+        assert self._run_with_exception_field("message", IrFieldMode.UPPER_BOUND) == TextValue(
+            "stop"
+        )
+
+    def test_ir_field_upper_bound_rejects_absent_field(self) -> None:
+        """Upper-bound mode still rejects a field absent from the runtime value."""
+        with pytest.raises(InvalidIrError, match="lacks field"):
+            self._run_with_exception_field("detail", IrFieldMode.UPPER_BOUND)
 
     def test_ir_field_reads_enum_payload_field(self) -> None:
         """IrField uses the same nominal projection contract for enum payloads."""

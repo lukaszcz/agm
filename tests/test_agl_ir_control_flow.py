@@ -462,6 +462,21 @@ r
     assert ir["r"] == TextValue("catchall msg")
 
 
+def test_try_specific_catch_with_binding_reads_concrete_exception_field() -> None:
+    """A concrete exception projection reads its own declared field exactly."""
+    source = """\
+exception AppError extends Exception
+  detail: text
+let r = try
+  raise AppError(message = "failed", detail = "details")
+catch AppError as e =>
+  e.detail
+r
+"""
+    ir = evaluate_ir(source)
+    assert ir["r"] == TextValue("details")
+
+
 # ---------------------------------------------------------------------------
 # IR evaluation tests — first-match ordering
 # ---------------------------------------------------------------------------

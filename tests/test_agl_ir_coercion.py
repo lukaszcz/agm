@@ -33,7 +33,7 @@ from __future__ import annotations
 
 import decimal
 
-from agm.agl.ir.nodes import IrBind, IrCoerce, IrMakeDict, IrMakeList
+from agm.agl.ir.nodes import IrCoerce, IrMakeDict, IrMakeList
 from agm.agl.ir.operations import IntToDecimal, ToJson
 from agm.agl.ir.program import ExecutableProgram
 from agm.agl.lower import lower_module
@@ -49,6 +49,7 @@ from agm.agl.semantics.values import (
     Value,
 )
 from agm.agl.typecheck import check_module
+from tests._agl_helpers import let_root_capture
 from tests.agl.ir_harness import _compiled_checked, base_caps, evaluate_ir
 
 # ---------------------------------------------------------------------------
@@ -75,8 +76,7 @@ def test_identity_int_let() -> None:
     # Structural: the IR bind value is a plain IrConstInt (no IrCoerce).
     prog = _lower(source)
     inits = prog.modules[prog.entry_module].initializers
-    bind = inits[0]
-    assert isinstance(bind, IrBind)
+    bind = let_root_capture(inits[0])
     assert not isinstance(bind.value, IrCoerce)
 
 
@@ -96,8 +96,7 @@ def test_identity_list_int() -> None:
     # Structural: no IrCoerce around the IrMakeList.
     prog = _lower(source)
     inits = prog.modules[prog.entry_module].initializers
-    bind = inits[0]
-    assert isinstance(bind, IrBind)
+    bind = let_root_capture(inits[0])
     assert isinstance(bind.value, IrMakeList)
     for item in bind.value.items:
         assert not isinstance(item, IrCoerce)
@@ -124,8 +123,7 @@ def test_int_to_decimal_scalar() -> None:
     # Structural: the bind value is IrCoerce(IrConstInt, IntToDecimal).
     prog = _lower(source)
     inits = prog.modules[prog.entry_module].initializers
-    bind = inits[0]
-    assert isinstance(bind, IrBind)
+    bind = let_root_capture(inits[0])
     coerce = bind.value
     assert isinstance(coerce, IrCoerce)
     assert coerce.operation == IntToDecimal()
@@ -159,8 +157,7 @@ def test_list_decimal_element_coercion() -> None:
     # Structural: elements inside IrMakeList are wrapped in IrCoerce(IntToDecimal).
     prog = _lower(source)
     inits = prog.modules[prog.entry_module].initializers
-    bind = inits[0]
-    assert isinstance(bind, IrBind)
+    bind = let_root_capture(inits[0])
     make_list = bind.value
     assert isinstance(make_list, IrMakeList)
     for item in make_list.items:
@@ -199,8 +196,7 @@ def test_list_ref_identity_no_coercion() -> None:
 
     prog = _lower(source)
     inits = prog.modules[prog.entry_module].initializers
-    bind_b = inits[1]
-    assert isinstance(bind_b, IrBind)
+    bind_b = let_root_capture(inits[1])
     assert isinstance(bind_b.value, IrLoad)
 
 
@@ -230,8 +226,7 @@ def test_list_int_ref_to_json() -> None:
 
     prog = _lower(source)
     inits = prog.modules[prog.entry_module].initializers
-    bind_j = inits[1]
-    assert isinstance(bind_j, IrBind)
+    bind_j = let_root_capture(inits[1])
     coerce = bind_j.value
     assert isinstance(coerce, IrCoerce)
     assert coerce.operation == ToJson()
@@ -278,8 +273,7 @@ def test_to_json_list_literal() -> None:
     # Structural: the whole IrMakeList is wrapped in IrCoerce(ToJson).
     prog = _lower(source)
     inits = prog.modules[prog.entry_module].initializers
-    bind = inits[0]
-    assert isinstance(bind, IrBind)
+    bind = let_root_capture(inits[0])
     coerce = bind.value
     assert isinstance(coerce, IrCoerce)
     assert coerce.operation == ToJson()
@@ -300,8 +294,7 @@ def test_dict_text_json_from_int_values() -> None:
     # Structural: the IrMakeDict entry VALUE nodes are wrapped in IrCoerce(ToJson).
     prog = _lower(source)
     inits = prog.modules[prog.entry_module].initializers
-    bind = inits[0]
-    assert isinstance(bind, IrBind)
+    bind = let_root_capture(inits[0])
     make_dict = bind.value
     assert isinstance(make_dict, IrMakeDict)
     for _key_node, value_node in make_dict.entries:
@@ -341,8 +334,7 @@ def test_dict_int_ref_to_json() -> None:
 
     prog = _lower(source)
     inits = prog.modules[prog.entry_module].initializers
-    bind_j = inits[1]
-    assert isinstance(bind_j, IrBind)
+    bind_j = let_root_capture(inits[1])
     coerce = bind_j.value
     assert isinstance(coerce, IrCoerce)
     assert coerce.operation == ToJson()

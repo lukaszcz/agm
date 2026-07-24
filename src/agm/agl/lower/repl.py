@@ -102,7 +102,7 @@ def lower_repl_entry(
         ENTRY_ID,
         source_id,
         source_text,
-        compiled_entry.cases,
+        compiled_entry.sites,
         contract_payloads=contract_payloads,
     )
     program = lowerer.lower()

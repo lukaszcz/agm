@@ -171,7 +171,7 @@ def lower_program(
             _entry_source_text
             if mid.is_entry and _entry_source_text is not None
             else cm.source_text,
-            compiled.cases_by_module[mid],
+            compiled.sites_by_module[mid],
             contract_payloads=contract_payloads,
         )
         module_lowerers[mid] = lowerer

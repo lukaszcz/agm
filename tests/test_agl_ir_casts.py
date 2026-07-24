@@ -235,11 +235,17 @@ def _bound_value(source: str, name: str):
     prog = _lower(source)
     entry = prog.modules[prog.entry_module]
     for node in entry.initializers:
-        if isinstance(node, IrBind):
-            desc = prog.symbols.get(node.symbol)
+        if not isinstance(node, IrSequence):
+            continue
+        root_capture, leaf = node.items
+        if not isinstance(root_capture, IrBind) or not isinstance(leaf, IrSequence):
+            continue
+        binder = leaf.items[0]
+        if isinstance(binder, IrBind):
+            desc = prog.symbols.get(binder.symbol)
             if desc is not None and desc.public_name == name:
-                return node.value
-    raise AssertionError(f"no IrBind for {name!r}")
+                return root_capture.value
+    raise AssertionError(f"no let root capture for {name!r}")
 
 
 def test_golden_as_lowers_to_ir_convert_raise() -> None:

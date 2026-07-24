@@ -1435,6 +1435,28 @@ class TestFunctionEvaluation:
 
         assert result["result"] == IntValue(42)
 
+    def test_non_function_closure_binding_evaluates_without_preinstallation(self) -> None:
+        """A closure bound to a non-function symbol is evaluated by its initializer."""
+        closure_sym = SymbolId(201)
+        fn_desc = _make_fn_descriptor(IrConstInt(_LOC, 42))
+        prog = _make_program(
+            initializers=(IrBind(_LOC, closure_sym, IrMakeClosure(_LOC, _FN_ID, ())),),
+            symbols={
+                _FN_SID: _fn_sym_desc(),
+                closure_sym: SymbolDescriptor(
+                    symbol_id=closure_sym,
+                    mutable=False,
+                    public_name="closure",
+                    owner=ENTRY_ID,
+                ),
+            },
+            functions={_FN_ID: fn_desc},
+        )
+
+        result = IrInterpreter(prog).run()
+
+        assert "closure" in result
+
     def test_param_default_can_call_top_level_function(self) -> None:
         """Entry param defaults can call functions whose closure initializer appears later."""
         from agm.agl.ir.program import IrParam

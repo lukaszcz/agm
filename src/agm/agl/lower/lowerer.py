@@ -31,7 +31,7 @@ from __future__ import annotations
 
 import decimal
 import json
-from collections.abc import Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import assert_never, cast
@@ -142,7 +142,7 @@ from agm.agl.lower.coercions import compile_coercion
 from agm.agl.lower.conversions import compile_recipe
 from agm.agl.matchcompile import (
     BoolConstructor,
-    CompiledCase,
+    CompiledMatchSite,
     Constructor,
     Decision,
     DecisionDecompose,
@@ -238,9 +238,7 @@ from agm.agl.syntax.nodes import (
     UnaryNot,
     UnitLit,
     VarDecl,
-    VarPattern,
     VarRef,
-    WildcardPattern,
     pattern_binder_candidates,
 )
 from agm.agl.syntax.spans import SourceSpan
@@ -359,7 +357,7 @@ class _Lowerer:
         module_id: ModuleId,
         source_id: SourceId,
         source_text: str,
-        cases: Mapping[int, CompiledCase],
+        sites: Mapping[int, CompiledMatchSite],
         *,
         contract_payloads: Mapping[int, ContractPayload] | None = None,
     ) -> None:
@@ -368,7 +366,7 @@ class _Lowerer:
         self._module_id = module_id
         self._source_id = source_id
         self._source_text = normalize_newlines(source_text)
-        self._compiled_cases = cases
+        self._compiled_sites = sites
         self._params: list[IrParam] = []
         # Shared TypeTable built during checking; resolves record/enum field
         # and variant shapes for constructor lowering, nominal descriptors,
@@ -519,11 +517,12 @@ class _Lowerer:
     )
 
     def _pattern_binding_ids(self, pattern: Pattern, out: set[int]) -> None:
-        """Collect node ids of binders through the shared syntax helper."""
+        """Collect checker-selected declaration ids for source pattern binders."""
         classifications = self._checked.pattern_classifications
         for candidate in pattern_binder_candidates(pattern):
             if candidate.is_as_pattern or classifications.get(candidate.node_id) is None:
-                out.add(candidate.node_id)
+                binding = self._checked.pattern_binding_for(candidate.node_id)
+                out.add(binding.decl_node_id if binding is not None else candidate.node_id)
 
     def _record_capture(
         self, node_id: int, local_ids: set[int], captured: dict[int, BindingRef]
@@ -569,7 +568,11 @@ class _Lowerer:
                 | InfixDecl()
             ):
                 return
-            case LetDecl() | VarDecl():
+            case LetDecl():
+                local_ids.add(node.node_id)
+                self._pattern_binding_ids(node.pattern, local_ids)
+                self._scan_captures(node.value, local_ids, captured)
+            case VarDecl():
                 local_ids.add(node.node_id)
                 self._scan_captures(node.value, local_ids, captured)
             case AssignStmt():
@@ -2519,8 +2522,32 @@ class _Lowerer:
         )
 
     # ------------------------------------------------------------------
-    # Case expression helpers
+    # Compiled match-site decision helpers
     # ------------------------------------------------------------------
+
+    @staticmethod
+    def _decision_binder_names(compiled: CompiledMatchSite) -> dict[int, str]:
+        """Collect each DAG leaf binder once, keyed by its pattern node id."""
+        names: dict[int, str] = {}
+        visited: set[int] = set()
+
+        def visit(decision: Decision) -> None:
+            if id(decision) in visited:
+                return
+            visited.add(id(decision))
+            if isinstance(decision, DecisionLeaf):
+                for assignment in decision.binder_assignments:
+                    names.setdefault(assignment.binder.node_id, assignment.binder.name)
+            elif isinstance(decision, DecisionDecompose):
+                visit(decision.child)
+            elif isinstance(decision, DecisionSwitch):
+                for branch in decision.keyed_children:
+                    visit(branch.decision)
+                if decision.default is not None:
+                    visit(decision.default)
+
+        visit(compiled.root)
+        return names
 
     def _lower_case(
         self,
@@ -2530,12 +2557,100 @@ class _Lowerer:
         span: "SourceSpan",
         result_type: Type,
     ) -> IrSequence:
-        """Lower one compiled decision DAG without re-reading source patterns."""
-        compiled = self._compiled_cases.get(case_node_id)
+        """Lower a case's actions through the shared decision traversal."""
+        compiled = self._compiled_sites.get(case_node_id)
         assert compiled is not None, (
             f"compiler bug: no compiled decision for case node {case_node_id}"
         )
+        binder_symbols = {
+            node_id: self._alloc_sym(node_id, name=name, mutable=False, public=False)
+            for node_id, name in self._decision_binder_names(compiled).items()
+        }
+        action_bodies: dict[int, IrExpr] = {}
+        for action in compiled.case_actions:
+            branch = branches[action.source_index]
+            assert branch.body.node_id == action.body_node_id, (
+                "compiler bug: decision action does not identify its source body"
+            )
+            action_bodies[action.action_id] = self.lower_coerced(branch.body, result_type)
+
         location = self._loc(span)
+
+        def lower_leaf(
+            decision: DecisionLeaf, occurrence_symbol: Callable[[OccurrenceId], SymbolId]
+        ) -> IrExpr:
+            bindings = tuple(
+                IrBind(
+                    location,
+                    binder_symbols[assignment.binder.node_id],
+                    IrLoad(location, occurrence_symbol(assignment.occurrence)),
+                )
+                for assignment in decision.binder_assignments
+            )
+            body = action_bodies[decision.action_id]
+            return IrSequence(location, (*bindings, body)) if bindings else body
+
+        return self._lower_compiled_decision(
+            compiled,
+            self.lower_expr(subject_expr),
+            location,
+            lower_leaf,
+        )
+
+    def _lower_pattern_let(self, let: LetDecl, *, top_level: bool) -> IrSequence:
+        """Lower one irrefutable immutable pattern binding through its decision DAG."""
+        compiled = self._compiled_sites.get(let.node_id)
+        assert compiled is not None, (
+            f"compiler bug: no compiled decision for let node {let.node_id}"
+        )
+        matched_type = self._checked.let_matched_types.get(let.node_id)
+        assert matched_type is not None, f"compiler bug: no matched type for let node {let.node_id}"
+        binder_symbols: dict[int, SymbolId] = {}
+        for node_id, name in self._decision_binder_names(compiled).items():
+            binding = self._checked.pattern_binding_for(node_id)
+            assert binding is not None and binding.kind is BinderKind.let_binding, (
+                f"compiler bug: no selected immutable binding for let pattern node {node_id}"
+            )
+            binder_symbols[node_id] = self._alloc_sym(
+                binding.decl_node_id,
+                name=name,
+                mutable=False,
+                public=top_level,
+            )
+        location = self._loc(let.span)
+        (action,) = compiled.actions
+
+        def lower_leaf(
+            decision: DecisionLeaf, occurrence_symbol: Callable[[OccurrenceId], SymbolId]
+        ) -> IrExpr:
+            assert decision.action_id == action.action_id, (
+                "compiler bug: let decision selected an unknown binding action"
+            )
+            bindings = tuple(
+                IrBind(
+                    location,
+                    binder_symbols[assignment.binder.node_id],
+                    IrLoad(location, occurrence_symbol(assignment.occurrence)),
+                )
+                for assignment in decision.binder_assignments
+            )
+            return IrSequence(location, (*bindings, IrConstUnit(location)))
+
+        return self._lower_compiled_decision(
+            compiled,
+            self.lower_coerced(let.value, matched_type),
+            location,
+            lower_leaf,
+        )
+
+    def _lower_compiled_decision(
+        self,
+        compiled: CompiledMatchSite,
+        root_value: IrExpr,
+        location: Location,
+        lower_leaf: "Callable[[DecisionLeaf, Callable[[OccurrenceId], SymbolId]], IrExpr]",
+    ) -> IrSequence:
+        """Lower a case or let decision through one shared occurrence DAG."""
         root_symbol = self._alloc_synthetic_sym(mutable=False)
         occurrence_symbols: dict[OccurrenceId, SymbolId] = {
             compiled.normalized.root.id: root_symbol
@@ -2551,12 +2666,7 @@ class _Lowerer:
                 field_children_by_group.setdefault(
                     (provenance.parent, provenance.constructor), []
                 ).append(occurrence)
-        actions = {action.action_id: action for action in compiled.case_actions}
-        branch_by_action = {
-            action.action_id: branches[action.source_index] for action in compiled.case_actions
-        }
         decision_memo: dict[int, IrExpr] = {}
-        action_body_memo: dict[int, IrExpr] = {}
 
         def symbol_for_occurrence(identifier: OccurrenceId) -> SymbolId:
             symbol = occurrence_symbols.get(identifier)
@@ -2567,42 +2677,6 @@ class _Lowerer:
                 symbol = self._alloc_synthetic_sym(mutable=False)
                 occurrence_symbols[identifier] = symbol
             return symbol
-
-        binder_names: dict[int, str] = {}
-        visited_decisions: set[int] = set()
-
-        def collect_binders(decision: Decision) -> None:
-            identifier = id(decision)
-            if identifier in visited_decisions:
-                return
-            visited_decisions.add(identifier)
-            if isinstance(decision, DecisionLeaf):
-                for assignment in decision.binder_assignments:
-                    binder = assignment.binder
-                    binder_names.setdefault(binder.node_id, binder.name)
-                return
-            if isinstance(decision, DecisionDecompose):
-                collect_binders(decision.child)
-                return
-            if isinstance(decision, DecisionSwitch):
-                for decision_branch in decision.keyed_children:
-                    collect_binders(decision_branch.decision)
-                if decision.default is not None:
-                    collect_binders(decision.default)
-                return
-            return  # DecisionFail carries no source binders.
-
-        collect_binders(compiled.root)
-        binder_symbols = {
-            node_id: self._alloc_sym(node_id, name=name, mutable=False, public=False)
-            for node_id, name in binder_names.items()
-        }
-        for action_id, action in actions.items():
-            source_branch = branch_by_action[action_id]
-            assert source_branch.body.node_id == action.body_node_id, (
-                "compiler bug: decision action does not identify its source body"
-            )
-            action_body_memo[action_id] = self.lower_coerced(source_branch.body, result_type)
 
         def case_key(constructor: Constructor) -> IrCaseKey:
             if isinstance(constructor, EnumConstructor):
@@ -2676,19 +2750,7 @@ class _Lowerer:
             if cached is not None:
                 return cached
             if isinstance(decision, DecisionLeaf):
-                bindings = tuple(
-                    IrBind(
-                        location,
-                        binder_symbols[assignment.binder.node_id],
-                        IrLoad(
-                            location,
-                            symbol_for_occurrence(assignment.occurrence),
-                        ),
-                    )
-                    for assignment in decision.binder_assignments
-                )
-                body = action_body_memo[decision.action_id]
-                lowered_leaf: IrExpr = IrSequence(location, (*bindings, body)) if bindings else body
+                lowered_leaf = lower_leaf(decision, symbol_for_occurrence)
                 decision_memo[id(decision)] = lowered_leaf
                 return lowered_leaf
 
@@ -2747,7 +2809,7 @@ class _Lowerer:
         return IrSequence(
             location,
             (
-                IrBind(location, root_symbol, self.lower_expr(subject_expr)),
+                IrBind(location, root_symbol, root_value),
                 decision,
             ),
         )
@@ -2938,17 +3000,15 @@ class _Lowerer:
             # ----------------------------------------------------------
             # Binders
             # ----------------------------------------------------------
-            case LetDecl(pattern=WildcardPattern(), value=rhs) | VarDecl(name="_", value=rhs):
+            case VarDecl(name="_", value=rhs):
                 return self.lower_expr(rhs)
 
-            case LetDecl(pattern=VarPattern(name=name), value=rhs, span=span, node_id=nid):
-                sym = self._alloc_sym(nid, name=name, mutable=False, public=top_level)
-                binding_type = self._binding_type(nid)
-                ir_val = self.lower_coerced(rhs, binding_type)
-                return IrBind(location=self._loc(span), symbol=sym, value=ir_val)
-
-            case LetDecl():
-                raise NotImplementedError("destructuring let patterns are not lowered yet")
+            # Every immutable let, including simple-name and discard patterns,
+            # lowers through its compiled match site. This captures its RHS once
+            # in the private root occurrence and lets the shared decision DAG
+            # select the checked binding(s) and unit result.
+            case LetDecl() as let:
+                return self._lower_pattern_let(let, top_level=top_level)
 
             case VarDecl(name=name, value=rhs, span=span, node_id=nid):
                 sym = self._alloc_sym(nid, name=name, mutable=True, public=top_level)
@@ -3326,7 +3386,7 @@ def lower_module(
         ENTRY_ID,
         source_id,
         source_text,
-        compiled.cases,
+        compiled.sites,
         contract_payloads=contract_payloads,
     )
     program = lowerer.lower()

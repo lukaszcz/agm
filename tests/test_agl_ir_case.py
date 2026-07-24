@@ -298,6 +298,56 @@ r"""
     assert ir["r"] == IntValue(3)
 
 
+def test_pattern_let_evaluates_initializer_once_and_binds_nested_values() -> None:
+    """A binding-mode leaf reuses its captured occurrences for every binder read."""
+    src = """\
+record Pair
+  left: int
+  right: int
+var calls = 0
+def make() -> Pair =
+  calls := calls + 1
+  Pair(left = 2, right = 3)
+let Pair(left, right) = make()
+left + right + calls
+"""
+    values = evaluate_ir(src)
+    assert values["calls"] == IntValue(1)
+    assert values["left"] == IntValue(2)
+    assert values["right"] == IntValue(3)
+
+
+def test_pattern_let_binders_are_local_to_function_capture_analysis() -> None:
+    """A function's own pattern binders are not mistaken for outer captures."""
+    src = """\
+record Pair
+  left: int
+  right: int
+def sum_pair() -> int =
+  let Pair(left, right) = Pair(left = 2, right = 3)
+  left + right
+let result = sum_pair()
+result
+"""
+    assert evaluate_ir(src)["result"] == IntValue(5)
+
+
+def test_pattern_let_omits_undemanded_fields_and_propagates_bottom_initializer() -> None:
+    """Only binder-needed fields are read; a bottom initializer never reaches bindings."""
+    src = """\
+record Pair
+  left: int
+  right: int
+def stop() -> Pair = raise Abort(message = "stop")
+let Pair(left, right): Pair = stop()
+left + right
+"""
+    from tests.agl.ir_harness import evaluate_ir_raises
+
+    failure = evaluate_ir_raises(src)
+    assert failure.display_name == "Abort"
+
+
 def test_case_record_and_singleton_enum_decompositions_execute_without_discriminants() -> None:
     """Closed records and singleton enums destructure through their payload fields."""
     src = """\

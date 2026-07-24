@@ -54,7 +54,7 @@ def _immutable_module_sites(
 
 
 def _case_sites(sites: Mapping[int, CompiledMatchSite]) -> Mapping[int, CompiledCase]:
-    """Expose the decision view consumed by case-only lowering until TASK 009."""
+    """Expose the filtered decision view for consumers interested only in cases."""
     return MappingProxyType(
         {node_id: site for node_id, site in sites.items() if site.source_kind is MatchSiteKind.CASE}
     )
@@ -74,7 +74,7 @@ class MatchCompiledModule:
 
     @property
     def cases(self) -> Mapping[int, CompiledCase]:
-        """Immutable filtered view for consumers that only lower source cases."""
+        """Immutable filtered view for consumers interested only in source cases."""
         return _case_sites(self.sites)
 
 
@@ -97,7 +97,7 @@ class MatchCompiledProgram:
 
     @property
     def cases_by_module(self) -> Mapping[ModuleId, Mapping[int, CompiledCase]]:
-        """Immutable filtered per-module case view for the current lowerer."""
+        """Immutable filtered per-module case view for case-only consumers."""
         return MappingProxyType(
             {module_id: _case_sites(sites) for module_id, sites in self.sites_by_module.items()}
         )

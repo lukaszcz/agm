@@ -55,6 +55,7 @@ from agm.agl.semantics.values import (
     UnitValue,
 )
 from agm.agl.typecheck import AglTypeError
+from tests._agl_helpers import let_root_capture
 from tests.agl.ir_harness import _compiled_checked, evaluate_ir, evaluate_ir_raises
 
 # ---------------------------------------------------------------------------
@@ -572,8 +573,7 @@ def test_lower_if_with_else_shape() -> None:
     assert isinstance(prog, ExecutableProgram)
     entry = prog.modules[prog.entry_module]
     items = entry.initializers
-    ir_bind = items[0]
-    assert isinstance(ir_bind, IrBind)
+    ir_bind = let_root_capture(items[0])
     ir_if = ir_bind.value
     assert isinstance(ir_if, IrIf)
     assert ir_if.has_else
@@ -622,8 +622,7 @@ def test_lower_try_no_binding_shape() -> None:
     assert isinstance(prog, ExecutableProgram)
     entry = prog.modules[prog.entry_module]
     items = entry.initializers
-    ir_bind = items[0]
-    assert isinstance(ir_bind, IrBind)
+    ir_bind = let_root_capture(items[0])
     ir_try = ir_bind.value
     assert isinstance(ir_try, IrTry)
     assert len(ir_try.handlers) == 1
@@ -643,8 +642,7 @@ def test_lower_try_with_binding_shape() -> None:
     assert isinstance(prog, ExecutableProgram)
     entry = prog.modules[prog.entry_module]
     items = entry.initializers
-    ir_bind = items[0]
-    assert isinstance(ir_bind, IrBind)
+    ir_bind = let_root_capture(items[0])
     ir_try = ir_bind.value
     assert isinstance(ir_try, IrTry)
     handler = ir_try.handlers[0]
@@ -664,8 +662,7 @@ def test_lower_try_catchall_shape() -> None:
     assert isinstance(prog, ExecutableProgram)
     entry = prog.modules[prog.entry_module]
     items = entry.initializers
-    ir_bind = items[0]
-    assert isinstance(ir_bind, IrBind)
+    ir_bind = let_root_capture(items[0])
     ir_try = ir_bind.value
     assert isinstance(ir_try, IrTry)
     handler = ir_try.handlers[0]

@@ -107,7 +107,7 @@ class CompiledMatchSite:
 
     @property
     def case_actions(self) -> tuple[SourceAction, ...]:
-        """Ordered arm actions for the case-only lowering consumer."""
+        """Ordered arm actions for consumers handling source cases."""
         if self.source_kind is not MatchSiteKind.CASE:
             raise MatchCompileInvariantError("let sites have binding actions, not case actions")
         actions = tuple(

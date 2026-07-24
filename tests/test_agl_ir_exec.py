@@ -9,6 +9,7 @@ from __future__ import annotations
 import pytest
 
 from agm.core.process import ProcessCaptureResult
+from tests._agl_helpers import let_root_capture
 from tests.agl.ir_harness import (
     _compiled_checked,
     evaluate_ir_raises_with_shell,
@@ -268,7 +269,7 @@ def test_t9_exec_inside_function() -> None:
 
 def test_t10_golden_lowering() -> None:
     """Lowering exec() produces an IrExec node and populates dry_run_inventory."""
-    from agm.agl.ir.nodes import IrBind, IrExec
+    from agm.agl.ir.nodes import IrExec, IrSequence
     from agm.agl.lower import lower_module
     from agm.agl.parser import parse_program
     from agm.agl.scope import resolve_module
@@ -288,9 +289,9 @@ def test_t10_golden_lowering() -> None:
     # Check that the entry module initializers contain an IrExec node
     entry_mod = executable.modules[executable.entry_module]
     exec_nodes = [
-        init.value
+        let_root_capture(init).value
         for init in entry_mod.initializers
-        if isinstance(init, IrBind) and isinstance(init.value, IrExec)
+        if isinstance(init, IrSequence) and isinstance(let_root_capture(init).value, IrExec)
     ]
     assert len(exec_nodes) == 1, f"Expected 1 IrExec node, found {len(exec_nodes)}"
 

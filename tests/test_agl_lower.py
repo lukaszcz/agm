@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import decimal
 from collections.abc import Mapping
-from dataclasses import fields, is_dataclass, replace
+from dataclasses import fields, is_dataclass
 from inspect import Parameter, signature
 from pathlib import Path
 
@@ -97,7 +97,7 @@ from agm.agl.semantics.types import (
     TypeVarType,
     UnitType,
 )
-from agm.agl.syntax.nodes import Case, ConstructorPattern, LetDecl, Placeholder
+from agm.agl.syntax.nodes import Case, Placeholder
 from agm.agl.typecheck import check_module
 from agm.agl.typecheck.env import CheckedModule
 from tests._agl_helpers import enum_type, record_type, type_table_for
@@ -185,6 +185,24 @@ def _lower(source: str) -> ExecutableProgram:
     )
 
 
+def _let_root_capture(initializer: object) -> IrBind:
+    """Return the private root capture from a compiled simple-let initializer."""
+    assert isinstance(initializer, IrSequence)
+    root_capture = initializer.items[0]
+    assert isinstance(root_capture, IrBind)
+    return root_capture
+
+
+def _simple_let_binder(initializer: object) -> IrBind:
+    """Return the public binding leaf from a compiled simple-let initializer."""
+    assert isinstance(initializer, IrSequence)
+    leaf = initializer.items[1]
+    assert isinstance(leaf, IrSequence)
+    binder = leaf.items[0]
+    assert isinstance(binder, IrBind)
+    return binder
+
+
 def _contains_flexible_inference_state(value: object, seen: set[int]) -> bool:
     """Recursively inspect IR data without treating declared rigid variables as leaks."""
     from agm.agl.semantics.types import InferenceVarType
@@ -234,7 +252,7 @@ def _make_lowerer(checked: CheckedModule, source: str) -> "_Lowerer":
     match_result = compile_module_matches(checked)
     assert isinstance(match_result.compiled, MatchCompiledModule)
     compiled = match_result.compiled
-    return _Lowerer(compiled.checked, link, ENTRY_ID, source_id, source, compiled.cases)
+    return _Lowerer(compiled.checked, link, ENTRY_ID, source_id, source, compiled.sites)
 
 
 def test_direct_lowerer_helper_requires_successful_match_compilation() -> None:
@@ -244,20 +262,20 @@ def test_direct_lowerer_helper_requires_successful_match_compilation() -> None:
         _make_lowerer(_check(source), source)
 
 
-def test_private_lowerer_requires_complete_case_mapping_argument() -> None:
-    cases = signature(_Lowerer).parameters["cases"]
+def test_private_lowerer_requires_complete_match_site_mapping_argument() -> None:
+    sites = signature(_Lowerer).parameters["sites"]
 
-    assert cases.default is Parameter.empty
+    assert sites.default is Parameter.empty
 
 
-def test_direct_lowerer_helper_passes_complete_compiled_case_mapping() -> None:
+def test_direct_lowerer_helper_passes_complete_compiled_match_site_mapping() -> None:
     source = "case true of | true => 1 | false => 2"
     checked = _check(source)
     lowerer = _make_lowerer(checked, source)
     case = checked.resolved.program.body.items[0]
 
     assert isinstance(case, Case)
-    assert set(lowerer._compiled_cases) == {case.node_id}
+    assert set(lowerer._compiled_sites) == {case.node_id}
 
 
 def test_constructor_result_nominal_rejects_non_nominal_type() -> None:
@@ -679,8 +697,7 @@ class TestListLitLowering:
         # list[int] with no elements
         prog = _lower("let _x: list[int] = []\n()")
         inits = prog.modules[prog.entry_module].initializers
-        bind = inits[0]
-        assert isinstance(bind, IrBind)
+        bind = _let_root_capture(inits[0])
         make_list = bind.value
         assert isinstance(make_list, IrMakeList)
         assert make_list.items == ()
@@ -688,8 +705,7 @@ class TestListLitLowering:
     def test_list_int_elements_no_coercion(self) -> None:
         prog = _lower("let _x: list[int] = [1, 2, 3]\n()")
         inits = prog.modules[prog.entry_module].initializers
-        bind = inits[0]
-        assert isinstance(bind, IrBind)
+        bind = _let_root_capture(inits[0])
         make_list = bind.value
         assert isinstance(make_list, IrMakeList)
         # Elements are plain IrConstInt (no coercion needed)
@@ -700,8 +716,7 @@ class TestListLitLowering:
         # list[decimal] = [1, 2] — elements need IntToDecimal
         prog = _lower("let _x: list[decimal] = [1, 2]\n()")
         inits = prog.modules[prog.entry_module].initializers
-        bind = inits[0]
-        assert isinstance(bind, IrBind)
+        bind = _let_root_capture(inits[0])
         make_list = bind.value
         assert isinstance(make_list, IrMakeList)
         # Each element is IrCoerce(IrConstInt, IntToDecimal())
@@ -714,8 +729,7 @@ class TestListLitLowering:
         # let j: json = [1, 2] — entire list is wrapped in ToJson
         prog = _lower("let _x: json = [1, 2]\n()")
         inits = prog.modules[prog.entry_module].initializers
-        bind = inits[0]
-        assert isinstance(bind, IrBind)
+        bind = _let_root_capture(inits[0])
         # The value should be IrCoerce(IrMakeList(...), ToJson())
         coerce = bind.value
         assert isinstance(coerce, IrCoerce)
@@ -732,16 +746,14 @@ class TestDictLitLowering:
     def test_empty_dict(self) -> None:
         prog = _lower("let _x: dict[text, int] = {}\n()")
         inits = prog.modules[prog.entry_module].initializers
-        bind = inits[0]
-        assert isinstance(bind, IrBind)
+        bind = _let_root_capture(inits[0])
         assert isinstance(bind.value, IrMakeDict)
         assert bind.value.entries == ()
 
     def test_dict_value_no_coercion(self) -> None:
         prog = _lower('let _x: dict[text, int] = {"a": 1}\n()')
         inits = prog.modules[prog.entry_module].initializers
-        bind = inits[0]
-        assert isinstance(bind, IrBind)
+        bind = _let_root_capture(inits[0])
         make_dict = bind.value
         assert isinstance(make_dict, IrMakeDict)
         assert len(make_dict.entries) == 1
@@ -754,8 +766,7 @@ class TestDictLitLowering:
         # dict[text, decimal] = {"a": 1} — value needs IntToDecimal
         prog = _lower('let _x: dict[text, decimal] = {"a": 1}\n()')
         inits = prog.modules[prog.entry_module].initializers
-        bind = inits[0]
-        assert isinstance(bind, IrBind)
+        bind = _let_root_capture(inits[0])
         make_dict = bind.value
         assert isinstance(make_dict, IrMakeDict)
         _key, val_expr = make_dict.entries[0]
@@ -769,33 +780,39 @@ class TestDictLitLowering:
 
 
 class TestBindingLowering:
-    def test_let_binding_identity_no_coerce(self) -> None:
-        # let x: int = 5 — no coercion needed
+    def test_simple_let_uses_the_shared_match_decision_and_private_root_capture(self) -> None:
         prog = _lower("let _x: int = 5\n()")
-        inits = prog.modules[prog.entry_module].initializers
-        bind = inits[0]
-        assert isinstance(bind, IrBind)
-        assert not prog.symbols[bind.symbol].mutable
-        assert isinstance(bind.value, IrConstInt)
-        assert bind.value.value == 5
+        (lowered, _) = prog.modules[prog.entry_module].initializers
+
+        assert isinstance(lowered, IrSequence)
+        root_capture, leaf = lowered.items
+        assert isinstance(root_capture, IrBind)
+        assert prog.symbols[root_capture.symbol].public_name is None
+        assert isinstance(root_capture.value, IrConstInt)
+        assert root_capture.value.value == 5
+        assert isinstance(leaf, IrSequence)
+        (binder, result) = leaf.items
+        assert isinstance(binder, IrBind)
+        assert prog.symbols[binder.symbol].public_name == "_x"
+        assert not prog.symbols[binder.symbol].mutable
+        assert isinstance(binder.value, IrLoad)
+        assert isinstance(result, IrConstUnit)
 
     def test_let_binding_int_to_decimal(self) -> None:
-        # let d: decimal = 1 → IrBind(.., IrCoerce(IrConstInt, IntToDecimal))
+        # let d: decimal = 1 → private root capture coerces before the public leaf.
         prog = _lower("let _d: decimal = 1\n()")
         inits = prog.modules[prog.entry_module].initializers
-        bind = inits[0]
-        assert isinstance(bind, IrBind)
+        bind = _let_root_capture(inits[0])
         assert isinstance(bind.value, IrCoerce)
         assert bind.value.operation == IntToDecimal()
         assert isinstance(bind.value.value, IrConstInt)
         assert bind.value.value.value == 1
 
     def test_let_binding_to_json(self) -> None:
-        # let j: json = 1 → IrCoerce(IrConstInt, ToJson)
+        # let j: json = 1 → root capture uses IrCoerce(IrConstInt, ToJson)
         prog = _lower("let _j: json = 1\n()")
         inits = prog.modules[prog.entry_module].initializers
-        bind = inits[0]
-        assert isinstance(bind, IrBind)
+        bind = _let_root_capture(inits[0])
         coerce = bind.value
         assert isinstance(coerce, IrCoerce)
         assert coerce.operation == ToJson()
@@ -807,8 +824,7 @@ class TestBindingLowering:
         # (the element coercion is applied at element level, not list level).
         prog = _lower("let _xs: list[decimal] = [1, 2]\n()")
         inits = prog.modules[prog.entry_module].initializers
-        bind = inits[0]
-        assert isinstance(bind, IrBind)
+        bind = _let_root_capture(inits[0])
         # The bind value should be IrMakeList with coerced elements
         make_list = bind.value
         assert isinstance(make_list, IrMakeList)
@@ -823,8 +839,7 @@ class TestBindingLowering:
         # that extend assignability.  The contract example is forward-looking.)
         prog = _lower("let _a: list[int] = [1]\nlet _b: list[int] = _a\n()")
         inits = prog.modules[prog.entry_module].initializers
-        bind_b = inits[1]
-        assert isinstance(bind_b, IrBind)
+        bind_b = _let_root_capture(inits[1])
         # No coercion wrap — direct IrLoad
         load = bind_b.value
         assert isinstance(load, IrLoad)
@@ -836,15 +851,21 @@ class TestBindingLowering:
         assert isinstance(bind, IrBind)
         assert prog.symbols[bind.symbol].mutable
 
-    def test_repeated_wildcard_binders_lower_rhs_without_symbols(self) -> None:
+    def test_wildcard_let_uses_the_shared_match_decision_without_public_bindings(self) -> None:
         prog = _lower("let _ = 1\nvar _ = 2\n()")
         first, second, _unit = prog.modules[prog.entry_module].initializers
 
-        assert isinstance(first, IrConstInt)
-        assert first.value == 1
+        assert isinstance(first, IrSequence)
+        root_capture, result = first.items
+        assert isinstance(root_capture, IrBind)
+        assert isinstance(root_capture.value, IrConstInt)
+        assert root_capture.value.value == 1
+        assert prog.symbols[root_capture.symbol].public_name is None
+        assert isinstance(result, IrSequence)
+        assert isinstance(result.items[0], IrConstUnit)
         assert isinstance(second, IrConstInt)
         assert second.value == 2
-        assert not prog.symbols
+        assert all(symbol.public_name is None for symbol in prog.symbols.values())
 
     def test_wildcard_binders_evaluate_effects_without_public_bindings(self) -> None:
         from tests.agl.ir_harness import evaluate_ir_output
@@ -853,36 +874,45 @@ class TestBindingLowering:
 
         assert output == "first\nsecond\n"
 
-    def test_lowerer_rejects_a_destructuring_let_from_a_checked_artifact(self) -> None:
-        source = "let value = 1"
-        checked = _check(source)
-        (let,) = checked.resolved.program.body.items
-        assert isinstance(let, LetDecl)
-        pattern = ConstructorPattern(
-            qualifier=None,
-            name="Pair",
-            positional=(),
-            named=(),
-            span=let.pattern.span,
-            node_id=let.pattern.node_id,
+    def test_pattern_let_captures_once_and_binds_each_top_level_name_publicly(self) -> None:
+        source = (
+            "record Pair\n"
+            "  left: int\n"
+            "  right: int\n"
+            "let Pair(left, right) = Pair(left = 1, right = 2)\n"
+            "()\n"
         )
-
-        with pytest.raises(NotImplementedError):
-            _make_lowerer(checked, source).lower_item(replace(let, pattern=pattern))
+        prog = _lower(source)
+        (lowered, _) = prog.modules[prog.entry_module].initializers
+        assert isinstance(lowered, IrSequence)
+        root_capture, decomposition = lowered.items
+        assert isinstance(root_capture, IrBind)
+        assert prog.symbols[root_capture.symbol].public_name is None
+        assert isinstance(decomposition, IrSequence)
+        projections_and_leaf = decomposition.items
+        assert all(
+            not isinstance(item, IrBind) or prog.symbols[item.symbol].public_name is None
+            for item in projections_and_leaf[:-1]
+        )
+        leaf = projections_and_leaf[-1]
+        assert isinstance(leaf, IrSequence)
+        binders = [item for item in leaf.items if isinstance(item, IrBind)]
+        assert [prog.symbols[binder.symbol].public_name for binder in binders] == ["left", "right"]
+        assert all(not prog.symbols[binder.symbol].mutable for binder in binders)
+        assert all(isinstance(binder.value, IrLoad) for binder in binders)
+        assert isinstance(leaf.items[-1], IrConstUnit)
 
     def test_symbol_public_name(self) -> None:
         prog = _lower("let myvar: int = 1\n()")
         inits = prog.modules[prog.entry_module].initializers
-        bind = inits[0]
-        assert isinstance(bind, IrBind)
+        bind = _simple_let_binder(inits[0])
         desc = prog.symbols[bind.symbol]
         assert desc.public_name == "myvar"
 
     def test_symbol_owner_is_entry_module(self) -> None:
         prog = _lower("let _x: int = 1\n()")
         inits = prog.modules[prog.entry_module].initializers
-        bind = inits[0]
-        assert isinstance(bind, IrBind)
+        bind = _simple_let_binder(inits[0])
         desc = prog.symbols[bind.symbol]
         assert desc.owner == prog.entry_module
 
@@ -902,8 +932,7 @@ class TestVarRefLowering:
     def test_varref_resolves_to_correct_symbol(self) -> None:
         prog = _lower("let _a: int = 1\n_a")
         inits = prog.modules[prog.entry_module].initializers
-        bind = inits[0]
-        assert isinstance(bind, IrBind)
+        bind = _simple_let_binder(inits[0])
         load = inits[1]
         assert isinstance(load, IrLoad)
         assert load.symbol == bind.symbol
@@ -997,9 +1026,9 @@ class TestBlockLowering:
         # We use lower_expr on the Block which calls lower_item on each child.
         ir = lowerer.lower_expr(block)
         assert isinstance(ir, IrBlock)
-        # IrBlock should have exactly 2 items: IrBind + IrLoad
+        # IrBlock contains the compiled let decision followed by its IrLoad.
         assert len(ir.items) == 2
-        assert isinstance(ir.items[0], IrBind)
+        assert isinstance(ir.items[0], IrSequence)
         assert isinstance(ir.items[1], IrLoad)
 
     def test_trailing_binder_appends_unit_value(self) -> None:
@@ -1019,7 +1048,8 @@ class TestBlockLowering:
         body = loop.body.items[0]
         assert isinstance(body, IrBlock)
         assert len(body.items) == 1
-        assert isinstance(body.items[0], IrBind)
+        assert isinstance(body.items[0], IrSequence)
+        assert isinstance(body.items[0].items[0], IrBind)
 
     def test_trailing_loop_binder_remains_available_to_until_condition(self) -> None:
         from agm.agl.semantics.values import IntValue
@@ -1183,11 +1213,7 @@ class TestUnsupportedNodes:
         assert len(prog.functions) == 1
         # Verify the let result = f() binding lowered to an IrDirectCall targeting f
         inits = prog.modules[prog.entry_module].initializers
-        result_bind = next(
-            (n for n in inits if isinstance(n, IrBind) and isinstance(n.value, IrDirectCall)),
-            None,
-        )
-        assert result_bind is not None, "let result = f() did not lower to an IrDirectCall bind"
+        result_bind = _let_root_capture(inits[1])
         assert isinstance(result_bind.value, IrDirectCall)
         assert result_bind.value.function_id in prog.functions
 
@@ -1199,8 +1225,7 @@ class TestUnsupportedNodes:
         """
         prog = _lower("let ignored = (fn() -> int => 42)()\n()")
         inits = prog.modules[prog.entry_module].initializers
-        indirect = inits[0]
-        assert isinstance(indirect, IrBind)
+        indirect = _let_root_capture(inits[0])
         assert isinstance(indirect.value, IrIndirectCall), (
             f"Expected IrIndirectCall, got {type(indirect.value).__name__}"
         )
@@ -1213,7 +1238,7 @@ class TestUnsupportedNodes:
         lowers to IrMakeEnum (eagerly constructed).  A variant with fields lowers to
         IrMakeConstructor.  Here Red is nullary, so the binding value must be IrMakeEnum.
         """
-        from agm.agl.ir.nodes import IrBind, IrMakeEnum
+        from agm.agl.ir.nodes import IrMakeEnum
 
         source = """\
 enum Color
@@ -1225,33 +1250,26 @@ let c = Color::Red
 """
         prog = _lower(source)
         entry = prog.modules[prog.entry_module]
-        found = False
-        for node in entry.initializers:
-            if isinstance(node, IrBind) and isinstance(node.value, IrMakeEnum):
-                if node.value.variant == "Red":
-                    found = True
-        assert found, "Expected IrBind(value=IrMakeEnum(variant='Red')) in initializers"
+        root_capture = _let_root_capture(entry.initializers[0])
+        assert isinstance(root_capture.value, IrMakeEnum)
+        assert root_capture.value.variant == "Red"
 
     def test_lambda_lowers_to_make_closure_in_unsupported_class(self) -> None:
         """Lambda expressions now lower to IrMakeClosure."""
         prog = _lower("let f = fn(x: int) -> int => x + 1\n()")
         inits = prog.modules[prog.entry_module].initializers
-        f_bind = inits[0]
-        assert isinstance(f_bind, IrBind)
+        f_bind = _let_root_capture(inits[0])
         assert isinstance(f_bind.value, IrMakeClosure)
 
     def test_if_lowers_correctly(self) -> None:
         """If expressions are lowered to IrIf in A."""
-        from agm.agl.ir.nodes import IrBind, IrIf
+        from agm.agl.ir.nodes import IrIf
 
         prog = _lower("let x = if true => 1 | else => 2\n()")
         entry = prog.modules[prog.entry_module]
-        found = False
-        for node in entry.initializers:
-            if isinstance(node, IrBind) and isinstance(node.value, IrIf):
-                assert node.value.has_else
-                found = True
-        assert found, "Expected IrBind(value=IrIf(has_else=True)) in initializers"
+        root_capture = _let_root_capture(entry.initializers[0])
+        assert isinstance(root_capture.value, IrIf)
+        assert root_capture.value.has_else
 
     def test_indexed_assign_lowers_to_ir_assign_with_path(self) -> None:
         """IndexTarget assignment lowers to IrAssign with a non-empty path."""
@@ -1443,11 +1461,8 @@ class TestLowerFunctions:
         source = "def f(x: int) -> int = x + 1\nlet fn_ref = f\nlet result = fn_ref(5)\n()"
         prog = _lower(source)
         inits = prog.modules[prog.entry_module].initializers
-        # inits[0] = IrBind(f, IrMakeClosure)
-        # inits[1] = IrBind(fn_ref, ...)
-        # inits[2] = IrBind(result, IrIndirectCall)
-        result_bind = inits[2]
-        assert isinstance(result_bind, IrBind)
+        # Every immutable let captures its RHS in the compiled site's private root.
+        result_bind = _let_root_capture(inits[2])
         assert isinstance(result_bind.value, IrIndirectCall)
 
     def test_field_access_function_value_call_lowers_to_indirect_call(self) -> None:
@@ -1467,7 +1482,9 @@ class TestLowerFunctions:
         prog = _lower(source)
         inits = prog.modules[prog.entry_module].initializers
         indirect_binds = [
-            n for n in inits if isinstance(n, IrBind) and isinstance(n.value, IrIndirectCall)
+            _let_root_capture(n)
+            for n in inits
+            if isinstance(n, IrSequence) and isinstance(_let_root_capture(n).value, IrIndirectCall)
         ]
         assert len(indirect_binds) == 1
 
@@ -1599,9 +1616,8 @@ class TestLambdaLowering:
         source = "let dbl = fn(x: int) -> int => x * 2\n()"
         prog = _lower(source)
         inits = prog.modules[prog.entry_module].initializers
-        # The module initializer for `let dbl = ...` is an IrBind wrapping an IrMakeClosure.
-        dbl_bind = inits[0]
-        assert isinstance(dbl_bind, IrBind)
+        # The compiled let's private root captures the IrMakeClosure.
+        dbl_bind = _let_root_capture(inits[0])
         assert isinstance(dbl_bind.value, IrMakeClosure)
         fn_id = dbl_bind.value.function_id
         assert fn_id in prog.functions, "Lambda's FunctionDescriptor must be in functions table"
@@ -1611,8 +1627,7 @@ class TestLambdaLowering:
         source = "let inc = fn(x: int) -> int => x + 1\n()"
         prog = _lower(source)
         inits = prog.modules[prog.entry_module].initializers
-        dbl_bind = inits[0]
-        assert isinstance(dbl_bind, IrBind)
+        dbl_bind = _let_root_capture(inits[0])
         assert isinstance(dbl_bind.value, IrMakeClosure)
         fn_id = dbl_bind.value.function_id
         desc = prog.functions[fn_id]
@@ -1629,8 +1644,7 @@ class TestLambdaLowering:
         prog = _lower(source)
         inits = prog.modules[prog.entry_module].initializers
         # offset is first, add_off is second
-        add_off_bind = inits[1]
-        assert isinstance(add_off_bind, IrBind)
+        add_off_bind = _let_root_capture(inits[1])
         assert isinstance(add_off_bind.value, IrMakeClosure)
         captures = add_off_bind.value.captures
         assert captures == (), "Module bindings resolve through the base frame"
@@ -1640,8 +1654,7 @@ class TestLambdaLowering:
         source = "let f = fn(x: int) => x\n()"
         prog = _lower(source)
         inits = prog.modules[prog.entry_module].initializers
-        bind = inits[0]
-        assert isinstance(bind, IrBind)
+        bind = _let_root_capture(inits[0])
         assert isinstance(bind.value, IrMakeClosure)
         fn_id = bind.value.function_id
         desc = prog.functions[fn_id]
@@ -1653,8 +1666,7 @@ class TestLambdaLowering:
         source = "let to_dec = fn(x: int) -> decimal => x\n()"
         prog = _lower(source)
         inits = prog.modules[prog.entry_module].initializers
-        bind = inits[0]
-        assert isinstance(bind, IrBind)
+        bind = _let_root_capture(inits[0])
         assert isinstance(bind.value, IrMakeClosure)
         fn_id = bind.value.function_id
         desc = prog.functions[fn_id]
@@ -1669,8 +1681,7 @@ class TestLambdaLowering:
         source = "let f = fn(x: int) -> int => x\n()"
         prog = _lower(source)
         inits = prog.modules[prog.entry_module].initializers
-        bind = inits[0]
-        assert isinstance(bind, IrBind)
+        bind = _let_root_capture(inits[0])
         assert isinstance(bind.value, IrMakeClosure)
         fn_id = bind.value.function_id
         desc = prog.functions[fn_id]
@@ -1688,10 +1699,8 @@ class TestIndirectCallLowering:
         source = "let f = fn(x: int) -> int => x + 1\nlet r = f(5)\n()"
         prog = _lower(source)
         inits = prog.modules[prog.entry_module].initializers
-        # inits[0] = IrBind(f, IrMakeClosure)
-        # inits[1] = IrBind(r, ...)
-        r_bind = inits[1]
-        assert isinstance(r_bind, IrBind)
+        # inits[0] and inits[1] are compiled let decisions.
+        r_bind = _let_root_capture(inits[1])
         assert isinstance(r_bind.value, IrIndirectCall), (
             f"Expected IrIndirectCall for value-call, got {type(r_bind.value).__name__}"
         )
@@ -1708,8 +1717,7 @@ class TestIndirectCallLowering:
         source = "let f = fn(x: int) -> int => x\nlet r = f(7)\n()"
         prog = _lower(source)
         inits = prog.modules[prog.entry_module].initializers
-        r_bind = inits[1]
-        assert isinstance(r_bind, IrBind)
+        r_bind = _let_root_capture(inits[1])
         assert isinstance(r_bind.value, IrIndirectCall)
         # int→int: identity coercion is elided, so arg is bare IrConstInt (no IrCoerce)
         assert len(r_bind.value.arguments) == 1
@@ -1724,8 +1732,7 @@ class TestIndirectCallLowering:
         source = "let f = fn(x: int) -> int => x\nlet r = f(3)\n()"
         prog = _lower(source)
         inits = prog.modules[prog.entry_module].initializers
-        r_bind = inits[1]
-        assert isinstance(r_bind, IrBind)
+        r_bind = _let_root_capture(inits[1])
         assert isinstance(r_bind.value, IrIndirectCall)
         # Callee should be IrLoad(f's symbol), not IrCoerce
         callee = r_bind.value.callee
@@ -1744,8 +1751,7 @@ class TestPartialCallLowering:
     def test_declared_partial_call_captures_non_holes_and_preserves_defaults(self) -> None:
         source = "def f(x: int, y: int, z: int = 9) -> int = x + y + z\nlet h = f(?, 2)\n()"
         prog = _lower(source)
-        h_bind = prog.modules[prog.entry_module].initializers[1]
-        assert isinstance(h_bind, IrBind)
+        h_bind = _let_root_capture(prog.modules[prog.entry_module].initializers[1])
         assert isinstance(h_bind.value, IrBlock)
         block_items = h_bind.value.items
         assert len(block_items) == 2
@@ -1772,8 +1778,7 @@ class TestPartialCallLowering:
     def test_value_partial_call_captures_callee_before_arguments(self) -> None:
         source = "let f = fn(x: int, y: int) -> int => x + y\nlet h = f(?, 2)\n()"
         prog = _lower(source)
-        h_bind = prog.modules[prog.entry_module].initializers[1]
-        assert isinstance(h_bind, IrBind)
+        h_bind = _let_root_capture(prog.modules[prog.entry_module].initializers[1])
         assert isinstance(h_bind.value, IrBlock)
         callee_bind, arg_bind, make_closure = h_bind.value.items
         assert isinstance(callee_bind, IrBind)
@@ -1799,8 +1804,7 @@ class TestPartialCallLowering:
     def test_constructor_partial_call_body_constructs_from_load_slots(self) -> None:
         source = "record Point\n  x: int\n  y: int\nlet make = Point(x = ?, y = 2)\n()"
         prog = _lower(source)
-        make_bind = prog.modules[prog.entry_module].initializers[0]
-        assert isinstance(make_bind, IrBind)
+        make_bind = _let_root_capture(prog.modules[prog.entry_module].initializers[0])
         assert isinstance(make_bind.value, IrBlock)
         captured_bind, make_closure = make_bind.value.items
         assert isinstance(captured_bind, IrBind)
@@ -1820,8 +1824,7 @@ class TestPartialCallLowering:
     def test_partial_call_captured_argument_coercion_is_inside_synthesized_body(self) -> None:
         source = "def f(x: decimal, y: decimal) -> decimal = x + y\nlet h = f(?, 1)\n()"
         prog = _lower(source)
-        h_bind = prog.modules[prog.entry_module].initializers[1]
-        assert isinstance(h_bind, IrBind)
+        h_bind = _let_root_capture(prog.modules[prog.entry_module].initializers[1])
         assert isinstance(h_bind.value, IrBlock)
         captured_bind, make_closure = h_bind.value.items
         assert isinstance(captured_bind, IrBind)
@@ -2068,28 +2071,24 @@ class TestHostOpLowering:
 
     def test_render_lowers_to_ir_render_value(self) -> None:
         """render(x, pretty:, quote_strings:) lowers to IrRenderValue."""
-        from agm.agl.ir.nodes import IrBind, IrRenderValue
+        from agm.agl.ir.nodes import IrRenderValue
 
         source = 'let s = render("x", pretty = false, quote_strings = false)\n()'
         prog = _lower(source)
         entry = prog.modules[list(prog.modules.keys())[-1]]
-        ir_bind = next((node for node in entry.initializers if isinstance(node, IrBind)), None)
-        assert ir_bind is not None, "Expected IrBind in entry initializers"
+        ir_bind = _let_root_capture(entry.initializers[0])
         assert isinstance(ir_bind.value, IrRenderValue)
         assert ir_bind.value.pretty is not None
         assert ir_bind.value.quote_strings is not None
 
     def test_parse_json_lowers_to_ir_parse_json(self) -> None:
         """parse_json(s) lowers to IrParseJson wrapping the argument expression."""
-        from agm.agl.ir.nodes import IrBind, IrParseJson
+        from agm.agl.ir.nodes import IrParseJson
 
         source = "let j = parse_json('null')\n()"
         prog = _lower(source)
         entry = prog.modules[list(prog.modules.keys())[-1]]
-        # The binding `let j = parse_json(...)` lowers to IrBind(value=IrParseJson(...))
-        ir_bind = next((node for node in entry.initializers if isinstance(node, IrBind)), None)
-        assert ir_bind is not None, "Expected IrBind in entry initializers"
-        assert isinstance(ir_bind, IrBind)
+        ir_bind = _let_root_capture(entry.initializers[0])
         assert isinstance(ir_bind.value, IrParseJson), (
             f"Expected IrBind.value to be IrParseJson, got {type(ir_bind.value).__name__}"
         )
@@ -2137,13 +2136,17 @@ class TestHostOpLowering:
 
     def test_ask_lowers_to_ir_ask_m6b(self) -> None:
         """ask() now lowers to IrAsk."""
-        from agm.agl.ir.nodes import IrAsk, IrBind
+        from agm.agl.ir.nodes import IrAsk
 
         source = 'agent impl\nlet r: text = ask("prompt", agent = impl)\n()'
         prog = _lower(source)
-        # The initializers contain IrBind(IrAgentHandle) for `impl` then IrBind(IrAsk) for `r`.
+        # The let site's private root captures the IrAsk result.
         inits = prog.modules[prog.entry_module].initializers
-        ask_binds = [n for n in inits if isinstance(n, IrBind) and isinstance(n.value, IrAsk)]
+        ask_binds = [
+            _let_root_capture(n)
+            for n in inits
+            if isinstance(n, IrSequence) and isinstance(_let_root_capture(n).value, IrAsk)
+        ]
         assert len(ask_binds) == 1
         assert len(prog.contracts) == 1
 
@@ -2189,14 +2192,16 @@ class TestHostOpLowering:
 
     def test_ask_request_lowers_to_ir_ask_request_with_contract(self) -> None:
         """ask-request lowers to IrAskRequest + ContractRequest in program.contracts."""
-        from agm.agl.ir.nodes import IrAskRequest, IrBind
+        from agm.agl.ir.nodes import IrAskRequest
 
         source = 'agent worker\nlet req = ask-request("my prompt", agent = worker)\n()'
         prog = _lower(source)
         inits = prog.modules[prog.entry_module].initializers
-        # The ask-request binding lowers to IrBind(symbol, IrAskRequest(...)).
+        # The let site's private root captures the IrAskRequest result.
         ask_req_binds = [
-            n for n in inits if isinstance(n, IrBind) and isinstance(n.value, IrAskRequest)
+            _let_root_capture(n)
+            for n in inits
+            if isinstance(n, IrSequence) and isinstance(_let_root_capture(n).value, IrAskRequest)
         ]
         assert len(ask_req_binds) == 1, (
             f"Expected exactly 1 IrBind(IrAskRequest), got {len(ask_req_binds)}"
@@ -2245,9 +2250,11 @@ class TestLambdaCapturePositive:
         # Find the IrMakeClosure in the function body (the nested lambda)
         lambda_closure: IrMakeClosure | None = None
         for item in body.items:
-            if isinstance(item, IrBind) and isinstance(item.value, IrMakeClosure):
-                lambda_closure = item.value
-                break
+            if isinstance(item, IrSequence):
+                captured_value = _let_root_capture(item).value
+                if isinstance(captured_value, IrMakeClosure):
+                    lambda_closure = captured_value
+                    break
         assert lambda_closure is not None, "Expected IrMakeClosure in make_fn body"
         # The lambda captures n (param) — captures must be non-empty
         captures = lambda_closure.captures
@@ -2282,9 +2289,11 @@ class TestLambdaCapturePositive:
         assert isinstance(body, IrBlock)
         lambda_closure = None
         for item in body.items:
-            if isinstance(item, IrBind) and isinstance(item.value, IrMakeClosure):
-                lambda_closure = item.value
-                break
+            if isinstance(item, IrSequence):
+                captured_value = _let_root_capture(item).value
+                if isinstance(captured_value, IrMakeClosure):
+                    lambda_closure = captured_value
+                    break
         assert lambda_closure is not None, "Expected IrMakeClosure in make_fn body"
         captures = lambda_closure.captures
         assert len(captures) == 1, f"Expected 1 capture, got {captures!r}"
@@ -2318,9 +2327,11 @@ class TestLambdaCapturePositive:
         assert isinstance(body, IrBlock)
         lambda_closure = None
         for item in body.items:
-            if isinstance(item, IrBind) and isinstance(item.value, IrMakeClosure):
-                lambda_closure = item.value
-                break
+            if isinstance(item, IrSequence):
+                captured_value = _let_root_capture(item).value
+                if isinstance(captured_value, IrMakeClosure):
+                    lambda_closure = captured_value
+                    break
         assert lambda_closure is not None, "Expected IrMakeClosure in make_fn body"
         captures = lambda_closure.captures
         # Both n (param) and count (var) must be captured — non-empty
@@ -2358,8 +2369,7 @@ class TestBinaryOpKindSelection:
     def test_int_add_lowers_to_arith_add_int(self) -> None:
         """+ on two ints → IrArith with op=ADD and kind=INT."""
         prog = _lower("let r = 1 + 2\n()")
-        bind = prog.modules[prog.entry_module].initializers[0]
-        assert isinstance(bind, IrBind)
+        bind = _let_root_capture(prog.modules[prog.entry_module].initializers[0])
         arith = bind.value
         assert isinstance(arith, IrArith)
         assert arith.op is ArithOp.ADD
@@ -2372,8 +2382,7 @@ class TestBinaryOpKindSelection:
         kind=DECIMAL is the decision-bearing field.
         """
         prog = _lower("let r = 3 / 2\n()")
-        bind = prog.modules[prog.entry_module].initializers[0]
-        assert isinstance(bind, IrBind)
+        bind = _let_root_capture(prog.modules[prog.entry_module].initializers[0])
         arith = bind.value
         assert isinstance(arith, IrArith)
         assert arith.op is ArithOp.DIV
@@ -2382,8 +2391,7 @@ class TestBinaryOpKindSelection:
     def test_int_ordering_lowers_to_compare_lt_int(self) -> None:
         """< on two ints → IrCompare with op=LT and kind=INT."""
         prog = _lower("let r = 1 < 2\n()")
-        bind = prog.modules[prog.entry_module].initializers[0]
-        assert isinstance(bind, IrBind)
+        bind = _let_root_capture(prog.modules[prog.entry_module].initializers[0])
         cmp = bind.value
         assert isinstance(cmp, IrCompare)
         assert cmp.op is CmpOp.LT
@@ -2396,8 +2404,7 @@ class TestBinaryOpKindSelection:
         this asserts the widening decision that would be missed by an INT-only test.
         """
         prog = _lower("let r = 1.0 < 2\n()")
-        bind = prog.modules[prog.entry_module].initializers[0]
-        assert isinstance(bind, IrBind)
+        bind = _let_root_capture(prog.modules[prog.entry_module].initializers[0])
         cmp = bind.value
         assert isinstance(cmp, IrCompare)
         assert cmp.op is CmpOp.LT
@@ -2410,8 +2417,7 @@ class TestBinaryOpKindSelection:
         equality is defined over any comparable type, not just numerics.
         """
         prog = _lower("let r = 1 == 1\n()")
-        bind = prog.modules[prog.entry_module].initializers[0]
-        assert isinstance(bind, IrBind)
+        bind = _let_root_capture(prog.modules[prog.entry_module].initializers[0])
         cmp = bind.value
         assert isinstance(cmp, IrCompare)
         assert cmp.op is CmpOp.EQ
@@ -2420,8 +2426,7 @@ class TestBinaryOpKindSelection:
     def test_in_list_lowers_to_contains_list(self) -> None:
         """'in' on a list → IrContains with kind=LIST."""
         prog = _lower("let r = 1 in [1, 2, 3]\n()")
-        bind = prog.modules[prog.entry_module].initializers[0]
-        assert isinstance(bind, IrBind)
+        bind = _let_root_capture(prog.modules[prog.entry_module].initializers[0])
         contains = bind.value
         assert isinstance(contains, IrContains)
         assert contains.kind is ContainsKind.LIST
@@ -2429,8 +2434,7 @@ class TestBinaryOpKindSelection:
     def test_in_dict_lowers_to_contains_dict(self) -> None:
         """'in' (key lookup) on a dict → IrContains with kind=DICT."""
         prog = _lower('let r = "a" in {"a": 1}\n()')
-        bind = prog.modules[prog.entry_module].initializers[0]
-        assert isinstance(bind, IrBind)
+        bind = _let_root_capture(prog.modules[prog.entry_module].initializers[0])
         contains = bind.value
         assert isinstance(contains, IrContains)
         assert contains.kind is ContainsKind.DICT
@@ -2457,8 +2461,7 @@ class TestOneLevelCaseLowering:
             "()\n"
         )
         prog = _lower(source)
-        case_bind = prog.modules[prog.entry_module].initializers[1]
-        assert isinstance(case_bind, IrBind)
+        case_bind = _let_root_capture(prog.modules[prog.entry_module].initializers[1])
         sequence = case_bind.value
         assert isinstance(sequence, IrSequence)
         assert isinstance(sequence.items[0], IrBind)
@@ -2481,8 +2484,7 @@ class TestOneLevelCaseLowering:
             "()\n"
         )
         prog = _lower(source)
-        case_bind = prog.modules[prog.entry_module].initializers[1]
-        assert isinstance(case_bind, IrBind)
+        case_bind = _let_root_capture(prog.modules[prog.entry_module].initializers[1])
         assert isinstance(case_bind.value, IrSequence)
         switch = case_bind.value.items[1]
         assert isinstance(switch, IrCase)
@@ -2505,8 +2507,7 @@ class TestOneLevelCaseLowering:
             "()\n"
         )
         prog = _lower(source)
-        case_bind = prog.modules[prog.entry_module].initializers[1]
-        assert isinstance(case_bind, IrBind)
+        case_bind = _let_root_capture(prog.modules[prog.entry_module].initializers[1])
         assert isinstance(case_bind.value, IrSequence)
         switch = case_bind.value.items[1]
         assert isinstance(switch, IrCase)
@@ -2535,8 +2536,7 @@ class TestIrConvertLowering:
         failure_mode=RAISE_CAST_ERROR.
         """
         prog = _lower("let r = 1 as decimal\n()")
-        bind = prog.modules[prog.entry_module].initializers[0]
-        assert isinstance(bind, IrBind)
+        bind = _let_root_capture(prog.modules[prog.entry_module].initializers[0])
         conv = bind.value
         assert isinstance(conv, IrConvert)
         assert conv.failure_mode is ConversionFailureMode.RAISE_CAST_ERROR
@@ -2549,8 +2549,7 @@ class TestIrConvertLowering:
         failure_mode=RETURN_BOOL.
         """
         prog = _lower("let r = 1.5 as? int\n()")
-        bind = prog.modules[prog.entry_module].initializers[0]
-        assert isinstance(bind, IrBind)
+        bind = _let_root_capture(prog.modules[prog.entry_module].initializers[0])
         conv = bind.value
         assert isinstance(conv, IrConvert)
         assert conv.failure_mode is ConversionFailureMode.RETURN_BOOL
@@ -2563,8 +2562,7 @@ class TestIrConvertLowering:
         expression for side-effects and then yields True — no IrConvert.
         """
         prog = _lower("let r = 1 as? decimal\n()")
-        bind = prog.modules[prog.entry_module].initializers[0]
-        assert isinstance(bind, IrBind)
+        bind = _let_root_capture(prog.modules[prog.entry_module].initializers[0])
         seq = bind.value
         assert isinstance(seq, IrSequence), (
             f"Total 'as?' must emit IrSequence, not {type(seq).__name__}"
@@ -2577,8 +2575,7 @@ class TestIrConvertLowering:
     def test_render_to_text_as_lowers_to_ir_convert_render_strategy(self) -> None:
         """'as text' (total render cast) → IrConvert with strategy=RENDER_TO_TEXT."""
         prog = _lower("let r = 42 as text\n()")
-        bind = prog.modules[prog.entry_module].initializers[0]
-        assert isinstance(bind, IrBind)
+        bind = _let_root_capture(prog.modules[prog.entry_module].initializers[0])
         conv = bind.value
         assert isinstance(conv, IrConvert)
         assert conv.failure_mode is ConversionFailureMode.RAISE_CAST_ERROR
@@ -2605,10 +2602,8 @@ class TestTemplateLowering:
         source = 'let name = "world"\nlet msg = "hello ${name}"\n()\n'
         prog = _lower(source)
         inits = prog.modules[prog.entry_module].initializers
-        # inits[0] = IrBind(name, IrConstText("world"))
-        # inits[1] = IrBind(msg, IrRenderTemplate(...))
-        msg_bind = inits[1]
-        assert isinstance(msg_bind, IrBind)
+        # Each immutable let has a private root capture.
+        msg_bind = _let_root_capture(inits[1])
         template = msg_bind.value
         assert isinstance(template, IrRenderTemplate)
         segs = template.segments
@@ -3382,12 +3377,14 @@ class TestRangeForDesugar:
         )
         body = _function_body(make_fn_desc)
         assert isinstance(body, IrBlock)
-        # The nested lambda _g lowers to IrBind(_g, IrMakeClosure(...)).
+        # The nested lambda _g is captured by its compiled let site's private root.
         g_closure: IrMakeClosure | None = None
         for item in body.items:
-            if isinstance(item, IrBind) and isinstance(item.value, IrMakeClosure):
-                g_closure = item.value
-                break
+            if isinstance(item, IrSequence):
+                captured_value = _let_root_capture(item).value
+                if isinstance(captured_value, IrMakeClosure):
+                    g_closure = captured_value
+                    break
         assert g_closure is not None, "Expected IrMakeClosure for _g in make_fn body"
         # _scan_captures must have walked for_range_to / for_range_by and found
         # end_val and step_val as free variables captured from make_fn's params.

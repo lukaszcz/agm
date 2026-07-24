@@ -26,10 +26,19 @@ from __future__ import annotations
 
 import dataclasses
 
+from agm.agl.ir.nodes import IrBind, IrExpr, IrSequence
 from agm.agl.modules.ids import ENTRY_ID, ModuleId
 from agm.agl.semantics.type_table import TypeDef, TypeTable, create_seeded_type_table
 from agm.agl.semantics.types import EnumType, RecordType, Type
 from agm.agl.syntax.nodes import Program
+
+
+def let_root_capture(initializer: IrExpr) -> IrBind:
+    """Return a simple immutable let's private compiled-match root capture."""
+    assert isinstance(initializer, IrSequence)
+    root_capture = initializer.items[0]
+    assert isinstance(root_capture, IrBind)
+    return root_capture
 
 
 def all_node_ids(obj: object, seen: set[int] | None = None) -> set[int]:

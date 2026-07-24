@@ -39,6 +39,7 @@ from agm.agl.ir import (
     IrFunctionParam,
     IrIndirectCall,
     IrMakeClosure,
+    IrSequence,
     Location,
     NominalDescriptor,
     NominalId,
@@ -69,6 +70,7 @@ from agm.agl.scope import resolve_module
 from agm.agl.scope.program import resolve_program
 from agm.agl.typecheck import check_module
 from agm.agl.typecheck.program import check_program
+from tests._agl_helpers import let_root_capture
 from tests.agl.ir_harness import (
     _compiled_checked,
     make_graph_from_files,
@@ -177,9 +179,10 @@ class TestExternCalls:
         assert isinstance(inits[0], IrBind)
         assert isinstance(inits[0].value, IrMakeClosure)
         result_bind = next(
-            item
+            let_root_capture(item)
             for item in inits
-            if isinstance(item, IrBind) and isinstance(item.value, IrIndirectCall)
+            if isinstance(item, IrSequence)
+            and isinstance(let_root_capture(item).value, IrIndirectCall)
         )
         assert isinstance(result_bind.value, IrIndirectCall)
 

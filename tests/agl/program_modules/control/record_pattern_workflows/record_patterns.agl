@@ -1,0 +1,7 @@
+record Box[T]
+  value: T
+
+type Alias[T] = Box[T]
+
+record Outer[T]
+  inner: Box[T]

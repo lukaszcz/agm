@@ -121,9 +121,9 @@ def _render_check_only(result: "EntryResult") -> str | None:
         assert result.value_type is not None
         return f": {format_type_for_repl(result.value_type, result.type_table)}"
     if result.kind == "binding":
-        assert result.name is not None
         assert result.value_type is not None
-        return f"{result.name} : {format_type_for_repl(result.value_type, result.type_table)}"
+        typ = format_type_for_repl(result.value_type, result.type_table)
+        return f"{result.name} : {typ}" if result.name is not None else f": {typ}"
     if result.kind == "declaration":
         assert result.name is not None
         return f"{result.name} declared"
@@ -160,14 +160,18 @@ def _render_echo(result: "EntryResult") -> str | None:
             quote_strings=result.quote_strings,
         )
     if result.kind == "binding":
-        # A binding echoes ``name : Type = value`` (single-sourced helper so the
-        # echo and ``:bindings`` listing never diverge).
-        assert result.name is not None
+        # Named bindings share their display with ``:bindings``. A destructuring
+        # let has no single public name, so it echoes its complete matched value.
         assert result.value is not None
         assert result.value_type is not None
         if not _is_repl_printable_value(result.value):
             return None
-        return format_typed_value(result.name, result.value_type, result.value)
+        if result.name is not None:
+            return format_typed_value(result.name, result.value_type, result.value)
+        return (
+            f": {result.value_type!r} = "
+            f"{render_value(result.value, pretty=True, quote_strings=True)}"
+        )
     if result.kind == "declaration":
         assert result.name is not None
         return f"{result.name} declared"

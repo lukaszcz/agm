@@ -31,9 +31,9 @@ receives its field or whole-value type. Without an annotation, the complete
 matched type is inferred from the initializer. A bottom initializer needs that
 annotation to type binders. `let _` remains a discard: its annotation does not
 constrain the initializer. Every `let` pattern is statically compiled and must
-be irrefutable; a refutable pattern is a static error. Destructuring lets are
-not yet lowered or executable, so lowering currently accepts only bare-name
-and wildcard `let` roots.
+be irrefutable; a refutable pattern is a static error. An executable
+destructuring `let` captures its complete initializer value once, then installs
+every selected binder from that value.
 
 `let` evaluates the initializer, checks it against the complete annotation (if
 any), and creates **immutable** bindings in the current scope. It scopes over the
@@ -59,6 +59,14 @@ ignored: annotations normally constrain an initializer and declare its binder's
 type, but `_` creates neither a readable binder nor a binding type. Its RHS is
 therefore checked without an annotation-derived expected type. Use it when a
 non-`unit` value is intentionally discarded.
+
+### REPL persistence and echo
+
+At the REPL top level, a completed destructuring `let` persists every selected
+binder across later entries. Its echo shows the complete matched value and type,
+not a synthetic binder name. If a later initializer fails, previously completed
+pattern initializers (and completed function closures) remain available; the
+failing initializer contributes no binders.
 
 ## `var` — mutable binding
 

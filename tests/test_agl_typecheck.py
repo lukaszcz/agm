@@ -689,6 +689,17 @@ class TestTypeEnvironment:
         assert current.get_function_signature("f") == signature
         assert current.is_extern_node_id(1)
 
+    def test_restore_binding_metadata_discards_uncommitted_function_signature(self) -> None:
+        previous = TypeEnvironment()
+        current = TypeEnvironment()
+        current.register_function_signature(
+            "transient", FunctionSignature(params=(), result=IntType())
+        )
+
+        current.restore_binding_metadata_from(previous, (), ("transient",))
+
+        assert current.get_function_signature("transient") is None
+
     def test_seed_rejects_an_environment_with_a_flexible_variable(self) -> None:
         source = TypeEnvironment()
         source.set_binding_type(1, InferenceVarType())
@@ -8524,6 +8535,27 @@ class TestNonGenericConstructorsUnchanged:
     def test_non_generic_enum_still_works(self) -> None:
         r = accept_type("enum Color\n  | Red\n  | Blue\nRed()")
         assert r.resolved.program is not None
+
+    def test_unresolved_local_type_binding_is_reported_as_a_type_error(self) -> None:
+        program = parse_program("Color")
+        value = program.body.items[0]
+        assert isinstance(value, VarRef)
+        type_binding = BindingRef(
+            name="Color",
+            mutable=False,
+            decl_span=value.span,
+            decl_node_id=value.node_id,
+            kind=BinderKind.constructor_binding,
+        )
+        resolved = _ModuleResolution(
+            program=program,
+            resolution={value.node_id: type_binding},
+            builtin_calls={},
+            root_scope=ScopeNode(node_id=program.node_id, bindings={"Color": type_binding}),
+        )
+
+        with pytest.raises(AglTypeError):
+            check_module(resolved, default_capabilities())
 
     def test_non_generic_type_arg_rejected(self) -> None:
         err = reject_type("record Point\n  x: int\n  y: int\nPoint::[int](x = 1, y = 2)")

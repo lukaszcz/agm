@@ -331,6 +331,7 @@ class _LinkState:
     nominals: dict[NominalId, NominalDescriptor] = field(default_factory=dict)
     sources: dict[SourceId, SourceFile] = field(default_factory=dict)
     contracts: dict[ContractId, ContractRequest] = field(default_factory=dict)
+    let_value_symbols: dict[int, SymbolId] = field(default_factory=dict)
 
 
 _ARITH_OP_MAP: dict[BinOp, ArithOp] = {
@@ -2641,6 +2642,9 @@ class _Lowerer:
             self.lower_coerced(let.value, matched_type),
             location,
             lower_leaf,
+            root_symbol_sink=lambda symbol: self._link.let_value_symbols.__setitem__(
+                let.node_id, symbol
+            ),
         )
 
     def _lower_compiled_decision(
@@ -2649,9 +2653,13 @@ class _Lowerer:
         root_value: IrExpr,
         location: Location,
         lower_leaf: "Callable[[DecisionLeaf, Callable[[OccurrenceId], SymbolId]], IrExpr]",
+        *,
+        root_symbol_sink: "Callable[[SymbolId], None] | None" = None,
     ) -> IrSequence:
         """Lower a case or let decision through one shared occurrence DAG."""
         root_symbol = self._alloc_synthetic_sym(mutable=False)
+        if root_symbol_sink is not None:
+            root_symbol_sink(root_symbol)
         occurrence_symbols: dict[OccurrenceId, SymbolId] = {
             compiled.normalized.root.id: root_symbol
         }

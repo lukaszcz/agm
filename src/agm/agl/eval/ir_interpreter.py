@@ -441,6 +441,7 @@ class IrInterpreter:
         self._frames: list[Frame] = [base_frame if base_frame is not None else {}]
         self.initializer_values: list[Value] = []
         self.module_initializer_values: dict[ModuleId, list[Value]] = {}
+        self.entry_initializers_started: bool = False
         self._call_depth: int = 0
         self._trace: TraceStore = trace if trace is not None else noop_trace()
         self._max_call_depth: int = max_call_depth
@@ -874,6 +875,7 @@ class IrInterpreter:
             with decimal.localcontext(AGL_DECIMAL_CONTEXT):
                 self._install_entry_function_closures()
                 self._install_entry_params()
+                self.entry_initializers_started = True
 
                 for mod in self._program.modules.values():
                     for node in mod.initializers:

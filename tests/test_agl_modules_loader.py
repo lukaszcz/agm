@@ -144,6 +144,26 @@ class TestGraphBuild:
         graph = load_graph(entry, entry_path=None, roots=_roots(root))
         assert ModuleId.from_path("util") in graph.modules
 
+    def test_library_pattern_let_remains_rejected_at_the_module_boundary(
+        self, tmp_path: Path
+    ) -> None:
+        from agm.agl.scope import AglScopeError
+        from agm.agl.scope.program import resolve_program
+
+        root = tmp_path / "r"
+        root.mkdir()
+        _write_module(
+            root,
+            "util",
+            "record Pair\n  left: int\n  right: int\n"
+            "let Pair(left, right) = Pair(left = 1, right = 2)\n",
+        )
+
+        graph = load_graph("import util\n()", entry_path=None, roots=_roots(root))
+
+        with pytest.raises(AglScopeError):
+            resolve_program(graph)
+
     def test_imported_module_without_default_stdlib(self, tmp_path: Path) -> None:
         root = tmp_path / "r"
         root.mkdir()

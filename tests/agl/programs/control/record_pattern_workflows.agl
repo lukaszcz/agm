@@ -1,0 +1,27 @@
+# Whole-program record pattern workflows: local swap plus nested generic records
+# reached through open, qualified, and aliased imports.
+import record_patterns
+import record_patterns as rp
+open import record_patterns
+
+param seed: int
+
+record Pair
+  left: int
+  right: int
+
+let pair = Pair(left = seed, right = seed + 1)
+let Pair(left = _ as swapped_right, right = _ as swapped_left) = pair
+print "${swapped_left}:${swapped_right}"
+
+let nested: rp::Outer[int] = rp::Outer(inner = rp::Box(value = seed + 2))
+let rp::Outer(inner = rp::Box(value = _ as nested_value)) = nested
+print nested_value
+
+let qualified: record_patterns::Alias[int] = record_patterns::Box(value = seed + 3)
+let record_patterns::Alias(value = _ as qualified_value) = qualified
+print qualified_value
+
+let opened: Alias[int] = Box(value = seed + 4)
+let Alias(value = _ as opened_value) = opened
+print opened_value

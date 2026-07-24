@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Collection, Iterable, Mapping
 from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import TYPE_CHECKING, cast
@@ -43,6 +43,7 @@ if TYPE_CHECKING:
 __all__ = [
     "LinkImage",
     "LoweredReplEntry",
+    "ParamOrigin",
     "ReplPromotionPlan",
     "lower_repl_entry",
     "lower_repl_program",
@@ -96,6 +97,14 @@ class LinkImage:
 
 
 @dataclass(frozen=True, slots=True)
+class ParamOrigin:
+    """Pair a source parameter declaration with its lowering symbol identity."""
+
+    declaration_id: int
+    symbol: SymbolId
+
+
+@dataclass(frozen=True, slots=True)
 class ReplPromotionPlan:
     """Relate source declarations to the entry initializers that complete them.
 
@@ -103,15 +112,27 @@ class ReplPromotionPlan:
     declarations appear later in source. Non-function source declarations become
     eligible when execution reaches their source-order initializer frontier.
     This makes partial REPL promotion depend on completed IR initializers rather
-    than diagnostic source locations.
+    than diagnostic source locations. Entry parameters are installed by a
+    pre-pass, so their completion comes from the symbols the interpreter
+    actually installed rather than from source position.
     """
 
     source_declaration_ids: tuple[frozenset[int], ...]
     initializers: tuple[InitializerOrigin, ...]
+    params: tuple[ParamOrigin, ...]
     declaration_dependencies: Mapping[int, frozenset[int]]
 
-    def completed_declaration_ids(self, completed_initializer_count: int) -> frozenset[int]:
-        """Return completed declarations whose entry dependencies are also completed."""
+    def completed_declaration_ids(
+        self,
+        completed_initializer_count: int,
+        installed_param_symbols: Collection[SymbolId],
+    ) -> frozenset[int]:
+        """Return complete declarations, including only installed params.
+
+        The result is dependency-safe and needs no post-correction by callers.
+        Parameters are installed by a pre-pass rather than an initializer, so
+        their source position cannot establish completion.
+        """
         assert 0 <= completed_initializer_count <= len(self.initializers)
         completed: set[int] = set()
         for origin in self.initializers[:completed_initializer_count]:
@@ -126,6 +147,12 @@ class ReplPromotionPlan:
         )
         for declaration_ids in self.source_declaration_ids[:source_frontier]:
             completed.update(declaration_ids)
+
+        completed.difference_update(
+            origin.declaration_id
+            for origin in self.params
+            if origin.symbol not in installed_param_symbols
+        )
 
         dependencies = self.declaration_dependencies
         while unsafe := {
@@ -257,10 +284,16 @@ def _declaration_dependencies(
 def _promotion_plan(
     checked: "CheckedModule",
     initializer_origins: tuple[InitializerOrigin, ...],
+    decl_to_sym: Mapping[int, SymbolId],
 ) -> ReplPromotionPlan:
-    """Consume lowering's initializer origins and add dependency closure."""
+    """Consume lowering's origins and add dependency-safe promotion metadata."""
     items = checked.resolved.program.body.items
     source_declaration_ids = tuple(_item_declaration_ids(item, checked) for item in items)
+    params = tuple(
+        ParamOrigin(declaration_id=item.node_id, symbol=decl_to_sym[item.node_id])
+        for item in items
+        if isinstance(item, ParamDecl)
+    )
     entry_declaration_ids = frozenset().union(*source_declaration_ids)
     type_declaration_ids = {
         item.name: item.node_id
@@ -279,6 +312,7 @@ def _promotion_plan(
     return ReplPromotionPlan(
         source_declaration_ids=source_declaration_ids,
         initializers=initializer_origins,
+        params=params,
         declaration_dependencies=MappingProxyType(declaration_dependencies),
     )
 
@@ -340,6 +374,7 @@ def lower_repl_entry(
         promotion_plan=_promotion_plan(
             checked_entry,
             link.initializer_origins[ENTRY_ID],
+            link.decl_to_sym,
         ),
     )
 
@@ -382,5 +417,6 @@ def lower_repl_program(
         promotion_plan=_promotion_plan(
             checked.modules[checked.entry_id],
             image._state.initializer_origins[program.entry_module],
+            image._state.decl_to_sym,
         ),
     )

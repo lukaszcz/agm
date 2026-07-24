@@ -21,6 +21,7 @@ import pytest
 
 from agm.agl.capabilities import HostCapabilities
 from agm.agl.ir.contracts import ConversionFailureMode, ConversionStrategy
+from agm.agl.ir.ids import SymbolId
 from agm.agl.ir.nodes import (
     AutoTraceField,
     IrArith,
@@ -81,7 +82,8 @@ from agm.agl.ir.operations import (
 from agm.agl.ir.program import ExecutableProgram, FunctionDescriptor, IrFunctionBody
 from agm.agl.ir.validate import validate_ir
 from agm.agl.lower import LinkImage, compile_coercion, lower_module, lower_repl_entry
-from agm.agl.lower.lowerer import _Lowerer
+from agm.agl.lower.lowerer import InitializerOrigin, _Lowerer
+from agm.agl.lower.repl import ParamOrigin, ReplPromotionPlan
 from agm.agl.matchcompile import MatchCompiledModule, compile_module_matches
 from agm.agl.parser import parse_program, parse_program_seeded
 from agm.agl.scope import resolve_module
@@ -97,7 +99,7 @@ from agm.agl.semantics.types import (
     TypeVarType,
     UnitType,
 )
-from agm.agl.syntax.nodes import Case, FuncDef, Placeholder
+from agm.agl.syntax.nodes import Case, FuncDef, ParamDecl, Placeholder
 from agm.agl.typecheck import check_module
 from agm.agl.typecheck.env import CheckedModule
 from tests._agl_helpers import enum_type, record_type, type_table_for
@@ -202,6 +204,39 @@ def test_lowering_records_each_entry_initializer_origin() -> None:
     for origin, _initializer in zip(origins, initializers, strict=True):
         item = items[origin.source_index]
         assert origin.is_function == (isinstance(item, FuncDef) and not item.is_builtin)
+
+
+def test_repl_promotion_plan_pairs_params_with_lowered_symbols() -> None:
+    source = "param first: int = 1\nparam second: int = 2\n()"
+    program, _next_id = parse_program_seeded(source, start_id=0)
+    image = LinkImage()
+    lowered = lower_repl_entry(
+        _compiled_checked(check_module(resolve_module(program), _caps())),
+        image=image,
+        source_text=source,
+        source_label="<repl:param-origins>",
+    )
+
+    expected = tuple(
+        (item.node_id, image._state.decl_to_sym[item.node_id])
+        for item in program.body.items
+        if isinstance(item, ParamDecl)
+    )
+    assert (
+        tuple((origin.declaration_id, origin.symbol) for origin in lowered.promotion_plan.params)
+        == expected
+    )
+
+
+def test_repl_promotion_excludes_uninstalled_params_before_dependency_closure() -> None:
+    plan = ReplPromotionPlan(
+        source_declaration_ids=(frozenset({10}), frozenset()),
+        initializers=(InitializerOrigin(source_index=1, is_function=False),),
+        params=(ParamOrigin(declaration_id=10, symbol=SymbolId(7)),),
+        declaration_dependencies={},
+    )
+
+    assert plan.completed_declaration_ids(0, set()) == frozenset()
 
 
 def test_lower_repl_trailing_binder_has_no_expression_marker() -> None:

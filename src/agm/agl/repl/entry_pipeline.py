@@ -515,24 +515,12 @@ class EntryPipeline:
         )
 
         def completed_declaration_ids() -> frozenset[int]:
-            from agm.agl.syntax.nodes import ParamDecl
-
-            if not interp.entry_initializers_started:
+            if not interp.entry_frame_started:
                 return frozenset()
-            completed = lowered.promotion_plan.completed_declaration_ids(
-                len(interp.module_initializer_values.get(lowered.program.entry_module, ()))
+            return lowered.promotion_plan.completed_declaration_ids(
+                len(interp.module_initializer_values.get(lowered.program.entry_module, ())),
+                interp.entry_param_symbols_installed,
             )
-            completed_param_names = frozenset(
-                param.public_name
-                for param in lowered.program.params
-                if param.symbol in interp.entry_param_symbols_installed
-            )
-            incomplete_param_ids = {
-                item.node_id
-                for item in orig_program.body.items
-                if isinstance(item, ParamDecl) and item.name not in completed_param_names
-            }
-            return completed - incomplete_param_ids
 
         try:
             interp.run()
@@ -617,7 +605,8 @@ class EntryPipeline:
             entry_active_config=entry_active_config,
             partial=False,
             promoted_declaration_ids=lowered.promotion_plan.completed_declaration_ids(
-                len(lowered.program.modules[lowered.program.entry_module].initializers)
+                len(lowered.program.modules[lowered.program.entry_module].initializers),
+                interp.entry_param_symbols_installed,
             ),
         )
         self._ctx._loaded_lib_modules.update(new_modules)

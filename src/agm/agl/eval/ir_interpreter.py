@@ -443,7 +443,7 @@ class IrInterpreter:
         self._frames: list[Frame] = [base_frame if base_frame is not None else {}]
         self.initializer_values: list[Value] = []
         self.module_initializer_values: dict[ModuleId, list[Value]] = {}
-        self.entry_initializers_started: bool = False
+        self.entry_frame_started: bool = False
         self.entry_param_symbols_installed: set[SymbolId] = set()
         self._call_depth: int = 0
         self._trace: TraceStore = trace if trace is not None else noop_trace()
@@ -879,9 +879,14 @@ class IrInterpreter:
         sys.setrecursionlimit(max(previous_limit, target))
         try:
             with decimal.localcontext(AGL_DECIMAL_CONTEXT):
-                self.entry_initializers_started = self._install_entry_function_closures()
+                # Record closure installation before params: a failing param
+                # default must still allow already-installed closures to be
+                # promoted. Set the flag again after the parameter pre-pass so
+                # a successfully installed entry frame also counts when it has
+                # no function closures.
+                self.entry_frame_started = self._install_entry_function_closures()
                 self._install_entry_params()
-                self.entry_initializers_started = True
+                self.entry_frame_started = True
 
                 for mod in self._program.modules.values():
                     for node in mod.initializers:

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TypeAlias
+from typing import TypeAlias, cast
 
 from agm.agl.semantics.type_table import TypeTable
 from agm.agl.semantics.types import EnumOwnerForm, EnumOwnerFormKind
@@ -45,6 +45,7 @@ from .model import (
     ConstructorCell,
     Decision,
     DecisionBranch,
+    DecisionDecompose,
     DecisionFail,
     DecisionLeaf,
     DecisionSwitch,
@@ -157,6 +158,38 @@ def _finalize_binders(matrix: PatternMatrix, row: MatrixRow) -> tuple[BinderAssi
     return tuple(sorted(assignments, key=assignment_key))
 
 
+def _decompose_free_occurrences(
+    occurrence: Occurrence,
+    child: Decision,
+    children: tuple[Occurrence, ...],
+    index: OccurrenceIndex,
+) -> tuple[OccurrenceId, ...]:
+    """Return the parent interface after an irrefutable field decomposition."""
+    required = {occurrence.id}
+    required.update(set(child.free_occurrences) - {field.id for field in children})
+    by_id = index.by_id
+    if any(identifier not in by_id for identifier in required):
+        raise MatchCompileInvariantError("decision free interface names an unknown occurrence")
+
+    def occurrence_key(identifier: OccurrenceId) -> tuple[int, int]:
+        return _occurrence_sort_key(by_id[identifier])
+
+    return tuple(sorted(required, key=occurrence_key))
+
+
+def _demanded_occurrences(
+    child: Decision,
+    children: tuple[Occurrence, ...],
+) -> tuple[OccurrenceId, ...]:
+    """Return declaration-order child fields which the child decision reads."""
+    required = set(child.free_occurrences)
+    return tuple(
+        occurrence.id
+        for occurrence in sorted(children, key=_occurrence_sort_key)
+        if occurrence.id in required
+    )
+
+
 def _switch_free_occurrences(
     occurrence: Occurrence,
     branches: tuple[DecisionBranch, ...],
@@ -194,6 +227,16 @@ class _CaseCompiler:
             key: object = ("fail",)
         elif isinstance(decision, DecisionLeaf):
             key = ("leaf", decision.action_id, decision.binder_assignments)
+        elif isinstance(decision, DecisionDecompose):
+            key = (
+                "decompose",
+                decision.occurrence,
+                decision.constructor,
+                decision.children,
+                id(decision.child),
+                decision.demanded_occurrences,
+                decision.free_occurrences,
+            )
         else:
             key = (
                 "switch",
@@ -230,6 +273,34 @@ class _CaseCompiler:
 
         selection = select_qba_column(matrix)
         heads = _ordered_heads(matrix, selection.index)
+        signature = signature_for_type(selection.occurrence.type, matrix.type_table)
+        if isinstance(signature, ClosedSignature) and len(signature.constructors) == 1:
+            singleton_constructor = cast(
+                EnumConstructor | RecordConstructor, signature.constructors[0]
+            )
+            specialized = specialize(matrix, selection.index, singleton_constructor, allocator)
+            child, current_allocator = self.compile(specialized.matrix, specialized.allocator)
+            children = specialized.matrix.occurrences[
+                selection.index : selection.index + singleton_constructor.arity
+            ]
+            decision = self.intern(
+                DecisionDecompose(
+                    selection.occurrence,
+                    singleton_constructor,
+                    children,
+                    child,
+                    _demanded_occurrences(child, children),
+                    _decompose_free_occurrences(
+                        selection.occurrence,
+                        child,
+                        children,
+                        current_allocator.index,
+                    ),
+                )
+            )
+            self._memo[state_key] = decision
+            return decision, current_allocator
+
         branches: list[DecisionBranch] = []
         current_allocator = allocator
         for constructor in heads:
@@ -237,7 +308,6 @@ class _CaseCompiler:
             child, current_allocator = self.compile(specialized.matrix, specialized.allocator)
             branches.append(DecisionBranch(constructor, child))
 
-        signature = signature_for_type(selection.occurrence.type, matrix.type_table)
         needs_default = isinstance(signature, OpenSignature) or not _signature_is_complete(
             heads, signature
         )
@@ -307,6 +377,25 @@ def _first_failure_constraints(root: Decision, type_table: TypeTable) -> _Constr
         if isinstance(decision, DecisionLeaf):
             memo[identifier] = None
             return None
+        if isinstance(decision, DecisionDecompose):
+            active.add(identifier)
+            try:
+                suffix = visit(decision.child)
+                if suffix is None:
+                    memo[identifier] = None
+                    return None
+                if any(occurrence_id == decision.occurrence.id for occurrence_id, _ in suffix):
+                    raise MatchCompileInvariantError(
+                        "a failure path processes an occurrence more than once"
+                    )
+                result = (
+                    (decision.occurrence.id, _ConstructorConstraint(decision.constructor)),
+                    *suffix,
+                )
+                memo[identifier] = result
+                return result
+            finally:
+                active.remove(identifier)
         active.add(identifier)
         try:
             signature = signature_for_type(decision.occurrence.type, type_table)
@@ -505,6 +594,8 @@ def _reachable_actions(root: Decision) -> set[int]:
         seen.add(identifier)
         if isinstance(decision, DecisionLeaf):
             reachable.add(decision.action_id)
+        elif isinstance(decision, DecisionDecompose):
+            visit(decision.child)
         elif isinstance(decision, DecisionSwitch):
             for branch in decision.keyed_children:
                 visit(branch.decision)
@@ -602,7 +693,17 @@ class _ReplaySwitchRule:
     has_default: bool
 
 
-_ReplayRule: TypeAlias = _ReplayFailRule | _ReplayLeafRule | _ReplaySwitchRule
+@dataclass(frozen=True, slots=True)
+class _ReplayDecomposeRule:
+    """The exact singleton-product rule expected for one refutable state."""
+
+    occurrence: Occurrence
+    constructor: EnumConstructor | RecordConstructor
+
+
+_ReplayRule: TypeAlias = (
+    _ReplayFailRule | _ReplayLeafRule | _ReplaySwitchRule | _ReplayDecomposeRule
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -791,6 +892,13 @@ def _validate_decision_dataflow(
     merge(root, root_available, frozenset())
     while worklist:
         decision, available, tested = states[worklist.pop()]
+        if isinstance(decision, DecisionDecompose):
+            child_available = available
+            if occurrence_groups is not None:
+                children = occurrence_groups.get((decision.occurrence.id, decision.constructor), ())
+                child_available |= frozenset(child.id for child in children)
+            merge(decision.child, child_available, tested | {decision.occurrence.id})
+            continue
         if not isinstance(decision, DecisionSwitch):
             continue
         next_tested = tested | {decision.occurrence.id}
@@ -808,9 +916,12 @@ def _validate_decision_dataflow(
             raise MatchCompileInvariantError(
                 "decision free occurrence interface is unavailable on an incoming path"
             )
-        if isinstance(decision, DecisionSwitch) and decision.occurrence.id in tested:
+        if (
+            isinstance(decision, (DecisionSwitch, DecisionDecompose))
+            and decision.occurrence.id in tested
+        ):
             raise MatchCompileInvariantError(
-                f"occurrence {decision.occurrence.id.value} is tested more than once on a path"
+                f"occurrence {decision.occurrence.id.value} is processed more than once on a path"
             )
 
 
@@ -881,6 +992,49 @@ def _validate_compiled_decisions(
                     "decision leaf binder assignments are not in stable occurrence order"
                 )
             expected_free = decision.free_occurrences
+        elif isinstance(decision, DecisionDecompose):
+            ledger_occurrence = occurrences_by_id.get(decision.occurrence.id)
+            if ledger_occurrence is not decision.occurrence:
+                raise MatchCompileInvariantError(
+                    "decision decomposition does not reference its exact ledger occurrence"
+                )
+            canonical = _canonical_switch_constructor(
+                decision.constructor,
+                decision.occurrence,
+                normalized.type_table,
+            )
+            signature = signature_for_type(decision.occurrence.type, normalized.type_table)
+            if (
+                not isinstance(signature, ClosedSignature)
+                or signature.constructors != (canonical,)
+                or not isinstance(canonical, (EnumConstructor, RecordConstructor))
+            ):
+                raise MatchCompileInvariantError(
+                    "decision decomposition requires an exactly singleton nominal signature"
+                )
+            children = occurrence_groups.get((decision.occurrence.id, canonical), ())
+            if decision.children != children:
+                raise MatchCompileInvariantError(
+                    "decision decomposition children do not match the occurrence ledger"
+                )
+            if canonical.arity:
+                referenced_groups.add((decision.occurrence.id, canonical))
+            validate_free_interface(decision.child)
+            expected_demanded = _demanded_occurrences(decision.child, children)
+            if decision.demanded_occurrences != expected_demanded:
+                raise MatchCompileInvariantError(
+                    "decision decomposition carries forged demanded occurrences"
+                )
+            expected_free = _decompose_free_occurrences(
+                decision.occurrence,
+                decision.child,
+                children,
+                occurrence_index,
+            )
+            if decision.free_occurrences != expected_free:
+                raise MatchCompileInvariantError(
+                    "decision decomposition carries a forged free occurrence interface"
+                )
         else:
             ledger_occurrence = occurrences_by_id.get(decision.occurrence.id)
             if ledger_occurrence is not decision.occurrence:
@@ -1022,6 +1176,35 @@ def _validate_semantic_replay(compiled: CompiledCase) -> None:
         selection = select_qba_column(matrix)
         heads = _ordered_heads(matrix, selection.index)
         signature = signature_for_type(selection.occurrence.type, matrix.type_table)
+        if isinstance(signature, ClosedSignature) and len(signature.constructors) == 1:
+            singleton_constructor = cast(
+                EnumConstructor | RecordConstructor, signature.constructors[0]
+            )
+            rule = _ReplayDecomposeRule(selection.occurrence, singleton_constructor)
+            remember_rule(decision, rule)
+            if not isinstance(decision, DecisionDecompose):
+                raise MatchCompileInvariantError(
+                    "semantic replay requires a singleton nominal state to map to DecisionDecompose"
+                )
+            specialized = specialize(matrix, selection.index, singleton_constructor, allocator)
+            children = specialized.matrix.occurrences[
+                selection.index : selection.index + singleton_constructor.arity
+            ]
+            if (
+                decision.occurrence != selection.occurrence
+                or decision.constructor != singleton_constructor
+                or decision.children != children
+            ):
+                raise MatchCompileInvariantError(
+                    "semantic replay found an incompatible singleton decomposition"
+                )
+            next_allocator = replay(specialized.matrix, decision.child, specialized.allocator)
+            if decision.demanded_occurrences != _demanded_occurrences(decision.child, children):
+                raise MatchCompileInvariantError(
+                    "semantic replay found forged decomposition demands"
+                )
+            return next_allocator
+
         needs_default = isinstance(signature, OpenSignature) or not _signature_is_complete(
             heads, signature
         )
@@ -1142,7 +1325,21 @@ def _validate_decision_shape(root: Decision) -> None:
         if identifier in visited:
             return
         visiting.add(identifier)
-        if isinstance(decision, DecisionSwitch):
+        if isinstance(decision, DecisionDecompose):
+            if len(set(decision.free_occurrences)) != len(decision.free_occurrences):
+                raise MatchCompileInvariantError(
+                    "decision free occurrence interface has duplicates"
+                )
+            if len(set(decision.demanded_occurrences)) != len(decision.demanded_occurrences):
+                raise MatchCompileInvariantError(
+                    "decision decomposition demands duplicate occurrences"
+                )
+            if decision.occurrence.id not in decision.free_occurrences:
+                raise MatchCompileInvariantError(
+                    "decision decomposition omits its processed free occurrence"
+                )
+            acyclic(decision.child)
+        elif isinstance(decision, DecisionSwitch):
             constructors = tuple(branch.constructor for branch in decision.keyed_children)
             if not constructors or len(set(constructors)) != len(constructors):
                 raise MatchCompileInvariantError(
@@ -1165,7 +1362,7 @@ def _validate_decision_shape(root: Decision) -> None:
 
 
 def validate_decision_dag(root: Decision) -> None:
-    """Assert acyclicity, unique switch keys, and one test per occurrence per path."""
+    """Assert acyclicity, node interfaces, and one decision per occurrence per path."""
     _validate_decision_shape(root)
     _validate_decision_dataflow(root, frozenset(), None)
 

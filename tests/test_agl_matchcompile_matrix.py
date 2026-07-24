@@ -33,7 +33,7 @@ from agm.agl.matchcompile.model import (
     BoolConstructor,
     ConstructorCell,
     ConstructorField,
-    DecisionSwitch,
+    DecisionDecompose,
     EnumConstructor,
     FieldOccurrenceProvenance,
     LiteralConstructor,
@@ -224,8 +224,8 @@ def test_record_compilation_validates_field_occurrences_and_reconstructs_witness
     )
     compiled = compile_case(normalize_case(_only_case(checked), checked))
 
-    assert isinstance(compiled.root, DecisionSwitch)
-    assert isinstance(compiled.root.keyed_children[0].constructor, RecordConstructor)
+    assert isinstance(compiled.root, DecisionDecompose)
+    assert isinstance(compiled.root.constructor, RecordConstructor)
     assert len(compiled.occurrences) == 2
     issue = compiled.issues[0]
     assert isinstance(issue, NonExhaustiveIssue)

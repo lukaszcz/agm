@@ -413,7 +413,40 @@ class DecisionSwitch:
     free_occurrences: tuple[OccurrenceId, ...] = ()
 
 
-Decision: TypeAlias = DecisionFail | DecisionLeaf | DecisionSwitch
+@dataclass(frozen=True, slots=True)
+class DecisionDecompose:
+    """Irrefutably expose a singleton nominal constructor's field occurrences.
+
+    Unlike a switch, this node performs no discriminant test. ``children``
+    preserves declaration-order provenance for dominance validation, while
+    ``demanded_occurrences`` records only the fields its child actually reads.
+    """
+
+    occurrence: Occurrence
+    constructor: FieldBearingNominalConstructor
+    children: tuple[Occurrence, ...]
+    child: Decision
+    demanded_occurrences: tuple[OccurrenceId, ...]
+    free_occurrences: tuple[OccurrenceId, ...] = ()
+
+    @property
+    def keyed_children(self) -> tuple[DecisionBranch, ...]:
+        """Expose the temporary lowering-compatible singleton edge.
+
+        Lowering has no native decomposition operation yet; its existing
+        switch consumer can represent the singleton enum edge unchanged.
+        Match compilation itself never treats this node as a discriminant
+        switch.
+        """
+        return (DecisionBranch(self.constructor, self.child),)
+
+    @property
+    def default(self) -> None:
+        """A decomposition has no failure/default edge."""
+        return None
+
+
+Decision: TypeAlias = DecisionFail | DecisionLeaf | DecisionSwitch | DecisionDecompose
 
 
 # ---------------------------------------------------------------------------
@@ -463,6 +496,7 @@ __all__ = [
     "ConstructorField",
     "Decision",
     "DecisionBranch",
+    "DecisionDecompose",
     "DecisionFail",
     "DecisionLeaf",
     "DecisionSwitch",

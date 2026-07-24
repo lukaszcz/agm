@@ -35,6 +35,7 @@ from agm.agl.matchcompile.matrix import OccurrenceAllocator, PatternMatrix, Spec
 from agm.agl.matchcompile.model import (
     Constructor,
     DecisionBranch,
+    DecisionDecompose,
     DecisionFail,
     DecisionLeaf,
     DecisionSwitch,
@@ -67,6 +68,7 @@ def test_matchcompile_public_exports_are_narrow_and_stable() -> None:
         "CompiledCase",
         "Constructor",
         "Decision",
+        "DecisionDecompose",
         "DecisionLeaf",
         "DecisionSwitch",
         "EnumConstructor",
@@ -141,8 +143,8 @@ def _semantic_replay_corruptions(
     bool_case, open_case, pair_case = cases
     bool_root = cast(DecisionSwitch, bool_case.root)
     open_root = cast(DecisionSwitch, open_case.root)
-    pair_root = cast(DecisionSwitch, pair_case.root)
-    pair_switch = cast(DecisionSwitch, pair_root.keyed_children[0].decision)
+    pair_root = cast(DecisionDecompose, pair_case.root)
+    pair_switch = cast(DecisionSwitch, pair_root.child)
     pair_right = pair_case.occurrences[2]
     open_branch = open_root.keyed_children[0]
 
@@ -207,21 +209,16 @@ def _semantic_replay_corruptions(
                 pair_case,
                 root=replace(
                     pair_root,
-                    keyed_children=(
-                        replace(
-                            pair_root.keyed_children[0],
-                            decision=replace(
-                                pair_switch,
-                                keyed_children=(
-                                    replace(
-                                        pair_switch.keyed_children[0],
-                                        decision=pair_switch.keyed_children[1].decision,
-                                    ),
-                                    replace(
-                                        pair_switch.keyed_children[1],
-                                        decision=pair_switch.keyed_children[0].decision,
-                                    ),
-                                ),
+                    child=replace(
+                        pair_switch,
+                        keyed_children=(
+                            replace(
+                                pair_switch.keyed_children[0],
+                                decision=pair_switch.keyed_children[1].decision,
+                            ),
+                            replace(
+                                pair_switch.keyed_children[1],
+                                decision=pair_switch.keyed_children[0].decision,
                             ),
                         ),
                     ),
@@ -235,15 +232,10 @@ def _semantic_replay_corruptions(
                 pair_case,
                 root=replace(
                     pair_root,
-                    keyed_children=(
-                        replace(
-                            pair_root.keyed_children[0],
-                            decision=replace(
-                                pair_switch,
-                                occurrence=pair_right,
-                                free_occurrences=(pair_right.id,),
-                            ),
-                        ),
+                    child=replace(
+                        pair_switch,
+                        occurrence=pair_right,
+                        free_occurrences=(pair_right.id,),
                     ),
                 ),
             ),
@@ -514,7 +506,7 @@ def test_program_artifact_replays_source_semantics_against_every_decision_edge()
     for _, case_index, corrupted_case in _semantic_replay_corruptions(cases):
         corrupted_cases = dict(compiled.cases)
         corrupted_cases[case_ids[case_index]] = corrupted_case
-        with pytest.raises(MatchCompileInvariantError, match="semantic replay"):
+        with pytest.raises(MatchCompileInvariantError, match="semantic replay|forged demanded"):
             MatchCompiledModule(compiled.checked, corrupted_cases)
 
 
@@ -589,8 +581,8 @@ def test_valid_shared_dag_passes_strong_compiled_case_validation() -> None:
         "case value of | pair(left = false, right = false) => 1 | _ => 2"
     )
     compiled_case = next(iter(compiled.cases.values()))
-    root = cast(DecisionSwitch, compiled_case.root)
-    left = cast(DecisionSwitch, root.keyed_children[0].decision)
+    root = cast(DecisionDecompose, compiled_case.root)
+    left = cast(DecisionSwitch, root.child)
     right = cast(DecisionSwitch, left.keyed_children[0].decision)
 
     assert right.default is left.default
@@ -615,8 +607,8 @@ def test_valid_shared_dag_passes_graph_semantic_replay_validation(tmp_path: Path
     assert isinstance(result.compiled, MatchCompiledProgram)
     compiled = result.compiled
     compiled_case = next(iter(compiled.cases_by_module[ENTRY_ID].values()))
-    root = cast(DecisionSwitch, compiled_case.root)
-    left = cast(DecisionSwitch, root.keyed_children[0].decision)
+    root = cast(DecisionDecompose, compiled_case.root)
+    left = cast(DecisionSwitch, root.child)
     right = cast(DecisionSwitch, left.keyed_children[0].decision)
 
     assert right.default is left.default
@@ -761,7 +753,7 @@ def test_graph_artifact_replays_source_semantics_against_every_decision_edge(
             for module_id, module_cases in compiled.cases_by_module.items()
         }
         corrupted_modules[ENTRY_ID][case_ids[case_index]] = corrupted_case
-        with pytest.raises(MatchCompileInvariantError, match="semantic replay"):
+        with pytest.raises(MatchCompileInvariantError, match="semantic replay|forged demanded"):
             MatchCompiledProgram(checked, corrupted_modules)
 
 

@@ -7,13 +7,14 @@ import pytest
 import agm.agl.matchcompile.compiler as compiler_module
 import agm.agl.matchcompile.matrix as matrix_module
 from agm.agl.capabilities import HostCapabilities
-from agm.agl.matchcompile.compiler import compile_case
+from agm.agl.matchcompile.compiler import compile_case, validate_decision_dag
 from agm.agl.matchcompile.matrix import (
     OccurrenceAllocator,
     head_constructors,
     matrix_from_normalized,
     specialize,
 )
+from agm.agl.matchcompile.model import DecisionDecompose, DecisionSwitch
 from agm.agl.matchcompile.normalize import normalize_case
 from agm.agl.parser import parse_program
 from agm.agl.scope import resolve_module
@@ -108,6 +109,40 @@ def test_terminal_wide_constructor_state_skips_column_profiles(
 
     assert compiled.reachable_action_ids == (case.branches[0].node_id,)
     assert profile_builds == 1
+
+
+def test_deep_singleton_product_patterns_keep_a_linear_decomposition_dag(
+    self_validation_disabled: None,
+) -> None:
+    depth = 40
+    declarations = ["record R0\n  value: bool"]
+    for index in range(1, depth + 1):
+        declarations.append(f"record R{index}\n  child: R{index - 1}")
+    value = "R0(value = true)"
+    for index in range(1, depth + 1):
+        value = f"R{index}(child = {value})"
+    checked, case = _normalized(
+        "\n".join((*declarations, f"let value = {value}", f"case value of | {value} => 1"))
+    )
+
+    compiled = compile_case(normalize_case(case, checked))
+    nodes: set[int] = set()
+
+    def visit(decision: object) -> None:
+        if id(decision) in nodes:
+            return
+        nodes.add(id(decision))
+        if isinstance(decision, DecisionDecompose):
+            visit(decision.child)
+        elif isinstance(decision, DecisionSwitch):
+            for branch in decision.keyed_children:
+                visit(branch.decision)
+            if decision.default is not None:
+                visit(decision.default)
+
+    visit(compiled.root)
+    assert len(nodes) <= depth + 4
+    validate_decision_dag(compiled.root)
 
 
 def test_compile_state_keys_cache_structural_hash_work(

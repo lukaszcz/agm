@@ -10,6 +10,7 @@ import pytest
 
 from agm.agl.capabilities import HostCapabilities
 from agm.agl.ir.ids import NominalId
+from agm.agl.matchcompile.compiler import compile_case, validate_compiled_case
 from agm.agl.matchcompile.matrix import (
     OccurrenceAllocator,
     PatternMatrix,
@@ -22,6 +23,7 @@ from agm.agl.matchcompile.model import (
     BinderAssignment,
     Constructor,
     ConstructorCell,
+    DecisionDecompose,
     EnumConstructor,
     MatrixRow,
     RecordConstructor,
@@ -307,6 +309,22 @@ def test_scalar_decompositions_use_runtime_literal_equality(
 ) -> None:
     checked, case, matrix, allocator = _matrix(source)
     _assert_decomposition_partition(checked, case, matrix, allocator, subjects)
+
+
+def test_record_decomposition_replays_the_same_matrix_semantics() -> None:
+    checked, case, matrix, _ = _matrix(
+        "record Pair\n"
+        "  left: bool\n"
+        "  right: bool\n"
+        "let value = Pair(left = true, right = false)\n"
+        "case value of | Pair(left = true) => 1 | Pair(left = false) => 0"
+    )
+
+    compiled = compile_case(normalize_case(case, checked))
+    assert isinstance(compiled.root, DecisionDecompose)
+    assert compiled.root.demanded_occurrences == (compiled.root.children[0].id,)
+    validate_compiled_case(compiled)
+    assert matrix.rows
 
 
 def test_record_decompositions_partition_partial_and_nested_patterns() -> None:

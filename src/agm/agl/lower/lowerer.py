@@ -256,7 +256,7 @@ from agm.agl.typecheck.env import (
 )
 from agm.util.text import normalize_newlines
 
-__all__ = ["_LinkState", "lower_module"]
+__all__ = ["InitializerOrigin", "_LinkState", "lower_module"]
 
 
 def _contract_has_schema(
@@ -317,6 +317,19 @@ def _add_builtin_nominals(
 # ---------------------------------------------------------------------------
 
 
+@dataclass(frozen=True, slots=True)
+class InitializerOrigin:
+    """Source item behind an initializer and its recorded leading-group status.
+
+    ``is_function`` means the item contributed a function closure emitted in
+    the leading group regardless of source position; it is recorded here so
+    consumers do not re-derive that fact from the AST.
+    """
+
+    source_index: int
+    is_function: bool
+
+
 @dataclass
 class _LinkState:
     next_sym: int = 0
@@ -332,6 +345,11 @@ class _LinkState:
     sources: dict[SourceId, SourceFile] = field(default_factory=dict)
     contracts: dict[ContractId, ContractRequest] = field(default_factory=dict)
     let_value_symbols: dict[int, SymbolId] = field(default_factory=dict)
+    # Lowering's published initializer-to-source-item mapping is the sole
+    # source of that correspondence. REPL promotion reads it rather than
+    # re-classifying source items; the entry mapping is overwritten before
+    # promotion consumes it on each REPL entry.
+    initializer_origins: dict[ModuleId, tuple[InitializerOrigin, ...]] = field(default_factory=dict)
 
 
 _ARITH_OP_MAP: dict[BinOp, ArithOp] = {
@@ -3293,6 +3311,43 @@ class _Lowerer:
 
         _add_builtin_nominals(self._link.nominals, table)
 
+    def lower_initializers(
+        self,
+        body: Block,
+        *,
+        top_level: bool,
+        functions_only: bool = False,
+    ) -> tuple[IrExpr, ...]:
+        """Lower one module body and publish its initializer origins.
+
+        This is the single walk that decides which items become initializers
+        and in what order. Both single-module and multi-module entry points use
+        it; it publishes the source item behind every emitted initializer for
+        REPL promotion.
+        """
+        function_initializers: list[IrExpr] = []
+        function_origins: list[InitializerOrigin] = []
+        other_initializers: list[IrExpr] = []
+        other_origins: list[InitializerOrigin] = []
+        for source_index, item in enumerate(body.items):
+            is_function = isinstance(item, FuncDef) and not item.is_builtin
+            if functions_only and not is_function:
+                continue
+            ir = self.lower_item(item, top_level=top_level)
+            if ir is None:
+                continue
+            origin = InitializerOrigin(source_index=source_index, is_function=is_function)
+            if is_function:
+                function_initializers.append(ir)
+                function_origins.append(origin)
+            else:
+                other_initializers.append(ir)
+                other_origins.append(origin)
+
+        initializers = tuple((*function_initializers, *other_initializers))
+        self._link.initializer_origins[self._module_id] = tuple((*function_origins, *other_origins))
+        return initializers
+
     def lower(self) -> ExecutableProgram:
         """Lower this validated program payload to an ``ExecutableProgram``."""
         self._build_nominals()
@@ -3314,21 +3369,11 @@ class _Lowerer:
                 )
 
         # Phase 2: lower all items
-        function_initializers: list[IrExpr] = []
-        other_initializers: list[IrExpr] = []
-        for item in body.items:
-            ir = self.lower_item(item, top_level=True)
-            if ir is not None:
-                target = (
-                    function_initializers
-                    if isinstance(item, FuncDef) and not item.is_builtin
-                    else other_initializers
-                )
-                target.append(ir)
+        initializers = self.lower_initializers(body, top_level=True)
 
         entry_mod = ExecutableModule(
             module_id=self._module_id,
-            initializers=tuple((*function_initializers, *other_initializers)),
+            initializers=initializers,
         )
 
         dry_run_inventory = tuple(

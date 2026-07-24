@@ -954,6 +954,17 @@ class TestFailureEffects:
         assert not failed.ok
         assert s.eval_entry("later(1)").value_type == IntType()
 
+    def test_runtime_failure_promotes_function_declared_after_failing_source_item(self) -> None:
+        s = ReplSession()
+        failed = s.eval_entry(
+            'let before = 1\nlet stop: int = raise Abort(message = "stop")\ndef later() -> int = 4'
+        )
+
+        assert not failed.ok
+        assert set(failed.installed) == {"before", "later"}
+        assert s.eval_entry("later()").value == IntValue(4)
+        assert not s.eval_entry("stop").ok
+
     def test_runtime_raise_does_not_promote_later_exception_type(self) -> None:
         s = ReplSession()
         result = s.eval_entry(

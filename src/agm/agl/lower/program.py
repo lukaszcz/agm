@@ -11,7 +11,6 @@ from collections.abc import Mapping
 
 from agm.agl.ir.contracts import ContractPayload
 from agm.agl.ir.ids import NominalId, SourceId
-from agm.agl.ir.nodes import IrExpr
 from agm.agl.ir.program import (
     DryRunEntry,
     ExecutableModule,
@@ -202,19 +201,14 @@ def lower_program(
         cm = checked.modules[mid]
         lowerer = module_lowerers[mid]
         body = cm.resolved.program.body
-        function_initializers: list[IrExpr] = []
-        other_initializers: list[IrExpr] = []
-        for item in body.items:
-            if mid.is_entry or isinstance(item, FuncDef):
-                ir = lowerer.lower_item(item, top_level=mid.is_entry)
-                if ir is not None:
-                    target = (
-                        function_initializers if isinstance(item, FuncDef) else other_initializers
-                    )
-                    target.append(ir)
+        initializers = lowerer.lower_initializers(
+            body,
+            top_level=mid.is_entry,
+            functions_only=not mid.is_entry,
+        )
         executable_modules[mid] = ExecutableModule(
             module_id=mid,
-            initializers=tuple((*function_initializers, *other_initializers)),
+            initializers=initializers,
         )
 
     # Collect entry-module params (only the entry module contributes params).

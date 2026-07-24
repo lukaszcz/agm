@@ -4,19 +4,20 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
+from types import MappingProxyType
 from typing import TYPE_CHECKING, cast
 
 from agm.agl.ir.contracts import ContractPayload
 from agm.agl.ir.ids import NominalId, SourceId, SymbolId
 from agm.agl.ir.program import ExecutableProgram, NominalDescriptor, SourceFile
 from agm.agl.ir.validate import validate_ir
-from agm.agl.lower.lowerer import _LinkState, _Lowerer
+from agm.agl.lower.lowerer import InitializerOrigin, _LinkState, _Lowerer
 from agm.agl.matchcompile import MatchCompiledModule, MatchCompiledProgram
 from agm.agl.modules.ids import ENTRY_ID, ModuleId
 from agm.agl.self_validation import self_validation_enabled
+from agm.agl.semantics.types import iter_nominal_types
 from agm.agl.syntax.nodes import (
     AgentDecl,
-    AssignStmt,
     Binder,
     Declaration,
     EnumDef,
@@ -36,6 +37,7 @@ from agm.agl.syntax.nodes import (
 from agm.util.text import normalize_newlines
 
 if TYPE_CHECKING:
+    from agm.agl.semantics.types import Type
     from agm.agl.typecheck.env import CheckedModule
 
 __all__ = [
@@ -105,29 +107,27 @@ class ReplPromotionPlan:
     """
 
     source_declaration_ids: tuple[frozenset[int], ...]
-    initializer_declaration_ids: tuple[frozenset[int], ...]
-    initializer_source_indices: tuple[int, ...]
-    initializer_is_function: tuple[bool, ...]
-    declaration_dependencies: tuple[tuple[int, frozenset[int]], ...]
+    initializers: tuple[InitializerOrigin, ...]
+    declaration_dependencies: Mapping[int, frozenset[int]]
 
     def completed_declaration_ids(self, completed_initializer_count: int) -> frozenset[int]:
         """Return completed declarations whose entry dependencies are also completed."""
-        assert 0 <= completed_initializer_count <= len(self.initializer_declaration_ids)
-        completed = set().union(*self.initializer_declaration_ids[:completed_initializer_count])
-        pending_source_indices = (
-            source_index
-            for source_index, is_function in zip(
-                self.initializer_source_indices[completed_initializer_count:],
-                self.initializer_is_function[completed_initializer_count:],
-                strict=True,
-            )
-            if not is_function
+        assert 0 <= completed_initializer_count <= len(self.initializers)
+        completed: set[int] = set()
+        for origin in self.initializers[:completed_initializer_count]:
+            completed.update(self.source_declaration_ids[origin.source_index])
+        source_frontier = next(
+            (
+                origin.source_index
+                for origin in self.initializers[completed_initializer_count:]
+                if not origin.is_function
+            ),
+            len(self.source_declaration_ids),
         )
-        source_frontier = next(pending_source_indices, len(self.source_declaration_ids))
         for declaration_ids in self.source_declaration_ids[:source_frontier]:
             completed.update(declaration_ids)
 
-        dependencies = dict(self.declaration_dependencies)
+        dependencies = self.declaration_dependencies
         while unsafe := {
             declaration_id
             for declaration_id in completed
@@ -181,43 +181,13 @@ def _item_declaration_ids(item: Item, checked: "CheckedModule") -> frozenset[int
     return frozenset()
 
 
-def _nominal_dependencies(typ: object, type_declaration_ids: Mapping[str, int]) -> set[int]:
+def _nominal_dependencies(typ: "Type", type_declaration_ids: Mapping[str, int]) -> set[int]:
     """Return entry nominal declarations reachable from a resolved semantic type."""
-    from agm.agl.semantics.types import (
-        DictType,
-        EnumType,
-        ExceptionType,
-        FunctionType,
-        ListType,
-        RecordType,
-    )
-
-    if isinstance(typ, (RecordType, EnumType)):
-        return (
-            {type_declaration_ids[typ.name]}
-            if typ.module_id.is_entry and typ.name in type_declaration_ids
-            else set()
-        ) | set().union(
-            *(_nominal_dependencies(arg, type_declaration_ids) for arg in typ.type_args)
-        )
-    if isinstance(typ, ExceptionType):
-        return (
-            {type_declaration_ids[typ.name]}
-            if typ.module_id.is_entry and typ.name in type_declaration_ids
-            else set()
-        )
-    if isinstance(typ, ListType):
-        return _nominal_dependencies(typ.elem, type_declaration_ids)
-    if isinstance(typ, DictType):
-        return _nominal_dependencies(typ.value, type_declaration_ids)
-    if isinstance(typ, FunctionType):
-        return set().union(
-            *(
-                _nominal_dependencies(part, type_declaration_ids)
-                for part in (*typ.params, typ.result)
-            )
-        )
-    return set()
+    return {
+        type_declaration_ids[nominal.name]
+        for nominal in iter_nominal_types(typ)
+        if nominal.module_id.is_entry and nominal.name in type_declaration_ids
+    }
 
 
 def _declaration_dependencies(
@@ -284,8 +254,11 @@ def _declaration_dependencies(
     return frozenset(dependencies)
 
 
-def _promotion_plan(checked: "CheckedModule", program: ExecutableProgram) -> ReplPromotionPlan:
-    """Build the source-to-initializer and dependency-safe completion plan."""
+def _promotion_plan(
+    checked: "CheckedModule",
+    initializer_origins: tuple[InitializerOrigin, ...],
+) -> ReplPromotionPlan:
+    """Consume lowering's initializer origins and add dependency closure."""
     items = checked.resolved.program.body.items
     source_declaration_ids = tuple(_item_declaration_ids(item, checked) for item in items)
     entry_declaration_ids = frozenset().union(*source_declaration_ids)
@@ -294,35 +267,31 @@ def _promotion_plan(checked: "CheckedModule", program: ExecutableProgram) -> Rep
         for item in items
         if isinstance(item, (EnumDef, ExceptionDef, RecordDef, TypeAlias))
     }
-    declaration_dependencies = tuple(
-        (
-            declaration_id,
-            _declaration_dependencies(item, checked, entry_declaration_ids, type_declaration_ids)
-            - {declaration_id},
+    declaration_dependencies: dict[int, frozenset[int]] = {}
+    for item, declaration_ids in zip(items, source_declaration_ids, strict=True):
+        if not declaration_ids:
+            continue
+        item_dependencies = _declaration_dependencies(
+            item, checked, entry_declaration_ids, type_declaration_ids
         )
-        for item, declaration_ids in zip(items, source_declaration_ids, strict=True)
-        for declaration_id in declaration_ids
-    )
-    function_initializers: list[tuple[frozenset[int], int, bool]] = []
-    other_initializers: list[tuple[frozenset[int], int, bool]] = []
-    for source_index, item in enumerate(items):
-        declaration_ids = source_declaration_ids[source_index]
-        if isinstance(item, FuncDef) and not item.is_builtin:
-            function_initializers.append((declaration_ids, source_index, True))
-        elif isinstance(item, (AgentDecl, AssignStmt, LetDecl, VarDecl)):
-            other_initializers.append((declaration_ids, source_index, False))
-        elif not isinstance(item, Declaration):
-            other_initializers.append((frozenset(), source_index, False))
-    initializers = (*function_initializers, *other_initializers)
-    entry_initializers = program.modules[program.entry_module].initializers
-    assert len(initializers) == len(entry_initializers), "compiler bug: REPL promotion plan drifted"
+        for declaration_id in declaration_ids:
+            declaration_dependencies[declaration_id] = item_dependencies - {declaration_id}
     return ReplPromotionPlan(
         source_declaration_ids=source_declaration_ids,
-        initializer_declaration_ids=tuple(item[0] for item in initializers),
-        initializer_source_indices=tuple(item[1] for item in initializers),
-        initializer_is_function=tuple(item[2] for item in initializers),
-        declaration_dependencies=declaration_dependencies,
+        initializers=initializer_origins,
+        declaration_dependencies=MappingProxyType(declaration_dependencies),
     )
+
+
+def _trailing_let_value_symbol(last: Item, link: _LinkState) -> SymbolId | None:
+    """Return the root value symbol of a trailing destructuring let, if any.
+
+    A simple-name let echoes through its own binding symbol, so only a
+    destructuring pattern needs the site's retained root value.
+    """
+    if not isinstance(last, LetDecl) or simple_let_pattern_name(last.pattern) is not None:
+        return None
+    return link.let_value_symbols.get(last.node_id)
 
 
 def lower_repl_entry(
@@ -361,18 +330,17 @@ def lower_repl_entry(
         if not isinstance(last, (Binder, Declaration))
         else None
     )
-    trailing_let_value_symbol = (
-        link.let_value_symbols.get(last.node_id)
-        if isinstance(last, LetDecl) and simple_let_pattern_name(last.pattern) is None
-        else None
-    )
+    trailing_let_value_symbol = _trailing_let_value_symbol(last, link)
     if self_validation_enabled():
         validate_ir(program)
     return LoweredReplEntry(
         program=program,
         trailing_expression=trailing_expression,
         trailing_let_value_symbol=trailing_let_value_symbol,
-        promotion_plan=_promotion_plan(checked_entry, program),
+        promotion_plan=_promotion_plan(
+            checked_entry,
+            link.initializer_origins[ENTRY_ID],
+        ),
     )
 
 
@@ -406,14 +374,13 @@ def lower_repl_program(
         if not isinstance(last, (Binder, Declaration))
         else None
     )
-    trailing_let_value_symbol = (
-        image._state.let_value_symbols.get(last.node_id)
-        if isinstance(last, LetDecl) and simple_let_pattern_name(last.pattern) is None
-        else None
-    )
+    trailing_let_value_symbol = _trailing_let_value_symbol(last, image._state)
     return LoweredReplEntry(
         program=program,
         trailing_expression=marker,
         trailing_let_value_symbol=trailing_let_value_symbol,
-        promotion_plan=_promotion_plan(checked.modules[checked.entry_id], program),
+        promotion_plan=_promotion_plan(
+            checked.modules[checked.entry_id],
+            image._state.initializer_origins[program.entry_module],
+        ),
     )

@@ -97,7 +97,7 @@ from agm.agl.semantics.types import (
     TypeVarType,
     UnitType,
 )
-from agm.agl.syntax.nodes import Case, Placeholder
+from agm.agl.syntax.nodes import Case, FuncDef, Placeholder
 from agm.agl.typecheck import check_module
 from agm.agl.typecheck.env import CheckedModule
 from tests._agl_helpers import enum_type, record_type, type_table_for
@@ -160,6 +160,48 @@ def test_lower_repl_entry_accumulates_tables_and_resolves_prior_symbols() -> Non
     assert first_sources < set(second.program.sources)
     assert second.trailing_expression is not None
     assert second.program.modules[second.program.entry_module].initializers
+
+
+def test_lowering_records_each_entry_initializer_origin() -> None:
+    source = (
+        "let before = 1\n"
+        "var count = 1\n"
+        "count := count + 1\n"
+        "def later() -> int = 4\n"
+        "agent worker\n"
+        "param limit: int = 5\n"
+        "record Box\n"
+        "  value: int\n"
+        "type Alias = Box\n"
+        "builtin def print[T](value: T) -> unit\n"
+        "later()"
+    )
+    program, _next_id = parse_program_seeded(source, start_id=0)
+    image = LinkImage()
+    lowered = lower_repl_entry(
+        _compiled_checked(check_module(resolve_module(program), _caps())),
+        image=image,
+        source_text=source,
+        source_label="<repl:origins>",
+    )
+
+    items = program.body.items
+    initializers = lowered.program.modules[lowered.program.entry_module].initializers
+    origins = image._state.initializer_origins[lowered.program.entry_module]
+
+    assert len(origins) == len(initializers)
+    assert tuple(origin.source_index for origin in origins) == (3, 0, 1, 2, 4, 9)
+    assert tuple(origin.is_function for origin in origins) == (
+        True,
+        False,
+        False,
+        False,
+        False,
+        False,
+    )
+    for origin, _initializer in zip(origins, initializers, strict=True):
+        item = items[origin.source_index]
+        assert origin.is_function == (isinstance(item, FuncDef) and not item.is_builtin)
 
 
 def test_lower_repl_trailing_binder_has_no_expression_marker() -> None:
@@ -1970,6 +2012,57 @@ class TestLowerGraph:
         # The suite-enabled self-checks already validated this program during
         # lowering; call validate_ir explicitly so the test pins it regardless.
         validate_ir(prog, deep=True)
+
+    def test_lower_program_records_origins_and_skips_already_linked_modules(
+        self, tmp_path: Path
+    ) -> None:
+        import os
+
+        from agm.agl.lower.lowerer import _LinkState
+        from agm.agl.lower.program import lower_program
+        from agm.agl.modules.ids import ModuleId
+        from agm.agl.modules.loader import load_graph
+        from agm.agl.modules.roots import RootSet
+        from agm.agl.scope.program import resolve_program
+        from agm.agl.typecheck.program import check_program
+
+        lib_source = "def first() -> int = 1\ndef second() -> int = 2\n"
+        entry_source = "import lib\nlet value = lib::first()\n()\n"
+        root = tmp_path / "root"
+        root.mkdir()
+        lib_mid = ModuleId.from_path("lib")
+        lib_path = root / lib_mid.relpath().replace("/", os.sep)
+        lib_path.parent.mkdir(parents=True, exist_ok=True)
+        lib_path.write_text(lib_source)
+
+        graph = load_graph(
+            entry_source,
+            entry_path=None,
+            roots=RootSet(roots=frozenset({root, _REPO_STDLIB_ROOT})),
+        )
+        checked = check_program(resolve_program(graph), _caps())
+        link = _LinkState()
+        program = lower_program(_compiled_checked(checked), _link=link)
+
+        for mid, executable_module in program.modules.items():
+            items = checked.modules[mid].resolved.program.body.items
+            origins = link.initializer_origins[mid]
+            assert len(origins) == len(executable_module.initializers)
+            for origin, _initializer in zip(origins, executable_module.initializers, strict=True):
+                item = items[origin.source_index]
+                assert origin.is_function == (isinstance(item, FuncDef) and not item.is_builtin)
+
+        library_origins = link.initializer_origins[lib_mid]
+        assert len(library_origins) == 2
+        sentinel = tuple(reversed(library_origins))
+        link.initializer_origins[lib_mid] = sentinel
+        relinked = lower_program(
+            _compiled_checked(checked),
+            _link=link,
+            _already_linked=frozenset({lib_mid}),
+        )
+        assert link.initializer_origins[lib_mid] == sentinel
+        assert relinked.modules[lib_mid].initializers == ()
 
     def test_lower_program_type_alias_no_spurious_nominal(self, tmp_path: Path) -> None:
         """Type alias does not register a spurious NominalId in lower_program.

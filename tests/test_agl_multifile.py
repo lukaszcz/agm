@@ -692,15 +692,18 @@ class TestScopedModuleSelections:
             ("Point", "distance"),
         )
 
-    def test_wildcard_import_rejects_scoped_selection(self, tmp_path: Path) -> None:
+    def test_wildcard_import_distributes_scoped_selection(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
         self._write_geo(tmp_path)
 
         result = _run_program(
-            "import geo/* using Point::distance\ngeo::Point::distance()\n",
+            "import geo/* using Point::distance\nprint geo::Point::distance()\n",
             roots_dirs=[tmp_path],
         )
 
-        assert result.ok is False
+        assert result.ok is True
+        assert capsys.readouterr().out == "7\n"
 
     def test_type_owned_members_and_nested_construction_execute(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
@@ -759,6 +762,132 @@ class TestScopedModuleSelections:
         )
 
         assert result.ok is False
+
+
+class TestCrossModuleScopedPaths:
+    """Scoped path atoms retain module identity through imports."""
+
+    def test_same_scoped_path_from_two_modules_clashes_only_at_use(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        (tmp_path / "north.agl").write_text("def Point::distance() -> int = 7\n")
+        (tmp_path / "south.agl").write_text("def Point::distance() -> int = 9\n")
+
+        result = _run_program(
+            "open import north\n"
+            "open import south\n"
+            "print /north::Point::distance()\n"
+            "print /south::Point::distance()\n",
+            roots_dirs=[tmp_path],
+        )
+
+        assert result.ok is True
+        assert capsys.readouterr().out == "7\n9\n"
+
+        ambiguous = _run_program(
+            "open import north\nopen import south\nPoint::distance()\n", roots_dirs=[tmp_path]
+        )
+        assert ambiguous.ok is False
+        assert any(
+            "ambiguous" in diagnostic.message.lower() for diagnostic in ambiguous.diagnostics
+        )
+
+    def test_module_route_and_open_scoped_path_clash_at_use(self, tmp_path: Path) -> None:
+        (tmp_path / "Point.agl").write_text("def distance() -> int = 9\n")
+        (tmp_path / "geometry.agl").write_text("def Point::distance() -> int = 7\n")
+
+        ambiguous = _run_program(
+            "import Point\nopen import geometry\nPoint::distance()\n", roots_dirs=[tmp_path]
+        )
+        assert ambiguous.ok is False
+        assert any(
+            "ambiguous" in diagnostic.message.lower() for diagnostic in ambiguous.diagnostics
+        )
+
+        repaired = _run_program(
+            "import Point\nopen import geometry\nprint /Point::distance()\n",
+            roots_dirs=[tmp_path],
+        )
+        assert repaired.ok is True
+
+    def test_scope_and_module_route_clash_are_repaired_by_anchors(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        (tmp_path / "Point.agl").write_text("def distance() -> int = 9\n")
+
+        ambiguous = _run_program(
+            "import Point\nscope Point\ndef distance() -> int = 7\nend Point\nPoint::distance()\n",
+            roots_dirs=[tmp_path],
+        )
+        assert ambiguous.ok is False
+        assert any(
+            "both" in diagnostic.message.lower() and "module route" in diagnostic.message.lower()
+            for diagnostic in ambiguous.diagnostics
+        )
+
+        repaired = _run_program(
+            "import Point\n"
+            "scope Point\n"
+            "def distance() -> int = 7\n"
+            "end Point\n"
+            "print /Point::distance()\n"
+            "print ::Point::distance()\n",
+            roots_dirs=[tmp_path],
+        )
+        assert repaired.ok is True
+        assert capsys.readouterr().out == "9\n7\n"
+
+    def test_open_import_exposes_scoped_paths_without_a_module_route(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        (tmp_path / "geo.agl").write_text(
+            "def Point::distance() -> int = 7\n"
+            "def Point::bearing() -> int = 3\n"
+            "private def Point::secret() -> int = 99\n"
+            "def Point::public_secret() -> int = secret()\n"
+        )
+
+        result = _run_program(
+            "open import geo hiding Point::bearing\n"
+            "print Point::distance()\n"
+            "print Point::public_secret()\n",
+            roots_dirs=[tmp_path],
+        )
+        assert result.ok is True
+        assert capsys.readouterr().out == "7\n99\n"
+
+        full = _run_program("open import geo\nprint Point::bearing()\n", roots_dirs=[tmp_path])
+        assert full.ok is True
+        assert capsys.readouterr().out == "3\n"
+
+        private = _run_program("open import geo\nPoint::secret()\n", roots_dirs=[tmp_path])
+        assert private.ok is False
+
+    def test_wildcard_selection_distributes_scoped_paths_and_excludes_private_members(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        shapes = tmp_path / "shapes"
+        shapes.mkdir()
+        (shapes / "circle.agl").write_text(
+            "def Point::measure() -> int = 3\nprivate def Point::secret() -> int = 30\n"
+        )
+        (shapes / "square.agl").write_text(
+            "def Point::measure() -> int = 4\nprivate def Point::secret() -> int = 40\n"
+        )
+
+        result = _run_program(
+            "import shapes/* using Point::measure\n"
+            "print circle::Point::measure()\n"
+            "print square::Point::measure()\n",
+            roots_dirs=[tmp_path],
+        )
+        assert result.ok is True
+        assert capsys.readouterr().out == "3\n4\n"
+
+        private = _run_program(
+            "import shapes/* using Point::measure\ncircle::Point::secret()\n", roots_dirs=[tmp_path]
+        )
+        assert private.ok is False
 
 
 # ---------------------------------------------------------------------------

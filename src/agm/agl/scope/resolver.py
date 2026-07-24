@@ -183,34 +183,22 @@ def _scope_path_sort_key(path: ScopePath) -> tuple[int, ScopePath]:
 
 
 def validate_scope_syntax(program: Program) -> None:
-    """Reject parsed scope forms whose namespace semantics are not available.
+    """Reject parsed scope forms whose runtime semantics are deferred.
 
     Program resolution invokes this for every loaded module before it derives
     exports or import environments. ``resolve_module`` invokes it too, keeping
     the per-module worker safe when used directly.
     """
-    unsupported: tuple[str, SourceSpan] | None = None
+    unsupported: SourceSpan | None = None
 
     def inspect(node: object) -> None:
         nonlocal unsupported
-        if unsupported is not None:
-            return
-        if isinstance(node, OpenDecl):
-            unsupported = ("open declarations are not supported here yet.", node.span)
-        elif (
-            isinstance(node, (ImportDecl, ExportDecl))
-            and node.wildcard
-            and any(item.scope_path for item in node.items)
-        ):
-            unsupported = (
-                "scoped selections on wildcard module declarations are not supported here yet.",
-                node.span,
-            )
+        if unsupported is None and isinstance(node, OpenDecl):
+            unsupported = node.span
 
     walk(program, inspect)
     if unsupported is not None:
-        message, span = unsupported
-        raise AglScopeError(message, span=span)
+        raise AglScopeError("open declarations are not supported here yet.", span=unsupported)
 
 
 # ---------------------------------------------------------------------------

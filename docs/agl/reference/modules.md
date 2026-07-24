@@ -54,8 +54,9 @@ import utils/strings using trim
 
 `using` and `hiding` name public declaration paths. Selecting a scope path
 selects its complete public subtree, including a same-named type and its enum
-variants. Selecting a path with no public content is an error. A bare name
-contributed by several imports is an error when used, not when imported.
+variants. Selecting a path with no public content is an error. A bare path
+contributed by several imports is an error when used, not when imported; scopes
+with the same spelling from different modules never merge.
 
 ## `open`, `using`, and `hiding`
 
@@ -97,10 +98,10 @@ alias makes both routes available.
 ## Wildcards
 
 `import prefix/*` expands to one import per module whose slash path is `prefix`
-or starts with `prefix/`. The import's `open`, root-member selection clause,
-and alias apply independently to every matched module. A `using` or `hiding`
-name must be public in every matched module. Scoped selections use a
-non-wildcard import.
+or starts with `prefix/`. The import's `open`, selection clause, and alias
+apply independently to every matched module. A `using` or `hiding` path must
+be public in every matched module, so scoped path selections distribute to
+each matched module.
 
 <!-- agl-check: fragment -->
 ```agl

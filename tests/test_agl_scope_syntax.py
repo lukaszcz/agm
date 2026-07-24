@@ -213,9 +213,8 @@ def test_scope_pass_only_rejects_the_deferred_open_form() -> None:
         "export library/* hiding Point::internal",
     ),
 )
-def test_scope_pass_rejects_deferred_wildcard_scoped_selection(source: str) -> None:
-    with pytest.raises(AglScopeError, match="wildcard"):
-        resolve_module(parse_program(source))
+def test_scope_pass_accepts_wildcard_scoped_selection(source: str) -> None:
+    resolve_module(parse_program(source))
 
 
 @pytest.mark.parametrize(

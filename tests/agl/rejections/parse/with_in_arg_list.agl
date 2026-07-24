@@ -1,0 +1,4 @@
+record P(x: int, y: int)
+def f(a: P, b: int) -> int = a.x + b
+let p = P(1, 2)
+f(p with x = 3, b = 4)

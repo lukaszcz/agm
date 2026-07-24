@@ -67,7 +67,7 @@ variable, agent, or function names:
 ```text
 record enum type param program agent def fn let var for while do until done
 if else case of try catch raise return break continue exception extends builtin extern as as?
-and or not is in to downto by true false null
+and or not is in to downto by with true false null
 infixl infixr prio
 ```
 
@@ -86,6 +86,9 @@ It cannot be used as a variable binder, pattern binder, or catch binder.
 definitions, named constructor arguments, dict shorthand keys, postfix field
 access, and pattern field keys). They cannot be used as variable, pattern, or
 catch binders. This preserves existing uses such as `tagged(by: value)`.
+
+`with` (the record-update operator) is fully reserved: unlike `to`, `downto`,
+and `by`, it is not accepted as a field name.
 
 **Contextual keywords** — `print`, `ask`, and `exec` are NOT reserved; they
 lex as plain `NAME` tokens and are given their built-in meaning during scope
@@ -395,6 +398,10 @@ From loosest to tightest binding (the bottom binds tightest):
 | 9 | function application (single-arg sugar) | **non-chaining** |
 | 10 | `.field` access, `[index]`, `( args )` call | left |
 | 11 | atoms: literals, names, `( expr )`, `()` unit, templates, `break`, `continue` | — |
+
+The record-update operator `with` binds looser than every level in the table,
+on both sides; see
+[Record update](expressions.md#record-update).
 
 User-defined symbolic infix operators are declared with `infixl` or `infixr`:
 

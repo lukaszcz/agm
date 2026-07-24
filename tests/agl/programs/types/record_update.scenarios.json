@@ -1,0 +1,26 @@
+{
+  "scenarios": [
+    {
+      "name": "severe_issue_escalates",
+      "params": {"bump": 2},
+      "agents": {
+        "tracker": ["{\"title\": \"Crash on save\", \"severity\": 5}"]
+      },
+      "expect": {
+        "stdout": "true\ntrue\n2\n3\n20\n3\ntrue\ntrue\n6\n3\nCrash on save\n7\n",
+        "calls": {"tracker": 1}
+      }
+    },
+    {
+      "name": "mild_issue_unchanged",
+      "params": {"bump": 1},
+      "agents": {
+        "tracker": ["{\"title\": \"Typo\", \"severity\": 2}"]
+      },
+      "expect": {
+        "stdout": "true\ntrue\n2\n2\n20\n3\ntrue\ntrue\n6\n3\nTypo\n2\n",
+        "calls": {"tracker": 1}
+      }
+    }
+  ]
+}

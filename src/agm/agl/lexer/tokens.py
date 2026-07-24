@@ -114,6 +114,7 @@ KW_PRIO = "prio"
 KW_TO = "to"
 KW_DOWNTO = "downto"
 KW_BY = "by"
+KW_WITH = "with"
 
 # Set of all reserved keyword strings (used by the scanner for fast lookup).
 KEYWORDS: frozenset[str] = frozenset(
@@ -163,6 +164,7 @@ KEYWORDS: frozenset[str] = frozenset(
         KW_TO,
         KW_DOWNTO,
         KW_BY,
+        KW_WITH,
     }
 )
 

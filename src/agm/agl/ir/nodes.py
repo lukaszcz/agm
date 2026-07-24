@@ -113,6 +113,7 @@ __all__ = [
     "IrTemplateValue",
     "IrTry",
     "IrUnary",
+    "IrUpdateRecord",
     "IrVariantIs",
     "UseDefault",
     "is_canonical_literal_scalar",
@@ -405,6 +406,24 @@ class IrField:
     location: Location
     value: "IrExpr"
     field: str
+
+
+@dataclass(frozen=True, slots=True)
+class IrUpdateRecord:
+    """IR functional update: ``target with field = expr, ...``.
+
+    Copies the target record or exception value with the listed fields
+    replaced, preserving the runtime nominal (an update through a base-typed
+    exception binding keeps the concrete exception type).
+
+    ``updates`` — source-order tuple of ``(field_name, expr)`` pairs; each
+        ``expr`` is already coerced to the declared field type by the lowerer
+        via ``lower_coerced``.
+    """
+
+    location: Location
+    value: "IrExpr"
+    updates: "tuple[tuple[str, IrExpr], ...]"
 
 
 @dataclass(frozen=True, slots=True)
@@ -1089,6 +1108,7 @@ IrExpr = (
     | IrOr
     | IrUnary
     | IrField
+    | IrUpdateRecord
     | IrIndex
     | IrRenderTemplate
     | IrMakeRecord

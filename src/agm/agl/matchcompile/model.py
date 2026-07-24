@@ -21,13 +21,6 @@ from agm.agl.syntax.nodes import Program
 from agm.agl.syntax.spans import SourceSpan
 
 
-class MatchSiteKind(enum.Enum):
-    """The source construct represented by a compiled pattern match site."""
-
-    CASE = "case"
-    LET = "let"
-
-
 @dataclass(frozen=True, slots=True, order=True)
 class OccurrenceId:
     """Stable, match-site-local identity of a value occurrence."""
@@ -322,7 +315,36 @@ class LetBindingAction:
     source_index: int
 
 
-MatchSiteAction: TypeAlias = SourceAction | LetBindingAction
+@dataclass(frozen=True, slots=True)
+class CaseSite:
+    """Ordered arm actions of a source ``case`` expression."""
+
+    actions: tuple[SourceAction, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class LetSite:
+    """The sole binding action of a source ``let``.
+
+    The action is a field rather than a tuple because a let has exactly one
+    binding leaf; the type states the structural fact directly.
+    """
+
+    action: LetBindingAction
+
+    @property
+    def actions(self) -> tuple[SourceAction | LetBindingAction, ...]:
+        """Widen actions for kind-independent validation only.
+
+        Narrowing consumers match on the payload; a narrowing accessor would
+        have to be able to fail.
+        """
+        return (self.action,)
+
+
+# The payload's concrete type is the match site's discriminant; no separate
+# kind tag exists by design.
+MatchSiteSource: TypeAlias = CaseSite | LetSite
 
 
 EnumConstructorSpelling: TypeAlias = EnumOwnerForm
@@ -361,12 +383,11 @@ class NormalizedMatchSite:
     """The normalized one-column matrix and source identities for one match site."""
 
     site_node_id: int
-    source_kind: MatchSiteKind
+    source: MatchSiteSource
     span: SourceSpan
     root: Occurrence
     occurrences: tuple[Occurrence, ...]
     rows: tuple[MatrixRow, ...]
-    actions: tuple[MatchSiteAction, ...]
     type_table: TypeTable = field(repr=False, compare=False, hash=False)
     case_context: MatchCaseContext = field(
         default_factory=lambda: MatchCaseContext(ENTRY_ID),
@@ -465,20 +486,22 @@ def _validate_constructor_cell(cell: ConstructorCell) -> None:
 
 
 def _validate_normalized_case(case: NormalizedMatchSite) -> None:
+    """Validate kind-independent matrix/action invariants through widening view."""
+    actions = case.source.actions
     if case.occurrences != (case.root,):
         raise ValueError("a freshly normalized match site must contain only its root occurrence")
     if any(len(row.cells) != len(case.occurrences) for row in case.rows):
         raise ValueError("normalized matrix row width does not match occurrence width")
-    if tuple(action.source_index for action in case.actions) != tuple(range(len(case.actions))):
+    if tuple(action.source_index for action in actions) != tuple(range(len(actions))):
         raise ValueError("match-site actions must retain contiguous source priority")
     row_indices = tuple(row.source_index for row in case.rows)
     if row_indices != tuple(sorted(set(row_indices))) or any(
-        not 0 <= source_index < len(case.actions) for source_index in row_indices
+        not 0 <= source_index < len(actions) for source_index in row_indices
     ):
         raise ValueError(
             "normalized matrix rows must retain an ordered unique subsequence of match-site actions"
         )
-    if any(row.action_id != case.actions[row.source_index].action_id for row in case.rows):
+    if any(row.action_id != actions[row.source_index].action_id for row in case.rows):
         raise ValueError("normalized rows and match-site actions must agree for each retained row")
 
 
@@ -486,6 +509,7 @@ __all__ = [
     "BinderAssignment",
     "BinderProvenance",
     "BoolConstructor",
+    "CaseSite",
     "ClosedSignature",
     "Constructor",
     "ConstructorCell",
@@ -505,9 +529,9 @@ __all__ = [
     "LiteralKind",
     "LiteralValue",
     "LetBindingAction",
+    "LetSite",
     "MatchCaseContext",
-    "MatchSiteAction",
-    "MatchSiteKind",
+    "MatchSiteSource",
     "MatrixRow",
     "NormalizedMatchSite",
     "Occurrence",

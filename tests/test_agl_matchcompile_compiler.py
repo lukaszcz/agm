@@ -43,6 +43,7 @@ from agm.agl.matchcompile.matrix import (
 from agm.agl.matchcompile.model import (
     BinderAssignment,
     BoolConstructor,
+    CaseSite,
     ClosedSignature,
     ConstructorCell,
     Decision,
@@ -54,8 +55,10 @@ from agm.agl.matchcompile.model import (
     EnumConstructor,
     EnumConstructorSpelling,
     FieldOccurrenceProvenance,
+    LetSite,
     LiteralKind,
     MatchCaseContext,
+    MatchSiteSource,
     Occurrence,
     OccurrenceId,
     RecordConstructor,
@@ -127,14 +130,6 @@ def test_compiler_marks_a_refutable_let_with_its_decision_witness() -> None:
     assert isinstance(compiled.issues[0], RefutableLetIssue)
     assert isinstance(compiled.issues[0].witness, BoolWitness)
     assert compiled.issues[0].witness.value is False
-    with pytest.raises(MatchCompileInvariantError, match="binding actions"):
-        _ = compiled.case_actions
-    with pytest.raises(MatchCompileInvariantError, match="non-case action"):
-        _ = replace(
-            compiled,
-            normalized=replace(compiled.normalized, source_kind=compiler_module.MatchSiteKind.CASE),
-        ).case_actions
-
     checked_case, _, irrefutable = _compile("case true of | _ => 1")
     with pytest.raises(MatchCompileInvariantError, match="begin with"):
         compiler_module._validate_occurrence_ledger(irrefutable.normalized, ())
@@ -155,6 +150,40 @@ def test_compiler_marks_a_refutable_let_with_its_decision_witness() -> None:
     assert root.constructor.arity == 2
     assert isinstance(root.child, DecisionLeaf)
     del checked_case
+
+
+def test_issue_kind_is_selected_by_the_sealed_source_payload() -> None:
+    _, _, case_compiled = _compile("case true of | false => 0")
+    assert isinstance(case_compiled.normalized.source, CaseSite)
+    assert isinstance(case_compiled.issues[0], NonExhaustiveIssue)
+
+    checked = check_module(resolve_module(parse_program("let true = false")), _CAPS)
+    lets: list[LetDecl] = []
+
+    def collect(node: object) -> None:
+        if isinstance(node, LetDecl):
+            lets.append(node)
+
+    walk(checked.resolved.program, collect)
+    (let,) = lets
+    let_compiled = compile_match_site(normalize_let(let, checked))
+    assert isinstance(let_compiled.normalized.source, LetSite)
+    assert isinstance(let_compiled.issues[0], RefutableLetIssue)
+
+
+def test_issue_selection_rejects_an_unknown_source_payload() -> None:
+    _, _, compiled = _compile("case true of | _ => 1")
+
+    class UnknownPayload:
+        actions: tuple[object, ...] = ()
+
+    malformed = replace(
+        compiled.normalized,
+        source=cast(MatchSiteSource, UnknownPayload()),
+        rows=(),
+    )
+    with pytest.raises(AssertionError):
+        compiler_module._issues(malformed, compiled.root, compiled.occurrences)
 
 
 def _compile_graph_case(tmp_path: Path, modules: dict[str, str]) -> CompiledMatchSite:
@@ -543,7 +572,7 @@ def test_irrefutable_leaf_finalizes_binder_and_has_no_issues() -> None:
     assert compiled.reachable_action_ids == (case.branches[0].node_id,)
     assert compiled.issues == ()
     assert compiled.site_node_id == case.node_id
-    assert compiled.actions == compiled.normalized.actions
+    assert compiled.source.actions == compiled.normalized.source.actions
 
 
 def test_boolean_switch_is_complete_and_has_signature_order() -> None:
@@ -2245,7 +2274,7 @@ def test_private_diagnostic_guards_reject_malformed_switches() -> None:
     _, _, compiled = _compile("let value = false\ncase value of | false => 0 | true => 1")
     normalized = compiled.normalized
     fail = DecisionFail()
-    leaf = DecisionLeaf(normalized.actions[0].action_id, ())
+    leaf = DecisionLeaf(normalized.source.actions[0].action_id, ())
     false_branch = DecisionBranch(BoolConstructor(False), fail)
     true_branch = DecisionBranch(BoolConstructor(True), leaf)
     complete_with_default = DecisionSwitch(

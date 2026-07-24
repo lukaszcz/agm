@@ -142,6 +142,7 @@ from agm.agl.lower.coercions import compile_coercion
 from agm.agl.lower.conversions import compile_recipe
 from agm.agl.matchcompile import (
     BoolConstructor,
+    CaseSite,
     CompiledMatchSite,
     Constructor,
     Decision,
@@ -150,6 +151,7 @@ from agm.agl.matchcompile import (
     DecisionSwitch,
     EnumConstructor,
     FieldOccurrenceProvenance,
+    LetSite,
     LiteralKind,
     MatchCompiledModule,
     Occurrence,
@@ -2586,7 +2588,9 @@ class _Lowerer:
             for node_id, name in self._decision_binder_names(compiled).items()
         }
         action_bodies: dict[int, IrExpr] = {}
-        for action in compiled.case_actions:
+        source = compiled.source
+        assert isinstance(source, CaseSite), "compiler bug: case site carries a non-case payload"
+        for action in source.actions:
             branch = branches[action.source_index]
             assert branch.body.node_id == action.body_node_id, (
                 "compiler bug: decision action does not identify its source body"
@@ -2624,7 +2628,9 @@ class _Lowerer:
                 public=top_level,
             )
         location = self._loc(let.span)
-        (action,) = compiled.actions
+        source = compiled.source
+        assert isinstance(source, LetSite), "compiler bug: let site carries a non-let payload"
+        action = source.action
 
         def leaf_tail(decision: DecisionLeaf) -> IrExpr:
             assert decision.action_id == action.action_id, (

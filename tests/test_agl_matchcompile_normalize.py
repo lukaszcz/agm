@@ -14,6 +14,7 @@ from agm.agl.ir.ids import NominalId
 from agm.agl.matchcompile.model import (
     BinderAssignment,
     BoolConstructor,
+    CaseSite,
     ClosedSignature,
     Constructor,
     ConstructorCell,
@@ -24,6 +25,7 @@ from agm.agl.matchcompile.model import (
     DecisionSwitch,
     EnumConstructor,
     FieldOccurrenceProvenance,
+    LetSite,
     LiteralConstructor,
     LiteralKind,
     Occurrence,
@@ -116,10 +118,11 @@ def test_let_normalization_retains_its_initializer_pattern_and_matched_type() ->
     normalized = normalize_let(let, checked)
 
     assert normalized.site_node_id == let.node_id
-    assert normalized.source_kind.value == "let"
+    assert isinstance(normalized.source, LetSite)
     assert normalized.root.type == checked.let_matched_types[let.node_id]
-    assert len(normalized.rows) == len(normalized.actions) == 1
-    assert normalized.actions[0].action_id == normalized.rows[0].action_id
+    assert normalized.source.action.action_id == normalized.rows[0].action_id
+    assert normalized.source.actions == (normalized.source.action,)
+    assert len(normalized.rows) == len(normalized.source.actions) == 1
     assert normalized.root.provenance.subject_node_id == let.value.node_id
     assert normalized.rows[0].source_pattern_id == let.pattern.node_id
     assert normalized.root.provenance.site_node_id == let.node_id
@@ -367,7 +370,8 @@ def test_normalize_case_preserves_priority_actions_and_binder_provenance() -> No
         case.branches[0].node_id,
         case.branches[1].node_id,
     ]
-    assert [action.body_node_id for action in normalized.actions] == [
+    assert isinstance(normalized.source, CaseSite)
+    assert [action.body_node_id for action in normalized.source.actions] == [
         case.branches[0].body.node_id,
         case.branches[1].body.node_id,
     ]
@@ -416,7 +420,8 @@ def test_fractional_decimal_arm_is_omitted_for_int_but_integral_decimal_is_retai
 
     normalized = normalize_case(case, checked)
 
-    assert [action.source_index for action in normalized.actions] == [0, 1, 2]
+    assert isinstance(normalized.source, CaseSite)
+    assert [action.source_index for action in normalized.source.actions] == [0, 1, 2]
     assert [row.source_index for row in normalized.rows] == [1, 2]
     assert [row.action_id for row in normalized.rows] == [
         case.branches[1].node_id,
@@ -441,7 +446,8 @@ def test_nested_uninhabited_constructor_omits_only_its_source_row() -> None:
 
     normalized = normalize_case(case, checked)
 
-    assert [action.source_index for action in normalized.actions] == [0, 1, 2]
+    assert isinstance(normalized.source, CaseSite)
+    assert [action.source_index for action in normalized.source.actions] == [0, 1, 2]
     assert [row.source_index for row in normalized.rows] == [1, 2]
     assert [row.action_id for row in normalized.rows] == [
         case.branches[1].node_id,
@@ -671,11 +677,19 @@ def test_model_rejects_invalid_occurrences_cells_and_normalized_matrices() -> No
         bad_row = replace(normalized.rows[0], source_index=1)
         replace(normalized, rows=(bad_row, normalized.rows[1]))
     with pytest.raises(ValueError, match="actions must retain"):
-        bad_action = replace(normalized.actions[0], source_index=1)
-        replace(normalized, actions=(bad_action, normalized.actions[1]))
+        assert isinstance(normalized.source, CaseSite)
+        bad_action = replace(normalized.source.actions[0], source_index=1)
+        replace(
+            normalized,
+            source=replace(normalized.source, actions=(bad_action, normalized.source.actions[1])),
+        )
     with pytest.raises(ValueError, match="rows and match-site actions"):
-        bad_action = replace(normalized.actions[0], action_id=-1)
-        replace(normalized, actions=(bad_action, normalized.actions[1]))
+        assert isinstance(normalized.source, CaseSite)
+        bad_action = replace(normalized.source.actions[0], action_id=-1)
+        replace(
+            normalized,
+            source=replace(normalized.source, actions=(bad_action, normalized.source.actions[1])),
+        )
 
     # Rows are the surviving ordered, unique subsequence of match-site actions.
     assert replace(normalized, rows=(normalized.rows[1],)).rows[0].source_index == 1

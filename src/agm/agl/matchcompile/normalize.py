@@ -48,6 +48,7 @@ from agm.agl.typecheck.env import CheckedModule
 from .model import (
     BinderProvenance,
     BoolConstructor,
+    CaseSite,
     ClosedSignature,
     Constructor,
     ConstructorCell,
@@ -55,10 +56,10 @@ from .model import (
     EnumConstructor,
     FieldBearingNominalConstructor,
     LetBindingAction,
+    LetSite,
     LiteralConstructor,
     LiteralKind,
     MatchCaseContext,
-    MatchSiteKind,
     MatrixRow,
     NormalizedMatchSite,
     Occurrence,
@@ -524,12 +525,11 @@ def normalize_case(
     )
     return NormalizedMatchSite(
         site_node_id=case.node_id,
-        source_kind=MatchSiteKind.CASE,
+        source=CaseSite(actions=actions),
         span=case.span,
         root=root,
         occurrences=(root,),
         rows=tuple(rows),
-        actions=actions,
         type_table=checked.type_env.type_table,
         case_context=case_context if case_context is not None else match_case_context(checked),
     )
@@ -566,7 +566,7 @@ def normalize_let(
     action = LetBindingAction(action_id=let.node_id, source_index=0)
     return NormalizedMatchSite(
         site_node_id=let.node_id,
-        source_kind=MatchSiteKind.LET,
+        source=LetSite(action=action),
         span=let.span,
         root=root,
         occurrences=(root,),
@@ -578,7 +578,6 @@ def normalize_let(
                 source_pattern_id=let.pattern.node_id,
             ),
         ),
-        actions=(action,),
         type_table=checked.type_env.type_table,
         case_context=case_context if case_context is not None else match_case_context(checked),
     )

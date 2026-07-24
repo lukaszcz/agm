@@ -14,12 +14,13 @@ import agm.agl.matchcompile as matchcompile
 import agm.agl.matchcompile.compiler as compiler_module
 import agm.agl.matchcompile.stage as stage_module
 from agm.agl.matchcompile import (
+    CaseSite,
     CompiledMatchSite,
+    LetSite,
     MatchCompilationResult,
     MatchCompiledModule,
     MatchCompiledProgram,
     MatchIssue,
-    MatchSiteKind,
     NonExhaustiveIssue,
     RedundantArmIssue,
     RefutableLetIssue,
@@ -40,6 +41,7 @@ from agm.agl.matchcompile.model import (
     DecisionSwitch,
     LiteralConstructor,
     NormalizedMatchSite,
+    SourceAction,
 )
 from agm.agl.matchcompile.normalize import MatchCompileInvariantError, normalize_case
 from agm.agl.modules.ids import ENTRY_ID
@@ -65,6 +67,7 @@ def test_matchcompile_public_exports_are_narrow_and_stable() -> None:
     assert set(matchcompile.__all__) == {
         "BoolConstructor",
         "BoolWitness",
+        "CaseSite",
         "CompiledMatchSite",
         "CompiledMatchSite",
         "Constructor",
@@ -77,6 +80,7 @@ def test_matchcompile_public_exports_are_narrow_and_stable() -> None:
         "EnumWitnessQualification",
         "FieldOccurrenceProvenance",
         "LetBindingAction",
+        "LetSite",
         "LiteralKind",
         "LiteralWitness",
         "MatchCompilationResult",
@@ -84,7 +88,7 @@ def test_matchcompile_public_exports_are_narrow_and_stable() -> None:
         "MatchCompiledProgram",
         "MatchCompiledModule",
         "MatchIssue",
-        "MatchSiteKind",
+        "MatchSiteSource",
         "MatchWitness",
         "NonExhaustiveIssue",
         "NormalizedMatchSite",
@@ -280,7 +284,7 @@ def test_empty_case_program_produces_valid_empty_artifact() -> None:
     assert case_sites(compiled.sites) == {}
 
 
-def test_compiles_nested_cases_and_lets_as_source_kind_preserving_sites() -> None:
+def test_compiles_nested_cases_and_lets_as_sealed_source_payloads() -> None:
     checked = _checked(
         "let outer = true\n"
         "case outer of\n"
@@ -294,16 +298,13 @@ def test_compiles_nested_cases_and_lets_as_source_kind_preserving_sites() -> Non
     compiled = result.compiled
 
     assert len(compiled.sites) == 4
-    assert {site.source_kind for site in compiled.sites.values()} == {
-        MatchSiteKind.CASE,
-        MatchSiteKind.LET,
-    }
+    assert {type(site.source) for site in compiled.sites.values()} == {CaseSite, LetSite}
     assert len(case_sites(compiled.sites)) == 2
-    lets = tuple(site for site in compiled.sites.values() if site.source_kind is MatchSiteKind.LET)
+    lets = tuple(site for site in compiled.sites.values() if isinstance(site.source, LetSite))
     assert len(lets) == 2
     assert all(isinstance(site, CompiledMatchSite) for site in lets)
     for site in lets:
-        assert len(site.actions) == 1
+        assert site.source.action == site.source.actions[0]
         assert site.normalized.root.type == checked.let_matched_types[site.site_node_id]
 
     mutable_sites = cast(MutableMapping[int, CompiledMatchSite], compiled.sites)
@@ -324,16 +325,24 @@ def test_refutable_let_is_rejected_with_a_structured_missing_pattern_witness() -
     assert "Refutable let" in diagnostic_from_match_issue(issue).message
 
 
-def test_artifact_rejects_a_match_site_with_the_wrong_source_kind() -> None:
+def test_artifact_rejects_a_match_site_with_the_wrong_source_payload() -> None:
     compiled = _compiled("let value = true")
     site_id, site = next(iter(compiled.sites.items()))
-    wrong_kind = replace(
+    assert isinstance(site.source, LetSite)
+    wrong_action = SourceAction(
+        action_id=site.source.action.action_id,
+        source_index=0,
+        body_node_id=site.source.action.action_id,
+        branch_span=site.normalized.span,
+        pattern_span=site.normalized.span,
+    )
+    wrong_payload = replace(
         site,
-        normalized=replace(site.normalized, source_kind=MatchSiteKind.CASE),
+        normalized=replace(site.normalized, source=CaseSite((wrong_action,))),
     )
 
-    with pytest.raises(MatchCompileInvariantError, match="source kind"):
-        MatchCompiledModule(compiled.checked, {site_id: wrong_kind})
+    with pytest.raises(MatchCompileInvariantError, match="source payload"):
+        MatchCompiledModule(compiled.checked, {site_id: wrong_payload})
 
 
 def test_source_issues_are_all_sorted_adapted_and_prevent_artifact() -> None:

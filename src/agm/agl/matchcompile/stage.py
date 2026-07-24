@@ -24,7 +24,7 @@ from .diagnostics import (
     issue_sort_key,
     render_witness,
 )
-from .model import MatchCaseContext, MatchSiteKind, NormalizedMatchSite
+from .model import CaseSite, LetSite, MatchCaseContext, NormalizedMatchSite
 from .normalize import (
     MatchCompileInvariantError,
     match_case_context,
@@ -207,14 +207,14 @@ def _validate_sites(
     for site_id, compiled in sites.items():
         source = expected[site_id]
         normalized = compiled.normalized
-        expected_kind = MatchSiteKind.CASE if isinstance(source, Case) else MatchSiteKind.LET
         if compiled.site_node_id != site_id or normalized.site_node_id != source.node_id:
             raise MatchCompileInvariantError(
                 f"compiled match-site mapping key {site_id} does not match its source"
             )
-        if normalized.source_kind is not expected_kind:
+        expected_payload = CaseSite if isinstance(source, Case) else LetSite
+        if not isinstance(normalized.source, expected_payload):
             raise MatchCompileInvariantError(
-                f"compiled match site {site_id} carries the wrong source kind"
+                f"compiled match site {site_id} carries the wrong source payload"
             )
         if normalized.span != source.span:
             raise MatchCompileInvariantError(

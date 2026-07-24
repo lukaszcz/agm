@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TypeAlias, cast
+from typing import TypeAlias, assert_never, cast
 
 from agm.agl.semantics.type_table import TypeTable
 from agm.agl.semantics.types import EnumOwnerForm, EnumOwnerFormKind
@@ -41,6 +41,7 @@ from .model import (
     BinderAssignment,
     BinderProvenance,
     BoolConstructor,
+    CaseSite,
     ClosedSignature,
     Constructor,
     ConstructorCell,
@@ -53,10 +54,10 @@ from .model import (
     EnumConstructor,
     EnumConstructorSpelling,
     FieldOccurrenceProvenance,
+    LetSite,
     LiteralConstructor,
     MatchCaseContext,
-    MatchSiteAction,
-    MatchSiteKind,
+    MatchSiteSource,
     MatrixRow,
     NormalizedMatchSite,
     Occurrence,
@@ -89,26 +90,9 @@ class CompiledMatchSite:
         return self.normalized.site_node_id
 
     @property
-    def source_kind(self) -> MatchSiteKind:
-        """The source construct that owns this decision DAG."""
-        return self.normalized.source_kind
-
-    @property
-    def actions(self) -> tuple[MatchSiteAction, ...]:
-        """Source-priority action metadata retained for later consumers."""
-        return self.normalized.actions
-
-    @property
-    def case_actions(self) -> tuple[SourceAction, ...]:
-        """Ordered arm actions for consumers handling source cases."""
-        if self.source_kind is not MatchSiteKind.CASE:
-            raise MatchCompileInvariantError("let sites have binding actions, not case actions")
-        actions = tuple(
-            action for action in self.normalized.actions if isinstance(action, SourceAction)
-        )
-        if len(actions) != len(self.normalized.actions):
-            raise MatchCompileInvariantError("case site carries a non-case action")
-        return actions
+    def source(self) -> MatchSiteSource:
+        """Return the sealed source payload that drives consumer narrowing."""
+        return self.normalized.source
 
 
 @dataclass(frozen=True, slots=True)
@@ -628,13 +612,24 @@ def _issues(
     occurrences: tuple[Occurrence, ...],
 ) -> tuple[tuple[int, ...], tuple[MatchIssue, ...]]:
     reachable = _reachable_actions(root)
+    issue_cls: type[NonExhaustiveIssue] | type[RefutableLetIssue]
+    redundant_actions: tuple[SourceAction, ...]
+    match normalized.source:
+        case CaseSite(actions=actions):
+            redundant_actions = actions
+            issue_cls = NonExhaustiveIssue
+        case LetSite():
+            redundant_actions = ()
+            issue_cls = RefutableLetIssue
+        case _ as unreachable_source:
+            assert_never(unreachable_source)
     reachable_in_source_order = tuple(
-        action.action_id for action in normalized.actions if action.action_id in reachable
+        action.action_id for action in normalized.source.actions if action.action_id in reachable
     )
     issues: list[MatchIssue] = [
         RedundantArmIssue(normalized.site_node_id, action.action_id, action.pattern_span)
-        for action in normalized.actions
-        if isinstance(action, SourceAction) and action.action_id not in reachable
+        for action in redundant_actions
+        if action.action_id not in reachable
     ]
     constraints = _first_failure_constraints(root, normalized.type_table)
     root_signature = signature_for_type(normalized.root.type, normalized.type_table)
@@ -647,11 +642,6 @@ def _issues(
             occurrences,
             normalized.type_table,
             normalized.case_context,
-        )
-        issue_cls = (
-            NonExhaustiveIssue
-            if normalized.source_kind is MatchSiteKind.CASE
-            else RefutableLetIssue
         )
         issues.append(issue_cls(normalized.site_node_id, normalized.span, witness))
     return reachable_in_source_order, tuple(sorted(issues, key=issue_sort_key))
@@ -946,7 +936,7 @@ def _validate_compiled_decisions(
     occurrence_groups: dict[tuple[OccurrenceId, Constructor], tuple[Occurrence, ...]],
 ) -> None:
     normalized = compiled.normalized
-    source_actions = {action.action_id: action for action in normalized.actions}
+    source_actions = {action.action_id: action for action in normalized.source.actions}
     binder_paths = _source_binder_paths(normalized)
     referenced_groups: set[tuple[OccurrenceId, Constructor]] = set()
     free_memo: dict[int, tuple[OccurrenceId, ...]] = {}

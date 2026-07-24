@@ -16,10 +16,10 @@ from agm.agl.matchcompile.compiler import CompiledMatchSite
 from agm.agl.matchcompile.matrix import PatternMatrix
 from agm.agl.matchcompile.model import (
     BoolConstructor,
+    CaseSite,
     EnumConstructor,
     LiteralConstructor,
     LiteralKind,
-    MatchSiteKind,
     PatternCell,
     RecordConstructor,
     WildcardCell,
@@ -184,9 +184,7 @@ def matrix_action(matrix: PatternMatrix, values: tuple[Value, ...]) -> int | Non
 
 def case_sites(sites: "Mapping[int, CompiledMatchSite]") -> dict[int, CompiledMatchSite]:
     """Return only the compiled sites that came from a source ``case`` expression."""
-    return {
-        node_id: site for node_id, site in sites.items() if site.source_kind is MatchSiteKind.CASE
-    }
+    return {node_id: site for node_id, site in sites.items() if isinstance(site.source, CaseSite)}
 
 
 __all__ = ["canonical_cell_matches", "case_sites", "matrix_action", "reference_action"]

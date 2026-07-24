@@ -31,9 +31,9 @@ type_expr ::= "unit"
             | "text" | "json" | "bool" | "int" | "decimal"
             | name
             | name "[" type_expr ("," type_expr)* "]"   (* applied type *)
-            | qual_prefix name "[" type_expr ("," type_expr)* "]"
+            | qualifier_chain name "[" type_expr ("," type_expr)* "]"
                                                                (* qualified applied type *)
-            | qual_prefix name                                (* qualified type *)
+            | qualifier_chain name                            (* qualified type *)
             | "list" "[" type_expr "]"
             | "dict" "[" "text" "," type_expr "]"
             | "agent"
@@ -44,23 +44,27 @@ func_type ::= type_atom "->" type_expr
 type_atom ::= "unit" | "text" | "json" | "bool" | "int" | "decimal"
             | name
             | name "[" type_expr ("," type_expr)* "]"
-            | qual_prefix name "[" type_expr ("," type_expr)* "]"
-            | qual_prefix name
+            | qualifier_chain name "[" type_expr ("," type_expr)* "]"
+            | qualifier_chain name
             | "list" "[" type_expr "]"
             | "dict" "[" "text" "," type_expr "]"
             | "agent"
-type_list   ::= type_expr ("," type_expr)* ","?
-qual_prefix ::= ["/"] NAME ("/" NAME)* "::" | "::"    (* byte-adjacent *)
+type_list       ::= type_expr ("," type_expr)* ","?
+qualifier_chain ::= "::" qualifier_segment* | qualifier_segment+
+qualifier_segment ::= ["/"] NAME ("/" NAME)* "::"
+                    | NAME "[" type_expr ("," type_expr)* "]" "::"
 ```
 
 A bare `name` in type position names a built-in type, a user type, an alias,
 or — inside a generic declaration — one of that declaration's type parameters.
 `name "[" … "]"` is an **applied type**: it instantiates a generic declaration
 at concrete type arguments, e.g. `Box[int]`, `Option[text]`,
-`Outcome[int, text]`, or nested `Box[Box[int]]`. A `qual_prefix` may precede
-the complete type name before its brackets, as in `mylib::Box[int]`; without
-brackets it forms a module-qualified type such as `mylib::Point`. The built-in
-`list[T]` and `dict[text, V]` are the same applied-type form.
+`Outcome[int, text]`, or nested `Box[Box[int]]`. A `qualifier_chain` may precede
+the complete type name before its brackets, as in `mylib::Box[int]` or
+`Geometry::Box[int]`; without brackets it forms a qualified type such as
+`mylib::Point` or `Geometry::Point`. The built-in `list[T]` and `dict[text, V]`
+are the same applied-type form. See [Named scopes](scopes.md) for scope-path
+resolution.
 
 `dict[text, T]` keys are always `text`, and the key position must be spelled
 literally as `text`. There are no union types, no string-literal types, and no
@@ -300,7 +304,7 @@ order; `@pos` must lead. Violations are static errors.
 Two record types with identical fields are still distinct types (nominal
 typing). Two record types from different modules are also distinct even if
 they have the same name and the same fields — see
-[Module-qualified type identity](#module-qualified-type-identity).
+[Module- and scope-qualified type identity](#module--and-scope-qualified-type-identity).
 A record may be generic — `record Box[T]` then a field `value: T`
 (see [Generics](generics.md)).
 
@@ -321,7 +325,10 @@ enum FixResult
   | Blocked(reason: text, recoverable: bool)
 ```
 
-Enums are the intended model for agent outcomes:
+Enums are the intended model for agent outcomes. An enum also establishes a
+same-named scope; its variants are members of that scope, so `Review::Pass` is
+a qualified member access. The unqualified variant spelling remains available
+under the ordinary constructor rules.
 
 ```agl
 enum Review
@@ -570,7 +577,7 @@ parameter — is covered in [Generics](generics.md).
 
 ## Declaration validity
 
-Before any value checking, the following are rejected as static errors:
+The following are static errors:
 
 1. A user type whose name duplicates another user type, a built-in type name,
    or a built-in exception name ([Exceptions](exceptions.md)).
@@ -582,7 +589,8 @@ Before any value checking, the following are rejected as static errors:
 5. An **uninhabitable** record, enum, or exception — see
    [Recursive types](#recursive-types).
 
-Type declarations are valid only at the program root.
+Type declarations are valid at the module root and in [named scope
+regions](scopes.md), but not in ordinary expression blocks.
 
 ## Assignability and coercion
 

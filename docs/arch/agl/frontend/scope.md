@@ -19,7 +19,7 @@ Assignment follows the same split. Scope resolves an unqualified `:=` target and
 
 `scope/imports.py` is the pure import-policy seam. Its contribution environment
 merges every declaration for a module into its selected path atoms, bare injection, aliases,
-and plain-path routes. Scoped paths retain their structure through selection and re-exporting; policy expands scope-prefix selections and re-roots renamed subtrees. Wildcard declarations retain root-member selection only. The selected set bounds both routes and bare injection: plain
+and plain-path routes. Scoped paths retain their structure through selection and re-exporting; policy expands scope-prefix selections and re-roots renamed subtrees. The selected set bounds both routes and bare injection: plain
 imports are qualified-only, while `using` and `open import` inject bare names. Scope `open`
 declarations use the same structured bare-contribution layers on their enclosing `ScopeNode`.
 Constructor contributions retain their owner path in a parallel region-local candidate layer, so a

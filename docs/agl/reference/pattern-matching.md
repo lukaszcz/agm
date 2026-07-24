@@ -14,12 +14,12 @@ pattern_atom   ::= "_"                                    (* wildcard *)
                  | literal                                (* literal pattern *)
                  | name                                   (* field-directed name or bare constructor *)
                  | name "(" pattern_fields? ")"          (* unqualified constructor *)
-                 | qual_prefix type_qual? name
+                 | qualifier_chain name
                      ("(" pattern_fields? ")")?           (* qualified constructor *)
 
-qual_prefix    ::= ["/"] NAME ("/" NAME)* "::"  (* module prefix *)
-                 | "::"                              (* current-module prefix *)
-type_qual      ::= name "::"                         (* owning type after a module prefix *)
+qualifier_chain ::= "::" qualifier_segment* | qualifier_segment+
+qualifier_segment ::= ["/"] NAME ("/" NAME)* "::"
+                    | NAME "[" type_expr ("," type_expr)* "]" "::"
 name           ::= NAME | OP_NAME
 field_name     ::= NAME | "agent" | "to" | "downto" | "by"
 

@@ -1,6 +1,7 @@
 - [Lexical structure](lexical-structure.md)
 - [Program structure](program-structure.md)
 - [Modules](modules.md)
+- [Named scopes](scopes.md)
 - [Types](types.md)
 - [Bindings and scope](bindings-and-scope.md)
 - [Expressions](expressions.md)

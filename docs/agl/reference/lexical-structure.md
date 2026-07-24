@@ -131,32 +131,35 @@ def private() -> text = "x"  # 'private' not at item-start → VAR_NAME
 record R(end: int)            # 'end' is a field name, not a closer
 ```
 
-## Module qualifiers
+## Qualifier chains
 
-`::` separates a **module qualifier** from the name it qualifies. In value
-and type position:
+`::` separates qualifier-chain segments from the member they select. A chain
+can begin with a module route, continue through named scopes or types, and end
+at a value, type, or enum variant:
 
 <!-- agl-check: fragment -->
 ```agl
-foo/bar::thing        # suffix qualifier, name thing
-/foo/bar::thing       # anchored qualifier, name thing
-::name                # current module, name name (self-reference)
-foo/bar::Color::Red   # module qualifier, enum Color, variant Red
+foo/bar::thing              # suffix module route, member thing
+/foo/bar::thing             # anchored module route
+Point::distance             # local scope member
+foo/bar::Geometry::Point    # module route, then scope members
+::Outer::Inner::name        # path anchored at the current module root
 ```
 
-A qualifier is an optional leading `/`, followed by a slash-separated module
-path and `::` immediately after its final segment. **Every** module qualifier,
-including a single-segment form such as `config::key`, is byte-adjacent through
-`::`: `foo/bar::thing` is a qualifier, while `foo / bar::thing` is division
-followed by a separate qualifier. A leading `/` anchors resolution to the
-complete module path. A leading `::` with no preceding path is the
-**self-reference** form — it refers to the current module.
+A slash-separated path before the first `::` is a module route. A leading `/`
+anchors that route to the complete module path; otherwise it may be a suffix
+route or an alias. Subsequent `::` segments name scopes or types. A single
+leading segment can be either a local scope/type or a module route; use `/` for
+the module reading or `::` for the current-module reading when both would
+resolve. Scope segments never suffix-match.
 
-`/` is the division operator only when written with whitespace on **both**
-sides. This matches `+`, `-` and `*`, which are identifier characters and so
-already need surrounding space to read as operators (`a+b` is one name). Left
-unspaced, `/` separates path segments, so a `/` that touches an operand on
-exactly one side is rejected:
+Every route and chain segment is byte-adjacent through `::`: `foo/bar::thing`
+is a qualifier, while `foo / bar::thing` is division followed by a separate
+qualifier. `/` is the division operator only when written with whitespace on
+**both** sides. This matches `+`, `-` and `*`, which are identifier characters
+and so already need surrounding space to read as operators (`a+b` is one
+name). Left unspaced, `/` separates route segments, so a `/` that touches an
+operand on exactly one side is rejected:
 
 <!-- agl-check: error -->
 ```agl
@@ -169,10 +172,11 @@ let t = a /b         # error: same
 The positional-parameter marker `/` ([Functions](functions.md)) touches no
 operand and is unaffected.
 
-The type-argument form `callee::[T]` and typed-call form `callee::[T](args)`
-(e.g. `ask-request::[Review](…)`) are distinct constructs — they are NOT module
-qualifiers.
-
+A type-owning chain segment may carry type arguments, as in
+`Option[int]::Some`; type arguments on a plain scope segment are a static
+error. The type-argument form `callee::[T]` and typed-call form
+`callee::[T](args)` (e.g. `ask-request::[Review](…)`) instead apply to the
+complete callee and are not qualifier segments.
 ## Identifiers
 
 An identifier starts with a letter (any Unicode letter, not just ASCII) or
@@ -317,13 +321,13 @@ in function type annotations (`int -> text`), `def` return type annotations
 (`fn(x: int) -> text => …`). `=>` is the **branch/lambda-body arrow** — it
 separates a branch condition or pattern from its body.
 
-`::` serves two distinct roles: as the **module-qualifier separator** (see
-[Module qualifiers](#module-qualifiers) above) and as the **type-argument
-introducer** `callee::[Type]` / `callee::[Type](args)`. It is
-a maximal-munch token distinct from two `:` delimiters. The two uses are
-disambiguated by context: a `::` immediately preceded by a tightly written
-name or slash path is the qualifier form; a `::` following a `NAME` and
-immediately followed by `[` is the type-argument form.
+`::` serves two distinct roles: as the **qualifier-chain separator** (see
+[Qualifier chains](#qualifier-chains) above) and as the **type-argument
+introducer** `callee::[Type]` / `callee::[Type](args)`. It is a maximal-munch
+token distinct from two `:` delimiters. The uses are disambiguated by context:
+a `::` after a tightly written route or chain segment is a qualifier separator;
+a `::` following a complete callee and immediately followed by `[` introduces
+type arguments.
 
 `==` is the **equality operator** (with `!=` for inequality). A single `=` is
 never a comparison: it separates a binder or named argument from its value

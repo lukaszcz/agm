@@ -15,7 +15,7 @@ A slash path is written byte-adjacent wherever it appears — in a header, a
 qualifier, or a wildcard tail. `a/b` is a path; `a / b`, spaced on both sides,
 is division. A `/` touching an operand on exactly one side (`a/ b`) is neither
 and is rejected; see
-[Module qualifiers](lexical-structure.md#module-qualifiers).
+[Qualifier chains](lexical-structure.md#qualifier-chains).
 
 A module must resolve to exactly one file across the configured library roots.
 No matching file is an error; more than one matching file is also an error.
@@ -79,8 +79,8 @@ subtree from both channels, so it can also remove a qualification ambiguity.
 
 ## Opening scopes
 
-An `open` declaration makes a scope's selected members available bare in its
-enclosing module or scope region:
+An `open` declaration makes a [named scope](scopes.md)'s selected members
+available bare in its enclosing module or scope region:
 
 <!-- agl-check: fragment -->
 ```agl
@@ -162,7 +162,8 @@ A leading `/` anchors a qualifier to the complete plain module path. Anchored
 qualifiers never match aliases and are always module routes. Aliases are
 single-segment routes only.
 
-Qualified type references follow the same rules and preserve nominal identity:
+Qualified type references follow the same rules and preserve module-and-scope
+nominal identity:
 
 <!-- agl-check: fragment -->
 ```agl
@@ -211,8 +212,8 @@ functions, type declarations, and infix declarations, but not executable
 top-level expressions, bindings, agents, parameters, or program declarations.
 Imports and exports appear before other declarations in a library module.
 
-Import cycles are valid. Public declarations are collected before bodies are
-resolved, so functions and nominal types may refer across cycles.
+Import cycles are valid. Functions and nominal types may refer to public
+declarations across an import cycle.
 
 ## REPL
 

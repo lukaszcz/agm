@@ -16,9 +16,9 @@ import_decl ::= ["open"] "import" module_path ["/" "*"]
                 ["as" ref_name]
                 [using_clause | hiding_clause]
 module_path ::= NAME ("/" NAME)*
-using_clause ::= "using" import_item ("," import_item)*
-hiding_clause ::= "hiding" ref_name ("," ref_name)*
-import_item ::= ref_name ["as" ref_name]
+using_clause ::= "using" path_atom ["as" ref_name] ("," path_atom ["as" ref_name])*
+hiding_clause ::= "hiding" path_atom ("," path_atom)*
+path_atom ::= NAME ("::" NAME)*
 ```
 
 Each import contributes a selected set **S** of public names. A plain import
@@ -28,10 +28,11 @@ its listed names bare; `hiding` selects all except its listed names; and
 invalid. Repeated declarations for one module union their selected sets and
 bare contributions. A bare collision is reported where the bare name is used.
 
-A `using N as M` rename is canonical: `M` is the selected member name for both
-bare and qualified access through that import. `as A` gives a module the
-single-name alias `A` instead of a plain path route. Distinct modules may share
-an alias; each referenced member must still resolve to one contributing module.
+A selected path is a public declaration path. Selecting a scope path selects
+its public subtree; a rename re-roots that selected path for both bare and
+qualified access. `as A` gives a module the single-name alias `A` instead of a
+plain path route. Distinct modules may share an alias; each referenced member
+must still resolve to one contributing module.
 
 `import prefix/*` expands to one declaration for every module at or under the
 prefix. Its clauses distribute to every matched module. A wildcard alias is a
@@ -40,19 +41,36 @@ shared alias facade.
 ## Reference routes
 
 ```ebnf
-qual_prefix ::= ["/"] NAME ("/" NAME)* "::" | "::"
+qualified_ref    ::= qualifier_chain NAME
+qualifier_chain  ::= "::" qualifier_segment* | qualifier_segment+
+qualifier_segment ::= ["/"] NAME ("/" NAME)* "::"
+                    | NAME "[" type_expr ("," type_expr)* "]" "::"
 ```
 
-A plain module route may use any unambiguous trailing sequence of an imported
-path. A leading `/` anchors a route to an exact complete path. An alias is a
-single-segment route and is not considered by suffix or anchored matching.
+The first segment may be a module route; a plain route may use any
+unambiguous trailing sequence of an imported path, while a leading `/` anchors
+it to an exact complete path. An alias is a single-segment route and is not
+considered by suffix or anchored matching. Remaining segments name scopes or
+types in the selected module. A type-owning segment may carry type arguments;
+a plain scope segment may not. Scope paths are exact and never suffix-match.
+
 The requested member filters route candidates by each module's selected set
 **S**. Zero candidates, an inaccessible member, and more than one contributing
-candidate are static errors; there is no route-preference order.
+candidate are static errors; there is no route-preference order. `::name` is a
+current-module self-reference. The same routing rules apply to value
+references, writable `builtin var` targets, type references, and
+module/scope/type/constructor chains.
 
-`::name` is a current-module self-reference. The same routing rules apply to
-value references, writable `builtin var` targets, type references, and
-module/type/constructor chains.
+## Named scopes
+
+A module may declare a nestable scope region with `scope A::B` and a matching
+`end A::B`. Regions contain static declarations and nested regions, and a
+qualified declaration head such as `def A::B::work` extends the same path.
+Declarations are visible to their scope siblings; outside the scope, the full
+path is required. Types establish same-named scopes, with enum variants as
+members. `open` contributes selected local or imported scope members as bare
+names in its enclosing module or scope region. Opens, scope selections, and
+renames do not change the defining module or re-export visibility.
 
 ## Lexical structure
 

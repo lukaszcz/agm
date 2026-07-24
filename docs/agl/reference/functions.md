@@ -11,8 +11,9 @@ from other functions. The type of a function value is written
 ## `def` — named function declarations
 
 ```ebnf
-func_def      ::= "def" name type_params? "(" param_list? ")" ("->" type_expr)? ("=" func_body | suite)
+func_def      ::= "def" decl_head type_params? "(" param_list? ")" ("->" type_expr)? ("=" func_body | suite)
                 | "builtin" NEWLINE? "def" name type_params? "(" param_list? ")" "->" type_expr
+decl_head     ::= [scope_path "::"] name
 func_body     ::= expr | suite
 type_params   ::= "[" name ("," name)* "]"
 param_list    ::= param_entry ("," param_entry)* ","?
@@ -21,9 +22,11 @@ param         ::= field_name ":" type_expr ("=" or_expr)?
 param_marker  ::= "/" | "*" | "@" NAME    (* @pos, @std, @named *)
 ```
 
-A `def` is a top-level declaration. An inline body requires `=`. For an
-indented suite body, the `=` before the newline is optional. The body is a
-single expression — which may be a block (a sequence of items ending in an
+A `def` is a static declaration at the module root or in a
+[named scope](scopes.md). A declaration head may include its scope path, as in
+`def Text::render(value: text) -> text = value`. An inline body requires `=`.
+For an indented suite body, the `=` before the newline is optional. The body is
+a single expression — which may be a block (a sequence of items ending in an
 expression):
 
 ```agl
@@ -185,10 +188,9 @@ def with_named_default(x: int, *, tag: text = "ok") -> text =
 
 ### Scope and forward references
 
-`def` declarations are collected before any expressions are evaluated, so
-every root `def` and every member of one named scope is in scope for its
-siblings (and for itself). Mutual recursion among root or same-scope `def`s
-is therefore unrestricted:
+A root `def` may call itself or any other root `def`, including one declared
+later. `def`s in the same named scope have the same visibility, so root and
+same-scope `def`s may use mutual recursion:
 
 ```agl
 def is_even(n: int) -> bool =

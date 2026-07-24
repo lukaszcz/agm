@@ -60,7 +60,7 @@ var artifact: text = ask("Implement ${spec}", agent = impl)
 ```ebnf
 assign_stmt ::= assign_target ":=" expr
 assign_target ::= name ("[" expr "]")*
-                | qual_prefix name
+                | qualifier_chain name
 ```
 
 `:=` updates the nearest visible **mutable** binding, has type `unit`, and
@@ -109,14 +109,17 @@ Static rules, all checked before execution:
 ## `def` — function declarations
 
 ```ebnf
-func_def ::= ["private"] "def" name type_params? "(" param_list? ")" ("->" type_expr)? ("=" func_body | suite)
+func_def ::= ["private"] "def" decl_head type_params? "(" param_list? ")" ("->" type_expr)? ("=" func_body | suite)
+decl_head ::= [scope_path "::"] name
 ```
 
-`def` is a static declaration valid at the module root and in named scope
-regions. It introduces an immutable function binding in its declaration layer.
-All root `def`s, and all `def`s in the same named scope, are collected in a
-pre-pass so they are mutually visible — every such `def` may call every other
-member (and itself) without a forward declaration.
+`def` is a static declaration valid at the module root and in
+[named scope regions](scopes.md). Its head may include a scope path, such as
+`def Text::render(value: text) -> text = value`. It introduces an immutable
+function binding in its declaration layer.
+A root `def` may call itself or any other root `def`, including one declared
+later. `def`s in the same named scope have the same visibility, so they may
+call one another recursively without a forward declaration.
 
 A `def` may be prefixed with `private`, making it invisible to other modules
 (see [Modules](modules.md)). The `private` modifier has no effect on lexical

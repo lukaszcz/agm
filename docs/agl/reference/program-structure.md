@@ -11,9 +11,11 @@ expression with a well-defined type, and the program is an
 expression-oriented sequence.
 
 ```ebnf
-program    ::= block EOF
-block      ::= item ((NEWLINE | ";") item)* (NEWLINE | ";")?
-item       ::= import_decl                        (* header position only *)
+program      ::= module_block EOF
+module_block ::= module_item ((NEWLINE | ";") module_item)* (NEWLINE | ";")?
+module_item   ::= scope_region | item
+block         ::= item ((NEWLINE | ";") item)* (NEWLINE | ";")?
+item          ::= import_decl                     (* header position only *)
              | open_decl                          (* header position only *)
              | export_decl                        (* root only *)
              | nominal_modifier? record_def        (* root only *)
@@ -41,14 +43,21 @@ private_modifier ::= "private" NEWLINE?
 any other declaration or expression. See [Modules](modules.md) and
 [Grammar](grammar.md#import-and-export-declarations) for their syntax.
 
+### Named scope regions
+
+A named scope region is a module item containing nested regions, header `open`
+declarations, and static declarations. Its matching `scope`/`end` syntax,
+declaration paths, and visibility rules are described in [Named scopes](scopes.md).
+
 ### Declarations
 
 The following are **root-only unless noted**: a static error if nested inside
 an ordinary block or, for forms without a scope-region exception, a named scope
 region.
 
-- **Type declarations** (`record`, `enum`, `exception`, `type`) — collected
-  program-wide before checking begins; forward references are fine. `record`,
+- **Type declarations** (`record`, `enum`, `exception`, `type`) — valid at the
+  module root and in named scope regions. They may refer to types declared
+  later in the program. `record`,
   `enum`, and `type` declarations may be **generic**, declaring type parameters
   in a bracketed list after the name (`record Box[T]`, `enum Option[T]`,
   `type Pair[A, B] = …`); see [Generics](generics.md). `private` restricts a
@@ -70,7 +79,7 @@ region.
   declarations.
 - **Function declarations** — ordinary `def`s and body-less companion-backed
   `extern def`s. They may be declared at the root or in named scope regions.
-  Like type declarations, root and same-scope `def`s are collected before any expression is evaluated,
+  Root and same-scope `def`s may refer to declarations that appear later,
   enabling mutual recursion (see [Functions](functions.md)). An ordinary `def`
   may be **generic** (`def id[T](x: T) -> T = x`); see [Generics](generics.md).
   `private` may prefix ordinary and extern functions; `builtin` introduces only

@@ -53,7 +53,9 @@ a loop's `until` condition.
 ### Scope regions
 
 ```ebnf
-scope_region ::= "scope" scope_path NEWLINE scope_item (NEWLINE scope_item)* NEWLINE? "end" scope_path
+scope_region ::= "scope" scope_path (NEWLINE | ";")
+                 [scope_item ((NEWLINE | ";") scope_item)* (NEWLINE | ";")?]
+                 "end" scope_path
 scope_path   ::= NAME ("::" NAME)*
 scope_item   ::= scope_region | open_decl
                | private_modifier? record_def | private_modifier? enum_def
@@ -263,8 +265,8 @@ type_expr ::= "unit"
             | "text" | "json" | "bool" | "int" | "decimal"
             | name
             | name "[" type_expr ("," type_expr)* "]"   (* applied type *)
-            | qual_prefix name "[" type_expr ("," type_expr)* "]"
-            | qual_prefix name         (* module-qualified type *)
+            | qualifier_chain name "[" type_expr ("," type_expr)* "]"
+            | qualifier_chain name
             | "list" "[" type_expr "]"
             | "dict" "[" "text" "," type_expr "]"
             | "agent"
@@ -275,12 +277,17 @@ func_type ::= type_atom "->" type_expr
 type_atom ::= "unit" | "text" | "json" | "bool" | "int" | "decimal"
             | name
             | name "[" type_expr ("," type_expr)* "]"
-            | qual_prefix name "[" type_expr ("," type_expr)* "]"
-            | qual_prefix name
+            | qualifier_chain name "[" type_expr ("," type_expr)* "]"
+            | qualifier_chain name
             | "list" "[" type_expr "]"
             | "dict" "[" "text" "," type_expr "]"
             | "agent"
 type_list ::= type_expr ("," type_expr)* ","?
+
+qualifier_chain   ::= "::" qualifier_segment*
+                    | qualifier_segment+
+qualifier_segment ::= ["/"] NAME ("/" NAME)* "::"
+                    | NAME "[" type_expr ("," type_expr)* "]" "::"
 ```
 
 `name "[" … "]"` is an applied type: a generic declaration instantiated at
@@ -342,7 +349,7 @@ var_decl       ::= "var" name type_ann? "=" expr
 builtin_var_def ::= "builtin" NEWLINE? "var" name type_ann  (* body-less; std/config only *)
 assign_stmt ::= assign_target ":=" expr
 assign_target ::= name ("[" expr "]")*
-                | qual_prefix name
+                | qualifier_chain name
 ```
 
 A `builtin var` is a body-less, host-backed mutable binding with a mandatory
@@ -447,9 +454,7 @@ pattern_atom   ::= "_"
                  | INT | DECIMAL | "true" | "false" | "null" | STRING
                  | name
                  | name "(" pattern_fields? ")"
-                 | qual_prefix type_qual? name ("(" pattern_fields? ")")?
-qual_prefix    ::= ["/"] NAME ("/" NAME)* "::" | "::"    (* byte-adjacent throughout *)
-type_qual      ::= name "::"
+                 | qualifier_chain name ("(" pattern_fields? ")")?
 pattern_fields ::= pattern_field ("," pattern_field)* ","?
 pattern_field  ::= pattern              (* positional sub-pattern *)
                  | field_name "=" pattern
@@ -513,7 +518,8 @@ postfix        ::= postfix "." field_name          (* runtime field access *)
                | postfix "::" "[" type_expr ("," type_expr)* "]"   (* explicit type application *)
                | atom
 
-applied_type_qualified_constructor ::= qual_prefix? NAME "[" type_expr ("," type_expr)* "]" "::" NAME
+applied_type_qualified_constructor ::= qualifier_chain NAME "[" type_expr ("," type_expr)* "]" "::" NAME
+                                           | NAME "[" type_expr ("," type_expr)* "]" "::" NAME
                                            (* `[` is byte-adjacent to the preceding NAME *)
 
 atom           ::= INT | DECIMAL | "true" | "false" | "null"
@@ -521,7 +527,7 @@ atom           ::= INT | DECIMAL | "true" | "false" | "null"
                | list_literal
                | dict_literal
                | name                              (* variable / constructor reference *)
-               | qual_prefix type_qual? name       (* qualified ref / constructor *)
+               | qualifier_chain name               (* qualified ref / constructor *)
                | applied_type_qualified_constructor
                | template
                | "(" expr ")"                      (* parenthesized expr *)
@@ -536,10 +542,10 @@ paren_block    ::= (marked_item ";")+ marked_item
 juxt_atom      ::= INT | DECIMAL | "true" | "false" | "null"
                  | list_literal | dict_literal | template
                  | NAME                              (* bare references exclude OP_NAME *)
-                 | qual_prefix type_qual? name       (* qualified ref / constructor *)
+                 | qualifier_chain name               (* qualified ref / constructor *)
                  | applied_type_qualified_constructor
 
-qualified_constructor ::= qual_prefix type_qual? name | name
+qualified_constructor ::= qualifier_chain name | name
 
 raise_expr     ::= "raise" or_expr
 return_expr    ::= "return" or_expr?

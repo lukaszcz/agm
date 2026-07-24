@@ -96,11 +96,14 @@ let metadata: dict[text, json] = {}
 ```ebnf
 constructor ::= constructor_ref value_type_args? constructor_args?
 constructor_ref ::= name
-                  | qual_prefix name
+                  | qualifier_chain name
                   | applied_type_qualified_constructor
-applied_type_qualified_constructor ::= qual_prefix? NAME "[" type_expr ("," type_expr)* "]" "::" NAME
+applied_type_qualified_constructor ::= qualifier_chain NAME "[" type_expr ("," type_expr)* "]" "::" NAME
+                                           | NAME "[" type_expr ("," type_expr)* "]" "::" NAME
                                            (* `[` is byte-adjacent to the preceding NAME *)
-qual_prefix ::= ["/"] NAME ("/" NAME)* "::" | "::"
+qualifier_chain ::= "::" qualifier_segment* | qualifier_segment+
+qualifier_segment ::= ["/"] NAME ("/" NAME)* "::"
+                    | NAME "[" type_expr ("," type_expr)* "]" "::"
 constructor_args ::= "(" (ctor_arg ("," ctor_arg)* ","?)? ")"
 value_type_args ::= "::" "[" type_expr ("," type_expr)* "]"
 ctor_arg    ::= expr              (* positional *)
@@ -140,6 +143,10 @@ Every declared field must be supplied; unknown and duplicate fields are
 static errors.
 
 ### Enum variant construction
+
+An enum establishes a same-named scope and each variant is a member of it.
+Thus qualification uses the same chain syntax as every other scope member;
+the bare variant convenience is unchanged.
 
 Qualified or unqualified:
 

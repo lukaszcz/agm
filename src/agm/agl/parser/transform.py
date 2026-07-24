@@ -36,7 +36,6 @@ from lark.tree import Meta
 import agm.agl.syntax as syntax
 from agm.agl.parser.errors import AglSyntaxError
 from agm.agl.syntax.nodes import ELSE
-from agm.agl.syntax.raw_tail import RAW_TAIL_BUILTINS
 from agm.agl.syntax.spans import UNKNOWN_SOURCE, SourceId, SourceSpan
 from agm.agl.syntax.types import (
     AgentT,
@@ -56,6 +55,7 @@ from agm.agl.syntax.types import (
     TypeQualifier,
     UnitT,
 )
+from agm.raw_tail_catalog import RAW_TAIL_BUILTINS
 
 # Types used internally
 _NamedArgList = list[syntax.NamedArg]
@@ -329,29 +329,6 @@ class AstBuilder(Transformer):
         Equal to ``start_id`` when no node has been built.
         """
         return self._next_unused
-
-    def _name(self, token: Token) -> Token:
-        """Reject a raw-tail spelling before it can cross the parser firewall."""
-        if str(token) in RAW_TAIL_BUILTINS:
-            raise AglSyntaxError(
-                f"{str(token)!r} is reserved for raw-tail calls.",
-                span=self._span_from_token(token),
-            )
-        return token
-
-    def name(self, meta: Meta, args: _Args) -> Token:
-        """Validate an identifier used in any declaration or reference position."""
-        del meta
-        token = args[0]
-        assert isinstance(token, Token)
-        return self._name(token)
-
-    def field_name(self, meta: Meta, args: _Args) -> Token:
-        """Validate an identifier used as a field or named-argument key."""
-        del meta
-        token = args[0]
-        assert isinstance(token, Token)
-        return self._name(token)
 
     # ------------------------------------------------------------------
     # Program root
@@ -2572,7 +2549,7 @@ class AstBuilder(Transformer):
     def applied_qual_ref(self, meta: Meta, args: _Args) -> syntax.VarRef:
         """Type-qualified constructor with explicit type arguments."""
         qual = next((a for a in args if isinstance(a, Qualifier)), None)
-        name_toks = [self._name(a) for a in args if _is_name_token(a)]
+        name_toks = [a for a in args if _is_name_token(a)]
         type_name = str(name_toks[0])
         variant_name = str(name_toks[-1])
         type_args_val = cast(
@@ -2627,14 +2604,17 @@ class AstBuilder(Transformer):
     # template and raw-tail desugaring
     # ------------------------------------------------------------------
 
-    def _build_template(
-        self, meta: Meta, segments: Iterable[syntax.TemplateSegment]
-    ) -> syntax.Template | syntax.StringLit:
-        """Build a template expression, collapsing a hole-free value to text."""
+    def _build_template(self, meta: Meta, args: _Args) -> syntax.Template | syntax.StringLit:
+        """Build a template expression from *args*, collapsing a hole-free value to text.
+
+        Non-segment children (delimiter tokens) are skipped, so quoted and
+        raw-tail payloads can hand their raw argument list straight through.
+        """
         nonempty_segments = tuple(
             segment
-            for segment in segments
-            if not (isinstance(segment, syntax.TextSegment) and segment.text == "")
+            for segment in args
+            if isinstance(segment, (syntax.TextSegment, syntax.InterpSegment))
+            and not (isinstance(segment, syntax.TextSegment) and segment.text == "")
         )
         span = self._span_from_meta(meta)
         nid = self._next_id()
@@ -2649,21 +2629,11 @@ class AstBuilder(Transformer):
 
     def template(self, meta: Meta, args: _Args) -> syntax.Template | syntax.StringLit:
         """Build a quoted template expression from its segment children."""
-        return self._build_template(
-            meta,
-            (
-                segment
-                for segment in args
-                if isinstance(segment, (syntax.TextSegment, syntax.InterpSegment))
-            ),
-        )
+        return self._build_template(meta, args)
 
     def raw_tail(self, meta: Meta, args: _Args) -> syntax.Template | syntax.StringLit:
         """Build the raw-tail payload with ordinary template interpolation semantics."""
-        return self._build_template(
-            meta,
-            (arg for arg in args if isinstance(arg, (syntax.TextSegment, syntax.InterpSegment))),
-        )
+        return self._build_template(meta, args)
 
     def raw_text(self, meta: Meta, args: _Args) -> syntax.TextSegment:
         """Build raw text before a following interpolation subtree is transformed."""
@@ -2673,8 +2643,9 @@ class AstBuilder(Transformer):
             text=str(tok), span=self._span_from_meta(meta), node_id=self._next_id()
         )
 
-    def type_args(self, meta: Meta, args: _Args) -> tuple[TypeExpr, ...]:
-        """Pass an explicit raw-tail type-argument group through to its call."""
+    @staticmethod
+    def _first_type_args(args: _Args) -> tuple[TypeExpr, ...]:
+        """Return the type-argument group among *args*, or ``()`` when absent."""
         return cast(
             tuple[TypeExpr, ...],
             next(
@@ -2687,6 +2658,11 @@ class AstBuilder(Transformer):
                 (),
             ),
         )
+
+    def type_args(self, meta: Meta, args: _Args) -> tuple[TypeExpr, ...]:
+        """Pass an explicit raw-tail type-argument group through to its call."""
+        del meta
+        return self._first_type_args(args)
 
     def raw_callee(self, meta: Meta, args: _Args) -> syntax.VarRef:
         """Build the synthetic builtin callee before its raw payload subtree."""
@@ -2703,19 +2679,11 @@ class AstBuilder(Transformer):
         """Desugar a raw-tail form to its registered builtin call."""
         callee = next(arg for arg in args if isinstance(arg, syntax.VarRef))
         payload = next(arg for arg in args if isinstance(arg, (syntax.StringLit, syntax.Template)))
-        type_args = next(
-            (
-                arg
-                for arg in args
-                if isinstance(arg, tuple) and all(isinstance(item, _ALL_TYPE_EXPRS) for item in arg)
-            ),
-            (),
-        )
         return syntax.Call(
             callee=callee,
             args=(payload,),
             named_args=(),
-            type_args=cast(tuple[TypeExpr, ...], type_args),
+            type_args=self._first_type_args(args),
             span=self._span_from_meta(meta),
             node_id=self._next_id(),
         )

@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING
 
 from agm.agl.diagnostics import AglError
 from agm.agl.syntax.spans import SourceSpan
+from agm.raw_tail_catalog import RAW_TAIL_NAMES
 
 if TYPE_CHECKING:
     from lark.exceptions import UnexpectedToken
@@ -63,8 +64,43 @@ _ELSE_BEFORE_TOKEN_RE = re.compile(r"(?<![A-Za-z0-9_])else\s*$")
 # identifier-body character, so a name that merely ends in ``?`` (predicate names
 # like ``empty?`` or the ``as?`` keyword) does not masquerade as a placeholder.
 _PLACEHOLDER_BEFORE_TOKEN_RE = re.compile(r"(?<![^\s(){}\[\]:,.|;/@=])\?[0-9]*\s*$")
-_RAW_TAIL_NAME_BEFORE_END_RE = re.compile(r"(exec!|ask!)(?:\s*::\s*\[[^]]*\])?\s*$")
-_RAW_TAIL_AFTER_INDENT_RE = re.compile(r"\s*(?:exec!|ask!)(?=\s|$)")
+# Raw-tail spellings come from the shared catalog so registering a new one keeps
+# these diagnostics working; longest-first so no spelling shadows a longer one.
+_RAW_TAIL_ALT = "|".join(re.escape(name) for name in sorted(RAW_TAIL_NAMES, key=len, reverse=True))
+_RAW_TAIL_NAME_BEFORE_END_RE = re.compile(rf"({_RAW_TAIL_ALT})(?:\s*::\s*\[[^]]*\])?\s*$")
+_RAW_TAIL_AFTER_INDENT_RE = re.compile(rf"\s*(?:{_RAW_TAIL_ALT})(?=\s|$)")
+
+# Raised from two different unexpected-token branches (the name itself, and the
+# ``_INDENT`` that follows a misplaced header), so the wording lives in one place.
+_RAW_TAIL_NOT_LINE_FINAL = (
+    "raw-tail forms are only allowed in line-final positions; use the call form "
+    "or an indented block form."
+)
+
+# An identifier can start an ordinary expression too, so ``NAME`` alone is not
+# sufficient to recognize an identifier slot. These terminals accompany it only
+# when the parser is expecting a general expression rather than a name.
+_EXPRESSION_STARTERS: frozenset[str] = frozenset(
+    {
+        "DECIMAL",
+        "FALSE",
+        "INT",
+        "LBRACE",
+        "LPAR",
+        "LSQB",
+        "MINUS",
+        "NOT",
+        "NULL",
+        "TEMPLATE_START",
+        "TRUE",
+    }
+)
+
+
+def _expects_identifier(expected: set[str]) -> bool:
+    """Return whether Lark expected a name slot rather than an expression."""
+    return bool({"NAME", "OP_NAME"} & expected) and not bool(_EXPRESSION_STARTERS & expected)
+
 
 # An inline `=>` body is a single item: no binders, no `;` sequence.  Both are
 # legal once the body is parenthesized or written as an indented block, so the
@@ -278,11 +314,12 @@ def syntax_error_from_lark(
         ):
             return _make_placeholder_position_error(span)
         if tok.type == "RAW_TAIL_NAME":
-            return AglSyntaxError(
-                "raw-tail forms are only allowed in line-final positions; use the call form "
-                "or an indented block form.",
-                span=span,
-            )
+            if str(tok) in RAW_TAIL_NAMES and _expects_identifier(set(exc.expected)):
+                return AglSyntaxError(
+                    f"{str(tok)!r} is reserved for raw-tail calls.",
+                    span=span,
+                )
+            return AglSyntaxError(_RAW_TAIL_NOT_LINE_FINAL, span=span)
         if tok.type == "RAW_TAIL_END":
             name_match = (
                 _RAW_TAIL_NAME_BEFORE_END_RE.search(source_text[:pos])
@@ -338,11 +375,7 @@ def syntax_error_from_lark(
                 span=span,
             )
         if tok.type == "_INDENT" and _is_raw_tail_after_indent(source_text, pos):
-            return AglSyntaxError(
-                "raw-tail forms are only allowed in line-final positions; use the call form "
-                "or an indented block form.",
-                span=span,
-            )
+            return AglSyntaxError(_RAW_TAIL_NOT_LINE_FINAL, span=span)
         if tok.type == "_NEWLINE":
             if "_INDENT" in exc.expected:
                 return AglSyntaxError(

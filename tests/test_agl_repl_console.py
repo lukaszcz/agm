@@ -40,7 +40,7 @@ from agm.agl.repl.console import (
     run_console,
 )
 from agm.agl.runtime.request import AgentRequest, AgentResponse
-from agm.core.process import ProcessCaptureResult
+from tests._process_helpers import FakeShell, constant
 
 
 class _CountingAgent:
@@ -55,34 +55,6 @@ class _CountingAgent:
         self.calls += 1
         self.prompts.append(request.prompt)
         return AgentResponse(content=self._reply)
-
-
-class _RecordingShell:
-    """A fake shell boundary recording commands issued by ``exec``."""
-
-    def __init__(self, stdout: str = "") -> None:
-        self._stdout = stdout
-        self.commands: list[str] = []
-
-    def __call__(
-        self,
-        args: list[str],
-        *,
-        idle_timeout: float | None = None,
-        isolate_process_group: bool = False,
-    ) -> ProcessCaptureResult:
-        del idle_timeout, isolate_process_group
-        assert args[:2] == ["sh", "-c"]
-        self.commands.append(args[2])
-        return ProcessCaptureResult(
-            returncode=0,
-            stdout=self._stdout,
-            stderr="",
-            elapsed=0.01,
-            timed_out=False,
-            spawn_error=None,
-            spawn_errno=None,
-        )
 
 
 # ---------------------------------------------------------------------------
@@ -284,12 +256,13 @@ class TestMultiline:
         # A raw-tail header opens an interactive block. Enter after each content
         # line must keep collecting the payload; the blank continuation line
         # closes it and runs one shell call.
-        shell = _RecordingShell()
+        shell = FakeShell(constant())
         with patch("agm.core.process.run_capture_result", side_effect=shell):
             output = drive("exec!\r  echo one\r  echo two\r\r\x04")
 
         assert ": error:" not in output.lower()
         assert shell.commands == ["echo one\necho two"]
+        shell.assert_complete()
 
     def test_raw_tail_ask_block_continues_and_uses_mocked_default_agent(self) -> None:
         agent = _CountingAgent("mocked reply")
@@ -669,12 +642,13 @@ class TestCompleter:
 
 class TestEvalOutput:
     def test_inline_raw_tail_exec_evaluates_through_the_console(self) -> None:
-        shell = _RecordingShell()
+        shell = FakeShell(constant())
         with patch("agm.core.process.run_capture_result", side_effect=shell):
             output = drive("exec! echo hi\r\x04")
 
         assert ": error:" not in output.lower()
         assert shell.commands == ["echo hi"]
+        shell.assert_complete()
 
     def test_binding_echo_shows_name_type_value(self) -> None:
         output = drive("let x = 5\r\x04")

@@ -920,26 +920,23 @@ class TestRawTailForms:
             "let x = ::ask!",
         ),
     )
-    def test_reserved_raw_names_stay_names_in_field_variant_and_self_qualification(
-        self, source: str
-    ) -> None:
-        assert ("NAME", "exec!") in tok(source) or ("NAME", "ask!") in tok(source)
+    def test_reserved_raw_names_always_start_raw_tail_scanning(self, source: str) -> None:
+        tokens = tok(source)
+        assert ("RAW_TAIL_NAME", "exec!") in tokens or ("RAW_TAIL_NAME", "ask!") in tokens
 
-    def test_parameter_name_stays_a_name_but_its_default_is_rejected_in_brackets(self) -> None:
-        assert ("NAME", "exec!") in tok("def f(exec!: int) -> int = 1")
+    @pytest.mark.parametrize("source", ("def f(exec!: int) -> int = 1", "record R[exec!]"))
+    def test_reserved_raw_names_in_bracket_keys_are_lexically_rejected(self, source: str) -> None:
         with pytest.raises(LexError) as exc_info:
-            tok("def f(x: int = exec! true) -> int = x")
+            tok(source)
         assert exc_info.value.span is not None
-        assert (
-            exc_info.value.span.start_line,
-            exc_info.value.span.start_col,
-            exc_info.value.span.end_line,
-            exc_info.value.span.end_col,
-        ) == (1, 16, 1, 16)
+        assert "brackets" in str(exc_info.value)
 
     @pytest.mark.parametrize("name", ("exec!", "ask!"))
-    def test_enum_variant_payload_field_name_stays_a_name(self, name: str) -> None:
-        assert ("NAME", name) in tok(f"enum E\n  | V({name}: int)")
+    def test_enum_variant_payload_field_name_is_lexically_rejected(self, name: str) -> None:
+        with pytest.raises(LexError) as exc_info:
+            tok(f"enum E\n  | V({name}: int)")
+        assert exc_info.value.span is not None
+        assert "brackets" in str(exc_info.value)
 
     def test_raw_tail_after_branch_arrow_remains_code(self) -> None:
         assert tok("if true => exec! date | else => 0") == [
@@ -982,24 +979,16 @@ class TestRawTailForms:
             "::ask!",
         ),
     )
-    def test_reserved_raw_names_stay_names_in_binding_and_qualified_contexts(
+    def test_reserved_raw_names_always_start_raw_tail_in_binding_and_qualified_contexts(
         self, source: str
     ) -> None:
-        assert ("NAME", "exec!") in tok(source) or ("NAME", "ask!") in tok(source)
+        tokens = tok(source)
+        assert ("RAW_TAIL_NAME", "exec!") in tokens or ("RAW_TAIL_NAME", "ask!") in tokens
 
     @pytest.mark.parametrize("name", ("exec!", "ask!"))
-    def test_qualified_name_does_not_trigger_raw_tail(self, name: str) -> None:
-        assert tok(f"target.{name}") == [
-            ("NAME", "target"),
-            ("DOT", "."),
-            ("NAME", name),
-        ]
-        assert tok(f"module::{name}") == [("MODQUAL", "module"), ("NAME", name)]
-        assert tok(f"module:: {name} echo") == [
-            ("MODQUAL", "module"),
-            ("NAME", name),
-            ("NAME", "echo"),
-        ]
+    def test_qualified_name_starts_raw_tail_scanning(self, name: str) -> None:
+        for source in (f"target.{name}", f"module::{name}", f"module:: {name} echo"):
+            assert ("RAW_TAIL_NAME", name) in tok(source)
 
     @pytest.mark.parametrize("name", ("exec!", "ask!"))
     def test_spaced_dcolon_does_not_suppress_raw_tail(self, name: str) -> None:

@@ -30,6 +30,7 @@ original bytes.  Offsets are 0-based and end-exclusive; lines and columns are
 
 from __future__ import annotations
 
+import re
 import unicodedata
 from dataclasses import dataclass
 from typing import Iterator
@@ -84,7 +85,7 @@ from agm.agl.lexer.tokens import (
     TEMPLATE_START,
     THIN_ARROW,
 )
-from agm.agl.syntax.raw_tail import RAW_TAIL_BUILTINS
+from agm.raw_tail_catalog import RAW_TAIL_BUILTINS
 from agm.util.text import normalize_newlines
 
 # ---------------------------------------------------------------------------
@@ -144,34 +145,9 @@ _IDENT_STOP: frozenset[str] = frozenset(
 
 _TAB_LEN = 4
 
-# A raw-tail spelling remains an ordinary NAME at declaration sites so the
-# frontend can issue the reservation diagnostic rather than treating its
-# declaration as an empty payload. Parenthesized parameter and field
-# declarations use a following single colon, which is unambiguous from the raw
-# form's optional ``::[...]``.
-_RAW_TAIL_DECLARATION_PREFIXES: frozenset[str] = frozenset(
-    {
-        "let",
-        "var",
-        "def",
-        "param",
-        "agent",
-        "program",
-        "record",
-        "enum",
-        "exception",
-        "type",
-        "for",
-        "as",
-        "catch",
-        "of",
-        PIPE,
-    }
-)
-
-_TYPE_PARAMETER_DECLARATIONS: frozenset[str] = frozenset(
-    {"record", "enum", "exception", "type", "def"}
-)
+# Characters that end a verbatim run inside a raw-tail payload: ``%`` may open a
+# hole and ``\`` may escape one.  Everything between them is copied wholesale.
+_RAW_RUN_STOP_RE = re.compile(r"[\\%]")
 
 
 def _is_ascii_digit(ch: str) -> bool:
@@ -323,22 +299,7 @@ class _Scanner:
         self._emitted_real = False
         self._bracket_depth = 0
         self._previous_significant: Token | None = None
-        self._previous_dcolon_is_qualifier = False
         self._pending_raw_newline: Token | None = None
-        # Declaration context is only used to leave reserved raw spellings as
-        # names where the grammar permits a declaration or qualified reference.
-        self._declaration_kind: str | None = None
-        self._declaration_name_seen = False
-        self._declaration_header_line = 0
-        self._declaration_header_indent = 0
-        self._nominal_header_phase: str | None = None
-        self._nominal_header_allows_indent = False
-        self._nominal_type_param_depth: int | None = None
-        self._nominal_body_margin: int | None = None
-        self._type_params_pending = False
-        self._type_parameter_depths: set[int] = set()
-        self._field_list_depths: set[int] = set()
-        self._field_name_depths: set[int] = set()
 
     @property
     def tab_warnings(self) -> list[Diagnostic]:
@@ -404,139 +365,12 @@ class _Scanner:
             end_offset=self._pos,
         )
 
-    def _clear_nominal_declaration_context(self) -> None:
-        """Close a nominal declaration context after its syntactic body ends."""
-        if self._declaration_kind in {"record", "enum", "exception"}:
-            self._declaration_kind = None
-            self._declaration_name_seen = False
-            self._nominal_header_phase = None
-            self._nominal_header_allows_indent = False
-            self._nominal_type_param_depth = None
-            self._nominal_body_margin = None
-            self._type_params_pending = False
-            self._type_parameter_depths.clear()
-            self._field_list_depths.clear()
-            self._field_name_depths.clear()
-
-    def _update_nominal_body_context(self, token: Token) -> None:
-        """Close nominal context when a line is outside its dedicated body margin."""
-        if (
-            self._declaration_kind not in {"record", "enum", "exception"}
-            or self._line == self._declaration_header_line
-        ):
-            return
-        indent, indent_chars = self._indent_info(self._line_start_pos)
-        if self._nominal_body_margin is None:
-            if not self._nominal_header_allows_indent or indent <= self._declaration_header_indent:
-                self._clear_nominal_declaration_context()
-                return
-            self._nominal_body_margin = indent
-        if indent != self._nominal_body_margin:
-            self._clear_nominal_declaration_context()
-            return
-        first_content_pos = self._line_start_pos + indent_chars
-        if token.start_pos == first_content_pos and token.type not in {
-            NAME,
-            PIPE,
-            AT,
-            SLASH,
-            STAR,
-            "agent",
-            "to",
-            "downto",
-            "by",
-        }:
-            self._clear_nominal_declaration_context()
-
-    def _track_nominal_header(self, token: Token) -> None:
-        """Record whether a nominal header has an inline or indented body."""
-        if self._nominal_header_phase is None or self._line != self._declaration_header_line:
-            return
-        phase = self._nominal_header_phase
-        if phase == "name" and token.type == NAME:
-            self._nominal_header_phase = "after_name"
-        elif phase == "type_params":
-            if token.type == RSQB and self._bracket_depth == self._nominal_type_param_depth:
-                self._nominal_header_phase = "after_name"
-                self._nominal_type_param_depth = None
-        elif phase == "after_name":
-            if token.type == LSQB and self._declaration_kind in {"record", "enum"}:
-                self._nominal_header_phase = "type_params"
-                self._nominal_type_param_depth = self._bracket_depth + 1
-            elif token.type == "extends" and self._declaration_kind == "exception":
-                self._nominal_header_phase = "base_name"
-            elif token.type != EQ:
-                self._nominal_header_allows_indent = False
-        elif phase == "base_name" and token.type == NAME:
-            self._nominal_header_phase = "after_base"
-        elif phase == "after_base":
-            self._nominal_header_allows_indent = False
-
     def _track_code_token(self, token: Token) -> None:
-        """Remember declaration and qualification context for raw-tail names."""
-        self._update_nominal_body_context(token)
-        previous = self._previous_significant
-        if token.type in _TYPE_PARAMETER_DECLARATIONS:
-            self._declaration_kind = token.type
-            self._declaration_name_seen = False
-            self._declaration_header_line = self._line
-            self._declaration_header_indent = self._indent_info(self._line_start_pos)[0]
-            self._nominal_header_phase = (
-                "name" if token.type in {"record", "enum", "exception"} else None
-            )
-            self._nominal_header_allows_indent = token.type in {"record", "enum", "exception"}
-            self._nominal_type_param_depth = None
-            self._nominal_body_margin = None
-            self._type_params_pending = False
-        elif token.type == SEMICOLON:
-            self._declaration_kind = None
-            self._type_params_pending = False
-            self._type_parameter_depths.clear()
-            self._field_list_depths.clear()
-            self._field_name_depths.clear()
-        elif token.type == NAME and self._declaration_kind is not None:
-            if not self._declaration_name_seen:
-                self._declaration_name_seen = True
-                self._type_params_pending = self._declaration_kind in _TYPE_PARAMETER_DECLARATIONS
-            else:
-                self._type_params_pending = False
-        self._track_nominal_header(token)
-        if token.type == LSQB and self._type_params_pending:
-            self._type_parameter_depths.add(self._bracket_depth + 1)
-            self._type_params_pending = False
-        elif self._type_params_pending and token.type != NAME:
-            self._type_params_pending = False
-        if token.type == LPAR:
-            depth = self._bracket_depth + 1
-            if (
-                (
-                    self._declaration_kind in {"record", "enum", "exception"}
-                    and self._declaration_name_seen
-                    and self._in_declaration_body()
-                )
-                or (self._declaration_kind == "def" and self._declaration_name_seen)
-                or (previous is not None and previous.type == "fn")
-            ):
-                self._field_list_depths.add(depth)
-                self._field_name_depths.add(depth)
-            if self._declaration_kind == "def" and self._declaration_name_seen:
-                self._declaration_kind = None
-        elif token.type == RPAR:
-            self._field_list_depths.discard(self._bracket_depth)
-            self._field_name_depths.discard(self._bracket_depth)
-        elif token.type == RSQB:
-            self._type_parameter_depths.discard(self._bracket_depth)
-        elif token.type == COLON:
-            self._field_name_depths.discard(self._bracket_depth)
-        elif token.type == COMMA and self._bracket_depth in self._field_list_depths:
-            self._field_name_depths.add(self._bracket_depth)
+        """Track bracket depth and the previous significant code token."""
         if token.type in (LPAR, LSQB, LBRACE):
             self._bracket_depth += 1
         elif token.type in (RPAR, RSQB, RBRACE):
             self._bracket_depth -= 1
-        self._previous_dcolon_is_qualifier = token.type == DCOLON and (
-            previous is None or previous.type != NAME or previous.end_pos == token.start_pos
-        )
         self._previous_significant = token
 
     def _make_token(
@@ -756,15 +590,15 @@ class _Scanner:
         does not prematurely close it.  Yields all code tokens then an
         ``INTERP_END`` token.
         """
-        depth = 1
         self._bracket_depth += 1
         try:
-            yield from self._scan_interp_code_body(depth)
+            yield from self._scan_interp_code_body()
         finally:
             self._bracket_depth -= 1
 
-    def _scan_interp_code_body(self, depth: int) -> Iterator[Token]:
-        """Scan the body of an interpolation with its enclosing depth tracked."""
+    def _scan_interp_code_body(self) -> Iterator[Token]:
+        """Scan an interpolation body up to the ``}`` that closes it."""
+        depth = 1
         while True:
             if self._at_end():
                 span = self._span_here()
@@ -983,43 +817,20 @@ class _Scanner:
             offset += 1
         return width, offset
 
+    def _skip_to_line_end(self, line_end: int) -> None:
+        """Consume the rest of a raw payload line already scanned for fragments.
+
+        The span is newline-free, so the column advances by its length; this is
+        the bulk form of stepping ``_advance(in_string=True)`` over each char.
+        """
+        self._col += line_end - self._pos
+        self._pos = line_end
+
     def _raw_tail_error(self, message: str, start_pos: int, line: int, col: int) -> LexError:
         """Build a raw-tail diagnostic anchored at a source location."""
         return LexError(
             message,
             span=SourceSpan(line, col, line, col, start_pos, start_pos),
-        )
-
-    def _in_declaration_body(self, position: int | None = None) -> bool:
-        """Return whether *position* is an actual nominal field or variant position."""
-        if self._declaration_kind not in {"record", "enum", "exception"}:
-            return False
-        if self._line == self._declaration_header_line:
-            return True
-        indent, indent_chars = self._indent_info(self._line_start_pos)
-        if self._nominal_body_margin is None:
-            if not self._nominal_header_allows_indent or indent <= self._declaration_header_indent:
-                self._clear_nominal_declaration_context()
-                return False
-            self._nominal_body_margin = indent
-        if indent != self._nominal_body_margin:
-            self._clear_nominal_declaration_context()
-            return False
-        if position is None:
-            return True
-        prefix = self._src[self._line_start_pos + indent_chars : position].strip()
-        if prefix in {"", "|"}:
-            return True
-        self._clear_nominal_declaration_context()
-        return False
-
-    def _raw_tail_name_is_declaration(self, previous_type: str | None, start_pos: int) -> bool:
-        """Return whether the just-scanned raw spelling is a declaration name."""
-        return (
-            previous_type in _RAW_TAIL_DECLARATION_PREFIXES
-            or self._bracket_depth in self._type_parameter_depths
-            or self._bracket_depth in self._field_name_depths
-            or self._in_declaration_body(start_pos)
         )
 
     def _scan_raw_type_args(self) -> Iterator[Token]:
@@ -1104,9 +915,16 @@ class _Scanner:
                         )
                         yield from self._scan_interp_code()
                     else:
+                        # Copy the whole run up to the next character that could
+                        # open a hole or escape it, rather than one char at a
+                        # time.  A block line slice never contains a newline, so
+                        # the column advances by the run length.
+                        stop = _RAW_RUN_STOP_RE.search(self._src, self._pos + 1, raw_line.end_pos)
+                        run_end = raw_line.end_pos if stop is None else stop.start()
                         start_fragment()
-                        buf.append(ch)
-                        self._advance(in_string=True)
+                        buf.append(self._src[self._pos : run_end])
+                        self._col += run_end - self._pos
+                        self._pos = run_end
                 if line_index + 1 < len(lines):
                     start_fragment()
                     buf.append("\n")
@@ -1121,7 +939,7 @@ class _Scanner:
         self._advance()  # header newline
         margin: int | None = None
         lines: list[_RawBlockLine] = []
-        pending_blank_lines: list[tuple[int, int, int, int]] = []
+        pending_blank_lines: list[_RawBlockLine] = []
         last_newline: tuple[int, int, int] | None = None
         next_indent = 0
 
@@ -1131,21 +949,20 @@ class _Scanner:
             if line_end == -1:
                 line_end = len(self._src)
             indent, indent_chars = self._indent_info(line_start)
-            text = self._src[line_start:line_end]
-            blank = not text.strip(" \t")
+            blank = line_start + indent_chars == line_end
 
             if not blank and indent <= parent_indent:
                 next_indent = self._measure_indentation()
                 break
             if blank and margin is None:
-                pending_blank_lines.append((line_start, line_end, line_no, line_col))
+                # A leading blank line contributes an empty slice at its end.
+                pending_blank_lines.append(
+                    _RawBlockLine(line_end, line_end, line_no, line_col + (line_end - line_start))
+                )
             else:
                 if margin is None:
                     margin = indent
-                    lines.extend(
-                        _RawBlockLine(end, end, blank_line_no, blank_line_col + (end - start))
-                        for start, end, blank_line_no, blank_line_col in pending_blank_lines
-                    )
+                    lines.extend(pending_blank_lines)
                 elif not blank and indent < margin:
                     raise self._raw_tail_error(
                         "raw-tail block line is under-indented; "
@@ -1173,8 +990,7 @@ class _Scanner:
                     )
                 )
 
-            while self._pos < line_end:
-                self._advance(in_string=True)
+            self._skip_to_line_end(line_end)
             if self._at_end():
                 last_newline = None
                 break
@@ -1225,8 +1041,7 @@ class _Scanner:
                 payload_end -= 1
             raw_line = _RawBlockLine(self._pos, payload_end, self._line, self._col)
             yield from self._scan_raw_lines([raw_line])
-            while self._pos < line_end:
-                self._advance(in_string=True)
+            self._skip_to_line_end(line_end)
 
         end_pos, end_line, end_col = self._pos, self._line, self._col
         yield self._make_token(RAW_TAIL_END, "", end_pos, end_line, end_col)
@@ -1262,15 +1077,7 @@ class _Scanner:
             else:
                 typ = NAME
             if typ == NAME and word in RAW_TAIL_BUILTINS:
-                previous_type = (
-                    self._previous_significant.type if self._previous_significant else None
-                )
-                is_qualified_name = previous_type == DCOLON and self._previous_dcolon_is_qualifier
-                is_declaration = self._raw_tail_name_is_declaration(previous_type, start_pos)
-                is_member_name = previous_type == DOT
-                if self._bracket_depth > 0 and not (
-                    is_declaration or is_qualified_name or is_member_name
-                ):
+                if self._bracket_depth > 0:
                     raise self._raw_tail_error(
                         "raw-tail forms are not allowed inside brackets; use the call form "
                         "or an indented block form.",
@@ -1278,21 +1085,15 @@ class _Scanner:
                         start_line,
                         start_col,
                     )
-                if not is_declaration and not is_qualified_name and not is_member_name:
-                    if (
-                        previous_type == ARROW
-                        and self._previous_significant is not None
-                        and self._previous_significant.line == start_line
-                    ):
-                        # An `=>` body has no raw-tail grammar alternative; leave
-                        # its continuation marker visible for the parser's
-                        # targeted diagnostic instead of absorbing a branch.
-                        yield self._make_token(
-                            RAW_TAIL_NAME, word, start_pos, start_line, start_col
-                        )
-                        return
-                    yield from self._scan_raw_tail(start_pos, start_line, start_col, word)
+                previous = self._previous_significant
+                if previous is not None and previous.type == ARROW and previous.line == start_line:
+                    # An `=>` body has no raw-tail grammar alternative; leave
+                    # its continuation marker visible for the parser's targeted
+                    # diagnostic instead of absorbing a branch.
+                    yield self._make_token(RAW_TAIL_NAME, word, start_pos, start_line, start_col)
                     return
+                yield from self._scan_raw_tail(start_pos, start_line, start_col, word)
+                return
             yield self._make_token(typ, word, start_pos, start_line, start_col)
             return
 
@@ -1397,10 +1198,6 @@ class _Scanner:
 
             # Newline — emit _NEWLINE with next real line's indentation
             if ch == "\n":
-                if self._line == self._declaration_header_line:
-                    if not self._nominal_header_allows_indent:
-                        self._clear_nominal_declaration_context()
-                self._type_params_pending = False
                 newline_offset = self._pos  # position of the '\n' itself
                 newline_line = self._line
                 newline_col = self._col

@@ -148,6 +148,7 @@ def first(prog: Program) -> object:
 
 def assert_raw_tail_name_span(error: AglSyntaxError, source: str) -> None:
     """Assert that a raw-tail reservation error covers its reserved name."""
+    assert "reserved for raw-tail calls" in str(error)
     span = error.span
     assert span is not None
     name = next(name for name in ("exec!", "ask!") if name in source)
@@ -4073,14 +4074,11 @@ print exec! true
             "var ask! = 1",
             "param exec!",
             "def ask!() -> int = 1",
-            "def f(exec!: int) -> int = 1",
             "agent ask!",
             "record exec! value: int",
-            "record R(exec!: int)",
             "record R\n  exec!: int",
             "enum ask! = Variant",
             "enum E = ask!",
-            "enum E\n  | V(exec!: int)",
             "exception exec! value: int",
             "exception X\n  ask!: int",
             "type ask! = int",
@@ -4140,10 +4138,10 @@ print exec! true
             "type Box[ask!] = int",
         ),
     )
-    def test_reserved_raw_parameter_names_reach_frontend(self, source: str) -> None:
+    def test_reserved_raw_parameter_names_are_rejected_inside_brackets(self, source: str) -> None:
         with pytest.raises(AglSyntaxError) as exc_info:
             parse(source)
-        assert_raw_tail_name_span(exc_info.value, source)
+        assert "brackets" in str(exc_info.value)
 
     @pytest.mark.parametrize("declaration", ("record", "exception"))
     def test_inline_field_declaration_does_not_leak_to_next_expression(

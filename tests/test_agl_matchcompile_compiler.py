@@ -30,8 +30,7 @@ from agm.agl.matchcompile import (
     render_witness,
 )
 from agm.agl.matchcompile.compiler import (
-    CompiledCase,
-    compile_case,
+    CompiledMatchSite,
     compile_match_site,
     validate_compiled_case,
     validate_decision_dag,
@@ -99,7 +98,7 @@ _CAPS = HostCapabilities(
 )
 
 
-def _compile(source: str) -> tuple[CheckedModule, Case, CompiledCase]:
+def _compile(source: str) -> tuple[CheckedModule, Case, CompiledMatchSite]:
     checked = check_module(resolve_module(parse_program(source)), _CAPS)
     cases: list[Case] = []
 
@@ -110,7 +109,7 @@ def _compile(source: str) -> tuple[CheckedModule, Case, CompiledCase]:
     walk(checked.resolved.program, collect)
     assert len(cases) == 1
     case = cases[0]
-    return checked, case, compile_case(normalize_case(case, checked))
+    return checked, case, compile_match_site(normalize_case(case, checked))
 
 
 def test_compiler_marks_a_refutable_let_with_its_decision_witness() -> None:
@@ -153,12 +152,12 @@ def test_compiler_marks_a_refutable_let_with_its_decision_witness() -> None:
         "case value of | Pair(left = _, right = _) => 1"
     )
     root = cast(DecisionDecompose, decomposed.root)
-    assert root.default is None
-    assert root.keyed_children[0].decision is root.child
+    assert root.constructor.arity == 2
+    assert isinstance(root.child, DecisionLeaf)
     del checked_case
 
 
-def _compile_graph_case(tmp_path: Path, modules: dict[str, str]) -> CompiledCase:
+def _compile_graph_case(tmp_path: Path, modules: dict[str, str]) -> CompiledMatchSite:
     graph = make_graph_from_files(tmp_path, modules)
     checked = check_program(resolve_program(graph), _CAPS).modules[ENTRY_ID]
     cases: list[Case] = []
@@ -169,13 +168,13 @@ def _compile_graph_case(tmp_path: Path, modules: dict[str, str]) -> CompiledCase
 
     walk(checked.resolved.program, collect)
     assert len(cases) == 1
-    return compile_case(normalize_case(cases[0], checked))
+    return compile_match_site(normalize_case(cases[0], checked))
 
 
-def _compile_without_normalized_rows(source: str) -> tuple[Case, CompiledCase]:
+def _compile_without_normalized_rows(source: str) -> tuple[Case, CompiledMatchSite]:
     _, case, compiled = _compile(source)
     normalized = replace(compiled.normalized, rows=())
-    return case, compile_case(normalized)
+    return case, compile_match_site(normalized)
 
 
 def _branch_matches(constructor: object, value: Value) -> bool:
@@ -191,7 +190,7 @@ def _branch_matches(constructor: object, value: Value) -> bool:
     raise AssertionError("finite generated tests only use boolean and enum constructors")
 
 
-def _decision_action(compiled: CompiledCase, subject: Value) -> int | None:
+def _decision_action(compiled: CompiledMatchSite, subject: Value) -> int | None:
     occurrences = {occurrence.id: occurrence for occurrence in compiled.occurrences}
 
     def evaluate(decision: Decision, values: dict[object, Value]) -> int | None:
@@ -543,7 +542,7 @@ def test_irrefutable_leaf_finalizes_binder_and_has_no_issues() -> None:
     assert compiled.root.free_occurrences == (compiled.normalized.root.id,)
     assert compiled.reachable_action_ids == (case.branches[0].node_id,)
     assert compiled.issues == ()
-    assert compiled.case_node_id == case.node_id
+    assert compiled.site_node_id == case.node_id
     assert compiled.actions == compiled.normalized.actions
 
 
@@ -572,7 +571,7 @@ def test_nested_missing_witness_is_structured_from_the_first_failure_path() -> N
     assert len(compiled.issues) == 1
     issue = compiled.issues[0]
     assert isinstance(issue, NonExhaustiveIssue)
-    assert issue.case_node_id == case.node_id
+    assert issue.site_node_id == case.node_id
     assert issue.span == case.span
     assert isinstance(issue.witness, EnumWitness)
     assert issue.witness.variant == "box"
@@ -1218,7 +1217,7 @@ def test_hidden_imported_type_allows_irrefutable_case_without_invented_spelling(
 
     assert compiled.issues == ()
 
-    unavailable = compile_case(replace(compiled.normalized, rows=()))
+    unavailable = compile_match_site(replace(compiled.normalized, rows=()))
     issue = cast(NonExhaustiveIssue, unavailable.issues[0])
     assert issue.witness == WildcardWitness()
     assert render_witness(issue.witness) == "_"
@@ -1416,7 +1415,7 @@ def test_negative_alias_to_other_enum_is_not_selected_as_owner(tmp_path: Path) -
             ),
         },
     )
-    unavailable = compile_case(replace(compiled.normalized, rows=()))
+    unavailable = compile_match_site(replace(compiled.normalized, rows=()))
     issue = cast(NonExhaustiveIssue, unavailable.issues[0])
 
     assert issue.witness == WildcardWitness()
@@ -1439,7 +1438,7 @@ def test_local_owner_form_blocks_shadowed_open_import_spelling(tmp_path: Path) -
             ),
         },
     )
-    unavailable = compile_case(replace(compiled.normalized, rows=()))
+    unavailable = compile_match_site(replace(compiled.normalized, rows=()))
     issue = cast(NonExhaustiveIssue, unavailable.issues[0])
 
     assert render_witness(issue.witness) == "empty"
@@ -1489,7 +1488,7 @@ def test_module_route_blocks_only_the_variant_it_shadows(tmp_path: Path) -> None
             bare_enum_constructors=frozenset(),
         ),
     )
-    issue = cast(NonExhaustiveIssue, compile_case(without_bare).issues[0])
+    issue = cast(NonExhaustiveIssue, compile_match_site(without_bare).issues[0])
     assert render_witness(issue.witness) == "::Owner::block"
 
     # Covers only "block" (via the self-qualifier, which bypasses the
@@ -1515,7 +1514,7 @@ def test_module_route_blocks_only_the_variant_it_shadows(tmp_path: Path) -> None
             bare_enum_constructors=frozenset(),
         ),
     )
-    issue = cast(NonExhaustiveIssue, compile_case(without_bare).issues[0])
+    issue = cast(NonExhaustiveIssue, compile_match_site(without_bare).issues[0])
     assert render_witness(issue.witness) == "Owner::free"
 
 
@@ -1901,7 +1900,7 @@ def test_private_compiler_guards_reject_malformed_internal_states() -> None:
         enum_compiled.normalized,
         case_context=MatchCaseContext(ENTRY_ID),
     )
-    issue = cast(NonExhaustiveIssue, compile_case(missing_spellings).issues[0])
+    issue = cast(NonExhaustiveIssue, compile_match_site(missing_spellings).issues[0])
 
     assert issue.witness == WildcardWitness()
 

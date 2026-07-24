@@ -106,13 +106,6 @@ def field_bearing_constructor_sort_key(
     )
 
 
-def field_bearing_constructor_fields(
-    constructor: FieldBearingNominalConstructor,
-) -> tuple[ConstructorField, ...]:
-    """Return declaration-order fields for either field-bearing nominal head."""
-    return constructor.fields
-
-
 @dataclass(frozen=True, slots=True)
 class BoolConstructor:
     """One constructor in the closed boolean signature."""
@@ -230,11 +223,6 @@ class RootOccurrenceProvenance:
     subject_node_id: int
     span: SourceSpan
 
-    @property
-    def case_node_id(self) -> int:
-        """Compatibility spelling for consumers that only accept case sites."""
-        return self.site_node_id
-
 
 @dataclass(frozen=True, slots=True)
 class FieldOccurrenceProvenance:
@@ -332,10 +320,6 @@ class LetBindingAction:
 
     action_id: int
     source_index: int
-    initializer_node_id: int
-    pattern_node_id: int
-    binding_span: SourceSpan
-    pattern_span: SourceSpan
 
 
 MatchSiteAction: TypeAlias = SourceAction | LetBindingAction
@@ -391,18 +375,9 @@ class NormalizedMatchSite:
         hash=False,
     )
 
-    @property
-    def case_node_id(self) -> int:
-        """Compatibility spelling for consumers that only accept case sites."""
-        return self.site_node_id
-
     def __post_init__(self) -> None:
         if self_validation_enabled():
             _validate_normalized_case(self)
-
-
-# Compatibility alias for case-only consumers.
-NormalizedCase: TypeAlias = NormalizedMatchSite
 
 
 @dataclass(frozen=True, slots=True)
@@ -465,20 +440,6 @@ class DecisionDecompose:
     child: Decision
     demanded_occurrences: tuple[OccurrenceId, ...]
     free_occurrences: tuple[OccurrenceId, ...] = ()
-
-    @property
-    def keyed_children(self) -> tuple[DecisionBranch, ...]:
-        """Expose the singleton constructor edge for generic decision consumers.
-
-        Lowering handles decompositions natively. This node is not a
-        discriminant switch and has no default edge.
-        """
-        return (DecisionBranch(self.constructor, self.child),)
-
-    @property
-    def default(self) -> None:
-        """A decomposition has no failure/default edge."""
-        return None
 
 
 Decision: TypeAlias = DecisionFail | DecisionLeaf | DecisionSwitch | DecisionDecompose
@@ -548,7 +509,6 @@ __all__ = [
     "MatchSiteAction",
     "MatchSiteKind",
     "MatrixRow",
-    "NormalizedCase",
     "NormalizedMatchSite",
     "Occurrence",
     "OccurrenceId",
@@ -564,7 +524,6 @@ __all__ = [
     "SourceAction",
     "SourcePatternProvenance",
     "WildcardCell",
-    "field_bearing_constructor_fields",
     "field_bearing_constructor_key",
     "field_bearing_constructor_sort_key",
 ]

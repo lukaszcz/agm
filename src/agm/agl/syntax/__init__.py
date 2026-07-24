@@ -94,7 +94,6 @@ from agm.agl.syntax.nodes import (
     WildcardPattern,
     assign_target_root_name,
     pattern_binder_candidates,
-    pattern_binder_names,
     pattern_binding_node_ids,
     simple_let_pattern_name,
 )
@@ -172,7 +171,6 @@ __all__ = [
     "PatternBinderCandidate",
     "pattern_binder_candidates",
     "pattern_binding_node_ids",
-    "pattern_binder_names",
     # expressions
     "Block",
     "VarRef",

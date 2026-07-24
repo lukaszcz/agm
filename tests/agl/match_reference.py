@@ -8,15 +8,18 @@ compiler tests can compare selected source actions against a simple oracle.
 from __future__ import annotations
 
 import decimal
+from collections.abc import Mapping
 from typing import assert_never
 
 from agm.agl.eval.arith import value_eq
+from agm.agl.matchcompile.compiler import CompiledMatchSite
 from agm.agl.matchcompile.matrix import PatternMatrix
 from agm.agl.matchcompile.model import (
     BoolConstructor,
     EnumConstructor,
     LiteralConstructor,
     LiteralKind,
+    MatchSiteKind,
     PatternCell,
     RecordConstructor,
     WildcardCell,
@@ -179,4 +182,11 @@ def matrix_action(matrix: PatternMatrix, values: tuple[Value, ...]) -> int | Non
     return None
 
 
-__all__ = ["canonical_cell_matches", "matrix_action", "reference_action"]
+def case_sites(sites: "Mapping[int, CompiledMatchSite]") -> dict[int, CompiledMatchSite]:
+    """Return only the compiled sites that came from a source ``case`` expression."""
+    return {
+        node_id: site for node_id, site in sites.items() if site.source_kind is MatchSiteKind.CASE
+    }
+
+
+__all__ = ["canonical_cell_matches", "case_sites", "matrix_action", "reference_action"]

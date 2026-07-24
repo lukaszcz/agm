@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import decimal
 import weakref
-from collections.abc import Mapping
 from dataclasses import replace
 from typing import Never, NoReturn, assert_never
 
@@ -16,7 +15,6 @@ from agm.agl.semantics.types import (
     BottomType,
     DecimalType,
     DictType,
-    EnumOwnerForm,
     EnumType,
     ExceptionType,
     FunctionType,
@@ -62,7 +60,6 @@ from .model import (
     MatchCaseContext,
     MatchSiteKind,
     MatrixRow,
-    NormalizedCase,
     NormalizedMatchSite,
     Occurrence,
     OccurrenceId,
@@ -75,7 +72,6 @@ from .model import (
     SourceAction,
     SourcePatternProvenance,
     WildcardCell,
-    field_bearing_constructor_fields,
 )
 
 CheckedPatternOwner = CheckedModule | CheckedModule
@@ -117,7 +113,7 @@ def resolve_bare_enum_constructors(
     )
 
 
-def _enum_constructor(enum_type: EnumType, variant: str, table: TypeTable) -> EnumConstructor:
+def enum_constructor(enum_type: EnumType, variant: str, table: TypeTable) -> EnumConstructor:
     try:
         variants = table.enum_variants(enum_type)
     except (KeyError, AssertionError) as exc:
@@ -136,7 +132,7 @@ def _enum_constructor(enum_type: EnumType, variant: str, table: TypeTable) -> En
     )
 
 
-def _record_constructor(record_type: RecordType, table: TypeTable) -> RecordConstructor:
+def record_constructor(record_type: RecordType, table: TypeTable) -> RecordConstructor:
     try:
         fields = table.record_fields(record_type)
     except (KeyError, AssertionError) as exc:
@@ -253,9 +249,7 @@ def pattern_cell_inhabits_type(cell: PatternCell, subject_type: Type) -> bool:
     if isinstance(cell.constructor, (EnumConstructor, RecordConstructor)):
         return all(
             pattern_cell_inhabits_type(argument, field.type)
-            for field, argument in zip(
-                field_bearing_constructor_fields(cell.constructor), cell.arguments, strict=True
-            )
+            for field, argument in zip(cell.constructor.fields, cell.arguments, strict=True)
         )
     return True
 
@@ -273,21 +267,25 @@ def _build_enum_signature(enum_type: EnumType, table: TypeTable) -> ClosedSignat
             f"cannot resolve enum signature for checked type {enum_type!r}"
         ) from exc
     return ClosedSignature(
-        tuple(_enum_constructor(enum_type, name, table) for name in variant_names)
+        tuple(enum_constructor(enum_type, name, table) for name in variant_names)
     )
 
 
 def _build_record_signature(record_type: RecordType, table: TypeTable) -> ClosedSignature:
-    return ClosedSignature((_record_constructor(record_type, table),))
+    return ClosedSignature((record_constructor(record_type, table),))
 
 
 def _nominal_signature(nominal_type: EnumType | RecordType, table: TypeTable) -> ClosedSignature:
     """Return a declaration-sensitive closed signature for a nominal type."""
-    typedef = table.get(nominal_type.module_id, nominal_type.name)
-    if typedef is None:
+
+    def build() -> ClosedSignature:
         if isinstance(nominal_type, EnumType):
             return _build_enum_signature(nominal_type, table)
         return _build_record_signature(nominal_type, table)
+
+    typedef = table.get(nominal_type.module_id, nominal_type.name)
+    if typedef is None:
+        return build()
     cache = _NOMINAL_SIGNATURES.get(table)
     if cache is None:
         cache = {}
@@ -295,10 +293,7 @@ def _nominal_signature(nominal_type: EnumType | RecordType, table: TypeTable) ->
     key = (nominal_type, typedef)
     signature = cache.get(key)
     if signature is None:
-        if isinstance(nominal_type, EnumType):
-            signature = _build_enum_signature(nominal_type, table)
-        else:
-            signature = _build_record_signature(nominal_type, table)
+        signature = build()
         cache[key] = signature
     return signature
 
@@ -391,7 +386,7 @@ def normalize_pattern(
                 raise MatchCompileInvariantError(
                     "final bare constructor has a non-enum checked type"
                 )
-            constructor = _enum_constructor(
+            constructor = enum_constructor(
                 EnumType(
                     constructor_ref.owner_name,
                     subject_type.type_args,
@@ -416,13 +411,13 @@ def normalize_pattern(
                     "missing final constructor classification for applied pattern"
                 )
             if isinstance(subject_type, EnumType):
-                nominal_constructor: FieldBearingNominalConstructor = _enum_constructor(
+                nominal_constructor: FieldBearingNominalConstructor = enum_constructor(
                     subject_type, variant, checked.type_env.type_table
                 )
                 if constructor_ref.variant != variant:
                     raise MatchCompileInvariantError("invalid final constructor classification")
             elif isinstance(subject_type, RecordType):
-                nominal_constructor = _record_constructor(subject_type, checked.type_env.type_table)
+                nominal_constructor = record_constructor(subject_type, checked.type_env.type_table)
                 if not _is_selected_record_constructor_ref(pattern, subject_type, checked):
                     raise MatchCompileInvariantError("invalid final constructor classification")
             else:
@@ -466,19 +461,28 @@ def normalize_pattern(
             _unsupported("source pattern", unreachable)
 
 
+def match_case_context(checked: CheckedPatternOwner) -> MatchCaseContext:
+    """Resolve the checked qualification metadata shared by one owner's match sites."""
+    return MatchCaseContext(
+        module_id=checked.module_id if isinstance(checked, CheckedModule) else ENTRY_ID,
+        enum_owner_forms=checked.type_env.enum_owner_forms(),
+        blocked_enum_variants=checked.type_env.blocked_enum_variants(),
+        bare_enum_constructors=resolve_bare_enum_constructors(checked),
+        owner_program=checked.resolved.program,
+    )
+
+
 def normalize_case(
     case: Case,
     checked: CheckedPatternOwner,
     *,
-    enum_owner_forms: tuple[EnumOwnerForm, ...] | None = None,
-    blocked_enum_variants: Mapping[tuple[str, ...], frozenset[str]] | None = None,
-    bare_enum_constructors: frozenset[tuple[ModuleId, str, str]] | None = None,
-) -> NormalizedCase:
+    case_context: MatchCaseContext | None = None,
+) -> NormalizedMatchSite:
     """Normalize one checked source case into a source-priority one-column matrix.
 
-    The optional context values let a whole-owner caller share checked
-    qualification metadata across all of its cases. Each defaults to resolving
-    from *checked* for direct callers.
+    An owner-wide caller passes *case_context* so all of its match sites share
+    one resolution of the checked qualification metadata; direct callers let it
+    default to resolving from *checked*.
     """
     try:
         subject_type = checked.node_types[case.subject.node_id]
@@ -518,27 +522,6 @@ def normalize_case(
         )
         for index, branch in enumerate(case.branches)
     )
-    module_id = checked.module_id if isinstance(checked, CheckedModule) else ENTRY_ID
-    owner_forms = (
-        checked.type_env.enum_owner_forms() if enum_owner_forms is None else enum_owner_forms
-    )
-    blocked_variants = (
-        checked.type_env.blocked_enum_variants()
-        if blocked_enum_variants is None
-        else blocked_enum_variants
-    )
-    bare_constructors = (
-        resolve_bare_enum_constructors(checked)
-        if bare_enum_constructors is None
-        else bare_enum_constructors
-    )
-    case_context = MatchCaseContext(
-        module_id=module_id,
-        enum_owner_forms=owner_forms,
-        blocked_enum_variants=blocked_variants,
-        bare_enum_constructors=bare_constructors,
-        owner_program=checked.resolved.program,
-    )
     return NormalizedMatchSite(
         site_node_id=case.node_id,
         source_kind=MatchSiteKind.CASE,
@@ -548,7 +531,7 @@ def normalize_case(
         rows=tuple(rows),
         actions=actions,
         type_table=checked.type_env.type_table,
-        case_context=case_context,
+        case_context=case_context if case_context is not None else match_case_context(checked),
     )
 
 
@@ -556,9 +539,7 @@ def normalize_let(
     let: LetDecl,
     checked: CheckedPatternOwner,
     *,
-    enum_owner_forms: tuple[EnumOwnerForm, ...] | None = None,
-    blocked_enum_variants: Mapping[tuple[str, ...], frozenset[str]] | None = None,
-    bare_enum_constructors: frozenset[tuple[ModuleId, str, str]] | None = None,
+    case_context: MatchCaseContext | None = None,
 ) -> NormalizedMatchSite:
     """Normalize one checked ``let`` as its complete one-row match matrix.
 
@@ -582,28 +563,7 @@ def normalize_let(
         ),
     )
     cell = normalize_pattern(let.pattern, matched_type, checked)
-    action = LetBindingAction(
-        action_id=let.node_id,
-        source_index=0,
-        initializer_node_id=let.value.node_id,
-        pattern_node_id=let.pattern.node_id,
-        binding_span=let.span,
-        pattern_span=let.pattern.span,
-    )
-    module_id = checked.module_id if isinstance(checked, CheckedModule) else ENTRY_ID
-    owner_forms = (
-        checked.type_env.enum_owner_forms() if enum_owner_forms is None else enum_owner_forms
-    )
-    blocked_variants = (
-        checked.type_env.blocked_enum_variants()
-        if blocked_enum_variants is None
-        else blocked_enum_variants
-    )
-    bare_constructors = (
-        resolve_bare_enum_constructors(checked)
-        if bare_enum_constructors is None
-        else bare_enum_constructors
-    )
+    action = LetBindingAction(action_id=let.node_id, source_index=0)
     return NormalizedMatchSite(
         site_node_id=let.node_id,
         source_kind=MatchSiteKind.LET,
@@ -620,13 +580,7 @@ def normalize_let(
         ),
         actions=(action,),
         type_table=checked.type_env.type_table,
-        case_context=MatchCaseContext(
-            module_id=module_id,
-            enum_owner_forms=owner_forms,
-            blocked_enum_variants=blocked_variants,
-            bare_enum_constructors=bare_constructors,
-            owner_program=checked.resolved.program,
-        ),
+        case_context=case_context if case_context is not None else match_case_context(checked),
     )
 
 
@@ -634,10 +588,13 @@ __all__ = [
     "CheckedPatternOwner",
     "MatchCompileInvariantError",
     "constructor_inhabits_type",
+    "enum_constructor",
+    "match_case_context",
     "normalize_case",
     "normalize_let",
     "normalize_pattern",
     "pattern_cell_inhabits_type",
+    "record_constructor",
     "resolve_bare_enum_constructors",
     "signature_for_type",
 ]

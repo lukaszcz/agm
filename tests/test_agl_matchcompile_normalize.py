@@ -119,10 +119,10 @@ def test_let_normalization_retains_its_initializer_pattern_and_matched_type() ->
     assert normalized.source_kind.value == "let"
     assert normalized.root.type == checked.let_matched_types[let.node_id]
     assert len(normalized.rows) == len(normalized.actions) == 1
-    action = normalized.actions[0]
-    assert action.initializer_node_id == let.value.node_id
-    assert action.pattern_node_id == let.pattern.node_id
-    assert normalized.root.provenance.case_node_id == let.node_id
+    assert normalized.actions[0].action_id == normalized.rows[0].action_id
+    assert normalized.root.provenance.subject_node_id == let.value.node_id
+    assert normalized.rows[0].source_pattern_id == let.pattern.node_id
+    assert normalized.root.provenance.site_node_id == let.node_id
     with pytest.raises(MatchCompileInvariantError, match="matched type"):
         normalize_let(let, replace(checked, let_matched_types={}))
 
@@ -357,7 +357,7 @@ def test_normalize_case_preserves_priority_actions_and_binder_provenance() -> No
 
     normalized = normalize_case(case, checked)
 
-    assert normalized.case_node_id == case.node_id
+    assert normalized.site_node_id == case.node_id
     assert normalized.type_table is checked.type_env.type_table
     assert normalized.occurrences == (normalized.root,)
     assert normalized.root.id.value == 0

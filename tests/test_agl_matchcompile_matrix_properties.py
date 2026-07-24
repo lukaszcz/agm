@@ -10,7 +10,7 @@ import pytest
 
 from agm.agl.capabilities import HostCapabilities
 from agm.agl.ir.ids import NominalId
-from agm.agl.matchcompile.compiler import compile_case, validate_compiled_case
+from agm.agl.matchcompile.compiler import compile_match_site, validate_compiled_case
 from agm.agl.matchcompile.matrix import (
     OccurrenceAllocator,
     PatternMatrix,
@@ -320,7 +320,7 @@ def test_record_decomposition_replays_the_same_matrix_semantics() -> None:
         "case value of | Pair(left = true) => 1 | Pair(left = false) => 0"
     )
 
-    compiled = compile_case(normalize_case(case, checked))
+    compiled = compile_match_site(normalize_case(case, checked))
     assert isinstance(compiled.root, DecisionDecompose)
     assert compiled.root.demanded_occurrences == (compiled.root.children[0].id,)
     validate_compiled_case(compiled)

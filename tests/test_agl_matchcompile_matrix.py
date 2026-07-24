@@ -12,7 +12,7 @@ import pytest
 import agm.agl.matchcompile.matrix as matrix_module
 from agm.agl.capabilities import HostCapabilities
 from agm.agl.ir.ids import NominalId
-from agm.agl.matchcompile.compiler import compile_case
+from agm.agl.matchcompile.compiler import compile_match_site
 from agm.agl.matchcompile.diagnostics import (
     NonExhaustiveIssue,
     RecordWitness,
@@ -222,7 +222,7 @@ def test_record_compilation_validates_field_occurrences_and_reconstructs_witness
         "let subject = Box(value = 1)\n"
         "case subject of | Box(value = 1) => 1"
     )
-    compiled = compile_case(normalize_case(_only_case(checked), checked))
+    compiled = compile_match_site(normalize_case(_only_case(checked), checked))
 
     assert isinstance(compiled.root, DecisionDecompose)
     assert isinstance(compiled.root.constructor, RecordConstructor)
@@ -945,7 +945,7 @@ def test_matrix_rejects_single_enum_head_that_disagrees_with_checked_signature(
         )
     malformed_cell = ConstructorCell(malformed, arguments, cell.provenance)
 
-    with pytest.raises(MatchCompileInvariantError, match="checked signature"):
+    with pytest.raises(MatchCompileInvariantError, match="checked signature|unknown variant"):
         replace(matrix, rows=(replace(matrix.rows[0], cells=(malformed_cell,)),))
 
 

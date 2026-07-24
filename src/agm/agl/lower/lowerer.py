@@ -2594,27 +2594,14 @@ class _Lowerer:
             action_bodies[action.action_id] = self.lower_coerced(branch.body, result_type)
 
         location = self._loc(span)
-
-        def lower_leaf(
-            decision: DecisionLeaf, occurrence_symbol: Callable[[OccurrenceId], SymbolId]
-        ) -> IrExpr:
-            bindings = tuple(
-                IrBind(
-                    location,
-                    binder_symbols[assignment.binder.node_id],
-                    IrLoad(location, occurrence_symbol(assignment.occurrence)),
-                )
-                for assignment in decision.binder_assignments
-            )
-            body = action_bodies[decision.action_id]
-            return IrSequence(location, (*bindings, body)) if bindings else body
-
-        return self._lower_compiled_decision(
+        sequence, _ = self._lower_compiled_decision(
             compiled,
             self.lower_expr(subject_expr),
             location,
-            lower_leaf,
+            binder_symbols,
+            lambda decision: action_bodies[decision.action_id],
         )
+        return sequence
 
     def _lower_pattern_let(self, let: LetDecl, *, top_level: bool) -> IrSequence:
         """Lower one irrefutable immutable pattern binding through its decision DAG."""
@@ -2639,45 +2626,36 @@ class _Lowerer:
         location = self._loc(let.span)
         (action,) = compiled.actions
 
-        def lower_leaf(
-            decision: DecisionLeaf, occurrence_symbol: Callable[[OccurrenceId], SymbolId]
-        ) -> IrExpr:
+        def leaf_tail(decision: DecisionLeaf) -> IrExpr:
             assert decision.action_id == action.action_id, (
                 "compiler bug: let decision selected an unknown binding action"
             )
-            bindings = tuple(
-                IrBind(
-                    location,
-                    binder_symbols[assignment.binder.node_id],
-                    IrLoad(location, occurrence_symbol(assignment.occurrence)),
-                )
-                for assignment in decision.binder_assignments
-            )
-            return IrSequence(location, (*bindings, IrConstUnit(location)))
+            return IrConstUnit(location)
 
-        return self._lower_compiled_decision(
+        sequence, root_symbol = self._lower_compiled_decision(
             compiled,
             self.lower_coerced(let.value, matched_type),
             location,
-            lower_leaf,
-            root_symbol_sink=lambda symbol: self._link.let_value_symbols.__setitem__(
-                let.node_id, symbol
-            ),
+            binder_symbols,
+            leaf_tail,
         )
+        self._link.let_value_symbols[let.node_id] = root_symbol
+        return sequence
 
     def _lower_compiled_decision(
         self,
         compiled: CompiledMatchSite,
         root_value: IrExpr,
         location: Location,
-        lower_leaf: "Callable[[DecisionLeaf, Callable[[OccurrenceId], SymbolId]], IrExpr]",
-        *,
-        root_symbol_sink: "Callable[[SymbolId], None] | None" = None,
-    ) -> IrSequence:
-        """Lower a case or let decision through one shared occurrence DAG."""
+        binder_symbols: "Mapping[int, SymbolId]",
+        leaf_tail: "Callable[[DecisionLeaf], IrExpr]",
+    ) -> tuple[IrSequence, SymbolId]:
+        """Lower a case or let decision through one shared occurrence DAG.
+
+        Returns the lowered sequence together with the synthetic symbol holding
+        the site's root value.
+        """
         root_symbol = self._alloc_synthetic_sym(mutable=False)
-        if root_symbol_sink is not None:
-            root_symbol_sink(root_symbol)
         occurrence_symbols: dict[OccurrenceId, SymbolId] = {
             compiled.normalized.root.id: root_symbol
         }
@@ -2776,7 +2754,16 @@ class _Lowerer:
             if cached is not None:
                 return cached
             if isinstance(decision, DecisionLeaf):
-                lowered_leaf = lower_leaf(decision, symbol_for_occurrence)
+                bindings = tuple(
+                    IrBind(
+                        location,
+                        binder_symbols[assignment.binder.node_id],
+                        IrLoad(location, symbol_for_occurrence(assignment.occurrence)),
+                    )
+                    for assignment in decision.binder_assignments
+                )
+                tail = leaf_tail(decision)
+                lowered_leaf = IrSequence(location, (*bindings, tail)) if bindings else tail
                 decision_memo[id(decision)] = lowered_leaf
                 return lowered_leaf
 
@@ -2838,7 +2825,7 @@ class _Lowerer:
                 IrBind(location, root_symbol, root_value),
                 decision,
             ),
-        )
+        ), root_symbol
 
     # ------------------------------------------------------------------
     # Ask/ask-request lowering

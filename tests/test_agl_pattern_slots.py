@@ -21,7 +21,6 @@ from agm.agl.scope.symbols import AglScopeError, BinderKind
 from agm.agl.syntax import (
     ConstructorPattern,
     pattern_binder_candidates,
-    pattern_binder_names,
     pattern_binding_node_ids,
 )
 from agm.agl.typecheck import AglTypeError, check_module
@@ -66,7 +65,7 @@ def test_pattern_binder_helpers_preserve_preorder_and_pattern_depth() -> None:
     assert pattern_binding_node_ids(declaration.pattern) == tuple(
         candidate.node_id for candidate in candidates
     )
-    assert pattern_binder_names(declaration.pattern) == ("value", "whole")
+    assert tuple(candidate.name for candidate in candidates) == ("value", "whole")
 
 
 # ---------------------------------------------------------------------------

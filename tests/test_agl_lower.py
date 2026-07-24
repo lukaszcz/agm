@@ -903,8 +903,7 @@ class TestBindingLowering:
         assert isinstance(root_capture.value, IrConstInt)
         assert root_capture.value.value == 1
         assert prog.symbols[root_capture.symbol].public_name is None
-        assert isinstance(result, IrSequence)
-        assert isinstance(result.items[0], IrConstUnit)
+        assert isinstance(result, IrConstUnit)
         assert isinstance(second, IrConstInt)
         assert second.value == 2
         assert all(symbol.public_name is None for symbol in prog.symbols.values())

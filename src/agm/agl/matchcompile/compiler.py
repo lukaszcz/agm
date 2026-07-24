@@ -58,7 +58,6 @@ from .model import (
     MatchSiteAction,
     MatchSiteKind,
     MatrixRow,
-    NormalizedCase,
     NormalizedMatchSite,
     Occurrence,
     OccurrenceId,
@@ -66,7 +65,6 @@ from .model import (
     RecordConstructor,
     SourceAction,
     WildcardCell,
-    field_bearing_constructor_fields,
 )
 from .normalize import (
     MatchCompileInvariantError,
@@ -91,11 +89,6 @@ class CompiledMatchSite:
         return self.normalized.site_node_id
 
     @property
-    def case_node_id(self) -> int:
-        """Compatibility spelling for case-only consumers."""
-        return self.site_node_id
-
-    @property
     def source_kind(self) -> MatchSiteKind:
         """The source construct that owns this decision DAG."""
         return self.normalized.source_kind
@@ -116,9 +109,6 @@ class CompiledMatchSite:
         if len(actions) != len(self.normalized.actions):
             raise MatchCompileInvariantError("case site carries a non-case action")
         return actions
-
-
-CompiledCase: TypeAlias = CompiledMatchSite
 
 
 @dataclass(frozen=True, slots=True)
@@ -485,9 +475,7 @@ def _witness_for_occurrence(
     if isinstance(constructor, LiteralConstructor):
         return LiteralWitness(constructor.kind, constructor.value)
     spelling = _source_spelling(constructor, case_context)
-    if spelling.owner_name is None and (
-        isinstance(constructor, RecordConstructor) or not spelling.bare
-    ):
+    if spelling.owner_name is None and not spelling.bare:
         return WildcardWitness()
     children_by_index = {
         child.provenance.field_index: child
@@ -505,9 +493,8 @@ def _witness_for_occurrence(
             if index in children_by_index
             else WildcardWitness(),
         )
-        for index, field in enumerate(field_bearing_constructor_fields(constructor))
+        for index, field in enumerate(constructor.fields)
     )
-    assert spelling is not None
     if spelling.bare:
         qualification = None
     else:
@@ -647,41 +634,26 @@ def _issues(
     issues: list[MatchIssue] = [
         RedundantArmIssue(normalized.site_node_id, action.action_id, action.pattern_span)
         for action in normalized.actions
-        if normalized.source_kind is MatchSiteKind.CASE and action.action_id not in reachable
+        if isinstance(action, SourceAction) and action.action_id not in reachable
     ]
     constraints = _first_failure_constraints(root, normalized.type_table)
     root_signature = signature_for_type(normalized.root.type, normalized.type_table)
     if constraints is not None and not (
         isinstance(root_signature, ClosedSignature) and not root_signature.constructors
     ):
-        constraint_map = dict(constraints)
-        issues.append(
-            (
-                NonExhaustiveIssue(
-                    normalized.site_node_id,
-                    normalized.span,
-                    _witness_for_root(
-                        normalized.root,
-                        constraint_map,
-                        occurrences,
-                        normalized.type_table,
-                        normalized.case_context,
-                    ),
-                )
-                if normalized.source_kind is MatchSiteKind.CASE
-                else RefutableLetIssue(
-                    normalized.site_node_id,
-                    normalized.span,
-                    _witness_for_root(
-                        normalized.root,
-                        constraint_map,
-                        occurrences,
-                        normalized.type_table,
-                        normalized.case_context,
-                    ),
-                )
-            )
+        witness = _witness_for_root(
+            normalized.root,
+            dict(constraints),
+            occurrences,
+            normalized.type_table,
+            normalized.case_context,
         )
+        issue_cls = (
+            NonExhaustiveIssue
+            if normalized.source_kind is MatchSiteKind.CASE
+            else RefutableLetIssue
+        )
+        issues.append(issue_cls(normalized.site_node_id, normalized.span, witness))
     return reachable_in_source_order, tuple(sorted(issues, key=issue_sort_key))
 
 
@@ -702,11 +674,6 @@ def compile_match_site(normalized: NormalizedMatchSite) -> CompiledMatchSite:
     occurrences = allocator.occurrences
     reachable, issues = _issues(normalized, root, occurrences)
     return CompiledMatchSite(normalized, root, occurrences, reachable, issues)
-
-
-# Compatibility entry point for focused case compiler tests and lowering seams.
-def compile_case(normalized: NormalizedCase) -> CompiledCase:
-    return compile_match_site(normalized)
 
 
 # ---------------------------------------------------------------------------
@@ -781,7 +748,7 @@ _BinderPath = tuple[_BinderPathStep, ...]
 
 
 def _source_binder_paths(
-    normalized: NormalizedCase,
+    normalized: NormalizedMatchSite,
 ) -> dict[int, dict[int, tuple[BinderProvenance, _BinderPath]]]:
     paths_by_action: dict[int, dict[int, tuple[BinderProvenance, _BinderPath]]] = {}
 
@@ -810,7 +777,7 @@ def _source_binder_paths(
 
 
 def _validate_occurrence_ledger(
-    normalized: NormalizedCase,
+    normalized: NormalizedMatchSite,
     occurrences: tuple[Occurrence, ...],
 ) -> tuple[
     dict[OccurrenceId, Occurrence],
@@ -974,7 +941,7 @@ def _validate_decision_dataflow(
 
 
 def _validate_compiled_decisions(
-    compiled: CompiledCase,
+    compiled: CompiledMatchSite,
     occurrences_by_id: dict[OccurrenceId, Occurrence],
     occurrence_groups: dict[tuple[OccurrenceId, Constructor], tuple[Occurrence, ...]],
 ) -> None:
@@ -1160,7 +1127,7 @@ def _validate_compiled_decisions(
     )
 
 
-def _validate_semantic_replay(compiled: CompiledCase) -> None:
+def _validate_semantic_replay(compiled: CompiledMatchSite) -> None:
     """Replay compiler rules against the stored DAG without compiling a replacement.
 
     Canonical matrices memoize their exact decision identity, while decision identities
@@ -1309,9 +1276,9 @@ def _validate_semantic_replay(compiled: CompiledCase) -> None:
 
 
 def validate_compiled_case(
-    compiled: CompiledCase,
+    compiled: CompiledMatchSite,
     *,
-    expected_normalized: NormalizedCase | None = None,
+    expected_normalized: NormalizedMatchSite | None = None,
     require_success: bool = False,
 ) -> None:
     """Validate the complete compiler and source contract of one compiled match site.
@@ -1416,9 +1383,7 @@ def validate_decision_dag(root: Decision) -> None:
 
 
 __all__ = [
-    "CompiledCase",
     "CompiledMatchSite",
-    "compile_case",
     "compile_match_site",
     "validate_compiled_case",
     "validate_decision_dag",

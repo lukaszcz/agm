@@ -608,6 +608,13 @@ def iter_type(t: Type) -> Iterator[Type]:
         yield from iter_type(child)
 
 
+def iter_nominal_types(t: Type) -> Iterator[RecordType | EnumType | ExceptionType]:
+    """Yield every nominal handle reachable from *t*, including *t* itself."""
+    for part in iter_type(t):
+        if isinstance(part, (RecordType, EnumType, ExceptionType)):
+            yield part
+
+
 def replace_type_children(t: Type, children: tuple[Type, ...]) -> Type:
     """Return *t* rebuilt with its direct structural *children*."""
     match t:

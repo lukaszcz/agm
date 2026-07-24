@@ -1105,18 +1105,9 @@ class _Resolver:
             if candidates:
                 self._pattern_constructor_candidates[node.pattern.node_id] = candidates
             self._check_not_reserved(node.pattern.name, node.span)
-            if node.pattern.name != "_":
-                self._define(
-                    node.pattern.name,
-                    BindingRef(
-                        name=node.pattern.name,
-                        mutable=False,
-                        decl_span=node.span,
-                        decl_node_id=node.node_id,
-                        kind=BinderKind.let_binding,
-                        module_id=self._module_id,
-                    ),
-                )
+            self._define_binder(
+                node, name=node.pattern.name, mutable=False, kind=BinderKind.let_binding
+            )
             return
         if isinstance(node.pattern, WildcardPattern):
             return
@@ -1124,9 +1115,12 @@ class _Resolver:
             self._bind_pattern_vars(node.pattern, self._current_scope(), _LET_PATTERN_POLICY)
 
     def _resolve_var(self, node: VarDecl) -> None:
-        self._resolve_binding(node, name=node.name, mutable=True, kind=BinderKind.var_binding)
+        self._check_not_reserved(node.name, node.span)
+        # Resolve RHS before defining the name (lambda non-recursion).
+        self._resolve_expr(node.value)
+        self._define_binder(node, name=node.name, mutable=True, kind=BinderKind.var_binding)
 
-    def _resolve_binding(
+    def _define_binder(
         self,
         node: LetDecl | VarDecl,
         *,
@@ -1134,20 +1128,20 @@ class _Resolver:
         mutable: bool,
         kind: BinderKind,
     ) -> None:
-        self._check_not_reserved(name, node.span)
-        # Resolve RHS before defining the name (lambda non-recursion).
-        self._resolve_expr(node.value)
+        """Define one simple-name binder whose initializer has already resolved."""
         if name == "_":
             return
-        ref = BindingRef(
-            name=name,
-            mutable=mutable,
-            decl_span=node.span,
-            decl_node_id=node.node_id,
-            kind=kind,
-            module_id=self._module_id,
+        self._define(
+            name,
+            BindingRef(
+                name=name,
+                mutable=mutable,
+                decl_span=node.span,
+                decl_node_id=node.node_id,
+                kind=kind,
+                module_id=self._module_id,
+            ),
         )
-        self._define(name, ref)
 
     def _resolve_assign(self, node: AssignStmt) -> None:
         target = node.target

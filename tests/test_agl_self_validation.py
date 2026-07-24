@@ -34,6 +34,7 @@ from agm.agl.self_validation import self_validation_enabled
 from agm.agl.typecheck import check_module
 from agm.agl.typecheck.program import check_program
 from tests.agl.ir_harness import base_caps, make_graph_from_files
+from tests.agl.match_reference import case_sites
 
 _SOURCE = "let x = 1\nx"
 
@@ -85,15 +86,15 @@ def test_disabled_validation_accepts_a_corrupt_artifact(
     self_validation_disabled: None,
 ) -> None:
     compiled = _compiled_program("case true of | true => 1 | false => 2")
-    (case_id,) = tuple(compiled.cases)
-    corrupt = replace(compiled.cases[case_id], reachable_action_ids=())
+    (case_id,) = tuple(case_sites(compiled.sites))
+    corrupt = replace(case_sites(compiled.sites)[case_id], reachable_action_ids=())
 
     # The artifact boundary does not re-check itself in production: a case whose
     # reachable-action set no longer matches its decision DAG is accepted rather
     # than rejected with ``MatchCompileInvariantError``.
     artifact = MatchCompiledModule(compiled.checked, {case_id: corrupt})
 
-    assert artifact.cases[case_id].reachable_action_ids == ()
+    assert case_sites(artifact.sites)[case_id].reachable_action_ids == ()
 
 
 def test_graph_lowering_trusts_the_artifact_that_already_validated_itself(
@@ -103,7 +104,7 @@ def test_graph_lowering_trusts_the_artifact_that_already_validated_itself(
     graph = make_graph_from_files(tmp_path, {"entry": "case true of | true => 1 | false => 2"})
     compiled = compile_program_matches(check_program(resolve_program(graph), base_caps())).compiled
     assert isinstance(compiled, MatchCompiledProgram)
-    entry_cases = compiled.cases_by_module[ENTRY_ID]
+    entry_cases = case_sites(compiled.sites_by_module[ENTRY_ID])
     (case_id,) = tuple(entry_cases)
 
     # Constructing the artifact is the checkpoint, so corruption applied behind
@@ -125,9 +126,9 @@ def test_program_lowering_trusts_the_artifact_that_already_validated_itself() ->
     """A match-compiled program is validated once, where it is built — not again per consumer."""
     source = "case true of | true => 1 | false => 2"
     compiled = _compiled_program(source)
-    (case_id,) = tuple(compiled.cases)
+    (case_id,) = tuple(case_sites(compiled.sites))
     corrupt = dict(compiled.sites)
-    corrupt[case_id] = replace(compiled.cases[case_id], reachable_action_ids=())
+    corrupt[case_id] = replace(case_sites(compiled.sites)[case_id], reachable_action_ids=())
 
     # Constructing the artifact is the checkpoint, so corruption applied behind
     # its back afterwards is rejected there ...
@@ -143,9 +144,9 @@ def test_repl_entry_lowering_trusts_the_artifact_that_already_validated_itself()
     """A REPL entry's artifact is validated at construction, not again by incremental lowering."""
     source = "case true of | true => 1 | false => 2"
     compiled = _compiled_program(source)
-    (case_id,) = tuple(compiled.cases)
+    (case_id,) = tuple(case_sites(compiled.sites))
     corrupt = dict(compiled.sites)
-    corrupt[case_id] = replace(compiled.cases[case_id], reachable_action_ids=())
+    corrupt[case_id] = replace(case_sites(compiled.sites)[case_id], reachable_action_ids=())
 
     with pytest.raises(MatchCompileInvariantError, match="reachable action ids"):
         MatchCompiledModule(compiled.checked, corrupt)
@@ -204,7 +205,7 @@ def test_production_match_compilation_takes_the_unvalidated_path(
     production branch, where the compiler's own output is trusted as produced.
     """
     program_artifact = _compiled_program(_MATCH_SOURCE)
-    assert program_artifact.cases
+    assert case_sites(program_artifact.sites)
 
     rejected = compile_module_matches(
         check_module(resolve_module(parse_program("case true of | true => 1")), base_caps())

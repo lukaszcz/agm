@@ -15,13 +15,7 @@ from agm.agl.syntax.visitor import walk
 from agm.agl.typecheck.env import CheckedModule
 from agm.agl.typecheck.program import CheckedProgram
 
-from .compiler import (
-    CompiledCase,
-    CompiledMatchSite,
-    compile_case,
-    compile_match_site,
-    validate_compiled_case,
-)
+from .compiler import CompiledMatchSite, compile_match_site, validate_compiled_case
 from .diagnostics import (
     MatchIssue,
     NonExhaustiveIssue,
@@ -30,12 +24,12 @@ from .diagnostics import (
     issue_sort_key,
     render_witness,
 )
-from .model import MatchSiteKind, NormalizedMatchSite
+from .model import MatchCaseContext, MatchSiteKind, NormalizedMatchSite
 from .normalize import (
     MatchCompileInvariantError,
+    match_case_context,
     normalize_case,
     normalize_let,
-    resolve_bare_enum_constructors,
 )
 
 SourceMatchSite: TypeAlias = Case | LetDecl
@@ -53,13 +47,6 @@ def _immutable_module_sites(
     )
 
 
-def _case_sites(sites: Mapping[int, CompiledMatchSite]) -> Mapping[int, CompiledCase]:
-    """Expose the filtered decision view for consumers interested only in cases."""
-    return MappingProxyType(
-        {node_id: site for node_id, site in sites.items() if site.source_kind is MatchSiteKind.CASE}
-    )
-
-
 @dataclass(frozen=True, slots=True)
 class MatchCompiledModule:
     """A checked module plus one compiled decision DAG per source match site."""
@@ -71,11 +58,6 @@ class MatchCompiledModule:
         object.__setattr__(self, "sites", _immutable_sites(self.sites))
         if self_validation_enabled():
             validate_match_compiled_module(self)
-
-    @property
-    def cases(self) -> Mapping[int, CompiledCase]:
-        """Immutable filtered view for consumers interested only in source cases."""
-        return _case_sites(self.sites)
 
 
 @dataclass(frozen=True, slots=True)
@@ -94,13 +76,6 @@ class MatchCompiledProgram:
         object.__setattr__(self, "sites_by_module", _immutable_module_sites(self.sites_by_module))
         if self_validation_enabled():
             validate_match_compiled_program(self)
-
-    @property
-    def cases_by_module(self) -> Mapping[ModuleId, Mapping[int, CompiledCase]]:
-        """Immutable filtered per-module case view for case-only consumers."""
-        return MappingProxyType(
-            {module_id: _case_sites(sites) for module_id, sites in self.sites_by_module.items()}
-        )
 
 
 MatchCompiledArtifact: TypeAlias = MatchCompiledModule | MatchCompiledProgram
@@ -131,11 +106,12 @@ def _source_sites(program: Program) -> dict[int, SourceMatchSite]:
     return sites
 
 
-def _source_cases(program: Program) -> dict[int, Case]:
-    """Compatibility helper for white-box case-only tests."""
-    return {
-        node_id: site for node_id, site in _source_sites(program).items() if isinstance(site, Case)
-    }
+def _normalize_source_site(
+    source: SourceMatchSite, owner: CheckedModule, case_context: MatchCaseContext
+) -> NormalizedMatchSite:
+    if isinstance(source, Case):
+        return normalize_case(source, owner, case_context=case_context)
+    return normalize_let(source, owner, case_context=case_context)
 
 
 def _compile_owner_sites(
@@ -143,28 +119,9 @@ def _compile_owner_sites(
 ) -> tuple[dict[int, CompiledMatchSite], list[MatchIssue]]:
     sites: dict[int, CompiledMatchSite] = {}
     issues: list[MatchIssue] = []
-    owner_forms = owner.type_env.enum_owner_forms()
-    blocked_variants = owner.type_env.blocked_enum_variants()
-    bare_constructors = resolve_bare_enum_constructors(owner)
+    case_context = match_case_context(owner)
     for site_node_id, source_site in _source_sites(owner.resolved.program).items():
-        if isinstance(source_site, Case):
-            normalized = normalize_case(
-                source_site,
-                owner,
-                enum_owner_forms=owner_forms,
-                blocked_enum_variants=blocked_variants,
-                bare_enum_constructors=bare_constructors,
-            )
-            compiled = compile_case(normalized)
-        else:
-            normalized = normalize_let(
-                source_site,
-                owner,
-                enum_owner_forms=owner_forms,
-                blocked_enum_variants=blocked_variants,
-                bare_enum_constructors=bare_constructors,
-            )
-            compiled = compile_match_site(normalized)
+        compiled = compile_match_site(_normalize_source_site(source_site, owner, case_context))
         sites[site_node_id] = compiled
         issues.extend(compiled.issues)
     return sites, issues
@@ -226,12 +183,6 @@ def diagnostics_from_match_issues(issues: tuple[MatchIssue, ...]) -> tuple[Diagn
     return tuple(diagnostic_from_match_issue(issue) for issue in sorted(issues, key=issue_sort_key))
 
 
-def _normalize_source_site(source: SourceMatchSite, owner: CheckedModule) -> NormalizedMatchSite:
-    if isinstance(source, Case):
-        return normalize_case(source, owner)
-    return normalize_let(source, owner)
-
-
 def _validate_sites(
     *,
     owner: CheckedModule,
@@ -240,6 +191,7 @@ def _validate_sites(
 ) -> None:
     program = owner.resolved.program
     expected = _source_sites(program)
+    case_context = match_case_context(owner)
     actual_ids = set(sites)
     expected_ids = set(expected)
     missing = expected_ids - actual_ids
@@ -280,7 +232,7 @@ def _validate_sites(
             )
         validate_compiled_case(
             compiled,
-            expected_normalized=_normalize_source_site(source, owner),
+            expected_normalized=_normalize_source_site(source, owner, case_context),
             require_success=True,
         )
 

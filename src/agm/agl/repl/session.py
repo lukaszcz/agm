@@ -30,6 +30,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable, Iterable
     from pathlib import Path
 
+    from agm.agl.ir.ids import SymbolId
     from agm.agl.modules.ids import ModuleId
     from agm.agl.modules.loader import LoadedModule
     from agm.agl.modules.roots import RootSet
@@ -231,30 +232,12 @@ class ReplSession:
     @staticmethod
     def _type_mentions_entry_nominal(typ: "Type", names: frozenset[str]) -> bool:
         """Return whether *typ* contains an entry-module nominal in *names*."""
-        from agm.agl.semantics.types import (
-            DictType,
-            EnumType,
-            ExceptionType,
-            FunctionType,
-            ListType,
-            RecordType,
-        )
+        from agm.agl.semantics.types import iter_nominal_types
 
-        if isinstance(typ, (RecordType, EnumType)):
-            return (typ.module_id.is_entry and typ.name in names) or any(
-                ReplSession._type_mentions_entry_nominal(arg, names) for arg in typ.type_args
-            )
-        if isinstance(typ, ExceptionType):
-            return typ.module_id.is_entry and typ.name in names
-        if isinstance(typ, ListType):
-            return ReplSession._type_mentions_entry_nominal(typ.elem, names)
-        if isinstance(typ, DictType):
-            return ReplSession._type_mentions_entry_nominal(typ.value, names)
-        if isinstance(typ, FunctionType):
-            return any(
-                ReplSession._type_mentions_entry_nominal(param, names) for param in typ.params
-            ) or ReplSession._type_mentions_entry_nominal(typ.result, names)
-        return False
+        return any(
+            nominal.module_id.is_entry and nominal.name in names
+            for nominal in iter_nominal_types(typ)
+        )
 
     @staticmethod
     def _assert_checked_state_closed(checked: "CheckedModule") -> None:
@@ -699,13 +682,6 @@ class ReplSession:
 
         self._assert_checked_state_closed(checked)
         entry_root = checked.resolved.root_scope
-        pattern_binding_refs = {
-            candidate.node_id: binding
-            for item in program.body.items
-            if isinstance(item, LetDecl)
-            for candidate in pattern_binder_candidates(item.pattern)
-            if (binding := checked.pattern_binding_for(candidate.node_id)) is not None
-        }
         binding_items = (AgentDecl, FuncDef, ParamDecl, VarDecl)
         promotion_bindings = {
             item.name: entry_root.bindings[item.name]
@@ -713,21 +689,23 @@ class ReplSession:
             if isinstance(item, binding_items) and item.name in entry_root.bindings
         }
         promotion_bindings.update(
-            {binding.name: binding for binding in pattern_binding_refs.values()}
+            (binding.name, binding)
+            for item in program.body.items
+            if isinstance(item, LetDecl)
+            for candidate in pattern_binder_candidates(item.pattern)
+            if (binding := checked.pattern_binding_for(candidate.node_id)) is not None
         )
         entry_binding_node_ids = {ref.decl_node_id for ref in promotion_bindings.values()}
         promoted_binding_node_ids = entry_binding_node_ids & promoted_declaration_ids
 
-        entry_type_names = frozenset(
-            item.name
+        entry_type_items = tuple(
+            item
             for item in program.body.items
             if isinstance(item, (RecordDef, EnumDef, ExceptionDef, TypeAlias))
         )
+        entry_type_names = frozenset(item.name for item in entry_type_items)
         promoted_type_names = frozenset(
-            item.name
-            for item in program.body.items
-            if isinstance(item, (RecordDef, EnumDef, ExceptionDef, TypeAlias))
-            and item.node_id in promoted_declaration_ids
+            item.name for item in entry_type_items if item.node_id in promoted_declaration_ids
         )
         unpromoted_type_names = entry_type_names - promoted_type_names
         stale_binding_names: set[str] = set()
@@ -824,28 +802,38 @@ class ReplSession:
         self._next_node_id = next_start_id
         return tuple(installed)
 
+    def frame_value(self, symbol: "SymbolId | None") -> "Value | None":
+        """Return the base-frame value bound to *symbol*, unwrapping a mutable cell."""
+        from agm.agl.semantics.values import Cell
+
+        slot = self._ir_base_frame.get(symbol) if symbol is not None else None
+        return slot.value if isinstance(slot, Cell) else slot
+
+    def _declaration_value(self, decl_node_id: int) -> "Value | None":
+        """Return the base-frame value of a promoted declaration."""
+        return self.frame_value(self._link_image.symbol_for_decl(decl_node_id))
+
     def _echo_data_ir(
         self, program: "Program", checked: "CheckedModule", captured: "Value | None"
     ) -> tuple["Value | None", "Type | None"]:
-        from agm.agl.semantics.values import Cell
-        from agm.agl.syntax.nodes import Binder, Declaration, LetDecl, VarDecl
+        from agm.agl.syntax.nodes import (
+            Binder,
+            Declaration,
+            LetDecl,
+            VarDecl,
+            simple_let_pattern_name,
+        )
 
         last = program.body.items[-1]
         value_type = self._value_type_of_last(program, checked)
         if not isinstance(last, (Binder, Declaration)):
             return captured, value_type
         if isinstance(last, LetDecl):
-            from agm.agl.syntax.nodes import simple_let_pattern_name
-
             if simple_let_pattern_name(last.pattern) is None:
                 return captured, value_type
-            symbol = self._link_image.symbol_for_decl(last.node_id)
-            slot = self._ir_base_frame.get(symbol) if symbol is not None else None
-            return (slot.value if isinstance(slot, Cell) else slot), value_type
+            return self._declaration_value(last.node_id), value_type
         if isinstance(last, VarDecl):
-            symbol = self._link_image.symbol_for_decl(last.node_id)
-            slot = self._ir_base_frame.get(symbol) if symbol is not None else None
-            return (slot.value if isinstance(slot, Cell) else slot), value_type
+            return self._declaration_value(last.node_id), value_type
         return None, None
 
     def _classify(self, program: "Program") -> tuple[EntryKind, str | None]:
@@ -1024,14 +1012,10 @@ class ReplSession:
     def declared_params(self) -> list[tuple[str, "Type", "Value"]]:
         """Return declared params as (name, type, resolved value)."""
         result: list[tuple[str, Type, Value]] = []
-        from agm.agl.semantics.values import Cell
-
         for name, typ in self._declared_params.items():
-            ref = self._session_scope.bindings[name]
-            symbol = self._link_image.symbol_for_decl(ref.decl_node_id)
-            slot = self._ir_base_frame.get(symbol) if symbol is not None else None
-            assert slot is not None
-            result.append((name, typ, slot.value if isinstance(slot, Cell) else slot))
+            value = self._declaration_value(self._session_scope.bindings[name].decl_node_id)
+            assert value is not None
+            result.append((name, typ, value))
         return result
 
     def program_name(self) -> str | None:

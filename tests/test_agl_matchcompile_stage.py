@@ -28,11 +28,7 @@ from agm.agl.matchcompile import (
     diagnostic_from_match_issue,
     diagnostics_from_match_issues,
 )
-from agm.agl.matchcompile.compiler import (
-    CompiledCase,
-    compile_case,
-    validate_compiled_case,
-)
+from agm.agl.matchcompile.compiler import compile_match_site, validate_compiled_case
 from agm.agl.matchcompile.diagnostics import issue_sort_key
 from agm.agl.matchcompile.matrix import OccurrenceAllocator, PatternMatrix, Specialization
 from agm.agl.matchcompile.model import (
@@ -43,7 +39,7 @@ from agm.agl.matchcompile.model import (
     DecisionLeaf,
     DecisionSwitch,
     LiteralConstructor,
-    NormalizedCase,
+    NormalizedMatchSite,
 )
 from agm.agl.matchcompile.normalize import MatchCompileInvariantError, normalize_case
 from agm.agl.modules.ids import ENTRY_ID
@@ -62,13 +58,14 @@ from agm.agl.typecheck import EnumOwnerForm, check_module
 from agm.agl.typecheck.env import CheckedModule
 from agm.agl.typecheck.program import CheckedProgram, check_program
 from tests.agl.ir_harness import base_caps, make_graph_from_files
+from tests.agl.match_reference import case_sites
 
 
 def test_matchcompile_public_exports_are_narrow_and_stable() -> None:
     assert set(matchcompile.__all__) == {
         "BoolConstructor",
         "BoolWitness",
-        "CompiledCase",
+        "CompiledMatchSite",
         "CompiledMatchSite",
         "Constructor",
         "Decision",
@@ -146,8 +143,8 @@ def _first_case(checked: CheckedModule | CheckedModule) -> Case:
 
 
 def _semantic_replay_corruptions(
-    cases: tuple[CompiledCase, ...],
-) -> tuple[tuple[str, int, CompiledCase], ...]:
+    cases: tuple[CompiledMatchSite, ...],
+) -> tuple[tuple[str, int, CompiledMatchSite], ...]:
     bool_case, open_case, pair_case = cases
     bool_root = cast(DecisionSwitch, bool_case.root)
     open_root = cast(DecisionSwitch, open_case.root)
@@ -273,16 +270,14 @@ def test_compiles_every_nested_case_once_into_immutable_total_mapping() -> None:
         "  | false => 3\n"
     )
 
-    assert len(compiled.cases) == 2
-    assert set(compiled.cases) == {case.case_node_id for case in compiled.cases.values()}
-    mutable_view = cast(MutableMapping[int, CompiledCase], compiled.cases)
-    with pytest.raises(TypeError):
-        mutable_view[999] = next(iter(compiled.cases.values()))
+    cases = case_sites(compiled.sites)
+    assert len(cases) == 2
+    assert set(cases) == {case.site_node_id for case in cases.values()}
 
 
 def test_empty_case_program_produces_valid_empty_artifact() -> None:
     compiled = _compiled("let x = 1\nx")
-    assert compiled.cases == {}
+    assert case_sites(compiled.sites) == {}
 
 
 def test_compiles_nested_cases_and_lets_as_source_kind_preserving_sites() -> None:
@@ -303,15 +298,12 @@ def test_compiles_nested_cases_and_lets_as_source_kind_preserving_sites() -> Non
         MatchSiteKind.CASE,
         MatchSiteKind.LET,
     }
-    assert len(compiled.cases) == 2
+    assert len(case_sites(compiled.sites)) == 2
     lets = tuple(site for site in compiled.sites.values() if site.source_kind is MatchSiteKind.LET)
     assert len(lets) == 2
     assert all(isinstance(site, CompiledMatchSite) for site in lets)
     for site in lets:
-        action = site.actions[0]
         assert len(site.actions) == 1
-        assert action.initializer_node_id == site.normalized.root.provenance.subject_node_id
-        assert action.pattern_node_id == site.normalized.rows[0].source_pattern_id
         assert site.normalized.root.type == checked.let_matched_types[site.site_node_id]
 
     mutable_sites = cast(MutableMapping[int, CompiledMatchSite], compiled.sites)
@@ -411,15 +403,15 @@ def test_rejected_match_compilation_still_validates_the_cases_it_discards(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Rejected cases never reach an artifact, so the stage result is their only oracle."""
-    real_compile_case = stage_module.compile_case
+    real_compile_case = stage_module.compile_match_site
 
-    def corrupting_compile_case(normalized: object) -> CompiledCase:
-        compiled = real_compile_case(cast(NormalizedCase, normalized))
+    def corrupting_compile_case(normalized: object) -> CompiledMatchSite:
+        compiled = real_compile_case(cast(NormalizedMatchSite, normalized))
         if not compiled.issues:
             return compiled
         return replace(compiled, reachable_action_ids=())
 
-    monkeypatch.setattr(stage_module, "compile_case", corrupting_compile_case)
+    monkeypatch.setattr(stage_module, "compile_match_site", corrupting_compile_case)
 
     with pytest.raises(MatchCompileInvariantError, match="reachable action ids"):
         compile_module_matches(_checked("case true of | true => 1"))
@@ -480,7 +472,7 @@ def test_graph_issues_are_aggregated_and_sorted_across_module_sources(tmp_path: 
 
 def test_program_artifact_rejects_missing_extra_mismatched_and_cross_program_cases() -> None:
     first = _compiled("case true of | true => 1 | false => 2")
-    case_id, compiled_case = next(iter(first.cases.items()))
+    case_id, compiled_case = next(iter(case_sites(first.sites).items()))
 
     with pytest.raises(MatchCompileInvariantError, match="missing"):
         MatchCompiledModule(first.checked, {})
@@ -513,7 +505,7 @@ def test_program_artifact_rejects_missing_extra_mismatched_and_cross_program_cas
 
     invalid_checked = _checked("case true of | true => 1")
     invalid_case = _first_case(invalid_checked)
-    invalid_compiled = compile_case(normalize_case(invalid_case, invalid_checked))
+    invalid_compiled = compile_match_site(normalize_case(invalid_case, invalid_checked))
     with pytest.raises(MatchCompileInvariantError, match="contains issues"):
         MatchCompiledModule(invalid_checked, {invalid_case.node_id: invalid_compiled})
 
@@ -522,9 +514,9 @@ def test_program_artifact_rejects_compiled_case_semantic_corruption() -> None:
     compiled = _compiled(
         "let _ = case true of | true => 1 | false => 2\ncase false of | true => 3 | false => 4"
     )
-    first_id, second_id = tuple(compiled.cases)
-    first = compiled.cases[first_id]
-    second = compiled.cases[second_id]
+    first_id, second_id = tuple(case_sites(compiled.sites))
+    first = case_sites(compiled.sites)[first_id]
+    second = case_sites(compiled.sites)[second_id]
     first_root = cast(DecisionSwitch, first.root)
 
     corruptions = (
@@ -551,14 +543,14 @@ def test_program_artifact_rejects_compiled_case_semantic_corruption() -> None:
         ),
     )
     for corrupted in corruptions:
-        cases = dict(compiled.cases)
+        cases = dict(case_sites(compiled.sites))
         cases[first_id] = corrupted
         with pytest.raises(MatchCompileInvariantError):
             MatchCompiledModule(compiled.checked, cases)
 
     invalid_checked = _checked("case true of | true => 1")
     invalid_case = _first_case(invalid_checked)
-    invalid_compiled = compile_case(normalize_case(invalid_case, invalid_checked))
+    invalid_compiled = compile_match_site(normalize_case(invalid_case, invalid_checked))
     stripped = replace(invalid_compiled, issues=())
     with pytest.raises(MatchCompileInvariantError):
         MatchCompiledModule(invalid_checked, {invalid_case.node_id: stripped})
@@ -566,8 +558,8 @@ def test_program_artifact_rejects_compiled_case_semantic_corruption() -> None:
 
 def test_program_artifact_replays_source_semantics_against_every_decision_edge() -> None:
     compiled = _compiled(_SEMANTIC_REPLAY_SOURCE)
-    case_ids = tuple(compiled.cases)
-    cases = tuple(compiled.cases.values())
+    case_ids = tuple(case_sites(compiled.sites))
+    cases = tuple(case_sites(compiled.sites).values())
 
     MatchCompiledModule(compiled.checked, compiled.sites)
     for _, case_index, corrupted_case in _semantic_replay_corruptions(cases):
@@ -579,10 +571,10 @@ def test_program_artifact_replays_source_semantics_against_every_decision_edge()
 
 def test_semantic_replay_rejects_terminal_and_ledger_rule_corruption() -> None:
     compiled = _compiled(_SEMANTIC_REPLAY_SOURCE)
-    bool_case, _, pair_case = tuple(compiled.cases.values())
+    bool_case, _, pair_case = tuple(case_sites(compiled.sites).values())
     bool_root = cast(DecisionSwitch, bool_case.root)
     leaf = cast(DecisionLeaf, bool_root.keyed_children[0].decision)
-    empty_case = compile_case(replace(bool_case.normalized, rows=()))
+    empty_case = compile_match_site(replace(bool_case.normalized, rows=()))
 
     corruptions = (
         replace(empty_case, root=leaf),
@@ -597,7 +589,7 @@ def test_semantic_replay_rejects_terminal_and_ledger_rule_corruption() -> None:
 
 def test_semantic_replay_rejects_incompatible_shared_decision_identity() -> None:
     compiled = _compiled("case true of | true => 1 | false => 2")
-    compiled_case = next(iter(compiled.cases.values()))
+    compiled_case = next(iter(case_sites(compiled.sites).values()))
     root = cast(DecisionSwitch, compiled_case.root)
     shared_leaf = root.keyed_children[0].decision
     forged_root = replace(
@@ -616,7 +608,7 @@ def test_semantic_replay_memo_rejects_divergent_node_for_one_state(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     compiled = _compiled("case true of | true => 1 | false => 2")
-    compiled_case = next(iter(compiled.cases.values()))
+    compiled_case = next(iter(case_sites(compiled.sites).values()))
     root = cast(DecisionSwitch, compiled_case.root)
 
     def same_state_specialize(
@@ -647,7 +639,7 @@ def test_valid_shared_dag_passes_strong_compiled_case_validation() -> None:
         "let value = pair(left = false, right = false)\n"
         "case value of | pair(left = false, right = false) => 1 | _ => 2"
     )
-    compiled_case = next(iter(compiled.cases.values()))
+    compiled_case = next(iter(case_sites(compiled.sites).values()))
     root = cast(DecisionDecompose, compiled_case.root)
     left = cast(DecisionSwitch, root.child)
     right = cast(DecisionSwitch, left.keyed_children[0].decision)
@@ -673,7 +665,7 @@ def test_valid_shared_dag_passes_graph_semantic_replay_validation(tmp_path: Path
     result = compile_program_matches(checked)
     assert isinstance(result.compiled, MatchCompiledProgram)
     compiled = result.compiled
-    compiled_case = next(iter(compiled.cases_by_module[ENTRY_ID].values()))
+    compiled_case = next(iter(case_sites(compiled.sites_by_module[ENTRY_ID]).values()))
     root = cast(DecisionDecompose, compiled_case.root)
     left = cast(DecisionSwitch, root.child)
     right = cast(DecisionSwitch, left.keyed_children[0].decision)
@@ -695,7 +687,7 @@ def test_duplicate_source_case_ids_are_rejected_by_compilation_and_validation(
     monkeypatch.setattr(stage_module, "walk", walk_one_case_twice)
 
     with pytest.raises(MatchCompileInvariantError, match="duplicate"):
-        stage_module._source_cases(checked.resolved.program)
+        stage_module._source_sites(checked.resolved.program)
     with pytest.raises(MatchCompileInvariantError, match="duplicate"):
         compile_module_matches(checked)
 
@@ -719,7 +711,7 @@ def test_graph_compiles_imported_cases_and_rejects_wrong_module_provenance(
         MatchCompiledProgram(checked, {})
 
     library_id = next(module_id for module_id in checked.modules if module_id != ENTRY_ID)
-    library_cases = compiled.cases_by_module[library_id]
+    library_cases = case_sites(compiled.sites_by_module[library_id])
     assert len(library_cases) == 1
     case_id, compiled_case = next(iter(library_cases.items()))
     wrong_context = replace(compiled_case.normalized.case_context, module_id=ENTRY_ID)
@@ -727,7 +719,7 @@ def test_graph_compiles_imported_cases_and_rejects_wrong_module_provenance(
         compiled_case,
         normalized=replace(compiled_case.normalized, case_context=wrong_context),
     )
-    corrupted = dict(compiled.cases_by_module)
+    corrupted = dict(compiled.sites_by_module)
     corrupted[library_id] = {case_id: wrong_case}
     with pytest.raises(MatchCompileInvariantError, match="belongs to module"):
         MatchCompiledProgram(checked, corrupted)
@@ -747,7 +739,7 @@ def test_graph_artifact_rejects_compiled_case_semantic_corruption(tmp_path: Path
     result = compile_program_matches(checked)
     assert isinstance(result.compiled, MatchCompiledProgram)
     compiled = result.compiled
-    entry_cases = compiled.cases_by_module[ENTRY_ID]
+    entry_cases = case_sites(compiled.sites_by_module[ENTRY_ID])
     first_id, second_id = tuple(entry_cases)
     first = entry_cases[first_id]
     second = entry_cases[second_id]
@@ -779,7 +771,7 @@ def test_graph_artifact_rejects_compiled_case_semantic_corruption(tmp_path: Path
     for corrupted_case in corruptions:
         corrupted_modules = {
             module_id: dict(module_cases)
-            for module_id, module_cases in compiled.cases_by_module.items()
+            for module_id, module_cases in compiled.sites_by_module.items()
         }
         corrupted_modules[ENTRY_ID][first_id] = corrupted_case
         with pytest.raises(MatchCompileInvariantError):
@@ -792,7 +784,7 @@ def test_graph_artifact_rejects_compiled_case_semantic_corruption(tmp_path: Path
     invalid_checked = check_program(resolve_program(invalid_graph), base_caps())
     invalid_owner = invalid_checked.modules[ENTRY_ID]
     invalid_case = _first_case(invalid_owner)
-    invalid_compiled = compile_case(normalize_case(invalid_case, invalid_owner))
+    invalid_compiled = compile_match_site(normalize_case(invalid_case, invalid_owner))
     stripped = replace(invalid_compiled, issues=())
     with pytest.raises(MatchCompileInvariantError):
         MatchCompiledProgram(
@@ -809,7 +801,7 @@ def test_graph_artifact_replays_source_semantics_against_every_decision_edge(
     result = compile_program_matches(checked)
     assert isinstance(result.compiled, MatchCompiledProgram)
     compiled = result.compiled
-    entry_cases = compiled.cases_by_module[ENTRY_ID]
+    entry_cases = case_sites(compiled.sites_by_module[ENTRY_ID])
     case_ids = tuple(entry_cases)
     cases = tuple(entry_cases.values())
 

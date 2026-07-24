@@ -7,7 +7,7 @@ import pytest
 import agm.agl.matchcompile.compiler as compiler_module
 import agm.agl.matchcompile.matrix as matrix_module
 from agm.agl.capabilities import HostCapabilities
-from agm.agl.matchcompile.compiler import compile_case, validate_decision_dag
+from agm.agl.matchcompile.compiler import compile_match_site, validate_decision_dag
 from agm.agl.matchcompile.matrix import (
     OccurrenceAllocator,
     head_constructors,
@@ -105,7 +105,7 @@ def test_terminal_wide_constructor_state_skips_column_profiles(
 
     monkeypatch.setattr(matrix_module, "_build_column_profiles", counted_build)
 
-    compiled = compile_case(normalized)
+    compiled = compile_match_site(normalized)
 
     assert compiled.reachable_action_ids == (case.branches[0].node_id,)
     assert profile_builds == 1
@@ -125,7 +125,7 @@ def test_deep_singleton_product_patterns_keep_a_linear_decomposition_dag(
         "\n".join((*declarations, f"let value = {value}", f"case value of | {value} => 1"))
     )
 
-    compiled = compile_case(normalize_case(case, checked))
+    compiled = compile_match_site(normalize_case(case, checked))
     nodes: set[int] = set()
 
     def visit(decision: object) -> None:

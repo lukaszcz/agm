@@ -42,6 +42,7 @@ from agm.agl.syntax.nodes import (
     WildcardPattern,
 )
 from agm.agl.typecheck import check_module
+from tests.agl.match_reference import case_sites
 
 
 def _lower(source: str) -> ExecutableProgram:
@@ -100,7 +101,7 @@ def test_lowering_rejects_a_forged_failed_decision(self_validation_disabled: Non
     checked = check_module(resolve_module(parse_program(source)), HostCapabilities())
     result = compile_module_matches(checked)
     assert isinstance(result.compiled, MatchCompiledModule)
-    case_id, compiled_case = next(iter(result.compiled.cases.items()))
+    case_id, compiled_case = next(iter(case_sites(result.compiled.sites).items()))
     forged = replace(
         result.compiled,
         sites={**result.compiled.sites, case_id: replace(compiled_case, root=DecisionFail())},
@@ -118,7 +119,7 @@ def test_lowering_rejects_a_forged_record_switch(self_validation_disabled: None)
     checked = check_module(resolve_module(parse_program(source)), HostCapabilities())
     result = compile_module_matches(checked)
     assert isinstance(result.compiled, MatchCompiledModule)
-    case_id, compiled_case = next(iter(result.compiled.cases.items()))
+    case_id, compiled_case = next(iter(case_sites(result.compiled.sites).items()))
     root = compiled_case.root
     assert isinstance(root, DecisionDecompose)
     forged = replace(

@@ -258,6 +258,9 @@ def _make_literal_key_value(key: IrLiteralCaseKey) -> Value:
     return JsonValue(None)
 
 
+_EXCEPTION_NOMINAL = NominalId(PRELUDE_ID, "Exception")
+
+
 def _project_nominal_field(value: Value, nominal: NominalId, field: str) -> Value:
     """Read one declared field from a nominal runtime value.
 
@@ -269,10 +272,9 @@ def _project_nominal_field(value: Value, nominal: NominalId, field: str) -> Valu
             "IrField: expected RecordValue, EnumValue, or ExceptionValue, "
             f"got {type(value).__name__}"
         )
-    is_exception_base = isinstance(value, ExceptionValue) and nominal == NominalId(
-        PRELUDE_ID, "Exception"
-    )
-    if value.nominal != nominal and not is_exception_base:
+    if value.nominal != nominal and not (
+        isinstance(value, ExceptionValue) and nominal == _EXCEPTION_NOMINAL
+    ):
         raise InvalidIrError(f"IrField: expected nominal {nominal!r}, got {value.nominal!r}")
     try:
         return value.fields[field]

@@ -24,7 +24,6 @@ from .model import (
     BoolConstructor,
     Constructor,
     ConstructorCell,
-    ConstructorField,
     EnumConstructor,
     FieldBearingConstructorKey,
     FieldBearingNominalConstructor,
@@ -32,7 +31,7 @@ from .model import (
     LiteralKind,
     MatchCaseContext,
     MatrixRow,
-    NormalizedCase,
+    NormalizedMatchSite,
     Occurrence,
     OccurrenceId,
     PathDecomposition,
@@ -40,13 +39,14 @@ from .model import (
     PatternProvenance,
     RecordConstructor,
     WildcardCell,
-    field_bearing_constructor_fields,
     field_bearing_constructor_key,
     field_bearing_constructor_sort_key,
 )
 from .normalize import (
     MatchCompileInvariantError,
     constructor_inhabits_type,
+    enum_constructor,
+    record_constructor,
 )
 
 
@@ -102,34 +102,12 @@ def _canonical_constructor(
 
     if isinstance(constructor, EnumConstructor):
         assert isinstance(subject_type, EnumType)
-        try:
-            fields = type_table.enum_variants(subject_type).get(constructor.variant)
-        except (KeyError, AssertionError) as exc:
-            raise MatchCompileInvariantError(
-                f"cannot resolve enum signature for checked type {subject_type!r}"
-            ) from exc
-        if fields is None:
-            raise MatchCompileInvariantError(
-                "enum constructor does not exactly match its checked signature"
-            )
-        canonical: FieldBearingNominalConstructor = EnumConstructor(
-            subject_type,
-            constructor.variant,
-            tuple(ConstructorField(name, field_type) for name, field_type in fields.items()),
+        canonical: FieldBearingNominalConstructor = enum_constructor(
+            subject_type, constructor.variant, type_table
         )
     else:
-        assert isinstance(constructor, RecordConstructor)
         assert isinstance(subject_type, RecordType)
-        try:
-            fields = type_table.record_fields(subject_type)
-        except (KeyError, AssertionError) as exc:
-            raise MatchCompileInvariantError(
-                f"cannot resolve record signature for checked type {subject_type!r}"
-            ) from exc
-        canonical = RecordConstructor(
-            subject_type,
-            tuple(ConstructorField(name, field_type) for name, field_type in fields.items()),
-        )
+        canonical = record_constructor(subject_type, type_table)
     if canonical != constructor:
         raise MatchCompileInvariantError(
             "nominal constructor does not exactly match its checked signature"
@@ -292,7 +270,7 @@ def _build_column_profiles(matrix: PatternMatrix) -> tuple[_ColumnProfile, ...]:
     )
 
 
-def matrix_from_normalized(case: NormalizedCase) -> PatternMatrix:
+def matrix_from_normalized(case: NormalizedMatchSite) -> PatternMatrix:
     """Construct the initial matrix state for a normalized match site."""
     return PatternMatrix(
         case.occurrences,
@@ -370,7 +348,7 @@ class OccurrenceAllocator:
     case_context: MatchCaseContext = dataclass_field(repr=False, compare=False, hash=False)
 
     @classmethod
-    def for_case(cls, case: NormalizedCase) -> OccurrenceAllocator:
+    def for_case(cls, case: NormalizedMatchSite) -> OccurrenceAllocator:
         """Create the sole root allocator for one normalized match site."""
         next_id = (
             max(
@@ -426,7 +404,7 @@ def _allocate_children(
                 source=sources[index],
             ),
         )
-        for index, field in enumerate(field_bearing_constructor_fields(constructor))
+        for index, field in enumerate(constructor.fields)
     )
     return children, OccurrenceAllocator(
         index=allocator.index.extended(group, children),
@@ -649,9 +627,7 @@ def _validate_cell(cell: PatternCell, subject_type: Type, type_table: TypeTable)
         return
     constructor = _canonical_constructor(cell.constructor, subject_type, type_table)
     if isinstance(constructor, (EnumConstructor, RecordConstructor)):
-        for field, argument in zip(
-            field_bearing_constructor_fields(constructor), cell.arguments, strict=True
-        ):
+        for field, argument in zip(constructor.fields, cell.arguments, strict=True):
             _validate_cell(argument, field.type, type_table)
 
 
@@ -730,7 +706,7 @@ def _validate_path_decompositions(
                 )
 
         fields = (
-            field_bearing_constructor_fields(canonical_constructor)
+            canonical_constructor.fields
             if isinstance(canonical_constructor, (EnumConstructor, RecordConstructor))
             else ()
         )

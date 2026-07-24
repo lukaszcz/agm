@@ -122,7 +122,7 @@ MatchWitness: TypeAlias = (
 class NonExhaustiveIssue:
     """One source case has a reachable failure path."""
 
-    case_node_id: int
+    site_node_id: int
     span: SourceSpan
     witness: MatchWitness
 
@@ -131,7 +131,7 @@ class NonExhaustiveIssue:
 class RedundantArmIssue:
     """One source arm action is unreachable in the compiled decision DAG."""
 
-    case_node_id: int
+    site_node_id: int
     action_id: int
     span: SourceSpan
 
@@ -140,7 +140,7 @@ class RedundantArmIssue:
 class RefutableLetIssue:
     """One immutable ``let`` pattern has a reachable non-matching value."""
 
-    let_node_id: int
+    site_node_id: int
     span: SourceSpan
     witness: MatchWitness
 
@@ -166,24 +166,21 @@ def render_witness(witness: MatchWitness) -> str:
         return "true" if witness.value else "false"
     if isinstance(witness, LiteralWitness):
         return _render_literal(witness.kind, witness.value)
-    if isinstance(witness, EnumWitness):
-        constructor_name = witness.variant
-        if witness.qualification is not None:
-            constructor_name = f"{witness.qualification.owner_spelling}::{witness.variant}"
-        if not witness.fields:
-            return constructor_name
+    if isinstance(witness, (EnumWitness, RecordWitness)):
+        if isinstance(witness, EnumWitness):
+            constructor_name = witness.variant
+            if witness.qualification is not None:
+                constructor_name = f"{witness.qualification.owner_spelling}::{witness.variant}"
+            if not witness.fields:
+                return constructor_name
+        else:
+            constructor_name = (
+                witness.record_type.name
+                if witness.qualification is None
+                else witness.qualification.owner_spelling
+            )
         fields = ", ".join(
             f"{field.name} = {render_witness(field.witness)}" for field in witness.fields
-        )
-        return f"{constructor_name}({fields})"
-    if isinstance(witness, RecordWitness):
-        fields = ", ".join(
-            f"{field.name} = {render_witness(field.witness)}" for field in witness.fields
-        )
-        constructor_name = (
-            witness.record_type.name
-            if witness.qualification is None
-            else witness.qualification.owner_spelling
         )
         return f"{constructor_name}({fields})"
     excluded = ", ".join(

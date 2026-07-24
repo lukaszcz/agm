@@ -5,7 +5,7 @@ helpers are implementation details available only from their defining
 submodules.
 """
 
-from .compiler import CompiledCase, CompiledMatchSite
+from .compiler import CompiledMatchSite
 from .diagnostics import (
     BoolWitness,
     EnumWitness,
@@ -56,7 +56,6 @@ __all__ = [
     "BoolConstructor",
     "BoolWitness",
     "Constructor",
-    "CompiledCase",
     "CompiledMatchSite",
     "Decision",
     "DecisionDecompose",

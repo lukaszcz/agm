@@ -20,7 +20,7 @@ if TYPE_CHECKING:
 
     from agm.agl.eval.ir_interpreter import IrInterpreter
     from agm.agl.ir.contracts import ContractPayload
-    from agm.agl.ir.ids import NominalId
+    from agm.agl.ir.ids import NominalId, SymbolId
     from agm.agl.ir.program import NominalDescriptor
     from agm.agl.lower import LinkImage
     from agm.agl.matchcompile import MatchCompiledProgram
@@ -101,6 +101,8 @@ class EntryPipelineCtx(Protocol):
     ) -> tuple[str, ...]: ...
 
     def _classify(self, program: Program) -> tuple[EntryKind, str | None]: ...
+
+    def frame_value(self, symbol: SymbolId | None) -> Value | None: ...
 
     def _echo_data_ir(
         self, program: Program, checked: CheckedModule, captured: Value | None
@@ -544,6 +546,7 @@ class EntryPipeline:
             )
             trace.run_end(ok=False)
             self._persist_interpreter_settings(interp, trace)
+            promoted = completed_declaration_ids()
             installed = self._ctx._promote_ir_state(
                 text=text,
                 program=orig_program,
@@ -552,13 +555,9 @@ class EntryPipeline:
                 entry_program_name=entry_program_name,
                 entry_active_config=entry_active_config,
                 partial=True,
-                promoted_declaration_ids=completed_declaration_ids(),
+                promoted_declaration_ids=promoted,
             )
-            self._restore_unpromoted_entry_nominals(
-                orig_program,
-                completed_declaration_ids(),
-                nominal_snapshot,
-            )
+            self._restore_unpromoted_entry_nominals(orig_program, promoted, nominal_snapshot)
             kind, name = self._ctx._classify(orig_program)
             return EntryResult(
                 kind=kind,
@@ -580,6 +579,7 @@ class EntryPipeline:
             )
             trace.run_end(ok=False)
             self._persist_interpreter_settings(interp, trace)
+            promoted = completed_declaration_ids()
             installed = self._ctx._promote_ir_state(
                 text=text,
                 program=orig_program,
@@ -588,13 +588,9 @@ class EntryPipeline:
                 entry_program_name=entry_program_name,
                 entry_active_config=entry_active_config,
                 partial=True,
-                promoted_declaration_ids=completed_declaration_ids(),
+                promoted_declaration_ids=promoted,
             )
-            self._restore_unpromoted_entry_nominals(
-                orig_program,
-                completed_declaration_ids(),
-                nominal_snapshot,
-            )
+            self._restore_unpromoted_entry_nominals(orig_program, promoted, nominal_snapshot)
             kind, name = self._ctx._classify(orig_program)
             return EntryResult(
                 kind=kind,
@@ -636,10 +632,7 @@ class EntryPipeline:
             else None
         )
         if lowered.trailing_let_value_symbol is not None:
-            from agm.agl.semantics.values import Cell
-
-            slot = self._ctx._ir_base_frame.get(lowered.trailing_let_value_symbol)
-            captured = slot.value if isinstance(slot, Cell) else slot
+            captured = self._ctx.frame_value(lowered.trailing_let_value_symbol)
         kind, name = self._ctx._classify(orig_program)
         value, value_type = self._ctx._echo_data_ir(orig_program, checked, captured)
         return EntryResult(

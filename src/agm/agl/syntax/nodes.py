@@ -902,11 +902,6 @@ def pattern_binding_node_ids(pattern: Pattern) -> tuple[int, ...]:
     return tuple(candidate.node_id for candidate in pattern_binder_candidates(pattern))
 
 
-def pattern_binder_names(pattern: Pattern) -> tuple[str, ...]:
-    """Return names for every named pattern binding candidate in source order."""
-    return tuple(candidate.name for candidate in pattern_binder_candidates(pattern))
-
-
 # ---------------------------------------------------------------------------
 # Binder nodes (block-item level, not independently usable as Expr)
 # ---------------------------------------------------------------------------

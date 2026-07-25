@@ -375,6 +375,10 @@ Meta-commands begin with a leading `:` (which never collides with AgL syntax):
 - Blank lines and comment-only entries (everything after a `#` is a comment) are a
   no-op: pressing Enter on them simply returns a fresh prompt, with no evaluation and no
   error.
+- **Declaration entries** echo the declared name followed by `declared`. A scoped
+  declaration path echoes the full path (`Tools::twice declared`), and a `scope … end`
+  region echoes the scope it opened (`Tools declared`). `import`, `export`, `open`, and
+  fixity declarations echo nothing.
 - **Bare type expressions** typed at the prompt are recognized as types rather than
   value expressions: entering `int`, a declared `enum`/`record`/`type` name, or a
   parameterized form like `list[int]` or `(int) -> bool` echoes the resolved type (e.g.

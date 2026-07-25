@@ -901,3 +901,78 @@ class TestNominalRenderingEcho:
         bindings = meta_mod.dispatch_meta(":bindings", _session_ctx(s))
         assert bindings.text is not None
         assert "Point(\n  y = 2,\n  x = 1\n)" in bindings.text
+
+
+class TestScopedDeclarationEcho:
+    """Verify scoped declarations echo the scope they landed in."""
+
+    def test_scope_region_entry_echoes_its_path(self) -> None:
+        s = ReplSession()
+        r = s.eval_entry("scope Tools\ndef twice(x: int) -> int = x * 2\nend Tools")
+
+        assert r.ok, r.diagnostics
+        assert render_mod.render_entry_result(r, echo=True) == "Tools declared"
+
+    def test_check_only_scope_region_entry_echoes_its_path(self) -> None:
+        s = ReplSession()
+        r = s.eval_entry(
+            "scope Tools\ndef twice(x: int) -> int = x * 2\nend Tools", check_only=True
+        )
+
+        assert r.ok, r.diagnostics
+        assert render_mod.render_entry_result(r, echo=True, check_only=True) == "Tools declared"
+
+    def test_empty_scope_region_entry_echoes_its_path(self) -> None:
+        s = ReplSession()
+        r = s.eval_entry("scope Tools\nend Tools")
+
+        assert r.ok, r.diagnostics
+        assert render_mod.render_entry_result(r, echo=True) == "Tools declared"
+
+    def test_multi_segment_scope_region_entry_echoes_the_full_path(self) -> None:
+        s = ReplSession()
+        r = s.eval_entry("scope Outer::Inner\ndef value() -> int = 1\nend Outer::Inner")
+
+        assert r.ok, r.diagnostics
+        assert render_mod.render_entry_result(r, echo=True) == "Outer::Inner declared"
+
+    def test_region_with_its_own_member_echoes_only_the_outer_path(self) -> None:
+        s = ReplSession()
+        r = s.eval_entry(
+            "scope Outer\ndef value() -> int = 1\nscope Inner\nend Inner\nend Outer",
+        )
+
+        assert r.ok, r.diagnostics
+        assert render_mod.render_entry_result(r, echo=True) == "Outer declared"
+
+    def test_scoped_shorthand_declaration_echoes_its_full_path(self) -> None:
+        s = ReplSession()
+        func = s.eval_entry("def Tools::twice(x: int) -> int = x * 2")
+        rec = s.eval_entry("record Tools::Pair(left: int, right: int)")
+
+        assert func.ok, func.diagnostics
+        assert rec.ok, rec.diagnostics
+        assert render_mod.render_entry_result(func, echo=True) == "Tools::twice declared"
+        assert render_mod.render_entry_result(rec, echo=True) == "Tools::Pair declared"
+
+    def test_root_declaration_echo_stays_unqualified(self) -> None:
+        s = ReplSession()
+        r = s.eval_entry("record Pair(left: int, right: int)")
+
+        assert r.ok, r.diagnostics
+        assert render_mod.render_entry_result(r, echo=True) == "Pair declared"
+
+    def test_exception_declaration_echoes_its_name(self) -> None:
+        s = ReplSession()
+        r = s.eval_entry("exception Boom extends Exception\n  code: int")
+
+        assert r.ok, r.diagnostics
+        assert render_mod.render_entry_result(r, echo=True) == "Boom declared"
+
+    def test_open_declaration_entry_echoes_nothing(self) -> None:
+        s = ReplSession()
+        assert s.eval_entry("def Tools::twice(x: int) -> int = x * 2").ok
+        r = s.eval_entry("open Tools")
+
+        assert r.ok, r.diagnostics
+        assert render_mod.render_entry_result(r, echo=True) is None

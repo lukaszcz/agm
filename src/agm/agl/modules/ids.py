@@ -95,6 +95,15 @@ class ModuleId:
         return cls(segments=tuple(segments))
 
 
+def spell_scope_path(path: Sequence[str]) -> str:
+    """Render a scope or declaration path as the ``A::B::name`` spelling.
+
+    The result is display text — a scope path is carried as its separate
+    segments everywhere else and is never recovered by splitting a spelling.
+    """
+    return "::".join(path)
+
+
 def spell_declaration(
     module_id: ModuleId, path: Sequence[str], *, local_to: ModuleId | None = None
 ) -> str:
@@ -105,7 +114,7 @@ def spell_declaration(
     module's user-facing label.  Diagnostics that suggest a disambiguating
     spelling use this so the suggestion is one the reader can actually type.
     """
-    scoped = "::".join(path)
+    scoped = spell_scope_path(path)
     if local_to is not None and module_id == local_to:
         return scoped
     return f"{module_id.display()}::{scoped}"

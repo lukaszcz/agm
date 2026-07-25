@@ -29,13 +29,17 @@ class EntryResult:
     ``kind``
         Classified by the entry's LAST item: a bare ``Expr`` → ``"expression"``
         (``value``/``value_type`` set); ``let``/``var`` → ``"binding"``
-        (``name``/``value_type``/``value``); ``record``/``enum``/``type``/
-        ``param``/``def``/``agent`` → ``"declaration"``; ``:=`` or side-
-        effecting expr (``print``, etc.) → ``"statement"``; a REPL-only bare
-        type expression (``int``, a declared type name, ``list[T]``) →
-        ``"type"`` (``value_type`` set, no value, no state change).
+        (``name``/``value_type``/``value``); ``record``/``enum``/``exception``/
+        ``type``/``param``/``def``/``agent`` and a ``scope … end`` region →
+        ``"declaration"``; ``:=``, an ``import``/``export``/``open``/fixity
+        declaration, or a side-effecting expr (``print``, etc.) →
+        ``"statement"``; a REPL-only bare type expression (``int``, a declared
+        type name, ``list[T]``) → ``"type"`` (``value_type`` set, no value, no
+        state change).
     ``name``
-        The bound/declared name, when meaningful (binding / declaration).
+        The bound/declared name, when meaningful (binding / declaration).  A
+        scoped declaration carries its path-qualified spelling (``A::f``), and a
+        scope region carries the path it opened.
     ``value``
         The echoed runtime value (expression value or new binding value); ``None``
         for declarations, statements, ``check_only`` runs, and failures.

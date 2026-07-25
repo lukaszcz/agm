@@ -76,6 +76,23 @@ def has_runnable_statements(text: str) -> bool:
         return True
 
 
+def _region_path(region: "ScopeRegion") -> tuple[str, ...]:
+    """Return the scope path *region* opens, as the entry spelled it.
+
+    A multi-segment header parses into nested single-segment regions, so a
+    region whose only item is another region is spelled back as the equivalent
+    multi-segment path; a region that also declares members ends the path.
+    """
+    from agm.agl.syntax.nodes import ScopeRegion
+
+    path = [region.segment.name]
+    current = region
+    while len(current.items) == 1 and isinstance(current.items[0], ScopeRegion):
+        current = current.items[0]
+        path.append(current.segment.name)
+    return tuple(path)
+
+
 # ---------------------------------------------------------------------------
 # ReplSession — the persistent incremental driver
 # ---------------------------------------------------------------------------
@@ -1027,12 +1044,14 @@ class ReplSession:
 
     def _classify(self, program: "Program") -> tuple[EntryKind, str | None]:
         """Classify the entry by its last item; return (kind, name)."""
+        from agm.agl.modules.ids import spell_scope_path
         from agm.agl.syntax.nodes import (
             AgentDecl,
             AssignStmt,
             Binder,
             Declaration,
             EnumDef,
+            ExceptionDef,
             FuncDef,
             LetDecl,
             ParamDecl,
@@ -1041,6 +1060,7 @@ class ReplSession:
             ScopeRegion,
             TypeAlias,
             VarDecl,
+            is_scoped_declaration,
         )
 
         # A parsed program always has at least one item (empty/comment-only
@@ -1056,6 +1076,7 @@ class ReplSession:
             (
                 RecordDef,
                 EnumDef,
+                ExceptionDef,
                 TypeAlias,
                 ParamDecl,
                 ProgramDecl,
@@ -1063,14 +1084,20 @@ class ReplSession:
                 AgentDecl,
             ),
         ):
+            # A shorthand declaration path names the member it declares, so the
+            # echo shows the member the way its scope makes it reachable.
+            if is_scoped_declaration(last):
+                path = tuple(segment.name for segment in last.scope_path)
+                return "declaration", spell_scope_path((*path, last.name))
             return "declaration", last.name
         if isinstance(last, ScopeRegion):
-            return "declaration", None
+            return "declaration", spell_scope_path(_region_path(last))
         # AssignStmt → "statement"
         if isinstance(last, AssignStmt):
             return "statement", None
-        # Remaining Declaration kinds (defensive fallback).
-        return "statement", None  # pragma: no cover
+        # Import, export, open, infix, and builtin declarations name nothing the
+        # echo can confirm, so they read as statements.
+        return "statement", None
 
     def _quote_strings_for_entry(self, program: "Program") -> bool:
         """Return the top-level text quoting mode for REPL echo.

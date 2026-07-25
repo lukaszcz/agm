@@ -296,8 +296,8 @@ def _raise_reexport_conflict(
 ) -> None:
     raise AglScopeError(
         f"re-export name {exposed!r} has conflicting origins:"
-        f" {existing[0].path_str()!r}::{existing[1]!r}"
-        f" and {origin[0].path_str()!r}::{origin[1]!r}",
+        f" {existing[0].display()!r}::{existing[1]!r}"
+        f" and {origin[0].display()!r}::{origin[1]!r}",
         span=decl.span,
     )
 

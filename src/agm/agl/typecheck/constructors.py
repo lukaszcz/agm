@@ -685,7 +685,7 @@ class ConstructorChecker:
                 callee_ref.module_id, callee_ref.name, None, scope_path=gdef.template.scope_path
             )
             assert sig is not None, (
-                f"GenericTypeDef '{callee_ref.name}' in '{callee_ref.module_id.path_str()}' "
+                f"GenericTypeDef '{callee_ref.name}' in '{callee_ref.module_id.display()}' "
                 "has no constructor signature in the program table"
             )
             return self.check_generic_constructor_as_value(

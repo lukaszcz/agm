@@ -101,7 +101,7 @@ def ambiguous_qualification_message(
 ) -> str:
     """Render the common repair-oriented diagnostic for a shared verdict."""
     rendered = render_qualifier(qualifier, anchored=anchored)
-    paths = ", ".join(module.path_str() for module in candidates)
+    paths = ", ".join(module.display() for module in candidates)
     name = "::".join(_path(member))
     message = f"'{rendered}::{name}' is ambiguous across imported modules: {paths}."
     return f"{message} {qualification_repair_guidance()}"
@@ -232,7 +232,7 @@ def _selected_atoms(
         if not paths:
             rendered = "::".join(_item_path(item))
             raise AglScopeError(
-                f"name {rendered!r} is not exported by module {module.path_str()!r}", span=decl.span
+                f"name {rendered!r} is not exported by module {module.display()!r}", span=decl.span
             )
         for atom in paths:
             matched[atom] = None

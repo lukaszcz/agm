@@ -450,3 +450,55 @@ def test_wildcard_using_identifies_the_module_missing_the_selected_name(tmp_path
     diagnostic = str(raised.value)
     assert "shared" in diagnostic
     assert "plugins/beta" in diagnostic
+
+
+class TestAmbiguityRepairsAreSpellable:
+    """An ambiguity diagnostic suggests spellings the reader can actually type.
+
+    The entry module's id carries a reserved segment holding a NUL byte so it
+    can never collide with a real file, and it has no name a program can write.
+    Neither may appear in a suggested repair: a declaration in the reading
+    module is spelled by its scope path alone.
+    """
+
+    _AMBIGUOUS_OPENED_SCOPES = (
+        "open X\n"
+        "open Y\n"
+        "\n"
+        "scope X\n"
+        "enum Flag\n"
+        "  | Good\n"
+        "end X\n"
+        "\n"
+        "scope Y\n"
+        "enum Flag\n"
+        "  | Good\n"
+        "end Y\n"
+    )
+
+    def test_ambiguous_constructor_across_opened_scopes(self, tmp_path: Path) -> None:
+        graph = _graph(tmp_path, self._AMBIGUOUS_OPENED_SCOPES + "\nlet f = Flag::Good\n")
+
+        with pytest.raises(AglScopeError) as raised:
+            resolve_program(graph)
+
+        diagnostic = str(raised.value)
+        assert "\x00" not in diagnostic
+        assert "<entry>" not in diagnostic
+        assert "X::Flag::Good" in diagnostic
+        assert "Y::Flag::Good" in diagnostic
+
+    def test_ambiguous_type_across_opened_scopes(self, tmp_path: Path) -> None:
+        graph = _graph(
+            tmp_path,
+            self._AMBIGUOUS_OPENED_SCOPES + "\nlet f: X::Flag = X::Flag::Good\nlet g: Flag = f\n",
+        )
+
+        with pytest.raises(AglTypeError) as raised:
+            check_program(resolve_program(graph), base_caps())
+
+        diagnostic = str(raised.value)
+        assert "\x00" not in diagnostic
+        assert "<entry>" not in diagnostic
+        assert "X::Flag" in diagnostic
+        assert "Y::Flag" in diagnostic

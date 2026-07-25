@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 # Regex for a valid identifier segment: must start with letter or underscore,
@@ -92,6 +93,22 @@ class ModuleId:
                     " (must match [A-Za-z_][A-Za-z0-9_]*)"
                 )
         return cls(segments=tuple(segments))
+
+
+def spell_declaration(
+    module_id: ModuleId, path: Sequence[str], *, local_to: ModuleId | None = None
+) -> str:
+    """Render a declaration path the way a reader in *local_to* would write it.
+
+    A declaration in the reading module needs no module qualifier, so it is
+    spelled by its path alone; anything else is prefixed with the owning
+    module's user-facing label.  Diagnostics that suggest a disambiguating
+    spelling use this so the suggestion is one the reader can actually type.
+    """
+    scoped = "::".join(path)
+    if local_to is not None and module_id == local_to:
+        return scoped
+    return f"{module_id.display()}::{scoped}"
 
 
 # ------------------------------------------------------------------

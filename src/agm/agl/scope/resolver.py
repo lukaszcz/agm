@@ -49,7 +49,7 @@ from dataclasses import replace
 from typing import TYPE_CHECKING, cast
 
 from agm.agl.diagnostics import Diagnostic
-from agm.agl.modules.ids import ENTRY_ID, PRELUDE_ID, STD_CONFIG_ID, ModuleId
+from agm.agl.modules.ids import ENTRY_ID, PRELUDE_ID, STD_CONFIG_ID, ModuleId, spell_declaration
 from agm.agl.scope.imports import (
     NameAtom,
     QName,
@@ -2322,7 +2322,9 @@ class _Resolver:
             return next(iter(resolved))
         qualifiers = ", ".join(
             sorted(
-                ref.module_id.path_str() + "::" + "::".join((*ref.scope_path, ref.name))
+                spell_declaration(
+                    ref.module_id, (*ref.scope_path, ref.name), local_to=self._module_id
+                )
                 for ref in resolved
             )
         )
@@ -2349,7 +2351,7 @@ class _Resolver:
         if len(qnames) > 1:
             # Clash-on-use: more than one module exposes this name.
             qualifiers = sorted(
-                qn[0].path_str() + "::" + "::".join((qn[1],) if isinstance(qn[1], str) else qn[1])
+                qn[0].display() + "::" + "::".join((qn[1],) if isinstance(qn[1], str) else qn[1])
                 for qn in qnames
             )
             hint = ", ".join(qualifiers)
@@ -2419,7 +2421,7 @@ class _Resolver:
                 f"No module imported under qualifier '{rendered}'.", span=span
             ),
             private_member=lambda module: AglScopeError(
-                f"'{name}' in module '{module.path_str()}' is declared private and cannot be "
+                f"'{name}' in module '{module.display()}' is declared private and cannot be "
                 "accessed from outside the module.",
                 span=span,
             ),

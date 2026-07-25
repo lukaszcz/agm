@@ -19,7 +19,7 @@ from types import MappingProxyType
 from typing import Literal, cast
 
 from agm.agl.diagnostics import AglError, Diagnostic
-from agm.agl.modules.ids import ENTRY_ID, PRELUDE_ID, ModuleId
+from agm.agl.modules.ids import ENTRY_ID, PRELUDE_ID, ModuleId, spell_declaration
 from agm.agl.scope.imports import (
     ImportEnv,
     NameAtom,
@@ -766,7 +766,7 @@ class TypeEnvironment:
                 f"Unknown module qualifier '{rendered}::'.", span=span
             ),
             private_member=lambda module: AglTypeError(
-                f"Type '{name}' in module '{module.path_str()}' is declared private "
+                f"Type '{name}' in module '{module.display()}' is declared private "
                 "and cannot be accessed from outside the module.",
                 span=span,
             ),
@@ -1274,7 +1274,7 @@ class TypeEnvironment:
             return next(iter(keys))
         labels = ", ".join(
             sorted(
-                f"{module.path_str()}::{'::'.join((*path, declared_name))}"
+                spell_declaration(module, (*path, declared_name), local_to=self._module_id)
                 for module, path, declared_name in keys
             )
         )
@@ -1641,7 +1641,7 @@ class TypeEnvironment:
         candidates = self._import_env.unqualified.get(name, frozenset())
         type_candidates = [qname for qname in candidates if self._is_program_type_candidate(qname)]
         if len(type_candidates) > 1:
-            labels = sorted(f"{qname[0].path_str()}::{qname[1]}" for qname in type_candidates)
+            labels = sorted(f"{qname[0].display()}::{qname[1]}" for qname in type_candidates)
             raise AglTypeError(
                 f"Ambiguous type '{name}': it is exported by multiple modules "
                 f"({', '.join(labels)}). Use a qualified reference to disambiguate.",
@@ -1777,7 +1777,7 @@ class TypeEnvironment:
                     return typ
             elif len(type_candidates) > 1:
                 # Ambiguous: multiple modules export this type name.
-                sorted_candidates = sorted(f"{qn[0].path_str()}::{qn[1]}" for qn in type_candidates)
+                sorted_candidates = sorted(f"{qn[0].display()}::{qn[1]}" for qn in type_candidates)
                 raise AglTypeError(
                     f"Ambiguous type '{name}': it is exported by multiple modules "
                     f"({', '.join(sorted_candidates)}). "
@@ -2179,7 +2179,7 @@ class TypeEnvironment:
         matches = self._open_imported_generic_type_matches(name)
         if len(matches) > 1:
             labels = sorted(
-                f"{module_id.path_str()}::{source_name}" for module_id, source_name, _ in matches
+                f"{module_id.display()}::{source_name}" for module_id, source_name, _ in matches
             )
             raise AglTypeError(
                 f"Ambiguous generic type '{name}': it is exported by multiple modules "

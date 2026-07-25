@@ -5,8 +5,8 @@ building the lexical scope chain and populating side tables:
 
 - ``resolution``:     ``VarRef.node_id`` / ``AssignStmt.node_id`` → ``BindingRef``
 - ``builtin_calls``:  ``Call.node_id`` → ``BuiltinKind``  (for contextual built-ins)
-- ``pattern_slots``: metadata for branch-local shared field-directed bindings
-- ``branch_pattern_slots``: ``Case`` branch node id → the slot ids it created
+- ``pattern_slots``: metadata for shared bindings owned by a pattern match site
+- ``match_site_pattern_slots``: match-site node id → the slot ids it created
 
 Scope rules
 -----------
@@ -45,7 +45,8 @@ from __future__ import annotations
 
 from collections.abc import Collection, Iterable, Iterator, Mapping
 from contextlib import contextmanager
-from dataclasses import replace
+from dataclasses import dataclass, replace
+from functools import partial
 from typing import TYPE_CHECKING, cast
 
 from agm.agl.diagnostics import Diagnostic
@@ -58,6 +59,7 @@ from agm.agl.scope.imports import (
     qualifier_candidates,
     qualifier_contributes,
     render_qualifier,
+    resolve_alias_target,
     resolve_qualified,
     resolve_qualified_member,
     try_resolve_qualified_member,
@@ -76,6 +78,7 @@ from agm.agl.scope.symbols import (
     ScopeNode,
     ScopePath,
     SlotCandidate,
+    alias_denotes_constructible_type,
     duplicate_binder_message,
     immutable_binder_phrase,
 )
@@ -96,7 +99,6 @@ if TYPE_CHECKING:
     from agm.agl.syntax.spans import SourceSpan
 from agm.agl.syntax.nodes import (
     AgentDecl,
-    AsPattern,
     AssignStmt,
     BinaryOp,
     Block,
@@ -156,7 +158,9 @@ from agm.agl.syntax.nodes import (
     VarDecl,
     VarPattern,
     VarRef,
+    WildcardPattern,
     assign_target_root_name,
+    pattern_binder_candidates,
 )
 from agm.agl.syntax.spans import SourceSpan
 from agm.agl.syntax.types import AppliedT, ImportMode, NameT
@@ -165,6 +169,22 @@ from agm.agl.syntax.visitor import walk
 # ---------------------------------------------------------------------------
 # Built-in names and reserved-name enforcement
 # ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class _PatternResolutionPolicy:
+    """Name-resolution policy for one pattern-owning syntax site."""
+
+    root_bare_binds: bool
+    binder_kind: BinderKind
+
+
+_CASE_PATTERN_POLICY = _PatternResolutionPolicy(
+    root_bare_binds=False, binder_kind=BinderKind.pattern_binding
+)
+_LET_PATTERN_POLICY = _PatternResolutionPolicy(
+    root_bare_binds=True, binder_kind=BinderKind.let_binding
+)
 
 # Built-in call names: recognised in call position, not bindable as values.
 # Sourced from ``symbols.BUILTIN_CALL_NAMES`` (the single source of truth).
@@ -218,6 +238,10 @@ class _Resolver:
         | None = None,
         cross_module_constructible_types: frozenset[tuple[ModuleId, NameAtom]] = frozenset(),
         cross_module_type_scopes: frozenset[tuple[ModuleId, NameAtom]] = frozenset(),
+        all_public_types: dict[
+            tuple[ModuleId, NameAtom], RecordDef | EnumDef | ExceptionDef | TypeAlias
+        ]
+        | None = None,
         is_entry: bool = True,
         repl_session_scope: ScopeNode | None = None,
         repl_session_scope_nodes: Mapping[ScopePath, ScopeNode] | None = None,
@@ -243,6 +267,12 @@ class _Resolver:
         # Public type declarations establish scope paths even when they have
         # no separately public child members.
         self._cross_module_type_scopes = cross_module_type_scopes
+        # Whole-program public-type table (program context only), used to
+        # follow a type alias's target across an import when deciding whether
+        # the alias has a variant-less constructor. ``None`` in module mode.
+        self._all_public_types: (
+            dict[tuple[ModuleId, NameAtom], RecordDef | EnumDef | ExceptionDef | TypeAlias] | None
+        ) = all_public_types
         # Whether this module is the entry module (program context only).
         self._is_entry: bool = is_entry
         # Optional REPL session scope for ``::name`` self-ref fallback.
@@ -314,18 +344,25 @@ class _Resolver:
         self._scoped_constructor_candidates: dict[tuple[ScopePath, str], list[ConstructorRef]] = {}
         # Constructor candidates: name -> ordered list of ConstructorRef.
         self._constructor_candidates: dict[str, list[ConstructorRef]] = {}
+        # Nominal aliases whose chain provably ends at an enum: they occupy
+        # their name (so a bare reference resolves instead of raising "not
+        # defined") but have no constructor candidate, since an enum's variants
+        # are its constructors, not the enum type itself.
+        self._nonconstructible_type_decls: dict[str, TypeAlias] = {}
         # Resolved single-candidate constructor refs: VarRef.node_id -> ConstructorRef.
         self._constructor_refs: dict[int, ConstructorRef] = {}
         # Scope records constructor candidates for bare pattern names. The
         # checker classifies them after constructor fields have been mapped;
         # candidates do not depend on ordinary lexical value bindings.
         self._pattern_constructor_candidates: dict[int, tuple[ConstructorRef, ...]] = {}
-        # Each case branch creates one shared slot binding for every
-        # field-directed name. The checker selects its final target once field
-        # types are known.
+        # Each pattern-owning case branch or let declaration creates one shared
+        # slot per binding name. The checker selects its final target after the
+        # match site has been classified.
         self._pattern_slots: dict[int, PatternSlot] = {}
-        self._branch_pattern_slots_by_node: dict[int, tuple[int, ...]] = {}
-        self._active_branch_pattern_slots: dict[str, int] | None = None
+        self._match_site_pattern_slots_by_node: dict[int, tuple[int, ...]] = {}
+        self._active_match_site_pattern_slots: dict[str, int] | None = None
+        self._active_match_site_node_id: int | None = None
+        self._active_match_site_binder_kind: BinderKind | None = None
         self._next_pattern_slot_id: int = 0
         # Loop-context flag: True when resolving inside a loop body (while_cond,
         # body, or until_cond). Reset to False across fn/def boundaries so that
@@ -451,7 +488,7 @@ class _Resolver:
             constructor_refs=dict(self._constructor_refs),
             pattern_constructor_candidates=dict(self._pattern_constructor_candidates),
             pattern_slots=dict(self._pattern_slots),
-            branch_pattern_slots=dict(self._branch_pattern_slots_by_node),
+            match_site_pattern_slots=dict(self._match_site_pattern_slots_by_node),
         )
 
     # ------------------------------------------------------------------
@@ -789,6 +826,35 @@ class _Resolver:
         existing.append(cref)
         self._constructor_candidates[ctor_key] = existing
 
+    def _alias_target_lookup(
+        self, name: str, qualifier: QualifierChain | None, *, scope_path: ScopePath = ()
+    ) -> RecordDef | EnumDef | ExceptionDef | TypeAlias | None:
+        """Resolve one alias-target type reference for :func:`alias_denotes_constructible_type`.
+
+        Tries this module's own declarations first — the alias's own scope path,
+        then the module root (only for an unqualified name, since a qualified
+        reference can never name a local declaration) — then falls back to the
+        shared import-environment resolution
+        (:func:`~agm.agl.scope.imports.resolve_alias_target`), which covers a
+        target reached through an open import or a module qualifier. In module
+        mode (no import environment or public-types table), only the local step
+        ever succeeds.
+        """
+        if qualifier is None or not qualifier.segments:
+            local_paths: tuple[ScopePath, ...] = (scope_path, ()) if scope_path else ((),)
+            for path in local_paths:
+                local = self._declaration_items.get((self._module_id, path, name))
+                if isinstance(local, (RecordDef, EnumDef, ExceptionDef, TypeAlias)):
+                    return local
+        return resolve_alias_target(
+            name,
+            qualifier,
+            self_module_id=None,
+            import_env=self._import_env,
+            all_public_types=self._all_public_types,
+            scope_path=scope_path,
+        )
+
     def _collect_constructor_candidates(self, program: Program) -> None:
         """Build constructor candidates for every collected declaration path."""
         self._seed_builtin_constructor_candidates()
@@ -836,17 +902,22 @@ class _Resolver:
                     item.name, cref, scope_path=path, inject_bare=not path
                 )
             elif isinstance(item, TypeAlias) and isinstance(item.type_expr, (NameT, AppliedT)):
-                cref = ConstructorRef(
-                    owner_name=item.name,
-                    variant=None,
-                    owner_decl_node_id=item.node_id,
-                    type_params=item.type_params,
-                    owner_module_id=self._module_id,
-                    owner_path=path,
-                )
-                self._add_constructor_candidate(
-                    item.name, cref, scope_path=path, inject_bare=not path
-                )
+                if alias_denotes_constructible_type(
+                    item, partial(self._alias_target_lookup, scope_path=path)
+                ):
+                    cref = ConstructorRef(
+                        owner_name=item.name,
+                        variant=None,
+                        owner_decl_node_id=item.node_id,
+                        type_params=item.type_params,
+                        owner_module_id=self._module_id,
+                        owner_path=path,
+                    )
+                    self._add_constructor_candidate(
+                        item.name, cref, scope_path=path, inject_bare=not path
+                    )
+                elif not path:
+                    self._nonconstructible_type_decls[item.name] = item
 
     def _root_declaring_candidates(self, name: str) -> tuple[ConstructorRef, ...]:
         """Candidates that declare *name* itself in this module's root.
@@ -913,6 +984,34 @@ class _Resolver:
                 module_id=rep.owner_module_id,
             )
             scope.define(name, ref)
+        self._define_nonconstructible_type_bindings(scope)
+
+    def _define_nonconstructible_type_bindings(self, scope: ScopeNode) -> None:
+        """Bind a nominal alias whose chain ends at an enum to its own declaration.
+
+        The alias has no constructor candidate — an enum's variants are its
+        constructors, not the enum type itself — but its name is still
+        occupied: a bare value reference resolves to a ``constructor_binding``
+        so type checking reports its "type name, not a value" diagnostic
+        instead of scope raising a bare "not defined" error. Same-module
+        collisions were already rejected by path-keyed collection; a REPL
+        parent binding is shadowed without error.
+        """
+        for name, decl in self._nonconstructible_type_decls.items():
+            parent_ref = scope.parent.lookup(name) if scope.parent is not None else None
+            if parent_ref is not None and parent_ref.kind is not BinderKind.constructor_binding:
+                continue
+            scope.define(
+                name,
+                BindingRef(
+                    name=name,
+                    mutable=False,
+                    decl_span=decl.span,
+                    decl_node_id=decl.node_id,
+                    kind=BinderKind.constructor_binding,
+                    module_id=self._module_id,
+                ),
+            )
 
     def _define_agent_bindings(self) -> None:
         """Define root agents; scoped agents already live in scope memberships."""
@@ -1560,32 +1659,67 @@ class _Resolver:
     # ------------------------------------------------------------------
 
     def _resolve_let(self, node: LetDecl) -> None:
-        self._resolve_binding(node, mutable=False, kind=BinderKind.let_binding)
+        # A let initializer is non-recursive: no part of its pattern exists
+        # until its RHS has resolved. A simple name is still a pattern binder;
+        # only its slot handling differs from a broader pattern.
+        self._resolve_expr(node.value)
+        if isinstance(node.pattern, VarPattern):
+            candidates = tuple(self._constructor_candidates.get(node.pattern.name, ()))
+            if candidates:
+                self._pattern_constructor_candidates[node.pattern.node_id] = candidates
+            self._check_not_reserved(node.pattern.name, node.span)
+            self._define_binder(
+                node,
+                decl_node_id=node.pattern.node_id,
+                name=node.pattern.name,
+                mutable=False,
+                kind=BinderKind.let_binding,
+            )
+            return
+        if isinstance(node.pattern, WildcardPattern):
+            return
+        with self._match_site_pattern_slots(node.node_id, _LET_PATTERN_POLICY):
+            self._bind_pattern_vars(node.pattern, self._current_scope(), _LET_PATTERN_POLICY)
 
     def _resolve_var(self, node: VarDecl) -> None:
-        self._resolve_binding(node, mutable=True, kind=BinderKind.var_binding)
-
-    def _resolve_binding(
-        self,
-        node: LetDecl | VarDecl,
-        *,
-        mutable: bool,
-        kind: BinderKind,
-    ) -> None:
         self._check_not_reserved(node.name, node.span)
         # Resolve RHS before defining the name (lambda non-recursion).
         self._resolve_expr(node.value)
-        if node.name == "_":
-            return
-        ref = BindingRef(
-            name=node.name,
-            mutable=mutable,
-            decl_span=node.span,
+        self._define_binder(
+            node,
             decl_node_id=node.node_id,
-            kind=kind,
-            module_id=self._module_id,
+            name=node.name,
+            mutable=True,
+            kind=BinderKind.var_binding,
         )
-        self._define(node.name, ref)
+
+    def _define_binder(
+        self,
+        node: LetDecl | VarDecl,
+        *,
+        decl_node_id: int,
+        name: str,
+        mutable: bool,
+        kind: BinderKind,
+    ) -> None:
+        """Define a resolved simple-name binder using its own identity node.
+
+        Let callers pass the pattern node; var callers pass the declaration node
+        because ``var`` has no pattern.
+        """
+        if name == "_":
+            return
+        self._define(
+            name,
+            BindingRef(
+                name=name,
+                mutable=mutable,
+                decl_span=node.span,
+                decl_node_id=decl_node_id,
+                kind=kind,
+                module_id=self._module_id,
+            ),
+        )
 
     def _resolve_assign(self, node: AssignStmt) -> None:
         target = node.target
@@ -2603,15 +2737,8 @@ class _Resolver:
         self._resolve_expr(node.subject)
         for branch in node.branches:
             with self._child_scope(branch.node_id) as branch_scope:
-                if isinstance(branch.pattern, ConstructorPattern):
-                    self._resolve_constructor_chain(
-                        branch.pattern.node_id,
-                        branch.pattern.qualifier,
-                        branch.pattern.name,
-                        defer_route_diagnostics=True,
-                    )
-                with self._branch_pattern_slots(branch.node_id):
-                    self._bind_pattern_vars(branch.pattern, branch_scope)
+                with self._match_site_pattern_slots(branch.node_id, _CASE_PATTERN_POLICY):
+                    self._bind_pattern_vars(branch.pattern, branch_scope, _CASE_PATTERN_POLICY)
                 self._resolve_expr_or_block(branch.body)
 
     def _resolve_loop(self, node: Loop) -> None:
@@ -2746,77 +2873,172 @@ class _Resolver:
     # Pattern variable binding
     # ------------------------------------------------------------------
 
-    def _bind_pattern_vars(
-        self, pattern: Pattern, scope: ScopeNode, *, nested: bool = False
-    ) -> None:
-        """Bind nested field-directed names to their shared branch slots.
+    def _qualified_pattern_constructor_candidates(
+        self, node: ConstructorPattern
+    ) -> tuple[ConstructorRef, ...]:
+        """Select the constructors a qualified pattern spelling can match.
 
-        A top-level bare name is constructor-only. Each nested name resolves
-        directly to the slot created for its branch, so no later pass has to
-        repair lexical resolution. The shared slot eagerly rejects duplicate
-        binders unless at least one candidate can match a bare nullary enum
-        variant; otherwise type checking defers diagnosis until field-directed
-        classification.
+        Ordering mirrors qualified value resolution: an opened contribution or
+        a local scope member is considered before an import route owning the
+        complete atom, and only then is the chain read as a type owner with the
+        pattern name as its variant. A spelling that resolves to nothing yields
+        an empty tuple, deferring the diagnostic to type checking.
         """
-        if isinstance(pattern, VarPattern):
-            regional_candidates = scope.bare_constructor_candidates(pattern.name)
-            candidates = (
-                tuple(regional_candidates)
-                if regional_candidates is not None
-                else tuple(self._constructor_candidates.get(pattern.name, ()))
+        chain = node.qualifier
+        assert chain is not None
+        relative_path = tuple(segment.name for segment in chain.segments)
+        if chain.anchor is QualifierAnchor.CURRENT_MODULE and not relative_path:
+            # ``::Name`` names this module's own root declaration and must not
+            # reach an imported constructor of the same spelling.
+            return tuple(
+                candidate
+                for candidate in self._constructor_candidates.get(node.name, ())
+                if candidate.owner_module_id in (self._module_id, PRELUDE_ID)
+                and not candidate.owner_path
             )
-            if candidates:
-                self._pattern_constructor_candidates[pattern.node_id] = candidates
-            if not nested:
-                if not candidates:
-                    raise AglScopeError(
-                        f"Bare case pattern '{pattern.name}' is not a visible constructor. "
-                        "Use '_' or '_ as name' for a catch-all binder.",
-                        span=pattern.span,
+        if chain.anchor is None:
+            opened = self._current_scope().bare_constructor_candidates(
+                _bare_atom((*relative_path, node.name))
+            )
+            if opened:
+                return tuple(opened)
+        local_path = self._validate_local_scope_chain(chain)
+        if local_path is not None:
+            if local_path in self._type_paths:
+                return (self._constructor_for_type_path(local_path, node.name),)
+            scoped = self._scoped_constructor_candidates.get((local_path, node.name), ())
+            if scoped:
+                return tuple(scoped)
+        if (
+            self._import_env is not None
+            and chain.anchor is not QualifierAnchor.CURRENT_MODULE
+            and chain.segments
+        ):
+            qname = self._try_resolve_qualified_qname(chain, node.name)
+            if qname is not None:
+                imported = self._cross_module_constructor_refs.get(qname)
+                if imported is not None:
+                    return (imported,)
+                # A root record, exception, or alias constructor is reached as an
+                # ordinary imported member; its declaration kind is what makes it
+                # a constructor spelling.
+                atom_path = _bare_path(qname[1])
+                decl_node_id, _decl_span, kind = self._decl_info.get(
+                    qname, (-1, node.span, BinderKind.let_binding)
+                )
+                if kind is BinderKind.constructor_binding:
+                    return (
+                        ConstructorRef(
+                            owner_name=atom_path[-1],
+                            variant=None,
+                            owner_decl_node_id=decl_node_id,
+                            type_params=(),
+                            owner_module_id=qname[0],
+                            owner_path=atom_path[:-1],
+                        ),
                     )
+        if self._resolve_constructor_chain(
+            node.node_id, chain, node.name, defer_route_diagnostics=True
+        ):
+            return (self._constructor_refs[node.node_id],)
+        return ()
+
+    def _try_resolve_qualified_qname(
+        self, chain: QualifierChain, name: str
+    ) -> tuple[ModuleId, NameAtom] | None:
+        """Resolve ``chain::name`` as one imported atom, or ``None`` on any failure."""
+        assert self._import_env is not None
+        route = tuple(part for part in chain.segments[0].name.split("/"))
+        atom = _bare_atom((*(segment.name for segment in chain.segments[1:]), name))
+        return try_resolve_qualified_member(self._import_env, route, atom, anchored=chain.anchored)
+
+    def _bare_constructor_candidates(self, name: str) -> tuple[ConstructorRef, ...]:
+        """Return the constructor candidates an unqualified *name* can select.
+
+        A region's opened contributions take precedence over the module-wide
+        candidate table, so a bare spelling inside a scope selects the same
+        constructor a qualified reference would.
+        """
+        regional = self._current_scope().bare_constructor_candidates(name)
+        if regional is not None:
+            return tuple(regional)
+        return tuple(self._constructor_candidates.get(name, ()))
+
+    def _bind_pattern_vars(
+        self, pattern: Pattern, scope: ScopeNode, policy: _PatternResolutionPolicy
+    ) -> None:
+        """Bind candidates according to a case or let match-site policy.
+
+        The syntax helper is the sole pattern walker. Case roots remain
+        constructor-only, let roots always bind, nested bare names remain
+        field-directed, and ``as`` names always bind.
+        """
+
+        def record_constructor_candidates(node: object) -> None:
+            if not isinstance(node, ConstructorPattern):
                 return
+            if node.qualifier is None:
+                self._pattern_constructor_candidates[node.node_id] = (
+                    self._bare_constructor_candidates(node.name)
+                )
+                return
+            # A qualified spelling never falls back to the bare one: every
+            # failure yields an empty set so the checker can judge the
+            # spelling against the type actually being matched.
+            candidates = self._qualified_pattern_constructor_candidates(node)
+            self._pattern_constructor_candidates[node.node_id] = candidates
+            if len(candidates) == 1:
+                self._constructor_refs[node.node_id] = candidates[0]
+
+        walk(pattern, record_constructor_candidates)
+        for candidate in pattern_binder_candidates(pattern):
+            constructor_candidates = (
+                self._bare_constructor_candidates(candidate.name)
+                if not candidate.is_as_pattern
+                else ()
+            )
+            if constructor_candidates:
+                self._pattern_constructor_candidates[candidate.node_id] = constructor_candidates
+            binds = candidate.is_as_pattern or candidate.nested or policy.root_bare_binds
+            if not binds:
+                if not constructor_candidates:
+                    raise AglScopeError(
+                        f"Bare case pattern '{candidate.name}' is not a visible constructor. "
+                        "Use '_' or '_ as name' for a catch-all binder.",
+                        span=candidate.span,
+                    )
+                continue
             self._add_pattern_slot_candidate(
-                pattern.name,
-                pattern.span,
-                pattern.node_id,
+                candidate.name,
+                candidate.span,
+                candidate.node_id,
                 scope,
                 can_match_bare_pattern=any(
-                    candidate.can_match_bare_pattern for candidate in candidates
+                    constructor.can_match_bare_pattern for constructor in constructor_candidates
                 ),
             )
-        elif isinstance(pattern, AsPattern):
-            self._bind_pattern_vars(pattern.pattern, scope, nested=nested)
-            self._add_pattern_slot_candidate(
-                pattern.name,
-                pattern.span,
-                pattern.node_id,
-                scope,
-                can_match_bare_pattern=False,
-            )
-        elif isinstance(pattern, ConstructorPattern):
-            for child in pattern.positional:
-                self._bind_pattern_vars(child, scope, nested=True)
-            for field in pattern.named:
-                self._bind_pattern_vars(field.pattern, scope, nested=True)
-        # WildcardPattern, LiteralPattern — no bindings introduced.
 
     @contextmanager
-    def _branch_pattern_slots(self, branch_node_id: int) -> Iterator[None]:
-        """Collect one shared pattern slot per name in the active branch.
-
-        The slot ids created here are published under *branch_node_id* so the
-        checker can select exactly this branch's slots instead of rescanning
-        every slot in the module.
-        """
-        parent_slots = self._active_branch_pattern_slots
-        self._active_branch_pattern_slots = {}
+    def _match_site_pattern_slots(
+        self, match_site_node_id: int, policy: _PatternResolutionPolicy
+    ) -> Iterator[None]:
+        """Collect slots owned by one case branch or let declaration."""
+        parent_slots = self._active_match_site_pattern_slots
+        parent_node_id = self._active_match_site_node_id
+        parent_binder_kind = self._active_match_site_binder_kind
+        self._active_match_site_pattern_slots = {}
+        self._active_match_site_node_id = match_site_node_id
+        self._active_match_site_binder_kind = policy.binder_kind
         try:
             yield
         finally:
-            self._branch_pattern_slots_by_node[branch_node_id] = tuple(
-                sorted(self._active_branch_pattern_slots.values())
+            assert self._active_match_site_pattern_slots is not None
+            self._match_site_pattern_slots_by_node[match_site_node_id] = tuple(
+                sorted(self._active_match_site_pattern_slots.values())
             )
-            self._active_branch_pattern_slots = parent_slots
+            self._active_match_site_pattern_slots = parent_slots
+            self._active_match_site_node_id = parent_node_id
+            self._active_match_site_binder_kind = parent_binder_kind
 
     def _add_pattern_slot_candidate(
         self,
@@ -2827,27 +3049,33 @@ class _Resolver:
         *,
         can_match_bare_pattern: bool,
     ) -> None:
-        """Join a candidate to its branch-local shared binding.
+        """Join a candidate to its match-site-local shared binding.
 
         Reject duplicate binders immediately only when neither the arriving
         candidate nor any prior slot candidate can match a bare pattern.
         """
         self._check_not_reserved(name, span)
-        branch_slots = self._active_branch_pattern_slots
-        assert branch_slots is not None
-        slot_id = branch_slots.get(name)
+        match_site_slots = self._active_match_site_pattern_slots
+        match_site_node_id = self._active_match_site_node_id
+        binder_kind = self._active_match_site_binder_kind
+        assert match_site_slots is not None
+        assert match_site_node_id is not None
+        assert binder_kind is not None
+        slot_id = match_site_slots.get(name)
         if slot_id is None:
             slot_id = self._next_pattern_slot_id
             self._next_pattern_slot_id += 1
-            branch_slots[name] = slot_id
+            match_site_slots[name] = slot_id
             alternative = scope.parent.lookup(name) if scope.parent is not None else None
             self._pattern_slots[slot_id] = PatternSlot(
                 slot_id=slot_id,
                 name=name,
                 candidates=(),
                 alternative=alternative,
+                match_site_node_id=match_site_node_id,
+                binder_kind=binder_kind,
             )
-            scope.define(
+            self._define(
                 name,
                 BindingRef(
                     name=name,

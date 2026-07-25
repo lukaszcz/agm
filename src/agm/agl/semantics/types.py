@@ -553,11 +553,13 @@ class EnumOwnerForm:
         """
         if self.type_template is None:
             return None
-        return _match_enum_owner_template(self.type_template, concrete)
+        return match_nominal_owner_template(self.type_template, concrete)
 
 
-def _match_enum_owner_template(template: TypeTemplate, concrete: Type) -> TypeTemplateMatch | None:
-    """Match enum owner templates while permitting uninferred phantom parameters."""
+def match_nominal_owner_template(
+    template: TypeTemplate, concrete: Type
+) -> TypeTemplateMatch | None:
+    """Match a nominal owner template while permitting uninferred phantom parameters."""
     bindings = match_type_template(template.template, concrete, ())
     if bindings is not None:
         return bindings
@@ -611,6 +613,13 @@ def iter_type(t: Type) -> Iterator[Type]:
     yield t
     for child in type_children(t):
         yield from iter_type(child)
+
+
+def iter_nominal_types(t: Type) -> Iterator[RecordType | EnumType | ExceptionType]:
+    """Yield every nominal handle reachable from *t*, including *t* itself."""
+    for part in iter_type(t):
+        if isinstance(part, (RecordType, EnumType, ExceptionType)):
+            yield part
 
 
 def replace_type_children(t: Type, children: tuple[Type, ...]) -> Type:

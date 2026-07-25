@@ -662,6 +662,17 @@ class TestEvalOutput:
 
         assert "x : int = 5" in output
 
+    def test_pattern_let_echoes_its_complete_value_without_a_synthetic_name(self) -> None:
+        session = ReplSession()
+        assert session.eval_entry("record Pair\n  left: int\n  right: int").ok
+
+        output = drive("let Pair(left, right) = Pair(left = 2, right = 3)\r\x04", session=session)
+
+        assert ": Pair = Pair(" in output
+        assert "left = 2" in output
+        assert "right = 3" in output
+        assert {name for name, _typ, _value in session.bindings()} == {"left", "right"}
+
     def test_expression_echo_shows_value(self) -> None:
         output = drive('"hi"\r\x04')
         assert "hi" in output

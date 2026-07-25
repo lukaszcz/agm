@@ -1,0 +1,14 @@
+{
+  "scenarios": [
+    {
+      "name": "top_level_pattern_binders_are_available",
+      "params": {"choose_right": true},
+      "expect": {"stdout": "3\n", "calls": {}}
+    },
+    {
+      "name": "record_pattern_binders_follow_the_selected_initializer",
+      "params": {"choose_right": false},
+      "expect": {"stdout": "5\n", "calls": {}}
+    }
+  ]
+}

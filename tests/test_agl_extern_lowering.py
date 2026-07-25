@@ -39,6 +39,7 @@ from agm.agl.ir import (
     IrFunctionParam,
     IrIndirectCall,
     IrMakeClosure,
+    IrSequence,
     Location,
     NominalDescriptor,
     NominalId,
@@ -69,6 +70,7 @@ from agm.agl.scope import resolve_module
 from agm.agl.scope.program import resolve_program
 from agm.agl.typecheck import check_module
 from agm.agl.typecheck.program import check_program
+from tests._agl_helpers import let_root_capture
 from tests.agl.ir_harness import (
     _compiled_checked,
     make_graph_from_files,
@@ -177,9 +179,10 @@ class TestExternCalls:
         assert isinstance(inits[0], IrBind)
         assert isinstance(inits[0].value, IrMakeClosure)
         result_bind = next(
-            item
+            let_root_capture(item)
             for item in inits
-            if isinstance(item, IrBind) and isinstance(item.value, IrIndirectCall)
+            if isinstance(item, (IrSequence, IrBind))
+            and isinstance(let_root_capture(item).value, IrIndirectCall)
         )
         assert isinstance(result_bind.value, IrIndirectCall)
 
@@ -234,6 +237,13 @@ class TestDryRunInventory:
         entry = executable.dry_run_inventory[0]
         assert entry.callee == "id"
         assert entry.target_type_label == "int"
+
+    def test_pattern_bound_extern_is_included_in_dry_run_inventory(self) -> None:
+        executable = _lower_source(
+            "extern def f(value: int) -> int\nlet _ as g: (int) -> int = f\ng(1)"
+        )
+
+        assert [entry.callee for entry in executable.dry_run_inventory] == ["f"]
 
     def test_pipeline_check_only_lists_the_extern_call_site(self, tmp_path: Path) -> None:
         root = tmp_path / "root"

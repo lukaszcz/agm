@@ -38,16 +38,19 @@ def _is_repl_printable_value(value: "Value") -> bool:
     return not isinstance(value, UnitValue) or value.printable_in_repl
 
 
-def format_typed_value(name: str, value_type: "Type", value: "Value") -> str:
-    """Format a single ``name : Type = value`` line.
+def format_typed_value(name: "str | None", value_type: "Type", value: "Value") -> str:
+    """Format a ``name : Type = value`` line, or ``: Type = value`` when unnamed.
 
     This is the single source of truth for the binding/value display shared by
     the entry-echo path (:func:`_render_echo`) and the ``:bindings`` / ``:params``
-    meta-commands, so the two never drift in how a value is rendered.
+    meta-commands, so the two never drift in how a value is rendered. *name* is
+    ``None`` for a destructuring ``let`` binding echo, which has no single
+    public name to show.
     """
     from agm.agl.runtime.render import render_value
 
-    return f"{name} : {value_type!r} = {render_value(value, pretty=True, quote_strings=True)}"
+    prefix = f"{name} :" if name is not None else ":"
+    return f"{prefix} {value_type!r} = {render_value(value, pretty=True, quote_strings=True)}"
 
 
 def render_entry_result(
@@ -121,9 +124,9 @@ def _render_check_only(result: "EntryResult") -> str | None:
         assert result.value_type is not None
         return f": {format_type_for_repl(result.value_type, result.type_table)}"
     if result.kind == "binding":
-        assert result.name is not None
         assert result.value_type is not None
-        return f"{result.name} : {format_type_for_repl(result.value_type, result.type_table)}"
+        typ = format_type_for_repl(result.value_type, result.type_table)
+        return f"{result.name} : {typ}" if result.name is not None else f": {typ}"
     if result.kind == "declaration":
         assert result.name is not None
         return f"{result.name} declared"
@@ -160,9 +163,8 @@ def _render_echo(result: "EntryResult") -> str | None:
             quote_strings=result.quote_strings,
         )
     if result.kind == "binding":
-        # A binding echoes ``name : Type = value`` (single-sourced helper so the
-        # echo and ``:bindings`` listing never diverge).
-        assert result.name is not None
+        # Named bindings share their display with ``:bindings``. A destructuring
+        # let has no single public name, so it echoes its complete matched value.
         assert result.value is not None
         assert result.value_type is not None
         if not _is_repl_printable_value(result.value):

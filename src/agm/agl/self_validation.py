@@ -15,9 +15,9 @@ An artifact validates itself once, where it is constructed; its consumers trust
 it rather than re-checking it, so each invariant is verified exactly once per
 artifact.
 
-The test harness enables them (see ``tests/conftest.py``) so that every case
-compiled and every program lowered anywhere in the suite doubles as an invariant
-oracle.
+The test harness enables them (see ``tests/conftest.py``) so that every match
+site compiled and every program lowered anywhere in the suite doubles as an
+invariant oracle.
 """
 
 from __future__ import annotations

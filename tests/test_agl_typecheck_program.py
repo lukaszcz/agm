@@ -89,11 +89,13 @@ def _with_reversed_module_discovery_order(graph: ModuleGraph) -> ModuleGraph:
 
 def _binding_value_type(cg: CheckedProgram, module_id: ModuleId, name: str) -> Type:
     """Inferred type of the RHS of the top-level ``let``/``var <name> = ...`` in ``module_id``."""
-    from agm.agl.syntax.nodes import LetDecl, VarDecl
+    from agm.agl.syntax.nodes import LetDecl, VarDecl, simple_let_pattern_name
 
     module = cg.modules[module_id]
     for item in module.resolved.program.body.items:
-        if isinstance(item, (LetDecl, VarDecl)) and item.name == name:
+        if isinstance(item, VarDecl) and item.name == name:
+            return module.node_types[item.value.node_id]
+        if isinstance(item, LetDecl) and simple_let_pattern_name(item.pattern) == name:
             return module.node_types[item.value.node_id]
     raise AssertionError(f"no top-level binding named {name!r} in {module_id}")
 
@@ -208,6 +210,19 @@ def test_candidate_inference_reads_preceding_top_level_binding(
     checked = _check(f"{binding}\ndef capture() = value\ncapture()")
 
     assert checked.function_signatures["capture"].result == expected
+
+
+def test_candidate_inference_reads_a_preceding_destructuring_let_binder() -> None:
+    """Candidate seeding tracks every selected binder node, not just the let site."""
+    checked = _check(
+        "enum Option[T]\n"
+        "  | some(value: T)\n"
+        "let some(value = value): Option[int] = some(value = 1)\n"
+        "def capture() = value\n"
+        "capture()"
+    )
+
+    assert checked.function_signatures["capture"].result == IntType()
 
 
 def test_program_signature_prepass_preserves_builtin_header_metadata(tmp_path: Path) -> None:
@@ -494,6 +509,40 @@ def test_qualified_type_ref_in_constructor_pattern(tmp_path: Path) -> None:
     cg = _check_program(tmp_path, modules)
     # Pin c's binding type as mylib::Color — not an any(TextType) scan over "red"/"blue".
     assert _binding_value_type(cg, ENTRY_ID, "c") == EnumType("Color", module_id=mylib_id)
+
+
+@pytest.mark.parametrize(
+    ("import_decl", "route"),
+    (
+        ("import mylib", "mylib"),
+        ("import mylib as colors", "colors"),
+        ("open import mylib", "mylib"),
+    ),
+    ids=("plain", "alias", "open"),
+)
+def test_module_qualified_imported_enum_pattern_publishes_constructor_ref(
+    tmp_path: Path, import_decl: str, route: str
+) -> None:
+    """A qualified imported enum pattern publishes its selected variant reference."""
+    checked = _check_program(
+        tmp_path,
+        {
+            "entry": f"{import_decl}\nlet {route}::Flag::on = {route}::Flag::on\n()",
+            "mylib": "enum Flag\n  | on\n  | off",
+        },
+    )
+    from agm.agl.syntax.nodes import ConstructorPattern, LetDecl
+
+    entry = checked.modules[ENTRY_ID]
+    let_decl = next(item for item in entry.resolved.program.body.items if isinstance(item, LetDecl))
+    assert isinstance(let_decl.pattern, ConstructorPattern)
+    constructor = entry.pattern_constructor_ref_for(let_decl.pattern.node_id)
+    assert constructor is not None
+    assert (constructor.owner_module_id, constructor.owner_name, constructor.variant) == (
+        ModuleId.from_path("mylib"),
+        "Flag",
+        "on",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -942,6 +991,93 @@ def test_imported_alias_to_non_nominal_named_type_is_not_constructible(tmp_path:
             {
                 "entry": "import lib\nlib::Alias(value = 1)",
                 "lib": "type Scalar = int\ntype Alias = Scalar",
+            },
+        )
+
+
+def test_local_alias_of_enum_is_a_type_name_not_a_value(tmp_path: Path) -> None:
+    """A local nominal alias whose target is an enum has no bare constructor.
+
+    An enum's variants are its constructors, not the enum type itself, so a
+    bare reference to the alias must report the same "type name, not a
+    value" diagnostic a bare enum type name gets — not the internal
+    "variant is required for EnumType" assertion that a variant-less
+    ``ConstructorRef`` for the alias used to trigger.
+    """
+    with pytest.raises(AglTypeError, match="is a type name, not a value"):
+        _check_program(
+            tmp_path,
+            {
+                "entry": "enum Color\n  | Red\n  | Blue\n\ntype Palette = Color\n\nprint(Palette)",
+            },
+        )
+
+
+def test_local_alias_of_record_remains_constructible(tmp_path: Path) -> None:
+    """A local nominal alias of a record keeps its bare zero-variant constructor."""
+    checked = _check_program(
+        tmp_path,
+        {
+            "entry": (
+                "record Point(x: int, y: int)\n\n"
+                "type Alias = Point\n\n"
+                "let p = Alias(x = 1, y = 2)\np"
+            ),
+        },
+    )
+
+    assert _binding_value_type(checked, ENTRY_ID, "p") == RecordType("Point", module_id=ENTRY_ID)
+
+
+def test_open_imported_alias_of_enum_is_a_type_name_not_a_value(tmp_path: Path) -> None:
+    """An open-imported nominal alias of an enum keeps its "type name" diagnostic."""
+    with pytest.raises(AglTypeError, match="is a type name, not a value"):
+        _check_program(
+            tmp_path,
+            {
+                "entry": "open import pal\nprint(Palette)",
+                "pal": "enum Color\n  | Red\n  | Blue\n\ntype Palette = Color",
+            },
+        )
+
+
+def test_module_qualified_alias_of_imported_enum_is_a_type_name_not_a_value(
+    tmp_path: Path,
+) -> None:
+    """A local alias whose target is a module-qualified imported enum has no bare constructor.
+
+    Unlike ``test_open_imported_alias_of_enum_is_a_type_name_not_a_value``, the
+    alias here is declared in the CONSUMING (entry) module, and its target
+    reaches the enum only through a module-qualified reference to an imported
+    module. The alias must still report the "type name, not a value"
+    diagnostic instead of leaking the internal "variant is required for
+    EnumType" assertion.
+    """
+    with pytest.raises(AglTypeError, match="is a type name, not a value"):
+        _check_program(
+            tmp_path,
+            {
+                "entry": "import pal\ntype Local = pal::Color\nprint(Local)",
+                "pal": "enum Color\n  | Red\n  | Blue",
+            },
+        )
+
+
+def test_open_imported_bare_alias_of_imported_enum_is_a_type_name_not_a_value(
+    tmp_path: Path,
+) -> None:
+    """A local alias whose target is an open-imported bare enum name has no bare constructor.
+
+    Unlike ``test_open_imported_alias_of_enum_is_a_type_name_not_a_value``, the
+    alias here is declared in the CONSUMING (entry) module, and its target
+    reaches the enum through an unqualified name exposed by an open import.
+    """
+    with pytest.raises(AglTypeError, match="is a type name, not a value"):
+        _check_program(
+            tmp_path,
+            {
+                "entry": "open import pal\ntype Local = Color\nprint(Local)",
+                "pal": "enum Color\n  | Red\n  | Blue",
             },
         )
 
@@ -3466,3 +3602,18 @@ def test_named_only_param_in_graph_function(tmp_path: Path) -> None:
     }
     cg: object = _check_program(tmp_path, modules)
     assert isinstance(cg, CheckedProgram)
+
+
+def test_route_qualified_generic_enum_owner_is_accepted_in_an_is_test(tmp_path: Path) -> None:
+    """``o is lib::Opt::none`` resolves the imported generic owner's parameters."""
+    checked = _check_program(
+        tmp_path,
+        {
+            "lib": "enum Opt[T]\n  | some(v: T)\n  | none\n",
+            "entry": (
+                "import lib\nlet o: lib::Opt[int] = lib::Opt::none\nprint(o is lib::Opt::none)\n"
+            ),
+        },
+    )
+
+    assert ENTRY_ID in checked.modules

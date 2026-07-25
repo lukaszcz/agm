@@ -8,26 +8,31 @@ compiler tests can compare selected source actions against a simple oracle.
 from __future__ import annotations
 
 import decimal
+from collections.abc import Mapping
 from typing import assert_never
 
 from agm.agl.eval.arith import value_eq
+from agm.agl.matchcompile.compiler import CompiledMatchSite
 from agm.agl.matchcompile.matrix import PatternMatrix
 from agm.agl.matchcompile.model import (
     BoolConstructor,
+    CaseSite,
     EnumConstructor,
     LiteralConstructor,
     LiteralKind,
     PatternCell,
+    RecordConstructor,
     WildcardCell,
 )
 from agm.agl.matchcompile.normalize import CheckedPatternOwner
-from agm.agl.semantics.types import EnumType, Type
+from agm.agl.semantics.types import EnumType, RecordType, Type
 from agm.agl.semantics.values import (
     BoolValue,
     DecimalValue,
     EnumValue,
     IntValue,
     JsonValue,
+    RecordValue,
     TextValue,
     Value,
 )
@@ -90,15 +95,23 @@ def _matches(
         case LiteralPattern():
             return value_eq(value, _literal_value(pattern))
         case ConstructorPattern(node_id=node_id, name=variant):
-            if not isinstance(subject_type, EnumType) or not isinstance(value, EnumValue):
+            if isinstance(subject_type, EnumType) and isinstance(value, EnumValue):
+                if (
+                    value.nominal.module_id != subject_type.module_id
+                    or value.nominal.declared_name != subject_type.name
+                    or value.variant != variant
+                ):
+                    return False
+                fields = checked.type_env.type_table.enum_variants(subject_type)[variant]
+            elif isinstance(subject_type, RecordType) and isinstance(value, RecordValue):
+                if (
+                    value.nominal.module_id != subject_type.module_id
+                    or value.nominal.declared_name != subject_type.name
+                ):
+                    return False
+                fields = checked.type_env.type_table.record_fields(subject_type)
+            else:
                 return False
-            if (
-                value.nominal.module_id != subject_type.module_id
-                or value.nominal.declared_name != subject_type.name
-                or value.variant != variant
-            ):
-                return False
-            fields = checked.type_env.type_table.enum_variants(subject_type)[variant]
             return all(
                 _matches(child, fields[field_name], value.fields[field_name], checked)
                 for field_name, child in checked.argument_bindings.constructor_patterns[node_id]
@@ -136,13 +149,20 @@ def canonical_cell_matches(cell: PatternCell, value: Value) -> bool:
         return isinstance(value, BoolValue) and value.value is constructor.value
     if isinstance(constructor, LiteralConstructor):
         return value_eq(value, _constructor_literal_value(constructor))
-    if not isinstance(constructor, EnumConstructor) or not isinstance(value, EnumValue):
-        return False
-    if (
-        value.nominal.module_id != constructor.enum_type.module_id
-        or value.nominal.declared_name != constructor.enum_type.name
-        or value.variant != constructor.variant
-    ):
+    if isinstance(constructor, EnumConstructor) and isinstance(value, EnumValue):
+        if (
+            value.nominal.module_id != constructor.enum_type.module_id
+            or value.nominal.declared_name != constructor.enum_type.name
+            or value.variant != constructor.variant
+        ):
+            return False
+    elif isinstance(constructor, RecordConstructor) and isinstance(value, RecordValue):
+        if (
+            value.nominal.module_id != constructor.record_type.module_id
+            or value.nominal.declared_name != constructor.record_type.name
+        ):
+            return False
+    else:
         return False
     return all(
         canonical_cell_matches(argument, value.fields[field.name])
@@ -162,4 +182,9 @@ def matrix_action(matrix: PatternMatrix, values: tuple[Value, ...]) -> int | Non
     return None
 
 
-__all__ = ["canonical_cell_matches", "matrix_action", "reference_action"]
+def case_sites(sites: "Mapping[int, CompiledMatchSite]") -> dict[int, CompiledMatchSite]:
+    """Return only the compiled sites that came from a source ``case`` expression."""
+    return {node_id: site for node_id, site in sites.items() if isinstance(site.source, CaseSite)}
+
+
+__all__ = ["canonical_cell_matches", "case_sites", "matrix_action", "reference_action"]

@@ -18,6 +18,7 @@ from agm.agl.ir.nodes import (
     IrMakeEnum,
     IrMakeException,
     IrMakeRecord,
+    IrSequence,
 )
 from agm.agl.ir.program import (
     ExecutableProgram,
@@ -37,6 +38,7 @@ from agm.agl.semantics.values import (
     RecordValue,
     TextValue,
 )
+from tests._agl_helpers import let_root_capture
 from tests.agl.ir_harness import _compiled_checked, evaluate_ir
 
 # ---------------------------------------------------------------------------
@@ -567,8 +569,10 @@ let p = Point(x = 3, y = 4)
     entry = prog.modules[prog.entry_module]
     found = False
     for node in entry.initializers:
-        if isinstance(node, IrBind) and isinstance(node.value, IrMakeRecord):
-            mr = node.value
+        if isinstance(node, (IrSequence, IrBind)) and isinstance(
+            let_root_capture(node).value, IrMakeRecord
+        ):
+            mr = let_root_capture(node).value
             assert mr.display_name == "Point"
             assert mr.nominal.declared_name == "Point"
             assert len(mr.fields) == 2
@@ -589,8 +593,10 @@ let c = Color::Red()
     entry = prog.modules[prog.entry_module]
     found = False
     for node in entry.initializers:
-        if isinstance(node, IrBind) and isinstance(node.value, IrMakeEnum):
-            me = node.value
+        if isinstance(node, (IrSequence, IrBind)) and isinstance(
+            let_root_capture(node).value, IrMakeEnum
+        ):
+            me = let_root_capture(node).value
             assert me.display_name == "Color"
             assert me.variant == "Red"
             assert me.fields == ()
@@ -612,8 +618,10 @@ let e = ArithmeticError(message = "oops", operation = "/")
     entry = prog.modules[prog.entry_module]
     found = False
     for node in entry.initializers:
-        if isinstance(node, IrBind) and isinstance(node.value, IrMakeException):
-            me = node.value
+        if isinstance(node, (IrSequence, IrBind)) and isinstance(
+            let_root_capture(node).value, IrMakeException
+        ):
+            me = let_root_capture(node).value
             assert me.display_name == "ArithmeticError"
             # Fields in declaration order: message, trace_id, operation
             field_names = [name for name, _ in me.fields]
@@ -643,8 +651,10 @@ let s = Score(name = "Bob", value = 5)
     entry = prog.modules[prog.entry_module]
     found = False
     for node in entry.initializers:
-        if isinstance(node, IrBind) and isinstance(node.value, IrMakeRecord):
-            for fname, fexpr in node.value.fields:
+        if isinstance(node, (IrSequence, IrBind)) and isinstance(
+            let_root_capture(node).value, IrMakeRecord
+        ):
+            for fname, fexpr in let_root_capture(node).value.fields:
                 if fname == "value":
                     assert isinstance(fexpr, IrCoerce), (
                         "value field expr should be IrCoerce(IntToDecimal)"
@@ -666,8 +676,10 @@ let mk = Pt
     entry = prog.modules[prog.entry_module]
     found = False
     for node in entry.initializers:
-        if isinstance(node, IrBind) and isinstance(node.value, IrMakeConstructor):
-            mc = node.value
+        if isinstance(node, (IrSequence, IrBind)) and isinstance(
+            let_root_capture(node).value, IrMakeConstructor
+        ):
+            mc = let_root_capture(node).value
             assert mc.display_name == "Pt"
             assert mc.variant is None
             assert mc.nominal.declared_name == "Pt"

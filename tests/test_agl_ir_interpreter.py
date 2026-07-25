@@ -49,6 +49,7 @@ from agm.agl.ir import (
     IrDirectCall,
     IrExpr,
     IrField,
+    IrFieldMode,
     IrFunctionBody,
     IrFunctionParam,
     IrIndex,
@@ -57,6 +58,7 @@ from agm.agl.ir import (
     IrLoad,
     IrMakeClosure,
     IrMakeDict,
+    IrMakeEnum,
     IrMakeException,
     IrMakeList,
     IrMakeRecord,
@@ -77,9 +79,10 @@ from agm.agl.ir import (
     SymbolId,
     ToJson,
     UseDefault,
+    VariantDescriptor,
 )
 from agm.agl.ir.ids import NominalId
-from agm.agl.modules.ids import ENTRY_ID
+from agm.agl.modules.ids import ENTRY_ID, PRELUDE_ID
 from agm.agl.semantics.values import (
     VOID_VALUE,
     BoolValue,
@@ -1042,6 +1045,7 @@ class TestIrField:
         *,
         x_val: int,
         y_val: int,
+        expected_nominal: NominalId | None = None,
     ) -> Value:
         """Run an IrField read by constructing a RecordValue via IrMakeRecord.
 
@@ -1067,7 +1071,12 @@ class TestIrField:
                 IrBind(
                     _LOC,
                     out_sym,
-                    IrField(_LOC, value=IrLoad(_LOC, rec_sym), field=field_name),
+                    IrField(
+                        _LOC,
+                        value=IrLoad(_LOC, rec_sym),
+                        nominal=expected_nominal if expected_nominal is not None else nominal,
+                        field=field_name,
+                    ),
                 ),
             ),
             {rec_sym: rec_desc, out_sym: out_desc},
@@ -1092,15 +1101,116 @@ class TestIrField:
         result = self._run_with_record_via_make("y", x_val=3, y_val=7)
         assert result == IntValue(7)
 
-    def test_ir_field_on_non_record_raises(self) -> None:
-        """IrField on a non-RecordValue/non-ExceptionValue raises InvalidIrError."""
+    def test_ir_field_with_wrong_nominal_raises(self) -> None:
+        """IrField rejects a nominal value outside its projection contract."""
+        with pytest.raises(InvalidIrError, match="expected nominal"):
+            self._run_with_record_via_make(
+                "x",
+                x_val=3,
+                y_val=4,
+                expected_nominal=NominalId(ENTRY_ID, "Other"),
+            )
+
+    def _run_with_exception_field(self, field: str, mode: IrFieldMode) -> Value:
+        """Project *field* from a concrete exception using *mode*."""
+        exception_nominal = NominalId(PRELUDE_ID, "Abort")
+        base_nominal = NominalId(PRELUDE_ID, "Exception")
+        rec_sym, rec_desc = _let_sym(0, "exc")
+        out_sym, out_desc = _let_sym(1, "out")
+        prog = _make_program(
+            (
+                IrBind(
+                    _LOC,
+                    rec_sym,
+                    IrMakeException(
+                        _LOC,
+                        exception_nominal,
+                        "Abort",
+                        (("message", IrConstText(_LOC, "stop")),),
+                    ),
+                ),
+                IrBind(
+                    _LOC,
+                    out_sym,
+                    IrField(
+                        _LOC,
+                        IrLoad(_LOC, rec_sym),
+                        base_nominal,
+                        field,
+                        mode=mode,
+                    ),
+                ),
+            ),
+            {rec_sym: rec_desc, out_sym: out_desc},
+        )
+        return IrInterpreter(prog).run()["out"]
+
+    def test_ir_field_exact_rejects_exception_subtype_as_base(self) -> None:
+        """Exact projections do not use exception hierarchy relationships."""
+        with pytest.raises(InvalidIrError, match="expected nominal"):
+            self._run_with_exception_field("message", IrFieldMode.EXACT)
+
+    def test_ir_field_upper_bound_reads_base_exception_field(self) -> None:
+        """Upper-bound projections read fields declared by the static bound."""
+        assert self._run_with_exception_field("message", IrFieldMode.UPPER_BOUND) == TextValue(
+            "stop"
+        )
+
+    def test_ir_field_upper_bound_rejects_absent_field(self) -> None:
+        """Upper-bound mode still rejects a field absent from the runtime value."""
+        with pytest.raises(InvalidIrError, match="lacks field"):
+            self._run_with_exception_field("detail", IrFieldMode.UPPER_BOUND)
+
+    def test_ir_field_reads_enum_payload_field(self) -> None:
+        """IrField uses the same nominal projection contract for enum payloads."""
+        enum_sym, enum_desc = _let_sym(0, "wrapped")
+        out_sym, out_desc = _let_sym(1, "out")
+        nominal = NominalId(ENTRY_ID, "Wrapper")
+        prog = _make_program(
+            (
+                IrBind(
+                    _LOC,
+                    enum_sym,
+                    IrMakeEnum(
+                        _LOC,
+                        nominal,
+                        "Wrapper",
+                        "wrap",
+                        (("value", IrConstInt(_LOC, 9)),),
+                    ),
+                ),
+                IrBind(
+                    _LOC,
+                    out_sym,
+                    IrField(_LOC, IrLoad(_LOC, enum_sym), nominal, "value"),
+                ),
+            ),
+            {enum_sym: enum_desc, out_sym: out_desc},
+            nominals={
+                nominal: NominalDescriptor(
+                    nominal=nominal,
+                    display_name="Wrapper",
+                    kind=NominalKind.ENUM,
+                    variants=(VariantDescriptor("wrap", ("value",)),),
+                )
+            },
+        )
+        assert IrInterpreter(prog).run()["out"] == IntValue(9)
+
+    def test_ir_field_on_non_nominal_raises(self) -> None:
+        """IrField on a non-nominal value raises InvalidIrError."""
         prog = _make_program(
             (
                 IrBind(_LOC, SymbolId(0), IrConstInt(_LOC, 42)),
                 IrBind(
                     _LOC,
                     SymbolId(1),
-                    IrField(_LOC, value=IrLoad(_LOC, SymbolId(0)), field="x"),
+                    IrField(
+                        _LOC,
+                        value=IrLoad(_LOC, SymbolId(0)),
+                        nominal=NominalId(ENTRY_ID, "Point"),
+                        field="x",
+                    ),
                 ),
             ),
             {
@@ -1457,6 +1567,28 @@ class TestFunctionEvaluation:
         from agm.agl.semantics.values import IntValue
 
         assert result["result"] == IntValue(42)
+
+    def test_non_function_closure_binding_evaluates_without_preinstallation(self) -> None:
+        """A closure bound to a non-function symbol is evaluated by its initializer."""
+        closure_sym = SymbolId(201)
+        fn_desc = _make_fn_descriptor(IrConstInt(_LOC, 42))
+        prog = _make_program(
+            initializers=(IrBind(_LOC, closure_sym, IrMakeClosure(_LOC, _FN_ID, ())),),
+            symbols={
+                _FN_SID: _fn_sym_desc(),
+                closure_sym: SymbolDescriptor(
+                    symbol_id=closure_sym,
+                    mutable=False,
+                    public_name="closure",
+                    owner=ENTRY_ID,
+                ),
+            },
+            functions={_FN_ID: fn_desc},
+        )
+
+        result = IrInterpreter(prog).run()
+
+        assert "closure" in result
 
     def test_param_default_can_call_top_level_function(self) -> None:
         """Entry param defaults can call functions whose closure initializer appears later."""

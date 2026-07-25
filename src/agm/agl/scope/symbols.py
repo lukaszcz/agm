@@ -20,17 +20,27 @@ Data model
 from __future__ import annotations
 
 import enum
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import TypeAlias
 
 from agm.agl.diagnostics import AglError, Diagnostic
 from agm.agl.modules.ids import ENTRY_ID, ModuleId
 from agm.agl.semantics.types import EnumType
-from agm.agl.syntax.nodes import AgentDecl, FuncDef, Program
+from agm.agl.syntax.nodes import (
+    AgentDecl,
+    EnumDef,
+    ExceptionDef,
+    FuncDef,
+    Program,
+    QualifierChain,
+    RecordDef,
+    TypeAlias,
+)
 from agm.agl.syntax.spans import SourceSpan
+from agm.agl.syntax.types import AppliedT, NameT
 
 ScopePath = tuple[str, ...]
-BareAtom: TypeAlias = str | ScopePath
+BareAtom = str | ScopePath
 AgentKey = tuple[ScopePath, str]
 DeclarationKey = tuple[ModuleId, ScopePath, str]
 
@@ -225,6 +235,53 @@ class ConstructorRef:
         )
 
 
+def alias_denotes_constructible_type(
+    alias: TypeAlias,
+    lookup: Callable[
+        [str, QualifierChain | None], RecordDef | EnumDef | ExceptionDef | TypeAlias | None
+    ],
+) -> bool:
+    """Whether *alias* denotes a constructible (non-enum) type.
+
+    A record, exception, or an alias chain that bottoms out at one of those
+    has a variant-less constructor; an enum does not (its variants are the
+    constructors, not the enum type itself). This follows the alias chain
+    (``type B = A`` where ``type A = Color``) through *lookup*, which resolves
+    one referenced type name — together with its ``qualifier`` chain, when
+    the reference is module-qualified or reaches its target through an import
+    — to its declaration, and returns ``False`` only when the chain provably
+    ends at an ``EnumDef``.
+
+    *lookup* is scoped to whatever declarations the caller can see (a
+    module's own root declarations and import environment, or a whole
+    program's public types); a link the callback cannot resolve — no import
+    environment available, a private target, a container/primitive alias, or
+    an unresolvable name — makes the alias presumed constructible, preserving
+    today's permissive default. The walk guards against a cyclic chain by
+    tracking the ``node_id`` of every declaration visited, not the bare name
+    spelling, since a qualified chain can revisit the same name in a
+    different module.
+    """
+    seen = {alias.node_id}
+    current = alias
+    while True:
+        type_expr = current.type_expr
+        if not isinstance(type_expr, (NameT, AppliedT)):
+            return True
+        target = lookup(type_expr.name, type_expr.qualifier)
+        if target is None:
+            return True
+        if target.node_id in seen:
+            return True
+        seen.add(target.node_id)
+        if isinstance(target, EnumDef):
+            return False
+        if isinstance(target, TypeAlias):
+            current = target
+            continue
+        return True
+
+
 # ---------------------------------------------------------------------------
 # PatternSlot — shared field-directed pattern metadata
 # ---------------------------------------------------------------------------
@@ -246,16 +303,20 @@ class SlotCandidate:
 
 @dataclass(frozen=True, slots=True)
 class PatternSlot:
-    """Parallel metadata for field-directed pattern candidates.
+    """Parallel metadata for candidates owned by one pattern match site.
 
-    ``alternative`` is either an enclosing ordinary binding or an outer
-    pattern-slot binding, if one is visible.
+    ``match_site_node_id`` identifies the owning case branch or ``let``
+    declaration. ``binder_kind`` records the binding kind requested by that
+    site when checking selects a candidate. ``alternative`` is an enclosing
+    ordinary binding or an outer pattern-slot binding, if one is visible.
     """
 
     slot_id: int
     name: str
     candidates: tuple[SlotCandidate, ...]
     alternative: BindingRef | None
+    match_site_node_id: int
+    binder_kind: BinderKind
 
 
 # ---------------------------------------------------------------------------
@@ -429,17 +490,19 @@ class ModuleResolution:
         resolved to (only present when the candidate set has exactly one entry
         and no nearer non-constructor binding shadows it).
     ``pattern_constructor_candidates``
-        Maps every bare ``VarPattern.node_id`` that names one or more visible
-        constructors to its candidate constructors. Constructor candidates are
-        independent of ordinary value bindings; the checker selects the final
-        interpretation from the matched occurrence's type and field name.
+        Maps bare ``VarPattern`` and constructor-pattern node ids to viable
+        candidates. Constructor patterns retain an empty tuple when their
+        named owner is unavailable, preventing fallback to an unqualified
+        spelling. Candidates are independent of ordinary value bindings; the
+        checker selects a bare name's final interpretation from the matched
+        occurrence's type and field name.
     ``pattern_slots``
         Scope-created field-directed pattern-slot metadata keyed by slot id.
         Branch-body references resolve directly to the shared slot binding.
-    ``branch_pattern_slots``
-        Maps each case branch's node id to the slot ids that branch's pattern
-        created, in creation (outer-to-inner) order. The checker selects
-        exactly these once the branch's patterns are classified.
+    ``match_site_pattern_slots``
+        Maps each owning case-branch or ``let`` declaration node id to the
+        slot ids its pattern created, in creation (outer-to-inner) order. The
+        checker selects exactly these after that match site is classified.
     """
 
     program: Program
@@ -463,7 +526,7 @@ class ModuleResolution:
         default_factory=dict
     )
     pattern_slots: dict[int, PatternSlot] = field(default_factory=dict)
-    branch_pattern_slots: dict[int, tuple[int, ...]] = field(default_factory=dict)
+    match_site_pattern_slots: dict[int, tuple[int, ...]] = field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------

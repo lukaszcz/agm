@@ -344,7 +344,7 @@ previously declared user operator.
 ## Bindings and mutation
 
 ```ebnf
-let_decl       ::= "let" name type_ann? "=" expr
+let_decl       ::= "let" pattern type_ann? "=" expr
 var_decl       ::= "var" name type_ann? "=" expr
 builtin_var_def ::= "builtin" NEWLINE? "var" name type_ann  (* body-less; std/config only *)
 assign_stmt ::= assign_target ":=" expr
@@ -432,7 +432,8 @@ try_expr          ::= "try" try_body catch_clause+
 try_body          ::= suite | (marked_item ";")* try_tail
 try_tail          ::= or_expr | inline_assign | try_letvar_decl | raise_expr
                     | return_expr | if_expr | case_expr | loop
-try_letvar_decl   ::= ("let" | "var") name type_ann? "=" try_value
+try_letvar_decl   ::= "let" pattern type_ann? "=" try_value
+                    | "var" name type_ann? "=" try_value
 try_value         ::= or_expr | raise_expr | return_expr | if_expr | case_expr | loop
 catch_clause      ::= "catch" catch_pattern "=>" branch_body
 catch_pattern     ::= name ("as" name)?
@@ -470,9 +471,10 @@ A qualified variant pattern (`Option::some(value)`,
 owning enum and variant with `::`. A leading `/` is an anchored qualifier;
 without it, the qualifier is resolved as a suffix. The complete qualifier
 through `::` is byte-adjacent.
-Unqualified constructor ownership is selected by the scrutinee's static enum
-type, even when multiple enums share the variant name; a qualifier is optional
-and must agree with that type when present ([Generics](generics.md),
+Unqualified constructor ownership is selected by the scrutinee's static nominal
+type, even when multiple enums share a variant name or a record constructor
+spelling collides with an enum variant; a qualifier is optional and must agree
+with that type when present ([Generics](generics.md),
 [Pattern matching](pattern-matching.md)). Type arguments are carried by the
 scrutinee type rather than written in a pattern.
 

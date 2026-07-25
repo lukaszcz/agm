@@ -39,7 +39,7 @@ from agm.agl.eval.conversions import AglCastConversion, run_recipe
 from agm.agl.eval.effects import EffectHandlers
 from agm.agl.eval.indexing import AglIndexOutOfRange, AglMissingKey, index_get, index_set
 from agm.agl.ir.contracts import ContractRequest, ConversionFailureMode
-from agm.agl.ir.ids import ContractId, FunctionId, Location, SymbolId
+from agm.agl.ir.ids import ContractId, FunctionId, Location, NominalId, SymbolId
 from agm.agl.ir.nodes import (
     AutoTraceField,
     IrAgentHandle,
@@ -70,6 +70,7 @@ from agm.agl.ir.nodes import (
     IrExec,
     IrExpr,
     IrField,
+    IrFieldMode,
     IrFunctionParam,
     IrIf,
     IrIndex,
@@ -259,6 +260,38 @@ def _make_literal_key_value(key: IrLiteralCaseKey) -> Value:
     return JsonValue(None)
 
 
+def _project_nominal_field(
+    value: Value, nominal: NominalId, field: str, mode: IrFieldMode
+) -> Value:
+    """Read one declared field from a nominal runtime value.
+
+    Records, enum payloads, and exceptions all retain their nominal identity and
+    field mapping at runtime, so this is the one typeless projection mechanism.
+    Exact projections require identity equality; upper-bound projections do not
+    check identity because the static layer already proved the field exists on
+    every value admitted by the bound.
+    """
+    if not isinstance(value, (RecordValue, EnumValue, ExceptionValue)):
+        raise InvalidIrError(
+            "IrField: expected RecordValue, EnumValue, or ExceptionValue, "
+            f"got {type(value).__name__}"
+        )
+    match mode:
+        case IrFieldMode.EXACT:
+            if value.nominal != nominal:
+                raise InvalidIrError(
+                    f"IrField: expected nominal {nominal!r}, got {value.nominal!r}"
+                )
+        case IrFieldMode.UPPER_BOUND:
+            pass
+        case _ as _unreachable_mode:  # pragma: no cover
+            assert_never(_unreachable_mode)
+    try:
+        return value.fields[field]
+    except KeyError:
+        raise InvalidIrError(f"IrField: nominal value lacks field {field!r}") from None
+
+
 # The tree-walking evaluator descends through several Python stack frames per AgL
 # call, so Python's own recursion limit — not the AgL call-depth guard — is what
 # a deep recursion hits first at the default ceiling.  Before running, ``run()``
@@ -420,6 +453,7 @@ class IrInterpreter:
         self._frames: list[Frame] = [base_frame if base_frame is not None else {}]
         self.initializer_values: list[Value] = []
         self.module_initializer_values: dict[ModuleId, list[Value]] = {}
+        self.entry_param_symbols_installed: set[SymbolId] = set()
         self._call_depth: int = 0
         self._trace: TraceStore = trace if trace is not None else noop_trace()
         self._max_call_depth: int = max_call_depth
@@ -643,7 +677,13 @@ class IrInterpreter:
         return result
 
     def _install_entry_function_closures(self) -> None:
-        """Pre-install available entry-module function closures for param defaults."""
+        """Pre-install every entry-module zero-capture function closure.
+
+        Runs before :meth:`_install_entry_params` so a param default that calls
+        an entry-declared function (or simply references its symbol) sees it
+        already bound, and so a closure installed here is promoted even when a
+        later param default fails.
+        """
         entry_module = self._program.modules[self._program.entry_module]
         for node in entry_module.initializers:
             match node:
@@ -851,6 +891,15 @@ class IrInterpreter:
         sys.setrecursionlimit(max(previous_limit, target))
         try:
             with decimal.localcontext(AGL_DECIMAL_CONTEXT):
+                # Closures install before params: a failing param default must
+                # still let already-installed closures (and any declarations
+                # completed earlier in the entry) be promoted. Promotion itself
+                # is driven by ``lowered.promotion_plan.completed_declaration_ids``
+                # (see ``entry_pipeline.completed_declaration_ids``), which is
+                # conservative on its own — it excludes params whose symbols were
+                # never installed and applies the declaration-dependency
+                # fixpoint — so no separate "did the entry frame start" gate is
+                # needed here.
                 self._install_entry_function_closures()
                 self._install_entry_params()
 
@@ -886,6 +935,7 @@ class IrInterpreter:
                     f"Required param {ir_param.public_name!r} has no value;"
                     " the host must supply a value for required params before calling run()"
                 )
+            self.entry_param_symbols_installed.add(ir_param.symbol)
 
     def _eval_initializer(self, node: IrExpr) -> Value:
         match node:
@@ -1136,13 +1186,8 @@ class IrInterpreter:
                     case _ as _unreachable_unary:  # pragma: no cover
                         assert_never(_unreachable_unary)
 
-            case IrField(value=val_expr, field=field_name):
-                val = self._eval(val_expr)
-                if not isinstance(val, (RecordValue, ExceptionValue)):
-                    raise InvalidIrError(
-                        f"IrField: expected RecordValue or ExceptionValue, got {type(val).__name__}"
-                    )
-                return val.fields[field_name]
+            case IrField(value=val_expr, nominal=nominal, field=field_name, mode=mode):
+                return _project_nominal_field(self._eval(val_expr), nominal, field_name, mode)
 
             case IrUpdateRecord(value=val_expr, updates=updates):
                 target = self._eval(val_expr)
@@ -1315,13 +1360,14 @@ class IrInterpreter:
                             raise InvalidIrError(
                                 "IrCase: selected payload arm for a non-enum subject"
                             )
+                        assert isinstance(key, IrEnumCaseKey)
                         for field_name, symbol in arm.field_bindings:
-                            field_value = subject_val.fields.get(field_name)
-                            if field_value is None:
-                                raise InvalidIrError(
-                                    f"IrCase: selected enum value lacks field {field_name!r}"
-                                )
-                            self._frame[symbol] = field_value
+                            self._frame[symbol] = _project_nominal_field(
+                                subject_val,
+                                key.nominal,
+                                field_name,
+                                IrFieldMode.EXACT,
+                            )
                     return self._eval(arm.body)
                 if default is not None:
                     return self._eval(default)

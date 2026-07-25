@@ -932,6 +932,69 @@ class ConstructorPattern:
 Pattern = WildcardPattern | LiteralPattern | VarPattern | AsPattern | ConstructorPattern
 
 
+@dataclass(frozen=True, slots=True)
+class PatternBinderCandidate:
+    """One named pattern occurrence that may introduce a binding.
+
+    ``nested`` distinguishes occurrences directed by a constructor field from
+    roots.  Match sites supply the policy that decides whether a bare root
+    binds; ``as`` occurrences always do.
+    """
+
+    name: str
+    node_id: int
+    span: SourceSpan
+    nested: bool
+    is_as_pattern: bool
+
+
+def pattern_binder_candidates(pattern: Pattern) -> tuple[PatternBinderCandidate, ...]:
+    """Return named binder candidates in source preorder.
+
+    This is the shared pattern-binding seam for scope and later checked-pattern
+    consumers. Wildcards and literals introduce no candidate, while every bare
+    name and ``as`` name retains its nesting and source identity.
+    """
+
+    candidates: list[PatternBinderCandidate] = []
+
+    def collect(current: Pattern, *, nested: bool) -> None:
+        if isinstance(current, VarPattern):
+            candidates.append(
+                PatternBinderCandidate(
+                    name=current.name,
+                    node_id=current.node_id,
+                    span=current.span,
+                    nested=nested,
+                    is_as_pattern=False,
+                )
+            )
+        elif isinstance(current, AsPattern):
+            collect(current.pattern, nested=nested)
+            candidates.append(
+                PatternBinderCandidate(
+                    name=current.name,
+                    node_id=current.node_id,
+                    span=current.span,
+                    nested=nested,
+                    is_as_pattern=True,
+                )
+            )
+        elif isinstance(current, ConstructorPattern):
+            for child in current.positional:
+                collect(child, nested=True)
+            for field in current.named:
+                collect(field.pattern, nested=True)
+
+    collect(pattern, nested=False)
+    return tuple(candidates)
+
+
+def pattern_binding_node_ids(pattern: Pattern) -> tuple[int, ...]:
+    """Return source node ids for every named pattern binding candidate."""
+    return tuple(candidate.node_id for candidate in pattern_binder_candidates(pattern))
+
+
 # ---------------------------------------------------------------------------
 # Binder nodes (block-item level, not independently usable as Expr)
 # ---------------------------------------------------------------------------
@@ -939,13 +1002,29 @@ Pattern = WildcardPattern | LiteralPattern | VarPattern | AsPattern | Constructo
 
 @dataclass(frozen=True, slots=True)
 class LetDecl:
-    """``let name [: type] = expr`` — immutable binding (scopes over continuation)."""
+    """``let pattern [: type] = expr`` — immutable binding (scopes over continuation).
 
-    name: str
+    Pattern-bearing lets are represented uniformly in the AST. Scope and
+    typechecking resolve supported patterns and record their selected bindings;
+    the AST itself makes no claim about later-stage execution support. ``node_id``
+    identifies the let match site, not any individual binder; binder identities
+    come from the pattern nodes.
+    """
+
+    pattern: Pattern
     type_ann: TypeExpr | None
     value: Expr
     span: SourceSpan = dc_field(compare=False)
     node_id: int = dc_field(compare=False)
+
+
+def simple_let_pattern_name(pattern: Pattern) -> str | None:
+    """Return a simple let root's name, with ``_`` for a wildcard root."""
+    if isinstance(pattern, VarPattern):
+        return pattern.name
+    if isinstance(pattern, WildcardPattern):
+        return "_"
+    return None
 
 
 @dataclass(frozen=True, slots=True)

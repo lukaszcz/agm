@@ -81,6 +81,7 @@ __all__ = [
     "IrDirectCall",
     "IrExpr",
     "IrField",
+    "IrFieldMode",
     "IrFunctionParam",
     "IrIf",
     "IrIfBranch",
@@ -399,13 +400,31 @@ class IrUnary:
 # ---------------------------------------------------------------------------
 
 
+class IrFieldMode(enum.Enum):
+    """Nominal identity rule for an ``IrField`` projection."""
+
+    EXACT = "exact"
+    UPPER_BOUND = "upper_bound"
+
+
 @dataclass(frozen=True, slots=True)
 class IrField:
-    """IR field read: obj.field on a record or exception value."""
+    """IR nominal field projection from a record, enum payload, or exception.
+
+    ``nominal`` identifies the field-bearing nominal shape used for static
+    field validation. ``mode`` records whether runtime identity must match that
+    nominal exactly or whether it is a static upper bound for the runtime
+    nominal. Lowering chooses the mode because it knows whether the receiver
+    was discriminated; the source-level declaration supplies the bound.
+    Enum fields are validated against the union of their variant payload
+    shapes. The default preserves exact checking for hand-built IR.
+    """
 
     location: Location
     value: "IrExpr"
+    nominal: NominalId
     field: str
+    mode: IrFieldMode = IrFieldMode.EXACT
 
 
 @dataclass(frozen=True, slots=True)

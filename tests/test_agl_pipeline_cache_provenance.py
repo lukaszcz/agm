@@ -95,7 +95,7 @@ def test_program_discovery_rejects_cached_artifact_with_different_entry_identity
     )
     wrong_entry_compiled = MatchCompiledProgram(
         checked=wrong_entry_checked,
-        cases_by_module=discovery.compiled.cases_by_module,
+        sites_by_module=discovery.compiled.sites_by_module,
     )
 
     with pytest.raises(ArtifactProvenanceError):

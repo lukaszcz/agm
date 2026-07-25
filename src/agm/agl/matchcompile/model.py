@@ -16,14 +16,14 @@ from typing import TypeAlias
 from agm.agl.modules.ids import ENTRY_ID, ModuleId
 from agm.agl.self_validation import self_validation_enabled
 from agm.agl.semantics.type_table import TypeTable
-from agm.agl.semantics.types import EnumOwnerForm, EnumType, Type
+from agm.agl.semantics.types import EnumOwnerForm, EnumType, RecordType, Type
 from agm.agl.syntax.nodes import Program
 from agm.agl.syntax.spans import SourceSpan
 
 
 @dataclass(frozen=True, slots=True, order=True)
 class OccurrenceId:
-    """Stable, case-local identity of a value occurrence."""
+    """Stable, match-site-local identity of a value occurrence."""
 
     value: int
 
@@ -34,7 +34,7 @@ class OccurrenceId:
 
 @dataclass(frozen=True, slots=True)
 class ConstructorField:
-    """One declaration-order child exposed by an enum constructor."""
+    """One declaration-order child exposed by an enum or record constructor."""
 
     name: str
     type: Type
@@ -51,6 +51,52 @@ class EnumConstructor:
     @property
     def arity(self) -> int:
         return len(self.fields)
+
+
+@dataclass(frozen=True, slots=True)
+class RecordConstructor:
+    """The sole typed constructor head for a nominal record."""
+
+    record_type: RecordType
+    fields: tuple[ConstructorField, ...]
+
+    @property
+    def arity(self) -> int:
+        return len(self.fields)
+
+
+FieldBearingNominalConstructor: TypeAlias = EnumConstructor | RecordConstructor
+
+
+@dataclass(frozen=True, slots=True)
+class FieldBearingConstructorKey:
+    """Runtime identity shared by enum variants and singleton record constructors."""
+
+    nominal_type: EnumType | RecordType
+    variant: str | None
+
+
+def field_bearing_constructor_key(
+    constructor: FieldBearingNominalConstructor,
+) -> FieldBearingConstructorKey:
+    """Return the equality key independent of declaration field metadata."""
+    if isinstance(constructor, EnumConstructor):
+        return FieldBearingConstructorKey(constructor.enum_type, constructor.variant)
+    return FieldBearingConstructorKey(constructor.record_type, None)
+
+
+def field_bearing_constructor_sort_key(
+    constructor: FieldBearingNominalConstructor,
+) -> tuple[int, tuple[str, ...], str, tuple[str, ...], str]:
+    """Return a stable order for a nominal constructor identity."""
+    key = field_bearing_constructor_key(constructor)
+    return (
+        0 if isinstance(key.nominal_type, EnumType) else 1,
+        key.nominal_type.module_id.segments,
+        key.nominal_type.name,
+        tuple(repr(argument) for argument in key.nominal_type.type_args),
+        key.variant or "",
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -103,7 +149,7 @@ class LiteralConstructor:
         return 0
 
 
-Constructor: TypeAlias = EnumConstructor | BoolConstructor | LiteralConstructor
+Constructor: TypeAlias = FieldBearingNominalConstructor | BoolConstructor | LiteralConstructor
 
 
 @dataclass(frozen=True, slots=True)
@@ -164,9 +210,9 @@ PatternProvenance: TypeAlias = SourcePatternProvenance | OmittedFieldProvenance
 
 @dataclass(frozen=True, slots=True)
 class RootOccurrenceProvenance:
-    """Provenance for the root scrutinee occurrence of one source case."""
+    """Provenance for the root value occurrence of one source match site."""
 
-    case_node_id: int
+    site_node_id: int
     subject_node_id: int
     span: SourceSpan
 
@@ -261,6 +307,46 @@ class SourceAction:
     pattern_span: SourceSpan
 
 
+@dataclass(frozen=True, slots=True)
+class LetBindingAction:
+    """The sole binding leaf of a source ``let`` match site."""
+
+    action_id: int
+    source_index: int
+
+
+@dataclass(frozen=True, slots=True)
+class CaseSite:
+    """Ordered arm actions of a source ``case`` expression."""
+
+    actions: tuple[SourceAction, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class LetSite:
+    """The sole binding action of a source ``let``.
+
+    The action is a field rather than a tuple because a let has exactly one
+    binding leaf; the type states the structural fact directly.
+    """
+
+    action: LetBindingAction
+
+    @property
+    def actions(self) -> tuple[SourceAction | LetBindingAction, ...]:
+        """Widen actions for kind-independent validation only.
+
+        Narrowing consumers match on the payload; a narrowing accessor would
+        have to be able to fail.
+        """
+        return (self.action,)
+
+
+# The payload's concrete type is the match site's discriminant; no separate
+# kind tag exists by design.
+MatchSiteSource: TypeAlias = CaseSite | LetSite
+
+
 EnumConstructorSpelling: TypeAlias = EnumOwnerForm
 
 
@@ -277,7 +363,7 @@ class MatrixRow:
 
 @dataclass(frozen=True, slots=True)
 class MatchCaseContext:
-    """Per-case frontend context used only for diagnostics and allocation identity."""
+    """Per-match-site frontend context used only for diagnostics and allocation identity."""
 
     module_id: ModuleId
     enum_owner_forms: tuple[EnumOwnerForm, ...] = ()
@@ -293,15 +379,15 @@ class MatchCaseContext:
 
 
 @dataclass(frozen=True, slots=True)
-class NormalizedCase:
-    """The normalized one-column matrix and source identities for a source case."""
+class NormalizedMatchSite:
+    """The normalized one-column matrix and source identities for one match site."""
 
-    case_node_id: int
+    site_node_id: int
+    source: MatchSiteSource
     span: SourceSpan
     root: Occurrence
     occurrences: tuple[Occurrence, ...]
     rows: tuple[MatrixRow, ...]
-    actions: tuple[SourceAction, ...]
     type_table: TypeTable = field(repr=False, compare=False, hash=False)
     case_context: MatchCaseContext = field(
         default_factory=lambda: MatchCaseContext(ENTRY_ID),
@@ -360,7 +446,24 @@ class DecisionSwitch:
     free_occurrences: tuple[OccurrenceId, ...] = ()
 
 
-Decision: TypeAlias = DecisionFail | DecisionLeaf | DecisionSwitch
+@dataclass(frozen=True, slots=True)
+class DecisionDecompose:
+    """Irrefutably expose a singleton nominal constructor's field occurrences.
+
+    Unlike a switch, this node performs no discriminant test. ``children``
+    preserves declaration-order provenance for dominance validation, while
+    ``demanded_occurrences`` records only the fields its child actually reads.
+    """
+
+    occurrence: Occurrence
+    constructor: FieldBearingNominalConstructor
+    children: tuple[Occurrence, ...]
+    child: Decision
+    demanded_occurrences: tuple[OccurrenceId, ...]
+    free_occurrences: tuple[OccurrenceId, ...] = ()
+
+
+Decision: TypeAlias = DecisionFail | DecisionLeaf | DecisionSwitch | DecisionDecompose
 
 
 # ---------------------------------------------------------------------------
@@ -382,46 +485,55 @@ def _validate_constructor_cell(cell: ConstructorCell) -> None:
         )
 
 
-def _validate_normalized_case(case: NormalizedCase) -> None:
+def _validate_normalized_case(case: NormalizedMatchSite) -> None:
+    """Validate kind-independent matrix/action invariants through widening view."""
+    actions = case.source.actions
     if case.occurrences != (case.root,):
-        raise ValueError("a freshly normalized case must contain only its root occurrence")
+        raise ValueError("a freshly normalized match site must contain only its root occurrence")
     if any(len(row.cells) != len(case.occurrences) for row in case.rows):
         raise ValueError("normalized matrix row width does not match occurrence width")
-    if tuple(action.source_index for action in case.actions) != tuple(range(len(case.actions))):
-        raise ValueError("source actions must retain contiguous source priority")
+    if tuple(action.source_index for action in actions) != tuple(range(len(actions))):
+        raise ValueError("match-site actions must retain contiguous source priority")
     row_indices = tuple(row.source_index for row in case.rows)
     if row_indices != tuple(sorted(set(row_indices))) or any(
-        not 0 <= source_index < len(case.actions) for source_index in row_indices
+        not 0 <= source_index < len(actions) for source_index in row_indices
     ):
         raise ValueError(
-            "normalized matrix rows must retain an ordered unique subsequence of source actions"
+            "normalized matrix rows must retain an ordered unique subsequence of match-site actions"
         )
-    if any(row.action_id != case.actions[row.source_index].action_id for row in case.rows):
-        raise ValueError("normalized rows and source actions must agree for each retained row")
+    if any(row.action_id != actions[row.source_index].action_id for row in case.rows):
+        raise ValueError("normalized rows and match-site actions must agree for each retained row")
 
 
 __all__ = [
     "BinderAssignment",
     "BinderProvenance",
     "BoolConstructor",
+    "CaseSite",
     "ClosedSignature",
     "Constructor",
     "ConstructorCell",
     "ConstructorField",
     "Decision",
     "DecisionBranch",
+    "DecisionDecompose",
     "DecisionFail",
     "DecisionLeaf",
     "DecisionSwitch",
     "EnumConstructor",
     "EnumConstructorSpelling",
+    "FieldBearingConstructorKey",
+    "FieldBearingNominalConstructor",
     "FieldOccurrenceProvenance",
     "LiteralConstructor",
     "LiteralKind",
     "LiteralValue",
+    "LetBindingAction",
+    "LetSite",
     "MatchCaseContext",
+    "MatchSiteSource",
     "MatrixRow",
-    "NormalizedCase",
+    "NormalizedMatchSite",
     "Occurrence",
     "OccurrenceId",
     "OccurrenceProvenance",
@@ -430,9 +542,12 @@ __all__ = [
     "PathDecomposition",
     "PatternCell",
     "PatternProvenance",
+    "RecordConstructor",
     "RootOccurrenceProvenance",
     "Signature",
     "SourceAction",
     "SourcePatternProvenance",
     "WildcardCell",
+    "field_bearing_constructor_key",
+    "field_bearing_constructor_sort_key",
 ]

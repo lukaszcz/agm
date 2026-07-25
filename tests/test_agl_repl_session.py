@@ -179,6 +179,19 @@ class TestPersistence:
 
         assert s.type_of("Geometry::Point(x = 1)") == "record Geometry::Point\n  x: int"
 
+    def test_simple_let_uses_one_frame_slot_per_entry(self) -> None:
+        session = ReplSession()
+
+        first = session.eval_entry("let value = 1")
+        assert first.ok, first.diagnostics
+        assert len(session._ir_base_frame) == 1
+        assert session.bindings() == [("value", IntType(), IntValue(1))]
+
+        second = session.eval_entry("let value = 2")
+        assert second.ok, second.diagnostics
+        assert len(session._ir_base_frame) == 2
+        assert session.bindings() == [("value", IntType(), IntValue(2))]
+
     def test_top_level_return_rejected_and_session_continues(self) -> None:
         s = ReplSession()
         bad = s.eval_entry("return 1")
@@ -626,10 +639,74 @@ class TestEchoData:
         assert render_entry_result(r, echo=True) == "total : int = 5"
         assert _int({name: value for name, _typ, value in s.bindings()}["total"]) == 5
 
+    @pytest.mark.parametrize("binder", ("let", "var"))
+    def test_trailing_discard_binder_evaluates_and_echoes_nothing(self, binder: str) -> None:
+        from agm.agl.repl.render import render_entry_result
+
+        s = ReplSession()
+        r = s.eval_entry(f"{binder} _ = 6")
+
+        assert r.ok, r.diagnostics
+        assert r.kind == "statement"
+        assert render_entry_result(r, echo=True) is None
+        assert s.bindings() == []
+
     def test_multi_item_entry_keeps_normal_block_discard_strictness(self) -> None:
         result = ReplSession().eval_entry("let first = 1\nfirst\nlet second = 2")
 
         assert not result.ok
+
+    def test_trailing_pattern_let_echoes_whole_value_and_promotes_every_binder(self) -> None:
+        from agm.agl.repl.render import render_entry_result
+
+        session = ReplSession()
+        assert session.eval_entry("record Pair\n  left: int\n  right: int").ok
+
+        live = session.eval_entry("let Pair(left, right) = Pair(left = 2, right = 3)")
+        checked = session.eval_entry(
+            "let Pair(left, right) = Pair(left = 2, right = 3)", check_only=True
+        )
+
+        assert live.ok, live.diagnostics
+        assert live.kind == "binding"
+        assert live.name is None
+        assert live.value_type == RecordType("Pair")
+        assert render_entry_result(live, echo=True) == ": Pair = Pair(\n  left = 2,\n  right = 3\n)"
+        assert checked.ok, checked.diagnostics
+        assert checked.kind == "binding"
+        assert checked.name is None
+        assert checked.value_type == RecordType("Pair")
+        assert (
+            render_entry_result(checked, echo=True, check_only=True)
+            == ": record Pair\n  left: int\n  right: int"
+        )
+        assert {name: value for name, _typ, value in session.bindings()} == {
+            "left": IntValue(2),
+            "right": IntValue(3),
+        }
+        assert session.eval_entry("left + right").value == IntValue(5)
+
+    def test_constructor_pattern_without_binders_echoes_but_discard_does_not(self) -> None:
+        from agm.agl.repl.render import render_entry_result
+
+        session = ReplSession()
+        assert session.eval_entry("record Pair\n  left: int\n  right: int").ok
+
+        constructor = session.eval_entry("let Pair() = Pair(left = 2, right = 3)")
+        discard = session.eval_entry("let _ = Pair(left = 4, right = 5)")
+
+        assert constructor.ok, constructor.diagnostics
+        assert constructor.kind == "binding"
+        assert constructor.name is None
+        assert constructor.value_type == RecordType("Pair")
+        assert (
+            render_entry_result(constructor, echo=True)
+            == ": Pair = Pair(\n  left = 2,\n  right = 3\n)"
+        )
+        assert discard.ok, discard.diagnostics
+        assert discard.kind == "statement"
+        assert render_entry_result(discard, echo=True) is None
+        assert session.bindings() == []
 
     def test_declaration_echo_kind(self) -> None:
         s = ReplSession()
@@ -845,6 +922,119 @@ class TestFailureEffects:
         assert use.ok
         assert use.value is not None and _int(use.value) == 30
 
+    def test_runtime_raise_promotes_complete_pattern_let_but_not_later_bindings(self) -> None:
+        session = ReplSession()
+        assert session.eval_entry("record Pair\n  left: int\n  right: int").ok
+
+        failed = session.eval_entry(
+            "let Pair(left, right) = Pair(left = 2, right = 3)\n"
+            'let later: int = raise Abort(message = "stop")'
+        )
+
+        assert not failed.ok
+        assert failed.installed == ("left", "right")
+        assert {name: value for name, _typ, value in session.bindings()} == {
+            "left": IntValue(2),
+            "right": IntValue(3),
+        }
+        assert session.eval_entry("left + right").value == IntValue(5)
+        assert not session.eval_entry("later").ok
+
+    def test_installed_report_includes_promoted_type_declaration(self) -> None:
+        # Regression: a promoted RECORD/ENUM/EXCEPTION/type-alias declaration is
+        # tracked separately (``promoted_type_names``) from the value bindings
+        # that build ``installed``, so it used to be silently dropped from the
+        # "Installed before failure" report even though it fully survived and a
+        # later entry could use it.
+        session = ReplSession()
+
+        failed = session.eval_entry("record Point\n  x: int\nlet z = [1, 2][9]")
+
+        assert not failed.ok
+        assert "Point" in failed.installed
+        assert session.eval_entry("Point(x = 1)").ok
+
+    def test_completed_pattern_initializer_and_function_metadata_survive_called_failure(
+        self,
+    ) -> None:
+        session = ReplSession()
+        assert session.eval_entry("record Pair\n  left: int\n  right: int").ok
+
+        failed = session.eval_entry(
+            "let Pair(left, right) = Pair(left = 2, right = 3)\n"
+            'def fail() -> int = raise Abort(message = "stop")\n'
+            "fail()"
+        )
+
+        assert not failed.ok
+        assert {"left", "right", "fail"} <= set(failed.installed)
+        assert session.eval_entry("left + right").value == IntValue(5)
+        assert session.type_of("fail") == "() -> int"
+        assert session.eval_entry("fail()").error is not None
+
+    def test_runtime_failure_excludes_function_with_uninitialized_value_dependency(self) -> None:
+        session = ReplSession()
+
+        failed = session.eval_entry(
+            'def needs_value() -> int = value\nlet value: int = raise Abort(message = "stop")'
+        )
+
+        assert not failed.ok
+        assert "needs_value" not in failed.installed
+        assert not session.eval_entry("needs_value()").ok
+
+    def test_runtime_failure_excludes_function_with_unpromoted_nominal_dependency(self) -> None:
+        session = ReplSession()
+
+        failed = session.eval_entry(
+            "type Delayed = Later\n"
+            "def needs_type(value: dict[text, Delayed]) -> dict[text, Delayed] = value\n"
+            'let stop: int = raise Abort(message = "stop")\n'
+            "record Later\n"
+            "  value: int"
+        )
+
+        assert not failed.ok
+        assert "needs_type" not in failed.installed
+        assert "Delayed" not in session.type_names()
+        assert not session.eval_entry("needs_type").ok
+        assert not session.eval_entry("Later(value = 1)").ok
+
+    def test_runtime_failure_promotes_generic_function_independent_of_same_named_nominal(
+        self,
+    ) -> None:
+        session = ReplSession()
+
+        failed = session.eval_entry(
+            "def identity[T](value: T) -> T = value\n"
+            'let stop: int = raise Abort(message = "stop")\n'
+            "record T\n"
+            "  value: int"
+        )
+
+        assert not failed.ok
+        assert "identity" in failed.installed
+        assert session.eval_entry("identity(1)").value == IntValue(1)
+        assert not session.eval_entry("T(value = 1)").ok
+
+    def test_runtime_failure_retains_independent_completed_function_and_pattern_binders(
+        self,
+    ) -> None:
+        session = ReplSession()
+        assert session.eval_entry("record Pair\n  left: int\n  right: int").ok
+
+        failed = session.eval_entry(
+            "let Pair(left, right) = Pair(left = 2, right = 3)\n"
+            "def sum() -> int = left + right\n"
+            'def fail() -> int = raise Abort(message = "stop")\n'
+            'let stop: int = raise Abort(message = "stop")'
+        )
+
+        assert not failed.ok
+        assert {"left", "right", "sum", "fail"} <= set(failed.installed)
+        assert session.eval_entry("sum()").value == IntValue(5)
+        assert session.eval_entry("fail()").error is not None
+
     def test_runtime_raise_in_else_branch_returns_entry_error(self) -> None:
         s = ReplSession()
 
@@ -895,6 +1085,42 @@ class TestFailureEffects:
         assert not result.ok
         assert s.declared_params() == []
 
+    def test_failing_param_default_still_promotes_completed_type_with_no_function(self) -> None:
+        # Regression: when the entry declares no zero-capture function closure,
+        # a failing ``param`` default used to roll back EVERY declaration in the
+        # entry, including a record type that fully completed before the param
+        # was reached — an accidental gate on whether the entry happened to
+        # declare a function, not on what actually finished.
+        s = ReplSession()
+
+        result = s.eval_entry("record Point\n  x: int\nparam p: int = [1, 2][9]")
+
+        assert not result.ok
+        followup = s.eval_entry("Point(x = 1)")
+        assert followup.ok, followup.diagnostics
+
+    def test_runtime_raise_does_not_promote_param_with_unpromoted_self_qualified_type(self) -> None:
+        s = ReplSession()
+
+        result = s.eval_entry(
+            'param p: ::R\nlet stop: int = raise Abort(message = "stop")\nrecord R\n  value: int'
+        )
+
+        assert not result.ok
+        assert s.declared_params() == []
+        assert not s.eval_entry("p").ok
+
+    def test_runtime_raise_promotes_preinstalled_function_before_failing_param_default(
+        self,
+    ) -> None:
+        s = ReplSession()
+
+        result = s.eval_entry("def f() -> int = 1\nparam p: decimal = 1 / 0")
+
+        assert not result.ok
+        assert result.installed == ("f",)
+        assert s.eval_entry("f()").value == IntValue(1)
+
     def test_runtime_raise_does_not_promote_later_type(self) -> None:
         s = ReplSession()
         result = s.eval_entry("let z: decimal = 1 / 0\nrecord After\n  value: int")
@@ -902,14 +1128,23 @@ class TestFailureEffects:
         assert not s.eval_entry("After").ok
         assert not s.eval_entry("After(value = 3)").ok
 
-    def test_runtime_raise_does_not_retain_later_function_signature(self) -> None:
+    def test_runtime_raise_retains_completed_function_initializer_metadata(self) -> None:
         s = ReplSession()
         failed = s.eval_entry("let z: decimal = 1 / 0\ndef later[T](x: T) -> T = x")
 
         assert not failed.ok
-        assert not s.eval_entry("later(1)").ok
-        assert s.eval_entry("def later[T](x: T) -> T = x").ok
         assert s.eval_entry("later(1)").value_type == IntType()
+
+    def test_runtime_failure_promotes_function_declared_after_failing_source_item(self) -> None:
+        s = ReplSession()
+        failed = s.eval_entry(
+            'let before = 1\nlet stop: int = raise Abort(message = "stop")\ndef later() -> int = 4'
+        )
+
+        assert not failed.ok
+        assert set(failed.installed) == {"before", "later"}
+        assert s.eval_entry("later()").value == IntValue(4)
+        assert not s.eval_entry("stop").ok
 
     def test_runtime_raise_does_not_promote_later_exception_type(self) -> None:
         s = ReplSession()
@@ -923,10 +1158,15 @@ class TestFailureEffects:
     def test_runtime_raise_promotes_prior_exception_constructor(self) -> None:
         s = ReplSession()
         result = s.eval_entry(
-            "exception Before extends Exception\n  code: int\nlet z: decimal = 1 / 0"
+            "exception Before extends Exception\n"
+            "  code: int\n"
+            "exception Child extends Before\n"
+            "  detail: int\n"
+            "let z: decimal = 1 / 0"
         )
         assert not result.ok
         assert s.eval_entry('Before(message = "m", code = 3)').ok
+        assert s.eval_entry('Child(message = "m", code = 3, detail = 4)').ok
 
     def test_runtime_raise_preserves_prior_type_but_not_later_binding(self) -> None:
         s = ReplSession()
@@ -2063,13 +2303,20 @@ class TestFuncDef:
         r = s.eval_entry("broken(1)")
         assert not r.ok  # broken not in scope
 
-    def test_runtime_failure_removes_unpromoted_scoped_nominal_metadata(self) -> None:
-        s = ReplSession()
-        failed = s.eval_entry("scope A\nrecord Token()\nend A\n1 / 0")
+    def test_runtime_failure_promotes_scoped_types_by_completed_initializers(self) -> None:
+        """A scoped type follows the same completion rule as a root type.
 
-        assert not failed.ok
-        later = s.eval_entry("A::Token()")
-        assert not later.ok
+        The region completed before the failing statement, so its member stays
+        usable; a region after the failure never took effect.
+        """
+        s = ReplSession()
+        before = s.eval_entry("scope A\nrecord Token()\nend A\n1 / 0")
+        assert not before.ok
+        assert s.eval_entry("A::Token()").ok
+
+        after = s.eval_entry("let z: decimal = 1 / 0\nscope B\nrecord Later()\nend B")
+        assert not after.ok
+        assert not s.eval_entry("B::Later()").ok
 
 
 # ---------------------------------------------------------------------------

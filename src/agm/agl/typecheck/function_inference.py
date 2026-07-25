@@ -34,6 +34,7 @@ from agm.agl.syntax.nodes import (
     ScopeRegion,
     VarDecl,
     VarRef,
+    pattern_binding_node_ids,
 )
 from agm.agl.syntax.visitor import walk
 from agm.agl.typecheck.inference import ConstraintRole, InferenceEngine, InferenceError
@@ -41,7 +42,7 @@ from agm.util.graph import sccs
 
 if TYPE_CHECKING:
     from agm.agl.capabilities import HostCapabilities
-    from agm.agl.scope.symbols import ModuleResolution
+    from agm.agl.scope.symbols import BindingRef, ConstructorRef, ModuleResolution
 from agm.agl.syntax.spans import SourceSpan
 from agm.agl.syntax.types import TypeExpr
 from agm.agl.typecheck.env import AglTypeError, FunctionSignature, ParamSpec, TypeEnvironment
@@ -72,6 +73,10 @@ class CandidateSession:
     evidence: list[SourceSpan] = field(default_factory=list)
     binding_snapshots: dict[ModuleId, PersistentDict[int, Type]] = field(default_factory=dict)
     visible_binding_snapshots: dict[tuple[ModuleId, int], PersistentDict[int, Type]] = field(
+        default_factory=dict
+    )
+    slot_resolution_snapshots: dict[ModuleId, dict[int, "BindingRef"]] = field(default_factory=dict)
+    slot_constructor_ref_snapshots: dict[ModuleId, dict[int, "ConstructorRef"]] = field(
         default_factory=dict
     )
     current_declaration_id: int | None = None
@@ -345,9 +350,18 @@ def _seed_candidate_visible_bindings(
                 )
             elif isinstance(item, (AgentDecl, LetDecl, ParamDecl, VarDecl)):
                 if _references_tainted_binding(module, item, tainted):
-                    tainted.add(item.node_id)
+                    if isinstance(item, LetDecl):
+                        # A let site's selected binders are the declaration ids
+                        # referenced by later code, not the match-site id.
+                        tainted.update(pattern_binding_node_ids(item.pattern))
+                    else:
+                        tainted.add(item.node_id)
                     continue
                 checker._check_item(item, expected=None)
+        session.slot_resolution_snapshots[module.module_id] = dict(checker._slot_resolution)
+        session.slot_constructor_ref_snapshots[module.module_id] = dict(
+            checker._slot_constructor_refs
+        )
 
 
 def _infer_function_component(
@@ -394,6 +408,10 @@ def _infer_function_component(
                 resolved=module.resolved,
                 capabilities=module.capabilities,
                 module_id=module.module_id,
+            )
+            checker._slot_resolution.update(session.slot_resolution_snapshots[module.module_id])
+            checker._slot_constructor_refs.update(
+                session.slot_constructor_ref_snapshots[module.module_id]
             )
             with module.env.type_scope(tuple(segment.name for segment in node.scope_path)):
                 candidate_type = checker.check_candidate_funcdef_body(node, signature, session)

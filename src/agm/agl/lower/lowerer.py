@@ -31,7 +31,7 @@ from __future__ import annotations
 
 import decimal
 import json
-from collections.abc import Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import assert_never, cast
@@ -77,6 +77,7 @@ from agm.agl.ir.nodes import (
     IrExec,
     IrExpr,
     IrField,
+    IrFieldMode,
     IrFunctionParam,
     IrIf,
     IrIfBranch,
@@ -143,17 +144,21 @@ from agm.agl.lower.coercions import compile_coercion
 from agm.agl.lower.conversions import compile_recipe
 from agm.agl.matchcompile import (
     BoolConstructor,
-    CompiledCase,
+    CaseSite,
+    CompiledMatchSite,
     Constructor,
     Decision,
+    DecisionDecompose,
     DecisionLeaf,
     DecisionSwitch,
     EnumConstructor,
     FieldOccurrenceProvenance,
+    LetSite,
     LiteralKind,
     MatchCompiledModule,
     Occurrence,
     OccurrenceId,
+    RecordConstructor,
 )
 from agm.agl.modules.ids import ENTRY_ID, PRELUDE_ID, ModuleId
 from agm.agl.scope.symbols import BinderKind, BindingRef, BuiltinKind
@@ -179,7 +184,6 @@ from agm.agl.semantics.types import (
 )
 from agm.agl.syntax.nodes import (
     AgentDecl,
-    AsPattern,
     AssignStmt,
     AssignTarget,
     BinaryOp,
@@ -193,7 +197,6 @@ from agm.agl.syntax.nodes import (
     CaseBranch,
     Cast,
     CatchClause,
-    ConstructorPattern,
     Continue,
     DecimalLit,
     DictLit,
@@ -217,7 +220,6 @@ from agm.agl.syntax.nodes import (
     Lambda,
     LetDecl,
     ListLit,
-    LiteralPattern,
     Loop,
     NamedArg,
     NameTarget,
@@ -243,9 +245,9 @@ from agm.agl.syntax.nodes import (
     UnaryNot,
     UnitLit,
     VarDecl,
-    VarPattern,
     VarRef,
-    WildcardPattern,
+    pattern_binder_candidates,
+    simple_let_pattern_name,
 )
 from agm.agl.syntax.spans import SourceSpan
 from agm.agl.type_schema import (
@@ -262,7 +264,7 @@ from agm.agl.typecheck.env import (
 )
 from agm.util.text import normalize_newlines
 
-__all__ = ["_LinkState", "lower_module"]
+__all__ = ["InitializerOrigin", "_LinkState", "lower_module"]
 
 
 def _contract_has_schema(
@@ -323,6 +325,19 @@ def _add_builtin_nominals(
 # ---------------------------------------------------------------------------
 
 
+@dataclass(frozen=True, slots=True)
+class InitializerOrigin:
+    """Source item behind an initializer and its recorded leading-group status.
+
+    ``is_function`` means the item contributed a function closure emitted in
+    the leading group regardless of source position; it is recorded here so
+    consumers do not re-derive that fact from the AST.
+    """
+
+    source_index: int
+    is_function: bool
+
+
 @dataclass
 class _LinkState:
     next_sym: int = 0
@@ -337,6 +352,12 @@ class _LinkState:
     nominals: dict[NominalId, NominalDescriptor] = field(default_factory=dict)
     sources: dict[SourceId, SourceFile] = field(default_factory=dict)
     contracts: dict[ContractId, ContractRequest] = field(default_factory=dict)
+    let_value_symbols: dict[int, SymbolId] = field(default_factory=dict)
+    # Lowering's published initializer-to-source-item mapping is the sole
+    # source of that correspondence. REPL promotion reads it rather than
+    # re-classifying source items; the entry mapping is overwritten before
+    # promotion consumes it on each REPL entry.
+    initializer_origins: dict[ModuleId, tuple[InitializerOrigin, ...]] = field(default_factory=dict)
 
 
 _ARITH_OP_MAP: dict[BinOp, ArithOp] = {
@@ -372,7 +393,7 @@ class _Lowerer:
         module_id: ModuleId,
         source_id: SourceId,
         source_text: str,
-        cases: Mapping[int, CompiledCase],
+        sites: Mapping[int, CompiledMatchSite],
         *,
         contract_payloads: Mapping[int, ContractPayload] | None = None,
     ) -> None:
@@ -381,7 +402,7 @@ class _Lowerer:
         self._module_id = module_id
         self._source_id = source_id
         self._source_text = normalize_newlines(source_text)
-        self._compiled_cases = cases
+        self._compiled_sites = sites
         self._params: list[IrParam] = []
         # Shared TypeTable built during checking; resolves record/enum field
         # and variant shapes for constructor lowering, nominal descriptors,
@@ -539,26 +560,19 @@ class _Lowerer:
     )
 
     def _pattern_binding_ids(self, pattern: Pattern, out: set[int]) -> None:
-        """Collect node_ids of the variable binders a pattern introduces."""
-        match pattern:
-            case AsPattern():
-                # An as-binder always binds; the checker classifies every
-                # AsPattern as a binder rather than a constructor spelling.
-                out.add(pattern.node_id)
-                self._pattern_binding_ids(pattern.pattern, out)
-            case VarPattern():
-                classifications = self._checked.pattern_classifications
-                if pattern.node_id in classifications and classifications[pattern.node_id] is None:
-                    out.add(pattern.node_id)
-            case ConstructorPattern():
-                for p in pattern.positional:
-                    self._pattern_binding_ids(p, out)
-                for pf in pattern.named:
-                    self._pattern_binding_ids(pf.pattern, out)
-            case WildcardPattern() | LiteralPattern():
-                pass
-            case _ as unreachable:  # pragma: no cover
-                assert_never(unreachable)
+        """Collect declaration ids for checker-selected source pattern binders.
+
+        The pattern side table is total over selected binders, so every returned
+        id comes directly from its uniform binder identity.
+        """
+        classifications = self._checked.pattern_classifications
+        for candidate in pattern_binder_candidates(pattern):
+            if candidate.is_as_pattern or classifications.get(candidate.node_id) is None:
+                binding = self._checked.pattern_binding_for(candidate.node_id)
+                assert binding is not None, (
+                    f"compiler bug: no selected binding for pattern node {candidate.node_id}"
+                )
+                out.add(binding.decl_node_id)
 
     def _record_capture(
         self, node_id: int, local_ids: set[int], captured: dict[int, BindingRef]
@@ -606,7 +620,11 @@ class _Lowerer:
                 | InfixDecl()
             ):
                 return
-            case LetDecl() | VarDecl():
+            case LetDecl():
+                local_ids.add(node.node_id)
+                self._pattern_binding_ids(node.pattern, local_ids)
+                self._scan_captures(node.value, local_ids, captured)
+            case VarDecl():
                 local_ids.add(node.node_id)
                 self._scan_captures(node.value, local_ids, captured)
             case AssignStmt():
@@ -995,6 +1013,25 @@ class _Lowerer:
         assert t is not None, f"compiler bug: no binding type for decl_node_id={decl_node_id!r}"
         return t
 
+    def _lower_named_binding(
+        self,
+        *,
+        decl_node_id: int,
+        name: str,
+        rhs: Expr,
+        span: SourceSpan,
+        binding_type: Type,
+        mutable: bool,
+        public: bool,
+    ) -> IrBind:
+        """Lower one named binding with its checker-selected coercion target."""
+        sym = self._alloc_sym(decl_node_id, name=name, mutable=mutable, public=public)
+        return IrBind(
+            location=self._loc(span),
+            symbol=sym,
+            value=self.lower_coerced(rhs, binding_type),
+        )
+
     def _node_type(self, node_id: int) -> Type:
         """Return the checker-recorded type for an expression node (compiler-error if missing)."""
         t = self._checked.node_types.get(node_id)
@@ -1141,10 +1178,14 @@ class _Lowerer:
             # Field access → IrField
             # ----------------------------------------------------------
             case FieldAccess(obj=obj_expr, field=field_name, span=span):
+                obj_type = self._node_type(obj_expr.node_id)
+                nominal, _display, mode = self._nominal_for_field_projection(obj_type)
                 return IrField(
                     location=self._loc(span),
                     value=self.lower_expr(obj_expr),
+                    nominal=nominal,
                     field=field_name,
+                    mode=mode,
                 )
 
             # ----------------------------------------------------------
@@ -1901,6 +1942,18 @@ class _Lowerer:
             )
         raise AssertionError(f"constructor function has non-nominal result {typ!r}")
 
+    def _nominal_for_field_projection(self, typ: Type) -> tuple[NominalId, str, IrFieldMode]:
+        """Return a nominal and mode from declaration metadata, never a name test."""
+        nominal, display_name = self._nominal_for_constructor_result(typ)
+        typedef = self._checked.type_env.type_table.get(
+            nominal.module_id, nominal.declared_name, nominal.scope_path
+        )
+        assert typedef is not None, (
+            f"compiler bug: no nominal declaration for field projection {nominal!r}"
+        )
+        mode = IrFieldMode.UPPER_BOUND if typedef.abstract else IrFieldMode.EXACT
+        return nominal, display_name, mode
+
     def _lower_nullary_constructor(
         self,
         ref_node_id: int,
@@ -2557,8 +2610,32 @@ class _Lowerer:
         )
 
     # ------------------------------------------------------------------
-    # Case expression helpers
+    # Compiled match-site decision helpers
     # ------------------------------------------------------------------
+
+    @staticmethod
+    def _decision_binder_names(compiled: CompiledMatchSite) -> dict[int, str]:
+        """Collect each DAG leaf binder once, keyed by its pattern node id."""
+        names: dict[int, str] = {}
+        visited: set[int] = set()
+
+        def visit(decision: Decision) -> None:
+            if id(decision) in visited:
+                return
+            visited.add(id(decision))
+            if isinstance(decision, DecisionLeaf):
+                for assignment in decision.binder_assignments:
+                    names.setdefault(assignment.binder.node_id, assignment.binder.name)
+            elif isinstance(decision, DecisionDecompose):
+                visit(decision.child)
+            elif isinstance(decision, DecisionSwitch):
+                for branch in decision.keyed_children:
+                    visit(branch.decision)
+                if decision.default is not None:
+                    visit(decision.default)
+
+        visit(compiled.root)
+        return names
 
     def _lower_case(
         self,
@@ -2568,20 +2645,97 @@ class _Lowerer:
         span: "SourceSpan",
         result_type: Type,
     ) -> IrSequence:
-        """Lower one compiled decision DAG without re-reading source patterns."""
-        compiled = self._compiled_cases.get(case_node_id)
+        """Lower a case's actions through the shared decision traversal."""
+        compiled = self._compiled_sites.get(case_node_id)
         assert compiled is not None, (
             f"compiler bug: no compiled decision for case node {case_node_id}"
         )
+        binder_symbols = {
+            node_id: self._alloc_sym(node_id, name=name, mutable=False, public=False)
+            for node_id, name in self._decision_binder_names(compiled).items()
+        }
+        action_bodies: dict[int, IrExpr] = {}
+        source = compiled.source
+        assert isinstance(source, CaseSite), "compiler bug: case site carries a non-case payload"
+        for action in source.actions:
+            branch = branches[action.source_index]
+            assert branch.body.node_id == action.body_node_id, (
+                "compiler bug: decision action does not identify its source body"
+            )
+            action_bodies[action.action_id] = self.lower_coerced(branch.body, result_type)
+
         location = self._loc(span)
+        sequence, _ = self._lower_compiled_decision(
+            compiled,
+            self.lower_expr(subject_expr),
+            location,
+            binder_symbols,
+            lambda decision: action_bodies[decision.action_id],
+        )
+        return sequence
+
+    def _lower_pattern_let(self, let: LetDecl, *, top_level: bool) -> IrSequence:
+        """Lower one destructuring irrefutable immutable pattern through its DAG."""
+        compiled = self._compiled_sites.get(let.node_id)
+        assert compiled is not None, (
+            f"compiler bug: no compiled decision for let node {let.node_id}"
+        )
+        matched_type = self._checked.let_matched_types.get(let.node_id)
+        assert matched_type is not None, f"compiler bug: no matched type for let node {let.node_id}"
+        binder_symbols: dict[int, SymbolId] = {}
+        for node_id, name in self._decision_binder_names(compiled).items():
+            binding = self._checked.pattern_binding_for(node_id)
+            assert binding is not None and binding.kind is BinderKind.let_binding, (
+                f"compiler bug: no selected immutable binding for let pattern node {node_id}"
+            )
+            binder_symbols[node_id] = self._alloc_sym(
+                binding.decl_node_id,
+                name=name,
+                mutable=False,
+                public=top_level,
+            )
+        location = self._loc(let.span)
+        source = compiled.source
+        assert isinstance(source, LetSite), "compiler bug: let site carries a non-let payload"
+        action = source.action
+
+        def leaf_tail(decision: DecisionLeaf) -> IrExpr:
+            assert decision.action_id == action.action_id, (
+                "compiler bug: let decision selected an unknown binding action"
+            )
+            return IrConstUnit(location)
+
+        sequence, root_symbol = self._lower_compiled_decision(
+            compiled,
+            self.lower_coerced(let.value, matched_type),
+            location,
+            binder_symbols,
+            leaf_tail,
+        )
+        self._link.let_value_symbols[let.node_id] = root_symbol
+        return sequence
+
+    def _lower_compiled_decision(
+        self,
+        compiled: CompiledMatchSite,
+        root_value: IrExpr,
+        location: Location,
+        binder_symbols: "Mapping[int, SymbolId]",
+        leaf_tail: "Callable[[DecisionLeaf], IrExpr]",
+    ) -> tuple[IrSequence, SymbolId]:
+        """Lower a case or let decision through one shared occurrence DAG.
+
+        Returns the lowered sequence together with the synthetic symbol holding
+        the site's root value.
+        """
         root_symbol = self._alloc_synthetic_sym(mutable=False)
         occurrence_symbols: dict[OccurrenceId, SymbolId] = {
             compiled.normalized.root.id: root_symbol
         }
         occurrences = {occurrence.id: occurrence for occurrence in compiled.occurrences}
         # Group each field occurrence under its (parent occurrence, constructor)
-        # once, in occurrence order, so a switch branch can look up its field
-        # children directly instead of rescanning every occurrence per branch.
+        # once. Both switches and irrefutable decompositions use this ledger to
+        # materialize exactly their child's demanded fields.
         field_children_by_group: dict[tuple[OccurrenceId, Constructor], list[Occurrence]] = {}
         for occurrence in compiled.occurrences:
             provenance = occurrence.provenance
@@ -2589,12 +2743,7 @@ class _Lowerer:
                 field_children_by_group.setdefault(
                     (provenance.parent, provenance.constructor), []
                 ).append(occurrence)
-        actions = {action.action_id: action for action in compiled.actions}
-        branch_by_action = {
-            action.action_id: branches[action.source_index] for action in compiled.actions
-        }
         decision_memo: dict[int, IrExpr] = {}
-        action_body_memo: dict[int, IrExpr] = {}
 
         def symbol_for_occurrence(identifier: OccurrenceId) -> SymbolId:
             symbol = occurrence_symbols.get(identifier)
@@ -2605,37 +2754,6 @@ class _Lowerer:
                 symbol = self._alloc_synthetic_sym(mutable=False)
                 occurrence_symbols[identifier] = symbol
             return symbol
-
-        binder_names: dict[int, str] = {}
-        visited_decisions: set[int] = set()
-
-        def collect_binders(decision: Decision) -> None:
-            identifier = id(decision)
-            if identifier in visited_decisions:
-                return
-            visited_decisions.add(identifier)
-            if isinstance(decision, DecisionLeaf):
-                for assignment in decision.binder_assignments:
-                    binder = assignment.binder
-                    binder_names.setdefault(binder.node_id, binder.name)
-                return
-            switch = cast(DecisionSwitch, decision)
-            for decision_branch in switch.keyed_children:
-                collect_binders(decision_branch.decision)
-            if switch.default is not None:
-                collect_binders(switch.default)
-
-        collect_binders(compiled.root)
-        binder_symbols = {
-            node_id: self._alloc_sym(node_id, name=name, mutable=False, public=False)
-            for node_id, name in binder_names.items()
-        }
-        for action_id, action in actions.items():
-            source_branch = branch_by_action[action_id]
-            assert source_branch.body.node_id == action.body_node_id, (
-                "compiler bug: decision action does not identify its source body"
-            )
-            action_body_memo[action_id] = self.lower_coerced(source_branch.body, result_type)
 
         def case_key(constructor: Constructor) -> IrCaseKey:
             if isinstance(constructor, EnumConstructor):
@@ -2649,6 +2767,8 @@ class _Lowerer:
                 )
             if isinstance(constructor, BoolConstructor):
                 return IrLiteralCaseKey(IrLiteralKind.BOOL, constructor.value)
+            if isinstance(constructor, RecordConstructor):
+                raise AssertionError("compiler bug: records must lower through DecisionDecompose")
             if constructor.kind is LiteralKind.NUMERIC:
                 assert isinstance(constructor.value, decimal.Decimal)
                 return IrLiteralCaseKey(IrLiteralKind.NUMERIC, constructor.value)
@@ -2657,6 +2777,52 @@ class _Lowerer:
                 return IrLiteralCaseKey(IrLiteralKind.TEXT, constructor.value)
             assert constructor.value is None
             return IrLiteralCaseKey(IrLiteralKind.NULL, None)
+
+        def field_index(occurrence: Occurrence) -> int:
+            """Return one ledger field's declaration index."""
+            provenance = occurrence.provenance
+            assert isinstance(provenance, FieldOccurrenceProvenance), (
+                "compiler bug: field group contains a non-field occurrence"
+            )
+            return provenance.field_index
+
+        def demanded_children(
+            parent: OccurrenceId,
+            constructor: EnumConstructor | RecordConstructor,
+            demanded: tuple[OccurrenceId, ...],
+        ) -> tuple[Occurrence, ...]:
+            """Return demanded child occurrences in stable declaration order."""
+            children = field_children_by_group.get((parent, constructor), ())
+            return tuple(
+                child for child in sorted(children, key=field_index) if child.id in demanded
+            )
+
+        def projection_bindings(
+            parent: OccurrenceId,
+            constructor: EnumConstructor | RecordConstructor,
+            demanded: tuple[OccurrenceId, ...],
+        ) -> tuple[IrBind, ...]:
+            """Project demanded nominal fields into their occurrence symbols."""
+            nominal = (
+                NominalId(constructor.enum_type.module_id, constructor.enum_type.name)
+                if isinstance(constructor, EnumConstructor)
+                else NominalId(constructor.record_type.module_id, constructor.record_type.name)
+            )
+            return tuple(
+                IrBind(
+                    location,
+                    symbol_for_occurrence(occurrence.id),
+                    IrField(
+                        location,
+                        IrLoad(location, symbol_for_occurrence(parent)),
+                        nominal,
+                        occurrence.provenance.field_name,
+                        mode=IrFieldMode.EXACT,
+                    ),
+                )
+                for occurrence in demanded_children(parent, constructor, demanded)
+                if isinstance(occurrence.provenance, FieldOccurrenceProvenance)
+            )
 
         def lower_decision(decision: Decision) -> IrExpr:
             cached = decision_memo.get(id(decision))
@@ -2667,62 +2833,74 @@ class _Lowerer:
                     IrBind(
                         location,
                         binder_symbols[assignment.binder.node_id],
-                        IrLoad(
-                            location,
-                            symbol_for_occurrence(assignment.occurrence),
-                        ),
+                        IrLoad(location, symbol_for_occurrence(assignment.occurrence)),
                     )
                     for assignment in decision.binder_assignments
                 )
-                body = action_body_memo[decision.action_id]
-                lowered_leaf: IrExpr = IrSequence(location, (*bindings, body)) if bindings else body
+                tail = leaf_tail(decision)
+                lowered_leaf = IrSequence(location, (*bindings, tail)) if bindings else tail
                 decision_memo[id(decision)] = lowered_leaf
                 return lowered_leaf
 
-            switch = cast(DecisionSwitch, decision)
-            arms: list[IrCaseArm] = []
-            for decision_branch in switch.keyed_children:
-                child = decision_branch.decision
-                demanded_children = tuple(
-                    occurrence
-                    for occurrence in field_children_by_group.get(
-                        (switch.occurrence.id, decision_branch.constructor), ()
-                    )
-                    if occurrence.id in child.free_occurrences
+            if isinstance(decision, DecisionDecompose):
+                bindings = projection_bindings(
+                    decision.occurrence.id,
+                    decision.constructor,
+                    decision.demanded_occurrences,
                 )
-                field_bindings = tuple(
-                    (
-                        occurrence.provenance.field_name,
-                        symbol_for_occurrence(occurrence.id),
-                    )
-                    for occurrence in demanded_children
-                    if isinstance(occurrence.provenance, FieldOccurrenceProvenance)
+                decomposition_child = lower_decision(decision.child)
+                lowered_decomposition: IrExpr = (
+                    IrSequence(location, (*bindings, decomposition_child))
+                    if bindings
+                    else decomposition_child
                 )
-                arms.append(
-                    IrCaseArm(
-                        case_key(decision_branch.constructor),
-                        field_bindings,
-                        lower_decision(child),
+                decision_memo[id(decision)] = lowered_decomposition
+                return lowered_decomposition
+
+            if isinstance(decision, DecisionSwitch):
+                arms: list[IrCaseArm] = []
+                for decision_branch in decision.keyed_children:
+                    constructor = decision_branch.constructor
+                    branch_child = decision_branch.decision
+                    if isinstance(constructor, (EnumConstructor, RecordConstructor)):
+                        field_bindings = tuple(
+                            (occurrence.provenance.field_name, symbol_for_occurrence(occurrence.id))
+                            for occurrence in demanded_children(
+                                decision.occurrence.id,
+                                constructor,
+                                branch_child.free_occurrences,
+                            )
+                            if isinstance(occurrence.provenance, FieldOccurrenceProvenance)
+                        )
+                    else:
+                        field_bindings = ()
+                    arms.append(
+                        IrCaseArm(
+                            case_key(constructor),
+                            field_bindings,
+                            lower_decision(branch_child),
+                        )
                     )
+                default = lower_decision(decision.default) if decision.default is not None else None
+                lowered_switch = IrCase(
+                    location,
+                    IrLoad(location, symbol_for_occurrence(decision.occurrence.id)),
+                    tuple(arms),
+                    default,
                 )
-            default = lower_decision(switch.default) if switch.default is not None else None
-            lowered_switch = IrCase(
-                location,
-                IrLoad(location, symbol_for_occurrence(switch.occurrence.id)),
-                tuple(arms),
-                default,
-            )
-            decision_memo[id(decision)] = lowered_switch
-            return lowered_switch
+                decision_memo[id(decision)] = lowered_switch
+                return lowered_switch
+
+            raise AssertionError("compiler bug: failed case decision reached lowering")
 
         decision = lower_decision(compiled.root)
         return IrSequence(
             location,
             (
-                IrBind(location, root_symbol, self.lower_expr(subject_expr)),
+                IrBind(location, root_symbol, root_value),
                 decision,
             ),
-        )
+        ), root_symbol
 
     # ------------------------------------------------------------------
     # Ask/ask-request lowering
@@ -2910,20 +3088,53 @@ class _Lowerer:
             # ----------------------------------------------------------
             # Binders
             # ----------------------------------------------------------
-            case LetDecl(name="_", value=rhs) | VarDecl(name="_", value=rhs):
+            case VarDecl(name="_", value=rhs):
                 return self.lower_expr(rhs)
 
-            case LetDecl(name=name, value=rhs, span=span, node_id=nid):
-                sym = self._alloc_sym(nid, name=name, mutable=False, public=top_level)
-                binding_type = self._binding_type(nid)
-                ir_val = self.lower_coerced(rhs, binding_type)
-                return IrBind(location=self._loc(span), symbol=sym, value=ir_val)
+            case LetDecl() as let:
+                simple_name = simple_let_pattern_name(let.pattern)
+                if simple_name == "_":
+                    # Nothing is bound, so avoid allocating a symbol while still
+                    # evaluating the initializer for its effects.
+                    location = self._loc(let.span)
+                    return IrSequence(
+                        location=location,
+                        items=(self.lower_expr(let.value), IrConstUnit(location)),
+                    )
+                if simple_name is not None:
+                    binding = self._checked.pattern_binding_for(let.pattern.node_id)
+                    assert binding is not None and binding.kind is BinderKind.let_binding, (
+                        f"compiler bug: no selected immutable binding for let node {let.node_id}"
+                    )
+                    matched_type = self._checked.let_matched_types.get(let.node_id)
+                    assert matched_type is not None, (
+                        f"compiler bug: no matched type for let node {let.node_id}"
+                    )
+                    # Simple lets share the direct bind path with var. Only a
+                    # destructuring let needs the decision traversal, so this
+                    # avoids the synthetic root symbol, occurrence ledger, and
+                    # surrounding sequence nodes on the evaluator's hot path.
+                    return self._lower_named_binding(
+                        decl_node_id=binding.decl_node_id,
+                        name=simple_name,
+                        rhs=let.value,
+                        span=let.span,
+                        binding_type=matched_type,
+                        mutable=False,
+                        public=top_level,
+                    )
+                return self._lower_pattern_let(let, top_level=top_level)
 
             case VarDecl(name=name, value=rhs, span=span, node_id=nid):
-                sym = self._alloc_sym(nid, name=name, mutable=True, public=top_level)
-                binding_type = self._binding_type(nid)
-                ir_val = self.lower_coerced(rhs, binding_type)
-                return IrBind(location=self._loc(span), symbol=sym, value=ir_val)
+                return self._lower_named_binding(
+                    decl_node_id=nid,
+                    name=name,
+                    rhs=rhs,
+                    span=span,
+                    binding_type=self._binding_type(nid),
+                    mutable=True,
+                    public=top_level,
+                )
 
             case AssignStmt(target=target, value=rhs, span=span, node_id=nid):
                 return self._lower_assign(target, rhs, span, nid)
@@ -3213,6 +3424,56 @@ class _Lowerer:
             ref.decl_node_id == agent.node_id for ref in self._checked.resolved.resolution.values()
         )
 
+    def lower_initializers(
+        self,
+        body: Block,
+        *,
+        top_level: bool,
+        handles_only: bool = False,
+        eager_scoped_agents: bool = False,
+    ) -> tuple[IrExpr, ...]:
+        """Lower one module body and publish its initializer origins.
+
+        This is the single walk that decides which items become initializers
+        and in what order. Both single-module and multi-module entry points use
+        it; it publishes the source item behind every emitted initializer for
+        REPL promotion. A scope region contributes its nested declarations under
+        the region's own source index, so promotion treats a region as one
+        declaration group. ``handles_only`` keeps a library module to the items
+        it must expose as runtime handles: functions and needed agents.
+        """
+        function_initializers: list[IrExpr] = []
+        function_origins: list[InitializerOrigin] = []
+        other_initializers: list[IrExpr] = []
+        other_origins: list[InitializerOrigin] = []
+        for source_index, item in enumerate(body.items):
+            members = _static_items((item,)) if isinstance(item, ScopeRegion) else (item,)
+            for member in members:
+                is_function = isinstance(member, FuncDef) and not member.is_builtin
+                if handles_only and not is_function and not isinstance(member, AgentDecl):
+                    continue
+                if (
+                    isinstance(member, AgentDecl)
+                    and member.scope_path
+                    and not eager_scoped_agents
+                    and not self._scoped_agent_is_referenced(member)
+                ):
+                    continue
+                ir = self.lower_item(member, top_level=top_level)
+                if ir is None:
+                    continue
+                origin = InitializerOrigin(source_index=source_index, is_function=is_function)
+                if is_function:
+                    function_initializers.append(ir)
+                    function_origins.append(origin)
+                else:
+                    other_initializers.append(ir)
+                    other_origins.append(origin)
+
+        initializers = tuple((*function_initializers, *other_initializers))
+        self._link.initializer_origins[self._module_id] = tuple((*function_origins, *other_origins))
+        return initializers
+
     def lower(self) -> ExecutableProgram:
         """Lower this validated program payload to an ``ExecutableProgram``."""
         self._build_nominals()
@@ -3236,27 +3497,11 @@ class _Lowerer:
                 )
 
         # Phase 2: lower all items
-        function_initializers: list[IrExpr] = []
-        other_initializers: list[IrExpr] = []
-        for item in body.items:
-            items = _static_items((item,)) if isinstance(item, ScopeRegion) else (item,)
-            for nested_item in items:
-                if isinstance(nested_item, AgentDecl) and (
-                    nested_item.scope_path and not self._scoped_agent_is_referenced(nested_item)
-                ):
-                    continue
-                ir = self.lower_item(nested_item, top_level=True)
-                if ir is not None:
-                    target = (
-                        function_initializers
-                        if isinstance(nested_item, FuncDef) and not nested_item.is_builtin
-                        else other_initializers
-                    )
-                    target.append(ir)
+        initializers = self.lower_initializers(body, top_level=True)
 
         entry_mod = ExecutableModule(
             module_id=self._module_id,
-            initializers=tuple((*function_initializers, *other_initializers)),
+            initializers=initializers,
         )
 
         dry_run_inventory = tuple(
@@ -3322,7 +3567,7 @@ def lower_module(
         ENTRY_ID,
         source_id,
         source_text,
-        compiled.cases,
+        compiled.sites,
         contract_payloads=contract_payloads,
     )
     program = lowerer.lower()

@@ -1,0 +1,13 @@
+{
+  "scenarios": [
+    {
+      "name": "swap_nested_generic_imported_qualified_and_aliased_records",
+      "module_roots": ["program_modules/control/record_pattern_workflows"],
+      "params": {"seed": 5},
+      "expect": {
+        "stdout": "6:5\n7\n8\n9\n",
+        "calls": {}
+      }
+    }
+  ]
+}

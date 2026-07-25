@@ -31,6 +31,7 @@ from agm.agl.semantics.values import (
 )
 from agm.agl.typecheck.env import OutputContractSpec
 from tests._agl_helpers import type_table_for
+from tests.agl.ir_harness import evaluate_ir
 
 
 def test_arithmetic_mixed_and_defensive_edges() -> None:
@@ -87,6 +88,22 @@ def test_param_conversion_direct_success_edges() -> None:
     )
     with pytest.raises(ValueError, match="unsupported type"):
         convert_param_value("unit", None, UnitType(), table)
+
+
+def test_deeply_nested_singleton_decompositions_execute() -> None:
+    """Nested record and singleton-enum payload projections need no runtime switches."""
+    source = """\
+record Leaf
+  value: int
+record Branch
+  leaf: Leaf
+enum Root | root(branch: Branch)
+let value = root(branch = Branch(leaf = Leaf(value = 7)))
+let result = case value of
+  | root(branch = Branch(leaf = Leaf(value = _ as selected))) => selected
+result
+"""
+    assert evaluate_ir(source)["result"] == IntValue(7)
 
 
 def test_structured_exec_contract_uses_passthrough_codec() -> None:

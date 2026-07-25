@@ -2,16 +2,26 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from types import MappingProxyType
-from typing import Callable, Mapping, TypeAlias
+from typing import TypeAlias
 
 from agm.agl.modules.ids import ModuleId
 from agm.agl.scope.symbols import AglScopeError
-from agm.agl.syntax.nodes import ImportDecl, ImportItem
+from agm.agl.syntax.nodes import (
+    EnumDef,
+    ExceptionDef,
+    ImportDecl,
+    ImportItem,
+    QualifierChain,
+    RecordDef,
+)
+from agm.agl.syntax.nodes import TypeAlias as TypeAliasDecl
 from agm.agl.syntax.types import ImportMode
 
 __all__ = [
+    "EMPTY_IMPORT_ENV",
     "ImportEnv",
     "ImportTarget",
     "ModuleContribution",
@@ -33,6 +43,7 @@ __all__ = [
     "qualifier_candidates",
     "qualifier_contributes",
     "render_qualifier",
+    "resolve_alias_target",
     "resolve_qualified",
     "resolve_qualified_member",
     "try_resolve_qualified_member",
@@ -172,6 +183,13 @@ class ImportEnv:
                 suffix.setdefault((alias,), set()).add(module)
         object.__setattr__(self, "suffix_routes", _frozen_routes(suffix))
         object.__setattr__(self, "anchored_routes", _frozen_routes(anchored))
+
+
+# A module with no imports at all shares this single empty environment rather
+# than each caller allocating its own throwaway ``ImportEnv()``. Safe to share:
+# the dataclass is frozen and every mapping field is frozen in ``__post_init__``,
+# so nothing can mutate ``contributions``/``unqualified`` through a reference.
+EMPTY_IMPORT_ENV = ImportEnv(contributions={}, unqualified={})
 
 
 @dataclass(frozen=True, slots=True)
@@ -364,8 +382,62 @@ def private_missing_member_module(
 def try_resolve_qualified_member(
     env: ImportEnv, qualifier: tuple[str, ...], member: NameAtom, *, anchored: bool = False
 ) -> QName | None:
+    """Resolve ``qualifier::member``, returning ``None`` for any non-unique verdict."""
     result = resolve_qualified(env, qualifier, member, anchored=anchored)
     return result.qname if isinstance(result, QualResolutionFound) else None
+
+
+def resolve_alias_target(
+    name: str,
+    qualifier: QualifierChain | None,
+    *,
+    self_module_id: ModuleId | None,
+    import_env: ImportEnv | None,
+    all_public_types: Mapping[QName, RecordDef | EnumDef | ExceptionDef | TypeAliasDecl] | None,
+    scope_path: PathAtom = (),
+) -> RecordDef | EnumDef | ExceptionDef | TypeAliasDecl | None:
+    """Resolve one type-alias target reference through a module's import environment.
+
+    Shared by the scope resolver and the program-level cross-module constructor
+    pre-pass so both judge a type alias's constructibility (see
+    :func:`~agm.agl.scope.symbols.alias_denotes_constructible_type`) the same
+    way for a target reached through an import rather than a same-module
+    declaration.
+
+    For an unqualified *name*, tries *self_module_id*'s own declaration under
+    *scope_path* first (when both *self_module_id* and *all_public_types* are
+    given — a caller that already checked richer local state, e.g. private
+    declarations, passes ``self_module_id=None`` to skip this step), then the
+    unqualified name exposed by *import_env*'s open imports. For a qualified
+    *name*, resolves through the ordinary qualified-member route.
+
+    Returns ``None`` for anything it cannot resolve — no import environment or
+    public-types table, a private target, an ambiguous unqualified name, or an
+    unknown route — which the caller treats as "presumed constructible".
+    """
+    if qualifier is None or not qualifier.segments:
+        if self_module_id is not None and all_public_types is not None:
+            local = all_public_types.get((self_module_id, _atom((*scope_path, name))))
+            if local is not None:
+                return local
+        if import_env is None or all_public_types is None:
+            return None
+        qnames = import_env.unqualified.get(name)
+        if qnames is None or len(qnames) != 1:
+            return None
+        (qname,) = qnames
+        return all_public_types.get(qname)
+    if import_env is None or all_public_types is None:
+        return None
+    qualified = try_resolve_qualified_member(
+        import_env,
+        qualifier.route_segments,
+        name,
+        anchored=qualifier.anchored,
+    )
+    if qualified is None:
+        return None
+    return all_public_types.get(qualified)
 
 
 def resolve_qualified_member(

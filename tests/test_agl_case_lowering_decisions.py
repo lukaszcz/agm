@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import decimal
+from dataclasses import replace
 
 import pytest
 
@@ -11,7 +12,8 @@ from agm.agl.ir import (
     ExecutableProgram,
     IrBind,
     IrCase,
-    IrEnumCaseKey,
+    IrConstUnit,
+    IrField,
     IrLiteralCaseKey,
     IrLiteralKind,
     IrLoad,
@@ -19,10 +21,18 @@ from agm.agl.ir import (
 )
 from agm.agl.lower import lower_module
 from agm.agl.matchcompile import (
+    DecisionDecompose,
     MatchCompiledModule,
     compile_module_matches,
 )
-from agm.agl.matchcompile.model import Occurrence, OccurrenceId, PathDecomposition
+from agm.agl.matchcompile.model import (
+    DecisionBranch,
+    DecisionFail,
+    DecisionSwitch,
+    Occurrence,
+    OccurrenceId,
+    PathDecomposition,
+)
 from agm.agl.parser import parse_program
 from agm.agl.scope import resolve_module
 from agm.agl.syntax.nodes import (
@@ -32,6 +42,7 @@ from agm.agl.syntax.nodes import (
     WildcardPattern,
 )
 from agm.agl.typecheck import check_module
+from tests.agl.match_reference import case_sites
 
 
 def _lower(source: str) -> ExecutableProgram:
@@ -53,12 +64,84 @@ def _lower(source: str) -> ExecutableProgram:
 
 def _public_binding(program: ExecutableProgram, name: str) -> IrBind:
     for initializer in program.modules[program.entry_module].initializers:
-        if (
-            isinstance(initializer, IrBind)
-            and program.symbols[initializer.symbol].public_name == name
-        ):
-            return initializer
+        if isinstance(initializer, IrBind):
+            if program.symbols[initializer.symbol].public_name == name:
+                return initializer
+            continue
+        if not isinstance(initializer, IrSequence):
+            continue
+        root_capture, leaf = initializer.items
+        if not isinstance(root_capture, IrBind) or not isinstance(leaf, IrSequence):
+            continue
+        binder = leaf.items[0]
+        if isinstance(binder, IrBind) and program.symbols[binder.symbol].public_name == name:
+            return root_capture
     raise AssertionError(f"missing public binding {name!r}")
+
+
+def test_record_root_decomposition_projects_only_demanded_fields_without_a_switch() -> None:
+    program = _lower(
+        "record Box\n"
+        "  first: int\n"
+        "  second: int\n"
+        "let value = Box(first = 1, second = 2)\n"
+        "let result = case value of | Box(first = _ as selected) => selected\n"
+        "()\n"
+    )
+    lowered = _public_binding(program, "result").value
+    assert isinstance(lowered, IrSequence)
+    decomposition = lowered.items[1]
+    assert isinstance(decomposition, IrSequence)
+    projection = decomposition.items[0]
+    assert isinstance(projection, IrBind)
+    assert isinstance(projection.value, IrField)
+    assert projection.value.field == "first"
+    assert not isinstance(decomposition, IrCase)
+
+
+def test_lowering_rejects_a_forged_failed_decision(self_validation_disabled: None) -> None:
+    """A failed decision path cannot become executable IR."""
+    source = "let value = 1\ncase value of | _ => 1\n"
+    checked = check_module(resolve_module(parse_program(source)), HostCapabilities())
+    result = compile_module_matches(checked)
+    assert isinstance(result.compiled, MatchCompiledModule)
+    case_id, compiled_case = next(iter(case_sites(result.compiled.sites).items()))
+    forged = replace(
+        result.compiled,
+        sites={**result.compiled.sites, case_id: replace(compiled_case, root=DecisionFail())},
+    )
+    with pytest.raises(AssertionError):
+        lower_module(forged, source_text=source, source_label="<test>")
+
+
+def test_lowering_rejects_a_forged_record_switch(self_validation_disabled: None) -> None:
+    """Records are decomposition-only and cannot acquire a runtime case key."""
+    source = (
+        "record Box\n  value: int\nlet value = Box(value = 1)\n"
+        "case value of | Box(value = _) => 1\n"
+    )
+    checked = check_module(resolve_module(parse_program(source)), HostCapabilities())
+    result = compile_module_matches(checked)
+    assert isinstance(result.compiled, MatchCompiledModule)
+    case_id, compiled_case = next(iter(case_sites(result.compiled.sites).items()))
+    root = compiled_case.root
+    assert isinstance(root, DecisionDecompose)
+    forged = replace(
+        result.compiled,
+        sites={
+            **result.compiled.sites,
+            case_id: replace(
+                compiled_case,
+                root=DecisionSwitch(
+                    root.occurrence,
+                    (DecisionBranch(root.constructor, root.child),),
+                    None,
+                ),
+            ),
+        },
+    )
+    with pytest.raises(AssertionError):
+        lower_module(forged, source_text=source, source_label="<test>")
 
 
 def test_wildcard_case_still_binds_root_subject_before_leaf() -> None:
@@ -91,25 +174,27 @@ def test_as_patterns_lower_every_chained_binder_at_the_matched_occurrence() -> N
     assert bindings[0].value.symbol == bindings[1].value.symbol
 
 
-def test_enum_arm_binds_only_demanded_immediate_field_for_nested_switch() -> None:
+def test_singleton_enum_decomposition_projects_demanded_fields_before_nested_switch() -> None:
     program = _lower(
         "enum Pair\n"
         "  | pair(left: bool, right: bool)\n"
         "let value = pair(left = false, right = true)\n"
         "let result = case value of\n"
         "  | pair(left = false) => 1\n"
-        "  | _ => 2\n"
+        "  | pair(left = true) => 2\n"
         "()\n"
     )
     lowered = _public_binding(program, "result").value
     assert isinstance(lowered, IrSequence)
-    enum_switch = lowered.items[1]
-    assert isinstance(enum_switch, IrCase)
-    enum_arm = enum_switch.arms[0]
-    assert isinstance(enum_arm.key, IrEnumCaseKey)
-    assert tuple(name for name, _ in enum_arm.field_bindings) == ("left",)
-    assert isinstance(enum_arm.body, IrCase)
-    assert all(isinstance(arm.key, IrLiteralCaseKey) for arm in enum_arm.body.arms)
+    decomposition = lowered.items[1]
+    assert isinstance(decomposition, IrSequence)
+    projection = decomposition.items[0]
+    assert isinstance(projection, IrBind)
+    assert isinstance(projection.value, IrField)
+    assert projection.value.field == "left"
+    nested_switch = decomposition.items[1]
+    assert isinstance(nested_switch, IrCase)
+    assert all(isinstance(arm.key, IrLiteralCaseKey) for arm in nested_switch.arms)
 
 
 @pytest.mark.parametrize(
@@ -163,13 +248,49 @@ def test_shared_decision_node_remains_shared_ir_object() -> None:
     )
     lowered = _public_binding(program, "result").value
     assert isinstance(lowered, IrSequence)
-    enum_switch = lowered.items[1]
-    assert isinstance(enum_switch, IrCase)
-    left_switch = enum_switch.arms[0].body
+    decomposition = lowered.items[1]
+    assert isinstance(decomposition, IrSequence)
+    left_switch = decomposition.items[-1]
     assert isinstance(left_switch, IrCase)
     right_switch = left_switch.arms[0].body
     assert isinstance(right_switch, IrCase)
     assert right_switch.default is left_switch.default
+
+
+def test_pattern_let_uses_the_shared_decision_dag_for_nested_demanded_fields() -> None:
+    program = _lower(
+        "record Leaf\n"
+        "  value: int\n"
+        "record Box\n"
+        "  selected: Leaf\n"
+        "  skipped: int\n"
+        "let Box(selected = Leaf(value = value)) = Box(selected = Leaf(value = 7), skipped = 9)\n"
+        "()\n"
+    )
+    (lowered, _) = program.modules[program.entry_module].initializers
+    assert isinstance(lowered, IrSequence)
+    root_capture, outer_decomposition = lowered.items
+    assert isinstance(root_capture, IrBind)
+    assert program.symbols[root_capture.symbol].public_name is None
+    assert isinstance(outer_decomposition, IrSequence)
+    outer_projection = outer_decomposition.items[0]
+    assert isinstance(outer_projection, IrBind)
+    assert isinstance(outer_projection.value, IrField)
+    assert outer_projection.value.field == "selected"
+    nested_decomposition = outer_decomposition.items[1]
+    assert isinstance(nested_decomposition, IrSequence)
+    nested_projection = nested_decomposition.items[0]
+    assert isinstance(nested_projection, IrBind)
+    assert isinstance(nested_projection.value, IrField)
+    assert nested_projection.value.field == "value"
+    leaf = nested_decomposition.items[1]
+    assert isinstance(leaf, IrSequence)
+    assert isinstance(leaf.items[-1], IrConstUnit)
+    assert "skipped" not in [
+        item.value.field
+        for item in (*outer_decomposition.items, *nested_decomposition.items)
+        if isinstance(item, IrBind) and isinstance(item.value, IrField)
+    ]
 
 
 def test_executable_ir_contains_no_source_pattern_or_occurrence_objects() -> None:

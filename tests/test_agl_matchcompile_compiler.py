@@ -22,14 +22,17 @@ from agm.agl.matchcompile import (
     LiteralWitness,
     NonExhaustiveIssue,
     OpenComplementWitness,
+    RecordWitness,
     RedundantArmIssue,
+    RefutableLetIssue,
     WildcardWitness,
     WitnessField,
     render_witness,
 )
 from agm.agl.matchcompile.compiler import (
-    CompiledCase,
-    compile_case,
+    CompiledMatchSite,
+    compile_match_site,
+    validate_compiled_case,
     validate_decision_dag,
 )
 from agm.agl.matchcompile.matrix import (
@@ -40,26 +43,32 @@ from agm.agl.matchcompile.matrix import (
 from agm.agl.matchcompile.model import (
     BinderAssignment,
     BoolConstructor,
+    CaseSite,
     ClosedSignature,
     ConstructorCell,
     Decision,
     DecisionBranch,
+    DecisionDecompose,
     DecisionFail,
     DecisionLeaf,
     DecisionSwitch,
     EnumConstructor,
     EnumConstructorSpelling,
     FieldOccurrenceProvenance,
+    LetSite,
     LiteralKind,
     MatchCaseContext,
+    MatchSiteSource,
     Occurrence,
     OccurrenceId,
+    RecordConstructor,
     Signature,
     WildcardCell,
 )
 from agm.agl.matchcompile.normalize import (
     MatchCompileInvariantError,
     normalize_case,
+    normalize_let,
     signature_for_type,
 )
 from agm.agl.modules.ids import ENTRY_ID, PRELUDE_ID
@@ -68,8 +77,8 @@ from agm.agl.scope import resolve_module
 from agm.agl.scope.program import resolve_program
 from agm.agl.semantics.type_table import TypeTable
 from agm.agl.semantics.types import EnumType, IntType, Type, TypeTemplate
-from agm.agl.semantics.values import BoolValue, EnumValue, Value
-from agm.agl.syntax.nodes import Case
+from agm.agl.semantics.values import BoolValue, EnumValue, RecordValue, Value
+from agm.agl.syntax.nodes import Case, LetDecl
 from agm.agl.syntax.visitor import walk
 from agm.agl.typecheck import (
     CheckedModule,
@@ -92,7 +101,7 @@ _CAPS = HostCapabilities(
 )
 
 
-def _compile(source: str) -> tuple[CheckedModule, Case, CompiledCase]:
+def _compile(source: str) -> tuple[CheckedModule, Case, CompiledMatchSite]:
     checked = check_module(resolve_module(parse_program(source)), _CAPS)
     cases: list[Case] = []
 
@@ -103,10 +112,81 @@ def _compile(source: str) -> tuple[CheckedModule, Case, CompiledCase]:
     walk(checked.resolved.program, collect)
     assert len(cases) == 1
     case = cases[0]
-    return checked, case, compile_case(normalize_case(case, checked))
+    return checked, case, compile_match_site(normalize_case(case, checked))
 
 
-def _compile_graph_case(tmp_path: Path, modules: dict[str, str]) -> CompiledCase:
+def test_compiler_marks_a_refutable_let_with_its_decision_witness() -> None:
+    checked = check_module(resolve_module(parse_program("let true = false")), _CAPS)
+    lets: list[LetDecl] = []
+
+    def collect(node: object) -> None:
+        if isinstance(node, LetDecl):
+            lets.append(node)
+
+    walk(checked.resolved.program, collect)
+    (let,) = lets
+    compiled = compile_match_site(normalize_let(let, checked))
+
+    assert isinstance(compiled.issues[0], RefutableLetIssue)
+    assert isinstance(compiled.issues[0].witness, BoolWitness)
+    assert compiled.issues[0].witness.value is False
+    checked_case, _, irrefutable = _compile("case true of | _ => 1")
+    with pytest.raises(MatchCompileInvariantError, match="begin with"):
+        compiler_module._validate_occurrence_ledger(irrefutable.normalized, ())
+    ledger, groups = compiler_module._validate_occurrence_ledger(
+        irrefutable.normalized, irrefutable.occurrences
+    )
+    with pytest.raises(MatchCompileInvariantError, match="does not belong"):
+        compiler_module._validate_compiled_decisions(
+            replace(irrefutable, root=DecisionLeaf(999, ())), ledger, groups
+        )
+    with pytest.raises(MatchCompileInvariantError, match="irrefutable"):
+        compiler_module._validate_semantic_replay(replace(irrefutable, root=DecisionFail()))
+    _, _, decomposed = _compile(
+        "record Pair\n  left: int\n  right: int\nlet value = Pair(left = 1, right = 2)\n"
+        "case value of | Pair(left = _, right = _) => 1"
+    )
+    root = cast(DecisionDecompose, decomposed.root)
+    assert root.constructor.arity == 2
+    assert isinstance(root.child, DecisionLeaf)
+    del checked_case
+
+
+def test_issue_kind_is_selected_by_the_sealed_source_payload() -> None:
+    _, _, case_compiled = _compile("case true of | false => 0")
+    assert isinstance(case_compiled.normalized.source, CaseSite)
+    assert isinstance(case_compiled.issues[0], NonExhaustiveIssue)
+
+    checked = check_module(resolve_module(parse_program("let true = false")), _CAPS)
+    lets: list[LetDecl] = []
+
+    def collect(node: object) -> None:
+        if isinstance(node, LetDecl):
+            lets.append(node)
+
+    walk(checked.resolved.program, collect)
+    (let,) = lets
+    let_compiled = compile_match_site(normalize_let(let, checked))
+    assert isinstance(let_compiled.normalized.source, LetSite)
+    assert isinstance(let_compiled.issues[0], RefutableLetIssue)
+
+
+def test_issue_selection_rejects_an_unknown_source_payload() -> None:
+    _, _, compiled = _compile("case true of | _ => 1")
+
+    class UnknownPayload:
+        actions: tuple[object, ...] = ()
+
+    malformed = replace(
+        compiled.normalized,
+        source=cast(MatchSiteSource, UnknownPayload()),
+        rows=(),
+    )
+    with pytest.raises(AssertionError):
+        compiler_module._issues(malformed, compiled.root, compiled.occurrences)
+
+
+def _compile_graph_case(tmp_path: Path, modules: dict[str, str]) -> CompiledMatchSite:
     graph = make_graph_from_files(tmp_path, modules)
     checked = check_program(resolve_program(graph), _CAPS).modules[ENTRY_ID]
     cases: list[Case] = []
@@ -117,13 +197,13 @@ def _compile_graph_case(tmp_path: Path, modules: dict[str, str]) -> CompiledCase
 
     walk(checked.resolved.program, collect)
     assert len(cases) == 1
-    return compile_case(normalize_case(cases[0], checked))
+    return compile_match_site(normalize_case(cases[0], checked))
 
 
-def _compile_without_normalized_rows(source: str) -> tuple[Case, CompiledCase]:
+def _compile_without_normalized_rows(source: str) -> tuple[Case, CompiledMatchSite]:
     _, case, compiled = _compile(source)
     normalized = replace(compiled.normalized, rows=())
-    return case, compile_case(normalized)
+    return case, compile_match_site(normalized)
 
 
 def _branch_matches(constructor: object, value: Value) -> bool:
@@ -139,7 +219,7 @@ def _branch_matches(constructor: object, value: Value) -> bool:
     raise AssertionError("finite generated tests only use boolean and enum constructors")
 
 
-def _decision_action(compiled: CompiledCase, subject: Value) -> int | None:
+def _decision_action(compiled: CompiledMatchSite, subject: Value) -> int | None:
     occurrences = {occurrence.id: occurrence for occurrence in compiled.occurrences}
 
     def evaluate(decision: Decision, values: dict[object, Value]) -> int | None:
@@ -148,6 +228,22 @@ def _decision_action(compiled: CompiledCase, subject: Value) -> int | None:
         if isinstance(decision, DecisionLeaf):
             return decision.action_id
         value = values[decision.occurrence.id]
+        if isinstance(decision, DecisionDecompose):
+            assert isinstance(value, (EnumValue, RecordValue))
+            next_values = dict(values)
+            children = sorted(
+                (
+                    occurrence
+                    for occurrence in occurrences.values()
+                    if isinstance(occurrence.provenance, FieldOccurrenceProvenance)
+                    and occurrence.provenance.parent == decision.occurrence.id
+                    and occurrence.provenance.constructor == decision.constructor
+                ),
+                key=lambda occurrence: occurrence.creation_order,
+            )
+            for field, child in zip(decision.constructor.fields, children, strict=True):
+                next_values[child.id] = value.fields[field.name]
+            return evaluate(decision.child, next_values)
         for branch in decision.keyed_children:
             if not _branch_matches(branch.constructor, value):
                 continue
@@ -188,6 +284,8 @@ def _has_fail(root: Decision) -> bool:
             return True
         if isinstance(decision, DecisionLeaf):
             return False
+        if isinstance(decision, DecisionDecompose):
+            return visit(decision.child)
         return any(visit(branch.decision) for branch in decision.keyed_children) or (
             decision.default is not None and visit(decision.default)
         )
@@ -205,7 +303,9 @@ def _decision_references(root: Decision) -> tuple[int, int]:
         if id(decision) in unique:
             return
         unique.add(id(decision))
-        if isinstance(decision, DecisionSwitch):
+        if isinstance(decision, DecisionDecompose):
+            visit(decision.child)
+        elif isinstance(decision, DecisionSwitch):
             for branch in decision.keyed_children:
                 visit(branch.decision)
             if decision.default is not None:
@@ -222,7 +322,9 @@ def _unique_decision_ids(root: Decision) -> frozenset[int]:
         if id(decision) in unique:
             return
         unique.add(id(decision))
-        if isinstance(decision, DecisionSwitch):
+        if isinstance(decision, DecisionDecompose):
+            visit(decision.child)
+        elif isinstance(decision, DecisionSwitch):
             for branch in decision.keyed_children:
                 visit(branch.decision)
             if decision.default is not None:
@@ -266,6 +368,9 @@ def _path_test_counts(root: Decision) -> tuple[int, ...]:
     counts: list[int] = []
 
     def visit(decision: Decision, count: int) -> None:
+        if isinstance(decision, DecisionDecompose):
+            visit(decision.child, count)
+            return
         if not isinstance(decision, DecisionSwitch):
             counts.append(count)
             return
@@ -296,6 +401,167 @@ def _nested_pair_value(
     )
 
 
+def test_singleton_nominals_decompose_without_a_discriminant_and_demand_only_used_fields() -> None:
+    _, _, compiled = _compile(
+        "enum Choice\n"
+        "  | no\n"
+        "  | yes\n"
+        "record Packet\n"
+        "  payload: Choice\n"
+        "  note: text\n"
+        'let value = Packet(payload = yes, note = "x")\n'
+        "case value of | Packet(payload = yes) => 1 | Packet(payload = no) => 0"
+    )
+
+    root = cast(DecisionDecompose, compiled.root)
+    assert isinstance(root.constructor, RecordConstructor)
+    assert isinstance(root.child, DecisionSwitch)
+    assert root.free_occurrences == (compiled.normalized.root.id,)
+    assert [occurrence.provenance.field_name for occurrence in root.children] == ["payload", "note"]
+    assert root.demanded_occurrences == (root.children[0].id,)
+    validate_decision_dag(compiled.root)
+
+
+def test_decomposition_self_validation_rejects_forged_interfaces_and_replay_nodes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _, _, compiled = _compile(
+        "enum Pair\n"
+        "  | pair(left: bool, right: bool)\n"
+        "let value = pair(left = true, right = false)\n"
+        "case value of | pair(left = true) => 1 | pair(left = false) => 0"
+    )
+    root = cast(DecisionDecompose, compiled.root)
+    ledger, groups = compiler_module._validate_occurrence_ledger(
+        compiled.normalized, compiled.occurrences
+    )
+
+    with pytest.raises(MatchCompileInvariantError, match="unknown occurrence"):
+        compiler_module._decompose_free_occurrences(
+            root.occurrence,
+            DecisionFail(),
+            (),
+            OccurrenceIndex.for_occurrences(()),
+        )
+    with pytest.raises(MatchCompileInvariantError, match="exact ledger occurrence"):
+        compiler_module._validate_compiled_decisions(
+            replace(compiled, root=replace(root, occurrence=replace(root.occurrence))),
+            ledger,
+            groups,
+        )
+    with pytest.raises(MatchCompileInvariantError, match="forged free"):
+        compiler_module._validate_compiled_decisions(
+            replace(
+                compiled,
+                root=replace(root, free_occurrences=(root.occurrence.id, root.children[0].id)),
+            ),
+            ledger,
+            groups,
+        )
+
+    original_signature = compiler_module.signature_for_type
+    signature_calls = 0
+
+    def invalid_singleton_signature(subject_type: Type, table: TypeTable) -> Signature:
+        nonlocal signature_calls
+        signature_calls += 1
+        if signature_calls == 1:
+            return original_signature(subject_type, table)
+        return ClosedSignature((BoolConstructor(False),))
+
+    monkeypatch.setattr(compiler_module, "signature_for_type", invalid_singleton_signature)
+    with pytest.raises(MatchCompileInvariantError, match="exactly singleton nominal"):
+        compiler_module._validate_compiled_decisions(compiled, ledger, groups)
+    monkeypatch.setattr(compiler_module, "signature_for_type", original_signature)
+
+    for malformed, message in (
+        (replace(root, free_occurrences=(root.occurrence.id, root.occurrence.id)), "duplicates"),
+        (
+            replace(root, demanded_occurrences=(root.children[0].id, root.children[0].id)),
+            "duplicate occurrences",
+        ),
+        (replace(root, free_occurrences=()), "omits"),
+    ):
+        with pytest.raises(MatchCompileInvariantError, match=message):
+            validate_decision_dag(malformed)
+
+    same_occurrence_failure = DecisionSwitch(
+        root.occurrence,
+        (DecisionBranch(root.constructor, DecisionFail()),),
+        None,
+        (root.occurrence.id,),
+    )
+    with pytest.raises(MatchCompileInvariantError, match="more than once"):
+        compiler_module._first_failure_constraints(
+            replace(root, child=same_occurrence_failure), compiled.normalized.type_table
+        )
+    with pytest.raises(MatchCompileInvariantError, match="requires a singleton nominal"):
+        compiler_module._validate_semantic_replay(replace(compiled, root=root.child))
+    with pytest.raises(MatchCompileInvariantError, match="incompatible singleton"):
+        compiler_module._validate_semantic_replay(
+            replace(compiled, root=replace(root, children=()))
+        )
+    with pytest.raises(MatchCompileInvariantError, match="forged decomposition demands"):
+        compiler_module._validate_semantic_replay(
+            replace(compiled, root=replace(root, demanded_occurrences=()))
+        )
+
+    missing_group_switch = DecisionSwitch(
+        root.occurrence,
+        (DecisionBranch(root.constructor, root.child),),
+        None,
+        (root.occurrence.id,),
+    )
+    with pytest.raises(MatchCompileInvariantError, match="field group"):
+        compiler_module._validate_compiled_decisions(
+            replace(compiled, root=missing_group_switch), ledger, {}
+        )
+
+    _, _, open_compiled = _compile("case 1 of | 1 => 1 | _ => 2")
+    open_root = cast(DecisionSwitch, open_compiled.root)
+    open_ledger, open_groups = compiler_module._validate_occurrence_ledger(
+        open_compiled.normalized, open_compiled.occurrences
+    )
+    with pytest.raises(MatchCompileInvariantError, match="retain a default"):
+        compiler_module._validate_compiled_decisions(
+            replace(open_compiled, root=replace(open_root, default=None)),
+            open_ledger,
+            open_groups,
+        )
+
+    _, _, bool_compiled = _compile("case true of | true => 1 | false => 2")
+    bool_root = cast(DecisionSwitch, bool_compiled.root)
+    with pytest.raises(MatchCompileInvariantError, match="wrong qba-selected occurrence"):
+        compiler_module._validate_semantic_replay(
+            replace(
+                bool_compiled,
+                root=replace(
+                    bool_root,
+                    occurrence=replace(
+                        bool_root.occurrence,
+                        id=OccurrenceId(99),
+                        creation_order=99,
+                    ),
+                ),
+            )
+        )
+
+
+def test_true_single_variant_enum_decomposes_before_its_refutable_payload() -> None:
+    _, _, compiled = _compile(
+        "enum Only\n"
+        "  | only(value: bool)\n"
+        "let value: Only = only(value = true)\n"
+        "case value of | only(value = true) => 1 | only(value = false) => 0"
+    )
+
+    root = cast(DecisionDecompose, compiled.root)
+    assert isinstance(root.constructor, EnumConstructor)
+    assert isinstance(root.child, DecisionSwitch)
+    assert root.demanded_occurrences == (root.children[0].id,)
+    validate_compiled_case(compiled)
+
+
 def test_irrefutable_leaf_finalizes_binder_and_has_no_issues() -> None:
     _, case, compiled = _compile("let value = 1\ncase value of | _ as captured => captured")
 
@@ -305,8 +571,8 @@ def test_irrefutable_leaf_finalizes_binder_and_has_no_issues() -> None:
     assert compiled.root.free_occurrences == (compiled.normalized.root.id,)
     assert compiled.reachable_action_ids == (case.branches[0].node_id,)
     assert compiled.issues == ()
-    assert compiled.case_node_id == case.node_id
-    assert compiled.actions == compiled.normalized.actions
+    assert compiled.site_node_id == case.node_id
+    assert compiled.source.actions == compiled.normalized.source.actions
 
 
 def test_boolean_switch_is_complete_and_has_signature_order() -> None:
@@ -334,7 +600,7 @@ def test_nested_missing_witness_is_structured_from_the_first_failure_path() -> N
     assert len(compiled.issues) == 1
     issue = compiled.issues[0]
     assert isinstance(issue, NonExhaustiveIssue)
-    assert issue.case_node_id == case.node_id
+    assert issue.site_node_id == case.node_id
     assert issue.span == case.span
     assert isinstance(issue.witness, EnumWitness)
     assert issue.witness.variant == "box"
@@ -431,8 +697,8 @@ def test_binder_in_specialized_default_row_targets_the_dominated_child_occurrenc
         "let value = box(flag = false)\n"
         "case value of | box(flag = false) => false | box(flag = _ as captured) => captured"
     )
-    root = cast(DecisionSwitch, compiled.root)
-    nested = cast(DecisionSwitch, root.keyed_children[0].decision)
+    root = cast(DecisionDecompose, compiled.root)
+    nested = cast(DecisionSwitch, root.child)
     fallback = cast(DecisionLeaf, nested.default)
     assignment = fallback.binder_assignments[0]
 
@@ -468,8 +734,8 @@ def test_qba_reordering_preserves_source_priority_for_every_pair_value() -> None
         "  | pair(left = false) => 2\n"
         "  | _ => 3\n"
     )
-    root = cast(DecisionSwitch, compiled.root)
-    pair = cast(EnumConstructor, root.keyed_children[0].constructor)
+    root = cast(DecisionDecompose, compiled.root)
+    pair = cast(EnumConstructor, root.constructor)
     nominal = NominalId(pair.enum_type.module_id, pair.enum_type.name)
 
     for left, right in itertools.product((False, True), repeat=2):
@@ -613,12 +879,14 @@ def test_compiled_decisions_are_acyclic_single_test_paths_and_locally_shared() -
     validate_decision_dag(compiled.root)
     unique, references = _decision_references(compiled.root)
     assert (unique, references) == (5, 6)
-    assert _path_test_counts(compiled.root) == (3, 3, 2)
+    assert _path_test_counts(compiled.root) == (2, 2, 1)
     repeated: Counter[int] = Counter()
 
     def collect(decision: Decision) -> None:
         repeated[id(decision)] += 1
-        if isinstance(decision, DecisionSwitch):
+        if isinstance(decision, DecisionDecompose):
+            collect(decision.child)
+        elif isinstance(decision, DecisionSwitch):
             for branch in decision.keyed_children:
                 collect(branch.decision)
             if decision.default is not None:
@@ -627,8 +895,8 @@ def test_compiled_decisions_are_acyclic_single_test_paths_and_locally_shared() -
     collect(compiled.root)
     assert max(repeated.values()) > 1
     assert unique < references
-    root = cast(DecisionSwitch, compiled.root)
-    left = cast(DecisionSwitch, root.keyed_children[0].decision)
+    root = cast(DecisionDecompose, compiled.root)
+    left = cast(DecisionSwitch, root.child)
     right = cast(DecisionSwitch, left.keyed_children[0].decision)
     assert right.default is left.default
 
@@ -844,6 +1112,33 @@ def test_local_enum_witness_prefers_bare_constructor_over_blocked_short_owner(
     assert render_witness(witness) == "Missing"
 
 
+def test_imported_record_witness_preserves_a_checker_accepted_source_qualification(
+    tmp_path: Path,
+) -> None:
+    modules = {
+        "library/remote": "record Remote\n  value: bool",
+        "entry": (
+            "import library/remote as r\n"
+            "let value: r::Remote = r::Remote(value = false)\n"
+            "case value of | r::Remote(value = true) => 0\n"
+        ),
+    }
+    compiled = _compile_graph_case(tmp_path, modules)
+    witness = cast(RecordWitness, cast(NonExhaustiveIssue, compiled.issues[0]).witness)
+
+    rendered = render_witness(witness)
+
+    assert witness.qualification == EnumWitnessQualification("Remote", ("r",))
+    assert rendered == "r::Remote(value = false)"
+    modules["entry"] = (
+        "import library/remote as r\n"
+        "let value: r::Remote = r::Remote(value = false)\n"
+        f"case value of | {rendered} => 0 | _ => 1\n"
+    )
+    checked = check_program(resolve_program(make_graph_from_files(tmp_path, modules)), _CAPS)
+    assert ENTRY_ID in checked.modules
+
+
 def test_qualified_only_imported_enum_witness_uses_source_alias(tmp_path: Path) -> None:
     compiled = _compile_graph_case(
         tmp_path,
@@ -951,7 +1246,7 @@ def test_hidden_imported_type_allows_irrefutable_case_without_invented_spelling(
 
     assert compiled.issues == ()
 
-    unavailable = compile_case(replace(compiled.normalized, rows=()))
+    unavailable = compile_match_site(replace(compiled.normalized, rows=()))
     issue = cast(NonExhaustiveIssue, unavailable.issues[0])
     assert issue.witness == WildcardWitness()
     assert render_witness(issue.witness) == "_"
@@ -1149,7 +1444,7 @@ def test_negative_alias_to_other_enum_is_not_selected_as_owner(tmp_path: Path) -
             ),
         },
     )
-    unavailable = compile_case(replace(compiled.normalized, rows=()))
+    unavailable = compile_match_site(replace(compiled.normalized, rows=()))
     issue = cast(NonExhaustiveIssue, unavailable.issues[0])
 
     assert issue.witness == WildcardWitness()
@@ -1172,7 +1467,7 @@ def test_local_owner_form_blocks_shadowed_open_import_spelling(tmp_path: Path) -
             ),
         },
     )
-    unavailable = compile_case(replace(compiled.normalized, rows=()))
+    unavailable = compile_match_site(replace(compiled.normalized, rows=()))
     issue = cast(NonExhaustiveIssue, unavailable.issues[0])
 
     assert render_witness(issue.witness) == "empty"
@@ -1222,7 +1517,7 @@ def test_module_route_blocks_only_the_variant_it_shadows(tmp_path: Path) -> None
             bare_enum_constructors=frozenset(),
         ),
     )
-    issue = cast(NonExhaustiveIssue, compile_case(without_bare).issues[0])
+    issue = cast(NonExhaustiveIssue, compile_match_site(without_bare).issues[0])
     assert render_witness(issue.witness) == "::Owner::block"
 
     # Covers only "block" (via the self-qualifier, which bypasses the
@@ -1248,7 +1543,7 @@ def test_module_route_blocks_only_the_variant_it_shadows(tmp_path: Path) -> None
             bare_enum_constructors=frozenset(),
         ),
     )
-    issue = cast(NonExhaustiveIssue, compile_case(without_bare).issues[0])
+    issue = cast(NonExhaustiveIssue, compile_match_site(without_bare).issues[0])
     assert render_witness(issue.witness) == "Owner::free"
 
 
@@ -1634,7 +1929,7 @@ def test_private_compiler_guards_reject_malformed_internal_states() -> None:
         enum_compiled.normalized,
         case_context=MatchCaseContext(ENTRY_ID),
     )
-    issue = cast(NonExhaustiveIssue, compile_case(missing_spellings).issues[0])
+    issue = cast(NonExhaustiveIssue, compile_match_site(missing_spellings).issues[0])
 
     assert issue.witness == WildcardWitness()
 
@@ -1813,8 +2108,8 @@ def test_strong_compiled_case_validator_rejects_internal_corruption() -> None:
         "let value = pair(left = 1, right = 2)\n"
         "case value of | pair(left = left, right = right) => left"
     )
-    two_root = cast(DecisionSwitch, two_binder_compiled.root)
-    two_leaf = cast(DecisionLeaf, two_root.keyed_children[0].decision)
+    two_root = cast(DecisionDecompose, two_binder_compiled.root)
+    two_leaf = cast(DecisionLeaf, two_root.child)
     two_ledger, two_groups = compiler_module._validate_occurrence_ledger(
         two_binder_compiled.normalized,
         two_binder_compiled.occurrences,
@@ -1867,12 +2162,10 @@ def test_strong_compiled_case_validator_rejects_internal_corruption() -> None:
         normalized,
         pair_compiled.occurrences,
     )
-    with pytest.raises(MatchCompileInvariantError, match="field group"):
+    with pytest.raises(MatchCompileInvariantError, match="children.*ledger"):
         compiler_module._validate_compiled_decisions(pair_compiled, pair_ledger, {})
-    nested_switch = cast(
-        DecisionSwitch,
-        cast(DecisionSwitch, pair_compiled.root).keyed_children[0].decision,
-    )
+    pair_root = cast(DecisionDecompose, pair_compiled.root)
+    nested_switch = cast(DecisionSwitch, pair_root.child)
     forged_nested = replace(
         nested_switch,
         free_occurrences=(
@@ -1880,15 +2173,7 @@ def test_strong_compiled_case_validator_rejects_internal_corruption() -> None:
             normalized.root.id,
         ),
     )
-    forged_root = replace(
-        cast(DecisionSwitch, pair_compiled.root),
-        keyed_children=(
-            replace(
-                cast(DecisionSwitch, pair_compiled.root).keyed_children[0],
-                decision=forged_nested,
-            ),
-        ),
-    )
+    forged_root = replace(pair_root, child=forged_nested)
     with pytest.raises(MatchCompileInvariantError, match="forged free"):
         compiler_module._validate_compiled_decisions(
             replace(pair_compiled, root=forged_root),
@@ -1922,7 +2207,7 @@ def test_strong_compiled_case_validator_rejects_internal_corruption() -> None:
     with pytest.raises(MatchCompileInvariantError, match="normalized source"):
         compiler_module.validate_compiled_case(
             pair_compiled,
-            expected_normalized=replace(normalized, case_node_id=normalized.case_node_id + 1),
+            expected_normalized=replace(normalized, site_node_id=normalized.site_node_id + 1),
         )
     with pytest.raises(MatchCompileInvariantError, match="type context"):
         compiler_module.validate_compiled_case(
@@ -1989,7 +2274,7 @@ def test_private_diagnostic_guards_reject_malformed_switches() -> None:
     _, _, compiled = _compile("let value = false\ncase value of | false => 0 | true => 1")
     normalized = compiled.normalized
     fail = DecisionFail()
-    leaf = DecisionLeaf(normalized.actions[0].action_id, ())
+    leaf = DecisionLeaf(normalized.source.actions[0].action_id, ())
     false_branch = DecisionBranch(BoolConstructor(False), fail)
     true_branch = DecisionBranch(BoolConstructor(True), leaf)
     complete_with_default = DecisionSwitch(

@@ -1,4 +1,4 @@
-"""Isolated tests for the checker-independent AgL inference engine."""
+"""Tests for the AgL inference engine and inference-dependent checker behavior."""
 
 from __future__ import annotations
 
@@ -6,7 +6,10 @@ from collections.abc import Callable
 
 import pytest
 
+from agm.agl.capabilities import HostCapabilities
 from agm.agl.modules.ids import ModuleId
+from agm.agl.parser import parse_program
+from agm.agl.scope import resolve_module
 from agm.agl.semantics.types import (
     AgentType,
     BoolType,
@@ -27,6 +30,8 @@ from agm.agl.semantics.types import (
     UnitType,
 )
 from agm.agl.syntax.spans import SourceId, SourceSpan
+from agm.agl.typecheck.checker import check_module
+from agm.agl.typecheck.env import AglTypeError
 from agm.agl.typecheck.inference import (
     ConstraintOrigin,
     ConstraintRole,
@@ -367,6 +372,24 @@ class TestContextCompletion:
 
         assert engine.is_solved(variable) is False
         assert engine.parent_of(variable) == engine.parent_of(other)
+
+
+def test_destructuring_let_binder_preserves_candidate_validation_provenance() -> None:
+    """A generic pattern field retains its initializer's candidate-return evidence."""
+    source = (
+        "enum Option[T]\n"
+        "  | some(value: T)\n"
+        "def recurse(n: int) = if n == 0 => 0 else => recurse(n - 1)\n"
+        "let some(value = value) = Option::some(value = recurse(0))\n"
+        'value + "x"'
+    )
+
+    with pytest.raises(AglTypeError) as raised:
+        check_module(resolve_module(parse_program(source)), HostCapabilities())
+
+    error = raised.value
+    assert "inferred return type" in str(error).lower()
+    assert any("candidate return type" in message.lower() for message, _ in error.related)
 
 
 class TestFinalizationAndProvenance:

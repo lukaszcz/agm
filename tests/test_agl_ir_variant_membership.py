@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 
 from agm.agl.ir.ids import Location, NominalId, SourceId
-from agm.agl.ir.nodes import IrBind, IrConstInt, IrVariantIs
+from agm.agl.ir.nodes import IrBind, IrConstInt, IrSequence, IrVariantIs
 from agm.agl.ir.program import (
     ExecutableModule,
     ExecutableProgram,
@@ -17,6 +17,7 @@ from agm.agl.ir.program import (
 from agm.agl.ir.validate import InvalidIrError, validate_ir
 from agm.agl.modules.ids import ENTRY_ID
 from agm.agl.semantics.values import BoolValue
+from tests._agl_helpers import let_root_capture
 from tests.agl.ir_harness import _compiled_checked, evaluate_ir
 
 
@@ -133,8 +134,10 @@ let r = c is not Blue
     entry = prog.modules[prog.entry_module]
     found = False
     for node in entry.initializers:
-        if isinstance(node, IrBind) and isinstance(node.value, IrVariantIs):
-            vi = node.value
+        if isinstance(node, (IrSequence, IrBind)) and isinstance(
+            let_root_capture(node).value, IrVariantIs
+        ):
+            vi = let_root_capture(node).value
             assert vi.nominal == NominalId(ENTRY_ID, "Color")
             assert vi.variant == "Blue"
             assert vi.negated is True

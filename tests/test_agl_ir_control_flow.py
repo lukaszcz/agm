@@ -55,6 +55,7 @@ from agm.agl.semantics.values import (
     UnitValue,
 )
 from agm.agl.typecheck import AglTypeError
+from tests._agl_helpers import let_root_capture
 from tests.agl.ir_harness import _compiled_checked, evaluate_ir, evaluate_ir_raises
 
 # ---------------------------------------------------------------------------
@@ -461,6 +462,21 @@ r
     assert ir["r"] == TextValue("catchall msg")
 
 
+def test_try_specific_catch_with_binding_reads_concrete_exception_field() -> None:
+    """A concrete exception projection reads its own declared field exactly."""
+    source = """\
+exception AppError extends Exception
+  detail: text
+let r = try
+  raise AppError(message = "failed", detail = "details")
+catch AppError as e =>
+  e.detail
+r
+"""
+    ir = evaluate_ir(source)
+    assert ir["r"] == TextValue("details")
+
+
 # ---------------------------------------------------------------------------
 # IR evaluation tests — first-match ordering
 # ---------------------------------------------------------------------------
@@ -572,8 +588,7 @@ def test_lower_if_with_else_shape() -> None:
     assert isinstance(prog, ExecutableProgram)
     entry = prog.modules[prog.entry_module]
     items = entry.initializers
-    ir_bind = items[0]
-    assert isinstance(ir_bind, IrBind)
+    ir_bind = let_root_capture(items[0])
     ir_if = ir_bind.value
     assert isinstance(ir_if, IrIf)
     assert ir_if.has_else
@@ -622,8 +637,7 @@ def test_lower_try_no_binding_shape() -> None:
     assert isinstance(prog, ExecutableProgram)
     entry = prog.modules[prog.entry_module]
     items = entry.initializers
-    ir_bind = items[0]
-    assert isinstance(ir_bind, IrBind)
+    ir_bind = let_root_capture(items[0])
     ir_try = ir_bind.value
     assert isinstance(ir_try, IrTry)
     assert len(ir_try.handlers) == 1
@@ -643,8 +657,7 @@ def test_lower_try_with_binding_shape() -> None:
     assert isinstance(prog, ExecutableProgram)
     entry = prog.modules[prog.entry_module]
     items = entry.initializers
-    ir_bind = items[0]
-    assert isinstance(ir_bind, IrBind)
+    ir_bind = let_root_capture(items[0])
     ir_try = ir_bind.value
     assert isinstance(ir_try, IrTry)
     handler = ir_try.handlers[0]
@@ -664,8 +677,7 @@ def test_lower_try_catchall_shape() -> None:
     assert isinstance(prog, ExecutableProgram)
     entry = prog.modules[prog.entry_module]
     items = entry.initializers
-    ir_bind = items[0]
-    assert isinstance(ir_bind, IrBind)
+    ir_bind = let_root_capture(items[0])
     ir_try = ir_bind.value
     assert isinstance(ir_try, IrTry)
     handler = ir_try.handlers[0]

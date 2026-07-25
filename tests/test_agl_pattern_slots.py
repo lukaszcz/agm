@@ -18,6 +18,11 @@ from agm.agl.capabilities import HostCapabilities
 from agm.agl.parser import parse_program
 from agm.agl.scope import resolve_module
 from agm.agl.scope.symbols import AglScopeError, BinderKind
+from agm.agl.syntax import (
+    ConstructorPattern,
+    pattern_binder_candidates,
+    pattern_binding_node_ids,
+)
 from agm.agl.typecheck import AglTypeError, check_module
 
 
@@ -40,6 +45,27 @@ def _slot_reference(resolved) -> int:
         for node_id, ref in resolved.resolution.items()
         if ref.kind is BinderKind.pattern_slot
     )
+
+
+# ---------------------------------------------------------------------------
+# Shared pattern helpers
+# ---------------------------------------------------------------------------
+
+
+def test_pattern_binder_helpers_preserve_preorder_and_pattern_depth() -> None:
+    program = parse_program("let Packet(value, _ as whole) = source")
+    declaration = program.body.items[0]
+    assert isinstance(declaration.pattern, ConstructorPattern)
+
+    candidates = pattern_binder_candidates(declaration.pattern)
+    assert [(candidate.name, candidate.nested) for candidate in candidates] == [
+        ("value", True),
+        ("whole", True),
+    ]
+    assert pattern_binding_node_ids(declaration.pattern) == tuple(
+        candidate.node_id for candidate in candidates
+    )
+    assert tuple(candidate.name for candidate in candidates) == ("value", "whole")
 
 
 # ---------------------------------------------------------------------------
@@ -167,6 +193,44 @@ def test_a_bare_nullary_variant_name_tests_the_variant() -> None:
 
     assert ok, diagnostics
     assert out == "2\n"
+
+
+def test_top_level_let_nested_nullary_constructor_selects_its_slot() -> None:
+    """A nested let pattern preserves its selected constructor in the continuation."""
+    resolved = _resolve(
+        "enum Flag\n"
+        "  | on\n"
+        "enum Packet\n"
+        "  | packet(flag: Flag)\n"
+        "let packet(on) = packet(on())\n"
+        "on\n"
+    )
+    reference = _slot_reference(resolved)
+
+    checked = check_module(resolved, HostCapabilities())
+
+    binding = checked.binding_for(reference)
+    constructor = checked.constructor_ref_for(reference)
+    assert binding is not None
+    assert binding.kind is BinderKind.constructor_binding
+    assert constructor is not None
+    assert (constructor.owner_name, constructor.variant) == ("Flag", "on")
+
+
+def test_top_level_let_rejects_an_ambiguous_constructor_slot_reference() -> None:
+    resolved = _resolve(
+        "enum First\n"
+        "  | on\n"
+        "enum Second\n"
+        "  | on\n"
+        "enum Pair\n"
+        "  | pair(first: First, second: Second)\n"
+        "let pair(on, on) = pair(First::on, Second::on)\n"
+        "on\n"
+    )
+
+    with pytest.raises(AglTypeError):
+        check_module(resolved, HostCapabilities())
 
 
 @pytest.mark.parametrize(

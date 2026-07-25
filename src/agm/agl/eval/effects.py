@@ -108,9 +108,9 @@ class EffectHandlers:
 
         ``AgentCancelled`` (and a bare ``KeyboardInterrupt`` from an unwrapped
         default agent) propagates out of ``AgentRegistry.dispatch`` without source
-        context. The REPL session needs the cancelled ``ask`` node's location to
-        apply partial-effects promotion by source position (just like ``AglRaise``
-        ), so we attach it here. A raw ``KeyboardInterrupt`` is normalized to
+        context. The REPL session reports this location with the cancellation;
+        initializer-completion tracking independently determines which prior
+        effects are promoted. A raw ``KeyboardInterrupt`` is normalized to
         ``AgentCancelled(reason="interrupted")`` to match the
         ``ConfirmingAgent`` conversion and give the session a uniform carrier.
         """

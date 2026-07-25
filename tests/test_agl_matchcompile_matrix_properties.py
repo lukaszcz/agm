@@ -10,6 +10,7 @@ import pytest
 
 from agm.agl.capabilities import HostCapabilities
 from agm.agl.ir.ids import NominalId
+from agm.agl.matchcompile.compiler import compile_match_site, validate_compiled_case
 from agm.agl.matchcompile.matrix import (
     OccurrenceAllocator,
     PatternMatrix,
@@ -22,8 +23,10 @@ from agm.agl.matchcompile.model import (
     BinderAssignment,
     Constructor,
     ConstructorCell,
+    DecisionDecompose,
     EnumConstructor,
     MatrixRow,
+    RecordConstructor,
     WildcardCell,
 )
 from agm.agl.matchcompile.normalize import normalize_case
@@ -35,6 +38,7 @@ from agm.agl.semantics.values import (
     EnumValue,
     IntValue,
     JsonValue,
+    RecordValue,
     TextValue,
     Value,
 )
@@ -305,6 +309,89 @@ def test_scalar_decompositions_use_runtime_literal_equality(
 ) -> None:
     checked, case, matrix, allocator = _matrix(source)
     _assert_decomposition_partition(checked, case, matrix, allocator, subjects)
+
+
+def test_record_decomposition_replays_the_same_matrix_semantics() -> None:
+    checked, case, matrix, _ = _matrix(
+        "record Pair\n"
+        "  left: bool\n"
+        "  right: bool\n"
+        "let value = Pair(left = true, right = false)\n"
+        "case value of | Pair(left = true) => 1 | Pair(left = false) => 0"
+    )
+
+    compiled = compile_match_site(normalize_case(case, checked))
+    assert isinstance(compiled.root, DecisionDecompose)
+    assert compiled.root.demanded_occurrences == (compiled.root.children[0].id,)
+    validate_compiled_case(compiled)
+    assert matrix.rows
+
+
+def test_record_decompositions_partition_partial_and_nested_patterns() -> None:
+    checked, case, matrix, allocator = _matrix(
+        "record Inner\n"
+        "  value: decimal\n"
+        "record Outer\n"
+        "  inner: Inner\n"
+        "  label: text\n"
+        'let value = Outer(inner = Inner(value = 1), label = "x")\n'
+        "case value of\n"
+        "  | Outer(inner = Inner(value = 1)) => 1\n"
+        '  | Outer(label = "x") => 2\n'
+        "  | _ => 3\n"
+    )
+    outer = head_constructors(matrix, 0)[0]
+    assert isinstance(outer, RecordConstructor)
+    outer_nominal = NominalId(outer.record_type.module_id, outer.record_type.name)
+    outer_result = specialize(matrix, 0, outer, allocator)
+    inner = head_constructors(outer_result.matrix, 0)[0]
+    assert isinstance(inner, RecordConstructor)
+    inner_nominal = NominalId(inner.record_type.module_id, inner.record_type.name)
+
+    subjects = (
+        RecordValue(
+            outer_nominal,
+            outer.record_type.name,
+            {
+                "inner": RecordValue(inner_nominal, inner.record_type.name, {"value": IntValue(1)}),
+                "label": TextValue("x"),
+            },
+        ),
+        RecordValue(
+            outer_nominal,
+            outer.record_type.name,
+            {
+                "inner": RecordValue(
+                    inner_nominal,
+                    inner.record_type.name,
+                    {"value": DecimalValue(decimal.Decimal("2"))},
+                ),
+                "label": TextValue("x"),
+            },
+        ),
+        RecordValue(
+            outer_nominal,
+            outer.record_type.name,
+            {
+                "inner": RecordValue(
+                    inner_nominal,
+                    inner.record_type.name,
+                    {"value": DecimalValue(decimal.Decimal("2"))},
+                ),
+                "label": TextValue("other"),
+            },
+        ),
+    )
+    inner_result = specialize(outer_result.matrix, 0, inner, outer_result.allocator)
+    for subject in subjects:
+        expected = reference_action(case, checked, subject)
+        assert (
+            matrix_action(
+                inner_result.matrix,
+                (subject.fields["inner"].fields["value"], subject.fields["label"]),
+            )
+            == expected
+        )
 
 
 def test_nested_enum_and_literal_decomposition_preserves_first_match_actions() -> None:

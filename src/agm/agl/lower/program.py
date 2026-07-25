@@ -11,7 +11,6 @@ from collections.abc import Mapping
 
 from agm.agl.ir.contracts import ContractPayload
 from agm.agl.ir.ids import NominalId, SourceId
-from agm.agl.ir.nodes import IrExpr
 from agm.agl.ir.program import (
     DryRunEntry,
     ExecutableModule,
@@ -33,7 +32,7 @@ from agm.agl.matchcompile import MatchCompiledProgram
 from agm.agl.modules.ids import STD_CORE_ID, ModuleId
 from agm.agl.self_validation import self_validation_enabled
 from agm.agl.semantics.types import ExceptionType, RecordType
-from agm.agl.syntax.nodes import AgentDecl, FuncDef, ScopeRegion
+from agm.agl.syntax.nodes import AgentDecl, FuncDef
 from agm.util.text import normalize_newlines
 
 __all__ = ["lower_program"]
@@ -166,7 +165,7 @@ def lower_program(
             _entry_source_text
             if mid.is_entry and _entry_source_text is not None
             else cm.source_text,
-            compiled.cases_by_module[mid],
+            compiled.sites_by_module[mid],
             contract_payloads=contract_payloads,
         )
         module_lowerers[mid] = lowerer
@@ -201,29 +200,15 @@ def lower_program(
         cm = checked.modules[mid]
         lowerer = module_lowerers[mid]
         body = cm.resolved.program.body
-        function_initializers: list[IrExpr] = []
-        other_initializers: list[IrExpr] = []
-        for item in body.items:
-            items = _static_items((item,)) if isinstance(item, ScopeRegion) else (item,)
-            for nested_item in items:
-                if isinstance(nested_item, AgentDecl) and (
-                    nested_item.scope_path
-                    and not _eager_scoped_agents
-                    and not lowerer._scoped_agent_is_referenced(nested_item)
-                ):
-                    continue
-                if mid.is_entry or isinstance(nested_item, (FuncDef, AgentDecl)):
-                    ir = lowerer.lower_item(nested_item, top_level=mid.is_entry)
-                    if ir is not None:
-                        target = (
-                            function_initializers
-                            if isinstance(nested_item, FuncDef)
-                            else other_initializers
-                        )
-                        target.append(ir)
+        initializers = lowerer.lower_initializers(
+            body,
+            top_level=mid.is_entry,
+            handles_only=not mid.is_entry,
+            eager_scoped_agents=_eager_scoped_agents,
+        )
         executable_modules[mid] = ExecutableModule(
             module_id=mid,
-            initializers=tuple((*function_initializers, *other_initializers)),
+            initializers=initializers,
         )
 
     # Collect entry-module params (only the entry module contributes params).

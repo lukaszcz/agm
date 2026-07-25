@@ -17,15 +17,15 @@
     {
       "name": "responses_flow_between_calls",
       "params": {"start": "an empty file"},
-      "agents": {"impl": ["draft with ${marker} inside", "final"], "ask": ["ok"]},
+      "agents": {"impl": ["draft with %{marker} inside", "final"], "ask": ["ok"]},
       "expect": {
-        "stdout": "draft with ${marker} inside\nfinal\n6\ndone\n",
+        "stdout": "draft with %{marker} inside\nfinal\n6\ndone\n",
         "calls": {"impl": 2, "ask": 1},
         "prompts": [
           {
             "agent": "impl",
             "call": 1,
-            "contains": ["draft with ${marker} inside"]
+            "contains": ["draft with %{marker} inside"]
           }
         ]
       }

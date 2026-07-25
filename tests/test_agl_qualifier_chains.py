@@ -445,3 +445,22 @@ def test_type_arguments_on_an_imported_generic_type_scope_still_resolve(tmp_path
     ]
     assert isinstance(describe_call.callee, VarRef)
     assert resolution.resolution[describe_call.callee.node_id].module_id != ENTRY_ID
+
+
+def test_open_imported_enum_owner_qualifies_its_variant(tmp_path: Path) -> None:
+    """``Color::Red`` reaches an open-imported enum owner in expression position."""
+    resolution = _entry_resolution(
+        tmp_path,
+        {
+            "entry": "open import lib\nlet c = Color::Red\nprint(c is Color::Red)\n",
+            "lib": "enum Color\n  | Red\n  | Blue\n",
+        },
+    )
+
+    (variant_ref,) = (
+        node
+        for node in _find_nodes(resolution.program, VarRef)
+        if node.qualifier is not None and node.name == "Red"
+    )
+    cref = resolution.constructor_refs[variant_ref.node_id]
+    assert (cref.owner_name, cref.variant) == ("Color", "Red")

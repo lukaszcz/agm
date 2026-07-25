@@ -70,6 +70,7 @@ from agm.agl.syntax.nodes import (
     ParamDecl,
     ParamKind,
     Pattern,
+    PatternBinderCandidate,
     PatternField,
     Placeholder,
     Program,
@@ -101,6 +102,9 @@ from agm.agl.syntax.nodes import (
     VarRef,
     WildcardPattern,
     assign_target_root_name,
+    pattern_binder_candidates,
+    pattern_binding_node_ids,
+    simple_let_pattern_name,
 )
 from agm.agl.syntax.spans import SourceSpan
 from agm.agl.syntax.types import (
@@ -176,6 +180,10 @@ __all__ = [
     "IndexTarget",
     "AssignTarget",
     "assign_target_root_name",
+    "simple_let_pattern_name",
+    "PatternBinderCandidate",
+    "pattern_binder_candidates",
+    "pattern_binding_node_ids",
     # expressions
     "Block",
     "VarRef",

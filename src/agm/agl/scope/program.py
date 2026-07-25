@@ -32,6 +32,7 @@ from agm.agl.diagnostics import Diagnostic
 from agm.agl.modules.ids import ModuleId
 from agm.agl.modules.loader import ModuleGraph
 from agm.agl.scope.imports import (
+    EMPTY_IMPORT_ENV,
     ImportEnv,
     ImportTarget,
     NameAtom,
@@ -40,6 +41,7 @@ from agm.agl.scope.imports import (
     SingleTarget,
     WildcardTarget,
     build_import_env,
+    resolve_alias_target,
 )
 from agm.agl.scope.resolver import _Resolver
 from agm.agl.scope.symbols import (
@@ -50,6 +52,7 @@ from agm.agl.scope.symbols import (
     ModuleResolution,
     ScopeNode,
     ScopePath,
+    alias_denotes_constructible_type,
 )
 from agm.agl.syntax.nodes import (
     AgentDecl,
@@ -61,6 +64,7 @@ from agm.agl.syntax.nodes import (
     FuncDef,
     ImportDecl,
     Program,
+    QualifierChain,
     RecordDef,
     ScopeRegion,
     TypeAlias,
@@ -148,13 +152,17 @@ def _build_cross_module_constructor_candidates(
     import_env: ImportEnv,
     all_public_types: dict[QName, RecordDef | EnumDef | ExceptionDef | TypeAlias],
     cross_module_constructor_refs: Mapping[QName, ConstructorRef],
+    import_envs: Mapping[ModuleId, ImportEnv],
 ) -> tuple[dict[str, tuple[ConstructorRef, ...]], frozenset[str]]:
     """Build constructor candidates from open-imported types for a module.
 
     For each type exposed via unqualified (open) import:
     - RecordDef: add the record name as a candidate (e.g. ``Foo(x:1)``).
     - EnumDef: add each variant name as a candidate (e.g. ``Red``).
-    - TypeAlias: not constructible, skip.
+    - TypeAlias: add the alias name only when its chain provably ends at a
+      constructible type, judged from its DECLARING module's environment —
+      an alias can reach its target through that module's own import, not the
+      consumer's — which is why *import_envs* is the whole program's table.
 
     A selected QName may also name an enum variant directly (e.g. an
     individually imported/renamed variant); such names are absent from
@@ -184,14 +192,36 @@ def _build_cross_module_constructor_candidates(
                 continue
             type_names.add(exposed_name)
             src_path = (src_name,) if isinstance(src_name, str) else src_name
-            if isinstance(decl, (RecordDef, ExceptionDef)):
+            owner_path = src_path[:-1]
+
+            def declaring_module_lookup(
+                target: str,
+                qualifier: QualifierChain | None,
+                *,
+                declaring_module: ModuleId = mid,
+                declaring_path: PathAtom = owner_path,
+            ) -> RecordDef | EnumDef | ExceptionDef | TypeAlias | None:
+                return resolve_alias_target(
+                    target,
+                    qualifier,
+                    self_module_id=declaring_module,
+                    import_env=import_envs.get(declaring_module, EMPTY_IMPORT_ENV),
+                    all_public_types=all_public_types,
+                    scope_path=declaring_path,
+                )
+
+            if isinstance(decl, (RecordDef, ExceptionDef)) or (
+                isinstance(decl, TypeAlias)
+                and isinstance(decl.type_expr, (NameT, AppliedT))
+                and alias_denotes_constructible_type(decl, declaring_module_lookup)
+            ):
                 cref = ConstructorRef(
                     owner_name=decl.name,
                     variant=None,
                     owner_decl_node_id=decl.node_id,
                     type_params=decl.type_params,
                     owner_module_id=mid,
-                    owner_path=src_path[:-1],
+                    owner_path=owner_path,
                 )
                 candidates.setdefault(exposed_name, []).append(cref)
             elif isinstance(decl, EnumDef):
@@ -206,7 +236,7 @@ def _build_cross_module_constructor_candidates(
                         owner_decl_node_id=decl.node_id,
                         type_params=decl.type_params,
                         owner_module_id=mid,
-                        owner_path=src_path[:-1],
+                        owner_path=owner_path,
                         can_match_bare_pattern=not variant.fields,
                     )
                     candidates.setdefault(variant.name, []).append(cref)
@@ -596,7 +626,7 @@ def resolve_program(
         # Build cross-module constructor candidates from open imports.
         cross_module_candidates, cross_module_type_names = (
             _build_cross_module_constructor_candidates(
-                import_envs[mid], all_public_types, cross_module_constructor_refs
+                import_envs[mid], all_public_types, cross_module_constructor_refs, import_envs
             )
         )
         constructor_candidates = cross_module_candidates
@@ -614,6 +644,7 @@ def resolve_program(
             cross_module_constructor_refs=cross_module_constructor_refs,
             cross_module_constructible_types=cross_module_constructible_types,
             cross_module_type_scopes=frozenset(all_public_types),
+            all_public_types=all_public_types,
             is_entry=is_entry,
             repl_session_scope=entry_repl_session_scope if is_entry else None,
             repl_session_scope_nodes=entry_repl_session_scope_nodes if is_entry else None,

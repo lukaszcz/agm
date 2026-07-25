@@ -19,6 +19,7 @@ from agm.agl.lower.program import lower_program
 from agm.agl.lower.repl import (
     LinkImage,
     LoweredReplEntry,
+    ReplPromotionPlan,
     lower_repl_entry,
     lower_repl_program,
 )
@@ -26,6 +27,7 @@ from agm.agl.lower.repl import (
 __all__ = [
     "LinkImage",
     "LoweredReplEntry",
+    "ReplPromotionPlan",
     "compile_coercion",
     "lower_program",
     "lower_module",

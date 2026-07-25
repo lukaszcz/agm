@@ -19,7 +19,7 @@ rendering, meta-commands, and the prompt_toolkit console are future work.
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING
 
 from agm.agl.diagnostics import AglError, Diagnostic, diagnostic_from_span
 from agm.agl.repl.entry import EntryKind, EntryResult
@@ -30,7 +30,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable, Iterable
     from pathlib import Path
 
-    from agm.agl.ir.ids import AgentId, Location
+    from agm.agl.ir.ids import AgentId, SymbolId
     from agm.agl.modules.ids import ModuleId
     from agm.agl.modules.loader import LoadedModule
     from agm.agl.modules.roots import RootSet
@@ -252,52 +252,12 @@ class ReplSession:
         typ: "Type", identities: frozenset[tuple[tuple[str, ...], str]]
     ) -> bool:
         """Return whether *typ* contains an entry nominal with one of *identities*."""
-        from agm.agl.semantics.types import (
-            DictType,
-            EnumType,
-            ExceptionType,
-            FunctionType,
-            ListType,
-            RecordType,
+        from agm.agl.semantics.types import iter_nominal_types
+
+        return any(
+            nominal.module_id.is_entry and (nominal.scope_path, nominal.name) in identities
+            for nominal in iter_nominal_types(typ)
         )
-
-        if isinstance(typ, (RecordType, EnumType)):
-            return (typ.module_id.is_entry and (typ.scope_path, typ.name) in identities) or any(
-                ReplSession._type_mentions_entry_nominal(arg, identities) for arg in typ.type_args
-            )
-        if isinstance(typ, ExceptionType):
-            return typ.module_id.is_entry and (typ.scope_path, typ.name) in identities
-        if isinstance(typ, ListType):
-            return ReplSession._type_mentions_entry_nominal(typ.elem, identities)
-        if isinstance(typ, DictType):
-            return ReplSession._type_mentions_entry_nominal(typ.value, identities)
-        if isinstance(typ, FunctionType):
-            return any(
-                ReplSession._type_mentions_entry_nominal(param, identities) for param in typ.params
-            ) or ReplSession._type_mentions_entry_nominal(typ.result, identities)
-        return False
-
-    @staticmethod
-    def _node_ids_from_failure(
-        program: "Program", failure_span: "SourceSpan | Location | None"
-    ) -> set[int]:
-        """Return AST ids belonging to the unexecuted suffix of a failed entry."""
-        if failure_span is None:
-            return set()
-        from agm.agl.syntax.nodes import ElseSentinel
-        from agm.agl.syntax.visitor import walk
-
-        node_ids: set[int] = set()
-
-        def collect(node: object) -> None:
-            if isinstance(node, ElseSentinel):
-                return
-            typed_node = cast("Program", node)
-            if typed_node.span.start_offset >= failure_span.start_offset:
-                node_ids.add(typed_node.node_id)
-
-        walk(program, collect)
-        return node_ids
 
     @staticmethod
     def _assert_checked_state_closed(checked: "CheckedModule") -> None:
@@ -727,15 +687,17 @@ class ReplSession:
         entry_program_name: str | None,
         entry_active_config: dict[str, object],
         partial: bool,
-        failure_span: "SourceSpan | Location | None",
+        promoted_declaration_ids: frozenset[int],
     ) -> tuple[str, ...]:
-        """Advance static state in lockstep with installed IR frame symbols."""
+        """Promote declarations whose IR initialization completed in this entry."""
+        from agm.agl.parser import resolve_infix_fixity
         from agm.agl.scope.symbols import ScopeNode
         from agm.agl.syntax.nodes import (
             AgentDecl,
             EnumDef,
             ExceptionDef,
             FuncDef,
+            InfixDecl,
             LetDecl,
             ParamDecl,
             ProgramDecl,
@@ -744,6 +706,7 @@ class ReplSession:
             TypeAlias,
             VarDecl,
             is_scoped_declaration,
+            pattern_binder_candidates,
         )
         from agm.agl.typecheck.env import TypeEnvironment
 
@@ -771,40 +734,53 @@ class ReplSession:
             TypeAlias,
             VarDecl,
         )
-        entry_names = {
-            item.name
+        binding_items = (AgentDecl, FuncDef, ParamDecl, VarDecl)
+        promotion_bindings = {
+            item.name: entry_root.bindings[item.name]
             for item in program.body.items
-            if isinstance(item, named_declarations) and not is_scoped_declaration(item)
+            if isinstance(item, binding_items)
+            and not is_scoped_declaration(item)
+            and item.name in entry_root.bindings
         }
-        for item in program.body.items:
-            if isinstance(item, EnumDef) and not item.scope_path:
-                entry_names.update(variant.name for variant in item.variants)
+        promotion_bindings.update(
+            (binding.name, binding)
+            for item in program.body.items
+            if isinstance(item, LetDecl)
+            for candidate in pattern_binder_candidates(item.pattern)
+            if (binding := checked.pattern_binding_for(candidate.node_id)) is not None
+        )
+        entry_binding_node_ids = {ref.decl_node_id for ref in promotion_bindings.values()}
+        promoted_binding_node_ids = entry_binding_node_ids & promoted_declaration_ids
 
-        def _before_failure(end_offset: int) -> bool:
-            return not partial or (
-                failure_span is not None and end_offset <= failure_span.start_offset
-            )
+        # Declarations this entry introduces, at the root and in its scope
+        # regions. Anything outside this set is retained session state, which a
+        # partial entry never demotes.
+        entry_declaration_node_ids = {
+            item.node_id for item in entry_declarations if isinstance(item, named_declarations)
+        } | entry_binding_node_ids
+
+        def _is_promoted(node_id: int) -> bool:
+            return node_id not in entry_declaration_node_ids or node_id in promoted_declaration_ids
 
         def type_identity(
             item: RecordDef | EnumDef | ExceptionDef | TypeAlias,
         ) -> tuple[tuple[str, ...], str]:
             return tuple(segment.name for segment in item.scope_path), item.name
 
-        entry_type_identities = frozenset(
-            type_identity(item)
+        entry_type_items = tuple(
+            item
             for item in entry_declarations
             if isinstance(item, (RecordDef, EnumDef, ExceptionDef, TypeAlias))
         )
+        entry_type_identities = frozenset(type_identity(item) for item in entry_type_items)
         promoted_type_identities = frozenset(
             type_identity(item)
-            for item in entry_declarations
-            if isinstance(item, (RecordDef, EnumDef, ExceptionDef, TypeAlias))
-            and _before_failure(item.span.end_offset)
-            and (not partial or not item.scope_path)
+            for item in entry_type_items
+            if item.node_id in promoted_declaration_ids
         )
+        unpromoted_type_identities = entry_type_identities - promoted_type_identities
         unpromoted_type_names = {
-            "::".join((*path, name))
-            for path, name in entry_type_identities - promoted_type_identities
+            "::".join((*path, name)) for path, name in unpromoted_type_identities
         }
         stale_binding_names: set[str] = set()
         stale_binding_node_ids: set[int] = set()
@@ -855,77 +831,51 @@ class ReplSession:
                 if crefs
             }
 
-        installed: list[str] = []
-        unpromoted_binding_node_ids = {
-            item.node_id
-            for item in program.body.items
-            if partial
-            and isinstance(item, named_declarations)
-            and not is_scoped_declaration(item)
-            and not _before_failure(item.span.end_offset)
-        }
-        for name, ref in entry_root.bindings.items():
-            symbol = self._link_image.symbol_for_decl(ref.decl_node_id)
-            declared_before_failure = (
-                failure_span is not None and ref.decl_span.end_offset <= failure_span.start_offset
-            )
-            installed_before_failure = symbol in self._ir_base_frame and (
-                failure_span is None or ref.decl_span.start_offset <= failure_span.start_offset
-            )
-            promoted_before_failure = installed_before_failure or (
-                symbol is None and declared_before_failure
-            )
-            if not partial or promoted_before_failure:
-                self._session_scope.bindings[name] = ref
-                if partial and name in entry_names:
-                    installed.append(name)
-
-        from agm.agl.syntax.nodes import ElseSentinel
-        from agm.agl.syntax.visitor import walk
-
-        entry_node_ends: dict[int, int] = {}
-
-        def record_node_end(node: object) -> None:
-            if isinstance(node, ElseSentinel):
-                return
-            typed_node = cast("Program", node)
-            entry_node_ends[typed_node.node_id] = typed_node.span.end_offset
-
-        walk(program, record_node_end)
-
-        def is_promoted_node(node_id: int, end_offset: int) -> bool:
-            return node_id not in entry_node_ends or not partial or _before_failure(end_offset)
-
-        for path, node in checked.resolved.scope_nodes.items():
-            if not path:
+        for name, ref in promotion_bindings.items():
+            if ref.decl_node_id not in promoted_binding_node_ids:
                 continue
-            if path not in self._session_scope_nodes:
-                if path in {
-                    scope_path + (name,)
-                    for scope_path, name in entry_type_identities - promoted_type_identities
-                } or not is_promoted_node(node.node_id, entry_node_ends.get(node.node_id, 0)):
-                    continue
-                self._session_scope_nodes[path] = ScopeNode(
-                    node_id=node.node_id,
-                    parent=self._session_scope_nodes[path[:-1]],
-                    scope_path=path,
-                )
+            self._session_scope.bindings[name] = ref
+        installed = (
+            self._installed_report(
+                program,
+                checked,
+                promoted_binding_node_ids=promoted_binding_node_ids,
+                promoted_type_names=frozenset(
+                    name for path, name in promoted_type_identities if not path
+                ),
+            )
+            if partial
+            else []
+        )
+
+        # Named scope paths are namespaces: a region's path is retained whenever
+        # it is not a demoted type's own path, and its members are promoted
+        # individually below.
+        for path, node in checked.resolved.scope_nodes.items():
+            if not path or path in self._session_scope_nodes:
+                continue
+            if path in {(*scope_path, name) for scope_path, name in unpromoted_type_identities}:
+                continue
+            self._session_scope_nodes[path] = ScopeNode(
+                node_id=node.node_id,
+                parent=self._session_scope_nodes[path[:-1]],
+                scope_path=path,
+            )
         for path, name in promoted_type_identities:
-            self._session_scope_nodes[path + (name,)].members.clear()
+            self._session_scope_nodes[(*path, name)].members.clear()
         for path, node in checked.resolved.scope_nodes.items():
             session_node = self._session_scope_nodes.get(path)
             if session_node is None:
                 continue
             for name, ref in node.members.items():
                 if (
-                    (ref.scope_path, ref.name)
-                    not in entry_type_identities - promoted_type_identities
+                    (ref.scope_path, ref.name) not in unpromoted_type_identities
                     and ref.decl_node_id not in stale_binding_node_ids
-                    and is_promoted_node(ref.decl_node_id, ref.decl_span.end_offset)
+                    and _is_promoted(ref.decl_node_id)
                 ):
                     session_node.members[name] = ref
         self._session_type_paths |= frozenset(
-            path + (name,) for path, name in promoted_type_identities
+            (*path, name) for path, name in promoted_type_identities
         )
 
         if not partial and not stale_binding_node_ids:
@@ -937,23 +887,20 @@ class ReplSession:
             previous_type_env = TypeEnvironment()
             previous_type_env.seed_from(self._type_env)
             # Build the replacement env in a local so a mid-promotion failure
-            # leaves the session's still-sealed ``self._type_env`` untouched;
-            # publishing an unsealed env would brick ``seed_from`` on every
-            # subsequent entry.  Only the final sealed env is committed.
+            # leaves the session's still-sealed ``self._type_env`` untouched.
             new_type_env = TypeEnvironment()
             new_type_env.seed_from(checked.type_env)
             if partial and unpromoted_type_names:
                 new_type_env.restore_type_names_from(previous_type_env, unpromoted_type_names)
             if partial:
-                unpromoted_binding_node_ids |= self._node_ids_from_failure(program, failure_span)
                 unpromoted_function_names = (
                     item.name
                     for item in entry_declarations
-                    if isinstance(item, FuncDef) and not _before_failure(item.span.end_offset)
+                    if isinstance(item, FuncDef) and item.node_id not in promoted_declaration_ids
                 )
                 new_type_env.restore_binding_metadata_from(
                     previous_type_env,
-                    unpromoted_binding_node_ids,
+                    entry_binding_node_ids - promoted_binding_node_ids,
                     unpromoted_function_names,
                 )
             new_type_env.remove_binding_types(stale_binding_node_ids)
@@ -962,12 +909,11 @@ class ReplSession:
 
         from agm.agl.ir.ids import AgentId
 
-        promoted_agents = {
+        self._declared_agents.update(
             AgentId(name, scope_path)
             for (scope_path, name), declaration in checked.resolved.declared_agents.items()
-            if _before_failure(declaration.span.end_offset)
-        }
-        self._declared_agents.update(promoted_agents)
+            if _is_promoted(declaration.node_id)
+        )
         if promoted_type_identities:
             promoted_candidates: dict[str, tuple[ConstructorRef, ...]] = {}
             for (_path, cname), crefs in checked.resolved.constructor_candidates_by_path.items():
@@ -987,59 +933,105 @@ class ReplSession:
                 name for path, name in promoted_type_identities if not path
             )
         for item in program.body.items:
-            if isinstance(item, ParamDecl):
-                symbol = self._link_image.symbol_for_decl(item.node_id)
-                # The IR interpreter installs every entry param into the base
-                # frame up front (before any initializer runs), so a bare
-                # ``symbol in self._ir_base_frame`` check would record a param
-                # declared after the failure even though the scope-promotion
-                # loop above excluded its binding by source position. Mirror
-                # that loop's ``installed_before_failure`` criterion so
-                # ``_declared_params`` stays aligned with ``_session_scope``
-                # (otherwise ``declared_params()`` raises ``KeyError``).
-                installed_before_failure = symbol in self._ir_base_frame and (
-                    failure_span is None or item.span.start_offset <= failure_span.start_offset
-                )
-                if not partial or installed_before_failure:
-                    typ = checked.type_env.get_binding_type(item.node_id)
-                    assert typ is not None
-                    self._declared_params[item.name] = typ
+            if isinstance(item, ParamDecl) and item.node_id in promoted_binding_node_ids:
+                typ = checked.type_env.get_binding_type(item.node_id)
+                assert typ is not None
+                self._declared_params[item.name] = typ
         if entry_program_name is not None and not partial:
             self._program_name = entry_program_name
             self._active_config = entry_active_config
         if not partial:
             self._source_log.append(text)
-        # Promote infix fixity: declarations that parsed (and, on partial
-        # failure, were declared before the failing point) persist so the
-        # operator is usable in later entries. Fixity is resolved against the
-        # already-accumulated table so relative priorities bind correctly.
-        from agm.agl.parser import resolve_infix_fixity
-        from agm.agl.syntax.nodes import InfixDecl
-
         promoted_infix = [
             item
             for item in program.body.items
-            if isinstance(item, InfixDecl) and _before_failure(item.span.end_offset)
+            if isinstance(item, InfixDecl) and item.node_id in promoted_declaration_ids
         ]
         if promoted_infix:
             self._accumulated_infix = resolve_infix_fixity(promoted_infix, self._accumulated_infix)
         self._next_node_id = next_start_id
         return tuple(installed)
 
+    @staticmethod
+    def _installed_report(
+        program: "Program",
+        checked: "CheckedModule",
+        *,
+        promoted_binding_node_ids: set[int],
+        promoted_type_names: frozenset[str],
+    ) -> list[str]:
+        """Return every promoted declaration name for a partial entry's report.
+
+        Ordered by the entry's source items: a promoted value binding (agent /
+        function / param / var) or a promoted type declaration (record / enum /
+        exception / type alias) contributes its declared name; a promoted ``let``
+        contributes each selected binder in pattern order. An enum's variant
+        names are never listed separately, only the enum's own declared name.
+        """
+        from agm.agl.syntax.nodes import (
+            AgentDecl,
+            EnumDef,
+            ExceptionDef,
+            FuncDef,
+            LetDecl,
+            ParamDecl,
+            RecordDef,
+            TypeAlias,
+            VarDecl,
+            pattern_binder_candidates,
+        )
+
+        binding_items = (AgentDecl, FuncDef, ParamDecl, VarDecl)
+        type_items = (RecordDef, EnumDef, ExceptionDef, TypeAlias)
+        installed: list[str] = []
+        for item in program.body.items:
+            if isinstance(item, binding_items):
+                if item.node_id in promoted_binding_node_ids:
+                    installed.append(item.name)
+            elif isinstance(item, LetDecl):
+                for candidate in pattern_binder_candidates(item.pattern):
+                    binding = checked.pattern_binding_for(candidate.node_id)
+                    if binding is not None and binding.decl_node_id in promoted_binding_node_ids:
+                        installed.append(binding.name)
+            elif isinstance(item, type_items) and item.name in promoted_type_names:
+                installed.append(item.name)
+        return installed
+
+    def frame_value(self, symbol: "SymbolId | None") -> "Value | None":
+        """Return the base-frame value bound to *symbol*, unwrapping a mutable cell."""
+        from agm.agl.semantics.values import Cell
+
+        slot = self._ir_base_frame.get(symbol) if symbol is not None else None
+        return slot.value if isinstance(slot, Cell) else slot
+
+    def _declaration_value(self, decl_node_id: int) -> "Value | None":
+        """Return the base-frame value of a promoted declaration."""
+        return self.frame_value(self._link_image.symbol_for_decl(decl_node_id))
+
     def _echo_data_ir(
         self, program: "Program", checked: "CheckedModule", captured: "Value | None"
     ) -> tuple["Value | None", "Type | None"]:
-        from agm.agl.semantics.values import Cell
-        from agm.agl.syntax.nodes import Binder, Declaration, LetDecl, VarDecl
+        from agm.agl.syntax.nodes import (
+            Binder,
+            Declaration,
+            LetDecl,
+            VarDecl,
+            simple_let_pattern_name,
+        )
 
         last = program.body.items[-1]
         value_type = self._value_type_of_last(program, checked)
         if not isinstance(last, (Binder, Declaration)):
             return captured, value_type
-        if isinstance(last, (LetDecl, VarDecl)):
-            symbol = self._link_image.symbol_for_decl(last.node_id)
-            slot = self._ir_base_frame.get(symbol) if symbol is not None else None
-            return (slot.value if isinstance(slot, Cell) else slot), value_type
+        if isinstance(last, LetDecl):
+            simple_name = simple_let_pattern_name(last.pattern)
+            if simple_name is None or simple_name == "_":
+                return captured, value_type
+            binding = checked.pattern_binding_for(last.pattern.node_id)
+            assert binding is not None, "compiler bug: no selected simple-let binding"
+            return self._declaration_value(binding.decl_node_id), value_type
+        if isinstance(last, VarDecl):
+            return self._declaration_value(last.node_id), value_type
         return None, None
 
     def _classify(self, program: "Program") -> tuple[EntryKind, str | None]:
@@ -1061,6 +1053,7 @@ class ReplSession:
             TypeAlias,
             VarDecl,
             is_scoped_declaration,
+            simple_let_pattern_name,
         )
 
         # A parsed program always has at least one item (empty/comment-only
@@ -1069,7 +1062,14 @@ class ReplSession:
         # Bare expression (not a binder or declaration) → "expression"
         if not isinstance(last, (Binder, Declaration, ScopeRegion)):
             return "expression", None
-        if isinstance(last, (LetDecl, VarDecl)):
+        if isinstance(last, LetDecl):
+            name = simple_let_pattern_name(last.pattern)
+            if name == "_":
+                return "statement", None
+            return "binding", name
+        if isinstance(last, VarDecl):
+            if last.name == "_":
+                return "statement", None
             return "binding", last.name
         if isinstance(
             last,
@@ -1121,7 +1121,13 @@ class ReplSession:
         that an initializer which always exits reports ``bottom``. Shared by the
         check-only result builder and the success echo so the two agree.
         """
-        from agm.agl.syntax.nodes import Binder, Declaration, LetDecl, VarDecl
+        from agm.agl.syntax.nodes import (
+            Binder,
+            Declaration,
+            LetDecl,
+            VarDecl,
+            simple_let_pattern_name,
+        )
 
         # A parsed program always has at least one item (empty/comment-only
         # source fails parsing earlier).
@@ -1136,6 +1142,12 @@ class ReplSession:
             initializer_type = checked.node_types.get(last.value.node_id)
             if isinstance(initializer_type, BottomType):
                 return initializer_type
+            if isinstance(last, LetDecl):
+                if simple_let_pattern_name(last.pattern) == "_":
+                    return None
+                return checked.let_matched_types.get(last.node_id)
+            if last.name == "_":
+                return None
             return checked.type_env.get_binding_type(last.node_id)
         return None
 
@@ -1195,16 +1207,11 @@ class ReplSession:
         """Return promoted user bindings as (name, declared type, current value).
 
         Includes params, which resolve eagerly and live in the value scope.
-        Constructor bindings are excluded — they are type-system entities with no
-        independent runtime value.
         """
-        from agm.agl.scope.symbols import BinderKind
         from agm.agl.semantics.values import Cell
 
         result: list[tuple[str, Type, Value]] = []
         for name, ref in self._session_scope.bindings.items():
-            if ref.kind == BinderKind.constructor_binding:
-                continue
             typ = self._type_env.get_binding_type(ref.decl_node_id)
             # Every promoted let/var/param binding has a recorded type.
             assert typ is not None
@@ -1230,14 +1237,10 @@ class ReplSession:
     def declared_params(self) -> list[tuple[str, "Type", "Value"]]:
         """Return declared params as (name, type, resolved value)."""
         result: list[tuple[str, Type, Value]] = []
-        from agm.agl.semantics.values import Cell
-
         for name, typ in self._declared_params.items():
-            ref = self._session_scope.bindings[name]
-            symbol = self._link_image.symbol_for_decl(ref.decl_node_id)
-            slot = self._ir_base_frame.get(symbol) if symbol is not None else None
-            assert slot is not None
-            result.append((name, typ, slot.value if isinstance(slot, Cell) else slot))
+            value = self._declaration_value(self._session_scope.bindings[name].decl_node_id)
+            assert value is not None
+            result.append((name, typ, value))
         return result
 
     def program_name(self) -> str | None:

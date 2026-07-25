@@ -1,0 +1,9 @@
+# Immutable let patterns capture one record value and publish each binder.
+param choose_right: bool
+
+record Pair
+  left: int
+  right: int
+
+let Pair(left = left, right = right) = if choose_right => Pair(left = 2, right = 3) | else => Pair(left = 5, right = 7)
+print(if choose_right => right | else => left)

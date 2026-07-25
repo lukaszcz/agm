@@ -1,0 +1,5 @@
+record R
+  x: int
+
+let R(0) = R(1)
+()

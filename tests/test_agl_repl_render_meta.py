@@ -464,6 +464,19 @@ class TestRenderHelpers:
         echoed = render_mod.render_entry_result(result, echo=True)
         assert echoed == render_mod.format_typed_value("g", TextType(), value)
 
+    def test_format_typed_value_without_name(self) -> None:
+        line = render_mod.format_typed_value(None, IntType(), IntValue(Decimal(5)))
+        assert line == ": int = 5"
+
+    def test_unnamed_binding_echo_matches_format_helper(self) -> None:
+        # A destructuring let has no single public name (``result.name is
+        # None``); its echo must go through the SAME shared formatter as a
+        # named binding, just with no name, so the two never drift.
+        value = TextValue("hi")
+        result = _result(kind="binding", name=None, value=value, value_type=TextType())
+        echoed = render_mod.render_entry_result(result, echo=True)
+        assert echoed == render_mod.format_typed_value(None, TextType(), value)
+
 
 # ---------------------------------------------------------------------------
 # Full meta-command set

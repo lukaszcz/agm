@@ -29,6 +29,8 @@ Two tiers (validate_ir runs ONLY when explicitly called):
        type parameters).
     8. Every ``IrBuiltinLoad``/``IrBuiltinStore`` key belongs to the canonical
        engine-key catalog.
+    9. Every ``IrField`` nominal is registered, field-bearing, and declares
+       its projected field (on at least one enum payload shape for enums).
 
 The expression dispatcher uses a closed structural ``match`` with a final
 ``assert_never(node)`` arm so that adding an ``IrExpr`` variant in a
@@ -97,6 +99,7 @@ from agm.agl.ir.nodes import (
     IrExec,
     IrExpr,
     IrField,
+    IrFieldMode,
     IrFunctionParam,
     IrIf,
     IrIndex,
@@ -269,6 +272,29 @@ def _check_nominal_in_table(nominal: NominalId, ctx: _Context) -> None:
         raise InvalidIrError(
             f"IR node references nominal {nominal!r} which is not in program.nominals"
         )
+
+
+def _check_nominal_field(nominal: NominalId, field: str, mode: IrFieldMode, ctx: _Context) -> None:
+    """Reject a projection outside the declaring nominal's field shape.
+
+    Exact and upper-bound projections use the same declaration descriptor for
+    field existence. The mode changes runtime identity checking, not which
+    fields the statically selected nominal declares.
+    """
+    desc = ctx.program.nominals.get(nominal)
+    if desc is None:  # pragma: no cover
+        return  # already caught by _check_nominal_in_table
+    match mode:
+        case IrFieldMode.EXACT | IrFieldMode.UPPER_BOUND:
+            pass
+        case _ as _unreachable_mode:  # pragma: no cover
+            assert_never(_unreachable_mode)
+    if desc.kind is NominalKind.ENUM:
+        known_fields = {name for variant in desc.variants for name in variant.fields}
+    else:
+        known_fields = set(desc.fields)
+    if field not in known_fields:
+        raise InvalidIrError(f"IrField references unknown field {field!r} of nominal {nominal!r}")
 
 
 def _check_enum_variant(nominal: NominalId, variant: str, ctx: _Context) -> None:
@@ -874,8 +900,13 @@ def _validate_expr_node(node: IrExpr, ctx: _Context) -> None:
                 raise InvalidIrError("IrUnary NEG: kind must not be None")
             _validate_expr(val, ctx)
 
-        case IrField(value=val):
+        case IrField(value=val, nominal=nominal, field=field, mode=mode):
             _validate_location(node.location, ctx)
+            if not field:
+                raise InvalidIrError("IrField field must be non-empty")
+            if ctx.deep:
+                _check_nominal_in_table(nominal, ctx)
+                _check_nominal_field(nominal, field, mode, ctx)
             _validate_expr(val, ctx)
 
         case IrUpdateRecord(value=val, updates=updates):

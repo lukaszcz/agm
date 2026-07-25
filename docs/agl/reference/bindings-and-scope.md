@@ -11,11 +11,30 @@ assignment: `x = e` as an item is a syntax error — use `let`/`var` to bind or
 ## `let` — immutable binding
 
 ```ebnf
-let_decl ::= "let" name (":" type_expr)? "=" expr
+let_decl ::= "let" pattern (":" type_expr)? "=" expr
 ```
 
-`let` evaluates the initializer, checks it against the annotation (if any),
-and creates an **immutable** binding in the current scope. It scopes over the
+The annotation applies to the complete pattern. The initializer is evaluated
+before any name introduced by the pattern becomes visible in the continuation.
+
+A bare name at a `let` root always introduces a binding, even when a visible
+constructor has the same spelling. Write `Only()` or a qualified constructor
+pattern when the pattern must test a constructor instead. Within a constructor
+pattern, bare names follow the same field-directed rules as nested `case`
+patterns; an `as` name always binds and `_` never binds.
+
+A `let` pattern may use record or enum constructors, literals, wildcards, and
+`as` binders. The annotation describes the complete value being matched, not any
+individual binder: the initializer is checked once against it, then each
+selected binder receives its field or whole-value type. Without an annotation,
+the complete matched type is inferred from the initializer. A bottom initializer
+needs that annotation to type binders. `let _` is a discard: its annotation does
+not constrain the initializer. Every `let` pattern must be irrefutable; a
+refutable pattern is a static error. A destructuring `let` evaluates its
+initializer once and installs every selected binder from that value.
+
+`let` evaluates the initializer, checks it against the complete annotation (if
+any), and creates **immutable** bindings in the current scope. It scopes over the
 **continuation** — the remaining items in the block and any enclosing
 continuation that consumes the block. A block ending in a bare `let` has type
 `unit` unless its initializer exits, in which case it has bottom type:
@@ -38,6 +57,14 @@ ignored: annotations normally constrain an initializer and declare its binder's
 type, but `_` creates neither a readable binder nor a binding type. Its RHS is
 therefore checked without an annotation-derived expected type. Use it when a
 non-`unit` value is intentionally discarded.
+
+### REPL persistence and echo
+
+At the REPL top level, a completed destructuring `let` persists every selected
+binder across later entries. Its echo shows the complete matched value and type,
+not a synthetic binder name. If a later initializer fails, previously completed
+pattern initializers (and completed function closures) remain available; the
+failing initializer contributes no binders.
 
 ## `var` — mutable binding
 
@@ -141,10 +168,11 @@ A `def` inside a nested block is a static error. See
 
 ## Typing of bindings
 
-- With an annotation, the initializer is checked against the annotated type
-  (`int → decimal` widening applies; see [Types](types.md)), and the
-  binding's declared type is the annotation.
-- Without an annotation, the binding's type is inferred from the initializer.
+- With an annotation, the initializer is checked against the annotated complete
+  type (`int → decimal` widening applies; see [Types](types.md)); every pattern
+  binder receives its selected concrete type.
+- Without an annotation, the complete matched type and each binder type are
+  inferred from the initializer.
   **An untyped `ask` defaults to `text`; an untyped `exec` defaults to the
   structured `ExecResult`**:
 

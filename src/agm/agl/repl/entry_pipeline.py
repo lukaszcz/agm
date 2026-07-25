@@ -20,7 +20,7 @@ if TYPE_CHECKING:
 
     from agm.agl.eval.ir_interpreter import IrInterpreter
     from agm.agl.ir.contracts import ContractPayload
-    from agm.agl.ir.ids import Location, NominalId
+    from agm.agl.ir.ids import NominalId, SymbolId
     from agm.agl.ir.program import NominalDescriptor
     from agm.agl.lower import LinkImage
     from agm.agl.matchcompile import MatchCompiledProgram
@@ -35,7 +35,6 @@ if TYPE_CHECKING:
     from agm.agl.semantics.values import EnumValue, Frame, Value
     from agm.agl.syntax.advisories import SpacedQualifier
     from agm.agl.syntax.nodes import ImportDecl, Item, OpenDecl, Program, ScopeRegion
-    from agm.agl.syntax.spans import SourceSpan
     from agm.agl.typecheck.env import CheckedModule, TypeEnvironment
     from agm.agl.typecheck.program import CheckedProgram
 
@@ -101,10 +100,12 @@ class EntryPipelineCtx(Protocol):
         entry_program_name: str | None,
         entry_active_config: dict[str, object],
         partial: bool,
-        failure_span: SourceSpan | Location | None,
+        promoted_declaration_ids: frozenset[int],
     ) -> tuple[str, ...]: ...
 
     def _classify(self, program: Program) -> tuple[EntryKind, str | None]: ...
+
+    def frame_value(self, symbol: SymbolId | None) -> Value | None: ...
 
     def _echo_data_ir(
         self, program: Program, checked: CheckedModule, captured: Value | None
@@ -339,6 +340,10 @@ class EntryPipeline:
             partial_calls=entry.partial_calls,
             slot_resolution=entry.slot_resolution,
             slot_constructor_refs=entry.slot_constructor_refs,
+            let_matched_types=entry.let_matched_types,
+            pattern_binding_refs=entry.pattern_binding_refs,
+            pattern_constructor_refs=entry.pattern_constructor_refs,
+            pattern_constructor_owners=entry.pattern_constructor_owners,
         )
 
     def _prepare_entry_program(
@@ -522,6 +527,19 @@ class EntryPipeline:
                 "timeout": self._ctx._persisted_timeout_setting,
             },
         )
+
+        def completed_declaration_ids() -> frozenset[int]:
+            # The entry frame is always populated by the closure pre-pass
+            # before params run (see ``IrInterpreter.run``), so a declaration
+            # completed before a failing param default stays promoted. The
+            # promotion plan itself is conservative: it excludes params whose
+            # symbols were not installed and applies the declaration-dependency
+            # fixpoint.
+            return lowered.promotion_plan.completed_declaration_ids(
+                len(interp.module_initializer_values.get(lowered.program.entry_module, ())),
+                interp.entry_param_symbols_installed,
+            )
+
         try:
             interp.run()
         except AglRaise as exc:
@@ -534,6 +552,7 @@ class EntryPipeline:
             )
             trace.run_end(ok=False)
             self._persist_interpreter_settings(interp, trace)
+            promoted = completed_declaration_ids()
             installed = self._ctx._promote_ir_state(
                 text=text,
                 program=orig_program,
@@ -542,9 +561,9 @@ class EntryPipeline:
                 entry_program_name=entry_program_name,
                 entry_active_config=entry_active_config,
                 partial=True,
-                failure_span=exc.span,
+                promoted_declaration_ids=promoted,
             )
-            self._restore_unpromoted_entry_nominals(orig_program, exc.span, nominal_snapshot)
+            self._restore_unpromoted_entry_nominals(orig_program, promoted, nominal_snapshot)
             kind, name = self._ctx._classify(orig_program)
             return EntryResult(
                 kind=kind,
@@ -559,7 +578,6 @@ class EntryPipeline:
                 installed=installed,
             )
         except (AgentCancelled, KeyboardInterrupt) as exc:
-            cancel_span = exc.span if isinstance(exc, AgentCancelled) else None
             cancellation_message = (
                 "Agent call cancelled — entry aborted."
                 if isinstance(exc, AgentCancelled)
@@ -567,6 +585,7 @@ class EntryPipeline:
             )
             trace.run_end(ok=False)
             self._persist_interpreter_settings(interp, trace)
+            promoted = completed_declaration_ids()
             installed = self._ctx._promote_ir_state(
                 text=text,
                 program=orig_program,
@@ -575,9 +594,9 @@ class EntryPipeline:
                 entry_program_name=entry_program_name,
                 entry_active_config=entry_active_config,
                 partial=True,
-                failure_span=cancel_span,
+                promoted_declaration_ids=promoted,
             )
-            self._restore_unpromoted_entry_nominals(orig_program, cancel_span, nominal_snapshot)
+            self._restore_unpromoted_entry_nominals(orig_program, promoted, nominal_snapshot)
             kind, name = self._ctx._classify(orig_program)
             return EntryResult(
                 kind=kind,
@@ -603,7 +622,10 @@ class EntryPipeline:
             entry_program_name=entry_program_name,
             entry_active_config=entry_active_config,
             partial=False,
-            failure_span=None,
+            promoted_declaration_ids=lowered.promotion_plan.completed_declaration_ids(
+                len(lowered.program.modules[lowered.program.entry_module].initializers),
+                interp.entry_param_symbols_installed,
+            ),
         )
         self._ctx._loaded_lib_modules.update(new_modules)
         self._ctx._link_image.mark_linked(
@@ -618,6 +640,8 @@ class EntryPipeline:
             if marker is not None and initializer_values is not None
             else None
         )
+        if lowered.trailing_let_value_symbol is not None:
+            captured = self._ctx.frame_value(lowered.trailing_let_value_symbol)
         kind, name = self._ctx._classify(orig_program)
         value, value_type = self._ctx._echo_data_ir(orig_program, checked, captured)
         return EntryResult(
@@ -746,10 +770,10 @@ class EntryPipeline:
     def _restore_unpromoted_entry_nominals(
         self,
         program: Program,
-        failure_span: SourceSpan | Location | None,
+        promoted_declaration_ids: frozenset[int],
         nominal_snapshot: Mapping["NominalId", "NominalDescriptor"],
     ) -> None:
-        """Rollback entry nominal descriptors for type declarations after a failure."""
+        """Rollback nominal descriptors whose declaration did not complete."""
         from agm.agl.ir.ids import NominalId
         from agm.agl.modules.ids import ENTRY_ID
         from agm.agl.syntax.nodes import EnumDef, ExceptionDef, RecordDef, ScopeRegion
@@ -766,6 +790,6 @@ class EntryPipeline:
         nominal_ids = tuple(
             NominalId(ENTRY_ID, item.name, tuple(segment.name for segment in item.scope_path))
             for item in type_declarations(program.body.items)
-            if not (failure_span is not None and item.span.end_offset <= failure_span.start_offset)
+            if item.node_id not in promoted_declaration_ids
         )
         self._ctx._link_image.restore_nominals(nominal_snapshot, nominal_ids)

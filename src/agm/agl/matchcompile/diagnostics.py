@@ -8,7 +8,7 @@ from typing import TypeAlias
 
 from agm.agl.scope.imports import render_qualifier
 from agm.agl.semantics.text_literal import quote_text
-from agm.agl.semantics.types import EnumType, Type
+from agm.agl.semantics.types import EnumType, RecordType, Type
 from agm.agl.syntax.spans import SourceSpan
 
 from .model import LiteralConstructor, LiteralKind
@@ -92,6 +92,15 @@ class EnumWitness:
 
 
 @dataclass(frozen=True, slots=True)
+class RecordWitness:
+    """A concrete record constructor with structural child witnesses."""
+
+    record_type: RecordType
+    fields: tuple[WitnessField, ...]
+    qualification: EnumWitnessQualification | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class OpenComplementWitness:
     """The remainder of an open domain after excluding observed literals."""
 
@@ -100,7 +109,12 @@ class OpenComplementWitness:
 
 
 MatchWitness: TypeAlias = (
-    WildcardWitness | BoolWitness | LiteralWitness | EnumWitness | OpenComplementWitness
+    WildcardWitness
+    | BoolWitness
+    | LiteralWitness
+    | EnumWitness
+    | RecordWitness
+    | OpenComplementWitness
 )
 
 
@@ -108,7 +122,7 @@ MatchWitness: TypeAlias = (
 class NonExhaustiveIssue:
     """One source case has a reachable failure path."""
 
-    case_node_id: int
+    site_node_id: int
     span: SourceSpan
     witness: MatchWitness
 
@@ -117,12 +131,21 @@ class NonExhaustiveIssue:
 class RedundantArmIssue:
     """One source arm action is unreachable in the compiled decision DAG."""
 
-    case_node_id: int
+    site_node_id: int
     action_id: int
     span: SourceSpan
 
 
-MatchIssue: TypeAlias = NonExhaustiveIssue | RedundantArmIssue
+@dataclass(frozen=True, slots=True)
+class RefutableLetIssue:
+    """One immutable ``let`` pattern has a reachable non-matching value."""
+
+    site_node_id: int
+    span: SourceSpan
+    witness: MatchWitness
+
+
+MatchIssue: TypeAlias = NonExhaustiveIssue | RedundantArmIssue | RefutableLetIssue
 
 
 def _render_literal(kind: LiteralKind, value: decimal.Decimal | str | None) -> str:
@@ -143,12 +166,19 @@ def render_witness(witness: MatchWitness) -> str:
         return "true" if witness.value else "false"
     if isinstance(witness, LiteralWitness):
         return _render_literal(witness.kind, witness.value)
-    if isinstance(witness, EnumWitness):
-        constructor_name = witness.variant
-        if witness.qualification is not None:
-            constructor_name = f"{witness.qualification.owner_spelling}::{witness.variant}"
-        if not witness.fields:
-            return constructor_name
+    if isinstance(witness, (EnumWitness, RecordWitness)):
+        if isinstance(witness, EnumWitness):
+            constructor_name = witness.variant
+            if witness.qualification is not None:
+                constructor_name = f"{witness.qualification.owner_spelling}::{witness.variant}"
+            if not witness.fields:
+                return constructor_name
+        else:
+            constructor_name = (
+                witness.record_type.name
+                if witness.qualification is None
+                else witness.qualification.owner_spelling
+            )
         fields = ", ".join(
             f"{field.name} = {render_witness(field.witness)}" for field in witness.fields
         )
@@ -164,8 +194,12 @@ def render_witness(witness: MatchWitness) -> str:
 
 def issue_sort_key(issue: MatchIssue) -> tuple[str, int, int, int, int, int, int]:
     """Return the deterministic cross-source ordering key used by the stage adapter."""
-    kind_order = 0 if isinstance(issue, NonExhaustiveIssue) else 1
-    action_id = -1 if isinstance(issue, NonExhaustiveIssue) else issue.action_id
+    if isinstance(issue, (NonExhaustiveIssue, RefutableLetIssue)):
+        kind_order = 0
+        action_id = -1
+    else:
+        kind_order = 1
+        action_id = issue.action_id
     span = issue.span
     return (
         span.source.label,
@@ -188,6 +222,8 @@ __all__ = [
     "NonExhaustiveIssue",
     "OpenComplementWitness",
     "RedundantArmIssue",
+    "RecordWitness",
+    "RefutableLetIssue",
     "WildcardWitness",
     "WitnessField",
     "issue_sort_key",

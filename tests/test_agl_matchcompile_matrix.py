@@ -12,6 +12,12 @@ import pytest
 import agm.agl.matchcompile.matrix as matrix_module
 from agm.agl.capabilities import HostCapabilities
 from agm.agl.ir.ids import NominalId
+from agm.agl.matchcompile.compiler import compile_match_site
+from agm.agl.matchcompile.diagnostics import (
+    NonExhaustiveIssue,
+    RecordWitness,
+    render_witness,
+)
 from agm.agl.matchcompile.matrix import (
     OccurrenceAllocator,
     PatternMatrix,
@@ -27,6 +33,7 @@ from agm.agl.matchcompile.model import (
     BoolConstructor,
     ConstructorCell,
     ConstructorField,
+    DecisionDecompose,
     EnumConstructor,
     FieldOccurrenceProvenance,
     LiteralConstructor,
@@ -35,6 +42,7 @@ from agm.agl.matchcompile.model import (
     Occurrence,
     OccurrenceId,
     PathDecomposition,
+    RecordConstructor,
     WildcardCell,
 )
 from agm.agl.matchcompile.normalize import (
@@ -46,7 +54,7 @@ from agm.agl.parser import parse_program
 from agm.agl.scope import resolve_module
 from agm.agl.scope.program import resolve_program
 from agm.agl.semantics.type_table import TypeTable
-from agm.agl.semantics.types import BoolType, EnumType, IntType, TextType
+from agm.agl.semantics.types import BoolType, EnumType, IntType, RecordType, TextType
 from agm.agl.semantics.values import BoolValue, EnumValue
 from agm.agl.syntax.nodes import Case
 from agm.agl.syntax.visitor import walk
@@ -149,6 +157,82 @@ def test_specialization_and_default_are_exact_and_migrate_binders() -> None:
     )
     assert defaulted.available_occurrences == matrix.available_occurrences
     assert defaulted.path_decompositions == matrix.path_decompositions
+
+
+def test_record_specialization_and_validation_use_field_bearing_nominal_machinery() -> None:
+    checked = _check(
+        "record Inner\n"
+        "  value: bool\n"
+        "record Outer\n"
+        "  left: Inner\n"
+        "  right: bool\n"
+        "let subject = Outer(left = Inner(value = true), right = false)\n"
+        "case subject of\n"
+        "  | Outer(left = Inner(value = _ as captured)) as whole => 1\n"
+        "  | _ as remaining => 2\n"
+    )
+    normalized = normalize_case(_only_case(checked), checked)
+    matrix = matrix_from_normalized(normalized)
+    head = head_constructors(matrix, 0)[0]
+    assert isinstance(head, RecordConstructor)
+    assert head.record_type == RecordType("Outer")
+    allocator = OccurrenceAllocator.for_case(normalized)
+
+    specialized = specialize(matrix, 0, head, allocator).matrix
+
+    assert [occurrence.type for occurrence in specialized.occurrences] == [
+        RecordType("Inner"),
+        BoolType(),
+    ]
+    assert [
+        cast(FieldOccurrenceProvenance, occurrence.provenance).field_name
+        for occurrence in specialized.occurrences
+    ] == ["left", "right"]
+    nested = specialized.rows[0].cells[0]
+    assert isinstance(nested, ConstructorCell)
+    assert isinstance(nested.constructor, RecordConstructor)
+    assert [binder.name for binder in nested.arguments[0].binders] == ["captured"]
+    whole = cast(ConstructorCell, matrix.rows[0].cells[0]).binders[0]
+    assert specialized.rows[0].binder_assignments == (
+        BinderAssignment(matrix.occurrences[0].id, whole),
+    )
+    remaining = cast(WildcardCell, matrix.rows[1].cells[0]).binders[0]
+    assert specialized.rows[1].binder_assignments == (
+        BinderAssignment(matrix.occurrences[0].id, remaining),
+    )
+    assert specialized.path_decompositions[0].constructor == head
+
+    malformed = replace(head, fields=tuple(reversed(head.fields)))
+    with pytest.raises(MatchCompileInvariantError, match="checked signature"):
+        specialize(matrix, 0, malformed, allocator)
+    missing_table = TypeTable()
+    with pytest.raises(MatchCompileInvariantError, match="cannot resolve record signature"):
+        specialize(
+            replace(matrix, type_table=missing_table),
+            0,
+            head,
+            replace(allocator, type_table=missing_table),
+        )
+
+
+def test_record_compilation_validates_field_occurrences_and_reconstructs_witnesses() -> None:
+    checked = _check(
+        "record Box\n"
+        "  value: int\n"
+        "let subject = Box(value = 1)\n"
+        "case subject of | Box(value = 1) => 1"
+    )
+    compiled = compile_match_site(normalize_case(_only_case(checked), checked))
+
+    assert isinstance(compiled.root, DecisionDecompose)
+    assert isinstance(compiled.root.constructor, RecordConstructor)
+    assert len(compiled.occurrences) == 2
+    issue = compiled.issues[0]
+    assert isinstance(issue, NonExhaustiveIssue)
+    assert isinstance(issue.witness, RecordWitness)
+    assert issue.witness.record_type == RecordType("Box")
+    assert [field.name for field in issue.witness.fields] == ["value"]
+    assert render_witness(issue.witness) == "Box(value = a int value other than 1)"
 
 
 def test_path_decompositions_are_recorded_only_when_the_self_checks_run(
@@ -861,7 +945,7 @@ def test_matrix_rejects_single_enum_head_that_disagrees_with_checked_signature(
         )
     malformed_cell = ConstructorCell(malformed, arguments, cell.provenance)
 
-    with pytest.raises(MatchCompileInvariantError, match="checked signature"):
+    with pytest.raises(MatchCompileInvariantError, match="checked signature|unknown variant"):
         replace(matrix, rows=(replace(matrix.rows[0], cells=(malformed_cell,)),))
 
 

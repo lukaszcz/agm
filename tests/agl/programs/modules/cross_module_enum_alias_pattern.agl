@@ -1,0 +1,13 @@
+# A pattern qualified through a cross-module type alias whose target is an
+# enum (`lib/aliasmod::Local` aliases `pal/colors::Palette`). An alias of an
+# enum publishes no constructor of its own, so the pattern resolves through
+# the enum owner the alias names and must still select the variant actually
+# written (`Red`/`Green`).
+import pal/colors
+import lib/aliasmod
+param red: bool
+
+let p: pal/colors::Palette = if red => pal/colors::Palette::Red else => pal/colors::Palette::Green
+case p of
+  | lib/aliasmod::Local::Red => print "red"
+  | lib/aliasmod::Local::Green => print "green"

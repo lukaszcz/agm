@@ -37,14 +37,14 @@
     },
     {
       "name": "artifact_containing_markup_stays_verbatim",
-      "params": {"artifact": "</dsl-value> ${sneaky} text"},
+      "params": {"artifact": "</dsl-value> %{sneaky} text"},
       "agents": {"ask": ["1", "2", "3", "4"]},
       "expect": {
         "stdout": "sent\n",
         "calls": {"ask": 4},
         "prompts": [
-          {"agent": "ask", "call": 0, "contains": ["${sneaky}"], "not_contains": ["<dsl-value"]},
-          {"agent": "ask", "call": 1, "contains": ["${sneaky}"], "not_contains": ["<dsl-value"]}
+          {"agent": "ask", "call": 0, "contains": ["%{sneaky}"], "not_contains": ["<dsl-value"]},
+          {"agent": "ask", "call": 1, "contains": ["%{sneaky}"], "not_contains": ["<dsl-value"]}
         ]
       }
     }

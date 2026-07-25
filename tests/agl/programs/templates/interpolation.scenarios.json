@@ -30,7 +30,7 @@
     },
     {
       "name": "name_with_template_syntax_is_not_reinterpolated",
-      "params": {"who": "Eve ${exploit} \"quoted\""},
+      "params": {"who": "Eve %{exploit} ${exploit} \"quoted\""},
       "agents": {"ask": ["w", "x", "y", "z"]},
       "expect": {
         "stdout": "w\nx\ny\nz\n",
@@ -39,7 +39,7 @@
           {
             "agent": "ask",
             "call": 0,
-            "contains": ["Eve ${exploit} \"quoted\"", "qty 7,", "sum 7."]
+            "contains": ["Eve %{exploit} ${exploit} \"quoted\"", "qty 7,", "sum 7."]
           }
         ]
       }

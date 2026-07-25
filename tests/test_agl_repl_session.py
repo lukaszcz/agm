@@ -517,6 +517,18 @@ class TestEchoData:
         assert render_entry_result(r, echo=True) == "total : int = 5"
         assert _int({name: value for name, _typ, value in s.bindings()}["total"]) == 5
 
+    @pytest.mark.parametrize("binder", ("let", "var"))
+    def test_trailing_discard_binder_evaluates_and_echoes_nothing(self, binder: str) -> None:
+        from agm.agl.repl.render import render_entry_result
+
+        s = ReplSession()
+        r = s.eval_entry(f"{binder} _ = 6")
+
+        assert r.ok, r.diagnostics
+        assert r.kind == "statement"
+        assert render_entry_result(r, echo=True) is None
+        assert s.bindings() == []
+
     def test_multi_item_entry_keeps_normal_block_discard_strictness(self) -> None:
         result = ReplSession().eval_entry("let first = 1\nfirst\nlet second = 2")
 
@@ -800,6 +812,20 @@ class TestFailureEffects:
         assert session.eval_entry("left + right").value == IntValue(5)
         assert not session.eval_entry("later").ok
 
+    def test_installed_report_includes_promoted_type_declaration(self) -> None:
+        # Regression: a promoted RECORD/ENUM/EXCEPTION/type-alias declaration is
+        # tracked separately (``promoted_type_names``) from the value bindings
+        # that build ``installed``, so it used to be silently dropped from the
+        # "Installed before failure" report even though it fully survived and a
+        # later entry could use it.
+        session = ReplSession()
+
+        failed = session.eval_entry("record Point\n  x: int\nlet z = [1, 2][9]")
+
+        assert not failed.ok
+        assert "Point" in failed.installed
+        assert session.eval_entry("Point(x = 1)").ok
+
     def test_completed_pattern_initializer_and_function_metadata_survive_called_failure(
         self,
     ) -> None:
@@ -930,6 +956,20 @@ class TestFailureEffects:
         result = s.eval_entry("param p: decimal = 1 / 0")
         assert not result.ok
         assert s.declared_params() == []
+
+    def test_failing_param_default_still_promotes_completed_type_with_no_function(self) -> None:
+        # Regression: when the entry declares no zero-capture function closure,
+        # a failing ``param`` default used to roll back EVERY declaration in the
+        # entry, including a record type that fully completed before the param
+        # was reached — an accidental gate on whether the entry happened to
+        # declare a function, not on what actually finished.
+        s = ReplSession()
+
+        result = s.eval_entry("record Point\n  x: int\nparam p: int = [1, 2][9]")
+
+        assert not result.ok
+        followup = s.eval_entry("Point(x = 1)")
+        assert followup.ok, followup.diagnostics
 
     def test_runtime_raise_does_not_promote_param_with_unpromoted_self_qualified_type(self) -> None:
         s = ReplSession()

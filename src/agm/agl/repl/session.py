@@ -733,13 +733,20 @@ class ReplSession:
                 if crefs
             }
 
-        installed: list[str] = []
         for name, ref in promotion_bindings.items():
             if ref.decl_node_id not in promoted_binding_node_ids:
                 continue
             self._session_scope.bindings[name] = ref
-            if partial:
-                installed.append(name)
+        installed = (
+            self._installed_report(
+                program,
+                checked,
+                promoted_binding_node_ids=promoted_binding_node_ids,
+                promoted_type_names=promoted_type_names,
+            )
+            if partial
+            else []
+        )
         if not partial and not stale_binding_node_ids:
             # The checked environment already includes the prior sealed session
             # state and is itself sealed at the checked-output boundary. Reuse it
@@ -801,6 +808,51 @@ class ReplSession:
             self._accumulated_infix = resolve_infix_fixity(promoted_infix, self._accumulated_infix)
         self._next_node_id = next_start_id
         return tuple(installed)
+
+    @staticmethod
+    def _installed_report(
+        program: "Program",
+        checked: "CheckedModule",
+        *,
+        promoted_binding_node_ids: set[int],
+        promoted_type_names: frozenset[str],
+    ) -> list[str]:
+        """Return every promoted declaration name for a partial entry's report.
+
+        Ordered by the entry's source items: a promoted value binding (agent /
+        function / param / var) or a promoted type declaration (record / enum /
+        exception / type alias) contributes its declared name; a promoted ``let``
+        contributes each selected binder in pattern order. An enum's variant
+        names are never listed separately, only the enum's own declared name.
+        """
+        from agm.agl.syntax.nodes import (
+            AgentDecl,
+            EnumDef,
+            ExceptionDef,
+            FuncDef,
+            LetDecl,
+            ParamDecl,
+            RecordDef,
+            TypeAlias,
+            VarDecl,
+            pattern_binder_candidates,
+        )
+
+        binding_items = (AgentDecl, FuncDef, ParamDecl, VarDecl)
+        type_items = (RecordDef, EnumDef, ExceptionDef, TypeAlias)
+        installed: list[str] = []
+        for item in program.body.items:
+            if isinstance(item, binding_items):
+                if item.node_id in promoted_binding_node_ids:
+                    installed.append(item.name)
+            elif isinstance(item, LetDecl):
+                for candidate in pattern_binder_candidates(item.pattern):
+                    binding = checked.pattern_binding_for(candidate.node_id)
+                    if binding is not None and binding.decl_node_id in promoted_binding_node_ids:
+                        installed.append(binding.name)
+            elif isinstance(item, type_items) and item.name in promoted_type_names:
+                installed.append(item.name)
+        return installed
 
     def frame_value(self, symbol: "SymbolId | None") -> "Value | None":
         """Return the base-frame value bound to *symbol*, unwrapping a mutable cell."""
@@ -869,6 +921,8 @@ class ReplSession:
                 return "statement", None
             return "binding", name
         if isinstance(last, VarDecl):
+            if last.name == "_":
+                return "statement", None
             return "binding", last.name
         if isinstance(
             last,
@@ -936,6 +990,8 @@ class ReplSession:
                 if simple_let_pattern_name(last.pattern) == "_":
                     return None
                 return checked.let_matched_types.get(last.node_id)
+            if last.name == "_":
+                return None
             return checked.type_env.get_binding_type(last.node_id)
         return None
 

@@ -516,8 +516,12 @@ class EntryPipeline:
         )
 
         def completed_declaration_ids() -> frozenset[int]:
-            if not interp.entry_frame_started:
-                return frozenset()
+            # The entry frame is always populated by the closure pre-pass
+            # before params run (see ``IrInterpreter.run``), so a declaration
+            # completed before a failing param default stays promoted. The
+            # promotion plan itself is conservative: it excludes params whose
+            # symbols were not installed and applies the declaration-dependency
+            # fixpoint.
             return lowered.promotion_plan.completed_declaration_ids(
                 len(interp.module_initializer_values.get(lowered.program.entry_module, ())),
                 interp.entry_param_symbols_installed,

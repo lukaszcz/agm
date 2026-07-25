@@ -453,7 +453,6 @@ class IrInterpreter:
         self._frames: list[Frame] = [base_frame if base_frame is not None else {}]
         self.initializer_values: list[Value] = []
         self.module_initializer_values: dict[ModuleId, list[Value]] = {}
-        self.entry_frame_started: bool = False
         self.entry_param_symbols_installed: set[SymbolId] = set()
         self._call_depth: int = 0
         self._trace: TraceStore = trace if trace is not None else noop_trace()
@@ -677,10 +676,15 @@ class IrInterpreter:
 
         return result
 
-    def _install_entry_function_closures(self) -> bool:
-        """Pre-install entry closures and report whether any completed."""
+    def _install_entry_function_closures(self) -> None:
+        """Pre-install every entry-module zero-capture function closure.
+
+        Runs before :meth:`_install_entry_params` so a param default that calls
+        an entry-declared function (or simply references its symbol) sees it
+        already bound, and so a closure installed here is promoted even when a
+        later param default fails.
+        """
         entry_module = self._program.modules[self._program.entry_module]
-        installed = False
         for node in entry_module.initializers:
             match node:
                 case IrBind(
@@ -692,10 +696,8 @@ class IrInterpreter:
                         continue
                     value = self._eval(closure_node)
                     self._frames[0][sym] = value
-                    installed = True
                 case _:
                     continue
-        return installed
 
     def _recursion_error(self) -> AglRaise:
         """Build the catchable AgL ``RecursionError`` for an exceeded call depth.
@@ -889,14 +891,17 @@ class IrInterpreter:
         sys.setrecursionlimit(max(previous_limit, target))
         try:
             with decimal.localcontext(AGL_DECIMAL_CONTEXT):
-                # Record closure installation before params: a failing param
-                # default must still allow already-installed closures to be
-                # promoted. Set the flag again after the parameter pre-pass so
-                # a successfully installed entry frame also counts when it has
-                # no function closures.
-                self.entry_frame_started = self._install_entry_function_closures()
+                # Closures install before params: a failing param default must
+                # still let already-installed closures (and any declarations
+                # completed earlier in the entry) be promoted. Promotion itself
+                # is driven by ``lowered.promotion_plan.completed_declaration_ids``
+                # (see ``entry_pipeline.completed_declaration_ids``), which is
+                # conservative on its own — it excludes params whose symbols were
+                # never installed and applies the declaration-dependency
+                # fixpoint — so no separate "did the entry frame start" gate is
+                # needed here.
+                self._install_entry_function_closures()
                 self._install_entry_params()
-                self.entry_frame_started = True
 
                 for mod in self._program.modules.values():
                     for node in mod.initializers:

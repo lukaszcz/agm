@@ -15,6 +15,7 @@ from __future__ import annotations
 
 from agm.agl.parser.errors import AglSyntaxError
 from agm.agl.parser.parser import (
+    has_open_raw_tail_block,
     has_unterminated_triple_quoted_string,
     is_incomplete_source,
     parse_program,
@@ -25,6 +26,7 @@ from agm.agl.parser.transform import resolve_infix_fixity
 
 __all__ = [
     "AglSyntaxError",
+    "has_open_raw_tail_block",
     "has_unterminated_triple_quoted_string",
     "is_incomplete_source",
     "parse_program",

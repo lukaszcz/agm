@@ -74,6 +74,7 @@
 
 %declare _NEWLINE _INDENT _DEDENT
 %declare TEMPLATE_START STRING_FRAGMENT INTERP_START INTERP_END TEMPLATE_END
+%declare RAW_TAIL_NAME RAW_TAIL_START RAW_FRAGMENT RAW_TAIL_END
 
 // ---------------------------------------------------------------------------
 // Identifier / number / operator tokens (%declare — no regex; from custom lexer)
@@ -119,7 +120,14 @@ _sep: _NEWLINE | SEMICOLON
 
 ?item: declaration
      | binder
-     | expr
+     | raw_return_expr
+     | line_final_expr
+
+// The single criterion for where a raw-tail form may appear: a line-final
+// expression position, where a raw payload cannot swallow a grammar-visible
+// continuation marker.  Every such position spells it as ``line_final_expr``.
+?raw_tail_form: raw_call | raw_juxt
+?line_final_expr: raw_tail_form | expr
 
 // ---------------------------------------------------------------------------
 // Declarations (transparent)
@@ -173,10 +181,7 @@ field_def: field_name COLON type_expr
 // admitted here alongside ordinary identifiers.  `to`, `downto`, and `by` are
 // also admitted so that existing field uses like `tagged(by: T)` continue to
 // work after those words became reserved keywords.
-// Inlined (`?`): each alternative is a single token, so the parent rule
-// receives the name Token (type NAME, AGENT, TO, DOWNTO, or BY) directly.
 ?field_name: NAME | AGENT | TO | DOWNTO | BY
-
 ?name: NAME | OP_NAME
 
 // enum_def: flat variant list using the |-continuation layout rule.
@@ -295,7 +300,7 @@ param_def: field_name COLON type_expr (EQ or_expr)?
 // separator — a newline or `;` — which starts the next block item; `;` cannot
 // extend the body because no body-specific marker distinguishes it. Write a
 // sequence as a parenthesized block (`def f() = (let x = 1; x)`) or as a suite.
-func_body: suite_expr | expr
+func_body: suite_expr | raw_return_expr | line_final_expr
 
 // ---------------------------------------------------------------------------
 // Binders (transparent)
@@ -303,9 +308,9 @@ func_body: suite_expr | expr
 
 ?binder: let_decl | var_decl | assign_stmt
 
-let_decl: "let" pattern type_ann? EQ expr
-var_decl: "var" name type_ann? EQ expr
-assign_stmt: postfix ASSIGN expr
+let_decl: "let" pattern type_ann? EQ line_final_expr
+var_decl: "var" name type_ann? EQ line_final_expr
+assign_stmt: postfix ASSIGN line_final_expr
 
 // Type annotation: COLON followed by a type_expr.
 type_ann: COLON type_expr
@@ -528,8 +533,11 @@ inline_assign: postfix ASSIGN or_expr
 
 ?letvar_decl: let_decl | var_decl
 
-// raise and return expressions
+// Raw-tail returns only occur at line-final block-item and function-body
+// positions. Inline branch, case, and try bodies use return_expr, so their
+// continuation markers remain grammar-visible instead of becoming raw payload.
 raise_expr: "raise" or_expr
+raw_return_expr: "return" raw_tail_form -> return_expr
 return_expr: "return" or_expr?
 
 // with_expr: functional update — ``target with field = value, ...``.
@@ -626,7 +634,7 @@ juxt_arg: juxt_atom juxt_suffix*
 juxt_suffix: DOT field_name       -> juxt_field_suffix
            | INDEX_LSQB expr RSQB -> juxt_index_suffix
            | LPAR arg_list? RPAR -> juxt_call_suffix
-           | DCOLON LSQB type_arg_list RSQB LPAR arg_list? RPAR -> juxt_typed_call_suffix
+           | type_args LPAR arg_list? RPAR -> juxt_typed_call_suffix
 
 // juxt_atom: the simple (no-paren, no-unary-minus) primaries allowed as juxt arg.
 // Qualified refs are valid juxt arguments; the lexer pre-merges qualifiers
@@ -652,7 +660,7 @@ juxt_var_ref: NAME -> var_ref
 ?postfix: postfix LPAR arg_list? RPAR  -> call
         | postfix DOT field_name       -> field_access
         | postfix INDEX_LSQB expr RSQB -> index_access
-        | postfix DCOLON LSQB type_arg_list RSQB -> type_apply
+        | postfix type_args            -> type_apply
         | atom
 
 // ---------------------------------------------------------------------------
@@ -770,6 +778,13 @@ template: TEMPLATE_START template_segment* TEMPLATE_END
 
 template_segment: STRING_FRAGMENT    -> tmpl_text
                 | interp             -> tmpl_interp
+
+raw_juxt: postfix raw_call -> juxt_call
+raw_call: raw_callee type_args? raw_tail
+raw_callee: RAW_TAIL_NAME
+raw_tail: RAW_TAIL_START (raw_text | interp)+ RAW_TAIL_END
+raw_text: RAW_FRAGMENT
+type_args: DCOLON LSQB type_arg_list RSQB
 
 interp: INTERP_START expr INTERP_END
 

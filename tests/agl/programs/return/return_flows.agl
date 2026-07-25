@@ -49,12 +49,12 @@ def widen(flag: bool) =
 def agent-value() -> text =
   return ask("give a short value", agent = helper)
 
-print "mode ${mode}"
-print "guard ${guard(-2)} ${guard(5)}"
+print "mode %{mode}"
+print "guard %{guard(-2)} %{guard(5)}"
 stop()
-print "loop ${loop-find(3)}"
-print "try ${try-return("try")} ${try-return("catch")}"
-print "lambda ${lambda-return(2)}"
-print "recursive ${recursive-first([0, -1, 7], 0)}"
-print "widen ${widen(true)}"
-print "agent ${agent-value()}"
+print "loop %{loop-find(3)}"
+print "try %{try-return("try")} %{try-return("catch")}"
+print "lambda %{lambda-return(2)}"
+print "recursive %{recursive-first([0, -1, 7], 0)}"
+print "widen %{widen(true)}"
+print "agent %{agent-value()}"

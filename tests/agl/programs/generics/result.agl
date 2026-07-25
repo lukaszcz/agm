@@ -35,5 +35,5 @@ print pinned
 # Branch chosen by the host param; field access on the destructured payload.
 let chosen: Outcome[Pt, Fault] = if fail => bad else => good
 case chosen of
-  | ok(value) => print "point ${value.x},${value.y}"
-  | err(error) => print "fault ${error.code}: ${error.detail}"
+  | ok(value) => print "point %{value.x},%{value.y}"
+  | err(error) => print "fault %{error.code}: %{error.detail}"

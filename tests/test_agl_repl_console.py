@@ -17,6 +17,7 @@ import io
 import signal
 from collections.abc import Callable, Iterator
 from types import FrameType
+from unittest.mock import patch
 
 import pytest
 from prompt_toolkit.completion import CompleteEvent
@@ -39,6 +40,7 @@ from agm.agl.repl.console import (
     run_console,
 )
 from agm.agl.runtime.request import AgentRequest, AgentResponse
+from tests._process_helpers import FakeShell
 
 
 class _CountingAgent:
@@ -47,10 +49,11 @@ class _CountingAgent:
     def __init__(self, reply: str = "ok") -> None:
         self._reply = reply
         self.calls = 0
+        self.prompts: list[str] = []
 
     def __call__(self, request: AgentRequest) -> AgentResponse:
-        del request
         self.calls += 1
+        self.prompts.append(request.prompt)
         return AgentResponse(content=self._reply)
 
 
@@ -249,8 +252,43 @@ class TestMultiline:
         assert "first" in output
         assert "second" in output
 
+    def test_raw_tail_block_continues_until_blank_line_then_executes(self) -> None:
+        # A raw-tail header opens an interactive block. Enter after each content
+        # line must keep collecting the payload; the blank continuation line
+        # closes it and runs one shell call.
+        shell = FakeShell()
+        with patch("agm.core.process.run_capture_result", side_effect=shell):
+            output = drive("exec!\r  echo one\r  echo two\r\r\x04")
+
+        assert ": error:" not in output.lower()
+        assert shell.commands == ["echo one\necho two"]
+        shell.assert_complete()
+
+    def test_raw_tail_ask_block_continues_and_uses_mocked_default_agent(self) -> None:
+        agent = _CountingAgent("mocked reply")
+        output = drive("ask!\r  summarize this\r\r\x04", session=ReplSession(default_agent=agent))
+
+        assert agent.calls == 1
+        assert agent.prompts == ["summarize this"]
+        assert "mocked reply" in output
+
 
 class TestIsIncomplete:
+    @pytest.mark.parametrize("source", ["exec!", "ask!::[text]", "let reply = ask!"])
+    def test_raw_tail_headers_open_blocks(self, source: str) -> None:
+        assert is_incomplete(source) is True
+
+    @pytest.mark.parametrize(
+        "source",
+        [
+            "exec! echo hi",
+            "exec!\n  echo hi\nnext",
+            "let x: text = exec!\n    echo hi\n# trailing comment",
+        ],
+    )
+    def test_closed_raw_tail_blocks_submit(self, source: str) -> None:
+        assert is_incomplete(source) is False
+
     @pytest.mark.parametrize(
         "source",
         ["record R", "enum E", "case x of", "try", "do agent", "if x == 1 =>", "1 +"],
@@ -358,10 +396,10 @@ class TestLexer:
     @pytest.mark.parametrize(
         "line",
         [
-            '"${x}"',
-            '"a${x}"',
-            '"a${x}b"',
-            '"${x}${y}"',
+            '"%{x}"',
+            '"a%{x}"',
+            '"a%{x}b"',
+            '"%{x}%{y}"',
         ],
     )
     def test_string_interpolation_is_not_duplicated(self, line: str) -> None:
@@ -582,10 +620,10 @@ class TestCompleter:
 
     def test_no_completion_after_interpolation_opener(self) -> None:
         # Regression: when completions were offered with an empty word after
-        # punctuation, typing `${x}` interactively could accept a stale
-        # completion and leave `${${x}` in the buffer.
+        # punctuation, typing `%{x}` interactively could accept a stale
+        # completion and leave `%{%{x}` in the buffer.
         completer = AglCompleter(ReplSession())
-        assert _completions(completer, "${") == []
+        assert _completions(completer, "%{") == []
 
     @pytest.mark.parametrize("quote", ['"""', "'''"])
     def test_no_completion_inside_unterminated_triple_quoted_string(self, quote: str) -> None:
@@ -610,6 +648,15 @@ class TestCompleter:
 
 
 class TestEvalOutput:
+    def test_inline_raw_tail_exec_evaluates_through_the_console(self) -> None:
+        shell = FakeShell()
+        with patch("agm.core.process.run_capture_result", side_effect=shell):
+            output = drive("exec! echo hi\r\x04")
+
+        assert ": error:" not in output.lower()
+        assert shell.commands == ["echo hi"]
+        shell.assert_complete()
+
     def test_binding_echo_shows_name_type_value(self) -> None:
         output = drive("let x = 5\r\x04")
 

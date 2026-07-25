@@ -34,5 +34,5 @@ Real agents (claude, codex, and other runners) are never invoked in tests; agent
 - `tests/test_agl_dependencies.py` — the package-layering contract.
 - `tests/test_agl_self_validation.py` — the self-validation gating contract; `src/agm/agl/self_validation.py` — the toggle.
 - `tests/test_agl_e2e.py` and `tests/agl/programs/` — module end-to-end acceptance; `tests/test_agl_multifile.py` with `tests/agl/multi_file/` — multi-file acceptance.
-- `tests/conftest.py`, `tests/_agl_helpers.py`, `tests/_proc_helpers.py` — shared fixtures and helpers.
+- `tests/conftest.py`, `tests/_agl_helpers.py`, `tests/_proc_helpers.py`, and `tests/_process_helpers.py` — shared fixtures and helpers; the latter provides reusable process-result builders and shell-boundary fakes.
 - `justfile` — the `test`, `lint`, `typecheck`, and `check` gates that run the suite.

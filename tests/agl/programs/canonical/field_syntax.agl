@@ -24,7 +24,7 @@ let same = (r.x == 0)
 print same
 
 case ee of
-  | A(x) => print "A ${x}"
+  | A(x) => print "A %{x}"
   | B(x, r) =>
       print x
       print r.x

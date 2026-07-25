@@ -8,7 +8,7 @@ Built-in JSON contracts consume the typeless schema/decode data compiled during 
 
 ## Value Rendering
 
-All value display — string interpolation, `print`, `render`, `as text`, and REPL echo — goes through one recursive renderer producing AgL-native syntax. Nominal fields are normalized into declaration order at construction, so the renderer needs no type information and every consumer (rendering, `as json`, equality) agrees on field order. Unit values carry a display flag distinguishing explicit `()` from the `void` produced by statement-like effects, which lets the REPL suppress echo.
+All value display — string interpolation, `print`, `render`, `as text`, and REPL echo — goes through one recursive renderer producing AgL-native syntax. The text-literal surface encoder is shared from `semantics/text_literal.py` with lexer decoding and match diagnostics, so interpolation escaping has one owner. Nominal fields are normalized into declaration order at construction, so the renderer needs no type information and every consumer (rendering, `as json`, equality) agrees on field order. Unit values carry a display flag distinguishing explicit `()` from the `void` produced by statement-like effects, which lets the REPL suppress echo.
 
 ## Pipeline Orchestrator
 

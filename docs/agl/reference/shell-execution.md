@@ -7,8 +7,8 @@
 
 <!-- agl-check: fragment -->
 ```agl
-let res = exec "ls -la ${dir}"       # res : ExecResult (default)
-let out: text = exec "cat ${path}"   # parsed form: stdout verbatim
+let res = exec "ls -la %{dir}"       # res : ExecResult (default)
+let out: text = exec "cat %{path}"   # parsed form: stdout verbatim
 let completed: unit = exec "make build" # unit form; raises ExecError on nonzero
 ```
 
@@ -30,6 +30,60 @@ exec "make build"                    # equivalent to exec("make build")
 
 With named arguments, parentheses are required.
 
+## Raw-tail `exec!`
+
+`exec!` writes the command directly after the keyword rather than inside a
+string template. The inline form takes the rest of its line; the block form
+collects one dedented, newline-joined shell script. Both produce the same call
+as `exec(<template>)` and accept explicit type arguments. Type arguments must
+touch the name (`exec!::[T]`); in `exec! ::[T]`, the spaced `::[T]` is command
+payload:
+
+```agl
+let directory = "."
+let listing: text = exec! printf '%s\n' %{directory}
+
+let home_listing: text = exec!
+  for file in "$HOME"/*; do
+    printf '%s\n' "$file"
+  done
+```
+
+The payload is verbatim shell text, except that inline payloads discard
+trailing spaces and tabs, and a block form drops blank lines that trail its
+last content line (blank lines before and between content lines are kept).
+Quotes, parentheses, `#`, `;`, every dollar form such as `$HOME`, `${name}`,
+`$(date)`, and `$1`, and ordinary backslashes all reach the shell unchanged.
+Only `%{expr}` interpolates; write `\%{` for a literal `%{`. A raw call needs a
+nonempty inline command or a block with at least one nonblank line. For example,
+this command passes `%{literal}` to the shell:
+
+```agl
+let marker: text = exec! printf '\%{literal}'
+```
+
+The backslash in `\%{` is consumed by the escape, so a payload cannot spell a
+literal backslash immediately followed by an interpolation as `\\%{expr}` —
+that is a literal backslash followed by a literal `%{expr}`. Interpolate the
+backslash from a text literal instead:
+
+```agl
+let subdir: text = "docs"
+let path: text = exec! printf '%s' "C:%{"\\"}%{subdir}"
+```
+
+Raw-tail calls are permitted only in line-final expression positions: block
+items, binding or assignment right-hand sides, inline function bodies, eligible
+`return` operands, and the final juxtaposition argument (`print exec! date`).
+They cannot appear inside brackets or before more AgL syntax on the same line.
+See [Grammar](grammar.md#raw-tail-calls) for the complete position rule.
+
+`exec!` has the same typing behavior as `exec`: without an expected type it
+returns `ExecResult`; a non-`ExecResult`/non-`unit` target parses stdout; and a
+`unit` target discards successful output. Use `exec(...)` instead when the
+command needs named parsing options (`format`, `strict_json`, or
+`on_parse_error`) or must occur outside a raw-tail position.
+
 ## Interpolation in shell templates
 
 The command template uses the same uniform rendering as all other templates
@@ -37,7 +91,7 @@ The command template uses the same uniform rendering as all other templates
 interpolate verbatim; `int`, `decimal`, and `bool` as plain scalar text;
 structured values (`list`, `dict`, record, enum, exception) in AgL form —
 single-line, no injected newlines. To interpolate a structured value as JSON,
-use an explicit cast: `${value as json}`.
+use an explicit cast: `%{value as json}`.
 
 Interpolated values are inserted **verbatim** into the command string —
 there is **no automatic shell quoting**. The workflow author is responsible
@@ -69,7 +123,7 @@ A **nonzero exit does not raise** in this form — the caller branches on
 let res = exec "ls -la"             # res : ExecResult
 print(res.stdout)
 if res.exit_code != 0 =>
-  print("command failed: ${res.stderr}")
+  print("command failed: %{res.stderr}")
 ```
 
 A spawn failure or timeout raises `ExecError` in this form. A timeout does
@@ -83,7 +137,7 @@ into that type (honouring `format`, `strict_json`, and `on_parse_error`) and
 
 <!-- agl-check: fragment -->
 ```agl
-let out: text = exec "cat ${path}"          # stdout verbatim; raises on nonzero
+let out: text = exec "cat %{path}"          # stdout verbatim; raises on nonzero
 let data: dict[text, int] = exec(           # JSON parsed; raises on nonzero
   "compute-stats --json",
   on_parse_error = Retry(n = 1)
@@ -147,9 +201,9 @@ and independently catchable:
 try
   let data: dict[text, int] = exec "compute-stats --json"
 catch ExecError as e =>
-  print "command failed (${e.exit_code}): ${e.stderr}"
+  print "command failed (%{e.exit_code}): %{e.stderr}"
 catch AgentParseError as e =>
-  print "not valid JSON: ${e.raw}"
+  print "not valid JSON: %{e.raw}"
 ```
 
 In the structured form, `ExecError` is raised for a spawn failure (the shell

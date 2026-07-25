@@ -9,7 +9,7 @@ exec "true"
 var rounds: int = 0
 do[3]
   rounds := rounds + 1
-  ask("round ${rounds}", agent = notifier)
+  ask("round %{rounds}", agent = notifier)
 until rounds >= target
 
 do

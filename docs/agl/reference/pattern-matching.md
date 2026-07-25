@@ -53,8 +53,8 @@ binder name.
 <!-- agl-check: fragment -->
 ```agl
 case shape of
-  | Rect(w, h) as rectangle => print "${rectangle} has area ${w * h}"
-  | _ as other => print "other shape: ${other}"
+  | Rect(w, h) as rectangle => print "%{rectangle} has area %{w * h}"
+  | _ as other => print "other shape: %{other}"
 ```
 
 ### Variable binders
@@ -211,7 +211,7 @@ def describe(response: Response) -> text =
   case response of
     | Complete => "complete"
     | Failed(code = 503) => "unavailable"  # nested scalar literal
-    | Failed(code = code) => "error ${code}"  # matched-field binder covers other ints
+    | Failed(code = code) => "error %{code}"  # matched-field binder covers other ints
 ```
 
 Static rules:
@@ -248,7 +248,7 @@ enum Option[T]
 def describe_option(o: Option[int]) -> text =
   case o of
     | Option::none => "missing"
-    | Option::some(value) => "found ${value}"   # value: int, so it can be interpolated
+    | Option::some(value) => "found %{value}"   # value: int, so it can be interpolated
 ```
 
 The qualifier (`Option::`) explicitly names the owning enum. It is optional
@@ -343,7 +343,7 @@ when you need the payload:
 until review is Pass
 
 case review of
-  | Fail(issues) => artifact := ask("Fix ${issues}", agent = impl)
+  | Fail(issues) => artifact := ask("Fix %{issues}", agent = impl)
   | Pass => ()
 ```
 

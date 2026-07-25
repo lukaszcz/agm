@@ -30,7 +30,7 @@ rules:
     - symbol: "([:;,.|])"
     - symbol.brackets: "([(){}]|\\[|\\])"
 
-    # Template strings. AgL strings may contain ${...}; this highlights the
+    # Template strings. AgL strings may contain %{...}; this highlights the
     # interpolation delimiters without trying to parse nested AgL expressions.
     - constant.string:
         start: "\"\"\""
@@ -38,7 +38,7 @@ rules:
         skip: "\\\\."
         rules:
             - constant.specialChar: "\\\\."
-            - special: "\\$\\{|\\}"
+            - special: "%\\{|\\}"
 
     - constant.string:
         start: "'''"
@@ -46,7 +46,7 @@ rules:
         skip: "\\\\."
         rules:
             - constant.specialChar: "\\\\."
-            - special: "\\$\\{|\\}"
+            - special: "%\\{|\\}"
 
     - constant.string:
         start: "\""
@@ -54,7 +54,7 @@ rules:
         skip: "\\\\."
         rules:
             - constant.specialChar: "\\\\."
-            - special: "\\$\\{|\\}"
+            - special: "%\\{|\\}"
 
     - constant.string:
         start: "'"
@@ -62,7 +62,7 @@ rules:
         skip: "\\\\."
         rules:
             - constant.specialChar: "\\\\."
-            - special: "\\$\\{|\\}"
+            - special: "%\\{|\\}"
 
     - comment:
         start: "#"

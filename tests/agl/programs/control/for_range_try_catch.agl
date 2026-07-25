@@ -8,5 +8,5 @@ try
     total := total + i
   done
 catch RangeError as e =>
-  print "caught: ${e.message}"
+  print "caught: %{e.message}"
 print total

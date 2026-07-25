@@ -16,7 +16,7 @@ let document: json = {
 }
 print document
 
-let fetched: json = ask("Emit a JSON document about ${payload}.", agent = source)
+let fetched: json = ask("Emit a JSON document about %{payload}.", agent = source)
 print fetched
 
 let n: int = ask("Emit a count.", agent = source)

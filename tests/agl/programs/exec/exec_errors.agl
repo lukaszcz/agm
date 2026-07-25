@@ -6,10 +6,10 @@ try
   let out: text = exec "sh -c 'echo partial; echo oops >&2; exit 3'"
   print out
 catch ExecError as e =>
-  print "failed code ${e.exit_code}"
-  print "captured ${e.stdout}"
-  print "err ${e.stderr}"
-  print "timed ${e.timed_out}"
+  print "failed code %{e.exit_code}"
+  print "captured %{e.stdout}"
+  print "err %{e.stderr}"
+  print "timed %{e.timed_out}"
 
 if mode == "uncaught" =>
   let ignored: text = exec "false"

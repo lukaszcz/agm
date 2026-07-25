@@ -161,10 +161,10 @@ body after `=>`, parenthesize it or use the suite form:
 
 <!-- agl-check: fragment -->
 ```agl
-| 1 => (let doubled = k * 2; print "doubled:${doubled}")
+| 1 => (let doubled = k * 2; print "doubled:%{doubled}")
 | 2 =>
     let doubled = k * 2
-    print "doubled:${doubled}"
+    print "doubled:%{doubled}"
 ```
 
 Parentheses directly after a callee are that call's argument list, so a
@@ -222,7 +222,7 @@ ordinary name in scope as a type throughout the declaration's body. See
 [Generics](generics.md).
 
 The runner string of an `agent` declaration must be a literal string with no
-`${…}` interpolation; an interpolation hole is a static error.
+`%{…}` interpolation; an interpolation hole is a static error.
 
 ## Type expressions
 
@@ -450,6 +450,40 @@ that lands on a named-only field is reinterpreted as the shorthand `name = name`
 
 A `STRING` pattern may not contain interpolation.
 
+## Raw-tail calls
+
+```ebnf
+raw_call  ::= ("exec!" | "ask!") type_args? raw_tail
+type_args ::= "::" "[" type_expr ("," type_expr)* "]"
+raw_tail  ::= inline_raw_tail | block_raw_tail
+```
+
+The optional `type_args` group is recognized only when its `::` is immediately
+adjacent to the raw name: `exec!::[T]` and `ask!::[T]`. Whitespace before the
+`::` makes it payload text instead, so `exec! ::[T]` and `ask! ::[T]` have no
+type arguments.
+
+An inline raw tail is all text from its first non-whitespace character through
+the end of the line, except that trailing spaces and tabs are removed. A block
+raw tail follows the name (and optional type arguments) with a newline and a
+more-indented block; its dedented lines become one newline-joined payload,
+dropping the blank lines that trail its last content line while keeping any
+before and between content lines. A raw call requires a nonempty inline tail or
+a block with at least one nonblank line. Raw text is tokenized as fragments and
+`%{expr}` interpolations, not as ordinary AgL expressions.
+
+A raw call is valid only where the grammar guarantees that nothing else follows
+on its line: as a block item; as a `let`, `var`, or assignment RHS; as an
+inline `def` body; as a `return` operand at a block-item or function-body tail;
+or as the final single-argument juxtaposition argument. It is not valid inside
+brackets, branch/catch inline bodies, or another inline expression. Use the
+ordinary call form there.
+
+```agl
+let path = "."
+let output: text = exec! printf '%s' %{path}
+```
+
 ## Expressions
 
 ```ebnf
@@ -599,13 +633,13 @@ template      ::= '"' (text_fragment | interpolation)* '"'
                 | '"""' (text_fragment | interpolation)* '"""'
                 | "'''" (text_fragment | interpolation)* "'''"
 
-interpolation ::= "${" expr "}"
+interpolation ::= "%{" expr "}"
 ```
 
 A `text_fragment` is literal template text between the surrounding quote
 delimiters and any interpolation; its escapes and, for triple-quoted templates,
 dedent are described in [Lexical structure](lexical-structure.md). Newlines are
-not permitted inside `${…}`.
+not permitted inside `%{…}`.
 
 ## Deterministic-parse notes
 

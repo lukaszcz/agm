@@ -16,6 +16,6 @@ catch JsonParseError as e =>
   print "parse error"
   print e.raw
   let has_msg = e.message != ""
-  print "has_message: ${has_msg as text}"
+  print "has_message: %{has_msg as text}"
   let has_id = e.trace_id != ""
-  print "has_trace_id: ${has_id as text}"
+  print "has_trace_id: %{has_id as text}"

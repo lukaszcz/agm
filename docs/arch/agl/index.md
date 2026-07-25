@@ -42,7 +42,7 @@ The firewall is *semantic*, not an I/O boundary: it isolates the static passes f
 
 ## Expression-Oriented Design
 
-AgL has no separate statement category. Every construct — bindings, assignment, `print`, loops, `if` without `else` — is an expression with a type, and a block yields the value of its last item. Built-ins such as `print`, `exec`, and `ask` are ordinary calls classified during resolution rather than special syntax. This uniformity is why the AST has a single call node and why the type system carries a unit type for side-effecting expressions.
+AgL has no separate statement category. Every construct — bindings, assignment, `print`, loops, `if` without `else` — is an expression with a type, and a block yields the value of its last item. Built-ins such as `print`, `exec`, and `ask` are ordinary calls classified during resolution rather than special syntax; the raw-tail `exec!` and `ask!` forms desugar to those calls in the parser. This uniformity is why the AST has a single call node and why the type system carries a unit type for side-effecting expressions.
 
 ## Programs and Modules
 
@@ -58,7 +58,7 @@ A **program** is the entry module together with its transitive imports. Unless t
 | Scope / name resolution | `src/agm/agl/scope/` |
 | Type checking | `src/agm/agl/typecheck/` |
 | Pattern-match compilation, artifacts, and diagnostics | `src/agm/agl/matchcompile/` |
-| Semantic foundation (values, types, exceptions) | `src/agm/agl/semantics/` |
+| Semantic foundation (values, types, exceptions, text literals) | `src/agm/agl/semantics/` |
 | Lowering / linking | `src/agm/agl/lower/` |
 | Execution IR (data model) | `src/agm/agl/ir/` |
 | Evaluator | `src/agm/agl/eval/` |
@@ -67,7 +67,7 @@ A **program** is the entry module together with its transitive imports. Unless t
 | REPL | `src/agm/agl/repl/` |
 | Pipeline orchestrator | `src/agm/agl/pipeline.py` |
 
-Package layering is enforced by a dependency-contract test (`tests/test_agl_dependencies.py`): `semantics` is the semantic foundation layer, the IR depends only on its own data, module ids, and the pure shared engine-key catalog, the evaluator never imports the frontend, the runtime is eval-free, and the pipeline sits on top.
+Package layering is enforced by a dependency-contract test (`tests/test_agl_dependencies.py`): `semantics` is the semantic foundation layer and the single owner of the AgL text-literal surface, the IR depends only on its own data, module ids, and the pure shared engine-key catalog, the evaluator never imports the frontend, the runtime is eval-free, and the pipeline sits on top.
 
 ## What To Read Next
 

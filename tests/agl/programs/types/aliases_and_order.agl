@@ -12,7 +12,7 @@ let next: Status = ask("Re-judge it.", agent = judge)
 
 case next of
   | Approved() => print "ok"
-  | Rejected(notes) => print "notes:\n${notes}"
+  | Rejected(notes) => print "notes:\n%{notes}"
 
 type Status = Verdict
 

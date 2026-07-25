@@ -63,10 +63,10 @@ def test_single_run_rejects_cached_artifact_from_different_prepared_program(
     check_only: bool, capsys: pytest.CaptureFixture[str]
 ) -> None:
     runtime = PipelineDriver()
-    prepared_a = runtime.prepare_program('param a: int = 1\nprint "stale ${a}"')
+    prepared_a = runtime.prepare_program('param a: int = 1\nprint "stale %{a}"')
     discovery_a = runtime.discover_params(prepared_a)
     assert discovery_a.compiled is not None
-    prepared_b = runtime.prepare_program('param b: int = 2\nprint "fresh ${b}"')
+    prepared_b = runtime.prepare_program('param b: int = 2\nprint "fresh %{b}"')
 
     with pytest.raises(ArtifactProvenanceError):
         runtime.run_prepared(

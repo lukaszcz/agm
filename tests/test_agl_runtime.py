@@ -176,6 +176,16 @@ class TestRegisterAgent:
         with pytest.raises(ValueError, match="ask-request"):
             rt.register_agent("ask-request", my_agent)
 
+    @pytest.mark.parametrize("name", ("exec!", "ask!"))
+    def test_register_raw_tail_name_raises(self, name: str) -> None:
+        rt = PipelineDriver()
+
+        def my_agent(request: object) -> str:
+            return "response"
+
+        with pytest.raises(ValueError, match=name):
+            rt.register_agent(name, my_agent)
+
 
 class TestRunBehavior:
     """run() behavior: valid programs run, static errors fail cleanly."""
@@ -1129,9 +1139,9 @@ class TestCapabilitiesBuiltFromRegistrations:
         assert requests[0].output_contract.format_instructions == "Return a none-codec response."
 
     def test_as_renderer_syntax_is_parse_error(self) -> None:
-        """``${x as name}`` is a syntax error (renderer syntax removed)."""
+        """``%{x as name}`` is a syntax error (renderer syntax removed)."""
         rt = PipelineDriver(default_agent=lambda req: "ok")
-        result = rt.run('param x\nlet y = ask "see ${x as fancy}"', param_values={"x": "hi"})
+        result = rt.run('param x\nlet y = ask "see %{x as fancy}"', param_values={"x": "hi"})
         assert result.ok is False
 
 
@@ -1553,17 +1563,17 @@ class TestRenderValue:
         assert "<dsl-value" not in out
 
     # ------------------------------------------------------------------
-    # Nested text escaping including $ → \$
+    # Nested text escaping including % → \%
     # ------------------------------------------------------------------
 
-    def test_nested_text_escapes_dollar(self) -> None:
-        """Nested text containing ``${`` escapes ``$`` as ``\\$``."""
+    def test_nested_text_escapes_percent(self) -> None:
+        """Nested text containing ``%{`` escapes ``%`` as ``\\%``."""
         from agm.agl.runtime.render import render_value
         from agm.agl.semantics.values import ListValue, TextValue
 
-        v = ListValue(elements=(TextValue("a${b}"),))
+        v = ListValue(elements=(TextValue("a%{b}"),))
         out = render_value(v)
-        assert out == r'["a\${b}"]'
+        assert out == r'["a\%{b}"]'
 
     def test_nested_text_escapes_quotes_and_newlines(self) -> None:
         """Nested text: quotes and newlines are escaped."""
@@ -1574,13 +1584,13 @@ class TestRenderValue:
         out = render_value(v)
         assert out == r'["say \"hi\"\nbye"]'
 
-    def test_quoted_top_level_text_escapes_dollar(self) -> None:
-        """render_value: top-level text with ``$`` escapes it when quoted."""
+    def test_quoted_top_level_text_escapes_percent(self) -> None:
+        """render_value: top-level text with ``%`` escapes it when quoted."""
         from agm.agl.runtime.render import render_value
         from agm.agl.semantics.values import TextValue
 
-        out = render_value(TextValue("a${b}"), quote_strings=True)
-        assert out == r'"a\${b}"'
+        out = render_value(TextValue("a%{b}"), quote_strings=True)
+        assert out == r'"a\%{b}"'
 
     # ------------------------------------------------------------------
     # pretty: single-line by default, indented when requested
@@ -2319,7 +2329,7 @@ class TestUniformRenderingInPrompts:
 
         rt = PipelineDriver(default_agent=agent)
         result = rt.run(
-            'param x\nask("see: ${x}")',
+            'param x\nask("see: %{x}")',
             param_values={"x": "hello"},
         )
         assert result.ok is True
@@ -2337,7 +2347,7 @@ class TestUniformRenderingInPrompts:
 
         rt = PipelineDriver(default_agent=agent)
         result = rt.run(
-            'let items: list[text] = ["a", "b"]\nask("items: ${items}")',
+            'let items: list[text] = ["a", "b"]\nask("items: %{items}")',
         )
         assert result.ok is True
         prompt = received[0].prompt
@@ -2568,7 +2578,7 @@ class TestDeclaredAgentsApi:
         from agm.agl import AgentDeclInfo
 
         rt = PipelineDriver()
-        source = 'agent impl = "claude -p %{PROMPT_FILE}"\nagent reviewer'
+        source = 'agent impl = "claude -p \\%{PROMPT_FILE}"\nagent reviewer'
         decls = rt.declared_agents(source)
         assert all(isinstance(d, AgentDeclInfo) for d in decls)
         # Sorted deterministically by source line/col.

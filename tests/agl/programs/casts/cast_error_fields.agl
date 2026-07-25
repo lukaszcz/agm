@@ -8,17 +8,17 @@ param target
 try
   if target == "int" =>
     let n = value as int
-    print "int: ${n}"
+    print "int: %{n}"
   else =>
     let d = value as decimal
-    print "decimal: ${d as text}"
+    print "decimal: %{d as text}"
 catch CastError as e =>
-  print "source: ${e.source_type}"
-  print "target: ${e.target_type}"
-  print "raw: ${e.raw}"
+  print "source: %{e.source_type}"
+  print "target: %{e.target_type}"
+  print "raw: %{e.raw}"
   # message is non-empty
   let has_msg = e.message as? text and e.message != ""
-  print "has_message: ${has_msg as text}"
+  print "has_message: %{has_msg as text}"
   # trace_id is a hex string (non-empty)
   let has_id = e.trace_id != ""
-  print "has_trace_id: ${has_id as text}"
+  print "has_trace_id: %{has_id as text}"

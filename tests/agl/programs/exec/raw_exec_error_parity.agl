@@ -1,0 +1,12 @@
+# Raw and call-shaped unit exec calls expose identical ExecError fields.
+try
+  let raw: text = exec! raw-failure
+  ()
+catch ExecError as error =>
+  print "raw %{error.command} %{error.exit_code} %{error.stdout} %{error.stderr} %{error.timed_out}"
+
+try
+  let call: text = exec "call-failure"
+  ()
+catch ExecError as error =>
+  print "call %{error.command} %{error.exit_code} %{error.stdout} %{error.stderr} %{error.timed_out}"

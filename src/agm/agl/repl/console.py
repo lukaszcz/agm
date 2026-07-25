@@ -41,8 +41,12 @@ from prompt_toolkit.lexers import Lexer
 from prompt_toolkit.output import Output
 
 from agm.agl.lexer import tokenize
-from agm.agl.lexer.tokens import KEYWORDS
-from agm.agl.parser import has_unterminated_triple_quoted_string, is_incomplete_source
+from agm.agl.lexer.tokens import KEYWORDS, RAW_TAIL_NAME
+from agm.agl.parser import (
+    has_open_raw_tail_block,
+    has_unterminated_triple_quoted_string,
+    is_incomplete_source,
+)
 from agm.agl.repl import meta as meta_mod
 from agm.agl.repl import render as render_mod
 from agm.agl.repl import session as session_mod
@@ -96,7 +100,7 @@ _KEYWORDS: tuple[str, ...] = tuple(sorted(KEYWORDS))
 
 # Word-prefix pattern for completion: AgL identifiers, including the hyphenated
 # built-in call name ``ask-request``.  It is anchored to the cursor so
-# punctuation such as `${` is not treated as an empty identifier completion
+# punctuation such as `%{` is not treated as an empty identifier completion
 # site.
 _IDENT_PREFIX: re.Pattern[str] = re.compile(r"[A-Za-z0-9_-]+$")
 
@@ -110,7 +114,14 @@ _IDENT_PREFIX: re.Pattern[str] = re.compile(r"[A-Za-z0-9_-]+$")
 # identifier constant names, and the synthetic template tokens.  The map is kept
 # small and centralized; anything unmapped falls through to plain text.
 _STRING_TOKENS: frozenset[str] = frozenset(
-    {"TEMPLATE_START", "STRING_FRAGMENT", "TEMPLATE_END", "INTERP_START", "INTERP_END"}
+    {
+        "TEMPLATE_START",
+        "STRING_FRAGMENT",
+        "TEMPLATE_END",
+        "INTERP_START",
+        "INTERP_END",
+        "RAW_FRAGMENT",
+    }
 )
 _NUMBER_TOKENS: frozenset[str] = frozenset({"INT", "DECIMAL"})
 _OPERATOR_TOKENS: frozenset[str] = frozenset(
@@ -176,7 +187,7 @@ def _style_class_for(
     When no session is available both sets are empty, so only the builtin types
     colour.
     """
-    if token_type in KEYWORDS:
+    if token_type in KEYWORDS or token_type == RAW_TAIL_NAME:
         return "class:agl.keyword"
     if token_type in _STRING_TOKENS:
         return "class:agl.string"
@@ -568,13 +579,14 @@ def is_incomplete(text: str) -> bool:
     Enter on an empty continuation line, so the buffer ends with ``\\n`` —
     likewise force-submits so the user can always escape a continuation even when
     the buffer is still syntactically incomplete.  Otherwise the structured
-    parser signal decides.
+    parser signal decides, except that a registered raw-tail block stays open
+    until its payload is closed by a blank line or dedent.
     """
     if not text.strip():
         return False
     if text.endswith("\n") and not has_unterminated_triple_quoted_string(text):
         return False
-    return is_incomplete_source(text)
+    return is_incomplete_source(text) or has_open_raw_tail_block(text)
 
 
 # ``has_runnable_statements`` (the blank/comment-only-entry predicate) lives in

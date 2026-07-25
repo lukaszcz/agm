@@ -429,7 +429,7 @@ enum Option[T]
 def describe_option(o: Option[int]) -> text =
   case o of
     | Option::none => "missing"
-    | Option::some(value) => "found ${value}"
+    | Option::some(value) => "found %{value}"
 
 let d: Option[int] = Option::some(value = 11)
 let line = describe_option(d)

@@ -40,7 +40,7 @@ to a loop body, whose value is discarded on every iteration.
 true false    # bool
 null          # json
 ()            # unit — printable unit value
-"text ${x}"   # template (type text; see Strings and interpolation)
+"text %{x}"   # template (type text; see Strings and interpolation)
 ```
 
 The unit literal `()` is the printable unit value. `void` is the same unit
@@ -497,7 +497,7 @@ try
   let data: json = parse_json(raw_output)
   # use data...
 catch JsonParseError as e =>
-  print "Malformed JSON: ${e.raw}"
+  print "Malformed JSON: %{e.raw}"
 ```
 
 `parse_json` cannot be bound as a function value (`let f = parse_json` is a
@@ -634,7 +634,7 @@ case_branch ::= pattern "=>" branch_body
 let next: text = case action of
   Stop => "Stop."
   | Continue(prompt) => prompt
-  | Escalate(reason) => "Investigate blocker:\n${reason}"
+  | Escalate(reason) => "Investigate blocker:\n%{reason}"
 ```
 
 `branch_body` is the canonical branch-body production: a suite or one

@@ -209,7 +209,7 @@ is catchable with `try`/`catch` like any other exception:
 try
   let slug = to_slug(title)
 catch ExternError as e =>
-  print "to_slug failed (${e.python_type}): ${e.message}"
+  print "to_slug failed (%{e.python_type}): %{e.message}"
 ```
 
 A problem discovered before any extern is ever called — a missing companion

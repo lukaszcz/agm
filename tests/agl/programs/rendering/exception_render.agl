@@ -6,13 +6,13 @@ param bad_input: text
 # --- print: CastError renders in declaration-order record form ---
 try
   let n = bad_input as int
-  print "parsed: ${n}"
+  print "parsed: %{n}"
 catch CastError as e =>
   # Print the exception value directly: record-style with all fields.
   print e
   # Interpolate into a template: same AgL form (top-level text is verbatim,
   # but the exception is a nominal value so it renders record-style).
-  print "caught: ${e.source_type} -> ${e.target_type}"
+  print "caught: %{e.source_type} -> %{e.target_type}"
   # as json: pretty-prints the exception as a JSON object with all fields.
   print(e as json)
 
@@ -28,4 +28,4 @@ try
   print q
 catch ArithmeticError as e =>
   print e
-  print "operation: ${e.operation}"
+  print "operation: %{e.operation}"

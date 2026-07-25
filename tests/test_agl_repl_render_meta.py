@@ -877,14 +877,14 @@ class TestNominalRenderingEcho:
         assert outcome.text is not None
         assert "Outcome::Partial(\n  left = 7\n)" in outcome.text
 
-    def test_dollar_in_text_binding_renders_in_bindings(self) -> None:
+    def test_percent_interpolation_marker_in_text_binding_renders_in_bindings(self) -> None:
         s = ReplSession()
-        r = s.eval_entry(r'let t = "a\${b}"')
+        r = s.eval_entry(r'let t = "a\%{b}"')
 
         assert r.ok
         outcome = meta_mod.dispatch_meta(":bindings", _session_ctx(s))
         assert outcome.text is not None
-        assert r"a\${b}" in outcome.text
+        assert r"a\%{b}" in outcome.text
 
     def test_bindings_meta_renders_record_nominal(self) -> None:
         # :bindings must render a record binding in AgL form (not JSON).

@@ -143,8 +143,9 @@ agents without their own command, from the write point onward.
 A `[exec.agents.<name>]` entry for a name the program never declares is a host
 configuration error. Because the default runner is always the floor (rung 7), every
 declared agent resolves under `agm exec` even with no config and no source hint. Runner
-strings (config or source hint) support the `%%` / `%{PROMPT_FILE}` placeholders for
-the rendered prompt-file path.
+configuration runner strings support the `%%` / `%{PROMPT_FILE}` placeholders for
+the rendered prompt-file path. In a source `agent` hint, spell the latter
+as `\%{PROMPT_FILE}` so it remains literal text.
 
 ### Configuration
 
@@ -187,7 +188,7 @@ std/config::runner := "claude -p"   # default agent runner
 std/config::timeout := Some("30s")  # shell-exec idle timeout
 
 param spec
-let result = ask "Process ${spec}"
+let result = ask "Process %{spec}"
 print result
 ```
 
@@ -288,9 +289,10 @@ again as though the session were new.
 ### Entry editing
 
 - Multiline editing is **AgL-aware**: pressing Enter on an unterminated block
-  (`record`, `enum`, `if`, `case`, `try`, `do`, …) opens a continuation line (`...>`);
-  a complete entry submits. Pressing Enter on a blank continuation line force-submits
-  even an unfinished buffer so you can always escape.
+  (`record`, `enum`, `if`, `case`, `try`, `do`, …) or a line-final raw-tail header
+  such as `exec!`/`ask!` opens a continuation line (`...>`); a complete entry submits.
+  Pressing Enter on a blank continuation line force-submits even an unfinished buffer
+  so you can always escape.
 - Syntax highlighting and tab-completion are driven from the live session.
   Highlighting colours keywords, string/number literals, operators, the builtin types
   (`text`, `int`, `decimal`, `bool`, `json`, `list`, `dict`, `unit`), and the types and

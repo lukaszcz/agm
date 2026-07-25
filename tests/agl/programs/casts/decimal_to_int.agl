@@ -5,9 +5,9 @@ param d: decimal
 
 try
   let i = d as int
-  print "ok: ${i}"
-  print "next: ${i + 1}"
+  print "ok: %{i}"
+  print "next: %{i + 1}"
 catch CastError as e =>
-  print "not integral: ${e.raw}"
+  print "not integral: %{e.raw}"
   print e.source_type
   print e.target_type

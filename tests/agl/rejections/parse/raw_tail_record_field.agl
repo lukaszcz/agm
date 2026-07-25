@@ -1,0 +1,2 @@
+record R
+  exec!: int

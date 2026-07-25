@@ -12,7 +12,7 @@ record Pair
 
 let pair = Pair(left = seed, right = seed + 1)
 let Pair(left = _ as swapped_right, right = _ as swapped_left) = pair
-print "${swapped_left}:${swapped_right}"
+print "%{swapped_left}:%{swapped_right}"
 
 let nested: rp::Outer[int] = rp::Outer(inner = rp::Box(value = seed + 2))
 let rp::Outer(inner = rp::Box(value = _ as nested_value)) = nested

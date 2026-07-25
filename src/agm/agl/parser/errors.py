@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING
 
 from agm.agl.diagnostics import AglError
 from agm.agl.syntax.spans import SourceSpan
+from agm.raw_tail_catalog import RAW_TAIL_NAMES
 
 if TYPE_CHECKING:
     from lark.exceptions import UnexpectedToken
@@ -63,6 +64,66 @@ _ELSE_BEFORE_TOKEN_RE = re.compile(r"(?<![A-Za-z0-9_])else\s*$")
 # identifier-body character, so a name that merely ends in ``?`` (predicate names
 # like ``empty?`` or the ``as?`` keyword) does not masquerade as a placeholder.
 _PLACEHOLDER_BEFORE_TOKEN_RE = re.compile(r"(?<![^\s(){}\[\]:,.|;/@=])\?[0-9]*\s*$")
+
+# The position rule a misplaced raw-tail form breaks, stated as the criterion
+# the grammar actually enforces: a raw payload owns the rest of its line, so it
+# is admitted only where nothing else may follow on that line.  An inline `=>`
+# body is line-final in appearance only — `| else => …` may still follow it.
+_RAW_TAIL_BAD_POSITION = (
+    "raw-tail forms are only allowed where nothing else can follow on the same "
+    "line; use the call form or an indented block form."
+)
+
+# Terminals that open an expression and can never be a name or a pattern.  A
+# name slot (binder, field, declaration name) and a pattern slot both admit
+# ``NAME``; only an expression slot admits these, which is what separates
+# "this name is reserved" from "this call is in the wrong position".
+_COMPOSITE_EXPRESSION_STARTERS: frozenset[str] = frozenset(
+    {
+        "LBRACE",
+        "LPAR",
+        "LSQB",
+        "MINUS",
+        "NOT",
+    }
+)
+
+# Terminals that end an item.  When one is expected, the parser had a complete
+# item in hand, so an unexpected indent is stray rather than a missing body.
+_ITEM_ENDERS: frozenset[str] = frozenset({"$END", "_DEDENT", "_NEWLINE", "SEMICOLON"})
+
+
+def _expects_identifier(expected: set[str]) -> bool:
+    """Return whether Lark expected a name slot rather than an expression."""
+    return bool({"NAME", "OP_NAME"} & expected) and not bool(
+        _COMPOSITE_EXPRESSION_STARTERS & expected
+    )
+
+
+def _raw_tail_name_on_stack(exc: UnexpectedToken) -> str | None:
+    """Name of the raw-tail form whose payload the parser is reading, if exposed.
+
+    The ``raw_callee`` subtree carrying the ``RAW_TAIL_NAME`` token is on the
+    parse stack for the whole payload, so the empty-payload diagnostic can name
+    the form the user wrote instead of re-deriving it from the source text.
+    Returns ``None`` when the parser state is unavailable, exactly as
+    :func:`_completed_rule` does.
+    """
+    parser: object = getattr(exc, "interactive_parser", None)
+    state: object = getattr(parser, "parser_state", None)
+    stack: object = getattr(state, "value_stack", None)
+    if not isinstance(stack, list):
+        return None
+    items: list[object] = stack
+    for item in reversed(items):
+        data: object = getattr(item, "data", None)
+        children: object = getattr(item, "children", None)
+        if data != "raw_callee" or not isinstance(children, list):
+            continue
+        name = str(children[0])
+        return name if name in RAW_TAIL_NAMES else None
+    return None
+
 
 # An inline `=>` body is a single item: no binders, no `;` sequence.  Both are
 # legal once the body is parenthesized or written as an indented block, so the
@@ -267,6 +328,20 @@ def syntax_error_from_lark(
             token_type=tok.type, source_text=source_text, token_pos=pos
         ):
             return _make_placeholder_position_error(span)
+        if tok.type == "RAW_TAIL_NAME":
+            if str(tok) in RAW_TAIL_NAMES and _expects_identifier(set(exc.expected)):
+                return AglSyntaxError(
+                    f"{str(tok)!r} is reserved for raw-tail calls.",
+                    span=span,
+                )
+            return AglSyntaxError(_RAW_TAIL_BAD_POSITION, span=span)
+        if tok.type == "RAW_TAIL_END":
+            name = _raw_tail_name_on_stack(exc) or "raw-tail form"
+            return AglSyntaxError(
+                f"raw-tail payload for {name!r} cannot be empty; use the call form "
+                "or an indented block form.",
+                span=span,
+            )
         # Chained comparison detection: the unexpected token is
         # a comparison operator AND that operator is NOT in the expected set.
         # When the operator IS expected, we are still before the first comparison
@@ -307,6 +382,14 @@ def syntax_error_from_lark(
             return AglSyntaxError(
                 "a nested `try` at the end of a `try` body takes the enclosing "
                 "`catch` clauses; parenthesize it.",
+                span=span,
+            )
+        if tok.type == "_INDENT" and bool(_ITEM_ENDERS & set(exc.expected)):
+            # A complete item was already in hand (its terminators are expected),
+            # so this indentation is stray — never a misplaced raw-tail form,
+            # whose payload the lexer would have consumed on the header line.
+            return AglSyntaxError(
+                "Unexpected indentation; this line is more indented than its block.",
                 span=span,
             )
         if tok.type == "_NEWLINE":

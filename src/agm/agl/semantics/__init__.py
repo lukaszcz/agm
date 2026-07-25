@@ -9,6 +9,8 @@ on narrow IR identity/location types and its own semantic data. It contains:
 - ``agm.agl.semantics.exceptions`` — ``AglRaise`` (Python control-flow carrier
   for propagating AgL exceptions) and ``make_builtin_exception`` (factory for
   built-in exception values).
+- ``agm.agl.semantics.text_literal`` — the single owner of AgL text-literal
+  interpolation and escaping, shared by the lexer, renderer, and diagnostics.
 
 Importers should use the submodules directly; this ``__init__`` deliberately
 re-exports nothing.

@@ -19,5 +19,5 @@ try
   let t: Tree = ask("Build a tree.", agent = builder, on_parse_error = Retry(n = 1))
   print sum_tree(t)
 catch AgentParseError as e =>
-  print "schema: ${e.expected_schema}"
+  print "schema: %{e.expected_schema}"
   raise e

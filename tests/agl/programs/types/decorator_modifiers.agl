@@ -21,10 +21,10 @@ type Label = text
 
 private
 def format_tag(t: Tag) -> Label =
-  "${t.name}#${t.weight}"
+  "%{t.name}#%{t.weight}"
 
 # The same-line form remains valid (the newline is optional, not required).
-private def emphasize(s: Label) -> Label = "${s}!"
+private def emphasize(s: Label) -> Label = "%{s}!"
 
 let t = Tag(name = "core", weight = 3)
 let st: Status[Tag] = Active(payload = t)

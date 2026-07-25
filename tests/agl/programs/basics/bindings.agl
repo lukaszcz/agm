@@ -8,14 +8,14 @@ let count = 2
 let exact = 1.5
 let okay = true
 
-var artifact = ask("Start from ${start}", agent = impl)
+var artifact = ask("Start from %{start}", agent = impl)
 print artifact
-artifact := ask("Refine: ${artifact}", agent = impl)
+artifact := ask("Refine: %{artifact}", agent = impl)
 print artifact
 
 var total: int = count + 1
 total := total * 2
 print total
 
-ask "Note ${greeting} ${exact} ${okay}"
+ask "Note %{greeting} %{exact} %{okay}"
 print "done"

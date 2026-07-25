@@ -7,12 +7,12 @@ param n: int
 
 # `let` shadows the built-in `ExecResult` standard core record constructor.
 let ExecResult = n * 2
-print "${ExecResult}"
+print "%{ExecResult}"
 
 # `let` shadows the built-in `AgentRequest` standard core record constructor.
-let AgentRequest = "req-${n}"
+let AgentRequest = "req-%{n}"
 print AgentRequest
 
 # `def` shadows the built-in `Retry` exception constructor.
 def Retry(x: int) -> int = x + 1
-print "${Retry(n)}"
+print "%{Retry(n)}"

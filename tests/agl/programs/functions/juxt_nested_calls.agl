@@ -9,7 +9,7 @@ def unwrap(o: Opt) -> int =
     | None => 0
     | Some(x) => x
 
-def label(o: Opt) -> text = "value=${unwrap(o)}"
+def label(o: Opt) -> text = "value=%{unwrap(o)}"
 
 print label(Opt::Some(x = 1))
 let nested_label = label Opt::Some(x = 2)

@@ -33,7 +33,7 @@ print(app(id, "fresh"))
 print(apply(3, fn(n: int) -> int => n * 2))
 
 # Inferred A=int, B=text (result type differs from the argument type).
-print(apply(7, fn(n: int) -> text => "n=${n}"))
+print(apply(7, fn(n: int) -> text => "n=%{n}"))
 
 # Inferred A=text, B=int.
 print(apply("hello", fn(s: text) -> int => 5))
@@ -54,7 +54,7 @@ print(via_lambda("kept"))
 let w: text -> Wrapper[text] = wrap
 let boxed = apply("hi", w)
 case boxed of
-  | wrap(value) => print "wrapped ${value}"
+  | wrap(value) => print "wrapped %{value}"
 
 # A generic HOF applied to a list element, with a param-selected transform.
 def loud(s: text) -> text = s + "!!!"

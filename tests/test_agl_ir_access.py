@@ -212,7 +212,7 @@ def test_template_text_only() -> None:
 
 def test_template_with_interpolation() -> None:
     """Template with an integer interpolation."""
-    source = 'let x: text = "val: ${42}"\n()'
+    source = 'let x: text = "val: %{42}"\n()'
     ir = evaluate_ir(source)
     assert ir["x"] == TextValue("val: 42")
 
@@ -221,7 +221,7 @@ def test_template_with_var_interpolation() -> None:
     """Template with a variable reference interpolation."""
     source = """\
 let n = 7
-let x: text = "n is ${n}"
+let x: text = "n is %{n}"
 ()
 """
     ir = evaluate_ir(source)
@@ -239,7 +239,7 @@ record Point
   x: int
   y: int
 let p = Point(x = 1, y = 2)
-let s: text = "point: ${p}"
+let s: text = "point: %{p}"
 ()
 """
     ir = evaluate_ir(source)
@@ -523,7 +523,7 @@ def test_golden_template_lowers_to_ir_render_template() -> None:
         IrTemplateValue,
     )
 
-    source = 'let x: text = "val: ${42}"\n()'
+    source = 'let x: text = "val: %{42}"\n()'
     prog = _lower(source)
     entry = prog.modules[prog.entry_module]
     found = False

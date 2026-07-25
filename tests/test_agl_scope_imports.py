@@ -226,10 +226,12 @@ def test_anchored_route_requires_the_exact_plain_path() -> None:
 def test_constructor_owner_resolves_local_and_self_forms() -> None:
     env = ImportEnv(contributions={}, unqualified={})
 
+    # A synthesized owner (``owner_name=None``) lets a single unanchored
+    # segment resolve as a local type.
     assert resolve_constructor_owner(
         env,
         _qualifier("Color"),
-        "Color",
+        None,
         "Red",
         is_local_type=lambda name: name == "Color",
         private_info={},
@@ -312,16 +314,41 @@ def test_constructor_owner_returns_each_route_failure_verdict() -> None:
 def test_constructor_owner_reports_type_route_ambiguity() -> None:
     env = _env_with_members(("pkg/Foo", ("local",)))
 
+    # A synthesized owner (``owner_name=None``) is what lets a local type and
+    # a module route compete for the same single segment.
     result = resolve_constructor_owner(
         env,
         _qualifier("Foo"),
-        "Foo",
+        None,
         "local",
         is_local_type=lambda name: name == "Foo",
         private_info={},
     )
 
     assert result == OwnerAmbiguousTypeOrRoute(("Foo",), "local")
+
+
+def test_constructor_owner_rejects_explicit_owner_matching_the_route_segment() -> None:
+    """An explicit owner spelling never falls back to the synthesized-owner route.
+
+    ``pal::pal::Red`` spells the module route ``pal`` and an explicit (but
+    wrong) owner ``pal`` before ``Red``. The single-segment route happens to
+    share its spelling with the explicit owner, but that must not make the
+    route contribute the member itself (``Red``) as if no owner had been
+    spelled — the route must be asked for the (bogus) owner name, and fail.
+    """
+    env = _env_with_members(("pal", ("Red",)))
+
+    result = resolve_constructor_owner(
+        env,
+        _qualifier("pal"),
+        "pal",
+        "Red",
+        is_local_type=lambda _name: False,
+        private_info={},
+    )
+
+    assert result == QualResolutionMissingMember(("pal",), "pal", (_module("pal"),))
 
 
 def test_wildcard_distributes_contributions_and_open_names() -> None:

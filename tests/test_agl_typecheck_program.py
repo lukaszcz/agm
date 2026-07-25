@@ -975,6 +975,93 @@ def test_imported_alias_to_non_nominal_named_type_is_not_constructible(tmp_path:
         )
 
 
+def test_local_alias_of_enum_is_a_type_name_not_a_value(tmp_path: Path) -> None:
+    """A local nominal alias whose target is an enum has no bare constructor.
+
+    An enum's variants are its constructors, not the enum type itself, so a
+    bare reference to the alias must report the same "type name, not a
+    value" diagnostic a bare enum type name gets — not the internal
+    "variant is required for EnumType" assertion that a variant-less
+    ``ConstructorRef`` for the alias used to trigger.
+    """
+    with pytest.raises(AglTypeError, match="is a type name, not a value"):
+        _check_program(
+            tmp_path,
+            {
+                "entry": "enum Color\n  | Red\n  | Blue\n\ntype Palette = Color\n\nprint(Palette)",
+            },
+        )
+
+
+def test_local_alias_of_record_remains_constructible(tmp_path: Path) -> None:
+    """A local nominal alias of a record keeps its bare zero-variant constructor."""
+    checked = _check_program(
+        tmp_path,
+        {
+            "entry": (
+                "record Point(x: int, y: int)\n\n"
+                "type Alias = Point\n\n"
+                "let p = Alias(x = 1, y = 2)\np"
+            ),
+        },
+    )
+
+    assert _binding_value_type(checked, ENTRY_ID, "p") == RecordType("Point", module_id=ENTRY_ID)
+
+
+def test_open_imported_alias_of_enum_is_a_type_name_not_a_value(tmp_path: Path) -> None:
+    """An open-imported nominal alias of an enum keeps its "type name" diagnostic."""
+    with pytest.raises(AglTypeError, match="is a type name, not a value"):
+        _check_program(
+            tmp_path,
+            {
+                "entry": "open import pal\nprint(Palette)",
+                "pal": "enum Color\n  | Red\n  | Blue\n\ntype Palette = Color",
+            },
+        )
+
+
+def test_module_qualified_alias_of_imported_enum_is_a_type_name_not_a_value(
+    tmp_path: Path,
+) -> None:
+    """A local alias whose target is a module-qualified imported enum has no bare constructor.
+
+    Unlike ``test_open_imported_alias_of_enum_is_a_type_name_not_a_value``, the
+    alias here is declared in the CONSUMING (entry) module, and its target
+    reaches the enum only through a module-qualified reference to an imported
+    module. The alias must still report the "type name, not a value"
+    diagnostic instead of leaking the internal "variant is required for
+    EnumType" assertion.
+    """
+    with pytest.raises(AglTypeError, match="is a type name, not a value"):
+        _check_program(
+            tmp_path,
+            {
+                "entry": "import pal\ntype Local = pal::Color\nprint(Local)",
+                "pal": "enum Color\n  | Red\n  | Blue",
+            },
+        )
+
+
+def test_open_imported_bare_alias_of_imported_enum_is_a_type_name_not_a_value(
+    tmp_path: Path,
+) -> None:
+    """A local alias whose target is an open-imported bare enum name has no bare constructor.
+
+    Unlike ``test_open_imported_alias_of_enum_is_a_type_name_not_a_value``, the
+    alias here is declared in the CONSUMING (entry) module, and its target
+    reaches the enum through an unqualified name exposed by an open import.
+    """
+    with pytest.raises(AglTypeError, match="is a type name, not a value"):
+        _check_program(
+            tmp_path,
+            {
+                "entry": "open import pal\ntype Local = Color\nprint(Local)",
+                "pal": "enum Color\n  | Red\n  | Blue",
+            },
+        )
+
+
 def test_imported_generic_alias_to_record_is_a_constructor_value(tmp_path: Path) -> None:
     """A generic alias retains its target record constructor signature."""
     checked = _check_program(

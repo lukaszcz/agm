@@ -1,0 +1,6 @@
+# A nominal alias whose target is a cross-module enum, reached through this
+# module's own import. An enum has no variant-less constructor, so `Local`
+# publishes none either, and a `Local::Variant` pattern routes to the
+# concrete `Palette` variant it names.
+import pal/colors
+type Local = pal/colors::Palette

@@ -139,6 +139,37 @@ def test_private_qualified_owner_is_rejected_in_both_positions(tmp_path: Path) -
     assert _program_outcome(tmp_path / "pattern", pattern_modules) == "typecheck"
 
 
+def test_explicit_owner_matching_the_route_segment_is_rejected(tmp_path: Path) -> None:
+    """A route segment sharing its spelling with a bogus explicit owner is rejected.
+
+    ``pal::pal::Red`` spells the module route ``pal`` and an explicit (wrong)
+    owner ``pal`` before ``Red``. The route segment happens to share its
+    spelling with the explicit owner, but that coincidence must not make the
+    route silently contribute the member itself as though no owner had been
+    spelled — the qualifier is a bogus owner and must be rejected.
+    """
+    modules = {
+        "entry": (
+            "import pal\nlet value = pal::Color::Red\ncase value of | pal::pal::Red => 1 | _ => 2"
+        ),
+        "pal": "enum Color\n  | Red",
+    }
+
+    assert _program_outcome(tmp_path, modules) == "typecheck"
+
+
+def test_correctly_spelled_module_and_owner_route_still_resolves(tmp_path: Path) -> None:
+    """The correct spelling ``pal::Color::Red`` keeps resolving after the fix."""
+    modules = {
+        "entry": (
+            "import pal\nlet value = pal::Color::Red\ncase value of | pal::Color::Red => 1 | _ => 2"
+        ),
+        "pal": "enum Color\n  | Red",
+    }
+
+    assert _program_outcome(tmp_path, modules) == "accepted"
+
+
 def test_ambiguous_imported_owner_is_rejected_by_scope(tmp_path: Path) -> None:
     modules = {
         "entry": "import one/types\nimport two/types\nlet value = types::Color::Red\nvalue",

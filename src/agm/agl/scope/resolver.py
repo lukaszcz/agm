@@ -50,6 +50,7 @@ from typing import TYPE_CHECKING, NoReturn
 from agm.agl.diagnostics import Diagnostic
 from agm.agl.modules.ids import ENTRY_ID, PRELUDE_ID, STD_CONFIG_ID, ModuleId
 from agm.agl.scope.imports import (
+    EMPTY_IMPORT_ENV,
     ConstructorOwnerFailure,
     ImportEnv,
     OwnerAmbiguousTypeOrRoute,
@@ -63,6 +64,7 @@ from agm.agl.scope.imports import (
     ambiguous_qualification_message,
     qualification_repair_guidance,
     render_qualifier,
+    resolve_alias_target,
     resolve_constructor_owner,
     resolve_qualified,
     resolve_qualified_member,
@@ -78,6 +80,7 @@ from agm.agl.scope.symbols import (
     PatternSlot,
     ScopeNode,
     SlotCandidate,
+    alias_denotes_constructible_type,
     duplicate_binder_message,
     immutable_binder_phrase,
 )
@@ -214,6 +217,8 @@ class _Resolver:
         private_info: dict[tuple[ModuleId, str], bool] | None = None,
         qualified_constructor_candidates: dict[tuple[ModuleId, str], tuple[ConstructorRef, ...]]
         | None = None,
+        all_public_types: dict[tuple[ModuleId, str], RecordDef | EnumDef | ExceptionDef | TypeAlias]
+        | None = None,
         is_entry: bool = True,
         repl_session_scope: ScopeNode | None = None,
         origin_path: Path | None = None,
@@ -235,6 +240,12 @@ class _Resolver:
         self._qualified_constructor_candidates: dict[
             tuple[ModuleId, str], tuple[ConstructorRef, ...]
         ] = qualified_constructor_candidates if qualified_constructor_candidates is not None else {}
+        # Whole-program public-type table (program context only), used to
+        # follow a type alias's target across an import when deciding whether
+        # the alias has a variant-less constructor. ``None`` in module mode.
+        self._all_public_types: (
+            dict[tuple[ModuleId, str], RecordDef | EnumDef | ExceptionDef | TypeAlias] | None
+        ) = all_public_types
         # Whether this module is the entry module (program context only).
         self._is_entry: bool = is_entry
         # Optional REPL session scope for ``::name`` self-ref fallback.
@@ -277,8 +288,16 @@ class _Resolver:
         self._program_name: str | None = None
         # Names of all root-level type declarations (RecordDef/EnumDef/TypeAlias).
         self._declared_type_names: set[str] = set()
+        # Root-level type declarations, keyed by name. Used to follow a nominal
+        # alias's target chain when deciding whether it has a constructor.
+        self._type_decls: dict[str, RecordDef | EnumDef | ExceptionDef | TypeAlias] = {}
         # Constructor candidates: name -> ordered list of ConstructorRef.
         self._constructor_candidates: dict[str, list[ConstructorRef]] = {}
+        # Nominal aliases whose chain provably ends at an enum: they occupy
+        # their name (so a bare reference resolves instead of raising "not
+        # defined") but have no constructor candidate, since an enum's variants
+        # are its constructors, not the enum type itself.
+        self._nonconstructible_type_decls: dict[str, TypeAlias] = {}
         # Resolved single-candidate constructor refs: VarRef.node_id -> ConstructorRef.
         self._constructor_refs: dict[int, ConstructorRef] = {}
         # Qualified constructor refs: VarRef.node_id -> (owner_name, member, owner_module_id).
@@ -474,6 +493,7 @@ class _Resolver:
                     )
                 local_type_names.add(item.name)
                 self._declared_type_names.add(item.name)
+                self._type_decls[item.name] = item
                 self._validate_type_params(item)
             elif isinstance(item, FuncDef):
                 self._validate_type_params(item)
@@ -575,6 +595,31 @@ class _Resolver:
         existing.append(cref)
         self._constructor_candidates[ctor_key] = existing
 
+    def _alias_target_lookup(
+        self, name: str, qualifier: Qualifier | None
+    ) -> RecordDef | EnumDef | ExceptionDef | TypeAlias | None:
+        """Resolve one alias-target type reference for :func:`alias_denotes_constructible_type`.
+
+        Tries this module's own root declarations first (only for an
+        unqualified name — a qualified reference can never name a local
+        declaration), then falls back to the shared import-environment
+        resolution (:func:`~agm.agl.scope.imports.resolve_alias_target`),
+        which covers a target reached through an open import or a module
+        qualifier. In module mode (no import environment or public-types
+        table), only the local step ever succeeds.
+        """
+        if qualifier is None:
+            local = self._type_decls.get(name)
+            if local is not None:
+                return local
+        return resolve_alias_target(
+            name,
+            qualifier,
+            self_module_id=None,
+            import_env=self._import_env,
+            all_public_types=self._all_public_types,
+        )
+
     def _collect_constructor_candidates(self, program: Program) -> None:
         """Build the constructor-candidates map from root-level RecordDef/EnumDef.
 
@@ -615,14 +660,17 @@ class _Resolver:
                 )
                 self._add_constructor_candidate(item.name, cref)
             elif isinstance(item, TypeAlias) and isinstance(item.type_expr, (NameT, AppliedT)):
-                cref = ConstructorRef(
-                    owner_name=item.name,
-                    variant=None,
-                    owner_decl_node_id=item.node_id,
-                    type_params=item.type_params,
-                    owner_module_id=self._module_id,
-                )
-                self._add_constructor_candidate(item.name, cref)
+                if alias_denotes_constructible_type(item, self._alias_target_lookup):
+                    cref = ConstructorRef(
+                        owner_name=item.name,
+                        variant=None,
+                        owner_decl_node_id=item.node_id,
+                        type_params=item.type_params,
+                        owner_module_id=self._module_id,
+                    )
+                    self._add_constructor_candidate(item.name, cref)
+                else:
+                    self._nonconstructible_type_decls[item.name] = item
 
     def _root_declaring_candidates(self, name: str) -> tuple[ConstructorRef, ...]:
         """Candidates that declare *name* itself in this module's root.
@@ -693,6 +741,40 @@ class _Resolver:
                 module_id=rep.owner_module_id,
             )
             scope.define(name, ref)
+        self._define_nonconstructible_type_bindings(scope)
+
+    def _define_nonconstructible_type_bindings(self, scope: ScopeNode) -> None:
+        """Bind a nominal alias whose chain ends at an enum to its own declaration.
+
+        The alias has no constructor candidate — an enum's variants are its
+        constructors, not the enum type itself — but its name is still
+        occupied: a bare value reference resolves to a ``constructor_binding``
+        so type checking reports its "type name, not a value" diagnostic
+        instead of scope raising a bare "not defined" error. Collision rules
+        mirror ``_define_constructor_bindings``: a same-module value binding
+        (func/agent) sharing the name is a duplicate declaration; a REPL
+        parent binding is shadowed without error.
+        """
+        for name, decl in self._nonconstructible_type_decls.items():
+            if name in scope.bindings:
+                raise AglScopeError(
+                    f"Name '{name}' is already declared in this scope.",
+                    span=None,
+                )
+            parent_ref = scope.parent.lookup(name) if scope.parent is not None else None
+            if parent_ref is not None and parent_ref.kind is not BinderKind.constructor_binding:
+                continue
+            scope.define(
+                name,
+                BindingRef(
+                    name=name,
+                    mutable=False,
+                    decl_span=decl.span,
+                    decl_node_id=decl.node_id,
+                    kind=BinderKind.constructor_binding,
+                    module_id=self._module_id,
+                ),
+            )
 
     def _define_agent_bindings(self) -> None:
         """Define each collected agent as a value binding in the current scope."""
@@ -1453,7 +1535,7 @@ class _Resolver:
             return
         qualifier = node.module_qualifier
         owner_result = resolve_constructor_owner(
-            self._import_env or ImportEnv(contributions={}, unqualified={}),
+            self._import_env or EMPTY_IMPORT_ENV,
             qualifier,
             type_name,
             type_name,
@@ -1504,9 +1586,9 @@ class _Resolver:
         # constructor member. A route-only spelling continues through the
         # ordinary qualified-member path below.
         owner_result = resolve_constructor_owner(
-            self._import_env or ImportEnv(contributions={}, unqualified={}),
+            self._import_env or EMPTY_IMPORT_ENV,
             qualifier,
-            segments[0],
+            None,
             node.name,
             is_local_type=lambda name: name in self._declared_type_names,
             private_info=self._private_info,
@@ -1965,9 +2047,9 @@ class _Resolver:
                 else:
                     owner_name = node.name
                 owner_result = resolve_constructor_owner(
-                    self._import_env or ImportEnv(contributions={}, unqualified={}),
+                    self._import_env or EMPTY_IMPORT_ENV,
                     qualifier,
-                    owner_name,
+                    node.qualifier,
                     node.name,
                     is_local_type=lambda name: name in self._declared_type_names,
                     private_info=self._private_info,

@@ -32,12 +32,14 @@ from agm.agl.diagnostics import Diagnostic
 from agm.agl.modules.ids import ModuleId
 from agm.agl.modules.loader import ModuleGraph
 from agm.agl.scope.imports import (
+    EMPTY_IMPORT_ENV,
     ImportEnv,
     ImportTarget,
     QName,
     SingleTarget,
     WildcardTarget,
     build_import_env,
+    resolve_alias_target,
 )
 from agm.agl.scope.resolver import _Resolver
 from agm.agl.scope.symbols import (
@@ -46,6 +48,7 @@ from agm.agl.scope.symbols import (
     ConstructorRef,
     ModuleResolution,
     ScopeNode,
+    alias_denotes_constructible_type,
 )
 from agm.agl.syntax.nodes import (
     AgentDecl,
@@ -140,6 +143,7 @@ class ResolvedProgram:
 def _build_cross_module_constructor_candidates(
     import_env: ImportEnv,
     all_public_types: dict[tuple[ModuleId, str], RecordDef | EnumDef | ExceptionDef | TypeAlias],
+    import_envs: Mapping[ModuleId, ImportEnv],
 ) -> tuple[
     dict[str, tuple[ConstructorRef, ...]],
     frozenset[str],
@@ -150,13 +154,31 @@ def _build_cross_module_constructor_candidates(
     Bare candidates and type names come only from open imports. Qualified
     candidates cover every imported member, including members reachable solely
     through a plain import route.
+
+    *import_env* is the consuming module's own environment, used to derive its
+    bare and qualified candidate sets below. *import_envs* is the whole
+    program's per-module table, needed because a type alias's constructibility
+    must be judged from its DECLARING module's environment — an alias can
+    reach an enum through that module's own import, not the consumer's — see
+    ``candidates_for``.
     """
 
     def candidates_for(
         mid: ModuleId, decl: RecordDef | EnumDef | ExceptionDef | TypeAlias
     ) -> tuple[ConstructorRef, ...]:
         if isinstance(decl, (RecordDef, ExceptionDef)) or (
-            isinstance(decl, TypeAlias) and isinstance(decl.type_expr, (NameT, AppliedT))
+            isinstance(decl, TypeAlias)
+            and isinstance(decl.type_expr, (NameT, AppliedT))
+            and alias_denotes_constructible_type(
+                decl,
+                lambda name, qualifier: resolve_alias_target(
+                    name,
+                    qualifier,
+                    self_module_id=mid,
+                    import_env=import_envs.get(mid, EMPTY_IMPORT_ENV),
+                    all_public_types=all_public_types,
+                ),
+            )
         ):
             return (
                 ConstructorRef(
@@ -490,7 +512,9 @@ def resolve_program(
             cross_module_candidates,
             cross_module_type_names,
             qualified_constructor_candidates,
-        ) = _build_cross_module_constructor_candidates(import_envs[mid], all_public_types)
+        ) = _build_cross_module_constructor_candidates(
+            import_envs[mid], all_public_types, import_envs
+        )
         constructor_candidates = cross_module_candidates
         type_names = cross_module_type_names
         if is_entry:
@@ -504,6 +528,7 @@ def resolve_program(
             decl_info=decl_info,
             private_info=private_info,
             qualified_constructor_candidates=qualified_constructor_candidates,
+            all_public_types=all_public_types,
             is_entry=is_entry,
             repl_session_scope=entry_repl_session_scope if is_entry else None,
             origin_path=loaded.path,

@@ -2706,6 +2706,32 @@ class TestConstructorBindings:
         r = parse_and_resolve("type MyInt = int\n()")
         assert "MyInt" in r.declared_type_names
 
+    def test_alias_with_unresolvable_unqualified_target_is_presumed_constructible(
+        self,
+    ) -> None:
+        """A standalone module has no import environment.
+
+        An alias whose unqualified target names no local declaration cannot be
+        resolved through an import either (there is none to try), so the
+        alias falls back to the permissive "presumed constructible" default
+        and keeps its own variant-less constructor candidate.
+        """
+        r = parse_and_resolve("type Local = Undeclared\n()\n")
+        candidates = r.constructor_candidates["Local"]
+        assert candidates[0].variant is None
+
+    def test_alias_with_unresolvable_qualified_target_is_presumed_constructible(
+        self,
+    ) -> None:
+        """Same as above, for a module-qualified target.
+
+        A standalone module has no import environment to resolve the
+        qualifier through, so the alias is presumed constructible.
+        """
+        r = parse_and_resolve("type Local = pal::Something\n()\n")
+        candidates = r.constructor_candidates["Local"]
+        assert candidates[0].variant is None
+
     def test_declared_type_names_excludes_variants(self) -> None:
         """Enum variant names are NOT in declared_type_names (they are values)."""
         r = parse_and_resolve("enum Color\n  | red\n  | blue\n()")

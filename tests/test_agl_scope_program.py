@@ -1425,6 +1425,44 @@ class TestTypeDeclarationsInModules:
         with pytest.raises(AglScopeError, match="bar|imported set"):
             resolve_program(graph)
 
+    def test_nonconstructible_alias_name_collides_with_existing_binding(
+        self, tmp_path: Path
+    ) -> None:
+        """A nominal alias of an enum still occupies its name for collision purposes.
+
+        ``Palette`` has no constructor candidate (``Color`` is an enum), but
+        scope still reserves the name for it, so a ``def`` of the same name
+        is a duplicate declaration exactly as it would be for a constructible
+        alias.
+        """
+        graph = _make_graph_from_files(
+            tmp_path,
+            {
+                "entry": (
+                    "def Palette() -> int = 1\nenum Color\n  | Red\ntype Palette = Color\n()"
+                ),
+            },
+        )
+        with pytest.raises(AglScopeError, match="Palette.*already declared"):
+            resolve_program(graph)
+
+    def test_nonconstructible_alias_yields_to_repl_session_binding(self, tmp_path: Path) -> None:
+        """A prior REPL session binding shadows a same-named nonconstructible alias.
+
+        Mirrors ``_define_constructor_bindings``'s own parent-shadow rule: an
+        ordinary session binding keeps its expression-position meaning rather
+        than being silently replaced by the new entry's alias.
+        """
+        prior_resolved = resolve_module(parse_program("let Palette = 42\nPalette"))
+        session_scope = prior_resolved.root_scope
+
+        graph = _make_graph_from_files(
+            tmp_path,
+            {"entry": "enum Color\n  | Red\n\ntype Palette = Color\n\nprint(Color::Red)"},
+        )
+        result = resolve_program(graph, entry_parent_scope=session_scope)
+        assert ENTRY_ID in result.modules
+
 
 # ---------------------------------------------------------------------------
 # Test: ::name self-reference in non-entry module

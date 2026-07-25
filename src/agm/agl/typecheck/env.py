@@ -21,6 +21,7 @@ from agm.agl.diagnostics import AglError, Diagnostic
 from agm.agl.ir.ids import NominalId
 from agm.agl.modules.ids import ENTRY_ID, ModuleId
 from agm.agl.scope.imports import (
+    EMPTY_IMPORT_ENV,
     ConstructorOwnerFailure,
     ConstructorOwnerResolution,
     ImportEnv,
@@ -731,35 +732,28 @@ class TypeEnvironment:
     def resolve_constructor_owner(
         self,
         qualifier: Qualifier,
-        owner_name: str,
+        owner_name: str | None,
         member: str,
         *,
-        allow_unqualified: bool = False,
         span: SourceSpan | None = None,
     ) -> ConstructorOwnerResolution:
         """Resolve one enum-owner spelling through the shared scope verdicts.
 
         Enum owner forms add checked visibility on top of the contribution
-        resolver. The optional unqualified mode lets pattern checking treat an
-        open-imported enum owner like a local owner for the short
-        ``Owner::Variant`` spelling; explicit module routes remain ordinary
-        qualified resolutions.
+        resolver. An owner-less spelling (``owner_name is None``) lets a
+        single unanchored qualifier segment name a local or open-imported
+        enum owner for the short ``Owner::Variant`` pattern spelling; an
+        explicitly spelled owner always resolves through the ordinary
+        qualified routes instead.
         """
-        if not qualifier.segments:
 
-            def is_local_type(name: str) -> bool:
+        def is_local_type(name: str) -> bool:
+            if not qualifier.segments:
                 return self.resolve_enum_owner_form(EnumOwnerFormKind.LOCAL, name) is not None
-        elif allow_unqualified and not qualifier.anchored and len(qualifier.segments) == 1:
-
-            def is_local_type(name: str) -> bool:
-                return self.resolve_unqualified_enum_owner_form(name) is not None
-        else:
-
-            def is_local_type(name: str) -> bool:
-                return False
+            return self.resolve_unqualified_enum_owner_form(name) is not None
 
         return resolve_constructor_owner_verdict(
-            self._import_env or ImportEnv(contributions={}, unqualified={}),
+            self._import_env or EMPTY_IMPORT_ENV,
             qualifier,
             owner_name,
             member,

@@ -998,18 +998,15 @@ class _Checker:
     def _check_let_binding(self, stmt: LetDecl) -> Type:
         """Check a let RHS once, then type every selected pattern binder."""
         if simple_let_pattern_name(stmt.pattern) == "_":
-            # Discard deliberately supplies no initializer expectation, but it
-            # still has a complete matched type for match compilation.
+            # Discard checks its initializer with no expected type and
+            # introduces no binder, so it records no matched type.
             value_type = self._check_boundary_expr(stmt.value, expected=None)
-            self._record_let_matched_type(stmt.node_id, value_type)
             return self._binder_result(value_type)
 
         ann_type = self._resolve_annotation(stmt.type_ann, stmt.span)
         value_type = self._check_boundary_expr(stmt.value, expected=ann_type)
         matched_type = self._binding_declared_type(stmt, value_type, ann_type)
         self._record_let_matched_type(stmt.node_id, matched_type)
-        if isinstance(stmt.pattern, VarPattern):
-            self._install_binding_metadata(stmt.pattern.node_id, stmt.value, matched_type, ann_type)
         provenance = (
             set(self._inferred_return_expr_provenance.get(stmt.value.node_id, ()))
             if ann_type is None
@@ -3643,9 +3640,8 @@ class _Checker:
             qualifier = module_qualifier.segments[0]
             owner_result = self._env.resolve_constructor_owner(
                 module_qualifier,
-                qualifier,
+                None,
                 variant,
-                allow_unqualified=True,
                 span=span,
             )
             if isinstance(owner_result, OwnerAmbiguousTypeOrRoute):
@@ -4234,7 +4230,7 @@ class _Checker:
                 f"type '{subj_type!r}'.",
                 span=pattern.span,
             )
-        constructor_ref = self._constructor_pattern_ref(pattern, owner_type, variant_name)
+        constructor_ref = self._constructor_pattern_ref(pattern, owner_type)
         if (
             constructor_ref is None
             and isinstance(owner_type, EnumType)
@@ -4260,15 +4256,17 @@ class _Checker:
         self,
         pattern: ConstructorPattern,
         owner_type: RecordType | EnumType,
-        variant: str | None,
     ) -> ConstructorRef | None:
         """Select the scope-published candidate matching this exact nominal constructor.
 
         Candidate owner names retain the spelling written by the user, including
         aliases. ``match_source_type_qname`` resolves that spelling transparently
-        and matches its full nominal template against the concrete scrutinee;
-        the matched concrete owner is published with the selected reference so
-        later passes do not repeat this resolution.
+        and matches its full nominal template against the concrete scrutinee, so
+        the first owner match is the selection. Every published candidate
+        carries the exact variant it was declared for — a nominal alias whose
+        chain resolves to an enum publishes no candidate of its own (see
+        ``alias_denotes_constructible_type``) — so an owner match is also a
+        variant match.
         """
         candidates = self._resolved.pattern_constructor_candidates.get(
             pattern.node_id, self._resolved.constructor_candidates.get(pattern.name, ())
@@ -4278,12 +4276,9 @@ class _Checker:
                 self._env.match_source_type_qname(
                     candidate.owner_module_id, candidate.owner_name, owner_type
                 )
-                is None
+                is not None
             ):
-                continue
-            if candidate.variant == variant:
                 return candidate
-            return replace(candidate, variant=variant)
         return None
 
     def _candidate_for_field_type(

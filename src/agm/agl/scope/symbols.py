@@ -20,13 +20,23 @@ Data model
 from __future__ import annotations
 
 import enum
+from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from agm.agl.diagnostics import AglError, Diagnostic
 from agm.agl.modules.ids import ENTRY_ID, ModuleId
 from agm.agl.semantics.types import EnumType
-from agm.agl.syntax.nodes import AgentDecl, FuncDef, Program
+from agm.agl.syntax.nodes import (
+    AgentDecl,
+    EnumDef,
+    ExceptionDef,
+    FuncDef,
+    Program,
+    RecordDef,
+    TypeAlias,
+)
 from agm.agl.syntax.spans import SourceSpan
+from agm.agl.syntax.types import AppliedT, NameT, Qualifier
 
 # ---------------------------------------------------------------------------
 # BuiltinKind — classification of a built-in Call node
@@ -215,6 +225,53 @@ class ConstructorRef:
             and self.owner_name == enum_type.name
             and self.variant == variant
         )
+
+
+def alias_denotes_constructible_type(
+    alias: TypeAlias,
+    lookup: Callable[
+        [str, Qualifier | None], RecordDef | EnumDef | ExceptionDef | TypeAlias | None
+    ],
+) -> bool:
+    """Whether *alias* denotes a constructible (non-enum) type.
+
+    A record, exception, or an alias chain that bottoms out at one of those
+    has a variant-less constructor; an enum does not (its variants are the
+    constructors, not the enum type itself). This follows the alias chain
+    (``type B = A`` where ``type A = Color``) through *lookup*, which resolves
+    one referenced type name — together with its ``module_qualifier``, when
+    the reference is module-qualified or reaches its target through an import
+    — to its declaration, and returns ``False`` only when the chain provably
+    ends at an ``EnumDef``.
+
+    *lookup* is scoped to whatever declarations the caller can see (a
+    module's own root declarations and import environment, or a whole
+    program's public types); a link the callback cannot resolve — no import
+    environment available, a private target, a container/primitive alias, or
+    an unresolvable name — makes the alias presumed constructible, preserving
+    today's permissive default. The walk guards against a cyclic chain by
+    tracking the ``node_id`` of every declaration visited, not the bare name
+    spelling, since a qualified chain can revisit the same name in a
+    different module.
+    """
+    seen = {alias.node_id}
+    current = alias
+    while True:
+        type_expr = current.type_expr
+        if not isinstance(type_expr, (NameT, AppliedT)):
+            return True
+        target = lookup(type_expr.name, type_expr.module_qualifier)
+        if target is None:
+            return True
+        if target.node_id in seen:
+            return True
+        seen.add(target.node_id)
+        if isinstance(target, EnumDef):
+            return False
+        if isinstance(target, TypeAlias):
+            current = target
+            continue
+        return True
 
 
 # ---------------------------------------------------------------------------

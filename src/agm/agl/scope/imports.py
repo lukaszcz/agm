@@ -2,16 +2,18 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from types import MappingProxyType
-from typing import Callable, Mapping, TypeVar
+from typing import TypeVar
 
 from agm.agl.modules.ids import ModuleId
 from agm.agl.scope.symbols import AglScopeError
-from agm.agl.syntax.nodes import ImportDecl
+from agm.agl.syntax.nodes import EnumDef, ExceptionDef, ImportDecl, RecordDef, TypeAlias
 from agm.agl.syntax.types import ImportMode, Qualifier, render_qualifier
 
 __all__ = [
+    "EMPTY_IMPORT_ENV",
     "ImportEnv",
     "ImportTarget",
     "ModuleContribution",
@@ -38,6 +40,7 @@ __all__ = [
     "qualifier_candidates",
     "qualifier_contributes",
     "render_qualifier",
+    "resolve_alias_target",
     "resolve_constructor_owner",
     "resolve_qualified",
     "resolve_qualified_member",
@@ -189,6 +192,13 @@ class ImportEnv:
                 suffix.setdefault((alias,), set()).add(module)
         object.__setattr__(self, "suffix_routes", _frozen_routes(suffix))
         object.__setattr__(self, "anchored_routes", _frozen_routes(anchored))
+
+
+# A module with no imports at all shares this single empty environment rather
+# than each caller allocating its own throwaway ``ImportEnv()``. Safe to share:
+# the dataclass is frozen and every mapping field is frozen in ``__post_init__``,
+# so nothing can mutate ``contributions``/``unqualified`` through a reference.
+EMPTY_IMPORT_ENV = ImportEnv(contributions={}, unqualified={})
 
 
 @dataclass(frozen=True, slots=True)
@@ -467,7 +477,7 @@ def private_missing_member_module(
 def resolve_constructor_owner(
     env: ImportEnv,
     qualifier: Qualifier,
-    owner_name: str,
+    owner_name: str | None,
     member: str,
     *,
     is_local_type: Callable[[str], bool],
@@ -476,39 +486,42 @@ def resolve_constructor_owner(
     """Select one constructor or variant owner without raising.
 
     This is the single owner-selection policy for constructor and variant
-    qualification. An empty qualifier selects the current module, an
-    unanchored one-segment qualifier selects a local type unless its route
-    contributes the requested member, and every other spelling resolves its
-    owner through the contribution routes. The helper returns a verdict —
-    including privacy and type/route ambiguity — so scope and typecheck can
-    translate it into their own diagnostics.
+    qualification. ``owner_name`` is the explicitly spelled owner (type) name
+    from the source, or ``None`` when the spelling carries no owner of its
+    own — the caller has only a qualifier segment to go on. The presumed
+    owner is ``owner_name`` when explicit, else ``member``.
 
-    For a one-segment qualifier that is not a local type, the route contributes
-    the constructor or variant itself. When the qualifier also carries an
-    explicit owner name, the route instead contributes that owner name (for
-    example, ``Pal::Secret::hidden`` resolves ``Pal::Secret``).
+    An empty qualifier selects the current module under the presumed owner.
+    An unanchored one-segment qualifier selects a local type only when
+    ``owner_name`` is ``None``: an explicit owner spelling means the
+    qualifier is unambiguously a module route, so the local-type candidate
+    (``segments[0]``) never competes with it. Every other spelling resolves
+    its owner through the contribution routes, using the presumed owner as
+    the route member — so an explicit owner name is what the route must
+    contribute (for example, ``Pal::Secret::hidden`` resolves ``Pal::Secret``)
+    — and a synthesized owner instead lets the route contribute the
+    constructor or variant itself. The helper returns a verdict — including
+    privacy and type/route ambiguity — so scope and typecheck can translate
+    it into their own diagnostics.
     """
     segments = qualifier.segments
+    presumed_owner = owner_name if owner_name is not None else member
     if not segments:
-        if is_local_type(owner_name):
-            return OwnerSelfModule(owner_name)
+        if is_local_type(presumed_owner):
+            return OwnerSelfModule(presumed_owner)
         return QualResolutionUnknownQualifier(segments)
 
     if (
         not qualifier.anchored
         and len(segments) == 1
-        and owner_name == segments[0]
-        and is_local_type(owner_name)
+        and owner_name is None
+        and is_local_type(segments[0])
     ):
         if qualifier_contributes(env, segments, member):
             return OwnerAmbiguousTypeOrRoute(segments, member)
-        return OwnerLocalType(owner_name)
+        return OwnerLocalType(segments[0])
 
-    route_member = owner_name
-    if len(segments) == 1 and (
-        owner_name == member or (not qualifier.anchored and owner_name == segments[0])
-    ):
-        route_member = member
+    route_member = presumed_owner
     result = resolve_qualified(env, segments, route_member, anchored=qualifier.anchored)
     if isinstance(result, QualResolutionFound):
         return OwnerImported(result.qname)
@@ -523,6 +536,53 @@ def try_resolve_qualified_member(env: ImportEnv, qualifier: Qualifier, member: s
     """Resolve ``qualifier::member``, returning ``None`` for any non-unique verdict."""
     result = resolve_qualified(env, qualifier.segments, member, anchored=qualifier.anchored)
     return result.qname if isinstance(result, QualResolutionFound) else None
+
+
+def resolve_alias_target(
+    name: str,
+    qualifier: Qualifier | None,
+    *,
+    self_module_id: ModuleId | None,
+    import_env: ImportEnv | None,
+    all_public_types: Mapping[QName, RecordDef | EnumDef | ExceptionDef | TypeAlias] | None,
+) -> RecordDef | EnumDef | ExceptionDef | TypeAlias | None:
+    """Resolve one type-alias target reference through a module's import environment.
+
+    Shared by the scope resolver and the program-level cross-module constructor
+    pre-pass so both judge a type alias's constructibility (see
+    :func:`~agm.agl.scope.symbols.alias_denotes_constructible_type`) the same
+    way for a target reached through an import rather than a same-module
+    declaration.
+
+    For an unqualified *name*, tries *self_module_id*'s own declaration first
+    (when both *self_module_id* and *all_public_types* are given — a caller
+    that already checked richer local state, e.g. private declarations, passes
+    ``self_module_id=None`` to skip this step), then the unqualified name
+    exposed by *import_env*'s open imports. For a qualified *name*, resolves
+    through the ordinary qualified-member route.
+
+    Returns ``None`` for anything it cannot resolve — no import environment or
+    public-types table, a private target, an ambiguous unqualified name, or an
+    unknown route — which the caller treats as "presumed constructible".
+    """
+    if qualifier is None:
+        if self_module_id is not None and all_public_types is not None:
+            local = all_public_types.get((self_module_id, name))
+            if local is not None:
+                return local
+        if import_env is None or all_public_types is None:
+            return None
+        qnames = import_env.unqualified.get(name)
+        if qnames is None or len(qnames) != 1:
+            return None
+        (qname,) = qnames
+        return all_public_types.get(qname)
+    if import_env is None or all_public_types is None:
+        return None
+    qualified = try_resolve_qualified_member(env=import_env, qualifier=qualifier, member=name)
+    if qualified is None:
+        return None
+    return all_public_types.get(qualified)
 
 
 def resolve_qualified_member(

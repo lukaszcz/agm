@@ -8,8 +8,8 @@ param artifact
 let issues = ["missing tests", "unclear API"]
 let review: Review = Fail(issues = issues)
 
-let a = ask "artifact: ${artifact}"
-let b = ask "text again: ${artifact}"
-let c = ask "list: ${issues}"
-let d = ask "enum: ${review}"
+let a = ask "artifact: %{artifact}"
+let b = ask "text again: %{artifact}"
+let c = ask "list: %{issues}"
+let d = ask "enum: %{review}"
 print "sent"

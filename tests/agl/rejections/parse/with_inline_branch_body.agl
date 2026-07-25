@@ -1,0 +1,4 @@
+record P(x: int, y: int)
+let p = P(1, 2)
+let q = if p.x > 0 => p with x = 3 | else => p
+print q.x

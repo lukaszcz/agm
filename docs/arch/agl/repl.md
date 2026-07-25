@@ -27,7 +27,7 @@ Because a write is an ordinary positional statement, settings take effect in pro
 
 ## Console and Confirmation
 
-The REPL console adds interactivity around the UI-free session: a confirmation wrapper gating live agent calls (confirm/auto modes, Ctrl-C converted into cancellation), syntax highlighting that runs the real lexer and classifies names semantically from declaration context rather than capitalization, parser-driven multiline submission that treats an unterminated string as continuation input, and terminal-detected color themes persisted to config.
+The REPL console adds interactivity around the UI-free session: a confirmation wrapper gating live agent calls (confirm/auto modes, Ctrl-C converted into cancellation), syntax highlighting that runs the real lexer and classifies names semantically from declaration context rather than capitalization, parser-driven multiline submission that treats an unterminated string or a line-final raw-tail header as continuation input, and terminal-detected color themes persisted to config.
 
 ## Code Entry Points
 

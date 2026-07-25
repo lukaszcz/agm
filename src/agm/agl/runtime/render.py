@@ -17,6 +17,7 @@ declaration order already, so rendering walks ``value.fields`` directly.
 from __future__ import annotations
 
 from agm.agl.runtime.serialize import dumps_exact, value_to_json_obj
+from agm.agl.semantics.text_literal import quote_text
 from agm.agl.semantics.values import (
     AgentValue,
     BoolValue,
@@ -35,35 +36,9 @@ from agm.agl.semantics.values import (
     Value,
 )
 
-_TEXT_ESCAPES: dict[str, str] = {
-    '"': '\\"',
-    "\\": "\\\\",
-    "\n": "\\n",
-    "\r": "\\r",
-    "\t": "\\t",
-    "\b": "\\b",
-    "\f": "\\f",
-    "$": "\\$",
-}
-
 
 def _indent(level: int) -> str:
     return "  " * level
-
-
-def _quote_text(s: str) -> str:
-    """Return *s* as a double-quoted AgL string literal surface form."""
-    out: list[str] = ['"']
-    for ch in s:
-        esc = _TEXT_ESCAPES.get(ch)
-        if esc is not None:
-            out.append(esc)
-        elif ch < " ":
-            out.append(f"\\u{ord(ch):04x}")
-        else:
-            out.append(ch)
-    out.append('"')
-    return "".join(out)
 
 
 def _scalar_text(value: IntValue | DecimalValue | BoolValue) -> str:
@@ -150,7 +125,7 @@ def _render(value: Value, *, pretty: bool, quote_strings: bool, top_level: bool,
     if isinstance(value, TextValue):
         if top_level and not quote_strings:
             return value.value
-        return _quote_text(value.value)
+        return quote_text(value.value)
 
     if isinstance(value, UnitValue):
         if not value.printable_in_repl:
@@ -185,7 +160,7 @@ def _render(value: Value, *, pretty: bool, quote_strings: bool, top_level: bool,
 
     if isinstance(value, DictValue):
         items = [
-            f"{_quote_text(key)}: {_render_child(child, pretty=pretty, level=level + 1)}"
+            f"{quote_text(key)}: {_render_child(child, pretty=pretty, level=level + 1)}"
             for key, child in value.entries.items()
         ]
         return _render_sequence("{", "}", items, level=level, pretty=pretty)

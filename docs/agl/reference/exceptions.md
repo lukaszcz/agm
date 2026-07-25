@@ -20,7 +20,7 @@ trace_id: text    # links the exception to its record in the run trace
 `Exception` itself is **not constructible** — `raise Exception(…)` is a
 static error. It exists for typing: a wildcard catch binds its variable as
 `Exception`, so only `message`, `trace_id`, and whole-value interpolation
-(`${e}`) are available there. Accessing a subtype field such as `e.raw`
+(`%{e}`) are available there. Accessing a subtype field such as `e.raw`
 requires catching the concrete type.
 
 Programs may declare concrete exception types:
@@ -107,16 +107,16 @@ initializer exits, in which case it has bottom type. See
 ```agl
 try
   let review: Review = ask(
-    "Review ${artifact}",
+    "Review %{artifact}",
     agent = reviewer,
     on_parse_error = Retry(n = 2)
   )
-  print "reviewed: ${review}"
+  print "reviewed: %{review}"
 catch AgentParseError as e =>
-  let report = ask("Explain invalid output:\n${e.raw}", agent = critic)
+  let report = ask("Explain invalid output:\n%{e.raw}", agent = critic)
   raise e
 catch _ as e =>
-  print "unexpected: ${e.message}"
+  print "unexpected: %{e.message}"
 ```
 
 Semantics:
@@ -178,6 +178,19 @@ Any concrete built-in exception type is constructible with named arguments
 for its fields; `trace_id` is injected by the runtime and is not written
 in source when omitted. The same construction rule applies to user-declared
 exception types. `Abort` is the conventional type for user-initiated failures.
+
+Exception values support the
+[record update](expressions.md#record-update) operator. Field names are
+checked against the binding's static exception type, but the copy preserves
+the value's **concrete** exception type — updating through a
+`catch Exception as e` binding and re-raising keeps the original exception
+type catchable:
+
+<!-- agl-check: fragment -->
+```agl
+catch Exception as e =>
+  raise (e with message = "while deploying: %{e.message}")
+```
 
 ## Built-in exception catalog
 

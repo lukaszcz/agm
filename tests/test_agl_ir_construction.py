@@ -165,7 +165,7 @@ record Point
   x: int
   y: int
 let p = Point(x = 1, y = 2)
-let s: text = "point: ${p}"
+let s: text = "point: %{p}"
 ()
 """
     ir = evaluate_ir(source)

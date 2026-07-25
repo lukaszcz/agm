@@ -7,7 +7,7 @@ def unbox(box: Box[int]) -> int = box.value
 def describe_option(option: library::Option[int]) -> text =
   case option of
     | none() => "none"
-    | some(value) => "some ${value}"
+    | some(value) => "some %{value}"
 
 param seed: int
 

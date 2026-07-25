@@ -18,7 +18,7 @@ record Point(x: int, y: int)
 def origin() -> Point = ::Geometry::Point(0, 0)
 
 scope Format
-def label(point: ::Geometry::Point) -> text = "${point.x},${point.y}"
+def label(point: ::Geometry::Point) -> text = "%{point.x},%{point.y}"
 end Format
 end Geometry
 
@@ -39,7 +39,7 @@ scope Text
 def normalize(value: text) -> text = value
 end Text
 
-def Text::display(value: text) -> text = "[${normalize(value)}]"
+def Text::display(value: text) -> text = "[%{normalize(value)}]"
 
 print(Text::display("ready"))
 ```
@@ -114,7 +114,7 @@ end Metrics
 end Math
 
 scope Text
-def show(value: int) -> text = "value ${value}"
+def show(value: int) -> text = "value %{value}"
 end Text
 
 let result = add(1, 2) + Metrics::scale(3)

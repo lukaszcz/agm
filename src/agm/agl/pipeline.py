@@ -34,6 +34,7 @@ from agm.agl.runtime.types import (
     ParamDeclInfo,
 )
 from agm.agl.self_validation import self_validation_enabled
+from agm.raw_tail_catalog import RAW_TAIL_NAMES
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -59,7 +60,7 @@ if TYPE_CHECKING:
 _ResultT = TypeVar("_ResultT")
 
 # Reserved agent names: cannot be registered by callers.
-_RESERVED_AGENT_NAMES: frozenset[str] = frozenset({"ask", "exec", "ask-request"})
+_RESERVED_AGENT_NAMES: frozenset[str] = frozenset({"ask", "exec", "ask-request"}) | RAW_TAIL_NAMES
 
 
 class ArtifactProvenanceError(Exception):

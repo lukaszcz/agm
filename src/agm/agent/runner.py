@@ -88,6 +88,7 @@ def validate_command(command: list[str], *, kind: str) -> None:
 
 def command_with_prompt_target(command: list[str], target: Path) -> list[str]:
     prompt_path = str(target)
+    # Separate from AgL's trigger in ``agm.agl.lexer.scanner``.
     placeholders = ("%%", "%{PROMPT_FILE}")
     replaced_command: list[str] = []
     replaced = False

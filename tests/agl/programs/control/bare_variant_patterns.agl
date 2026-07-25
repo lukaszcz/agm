@@ -44,7 +44,7 @@ def code(c: Color) -> int =
 def describe(b: Box) -> text =
   case b of
     | Empty => "empty"
-    | Full(item) => "full:${item}"
+    | Full(item) => "full:%{item}"
 
 def signal_name(s: Signal) -> text =
   case s of
@@ -60,7 +60,7 @@ def trend_name(t: Trend) -> text =
 def inner_name(w: Wrapper) -> text =
   case w of
     | Wrap(color = Red) => "wrapped-red"
-    | Wrap(color) => "wrapped-${name(color)}"
+    | Wrap(color) => "wrapped-%{name(color)}"
 
 let c: Color = pick(n)
 print(name(c))

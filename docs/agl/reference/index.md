@@ -8,7 +8,7 @@ agent outcomes.
 AgL is not a general-purpose programming language. It is a typed, expression-
 oriented orchestration language whose core ideas are:
 
-- **Agent calls are first-class expressions.** `ask("Review ${artifact}", agent = reviewer)`
+- **Agent calls are first-class expressions.** `ask("Review %{artifact}", agent = reviewer)`
   calls a host-provided agent with a rendered prompt template; the result is
   a typed value usable in any expression position.
 - **Types are contracts at the LLM boundary.** Annotating an `ask` call's
@@ -48,22 +48,22 @@ agent impl
 
 def review_and_fix(artifact: text) -> text =
   let r: Review = ask(
-    "Review the artifact for correctness:\n${artifact}",
+    "Review the artifact for correctness:\n%{artifact}",
     agent = reviewer,
     on_parse_error = Retry(n = 2)
   )
   case r of
     | Pass => artifact
     | Fail(issues) => ask(
-        "Fix these issues:\n${issues}\n\nCurrent:\n${artifact}",
+        "Fix these issues:\n%{issues}\n\nCurrent:\n%{artifact}",
         agent = impl
       )
 
-var artifact: text = ask("Implement ${spec}", agent = impl)
+var artifact: text = ask("Implement %{spec}", agent = impl)
 
 do[5]
   artifact := review_and_fix(artifact)
-  let final: Review = ask("Final review:\n${artifact}", agent = reviewer)
+  let final: Review = ask("Final review:\n%{artifact}", agent = reviewer)
 until final is Pass
 ```
 
@@ -82,7 +82,7 @@ until final is Pass
 | [Pattern matching](pattern-matching.md) | Patterns, source priority, exhaustiveness, redundancy |
 | [Generics](generics.md) | Type parameters on `def`/`record`/`enum`/`type`, type application, inference and `::[…]` override, generic constructor values, strict parametricity, invariance, erasure |
 | [Control flow](control-flow.md) | `if`, `case`, unified loops (`for`/`while`/`do`/`until`/`done`), `break`, `continue` |
-| [Strings and interpolation](strings-and-interpolation.md) | Templates, escapes, `${…}` interpolation, uniform rendering rules |
+| [Strings and interpolation](strings-and-interpolation.md) | Templates, escapes, `%{…}` interpolation, uniform rendering rules |
 | [Agent calls](agent-calls.md) | `ask`, agents as values, call options, output contracts, the JSON wire format, parse policies and retries |
 | [Shell execution](shell-execution.md) | `exec`, the `ExecResult` structured form vs the parsed form, `ExecError` |
 | [Python FFI](ffi.md) | `extern def`, the companion Python file, the type mapping across the boundary, sealed handles, `ExternError` |

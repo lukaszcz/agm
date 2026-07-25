@@ -433,7 +433,7 @@ do
   do inner := inner + 1 until inner >= 2
   outer := outer + 1
 until outer >= 3
-print "${outer}/${inner}"
+print "%{outer}/%{inner}"
 """
         )
         assert ok, diags

@@ -79,6 +79,7 @@ from agm.agl.syntax.nodes import (
     QualifierSegment,
     Raise,
     RecordDef,
+    RecordUpdate,
     Return,
     ScopeItem,
     ScopeRef,
@@ -155,6 +156,7 @@ __all__ = [
     # declarations
     "FuncDef",
     "RecordDef",
+    "RecordUpdate",
     "EnumDef",
     "ExceptionDef",
     "TypeAlias",

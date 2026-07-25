@@ -6,7 +6,7 @@ var effects: int = initial
 
 def produce(label: text) -> text =
   effects := effects + 1
-  "discarded ${label}"
+  "discarded %{label}"
 
 let _: int = produce("first")
 var _: bool = produce("second")

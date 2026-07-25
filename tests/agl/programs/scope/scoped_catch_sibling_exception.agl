@@ -41,4 +41,4 @@ if
     try
       print A::raise_scoped()
     catch Boom as e =>
-      print "wrongly caught: ${e.detail}"
+      print "wrongly caught: %{e.detail}"

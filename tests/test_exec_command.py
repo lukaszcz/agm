@@ -864,7 +864,7 @@ class TestExecLowersGraphOnce:
         capsys: pytest.CaptureFixture[str],
     ) -> None:
         lowerings = self._count_lowerings(monkeypatch)
-        (tmp_path / "helper.agl").write_text('def greet(who: text) -> text = "hi ${who}"\n')
+        (tmp_path / "helper.agl").write_text('def greet(who: text) -> text = "hi %{who}"\n')
         agl_file = tmp_path / "prog.agl"
         agl_file.write_text(
             'open import helper\nparam who: text = "world"\nprint helper::greet(who)\n'
@@ -901,7 +901,7 @@ class TestExecLowersGraphOnce:
     ) -> None:
         """A param failure preempts the run: no trace file, no program output."""
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text('param n: int\nprint "n=${n}"\n')
+        agl_file.write_text('param n: int\nprint "n=%{n}"\n')
         log_path = tmp_path / "trace.jsonl"
 
         with pytest.raises(SystemExit) as exc_info:
@@ -2317,7 +2317,7 @@ class TestExecAgentPrecedence:
 
         agl_file = tmp_path / "prog.agl"
         agl_file.write_text(
-            'agent impl = "source-runner %{PROMPT_FILE}"\n'
+            'agent impl = "source-runner \\%{PROMPT_FILE}"\n'
             'let x = ask("do it", agent = impl)\n'
             "print x\n"
         )
@@ -2368,8 +2368,8 @@ class TestExecAgentPrecedence:
 
         agl_file = tmp_path / "prog.agl"
         agl_file.write_text(
-            'agent a = "source-a %{PROMPT_FILE}"\n'  # config override → CONFIG-A
-            'agent b = "source-b %{PROMPT_FILE}"\n'  # no config entry → SOURCE-B
+            'agent a = "source-a \\%{PROMPT_FILE}"\n'  # config override → CONFIG-A
+            'agent b = "source-b \\%{PROMPT_FILE}"\n'  # no config entry → SOURCE-B
             "agent c\n"  # bare, no config entry → DEFAULT
             'let ra = ask("first", agent = a)\n'
             'let rb = ask("second", agent = b)\n'
@@ -2401,7 +2401,7 @@ class TestExecAgentPrecedence:
 
         agl_file = tmp_path / "prog.agl"
         agl_file.write_text(
-            'agent impl = "source-runner %{PROMPT_FILE}"\n'
+            'agent impl = "source-runner \\%{PROMPT_FILE}"\n'
             'let x = ask("do it", agent = impl)\n'
             "print x\n"
         )
@@ -2443,7 +2443,7 @@ class TestExecAgentPrecedence:
 
         agl_file = tmp_path / "prog.agl"
         agl_file.write_text(
-            'agent impl = "source-runner --file=%{PROMPT_FILE}"\n'
+            'agent impl = "source-runner --file=\\%{PROMPT_FILE}"\n'
             'let x = ask("do it", agent = impl)\n'
             "print x\n"
         )
@@ -3539,23 +3539,12 @@ class TestExecCliModulePaths:
 class TestReservedFileStem:
     """: a file stem matching a reserved AGM section name must exit 1."""
 
+    @pytest.mark.parametrize("name", ("loop", "exec", "exec!", "ask!"))
     def test_reserved_stem_no_program_decl_exits_1(
-        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+        self, name: str, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        """File 'loop.agl' with no ``program`` decl uses stem 'loop' (reserved) → exit 1."""
-        agl_file = tmp_path / "loop.agl"
-        agl_file.write_text("let x = 1\nx\n")
-
-        with pytest.raises(SystemExit) as exc_info:
-            exec_command.run(_exec_args_no_log(agl_file))
-
-        assert exc_info.value.code == 1
-
-    def test_exec_stem_no_program_decl_exits_1(
-        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
-    ) -> None:
-        """File 'exec.agl' with no ``program`` decl uses stem 'exec' (reserved) → exit 1."""
-        agl_file = tmp_path / "exec.agl"
+        """A reserved source stem without ``program NAME`` cannot select a config key."""
+        agl_file = tmp_path / f"{name}.agl"
         agl_file.write_text("let x = 1\nx\n")
 
         with pytest.raises(SystemExit) as exc_info:

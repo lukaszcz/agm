@@ -42,4 +42,4 @@ print (tree == different)
 
 case tree of
   | Leaf() => print "empty"
-  | Node(value, left, right) => print "root ${value}"
+  | Node(value, left, right) => print "root %{value}"

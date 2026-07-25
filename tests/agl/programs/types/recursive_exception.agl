@@ -12,7 +12,7 @@ param depth: int
 
 def make_causes(d: int) -> list[ValidationError] =
   if d <= 0 => []
-  else => [ValidationError(message = "nested failure", field_name = "cause_${d}", causes = make_causes(d - 1))]
+  else => [ValidationError(message = "nested failure", field_name = "cause_%{d}", causes = make_causes(d - 1))]
 
 try
   raise ValidationError(message = "invalid", field_name = field_name, causes = make_causes(depth))

@@ -1,0 +1,21 @@
+# Exception update with `with`: updating a caught exception's fields, an
+# update through a base-typed `catch Exception` binding preserving the
+# concrete exception type, and rewrap-and-rethrow.
+exception Boom extends Exception
+  code: int
+
+param trigger: bool
+param bump: int
+
+try
+  try
+    if trigger =>
+      raise Boom(message = "boom", code = 1)
+    else =>
+      print "calm"
+  catch Exception as e =>
+    let wrapped = e with message = "ctx: %{e.message}"
+    raise wrapped
+catch Boom as e =>
+  let bumped = e with code = e.code + bump, message = "final"
+  print "boom %{bumped.message} %{bumped.code} (%{e.message})"

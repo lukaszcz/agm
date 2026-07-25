@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import decimal
-import json
 from dataclasses import dataclass
 from typing import TypeAlias
 
 from agm.agl.scope.imports import render_qualifier
+from agm.agl.semantics.text_literal import quote_text
 from agm.agl.semantics.types import EnumType, Type
 from agm.agl.syntax.spans import SourceSpan
 
@@ -128,7 +128,7 @@ MatchIssue: TypeAlias = NonExhaustiveIssue | RedundantArmIssue
 def _render_literal(kind: LiteralKind, value: decimal.Decimal | str | None) -> str:
     if kind is LiteralKind.TEXT:
         assert isinstance(value, str)
-        return json.dumps(value, ensure_ascii=False).replace("${", "\\${")
+        return quote_text(value)
     if kind is LiteralKind.NULL:
         return "null"
     assert isinstance(value, decimal.Decimal)

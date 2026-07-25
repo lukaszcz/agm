@@ -8,9 +8,9 @@ agent invocations use the built-in `ask` function:
 
 <!-- agl-check: fragment -->
 ```agl
-ask "Summarize ${topic}"
-ask("Review this artifact:\n${artifact}", agent = reviewer)
-ask("Review ${artifact}", agent = reviewer, on_parse_error = Retry(n = 2))
+ask "Summarize %{topic}"
+ask("Review this artifact:\n%{artifact}", agent = reviewer)
+ask("Review %{artifact}", agent = reviewer, on_parse_error = Retry(n = 2))
 ```
 
 ## `ask` — the agent call function
@@ -45,8 +45,34 @@ With named arguments, parentheses are required:
 
 <!-- agl-check: fragment -->
 ```agl
-let r: Review = ask("Review ${artifact}", agent = reviewer)
+let r: Review = ask("Review %{artifact}", agent = reviewer)
 ```
+
+## Raw-tail `ask!`
+
+`ask!` writes a prompt directly after the keyword. Inline form consumes the
+rest of its line; block form consumes one dedented, newline-joined prompt.
+It desugars to the same call as `ask(<template>)`, so explicit type arguments
+and target-type inference work exactly as for `ask`. Type arguments must touch
+the name (`ask!::[T]`); in `ask! ::[T]`, the spaced `::[T]` is prompt payload:
+
+```agl
+record Review
+  summary: text
+
+let subject = "the release notes"
+let summary: text = ask! Summarize %{subject}.
+let review: Review = ask!::[Review]
+  Review %{subject} and provide a concise summary.
+```
+
+Raw-tail prompt text is verbatim except for `%{expr}` interpolation and
+trailing spaces and tabs in an inline prompt; `\%{` writes a literal `%{`.
+A raw call needs a nonempty inline prompt or a block with at least one nonblank
+line. `ask!` always uses the configured default agent and default parsing
+options. Use `ask(...)` when selecting an agent with `agent =` or when setting
+`format`, `strict_json`, or `on_parse_error`; it is also the form to use
+outside a raw-tail line-final position.
 
 ## Agents as values
 
@@ -55,8 +81,11 @@ declaration introduces a name binding of type `agent` in its declaring scope:
 
 ```agl
 agent reviewer
-agent planner = "claude -p %{PROMPT_FILE}"
+agent planner = "claude -p \%{PROMPT_FILE}"
 ```
+
+A runner hint may include the host prompt-file placeholder; write it as
+`\%{PROMPT_FILE}` so it is literal text in the template.
 
 Agent values may be stored, passed to functions, and held in lists — they
 are ordinary value bindings:
@@ -85,11 +114,11 @@ an immutable binding of type `agent`; a qualified head declares its exact
 scope member, and a scoped agent is selected with its full
 scope path, such as `Tools::reviewer`. The optional `= "…"` string attaches a
 *runner hint* consumed by the host and has no language effect. The runner string must be a static literal — no
-`${…}` interpolation.
+`%{…}` interpolation.
 
 Declaring the same agent name twice in one declaration layer, or declaring
-`ask` or `exec` as an agent name, is a static error. Agents at different scope
-paths remain distinct even when their final names match.
+`ask`, `exec`, `ask!`, or `exec!` as an agent name, is a static error. Agents
+at different scope paths remain distinct even when their final names match.
 
 ### The default agent
 
@@ -233,7 +262,7 @@ that supports the call's target type; both are checked statically.
 
 <!-- agl-check: fragment -->
 ```agl
-let r: Review = ask("Review ${a}", agent = reviewer, format = "json")
+let r: Review = ask("Review %{a}", agent = reviewer, format = "json")
 ```
 
 ### `strict_json`
@@ -264,7 +293,7 @@ enum ParsePolicy
 <!-- agl-check: fragment -->
 ```agl
 let r: Review = ask(
-  "Review ${artifact}",
+  "Review %{artifact}",
   agent = reviewer,
   on_parse_error = Retry(n = 2)
 )
@@ -447,8 +476,8 @@ request value.
 
 <!-- agl-check: fragment -->
 ```agl
-let r = ask-request("Summarize ${topic}")
-let r = ask-request::[Review]("Review ${artifact}", agent = reviewer)
+let r = ask-request("Summarize %{topic}")
+let r = ask-request::[Review]("Review %{artifact}", agent = reviewer)
 ```
 
 ### Target type
@@ -459,7 +488,7 @@ result type is fixed to `AgentRequest`), so the target type is given
 
 <!-- agl-check: fragment -->
 ```agl
-let r = ask-request::[Review]("Review ${artifact}")
+let r = ask-request::[Review]("Review %{artifact}")
 let n = ask-request::[int]("How many?")
 ```
 

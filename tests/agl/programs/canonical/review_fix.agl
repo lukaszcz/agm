@@ -21,7 +21,7 @@ agent impl
 agent reviewer
 agent critic
 
-var artifact: text = ask("Implement ${spec}", agent = impl)
+var artifact: text = ask("Implement %{spec}", agent = impl)
 
 # review declared as var so the until condition can reference it.
 var review: Review = Pass
@@ -32,7 +32,7 @@ try
     Review the artifact for correctness, completeness, and maintainability.
 
     Artifact:
-    ${artifact}
+    %{artifact}
     """, agent = reviewer, on_parse_error = Retry(n = 2))
 
     case review of
@@ -44,10 +44,10 @@ try
           Fix valid issues.
 
           Issues:
-          ${issues}
+          %{issues}
 
           Current artifact:
-          ${artifact}
+          %{artifact}
           """, agent = impl, on_parse_error = Retry(n = 2))
 
           case result of
@@ -56,7 +56,7 @@ try
             | Changed(output) =>
                 artifact := output
             | Blocked(reason) =>
-                let blocker_report = ask("Explain blocker:\n${reason}", agent = critic)
+                let blocker_report = ask("Explain blocker:\n%{reason}", agent = critic)
                 raise Abort(message = blocker_report)
 
   until review is Pass
@@ -66,16 +66,16 @@ catch AgentParseError as e =>
   An agent failed to return valid structured output.
 
   Agent:
-  ${e.agent}
+  %{e.agent}
 
   Expected schema:
-  ${e.expected_schema}
+  %{e.expected_schema}
 
   Raw output:
-  ${e.raw}
+  %{e.raw}
 
   Validation errors:
-  ${e.validation_errors}
+  %{e.validation_errors}
   """, agent = critic)
   raise e
 
@@ -84,10 +84,10 @@ catch MaxIterationsExceeded as e =>
   The review/fix loop did not converge.
 
   Last artifact:
-  ${artifact}
+  %{artifact}
 
   Loop metadata:
-  ${e}
+  %{e}
   """, agent = critic)
   raise e
 

@@ -2,7 +2,7 @@
 # typed targets parsed like agent output.
 param name
 
-let greeting: text = exec "printf 'hi %s' ${name}"
+let greeting: text = exec "printf 'hi %s' %{name}"
 print greeting
 
 let trimmed: text = exec "echo padded"

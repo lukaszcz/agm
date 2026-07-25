@@ -12,7 +12,7 @@ end Metrics
 end Math
 
 scope Text
-def show(value: int) -> text = "value ${value}"
+def show(value: int) -> text = "value %{value}"
 def hidden_format() -> text = "hidden"
 end Text
 

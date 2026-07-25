@@ -83,6 +83,7 @@ from agm.agl.syntax.nodes import (
     QualifierSegment,
     Raise,
     RecordDef,
+    RecordUpdate,
     Return,
     ScopeRef,
     ScopeRegion,
@@ -231,6 +232,7 @@ class Visitor:
     def visit_IsTest(self, node: IsTest) -> None: ...
     def visit_TypeApply(self, node: TypeApply) -> None: ...
     def visit_Call(self, node: Call) -> None: ...
+    def visit_RecordUpdate(self, node: RecordUpdate) -> None: ...
     def visit_Param(self, node: Param) -> None: ...
     def visit_Lambda(self, node: Lambda) -> None: ...
     def visit_Block(self, node: Block) -> None: ...
@@ -337,6 +339,7 @@ _KNOWN_NODE_TYPES: frozenset[type] = frozenset(
         IsTest,
         TypeApply,
         Call,
+        RecordUpdate,
         Param,
         Lambda,
         Block,
@@ -616,6 +619,11 @@ def walk(node: object, callback: Callable[[object], None]) -> None:
             walk(call_named, callback)
         for ta in node.type_args:
             walk(ta, callback)
+
+    elif isinstance(node, RecordUpdate):
+        walk(node.target, callback)
+        for update in node.updates:
+            walk(update, callback)
 
     elif isinstance(node, Param):
         walk(node.type_expr, callback)

@@ -18,22 +18,22 @@ let shape: Shape = ask("Pick a shape.", agent = picker)
 
 case shape of
   | Shape::Dot() => print "dot"
-  | Line(len) => print "line ${len}"
-  | Box(w, h, label) => print "box ${w}x${h} ${label}"
+  | Line(len) => print "line %{len}"
+  | Box(w, h, label) => print "box %{w}x%{h} %{label}"
 
 let wrapped: Wrapped = Inner(shape = shape)
 case wrapped of
-  | Inner(shape = Line(len as n)) => print "nested line ${n}"
+  | Inner(shape = Line(len as n)) => print "nested line %{n}"
   | Inner(shape = _ as inner) => print "nested other"
   | Nothing() => print "nothing"
 
 case code of
   | 0 => print "zero"
   | 1 => print "one"
-  | _ as other => print "other ${other}"
+  | _ as other => print "other %{other}"
 
 case shape of
-  | Box(label = _ as tag) => print "tagged ${tag}"
+  | Box(label = _ as tag) => print "tagged %{tag}"
   | _ => print "untagged"
 
 case who of

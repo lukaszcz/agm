@@ -142,6 +142,7 @@ from agm.agl.syntax.nodes import (
     QualifierChain,
     Raise,
     RecordDef,
+    RecordUpdate,
     Return,
     ScopeRegion,
     StringLit,
@@ -1749,6 +1750,10 @@ class _Resolver:
                 )
         elif isinstance(expr, FieldAccess):
             self._resolve_field_access(expr)
+        elif isinstance(expr, RecordUpdate):
+            self._resolve_expr(expr.target)
+            for update in expr.updates:
+                self._resolve_expr(update.value)
         elif isinstance(expr, IndexAccess):
             self._resolve_expr(expr.obj)
             self._resolve_expr(expr.index)

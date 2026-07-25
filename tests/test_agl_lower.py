@@ -2691,10 +2691,10 @@ class TestTemplateLowering:
     def test_interpolated_template_lowers_to_ir_render_template_with_segments(self) -> None:
         """A template with one text segment and one interpolated expression.
 
-        "hello ${name}" lowers to IrRenderTemplate with segments:
+        "hello %{name}" lowers to IrRenderTemplate with segments:
           (IrTemplateText("hello "), IrTemplateValue(IrLoad(name_sym)))
         """
-        source = 'let name = "world"\nlet msg = "hello ${name}"\n()\n'
+        source = 'let name = "world"\nlet msg = "hello %{name}"\n()\n'
         prog = _lower(source)
         inits = prog.modules[prog.entry_module].initializers
         # inits[0] = IrBind(name, IrConstText("world"))

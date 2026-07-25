@@ -13,7 +13,7 @@ try
   let q = 10 / d
   print q
 catch ArithmeticError as e =>
-  print "math failed: ${e.operation}"
+  print "math failed: %{e.operation}"
 
 try
   let flip: Coin = ask("Flip a coin.", agent = tosser)
@@ -22,16 +22,16 @@ try
     | Tails() =>
         raise MatchError(message = "no match", scrutinee_type = "Coin", scrutinee = null)
 catch MatchError as e =>
-  print "no match for ${e.scrutinee_type}"
+  print "no match for %{e.scrutinee_type}"
 
 try
   var i: int = 0
   do[2]
     i := i + 1
   until mode == "converge"
-  print "loop done ${i}"
+  print "loop done %{i}"
 catch MaxIterationsExceeded as e =>
-  print "exhausted at ${e.limit}"
+  print "exhausted at %{e.limit}"
 
 try
   if mode == "boom" =>
@@ -39,7 +39,7 @@ try
   else =>
     ()
 catch Exception as e =>
-  print "generic: ${e.message}"
+  print "generic: %{e.message}"
 
 try
   if mode == "boom" =>

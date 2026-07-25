@@ -100,6 +100,7 @@ from agm.agl.ir.nodes import (
     IrTemplateValue,
     IrTry,
     IrUnary,
+    IrUpdateRecord,
     IrVariantIs,
     UseDefault,
 )
@@ -1142,6 +1143,28 @@ class IrInterpreter:
                         f"IrField: expected RecordValue or ExceptionValue, got {type(val).__name__}"
                     )
                 return val.fields[field_name]
+
+            case IrUpdateRecord(value=val_expr, updates=updates):
+                target = self._eval(val_expr)
+                if not isinstance(target, (RecordValue, ExceptionValue)):
+                    raise InvalidIrError(
+                        "IrUpdateRecord: expected RecordValue or ExceptionValue, "
+                        f"got {type(target).__name__}"
+                    )
+                updated_fields: dict[str, Value] = dict(target.fields)
+                for fname, fexpr in updates:
+                    updated_fields[fname] = self._eval(fexpr)
+                if isinstance(target, RecordValue):
+                    return RecordValue(
+                        nominal=target.nominal,
+                        display_name=target.display_name,
+                        fields=updated_fields,
+                    )
+                return ExceptionValue(
+                    nominal=target.nominal,
+                    display_name=target.display_name,
+                    fields=updated_fields,
+                )
 
             case IrIndex(kind=kind, value=val_expr, index=idx_expr):
                 container = self._eval(val_expr)

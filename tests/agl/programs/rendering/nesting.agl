@@ -56,8 +56,8 @@ print(s2 as json)
 
 # --- function combining nesting + rendering ---
 def describe(a: Author) -> text =
-  if a.active => "active: ${a.name}"
-  else => "inactive: ${a.name}"
+  if a.active => "active: %{a.name}"
+  else => "inactive: %{a.name}"
 
 print(describe(Author(name = "Xe", active = false)))
 print(describe(Author(name = "Ada", active = true)))

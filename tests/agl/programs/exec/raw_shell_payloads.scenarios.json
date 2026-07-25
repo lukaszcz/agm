@@ -1,0 +1,66 @@
+{
+  "scenarios": [
+    {
+      "name": "preserves_dollar_forms_quotes_and_interpolation",
+      "params": {"file": "report.json", "label": "release"},
+      "shell": [
+        {
+          "command": "printf '%s' $VAR \"${var}\" $(echo shell) $1 \"My File Name With Spaces\"; # raw tail text remains shell text",
+          "stdout": "shell syntax preserved"
+        },
+        {
+          "command": "printf '%s' $VAR \"${var}\" $(echo shell) $1 report.json-3",
+          "stdout": "interpolated"
+        },
+        {"command": "curl -w '%{http_code}' report.json", "stdout": "200"},
+        {
+          "command": "for item in one two; do\n  if [ \"$item\" = \"one\" ]; then\n    printf '%s:' \"$item\"\n  else\n    printf '%s;' \"$item\"\n  fi\ndone",
+          "stdout": "one:two;"
+        },
+        {"command": "cat data.json", "stdout": "{\"name\": \"report\"}"},
+        {"command": "printf '<%s>' \"release\"", "stdout": "<release>"}
+      ],
+      "expect": {
+        "stdout_contains": [
+          "shell syntax preserved\n",
+          "interpolated\n",
+          "200\n",
+          "one:two;\n",
+          "\"report\"\n",
+          "<release>\n"
+        ]
+      }
+    },
+    {
+      "name": "renders_distinct_values_without_rescanning_shell_text",
+      "params": {"file": "archive.json", "label": "literal %{file}"},
+      "shell": [
+        {
+          "command": "printf '%s' $VAR \"${var}\" $(echo shell) $1 \"My File Name With Spaces\"; # raw tail text remains shell text",
+          "stdout": "dollars untouched"
+        },
+        {
+          "command": "printf '%s' $VAR \"${var}\" $(echo shell) $1 archive.json-3",
+          "stdout": "archive input"
+        },
+        {"command": "curl -w '%{http_code}' archive.json", "stdout": "404"},
+        {
+          "command": "for item in one two; do\n  if [ \"$item\" = \"one\" ]; then\n    printf '%s:' \"$item\"\n  else\n    printf '%s;' \"$item\"\n  fi\ndone",
+          "stdout": "one:two;"
+        },
+        {"command": "cat data.json", "stdout": "{\"name\": \"archive\", \"cached\": false}"},
+        {"command": "printf '<%s>' \"literal %{file}\"", "stdout": "<literal %{file}>"}
+      ],
+      "expect": {
+        "stdout_contains": [
+          "dollars untouched\n",
+          "archive input\n",
+          "404\n",
+          "one:two;\n",
+          "\"archive\"\n",
+          "<literal %{file}>\n"
+        ]
+      }
+    }
+  ]
+}

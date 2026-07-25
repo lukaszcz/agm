@@ -26,6 +26,7 @@ import decimal
 import importlib.resources
 import logging
 import logging.handlers
+from unittest.mock import patch
 
 import pytest
 from lark.exceptions import UnexpectedToken
@@ -119,6 +120,7 @@ from agm.agl.syntax.types import (
     TextT,
     UnitT,
 )
+from agm.core.process import ProcessCaptureResult
 
 # ---------------------------------------------------------------------------
 # Helper
@@ -143,6 +145,25 @@ def items(prog: Program) -> tuple[object, ...]:
 def first(prog: Program) -> object:
     """Return the first top-level item."""
     return prog.body.items[0]
+
+
+def assert_raw_tail_name_span(error: AglSyntaxError, source: str) -> None:
+    """Assert that a raw-tail reservation error covers its reserved name."""
+    assert "reserved for raw-tail calls" in str(error)
+    span = error.span
+    assert span is not None
+    name = next(name for name in ("exec!", "ask!") if name in source)
+    offset = source.index(name)
+    line = source.count("\n", 0, offset) + 1
+    col = offset - source.rfind("\n", 0, offset)
+    assert (
+        span.start_line,
+        span.start_col,
+        span.end_line,
+        span.end_col,
+        span.start_offset,
+        span.end_offset,
+    ) == (line, col, line, col + len(name), offset, offset + len(name))
 
 
 def _collect_node_ids(obj: object, result: list[int]) -> None:
@@ -300,7 +321,7 @@ class TestLiterals:
         assert isinstance(s, StringLit) and s.value == "hello"
 
     def test_string_interpolated(self) -> None:
-        tmpl = first(parse('"hello ${name}"'))
+        tmpl = first(parse('"hello %{name}"'))
         assert isinstance(tmpl, Template)
         assert len(tmpl.segments) == 2
         assert isinstance(tmpl.segments[0], TextSegment)
@@ -669,7 +690,7 @@ class TestDeclarations:
         assert ag.runner is None
 
     def test_agent_decl_with_runner(self) -> None:
-        ag = first(parse('agent planner = "claude -p %{PROMPT_FILE}"'))
+        ag = first(parse('agent planner = "claude -p \\%{PROMPT_FILE}"'))
         assert isinstance(ag, AgentDecl)
         assert ag.runner == "claude -p %{PROMPT_FILE}"
 
@@ -2438,23 +2459,23 @@ class TestTemplates:
         assert s.value == "hello world"
 
     def test_interpolated_template(self) -> None:
-        t = first(parse('"Hello ${name}"'))
+        t = first(parse('"Hello %{name}"'))
         assert isinstance(t, Template)
         assert any(isinstance(seg, InterpSegment) for seg in t.segments)
 
     def test_multi_interp_template(self) -> None:
-        t = first(parse('"${a} and ${b}"'))
+        t = first(parse('"%{a} and %{b}"'))
         assert isinstance(t, Template)
         interps = [s for s in t.segments if isinstance(s, InterpSegment)]
         assert len(interps) == 2
 
     def test_interpolated_agent_runner_raises(self) -> None:
         with pytest.raises(AglSyntaxError, match="literal string"):
-            parse('agent reviewer = "runner ${x}"')
+            parse('agent reviewer = "runner %{x}"')
 
     def test_pattern_interpolated_string_raises(self) -> None:
         with pytest.raises(AglSyntaxError, match="interpolation"):
-            parse('case x of | "${y}" => ok')
+            parse('case x of | "%{y}" => ok')
 
 
 # ---------------------------------------------------------------------------
@@ -2976,6 +2997,33 @@ class TestSyntaxErrorFromLarkDirect:
         assert span is not None
         assert span.start_line == 1
         assert span.start_col == 1
+
+    def test_empty_raw_tail_names_the_generic_form_without_parser_state(self) -> None:
+        """With no parse stack exposed, the empty-payload message names no spelling."""
+        from lark.exceptions import UnexpectedToken
+
+        from agm.agl.parser.errors import syntax_error_from_lark
+
+        token = Token("RAW_TAIL_END", "", start_pos=5, line=1, column=6)
+        err = syntax_error_from_lark(UnexpectedToken(token, expected={"RAW_FRAGMENT"}))
+        assert "raw-tail form" in str(err)
+        assert "cannot be empty" in str(err)
+
+    def test_empty_raw_tail_falls_back_when_stack_has_no_raw_callee(self) -> None:
+        """A parse stack without a ``raw_callee`` subtree yields the generic name."""
+        import types
+
+        from lark.exceptions import UnexpectedToken
+
+        from agm.agl.parser.errors import syntax_error_from_lark
+
+        token = Token("RAW_TAIL_END", "", start_pos=5, line=1, column=6)
+        exc = UnexpectedToken(token, expected={"RAW_FRAGMENT"})
+        exc.interactive_parser = types.SimpleNamespace(
+            parser_state=types.SimpleNamespace(value_stack=[])
+        )
+        err = syntax_error_from_lark(exc)
+        assert "raw-tail form" in str(err)
 
 
 # ---------------------------------------------------------------------------
@@ -4089,3 +4137,270 @@ class TestModifierDecoratorNewline:
         assert isinstance(it[0], FuncDef)
         assert isinstance(it[1], EnumDef)
         assert it[1].is_private is True
+
+
+class TestRawTailCalls:
+    @pytest.mark.parametrize(
+        ("raw_source", "call_source"),
+        (
+            ("exec! ls -lh", 'exec("ls -lh")'),
+            ("ask! Summarize %{f}", 'ask("Summarize %{f}")'),
+            ("exec!\n  echo %{file}\n  date", 'exec("""echo %{file}\ndate""")'),
+            ("ask!\n  Review %{file}\n  carefully", 'ask("""Review %{file}\ncarefully""")'),
+            ("exec!::[json] cat result.json", 'exec::[json]("cat result.json")'),
+            ("ask!::[Review] Summarize %{f}", 'ask::[Review]("Summarize %{f}")'),
+            ("exec! : true", 'exec(": true")'),
+        ),
+    )
+    def test_desugars_to_equivalent_call(self, raw_source: str, call_source: str) -> None:
+        assert first(parse(raw_source)) == first(parse(call_source))
+
+    def test_is_allowed_at_each_line_final_position(self) -> None:
+        source = """\
+exec! true
+let a = exec! true
+var b = exec! true
+b := exec! false
+def returned() -> ExecResult
+  return exec! true
+def inline() -> ExecResult = return exec! true
+print exec! true
+(1 + 1) exec! true
+1 + 1; exec! true
+"""
+        program = parse(source)
+        assert len(program.body.items) == 10
+        returned = program.body.items[4]
+        inline = program.body.items[5]
+        assert isinstance(returned, FuncDef)
+        assert isinstance(returned.body, Block)
+        assert isinstance(returned.body.items[0], Return)
+        assert isinstance(inline, FuncDef)
+        assert isinstance(inline.body, Return)
+
+    def test_raw_tail_is_allowed_as_an_arrow_suite_item(self) -> None:
+        branch = first(parse("if true =>\n  exec! true"))
+        assert isinstance(branch, If)
+        assert isinstance(branch.branches[0].body, Block)
+        assert isinstance(branch.branches[0].body.items[0], Call)
+
+    def test_inline_nominal_declaration_does_not_reserve_nested_do_suite_items(self) -> None:
+        function = first(parse("def f() -> unit\n  record R x: int\n  do\n    exec! true\n  done"))
+        assert isinstance(function, FuncDef)
+        assert isinstance(function.body, Block)
+        loop = function.body.items[-1]
+        assert isinstance(loop, Do)
+        assert isinstance(loop.body, Block)
+        assert isinstance(loop.body.items[0], Call)
+
+    @pytest.mark.parametrize(
+        ("source", "expected_span"),
+        (
+            ("exec!", (1, 6, 1, 6)),
+            ("ask!   ", (1, 8, 1, 8)),
+            ("exec!\n", (2, 1, 2, 1)),
+            ("exec!\nnext", (2, 1, 2, 1)),
+        ),
+    )
+    def test_empty_payload_is_rejected_at_its_location(
+        self, source: str, expected_span: tuple[int, int, int, int]
+    ) -> None:
+        with pytest.raises(AglSyntaxError) as exc_info:
+            parse_program(source)
+        assert exc_info.value.span is not None
+        assert (
+            exc_info.value.span.start_line,
+            exc_info.value.span.start_col,
+            exc_info.value.span.end_line,
+            exc_info.value.span.end_col,
+        ) == expected_span
+
+    @pytest.mark.parametrize(
+        ("source", "expected_span"),
+        (
+            ("1 + exec!", (1, 5, 1, 10)),
+            ("1 + exec! true", (1, 5, 1, 10)),
+            ("if true => exec! date | else => 0", (1, 12, 1, 17)),
+            ("case true of true => exec! date | false => 0", (1, 22, 1, 27)),
+            ("try exec! date catch _ => 0", (1, 5, 1, 10)),
+            ("if true => return exec! date | else => 0", (1, 19, 1, 24)),
+            ("case true of true => return exec! date | false => 0", (1, 29, 1, 34)),
+            ("try return exec! date catch _ => 0", (1, 12, 1, 17)),
+        ),
+    )
+    def test_non_line_final_position_is_rejected_at_its_location(
+        self, source: str, expected_span: tuple[int, int, int, int]
+    ) -> None:
+        with pytest.raises(AglSyntaxError) as exc_info:
+            parse(source)
+        assert exc_info.value.span is not None
+        assert (
+            exc_info.value.span.start_line,
+            exc_info.value.span.start_col,
+            exc_info.value.span.end_line,
+            exc_info.value.span.end_col,
+        ) == expected_span
+
+    @pytest.mark.parametrize(
+        "source",
+        (
+            "let exec! = 1",
+            "var ask! = 1",
+            "param exec!",
+            "def ask!() -> int = 1",
+            "agent ask!",
+            "record exec! value: int",
+            "record R\n  exec!: int",
+            "enum ask! = Variant",
+            "enum E = ask!",
+            "exception exec! value: int",
+            "exception X\n  ask!: int",
+            "type ask! = int",
+            "program exec!",
+            "for exec! in [] do 1 done",
+            "case x of value as ask! => 1",
+            "case x of ask! => 1",
+            "::ask!",
+            "let x = ::ask!",
+            "module::exec!",
+            "Type[int]::exec!",
+            "module::Type[int]::ask!",
+            "value.ask!",
+        ),
+    )
+    def test_reserved_raw_name_has_a_frontend_diagnostic(self, source: str) -> None:
+        with pytest.raises(AglSyntaxError) as exc_info:
+            parse(source)
+        assert_raw_tail_name_span(exc_info.value, source)
+
+    @pytest.mark.parametrize(
+        "source",
+        (
+            "let a = (1 + 2\nlet b: text = exec! echo hi\nprint(b)\n",
+            "let a = [1, 2\nlet b: text = exec! echo hi\n",
+        ),
+    )
+    def test_unclosed_bracket_is_reported_where_the_expression_breaks(self, source: str) -> None:
+        # A missing closing bracket must not be reported as a misplaced raw tail
+        # on a later line; the diagnostic belongs to the item that cannot continue.
+        with pytest.raises(AglSyntaxError) as exc_info:
+            parse(source)
+        span = exc_info.value.span
+        assert span is not None
+        assert (span.start_line, span.start_col) == (2, 1)
+
+    def test_arrow_body_raw_tail_is_rejected_over_its_shell_quotes(self) -> None:
+        with pytest.raises(AglSyntaxError) as exc_info:
+            parse("if true => exec! echo 'oops")
+        span = exc_info.value.span
+        assert span is not None
+        assert (span.start_line, span.start_col) == (1, 12)
+
+    def test_empty_payload_names_the_form_after_nested_type_arguments(self) -> None:
+        with pytest.raises(AglSyntaxError) as exc_info:
+            parse_program("let x: list[int] = exec!::[list[int]]\nnext")
+        assert "exec!" in str(exc_info.value)
+
+    @pytest.mark.parametrize(
+        "source",
+        ("let x = 1\n  exec! echo hi", "print 1\n  exec! echo hi"),
+    )
+    def test_stray_indentation_before_a_raw_tail_is_reported_as_indentation(
+        self, source: str
+    ) -> None:
+        with pytest.raises(AglSyntaxError) as exc_info:
+            parse(source)
+        assert "indent" in str(exc_info.value).lower()
+
+    def test_raw_tail_default_is_rejected_inside_parameter_brackets_at_its_location(self) -> None:
+        with pytest.raises(AglSyntaxError) as exc_info:
+            parse("def f(x: int = exec! true) -> int = x")
+        assert exc_info.value.span is not None
+        assert (
+            exc_info.value.span.start_line,
+            exc_info.value.span.start_col,
+            exc_info.value.span.end_line,
+            exc_info.value.span.end_col,
+        ) == (1, 16, 1, 16)
+
+    @pytest.mark.parametrize("declaration", ("record", "exception"))
+    @pytest.mark.parametrize("marker", ("/", "*", "@named"))
+    def test_nominal_marker_preserves_raw_field_reservation(
+        self, declaration: str, marker: str
+    ) -> None:
+        source = f"{declaration} R\n  x: int\n  {marker}\n  exec!: int"
+        with pytest.raises(AglSyntaxError) as exc_info:
+            parse(source)
+        assert_raw_tail_name_span(exc_info.value, source)
+
+    def test_raw_tail_in_unsupported_lambda_suite_is_rejected_at_its_location(self) -> None:
+        source = "let f = fn() =>\n  exec! date"
+        with pytest.raises(AglSyntaxError) as exc_info:
+            parse(source)
+        assert exc_info.value.span is not None
+        assert (
+            exc_info.value.span.start_line,
+            exc_info.value.span.start_col,
+            exc_info.value.span.end_line,
+            exc_info.value.span.end_col,
+        ) == (1, 16, 1, 17)
+
+    @pytest.mark.parametrize(
+        "source",
+        (
+            "fn(exec!: int) => 1",
+            "type Box[ask!] = int",
+        ),
+    )
+    def test_reserved_raw_parameter_names_are_rejected_inside_brackets(self, source: str) -> None:
+        with pytest.raises(AglSyntaxError) as exc_info:
+            parse(source)
+        assert "brackets" in str(exc_info.value)
+
+    @pytest.mark.parametrize("declaration", ("record", "exception"))
+    def test_inline_field_declaration_does_not_leak_to_next_expression(
+        self, declaration: str
+    ) -> None:
+        source = f"{declaration} R x: int\nfoo(exec! true)"
+        with pytest.raises(AglSyntaxError) as exc_info:
+            parse(source)
+        assert exc_info.value.span is not None
+        assert (
+            exc_info.value.span.start_line,
+            exc_info.value.span.start_col,
+            exc_info.value.span.end_line,
+            exc_info.value.span.end_col,
+        ) == (2, 5, 2, 5)
+
+    def test_desugaring_assigns_node_ids_in_source_order(self) -> None:
+        raw_call = first(parse("exec! true"))
+        assert isinstance(raw_call, Call)
+        assert isinstance(raw_call.callee, VarRef)
+        assert isinstance(raw_call.args[0], StringLit)
+        assert raw_call.callee.node_id < raw_call.args[0].node_id < raw_call.node_id
+
+    def test_interpolated_raw_text_precedes_its_interpolation_node_ids(self) -> None:
+        raw_call = first(parse("exec! before %{value}"))
+        assert isinstance(raw_call, Call)
+        assert isinstance(raw_call.args[0], Template)
+        text, interpolation = raw_call.args[0].segments
+        assert isinstance(text, TextSegment)
+        assert isinstance(interpolation, InterpSegment)
+        assert text.node_id < interpolation.expr.node_id < interpolation.node_id
+
+    def test_desugared_statement_runs_through_the_pipeline(self) -> None:
+        completed = ProcessCaptureResult(
+            returncode=0,
+            stdout="",
+            stderr="",
+            elapsed=0.0,
+            timed_out=False,
+            spawn_error=None,
+            spawn_errno=None,
+        )
+        from agm.agl import PipelineDriver
+
+        with patch("agm.core.process.run_capture_result", return_value=completed):
+            result = PipelineDriver().run("exec! true")
+
+        assert result.ok

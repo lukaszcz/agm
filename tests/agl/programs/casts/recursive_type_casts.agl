@@ -17,19 +17,19 @@ param forest_text
 
 if tree_text as? Tree =>
   let t = tree_text as Tree
-  print "sum: ${sum_tree(t)}"
+  print "sum: %{sum_tree(t)}"
 else =>
   try
     let t = tree_text as Tree
     print "unreachable"
   catch CastError as e =>
-    print "cast failed: ${e.source_type} -> ${e.target_type}"
+    print "cast failed: %{e.source_type} -> %{e.target_type}"
 
 if forest_text as? list[Tree] =>
   let forest = forest_text as list[Tree]
   var total: int = 0
   for t in forest do
     total := total + sum_tree(t)
-  print "forest total: ${total}"
+  print "forest total: %{total}"
 else =>
   print "forest invalid"

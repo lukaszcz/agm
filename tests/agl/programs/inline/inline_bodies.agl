@@ -18,7 +18,7 @@ agent reviewer
 var label: text = "unset"
 case k of
   | 0 => label := "zero"
-  | 1 => (let doubled = k * 2; print "doubled:${doubled}")
+  | 1 => (let doubled = k * 2; print "doubled:%{doubled}")
   | _ => label := "many"
 print label
 
@@ -36,14 +36,14 @@ print classify(k)
 var caught: text = "none"
 try
   if k == 9 => raise Halt(code = k, message = "nine") else => ()
-catch Halt as e => caught := "halt:${e.code}"
+catch Halt as e => caught := "halt:%{e.code}"
 print caught
 
 # A `catch`-terminated try body takes the same `;` sequence as a loop body,
 # including binders and assignments.
 var probe: int = 0
 let probed = try probe := k; let bumped = probe + 1; bumped catch _ => -1
-print "probed:${probed}"
+print "probed:%{probed}"
 
 # Open forms inline in loop bodies: `case` under `for`, `if` under `while`,
 # and a nested loop under bare `do`.
@@ -63,12 +63,12 @@ do
   do inner := inner + 1 until inner >= 2
   outer := outer + 1
 until outer >= 3
-print "${outer}/${inner}"
+print "%{outer}/%{inner}"
 
 # An inline `try` in a loop body, over an agent call that may fail to parse.
 # The inline `catch` body is an assignment.
-def review(i: int) -> Verdict = ask("Review ${i}.", agent = reviewer)
+def review(i: int) -> Verdict = ask("Review %{i}.", agent = reviewer)
 
 var failures: int = 0
 for i in 1 to 2 do try print review(i) catch AgentParseError => failures := failures + 1 done
-print "failures:${failures}"
+print "failures:%{failures}"

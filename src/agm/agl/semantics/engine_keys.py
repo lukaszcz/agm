@@ -13,6 +13,7 @@ from agm.command_catalog import COMMAND_NAMES
 from agm.config.engine_keys import ENGINE_KEY_KINDS, EngineKeyKind
 from agm.config.engine_keys import ENGINE_KEY_NAMES as ENGINE_KEY_NAMES
 from agm.config.sections import RESERVED_CONFIG_SECTIONS
+from agm.raw_tail_catalog import RAW_TAIL_NAMES
 
 # Concrete AgL type for each engine-key value kind.  The kebab key names and
 # their kinds are the single source of truth in :mod:`agm.config.engine_keys`;
@@ -37,11 +38,13 @@ def get_engine_key_type(name: str) -> Type | None:
 # Reserved program names
 # ---------------------------------------------------------------------------
 
-# Program names that collide with AGM top-level command and TOML config-section
-# names.  A ``program NAME`` declaration whose name is in this set is a scope
-# error because it would conflict with an existing ``[NAME]`` section in the
-# config file schema.
+# Program names that collide with AGM top-level commands, TOML config sections,
+# or raw-tail spellings. A ``program NAME`` declaration or implicit source-file
+# stem in this set cannot select a program config table.
 #
-# Sources: the shared CLI command catalog (:mod:`agm.command_catalog`) plus the
-# reserved structural config-section names (:mod:`agm.config.sections`).
-RESERVED_PROGRAM_NAMES: frozenset[str] = frozenset(COMMAND_NAMES) | RESERVED_CONFIG_SECTIONS
+# Sources: the shared CLI command catalog (:mod:`agm.command_catalog`), reserved
+# structural config-section names (:mod:`agm.config.sections`), and the raw-tail
+# catalog (:mod:`agm.raw_tail_catalog`).
+RESERVED_PROGRAM_NAMES: frozenset[str] = (
+    frozenset(COMMAND_NAMES) | RESERVED_CONFIG_SECTIONS | RAW_TAIL_NAMES
+)

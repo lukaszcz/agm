@@ -185,9 +185,9 @@ def run(args: ExecArgs) -> None:
     )
 
     # Resolve the single final program key for BOTH engine-key overrides and param
-    # resolution.  The declared ``program NAME`` takes precedence over the file stem;
-    # a stem that collides with an AGM reserved section name produces no key (and
-    # triggers the reserved-stem error below when no ``program NAME`` decl exists).
+    # resolution. The declared ``program NAME`` takes precedence over the file stem;
+    # a stem in the stable reserved-program-name set produces no key (and triggers
+    # the reserved-stem error below when no ``program NAME`` declaration exists).
     if prepared.program_name is not None:
         program_key: str | None = prepared.program_name
     elif raw_stem is not None and raw_stem not in RESERVED_PROGRAM_NAMES:
@@ -195,17 +195,17 @@ def run(args: ExecArgs) -> None:
     else:
         program_key = None
 
-    # Reserved file-stem check: when no ``program NAME`` decl is present,
-    # a file stem that matches an AGM config section name would silently shadow
-    # the global ``[exec]`` config.  Require an explicit ``program NAME`` decl
-    # with a non-reserved name instead.  Inline ``-c`` (no file stem) is unaffected.
+    # Reserved file-stem check: when no ``program NAME`` declaration is present,
+    # a reserved stem would select a conflicting or invalid program config key.
+    # Require an explicit non-reserved name instead. Inline ``-c`` (no file stem)
+    # is unaffected.
     if (
         raw_stem is not None
         and raw_stem in RESERVED_PROGRAM_NAMES
         and prepared.program_name is None
     ):
         print(
-            f"Error: file stem '{raw_stem}' is a reserved AGM section name. "
+            f"Error: file stem '{raw_stem}' is a reserved program name. "
             "Add a 'program NAME' declaration with a non-reserved name.",
             file=sys.stderr,
         )

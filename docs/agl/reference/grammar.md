@@ -192,10 +192,10 @@ body after `=>`, parenthesize it or use the suite form:
 
 <!-- agl-check: fragment -->
 ```agl
-| 1 => (let doubled = k * 2; print "doubled:${doubled}")
+| 1 => (let doubled = k * 2; print "doubled:%{doubled}")
 | 2 =>
     let doubled = k * 2
-    print "doubled:${doubled}"
+    print "doubled:%{doubled}"
 ```
 
 Parentheses directly after a callee are that call's argument list, so a
@@ -254,7 +254,7 @@ ordinary name in scope as a type throughout the declaration's body. See
 [Generics](generics.md).
 
 The runner string of an `agent` declaration must be a literal string with no
-`${…}` interpolation; an interpolation hole is a static error.
+`%{…}` interpolation; an interpolation hole is a static error.
 
 ## Type expressions
 
@@ -483,11 +483,49 @@ that lands on a named-only field is reinterpreted as the shorthand `name = name`
 
 A `STRING` pattern may not contain interpolation.
 
+## Raw-tail calls
+
+```ebnf
+raw_call  ::= ("exec!" | "ask!") type_args? raw_tail
+type_args ::= "::" "[" type_expr ("," type_expr)* "]"
+raw_tail  ::= inline_raw_tail | block_raw_tail
+```
+
+The optional `type_args` group is recognized only when its `::` is immediately
+adjacent to the raw name: `exec!::[T]` and `ask!::[T]`. Whitespace before the
+`::` makes it payload text instead, so `exec! ::[T]` and `ask! ::[T]` have no
+type arguments.
+
+An inline raw tail is all text from its first non-whitespace character through
+the end of the line, except that trailing spaces and tabs are removed. A block
+raw tail follows the name (and optional type arguments) with a newline and a
+more-indented block; its dedented lines become one newline-joined payload,
+dropping the blank lines that trail its last content line while keeping any
+before and between content lines. A raw call requires a nonempty inline tail or
+a block with at least one nonblank line. Raw text is tokenized as fragments and
+`%{expr}` interpolations, not as ordinary AgL expressions.
+
+A raw call is valid only where the grammar guarantees that nothing else follows
+on its line: as a block item; as a `let`, `var`, or assignment RHS; as an
+inline `def` body; as a `return` operand at a block-item or function-body tail;
+or as the final single-argument juxtaposition argument. It is not valid inside
+brackets, branch/catch inline bodies, or another inline expression. Use the
+ordinary call form there.
+
+```agl
+let path = "."
+let output: text = exec! printf '%s' %{path}
+```
+
 ## Expressions
 
 ```ebnf
 expr      ::= case_expr | if_expr | loop | try_expr | raise_expr
-            | return_expr | lambda_expr | or_expr
+            | return_expr | record_update | lambda_expr | or_expr
+
+record_update ::= update_target "with" field_update ("," field_update)*
+update_target ::= record_update | or_expr     (* chaining is left-associative *)
+field_update  ::= field_name "=" or_expr
 
 or_expr       ::= infix_expr
 infix_expr    ::= infix_operand (infix_op infix_operand)*
@@ -584,12 +622,19 @@ the body. Parameter types are always required.
 
 ```ebnf
 arg_list        ::= arg ("," arg)* ","?
-arg             ::= expr                         (* positional *)
+arg             ::= element_expr                 (* positional *)
                   | placeholder_arg              (* positional hole *)
-                  | field_name "=" expr          (* named *)
+                  | field_name "=" element_expr  (* named *)
                   | field_name "=" placeholder_arg (* named hole *)
 placeholder_arg ::= "?" | "?<digits>"
 ```
+
+`element_expr` is `expr` without a bare record update: in comma-separated
+element positions (call arguments, list and dict literal elements) a record
+update — including one that forms the body of an inline lambda — must be
+parenthesized, so that its update list cannot be confused with the enclosing
+comma-separated list. See
+[Record update](expressions.md#record-update).
 
 A placeholder is legal only as a whole parenthesized call argument: either a
 positional argument (`f(?, x)`) or the value of a named argument (`f(x = ?)`).
@@ -608,12 +653,14 @@ constructors) and is triggered solely by the parameter's zone.
 ## Literals
 
 ```ebnf
-list_literal ::= "[" (expr ("," expr)* ","?)? "]"
+list_literal ::= "[" (element_expr ("," element_expr)* ","?)? "]"
 
 dict_literal ::= "{" (dict_entry ("," dict_entry)* ","?)? "}"
-dict_entry   ::= STRING ":" expr        (* no interpolation in keys *)
-               | field_name ":" expr    (* shorthand for the string key *)
+dict_entry   ::= STRING ":" element_expr    (* no interpolation in keys *)
+               | field_name ":" element_expr (* shorthand for the string key *)
 ```
+
+`element_expr` excludes bare record updates — see [Calls](#calls).
 
 ## Templates
 
@@ -623,13 +670,13 @@ template      ::= '"' (text_fragment | interpolation)* '"'
                 | '"""' (text_fragment | interpolation)* '"""'
                 | "'''" (text_fragment | interpolation)* "'''"
 
-interpolation ::= "${" expr "}"
+interpolation ::= "%{" expr "}"
 ```
 
 A `text_fragment` is literal template text between the surrounding quote
 delimiters and any interpolation; its escapes and, for triple-quoted templates,
 dedent are described in [Lexical structure](lexical-structure.md). Newlines are
-not permitted inside `${…}`.
+not permitted inside `%{…}`.
 
 ## Deterministic-parse notes
 

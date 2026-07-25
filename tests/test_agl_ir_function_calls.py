@@ -281,7 +281,7 @@ def test_function_with_template_in_body() -> None:
     """Function body containing a template literal (exercises _walk_for_captures for Template)."""
     source = (
         'let prefix = "Item"\n'
-        'def label(n: int) -> text = "${prefix} #${n}"\n'
+        'def label(n: int) -> text = "%{prefix} #%{n}"\n'
         "let result = label(5)\n()"
     )
     ir = evaluate_ir(source)

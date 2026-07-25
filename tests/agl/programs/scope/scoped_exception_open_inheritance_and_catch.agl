@@ -14,9 +14,9 @@ def describe(trigger: bool) -> text =
     else =>
       raise Base(message = "plain", code = 3)
   catch Child as e =>
-    "child ${e.code} ${e.detail}"
+    "child %{e.code} %{e.detail}"
   catch Base as e =>
-    "base ${e.code}"
+    "base %{e.code}"
 
 print describe(true)
 print describe(false)

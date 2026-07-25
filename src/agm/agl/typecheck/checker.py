@@ -144,6 +144,7 @@ from agm.agl.syntax.nodes import (
     QualifierChain,
     Raise,
     RecordDef,
+    RecordUpdate,
     Return,
     ScopeRegion,
     StringLit,
@@ -1333,6 +1334,8 @@ class _Checker:
             return self._check_is_test(expr)
         if isinstance(expr, FieldAccess):
             return self._check_field_access(expr, expected=expected)
+        if isinstance(expr, RecordUpdate):
+            return self._check_record_update(expr, expected=expected)
         if _is_index_like(expr):
             return self._check_index_access(expr)
         if isinstance(expr, ListLit):
@@ -3039,7 +3042,7 @@ class _Checker:
         return TextType()
 
     def _check_template_literal(self, expr: ListLit | DictLit) -> Type:
-        """Check a non-empty container literal in a ``${ … }`` context."""
+        """Check a non-empty container literal in a ``%{ … }`` context."""
         if isinstance(expr, ListLit):
             for elem in expr.elements:
                 self._check_template_literal_child(elem)
@@ -3662,6 +3665,58 @@ class _Checker:
             )
         except AglTypeError as exc:
             raise self._frame_inferred_return_error(exc, exprs=(node.obj,)) from exc
+
+    # --- record update ---
+
+    def _check_record_update(self, node: RecordUpdate, expected: Type | None = None) -> Type:
+        """Check ``target with field = value, ...``; the result type is the target's type."""
+        obj_type = self._check_expr(node.target, expected=expected)
+        if self._candidate_session is not None and contains_inference_var(obj_type):
+            # The result has the target's type even before the target type is
+            # solved; field checks are deferred to the definitive pass.
+            for update in node.updates:
+                self._check_expr(update.value, expected=None)
+            return obj_type
+        try:
+            # Reject operations on bare type variables.
+            if isinstance(obj_type, TypeVarType):
+                raise AglTypeError(
+                    f"a value of type variable '{obj_type.name}' has no fields.",
+                    span=node.span,
+                )
+            fields: Mapping[str, Type]
+            if isinstance(obj_type, ExceptionType):
+                fields = self._env.type_table.exception_fields(obj_type)
+                kind_label = "Exception type"
+            elif isinstance(obj_type, RecordType):
+                fields = self._env.type_table.record_fields(obj_type)
+                kind_label = "Record"
+            else:
+                raise AglTypeError(
+                    f"'with' requires a record or exception value; got '{obj_type!r}'.",
+                    span=node.span,
+                )
+            seen: set[str] = set()
+            for update in node.updates:
+                if update.name in seen:
+                    raise AglTypeError(
+                        f"duplicate field '{update.name}' in 'with' update.",
+                        span=update.span,
+                    )
+                seen.add(update.name)
+                if update.name not in fields:
+                    raise AglTypeError(
+                        f"{kind_label} '{obj_type.name}' has no field '{update.name}'.",
+                        span=update.span,
+                    )
+                field_type = fields[update.name]
+                value_type = self._check_expr(update.value, expected=field_type)
+                self._assert_assignable_from(
+                    value_type, field_type, update.value.span, update.value
+                )
+            return obj_type
+        except AglTypeError as exc:
+            raise self._frame_inferred_return_error(exc, exprs=(node.target,)) from exc
 
     # --- index access ---
 

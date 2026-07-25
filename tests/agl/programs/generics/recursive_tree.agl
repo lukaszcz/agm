@@ -72,4 +72,4 @@ print sum_nested_lists(list_tree)
 
 case int_tree of
   | Leaf => print "empty"
-  | Node(value, left, right) => print "root ${value}"
+  | Node(value, left, right) => print "root %{value}"

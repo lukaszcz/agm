@@ -37,8 +37,8 @@ def classify(n: int) -> text =
     | else   => "zero"
 
 def summarize(doc: text, limit: int = 3) -> text =
-  let head = ask "Summarize: ${doc}"
-  let tagged = "[${limit}] ${head}"
+  let head = ask "Summarize: %{doc}"
+  let tagged = "[%{limit}] %{head}"
   tagged
 
 def double(n: int) = n * 2
@@ -180,10 +180,10 @@ Named-only defaults may appear in any order:
 
 ```agl
 def greet(name: text, greeting: text = "Hello") -> text =
-  "${greeting}, ${name}!"
+  "%{greeting}, %{name}!"
 
 def with_named_default(x: int, *, tag: text = "ok") -> text =
-  "${tag}: ${x}"   # tag is named-only; its default is unconstrained
+  "%{tag}: %{x}"   # tag is named-only; its default is unconstrained
 ```
 
 ### Scope and forward references
@@ -221,7 +221,7 @@ required.
 ```agl
 let double = fn(x: int) => x * 2
 let add    = fn(x: int, y: int) -> int => x + y
-let greet  = fn(name: text) -> text => "Hello, ${name}!"
+let greet  = fn(name: text) -> text => "Hello, %{name}!"
 ```
 
 A lambda is an ordinary expression and may appear anywhere an expression is
@@ -430,7 +430,7 @@ filled, it is reinterpreted as the named argument `x = x` — but only if
 position is an error:
 
 ```agl
-def h(a: int, *, key: text) -> text = "${a}: ${key}"
+def h(a: int, *, key: text) -> text = "%{a}: %{key}"
 let key = "hello"
 print(h(1, key))           # key is bare name, lands on named-only 'key' → key = key
 print(h(1, key = key))     # explicit form, identical result
@@ -441,7 +441,7 @@ supplied in any order:
 
 ```agl
 def format_msg(text: text, prefix: text = "[INFO]") -> text =
-  "${prefix} ${text}"
+  "%{prefix} %{text}"
 
 let _ = format_msg("Done.")              # prefix uses its default
 let _ = format_msg("Done.", prefix = "!") # prefix supplied by name
@@ -581,7 +581,7 @@ underlying call is raised when the closure is invoked:
 def add(a: int, b: int) -> int = a + b
 
 def fail_created() -> int = raise Abort(message = "created")
-def fail_called(x: int) -> int = raise Abort(message = "called ${x}")
+def fail_called(x: int) -> int = raise Abort(message = "called %{x}")
 
 try
   let f = add(?, fail_created())
@@ -728,18 +728,18 @@ enum Review
 agent reviewer
 
 def summarize_issues(issues: list[text]) -> text =
-  "Issues found:\n${issues}"
+  "Issues found:\n%{issues}"
 
 def review_artifact(artifact: text) -> Review =
   let r: Review = ask(
-    "Review this artifact:\n${artifact}",
+    "Review this artifact:\n%{artifact}",
     agent = reviewer,
     on_parse_error = Retry(n = 2)
   )
   r
 
 param spec: text
-let artifact: text = ask "Implement ${spec}"
+let artifact: text = ask "Implement %{spec}"
 let result = review_artifact(artifact)
 
 case result of

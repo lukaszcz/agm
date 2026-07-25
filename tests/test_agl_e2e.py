@@ -46,7 +46,7 @@ from typing import Any
 
 import pytest
 
-from agm.core.process import ProcessCaptureResult
+from tests._process_helpers import FakeShell
 
 AGL_DIR = Path(__file__).parent / "agl"
 PROGRAMS_DIR = AGL_DIR / "programs"
@@ -102,55 +102,15 @@ def _agent_from_spec(name: str, spec: Any) -> ScriptedAgent:
     )
 
 
-@dataclass
-class ScriptedShell:
-    """Replays expected shell calls without crossing the subprocess boundary."""
-
-    responses: list[dict[str, Any]]
-    commands: list[str] = field(default_factory=list)
-
-    def __call__(
-        self,
-        args: list[str],
-        *,
-        idle_timeout: float | None = None,
-        isolate_process_group: bool = False,
-    ) -> ProcessCaptureResult:
-        del idle_timeout, isolate_process_group
-        assert args[:2] == ["sh", "-c"]
-        command = args[2]
-        self.commands.append(command)
-        index = len(self.commands) - 1
-        assert index < len(self.responses), f"unexpected shell command: {command!r}"
-        spec = self.responses[index]
-        assert command == spec["command"], (
-            f"shell command {index}: expected {spec['command']!r}, got {command!r}"
-        )
-        return ProcessCaptureResult(
-            returncode=spec.get("returncode", 0),
-            stdout=spec.get("stdout", ""),
-            stderr=spec.get("stderr", ""),
-            elapsed=0.01,
-            timed_out=spec.get("timed_out", False),
-            spawn_error=spec.get("spawn_error"),
-            spawn_errno=None,
-        )
-
-    def assert_complete(self) -> None:
-        assert len(self.commands) == len(self.responses), (
-            f"expected {len(self.responses)} shell commands, got {len(self.commands)}"
-        )
-
-
 def _run_program(
     source: str, scenario: dict[str, Any], program: Path
-) -> tuple[Any, dict[str, ScriptedAgent], ScriptedShell]:
+) -> tuple[Any, dict[str, ScriptedAgent], FakeShell]:
     from agm.agl import PipelineDriver
 
     agents = {
         name: _agent_from_spec(name, spec) for name, spec in scenario.get("agents", {}).items()
     }
-    shell = ScriptedShell(responses=scenario.get("shell", []))
+    shell = FakeShell(scenario.get("shell", []))
     kwargs: dict[str, Any] = {}
     runtime_cfg = scenario.get("runtime", {})
     if "default_call_depth_limit" in runtime_cfg:

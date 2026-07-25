@@ -31,19 +31,19 @@ param top: int
 let ints: Stack[int] = Stack(items = [top, 20, 30], size = 3)
 case peek(ints) of
   | none() => print "ints: empty"
-  | some(value) => print "ints top: ${value}"
+  | some(value) => print "ints top: %{value}"
 
 # Map the int top through a concrete lambda to a text Option.
-case map_top(ints, fn(n: int) -> text => "v${n}") of
+case map_top(ints, fn(n: int) -> text => "v%{n}") of
   | none() => print "mapped: empty"
-  | some(value) => print "mapped: ${value}"
+  | some(value) => print "mapped: %{value}"
 
 # Empty text stack: the nullary branch.
 let no_words: list[text] = []
 let words: Stack[text] = Stack(items = no_words, size = 0)
 case peek(words) of
   | none() => print "words: empty"
-  | some(value) => print "words top: ${value}"
+  | some(value) => print "words top: %{value}"
 
 # Record-element stack: field access on the destructured payload.
 let items: Stack[Item] = Stack(
@@ -52,4 +52,4 @@ let items: Stack[Item] = Stack(
 )
 case peek(items) of
   | none() => print "items: empty"
-  | some(value) => print "item top: ${value.label} x${value.qty}"
+  | some(value) => print "item top: %{value.label} x%{value.qty}"

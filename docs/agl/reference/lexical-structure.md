@@ -31,7 +31,7 @@ The layout rules:
    previously in effect — a misaligned dedent is a lexical error.
 2. **Blank lines and comment-only lines** are ignored for layout purposes.
 3. **Implicit continuation inside brackets.** While any `(`, `[`, `{`, or
-   `${` interpolation is open, newlines do not terminate the item; the
+   `%{` interpolation is open, newlines do not terminate the item; the
    logical line continues until the bracket closes. List literals, dictionary
    literals, constructor argument lists, and function call argument lists may
    therefore span multiple lines.
@@ -47,12 +47,12 @@ The layout rules:
    ```agl
    if
      | status is Complete => ()
-     | status is Blocked => (let report = ask("Explain ${status}", agent = critic); print report)
+     | status is Blocked => (let report = ask("Explain %{status}", agent = critic); print report)
      | else => ()
 
    var r: Review = Pass
    do[5]
-     r := ask("Review ${artifact}", agent = reviewer)
+     r := ask("Review %{artifact}", agent = reviewer)
    until r is Pass
    ```
 
@@ -67,7 +67,7 @@ variable, agent, or function names:
 ```text
 record enum type param program agent def fn let var for while do until done
 if else case of try catch raise return break continue exception extends builtin extern as as?
-and or not is in to downto by true false null
+and or not is in to downto by with true false null
 infixl infixr prio
 ```
 
@@ -87,11 +87,15 @@ definitions, named constructor arguments, dict shorthand keys, postfix field
 access, and pattern field keys). They cannot be used as variable, pattern, or
 catch binders. This preserves existing uses such as `tagged(by: value)`.
 
+`with` (the record-update operator) is fully reserved: unlike `to`, `downto`,
+and `by`, it is not accepted as a field name.
+
 **Contextual keywords** — `print`, `ask`, and `exec` are NOT reserved; they
 lex as plain `NAME` tokens and are given their built-in meaning during scope
 resolution. They may not be declared with `let`, `var`, or `param`, may not be
 declared as agents or functions, and may not appear as pattern or catch
-binders — but they remain legal as field names.
+binders — but they remain legal as field names. The distinct raw-tail spellings
+`exec!` and `ask!` are reserved for their raw forms and cannot be used as names.
 
 **Type-annotation keywords** — `text`, `json`, `bool`, `int`, `decimal`,
 `list`, `dict`, and `unit` are **not** reserved; they are recognized
@@ -296,7 +300,7 @@ operator: `-3` is `-` applied to the literal `3`.
 
 ## Strings and templates
 
-All string literals are **templates**: they may contain `${expr}`
+All string literals are **templates**: they may contain `%{expr}`
 interpolation. Both `"` and `'` are valid delimiter characters, giving four
 forms:
 
@@ -305,6 +309,26 @@ forms:
 
 Escape sequences, triple-quoted dedent normalization, and interpolation
 semantics are covered in [Strings and interpolation](strings-and-interpolation.md).
+
+## Raw-tail forms
+
+`exec!` and `ask!` begin raw-tail calls. The lexer emits a `RAW_TAIL_NAME`,
+then `RAW_TAIL_START`, one or more `RAW_FRAGMENT` and interpolation-token
+runs, and `RAW_TAIL_END`. Optional type arguments must be byte-adjacent to the
+name: `exec!::[T]` and `ask!::[T]`. In `exec! ::[T]` or `ask! ::[T]`, the
+spaced `::[T]` instead begins the payload. The payload is either the rest of
+that line or a following indented block. In both cases it is one template: its
+text is verbatim except that `%{expr}` interpolates and `\%{` is a literal
+`%{`. Inline payloads discard trailing spaces and tabs; block payloads drop the
+blank lines that trail the last content line.
+
+A raw-tail call requires a nonempty inline payload or a block with at least one
+nonblank line. It is only recognized at bracket depth zero and must occupy a
+line-final expression position. Its payload therefore owns `#`, `;`, quotes,
+parentheses, dollar forms, and ordinary backslashes rather than treating them
+as AgL syntax. The [Grammar](grammar.md#raw-tail-calls) lists the allowed
+positions; [Shell execution](shell-execution.md#raw-tail-exec) and [Agent
+calls](agent-calls.md#raw-tail-ask) describe the two forms.
 
 ## Operators and punctuation
 
@@ -386,6 +410,10 @@ From loosest to tightest binding (the bottom binds tightest):
 | 9 | function application (single-arg sugar) | **non-chaining** |
 | 10 | `.field` access, `[index]`, `( args )` call | left |
 | 11 | atoms: literals, names, `( expr )`, `()` unit, templates, `break`, `continue` | — |
+
+The record-update operator `with` binds looser than every level in the table,
+on both sides; see
+[Record update](expressions.md#record-update).
 
 User-defined symbolic infix operators are declared with `infixl` or `infixr`:
 

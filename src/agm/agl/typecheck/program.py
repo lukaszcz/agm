@@ -525,18 +525,21 @@ def _build_program_type_table(
         resolving_aliases.add(key)
         try:
             env = cross_envs[alias_mid]
-            if item.type_params:
-                template = env.resolve_type_expr(
-                    item.type_expr,
-                    span=item.span,
-                    type_vars=frozenset(item.type_params),
-                )
-                program_alias_table[key] = GenericAliasDef(
-                    type_params=item.type_params,
-                    template=template,
-                )
-                return None
-            resolved = env.resolve_type_expr(item.type_expr, span=item.span)
+            # An alias forced from elsewhere still names its target the way its
+            # own scope region does, so resolution re-enters the declaring path.
+            with env.type_scope(scope_path):
+                if item.type_params:
+                    template = env.resolve_type_expr(
+                        item.type_expr,
+                        span=item.span,
+                        type_vars=frozenset(item.type_params),
+                    )
+                    program_alias_table[key] = GenericAliasDef(
+                        type_params=item.type_params,
+                        template=template,
+                    )
+                    return None
+                resolved = env.resolve_type_expr(item.type_expr, span=item.span)
             program_type_table[key] = resolved
             return resolved
         finally:

@@ -1,0 +1,7 @@
+# Type arguments belong on a generic enum's type name, not on a qualified
+# variant: 'Box[T]::wrap' is the spelling, and 'Box::wrap::[T]' is rejected.
+enum Box[T]
+  | wrap(value: T)
+
+let build = Box::wrap::[int]
+print build(value = 1)

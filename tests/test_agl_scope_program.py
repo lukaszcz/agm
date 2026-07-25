@@ -384,6 +384,52 @@ class TestOpenImport:
         # BindingRef.name is the original declared name in the owning module.
         assert ref.name == "foo"
 
+    def test_using_rename_of_scoped_record_keeps_its_owner_path(self, tmp_path: Path) -> None:
+        """A renamed scoped-record import keeps the source's named scope.
+
+        Constructor identity is structured: the candidate is exposed at the
+        importing module's root under its alias, while its ``owner_path`` still
+        carries the declaring scope (``A``) rather than defaulting to the module
+        root, or downstream field-type lookup targets the wrong declaration.
+        """
+        graph = _make_graph_from_files(
+            tmp_path,
+            {
+                "entry": "import mylib using A::Token as T\nlet t = T(n = 1)",
+                "mylib": "scope A\nrecord Token(n: int)\nend A",
+            },
+        )
+        result = resolve_program(graph)
+        entry_resolved = result.modules[ENTRY_ID].resolved
+        (candidate,) = entry_resolved.constructor_candidates_by_path[((), "T")]
+        assert candidate.owner_name == "Token"
+        assert candidate.owner_path == ("A",)
+
+    def test_using_rename_of_scoped_enum_variant_is_a_constructor_candidate(
+        self, tmp_path: Path
+    ) -> None:
+        """An individually-imported, renamed scoped enum variant resolves as a constructor.
+
+        ``all_public_types`` is keyed by the owning enum's QName, not the
+        variant's, so the candidate must be recovered from the cross-module
+        constructor-ref table instead.  It is exposed at the importing
+        module's root under its alias, and must still carry the owning enum's
+        name, the selected variant, and the enum's named scope.
+        """
+        graph = _make_graph_from_files(
+            tmp_path,
+            {
+                "entry": "import mylib using A::Status::Good as X\n()",
+                "mylib": "scope A\nenum Status\n  | Good\n  | Bad\nend A",
+            },
+        )
+        result = resolve_program(graph)
+        entry_resolved = result.modules[ENTRY_ID].resolved
+        (candidate,) = entry_resolved.constructor_candidates_by_path[((), "X")]
+        assert candidate.owner_name == "Status"
+        assert candidate.variant == "Good"
+        assert candidate.owner_path == ("A",)
+
     def test_qualified_import_prevents_bare_access(self, tmp_path: Path) -> None:
         """'import mylib qualified' — bare 'foo' should error."""
         graph = _make_graph_from_files(

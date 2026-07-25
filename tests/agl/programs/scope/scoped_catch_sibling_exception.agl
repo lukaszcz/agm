@@ -1,0 +1,44 @@
+# A catch clause names only a bare exception (the grammar allows no qualifier),
+# so it resolves against the enclosing named scope first and only then against
+# the module root: a scope's own exception is caught by its sibling handler, an
+# exception declared only at the module root is still caught inside a scoped
+# function, and same-named exceptions in different scopes stay nominally
+# distinct.
+exception Boom extends Exception
+  detail: text
+
+exception Outage extends Exception
+  detail: text
+
+scope A
+exception Boom extends Exception
+  detail: text
+
+def catch_sibling() -> text =
+  try
+    raise A::Boom(message = "m", detail = "sibling")
+  catch Boom as e =>
+    e.detail
+
+def catch_root() -> text =
+  try
+    raise Outage(message = "m", detail = "root")
+  catch Outage as e =>
+    e.detail
+
+def raise_scoped() -> text =
+  raise A::Boom(message = "m", detail = "scoped")
+end A
+
+param mode
+
+if
+  | mode == "sibling" =>
+    print A::catch_sibling()
+  | mode == "root_in_scope" =>
+    print A::catch_root()
+  | else =>
+    try
+      print A::raise_scoped()
+    catch Boom as e =>
+      print "wrongly caught: ${e.detail}"

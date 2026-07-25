@@ -1,0 +1,8 @@
+# `open import` contributes an imported scope's members bare; a later `open`
+# of that scope's own name (with no module route) must reach them too.
+open import facade
+
+open Shapes
+
+print(measure())
+print(Nested::Point(x = 4).x)

@@ -1,0 +1,10 @@
+{
+  "scenarios": [
+    {
+      "name": "opened_scope_enum_owner_resolves_for_is_and_case",
+      "expect": {
+        "stdout": "true\nfalse\ngood\n"
+      }
+    }
+  ]
+}

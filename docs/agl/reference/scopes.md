@@ -86,7 +86,11 @@ print(label(review))
 The familiar bare-variant spelling remains available when it is unambiguous or
 selected by the expected enum type. Module-root record and exception
 construction keeps its bare type spelling (`Point(...)`); a scoped type is
-constructed through its full path or after opening its enclosing scope.
+constructed through its full path or after opening its enclosing scope. A scope
+path is a route, not a type qualifier, so a scoped generic constructor takes
+explicit type arguments on the constructor just as an unqualified one does
+(`A::Pair::[int]`); only a variant qualified by its owning enum puts them on the
+type (`Option[int]::some`).
 
 `private` applies to individual declarations, not an entire scope. A private
 member remains available within its defining module but is not selectable,

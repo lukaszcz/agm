@@ -147,6 +147,7 @@ class ResolvedProgram:
 def _build_cross_module_constructor_candidates(
     import_env: ImportEnv,
     all_public_types: dict[QName, RecordDef | EnumDef | ExceptionDef | TypeAlias],
+    cross_module_constructor_refs: Mapping[QName, ConstructorRef],
 ) -> tuple[dict[str, tuple[ConstructorRef, ...]], frozenset[str]]:
     """Build constructor candidates from open-imported types for a module.
 
@@ -154,6 +155,12 @@ def _build_cross_module_constructor_candidates(
     - RecordDef: add the record name as a candidate (e.g. ``Foo(x:1)``).
     - EnumDef: add each variant name as a candidate (e.g. ``Red``).
     - TypeAlias: not constructible, skip.
+
+    A selected QName may also name an enum variant directly (e.g. an
+    individually imported/renamed variant); such names are absent from
+    ``all_public_types`` (which is keyed by owning-type QName), so they are
+    resolved through ``cross_module_constructor_refs`` instead, which already
+    carries a per-variant :class:`ConstructorRef`.
 
     Returns ``(candidates, type_names)`` where ``type_names`` is the set of
     open-imported type names (for qualified constructor access like ``Color::Red``).
@@ -171,8 +178,12 @@ def _build_cross_module_constructor_candidates(
             seen.add(key)
             decl = all_public_types.get(key)
             if decl is None:
+                variant_ref = cross_module_constructor_refs.get(key)
+                if variant_ref is not None:
+                    candidates.setdefault(exposed_name, []).append(variant_ref)
                 continue
             type_names.add(exposed_name)
+            src_path = (src_name,) if isinstance(src_name, str) else src_name
             if isinstance(decl, (RecordDef, ExceptionDef)):
                 cref = ConstructorRef(
                     owner_name=decl.name,
@@ -180,6 +191,7 @@ def _build_cross_module_constructor_candidates(
                     owner_decl_node_id=decl.node_id,
                     type_params=decl.type_params,
                     owner_module_id=mid,
+                    owner_path=src_path[:-1],
                 )
                 candidates.setdefault(exposed_name, []).append(cref)
             elif isinstance(decl, EnumDef):
@@ -194,6 +206,7 @@ def _build_cross_module_constructor_candidates(
                         owner_decl_node_id=decl.node_id,
                         type_params=decl.type_params,
                         owner_module_id=mid,
+                        owner_path=src_path[:-1],
                         can_match_bare_pattern=not variant.fields,
                     )
                     candidates.setdefault(variant.name, []).append(cref)
@@ -582,7 +595,9 @@ def resolve_program(
         is_entry = mid.is_entry
         # Build cross-module constructor candidates from open imports.
         cross_module_candidates, cross_module_type_names = (
-            _build_cross_module_constructor_candidates(import_envs[mid], all_public_types)
+            _build_cross_module_constructor_candidates(
+                import_envs[mid], all_public_types, cross_module_constructor_refs
+            )
         )
         constructor_candidates = cross_module_candidates
         type_names = cross_module_type_names

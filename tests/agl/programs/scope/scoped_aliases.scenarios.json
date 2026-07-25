@@ -1,0 +1,10 @@
+{
+  "scenarios": [
+    {
+      "name": "scoped_alias_targets_resolve_in_their_declaring_scope",
+      "expect": {
+        "stdout": "first\nsecond\nw:third\nfourth\n"
+      }
+    }
+  ]
+}

@@ -2,10 +2,15 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+from typing import TypeVar
+
 import pytest
 
+from agm.agl.modules.ids import ENTRY_ID
 from agm.agl.parser import parse_program
-from agm.agl.scope import AglScopeError, resolve_module
+from agm.agl.scope import AglScopeError, ModuleResolution, resolve_module
+from agm.agl.scope.program import resolve_program
 from agm.agl.syntax import (
     AssignStmt,
     Block,
@@ -20,6 +25,9 @@ from agm.agl.syntax import (
     ScopeRegion,
     VarRef,
 )
+from agm.agl.syntax.nodes import ConstructorPattern
+from agm.agl.syntax.visitor import walk
+from tests.agl.ir_harness import make_graph_from_files
 
 
 def _ref(source: str) -> VarRef:
@@ -28,6 +36,22 @@ def _ref(source: str) -> VarRef:
     (expr,) = program.body.items
     assert isinstance(expr, VarRef)
     return expr
+
+
+_NodeT = TypeVar("_NodeT")
+
+
+def _find_nodes(program: object, node_type: type[_NodeT]) -> list[_NodeT]:
+    """Collect every node of *node_type* in *program*, in tree order."""
+    found: list[_NodeT] = []
+    walk(program, lambda node: found.append(node) if isinstance(node, node_type) else None)
+    return found
+
+
+def _entry_resolution(tmp_path: Path, modules: dict[str, str]) -> ModuleResolution:
+    """Resolve a multi-module program and return the entry module's resolution."""
+    resolved = resolve_program(make_graph_from_files(tmp_path, modules))
+    return resolved.modules[resolved.entry_id].resolved
 
 
 def test_qualified_expression_keeps_segment_spans_and_type_arguments() -> None:
@@ -301,3 +325,123 @@ def test_type_arguments_on_a_plain_scope_are_rejected_in_every_chain_position(
 def test_long_expression_qualifier_chain_reports_the_unresolved_name(source: str) -> None:
     with pytest.raises(AglScopeError, match="not defined|No module"):
         resolve_module(parse_program(source))
+
+
+def test_imported_scoped_enum_owner_retains_its_scope_path_for_is_and_case(
+    tmp_path: Path,
+) -> None:
+    """A pattern-qualified ``lib::A::Status::Good`` keeps ``lib``'s scoped owner."""
+    resolution = _entry_resolution(
+        tmp_path,
+        {
+            "entry": (
+                "import lib\n"
+                "let s = lib::A::Status::Good\n"
+                "print(s is lib::A::Status::Good)\n"
+                "print(case s of\n"
+                '  | lib::A::Status::Good => "good"\n'
+                '  | lib::A::Status::Bad => "bad")\n'
+            ),
+            "lib": "scope A\nenum Status\n  | Good\n  | Bad\nend A\n",
+        },
+    )
+
+    (is_test,) = _find_nodes(resolution.program, IsTest)
+    is_cref = resolution.constructor_refs[is_test.node_id]
+    assert (is_cref.owner_path, is_cref.owner_name, is_cref.variant) == (("A",), "Status", "Good")
+
+    (case_node,) = _find_nodes(resolution.program, Case)
+    good_pattern = case_node.branches[0].pattern
+    assert isinstance(good_pattern, ConstructorPattern)
+    case_cref = resolution.constructor_refs[good_pattern.node_id]
+    assert (case_cref.owner_path, case_cref.owner_name, case_cref.variant) == (
+        ("A",),
+        "Status",
+        "Good",
+    )
+
+
+def test_explicit_module_route_open_is_not_masked_by_a_same_named_local_scope(
+    tmp_path: Path,
+) -> None:
+    """``open geo/shapes::Point`` reaches the routed scope over a same-named local one."""
+    resolution = _entry_resolution(
+        tmp_path,
+        {
+            "entry": (
+                "import geo/shapes\n"
+                "open geo/shapes::Point\n"
+                "scope Point\n"
+                "def area() -> int = 1\n"
+                "end Point\n"
+                "print(describe())\n"
+                "print(Point::area())\n"
+            ),
+            "geo/shapes": 'scope Point\ndef describe() -> text = "point"\nend Point\n',
+        },
+    )
+
+    var_refs = _find_nodes(resolution.program, VarRef)
+    (describe_ref,) = [node for node in var_refs if node.name == "describe"]
+    assert resolution.resolution[describe_ref.node_id].module_id != ENTRY_ID
+
+    (area_ref,) = [node for node in var_refs if node.name == "area"]
+    assert resolution.resolution[area_ref.node_id].module_id == ENTRY_ID
+
+
+def test_unrelated_nested_scope_does_not_mask_a_root_import_route(tmp_path: Path) -> None:
+    """A nested ``X::lib`` scope must not shadow an unrelated root import named ``lib``."""
+    resolution = _entry_resolution(
+        tmp_path,
+        {
+            "entry": (
+                "import lib\n"
+                "scope X\n"
+                "scope lib\n"
+                "def g() -> int = 1\n"
+                "end lib\n"
+                "end X\n"
+                "print(lib::A::f())\n"
+            ),
+            "lib": "scope A\ndef f() -> int = 7\nend A\n",
+        },
+    )
+
+    (call_ref,) = [node for node in _find_nodes(resolution.program, VarRef) if node.name == "f"]
+    assert resolution.resolution[call_ref.node_id].module_id != ENTRY_ID
+
+
+@pytest.mark.parametrize(
+    "entry_source",
+    (
+        "import lib\nprint(lib[int]::A::f())",
+        "import lib\nprint(lib::A[int]::f())",
+    ),
+)
+def test_type_arguments_are_rejected_on_imported_route_and_scope_segments(
+    tmp_path: Path, entry_source: str
+) -> None:
+    with pytest.raises(AglScopeError, match="Type arguments cannot be applied"):
+        resolve_program(
+            make_graph_from_files(
+                tmp_path, {"entry": entry_source, "lib": "scope A\ndef f() -> int = 7\nend A\n"}
+            )
+        )
+
+
+def test_type_arguments_on_an_imported_generic_type_scope_still_resolve(tmp_path: Path) -> None:
+    """``lib::Box[int]::describe()`` keeps working: ``Box`` is a real generic type."""
+    resolution = _entry_resolution(
+        tmp_path,
+        {
+            "entry": "import lib\nprint(lib::Box[int]::describe())",
+            "lib": 'record Box[T]\n  value: T\n\ndef Box::describe() -> text = "box"\n',
+        },
+    )
+    (describe_call,) = [
+        call
+        for call in _find_nodes(resolution.program, Call)
+        if isinstance(call.callee, VarRef) and call.callee.name == "describe"
+    ]
+    assert isinstance(describe_call.callee, VarRef)
+    assert resolution.resolution[describe_call.callee.node_id].module_id != ENTRY_ID

@@ -212,13 +212,37 @@ def _lower(source: str) -> ExecutableProgram:
 def test_scoped_functions_link_while_unused_scoped_agents_remain_deferred() -> None:
     program = _lower(_MIXED_ROOT_AND_SCOPED_DECLARATIONS)
 
-    assert {symbol.public_name for symbol in program.symbols.values()} == {
-        "root",
-        "root_agent",
-        "block_function",
-        "shorthand_function",
+    # Named-scope functions still lower and link (all 3 functions present, callable
+    # via their scoped identity) but are not exposed under their unqualified name:
+    # only the root function and the root agent get a public_name.
+    public_names = {
+        symbol.public_name for symbol in program.symbols.values() if symbol.public_name is not None
     }
+    assert public_names == {"root", "root_agent"}
     assert len(program.functions) == 3
+
+
+def test_scoped_only_function_has_no_public_name() -> None:
+    """A function declared only inside a named scope must never surface a root binding."""
+    program = _lower("scope A\ndef f() -> int = 1\nend A\n()")
+
+    public_names = {symbol.public_name for symbol in program.symbols.values()}
+    assert "f" not in public_names
+    assert len(program.functions) == 1
+
+
+def test_root_and_scoped_functions_with_same_name_do_not_collide_in_public_names() -> None:
+    """A root ``f`` and a same-named scoped ``A::f`` must not collide: only the root wins."""
+    source = 'def f() -> int = 100\nscope A\ndef f() -> text = "scoped"\nend A\n()'
+    program = _lower(source)
+
+    matching = [symbol for symbol in program.symbols.values() if symbol.public_name == "f"]
+    assert len(matching) == 1
+    (root_function,) = (
+        desc for desc in program.functions.values() if desc.function_symbol == matching[0].symbol_id
+    )
+    assert root_function.result_label == "int"
+    assert len(program.functions) == 2
 
 
 def test_lowering_preserves_scoped_nominal_identity_for_generic_and_enum_types() -> None:
@@ -1921,12 +1945,14 @@ class TestLowerGraph:
 
         program = lower_program(_compiled_checked(check_program(resolve_program(graph), _caps())))
 
-        assert {symbol.public_name for symbol in program.symbols.values()} == {
-            "root",
-            "root_agent",
-            "block_function",
-            "shorthand_function",
+        # Same expectation as the single-module case: named-scope functions link
+        # but do not get a public_name, since they are not root-level bindings.
+        public_names = {
+            symbol.public_name
+            for symbol in program.symbols.values()
+            if symbol.public_name is not None
         }
+        assert public_names == {"root", "root_agent"}
         assert len(program.functions) == 3
 
     def test_lower_program_simple(self, tmp_path: Path) -> None:

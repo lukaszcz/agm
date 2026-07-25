@@ -1021,6 +1021,57 @@ class TestAgentRegistryDispatch:
         with pytest.raises(KeyError, match="No agent registered"):
             registry.dispatch(scoped, AgentRequest(agent="Tools::bot", prompt="q"))
 
+    def test_root_name_registration_keys_dispatch_and_names(self) -> None:
+        from agm.agl.runtime import AgentRequest
+        from agm.agl.runtime.agents import AgentRegistry
+
+        def named(req: AgentRequest) -> str:
+            return f"named:{req.prompt}"
+
+        registry = AgentRegistry(named={"reviewer": named}, default_agent=None)
+
+        assert registry.agent_names == frozenset({"reviewer"})
+        assert registry.backs(AgentId("reviewer"))
+        assert registry.dispatch(
+            "reviewer", AgentRequest(agent="reviewer", prompt="hi")
+        ).content == ("named:hi")
+
+    def test_root_name_and_scoped_registrations_stay_distinct(self) -> None:
+        from agm.agl.runtime import AgentRequest
+        from agm.agl.runtime.agents import AgentRegistry
+
+        scoped = AgentId("bot", ("Tools",))
+        registry = AgentRegistry(
+            named={"bot": lambda _request: "root", scoped: lambda _request: "scoped"},
+            default_agent=None,
+        )
+
+        assert registry.agent_names == frozenset({"bot"})
+        assert registry.agent_ids == frozenset({AgentId("bot"), scoped})
+        assert registry.dispatch("bot", AgentRequest(agent="bot", prompt="q")).content == "root"
+        assert (
+            registry.dispatch(scoped, AgentRequest(agent="Tools::bot", prompt="q")).content
+            == "scoped"
+        )
+
+
+class TestAgentRequestFieldOrder:
+    """The request dataclass keeps its documented positional field order."""
+
+    def test_third_positional_argument_is_the_attempt_counter(self) -> None:
+        request = AgentRequest("bot", "prompt", 2)
+
+        assert request.attempt == 2
+        assert request.agent_id is None
+
+    def test_agent_id_is_supplied_by_keyword(self) -> None:
+        identity = AgentId("bot", ("Tools",))
+
+        request = AgentRequest("bot", "prompt", agent_id=identity)
+
+        assert request.agent_id == identity
+        assert request.attempt == 0
+
 
 class TestParamBindingInvariant:
     """The runtime relies on the checker recording every param's binding type."""

@@ -1,0 +1,17 @@
+# Opening a local scope exposes its enum type for construction, `is` tests,
+# and `case` patterns, not just bare construction.
+open A
+
+scope A
+enum Status
+  | Good
+  | Bad
+end A
+
+let s = Status::Good
+
+print(s is Status::Good)
+print(s is Status::Bad)
+print(case s of
+  | Status::Good => "good"
+  | Status::Bad => "bad")

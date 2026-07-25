@@ -1,0 +1,22 @@
+# An `open`ed scope makes its exceptions available for `extends` and `catch`.
+open A
+scope A
+exception Base extends Exception
+  code: int
+end A
+exception Child extends Base
+  detail: text
+
+def describe(trigger: bool) -> text =
+  try
+    if trigger =>
+      raise Child(message = "boom", code = 7, detail = "extra")
+    else =>
+      raise Base(message = "plain", code = 3)
+  catch Child as e =>
+    "child ${e.code} ${e.detail}"
+  catch Base as e =>
+    "base ${e.code}"
+
+print describe(true)
+print describe(false)

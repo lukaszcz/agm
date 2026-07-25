@@ -97,6 +97,7 @@ class AgentRequest:
     ``agent``
         The agent name as it appears in the AgL source: ``"ask"`` for the
         built-in default agent, or the registered name for named agents.
+        A scoped agent's name is rendered with its scope path.
     ``prompt``
         The fully rendered user-authored prompt template.  Interpolated
         values have already been processed by the renderer pipeline.  The
@@ -115,16 +116,21 @@ class AgentRequest:
         Carries ``format_instructions`` and ``json_schema`` so agents can
         relay them to the underlying model.  ``None`` for ``unit`` calls,
         whose response is intentionally ignored.
+    ``agent_id``
+        The structured identity (declared name plus scope path) of the called
+        agent, or ``None`` when the caller supplied only a name.  Declared
+        last so the field order every other field already had is preserved
+        for positional construction.
     """
 
     agent: str
     prompt: str
-    agent_id: AgentId | None = None
     attempt: int = 0
     previous_invalid_output: str | None = None
     validation_errors: list[ValidationError] = field(default_factory=list)
     metadata: dict[str, object] = field(default_factory=dict)
     output_contract: "OutputContract | TypelessOutputContract | None" = None
+    agent_id: AgentId | None = None
 
 
 @dataclass(slots=True)

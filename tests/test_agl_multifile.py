@@ -727,6 +727,77 @@ class TestScopedModuleSelections:
         assert result.ok is True
         assert capsys.readouterr().out == "7\n4\n5\n"
 
+    def test_renamed_scoped_record_constructs_via_its_bare_alias(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """A scoped record selected and renamed by 'using … as' builds under its alias."""
+        self._write_geo(tmp_path)
+
+        result = _run_program(
+            "import geo using Point as P\nlet p = P(x = 9)\nprint p.x\n",
+            roots_dirs=[tmp_path],
+        )
+
+        assert result.ok is True
+        assert capsys.readouterr().out == "9\n"
+
+    def test_renamed_root_enum_variant_constructs_via_its_bare_alias(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """A root enum variant individually selected and renamed builds as a value."""
+        (tmp_path / "flags.agl").write_text("enum Status\n  | Good\n  | Bad\n")
+
+        result = _run_program(
+            "import flags using Status::Good as X\nlet s = X\nprint s\n",
+            roots_dirs=[tmp_path],
+        )
+
+        assert result.ok is True
+        assert capsys.readouterr().out == "Status::Good\n"
+
+    def test_renamed_scoped_enum_exposes_its_variants_bare(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Renaming a scoped enum exposes its variants bare, as a root enum does."""
+        self._write_geo(tmp_path)
+
+        result = _run_program(
+            "import geo using Point::Color as C\nprint C::red\nprint red\n",
+            roots_dirs=[tmp_path],
+        )
+
+        assert result.ok is True
+        assert capsys.readouterr().out == "Point::Color::red\nPoint::Color::red\n"
+
+    def test_opening_a_bare_imported_scope_contributed_twice_is_rejected(
+        self, tmp_path: Path
+    ) -> None:
+        """Two bare-imported modules contributing the same scope leave `open` ambiguous."""
+        (tmp_path / "lib1.agl").write_text("scope A\ndef one() -> int = 1\nend A\n")
+        (tmp_path / "lib2.agl").write_text("scope A\ndef two() -> int = 2\nend A\n")
+
+        result = _run_program(
+            "open import lib1\nopen import lib2\nopen A\nprint one()\n",
+            roots_dirs=[tmp_path],
+        )
+
+        assert result.ok is False
+        assert result.diagnostics
+
+    def test_scoped_generic_accepts_explicit_type_arguments_across_modules(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """A module route onto a scoped generic is a route, not a type qualifier."""
+        (tmp_path / "boxes.agl").write_text("scope A\nrecord Box[T](v: T)\nend A\n")
+
+        result = _run_program(
+            "import boxes\nlet build = boxes::A::Box::[int]\nprint build(3).v\n",
+            roots_dirs=[tmp_path],
+        )
+
+        assert result.ok is True
+        assert capsys.readouterr().out == "3\n"
+
     def test_private_scoped_members_remain_module_visible(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:

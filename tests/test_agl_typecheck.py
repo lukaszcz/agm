@@ -1079,6 +1079,57 @@ class TestTypeEnvironment:
         )
         assert env.resolve_binding(ref) is None
 
+    def test_renamed_scoped_enum_import_owner_form_resolves(self, tmp_path: object) -> None:
+        """Owner-form construction must keep a renamed import's scope path.
+
+        A ``using A::Status as S`` import selects a QName whose declaration
+        path is ``("A",)``; enum-owner-form construction used to discard that
+        path before asking the shared type table for the source template,
+        so it asked for a root ``lib::Status`` template instead and hit an
+        internal consistency check -- even when the import was never used,
+        because owner forms are enumerated for every checked module.
+        """
+        from pathlib import Path
+
+        from agm.agl.matchcompile import compile_program_matches
+        from agm.agl.scope.program import resolve_program
+        from agm.agl.typecheck.program import check_program
+        from tests.agl.ir_harness import make_graph_from_files
+
+        lib_source = "scope A\nenum Status\n  | Good\n  | Bad\nend A\n"
+
+        unused_modules = {
+            "entry": "import lib using A::Status as S\nprint(3)",
+            "lib": lib_source,
+        }
+        unused_checked = check_program(
+            resolve_program(make_graph_from_files(Path(tmp_path) / "unused", unused_modules)),
+            default_capabilities(),
+        )
+        # enum_owner_forms() is enumerated for every checked module regardless
+        # of whether an enum constructor is actually referenced; this must not
+        # raise even though 'S' is never used.
+        unused_checked.modules[ENTRY_ID].type_env.enum_owner_forms()
+        unused_match = compile_program_matches(unused_checked)
+        assert unused_match.compiled is not None
+
+        used_modules = {
+            "entry": (
+                "import lib using A::Status as S\n"
+                "let s: S = S::Good\n"
+                "print(case s of\n"
+                "  | S::Good => 1\n"
+                "  | S::Bad => 2)"
+            ),
+            "lib": lib_source,
+        }
+        used_checked = check_program(
+            resolve_program(make_graph_from_files(Path(tmp_path) / "used", used_modules)),
+            default_capabilities(),
+        )
+        used_match = compile_program_matches(used_checked)
+        assert used_match.compiled is not None
+
 
 class TestCheckedOutputClosure:
     """The checker publishes only closed, runtime-ready type decisions."""

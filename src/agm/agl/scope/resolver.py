@@ -43,7 +43,7 @@ normal binding.  A bare ``VarRef("print")`` (not in call position) raises
 
 from __future__ import annotations
 
-from collections.abc import Collection, Iterator, Mapping
+from collections.abc import Collection, Iterable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import replace
 from typing import TYPE_CHECKING, cast
@@ -52,6 +52,7 @@ from agm.agl.diagnostics import Diagnostic
 from agm.agl.modules.ids import ENTRY_ID, PRELUDE_ID, STD_CONFIG_ID, ModuleId
 from agm.agl.scope.imports import (
     NameAtom,
+    QName,
     QualResolutionFound,
     qualification_repair_guidance,
     qualifier_candidates,
@@ -371,7 +372,12 @@ class _Resolver:
         if ambient_constructor_candidates:
             for cname, crefs in ambient_constructor_candidates.items():
                 for cref in crefs:
-                    if cref.owner_path:
+                    # A candidate from another module was selected by an import
+                    # and is exposed here under *cname* alone; its owner path
+                    # describes its declaring module, not a scope of this one.
+                    # Only a retained same-module member belongs to a named
+                    # scope here and must stay out of the bare table.
+                    if cref.owner_path and cref.owner_module_id == self._module_id:
                         owner_scope = cref.owner_path + (
                             (cref.owner_name,) if cref.variant is not None else ()
                         )
@@ -1339,7 +1345,11 @@ class _Resolver:
     ) -> dict[NameAtom, tuple[BindingRef, ConstructorRef | None]]:
         """Return the relative public subtree of an opened local or imported scope."""
         requested_path = tuple(segment.name for segment in decl.scope_ref.scope_path)
-        local_path = self._open_local_scope_path(requested_path)
+        # An explicit module route (``open geo/shapes::Point``) names its target
+        # unambiguously; a same-named local scope must not intercept it.
+        local_path = (
+            None if decl.scope_ref.module_route else self._open_local_scope_path(requested_path)
+        )
         if local_path is not None:
             local_members: dict[NameAtom, tuple[BindingRef, ConstructorRef | None]] = {}
             for path, node in self._scope_nodes.items():
@@ -1358,6 +1368,15 @@ class _Resolver:
         scope_path = requested_path
         if not route and len(requested_path) > 1:
             route, scope_path = (requested_path[0],), requested_path[1:]
+        if not route and self._import_env is not None:
+            # A prior ``open import`` / ``using`` already contributed this
+            # scope's members bare; reach the source scope they came from
+            # before giving up on an explicit route.
+            bare_members = self._open_bare_imported_scope_members(
+                requested_path, decl.scope_ref.span
+            )
+            if bare_members is not None:
+                return bare_members
         if self._import_env is None or not route or not scope_path:
             raise AglScopeError(
                 f"Unknown scope path '{'::'.join(requested_path)}'.", span=decl.scope_ref.span
@@ -1366,28 +1385,9 @@ class _Resolver:
         matching: list[dict[NameAtom, tuple[BindingRef, ConstructorRef | None]]] = []
         for module in qualifier_candidates(self._import_env, route, anchored=False):
             contribution = self._import_env.contributions[module]
-            imported_members: dict[NameAtom, tuple[BindingRef, ConstructorRef | None]] = {}
-            is_public_type_scope = False
-            for exposed, qname in contribution.members.items():
-                path = _bare_path(exposed)
-                if path == scope_path and qname in self._cross_module_type_scopes:
-                    is_public_type_scope = True
-                    continue
-                if path[: len(scope_path)] != scope_path or len(path) == len(scope_path):
-                    continue
-                atom = _bare_atom(path[len(scope_path) :])
-                constructor = self._cross_module_constructor_refs.get(qname)
-                ref = self._make_cross_module_ref(
-                    qname[0], _bare_path(atom)[-1], qname[1], decl.span
-                )
-                if constructor is not None:
-                    ref = replace(
-                        ref,
-                        decl_node_id=constructor.owner_decl_node_id,
-                        kind=BinderKind.constructor_binding,
-                        scope_path=constructor.owner_path,
-                    )
-                imported_members[atom] = (ref, constructor)
+            imported_members, is_public_type_scope = self._scope_subtree_members(
+                contribution.members.items(), scope_path, decl.span
+            )
             if imported_members or is_public_type_scope:
                 matching.append(imported_members)
         if not matching:
@@ -1399,6 +1399,71 @@ class _Resolver:
             raise AglScopeError(
                 f"Opened scope '{'::'.join(scope_path)}' is ambiguous across imported modules.",
                 span=decl.scope_ref.span,
+            )
+        return matching[0]
+
+    def _scope_subtree_members(
+        self,
+        entries: Iterable[tuple[NameAtom, QName]],
+        scope_path: ScopePath,
+        span: SourceSpan,
+    ) -> tuple[dict[NameAtom, tuple[BindingRef, ConstructorRef | None]], bool]:
+        """Materialize one contribution's members below *scope_path*, relative to it.
+
+        Returns the relative-atom member dict and whether *scope_path* itself
+        names a public type scope with no separately public child members
+        (still a valid, if empty, selection).
+        """
+        members: dict[NameAtom, tuple[BindingRef, ConstructorRef | None]] = {}
+        is_public_type_scope = False
+        for exposed, qname in entries:
+            path = _bare_path(exposed)
+            if path == scope_path and qname in self._cross_module_type_scopes:
+                is_public_type_scope = True
+                continue
+            if path[: len(scope_path)] != scope_path or len(path) == len(scope_path):
+                continue
+            atom = _bare_atom(path[len(scope_path) :])
+            constructor = self._cross_module_constructor_refs.get(qname)
+            ref = self._make_cross_module_ref(qname[0], _bare_path(atom)[-1], qname[1], span)
+            if constructor is not None:
+                ref = replace(
+                    ref,
+                    decl_node_id=constructor.owner_decl_node_id,
+                    kind=BinderKind.constructor_binding,
+                    scope_path=constructor.owner_path,
+                )
+            members[atom] = (ref, constructor)
+        return members, is_public_type_scope
+
+    def _open_bare_imported_scope_members(
+        self, requested_path: ScopePath, span: SourceSpan
+    ) -> dict[NameAtom, tuple[BindingRef, ConstructorRef | None]] | None:
+        """Resolve an unrouted ``open`` target against already-bare imports.
+
+        ``open import lib`` and ``import lib using A`` both inject a module's
+        selected members bare (see ``ImportEnv``/``build_import_env``); a
+        later ``open A`` names the source scope those bare members came from,
+        not an individual member, so it is resolved against every
+        contribution's bare-exposed names rather than a module route.
+        """
+        assert self._import_env is not None
+        matching: list[dict[NameAtom, tuple[BindingRef, ConstructorRef | None]]] = []
+        for contribution in self._import_env.contributions.values():
+            entries = (
+                (exposed, contribution.members[exposed]) for exposed in contribution.bare_names
+            )
+            members, _is_public_type_scope = self._scope_subtree_members(
+                entries, requested_path, span
+            )
+            if members:
+                matching.append(members)
+        if not matching:
+            return None
+        if len(matching) > 1:
+            raise AglScopeError(
+                f"Opened scope '{'::'.join(requested_path)}' is ambiguous across imported modules.",
+                span=span,
             )
         return matching[0]
 
@@ -1786,7 +1851,9 @@ class _Resolver:
         if ref.kind != BinderKind.constructor_binding:
             return
         resolved_candidates = tuple(
-            self._constructor_candidates.get(node.name, ()) if candidates is None else candidates
+            self._declaring_constructor_candidates(node.name, ref)
+            if candidates is None
+            else candidates
         )
         if len(resolved_candidates) >= 2:
             owner_names = ", ".join(
@@ -1800,6 +1867,18 @@ class _Resolver:
             )
         if len(resolved_candidates) == 1:
             self._constructor_refs[node.node_id] = resolved_candidates[0]
+
+    def _declaring_constructor_candidates(
+        self, name: str, ref: BindingRef
+    ) -> tuple[ConstructorRef, ...]:
+        """Return the candidates declared where *ref* was found.
+
+        A member of a named scope is selected by that scope's structured
+        identity; only a module-root binding uses the root-only candidate map.
+        """
+        if ref.scope_path and ref.module_id == self._module_id:
+            return tuple(self._scoped_constructor_candidates.get((ref.scope_path, name), ()))
+        return tuple(self._constructor_candidates.get(name, ()))
 
     def _track_agent_reference(self, ref: BindingRef) -> None:
         """Preserve agent usage hidden behind constructor-selected pattern slots."""
@@ -1904,13 +1983,22 @@ class _Resolver:
             has_module_route = self._import_env is not None and bool(
                 qualifier_candidates(self._import_env, relative_path, anchored=chain.anchored)
             )
+            # A route needs only its leading segment to be real: `lib::A::f()`
+            # is a genuine import route through `lib` even though `A::f` (or a
+            # longer suffix) does not itself name a complete module route.
+            has_leading_route = self._import_env is not None and bool(
+                qualifier_candidates(self._import_env, relative_path[:1], anchored=chain.anchored)
+            )
             has_opened_member = (
                 self._current_scope().bare_candidates(_bare_atom((*relative_path, node.name)))
                 is not None
             )
             known_segment = any(relative_path[0] in scope_path for scope_path in self._scope_nodes)
             if (chain.anchor is QualifierAnchor.CURRENT_MODULE and len(chain.segments) > 1) or (
-                known_segment and not has_module_route and not has_opened_member
+                known_segment
+                and not has_module_route
+                and not has_leading_route
+                and not has_opened_member
             ):
                 raise AglScopeError(
                     f"Unknown scope path '{'::'.join(relative_path)}'.", span=chain.span
@@ -1939,9 +2027,7 @@ class _Resolver:
         if ref.kind is BinderKind.constructor_binding:
             candidates = self._scoped_constructor_candidates.get((path, node.name), ())
             if len(candidates) == 1:
-                (candidate,) = candidates
-                owner_name = "::".join((*candidate.owner_path, candidate.owner_name))
-                self._constructor_refs[node.node_id] = replace(candidate, owner_name=owner_name)
+                self._constructor_refs[node.node_id] = candidates[0]
                 return True
             return False
         self._track_agent_reference(ref)
@@ -2106,11 +2192,15 @@ class _Resolver:
         return False
 
     def _constructor_for_type_path(self, path: ScopePath, variant: str) -> ConstructorRef:
-        """Return the constructor-shaped chain result owned by local *path*."""
-        owner_name = "::".join(path)
+        """Return the constructor-shaped chain result owned by local *path*.
+
+        The owner's scope path stays in ``owner_path`` and never merges into
+        ``owner_name``: a constructor identity is structured, so a display
+        spelling must not double as one.
+        """
         candidates = self._scoped_constructor_candidates.get((path, variant), ())
         if candidates:
-            return replace(candidates[0], owner_name=owner_name)
+            return candidates[0]
         declaration = self._declaration_items.get((self._module_id, path[:-1], path[-1]))
         if declaration is None:
             retained = next(
@@ -2124,10 +2214,10 @@ class _Resolver:
                 None,
             )
             assert retained is not None
-            return replace(retained, owner_name=owner_name)
+            return retained
         assert isinstance(declaration, (RecordDef, EnumDef, ExceptionDef, TypeAlias))
         return ConstructorRef(
-            owner_name=owner_name,
+            owner_name=path[-1],
             variant=variant,
             owner_decl_node_id=declaration.node_id,
             type_params=declaration.type_params,
@@ -2144,11 +2234,16 @@ class _Resolver:
         ordinary qualified values, with only the resulting member kind
         determining whether it owns a constructor.
         """
-        if (
-            self._import_env is None
-            or chain.anchor is QualifierAnchor.CURRENT_MODULE
-            or not chain.segments
-        ):
+        if chain.anchor is QualifierAnchor.CURRENT_MODULE or not chain.segments:
+            return None
+        if len(chain.segments) == 1 and not chain.anchored:
+            bare_atom = _bare_atom((chain.segments[0].name, variant))
+            bare_candidates = self._current_scope().bare_constructor_candidates(bare_atom)
+            # Several opened scopes contributing the same owner fall through to
+            # the shared lookup below, which owns the ambiguity diagnostic.
+            if bare_candidates is not None and len(bare_candidates) == 1:
+                return next(iter(bare_candidates))
+        if self._import_env is None:
             return None
         owner_ref: BindingRef | None = None
         if len(chain.segments) == 1 and not chain.anchored:
@@ -2183,6 +2278,7 @@ class _Resolver:
                 for candidates in self._constructor_candidates.values()
                 for candidate in candidates
                 if candidate.owner_module_id == owner_ref.module_id
+                and candidate.owner_path == owner_ref.scope_path
                 and candidate.owner_name == owner_ref.name
             ),
             None,
@@ -2194,6 +2290,7 @@ class _Resolver:
                 owner_decl_node_id=owner_ref.decl_node_id,
                 type_params=(),
                 owner_module_id=owner_ref.module_id,
+                owner_path=owner_ref.scope_path,
             )
         return replace(candidate, variant=variant)
 
@@ -2289,8 +2386,28 @@ class _Resolver:
     ) -> tuple[ModuleId, NameAtom]:
         """Resolve a module route followed by one structured declaration path."""
         assert self._import_env is not None
-        route = tuple(part for part in qualifier.segments[0].name.split("/"))
-        atom_path = (*tuple(segment.name for segment in qualifier.segments[1:]), name)
+        route_segment = qualifier.segments[0]
+        if route_segment.type_args is not None:
+            raise AglScopeError(
+                f"Type arguments cannot be applied to module route '{route_segment.name}'.",
+                span=route_segment.span,
+            )
+        route = tuple(part for part in route_segment.name.split("/"))
+        candidate_modules = qualifier_candidates(
+            self._import_env, route, anchored=qualifier.anchored
+        )
+        cumulative: ScopePath = ()
+        for segment in qualifier.segments[1:]:
+            cumulative = (*cumulative, segment.name)
+            if segment.type_args is not None and not any(
+                (module, _bare_atom(cumulative)) in self._cross_module_type_scopes
+                for module in candidate_modules
+            ):
+                raise AglScopeError(
+                    f"Type arguments cannot be applied to scope segment '{segment.name}'.",
+                    span=segment.span,
+                )
+        atom_path = (*cumulative, name)
         atom: NameAtom = atom_path[0] if len(atom_path) == 1 else atom_path
         return resolve_qualified_member(
             self._import_env,

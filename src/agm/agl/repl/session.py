@@ -801,6 +801,24 @@ class ReplSession:
                     stale_binding_node_ids.add(ref.decl_node_id)
             for name in stale_binding_names:
                 self._session_scope.bindings.pop(name, None)
+            # A redefined type can also be mentioned by a retained named-scope
+            # member (e.g. ``A::make() -> A::R``), not just a root binding;
+            # walk every session scope node's members the same way so a stale
+            # scoped value/function is invalidated rather than surviving with a
+            # runtime layout that no longer matches its (new) static type.
+            for path, node in self._session_scope_nodes.items():
+                if not path:
+                    continue
+                stale_member_names: set[str] = set()
+                for name, ref in node.members.items():
+                    typ = self._type_env.resolve_binding(ref)
+                    if typ is not None and self._type_mentions_entry_nominal(
+                        typ, promoted_type_identities
+                    ):
+                        stale_member_names.add(name)
+                        stale_binding_node_ids.add(ref.decl_node_id)
+                for name in stale_member_names:
+                    node.members.pop(name, None)
             self._declared_params = {
                 name: typ
                 for name, typ in self._declared_params.items()
@@ -883,10 +901,10 @@ class ReplSession:
                 continue
             for name, ref in node.members.items():
                 if (
-                    ref.scope_path,
-                    ref.name,
-                ) not in entry_type_identities - promoted_type_identities and is_promoted_node(
-                    ref.decl_node_id, ref.decl_span.end_offset
+                    (ref.scope_path, ref.name)
+                    not in entry_type_identities - promoted_type_identities
+                    and ref.decl_node_id not in stale_binding_node_ids
+                    and is_promoted_node(ref.decl_node_id, ref.decl_span.end_offset)
                 ):
                     session_node.members[name] = ref
         self._session_type_paths |= frozenset(

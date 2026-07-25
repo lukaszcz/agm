@@ -103,7 +103,9 @@ class AgentRegistry:
     Parameters
     ----------
     named:
-        Pre-validated mapping from structured agent identity to callable.
+        Pre-validated mapping from agent identity to callable.  A plain root
+        name is accepted and normalized to its root identity, just as
+        :func:`runner_backed_agent_factory` normalizes its command map.
     default_agent:
         The callable for the built-in ``ask`` keyword (or ``None`` if
         no default agent is configured).
@@ -112,10 +114,12 @@ class AgentRegistry:
     def __init__(
         self,
         *,
-        named: Mapping[AgentId, AgentFn],
+        named: Mapping[AgentId, AgentFn] | Mapping[str, AgentFn],
         default_agent: AgentFn | None,
     ) -> None:
-        self._named = dict(named)
+        self._named = {
+            (key if isinstance(key, AgentId) else AgentId(key)): fn for key, fn in named.items()
+        }
         self._default = default_agent
 
     def set_default_agent(self, fn: AgentFn | None) -> None:

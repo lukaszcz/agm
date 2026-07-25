@@ -1,0 +1,22 @@
+{
+  "scenarios": [
+    {
+      "name": "catches_sibling_scoped_exception",
+      "params": {"mode": "sibling"},
+      "expect": {"stdout": "sibling\n"}
+    },
+    {
+      "name": "root_exception_still_caught_inside_scoped_function",
+      "params": {"mode": "root_in_scope"},
+      "expect": {"stdout": "root\n"}
+    },
+    {
+      "name": "scoped_exception_not_caught_by_same_named_root_handler",
+      "params": {"mode": "other"},
+      "expect": {
+        "stdout": "",
+        "raises": {"type": "A::Boom", "fields": {"detail": "scoped"}}
+      }
+    }
+  ]
+}

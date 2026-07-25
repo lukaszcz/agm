@@ -1627,10 +1627,15 @@ class _Checker:
         # constructor checker, which instantiates the constructor with the
         # supplied type arguments and returns a function value (payload) or
         # the constructed nominal value (nullary variant).
+        # Only a variant qualified by its owning enum carries the type arguments
+        # on the qualifier (``Box[T]::wrap``).  A qualifier on a record or
+        # exception constructor is a scope or module route, not a type, so it
+        # applies its arguments exactly as the unqualified spelling does.
         if (
             isinstance(node.expr, VarRef)
             and (ctor_ref := self._constructor_ref_for(node.expr.node_id)) is not None
             and node.expr.qualifier is not None
+            and ctor_ref.variant is not None
         ):
             raise self._qualified_constructor_typed_call_error(node.span)
         if (

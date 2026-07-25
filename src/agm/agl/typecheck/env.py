@@ -990,6 +990,13 @@ class TypeEnvironment:
                 )
             except AglTypeError:
                 return None
+        # Opened-scope contributions: a bare name opened into the current
+        # region (``open A``) resolves here too, before falling through to
+        # module-level open imports.  An arity complaint about an opened
+        # generic propagates: it names the problem better than "unknown type".
+        opened = self._resolve_opened_type(name, None)
+        if opened is not None:
+            return opened
         # Program context: look up via open imports.
         if self._import_env is not None and self._program_type_table is not None:
             candidates = self._import_env.unqualified.get(name, frozenset())
@@ -1580,12 +1587,13 @@ class TypeEnvironment:
                         f"got {len(resolved_args)}.",
                         span=eff_span,
                     )
-                body_type = self.resolve_type_expr(
-                    alias_expr,
-                    span=span,
-                    _resolving=_resolving | {name},
-                    type_vars=type_vars | frozenset(alias_params),
-                )
+                with self.type_scope(_split_scoped_type_name(name)[0]):
+                    body_type = self.resolve_type_expr(
+                        alias_expr,
+                        span=span,
+                        _resolving=_resolving | {name},
+                        type_vars=type_vars | frozenset(alias_params),
+                    )
                 return self.instantiate_alias(
                     name,
                     GenericAliasDef(type_params=alias_params, template=body_type),
@@ -1733,12 +1741,13 @@ class TypeEnvironment:
                     span=span,
                 )
             target_expr = self._alias_targets[name]
-            return self.resolve_type_expr(
-                target_expr,
-                span=span,
-                _resolving=_resolving | {name},
-                type_vars=type_vars,
-            )
+            with self.type_scope(_split_scoped_type_name(name)[0]):
+                return self.resolve_type_expr(
+                    target_expr,
+                    span=span,
+                    _resolving=_resolving | {name},
+                    type_vars=type_vars,
+                )
         program_alias_def = self._program_alias_table.get((self._module_id, (), name))
         if program_alias_def is not None:
             raise AglTypeError(
@@ -1910,11 +1919,12 @@ class TypeEnvironment:
         alias_expr = self._alias_targets.get(local_name)
         if alias_expr is not None:
             type_params = self._alias_type_params.get(local_name, ())
-            template = self.resolve_type_expr(
-                alias_expr,
-                _resolving=frozenset({local_name}),
-                type_vars=frozenset(type_params),
-            )
+            with self.type_scope(_split_scoped_type_name(local_name)[0]):
+                template = self.resolve_type_expr(
+                    alias_expr,
+                    _resolving=frozenset({local_name}),
+                    type_vars=frozenset(type_params),
+                )
             return TypeTemplate(template, type_params)
         resolved = self._types.get(local_name)
         return None if resolved is None else TypeTemplate(resolved)
@@ -1956,12 +1966,14 @@ class TypeEnvironment:
     ) -> EnumOwnerForm | None:
         """Resolve one exact enum-owner source form through checked visibility."""
         source_module_id: ModuleId
+        source_scope_path: ScopePath
         source_name: str
         expected_qualifier: tuple[str, ...] | None
         if kind in (EnumOwnerFormKind.LOCAL, EnumOwnerFormKind.SELF):
             if owner_name not in self._own_source_type_names():
                 return None
             source_module_id = self._module_id
+            source_scope_path = ()
             source_name = owner_name
             expected_qualifier = None if kind is EnumOwnerFormKind.LOCAL else ()
         elif kind is EnumOwnerFormKind.OPEN_IMPORT:
@@ -1975,8 +1987,7 @@ class TypeEnvironment:
             if len(type_qnames) != 1:
                 return None
             qname = type_qnames[0]
-            source_module_id = qname[0]
-            source_name = self._qname_decl_key(qname)[2]
+            source_module_id, source_scope_path, source_name = self._qname_decl_key(qname)
             expected_qualifier = None
         else:
             if (
@@ -1992,10 +2003,11 @@ class TypeEnvironment:
             assert resolved_qname is not None
             if not self._is_program_type_candidate(resolved_qname):
                 return None
-            source_module_id = resolved_qname[0]
-            source_name = self._qname_decl_key(resolved_qname)[2]
+            source_module_id, source_scope_path, source_name = self._qname_decl_key(resolved_qname)
             expected_qualifier = module_qualifier.route_segments
-        template = self.source_type_template_qname(source_module_id, source_name)
+        template = self.source_type_template_qname(
+            source_module_id, source_name, scope_path=source_scope_path
+        )
         assert template is not None
         return EnumOwnerForm(
             owner_name,
@@ -2065,9 +2077,12 @@ class TypeEnvironment:
                         qname
                     ):
                         continue
-                    source_name = self._qname_decl_key(qname)[2]
+                    _, source_scope_path, source_name = self._qname_decl_key(qname)
                     template = cast(
-                        TypeTemplate, self.source_type_template_qname(qname[0], source_name)
+                        TypeTemplate,
+                        self.source_type_template_qname(
+                            qname[0], source_name, scope_path=source_scope_path
+                        ),
                     )
                     for qualifier, anchored in routes:
                         resolved = resolve_qualified(
@@ -2191,6 +2206,17 @@ class TypeEnvironment:
                 return None
             gdef = self._program_generic_table.get((self._module_id, (), name))
             return (name, gdef) if gdef is not None else None
+        # A non-empty qualifier may name a local named scope rather than an
+        # import route (e.g. a REPL-retained ``scope A`` generic record
+        # displayed as ``A::Box``).  Try exact local resolution first; a ``/``
+        # route (``QualifierAnchor.MODULE``) is always an import route and is
+        # never probed locally (``_local_qualified_type_name`` enforces this).
+        local_name = self._local_qualified_type_name(qualifier, name)
+        if (
+            local_name is not None
+            and (local_gdef := self._generic_types.get(local_name)) is not None
+        ):
+            return local_name, local_gdef
         if self._import_env is None or self._program_generic_table is None:
             return None
         qname = self._resolve_import_qname(qualifier, name, span=span, required=False)
@@ -2250,15 +2276,17 @@ class TypeEnvironment:
         variant: str | None,
         *,
         module_id: ModuleId | None = None,
+        scope_path: ScopePath = (),
     ) -> tuple[tuple[str, ParamKind], ...] | None:
         """Return the ordered field-kind pairs for a constructor, or ``None`` if unknown.
 
         First checks the own-module registry; falls back to the cross-module graph table
         when ``module_id`` is provided (used for cross-module constructor calls where the
-        owner type carries its declaring module's ``module_id``).
+        owner type carries its declaring module's ``module_id``).  The owner's named
+        scope is supplied structurally, exactly as for constructor signatures.
         """
         owner_module_id = self._module_id if module_id is None else module_id
-        key = self._constructor_key(owner_module_id, owner_name, (), variant)
+        key = self._constructor_key(owner_module_id, owner_name, scope_path, variant)
         result = self._constructor_field_kinds.get(key)
         if result is not None:
             return result
@@ -2296,12 +2324,12 @@ class TypeEnvironment:
                 for fname, kind_value in self._type_table.exception_field_kinds(typ)
             )
         assert isinstance(typ, (RecordType, EnumType)), f"unexpected constructor owner type {typ!r}"
-        scoped_owner_name = "::".join((*typ.scope_path, typ.name))
-        if isinstance(typ, EnumType):
-            return self.get_constructor_field_kinds(
-                scoped_owner_name, variant, module_id=typ.module_id
-            )
-        return self.get_constructor_field_kinds(scoped_owner_name, None, module_id=typ.module_id)
+        return self.get_constructor_field_kinds(
+            typ.name,
+            variant if isinstance(typ, EnumType) else None,
+            module_id=typ.module_id,
+            scope_path=typ.scope_path,
+        )
 
     def all_constructor_field_kinds(
         self,

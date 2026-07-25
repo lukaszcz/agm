@@ -12,7 +12,7 @@ from collections.abc import Mapping
 from dataclasses import replace
 from typing import Literal, Protocol
 
-from agm.agl.scope.symbols import BindingRef, ConstructorRef, ModuleResolution
+from agm.agl.scope.symbols import BindingRef, ConstructorRef, ModuleResolution, ScopePath
 from agm.agl.semantics.types import (
     EnumType,
     ExceptionType,
@@ -329,11 +329,14 @@ class ConstructorChecker:
         owner_name: str,
         variant: str | None,
         gdef: GenericTypeDef | None,
+        owner_path: ScopePath = (),
     ) -> tuple[tuple[str, ParamKind], ...]:
         field_kinds = (
             self._ctx._env.get_constructor_field_kinds_for_type(gdef.template, owner_name, variant)
             if gdef is not None
-            else self._ctx._env.get_constructor_field_kinds(owner_name, variant)
+            else self._ctx._env.get_constructor_field_kinds(
+                owner_name, variant, scope_path=owner_path
+            )
         )
         assert field_kinds is not None, (
             f"compiler bug: no field-kinds for generic constructor '{owner_name}'"
@@ -359,7 +362,7 @@ class ConstructorChecker:
         variant = ctor_ref.variant
         type_params = ctor_ref.type_params
         field_kinds = self._generic_constructor_field_kinds(
-            owner_name=owner_name, variant=variant, gdef=gdef
+            owner_name=owner_name, variant=variant, gdef=gdef, owner_path=ctor_ref.owner_path
         )
         bound_exprs = bind_constructor_args(
             field_kinds,

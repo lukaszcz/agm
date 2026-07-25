@@ -1,0 +1,8 @@
+# `import ... using A` also contributes scope A's members bare; a later
+# `open A` (no module route) must reach the source scope those came from.
+import facade using Shapes
+
+open Shapes
+
+print(measure())
+print(Nested::Point(x = 5).x)

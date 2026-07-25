@@ -1,0 +1,10 @@
+{
+  "scenarios": [
+    {
+      "name": "scoped_generic_constructors_accept_explicit_type_arguments",
+      "expect": {
+        "stdout": "3\n30\nab\n"
+      }
+    }
+  ]
+}

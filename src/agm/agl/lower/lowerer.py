@@ -500,13 +500,20 @@ class _Lowerer:
         )
 
     def _prealloc_funcdef(self, funcdef: "FuncDef") -> None:
-        """Pre-allocate SymbolId and FunctionId for a static ``FuncDef``."""
+        """Pre-allocate SymbolId and FunctionId for a static ``FuncDef``.
+
+        A function declared inside a named scope is published under its
+        unqualified name only within its own module frame; it must never be
+        exposed as a root-level ``RunResult`` binding (``RunResult.bindings``
+        is root-only), so ``public`` additionally requires an empty
+        declaration scope path.
+        """
         fn_id = self._alloc_fn()
         sym = self._alloc_sym(
             funcdef.node_id,
             name=funcdef.name,
             mutable=False,
-            public=not funcdef.is_private,
+            public=not funcdef.is_private and not funcdef.scope_path,
             owner=self._module_id,
         )
         self._link.fn_node_to_sym[funcdef.node_id] = sym
@@ -799,7 +806,11 @@ class _Lowerer:
             funcdef, fn_id
         )
         captures = self._compute_captures(funcdef, param_decl_ids)
-        with self._return_context(sig.result):
+        declaration_scope_path = tuple(segment.name for segment in funcdef.scope_path)
+        with (
+            self._return_context(sig.result),
+            self._checked.type_env.type_scope(declaration_scope_path),
+        ):
             body_ir = self.lower_coerced(funcdef.body, sig.result)
 
         desc = FunctionDescriptor(

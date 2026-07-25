@@ -1,0 +1,24 @@
+# Explicit type application spells a generic constructor the same way inside a
+# named scope as at the module root: the scope segments of `A::Pair::[int]` are
+# a scope route, not a type qualifier, so they neither block the application nor
+# move the type arguments onto the qualifier.
+record Pair[T](first: T, second: T)
+
+scope A
+record Pair[T](first: T, second: T)
+
+def make_local() -> Pair[text] =
+  let build = Pair::[text]
+  build("a", "b")
+end A
+
+let root_build = Pair::[int]
+let root = root_build(1, 2)
+print (root.first + root.second)
+
+let scoped_build = A::Pair::[int]
+let scoped = scoped_build(10, 20)
+print (scoped.first + scoped.second)
+
+let inner = A::make_local()
+print (inner.first + inner.second)

@@ -558,8 +558,11 @@ an agent, a record constructor, an enum variant, or a generic `def`/constructor
 used as a first-class value. The typed postfix form carries explicit type
 arguments to a generic `def` or bare constructor (`id::[int](5)`,
 `some::[int](value = 1)`, `apply::[int, int](…)`), or instantiate a generic
-function value (`id::[int]`). Qualified generic constructors put type arguments
-on the type side (`Option[int]::some(value = 1)`). In that explicit
+function value (`id::[int]`). An enum variant qualified by its owning generic
+type puts the type arguments on the type side (`Option[int]::some(value = 1)`).
+A qualifier that is a scope or module route rather than an owning type leaves
+the constructor's own spelling intact, so it carries type arguments exactly as
+the unqualified form does (`A::Pair::[int]`, `boxes::A::Box::[int]`). In that explicit
 type-qualified constructor form, the `[` is byte-adjacent to the applied type
 name: `Option[int]::some` is valid, while `Option [int]::some` is not. This
 restriction does not apply to ordinary applied types, so both `Option[int]` and

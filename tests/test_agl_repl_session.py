@@ -555,6 +555,26 @@ class TestRecursiveTypesAcrossEntries:
 
         assert not result.ok
 
+    def test_scoped_record_redefinition_invalidates_dependent_scoped_function(self) -> None:
+        """A redefined scoped type invalidates dependent retained scope members too.
+
+        Mirrors ``test_record_redefinition_invalidates_old_nominal_values`` at
+        root scope: a scoped function returning a redefined scoped record must
+        stop resolving cleanly, instead of surviving with a stale runtime
+        layout that no longer matches its (new) static field set.
+        """
+        s = ReplSession()
+        assert s.eval_entry("scope A\nrecord R(n: int)\nend A").ok
+        assert s.eval_entry("scope A\ndef make() -> A::R = A::R(1)\nend A").ok
+        call = s.eval_entry("A::make().n")
+        assert call.ok
+        assert call.value == IntValue(1)
+        assert s.eval_entry("scope A\nrecord R(m: text)\nend A").ok
+
+        result = s.eval_entry("A::make().m")
+
+        assert not result.ok
+
     def test_ask_with_recursive_output_type_does_not_crash(self) -> None:
         """The REPL's contract-preview path (make_contract) handles a recursive ask target.
 
@@ -3102,6 +3122,23 @@ class TestBareTypeEntry:
         assert r.value is None
         assert render_entry_result(r, echo=True) == "<type:\nrecord Box[T]\n  value: T\n>"
 
+    def test_bare_scoped_generic_record_name_echoes_definition(self) -> None:
+        """A retained named-scope generic resolves by its qualified local name.
+
+        ``A::Box``'s qualifier names a local ``scope A``, not an import route;
+        the bare qualified name must resolve the same way the unqualified
+        root form does, rather than being treated as an (absent) import.
+        """
+        from agm.agl.repl.render import render_entry_result
+
+        s = ReplSession()
+        s.eval_entry("scope A\nrecord Box[T]\n  value: T\nend A")
+        r = s.eval_entry("A::Box")
+        assert r.ok
+        assert r.kind == "type"
+        assert r.value is None
+        assert render_entry_result(r, echo=True) == "<type:\nrecord A::Box[T]\n  value: T\n>"
+
     def test_bare_generic_type_entry_in_check_only_mode(self) -> None:
         from agm.agl.repl.render import render_entry_result
 
@@ -3264,6 +3301,45 @@ class TestBareTypeEntry:
         assert (
             no_generic_env.resolve_qualified_unapplied_generic_type(
                 qualified_expr.qualifier,
+                "Box",
+            )
+            is None
+        )
+
+    def test_qualified_unapplied_generic_resolution_prefers_local_named_scope(self) -> None:
+        """A non-empty qualifier may name a local scope, not only an import route.
+
+        ``A::Box`` for a locally-declared ``scope A`` generic must resolve
+        without any import environment; a ``/``-anchored qualifier (always an
+        import route) must never be resolved against the same local name.
+        """
+        from agm.agl.parser import parse_type_expr
+        from agm.agl.semantics.types import RecordType
+        from agm.agl.syntax.types import NameT
+        from agm.agl.typecheck.env import GenericTypeDef, TypeEnvironment
+
+        local_def = GenericTypeDef(
+            kind="record",
+            type_params=("T",),
+            template=RecordType(name="Box", scope_path=("A",)),
+        )
+        env = TypeEnvironment()
+        env.register_generic_type("A::Box", local_def)
+
+        local_expr = parse_type_expr("A::Box")
+        assert isinstance(local_expr, NameT)
+        assert local_expr.qualifier is not None
+        assert env.resolve_qualified_unapplied_generic_type(
+            local_expr.qualifier,
+            "Box",
+        ) == ("A::Box", local_def)
+
+        module_expr = parse_type_expr("/A::Box")
+        assert isinstance(module_expr, NameT)
+        assert module_expr.qualifier is not None
+        assert (
+            env.resolve_qualified_unapplied_generic_type(
+                module_expr.qualifier,
                 "Box",
             )
             is None

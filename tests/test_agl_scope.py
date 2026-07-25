@@ -420,6 +420,52 @@ class TestScopeRegions:
         parse_and_resolve("enum Point = origin\ndef origin() -> int = 0\n()")
 
 
+class TestOpenedScopeEnumOwners:
+    """Opening a local scope must expose its enum type to `is` tests and `case`."""
+
+    def test_is_test_resolves_enum_owner_contributed_by_an_open(self) -> None:
+        r = parse_and_resolve(
+            "open A\n"
+            "scope A\n"
+            "enum Status\n"
+            "  | Good\n"
+            "  | Bad\n"
+            "end A\n"
+            "let s = Status::Good\n"
+            "s is Status::Good\n"
+        )
+        from agm.agl.syntax.nodes import IsTest
+        from agm.agl.syntax.visitor import walk
+
+        found: list[IsTest] = []
+        walk(r.program, lambda node: found.append(node) if isinstance(node, IsTest) else None)
+        assert len(found) == 1
+        cref = r.constructor_refs[found[0].node_id]
+        assert (cref.owner_path, cref.owner_name, cref.variant) == (("A",), "Status", "Good")
+
+    def test_case_pattern_resolves_enum_owner_contributed_by_an_open(self) -> None:
+        r = parse_and_resolve(
+            "open A\n"
+            "scope A\n"
+            "enum Status\n"
+            "  | Good\n"
+            "  | Bad\n"
+            "end A\n"
+            "let s = Status::Good\n"
+            "case s of\n"
+            "  | Status::Good => 1\n"
+            "  | Status::Bad => 2\n"
+        )
+        from agm.agl.syntax.nodes import Case
+
+        case_node = r.program.body.items[-1]
+        assert isinstance(case_node, Case)
+        good_pattern = case_node.branches[0].pattern
+        assert isinstance(good_pattern, ConstructorPattern)
+        cref = r.constructor_refs[good_pattern.node_id]
+        assert (cref.owner_path, cref.owner_name, cref.variant) == (("A",), "Status", "Good")
+
+
 # ---------------------------------------------------------------------------
 # Basic acceptance
 # ---------------------------------------------------------------------------

@@ -23,17 +23,15 @@ pattern when the pattern must test a constructor instead. Within a constructor
 pattern, bare names follow the same field-directed rules as nested `case`
 patterns; an `as` name always binds and `_` never binds.
 
-At the syntax, scope-resolution, and typechecking stages, `let` patterns
-may use record or enum constructors, literals, wildcards, and `as` binders.
-The annotation describes the complete value being matched, not any individual
-binder: the initializer is checked once against it, then each selected binder
-receives its field or whole-value type. Without an annotation, the complete
-matched type is inferred from the initializer. A bottom initializer needs that
-annotation to type binders. `let _` remains a discard: its annotation does not
-constrain the initializer. Every `let` pattern is statically compiled and must
-be irrefutable; a refutable pattern is a static error. An executable
-destructuring `let` captures its complete initializer value once, then installs
-every selected binder from that value.
+A `let` pattern may use record or enum constructors, literals, wildcards, and
+`as` binders. The annotation describes the complete value being matched, not any
+individual binder: the initializer is checked once against it, then each
+selected binder receives its field or whole-value type. Without an annotation,
+the complete matched type is inferred from the initializer. A bottom initializer
+needs that annotation to type binders. `let _` is a discard: its annotation does
+not constrain the initializer. Every `let` pattern must be irrefutable; a
+refutable pattern is a static error. A destructuring `let` evaluates its
+initializer once and installs every selected binder from that value.
 
 `let` evaluates the initializer, checks it against the complete annotation (if
 any), and creates **immutable** bindings in the current scope. It scopes over the

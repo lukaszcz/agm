@@ -2,7 +2,7 @@
 # abort, format option, trailing comma in call options.
 enum Review
   | Pass
-  | Fail(issues: list[text])
+  | Fail(issues: array[text])
 
 agent reviewer
 

@@ -126,12 +126,12 @@ class TestRenderEntryResult:
     def test_expression_echo_pretty_prints_structured_values(self) -> None:
         from agm.agl.ir.ids import NominalId
         from agm.agl.modules.ids import ENTRY_ID
-        from agm.agl.semantics.values import IntValue, ListValue, RecordValue
+        from agm.agl.semantics.values import ArrayValue, IntValue, RecordValue
 
         value = RecordValue(
             nominal=NominalId(ENTRY_ID, "Box"),
             display_name="Box",
-            fields={"items": ListValue((IntValue(1), IntValue(2)))},
+            fields={"items": ArrayValue((IntValue(1), IntValue(2)))},
         )
         result = _result(kind="expression", value=value, value_type=TextType(), ok=True)
 

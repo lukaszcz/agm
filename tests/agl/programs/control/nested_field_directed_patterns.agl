@@ -12,7 +12,7 @@ param matched: bool
 
 var read: int = 4
 var assign: int = 8
-var indexed: list[int] = [12]
+var indexed: array[int] = [12]
 
 let reading: Packet = if matched => packet(Signal::read) | else => packet(Signal::skip)
 case reading of

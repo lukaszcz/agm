@@ -220,8 +220,8 @@ EQ_EQ = "EQ_EQ"  # ==
 
 # Synthetic token: the "[" that opens a loop bound, i.e. the first "[" after the
 # "do" keyword.  Retagging it ``DO_LSQB`` lets the grammar distinguish the
-# ``do[expr]`` bound from a ``do`` body that starts with a list literal —
-# without it, the optional ``loop_bound`` and a list-literal body both begin
+# ``do[expr]`` bound from a ``do`` body that starts with an array literal —
+# without it, the optional ``loop_bound`` and an array-literal body both begin
 # with ``LSQB`` (the LALR(1) conflict this resolves).
 DO_LSQB = "DO_LSQB"  # [ opening a do-loop bound
 

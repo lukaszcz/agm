@@ -1,8 +1,8 @@
-# for x in list while x < limit do body done — for+while combination.
-# The while guard stops early even when the list is not exhausted.
+# for x in array while x < limit do body done — for+while combination.
+# The while guard stops early even when the array is not exhausted.
 # Exercises: for+while, for var visible in while guard and body,
 # loop-carried outer var, done terminator.
-param items: list[int]
+param items: array[int]
 param limit: int
 var total: int = 0
 for x in items while x < limit do

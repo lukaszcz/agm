@@ -29,13 +29,13 @@ followed by `{` is literal; `\%` produces a literal percent sign.
 | `text` | verbatim (no quotes) |
 | `int`, `decimal`, `bool` | plain scalar text |
 | `json` | compact JSON by default; use `render(value, pretty = true)` for indented display |
-| `list[E]` | `[e1, e2, …]` — AgL list syntax |
+| `array[E]` | `[e1, e2, …]` — AgL array syntax |
 | `dict[text, V]` | `{"k1": value1, "k2": value2}` — AgL dict syntax; keys always quoted |
 | record | `TypeName(f1 = value1, f2 = value2)` — AgL constructor form; fields in declaration order |
 | enum | `TypeName::Variant(f1 = value1, …)` — qualified; nullary variant as `TypeName::Variant` (no parens) |
 | exception | `TypeName(f1 = value1, …)` — record-style with all fields including `trace_id`, in declaration order |
 
-AgL structured values (`list`, `dict`, record, enum, exception) always render on
+AgL structured values (`array`, `dict`, record, enum, exception) always render on
 a **single line** — no injected newlines. A `json` value renders as **compact**
 (single-line) JSON whether it is nested inside another structured value or
 interpolated directly; use `render(value, pretty = true)` for indented,
@@ -46,7 +46,7 @@ Scalar text conventions:
 - `bool` renders as `true` / `false`.
 - `decimal` renders in plain fixed-point notation — never scientific
   notation — with trailing zeros dropped (`1.50` → `1.5`, `1E+2` → `100`).
-- Nested `text` values (a `text` field inside a record, list element, etc.)
+- Nested `text` values (a `text` field inside a record, array element, etc.)
   are emitted as a quoted AgL string literal with full JSON escaping plus
   `\%` for percent signs, so they cannot be mis-read as interpolation syntax.
 

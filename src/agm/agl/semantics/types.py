@@ -11,7 +11,7 @@ Type hierarchy
 - ``BoolType`` — the ``bool`` primitive.
 - ``IntType`` — the ``int`` primitive (arbitrary-precision integer).
 - ``DecimalType`` — the ``decimal`` primitive (exact fixed-point).
-- ``ListType(elem)`` — ``list[T]``.
+- ``ArrayType(elem)`` — ``array[T]``.
 - ``DictType(value)`` — ``dict[text, V]`` (keys are always ``text`` in AgL).
 - ``RecordType(name, type_args, module_id)`` — a ``record`` nominal type
   handle; field shapes live in the shared ``TypeTable``
@@ -126,17 +126,17 @@ class DecimalType:
 
 
 @dataclass(frozen=True, slots=True)
-class ListType:
-    """``list[T]`` — a homogeneous list."""
+class ArrayType:
+    """``array[T]`` — a homogeneous array."""
 
     elem: Type
 
     @property
     def kind(self) -> str:
-        return "list"
+        return "array"
 
     def __repr__(self) -> str:
-        return f"list[{self.elem!r}]"
+        return f"array[{self.elem!r}]"
 
 
 @dataclass(frozen=True, slots=True)
@@ -389,7 +389,7 @@ Type = (
     | BoolType
     | IntType
     | DecimalType
-    | ListType
+    | ArrayType
     | DictType
     | RecordType
     | EnumType
@@ -462,8 +462,8 @@ def match_type_template(
                 inferred[pattern.name] = actual
                 return True
             return previous == actual
-        if isinstance(pattern, ListType):
-            return isinstance(actual, ListType) and visit(pattern.elem, actual.elem)
+        if isinstance(pattern, ArrayType):
+            return isinstance(actual, ArrayType) and visit(pattern.elem, actual.elem)
         if isinstance(pattern, DictType):
             return isinstance(actual, DictType) and visit(pattern.value, actual.value)
         if isinstance(pattern, FunctionType):
@@ -582,7 +582,7 @@ def type_children(t: Type) -> tuple[Type, ...]:
     shapes remain owned by ``TypeTable`` and are never expanded here.
     """
     match t:
-        case ListType(elem=elem):
+        case ArrayType(elem=elem):
             return (elem,)
         case DictType(value=value):
             return (value,)
@@ -625,8 +625,8 @@ def iter_nominal_types(t: Type) -> Iterator[RecordType | EnumType | ExceptionTyp
 def replace_type_children(t: Type, children: tuple[Type, ...]) -> Type:
     """Return *t* rebuilt with its direct structural *children*."""
     match t:
-        case ListType():
-            return ListType(children[0])
+        case ArrayType():
+            return ArrayType(children[0])
         case DictType():
             return DictType(children[0])
         case FunctionType(params=params):
@@ -692,7 +692,7 @@ def is_json_shaped(value_type: Type) -> bool:
 
     JSON-shaped types are the values that may inhabit a ``json`` slot:
     ``null``/``json``, ``bool``, ``int``, ``decimal``, ``text``, and
-    ``list``/``dict`` whose element/value types are themselves JSON-shaped.
+    ``array``/``dict`` whose element/value types are themselves JSON-shaped.
     Records, enums, and exceptions are **not** JSON-shaped — to embed one in a
     ``json`` value they must first be rendered to text (e.g. via a ``let`` binding).
 
@@ -701,7 +701,7 @@ def is_json_shaped(value_type: Type) -> bool:
     """
     if isinstance(value_type, (TextType, JsonType, BoolType, IntType, DecimalType)):
         return True
-    if isinstance(value_type, ListType):
+    if isinstance(value_type, ArrayType):
         return is_json_shaped(value_type.elem)
     if isinstance(value_type, DictType):
         return is_json_shaped(value_type.value)
@@ -719,7 +719,7 @@ def is_assignable(value_type: Type, target_type: Type) -> bool:
 
     1. ``int → decimal`` widening is the only scalar coercion.
     2. ``json`` accepts any JSON-shaped value (rule 3): ``null``/``json``,
-       ``bool``, ``int``, ``decimal``, ``text``, and ``list``/``dict`` of
+       ``bool``, ``int``, ``decimal``, ``text``, and ``array``/``dict`` of
        JSON-shaped types.  Records/enums/exceptions are rejected.
 
     All other assignments require exact structural equality.
@@ -939,7 +939,7 @@ def cast_classification(source: Type, target: Type) -> CastKind:
         # Every data value renders to text. Non-data sources (unit/agent/function)
         # are filtered at the top, and json-shaped/exact-type sources are handled by
         # the is_assignable block above, so any source reaching here is a renderable
-        # data type (json/bool/int/decimal/list/dict/record/enum/exception).
+        # data type (json/bool/int/decimal/array/dict/record/enum/exception).
         return CastKind.TOTAL_RENDER
 
     if isinstance(target, JsonType):
@@ -958,7 +958,7 @@ def cast_classification(source: Type, target: Type) -> CastKind:
             return CastKind.FALLIBLE
         return CastKind.STATIC_ERROR
 
-    if isinstance(target, (ListType, DictType, RecordType, EnumType)):
+    if isinstance(target, (ArrayType, DictType, RecordType, EnumType)):
         if isinstance(source, _text_or_json):
             return CastKind.FALLIBLE
         return CastKind.STATIC_ERROR

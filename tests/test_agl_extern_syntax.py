@@ -81,7 +81,7 @@ class TestGrammarAndTransformer:
         assert len(fd.params) == 1
 
     def test_extern_def_with_type_params(self) -> None:
-        fd = first("extern def reverse[T](xs: list[T]) -> list[T]")
+        fd = first("extern def reverse[T](xs: array[T]) -> array[T]")
         assert isinstance(fd, FuncDef)
         assert fd.type_params == ("T",)
         assert fd.is_extern is True

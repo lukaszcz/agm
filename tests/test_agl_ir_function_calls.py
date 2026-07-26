@@ -241,17 +241,17 @@ def test_function_with_named_args_in_body_call() -> None:
     assert ir["result"] == TextValue("Hello, World!")
 
 
-def test_function_with_list_in_body() -> None:
-    """Function body containing a list literal (exercises _walk_for_captures for ListLit)."""
+def test_function_with_array_in_body() -> None:
+    """Function body containing an array literal (exercises _walk_for_captures for ArrayLit)."""
     source = (
         "let base = 1\n"
-        "def make_list(x: int) -> list[int] = [base, x, x * 2]\n"
-        "let result = make_list(3)\n()"
+        "def make_array(x: int) -> array[int] = [base, x, x * 2]\n"
+        "let result = make_array(3)\n()"
     )
-    from agm.agl.semantics.values import ListValue
+    from agm.agl.semantics.values import ArrayValue
 
     ir = evaluate_ir(source)
-    assert ir["result"] == ListValue((IntValue(1), IntValue(3), IntValue(6)))
+    assert ir["result"] == ArrayValue((IntValue(1), IntValue(3), IntValue(6)))
 
 
 def test_function_with_field_access_in_body() -> None:
@@ -364,7 +364,7 @@ def test_function_with_raise_in_body() -> None:
 
 
 def test_function_with_index_access_and_capture() -> None:
-    """Function body with index access capturing outer list."""
+    """Function body with index access capturing outer array."""
     source = (
         "let items = [10, 20, 30]\n"
         "def get_item(i: int) -> int = items[i]\n"
@@ -418,11 +418,11 @@ def test_index_target_capture() -> None:
     root) and the outer `let k` (index expression).  Before the fix the root was missed
     and lowering raised InvalidIrError.  Evaluation must yield arr = [0, 99, 0].
     """
-    from agm.agl.semantics.values import ListValue
+    from agm.agl.semantics.values import ArrayValue
 
     source = "var arr = [0, 0, 0]\nlet k = 1\ndef setit() -> unit =\n  arr[k] := 99\nsetit()\n()"
     ir = evaluate_ir(source)
-    assert ir["arr"] == ListValue((IntValue(0), IntValue(99), IntValue(0)))
+    assert ir["arr"] == ArrayValue((IntValue(0), IntValue(99), IntValue(0)))
 
 
 def test_assignment_as_function_result_yields_unit() -> None:
@@ -462,7 +462,7 @@ def test_name_target_only_assign_capture() -> None:
 
 
 def test_capture_through_nested_positions_and_pattern_locals() -> None:
-    """Fix: captures work through case/if/list/template/call-arg; pattern binders are local.
+    """Fix: captures work through case/if/array/template/call-arg; pattern binders are local.
 
     Exercises:
     - Outer let used only inside a `case` arm (captured correctly).

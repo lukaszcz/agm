@@ -3,7 +3,7 @@
 # Exercises: range-in-range, collection-for with inner range, range-for with inner collection-for.
 param rows: int
 param cols: int
-param scale_items: list[int] = [10, 20]
+param scale_items: array[int] = [10, 20]
 
 var grid_sum: int = 0
 for r in 1 to rows do
@@ -13,7 +13,7 @@ for r in 1 to rows do
 done
 print grid_sum
 
-var items: list[int] = [1, 2, 3]
+var items: array[int] = [1, 2, 3]
 var mixed: int = 0
 for x in items do
   for j in 1 to cols do

@@ -1,7 +1,7 @@
 scope Workflow
 record Task
   name: text
-  children: list[Task]
+  children: array[Task]
 end Workflow
 
 enum Workflow::Status

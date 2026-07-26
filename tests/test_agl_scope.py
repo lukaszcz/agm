@@ -94,6 +94,7 @@ def _find_varref(program: object, name: str, occurrence: int = -1) -> VarRef:
     Raises AssertionError if no match found.
     """
     from agm.agl.syntax.nodes import (
+        ArrayLit,
         BinaryOp,
         Case,
         Cast,
@@ -101,7 +102,6 @@ def _find_varref(program: object, name: str, occurrence: int = -1) -> VarRef:
         IndexAccess,
         InterpSegment,
         IsTest,
-        ListLit,
         ParamDecl,
         Raise,
         UnaryNeg,
@@ -179,7 +179,7 @@ def _find_varref(program: object, name: str, occurrence: int = -1) -> VarRef:
             walk(node.expr)
         elif isinstance(node, IsTest):
             walk(node.expr)
-        elif isinstance(node, ListLit):
+        elif isinstance(node, ArrayLit):
             for elem in node.elements:
                 walk(elem)
         elif isinstance(node, DictLit):
@@ -765,7 +765,7 @@ class TestAssignErrors:
         )
         err = reject_program(assign_bad, _make_unitlit())
         _, msg = diag(err)
-        assert "indexed assignment requires a variable list or dict root" in msg
+        assert "indexed assignment requires a variable array or dict root" in msg
 
     def test_assign_to_var_resolves(self) -> None:
         r = parse_and_resolve("var n = 0\nn := 1\nn")
@@ -1975,12 +1975,12 @@ class TestDirectASTConstruction:
         r = resolve_program(let_x, field_expr)
         assert r.resolution[x_ref.node_id].kind == BinderKind.let_binding
 
-    def test_list_lit_resolved(self) -> None:
-        from agm.agl.syntax.nodes import ListLit
+    def test_array_lit_resolved(self) -> None:
+        from agm.agl.syntax.nodes import ArrayLit
 
         let_x = _make_let("x", _make_intlit(1))
         x_ref = _make_varref("x")
-        lst = ListLit(elements=(x_ref,), span=_sp(), node_id=_nid())
+        lst = ArrayLit(elements=(x_ref,), span=_sp(), node_id=_nid())
         r = resolve_program(let_x, lst)
         assert r.resolution[x_ref.node_id].kind == BinderKind.let_binding
 

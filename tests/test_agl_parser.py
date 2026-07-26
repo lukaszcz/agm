@@ -3,11 +3,11 @@
 Covers:
 - LALR(1) conflict-guard: zero shift/reduce and reduce/reduce conflicts.
 - Parsing current constructs to the expected AST shape.
-- Records, enums, type aliases, constructors, field access, lists, dicts.
+- Records, enums, type aliases, constructors, field access, arrays, dicts.
 - Templates: plain text, interpolations.
 - Uniform calls: paren-call with positional+named args; single-arg sugar.
 - Function declarations (def) and lambda expressions.
-- Type expressions: primitives, list[T], dict[text, T], func_type, unit, agent.
+- Type expressions: primitives, array[T], dict[text, T], func_type, unit, agent.
 - Control flow: if/case/do/try expressions; suite bodies; multi-line branches.
 - Binders: let/var/assignment.
 - Input/agent/config declarations.
@@ -44,6 +44,7 @@ from agm.agl.parser import (
 from agm.agl.parser.errors import syntax_error_from_lark
 from agm.agl.syntax import (
     AgentDecl,
+    ArrayLit,
     AsPattern,
     AssignStmt,
     BinaryOp,
@@ -75,7 +76,6 @@ from agm.agl.syntax import (
     IsTest,
     Lambda,
     LetDecl,
-    ListLit,
     LiteralPattern,
     NamedArg,
     NameTarget,
@@ -109,13 +109,13 @@ from agm.agl.syntax.nodes import ELSE
 from agm.agl.syntax.types import (
     AgentT,
     AppliedT,
+    ArrayT,
     BoolT,
     DecimalT,
     DictT,
     FuncT,
     IntT,
     JsonT,
-    ListT,
     NameT,
     TextT,
     UnitT,
@@ -327,13 +327,13 @@ class TestLiterals:
         assert isinstance(tmpl.segments[0], TextSegment)
         assert isinstance(tmpl.segments[1], InterpSegment)
 
-    def test_list_empty(self) -> None:
+    def test_array_empty(self) -> None:
         lst = first(parse("[]"))
-        assert isinstance(lst, ListLit) and lst.elements == ()
+        assert isinstance(lst, ArrayLit) and lst.elements == ()
 
-    def test_list_elements(self) -> None:
+    def test_array_elements(self) -> None:
         lst = first(parse("[1, 2, 3]"))
-        assert isinstance(lst, ListLit) and len(lst.elements) == 3
+        assert isinstance(lst, ArrayLit) and len(lst.elements) == 3
 
     def test_dict_empty(self) -> None:
         d = first(parse("{}"))
@@ -514,10 +514,10 @@ class TestTypeExpressions:
         let = first(parse("let x: json = null"))
         assert isinstance(let, LetDecl) and isinstance(let.type_ann, JsonT)
 
-    def test_list_of_int(self) -> None:
-        let = first(parse("let xs: list[int] = []"))
+    def test_array_of_int(self) -> None:
+        let = first(parse("let xs: array[int] = []"))
         assert isinstance(let, LetDecl)
-        assert isinstance(let.type_ann, ListT)
+        assert isinstance(let.type_ann, ArrayT)
         assert isinstance(let.type_ann.elem, IntT)
 
     def test_dict_type(self) -> None:
@@ -526,11 +526,11 @@ class TestTypeExpressions:
         assert isinstance(let.type_ann, DictT)
         assert isinstance(let.type_ann.value, IntT)
 
-    def test_list_wrong_arg_count_raises(self) -> None:
+    def test_array_wrong_arg_count_raises(self) -> None:
         from agm.agl.parser.errors import AglSyntaxError
 
         with pytest.raises(AglSyntaxError, match="exactly one"):
-            parse("let x: list[int, text] = []")
+            parse("let x: array[int, text] = []")
 
     def test_dict_wrong_arg_count_raises(self) -> None:
         from agm.agl.parser.errors import AglSyntaxError
@@ -540,11 +540,11 @@ class TestTypeExpressions:
 
     def test_dict_non_text_key_complex_type_raises(self) -> None:
         # dict key type must be text; a complex key triggers _type_expr_spelling fallback
-        # (ListT → "list", covering the cls[:-1].lower() branch).
+        # (ArrayT → "array", covering the cls[:-1].lower() branch).
         from agm.agl.parser.errors import AglSyntaxError
 
         with pytest.raises(AglSyntaxError, match="text"):
-            parse("let d: dict[list[int], int] = {}")
+            parse("let d: dict[array[int], int] = {}")
 
     def test_dict_named_type_key_raises(self) -> None:
         # dict key type must be text; a named type key triggers the NameT branch
@@ -961,11 +961,11 @@ class TestParseTypeExpr:
         result = parse_type_expr("decimal")
         assert isinstance(result, DecimalT)
 
-    def test_list_int(self) -> None:
-        from agm.agl.syntax.types import IntT, ListT
+    def test_array_int(self) -> None:
+        from agm.agl.syntax.types import ArrayT, IntT
 
-        result = parse_type_expr("list[int]")
-        assert isinstance(result, ListT)
+        result = parse_type_expr("array[int]")
+        assert isinstance(result, ArrayT)
         assert isinstance(result.elem, IntT)
 
     def test_dict_text_int(self) -> None:
@@ -1698,27 +1698,27 @@ class TestCalls:
         assert arg.named_args[0].name == "x"
         assert isinstance(arg.named_args[0].value, IntLit)
 
-    def test_juxt_call_list_literal_preserved(self) -> None:
+    def test_juxt_call_array_literal_preserved(self) -> None:
         call = first(parse("f [2]"))
         assert isinstance(call, Call)
         assert isinstance(call.callee, VarRef)
         assert call.callee.name == "f"
         assert len(call.args) == 1
-        assert isinstance(call.args[0], ListLit)
+        assert isinstance(call.args[0], ArrayLit)
 
-    def test_print_list_literal_juxt_preserved(self) -> None:
+    def test_print_array_literal_juxt_preserved(self) -> None:
         call = first(parse("print [1,2,3]"))
         assert isinstance(call, Call)
         assert isinstance(call.callee, VarRef)
         assert call.callee.name == "print"
-        assert isinstance(call.args[0], ListLit)
+        assert isinstance(call.args[0], ArrayLit)
 
     def test_spaced_lsqb_does_not_index(self) -> None:
         call = first(parse("l [2]"))
         assert isinstance(call, Call)
         assert isinstance(call.callee, VarRef)
         assert call.callee.name == "l"
-        assert isinstance(call.args[0], ListLit)
+        assert isinstance(call.args[0], ArrayLit)
 
     def test_chained_paren_calls(self) -> None:
         """f(x).g(y) chains fine via postfix."""
@@ -1753,9 +1753,9 @@ class TestTypedCalls:
         assert isinstance(call.type_args[0], NameT)
         assert call.type_args[0].name == "Review"
 
-        generic = first(parse('ask-request::[list[Review]]("p")'))
+        generic = first(parse('ask-request::[array[Review]]("p")'))
         assert isinstance(generic, Call)
-        assert isinstance(generic.type_args[0], ListT)
+        assert isinstance(generic.type_args[0], ArrayT)
         assert isinstance(generic.type_args[0].elem, NameT)
         assert generic.type_args[0].elem.name == "Review"
 
@@ -1776,9 +1776,9 @@ class TestTypedCalls:
         assert isinstance(call.type_args[0], AgentT)
 
     def test_typed_call_generic_type(self) -> None:
-        call = first(parse('ask-request::[list[Review]]("p")'))
+        call = first(parse('ask-request::[array[Review]]("p")'))
         assert isinstance(call, Call)
-        assert isinstance(call.type_args[0], ListT)
+        assert isinstance(call.type_args[0], ArrayT)
         assert isinstance(call.type_args[0].elem, NameT)
         assert call.type_args[0].elem.name == "Review"
 
@@ -1808,14 +1808,14 @@ class TestTypedCalls:
         assert isinstance(call, Call)
         assert len(call.args) == 1
 
-    def test_typed_call_preserves_list_literal_juxt(self) -> None:
-        # ``::`` introduces the typed form without disturbing list-literal
+    def test_typed_call_preserves_array_literal_juxt(self) -> None:
+        # ``::`` introduces the typed form without disturbing array-literal
         # juxtaposition (``print [1,2,3]`` still parses).
         call = first(parse("print [1,2,3]"))
         assert isinstance(call, Call)
         assert isinstance(call.callee, VarRef)
         assert call.callee.name == "print"
-        assert isinstance(call.args[0], ListLit)
+        assert isinstance(call.args[0], ArrayLit)
 
     def test_typed_call_accepts_field_access_callee(self) -> None:
         prog = parse("f.g::[T](x)")
@@ -1909,7 +1909,7 @@ class TestFieldAccessAndConstructors:
 
 
 class TestIndexAccess:
-    def test_list_index_access(self) -> None:
+    def test_array_index_access(self) -> None:
         idx = first(parse("l[2]"))
         assert isinstance(idx, IndexAccess)
         assert isinstance(idx.obj, VarRef)
@@ -1949,10 +1949,10 @@ class TestIndexAccess:
         assert isinstance(idx.obj.callee, VarRef)
         assert idx.obj.callee.name == "make"
 
-    def test_list_literal_index(self) -> None:
+    def test_array_literal_index(self) -> None:
         idx = first(parse("[1, 2, 3][0]"))
         assert isinstance(idx, IndexAccess)
-        assert isinstance(idx.obj, ListLit)
+        assert isinstance(idx.obj, ArrayLit)
 
 
 # ---------------------------------------------------------------------------
@@ -4271,7 +4271,7 @@ print exec! true
 
     def test_empty_payload_names_the_form_after_nested_type_arguments(self) -> None:
         with pytest.raises(AglSyntaxError) as exc_info:
-            parse_program("let x: list[int] = exec!::[list[int]]\nnext")
+            parse_program("let x: array[int] = exec!::[array[int]]\nnext")
         assert "exec!" in str(exc_info.value)
 
     @pytest.mark.parametrize(

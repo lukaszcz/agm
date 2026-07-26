@@ -18,4 +18,4 @@ type Status = Verdict
 
 enum Verdict
   | Approved
-  | Rejected(notes: list[text])
+  | Rejected(notes: array[text])

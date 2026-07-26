@@ -623,8 +623,8 @@ def _remap_adjacent_brackets(tokens: list[Token]) -> list[Token]:
 
     A ``[`` immediately following the ``do`` keyword opens a loop bound; it is
     retagged ``DO_LSQB`` so the LALR grammar can tell ``do[expr]`` (the bound)
-    apart from a ``do`` body that starts with a list literal — without that
-    distinct terminal the optional ``loop_bound`` and a list-literal body both
+    apart from a ``do`` body that starts with an array literal — without that
+    distinct terminal the optional ``loop_bound`` and an array-literal body both
     begin with ``LSQB``, which is the conflict this resolves.  Whitespace
     between ``do`` and ``[`` is allowed (``do [n]`` works); a newline is not,
     because layout inserts a token between them.

@@ -47,6 +47,7 @@ from tests.agl.ir_harness import (
 def _find_varref(program: object, name: str) -> VarRef | None:
     """Recursively find the first VarRef with the given name in a Program."""
     from agm.agl.syntax.nodes import (
+        ArrayLit,
         AssignStmt,
         BinaryOp,
         Block,
@@ -61,7 +62,6 @@ def _find_varref(program: object, name: str) -> VarRef | None:
         IsTest,
         Lambda,
         LetDecl,
-        ListLit,
         Loop,
         ParamDecl,
         Program,
@@ -155,7 +155,7 @@ def _find_varref(program: object, name: str) -> VarRef | None:
             return walk(node.expr)
         if isinstance(node, IsTest):
             return walk(node.expr)
-        if isinstance(node, ListLit):
+        if isinstance(node, ArrayLit):
             for elem in node.elements:
                 r = walk(elem)
                 if r is not None:

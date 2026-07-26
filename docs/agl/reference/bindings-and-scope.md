@@ -100,7 +100,7 @@ var proposal: Turn = ask("Initial proposal.", agent = researcher)
 proposal := ask("Revise proposal.", agent = researcher)   # target type: Turn
 ```
 
-`:=` can also update an element of a mutable list or an existing key of a
+`:=` can also update an element of a mutable array or an existing key of a
 mutable dictionary:
 
 ```agl
@@ -115,12 +115,12 @@ Assignment indexes are adjacency-sensitive: the opening `[` must be adjacent
 to the target name or preceding index, as in `xs[0]`. A spaced form such as
 `xs [0]` is not an indexed assignment target.
 
-Indexed assignment is copy-on-write: the binding is updated with a new list or
+Indexed assignment is copy-on-write: the binding is updated with a new array or
 dictionary value containing the changed element. The root must be a `var`
 binding. Assigning through `let`, `param`, function arguments, function return
 temporaries, fields, or a type-qualified constructor reference is a static
-error. List assignment uses the same
-negative-index and `IndexError` rules as list access. Dictionary assignment
+error. Array assignment uses the same
+negative-index and `IndexError` rules as array access. Dictionary assignment
 updates existing keys only; assigning to a missing key raises `KeyError`.
 
 Static rules, all checked before execution:
@@ -177,8 +177,8 @@ A `def` inside a nested block is a static error. See
   let res = exec "ls"       # res: ExecResult (structured default)
   ```
 
-- Empty list/dictionary literals cannot be inferred and require an
-  annotation: `let items: list[Issue] = []`.
+- Empty array/dictionary literals cannot be inferred and require an
+  annotation: `let items: array[Issue] = []`.
 - A `let` or `var` bound to a function value has a function type:
 
   <!-- agl-check: fragment -->
@@ -212,7 +212,7 @@ the runtime after CLI/config resolution.
 
 Every program param must have a JSON-wire-serializable type, even when it has a
 default and the host does not supply a value. Supported param types are `text`,
-`int`, `decimal`, `bool`, `json`, lists, dictionaries, records, and enums.
+`int`, `decimal`, `bool`, `json`, arrays, dictionaries, records, and enums.
 Runtime-only types such as `unit`, `agent`, and function types cannot be used as
 program param types.
 
@@ -259,13 +259,13 @@ inside an imported library module (see [Modules](modules.md)). They are valid
 at the module root and in named scope regions. Each declaration enters its
 declaration layer as an **immutable binding of type `agent`**. A qualified
 head declares that member in its exact scope path. Agent values may be stored in bindings, passed to `def` parameters,
-and held in `list[agent]`:
+and held in `array[agent]`:
 
 ```agl
 agent reviewer
 agent impl = "claude -p \%{PROMPT_FILE}"
 
-let agents: list[agent] = [reviewer, impl]
+let agents: array[agent] = [reviewer, impl]
 ```
 
 A declared agent is a first-class value. It is passed to `ask` via the

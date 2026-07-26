@@ -272,7 +272,7 @@ class FieldAccess:
 
 @dataclass(frozen=True, slots=True)
 class IndexAccess:
-    """``obj[index]`` — index access on a list or dict value."""
+    """``obj[index]`` — index access on an array or dict value."""
 
     obj: Expr
     index: Expr
@@ -782,8 +782,8 @@ class StringLit:
 
 
 @dataclass(frozen=True, slots=True)
-class ListLit:
-    """A list literal: ``[e1, e2, ...]``."""
+class ArrayLit:
+    """An array literal: ``[e1, e2, ...]``."""
 
     elements: tuple[Expr, ...]
     span: SourceSpan = dc_field(compare=False)
@@ -844,7 +844,7 @@ Expr = (
     | BoolLit
     | NullLit
     | StringLit
-    | ListLit
+    | ArrayLit
     | DictLit
 )
 

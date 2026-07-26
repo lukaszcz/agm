@@ -1,7 +1,7 @@
 # The multi-agent refinement loop, finished with exec and print.
 enum Review
   | Pass
-  | Fail(issues: list[text])
+  | Fail(issues: array[text])
 
 param spec
 

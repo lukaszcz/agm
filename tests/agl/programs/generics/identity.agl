@@ -1,8 +1,8 @@
 # Generics: a polymorphic identity `def` applied at several instantiations
-# (int, text, list, record), an explicit `id::[…]` type-argument override, and
+# (int, text, array, record), an explicit `id::[…]` type-argument override, and
 # the generic `def` bound as a first-class value through an expected function
 # type and then applied. Also exercises a `let` annotation inside a generic
-# def body that references the def's type variable to build a `list[T]`
+# def body that references the def's type variable to build an `array[T]`
 # (`singleton`), instantiated at int and text. Also exercises a parameterized
 # type alias (`Seq[A]`) instantiated at a concrete element type. A host param
 # drives the int passed to `id` so two scenarios prove the same generic body
@@ -10,13 +10,13 @@
 def id[T](x: T) -> T = x
 
 # A generic def whose body uses a `let` annotation referencing the def's own
-# type variable `T` to build a `list[T]`.
-def singleton[T](x: T) -> list[T] =
-  let single: list[T] = [x]
+# type variable `T` to build an `array[T]`.
+def singleton[T](x: T) -> array[T] =
+  let single: array[T] = [x]
   single
 
-# A parameterized type alias: `Seq[A]` abbreviates `list[A]`.
-type Seq[A] = list[A]
+# A parameterized type alias: `Seq[A]` abbreviates `array[A]`.
+type Seq[A] = array[A]
 
 record Tag
   name: text

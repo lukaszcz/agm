@@ -34,7 +34,7 @@ Layout:
 | `partial/` | Partial application placeholders for calls, constructors, generics, eager capture, and higher-order use |
 | `rendering/` | Console/value rendering: nesting, escaping, exception rendering |
 | `templates/` | Template interpolation |
-| `types/` | Records, enums, `json`, `list`, `dict` |
+| `types/` | Records, enums, `json`, `array`, `dict` |
 
 ## `<name>.scenarios.json`
 

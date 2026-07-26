@@ -1,5 +1,5 @@
 # Equality '==' and inequality '!=' both produce bool, across scalar and
-# structured values (int, decimal, text, list, dict, record, enum). Ordering
+# structured values (int, decimal, text, array, dict, record, enum). Ordering
 # operators (<, <=, >, >=) compare ints and text lexicographically. Record/enum
 # construction uses '='; dict literals keep ':'.
 record P

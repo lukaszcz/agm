@@ -55,9 +55,9 @@ from agm.agl.ir import (
     IrLiteralCaseKey,
     IrLiteralKind,
     IrLoad,
+    IrMakeArray,
     IrMakeClosure,
     IrMakeDict,
-    IrMakeList,
     IrRenderTemplate,
     IrSequence,
     IrTemplateText,
@@ -463,7 +463,7 @@ class TestValidProgram:
             IrConstText(location=LOC, value="hi"),
             IrConstUnit(location=LOC),
             IrConstJsonNull(location=LOC),
-            IrMakeList(location=LOC, items=(IrConstInt(location=LOC, value=0),)),
+            IrMakeArray(location=LOC, items=(IrConstInt(location=LOC, value=0),)),
             IrMakeDict(
                 location=LOC,
                 entries=((IrConstText(location=LOC, value="k"), _int(1)),),
@@ -506,7 +506,7 @@ class TestValidProgram:
         validate_ir(program, deep=True)
 
     def test_assign_with_index_path(self) -> None:
-        idx_step = IrIndexStep(kind=IndexKind.LIST, index=_int(0), location=LOC)
+        idx_step = IrIndexStep(kind=IndexKind.ARRAY, index=_int(0), location=LOC)
         assign = IrAssign(location=LOC, symbol=SYM_MUT, path=(idx_step,), value=_int(99))
         prog = _make_program(initializers=(assign,))
         validate_ir(prog)
@@ -564,7 +564,7 @@ class TestCheapTierLocation:
 
     def test_index_step_bad_location(self) -> None:
         bad_loc = loc(start_offset=-5, end_offset=0)
-        step = IrIndexStep(kind=IndexKind.LIST, index=_int(0), location=bad_loc)
+        step = IrIndexStep(kind=IndexKind.ARRAY, index=_int(0), location=bad_loc)
         assign = IrAssign(location=LOC, symbol=SYM_MUT, path=(step,), value=_int())
         prog = _make_program(initializers=(assign,))
         with pytest.raises(InvalidIrError, match="start_offset"):
@@ -573,7 +573,7 @@ class TestCheapTierLocation:
     def test_index_step_index_bad_location(self) -> None:
         bad_loc = loc(start_offset=10, end_offset=5)
         step = IrIndexStep(
-            kind=IndexKind.LIST, index=IrConstInt(location=bad_loc, value=0), location=LOC
+            kind=IndexKind.ARRAY, index=IrConstInt(location=bad_loc, value=0), location=LOC
         )
         assign = IrAssign(location=LOC, symbol=SYM_MUT, path=(step,), value=_int())
         prog = _make_program(initializers=(assign,))
@@ -899,7 +899,7 @@ class TestDeepTierLocationSourceId:
     def test_index_step_location_source_id_missing(self) -> None:
         """IrIndexStep.location source_id is also validated."""
         bad_loc = loc(source_id=SID1)
-        step = IrIndexStep(kind=IndexKind.LIST, index=_int(), location=bad_loc)
+        step = IrIndexStep(kind=IndexKind.ARRAY, index=_int(), location=bad_loc)
         assign = IrAssign(location=LOC, symbol=SYM_MUT, path=(step,), value=_int())
         prog = _make_program(initializers=(assign,))
         with pytest.raises(InvalidIrError, match="source_id"):
@@ -951,10 +951,10 @@ class TestDeepTierMultiModule:
 class TestChildTraversal:
     """Validator must recurse into child expressions to find violations."""
 
-    def test_make_list_item_bad_location(self) -> None:
+    def test_make_array_item_bad_location(self) -> None:
         bad_loc = loc(start_offset=-1, end_offset=0)
         item = IrConstInt(location=bad_loc, value=1)
-        node = IrMakeList(location=LOC, items=(item,))
+        node = IrMakeArray(location=LOC, items=(item,))
         prog = _make_program(initializers=(node,))
         with pytest.raises(InvalidIrError):
             validate_ir(prog, deep=False)
@@ -1264,7 +1264,7 @@ class TestIrIndexValidation:
                 IrBind(
                     LOC,
                     SYM0,
-                    IrIndex(LOC, IndexKind.LIST, IrMakeList(LOC, ()), IrConstInt(LOC, 0)),
+                    IrIndex(LOC, IndexKind.ARRAY, IrMakeArray(LOC, ()), IrConstInt(LOC, 0)),
                 ),
             )
         )
@@ -1280,7 +1280,7 @@ class TestIrIndexValidation:
                 IrBind(
                     LOC,
                     SYM0,
-                    IrIndex(bad_loc, IndexKind.LIST, IrMakeList(LOC, ()), IrConstInt(LOC, 0)),
+                    IrIndex(bad_loc, IndexKind.ARRAY, IrMakeArray(LOC, ()), IrConstInt(LOC, 0)),
                 ),
             )
         )

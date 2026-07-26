@@ -11,6 +11,7 @@ from agm.agl.modules.ids import ENTRY_ID, ModuleId
 from agm.agl.semantics.type_table import TypeDef, TypeTable
 from agm.agl.semantics.types import (
     AgentType,
+    ArrayType,
     BoolType,
     BottomType,
     DecimalType,
@@ -21,7 +22,6 @@ from agm.agl.semantics.types import (
     InferenceVarType,
     IntType,
     JsonType,
-    ListType,
     RecordType,
     TextType,
     Type,
@@ -197,7 +197,7 @@ def constructor_inhabits_type(constructor: Constructor, subject_type: Type) -> b
             raise MatchCompileInvariantError("flexible inference type escaped checked output")
         case (
             TypeVarType()
-            | ListType()
+            | ArrayType()
             | DictType()
             | ExceptionType()
             | UnitType()
@@ -292,7 +292,7 @@ def signature_for_type(subject_type: Type, table: TypeTable) -> Signature:
             | IntType()
             | DecimalType()
             | TypeVarType()
-            | ListType()
+            | ArrayType()
             | DictType()
             | ExceptionType()
             | UnitType()

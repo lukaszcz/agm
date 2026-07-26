@@ -393,17 +393,17 @@ def test_builtin_exception_value_uses_prelude_id() -> None:
 
 
 # ---------------------------------------------------------------------------
-# ListValue (type lives in agm.agl.semantics.values)
+# ArrayValue (type lives in agm.agl.semantics.values)
 # ---------------------------------------------------------------------------
 
 
-def test_list_value_eq_and_hash() -> None:
-    """ListValue equality and hash compare elements structurally."""
-    from agm.agl.semantics.values import IntValue, ListValue
+def test_array_value_eq_and_hash() -> None:
+    """ArrayValue equality and hash compare elements structurally."""
+    from agm.agl.semantics.values import ArrayValue, IntValue
 
-    lv1 = ListValue(elements=(IntValue(1), IntValue(2)))
-    lv2 = ListValue(elements=(IntValue(1), IntValue(2)))
-    lv3 = ListValue(elements=(IntValue(1),))
+    lv1 = ArrayValue(elements=(IntValue(1), IntValue(2)))
+    lv2 = ArrayValue(elements=(IntValue(1), IntValue(2)))
+    lv3 = ArrayValue(elements=(IntValue(1),))
 
     assert lv1 == lv2
     assert hash(lv1) == hash(lv2)
@@ -427,7 +427,7 @@ def test_semantics_values_includes_container_types() -> None:
     """The single Value union in agm.agl.semantics.values includes all container/nominal types."""
     import agm.agl.semantics.values as vals
 
-    for name in ("ListValue", "DictValue", "RecordValue", "EnumValue", "ExceptionValue"):
+    for name in ("ArrayValue", "DictValue", "RecordValue", "EnumValue", "ExceptionValue"):
         assert hasattr(vals, name), f"agm.agl.semantics.values missing {name!r}"
 
 

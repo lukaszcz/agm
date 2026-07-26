@@ -47,6 +47,7 @@ from agm.agl.semantics.types import (
 )
 from agm.agl.syntax.nodes import (
     AgentDecl,
+    ArrayLit,
     AsPattern,
     AssignStmt,
     AssignTarget,
@@ -68,7 +69,6 @@ from agm.agl.syntax.nodes import (
     Item,
     Lambda,
     LetDecl,
-    ListLit,
     NamedArg,
     Param,
     ParamDecl,
@@ -88,12 +88,12 @@ from agm.agl.syntax.nodes import (
 from agm.agl.syntax.spans import SourceSpan
 from agm.agl.syntax.types import (
     AgentT,
+    ArrayT,
     BoolT,
     DictT,
     FuncT,
     IntT,
     JsonT,
-    ListT,
     TextT,
     TypeExpr,
     UnitT,
@@ -101,6 +101,7 @@ from agm.agl.syntax.types import (
 from agm.agl.typecheck import (
     AgentType,
     AglTypeError,
+    ArrayType,
     BoolType,
     BottomType,
     CheckedModule,
@@ -112,7 +113,6 @@ from agm.agl.typecheck import (
     FunctionType,
     IntType,
     JsonType,
-    ListType,
     PartialCallSpec,
     RecordType,
     TextType,
@@ -143,7 +143,9 @@ def default_capabilities() -> HostCapabilities:
         supports_shell_exec=True,
         codec_kinds={
             "text": frozenset({"text"}),
-            "json": frozenset({"json", "record", "enum", "list", "dict", "int", "decimal", "bool"}),
+            "json": frozenset(
+                {"json", "record", "enum", "array", "dict", "int", "decimal", "bool"}
+            ),
         },
     )
 
@@ -163,7 +165,9 @@ def no_agent_caps() -> HostCapabilities:
         supports_shell_exec=True,
         codec_kinds={
             "text": frozenset({"text"}),
-            "json": frozenset({"json", "record", "enum", "list", "dict", "int", "decimal", "bool"}),
+            "json": frozenset(
+                {"json", "record", "enum", "array", "dict", "int", "decimal", "bool"}
+            ),
         },
     )
 
@@ -295,12 +299,12 @@ class TestIsJsonShaped:
         for t in (TextType(), JsonType(), BoolType(), IntType(), DecimalType()):
             assert is_json_shaped(t)
 
-    def test_list_of_json_shaped(self) -> None:
-        assert is_json_shaped(ListType(elem=IntType()))
-        assert is_json_shaped(ListType(elem=JsonType()))
+    def test_array_of_json_shaped(self) -> None:
+        assert is_json_shaped(ArrayType(elem=IntType()))
+        assert is_json_shaped(ArrayType(elem=JsonType()))
 
-    def test_list_of_non_json(self) -> None:
-        assert not is_json_shaped(ListType(elem=UnitType()))
+    def test_array_of_non_json(self) -> None:
+        assert not is_json_shaped(ArrayType(elem=UnitType()))
 
     def test_dict_of_json_shaped(self) -> None:
         assert is_json_shaped(DictType(value=TextType()))
@@ -383,18 +387,18 @@ class TestComparableTypes:
         assert not comparable_types(JsonType(), TextType(), _EMPTY_TABLE)
 
     # Transitive rejection: containers/records/enums holding non-comparable types.
-    def test_list_of_function_not_comparable(self) -> None:
+    def test_array_of_function_not_comparable(self) -> None:
         ft = FunctionType(params=(), result=IntType())
-        assert not comparable_types(ListType(elem=ft), ListType(elem=ft), _EMPTY_TABLE)
+        assert not comparable_types(ArrayType(elem=ft), ArrayType(elem=ft), _EMPTY_TABLE)
 
-    def test_list_of_agent_not_comparable(self) -> None:
+    def test_array_of_agent_not_comparable(self) -> None:
         assert not comparable_types(
-            ListType(elem=AgentType()), ListType(elem=AgentType()), _EMPTY_TABLE
+            ArrayType(elem=AgentType()), ArrayType(elem=AgentType()), _EMPTY_TABLE
         )
 
-    def test_list_of_unit_not_comparable(self) -> None:
+    def test_array_of_unit_not_comparable(self) -> None:
         assert not comparable_types(
-            ListType(elem=UnitType()), ListType(elem=UnitType()), _EMPTY_TABLE
+            ArrayType(elem=UnitType()), ArrayType(elem=UnitType()), _EMPTY_TABLE
         )
 
     def test_dict_of_function_not_comparable(self) -> None:
@@ -478,8 +482,8 @@ class TestComparableTypes:
         )
         assert comparable_types(rt, rt, _table_for(typedef))
 
-    def test_list_of_int_comparable(self) -> None:
-        assert comparable_types(ListType(elem=IntType()), ListType(elem=IntType()), _EMPTY_TABLE)
+    def test_array_of_int_comparable(self) -> None:
+        assert comparable_types(ArrayType(elem=IntType()), ArrayType(elem=IntType()), _EMPTY_TABLE)
 
     def test_dict_of_text_comparable(self) -> None:
         assert comparable_types(
@@ -711,11 +715,11 @@ class TestTypeEnvironment:
         sp = mk_span()
         assert env.resolve_type_expr(AgentT(span=sp, node_id=1)) == AgentType()
 
-    def test_resolve_list_type(self) -> None:
+    def test_resolve_array_type(self) -> None:
         env = TypeEnvironment()
         sp = mk_span()
-        result = env.resolve_type_expr(ListT(elem=IntT(span=sp, node_id=1), span=sp, node_id=2))
-        assert result == ListType(elem=IntType())
+        result = env.resolve_type_expr(ArrayT(elem=IntT(span=sp, node_id=1), span=sp, node_id=2))
+        assert result == ArrayType(elem=IntType())
 
     def test_resolve_dict_type(self) -> None:
         env = TypeEnvironment()
@@ -1649,7 +1653,7 @@ class TestAsk:
         assert checked.let_matched_types[let.node_id] == EnumType("Option", (IntType(),))
         assert checked.type_env.get_binding_type(field.node_id) == IntType()
 
-        reject_type("let _: list[int] = []")
+        reject_type("let _: array[int] = []")
         reject_type(
             "enum Option[T]\n  | some(value: T)\nlet some(value = value) = "
             'raise Abort(message = "stop")'
@@ -2289,11 +2293,11 @@ class TestFuncDef:
         "recursive_expression",
         (
             pytest.param(
-                "(let next: list[T] -> T = recurse; next([value]))",
+                "(let next: array[T] -> T = recurse; next([value]))",
                 id="function-value",
             ),
             pytest.param("recurse(?)([value])", id="partial-application"),
-            pytest.param("recurse::[list[T]]([value])", id="explicit-type-application"),
+            pytest.param("recurse::[array[T]]([value])", id="explicit-type-application"),
         ),
     )
     def test_changed_generic_recursion_through_indirect_forms_requires_annotation(
@@ -2338,10 +2342,10 @@ class TestFuncDef:
 
     def test_unannotated_nonrecursive_generic_checks_default(self) -> None:
         checked = accept_type(
-            "def identity[T](value: list[T], fallback: list[T] = []) = value\nidentity([0])"
+            "def identity[T](value: array[T], fallback: array[T] = []) = value\nidentity([0])"
         )
 
-        assert checked.function_signatures["identity"].result == ListType(TypeVarType("T"))
+        assert checked.function_signatures["identity"].result == ArrayType(TypeVarType("T"))
 
     def test_unannotated_nonrecursive_generic_that_always_raises_needs_annotation(self) -> None:
         err = reject_type('def fail[T](value: T) = raise Abort(message = "x")')
@@ -2786,14 +2790,14 @@ class TestFuncDef:
     @pytest.mark.parametrize(
         "source",
         (
-            "def recurse(n: int) = if n == 0 => 1 else => recurse(n - 1)\nrecurse(0) as list[int]",
+            "def recurse(n: int) = if n == 0 => 1 else => recurse(n - 1)\nrecurse(0) as array[int]",
             "def recurse(n: int) = if n == 0 => 1 else => recurse(n - 1)\n"
             'try recurse(0) catch _ => "text"',
             "def recurse(n: int) = if n == 0 => 1 else => recurse(n - 1)\nraise recurse(0)",
             "def recurse(n: int) = if n == 0 => 1 else => recurse(n - 1)\nrecurse(0).reviewer",
             "def recurse(n: int) = if n == 0 => 1 else => recurse(n - 1)\nrecurse(0)[0]",
             "def recurse(n: int) = if n == 0 => 1 else => recurse(n - 1)\n"
-            "let values: list[text] = [recurse(0)]\nvalues",
+            "let values: array[text] = [recurse(0)]\nvalues",
             "def recurse(n: int) = if n == 0 => 1 else => recurse(n - 1)\n"
             'let values: dict[text, text] = {"value": recurse(0)}\nvalues',
             "def recurse(n: int) = if n == 0 => 1 else => recurse(n - 1)\nparse_json(recurse(0))",
@@ -2810,7 +2814,7 @@ class TestFuncDef:
             "raise",
             "field-access-reviewer-repro",
             "index-access",
-            "expected-list-element",
+            "expected-array-element",
             "expected-dict-element",
             "builtin-argument",
             "constructor-argument",
@@ -2875,7 +2879,7 @@ class TestFuncDef:
             "def recurse(n: int) = if n == 0 => 0 else => recurse(n - 1)\n"
             '{"candidate": recurse(0), "other": "x"}',
         ),
-        ids=("list", "dict"),
+        ids=("array", "dict"),
     )
     def test_literal_common_type_conflicts_frame_candidate_evidence(self, source: str) -> None:
         err = reject_type(source)
@@ -3028,7 +3032,7 @@ class TestFuncDef:
             f"def recurse(n: int) = if n == 0 => recurse(n) else => {elements}\nrecurse"
         )
 
-        assert checked.function_signatures["recurse"].result == ListType(DecimalType())
+        assert checked.function_signatures["recurse"].result == ArrayType(DecimalType())
 
     @pytest.mark.parametrize("elements", ('[1, "x"]', '["x", 1]'))
     def test_direct_recursive_incompatible_literal_evidence_requires_annotation_regardless_of_order(
@@ -3062,7 +3066,7 @@ class TestFuncDef:
             "else => recurse(n)\nrecurse"
         )
 
-        assert checked.function_signatures["recurse"].result == ListType(IntType())
+        assert checked.function_signatures["recurse"].result == ArrayType(IntType())
 
     @pytest.mark.parametrize(
         "elements",
@@ -3201,10 +3205,10 @@ class TestFuncDef:
 
     def test_candidate_expected_shape_mismatch_is_reported_during_discovery(self) -> None:
         reject_type(
-            "def accepts_list[T](value: list[T]) -> int = 0\n"
+            "def accepts_array[T](value: array[T]) -> int = 0\n"
             "def accepts_dict(value: dict[text, int]) -> int = 0\n"
             "def recurse(n: int) =\n"
-            "  if n == 0 => accepts_list(recurse(n)) else => accepts_dict(recurse(n))\n"
+            "  if n == 0 => accepts_array(recurse(n)) else => accepts_dict(recurse(n))\n"
             "recurse"
         )
 
@@ -4262,7 +4266,7 @@ class TestTemplate:
         r = accept_type('"%{null}"')
         assert r.resolved.program is not None
 
-    def test_interpolated_list_literal(self) -> None:
+    def test_interpolated_array_literal(self) -> None:
         r = accept_type('"%{[1, 2, 3]}"')
         assert r.resolved.program is not None
 
@@ -4371,8 +4375,8 @@ class TestBinaryOps:
         node = r.resolved.program.body.items[0]
         assert r.node_types[node.node_id] == BoolType()
 
-    def test_in_list(self) -> None:
-        r = accept_type("let xs: list[int] = [1, 2, 3]\n1 in xs")
+    def test_in_array(self) -> None:
+        r = accept_type("let xs: array[int] = [1, 2, 3]\n1 in xs")
         node = r.resolved.program.body.items[1]
         assert r.node_types[node.node_id] == BoolType()
 
@@ -4398,12 +4402,12 @@ class TestBinaryOps:
         assert "same" in str(err).lower() or "equality" in str(err).lower()
 
     # Transitive no-equality: function/agent/unit inside containers/records/enums.
-    def test_eq_list_of_fn_raises(self) -> None:
+    def test_eq_array_of_fn_raises(self) -> None:
         err = reject_type(
             "def f(n: int) -> int = n\n"
             "def g(n: int) -> int = n\n"
-            "let fs: list[(int) -> int] = [f, g]\n"
-            "let gs: list[(int) -> int] = [f]\n"
+            "let fs: array[(int) -> int] = [f, g]\n"
+            "let gs: array[(int) -> int] = [f]\n"
             "let r = (fs == gs)\nr"
         )
         assert "equality" in str(err).lower()
@@ -4437,18 +4441,18 @@ class TestBinaryOps:
         )
         assert "equality" in str(err).lower()
 
-    def test_eq_list_of_agent_raises(self) -> None:
+    def test_eq_array_of_agent_raises(self) -> None:
         err = reject_type(
             "agent reviewer\n"
-            "let as1: list[agent] = [reviewer]\n"
-            "let as2: list[agent] = [reviewer]\n"
+            "let as1: array[agent] = [reviewer]\n"
+            "let as2: array[agent] = [reviewer]\n"
             "let r = (as1 == as2)\nr"
         )
         assert "equality" in str(err).lower()
 
-    def test_eq_list_of_unit_raises(self) -> None:
+    def test_eq_array_of_unit_raises(self) -> None:
         err = reject_type(
-            "let us1: list[unit] = [()]\nlet us2: list[unit] = [()]\nlet r = (us1 == us2)\nr"
+            "let us1: array[unit] = [()]\nlet us2: array[unit] = [()]\nlet r = (us1 == us2)\nr"
         )
         assert "equality" in str(err).lower()
 
@@ -4492,8 +4496,8 @@ class TestBinaryOps:
         assert "equality" in str(err).lower()
 
     # Still-accept: lists/records/dicts of equatable scalars must stay green.
-    def test_eq_list_of_int_accepted(self) -> None:
-        accept_type("let xs: list[int] = [1, 2]\nlet ys: list[int] = [3]\nlet r = (xs == ys)\nr")
+    def test_eq_array_of_int_accepted(self) -> None:
+        accept_type("let xs: array[int] = [1, 2]\nlet ys: array[int] = [3]\nlet r = (xs == ys)\nr")
 
     def test_eq_dict_of_text_accepted(self) -> None:
         accept_type(
@@ -4524,7 +4528,7 @@ class TestBinaryOps:
         assert "ordering" in str(err).lower() or "numeric" in str(err).lower()
 
     def test_in_type_mismatch_raises(self) -> None:
-        err = reject_type('let xs: list[int] = [1, 2]\n"hello" in xs')
+        err = reject_type('let xs: array[int] = [1, 2]\n"hello" in xs')
         assert "in" in str(err).lower() or "mismatch" in str(err).lower()
 
     def test_in_invalid_container_raises(self) -> None:
@@ -4890,7 +4894,7 @@ class TestConstructorRefDispatch:
         source = (
             "enum Flag\n  | on\n  | off\n"
             "enum Packet\n  | packet(flag: Flag)\n"
-            "var on: list[int] = [0]\n"
+            "var on: array[int] = [0]\n"
             "let item = packet(Flag::on)\n"
             "case item of\n"
             "  | packet(on) =>\n"
@@ -4973,7 +4977,7 @@ class TestConstructorRefDispatch:
         [
             ("var on: int = 0", "on"),
             ("var on: int = 0", "on := on + 1\n        on"),
-            ("var on: list[int] = [0]", "on[0] := 1\n        on[0]"),
+            ("var on: array[int] = [0]", "on[0] := 1\n        on[0]"),
         ],
     )
     def test_nested_constructor_patterns_reach_outer_binding(
@@ -5251,46 +5255,46 @@ class TestBareConstructorTypeApply:
 
 
 # ---------------------------------------------------------------------------
-# List literals
+# Array literals
 # ---------------------------------------------------------------------------
 
 
-class TestListLiterals:
-    def test_list_int(self) -> None:
+class TestArrayLiterals:
+    def test_array_int(self) -> None:
         r = accept_type("[1, 2, 3]")
         node = r.resolved.program.body.items[0]
-        assert r.node_types[node.node_id] == ListType(elem=IntType())
+        assert r.node_types[node.node_id] == ArrayType(elem=IntType())
 
-    def test_list_text(self) -> None:
+    def test_array_text(self) -> None:
         r = accept_type('["a", "b"]')
         node = r.resolved.program.body.items[0]
-        assert r.node_types[node.node_id] == ListType(elem=TextType())
+        assert r.node_types[node.node_id] == ArrayType(elem=TextType())
 
-    def test_list_empty_with_annotation(self) -> None:
-        r = accept_type("let xs: list[int] = []\nxs")
+    def test_array_empty_with_annotation(self) -> None:
+        r = accept_type("let xs: array[int] = []\nxs")
         decl = r.resolved.program.body.items[0]
         assert isinstance(decl, LetDecl)
-        assert r.type_env.get_binding_type(decl.pattern.node_id) == ListType(elem=IntType())
+        assert r.type_env.get_binding_type(decl.pattern.node_id) == ArrayType(elem=IntType())
 
-    def test_list_empty_no_annotation_raises(self) -> None:
+    def test_array_empty_no_annotation_raises(self) -> None:
         err = reject_type("[]")
         assert "annotation" in str(err).lower() or "empty" in str(err).lower()
 
-    def test_list_inconsistent_elements_raises(self) -> None:
+    def test_array_inconsistent_elements_raises(self) -> None:
         err = reject_type('["a", 1]')
         assert "inconsistent" in str(err).lower() or "type" in str(err).lower()
 
-    def test_list_int_decimal_widening(self) -> None:
+    def test_array_int_decimal_widening(self) -> None:
         r = accept_type("[1, 2.5]")
         node = r.resolved.program.body.items[0]
-        assert r.node_types[node.node_id] == ListType(elem=DecimalType())
+        assert r.node_types[node.node_id] == ArrayType(elem=DecimalType())
 
-    def test_list_in_json_context(self) -> None:
+    def test_array_in_json_context(self) -> None:
         r = accept_type("let xs: json = [1, 2, 3]\nxs")
         assert r.resolved.program is not None
 
-    def test_list_record_in_json_raises(self) -> None:
-        err = reject_type("record R\n  x: int\nlet xs: list[json] = [R(x = 1)]\nxs")
+    def test_array_record_in_json_raises(self) -> None:
+        err = reject_type("record R\n  x: int\nlet xs: array[json] = [R(x = 1)]\nxs")
         assert "json" in str(err).lower() or "mismatch" in str(err).lower()
 
 
@@ -5352,18 +5356,18 @@ class TestProvisionalContainerLiterals:
         xs, values = checked.resolved.program.body.items[1:3]
         assert isinstance(xs, LetDecl)
         assert isinstance(values, LetDecl)
-        assert checked.type_env.get_binding_type(xs.pattern.node_id) == ListType(IntType())
+        assert checked.type_env.get_binding_type(xs.pattern.node_id) == ArrayType(IntType())
         assert checked.type_env.get_binding_type(values.pattern.node_id) == DictType(IntType())
         self._assert_finalized(checked)
 
     def test_empty_literals_are_solved_by_enclosing_results_and_constructor_fields(self) -> None:
         checked = accept_type(
             "record Bundle[T]\n"
-            "  values: list[T]\n"
+            "  values: array[T]\n"
             "  metadata: dict[text, T]\n"
             "  value: T\n"
             "def id[T](value: T) -> T = value\n"
-            "let xs: list[int] = id([])\n"
+            "let xs: array[int] = id([])\n"
             "let values: dict[text, int] = id({})\n"
             "let bundle = Bundle(values = [], metadata = {}, value = 1)\n"
             "bundle"
@@ -5372,7 +5376,7 @@ class TestProvisionalContainerLiterals:
         assert isinstance(xs, LetDecl)
         assert isinstance(values, LetDecl)
         assert isinstance(bundle, LetDecl)
-        assert checked.type_env.get_binding_type(xs.pattern.node_id) == ListType(IntType())
+        assert checked.type_env.get_binding_type(xs.pattern.node_id) == ArrayType(IntType())
         assert checked.type_env.get_binding_type(values.pattern.node_id) == DictType(IntType())
         assert checked.type_env.get_binding_type(bundle.pattern.node_id) == RecordType(
             "Bundle", (IntType(),)
@@ -5380,11 +5384,11 @@ class TestProvisionalContainerLiterals:
         self._assert_finalized(checked)
 
     def test_empty_literals_are_solved_by_expected_container_types(self) -> None:
-        checked = accept_type("let xs: list[int] = []\nlet values: dict[text, int] = {}\nvalues")
+        checked = accept_type("let xs: array[int] = []\nlet values: dict[text, int] = {}\nvalues")
         xs, values = checked.resolved.program.body.items[:2]
         assert isinstance(xs, LetDecl)
         assert isinstance(values, LetDecl)
-        assert checked.type_env.get_binding_type(xs.pattern.node_id) == ListType(IntType())
+        assert checked.type_env.get_binding_type(xs.pattern.node_id) == ArrayType(IntType())
         assert checked.type_env.get_binding_type(values.pattern.node_id) == DictType(IntType())
         self._assert_finalized(checked)
 
@@ -5398,7 +5402,7 @@ class TestProvisionalContainerLiterals:
         xs, values = checked.resolved.program.body.items[1:3]
         assert isinstance(xs, LetDecl)
         assert isinstance(values, LetDecl)
-        assert checked.type_env.get_binding_type(xs.pattern.node_id) == ListType(IntType())
+        assert checked.type_env.get_binding_type(xs.pattern.node_id) == ArrayType(IntType())
         assert checked.type_env.get_binding_type(values.pattern.node_id) == DictType(IntType())
         self._assert_finalized(checked)
 
@@ -5415,7 +5419,7 @@ class TestProvisionalContainerLiterals:
         option_int = EnumType("Option", (IntType(),))
         assert isinstance(xs, LetDecl)
         assert isinstance(values, LetDecl)
-        assert checked.type_env.get_binding_type(xs.pattern.node_id) == ListType(option_int)
+        assert checked.type_env.get_binding_type(xs.pattern.node_id) == ArrayType(option_int)
         assert checked.type_env.get_binding_type(values.pattern.node_id) == DictType(option_int)
         self._assert_finalized(checked)
 
@@ -5484,7 +5488,7 @@ class TestProvisionalContainerLiterals:
         xs, value = checked.resolved.program.body.items[1:3]
         assert isinstance(xs, LetDecl)
         assert isinstance(value, LetDecl)
-        assert checked.type_env.get_binding_type(xs.pattern.node_id) == ListType(DecimalType())
+        assert checked.type_env.get_binding_type(xs.pattern.node_id) == ArrayType(DecimalType())
         assert checked.type_env.get_binding_type(value.pattern.node_id) == DecimalType()
 
 
@@ -5510,7 +5514,7 @@ class TestTypeDeclarations:
         # A parameterized alias body may reference its own type parameter, and
         # applying it substitutes the argument (regression: the type-builder
         # previously registered aliases with 0 params and dropped body type vars).
-        r = accept_type("type Wrap[A] = list[A]\nlet w: Wrap[int] = [1, 2]\nw")
+        r = accept_type("type Wrap[A] = array[A]\nlet w: Wrap[int] = [1, 2]\nw")
         assert r.resolved.program is not None
 
     def test_parameterized_alias_unused_params(self) -> None:
@@ -5533,12 +5537,12 @@ class TestTypeDeclarations:
         )
 
     def test_parameterized_alias_arity_mismatch_rejected(self) -> None:
-        err = reject_type("type Wrap[A] = list[A]\nlet w: Wrap[int, text] = [1]\nw")
+        err = reject_type("type Wrap[A] = array[A]\nlet w: Wrap[int, text] = [1]\nw")
         assert "type argument" in str(err).lower()
 
     def test_parameterized_alias_substitution_enforced(self) -> None:
-        # Wrap[int] resolves to list[int]; a text element is rejected.
-        err = reject_type('type Wrap[A] = list[A]\nlet w: Wrap[int] = ["x"]\nw')
+        # Wrap[int] resolves to array[int]; a text element is rejected.
+        err = reject_type('type Wrap[A] = array[A]\nlet w: Wrap[int] = ["x"]\nw')
         assert (
             "int" in str(err).lower()
             or "text" in str(err).lower()
@@ -5567,7 +5571,7 @@ class TestTypeDeclarations:
         assert "already declared" in str(exc_info.value).lower()
 
     def test_record_bare_self_field_is_uninhabitable(self) -> None:
-        # A record whose only field is itself, with no list/dict guard or
+        # A record whose only field is itself, with no array/dict guard or
         # enum base case, has no finite value.
         err = reject_type("record Node\n  child: Node\nNode(child = Node(child = ()))")
         assert "uninhabitable" in str(err).lower()
@@ -5835,8 +5839,8 @@ class TestTypeReprAndKind:
     def test_bottom_repr(self) -> None:
         assert repr(BottomType()) == "bottom"
 
-    def test_list_repr(self) -> None:
-        assert repr(ListType(elem=IntType())) == "list[int]"
+    def test_array_repr(self) -> None:
+        assert repr(ArrayType(elem=IntType())) == "array[int]"
 
     def test_dict_repr(self) -> None:
         assert repr(DictType(value=TextType())) == "dict[text, text]"
@@ -5888,8 +5892,8 @@ class TestTypeReprAndKind:
     def test_bottom_kind(self) -> None:
         assert BottomType().kind == "bottom"
 
-    def test_list_kind(self) -> None:
-        assert ListType(elem=IntType()).kind == "list"
+    def test_array_kind(self) -> None:
+        assert ArrayType(elem=IntType()).kind == "array"
 
     def test_dict_kind(self) -> None:
         assert DictType(value=IntType()).kind == "dict"
@@ -6167,17 +6171,17 @@ class TestMisc:
         r = accept_type("record R\n  x: int\ntype MyR = R\nlet r: MyR = R(x = 1)\nr")
         assert r.resolved.program is not None
 
-    def test_field_list_of_record(self) -> None:
-        # Exercises ListT path in _ensure_referenced_type_built
-        r = accept_type("record R\n  x: int\nrecord S\n  items: list[R]\nS(items = [])")
+    def test_field_array_of_record(self) -> None:
+        # Exercises ArrayT path in _ensure_referenced_type_built
+        r = accept_type("record R\n  x: int\nrecord S\n  items: array[R]\nS(items = [])")
         assert r.resolved.program is not None
 
-    def test_template_empty_list_in_dict_value(self) -> None:
-        # Exercises empty-list in _check_template_literal_child
+    def test_template_empty_array_in_dict_value(self) -> None:
+        # Exercises empty-array in _check_template_literal_child
         r = accept_type('"%{{ "a": []}}"')
         assert r.resolved.program is not None
 
-    def test_template_empty_dict_as_list_child(self) -> None:
+    def test_template_empty_dict_as_array_child(self) -> None:
         # Exercises empty-dict in _check_template_literal_child
         r = accept_type('"%{[{}]}"')
         assert r.resolved.program is not None
@@ -6286,21 +6290,21 @@ class TestMisc:
         node = r.resolved.program.body.items[0]
         assert r.node_types[node.node_id] == DecimalType()
 
-    def test_list_decimal_then_int_widening(self) -> None:
-        # Exercises list element type unification: decimal followed by int widens to decimal.
+    def test_array_decimal_then_int_widening(self) -> None:
+        # Exercises array element type unification: decimal followed by int widens to decimal.
         # is_assignable(decimal,int)=False but is_assignable(int,decimal)=True, so type widens.
         r = accept_type("[2.5, 1]")
         node = r.resolved.program.body.items[0]
-        assert r.node_types[node.node_id] == ListType(elem=DecimalType())
+        assert r.node_types[node.node_id] == ArrayType(elem=DecimalType())
 
     def test_alias_field_in_record(self) -> None:
         # Exercises lines 314-316: alias in _ensure_referenced_type_built
         r = accept_type("type N = int\nrecord R\n  x: N\nR(x = 1)")
         assert r.resolved.program is not None
 
-    def test_list_field_of_aliased_type(self) -> None:
-        # Exercises line 321: ListT in _ensure_referenced_type_built
-        r = accept_type("type N = int\nrecord R\n  xs: list[N]\nR(xs = [])")
+    def test_array_field_of_aliased_type(self) -> None:
+        # Exercises line 321: ArrayT in _ensure_referenced_type_built
+        r = accept_type("type N = int\nrecord R\n  xs: array[N]\nR(xs = [])")
         assert r.resolved.program is not None
 
     def test_dict_field_of_aliased_type(self) -> None:
@@ -6313,8 +6317,8 @@ class TestMisc:
         r = accept_type("enum E\n  | A\nrecord R1\n  e: E\nrecord R2\n  e: E\nR1(e = A())")
         assert r.resolved.program is not None
 
-    def test_template_nested_list_in_list(self) -> None:
-        # Exercises a non-empty ListLit as a child of a template list.
+    def test_template_nested_array_in_array(self) -> None:
+        # Exercises a non-empty ArrayLit as a child of a template array.
         r = accept_type('"%{[1, [2, 3]]}"')
         assert r.resolved.program is not None
 
@@ -6423,18 +6427,18 @@ class TestIndexTypechecking:
             node_id=_mk_node_id(),
         )
 
-    def _list_decl_and_ref(
+    def _array_decl_and_ref(
         self, *, mutable: bool = False
     ) -> tuple[LetDecl | VarDecl, VarRef, BindingRef]:
         sp = mk_span()
         decl = self._binding(
             "xs",
-            ListT(
+            ArrayT(
                 elem=IntT(span=sp, node_id=_mk_node_id()),
                 span=sp,
                 node_id=_mk_node_id(),
             ),
-            ListLit(
+            ArrayLit(
                 elements=(
                     IntLit(value=10, span=sp, node_id=_mk_node_id()),
                     IntLit(value=20, span=sp, node_id=_mk_node_id()),
@@ -6489,9 +6493,9 @@ class TestIndexTypechecking:
         )
         return decl, ref_expr, ref
 
-    def test_list_index_returns_element_type(self) -> None:
+    def test_array_index_returns_element_type(self) -> None:
         sp = mk_span()
-        decl, obj, ref = self._list_decl_and_ref()
+        decl, obj, ref = self._array_decl_and_ref()
         index = IndexAccess(
             obj=obj,
             index=IntLit(value=0, span=sp, node_id=_mk_node_id()),
@@ -6515,15 +6519,15 @@ class TestIndexTypechecking:
 
     def test_bad_index_operands_and_non_container_rejected(self) -> None:
         sp = mk_span()
-        list_decl, list_obj, list_ref = self._list_decl_and_ref()
+        array_decl, array_obj, array_ref = self._array_decl_and_ref()
         list_index = IndexAccess(
-            obj=list_obj,
+            obj=array_obj,
             index=StringLit(value="a", span=sp, node_id=_mk_node_id()),
             span=sp,
             node_id=_mk_node_id(),
         )
         with pytest.raises(AglTypeError, match="expected 'int'"):
-            self._check_items((list_decl, cast(Item, list_index)), {list_obj.node_id: list_ref})
+            self._check_items((array_decl, cast(Item, list_index)), {array_obj.node_id: array_ref})
 
         dict_decl, dict_obj, dict_ref = self._dict_decl_and_ref()
         dict_index = IndexAccess(
@@ -6555,16 +6559,16 @@ class TestIndexTypechecking:
             span=sp,
             node_id=_mk_node_id(),
         )
-        with pytest.raises(AglTypeError, match="list or dict"):
+        with pytest.raises(AglTypeError, match="array or dict"):
             self._check_items((decl, cast(Item, non_container)), {obj.node_id: ref})
 
-    def test_parsed_indexed_assignment_accepts_var_list(self) -> None:
+    def test_parsed_indexed_assignment_accepts_var_array(self) -> None:
         result = accept_type("var xs = [1]\nxs[0] := 2\nxs")
         program = result.resolved.program
         assert program is not None
         final_expr = program.body.items[2]
         assert isinstance(final_expr, VarRef)
-        assert result.node_types[final_expr.node_id] == ListType(elem=IntType())
+        assert result.node_types[final_expr.node_id] == ArrayType(elem=IntType())
 
     def test_parsed_chained_indexed_assignment_records_intermediate_target_type(self) -> None:
         result = accept_type("var matrix = [[1, 2]]\nmatrix[0][1] := 3\nmatrix")
@@ -6577,22 +6581,22 @@ class TestIndexTypechecking:
         assert isinstance(target, IndexTarget)
         intermediate = target.obj
         assert isinstance(intermediate, IndexAccess)
-        assert result.node_types[intermediate.node_id] == ListType(elem=IntType())
+        assert result.node_types[intermediate.node_id] == ArrayType(elem=IntType())
 
         final_expr = program.body.items[2]
         assert isinstance(final_expr, VarRef)
-        assert result.node_types[final_expr.node_id] == ListType(elem=ListType(elem=IntType()))
+        assert result.node_types[final_expr.node_id] == ArrayType(elem=ArrayType(elem=IntType()))
 
     def test_parsed_indexed_assignment_rejects_non_container_root(self) -> None:
         err = reject_type("var n = 1\nn[0] := 2\nn")
-        assert "list or dict" in str(err)
+        assert "array or dict" in str(err)
 
-    def test_indexed_assignment_accepts_var_list_and_dict(self) -> None:
+    def test_indexed_assignment_accepts_var_array_and_dict(self) -> None:
         sp = mk_span()
-        list_decl, list_obj, list_ref = self._list_decl_and_ref(mutable=True)
-        list_assign = AssignStmt(
+        array_decl, array_obj, array_ref = self._array_decl_and_ref(mutable=True)
+        array_assign = AssignStmt(
             target=IndexTarget(
-                obj=list_obj,
+                obj=array_obj,
                 index=IntLit(value=0, span=sp, node_id=_mk_node_id()),
                 span=sp,
                 node_id=_mk_node_id(),
@@ -6602,8 +6606,8 @@ class TestIndexTypechecking:
             node_id=_mk_node_id(),
         )
         self._check_items(
-            (list_decl, list_assign),
-            {list_obj.node_id: list_ref, list_assign.node_id: list_ref},
+            (array_decl, array_assign),
+            {array_obj.node_id: array_ref, array_assign.node_id: array_ref},
         )
 
         dict_decl, dict_obj, dict_ref = self._dict_decl_and_ref(mutable=True)
@@ -6625,7 +6629,7 @@ class TestIndexTypechecking:
 
     def test_indexed_assignment_rejects_immutable_and_invalid_roots(self) -> None:
         sp = mk_span()
-        decl, obj, ref = self._list_decl_and_ref()
+        decl, obj, ref = self._array_decl_and_ref()
         let_assign = AssignStmt(
             target=IndexTarget(
                 obj=obj,
@@ -6640,7 +6644,7 @@ class TestIndexTypechecking:
         with pytest.raises(AglTypeError, match="mutable 'var'"):
             self._check_items((decl, let_assign), {obj.node_id: ref, let_assign.node_id: ref})
 
-        mutable_decl, mutable_obj, mutable_ref = self._list_decl_and_ref(mutable=True)
+        mutable_decl, mutable_obj, mutable_ref = self._array_decl_and_ref(mutable=True)
         field_assign = AssignStmt(
             target=IndexTarget(
                 obj=FieldAccess(
@@ -6657,7 +6661,7 @@ class TestIndexTypechecking:
             span=sp,
             node_id=_mk_node_id(),
         )
-        with pytest.raises(AglTypeError, match="variable list or dict root"):
+        with pytest.raises(AglTypeError, match="variable array or dict root"):
             self._check_items(
                 (mutable_decl, field_assign),
                 {
@@ -6668,7 +6672,7 @@ class TestIndexTypechecking:
 
         temporary_assign = AssignStmt(
             target=IndexTarget(
-                obj=ListLit(
+                obj=ArrayLit(
                     elements=(IntLit(value=1, span=sp, node_id=_mk_node_id()),),
                     span=sp,
                     node_id=_mk_node_id(),
@@ -6681,7 +6685,7 @@ class TestIndexTypechecking:
             span=sp,
             node_id=_mk_node_id(),
         )
-        with pytest.raises(AglTypeError, match="variable list or dict root"):
+        with pytest.raises(AglTypeError, match="variable array or dict root"):
             self._check_items(
                 (mutable_decl, temporary_assign),
                 {temporary_assign.node_id: mutable_ref},
@@ -6691,7 +6695,7 @@ class TestIndexTypechecking:
         sp = mk_span()
         param = ParamDecl(
             name="xs",
-            annotation=ListT(
+            annotation=ArrayT(
                 elem=IntT(span=sp, node_id=_mk_node_id()),
                 span=sp,
                 node_id=_mk_node_id(),
@@ -6726,7 +6730,7 @@ class TestIndexTypechecking:
 
         fn_param = Param(
             name="arg",
-            type_expr=ListT(
+            type_expr=ArrayT(
                 elem=IntT(span=sp, node_id=_mk_node_id()),
                 span=sp,
                 node_id=_mk_node_id(),
@@ -6794,7 +6798,7 @@ class TestIndexTypechecking:
             span=sp,
             node_id=_mk_node_id(),
         )
-        with pytest.raises(AglTypeError, match="list or dict"):
+        with pytest.raises(AglTypeError, match="array or dict"):
             self._check_items(
                 (var_decl, non_container_assign),
                 {var_obj.node_id: var_ref, non_container_assign.node_id: var_ref},
@@ -6802,7 +6806,7 @@ class TestIndexTypechecking:
 
     def test_indexed_assignment_value_type_mismatch_rejected(self) -> None:
         sp = mk_span()
-        decl, obj, ref = self._list_decl_and_ref(mutable=True)
+        decl, obj, ref = self._array_decl_and_ref(mutable=True)
         stmt = AssignStmt(
             target=IndexTarget(
                 obj=obj,
@@ -7654,7 +7658,7 @@ class TestResolveTypeExprTypeVars:
 
     def test_parameterized_alias_applied(self) -> None:
         from agm.agl.syntax.types import AppliedT, NameT
-        from agm.agl.syntax.types import ListT as _ListT
+        from agm.agl.syntax.types import ArrayT as _ListT
 
         env = TypeEnvironment()
         sp = mk_span()
@@ -7666,10 +7670,10 @@ class TestResolveTypeExprTypeVars:
         result = env.resolve_type_expr(
             AppliedT(name="Wrapper", args=(IntT(span=sp, node_id=1),), span=sp, node_id=2),
         )
-        assert result == ListType(IntType())
+        assert result == ArrayType(IntType())
 
     def test_bare_parameterized_alias_rejected(self) -> None:
-        from agm.agl.syntax.types import ListT as _ListT
+        from agm.agl.syntax.types import ArrayT as _ListT
         from agm.agl.syntax.types import NameT
 
         env = TypeEnvironment()
@@ -7709,7 +7713,7 @@ class TestResolveTypeExprTypeVars:
         assert env2.get_constructor_signature("Box", None) == sig
 
     def test_seed_from_copies_alias_type_params(self) -> None:
-        from agm.agl.syntax.types import ListT as _ListT
+        from agm.agl.syntax.types import ArrayT as _ListT
         from agm.agl.syntax.types import NameT
 
         env1 = TypeEnvironment()
@@ -7731,7 +7735,7 @@ class TestResolveTypeExprTypeVars:
 
     def test_applied_t_alias_arity_mismatch_raises(self) -> None:
         from agm.agl.syntax.types import AppliedT, NameT
-        from agm.agl.syntax.types import ListT as _ListT
+        from agm.agl.syntax.types import ArrayT as _ListT
 
         env = TypeEnvironment()
         sp = mk_span()
@@ -7909,7 +7913,7 @@ class TestGenericFunctionInferenceRegions:
     def test_context_completes_empty_collection_arguments_after_their_shape_is_known(self) -> None:
         checked = accept_type(
             "def id[T](value: T) -> T = value\n"
-            "let xs: list[int] = id([])\n"
+            "let xs: array[int] = id([])\n"
             "let values: dict[text, int] = id({})\n"
             "values\n"
         )
@@ -7917,7 +7921,7 @@ class TestGenericFunctionInferenceRegions:
         values = checked.resolved.program.body.items[2]
         assert isinstance(xs, LetDecl)
         assert isinstance(values, LetDecl)
-        assert checked.type_env.get_binding_type(xs.pattern.node_id) == ListType(IntType())
+        assert checked.type_env.get_binding_type(xs.pattern.node_id) == ArrayType(IntType())
         assert checked.type_env.get_binding_type(values.pattern.node_id) == DictType(IntType())
         self._assert_finalized(checked)
 
@@ -7986,11 +7990,11 @@ class TestGenerics:
         accept_type("def const[A, B](a: A, b: B) -> A = a\nconst(1, true)")
 
     def test_generic_first_container_index_allowed(self) -> None:
-        # list[T] indexing yields T — indexing on a container of T is fine
-        accept_type("def first[T](xs: list[T]) -> T = xs[0]\nfirst([1, 2, 3])")
+        # array[T] indexing yields T — indexing on a container of T is fine
+        accept_type("def first[T](xs: array[T]) -> T = xs[0]\nfirst([1, 2, 3])")
 
     def test_generic_wrap_def_accepted(self) -> None:
-        accept_type("def wrap[T](x: T) -> list[T] = [x]\nwrap(1)")
+        accept_type("def wrap[T](x: T) -> array[T] = [x]\nwrap(1)")
 
     # ------------------------------------------------------------------
     # Type argument inference
@@ -8004,10 +8008,10 @@ class TestGenerics:
 
     def test_inference_result_only_from_expected(self) -> None:
         # T only appears in the result; context provides the binding
-        r = accept_type("def empty[T]() -> list[T] = []\nlet xs: list[int] = empty()\nxs")
+        r = accept_type("def empty[T]() -> array[T] = []\nlet xs: array[int] = empty()\nxs")
         decl = r.resolved.program.body.items[1]
         assert isinstance(decl, LetDecl)
-        assert r.type_env.get_binding_type(decl.pattern.node_id) == ListType(elem=IntType())
+        assert r.type_env.get_binding_type(decl.pattern.node_id) == ArrayType(elem=IntType())
 
     def test_inference_context_doesnt_override_arg(self) -> None:
         # let x: decimal = id(1) infers T=int, then coerces int → decimal
@@ -8067,7 +8071,7 @@ class TestGenerics:
 
     def test_uninferable_variable_error(self) -> None:
         # Result-only type var with no expected context
-        err = reject_type("def empty[T]() -> list[T] = []\nempty()")
+        err = reject_type("def empty[T]() -> array[T] = []\nempty()")
         assert (
             "infer" in str(err).lower()
             or "type argument" in str(err).lower()
@@ -8141,8 +8145,8 @@ class TestGenerics:
         assert "type variable" in str(err).lower() or "abstract" in str(err).lower()
 
     def test_d2_in_op_bare_T_rejected(self) -> None:
-        # T `in` list[T] — left operand is a bare TypeVarType
-        err = reject_type("def contains[T](x: T, xs: list[T]) -> bool = x in xs")
+        # T `in` array[T] — left operand is a bare TypeVarType
+        err = reject_type("def contains[T](x: T, xs: array[T]) -> bool = x in xs")
         assert (
             "type variable" in str(err).lower()
             or "abstract" in str(err).lower()
@@ -8150,8 +8154,8 @@ class TestGenerics:
         )
 
     def test_d2_container_of_T_index_allowed(self) -> None:
-        # xs: list[T]; xs[0] yields T — container index is fine
-        accept_type("def first[T](xs: list[T]) -> T = xs[0]\nfirst([1])")
+        # xs: array[T]; xs[0] yields T — container index is fine
+        accept_type("def first[T](xs: array[T]) -> T = xs[0]\nfirst([1])")
 
     # ------------------------------------------------------------------
     # Generic def used as a value
@@ -8204,9 +8208,9 @@ class TestGenerics:
         err = reject_type("def req[T](p: text) -> AgentRequest = ask-request::[T](p)")
         assert "type variable" in str(err).lower() or "cannot" in str(err).lower()
 
-    def test_d3_ask_with_list_of_T_rejected(self) -> None:
-        # list[T] as target also contains a type var
-        err = reject_type("def fetch[T](p: text) -> list[T] = ask::[list[T]](p)")
+    def test_d3_ask_with_array_of_T_rejected(self) -> None:
+        # array[T] as target also contains a type var
+        err = reject_type("def fetch[T](p: text) -> array[T] = ask::[array[T]](p)")
         assert "type variable" in str(err).lower() or "cannot" in str(err).lower()
 
     def test_d3_ask_contextual_type_var_target_rejected(self) -> None:
@@ -8217,9 +8221,9 @@ class TestGenerics:
         assert "type variable" in str(err).lower()
 
     def test_d3_ask_contextual_composite_type_var_target_rejected(self) -> None:
-        # Regression: a composite contextual target (list[T]) previously crashed
+        # Regression: a composite contextual target (array[T]) previously crashed
         # in schema generation; it must now be a clean static error.
-        err = reject_type("def fetch[T](p: text) -> list[T] = ask(p)")
+        err = reject_type("def fetch[T](p: text) -> array[T] = ask(p)")
         assert "type variable" in str(err).lower()
 
     def test_d3_exec_contextual_type_var_target_rejected(self) -> None:
@@ -8580,11 +8584,11 @@ class TestGenericConstructorInference:
         )
         assert r.resolved.program is not None
 
-    def test_record_inferred_from_list_element_context(self) -> None:
+    def test_record_inferred_from_array_element_context(self) -> None:
         r = accept_type(
             "record Box[T]\n"
             "  value: T\n"
-            "let bs: list[Box[int]] = [Box(value = 1), Box(value = 2)]\nbs"
+            "let bs: array[Box[int]] = [Box(value = 1), Box(value = 2)]\nbs"
         )
         assert r.resolved.program is not None
 
@@ -9136,7 +9140,8 @@ class TestGenericEnumQualifiersAndTypeVarScoping:
     def test_type_var_let_annotation_in_generic_def_body(self) -> None:
         # A `let` annotation in a generic def body may reference a type variable.
         r = accept_type(
-            "def mk[A](x: A) -> list[A] =\n  let single: list[A] = [x]\n  single\nlet r = mk(3)\nr"
+            "def mk[A](x: A) -> array[A] =\n"
+            "  let single: array[A] = [x]\n  single\nlet r = mk(3)\nr"
         )
         assert r.resolved.program is not None
 
@@ -9436,7 +9441,7 @@ class TestGenericRecursiveTypes:
 
     def test_generic_record_direct_recursion_is_uninhabitable(self) -> None:
         # record Tree[T] with a bare field of type Tree[T] and no base case
-        # or list/dict guard has no finite value.
+        # or array/dict guard has no finite value.
         err = reject_type(
             "enum Option[T]\n"
             "  | none\n"
@@ -9448,16 +9453,16 @@ class TestGenericRecursiveTypes:
         )
         assert "uninhabitable" in str(err).lower()
 
-    def test_generic_record_indirect_via_list_is_accepted(self) -> None:
-        # children: list[Tree[T]] is guarded: the empty list is always a
+    def test_generic_record_indirect_via_array_is_accepted(self) -> None:
+        # children: array[Tree[T]] is guarded: the empty array is always a
         # value regardless of the element type.
         r = accept_type(
-            "record Tree[T]\n  value: T\n  children: list[Tree[T]]\nTree(value = 1, children = [])"
+            "record Tree[T]\n  value: T\n  children: array[Tree[T]]\nTree(value = 1, children = [])"
         )
         assert r.resolved.program is not None
 
     def test_generic_record_indirect_via_dict_is_accepted(self) -> None:
-        # dict[text, Tree[T]] is guarded the same way as list.
+        # dict[text, Tree[T]] is guarded the same way as array.
         r = accept_type(
             "record Tree[T]\n"
             "  value: T\n"
@@ -9540,11 +9545,11 @@ class TestExceptionRecursiveTypes:
         err = reject_type("exception E extends Exception\n  child: E\nE(child = ())")
         assert "uninhabitable" in str(err).lower()
 
-    def test_exception_self_field_via_list_is_accepted(self) -> None:
-        # exception E extends Exception (kids: list[E]): list-guarded
+    def test_exception_self_field_via_array_is_accepted(self) -> None:
+        # exception E extends Exception (kids: array[E]): array-guarded
         # recursion through its own field.
         r = accept_type(
-            'exception E extends Exception\n  kids: list[E]\nE(message = "m", kids = [])'
+            'exception E extends Exception\n  kids: array[E]\nE(message = "m", kids = [])'
         )
         assert r.resolved.program is not None
 
@@ -9593,8 +9598,8 @@ class TestInhabitationMatrix:
         err = reject_type("let unrelated = 1\nrecord R\n  next: R\nR(next = ())")
         assert "uninhabitable" in str(err).lower()
 
-    def test_list_guarded_record_is_accepted(self) -> None:
-        r = accept_type("record R\n  children: list[R]\nR(children = [])")
+    def test_array_guarded_record_is_accepted(self) -> None:
+        r = accept_type("record R\n  children: array[R]\nR(children = [])")
         assert r.resolved.program is not None
 
     def test_dict_guarded_record_is_accepted(self) -> None:
@@ -9808,13 +9813,13 @@ class TestCast:
         assert isinstance(decl.value, Cast)
         assert r.node_types[decl.value.node_id] == TextType()
 
-    def test_json_to_list_fallible(self) -> None:
-        """json as list[int] yields list[int]."""
-        r = accept_type("let j: json = 42\nlet xs: list[int] = j as list[int]\nxs")
+    def test_json_to_array_fallible(self) -> None:
+        """json as array[int] yields array[int]."""
+        r = accept_type("let j: json = 42\nlet xs: array[int] = j as array[int]\nxs")
         decl = r.resolved.program.body.items[1]
         assert isinstance(decl, LetDecl)
         assert isinstance(decl.value, Cast)
-        assert r.node_types[decl.value.node_id] == ListType(elem=IntType())
+        assert r.node_types[decl.value.node_id] == ArrayType(elem=IntType())
 
     def test_cast_spec_stored(self) -> None:
         """CastSpec is stored in CheckedModule.cast_specs."""
@@ -9893,7 +9898,7 @@ _GROWING_TYPE_SRC = (
 
 _TREE_SRC = "enum Tree\n  | Leaf\n  | Node(value: int, left: Tree, right: Tree)\n"
 
-_PHANTOM_GROWING_TYPE_SRC = "record R[T]\n  children: list[R[list[T]]]\n"
+_PHANTOM_GROWING_TYPE_SRC = "record R[T]\n  children: array[R[array[T]]]\n"
 
 
 class TestNoFiniteSchemaUseSites:
@@ -9923,7 +9928,7 @@ class TestNoFiniteSchemaUseSites:
             supports_shell_exec=True,
             codec_kinds={
                 "text": frozenset({"text"}),
-                "custom": frozenset({"record", "enum", "list", "dict"}),
+                "custom": frozenset({"record", "enum", "array", "dict"}),
             },
         )
         checked = accept_type(
@@ -9938,7 +9943,7 @@ class TestNoFiniteSchemaUseSites:
             supports_shell_exec=True,
             codec_kinds={
                 "text": frozenset({"text"}),
-                "custom": frozenset({"record", "enum", "list", "dict"}),
+                "custom": frozenset({"record", "enum", "array", "dict"}),
             },
         )
         checked = accept_type('record Box\n  a: agent\nask::[Box]("Q", format = "custom")', caps)
@@ -9983,12 +9988,12 @@ class TestNoFiniteSchemaUseSites:
         assert "holder" in msg
         assert "perfect" in msg
 
-    def test_cast_growing_type_in_list_target_rejected(self) -> None:
-        # A FALLIBLE cast to a COMPOSITE target (list[...]) containing an
+    def test_cast_growing_type_in_array_target_rejected(self) -> None:
+        # A FALLIBLE cast to a COMPOSITE target (array[...]) containing an
         # infinite type must be rejected here too, not only a bare
         # record/enum target — otherwise it passes check and crashes at
         # lowering.
-        err = reject_type(_GROWING_TYPE_SRC + 'let raw: text = "{}"\nraw as list[Perfect[int]]')
+        err = reject_type(_GROWING_TYPE_SRC + 'let raw: text = "{}"\nraw as array[Perfect[int]]')
         msg = str(err).lower()
         assert "perfect" in msg
         assert "cast target" in msg
@@ -10065,7 +10070,7 @@ class TestNoFiniteSchemaUseSites:
 
     def test_phantom_growing_recursive_type_accepted_at_schema_boundaries(self) -> None:
         # R's T parameter never affects its wire shape, so recursively
-        # mentioning R[list[T]] still closes to one schema definition.
+        # mentioning R[array[T]] still closes to one schema definition.
         assert accept_type(_PHANTOM_GROWING_TYPE_SRC + 'ask::[R[int]]("Q")')
         assert accept_type(_PHANTOM_GROWING_TYPE_SRC + 'exec::[R[int]]("cmd")')
         assert accept_type(_PHANTOM_GROWING_TYPE_SRC + 'let raw: text = "{}"\nraw as R[int]')

@@ -97,7 +97,7 @@ print label
     def test_indexed_assignment_inline_in_case_arm(self) -> None:
         ok, out, diags = _run(
             """\
-var xs: list[int] = [1, 2]
+var xs: array[int] = [1, 2]
 case 0 of
   | 0 => xs[0] := 99
   | _ => ()

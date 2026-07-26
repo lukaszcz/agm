@@ -1,7 +1,7 @@
-# `in` membership (list element / dict key / substring) and boolean composition
+# `in` membership (array element / dict key / substring) and boolean composition
 # with precedence.
 param needle
-param numbers: list[int]
+param numbers: array[int]
 param k: int
 
 let words = ["alpha", "beta", "gamma"]

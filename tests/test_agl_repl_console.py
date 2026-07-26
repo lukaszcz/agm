@@ -441,7 +441,7 @@ class TestLexer:
                 return style
         return None
 
-    @pytest.mark.parametrize("name", ["int", "text", "bool", "list", "dict", "decimal"])
+    @pytest.mark.parametrize("name", ["int", "text", "bool", "array", "dict", "decimal"])
     def test_builtin_type_name_is_styled_as_type(self, name: str) -> None:
         # Builtin type spellings lex as plain NAME (capitalization is meaningless)
         # yet must colour as types — even without a session.

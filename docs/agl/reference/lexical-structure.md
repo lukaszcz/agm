@@ -32,7 +32,7 @@ The layout rules:
 2. **Blank lines and comment-only lines** are ignored for layout purposes.
 3. **Implicit continuation inside brackets.** While any `(`, `[`, `{`, or
    `%{` interpolation is open, newlines do not terminate the item; the
-   logical line continues until the bracket closes. List literals, dictionary
+   logical line continues until the bracket closes. Array literals, dictionary
    literals, constructor argument lists, and function call argument lists may
    therefore span multiple lines.
 4. **Branch-marker continuation.** When the first token of a line is `|`,
@@ -98,7 +98,7 @@ binders — but they remain legal as field names. The distinct raw-tail spelling
 `exec!` and `ask!` are reserved for their raw forms and cannot be used as names.
 
 **Type-annotation keywords** — `text`, `json`, `bool`, `int`, `decimal`,
-`list`, `dict`, and `unit` are **not** reserved; they are recognized
+`array`, `dict`, and `unit` are **not** reserved; they are recognized
 contextually in type positions. `fn` is reserved (it introduces a lambda).
 `def` is reserved (it introduces a function declaration). `builtin` is
 reserved for standard-library declarations that are implemented by the host.
@@ -360,12 +360,12 @@ Multi-character operators are matched greedily.
 
 A `[` that immediately follows `do` — with or without intervening whitespace
 (`do[n]` and `do [n]` are equivalent) — opens the loop bound `[expr]`. This
-is what distinguishes the bound from a list literal that could otherwise begin
+is what distinguishes the bound from an array literal that could otherwise begin
 the loop body. As a consequence, a `do` body cannot itself *begin* with a bare
-list literal; parenthesize it (`do ([item1, item2]) until …`) if needed.
+array literal; parenthesize it (`do ([item1, item2]) until …`) if needed.
 
 An adjacent `[` after an expression-ending token starts indexing. Whitespace
-keeps the bracket as a list literal, so `xs[0]` indexes while `f [0]` is the
+keeps the bracket as an array literal, so `xs[0]` indexes while `f [0]` is the
 single-argument call sugar `f([0])`.
 
 ## Zone markers

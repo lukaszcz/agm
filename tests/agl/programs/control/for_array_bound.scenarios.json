@@ -1,12 +1,12 @@
 {
   "scenarios": [
     {
-      "name": "list_exhausted_before_bound",
+      "name": "array_exhausted_before_bound",
       "params": {"items": [1, 2, 3], "n": 10},
       "expect": {"stdout": "6\n"}
     },
     {
-      "name": "bound_exhausted_before_list",
+      "name": "bound_exhausted_before_array",
       "params": {"items": [1, 2, 3, 4, 5], "n": 2},
       "expect": {
         "raises": {"type": "MaxIterationsExceeded", "fields": {"limit": 2}}
@@ -18,7 +18,7 @@
       "expect": {"stdout": "0\n"}
     },
     {
-      "name": "bound_equals_list_length_normal_completion",
+      "name": "bound_equals_array_length_normal_completion",
       "params": {"items": [1, 2, 3], "n": 3},
       "expect": {"stdout": "6\n"}
     }

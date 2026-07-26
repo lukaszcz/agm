@@ -12,6 +12,7 @@ from agm.agl.parser import parse_program
 from agm.agl.scope import resolve_module
 from agm.agl.semantics.types import (
     AgentType,
+    ArrayType,
     BoolType,
     BottomType,
     DecimalType,
@@ -22,7 +23,6 @@ from agm.agl.semantics.types import (
     InferenceVarType,
     IntType,
     JsonType,
-    ListType,
     RecordType,
     TextType,
     Type,
@@ -90,7 +90,7 @@ class TestInstantiation:
         instantiated = engine.instantiate(
             ("T",),
             (
-                ListType(TypeVarType("T")),
+                ArrayType(TypeVarType("T")),
                 DictType(TypeVarType("T")),
                 RecordType("Box", (TypeVarType("T"),)),
                 EnumType("Option", (TypeVarType("T"),)),
@@ -100,7 +100,7 @@ class TestInstantiation:
 
         variable = instantiated.variables["T"]
         assert instantiated.templates == (
-            ListType(variable),
+            ArrayType(variable),
             DictType(variable),
             RecordType("Box", (variable,)),
             EnumType("Option", (variable,)),
@@ -120,11 +120,11 @@ class TestUnification:
             (UnitType(), UnitType()),
             (AgentType(), AgentType()),
             (ExceptionType("Problem"), ExceptionType("Problem")),
-            (ListType(IntType()), ListType(IntType())),
+            (ArrayType(IntType()), ArrayType(IntType())),
             (DictType(IntType()), DictType(IntType())),
             (
-                FunctionType((IntType(), ListType(TextType())), TextType()),
-                FunctionType((IntType(), ListType(TextType())), TextType()),
+                FunctionType((IntType(), ArrayType(TextType())), TextType()),
+                FunctionType((IntType(), ArrayType(TextType())), TextType()),
             ),
             (
                 RecordType("Box", (IntType(),), ModuleId.from_path("a")),
@@ -145,7 +145,7 @@ class TestUnification:
         ("left", "right"),
         [
             (IntType(), TextType()),
-            (ListType(IntType()), ListType(TextType())),
+            (ArrayType(IntType()), ArrayType(TextType())),
             (DictType(IntType()), DictType(TextType())),
             (FunctionType((IntType(),), IntType()), FunctionType((), IntType())),
             (TypeVarType("T"), TypeVarType("U")),
@@ -175,13 +175,13 @@ class TestUnification:
 
     def test_structural_unification_descends_to_flexible_children(self) -> None:
         engine = InferenceEngine()
-        list_variable = engine.fresh("list")
+        array_variable = engine.fresh("array")
         dict_variable = engine.fresh("dict")
         function_variable = engine.fresh("function")
         record_variable = engine.fresh("record")
         enum_variable = engine.fresh("enum")
 
-        engine.unify(ListType(list_variable), ListType(IntType()), _origin(engine, 1))
+        engine.unify(ArrayType(array_variable), ArrayType(IntType()), _origin(engine, 1))
         engine.unify(DictType(dict_variable), DictType(TextType()), _origin(engine, 2))
         engine.unify(
             FunctionType((function_variable,), function_variable),
@@ -199,7 +199,7 @@ class TestUnification:
             _origin(engine, 5),
         )
 
-        assert tuple(engine.zonk(variable) for variable in (list_variable, function_variable)) == (
+        assert tuple(engine.zonk(variable) for variable in (array_variable, function_variable)) == (
             IntType(),
             IntType(),
         )
@@ -213,8 +213,8 @@ class TestUnification:
         engine = InferenceEngine()
         with pytest.raises(InferenceError):
             engine.unify(
-                FunctionType((ListType(IntType()),), IntType()),
-                FunctionType((ListType(TextType()),), IntType()),
+                FunctionType((ArrayType(IntType()),), IntType()),
+                FunctionType((ArrayType(TextType()),), IntType()),
                 _origin(engine, 1),
             )
         with pytest.raises(InferenceError):
@@ -227,7 +227,7 @@ class TestUnification:
     @pytest.mark.parametrize(
         "wrap",
         [
-            lambda variable: ListType(variable),
+            lambda variable: ArrayType(variable),
             lambda variable: DictType(variable),
             lambda variable: FunctionType((variable,), IntType()),
             lambda variable: RecordType("Box", (variable,)),
@@ -270,7 +270,7 @@ class TestUnification:
         engine = InferenceEngine()
         variable = engine.fresh("T")
         engine.unify(variable, BottomType(), _origin(engine, 1))
-        engine.unify(BottomType(), ListType(variable), _origin(engine, 2))
+        engine.unify(BottomType(), ArrayType(variable), _origin(engine, 2))
 
         assert engine.zonk(variable) == variable
         assert engine.is_solved(variable) is False
@@ -282,8 +282,8 @@ class TestContextCompletion:
         first = engine.fresh("T")
         second = engine.fresh("U")
         engine.complete_from_context(
-            FunctionType((ListType(first),), DictType(second)),
-            FunctionType((ListType(IntType()),), DictType(TextType())),
+            FunctionType((ArrayType(first),), DictType(second)),
+            FunctionType((ArrayType(IntType()),), DictType(TextType())),
             _origin(engine, 1, role=ConstraintRole.EXPECTED_RESULT),
         )
 
@@ -301,20 +301,20 @@ class TestContextCompletion:
     def test_context_ignores_mismatched_shapes_and_bottom(self) -> None:
         engine = InferenceEngine()
         variable = engine.fresh("T")
-        engine.complete_from_context(ListType(variable), DictType(IntType()), _origin(engine, 1))
+        engine.complete_from_context(ArrayType(variable), DictType(IntType()), _origin(engine, 1))
         engine.complete_from_context(variable, BottomType(), _origin(engine, 2))
 
         assert engine.is_solved(variable) is False
 
     def test_context_recurses_through_each_matching_shape(self) -> None:
         engine = InferenceEngine()
-        list_variable = engine.fresh("list")
+        array_variable = engine.fresh("array")
         dict_variable = engine.fresh("dict")
         function_variable = engine.fresh("function")
         record_variable = engine.fresh("record")
         enum_variable = engine.fresh("enum")
         engine.complete_from_context(
-            ListType(list_variable), ListType(IntType()), _origin(engine, 1)
+            ArrayType(array_variable), ArrayType(IntType()), _origin(engine, 1)
         )
         engine.complete_from_context(
             DictType(dict_variable), DictType(TextType()), _origin(engine, 2)
@@ -335,7 +335,7 @@ class TestContextCompletion:
             _origin(engine, 5),
         )
 
-        assert tuple(engine.zonk(variable) for variable in (list_variable, record_variable)) == (
+        assert tuple(engine.zonk(variable) for variable in (array_variable, record_variable)) == (
             IntType(),
             IntType(),
         )
@@ -349,7 +349,7 @@ class TestContextCompletion:
         other = engine.fresh("U")
         engine.complete_from_context(variable, other, _origin(engine, 1))
         engine.complete_from_context(variable, variable, _origin(engine, 2))
-        engine.complete_from_context(variable, ListType(variable), _origin(engine, 3))
+        engine.complete_from_context(variable, ArrayType(variable), _origin(engine, 3))
         engine.complete_from_context(
             FunctionType((variable,), IntType()), FunctionType((), IntType()), _origin(engine, 4)
         )
@@ -397,7 +397,7 @@ class TestFinalizationAndProvenance:
         engine = InferenceEngine()
         result = engine.fresh("result")
         element = engine.fresh("element")
-        engine.unify(result, ListType(element), _origin(engine, 1))
+        engine.unify(result, ArrayType(element), _origin(engine, 1))
 
         assert engine.is_solved(result) is False
 
@@ -414,9 +414,9 @@ class TestFinalizationAndProvenance:
         engine.unify(second, third, _origin(engine, 2))
         engine.unify(third, IntType(), _origin(engine, 3))
 
-        zonked = engine.zonk(FunctionType((first,), ListType(second)))
+        zonked = engine.zonk(FunctionType((first,), ArrayType(second)))
 
-        assert zonked == FunctionType((IntType(),), ListType(IntType()))
+        assert zonked == FunctionType((IntType(),), ArrayType(IntType()))
         assert engine.zonk(first) == IntType()
         assert engine.parent_of(first) == engine.parent_of(third)
 
@@ -440,7 +440,7 @@ class TestFinalizationAndProvenance:
         engine = InferenceEngine()
         outer = engine.fresh("T")
         inner = engine.fresh("U")
-        engine.unify(outer, ListType(inner), _origin(engine, 1))
+        engine.unify(outer, ArrayType(inner), _origin(engine, 1))
         engine.require_solved(outer, _origin(engine, 2, type_param="T"))
 
         with pytest.raises(InferenceError, match="T"):
@@ -479,7 +479,7 @@ class TestFinalizationAndProvenance:
 
     def test_origin_sequence_is_stable_and_roles_are_typed(self) -> None:
         engine = InferenceEngine()
-        first = engine.origin(_span(1), role=ConstraintRole.LITERAL_ELEMENT, subject="list")
+        first = engine.origin(_span(1), role=ConstraintRole.LITERAL_ELEMENT, subject="array")
         second = engine.origin(_span(2), role=ConstraintRole.EXPECTED_RESULT, subject="id")
 
         assert (first.sequence, second.sequence) == (0, 1)

@@ -87,14 +87,14 @@ agent planner = "claude -p \%{PROMPT_FILE}"
 A runner hint may include the host prompt-file placeholder; write it as
 `\%{PROMPT_FILE}` so it is literal text in the template.
 
-Agent values may be stored, passed to functions, and held in lists — they
+Agent values may be stored, passed to functions, and held in arrays — they
 are ordinary value bindings:
 
 <!-- agl-check: fragment -->
 ```agl
-let agents: list[agent] = [reviewer, planner]
+let agents: array[agent] = [reviewer, planner]
 
-def call_first(agents: list[agent], prompt: text) -> text =
+def call_first(agents: array[agent], prompt: text) -> text =
   ask(prompt, agent = reviewer)
 ```
 
@@ -198,7 +198,7 @@ def fetch[T]() -> T =
 ```
 
 This applies whether the type variable is the whole target (`ask::[T](…)`) or
-merely appears inside it (`ask::[list[T]](…)` is equally rejected). It also
+merely appears inside it (`ask::[array[T]](…)` is equally rejected). It also
 applies when the target is inferred from an enclosing annotation typed by a
 type variable (`let r: T = ask(…)`).
 
@@ -256,7 +256,7 @@ ask("Plan the next step.", agent = planner)
 
 Selects the output codec by name, as a `text` value. Normally unnecessary:
 the codec is auto-selected from the target type — `text` targets use the
-`text` codec; `json`, records, enums, lists, dictionaries, and numeric/boolean
+`text` codec; `json`, records, enums, arrays, dictionaries, and numeric/boolean
 types use the `json` codec. An explicit `format` must name a registered codec
 that supports the call's target type; both are checked statically.
 
@@ -333,7 +333,7 @@ Example — for
 ```agl
 enum Review
   | Pass
-  | Fail(issues: list[text])
+  | Fail(issues: array[text])
 ```
 
 valid responses are:
@@ -361,7 +361,7 @@ mechanically from the target type:
 | `decimal` | `{"type": "number"}` |
 | `bool` | `{"type": "boolean"}` |
 | `json` | `{}` (any JSON value) |
-| `list[T]` | `{"type": "array", "items": <T>}` |
+| `array[T]` | `{"type": "array", "items": <T>}` |
 | `dict[text, V]` | `{"type": "object", "additionalProperties": <V>}` |
 | record | object schema: `additionalProperties: false`, all fields `required`, per-field `properties` |
 | enum | `oneOf` of per-variant schemas, each with a `"$case"` `const` plus payload fields, `additionalProperties: false` |

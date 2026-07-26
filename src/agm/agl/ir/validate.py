@@ -45,10 +45,11 @@ from collections.abc import Callable, Mapping
 from typing import TypeVar, assert_never
 
 from agm.agl.ir.contracts import (
+    ArrayDecode,
+    BoundaryArray,
     BoundaryDict,
     BoundaryEnum,
     BoundaryException,
-    BoundaryList,
     BoundaryRecord,
     BoundaryRef,
     BoundaryScalar,
@@ -61,7 +62,6 @@ from agm.agl.ir.contracts import (
     DictDecode,
     EnumDecode,
     ExternContract,
-    ListDecode,
     RecordDecode,
     RefDecode,
     ScalarDecode,
@@ -112,12 +112,12 @@ from agm.agl.ir.nodes import (
     IrLiteralKind,
     IrLoad,
     IrLoop,
+    IrMakeArray,
     IrMakeClosure,
     IrMakeConstructor,
     IrMakeDict,
     IrMakeEnum,
     IrMakeException,
-    IrMakeList,
     IrMakeRecord,
     IrOr,
     IrParseJson,
@@ -378,7 +378,7 @@ def _walk_decode_schema(
                 ref_kind="DecodeSchema RefDecode",
                 key_noun="$defs key",
             )
-        case ListDecode(elem=elem):
+        case ArrayDecode(elem=elem):
             _walk_decode_schema(elem, defs, ctx)
         case DictDecode(value=value_schema):
             _walk_decode_schema(value_schema, defs, ctx)
@@ -453,7 +453,7 @@ def _check_boundary_schema_nominals(
                 ref_kind="BoundarySchema BoundaryRef",
                 key_noun="defs key",
             )
-        case BoundaryList(element=element):
+        case BoundaryArray(element=element):
             _check_boundary_schema_nominals(element, defs, ctx)
         case BoundaryDict(value=value_schema):
             _check_boundary_schema_nominals(value_schema, defs, ctx)
@@ -485,7 +485,7 @@ def _collect_boundary_seal_vars(schema: BoundarySchema, out: set[str]) -> None:
             return
         case BoundarySealVar(var=var):
             out.add(var)
-        case BoundaryList(element=element):
+        case BoundaryArray(element=element):
             _collect_boundary_seal_vars(element, out)
         case BoundaryDict(value=value_schema):
             _collect_boundary_seal_vars(value_schema, out)
@@ -782,7 +782,7 @@ def _validate_expr_node(node: IrExpr, ctx: _Context) -> None:
         case IrConstJsonNull():
             _validate_location(node.location, ctx)
 
-        case IrMakeList():
+        case IrMakeArray():
             _validate_location(node.location, ctx)
             for item in node.items:
                 _validate_expr(item, ctx)

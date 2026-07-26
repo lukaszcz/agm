@@ -6,7 +6,7 @@ param k: int
 
 enum Verdict
   | Pass
-  | Fail(issues: list[text])
+  | Fail(issues: array[text])
 
 exception Halt extends Exception
   code: int

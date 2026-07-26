@@ -199,8 +199,8 @@ class ConstructorValue:
 
 
 @dataclass(frozen=True, slots=True)
-class ListValue:
-    """A ``list[T]`` value: an immutable tuple of ``Value`` items."""
+class ArrayValue:
+    """An ``array[T]`` value: an immutable tuple of ``Value`` items."""
 
     elements: tuple[Value, ...]
 
@@ -370,7 +370,7 @@ Value: TypeAlias = (
     | DecimalValue
     | BoolValue
     | JsonValue
-    | ListValue
+    | ArrayValue
     | DictValue
     | RecordValue
     | EnumValue
@@ -413,6 +413,7 @@ __all__ = [
     "UNIT_VALUE",
     "VOID_VALUE",
     "AgentValue",
+    "ArrayValue",
     "BoolValue",
     "Cell",
     "ConstructorValue",
@@ -425,7 +426,6 @@ __all__ = [
     "IrClosureValue",
     "IteratorValue",
     "JsonValue",
-    "ListValue",
     "NominalId",
     "RecordValue",
     "Slot",

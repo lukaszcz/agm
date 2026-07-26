@@ -24,7 +24,7 @@ if TYPE_CHECKING:
 # parse — notably the REPL syntax highlighter — use this set to recognise the
 # builtin types case-faithfully (identifier capitalization carries no meaning).
 BUILTIN_TYPE_NAMES: frozenset[str] = frozenset(
-    {"text", "json", "bool", "int", "decimal", "unit", "list", "dict"}
+    {"text", "json", "bool", "int", "decimal", "unit", "array", "dict"}
 )
 
 
@@ -87,8 +87,8 @@ class NameT:
 
 
 @dataclass(frozen=True, slots=True)
-class ListT:
-    """A ``list[T]`` type."""
+class ArrayT:
+    """An ``array[T]`` type."""
 
     elem: TypeExpr
     span: SourceSpan = field(compare=False)
@@ -154,7 +154,7 @@ TypeExpr = (
     | IntT
     | DecimalT
     | NameT
-    | ListT
+    | ArrayT
     | DictT
     | UnitT
     | AgentT

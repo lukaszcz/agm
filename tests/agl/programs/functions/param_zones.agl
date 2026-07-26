@@ -17,7 +17,7 @@ def add_atmarker(x: int, @std, y: int) -> int = x + y
 def with_default(x: int, y: int = 10, *, z: int) -> int = x + y + z
 
 # Generic function with pos-only and standard zones.
-def identity_po[T](x: T, /, y: T) -> list[T] =
+def identity_po[T](x: T, /, y: T) -> array[T] =
   let dummy = x
   [dummy, y]
 

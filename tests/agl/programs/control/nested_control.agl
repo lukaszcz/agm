@@ -2,7 +2,7 @@
 # markers, state threading through outer vars.
 enum Review
   | Pass
-  | Fail(issues: list[text])
+  | Fail(issues: array[text])
 
 enum Plan
   | Retry

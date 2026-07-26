@@ -56,7 +56,7 @@ let boxed = apply("hi", w)
 case boxed of
   | wrap(value) => print "wrapped %{value}"
 
-# A generic HOF applied to a list element, with a param-selected transform.
+# A generic HOF applied to an array element, with a param-selected transform.
 def loud(s: text) -> text = s + "!!!"
 def quiet(s: text) -> text = s
 

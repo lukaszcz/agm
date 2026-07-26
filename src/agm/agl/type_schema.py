@@ -37,7 +37,7 @@ Derivation rules:
 - ``decimal`` → ``{"type": "number"}``
 - ``bool``    → ``{"type": "boolean"}``
 - ``json``    → ``{}``  (permissive — accepts any JSON value)
-- ``list[T]`` → ``{"type": "array", "items": <schema for T>}``
+- ``array[T]`` → ``{"type": "array", "items": <schema for T>}``
 - ``dict[text, V]`` → ``{"type": "object", "additionalProperties": <schema for V>}``
 - ``record``  → object schema with ``additionalProperties: false``, ``required``,
                 and per-field ``properties``.
@@ -78,10 +78,11 @@ from dataclasses import dataclass, field
 from typing import assert_never
 
 from agm.agl.ir.contracts import (
+    ArrayDecode,
+    BoundaryArray,
     BoundaryDict,
     BoundaryEnum,
     BoundaryException,
-    BoundaryList,
     BoundaryRecord,
     BoundaryRef,
     BoundaryScalar,
@@ -95,7 +96,6 @@ from agm.agl.ir.contracts import (
     EnumDecode,
     ExternContract,
     ExternParamSchema,
-    ListDecode,
     ParamDecoder,
     RecordDecode,
     RefDecode,
@@ -107,6 +107,7 @@ from agm.agl.ir.ids import NominalId
 from agm.agl.semantics.type_table import TypeTable
 from agm.agl.semantics.types import (
     AgentType,
+    ArrayType,
     BoolType,
     BottomType,
     DecimalType,
@@ -117,7 +118,6 @@ from agm.agl.semantics.types import (
     InferenceVarType,
     IntType,
     JsonType,
-    ListType,
     RecordType,
     TextType,
     Type,
@@ -244,7 +244,7 @@ def _emit_body(typ: Type, type_table: TypeTable, plan: _SchemaPlan) -> dict[str,
     if isinstance(typ, JsonType):
         # Permissive: accepts any JSON value.
         return {}
-    if isinstance(typ, ListType):
+    if isinstance(typ, ArrayType):
         return {"type": "array", "items": _emit(typ.elem, type_table, plan)}
     if isinstance(typ, DictType):
         return {"type": "object", "additionalProperties": _emit(typ.value, type_table, plan)}
@@ -375,7 +375,7 @@ def _build_instantiation_plan(
     Nodes are concrete ``RecordType``/``EnumType``/``ExceptionType`` handles (memoized on handle
     equality); an edge from a node to another is a nominal handle occurring
     anywhere in the node's OWN substituted fields/variants (including nested
-    under ``list``/``dict``, or in another reference's own type arguments —
+    under ``array``/``dict``, or in another reference's own type arguments —
     :func:`~agm.agl.semantics.analyses.nominal_references` finds both).
     Returns ``(order, adjacency)``: *order* is first-encounter (BFS) order,
     used for deterministic ``$defs`` key assignment; *adjacency* maps each
@@ -562,8 +562,8 @@ def _emit_decode_body(typ: Type, type_table: TypeTable, plan: "_SchemaPlan") -> 
         return ScalarDecode(ScalarKind.BOOL)
     if isinstance(typ, JsonType):
         return ScalarDecode(ScalarKind.JSON)
-    if isinstance(typ, ListType):
-        return ListDecode(_emit_decode(typ.elem, type_table, plan))
+    if isinstance(typ, ArrayType):
+        return ArrayDecode(_emit_decode(typ.elem, type_table, plan))
     if isinstance(typ, DictType):
         return DictDecode(_emit_decode(typ.value, type_table, plan))
     if isinstance(typ, RecordType):
@@ -710,8 +710,8 @@ def _emit_boundary_body(typ: Type, type_table: TypeTable, plan: "_SchemaPlan") -
         return BoundaryScalar(ScalarKind.JSON)
     if isinstance(typ, UnitType):
         return BoundaryUnit()
-    if isinstance(typ, ListType):
-        return BoundaryList(_emit_boundary(typ.elem, type_table, plan))
+    if isinstance(typ, ArrayType):
+        return BoundaryArray(_emit_boundary(typ.elem, type_table, plan))
     if isinstance(typ, DictType):
         return BoundaryDict(_emit_boundary(typ.value, type_table, plan))
     if isinstance(typ, RecordType):

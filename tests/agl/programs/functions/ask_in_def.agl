@@ -7,7 +7,7 @@ agent reviewer
 
 enum Verdict
   | Pass
-  | Fail(issues: list[text])
+  | Fail(issues: array[text])
 
 def review_once(doc: text) -> Verdict =
   ask("Review this document: " + doc, agent = reviewer)

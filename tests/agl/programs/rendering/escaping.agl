@@ -1,5 +1,5 @@
 # Nested text rendering: literal interpolation markers, dollar signs, quotes,
-# and \n inside records and lists, combined with functions and control flow.
+# and \n inside records and arrays, combined with functions and control flow.
 # Verifies that nested text in structured values is quoted in a round-trippable
 # AgL string literal — a literal `%{` is re-escaped so the rendered form cannot
 # read back as an interpolation, while a bare `$` needs no escape.
@@ -20,7 +20,7 @@ print t1
 let t2 = Template(body = "line1\nline2", tag = "ok")
 print t2
 
-# A list of records containing special characters.
+# An array of records containing special characters.
 let snips = [Raw(src = "${var} \%{var}"), Wrapped(prefix = ">>", src = "a\"b")]
 print snips
 

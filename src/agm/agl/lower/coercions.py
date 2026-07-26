@@ -10,7 +10,7 @@ Ordering follows the contract exactly (mirrors legacy eval/interpreter._coerce):
   1. equal types → None (identity)
   2. target is JsonType and source is not JsonType → ToJson
   3. target is DecimalType and source is IntType → IntToDecimal
-  4. both ListType → recurse on elem; MapList if child is not None
+  4. both ArrayType → recurse on elem; MapArray if child is not None
   5. both DictType → recurse on value; MapDictValues if child is not None
   6. both RecordType → per shared field; MapRecordFields if any
   7. both EnumType → per variant/field; MapEnumFields if any
@@ -44,7 +44,7 @@ own checked type is already concrete (e.g. ``Tree[int]``). Recursing into
 ``Tree[T]``'s own fields never makes progress — substituting ``type_args =
 (T,)`` into ``Tree``'s template is an identity substitution, so the SAME
 ``(source, target)`` pair reappears every step, an unbounded recursion for a
-recursive declaration (list/dict/function templates instead reach a bare
+recursive declaration (array/dict/function templates instead reach a bare
 ``TypeVarType`` leaf after finitely many steps and stop, so they never
 actually needed this rule — but nothing is lost by covering them too).
 Treating any such pair as opaque is exactly right, not just crash-avoidance:
@@ -56,7 +56,7 @@ substitution exactly — no coercion is ever actually needed there.
 
 Genuinely unequal instantiations of the SAME recursive declaration (e.g.
 ``Box[int]`` vs. ``Box[decimal]``, both fully concrete, where ``Box[T]`` has
-a ``list[Box[T]]`` field) are a further, hypothetical case the two checks
+an ``array[Box[T]]`` field) are a further, hypothetical case the two checks
 above do not cover, and one investigation did not find reachable through the
 checker either: the same invariance argument applies at every nesting depth,
 so two syntactically different FULLY CONCRETE handles of the same recursive
@@ -74,20 +74,20 @@ from __future__ import annotations
 from agm.agl.ir.operations import (
     Coercion,
     IntToDecimal,
+    MapArray,
     MapDictValues,
     MapEnumFields,
-    MapList,
     MapRecordFields,
     ToJson,
 )
 from agm.agl.semantics.type_table import TypeTable
 from agm.agl.semantics.types import (
+    ArrayType,
     DecimalType,
     DictType,
     EnumType,
     IntType,
     JsonType,
-    ListType,
     RecordType,
     Type,
     contains_type_var,
@@ -107,7 +107,7 @@ def compile_coercion(source: Type, target: Type, type_table: TypeTable) -> Coerc
       1. equal types → None
       2. target is json and source is not json → ToJson
       3. target is decimal and source is int → IntToDecimal
-      4. both list → recurse on elem; MapList if child is not None
+      4. both array → recurse on elem; MapArray if child is not None
       5. both dict → recurse on value; MapDictValues if child is not None
       6. both record → per shared field; MapRecordFields if any
       7. both enum → per variant/field; MapEnumFields if any
@@ -199,10 +199,10 @@ def _compile_coercion(
     if isinstance(target, DecimalType) and isinstance(source, IntType):
         return IntToDecimal()
 
-    # 4. Both list → recurse on element type.
-    if isinstance(target, ListType) and isinstance(source, ListType):
+    # 4. Both array → recurse on element type.
+    if isinstance(target, ArrayType) and isinstance(source, ArrayType):
         child = _compile_coercion(source.elem, target.elem, type_table, visiting=visiting)
-        return MapList(child) if child is not None else None
+        return MapArray(child) if child is not None else None
 
     # 5. Both dict → recurse on value type.
     if isinstance(target, DictType) and isinstance(source, DictType):

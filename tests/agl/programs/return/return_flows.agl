@@ -34,7 +34,7 @@ def lambda-return(x: int) -> int =
   let f = fn(y: int) => if y > 0 => (return y + 10) | else => y
   f(x)
 
-def recursive-first(xs: list[int], i: int) -> int =
+def recursive-first(xs: array[int], i: int) -> int =
   if i >= 3 =>
     return -1
   if xs[i] > 0 =>

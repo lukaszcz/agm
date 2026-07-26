@@ -49,7 +49,9 @@ def _lower(source: str) -> ExecutableProgram:
     capabilities = HostCapabilities(
         codec_kinds={
             "text": frozenset({"text"}),
-            "json": frozenset({"json", "record", "enum", "list", "dict", "int", "decimal", "bool"}),
+            "json": frozenset(
+                {"json", "record", "enum", "array", "dict", "int", "decimal", "bool"}
+            ),
         }
     )
     checked = check_module(resolve_module(parse_program(source)), capabilities)

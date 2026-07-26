@@ -63,7 +63,7 @@ def test_spaced_qualifier_near_miss_suggests_a_tight_qualifier(tmp_path: Path) -
     ("spaced", "module_source", "intended"),
     (
         ("config ::x().field", "def x() -> int = 1", "config::x"),
-        ("config ::xs()[0]", "def xs() -> list[int] = [1]", "config::xs"),
+        ("config ::xs()[0]", "def xs() -> array[int] = [1]", "config::xs"),
         ("config ::E::X", "enum E\n  | X", "config::E::X"),
     ),
 )
@@ -195,10 +195,10 @@ def test_spaced_slash_qualifier_near_miss_uses_the_full_route_despite_suffix_col
         ),
         (
             (
-                "import app/config\ndef xs() -> list[int] = [1]\n"
+                "import app/config\ndef xs() -> array[int] = [1]\n"
                 "def config(value: int) -> int = value\nconfig ::xs()[0]"
             ),
-            {"app/config": "def xs() -> list[int] = [1]"},
+            {"app/config": "def xs() -> array[int] = [1]"},
         ),
         (
             "import app/config\nenum E\n  | X\ndef config(value: E) -> E = value\nconfig ::E::X",

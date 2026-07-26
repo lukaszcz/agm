@@ -608,7 +608,7 @@ class TestScopedModuleSelections:
     def test_scoped_generic_alias_resolves_before_its_origin_body(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        (tmp_path / "library.agl").write_text("type Point::Values[T] = list[T]\n")
+        (tmp_path / "library.agl").write_text("type Point::Values[T] = array[T]\n")
 
         result = _run_program(
             "import library using Point\n"

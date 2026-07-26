@@ -2,7 +2,7 @@
 
 Covers (per the AgL DSL contract):
 1. Schema derivation (schema.py): every Type kind → JSON Schema dict.
-2. JsonCodec.supports_type: json/record/enum/list/dict/int/decimal/bool;
+2. JsonCodec.supports_type: json/record/enum/array/dict/int/decimal/bool;
    NOT text (text stays TextCodec).
 3. Lenient default parsing: bare JSON, fenced ```json``` blocks, prose-wrapped,
    trailing-comma / single-quote trivial repairs, extracted and re-parsed with
@@ -11,7 +11,7 @@ Covers (per the AgL DSL contract):
    JSON with surrounding whitespace accepted.
 5. Schema validation errors → ParseResult.ok=False (missing/unknown field, wrong
    type, bad $case).
-6. Typed Value construction: RecordValue, EnumValue, ListValue, DictValue,
+6. Typed Value construction: RecordValue, EnumValue, ArrayValue, DictValue,
    scalars; int→decimal widening where the target type says decimal.
 7. Multiple JSON values / ambiguous output → failure.
 8. PipelineDriver wire-up: JsonCodec registered; checker passes json/record/enum
@@ -51,13 +51,13 @@ from agm.agl.semantics.exceptions import AglRaise
 from agm.agl.semantics.type_table import TypeDef, TypeTable
 from agm.agl.semantics.types import (
     AgentType,
+    ArrayType,
     BoolType,
     DecimalType,
     DictType,
     EnumType,
     IntType,
     JsonType,
-    ListType,
     RecordType,
     TextType,
     Type,
@@ -65,13 +65,13 @@ from agm.agl.semantics.types import (
     UnitType,
 )
 from agm.agl.semantics.values import (
+    ArrayValue,
     BoolValue,
     DecimalValue,
     DictValue,
     EnumValue,
     IntValue,
     JsonValue,
-    ListValue,
     RecordValue,
     TextValue,
 )
@@ -108,7 +108,7 @@ _ISSUE_TYPE, _ISSUE_TYPEDEF = record_type(
 )
 _REVIEW_TYPE, _REVIEW_TYPEDEF = enum_type(
     "Review",
-    {"Pass": {}, "Fail": {"issues": ListType(elem=TextType())}},
+    {"Pass": {}, "Fail": {"issues": ArrayType(elem=TextType())}},
 )
 # Shared table pre-seeded with the two ad-hoc composite shapes reused across
 # most of this suite (see ``_make_issue_type``/``_make_review_type``); tests
@@ -122,7 +122,7 @@ def _make_issue_type() -> RecordType:
 
 
 def _make_review_type() -> EnumType:
-    """enum Review | Pass | Fail(issues: list[text])"""
+    """enum Review | Pass | Fail(issues: array[text])"""
     return _REVIEW_TYPE
 
 
@@ -216,7 +216,9 @@ def _check_program_with_json(body: tuple[Item, ...]) -> CheckedModule:
         has_default_agent=True,
         codec_kinds={
             "text": frozenset({"text"}),
-            "json": frozenset({"json", "record", "enum", "list", "dict", "int", "decimal", "bool"}),
+            "json": frozenset(
+                {"json", "record", "enum", "array", "dict", "int", "decimal", "bool"}
+            ),
         },
     )
     return check_module(resolved, caps)
@@ -336,8 +338,8 @@ def _bool_ty() -> tast.BoolT:
     return tast.BoolT(span=_sp(), node_id=_nid())
 
 
-def _list_ty(elem: tast.TypeExpr) -> tast.ListT:
-    return tast.ListT(elem=elem, span=_sp(), node_id=_nid())
+def _array_ty(elem: tast.TypeExpr) -> tast.ArrayT:
+    return tast.ArrayT(elem=elem, span=_sp(), node_id=_nid())
 
 
 def _text_ty() -> tast.TextT:
@@ -394,16 +396,16 @@ class TestDeriveSchema:
         schema = derive_schema(JsonType(), type_table_for())
         assert schema == {}
 
-    def test_list_of_text(self) -> None:
-        schema = derive_schema(ListType(elem=TextType()), type_table_for())
+    def test_array_of_text(self) -> None:
+        schema = derive_schema(ArrayType(elem=TextType()), type_table_for())
         assert schema == {"type": "array", "items": {"type": "string"}}
 
-    def test_list_of_int(self) -> None:
-        schema = derive_schema(ListType(elem=IntType()), type_table_for())
+    def test_array_of_int(self) -> None:
+        schema = derive_schema(ArrayType(elem=IntType()), type_table_for())
         assert schema == {"type": "array", "items": {"type": "integer"}}
 
-    def test_list_nested(self) -> None:
-        schema = derive_schema(ListType(elem=ListType(elem=BoolType())), type_table_for())
+    def test_array_nested(self) -> None:
+        schema = derive_schema(ArrayType(elem=ArrayType(elem=BoolType())), type_table_for())
         assert schema == {
             "type": "array",
             "items": {"type": "array", "items": {"type": "boolean"}},
@@ -559,10 +561,10 @@ class TestRecursiveSchemaDerivation:
         schema = derive_schema(tree, type_table_for(tree_def))
         assert schema == {"$ref": "#/$defs/Tree", "$defs": {"Tree": _TREE_DEFS_BODY}}
 
-    def test_list_guarded_recursive_record_is_ref_with_defs(self) -> None:
+    def test_array_guarded_recursive_record_is_ref_with_defs(self) -> None:
         category, category_def = record_type(
             "Category",
-            {"name": TextType(), "subcategories": ListType(RecordType(name="Category"))},
+            {"name": TextType(), "subcategories": ArrayType(RecordType(name="Category"))},
         )
         schema = derive_schema(category, type_table_for(category_def))
         assert schema == {
@@ -702,14 +704,14 @@ class TestRecursiveSchemaDerivation:
         assert "$defs" not in schema
 
     def test_phantom_recursive_argument_growth_refs_same_defs_entry(self) -> None:
-        recursive = RecordType("R", type_args=(ListType(TypeVarType("T")),), module_id=ENTRY_ID)
+        recursive = RecordType("R", type_args=(ArrayType(TypeVarType("T")),), module_id=ENTRY_ID)
         root = RecordType("R", type_args=(IntType(),), module_id=ENTRY_ID)
         r_def = TypeDef(
             kind="record",
             name="R",
             module_id=ENTRY_ID,
             type_params=("T",),
-            fields=(("children", ListType(recursive)),),
+            fields=(("children", ArrayType(recursive)),),
         )
         schema = derive_schema(root, type_table_for(r_def))
         assert schema == {
@@ -845,10 +847,10 @@ class TestRecursiveDecodeDerivation:
         )
         assert plan == DecodePlan(root=RefDecode("Tree"), defs=(("Tree", tree_body),))
 
-    def test_list_guarded_recursive_record_is_refdecode_with_defs(self) -> None:
+    def test_array_guarded_recursive_record_is_refdecode_with_defs(self) -> None:
         from agm.agl.ir.contracts import (
+            ArrayDecode,
             DecodePlan,
-            ListDecode,
             RecordDecode,
             RefDecode,
             ScalarDecode,
@@ -858,7 +860,7 @@ class TestRecursiveDecodeDerivation:
 
         category, category_def = record_type(
             "Category",
-            {"name": TextType(), "subcategories": ListType(RecordType(name="Category"))},
+            {"name": TextType(), "subcategories": ArrayType(RecordType(name="Category"))},
         )
         plan = build_decode_schema(category, type_table_for(category_def))
         category_body = RecordDecode(
@@ -866,7 +868,7 @@ class TestRecursiveDecodeDerivation:
             display_name="Category",
             fields=(
                 ("name", ScalarDecode(ScalarKind.TEXT)),
-                ("subcategories", ListDecode(RefDecode("Category"))),
+                ("subcategories", ArrayDecode(RefDecode("Category"))),
             ),
         )
         assert plan == DecodePlan(root=RefDecode("Category"), defs=(("Category", category_body),))
@@ -1107,8 +1109,8 @@ class TestJsonCodecSupportsType:
     def test_supports_bool(self) -> None:
         assert JsonCodec().supports_type(BoolType()) is True
 
-    def test_supports_list(self) -> None:
-        assert JsonCodec().supports_type(ListType(elem=TextType())) is True
+    def test_supports_array(self) -> None:
+        assert JsonCodec().supports_type(ArrayType(elem=TextType())) is True
 
     def test_supports_dict(self) -> None:
         assert JsonCodec().supports_type(DictType(value=TextType())) is True
@@ -1391,20 +1393,20 @@ class TestTypedValueConstruction:
         assert result.ok is True
         assert result.value == BoolValue(False)
 
-    def test_list_of_text(self) -> None:
+    def test_array_of_text(self) -> None:
         codec = JsonCodec()
-        typ = ListType(elem=TextType())
+        typ = ArrayType(elem=TextType())
         result = _parse_typed(codec, '["a", "b"]', typ, strict_json=False)
         assert result.ok is True
-        assert isinstance(result.value, ListValue)
+        assert isinstance(result.value, ArrayValue)
         assert result.value.elements == (TextValue("a"), TextValue("b"))
 
-    def test_list_of_int(self) -> None:
+    def test_array_of_int(self) -> None:
         codec = JsonCodec()
-        typ = ListType(elem=IntType())
+        typ = ArrayType(elem=IntType())
         result = _parse_typed(codec, "[1, 2, 3]", typ, strict_json=False)
         assert result.ok is True
-        assert isinstance(result.value, ListValue)
+        assert isinstance(result.value, ArrayValue)
         assert result.value.elements == (IntValue(1), IntValue(2), IntValue(3))
 
     def test_dict_of_text(self) -> None:
@@ -1446,7 +1448,7 @@ class TestTypedValueConstruction:
         assert isinstance(result.value, EnumValue)
         assert result.value.variant == "Fail"
         issues = result.value.fields["issues"]
-        assert isinstance(issues, ListValue)
+        assert isinstance(issues, ArrayValue)
         assert issues.elements == (TextValue("a"), TextValue("b"))
 
     def test_json_value_wraps_raw(self) -> None:
@@ -1469,16 +1471,16 @@ class TestTypedValueConstruction:
         assert isinstance(inner_val, RecordValue)
         assert inner_val.fields["x"] == IntValue(7)
 
-    def test_list_in_record_field(self) -> None:
+    def test_array_in_record_field(self) -> None:
         codec = JsonCodec()
-        typ, typedef = record_type("Doc", {"tags": ListType(elem=TextType())})
+        typ, typedef = record_type("Doc", {"tags": ArrayType(elem=TextType())})
         result = _parse_typed(
             codec, '{"tags": ["x", "y"]}', typ, strict_json=False, table=type_table_for(typedef)
         )
         assert result.ok is True
         assert isinstance(result.value, RecordValue)
         tags = result.value.fields["tags"]
-        assert isinstance(tags, ListValue)
+        assert isinstance(tags, ArrayValue)
         assert tags.elements == (TextValue("x"), TextValue("y"))
 
 
@@ -1683,7 +1685,7 @@ class TestValidationErrorsThroughRuntime:
         enum_def = _enum_def(
             "Review",
             _variant_def("Pass"),
-            _variant_def("Fail", _field_def("issues", _list_ty(_text_ty()))),
+            _variant_def("Fail", _field_def("issues", _array_ty(_text_ty()))),
         )
         let_r = _let("r", _ask_call("Review."), type_ann=_name_ty("Review"))
         with pytest.raises(AglRaise) as exc_info:
@@ -1966,12 +1968,12 @@ class TestPipelineDriverWireUp:
         assert x.fields["title"] == TextValue("Bug")
 
     def test_enum_target_accepted_via_json_codec(self) -> None:
-        # enum Review | Pass | Fail(issues: list[text])
+        # enum Review | Pass | Fail(issues: array[text])
         # let r: Review = ask "Review."
         enum_def = _enum_def(
             "Review",
             _variant_def("Pass"),
-            _variant_def("Fail", _field_def("issues", _list_ty(_text_ty()))),
+            _variant_def("Fail", _field_def("issues", _array_ty(_text_ty()))),
         )
         let_r = _let(
             "r",
@@ -1986,15 +1988,15 @@ class TestPipelineDriverWireUp:
         assert isinstance(r, EnumValue)
         assert r.variant == "Pass"
 
-    def test_list_target_accepted(self) -> None:
+    def test_array_target_accepted(self) -> None:
         let_xs = _let(
             "xs",
             _ask_call("List items."),
-            type_ann=_list_ty(_text_ty()),
+            type_ann=_array_ty(_text_ty()),
         )
         scope = _run_with_json_codec((let_xs,), default_agent=lambda req: '["a", "b"]')
         xs = scope.snapshot()["xs"]
-        assert isinstance(xs, ListValue)
+        assert isinstance(xs, ArrayValue)
         assert xs.elements == (TextValue("a"), TextValue("b"))
 
     def test_dict_target_accepted(self) -> None:
@@ -2114,7 +2116,7 @@ class TestPipelineDriverWireUp:
         kinds = {
             text_codec.name: frozenset({"text"}),
             json_codec.name: frozenset(
-                {"json", "record", "enum", "list", "dict", "int", "decimal", "bool"}
+                {"json", "record", "enum", "array", "dict", "int", "decimal", "bool"}
             ),
         }
         caps = HostCapabilities(
@@ -2256,10 +2258,10 @@ issue
         assert isinstance(result.value, EnumValue)
         assert result.value.variant == "Done"
 
-    def test_list_param_parsed_from_json_string(self) -> None:
+    def test_array_param_parsed_from_json_string(self) -> None:
         rt = PipelineDriver()
         result = rt.run(
-            "param tags: list[text]",
+            "param tags: array[text]",
             param_values={"tags": '["a", "b"]'},
         )
         assert result.ok is True
@@ -2267,10 +2269,10 @@ issue
     def test_structured_param_accepts_python_list(self) -> None:
         """Structured params may be provided as a Python list (JSON-compatible)."""
         from agm.agl.runtime.params import convert_param_value
-        from agm.agl.semantics.values import IntValue, ListValue
+        from agm.agl.semantics.values import ArrayValue, IntValue
 
-        result = convert_param_value("xs", [1, 2, 3], ListType(elem=IntType()), type_table_for())
-        assert isinstance(result, ListValue)
+        result = convert_param_value("xs", [1, 2, 3], ArrayType(elem=IntType()), type_table_for())
+        assert isinstance(result, ArrayValue)
         assert result.elements == (IntValue(1), IntValue(2), IntValue(3))
 
     def test_structured_param_must_be_string_or_compatible(self) -> None:
@@ -2278,7 +2280,7 @@ issue
         from agm.agl.runtime.params import convert_param_value
 
         with pytest.raises(ValueError, match="JSON"):
-            convert_param_value("xs", object(), ListType(elem=IntType()), type_table_for())
+            convert_param_value("xs", object(), ArrayType(elem=IntType()), type_table_for())
 
     def test_invalid_structured_param_raises(self) -> None:
         """A JSON string that fails schema validation for the declared type raises."""
@@ -2331,7 +2333,7 @@ issue
             convert_param_value(
                 "tags",
                 "```json\n[1, 2]\n```",
-                ListType(elem=IntType()),
+                ArrayType(elem=IntType()),
                 type_table_for(),
             )
 
@@ -2386,12 +2388,12 @@ class TestDecodeValueErrorBranches:
         with pytest.raises(ValueError, match="bool"):
             decode_value(ScalarDecode(kind=ScalarKind.BOOL), 1)
 
-    def test_list_type_got_non_list(self) -> None:
-        from agm.agl.ir.contracts import ListDecode, ScalarDecode, ScalarKind
+    def test_array_type_got_non_array(self) -> None:
+        from agm.agl.ir.contracts import ArrayDecode, ScalarDecode, ScalarKind
         from agm.agl.runtime.convert import decode_value
 
         with pytest.raises(ValueError, match="array"):
-            decode_value(ListDecode(elem=ScalarDecode(kind=ScalarKind.TEXT)), "not a list")
+            decode_value(ArrayDecode(elem=ScalarDecode(kind=ScalarKind.TEXT)), "not a list")
 
     def test_dict_type_got_non_dict(self) -> None:
         from agm.agl.ir.contracts import DictDecode, ScalarDecode, ScalarKind
@@ -2684,13 +2686,13 @@ class TestValidationMappingCoverage:
         assert result.ok is False
         assert result.errors[0].category == "bad_case"
 
-    def test_list_nested_enum_bad_case(self) -> None:
+    def test_array_nested_enum_bad_case(self) -> None:
         codec = JsonCodec()
         enum, enum_def = enum_type("E", {"A": {}, "B": {"x": IntType()}})
         result = _parse_typed(
             codec,
             '[{"$case": "Z"}]',
-            ListType(elem=enum),
+            ArrayType(elem=enum),
             strict_json=False,
             table=type_table_for(enum_def),
         )
@@ -2712,8 +2714,8 @@ class TestValidationMappingCoverage:
         assert result.errors[0].category == "bad_case"
         assert result.errors[0].path == "$.k"
 
-    def test_make_validation_error_required_non_list(self) -> None:
-        """_make_validation_error: required validator with non-list value → field=None."""
+    def test_make_validation_error_required_non_array(self) -> None:
+        """_make_validation_error: required validator with non-array value → field=None."""
         from unittest.mock import MagicMock
 
         from jsonschema import ValidationError as JVE
@@ -3012,19 +3014,19 @@ class TestCodecSupportedKinds:
     def test_json_codec_supported_kinds(self) -> None:
         codec = JsonCodec()
         assert codec.supported_kinds == frozenset(
-            {"json", "record", "enum", "list", "dict", "int", "decimal", "bool"}
+            {"json", "record", "enum", "array", "dict", "int", "decimal", "bool"}
         )
 
     def test_supported_kinds_consistent_with_supports_type(self) -> None:
         """Every kind in supported_kinds matches a Type that supports_type returns True for."""
         from agm.agl.semantics.types import (
+            ArrayType,
             BoolType,
             DecimalType,
             DictType,
             EnumType,
             IntType,
             JsonType,
-            ListType,
             RecordType,
             TextType,
         )
@@ -3035,7 +3037,7 @@ class TestCodecSupportedKinds:
             "decimal": DecimalType(),
             "bool": BoolType(),
             "json": JsonType(),
-            "list": ListType(elem=TextType()),
+            "array": ArrayType(elem=TextType()),
             "dict": DictType(value=TextType()),
             "record": RecordType(name="R"),
             "enum": EnumType(name="E"),
@@ -3589,17 +3591,17 @@ class TestRegisterCodec:
         seen_decode: list[DecodeSchema | None] = []
         received: list[AgentRequest] = []
 
-        class ListIntCodec:
+        class ArrayIntCodec:
             @property
             def name(self) -> str:
-                return "list-int-codec"
+                return "array-int-codec"
 
             @property
             def supported_kinds(self) -> frozenset[str]:
-                return frozenset({"list"})
+                return frozenset({"array"})
 
             def supports_type(self, t: Type) -> bool:
-                return isinstance(t, ListType)
+                return isinstance(t, ArrayType)
 
             def make_contract(
                 self, type_ref: Type, type_table: TypeTable | None = None
@@ -3608,7 +3610,7 @@ class TestRegisterCodec:
                     target_type_label=repr(type_ref),
                     codec=self,
                     strict_json=None,
-                    format_instructions="LIST-INT-CUSTOM-FORMAT",
+                    format_instructions="ARRAY-INT-CUSTOM-FORMAT",
                     json_schema=None,
                 )
 
@@ -3622,21 +3624,21 @@ class TestRegisterCodec:
                 defs: Mapping[str, DecodeSchema] | None = None,
             ) -> ParseResult:
                 seen_decode.append(decode)
-                return ParseResult.success(ListValue((IntValue(int(raw)),)))
+                return ParseResult.success(ArrayValue((IntValue(int(raw)),)))
 
         def agent(req: AgentRequest) -> str:
             received.append(req)
             return "3"
 
         rt = PipelineDriver(default_agent=agent)
-        rt.register_codec(ListIntCodec())
-        result = rt.run('let xs: list[int] = ask("Q", format = "list-int-codec")\nxs')
+        rt.register_codec(ArrayIntCodec())
+        result = rt.run('let xs: array[int] = ask("Q", format = "array-int-codec")\nxs')
 
         assert result.ok is True
-        assert result.bindings["xs"] == ListValue((IntValue(3),))
+        assert result.bindings["xs"] == ArrayValue((IntValue(3),))
         assert seen_decode == [None]
         assert received[0].output_contract is not None
-        assert received[0].output_contract.format_instructions == "LIST-INT-CUSTOM-FORMAT"
+        assert received[0].output_contract.format_instructions == "ARRAY-INT-CUSTOM-FORMAT"
 
     def test_custom_codec_contract_materialized_before_ir_pipeline(self) -> None:
         """Custom codecs see checked types before lowering; IR parse stays typeless."""
@@ -3722,7 +3724,7 @@ class TestRegisterCodec:
             ("bool", "bool", BoolType),
             ("json", "json", JsonType),
             ("agent", "agent", AgentType),
-            ("list", "list[int]", ListType),
+            ("array", "array[int]", ArrayType),
             ("dict", "dict[text, int]", DictType),
             ("record", "Issue", RecordType),
             ("enum", "Result", EnumType),
@@ -3759,7 +3761,7 @@ class TestRegisterCodec:
                         "bool",
                         "json",
                         "agent",
-                        "list",
+                        "array",
                         "dict",
                         "record",
                         "enum",

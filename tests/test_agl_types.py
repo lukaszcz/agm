@@ -22,6 +22,7 @@ from agm.agl.modules.ids import ModuleId
 from agm.agl.semantics.type_table import TypeTable, comparable_types
 from agm.agl.semantics.types import (
     AgentType,
+    ArrayType,
     BoolType,
     BottomType,
     DecimalType,
@@ -32,7 +33,6 @@ from agm.agl.semantics.types import (
     InferenceVarType,
     IntType,
     JsonType,
-    ListType,
     RecordType,
     TextType,
     Type,
@@ -588,7 +588,7 @@ class TestInferenceVarType:
     @pytest.mark.parametrize(
         "typ",
         [
-            ListType(InferenceVarType("T")),
+            ArrayType(InferenceVarType("T")),
             DictType(InferenceVarType("T")),
             FunctionType(params=(InferenceVarType("T"),), result=InferenceVarType("T")),
             RecordType("Box", type_args=(InferenceVarType("T"),)),
@@ -604,7 +604,7 @@ class TestInferenceVarType:
     def test_iter_type_visits_flexible_variables_in_nested_types(self) -> None:
         variable = InferenceVarType("T")
         typ = FunctionType(
-            params=(ListType(variable),),
+            params=(ArrayType(variable),),
             result=RecordType("Box", type_args=(DictType(variable),)),
         )
 
@@ -613,14 +613,14 @@ class TestInferenceVarType:
     def test_rigid_substitution_does_not_rewrite_flexible_variables(self) -> None:
         variable = InferenceVarType("T")
         typ = FunctionType(
-            params=(TypeVarType("T"), ListType(variable)),
+            params=(TypeVarType("T"), ArrayType(variable)),
             result=EnumType("Option", type_args=(variable, TypeVarType("U"))),
         )
 
         result = substitute(typ, {"T": IntType(), "U": TextType()})
 
         assert result == FunctionType(
-            params=(IntType(), ListType(variable)),
+            params=(IntType(), ArrayType(variable)),
             result=EnumType("Option", type_args=(variable, TextType())),
         )
         assert contains_inference_var(result) is True
@@ -756,15 +756,15 @@ class TestTypeTemplateMatch:
     def test_nested_containers_and_functions_require_consistent_binding(self) -> None:
         variable = TypeVarType("T")
         template = FunctionType(
-            params=(ListType(variable), DictType(variable)),
+            params=(ArrayType(variable), DictType(variable)),
             result=variable,
         )
         matching = FunctionType(
-            params=(ListType(IntType()), DictType(IntType())),
+            params=(ArrayType(IntType()), DictType(IntType())),
             result=IntType(),
         )
         conflicting = FunctionType(
-            params=(ListType(IntType()), DictType(TextType())),
+            params=(ArrayType(IntType()), DictType(TextType())),
             result=IntType(),
         )
 
@@ -774,7 +774,7 @@ class TestTypeTemplateMatch:
     def test_shape_nominal_and_rigid_leaf_mismatches_do_not_match(self) -> None:
         module = ModuleId.from_path("library/remote")
 
-        assert match_type_template(ListType(IntType()), DictType(IntType()), ()) is None
+        assert match_type_template(ArrayType(IntType()), DictType(IntType()), ()) is None
         assert (
             match_type_template(
                 EnumType("Remote", module_id=module),
@@ -801,8 +801,8 @@ class TestHelpers:
     def test_free_type_vars_typevar(self) -> None:
         assert free_type_vars(TypeVarType("T")) == frozenset({"T"})
 
-    def test_free_type_vars_list(self) -> None:
-        assert free_type_vars(ListType(TypeVarType("T"))) == frozenset({"T"})
+    def test_free_type_vars_array(self) -> None:
+        assert free_type_vars(ArrayType(TypeVarType("T"))) == frozenset({"T"})
 
     def test_free_type_vars_dict(self) -> None:
         assert free_type_vars(DictType(TypeVarType("V"))) == frozenset({"V"})
@@ -837,10 +837,10 @@ class TestHelpers:
         result = substitute(t, {"U": IntType()})
         assert result == TypeVarType("T")
 
-    def test_substitute_list(self) -> None:
-        t = ListType(TypeVarType("T"))
+    def test_substitute_array(self) -> None:
+        t = ArrayType(TypeVarType("T"))
         result = substitute(t, {"T": IntType()})
-        assert result == ListType(IntType())
+        assert result == ArrayType(IntType())
 
     def test_substitute_dict(self) -> None:
         t = DictType(TypeVarType("V"))
@@ -870,10 +870,10 @@ class TestHelpers:
         assert substitute(IntType(), {"T": TextType()}) == IntType()
 
     def test_contains_type_var_true(self) -> None:
-        assert contains_type_var(ListType(TypeVarType("T"))) is True
+        assert contains_type_var(ArrayType(TypeVarType("T"))) is True
 
     def test_contains_type_var_false(self) -> None:
-        assert contains_type_var(ListType(IntType())) is False
+        assert contains_type_var(ArrayType(IntType())) is False
 
     def test_contains_type_var_record_type_args(self) -> None:
         assert contains_type_var(RecordType("Box", type_args=(TypeVarType("T"),))) is True
@@ -1036,19 +1036,19 @@ class TestCastClassification:
         r = RecordType(name="R")
         assert cast_classification(r, JsonType()) == CastKind.TOTAL_JSON
 
-    def test_list_of_record_to_json_static_error(self) -> None:
-        # A list whose elements are nominal is not json-shaped and not itself a
-        # nominal source, so `list[record] as json` remains a static error: only
+    def test_array_of_record_to_json_static_error(self) -> None:
+        # An array whose elements are nominal is not json-shaped and not itself a
+        # nominal source, so `array[record] as json` remains a static error: only
         # a direct record/enum/exception source supports the explicit json cast.
         from agm.agl.semantics.types import (
+            ArrayType,
             CastKind,
             JsonType,
-            ListType,
             RecordType,
             cast_classification,
         )
 
-        lst = ListType(elem=RecordType(name="R"))
+        lst = ArrayType(elem=RecordType(name="R"))
         assert cast_classification(lst, JsonType()) == CastKind.STATIC_ERROR
 
     def test_text_to_record_fallible(self) -> None:
@@ -1090,15 +1090,15 @@ class TestCastClassification:
 
         assert cast_classification(JsonType(), TextType()) == CastKind.TOTAL_RENDER
 
-    def test_int_to_list_static_error(self) -> None:
+    def test_int_to_array_static_error(self) -> None:
         from agm.agl.semantics.types import (
+            ArrayType,
             CastKind,
             IntType,
-            ListType,
             cast_classification,
         )
 
-        assert cast_classification(IntType(), ListType(IntType())) == CastKind.STATIC_ERROR
+        assert cast_classification(IntType(), ArrayType(IntType())) == CastKind.STATIC_ERROR
 
 
 # ---------------------------------------------------------------------------
@@ -1218,8 +1218,8 @@ class TestNominalEquality:
         s = {e1, e2}
         assert len(s) == 1
 
-    def test_list_type_stays_structural(self) -> None:
-        assert ListType(IntType()) != ListType(TextType())
+    def test_array_type_stays_structural(self) -> None:
+        assert ArrayType(IntType()) != ArrayType(TextType())
 
     def test_dict_type_stays_structural(self) -> None:
         assert DictType(IntType()) != DictType(TextType())

@@ -16,7 +16,7 @@ back), the fixpoint is independent of iteration order.
 Inhabitation
 ------------
 A declaration is inhabited iff it has at least one finite value. Recursion
-through a ``list``/``dict`` field is always fine (the empty collection is a
+through an ``array``/``dict`` field is always fine (the empty collection is a
 value regardless of the element type); recursion through a record/exception
 field or every variant of an enum is fine only if some path bottoms out
 without needing another value of the same (or a mutually recursive)
@@ -60,7 +60,7 @@ and within each SCC build a small parameter-dependency graph (which of a
 referencing declaration's OWN parameters feed which of the referenced
 declaration's parameters, and whether that feed is "growing" — the source
 parameter occurs as a proper subterm of the argument template, under a
-list/dict/function/nominal-argument constructor, rather than being passed
+array/dict/function/nominal-argument constructor, rather than being passed
 through unchanged). An SCC's closure is infinite iff that small graph has a
 cycle containing at least one growing edge; every declaration in such an SCC
 is infinite, everything else is finite. See :func:`compute_finite_closure`
@@ -78,6 +78,7 @@ from typing import assert_never
 from agm.agl.semantics.type_table import DeclKey, TypeDef, TypeDefKind, TypeTable, decl_key_sort_key
 from agm.agl.semantics.types import (
     AgentType,
+    ArrayType,
     BoolType,
     BottomType,
     DecimalType,
@@ -88,7 +89,6 @@ from agm.agl.semantics.types import (
     InferenceVarType,
     IntType,
     JsonType,
-    ListType,
     RecordType,
     TextType,
     Type,
@@ -144,7 +144,7 @@ def uninhabitable_message(kind: TypeDefKind, name: str) -> str:
     return (
         f"{label} type '{name}' is uninhabitable: every value of '{name}' would be "
         "infinite. Recursion must be guarded by an enum base-case variant or a "
-        "list/dict field."
+        "array/dict field."
     )
 
 
@@ -276,7 +276,7 @@ def _template_inhabited(
             if any(stack_key == key for stack_key, _args in stack):
                 return False
             return key in inhabited
-        case ListType() | DictType():
+        case ArrayType() | DictType():
             # The empty collection is always a value, regardless of the
             # element/value type — this is exactly what "guards" recursion.
             return True
@@ -337,7 +337,7 @@ def compute_equality_capabilities(table: TypeTable) -> EqualityCapabilities:
     - ``relevant_params``: the subset of a declaration's OWN type parameters
       whose concrete instantiation can flip a reference to it from
       comparable to not. A parameter is relevant if it appears directly in a
-      field (including nested in ``list``/``dict``/function-parameter/
+      field (including nested in ``array``/``dict``/function-parameter/
       result position), or is passed to another reference's parameter that
       is ITSELF relevant for that reference's declaration — transitively.
       Unused ("phantom") parameters are therefore never relevant, matching
@@ -425,7 +425,7 @@ def _template_no_eq(
     match t:
         case FunctionType() | AgentType() | UnitType():
             return True
-        case ListType():
+        case ArrayType():
             return _template_no_eq(t.elem, no_eq, relevant, defs)
         case DictType():
             return _template_no_eq(t.value, no_eq, relevant, defs)
@@ -470,7 +470,7 @@ def _template_relevant_params(
             return {t.name} if t.name in own_params else set()
         case InferenceVarType():
             return set()
-        case ListType():
+        case ArrayType():
             return _template_relevant_params(t.elem, own_params, relevant, defs)
         case DictType():
             return _template_relevant_params(t.value, own_params, relevant, defs)
@@ -600,7 +600,7 @@ def compute_finite_closure(table: TypeTable) -> FiniteClosure:
 def nominal_references(t: Type) -> Iterator[RecordType | EnumType | ExceptionType]:
     """Yield every nominal reference occurring anywhere in *t*, including nested.
 
-    Recurses into ``list``/``dict``/function shapes and, for a nominal
+    Recurses into ``array``/``dict``/function shapes and, for a nominal
     reference itself, into its OWN argument templates too — a reference's
     arguments may themselves nest further nominal references (e.g.
     ``Perfect[Wrapper[T]]``). ``t`` is always a finite tree (nominal
@@ -613,7 +613,7 @@ def nominal_references(t: Type) -> Iterator[RecordType | EnumType | ExceptionTyp
                 yield from nominal_references(arg)
         case ExceptionType():
             yield t
-        case ListType(elem=elem):
+        case ArrayType(elem=elem):
             yield from nominal_references(elem)
         case DictType(value=value):
             yield from nominal_references(value)
@@ -663,7 +663,7 @@ def nominal_references_for_schema(
                     yield from nominal_references_for_schema(arg, defs, relevant_params)
         case ExceptionType():
             yield t
-        case ListType(elem=elem):
+        case ArrayType(elem=elem):
             yield from nominal_references_for_schema(elem, defs, relevant_params)
         case DictType(value=value):
             yield from nominal_references_for_schema(value, defs, relevant_params)
@@ -812,7 +812,7 @@ def _param_occurrences(
             return {name: growing}
         case InferenceVarType():
             return {}
-        case ListType(elem=elem):
+        case ArrayType(elem=elem):
             return _param_occurrences(
                 elem, growing=True, defs=defs, relevant_params=relevant_params
             )

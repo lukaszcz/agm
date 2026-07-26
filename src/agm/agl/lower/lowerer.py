@@ -10,7 +10,7 @@ Supported AST nodes
 -----------------------
   Expressions
     UnitLit, IntLit, DecimalLit, BoolLit, NullLit, StringLit
-    ListLit, DictLit
+    ArrayLit, DictLit
     VarRef
     Block
 
@@ -91,12 +91,12 @@ from agm.agl.ir.nodes import (
     IrLiteralKind,
     IrLoad,
     IrLoop,
+    IrMakeArray,
     IrMakeClosure,
     IrMakeConstructor,
     IrMakeDict,
     IrMakeEnum,
     IrMakeException,
-    IrMakeList,
     IrMakeRecord,
     IrOr,
     IrParseJson,
@@ -167,6 +167,7 @@ from agm.agl.semantics.type_table import TypeTable
 from agm.agl.semantics.types import (
     BUILTIN_EXCEPTIONS,
     BUILTIN_PRELUDE_TYPES,
+    ArrayType,
     BoolType,
     BottomType,
     CastKind,
@@ -176,7 +177,6 @@ from agm.agl.semantics.types import (
     ExceptionType,
     FunctionType,
     IntType,
-    ListType,
     RecordType,
     TextType,
     Type,
@@ -184,6 +184,7 @@ from agm.agl.semantics.types import (
 )
 from agm.agl.syntax.nodes import (
     AgentDecl,
+    ArrayLit,
     AssignStmt,
     AssignTarget,
     BinaryOp,
@@ -219,7 +220,6 @@ from agm.agl.syntax.nodes import (
     Item,
     Lambda,
     LetDecl,
-    ListLit,
     Loop,
     NamedArg,
     NameTarget,
@@ -694,7 +694,7 @@ class _Lowerer:
             case IndexAccess():
                 self._scan_captures(node.obj, local_ids, captured)
                 self._scan_captures(node.index, local_ids, captured)
-            case ListLit():
+            case ArrayLit():
                 for elem in node.elements:
                     self._scan_captures(elem, local_ids, captured)
             case DictLit():
@@ -1093,8 +1093,8 @@ class _Lowerer:
             # ----------------------------------------------------------
             # Container literals
             # ----------------------------------------------------------
-            case ListLit() as list_node:
-                return self._lower_list_lit(list_node)
+            case ArrayLit() as array_node:
+                return self._lower_array_lit(array_node)
 
             case DictLit() as dict_node:
                 return self._lower_dict_lit(dict_node)
@@ -1500,8 +1500,8 @@ class _Lowerer:
             # ---- Collection for pre-loop ----
             if for_iter_expr is not None:
                 iter_type = self._node_type(for_iter_expr.node_id)
-                if isinstance(iter_type, ListType):
-                    iter_kind = IterKind.LIST
+                if isinstance(iter_type, ArrayType):
+                    iter_kind = IterKind.ARRAY
                 elif isinstance(iter_type, DictType):
                     iter_kind = IterKind.DICT_KEYS
                 else:  # TextType
@@ -1784,14 +1784,14 @@ class _Lowerer:
     # Container literal helpers
     # ------------------------------------------------------------------
 
-    def _lower_list_lit(self, node: ListLit) -> IrMakeList:
-        """Lower a ``ListLit``, applying element-level coercions."""
+    def _lower_array_lit(self, node: ArrayLit) -> IrMakeArray:
+        """Lower an ``ArrayLit``, applying element-level coercions."""
         own_type = self._node_type(node.node_id)
-        assert isinstance(own_type, ListType), (
-            f"compiler bug: ListLit has node_type {own_type!r}, expected ListType"
+        assert isinstance(own_type, ArrayType), (
+            f"compiler bug: ArrayLit has node_type {own_type!r}, expected ArrayType"
         )
         items = tuple(self.lower_coerced(e, own_type.elem) for e in node.elements)
-        return IrMakeList(location=self._loc(node.span), items=items)
+        return IrMakeArray(location=self._loc(node.span), items=items)
 
     def _lower_dict_lit(self, node: DictLit) -> IrMakeDict:
         """Lower a ``DictLit``, applying value-level coercions."""
@@ -1912,8 +1912,8 @@ class _Lowerer:
     def _lower_in_op(self, item: Expr, container: Expr, loc: Location) -> IrContains:
         """Lower the IN operator based on container type."""
         container_type = self._node_type(container.node_id)
-        if isinstance(container_type, ListType):
-            kind = ContainsKind.LIST
+        if isinstance(container_type, ArrayType):
+            kind = ContainsKind.ARRAY
             item_ir = self.lower_coerced(item, container_type.elem)
         elif isinstance(container_type, DictType):
             kind = ContainsKind.DICT
@@ -3282,16 +3282,16 @@ class _Lowerer:
         )
 
     def _kind_for_container(self, t: Type) -> IndexKind:
-        """Return IndexKind for a container type (LIST or DICT)."""
-        if isinstance(t, ListType):
-            return IndexKind.LIST
+        """Return IndexKind for a container type (ARRAY or DICT)."""
+        if isinstance(t, ArrayType):
+            return IndexKind.ARRAY
         if isinstance(t, DictType):
             return IndexKind.DICT
         raise AssertionError(f"compiler bug: non-container type in index path: {t!r}")
 
     def _elem_type_for_container(self, t: Type) -> Type:
         """Return the element/value type for a container type."""
-        if isinstance(t, ListType):
+        if isinstance(t, ArrayType):
             return t.elem
         if isinstance(t, DictType):
             return t.value

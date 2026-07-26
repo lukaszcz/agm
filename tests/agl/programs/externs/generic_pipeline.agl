@@ -6,7 +6,7 @@ enum Verdict
   | High
   | Low
 
-extern def dedup[T](xs: list[T]) -> list[T]
+extern def dedup[T](xs: array[T]) -> array[T]
 
 param extra: int
 

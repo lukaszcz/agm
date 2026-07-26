@@ -248,15 +248,15 @@ class TestAglSyntaxErrorWithSource:
     def test_transformer_error_with_source_has_label(self) -> None:
         """AglSyntaxErrors raised inside the transformer carry the source id.
 
-        Regression: errors raised in the transformer (e.g. "list[] arg count")
+        Regression: errors raised in the transformer (e.g. "array[] arg count")
         were unwrapped from VisitError and re-raised WITHOUT the source stamp,
         so they reported ``<agl>`` instead of the module path.
         """
         sid = SourceId(label="/mods/broken.agl")
         with pytest.raises(AglSyntaxError) as exc_info:
-            # "list[int, text]" triggers an arg-count error inside the
+            # "array[int, text]" triggers an arg-count error inside the
             # AstBuilder transformer, wrapped in a VisitError.
-            parse_program("def f() -> list[int, text] = 1", source=sid)
+            parse_program("def f() -> array[int, text] = 1", source=sid)
         err = exc_info.value
         assert err.span is not None
         assert err.span.source.label == "/mods/broken.agl"

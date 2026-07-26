@@ -38,13 +38,13 @@ from agm.agl.ir.contracts import ContractRequest, DecodeSchema
 from agm.agl.runtime.codec import OutputCodec
 from agm.agl.semantics.types import (
     AgentType,
+    ArrayType,
     BoolType,
     DecimalType,
     DictType,
     EnumType,
     IntType,
     JsonType,
-    ListType,
     RecordType,
     TextType,
     Type,
@@ -188,8 +188,8 @@ def _target_type_for_request(request: ContractRequest) -> Type:
         return JsonType()
     if kind == "agent":
         return AgentType()
-    if kind == "list":
-        return ListType(JsonType())
+    if kind == "array":
+        return ArrayType(JsonType())
     if kind == "dict":
         return DictType(JsonType())
     if kind == "record":

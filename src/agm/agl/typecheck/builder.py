@@ -32,7 +32,7 @@ trivially resolve, nothing in phase 2 itself needs to reject a declaration
 that structurally contains itself; instead, once every body is resolved, an
 inhabitation check (:func:`~agm.agl.semantics.analyses.compute_uninhabited`)
 runs over the whole table and rejects any declaration that has no finite
-value (e.g. a record whose only field is itself, with no ``list``/``dict``
+value (e.g. a record whose only field is itself, with no ``array``/``dict``
 or enum base-case escape). Recursive type ALIASES remain banned — an alias
 is transparent and has no nominal identity to anchor a cycle — by the
 existing alias-cycle check in ``typecheck/env.py``.

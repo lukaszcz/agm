@@ -48,7 +48,7 @@
       }
     },
     {
-      "name": "wrong_shape_for_list_target",
+      "name": "wrong_shape_for_array_target",
       "params": {"payload": [1, 2]},
       "agents": {
         "source": ["{}", "1", "1.5", "true", "{\"not\": \"a list\"}"]

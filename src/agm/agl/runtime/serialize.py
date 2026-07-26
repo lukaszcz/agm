@@ -25,6 +25,7 @@ from typing import assert_never
 
 from agm.agl.semantics.values import (
     AgentValue,
+    ArrayValue,
     BoolValue,
     ConstructorValue,
     DecimalValue,
@@ -35,7 +36,6 @@ from agm.agl.semantics.values import (
     IrClosureValue,
     IteratorValue,
     JsonValue,
-    ListValue,
     RecordValue,
     TextValue,
     UnitValue,
@@ -60,7 +60,7 @@ def value_to_json_obj(value: Value) -> object:
         return value.value
     if isinstance(value, JsonValue):
         return value.raw
-    if isinstance(value, ListValue):
+    if isinstance(value, ArrayValue):
         return [value_to_json_obj(e) for e in value.elements]
     if isinstance(value, DictValue):
         return {k: value_to_json_obj(v) for k, v in value.entries.items()}
@@ -111,7 +111,7 @@ def _emit(obj: object, *, indent: int | None, level: int) -> str:
     if isinstance(obj, (str, int)) or obj is None:
         return json.dumps(obj, ensure_ascii=False)
     if isinstance(obj, list):
-        return _emit_list(obj, indent=indent, level=level)
+        return _emit_array(obj, indent=indent, level=level)
     if isinstance(obj, dict):
         return _emit_dict(obj, indent=indent, level=level)
     # Defensive: anything outside the closed domain is rendered via json.dumps,
@@ -127,7 +127,7 @@ def _decimal_text(d: Decimal) -> str:
     return format(d, "f")
 
 
-def _emit_list(obj: list[object], *, indent: int | None, level: int) -> str:
+def _emit_array(obj: list[object], *, indent: int | None, level: int) -> str:
     if not obj:
         return "[]"
     if indent is None:

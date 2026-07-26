@@ -4,9 +4,9 @@ param payload: json
 
 agent source
 
-let empty_list: list[text] = []
+let empty_array: array[text] = []
 let empty_map: dict[text, json] = {}
-print empty_list
+print empty_array
 print empty_map
 
 let document: json = {
@@ -22,7 +22,7 @@ print fetched
 let n: int = ask("Emit a count.", agent = source)
 let d: decimal = ask("Emit a ratio.", agent = source)
 let flag: bool = ask("Emit a flag.", agent = source)
-let names: list[text] = ask("Emit names.", agent = source)
+let names: array[text] = ask("Emit names.", agent = source)
 let scores: dict[text, int] = ask("Emit scores.", agent = source)
 print n
 print d

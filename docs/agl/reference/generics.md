@@ -38,11 +38,11 @@ type Pair[A, B] = dict[text, json]
 A declaration may have several parameters (`def apply[A, B](…)`,
 `enum Outcome[T, E]`). Inside the body, a type parameter may be used anywhere
 a type is expected — including as a field type, a function parameter or result
-type, the element type of `list[T]`, or in a `let` annotation:
+type, the element type of `array[T]`, or in a `let` annotation:
 
 ```agl
-def singleton[T](x: T) -> list[T] =
-  let single: list[T] = [x]
+def singleton[T](x: T) -> array[T] =
+  let single: array[T] = [x]
   single
 ```
 
@@ -66,7 +66,7 @@ print nested.value.value
 ```
 
 `Box[int]`, `Option[text]`, `Outcome[int, text]`, and the nested
-`Box[Box[int]]` are all applied types. The built-in `list[T]` and
+`Box[Box[int]]` are all applied types. The built-in `array[T]` and
 `dict[text, V]` use exactly the same form.
 
 <!-- agl-check: fragment -->
@@ -153,14 +153,14 @@ explicitly:
 ```agl
 def id[T](x: T) -> T = x
 
-def singleton[T](x: T) -> list[T] = [x]
+def singleton[T](x: T) -> array[T] = [x]
 
-def map_one[A, B](f: (A) -> B, xs: list[A]) -> list[B] = [f(xs[0])]
+def map_one[A, B](f: (A) -> B, xs: array[A]) -> array[B] = [f(xs[0])]
 
-let keep_ints: (list[int]) -> list[int] = map_one(id, ?)
+let keep_ints: (array[int]) -> array[int] = map_one(id, ?)
 print(keep_ints([5])[0])        # 5
 
-let make_single: (int) -> list[int] = singleton(?)
+let make_single: (int) -> array[int] = singleton(?)
 print(make_single(7)[0])        # 7
 
 let make_text = singleton::[text](?)
@@ -294,12 +294,12 @@ through a type argument, and the `int → decimal` widening does not propagate
 inside one:
 
 ```agl
-let xs: list[int] = [1, 2]
-# let ys: list[decimal] = xs   # static error: list[int] ≠ list[decimal]
+let xs: array[int] = [1, 2]
+# let ys: array[decimal] = xs   # static error: array[int] ≠ array[decimal]
 print xs[0]
 ```
 
-`list[int]` is not assignable to `list[decimal]` or `list[json]`, and
+`array[int]` is not assignable to `array[decimal]` or `array[json]`, and
 `Box[int]` is a different type from `Box[text]`.
 
 ## Recursive generic functions
@@ -315,7 +315,7 @@ def first[T](value: T, more: bool) =
 
 A recursive call at a different instantiation is polymorphic recursion and
 requires an explicit result annotation. This includes growing an argument such
-as `T` to `list[T]`, replacing it with a fixed type, or permuting multiple type
+as `T` to `array[T]`, replacing it with a fixed type, or permuting multiple type
 parameters. Annotated generic functions may use those recursive patterns.
 
 ## Recursive generic types

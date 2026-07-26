@@ -43,6 +43,7 @@ from agm.agl.scope import resolve_module
 from agm.agl.semantics.exceptions import AglRaise
 from agm.agl.semantics.values import (
     AgentValue,
+    ArrayValue,
     BoolValue,
     ConstructorValue,
     DecimalValue,
@@ -52,7 +53,6 @@ from agm.agl.semantics.values import (
     IntValue,
     IrClosureValue,
     JsonValue,
-    ListValue,
     RecordValue,
     TextValue,
     UnitValue,
@@ -68,7 +68,7 @@ _CAPS = HostCapabilities(
     supports_shell_exec=True,
     codec_kinds={
         "text": frozenset({"text"}),
-        "json": frozenset({"json", "record", "enum", "list", "dict", "int", "decimal", "bool"}),
+        "json": frozenset({"json", "record", "enum", "array", "dict", "int", "decimal", "bool"}),
     },
 )
 
@@ -133,9 +133,9 @@ class TestEncodeScalarsAndContainers:
         result = encode_boundary_value(contract.params[0].schema, JsonValue(Decimal("2.5")), {})
         assert result == Decimal("2.5")
 
-    def test_list(self) -> None:
-        contract = build_contract("extern def f(x: list[int]) -> list[int]\n0")
-        value = ListValue((IntValue(1), IntValue(2)))
+    def test_array(self) -> None:
+        contract = build_contract("extern def f(x: array[int]) -> array[int]\n0")
+        value = ArrayValue((IntValue(1), IntValue(2)))
         assert encode_boundary_value(contract.params[0].schema, value, {}) == [1, 2]
 
     def test_dict(self) -> None:
@@ -194,9 +194,9 @@ class TestEncodeNominals:
 
 
 class TestEncodeDeepCopy:
-    def test_mutating_encoded_list_does_not_affect_agl_value(self) -> None:
-        contract = build_contract("extern def f(x: list[int]) -> list[int]\n0")
-        original = ListValue((IntValue(1), IntValue(2)))
+    def test_mutating_encoded_array_does_not_affect_agl_value(self) -> None:
+        contract = build_contract("extern def f(x: array[int]) -> array[int]\n0")
+        original = ArrayValue((IntValue(1), IntValue(2)))
         encoded = encode_boundary_value(contract.params[0].schema, original, {})
         assert isinstance(encoded, list)
         encoded.append(99)
@@ -215,9 +215,9 @@ class TestEncodeDeepCopy:
         assert original.raw["a"] == [1, 2]
 
     def test_mutating_encoded_nested_json_list_element_does_not_affect_agl_value(self) -> None:
-        contract = build_contract("extern def f(x: list[json]) -> list[json]\n0")
+        contract = build_contract("extern def f(x: array[json]) -> array[json]\n0")
         inner_list: list[object] = [1, 2]
-        original = ListValue((JsonValue(inner_list),))
+        original = ArrayValue((JsonValue(inner_list),))
         encoded = encode_boundary_value(contract.params[0].schema, original, {})
         assert isinstance(encoded, list)
         encoded[0].append(999)
@@ -260,8 +260,8 @@ class TestEncodeShapeMismatch:
         with pytest.raises(BoundaryViolation):
             encode_boundary_value(contract.params[0].schema, IntValue(1), {})
 
-    def test_list_mismatch(self) -> None:
-        contract = build_contract("extern def f(x: list[int]) -> list[int]\n0")
+    def test_array_mismatch(self) -> None:
+        contract = build_contract("extern def f(x: array[int]) -> array[int]\n0")
         with pytest.raises(BoundaryViolation):
             encode_boundary_value(contract.params[0].schema, IntValue(1), {})
 
@@ -369,19 +369,19 @@ class TestDecodeScalars:
 
 
 class TestDecodeContainers:
-    def test_list(self) -> None:
-        contract = build_contract("extern def f(x: int) -> list[int]\n0")
-        assert decode_boundary_value(contract.result, [1, 2], {}) == ListValue(
+    def test_array(self) -> None:
+        contract = build_contract("extern def f(x: int) -> array[int]\n0")
+        assert decode_boundary_value(contract.result, [1, 2], {}) == ArrayValue(
             (IntValue(1), IntValue(2))
         )
 
-    def test_list_wrong_type_rejected(self) -> None:
-        contract = build_contract("extern def f(x: int) -> list[int]\n0")
+    def test_array_wrong_type_rejected(self) -> None:
+        contract = build_contract("extern def f(x: int) -> array[int]\n0")
         with pytest.raises(BoundaryViolation):
             decode_boundary_value(contract.result, "not a list", {})
 
-    def test_cyclic_list_rejected(self) -> None:
-        contract = build_contract("extern def f(x: int) -> list[list[int]]\n0")
+    def test_cyclic_array_rejected(self) -> None:
+        contract = build_contract("extern def f(x: int) -> array[array[int]]\n0")
         value: list[object] = []
         value.append(value)
         with pytest.raises(BoundaryViolation):
@@ -579,10 +579,10 @@ class TestDecodeJson:
 class TestSealing:
     def test_encode_wraps_type_var_position_in_handle(self) -> None:
         contract = build_contract(
-            "extern def reverse[T](xs: list[T]) -> list[T]\n0", fn_name="reverse"
+            "extern def reverse[T](xs: array[T]) -> array[T]\n0", fn_name="reverse"
         )
         seals = {"T": object()}
-        value = ListValue((IntValue(1),))
+        value = ArrayValue((IntValue(1),))
         encoded = encode_boundary_value(contract.params[0].schema, value, seals)
         assert isinstance(encoded[0], SealedHandle)
 
@@ -609,7 +609,7 @@ class TestSealing:
             DecimalValue(Decimal("1.5")),
             BoolValue(True),
             JsonValue({"items": [True, 1, Decimal("2"), "x", None]}),
-            ListValue((IntValue(1),)),
+            ArrayValue((IntValue(1),)),
             EnumValue(nominal=nominal, display_name="Choice", variant="some", fields={}),
             ExceptionValue(nominal=nominal, display_name="Oops", fields={"msg": TextValue("x")}),
             UnitValue(),
@@ -797,7 +797,7 @@ class TestInvoke:
         assert exc.fields["python_type"] == TextValue("")
 
     def test_list_subclass_return_is_a_contract_violation(self) -> None:
-        contract = build_contract("extern def f() -> list[int]\n0")
+        contract = build_contract("extern def f() -> array[int]\n0")
 
         class BadList(list[object]):
             def __iter__(self) -> Iterator[object]:

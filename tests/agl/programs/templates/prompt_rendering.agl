@@ -1,6 +1,6 @@
 # Uniform rendering: all value types render without boundary tags.
 enum Review
-  | Fail(issues: list[text])
+  | Fail(issues: array[text])
   | Pass
 
 param artifact
@@ -10,6 +10,6 @@ let review: Review = Fail(issues = issues)
 
 let a = ask "artifact: %{artifact}"
 let b = ask "text again: %{artifact}"
-let c = ask "list: %{issues}"
+let c = ask "array: %{issues}"
 let d = ask "enum: %{review}"
 print "sent"

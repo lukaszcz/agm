@@ -34,10 +34,10 @@ from typing import Protocol, assert_never, cast
 
 from agm.agl.diagnostics import AglError
 from agm.agl.ir.contracts import (
+    BoundaryArray,
     BoundaryDict,
     BoundaryEnum,
     BoundaryException,
-    BoundaryList,
     BoundaryRecord,
     BoundaryRef,
     BoundaryScalar,
@@ -53,6 +53,7 @@ from agm.agl.runtime.serialize import value_to_json_obj
 from agm.agl.semantics.exceptions import AglRaise, make_builtin_exception
 from agm.agl.semantics.values import (
     AgentValue,
+    ArrayValue,
     BoolValue,
     ConstructorValue,
     DecimalValue,
@@ -63,7 +64,6 @@ from agm.agl.semantics.values import (
     IrClosureValue,
     IteratorValue,
     JsonValue,
-    ListValue,
     RecordValue,
     TextValue,
     UnitValue,
@@ -247,8 +247,8 @@ def _sealed_value_eq_key(value: Value) -> object:
         return ("bool", value.value)
     if isinstance(value, JsonValue):
         return ("json", _json_eq_key(value.raw))
-    if isinstance(value, ListValue):
-        return ("list", tuple(_sealed_value_eq_key(item) for item in value.elements))
+    if isinstance(value, ArrayValue):
+        return ("array", tuple(_sealed_value_eq_key(item) for item in value.elements))
     if isinstance(value, DictValue):
         return (
             "dict",
@@ -341,9 +341,9 @@ def encode_boundary_value(
             if not isinstance(value, UnitValue):
                 raise BoundaryViolation(f"expected unit, got {_typename(value)}")
             return None
-        case BoundaryList(element=elem_schema):
-            if not isinstance(value, ListValue):
-                raise BoundaryViolation(f"expected a list value, got {_typename(value)}")
+        case BoundaryArray(element=elem_schema):
+            if not isinstance(value, ArrayValue):
+                raise BoundaryViolation(f"expected an array value, got {_typename(value)}")
             return [
                 encode_boundary_value(elem_schema, e, seals, defs, vault) for e in value.elements
             ]
@@ -460,13 +460,13 @@ def decode_boundary_value(
             if obj is not None:
                 raise BoundaryViolation(f"expected unit (None), got {_typename(obj)}")
             return UnitValue()
-        case BoundaryList(element=elem_schema):
+        case BoundaryArray(element=elem_schema):
             if type(obj) is not list:
                 raise BoundaryViolation(f"expected a list, got {_typename(obj)}")
             items = cast(list[object], obj)
-            marker = _enter_container(items, active_containers, "list")
+            marker = _enter_container(items, active_containers, "array")
             try:
-                return ListValue(
+                return ArrayValue(
                     tuple(
                         decode_boundary_value(elem_schema, e, seals, defs, vault, active_containers)
                         for e in items

@@ -1,7 +1,7 @@
-# for x in list do body — break on sentinel element.
+# for x in array do body — break on sentinel element.
 # Accumulates a sum until a sentinel value (-1) is encountered, then breaks.
 # Asserts the partial sum up to (not including) the sentinel.
-param items: list[int]
+param items: array[int]
 var total: int = 0
 for x in items do
   if x == -1 => break

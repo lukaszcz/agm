@@ -47,6 +47,7 @@ from agm.agl.semantics.types import (
     BUILTIN_PRELUDE_TYPE_NAMES,
     BUILTIN_PRELUDE_TYPES,
     AgentType,
+    ArrayType,
     BoolType,
     CastSpec,
     DecimalType,
@@ -58,7 +59,6 @@ from agm.agl.semantics.types import (
     FunctionType,
     IntType,
     JsonType,
-    ListType,
     RecordType,
     TextType,
     Type,
@@ -847,7 +847,7 @@ class TypeEnvironment:
         """Store the raw TypeExpr for *name*; resolved lazily by resolve_type_expr.
 
         ``type_params`` must be provided for parameterized type aliases (e.g.
-        ``type Wrapper[T] = list[T]``); defaults to ``()`` for plain aliases.
+        ``type Wrapper[T] = array[T]``); defaults to ``()`` for plain aliases.
         """
         self._assert_mutable()
         self._alias_targets[name] = target_expr
@@ -996,7 +996,7 @@ class TypeEnvironment:
         Returns the resolved ``Type`` for a record/enum/exception name or an
         alias chain (multi-hop, alias-of-alias) that bottoms out in a named
         type; ``None`` if the name is unknown or names a non-nominal alias
-        target (e.g. an alias of ``list[int]``, which has no single name).
+        target (e.g. an alias of ``array[int]``, which has no single name).
         Used for alias-transparent qualifier resolution in qualified
         constructors and ``is`` tests.
 
@@ -1494,13 +1494,13 @@ class TypeEnvironment:
         from agm.agl.syntax.types import (
             AgentT,
             AppliedT,
+            ArrayT,
             BoolT,
             DecimalT,
             DictT,
             FuncT,
             IntT,
             JsonT,
-            ListT,
             NameT,
             TextT,
             UnitT,
@@ -1532,11 +1532,11 @@ class TypeEnvironment:
                 type_expr.result, _resolving=_resolving, type_vars=type_vars
             )
             return FunctionType(params=params, result=result)
-        if isinstance(type_expr, ListT):
+        if isinstance(type_expr, ArrayT):
             elem = self.resolve_type_expr(
                 type_expr.elem, _resolving=_resolving, type_vars=type_vars
             )
-            return ListType(elem=elem)
+            return ArrayType(elem=elem)
         if isinstance(type_expr, DictT):
             val = self.resolve_type_expr(
                 type_expr.value, _resolving=_resolving, type_vars=type_vars

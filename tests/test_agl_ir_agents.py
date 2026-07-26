@@ -13,11 +13,11 @@ import pytest
 
 from agm.agl.ir.ids import AgentId
 from agm.agl.semantics.values import (
+    ArrayValue,
     BoolValue,
     EnumValue,
     ExceptionValue,
     IntValue,
-    ListValue,
     RecordValue,
     TextValue,
 )
@@ -95,24 +95,24 @@ pt
 
 
 # ---------------------------------------------------------------------------
-# JSON list ask
+# JSON array ask
 # ---------------------------------------------------------------------------
 
 
-def test_json_list_ask() -> None:
-    """JSON-list ask: agent returns a JSON array."""
+def test_json_array_ask() -> None:
+    """JSON-array ask: agent returns a JSON array."""
     source = """\
 agent lister
-let items: list[text] = ask("List items.", agent = lister)
+let items: array[text] = ask("List items.", agent = lister)
 items
 """
     ir = evaluate_ir_with_agents(
         source,
         scripts={"lister": ['["alpha", "beta", "gamma"]']},
     )
-    assert isinstance(ir["items"], ListValue)
+    assert isinstance(ir["items"], ArrayValue)
     assert ir["items"].elements == (TextValue("alpha"), TextValue("beta"), TextValue("gamma"))
-    assert isinstance(ir["items"], ListValue)
+    assert isinstance(ir["items"], ArrayValue)
     assert ir["items"].elements == (TextValue("alpha"), TextValue("beta"), TextValue("gamma"))
 
 
@@ -1018,12 +1018,12 @@ def test_enum_bad_case_no_decode_schema() -> None:
     assert not result.ok  # decode=None → failure before schema validation
 
 
-def test_find_enum_decode_at_path_through_list() -> None:
-    """_find_enum_decode_at_path: navigate through ListDecode to find EnumDecode."""
+def test_find_enum_decode_at_path_through_array() -> None:
+    """_find_enum_decode_at_path: navigate through ArrayDecode to find EnumDecode."""
     from agm.agl.ir.contracts import (
+        ArrayDecode,
         ContractRequest,
         EnumDecode,
-        ListDecode,
         VariantDecode,
     )
     from agm.agl.ir.ids import NominalId
@@ -1036,18 +1036,18 @@ def test_find_enum_decode_at_path_through_list() -> None:
         display_name="Status",
         variants=(VariantDecode(name="Ok", fields=()),),
     )
-    list_dec = ListDecode(elem=enum_dec)
+    array_dec = ArrayDecode(elem=enum_dec)
     contract = ContractRequest(
         codec_name="json",
         strict_json=None,
         json_schema="{}",
-        decode=list_dec,
-        target_type_label="list[Status]",
+        decode=array_dec,
+        target_type_label="array[Status]",
         structured_exec=False,
         format_instructions="",
         is_unit=False,
     )
-    # Navigate into element 0 of list.
+    # Navigate into element 0 of array.
     result = _find_enum_decode_at_path(contract.decode, [0])
     assert isinstance(result, EnumDecode)
     assert result.display_name == "Status"
@@ -2244,8 +2244,8 @@ def test_parse_lenient_extracted_json_fails_decode() -> None:
     assert "JSON parse failed" in result.error_msg
 
 
-def test_make_validation_error_required_non_list() -> None:
-    """_make_validation_error: required validator with non-list required → field=None."""
+def test_make_validation_error_required_non_array() -> None:
+    """_make_validation_error: required validator with non-array required → field=None."""
     from unittest.mock import MagicMock
 
     from jsonschema import ValidationError as JsError

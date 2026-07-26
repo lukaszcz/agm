@@ -17,5 +17,5 @@ print(answer + 1)
 let data: json = exec "printf '{\"k\": [1, 2]}'"
 print data
 
-let words: list[text] = exec "printf '[\"a\", \"b\"]'"
+let words: array[text] = exec "printf '[\"a\", \"b\"]'"
 print words

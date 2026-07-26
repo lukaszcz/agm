@@ -298,7 +298,7 @@ cover those fields; an empty record-constructor pattern can cover the remainder.
 This rule applies recursively to enum payloads: a payload of enum or `bool` type
 may itself be covered with a complete set of nested patterns.
 
-The domains of `int`, `decimal`, `text`, `json`, lists, dictionaries, exceptions,
+The domains of `int`, `decimal`, `text`, `json`, arrays, dictionaries, exceptions,
 `unit`, agents, functions, and an unresolved type parameter are open.
 
 `bottom` has an empty domain: a diverging expression (`raise`, `return`, `break`,

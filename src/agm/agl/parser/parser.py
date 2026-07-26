@@ -402,7 +402,7 @@ def parse_type_expr(
     """Parse *text* as a single AgL type expression and return a ``TypeExpr``.
 
     This is a REPL-only convenience: the interactive loop uses it to recognize
-    a bare type entry (``int``, ``list[T]``, a declared record/enum name, …) so
+    a bare type entry (``int``, ``array[T]``, a declared record/enum name, …) so
     it can echo the resolved type instead of reporting ``'X' is not defined.``.
     It reuses the same grammar/lexer/transformer as :func:`parse_program` but
     roots the parse at the ``type_expr`` rule, so any input that is not a single

@@ -13,10 +13,10 @@ from agm.agl.eval.indexing import AglIndexOutOfRange, AglMissingKey, index_get, 
 from agm.agl.ir.operations import IndexKind
 from agm.agl.ir.program import ExecutableProgram
 from agm.agl.semantics.values import (
+    ArrayValue,
     DecimalValue,
     DictValue,
     IntValue,
-    ListValue,
     TextValue,
 )
 from tests._agl_helpers import let_root_capture
@@ -27,17 +27,17 @@ from tests.agl.ir_harness import _compiled_checked, evaluate_ir, evaluate_ir_rai
 # ---------------------------------------------------------------------------
 
 
-def test_index_get_list_basic() -> None:
-    lst = ListValue((IntValue(10), IntValue(20), IntValue(30)))
-    assert index_get(IndexKind.LIST, lst, IntValue(0)) == IntValue(10)
-    assert index_get(IndexKind.LIST, lst, IntValue(1)) == IntValue(20)
-    assert index_get(IndexKind.LIST, lst, IntValue(-1)) == IntValue(30)
+def test_index_get_array_basic() -> None:
+    lst = ArrayValue((IntValue(10), IntValue(20), IntValue(30)))
+    assert index_get(IndexKind.ARRAY, lst, IntValue(0)) == IntValue(10)
+    assert index_get(IndexKind.ARRAY, lst, IntValue(1)) == IntValue(20)
+    assert index_get(IndexKind.ARRAY, lst, IntValue(-1)) == IntValue(30)
 
 
-def test_index_get_list_out_of_range() -> None:
-    lst = ListValue((IntValue(1), IntValue(2)))
+def test_index_get_array_out_of_range() -> None:
+    lst = ArrayValue((IntValue(1), IntValue(2)))
     with pytest.raises(AglIndexOutOfRange) as exc_info:
-        index_get(IndexKind.LIST, lst, IntValue(5))
+        index_get(IndexKind.ARRAY, lst, IntValue(5))
     assert exc_info.value.index == 5
     assert exc_info.value.length == 2
 
@@ -54,22 +54,22 @@ def test_index_get_dict_missing_key() -> None:
     assert exc_info.value.key == "z"
 
 
-def test_index_set_list_basic() -> None:
-    lst = ListValue((IntValue(1), IntValue(2), IntValue(3)))
-    result = index_set(IndexKind.LIST, lst, IntValue(1), IntValue(99))
-    assert result == ListValue((IntValue(1), IntValue(99), IntValue(3)))
+def test_index_set_array_basic() -> None:
+    lst = ArrayValue((IntValue(1), IntValue(2), IntValue(3)))
+    result = index_set(IndexKind.ARRAY, lst, IntValue(1), IntValue(99))
+    assert result == ArrayValue((IntValue(1), IntValue(99), IntValue(3)))
 
 
-def test_index_set_list_negative() -> None:
-    lst = ListValue((IntValue(1), IntValue(2), IntValue(3)))
-    result = index_set(IndexKind.LIST, lst, IntValue(-1), IntValue(99))
-    assert result == ListValue((IntValue(1), IntValue(2), IntValue(99)))
+def test_index_set_array_negative() -> None:
+    lst = ArrayValue((IntValue(1), IntValue(2), IntValue(3)))
+    result = index_set(IndexKind.ARRAY, lst, IntValue(-1), IntValue(99))
+    assert result == ArrayValue((IntValue(1), IntValue(2), IntValue(99)))
 
 
-def test_index_set_list_oob() -> None:
-    lst = ListValue((IntValue(1), IntValue(2)))
+def test_index_set_array_oob() -> None:
+    lst = ArrayValue((IntValue(1), IntValue(2)))
     with pytest.raises(AglIndexOutOfRange):
-        index_set(IndexKind.LIST, lst, IntValue(5), IntValue(99))
+        index_set(IndexKind.ARRAY, lst, IntValue(5), IntValue(99))
 
 
 def test_index_set_dict_basic() -> None:
@@ -78,20 +78,20 @@ def test_index_set_dict_basic() -> None:
     assert result == DictValue({"a": IntValue(99)})
 
 
-def test_index_get_list_wrong_container() -> None:
+def test_index_get_array_wrong_container() -> None:
     d = DictValue({"a": IntValue(1)})
-    with pytest.raises(AssertionError, match="index_get LIST: expected ListValue"):
-        index_get(IndexKind.LIST, d, IntValue(0))
+    with pytest.raises(AssertionError, match="index_get ARRAY: expected ArrayValue"):
+        index_get(IndexKind.ARRAY, d, IntValue(0))
 
 
-def test_index_get_list_wrong_index() -> None:
-    lst = ListValue((IntValue(1),))
-    with pytest.raises(AssertionError, match="index_get LIST: expected IntValue"):
-        index_get(IndexKind.LIST, lst, TextValue("x"))
+def test_index_get_array_wrong_index() -> None:
+    lst = ArrayValue((IntValue(1),))
+    with pytest.raises(AssertionError, match="index_get ARRAY: expected IntValue"):
+        index_get(IndexKind.ARRAY, lst, TextValue("x"))
 
 
 def test_index_get_dict_wrong_container() -> None:
-    lst = ListValue((IntValue(1),))
+    lst = ArrayValue((IntValue(1),))
     with pytest.raises(AssertionError, match="index_get DICT: expected DictValue"):
         index_get(IndexKind.DICT, lst, TextValue("x"))
 
@@ -102,22 +102,22 @@ def test_index_get_dict_wrong_index() -> None:
         index_get(IndexKind.DICT, d, IntValue(0))
 
 
-def test_index_set_list_wrong_container() -> None:
+def test_index_set_array_wrong_container() -> None:
     d = DictValue({"a": IntValue(1)})
-    with pytest.raises(AssertionError, match="index_set LIST: expected ListValue"):
-        index_set(IndexKind.LIST, d, IntValue(0), IntValue(99))
+    with pytest.raises(AssertionError, match="index_set ARRAY: expected ArrayValue"):
+        index_set(IndexKind.ARRAY, d, IntValue(0), IntValue(99))
 
 
 def test_index_set_dict_wrong_container() -> None:
-    lst = ListValue((IntValue(1),))
+    lst = ArrayValue((IntValue(1),))
     with pytest.raises(AssertionError, match="index_set DICT: expected DictValue"):
         index_set(IndexKind.DICT, lst, TextValue("x"), IntValue(99))
 
 
-def test_index_set_list_wrong_index() -> None:
-    lst = ListValue((IntValue(1),))
-    with pytest.raises(AssertionError, match="index_set LIST: expected IntValue"):
-        index_set(IndexKind.LIST, lst, TextValue("x"), IntValue(99))
+def test_index_set_array_wrong_index() -> None:
+    lst = ArrayValue((IntValue(1),))
+    with pytest.raises(AssertionError, match="index_set ARRAY: expected IntValue"):
+        index_set(IndexKind.ARRAY, lst, TextValue("x"), IntValue(99))
 
 
 def test_index_set_dict_wrong_index() -> None:
@@ -150,8 +150,8 @@ let px = p.x
     assert ir["px"] == IntValue(3)
 
 
-def test_list_index() -> None:
-    """List index: xs[1] returns the element at index 1."""
+def test_array_index() -> None:
+    """Array index: xs[1] returns the element at index 1."""
     source = """\
 let xs = [10, 20, 30]
 let x = xs[1]
@@ -161,8 +161,8 @@ let x = xs[1]
     assert ir["x"] == IntValue(20)
 
 
-def test_list_negative_index() -> None:
-    """List negative index: xs[-1] returns the last element."""
+def test_array_negative_index() -> None:
+    """Array negative index: xs[-1] returns the last element."""
     source = """\
 let xs = [10, 20, 30]
 let x = xs[-1]
@@ -172,8 +172,8 @@ let x = xs[-1]
     assert ir["x"] == IntValue(30)
 
 
-def test_list_index_out_of_range() -> None:
-    """List out-of-bounds index raises IndexError."""
+def test_array_index_out_of_range() -> None:
+    """Array out-of-bounds index raises IndexError."""
     source = """\
 let xs = [10, 20]
 let x = xs[5]
@@ -247,15 +247,15 @@ let s: text = "point: %{p}"
     assert isinstance(ir["s"], TextValue)
 
 
-def test_indexed_assignment_list_depth1() -> None:
-    """Indexed assignment depth 1: list."""
+def test_indexed_assignment_array_depth1() -> None:
+    """Indexed assignment depth 1: array."""
     source = """\
 var xs = [1, 2, 3]
 xs[0] := 99
 ()
 """
     ir = evaluate_ir(source)
-    assert ir["xs"] == ListValue((IntValue(99), IntValue(2), IntValue(3)))
+    assert ir["xs"] == ArrayValue((IntValue(99), IntValue(2), IntValue(3)))
 
 
 def test_indexed_assignment_dict_depth1() -> None:
@@ -269,24 +269,24 @@ m["a"] := 99
     assert ir["m"] == DictValue({"a": IntValue(99)})
 
 
-def test_indexed_assignment_list_of_list() -> None:
-    """Indexed assignment depth 2: list-of-list."""
+def test_indexed_assignment_array_of_array() -> None:
+    """Indexed assignment depth 2: array-of-array."""
     source = """\
 var xss = [[1, 2], [3, 4]]
 xss[0][1] := 99
 ()
 """
     ir = evaluate_ir(source)
-    assert ir["xss"] == ListValue(
+    assert ir["xss"] == ArrayValue(
         (
-            ListValue((IntValue(1), IntValue(99))),
-            ListValue((IntValue(3), IntValue(4))),
+            ArrayValue((IntValue(1), IntValue(99))),
+            ArrayValue((IntValue(3), IntValue(4))),
         )
     )
 
 
-def test_indexed_assignment_dict_of_list() -> None:
-    """Indexed assignment depth 2: dict-of-list."""
+def test_indexed_assignment_dict_of_array() -> None:
+    """Indexed assignment depth 2: dict-of-array."""
     source = """\
 var m = {"a": [1, 2]}
 m["a"][0] := 99
@@ -295,42 +295,42 @@ m["a"][0] := 99
     ir = evaluate_ir(source)
     assert ir["m"] == DictValue(
         {
-            "a": ListValue((IntValue(99), IntValue(2))),
+            "a": ArrayValue((IntValue(99), IntValue(2))),
         }
     )
 
 
-def test_indexed_assignment_list_of_dict() -> None:
-    """Indexed assignment depth 2: list-of-dict."""
+def test_indexed_assignment_array_of_dict() -> None:
+    """Indexed assignment depth 2: array-of-dict."""
     source = """\
 var m = [{"x": 1}]
 m[0]["x"] := 99
 ()
 """
     ir = evaluate_ir(source)
-    assert ir["m"] == ListValue((DictValue({"x": IntValue(99)}),))
+    assert ir["m"] == ArrayValue((DictValue({"x": IntValue(99)}),))
 
 
-def test_indexed_assignment_depth3_list_of_list_of_list() -> None:
-    """Indexed assignment depth 3: list-of-list-of-list."""
+def test_indexed_assignment_depth3_array_of_array_of_array() -> None:
+    """Indexed assignment depth 3: array-of-array-of-array."""
     source = """\
 var xsss = [[[1, 2], [3, 4]], [[5, 6], [7, 8]]]
 xsss[0][1][0] := 99
 ()
 """
     ir = evaluate_ir(source)
-    assert ir["xsss"] == ListValue(
+    assert ir["xsss"] == ArrayValue(
         (
-            ListValue(
+            ArrayValue(
                 (
-                    ListValue((IntValue(1), IntValue(2))),
-                    ListValue((IntValue(99), IntValue(4))),
+                    ArrayValue((IntValue(1), IntValue(2))),
+                    ArrayValue((IntValue(99), IntValue(4))),
                 )
             ),
-            ListValue(
+            ArrayValue(
                 (
-                    ListValue((IntValue(5), IntValue(6))),
-                    ListValue((IntValue(7), IntValue(8))),
+                    ArrayValue((IntValue(5), IntValue(6))),
+                    ArrayValue((IntValue(7), IntValue(8))),
                 )
             ),
         )
@@ -367,20 +367,20 @@ m["z"] := 99
     evaluate_ir_raises(source)
 
 
-def test_indexed_assignment_decimal_leaf_list_depth1() -> None:
-    """Indexed assignment into list[decimal] exercises the IrCoerce IntToDecimal leaf path.
+def test_indexed_assignment_decimal_leaf_array_depth1() -> None:
+    """Indexed assignment into array[decimal] exercises the IrCoerce IntToDecimal leaf path.
 
     The RHS is an int literal; lower_coerced wraps it in IrCoerce(IntToDecimal) because
     the slot type is decimal (the coercion runs exactly once).
     """
     source = """\
-var xs: list[decimal] = [1.0, 2.0, 3.0]
+var xs: array[decimal] = [1.0, 2.0, 3.0]
 xs[1] := 42
 ()
 """
     ir = evaluate_ir(source)
     result = ir["xs"]
-    assert isinstance(result, ListValue)
+    assert isinstance(result, ArrayValue)
     assert result.elements[1] == DecimalValue(decimal.Decimal(42))
 
 
@@ -400,10 +400,10 @@ m["a"] := 7
     assert result.entries["a"] == DecimalValue(decimal.Decimal(7))
 
 
-def test_empty_list_literal_evaluates_to_empty_list() -> None:
-    """An annotated empty list literal evaluates to an empty ListValue."""
-    ir = evaluate_ir("let xs: list[int] = []\nxs\n")
-    assert ir["xs"] == ListValue(elements=())
+def test_empty_array_literal_evaluates_to_empty_array() -> None:
+    """An annotated empty array literal evaluates to an empty ArrayValue."""
+    ir = evaluate_ir("let xs: array[int] = []\nxs\n")
+    assert ir["xs"] == ArrayValue(elements=())
 
 
 def test_empty_dict_literal_evaluates_to_empty_dict() -> None:
@@ -412,22 +412,22 @@ def test_empty_dict_literal_evaluates_to_empty_dict() -> None:
     assert ir["d"] == DictValue(entries={})
 
 
-def test_indexed_assignment_decimal_leaf_list_of_list_depth2() -> None:
-    """Indexed assignment depth 2 into list[list[decimal]] exercises IntToDecimal at the leaf.
+def test_indexed_assignment_decimal_leaf_array_of_array_depth2() -> None:
+    """Indexed assignment depth 2 into array[array[decimal]] exercises IntToDecimal at the leaf.
 
     Verifies that the coercion is applied exactly once at the leaf (not to the container)
     and that the leaf-outward rebuild produces the right structure.
     """
     source = """\
-var xss: list[list[decimal]] = [[1.0, 2.0], [3.0, 4.0]]
+var xss: array[array[decimal]] = [[1.0, 2.0], [3.0, 4.0]]
 xss[0][1] := 99
 ()
 """
     ir = evaluate_ir(source)
     result = ir["xss"]
-    assert isinstance(result, ListValue)
+    assert isinstance(result, ArrayValue)
     inner = result.elements[0]
-    assert isinstance(inner, ListValue)
+    assert isinstance(inner, ArrayValue)
     assert inner.elements[1] == DecimalValue(decimal.Decimal(99))
 
 
@@ -450,7 +450,9 @@ def _lower(source: str) -> "ExecutableProgram":
         supports_shell_exec=True,
         codec_kinds={
             "text": frozenset({"text"}),
-            "json": frozenset({"json", "record", "enum", "list", "dict", "int", "decimal", "bool"}),
+            "json": frozenset(
+                {"json", "record", "enum", "array", "dict", "int", "decimal", "bool"}
+            ),
         },
     )
     prog = parse_program(source)
@@ -508,9 +510,9 @@ let x = xs[1]
         if isinstance(node, (IrSequence, IrBind)):
             value = let_root_capture(node).value
             if isinstance(value, IrIndex):
-                assert value.kind is IndexKind.LIST
+                assert value.kind is IndexKind.ARRAY
                 found = True
-    assert found, "Expected IrBind(value=IrIndex(kind=LIST)) in initializers"
+    assert found, "Expected IrBind(value=IrIndex(kind=ARRAY)) in initializers"
 
 
 def test_golden_template_lowers_to_ir_render_template() -> None:
@@ -555,6 +557,6 @@ xs[0] := 99
     for node in entry.initializers:
         if isinstance(node, IrAssign) and node.path:
             assert len(node.path) == 1
-            assert node.path[0].kind is IndexKind.LIST
+            assert node.path[0].kind is IndexKind.ARRAY
             found = True
     assert found, "Expected IrAssign with non-empty path in initializers"

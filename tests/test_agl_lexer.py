@@ -435,7 +435,7 @@ class TestIndexBracketRemap:
             ("RBRACE", "}"),
         ]
 
-    def test_spaced_lsqb_stays_list_literal_lsqb(self) -> None:
+    def test_spaced_lsqb_stays_array_literal_lsqb(self) -> None:
         assert lark_tok("f [2]") == [
             ("NAME", "f"),
             ("LSQB", "["),
@@ -2343,7 +2343,7 @@ class TestV2Keywords:
 
     def test_unit_lexes_as_var_name(self) -> None:
         # `unit` is a type keyword but not reserved — it lexes as NAME,
-        # exactly like `text`, `int`, `bool`, `json`, `decimal`, `list`, `dict`.
+        # exactly like `text`, `int`, `bool`, `json`, `decimal`, `array`, `dict`.
         result = tok("unit")
         assert result == [("NAME", "unit")]
 
@@ -2364,9 +2364,9 @@ class TestV2Keywords:
         assert "NAME" in types
 
     def test_existing_primitive_type_keywords_still_lex_as_var_name(self) -> None:
-        # Regression guard: text, int, bool, json, decimal, list, dict
+        # Regression guard: text, int, bool, json, decimal, array, dict
         # must all still be NAME (unchanged from before).
-        for word in ("text", "int", "bool", "json", "decimal", "list", "dict"):
+        for word in ("text", "int", "bool", "json", "decimal", "array", "dict"):
             result = tok(word)
             assert result == [("NAME", word)], f"{word!r} should be NAME"
 
@@ -2507,7 +2507,7 @@ class TestV2LoopBoundPreserved:
         lb = next(v for t, v in result if t == "INT")
         assert lb == "10"
 
-    def test_loop_bound_not_confused_with_list_literal(self) -> None:
+    def test_loop_bound_not_confused_with_array_literal(self) -> None:
         # [5] alone (not after do) must NOT become LOOP_BOUND even via AglLexer.
         result = self._lex("[5]")
         types = [t for t, _ in result]
@@ -2941,8 +2941,8 @@ class TestSpacedQualifierAdvisories:
         assert advisory.member_text == "E[int]::X"
 
     def test_member_text_spans_nested_type_arguments(self) -> None:
-        (advisory,) = self._advisories("config ::E[list[int]]::X")
-        assert advisory.member_text == "E[list[int]]::X"
+        (advisory,) = self._advisories("config ::E[array[int]]::X")
+        assert advisory.member_text == "E[array[int]]::X"
 
     def test_member_text_covers_a_variant_without_type_arguments(self) -> None:
         (advisory,) = self._advisories("config ::E::X")

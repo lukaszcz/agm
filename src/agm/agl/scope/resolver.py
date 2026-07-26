@@ -99,6 +99,7 @@ if TYPE_CHECKING:
     from agm.agl.syntax.spans import SourceSpan
 from agm.agl.syntax.nodes import (
     AgentDecl,
+    ArrayLit,
     AssignStmt,
     BinaryOp,
     Block,
@@ -130,7 +131,6 @@ from agm.agl.syntax.nodes import (
     Item,
     Lambda,
     LetDecl,
-    ListLit,
     Loop,
     NameTarget,
     NullLit,
@@ -1724,7 +1724,7 @@ class _Resolver:
         name = assign_target_root_name(node.target)
         if name is None:
             raise AglScopeError(
-                "indexed assignment requires a variable list or dict root.",
+                "indexed assignment requires a variable array or dict root.",
                 span=node.target.span,
             )
         ref = self._current_scope().lookup(name)
@@ -1902,7 +1902,7 @@ class _Resolver:
             self._resolve_expr(expr.expr)
         elif isinstance(expr, TypeApply):
             self._resolve_expr(expr.expr)
-        elif isinstance(expr, ListLit):
+        elif isinstance(expr, ArrayLit):
             for elem in expr.elements:
                 self._resolve_expr(elem)
         elif isinstance(expr, DictLit):

@@ -88,7 +88,7 @@ makes `expr` the function call's result. A bare `return` is equivalent to
 `return ()` and is valid only when the function result type is `unit`.
 
 ```agl
-def first_positive(xs: list[int]) -> int =
+def first_positive(xs: array[int]) -> int =
   for x in xs do
     if x > 0 =>
       return x
@@ -225,10 +225,10 @@ let greet  = fn(name: text) -> text => "Hello, %{name}!"
 ```
 
 A lambda is an ordinary expression and may appear anywhere an expression is
-accepted — in a binding, as a call argument, or in a list:
+accepted — in a binding, as a call argument, or in an array:
 
 ```agl
-let ops: list[int -> int] = [fn(x: int) => x + 1, fn(x: int) => x * 2]
+let ops: array[int -> int] = [fn(x: int) => x + 1, fn(x: int) => x * 2]
 ```
 
 When used in juxtaposition position (as the right operand of an operator or
@@ -265,8 +265,8 @@ appear within the declaration — parameter types, the return type, and any
 annotation **nested inside the body**:
 
 ```agl
-def singleton[T](x: T) -> list[T] =
-  let single: list[T] = [x]
+def singleton[T](x: T) -> array[T] =
+  let single: array[T] = [x]
   single
 
 def via_lambda[A](x: A) -> A =
@@ -274,7 +274,7 @@ def via_lambda[A](x: A) -> A =
   g(x)
 ```
 
-Here `list[T]` is an annotation on an inner `let`, and the lambda's parameter
+Here `array[T]` is an annotation on an inner `let`, and the lambda's parameter
 and return types refer to the enclosing `A`. A type variable is in scope
 throughout the body of the `def` that introduces it.
 
@@ -360,7 +360,7 @@ Each of these is a static error. This *parametricity* guarantee means a
 generic function treats its type-variable values uniformly regardless of the
 concrete type they are instantiated at. (The restriction applies only to the
 bare type variable itself — a value of a concrete or composite type such as
-`list[T]` supports every operation that type normally allows.)
+`array[T]` supports every operation that type normally allows.)
 
 ## Calling functions
 
@@ -606,14 +606,14 @@ the `::[…]` form.
 ```agl
 def id[T](x: T) -> T = x
 
-def singleton[T](x: T) -> list[T] = [x]
+def singleton[T](x: T) -> array[T] = [x]
 
-def map_one[A, B](f: (A) -> B, xs: list[A]) -> list[B] = [f(xs[0])]
+def map_one[A, B](f: (A) -> B, xs: array[A]) -> array[B] = [f(xs[0])]
 
-let keep_ints: (list[int]) -> list[int] = map_one(id, ?)
+let keep_ints: (array[int]) -> array[int] = map_one(id, ?)
 print(keep_ints([5])[0])        # 5
 
-let make_single: (int) -> list[int] = singleton(?)
+let make_single: (int) -> array[int] = singleton(?)
 print(make_single(7)[0])        # 7
 
 let make_text = singleton::[text](?)
@@ -723,11 +723,11 @@ record Issue
 
 enum Review
   | Pass
-  | Fail(issues: list[text])
+  | Fail(issues: array[text])
 
 agent reviewer
 
-def summarize_issues(issues: list[text]) -> text =
+def summarize_issues(issues: array[text]) -> text =
   "Issues found:\n%{issues}"
 
 def review_artifact(artifact: text) -> Review =

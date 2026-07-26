@@ -46,13 +46,13 @@ from agm.agl.ir import (
     IrLiteralCaseKey,
     IrLiteralKind,
     IrLoad,
+    IrMakeArray,
     IrMakeDict,
-    IrMakeList,
     IrSequence,
     Location,
+    MapArray,
     MapDictValues,
     MapEnumFields,
-    MapList,
     MapRecordFields,
     NominalDescriptor,
     NominalId,
@@ -262,12 +262,12 @@ class TestCompareKind:
 
 class TestContainsKind:
     def test_members(self) -> None:
-        assert ContainsKind.LIST
+        assert ContainsKind.ARRAY
         assert ContainsKind.DICT
         assert ContainsKind.TEXT
 
     def test_exhaustive(self) -> None:
-        assert {m.name for m in ContainsKind} == {"LIST", "DICT", "TEXT"}
+        assert {m.name for m in ContainsKind} == {"ARRAY", "DICT", "TEXT"}
 
 
 # ---------------------------------------------------------------------------
@@ -289,13 +289,13 @@ class TestCoercion:
         c = ToJson()
         assert isinstance(c, ToJson)
 
-    def test_map_list(self) -> None:
+    def test_map_array(self) -> None:
         inner = IntToDecimal()
-        c = MapList(item=inner)
+        c = MapArray(item=inner)
         assert c.item == inner
 
-    def test_map_list_frozen(self) -> None:
-        c = MapList(item=IntToDecimal())
+    def test_map_array_frozen(self) -> None:
+        c = MapArray(item=IntToDecimal())
         with pytest.raises(dataclasses.FrozenInstanceError):
             setattr(c, "item", ToJson())
 
@@ -332,21 +332,21 @@ class TestCoercion:
             setattr(c, "variants", (("X", ()),))
 
     def test_nested_coercion(self) -> None:
-        # MapList(MapRecordFields((("x", IntToDecimal()),)))
+        # MapArray(MapRecordFields((("x", IntToDecimal()),)))
         inner = MapRecordFields(fields=(("x", IntToDecimal()),))
-        outer = MapList(item=inner)
+        outer = MapArray(item=inner)
         assert outer.item == inner
         assert isinstance(outer.item, MapRecordFields)
         assert outer.item.fields[0][0] == "x"
         assert isinstance(outer.item.fields[0][1], IntToDecimal)
 
     def test_coercion_equality(self) -> None:
-        a = MapList(item=IntToDecimal())
-        b = MapList(item=IntToDecimal())
+        a = MapArray(item=IntToDecimal())
+        b = MapArray(item=IntToDecimal())
         assert a == b
 
     def test_coercion_hash(self) -> None:
-        s = {MapList(item=IntToDecimal()), MapList(item=IntToDecimal())}
+        s = {MapArray(item=IntToDecimal()), MapArray(item=IntToDecimal())}
         assert len(s) == 1
 
     def test_coercion_type_alias(self) -> None:
@@ -354,8 +354,8 @@ class TestCoercion:
         c: Coercion = IntToDecimal()
         assert isinstance(c, IntToDecimal)
 
-        c2: Coercion = MapList(item=IntToDecimal())
-        assert isinstance(c2, MapList)
+        c2: Coercion = MapArray(item=IntToDecimal())
+        assert isinstance(c2, MapArray)
 
 
 # ---------------------------------------------------------------------------
@@ -375,7 +375,7 @@ class TestIrExprUnion:
         # IrIndexStep is a helper record, not a member of IrExpr.
         # We verify this by confirming it is not an instance of any IrExpr member type.
         step = IrIndexStep(
-            kind=IndexKind.LIST, index=IrConstInt(location=LOC, value=0), location=LOC
+            kind=IndexKind.ARRAY, index=IrConstInt(location=LOC, value=0), location=LOC
         )
         assert not isinstance(step, IrConstInt)
         assert not isinstance(step, IrConstDecimal)
@@ -383,7 +383,7 @@ class TestIrExprUnion:
         assert not isinstance(step, IrConstText)
         assert not isinstance(step, IrConstUnit)
         assert not isinstance(step, IrConstJsonNull)
-        assert not isinstance(step, IrMakeList)
+        assert not isinstance(step, IrMakeArray)
         assert not isinstance(step, IrMakeDict)
         assert not isinstance(step, IrLoad)
         assert not isinstance(step, IrBind)
@@ -464,17 +464,17 @@ class TestIrConstants:
 
 
 class TestIrContainerLiterals:
-    def test_make_list_empty(self) -> None:
-        n = IrMakeList(location=LOC, items=())
+    def test_make_array_empty(self) -> None:
+        n = IrMakeArray(location=LOC, items=())
         assert n.items == ()
 
-    def test_make_list_with_items(self) -> None:
+    def test_make_array_with_items(self) -> None:
         item = IrConstInt(location=LOC, value=1)
-        n = IrMakeList(location=LOC, items=(item,))
+        n = IrMakeArray(location=LOC, items=(item,))
         assert n.items == (item,)
 
-    def test_make_list_frozen(self) -> None:
-        n = IrMakeList(location=LOC, items=())
+    def test_make_array_frozen(self) -> None:
+        n = IrMakeArray(location=LOC, items=())
         with pytest.raises(dataclasses.FrozenInstanceError):
             setattr(n, "items", (IrConstInt(location=LOC, value=1),))
 
@@ -523,14 +523,14 @@ class TestIrBindingsStorage:
 
     def test_ir_index_step(self) -> None:
         idx = IrConstInt(location=LOC, value=0)
-        step = IrIndexStep(kind=IndexKind.LIST, index=idx, location=LOC)
-        assert step.kind is IndexKind.LIST
+        step = IrIndexStep(kind=IndexKind.ARRAY, index=idx, location=LOC)
+        assert step.kind is IndexKind.ARRAY
         assert step.index == idx
         assert step.location == LOC
 
     def test_ir_index_step_frozen(self) -> None:
         step = IrIndexStep(
-            kind=IndexKind.LIST, index=IrConstInt(location=LOC, value=0), location=LOC
+            kind=IndexKind.ARRAY, index=IrConstInt(location=LOC, value=0), location=LOC
         )
         with pytest.raises(dataclasses.FrozenInstanceError):
             setattr(step, "index", IrConstInt(location=LOC, value=1))
@@ -544,7 +544,7 @@ class TestIrBindingsStorage:
 
     def test_ir_assign_with_path(self) -> None:
         idx_expr = IrConstInt(location=LOC, value=0)
-        step = IrIndexStep(kind=IndexKind.LIST, index=idx_expr, location=LOC)
+        step = IrIndexStep(kind=IndexKind.ARRAY, index=idx_expr, location=LOC)
         val = IrConstText(location=LOC, value="v")
         n = IrAssign(location=LOC, symbol=SYM0, path=(step,), value=val)
         assert len(n.path) == 1

@@ -16,10 +16,10 @@ import pytest
 
 from agm.agl.capabilities import HostCapabilities
 from agm.agl.ir.contracts import (
+    BoundaryArray,
     BoundaryDict,
     BoundaryEnum,
     BoundaryException,
-    BoundaryList,
     BoundaryRecord,
     BoundaryRef,
     BoundaryScalar,
@@ -52,7 +52,7 @@ _CAPS = HostCapabilities(
     supports_shell_exec=True,
     codec_kinds={
         "text": frozenset({"text"}),
-        "json": frozenset({"json", "record", "enum", "list", "dict", "int", "decimal", "bool"}),
+        "json": frozenset({"json", "record", "enum", "array", "dict", "int", "decimal", "bool"}),
     },
 )
 
@@ -97,19 +97,19 @@ class TestScalarsAndContainers:
         assert contract.params[0].schema == BoundaryUnit()
         assert contract.result == BoundaryUnit()
 
-    def test_list_nesting(self) -> None:
-        contract = build_contract("extern def f(x: list[int]) -> list[int]\n0")
-        assert contract.result == BoundaryList(BoundaryScalar(ScalarKind.INT))
+    def test_array_nesting(self) -> None:
+        contract = build_contract("extern def f(x: array[int]) -> array[int]\n0")
+        assert contract.result == BoundaryArray(BoundaryScalar(ScalarKind.INT))
 
     def test_dict_nesting(self) -> None:
         contract = build_contract("extern def f(x: dict[text, int]) -> dict[text, int]\n0")
         assert contract.result == BoundaryDict(BoundaryScalar(ScalarKind.INT))
 
-    def test_list_of_dict_nesting(self) -> None:
+    def test_array_of_dict_nesting(self) -> None:
         contract = build_contract(
-            "extern def f(x: list[dict[text, int]]) -> list[dict[text, int]]\n0"
+            "extern def f(x: array[dict[text, int]]) -> array[dict[text, int]]\n0"
         )
-        assert contract.result == BoundaryList(BoundaryDict(BoundaryScalar(ScalarKind.INT)))
+        assert contract.result == BoundaryArray(BoundaryDict(BoundaryScalar(ScalarKind.INT)))
 
 
 # ---------------------------------------------------------------------------
@@ -196,14 +196,14 @@ class TestOption:
 
 
 class TestDeepNesting:
-    def test_list_of_dict_of_option(self) -> None:
+    def test_array_of_dict_of_option(self) -> None:
         source = (
             "enum Option[T]\n  | none\n  | some(value: T)\n"
-            "extern def f[T](x: list[dict[text, Option[T]]]) -> int\n0"
+            "extern def f[T](x: array[dict[text, Option[T]]]) -> int\n0"
         )
         contract = build_contract(source)
         schema = contract.params[0].schema
-        assert isinstance(schema, BoundaryList)
+        assert isinstance(schema, BoundaryArray)
         assert isinstance(schema.element, BoundaryDict)
         inner = schema.element.value
         assert isinstance(inner, BoundaryEnum)
@@ -219,11 +219,11 @@ class TestDeepNesting:
 class TestTypeParams:
     def test_reverse_signature_yields_seal_vars(self) -> None:
         contract = build_contract(
-            "extern def reverse[T](xs: list[T]) -> list[T]\n0", fn_name="reverse"
+            "extern def reverse[T](xs: array[T]) -> array[T]\n0", fn_name="reverse"
         )
         assert contract.type_params == ("T",)
-        assert contract.params[0].schema == BoundaryList(BoundarySealVar("T"))
-        assert contract.result == BoundaryList(BoundarySealVar("T"))
+        assert contract.params[0].schema == BoundaryArray(BoundarySealVar("T"))
+        assert contract.result == BoundaryArray(BoundarySealVar("T"))
 
     def test_two_type_variables_stay_distinct(self) -> None:
         contract = build_contract("extern def pair[A, B](a: A, b: B) -> A\n0", fn_name="pair")
@@ -286,9 +286,9 @@ class TestRecursiveTypes:
         )
 
     def test_recursive_record_crosses_as_boundary_ref(self) -> None:
-        # A self-referential record (finite via the possibly-empty child list).
+        # A self-referential record (finite via the possibly-empty child array).
         source = (
-            "record Node\n  value: int\n  children: list[Node]\nextern def f(n: Node) -> int\n0"
+            "record Node\n  value: int\n  children: array[Node]\nextern def f(n: Node) -> int\n0"
         )
         contract = build_contract(source)
         schema = contract.params[0].schema
@@ -297,7 +297,7 @@ class TestRecursiveTypes:
         assert isinstance(body, BoundaryRecord)
         assert body.fields == (
             ("value", BoundaryScalar(ScalarKind.INT)),
-            ("children", BoundaryList(BoundaryRef(schema.key))),
+            ("children", BoundaryArray(BoundaryRef(schema.key))),
         )
 
     def test_recursive_type_shared_across_param_and_result(self) -> None:
@@ -312,7 +312,7 @@ class TestRecursiveTypes:
 
     def test_recursive_exception_crosses_as_boundary_ref(self) -> None:
         source = (
-            "exception Wrapped extends Exception\n  causes: list[Wrapped]\n"
+            "exception Wrapped extends Exception\n  causes: array[Wrapped]\n"
             "extern def f(e: Wrapped) -> Wrapped\n0"
         )
         contract = build_contract(source)
@@ -322,7 +322,7 @@ class TestRecursiveTypes:
         assert param_schema.key == contract.result.key
         body = dict(contract.defs)[param_schema.key]
         assert isinstance(body, BoundaryException)
-        assert body.fields[-1] == ("causes", BoundaryList(BoundaryRef(param_schema.key)))
+        assert body.fields[-1] == ("causes", BoundaryArray(BoundaryRef(param_schema.key)))
 
     def test_non_finite_schema_param_rejected(self) -> None:
         with pytest.raises(AglTypeError) as exc:
@@ -353,8 +353,8 @@ class TestArtifactHygiene:
         assert {c1, c2} == {c1}
 
     def test_boundary_schema_nodes_hashable_and_equal_by_value(self) -> None:
-        a = BoundaryList(BoundaryScalar(ScalarKind.INT))
-        b = BoundaryList(BoundaryScalar(ScalarKind.INT))
+        a = BoundaryArray(BoundaryScalar(ScalarKind.INT))
+        b = BoundaryArray(BoundaryScalar(ScalarKind.INT))
         assert a == b
         assert hash(a) == hash(b)
 

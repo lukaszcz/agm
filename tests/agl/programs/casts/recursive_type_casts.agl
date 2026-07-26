@@ -1,7 +1,7 @@
 # `as`/`as?` casts to a recursive type: the same $defs/$ref JSON Schema and
 # RefDecode decode plan that a recursive agent output target uses also drives
 # a fallible text/json cast. Covers success and failure paths for `as`
-# (CastError) and `as?` (bool convertibility test), plus a `list[Tree]` cast
+# (CastError) and `as?` (bool convertibility test), plus an `array[Tree]` cast
 # target (a container of a recursive element type).
 enum Tree
   | Leaf
@@ -25,8 +25,8 @@ else =>
   catch CastError as e =>
     print "cast failed: %{e.source_type} -> %{e.target_type}"
 
-if forest_text as? list[Tree] =>
-  let forest = forest_text as list[Tree]
+if forest_text as? array[Tree] =>
+  let forest = forest_text as array[Tree]
   var total: int = 0
   for t in forest do
     total := total + sum_tree(t)

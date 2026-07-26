@@ -5,7 +5,7 @@ Covers:
 - IR-level unit tests for IrBreak and IrContinue primitives built directly.
 - Control-signal bypass: IrBreak/IrContinue propagate through IrTry bodies.
 - validate_ir: IrLoop, IrBreak, IrContinue, IrIterInit/HasNext/Next structural checks.
-- for-loop iteration over list, dict, and text collections.
+- for-loop iteration over array, dict, and text collections.
 - while-clause guard with and without for-clause.
 - Type error for non-iterable for-clause collection.
 """
@@ -657,12 +657,12 @@ def test_validate_ir_ircontinue() -> None:
 
 
 # ---------------------------------------------------------------------------
-# for-loop: iteration over list, dict, and text collections
+# for-loop: iteration over array, dict, and text collections
 # ---------------------------------------------------------------------------
 
 
-def test_for_loop_list_iteration_accumulates_sum() -> None:
-    """for x in list do body done — iterates over all list elements."""
+def test_for_loop_array_iteration_accumulates_sum() -> None:
+    """for x in array do body done — iterates over all array elements."""
     source = (
         "var items = [1, 2, 3, 4]\n"
         "var total = 0\n"
@@ -675,10 +675,11 @@ def test_for_loop_list_iteration_accumulates_sum() -> None:
     assert result["total"] == IntValue(10)
 
 
-def test_for_loop_list_empty_skips_body() -> None:
-    """for x in empty list do body done — body never executes."""
+def test_for_loop_array_empty_skips_body() -> None:
+    """for x in empty array do body done — body never executes."""
     source = (
-        "let xs: list[int] = []\nvar total = 0\nfor x in xs do\n  total := total + 1\ndone\ntotal\n"
+        "let xs: array[int] = []\nvar total = 0\n"
+        "for x in xs do\n  total := total + 1\ndone\ntotal\n"
     )
     result = evaluate_ir(source)
     assert result["total"] == IntValue(0)
@@ -707,8 +708,8 @@ def test_for_loop_var_accessible_in_body() -> None:
     assert result["last"] == TextValue("c")
 
 
-def test_for_loop_list_bound_limits_iterations() -> None:
-    """for x in list do[bound] body until false — bound raises MaxIterationsExceeded."""
+def test_for_loop_array_bound_limits_iterations() -> None:
+    """for x in array do[bound] body until false — bound raises MaxIterationsExceeded."""
     source = (
         "var total = 0\nfor x in [10, 20, 30, 40, 50] do[3]\n  total := total + x\nuntil false\n"
     )
@@ -737,7 +738,7 @@ def test_while_loop_false_condition_skips_body() -> None:
 
 
 def test_for_loop_with_while_guard() -> None:
-    """for x in list while cond do body done — while guard stops early."""
+    """for x in array while cond do body done — while guard stops early."""
     source = (
         "var total = 0\n"
         "for x in [1, 2, 3, 4, 5] while x <= 3 do\n"
@@ -830,7 +831,7 @@ def test_validate_ir_iterinit_iternext_in_loop() -> None:
                 symbol=it_sym,
                 value=IrIterInit(
                     location=_DUMMY_LOC,
-                    kind=IterKind.LIST,
+                    kind=IterKind.ARRAY,
                     collection=IrConstText(location=_DUMMY_LOC, value="placeholder"),
                 ),
             ),

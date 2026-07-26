@@ -39,7 +39,7 @@ _CAPS = HostCapabilities(
     supports_extern=True,
     codec_kinds={
         "text": frozenset({"text"}),
-        "json": frozenset({"json", "record", "enum", "list", "dict", "int", "decimal", "bool"}),
+        "json": frozenset({"json", "record", "enum", "array", "dict", "int", "decimal", "bool"}),
     },
 )
 

@@ -6,7 +6,7 @@ record Issue
   severity: int
   description: text
 
-type Issues = list[Issue]
+type Issues = array[Issue]
 
 enum Review
   | Pass

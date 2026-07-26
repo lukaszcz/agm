@@ -442,7 +442,7 @@ def _build_program_type_table(
     same as same-module mutual recursion) as long as the declarations
     involved are inhabited — e.g. modA imports modB for a Color enum used in
     modA.Foo fields, and modB imports modA for modA.Foo used in modB.Bar
-    fields via a ``list``/``dict`` field or an enum base-case variant.
+    fields via an ``array``/``dict`` field or an enum base-case variant.
     """
     # Shared TypeTable: one instance dual-written by every cross-module env
     # below, so declarations from all modules land in the same table.  Step A's

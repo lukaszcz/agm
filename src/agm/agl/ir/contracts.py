@@ -22,10 +22,11 @@ from dataclasses import dataclass
 from agm.agl.ir.ids import NominalId
 
 __all__ = [
+    "ArrayDecode",
+    "BoundaryArray",
     "BoundaryDict",
     "BoundaryEnum",
     "BoundaryException",
-    "BoundaryList",
     "BoundaryRecord",
     "BoundaryRef",
     "BoundaryScalar",
@@ -44,7 +45,6 @@ __all__ = [
     "EnumDecode",
     "ExternContract",
     "ExternParamSchema",
-    "ListDecode",
     "ParamDecoder",
     "RecordDecode",
     "RefDecode",
@@ -79,7 +79,7 @@ class ScalarDecode:
 
 
 @dataclass(frozen=True, slots=True)
-class ListDecode:
+class ArrayDecode:
     """Decode a JSON array, recursively decoding each element."""
 
     elem: "DecodeSchema"
@@ -136,7 +136,7 @@ class RefDecode:
 
 #: Closed union of decode-schema nodes.  Dispatch with a structural ``match``
 #: whose final arm is ``assert_never``.
-DecodeSchema = ScalarDecode | ListDecode | DictDecode | RecordDecode | EnumDecode | RefDecode
+DecodeSchema = ScalarDecode | ArrayDecode | DictDecode | RecordDecode | EnumDecode | RefDecode
 
 
 @dataclass(frozen=True, slots=True)
@@ -197,8 +197,8 @@ class BoundaryUnit:
 
 
 @dataclass(frozen=True, slots=True)
-class BoundaryList:
-    """A ``list[T]`` crossing as a Python ``list``, recursing on elements."""
+class BoundaryArray:
+    """An ``array[T]`` crossing as a Python ``list``, recursing on elements."""
 
     element: "BoundarySchema"
 
@@ -278,7 +278,7 @@ class BoundaryRef:
 BoundarySchema = (
     BoundaryScalar
     | BoundaryUnit
-    | BoundaryList
+    | BoundaryArray
     | BoundaryDict
     | BoundaryRecord
     | BoundaryEnum

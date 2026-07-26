@@ -82,12 +82,12 @@ from agm.agl.ir.nodes import (
     IrLiteralKind,
     IrLoad,
     IrLoop,
+    IrMakeArray,
     IrMakeClosure,
     IrMakeConstructor,
     IrMakeDict,
     IrMakeEnum,
     IrMakeException,
-    IrMakeList,
     IrMakeRecord,
     IrOr,
     IrParseJson,
@@ -111,9 +111,9 @@ from agm.agl.ir.operations import (
     Coercion,
     IndexKind,
     IntToDecimal,
+    MapArray,
     MapDictValues,
     MapEnumFields,
-    MapList,
     MapRecordFields,
     ToJson,
     UnaryOp,
@@ -141,6 +141,7 @@ from agm.agl.semantics.values import (
     UNIT_VALUE,
     VOID_VALUE,
     AgentValue,
+    ArrayValue,
     BoolValue,
     Cell,
     ConstructorValue,
@@ -153,7 +154,6 @@ from agm.agl.semantics.values import (
     IrClosureValue,
     IteratorValue,
     JsonValue,
-    ListValue,
     RecordValue,
     TextValue,
     Value,
@@ -364,12 +364,12 @@ def _apply_coercion(value: Value, coercion: Coercion) -> Value:
                 return value
             return JsonValue(value_to_json_obj(value))
 
-        case MapList(item=child_op):
-            if not isinstance(value, ListValue):
+        case MapArray(item=child_op):
+            if not isinstance(value, ArrayValue):
                 raise InvalidIrError(
-                    f"MapList coercion requires ListValue, got {type(value).__name__}"
+                    f"MapArray coercion requires ArrayValue, got {type(value).__name__}"
                 )
-            return ListValue(tuple(_apply_coercion(elem, child_op) for elem in value.elements))
+            return ArrayValue(tuple(_apply_coercion(elem, child_op) for elem in value.elements))
 
         case MapDictValues(value=child_op):
             if not isinstance(value, DictValue):
@@ -586,7 +586,7 @@ class IrInterpreter:
                 return AglRaise(
                     _make_exc_value(
                         "IndexError",
-                        f"List index {err.index} out of range for length {err.length}",
+                        f"Array index {err.index} out of range for length {err.length}",
                         trace_id=self._trace.new_event_id(),
                         index=IntValue(err.index),
                         length=IntValue(err.length),
@@ -979,8 +979,8 @@ class IrInterpreter:
             case IrConstJsonNull():
                 return JsonValue(None)
 
-            case IrMakeList(items=items):
-                return ListValue(tuple(self._eval(item) for item in items))
+            case IrMakeArray(items=items):
+                return ArrayValue(tuple(self._eval(item) for item in items))
 
             case IrMakeDict(entries=entries):
                 result: dict[str, Value] = {}
@@ -1419,7 +1419,7 @@ class IrInterpreter:
 
             case IrIterInit(collection=collection_expr):
                 coll = self._eval(collection_expr)
-                if isinstance(coll, ListValue):
+                if isinstance(coll, ArrayValue):
                     elements: list[Value] = list(coll.elements)
                 elif isinstance(coll, DictValue):
                     elements = [TextValue(k) for k in coll.entries]

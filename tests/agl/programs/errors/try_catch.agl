@@ -2,7 +2,7 @@
 # Exception base (message/trace_id only).
 enum Review
   | Pass
-  | Fail(issues: list[text])
+  | Fail(issues: array[text])
 
 param mode
 

@@ -189,7 +189,7 @@ until finished
 
 ### Clause semantics
 
-**`for` — collection iteration.** `for x in COLLECTION` iterates `list[T]`
+**`for` — collection iteration.** `for x in COLLECTION` iterates `array[T]`
 (elements, in order), `dict[text, V]` (keys, in dict order), or `text`
 (each character as a length-1 `text`). The loop variable `x` takes the
 element/key/char type respectively.

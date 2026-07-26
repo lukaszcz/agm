@@ -1,4 +1,4 @@
-# Native rendering: nested records, enums, lists, dicts, json fields,
+# Native rendering: nested records, enums, arrays, dicts, json fields,
 # declaration-order normalization, and "as json" opt-in.
 record Author
   name: text
@@ -7,7 +7,7 @@ record Author
 record Issue
   title: text
   severity: int
-  tags: list[text]
+  tags: array[text]
   author: Author
 
 enum Status

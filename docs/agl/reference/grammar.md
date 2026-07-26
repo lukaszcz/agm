@@ -263,7 +263,7 @@ type_expr ::= "unit"
             | name "[" type_expr ("," type_expr)* "]"   (* applied type *)
             | qualifier_chain name "[" type_expr ("," type_expr)* "]"
             | qualifier_chain name
-            | "list" "[" type_expr "]"
+            | "array" "[" type_expr "]"
             | "dict" "[" "text" "," type_expr "]"
             | "agent"
             | func_type
@@ -275,7 +275,7 @@ type_atom ::= "unit" | "text" | "json" | "bool" | "int" | "decimal"
             | name "[" type_expr ("," type_expr)* "]"
             | qualifier_chain name "[" type_expr ("," type_expr)* "]"
             | qualifier_chain name
-            | "list" "[" type_expr "]"
+            | "array" "[" type_expr "]"
             | "dict" "[" "text" "," type_expr "]"
             | "agent"
 type_list ::= type_expr ("," type_expr)* ","?
@@ -288,7 +288,7 @@ qualifier_segment ::= ["/"] NAME ("/" NAME)* "::"
 
 `name "[" … "]"` is an applied type: a generic declaration instantiated at
 concrete type arguments (`Box[int]`, `Outcome[int, text]`). The built-in
-`list[T]` and `dict[text, V]` are the same form.
+`array[T]` and `dict[text, V]` are the same form.
 
 ## Function declarations
 
@@ -560,7 +560,7 @@ applied_type_qualified_constructor ::= qualifier_chain NAME "[" type_expr ("," t
 
 atom           ::= INT | DECIMAL | "true" | "false" | "null"
                | "(" ")"                           (* unit literal *)
-               | list_literal
+               | array_literal
                | dict_literal
                | name                              (* variable / constructor reference *)
                | qualifier_chain name               (* qualified ref / constructor *)
@@ -576,7 +576,7 @@ paren_block    ::= (marked_item ";")+ marked_item
                  | let_decl | var_decl
 
 juxt_atom      ::= INT | DECIMAL | "true" | "false" | "null"
-                 | list_literal | dict_literal | template
+                 | array_literal | dict_literal | template
                  | NAME                              (* bare references exclude OP_NAME *)
                  | qualifier_chain name               (* qualified ref / constructor *)
                  | applied_type_qualified_constructor
@@ -628,7 +628,7 @@ placeholder_arg ::= "?" | "?<digits>"
 ```
 
 `element_expr` is `expr` without a bare record update: in comma-separated
-element positions (call arguments, list and dict literal elements) a record
+element positions (call arguments, array and dict literal elements) a record
 update — including one that forms the body of an inline lambda — must be
 parenthesized, so that its update list cannot be confused with the enclosing
 comma-separated list. See
@@ -651,7 +651,7 @@ constructors) and is triggered solely by the parameter's zone.
 ## Literals
 
 ```ebnf
-list_literal ::= "[" (element_expr ("," element_expr)* ","?)? "]"
+array_literal ::= "[" (element_expr ("," element_expr)* ","?)? "]"
 
 dict_literal ::= "{" (dict_entry ("," dict_entry)* ","?)? "}"
 dict_entry   ::= STRING ":" element_expr    (* no interpolation in keys *)
@@ -683,7 +683,7 @@ not permitted inside `%{…}`.
 - Chained comparisons are rejected with a non-associativity message after the
   infix chain is grouped.
 - The `[N]` after `do` is a single lexical unit, so it never conflicts with
-  a list literal.
+  an array literal.
 - A `|`, `else`, `catch`, or `until` at the start of a line attaches to the
   innermost construct that can accept it; the layout rules guarantee each
   such token belongs to exactly one construct

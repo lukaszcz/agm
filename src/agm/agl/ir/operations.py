@@ -29,9 +29,9 @@ __all__ = [
     "IndexKind",
     "IntToDecimal",
     "IterKind",
+    "MapArray",
     "MapDictValues",
     "MapEnumFields",
-    "MapList",
     "MapRecordFields",
     "NumericKind",
     "ToJson",
@@ -99,17 +99,17 @@ class CompareKind(enum.Enum):
 
 
 class ContainsKind(enum.Enum):
-    """Kind tag for the ``in`` containment operator: list, dict, or text."""
+    """Kind tag for the ``in`` containment operator: array, dict, or text."""
 
-    LIST = "list"
+    ARRAY = "array"
     DICT = "dict"
     TEXT = "text"
 
 
 class IndexKind(enum.Enum):
-    """Kind tag for index access: list or dict."""
+    """Kind tag for index access: array or dict."""
 
-    LIST = "list"
+    ARRAY = "array"
     DICT = "dict"
 
 
@@ -121,9 +121,9 @@ class UnaryOp(enum.Enum):
 
 
 class IterKind(enum.Enum):
-    """Kind tag for for-loop iteration: list elements, dict keys, or text chars."""
+    """Kind tag for for-loop iteration: array elements, dict keys, or text chars."""
 
-    LIST = "list"
+    ARRAY = "array"
     DICT_KEYS = "dict_keys"
     TEXT = "text"
 
@@ -144,8 +144,8 @@ class ToJson:
 
 
 @dataclass(frozen=True, slots=True)
-class MapList:
-    """Coercion: apply a child coercion to every element of a list."""
+class MapArray:
+    """Coercion: apply a child coercion to every element of an array."""
 
     item: "Coercion"
 
@@ -183,4 +183,4 @@ class MapEnumFields:
 
 #: Closed union of coercion operations.  An identity (no-op) coercion is
 #: represented by ``None`` at use sites; it is NOT a member of this union.
-Coercion = IntToDecimal | ToJson | MapList | MapDictValues | MapRecordFields | MapEnumFields
+Coercion = IntToDecimal | ToJson | MapArray | MapDictValues | MapRecordFields | MapEnumFields

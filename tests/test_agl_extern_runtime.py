@@ -15,7 +15,7 @@ body) and the resulting runtime behavior:
 - end-to-end file runs through the real pipeline (`PipelineDriver`), a
   REPL smoke test, and the dry-run (`check_only`) contract.
 - the full round-trip conversion matrix (decimal exactness, bool/float
-  rejection inside containers, unit, json passthrough, list/dict nesting,
+  rejection inside containers, unit, json passthrough, array/dict nesting,
   records, enums including `Option` as a plain enum, exceptions as values,
   and deep-copy isolation), driven entirely through real extern calls rather
   than the boundary walkers directly.
@@ -40,11 +40,11 @@ from agm.agl.modules.roots import RootSet
 from agm.agl.pipeline import PipelineDriver
 from agm.agl.semantics.values import (
     UNIT_VALUE,
+    ArrayValue,
     BoolValue,
     DecimalValue,
     DictValue,
     IntValue,
-    ListValue,
     TextValue,
 )
 from tests.agl.ir_harness import (
@@ -266,17 +266,17 @@ class TestDecimalExactness:
 
 
 class TestStrictReturnValidation:
-    def test_bool_element_in_returned_int_list_rejected(self, tmp_path: Path) -> None:
+    def test_bool_element_in_returned_int_array_rejected(self, tmp_path: Path) -> None:
         exc = evaluate_ir_raises_with_externs(
-            "extern def f() -> list[int]\nlet _ = f()\n()\n",
+            "extern def f() -> array[int]\nlet _ = f()\n()\n",
             "def f():\n    return [1, True, 2]\n",
             tmp_path,
         )
         assert exc.display_name == "ExternError"
 
-    def test_bool_element_in_returned_decimal_list_rejected(self, tmp_path: Path) -> None:
+    def test_bool_element_in_returned_decimal_array_rejected(self, tmp_path: Path) -> None:
         exc = evaluate_ir_raises_with_externs(
-            "extern def f() -> list[decimal]\nlet _ = f()\n()\n",
+            "extern def f() -> array[decimal]\nlet _ = f()\n()\n",
             "from decimal import Decimal\ndef f():\n    return [Decimal('1'), True]\n",
             tmp_path,
         )
@@ -382,14 +382,14 @@ class TestJsonPassthrough:
 
 
 # ---------------------------------------------------------------------------
-# list/dict deep nesting
+# array/dict deep nesting
 # ---------------------------------------------------------------------------
 
 
-class TestListDictDeepNesting:
-    def test_list_of_list_round_trip(self, tmp_path: Path) -> None:
+class TestArrayDictDeepNesting:
+    def test_array_of_array_round_trip(self, tmp_path: Path) -> None:
         source = (
-            "extern def flatten_sum(xs: list[list[int]]) -> int\n"
+            "extern def flatten_sum(xs: array[array[int]]) -> int\n"
             "let r = flatten_sum([[1, 2], [3, 4]])\n"
             "r\n"
         )
@@ -397,16 +397,16 @@ class TestListDictDeepNesting:
         result, _ = evaluate_ir_with_externs(source, companion, tmp_path)
         assert result["r"] == IntValue(10)
 
-    def test_dict_of_list_round_trip(self, tmp_path: Path) -> None:
+    def test_dict_of_array_round_trip(self, tmp_path: Path) -> None:
         source = (
-            "extern def echo(x: dict[text, list[int]]) -> dict[text, list[int]]\n"
+            "extern def echo(x: dict[text, array[int]]) -> dict[text, array[int]]\n"
             "let r = echo({a: [1, 2], b: [3]})\n"
             "r\n"
         )
         companion = "def echo(x):\n    return x\n"
         result, _ = evaluate_ir_with_externs(source, companion, tmp_path)
         assert result["r"] == DictValue(
-            entries={"a": ListValue((IntValue(1), IntValue(2))), "b": ListValue((IntValue(3),))}
+            entries={"a": ArrayValue((IntValue(1), IntValue(2))), "b": ArrayValue((IntValue(3),))}
         )
 
     def test_dict_non_string_key_on_return_rejected(self, tmp_path: Path) -> None:
@@ -636,26 +636,28 @@ class TestExceptionsAsValues:
 
 
 class TestDeepCopyIsolation:
-    def test_extern_receiving_a_list_can_mutate_and_return_its_own_copy(
+    def test_extern_receiving_an_array_can_mutate_and_return_its_own_copy(
         self, tmp_path: Path
     ) -> None:
-        """A companion receiving a ``list[int]`` gets an ordinary, mutable
+        """A companion receiving an ``array[int]`` gets an ordinary, mutable
         Python ``list`` it can ``.append`` to and hand back as the result.
 
         Unlike the json variant below, there is no AgL-side isolation signal
-        to check here: AgL lists are immutable tuples, so an AgL binding
+        to check here: AgL arrays are immutable tuples, so an AgL binding
         could never reflect a companion's mutation regardless of whether
-        encoding copies the list — asserting on it would be vacuous.
+        encoding copies the array — asserting on it would be vacuous.
         """
         source = (
-            "extern def touch(xs: list[int]) -> list[int]\n"
+            "extern def touch(xs: array[int]) -> array[int]\n"
             "let xs = [1, 2, 3]\n"
             "let touched = touch(xs)\n"
             "touched\n"
         )
         companion = "def touch(xs):\n    xs.append(99)\n    return xs\n"
         result, _ = evaluate_ir_with_externs(source, companion, tmp_path)
-        assert result["touched"] == ListValue((IntValue(1), IntValue(2), IntValue(3), IntValue(99)))
+        assert result["touched"] == ArrayValue(
+            (IntValue(1), IntValue(2), IntValue(3), IntValue(99))
+        )
 
     def test_mutating_a_received_json_object_does_not_affect_the_agl_value_used_after_the_call(
         self, tmp_path: Path

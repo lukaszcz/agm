@@ -18,7 +18,7 @@
 // terminal names (e.g. LET) in Lark's grammar tables.  AglLexer.lex()
 // remaps lowercase scanner output to the uppercase names required here.
 //
-// Type annotation keywords (text, json, bool, int, decimal, list, dict, unit):
+// Type annotation keywords (text, json, bool, int, decimal, array, dict, unit):
 // These are NOT reserved by the scanner.  The grammar accepts them as
 // NAME tokens; AstBuilder type handlers map the string value to the
 // appropriate TypeExpr node.
@@ -337,7 +337,7 @@ type_ann: COLON type_expr
 // ---------------------------------------------------------------------------
 // Type expressions
 //
-// Type keywords (text, json, bool, int, decimal, list, dict, unit) are NOT
+// Type keywords (text, json, bool, int, decimal, array, dict, unit) are NOT
 // reserved by the scanner; they arrive as NAME tokens.
 // The AstBuilder maps NAME values to the right TypeExpr.
 //
@@ -348,7 +348,7 @@ type_ann: COLON type_expr
 // () -> C uses empty type_list; multiple parameters still require parentheses.
 //
 // applied_type: name[type_arg_list] — user-defined generic type application.
-//   Handles list[T], dict[text, V], and any user-defined generic like Pair[A, B].
+//   Handles array[T], dict[text, V], and any user-defined generic like Pair[A, B].
 // ---------------------------------------------------------------------------
 
 ?type_expr: LPAR type_list? RPAR THIN_ARROW type_expr       -> func_type
@@ -439,7 +439,7 @@ case_branch: pattern ARROW branch_body
 
 // loop expression: optional for/while clauses, then do[bound]? body until/done/omitted(via layout).
 // The bound's opening "[" is lexed as DO_LSQB (the first "[" after `do`), so
-// the optional loop_bound is unambiguous against a list-literal body (avoids
+// the optional loop_bound is unambiguous against an array-literal body (avoids
 // S/R). The terminator is mandatory in the grammar; the layout injects a
 // synthetic DONE token for multi-line bodies that omit it.
 // loop_clauses is always present (possibly empty) so loop_expr always has a
@@ -450,7 +450,7 @@ for_clause   : "for" name "in" or_expr range_tail? _NEWLINE?
 while_clause : "while" or_expr _NEWLINE?
 
 // range_tail: the optional integer-range tail on a for clause.
-// When absent, the for clause iterates a collection (list/dict/text).
+// When absent, the for clause iterates a collection (array/dict/text).
 // When present, the for clause iterates an integer counter from the
 // start expression (stored in for_iter) up or down to the bound expression.
 range_tail   : range_dir or_expr range_by?
@@ -568,7 +568,7 @@ return_expr: "return" or_expr?
 // parentheses (values are or_expr), which is what makes chaining and the
 // update list unambiguous.
 // with_expr is NOT admissible in comma-separated element positions (call
-// arguments, list/dict literals — see arg_expr) nor in `=>` inline bodies
+// arguments, array/dict literals — see arg_expr) nor in `=>` inline bodies
 // (see closed_item): there its COMMA would contest the enclosing separator.
 // Parenthesize the whole update expression in those positions.
 with_expr: with_target "with" with_update (COMMA with_update)*
@@ -666,7 +666,7 @@ juxt_suffix: DOT field_name       -> juxt_field_suffix
           | template
           | qual_var_ref
           | juxt_var_ref
-          | lit_list
+          | lit_array
           | lit_dict
 
 juxt_var_ref: NAME -> var_ref
@@ -698,7 +698,7 @@ juxt_var_ref: NAME -> var_ref
 // AgL lexer treats ``<`` and ``>`` as identifier-continuation characters, so
 // ``Review>`` would scan as a single token; ``[`` and ``]`` are identifier
 // stop characters and delimit cleanly.  ``type_expr`` uses ``[]`` only for
-// generics (``list[T]``), so nested brackets stay balanced.
+// generics (``array[T]``), so nested brackets stay balanced.
 // ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
@@ -712,7 +712,7 @@ juxt_var_ref: NAME -> var_ref
      | lit_false
      | lit_null
      | template
-     | lit_list
+     | lit_array
      | lit_dict
      | var_ref
      | qual_var_ref
@@ -755,7 +755,7 @@ named_arg: field_name EQ named_arg_value
 ?named_arg_value: arg_expr | placeholder_arg
 
 // arg_expr: expr minus with_expr — the forms admissible in comma-separated
-// element positions (call arguments, list and dict literals).  A bare
+// element positions (call arguments, array and dict literals).  A bare
 // with_expr's update list would contest the enclosing COMMA
 // (`f(r with x = 1, y = 2)` — second update vs named argument), so `with`
 // requires parentheses there: `f((r with x = 1), y = 2)`.
@@ -806,12 +806,12 @@ type_args: DCOLON LSQB type_arg_list RSQB
 interp: INTERP_START expr INTERP_END
 
 // ---------------------------------------------------------------------------
-// List and dict literals
+// Array and dict literals
 // ---------------------------------------------------------------------------
 
-// list_literal: "[" (expr ("," expr)* ","?)? "]"
+// array_literal: "[" (expr ("," expr)* ","?)? "]"
 // Inside LSQB…RSQB paren_level>0, so _NEWLINE is suppressed (implicit continuation).
-lit_list: LSQB (arg_expr (COMMA arg_expr)* COMMA?)? RSQB
+lit_array: LSQB (arg_expr (COMMA arg_expr)* COMMA?)? RSQB
 
 // dict_literal: "{" (dict_entry ("," dict_entry)* ","?)? "}"
 // Inside LBRACE…RBRACE paren_level>0 (implicit continuation).

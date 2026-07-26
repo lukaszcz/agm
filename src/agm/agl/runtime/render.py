@@ -20,6 +20,7 @@ from agm.agl.runtime.serialize import dumps_exact, value_to_json_obj
 from agm.agl.semantics.text_literal import quote_text
 from agm.agl.semantics.values import (
     AgentValue,
+    ArrayValue,
     BoolValue,
     ConstructorValue,
     DecimalValue,
@@ -29,7 +30,6 @@ from agm.agl.semantics.values import (
     IntValue,
     IrClosureValue,
     JsonValue,
-    ListValue,
     RecordValue,
     TextValue,
     UnitValue,
@@ -152,7 +152,7 @@ def _render(value: Value, *, pretty: bool, quote_strings: bool, top_level: bool,
         rendered = dumps_exact(value_to_json_obj(value), indent=2 if pretty else None)
         return _shift_after_first(rendered, level=level) if pretty else rendered
 
-    if isinstance(value, ListValue):
+    if isinstance(value, ArrayValue):
         items = [
             _render_child(element, pretty=pretty, level=level + 1) for element in value.elements
         ]

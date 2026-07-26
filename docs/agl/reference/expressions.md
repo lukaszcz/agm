@@ -48,14 +48,14 @@ value with REPL echo suppressed; it compares equal to `()`. `()` is also the
 empty argument list of a zero-argument call — the two are syntactically
 unified.
 
-### List literals
+### Array literals
 
 ```agl
 let issues = ["missing tests", "unclear API"]
 ```
 
 Elements must share a type, up to `int → decimal` widening. Under an expected
-type, each element is checked against the expected element type. An empty list
+type, each element is checked against the expected element type. An empty array
 may obtain its element type from an expected container type or another
 constraint in the same enclosing expression:
 
@@ -69,7 +69,7 @@ expression ends, add an annotation:
 
 <!-- agl-check: fragment -->
 ```agl
-let items: list[Issue] = []
+let items: array[Issue] = []
 ```
 
 ### Dictionary literals
@@ -302,7 +302,7 @@ let code = res.exit_code
 ```
 
 Field access is statically checked. It does not apply to enums (use pattern
-matching to extract variant payloads), dictionaries, or lists.
+matching to extract variant payloads), dictionaries, or arrays.
 
 ## Record update
 
@@ -320,7 +320,7 @@ The result has the target's static type. Every listed field must exist on
 that type, each value must be assignable to the declared field type (with the
 usual expected-type propagation and `int` → `decimal` coercion), and listing
 the same field twice in one update is a static error. `with` does not apply
-to enums (match and reconstruct instead), dictionaries, lists, or `json`
+to enums (match and reconstruct instead), dictionaries, arrays, or `json`
 values. The target is evaluated once, then the update values left to right.
 
 Update values are ordinary expressions in the enclosing scope — there is no
@@ -341,8 +341,8 @@ the first update. An update as an update *value* must be parenthesized:
 `r with inner = (r.inner with x = 1)`.
 
 **Restricted positions.** In comma-separated element positions — call
-arguments, list and dict literal elements — and in inline `=>` branch bodies,
-a bare `with` would be ambiguous against the enclosing list or branch
+arguments, array and dict literal elements — and in inline `=>` branch bodies,
+a bare `with` would be ambiguous against the enclosing array or branch
 separator, so the whole update expression must be parenthesized there:
 `f((r with x = 1), y = 2)`. Suite (indented) bodies have no such restriction.
 
@@ -352,7 +352,7 @@ the value's concrete exception type — see
 
 ## Indexing
 
-`expr[index]` reads from a list or dictionary:
+`expr[index]` reads from an array or dictionary:
 
 <!-- agl-check: fragment -->
 ```agl
@@ -373,8 +373,8 @@ let item = make_items()[0]
 Whitespace matters. `xs[0]` is indexing because the `[` is adjacent to `xs`.
 `f [0]` remains the single-argument call sugar `f([0])`.
 
-List indexes must be `int`. Negative indexes count from the end, as in
-Python: `xs[-1]` selects the last element. An out-of-range list index raises
+Array indexes must be `int`. Negative indexes count from the end, as in
+Python: `xs[-1]` selects the last element. An out-of-range array index raises
 catchable `IndexError` with `index`, `length`, and `message` fields.
 
 Dictionary indexes must be `text`. Missing keys raise catchable `KeyError`
@@ -521,7 +521,7 @@ binder/named-argument separator). Both operands must have the same type after
 
 Operands whose type is, or transitively contains, a function, agent, or
 `unit` value are a static error — this applies to bare values as well as to
-containers (`list`, `dict`), records, enums, or exceptions that hold such
+containers (`array`, `dict`), records, enums, or exceptions that hold such
 a type at any depth.
 
 `==` is non-associative; `x == y == z` is a parse error.
@@ -535,7 +535,7 @@ by code point.
 
 <!-- agl-check: fragment -->
 ```agl
-issue in issues          # element membership:  issues: list[T]
+issue in issues          # element membership:  issues: array[T]
 "source" in metadata     # key membership:      metadata: dict[text, V]
 "missing" in body        # substring:           both text
 ```
@@ -602,7 +602,7 @@ if count_json as? int =>
 
 A `text` cast from a fallible source reads the value and formats it as text;
 it is always total regardless of the source type (any data value has a text
-rendering). For structured source types (`list`, records, enums, exceptions …)
+rendering). For structured source types (`array`, records, enums, exceptions …)
 `as text` produces the same AgL-form text that `print` would render.
 For scalar types (`bool`, `int`, `decimal`) it produces the plain scalar text.
 
@@ -610,7 +610,7 @@ For scalar types (`bool`, `int`, `decimal`) it produces the plain scalar text.
 works as a `text`/`json` cast target exactly like any other: the value is
 validated and decoded through the same JSON Schema (`$defs`/`$ref` for the
 recursive parts) used at the agent-call boundary, and `as`/`as?` behave
-normally, including inside a container target such as `list[Tree]`. The same
+normally, including inside a container target such as `array[Tree]`. The same
 finite-schema restriction applies as for an agent output type: a
 [polymorphically recursive](generics.md#recursive-generic-types) generic type
 whose reachable instantiations never close cannot be used as a cast target
@@ -793,7 +793,7 @@ The checker propagates an expected type top-down where it helps:
 | `let x: T = e` / `var x: T = e` | `T` into `e` |
 | `x := e` | declared type of `x` into `e` |
 | Constructor argument | declared field type |
-| `list[T]` / `dict[text, V]` expectation | element/value type into each element |
+| `array[T]` / `dict[text, V]` expectation | element/value type into each element |
 | `case` / `if` expression with outer expectation | into every branch |
 | `ask` / typed `exec` | becomes the call's target type |
 | Function call | each parameter type into the corresponding argument |

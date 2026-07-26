@@ -37,23 +37,23 @@ from jsonschema import Draft202012Validator
 from jsonschema import ValidationError as JsonschemaValidationError
 
 from agm.agl.ir.contracts import (
+    ArrayDecode,
     DecodeSchema,
     DictDecode,
     EnumDecode,
-    ListDecode,
     RecordDecode,
     RefDecode,
     ScalarDecode,
     ScalarKind,
 )
 from agm.agl.semantics.values import (
+    ArrayValue,
     BoolValue,
     DecimalValue,
     DictValue,
     EnumValue,
     IntValue,
     JsonValue,
-    ListValue,
     RecordValue,
     TextValue,
     Value,
@@ -236,10 +236,10 @@ def decode_value(
             return decode_value(resolved, obj, defs)
         case ScalarDecode(kind=kind):
             return _decode_scalar(kind, obj)
-        case ListDecode(elem=elem):
+        case ArrayDecode(elem=elem):
             if not isinstance(obj, list):
                 raise ValueError(f"Expected array, got {type(obj).__name__}")
-            return ListValue(tuple(decode_value(elem, e, defs) for e in obj))
+            return ArrayValue(tuple(decode_value(elem, e, defs) for e in obj))
         case DictDecode(value=value_schema):
             if not isinstance(obj, dict):
                 raise ValueError(f"Expected object, got {type(obj).__name__}")

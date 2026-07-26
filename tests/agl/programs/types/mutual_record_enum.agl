@@ -1,12 +1,12 @@
 # Mutual recursion between a record and an enum: Expr.Block holds a
-# list[Stmt], and Stmt.value holds an Expr, so the two declarations are
-# mutually recursive (guarded here by the list, though neither actually
+# array[Stmt], and Stmt.value holds an Expr, so the two declarations are
+# mutually recursive (guarded here by the array, though neither actually
 # NEEDS a guard since Expr's Lit variant is already a base case). Folds over
 # both via a single recursive function.
 enum Expr
   | Lit(value: int)
   | Add(lhs: Expr, rhs: Expr)
-  | Block(stmts: list[Stmt])
+  | Block(stmts: array[Stmt])
 
 record Stmt
   name: text

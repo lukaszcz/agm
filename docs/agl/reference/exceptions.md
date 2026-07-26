@@ -48,17 +48,17 @@ self-reference without a base case:
 ```agl
 exception ValidationError extends Exception
   field_name: text
-  causes: list[ValidationError]   # legal: guarded by list[...]
+  causes: array[ValidationError]   # legal: guarded by array[...]
 ```
 
 <!-- agl-check: error -->
 ```agl
 exception Broken extends Exception
-  child: Broken   # rejected: uninhabitable, no list/dict guard
+  child: Broken   # rejected: uninhabitable, no array/dict guard
 ```
 
 For a required exception field, recursion must be guarded by a field type
-that itself has a finite base value, such as `list`/`dict` (empty collection)
+that itself has a finite base value, such as `array`/`dict` (empty collection)
 or an enum/option-style type with a base-case variant. The same inhabitation
 rule also covers the `extends` chain itself: an `extends` cycle (two exceptions
 each extending the other) is rejected as uninhabitable for the same reason a
@@ -307,7 +307,7 @@ operation: text    # the operator, e.g. "/"
 
 ### `IndexError`
 
-Raised by out-of-range list indexing or indexed list assignment.
+Raised by out-of-range array indexing or indexed array assignment.
 
 ```text
 index: int
@@ -386,7 +386,7 @@ The general-purpose user abort; carries only the base fields.
 
 | Source | Exception |
 | ------ | --------- |
-| Out-of-range list index access or assignment | `IndexError` |
+| Out-of-range array index access or assignment | `IndexError` |
 | Missing dictionary key access or assignment | `KeyError` |
 | Agent transport failure | `AgentCallError` |
 | Invalid structured output after all attempts | `AgentParseError` |

@@ -52,6 +52,7 @@ from agm.agl.scope.program import resolve_program
 from agm.agl.semantics.type_table import TypeDef, TypeTable
 from agm.agl.semantics.types import (
     AgentType,
+    ArrayType,
     BoolType,
     BottomType,
     DecimalType,
@@ -62,7 +63,6 @@ from agm.agl.semantics.types import (
     InferenceVarType,
     IntType,
     JsonType,
-    ListType,
     RecordType,
     TextType,
     Type,
@@ -83,7 +83,7 @@ _CAPS = HostCapabilities(
     supports_shell_exec=True,
     codec_kinds={
         "text": frozenset({"text"}),
-        "json": frozenset({"json", "record", "enum", "list", "dict", "int", "decimal", "bool"}),
+        "json": frozenset({"json", "record", "enum", "array", "dict", "int", "decimal", "bool"}),
     },
 )
 
@@ -171,7 +171,7 @@ def test_signatures_are_closed_for_boolean_and_enum_in_declaration_order() -> No
         IntType(),
         DecimalType(),
         TypeVarType("T"),
-        ListType(IntType()),
+        ArrayType(IntType()),
         DictType(IntType()),
         ExceptionType("E"),
         UnitType(),
@@ -455,7 +455,7 @@ def test_constructor_inhabitation_is_total_over_current_constructor_and_type_uni
         IntType(),
         DecimalType(),
         TypeVarType("T"),
-        ListType(IntType()),
+        ArrayType(IntType()),
         DictType(IntType()),
         RecordType("R"),
         EnumType("Choice"),

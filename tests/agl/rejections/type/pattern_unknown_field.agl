@@ -1,6 +1,6 @@
 enum R
   | Pass
-  | Fail(issues: list[text], code: int)
+  | Fail(issues: array[text], code: int)
 let r: R = Pass
 case r of
   | Fail(missing = x) => ()

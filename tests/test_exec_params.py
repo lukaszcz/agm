@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 
 from agm.agl.runtime.types import ParamDeclInfo
-from agm.agl.semantics.types import BoolType, IntType, ListType, TextType
+from agm.agl.semantics.types import ArrayType, BoolType, IntType, TextType
 
 
 def _make_param(
@@ -251,7 +251,7 @@ class TestParseParamTokens:
     def test_json_string_passthrough(self) -> None:
         from agm.cli_support.exec_params import parse_param_tokens
 
-        params = (_make_param("tags", ListType(elem=TextType())),)
+        params = (_make_param("tags", ArrayType(elem=TextType())),)
         result = parse_param_tokens(params, ["--tags", '["a","b"]'])
         assert result == {"tags": '["a","b"]'}
 

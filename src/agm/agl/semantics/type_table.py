@@ -50,6 +50,7 @@ from typing import TYPE_CHECKING, Literal, assert_never, cast
 from agm.agl.modules.ids import PRELUDE_ID, STD_CORE_ID, ModuleId
 from agm.agl.semantics.types import (
     AgentType,
+    ArrayType,
     BoolType,
     BottomType,
     DecimalType,
@@ -60,7 +61,6 @@ from agm.agl.semantics.types import (
     InferenceVarType,
     IntType,
     JsonType,
-    ListType,
     RecordType,
     TextType,
     Type,
@@ -546,8 +546,8 @@ class TypeTable:
                     module_id=t.module_id,
                     scope_path=t.scope_path,
                 )
-            case ListType(elem=elem):
-                return ListType(self._canonical_schema_type(elem, relevant_params))
+            case ArrayType(elem=elem):
+                return ArrayType(self._canonical_schema_type(elem, relevant_params))
             case DictType(value=value):
                 return DictType(self._canonical_schema_type(value, relevant_params))
             case FunctionType(params=params, result=result):
@@ -712,10 +712,10 @@ def _has_no_value_equality(t: Type, table: TypeTable) -> bool:
 
     Function, agent, and unit values are opaque / identity-only and AgL gives
     them no ``=``/``!=`` operator; ``unit`` has a single value but no equality
-    operator.  A list, dict, record, enum, or exception that transitively holds
+    operator.  An array, dict, record, enum, or exception that transitively holds
     such a type is therefore itself not comparable.  ``t`` is always a finite
-    tree (list/dict wrapping is structural, not nominal), so recursing through
-    ``ListType``/``DictType`` always terminates; a record/enum/exception
+    tree (array/dict wrapping is structural, not nominal), so recursing through
+    ``ArrayType``/``DictType`` always terminates; a record/enum/exception
     handle instead defers to :meth:`TypeTable.has_no_value_equality`, which
     consults a precomputed declaration-level fixpoint rather than re-walking
     the handle's own fields — the type declarations themselves may be
@@ -724,7 +724,7 @@ def _has_no_value_equality(t: Type, table: TypeTable) -> bool:
     match t:
         case FunctionType() | AgentType() | UnitType():
             return True
-        case ListType():
+        case ArrayType():
             return _has_no_value_equality(t.elem, table)
         case DictType():
             return _has_no_value_equality(t.value, table)
@@ -758,7 +758,7 @@ def comparable_types(left: Type, right: Type, table: TypeTable) -> bool:
     ``AgentType``, ``FunctionType``, and ``UnitType`` operands are
     NON-comparable — using ``=``/``!=``/``<`` on them is a static error. Agents
     have no equality in AgL; function values are opaque.
-    This rule is **transitive**: a ``list``, ``dict``, ``record``, ``enum``, or
+    This rule is **transitive**: an ``array``, ``dict``, ``record``, ``enum``, or
     ``exception`` that (at any depth) contains a function, agent, or ``unit``
     value likewise has no equality and cannot be compared with ``=``/``!=``.
     ``table`` resolves record/enum field shapes for that transitive walk.

@@ -34,13 +34,13 @@ from agm.agl.semantics.type_table import (
 from agm.agl.semantics.types import (
     BUILTIN_PRELUDE_TYPES,
     AgentType,
+    ArrayType,
     BoolType,
     DictType,
     EnumType,
     ExceptionType,
     FunctionType,
     IntType,
-    ListType,
     RecordType,
     TextType,
     TypeVarType,
@@ -57,7 +57,7 @@ _CAPS = HostCapabilities(
     supports_shell_exec=True,
     codec_kinds={
         "text": frozenset({"text"}),
-        "json": frozenset({"json", "record", "enum", "list", "dict", "int", "decimal", "bool"}),
+        "json": frozenset({"json", "record", "enum", "array", "dict", "int", "decimal", "bool"}),
     },
 )
 
@@ -759,7 +759,7 @@ class TestGenericSubstitution:
                 fields=(
                     ("first", TypeVarType("T")),
                     ("second", TypeVarType("U")),
-                    ("firsts", ListType(TypeVarType("T"))),
+                    ("firsts", ArrayType(TypeVarType("T"))),
                     ("seconds", DictType(TypeVarType("U"))),
                 ),
             )
@@ -769,7 +769,7 @@ class TestGenericSubstitution:
         assert dict(result) == {
             "first": IntType(),
             "second": TextType(),
-            "firsts": ListType(IntType()),
+            "firsts": ArrayType(IntType()),
             "seconds": DictType(TextType()),
         }
 
@@ -1256,9 +1256,9 @@ class TestComparableTypesTableAware:
         text_handle = EnumType(name="Holder", type_args=(TextType(),), module_id=ENTRY_ID)
         assert comparable_types(text_handle, text_handle, table) is True
 
-    def test_record_with_unit_nested_in_list_field_not_comparable(self) -> None:
-        # Nested depth: the record field itself is a list, whose element type
-        # is the type parameter — instantiating with unit makes the list of
+    def test_record_with_unit_nested_in_array_field_not_comparable(self) -> None:
+        # Nested depth: the record field itself is an array, whose element type
+        # is the type parameter — instantiating with unit makes the array of
         # unit values transitively non-comparable.
         table = TypeTable()
         table.register(
@@ -1267,7 +1267,7 @@ class TestComparableTypesTableAware:
                 name="Wrapper",
                 module_id=ENTRY_ID,
                 type_params=("T",),
-                fields=(("items", ListType(TypeVarType("T"))),),
+                fields=(("items", ArrayType(TypeVarType("T"))),),
             )
         )
         handle = RecordType(name="Wrapper", type_args=(UnitType(),), module_id=ENTRY_ID)
@@ -1378,7 +1378,7 @@ class TestComparableTypesTableAware:
         assert comparable_types(handle, handle, table) is True
 
     def test_recursive_tree_is_comparable(self) -> None:
-        # A self-referential enum (list/dict guard not even needed for
+        # A self-referential enum (array/dict guard not even needed for
         # equality — only for inhabitation): the equality-capability fixpoint
         # must terminate on a cycle instead of recursing through the same
         # declaration's fields forever.
@@ -1432,7 +1432,7 @@ class TestComparableTypesTableAware:
         assert comparable_types(handle, handle, table) is False
 
     def test_mutually_recursive_records_are_comparable(self) -> None:
-        # A/B are mutually recursive through a list guard (inhabited) and
+        # A/B are mutually recursive through an array guard (inhabited) and
         # contain only scalar fields otherwise: both must be comparable, and
         # the fixpoint must not infinite-loop walking A -> B -> A -> ...
         table = TypeTable()
@@ -1443,7 +1443,7 @@ class TestComparableTypesTableAware:
                 module_id=ENTRY_ID,
                 fields=(
                     ("name", TextType()),
-                    ("bs", ListType(RecordType(name="B", module_id=ENTRY_ID))),
+                    ("bs", ArrayType(RecordType(name="B", module_id=ENTRY_ID))),
                 ),
             )
         )
@@ -1512,7 +1512,7 @@ class TestFiniteClosure:
         exc = ExceptionType("Oops", module_id=ENTRY_ID)
         enum = EnumType("Choice", module_id=ENTRY_ID)
         box = RecordType("Box", type_args=(enum,), module_id=ENTRY_ID)
-        typ = FunctionType(params=(ListType(exc),), result=DictType(box))
+        typ = FunctionType(params=(ArrayType(exc),), result=DictType(box))
         assert list(nominal_references(typ)) == [exc, box, enum]
         assert list(nominal_references(BoolType())) == []
 
@@ -1531,7 +1531,7 @@ class TestFiniteClosure:
                     ("value", TypeVarType("T")),
                     (
                         "children",
-                        ListType(
+                        ArrayType(
                             RecordType("Tree", type_args=(TypeVarType("T"),), module_id=ENTRY_ID)
                         ),
                     ),
@@ -1625,8 +1625,8 @@ class TestFiniteClosure:
         # Pair itself is unrelated (non-recursive) and stays finite.
         assert table.has_finite_closure(ENTRY_ID, "Pair") is True
 
-    def test_growing_via_list_is_infinite(self) -> None:
-        # P[T] referencing P[list[T]]: T occurs under the list constructor,
+    def test_growing_via_array_is_infinite(self) -> None:
+        # P[T] referencing P[array[T]]: T occurs under the array constructor,
         # a proper subterm of the argument template.
         table = TypeTable()
         table.register(
@@ -1640,7 +1640,7 @@ class TestFiniteClosure:
                     (
                         "next",
                         RecordType(
-                            "P", type_args=(ListType(TypeVarType("T")),), module_id=ENTRY_ID
+                            "P", type_args=(ArrayType(TypeVarType("T")),), module_id=ENTRY_ID
                         ),
                     ),
                 ),
@@ -1747,7 +1747,7 @@ class TestFiniteClosure:
     def test_non_generic_exception_is_finite(self) -> None:
         # Exceptions are never generic, so they contribute no
         # parameter-dependency nodes at all — any recursive exception chain
-        # (guarded through a list/dict field, as inhabitation requires) is
+        # (guarded through an array/dict field, as inhabitation requires) is
         # unconditionally finite.
         table = TypeTable()
         table.register(
@@ -1757,7 +1757,7 @@ class TestFiniteClosure:
                 module_id=ENTRY_ID,
                 fields=(
                     ("code", IntType()),
-                    ("causes", ListType(ExceptionType("Chain", module_id=ENTRY_ID))),
+                    ("causes", ArrayType(ExceptionType("Chain", module_id=ENTRY_ID))),
                 ),
             )
         )
@@ -1864,10 +1864,10 @@ class TestFiniteClosure:
                 fields=(
                     (
                         "children",
-                        ListType(
+                        ArrayType(
                             RecordType(
                                 "R",
-                                type_args=(ListType(TypeVarType("T")),),
+                                type_args=(ArrayType(TypeVarType("T")),),
                                 module_id=ENTRY_ID,
                             )
                         ),
@@ -1910,7 +1910,7 @@ class TestFiniteClosure:
                                     type_args=(
                                         RecordType(
                                             "Phantom",
-                                            type_args=(ListType(TypeVarType("T")),),
+                                            type_args=(ArrayType(TypeVarType("T")),),
                                             module_id=ENTRY_ID,
                                         ),
                                     ),
@@ -1946,7 +1946,7 @@ class TestFiniteClosure:
                             type_args=(
                                 RecordType(
                                     "Unknown",
-                                    type_args=(ListType(TypeVarType("T")),),
+                                    type_args=(ArrayType(TypeVarType("T")),),
                                     module_id=ENTRY_ID,
                                 ),
                             ),
@@ -1984,7 +1984,7 @@ class TestFiniteClosure:
                             type_args=(
                                 RecordType(
                                     "Box",
-                                    type_args=(TypeVarType("T"), ListType(TypeVarType("T"))),
+                                    type_args=(TypeVarType("T"), ArrayType(TypeVarType("T"))),
                                     module_id=ENTRY_ID,
                                 ),
                             ),
@@ -2008,7 +2008,7 @@ class TestFiniteClosure:
                     ("value", TypeVarType("T")),
                     (
                         "children",
-                        ListType(
+                        ArrayType(
                             RecordType("Tree", type_args=(TypeVarType("T"),), module_id=ENTRY_ID)
                         ),
                     ),
@@ -2086,7 +2086,7 @@ class TestFiniteClosure:
                     (
                         "next",
                         RecordType(
-                            "Pair", type_args=(ListType(TypeVarType("T")),), module_id=ENTRY_ID
+                            "Pair", type_args=(ArrayType(TypeVarType("T")),), module_id=ENTRY_ID
                         ),
                     ),
                 ),
@@ -2182,11 +2182,11 @@ class TestFiniteClosure:
         table = TypeTable()
         ghost = RecordType(
             "Ghost",
-            type_args=(ListType(IntType()),),
+            type_args=(ArrayType(IntType()),),
             module_id=ENTRY_ID,
         )
         assert table.canonical_schema_type(ghost) == ghost
-        assert table.schema_relevant_type_args(ghost) == (ListType(IntType()),)
+        assert table.schema_relevant_type_args(ghost) == (ArrayType(IntType()),)
 
     def test_schema_canonical_type_preserves_extra_defensive_args(self) -> None:
         table = TypeTable()

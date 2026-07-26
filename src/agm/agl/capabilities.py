@@ -18,7 +18,7 @@ Design
 - ``codec_kinds``: mapping from codec name → frozenset of semantic type-kind
   strings the codec supports.  Built-in codecs: ``"text"`` (supports
   ``{"text"}``); ``"json"`` (supports
-  ``{"json", "record", "enum", "list", "dict", "int", "decimal", "bool"}``).
+  ``{"json", "record", "enum", "array", "dict", "int", "decimal", "bool"}``).
   Hosts may register additional codecs via ``PipelineDriver``.
 
 The string type-kind identifiers used in ``codec_kinds`` match the names of

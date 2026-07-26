@@ -72,6 +72,7 @@ from agm.agl.scope.symbols import (
 from agm.agl.semantics.type_table import TypeTable, comparable_types
 from agm.agl.semantics.types import (
     AgentType,
+    ArrayType,
     BoolType,
     BottomType,
     CastKind,
@@ -86,7 +87,6 @@ from agm.agl.semantics.types import (
     InferenceVarType,
     IntType,
     JsonType,
-    ListType,
     RecordType,
     TextType,
     Type,
@@ -100,6 +100,7 @@ from agm.agl.semantics.types import (
 )
 from agm.agl.syntax.nodes import (
     AgentDecl,
+    ArrayLit,
     AsPattern,
     AssignStmt,
     BinaryOp,
@@ -135,7 +136,6 @@ from agm.agl.syntax.nodes import (
     Item,
     Lambda,
     LetDecl,
-    ListLit,
     LiteralPattern,
     Loop,
     NameTarget,
@@ -421,7 +421,7 @@ def _contains_banned_extern_type(
 
     The FFI is a pure data boundary: function and agent values can never cross
     it, so they are static errors anywhere in an extern's parameter or return
-    types, including nested inside ``list``/``dict``/record/enum
+    types, including nested inside ``array``/``dict``/record/enum
     instantiations.  Type variables are permitted at any depth — dynamic
     sealing keeps values at those positions opaque.  Record/enum field and
     variant shapes are resolved through *type_table*; *_seen* tracks the
@@ -431,7 +431,7 @@ def _contains_banned_extern_type(
     match t:
         case FunctionType() | AgentType():
             return True
-        case ListType():
+        case ArrayType():
             return _contains_banned_extern_type(t.elem, type_table, _seen)
         case DictType():
             return _contains_banned_extern_type(t.value, type_table, _seen)
@@ -945,7 +945,7 @@ class _Checker:
         schema_type = self._env.type_table.canonical_schema_type(typ)
         if isinstance(schema_type, (TextType, JsonType, BoolType, IntType, DecimalType)):
             return True
-        if isinstance(schema_type, ListType):
+        if isinstance(schema_type, ArrayType):
             return self._wire_type_is_serializable(schema_type.elem, seen=seen)
         if isinstance(schema_type, DictType):
             return self._wire_type_is_serializable(schema_type.value, seen=seen)
@@ -1216,7 +1216,7 @@ class _Checker:
             self._record_node_type(obj.node_id, indexed_type)
             return indexed_type
         raise AglTypeError(
-            "indexed assignment requires a variable list or dict root.",
+            "indexed assignment requires a variable array or dict root.",
             span=obj.span,
         )
 
@@ -1435,8 +1435,8 @@ class _Checker:
             return self._check_record_update(expr, expected=expected)
         if _is_index_like(expr):
             return self._check_index_access(expr)
-        if isinstance(expr, ListLit):
-            return self._check_list_lit(expr, expected=expected)
+        if isinstance(expr, ArrayLit):
+            return self._check_array_lit(expr, expected=expected)
         if isinstance(expr, Cast):
             return self._check_cast(expr)
         # DictLit is the last literal Expr union member (Break/Continue handled above).
@@ -1825,7 +1825,7 @@ class _Checker:
         # Only a FALLIBLE cast derives a JSON schema at lowering time
         # (TOTAL_RENDER/TOTAL_JSON/TOTAL_NOOP never do) — and it may need one
         # not just for a bare record/enum target but for a composite target
-        # containing one (e.g. list[Perfect[int]], dict[text, Perfect[int]]).
+        # containing one (e.g. array[Perfect[int]], dict[text, Perfect[int]]).
         # A type whose reachable instantiation closure is infinite has no
         # finite schema to derive, so reject it here rather than crashing at
         # lowering. no_finite_schema_message returns None for scalar/finite
@@ -2103,7 +2103,7 @@ class _Checker:
     def _provenance_for_index_result(self, result_type: Type, obj: Expr) -> set[int]:
         """Carry container evidence only when indexing exposes its element/value type."""
         obj_type = self._node_type(obj.node_id)
-        exposes_result = (isinstance(obj_type, ListType) and obj_type.elem == result_type) or (
+        exposes_result = (isinstance(obj_type, ArrayType) and obj_type.elem == result_type) or (
             isinstance(obj_type, DictType) and obj_type.value == result_type
         )
         if exposes_result:
@@ -3046,7 +3046,7 @@ class _Checker:
             # Collection for: for VAR in COLLECTION
             iter_type = self._check_expr(node.for_iter, expected=None)
             with self._frame_direct_candidate_use(exprs=(node.for_iter,)):
-                if isinstance(iter_type, ListType):
+                if isinstance(iter_type, ArrayType):
                     elem_type: Type = iter_type.elem
                 elif isinstance(iter_type, DictType):
                     elem_type = TextType()
@@ -3054,7 +3054,7 @@ class _Checker:
                     elem_type = TextType()
                 else:
                     raise AglTypeError(
-                        f"'for' collection must be list[T], dict[text,V], or text; "
+                        f"'for' collection must be array[T], dict[text,V], or text; "
                         f"got '{iter_type!r}'.",
                         span=node.for_iter.span,
                     )
@@ -3167,21 +3167,21 @@ class _Checker:
             if isinstance(seg, InterpSegment):
                 is_nonempty_container_literal = (
                     isinstance(seg.expr, DictLit) and bool(seg.expr.entries)
-                ) or (isinstance(seg.expr, ListLit) and bool(seg.expr.elements))
+                ) or (isinstance(seg.expr, ArrayLit) and bool(seg.expr.elements))
                 if is_nonempty_container_literal:
-                    assert isinstance(seg.expr, (ListLit, DictLit))
+                    assert isinstance(seg.expr, (ArrayLit, DictLit))
                     seg_type = self._check_template_literal(seg.expr)
                     self._record_node_type(seg.expr.node_id, seg_type)
                 else:
                     self._check_expr(seg.expr, expected=None)
         return TextType()
 
-    def _check_template_literal(self, expr: ListLit | DictLit) -> Type:
+    def _check_template_literal(self, expr: ArrayLit | DictLit) -> Type:
         """Check a non-empty container literal in a ``%{ … }`` context."""
-        if isinstance(expr, ListLit):
+        if isinstance(expr, ArrayLit):
             for elem in expr.elements:
                 self._check_template_literal_child(elem)
-            return ListType(elem=JsonType())
+            return ArrayType(elem=JsonType())
         # DictLit — caller guarantees non-empty.
         seen_keys: dict[str, SourceSpan] = {}
         for entry in expr.entries:
@@ -3200,7 +3200,7 @@ class _Checker:
         """Check a single child of a template container literal."""
         if isinstance(expr, (StringLit, IntLit, DecimalLit, BoolLit, NullLit)):
             return self._check_expr(expr, expected=JsonType())
-        if isinstance(expr, ListLit):
+        if isinstance(expr, ArrayLit):
             if not expr.elements:
                 return self._check_expr(expr, expected=JsonType())
             result = self._check_template_literal(expr)
@@ -3297,7 +3297,7 @@ class _Checker:
         left, right = operands
         if isinstance(right, InferenceVarType):
             return True
-        if isinstance(right, ListType):
+        if isinstance(right, ArrayType):
             return True
         if isinstance(right, (TextType, DictType)):
             return contains_inference_var(left) or isinstance(left, (TextType, BottomType))
@@ -3549,10 +3549,10 @@ class _Checker:
             right_type, TextType
         ):
             return BoolType()
-        if isinstance(right_type, ListType):
+        if isinstance(right_type, ArrayType):
             if not is_assignable(left_type, right_type.elem):
                 raise AglTypeError(
-                    f"'in' element type mismatch: '{left_type!r}' in 'list[{right_type.elem!r}]'.",
+                    f"'in' element type mismatch: '{left_type!r}' in 'array[{right_type.elem!r}]'.",
                     span=span,
                 )
             return BoolType()
@@ -3561,7 +3561,7 @@ class _Checker:
         if isinstance(right_type, BottomType):
             return BoolType()
         raise AglTypeError(
-            f"'in' requires (text in text), (T in list[T]), or (text in dict); "
+            f"'in' requires (text in text), (T in array[T]), or (text in dict); "
             f"got '{left_type!r}' in '{right_type!r}'.",
             span=span,
         )
@@ -3886,7 +3886,7 @@ class _Checker:
                 exprs=(obj_expr,) if obj_expr else (),
                 binding_node_ids=binding_node_ids,
             ) from error
-        if isinstance(obj_type, ListType):
+        if isinstance(obj_type, ArrayType):
             index_type = self._check_expr(index, expected=IntType())
             self._assert_assignable_from(index_type, IntType(), index.span, index)
             return obj_type.elem
@@ -3897,7 +3897,7 @@ class _Checker:
             return obj_type.value
 
         error = AglTypeError(
-            f"indexing requires a list or dict; got '{obj_type!r}'.",
+            f"indexing requires an array or dict; got '{obj_type!r}'.",
             span=span,
         )
         raise self._frame_inferred_return_error(
@@ -3906,10 +3906,10 @@ class _Checker:
             binding_node_ids=binding_node_ids,
         ) from error
 
-    # --- list / dict literals ---
+    # --- array / dict literals ---
 
     def _expected_elem_type(self, expected: Type | None) -> Type | None:
-        if isinstance(expected, ListType):
+        if isinstance(expected, ArrayType):
             return expected.elem
         if isinstance(expected, JsonType):
             return JsonType()
@@ -3960,34 +3960,34 @@ class _Checker:
         )
         return make_type(element)
 
-    def _check_list_lit(self, node: ListLit, *, expected: Type | None) -> Type:
+    def _check_array_lit(self, node: ArrayLit, *, expected: Type | None) -> Type:
         if not node.elements:
             expected = self._complete_empty_literal_shape(
                 expected,
-                make_type=ListType,
-                literal_name="empty list literal",
+                make_type=ArrayType,
+                literal_name="empty array literal",
                 span=node.span,
             )
         elem_expected = self._expected_elem_type(expected)
         if not node.elements:
             if elem_expected is None:
                 raise AglTypeError(
-                    "Empty list literal requires a type annotation "
-                    "(e.g. 'let xs: list[text] = []').",
+                    "Empty array literal requires a type annotation "
+                    "(e.g. 'let xs: array[text] = []').",
                     span=node.span,
                 )
-            return ListType(elem=elem_expected)
+            return ArrayType(elem=elem_expected)
         if elem_expected is not None and not contains_inference_var(elem_expected):
             for elem in node.elements:
                 et = self._check_expr(elem, expected=elem_expected)
                 self._assert_assignable_from(et, elem_expected, elem.span, elem)
-            return ListType(elem=elem_expected)
+            return ArrayType(elem=elem_expected)
         with self._frame_direct_candidate_use(exprs=node.elements):
-            unified = self._unify_elements(node.elements, kind="List", span=node.span)
+            unified = self._unify_elements(node.elements, kind="Array", span=node.span)
         self._set_inferred_return_expr_provenance(
             node.node_id, self._provenance_for_result(unified, node.elements)
         )
-        return ListType(elem=unified)
+        return ArrayType(elem=unified)
 
     def _check_dict_lit(self, node: DictLit, *, expected: Type | None) -> Type:
         if not node.entries:

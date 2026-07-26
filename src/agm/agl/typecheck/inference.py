@@ -14,12 +14,12 @@ from enum import StrEnum
 
 from agm.agl.diagnostics import AglError
 from agm.agl.semantics.types import (
+    ArrayType,
     BottomType,
     DictType,
     EnumType,
     FunctionType,
     InferenceVarType,
-    ListType,
     RecordType,
     Type,
     contains_inference_var,
@@ -232,7 +232,7 @@ class InferenceEngine:
         evidence = self._merge_origins(
             inherited, self._origins_in(original_left), self._origins_in(original_right)
         )
-        if isinstance(left, ListType) and isinstance(right, ListType):
+        if isinstance(left, ArrayType) and isinstance(right, ArrayType):
             self._unify(left.elem, right.elem, origin, evidence)
             return
         if isinstance(left, DictType) and isinstance(right, DictType):
@@ -308,7 +308,7 @@ class InferenceEngine:
             if not self._occurs(inferred, context):
                 self._bind(inferred, context, origin)
             return
-        if isinstance(inferred, ListType) and isinstance(context, ListType):
+        if isinstance(inferred, ArrayType) and isinstance(context, ArrayType):
             self._complete(inferred.elem, context.elem, origin)
             return
         if isinstance(inferred, DictType) and isinstance(context, DictType):

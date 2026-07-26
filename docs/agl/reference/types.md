@@ -16,7 +16,7 @@ json
 bool
 int
 decimal
-list[T]
+array[T]
 dict[text, T]
 agent
 () -> B
@@ -34,7 +34,7 @@ type_expr ::= "unit"
             | qualifier_chain name "[" type_expr ("," type_expr)* "]"
                                                                (* qualified applied type *)
             | qualifier_chain name                            (* qualified type *)
-            | "list" "[" type_expr "]"
+            | "array" "[" type_expr "]"
             | "dict" "[" "text" "," type_expr "]"
             | "agent"
             | func_type
@@ -46,7 +46,7 @@ type_atom ::= "unit" | "text" | "json" | "bool" | "int" | "decimal"
             | name "[" type_expr ("," type_expr)* "]"
             | qualifier_chain name "[" type_expr ("," type_expr)* "]"
             | qualifier_chain name
-            | "list" "[" type_expr "]"
+            | "array" "[" type_expr "]"
             | "dict" "[" "text" "," type_expr "]"
             | "agent"
 type_list       ::= type_expr ("," type_expr)* ","?
@@ -62,7 +62,7 @@ at concrete type arguments, e.g. `Box[int]`, `Option[text]`,
 `Outcome[int, text]`, or nested `Box[Box[int]]`. A `qualifier_chain` may precede
 the complete type name before its brackets, as in `mylib::Box[int]` or
 `Geometry::Box[int]`; without brackets it forms a qualified type such as
-`mylib::Point` or `Geometry::Point`. The built-in `list[T]` and `dict[text, V]`
+`mylib::Point` or `Geometry::Point`. The built-in `array[T]` and `dict[text, V]`
 are the same applied-type form. See [Named scopes](scopes.md) for scope-path
 resolution.
 
@@ -119,7 +119,7 @@ exactly. A wire number with an integral value (such as `1.0`) satisfies an
 ### `json`
 
 `json` holds any *JSON-shaped* value: `null`, booleans, numbers, text, and
-lists/dictionaries of JSON-shaped values. The literal `null` has type `json`.
+arrays/dictionaries of JSON-shaped values. The literal `null` has type `json`.
 
 Records, enums, exceptions, functions, and agents are **not** JSON-shaped.
 
@@ -132,18 +132,18 @@ enum MaybeText
   | Some(value: text)
 ```
 
-### `list[T]` and `dict[text, T]`
+### `array[T]` and `dict[text, T]`
 
 Homogeneous containers. Elements and values are read with indexing
 (`xs[0]`, `metadata["key"]`). A mutable `var` binding can be updated through
-an index with `:=`; this replaces the binding with a new list or dictionary
+an index with `:=`; this replaces the binding with a new array or dictionary
 value. There is no `len` operator.
 
 ### `agent`
 
 `agent` is an opaque type for declared agent values. Every `agent`
 declaration introduces a name of this type. Agent values may be stored in
-bindings, passed to functions, and held in lists, but have **no fields, no
+bindings, passed to functions, and held in arrays, but have **no fields, no
 operators, no JSON encoding, and only opaque rendering**. Rendering or
 interpolating an agent value produces a handle such as `<agent reviewer>`.
 Storing it where a JSON-shaped type is expected is a static error.
@@ -333,7 +333,7 @@ under the ordinary constructor rules.
 ```agl
 enum Review
   | Pass
-  | Fail(issues: list[text])
+  | Fail(issues: array[text])
 ```
 
 **Variant field zones.** Payload fields are standard by default, regardless of
@@ -382,10 +382,10 @@ enum Tree
 
 record Category
   name: text
-  subcategories: list[Category]
+  subcategories: array[Category]
 
 exception Retryable extends Exception
-  causes: list[Retryable]
+  causes: array[Retryable]
 ```
 
 Mutual recursion — records, enums, and exceptions referencing each other in
@@ -401,8 +401,8 @@ the following breaks the chain:
 
 - an enum variant that does not need another value of the same (or a
   mutually recursive) type — a **base case**, such as `Leaf` above;
-- a `list[T]`/`dict[text, T]` field whose element type is the recursive
-  type — the empty list or dict is always a value, regardless of `T`, as
+- an `array[T]`/`dict[text, T]` field whose element type is the recursive
+  type — the empty array or dict is always a value, regardless of `T`, as
   with `Category.subcategories` above.
 
 A record or exception whose every required field, or an enum whose every
@@ -415,20 +415,20 @@ record Node
   next: Node
 # Record type 'Node' is uninhabitable: every value of 'Node' would be
 # infinite. Recursion must be guarded by an enum base-case variant or a
-# list/dict field.
+# array/dict field.
 ```
 
 The same rule rejects an enum whose only variant carries itself, an exception
 whose required fields contain an unguarded cycle, and a mutually recursive
 pair with no base case or guard anywhere in the cycle (for example
-`record A { b: B }` / `record B { a: A }`, with no list/dict field and no enum
+`record A { b: B }` / `record B { a: A }`, with no array/dict field and no enum
 alternative on either side). Abstract exception roots are inhabited only by
 constructible descendants, not by their own fields alone. The error is
 reported at the declaration and names its kind (`Record type`/`Enum type`/
 `Exception type`).
 
 Generic recursive types — a declaration referencing itself at a different
-type argument, such as `Expr[T]` referencing `Expr[list[T]]` in its own body —
+type argument, such as `Expr[T]` referencing `Expr[array[T]]` in its own body —
 are constructible under the same rule; see [Generics](generics.md) for the
 generics-specific recursion rules.
 
@@ -528,7 +528,7 @@ def make() -> ::Node = Node(value = 0)   # refers to this module's own Node
 <!-- agl-check: fragment -->
 ```agl
 type Status = Review
-type Issues = list[Issue]
+type Issues = array[Issue]
 type Metadata = dict[text, json]
 ```
 
@@ -565,12 +565,12 @@ their type arguments match exactly, with no variance or subtyping. The
 arguments.
 
 ```agl
-let xs: list[int] = [1, 2]
-# let ys: list[decimal] = xs   # static error: list[int] ≠ list[decimal]
+let xs: array[int] = [1, 2]
+# let ys: array[decimal] = xs   # static error: array[int] ≠ array[decimal]
 ```
 
-`Box[int]` and `Box[text]` are unrelated types, and `list[int]` is not
-assignable to `list[json]`. The full generics model — declaration syntax,
+`Box[int]` and `Box[text]` are unrelated types, and `array[int]` is not
+assignable to `array[json]`. The full generics model — declaration syntax,
 inference, the `::[…]` override, and what may be done with a value of a type
 parameter — is covered in [Generics](generics.md).
 
@@ -623,7 +623,7 @@ AgL provides two cast operators:
   raises. Equivalent to asking whether `EXPR as T` would succeed.
 
 The target type `T` is a type expression written the same way as any other
-type annotation (`int`, `list[text]`, `MyRecord`, etc.).
+type annotation (`int`, `array[text]`, `MyRecord`, etc.).
 
 Both operators are left-associative and sit at a precedence level between
 unary `-` and `* /`. See [Lexical structure](lexical-structure.md) and
@@ -638,8 +638,8 @@ at runtime; **fallible** ones may raise `CastError`.
 
 | Target type | Permitted source types | Outcome |
 | ----------- | ---------------------- | ------- |
-| `text` | any data type (`text`, `json`, `bool`, `int`, `decimal`, `list[E]`, `dict[text,V]`, record, enum, exception) | total — renders the value to its AgL-form text representation |
-| `json` | `text`, `json`, `bool`, `int`, `decimal`, `list[E]`, `dict[text,V]` | total — canonicalizes the value to `json` |
+| `text` | any data type (`text`, `json`, `bool`, `int`, `decimal`, `array[E]`, `dict[text,V]`, record, enum, exception) | total — renders the value to its AgL-form text representation |
+| `json` | `text`, `json`, `bool`, `int`, `decimal`, `array[E]`, `dict[text,V]` | total — canonicalizes the value to `json` |
 | `json` | record, enum, exception | total — structural JSON encoding (record → field object; enum → object with `"$case"` tag; exception → all fields including `trace_id`) |
 | `bool` | `bool` | total (no-op) |
 | `bool` | `text`, `json` | fallible — value must be a JSON boolean |
@@ -649,8 +649,8 @@ at runtime; **fallible** ones may raise `CastError`.
 | `decimal` | `decimal` | total (no-op) |
 | `decimal` | `int` | total (widening, same as the implicit coercion) |
 | `decimal` | `text`, `json` | fallible — value must be a number |
-| `list[E]` | identical `list[E]` | total (no-op) |
-| `list[E]` | `text`, `json` | fallible — strict JSON parse then element validation |
+| `array[E]` | identical `array[E]` | total (no-op) |
+| `array[E]` | `text`, `json` | fallible — strict JSON parse then element validation |
 | `dict[text,V]` | identical `dict[text,V]` | total (no-op) |
 | `dict[text,V]` | `text`, `json` | fallible — strict JSON parse then value validation |
 | record `R` | same record `R` | total (no-op) |
@@ -683,7 +683,7 @@ let ok: bool = some_json as? int   # true if the value is an integral number
 ### Strict parsing in text and json casts
 
 When the source type is `text` or `json` and the target is a type that
-requires structure (`bool`, `int`, `decimal`, list, dict, record, or enum),
+requires structure (`bool`, `int`, `decimal`, array, dict, record, or enum),
 the cast parses the text (or validates the JSON tree) using **strict JSON
 parsing**: the input must be exactly one well-formed JSON value with no
 surrounding prose, no Markdown fences, and no recovery. This contrasts with
@@ -738,17 +738,17 @@ produces the JSON number `42` and raises `JsonParseError`
 Every **data** type has full value equality (`==` / `!=`):
 
 - Scalars compare by value; `int` and `decimal` compare numerically.
-- Lists compare element-wise; dictionaries compare by key set and per-key
+- Arrays compare element-wise; dictionaries compare by key set and per-key
   values.
 - Records and enums compare by type, variant (for enums), and field values.
 - `json` values compare structurally.
 
 **Opaque types** — `agent`, function types, and `unit` — have **no equality**.
 A comparison involving one of these types is a static error. This rule is
-**transitive**: a `list`, `dict`, `record`, `enum`, or `exception` that (at
+**transitive**: an `array`, `dict`, `record`, `enum`, or `exception` that (at
 any depth) contains a function, agent, or `unit` value likewise has no
 equality and cannot be used with `==`/`!=`. For example, comparing two
-`list[int -> int]` values with `==` is a static error, as is a
+`array[int -> int]` values with `==` is a static error, as is a
 `record` with an `agent` field compared with `==`.
 
 See [Expressions](expressions.md) for the operator rules and

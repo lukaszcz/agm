@@ -53,7 +53,7 @@ _CAPS = HostCapabilities(
     supports_shell_exec=True,
     codec_kinds={
         "text": frozenset({"text"}),
-        "json": frozenset({"json", "record", "enum", "list", "dict", "int", "decimal", "bool"}),
+        "json": frozenset({"json", "record", "enum", "array", "dict", "int", "decimal", "bool"}),
     },
 )
 
@@ -106,7 +106,7 @@ class TestExternSignatureParity:
         assert "default" in str(err).lower()
 
     def test_generic_extern_signature_accepted(self) -> None:
-        cp = check_extern("extern def reverse[T](xs: list[T]) -> list[T]\nreverse([1, 2])")
+        cp = check_extern("extern def reverse[T](xs: array[T]) -> array[T]\nreverse([1, 2])")
         sig = cp.function_signatures["reverse"]
         assert sig.type_params == ("T",)
 
@@ -184,8 +184,8 @@ class TestExternFunctionAgentTypeBan:
         err = reject_extern("extern def f(x: int) -> agent\n0")
         assert "agent" in str(err).lower()
 
-    def test_function_type_nested_in_list_rejected(self) -> None:
-        err = reject_extern("extern def f(cbs: list[(int) -> int]) -> int\n0")
+    def test_function_type_nested_in_array_rejected(self) -> None:
+        err = reject_extern("extern def f(cbs: array[(int) -> int]) -> int\n0")
         assert "function" in str(err).lower()
 
     def test_function_type_nested_in_dict_rejected(self) -> None:
@@ -221,8 +221,8 @@ class TestExternFunctionAgentTypeBan:
     def test_type_variables_permitted(self) -> None:
         check_extern("extern def id[T](x: T) -> T\nid(1)")
 
-    def test_type_variable_nested_in_list_permitted(self) -> None:
-        check_extern("extern def first[T](xs: list[T]) -> T\nfirst([1, 2])")
+    def test_type_variable_nested_in_array_permitted(self) -> None:
+        check_extern("extern def first[T](xs: array[T]) -> T\nfirst([1, 2])")
 
     def test_record_and_plain_types_permitted(self) -> None:
         source = "record Box\n  value: int\nextern def get(b: Box) -> int\nget(Box(value = 1))"
@@ -255,7 +255,7 @@ class TestExternCallTyping:
 
     def test_generic_inference_multiple_instantiations(self) -> None:
         source = (
-            "extern def reverse[T](xs: list[T]) -> list[T]\n"
+            "extern def reverse[T](xs: array[T]) -> array[T]\n"
             "let a = reverse([1, 2])\n"
             'let b = reverse(["x", "y"])\n'
             "a"
@@ -264,8 +264,8 @@ class TestExternCallTyping:
 
     def test_call_inside_generic_function_at_rigid_type_var(self) -> None:
         source = (
-            "extern def reverse[T](xs: list[T]) -> list[T]\n"
-            "def wrapper[U](xs: list[U]) -> list[U] = reverse(xs)\n"
+            "extern def reverse[T](xs: array[T]) -> array[T]\n"
+            "def wrapper[U](xs: array[U]) -> array[U] = reverse(xs)\n"
             "wrapper([1, 2])"
         )
         check_extern(source)
@@ -290,8 +290,8 @@ class TestExternCallTyping:
 
     def test_generic_extern_used_as_value(self) -> None:
         source = (
-            "extern def reverse[T](xs: list[T]) -> list[T]\n"
-            "let g: (list[int]) -> list[int] = reverse\ng([1, 2])"
+            "extern def reverse[T](xs: array[T]) -> array[T]\n"
+            "let g: (array[int]) -> array[int] = reverse\ng([1, 2])"
         )
         check_extern(source)
 

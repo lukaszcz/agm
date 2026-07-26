@@ -91,7 +91,7 @@ _CAPS = HostCapabilities(
     supports_extern=True,
     codec_kinds={
         "text": frozenset({"text"}),
-        "json": frozenset({"json", "record", "enum", "list", "dict", "int", "decimal", "bool"}),
+        "json": frozenset({"json", "record", "enum", "array", "dict", "int", "decimal", "bool"}),
     },
 )
 
@@ -383,7 +383,7 @@ class TestValidatorAcceptsAWellFormedExternProgram:
     def test_every_boundary_schema_shape_is_walked_without_error(self) -> None:
         """One extern whose signature exercises every BoundarySchema variant.
 
-        Covers list/dict/record/enum/exception/unit/seal-var recursion in a
+        Covers array/dict/record/enum/exception/unit/seal-var recursion in a
         single lowering, through the real checker-types-to-contract compiler.
         """
         source = (
@@ -393,7 +393,7 @@ class TestValidatorAcceptsAWellFormedExternProgram:
             "  | circle(radius: decimal)\n"
             "exception BadThing extends Exception\n"
             "  detail: text\n"
-            "extern def f[T](a: Box, b: list[dict[text, int]], c: unit, d: T, e: Shape)"
+            "extern def f[T](a: Box, b: array[dict[text, int]], c: unit, d: T, e: Shape)"
             " -> BadThing\n"
             "0"
         )

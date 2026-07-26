@@ -37,6 +37,8 @@ from agm.agl.syntax import (
     AgentDecl,
     AgentT,
     AppliedT,
+    ArrayLit,
+    ArrayT,
     AsPattern,
     AssignStmt,
     AssignTarget,
@@ -79,8 +81,6 @@ from agm.agl.syntax import (
     JsonT,
     Lambda,
     LetDecl,
-    ListLit,
-    ListT,
     LiteralPattern,
     Loop,
     NamedArg,
@@ -225,9 +225,9 @@ class TestTypeExprs:
         t = NameT(name="MyType", span=self._s(), node_id=1)
         assert t.name == "MyType"
 
-    def test_list_t(self) -> None:
+    def test_array_t(self) -> None:
         elem = TextT(span=self._s(), node_id=2)
-        t = ListT(elem=elem, span=self._s(), node_id=1)
+        t = ArrayT(elem=elem, span=self._s(), node_id=1)
         assert t.elem is elem
 
     def test_dict_t(self) -> None:
@@ -281,9 +281,9 @@ class TestTypeExprs:
         t2 = NameT(name="Bar", span=span(), node_id=1)
         assert t1 != t2
 
-    def test_list_t_equality(self) -> None:
-        a = ListT(elem=TextT(span=span(), node_id=2), span=span(), node_id=1)
-        b = ListT(elem=TextT(span=span(3, 0, 3, 4), node_id=99), span=span(5, 0, 5, 4), node_id=50)
+    def test_array_t_equality(self) -> None:
+        a = ArrayT(elem=TextT(span=span(), node_id=2), span=span(), node_id=1)
+        b = ArrayT(elem=TextT(span=span(3, 0, 3, 4), node_id=99), span=span(5, 0, 5, 4), node_id=50)
         assert a == b
 
     def test_func_t_equality_ignores_span_node_id(self) -> None:
@@ -319,7 +319,7 @@ class TestTypeExprs:
             IntT,
             DecimalT,
             NameT,
-            ListT,
+            ArrayT,
             DictT,
             UnitT,
             AgentT,
@@ -376,14 +376,14 @@ class TestLiterals:
         node = StringLit(value="hello", span=self._s(), node_id=1)
         assert node.value == "hello"
 
-    def test_list_lit(self) -> None:
+    def test_array_lit(self) -> None:
         elems: tuple[Expr, ...] = (IntLit(value=1, span=self._s(), node_id=2),)
-        node = ListLit(elements=elems, span=self._s(), node_id=1)
+        node = ArrayLit(elements=elems, span=self._s(), node_id=1)
         assert isinstance(node.elements, tuple)
         assert len(node.elements) == 1
 
-    def test_list_lit_empty(self) -> None:
-        node = ListLit(elements=(), span=self._s(), node_id=1)
+    def test_array_lit_empty(self) -> None:
+        node = ArrayLit(elements=(), span=self._s(), node_id=1)
         assert node.elements == ()
 
     def test_dict_lit(self) -> None:
@@ -1252,7 +1252,7 @@ class TestDeclarations:
         assert len(node.variants) == 2
 
     def test_type_alias(self) -> None:
-        t = ListT(elem=TextT(span=self._s(), node_id=3), span=self._s(), node_id=2)
+        t = ArrayT(elem=TextT(span=self._s(), node_id=3), span=self._s(), node_id=2)
         node = TypeAlias(name="Names", type_expr=t, span=self._s(), node_id=1)
         assert node.name == "Names"
 
@@ -1500,7 +1500,7 @@ class TestVisitorWalk:
         json_t = JsonT(span=s, node_id=103)
         decimal_t = DecimalT(span=s, node_id=104)
         name_t = NameT(name="MyT", span=s, node_id=105)
-        list_t = ListT(elem=text_t, span=s, node_id=106)
+        list_t = ArrayT(elem=text_t, span=s, node_id=106)
         dict_t = DictT(value=int_t, span=s, node_id=107)
         unit_t = UnitT(span=s, node_id=108)
         agent_t = AgentT(span=s, node_id=109)
@@ -1588,7 +1588,7 @@ class TestVisitorWalk:
 
         dict_entry = DictEntry(key=str_lit, value=int_lit, span=s, node_id=306)
         dict_lit = DictLit(entries=(dict_entry,), span=s, node_id=307)
-        list_lit = ListLit(elements=(int_lit,), span=s, node_id=308)
+        list_lit = ArrayLit(elements=(int_lit,), span=s, node_id=308)
 
         # --- Template ---
         text_seg = TextSegment(text="hi ", span=s, node_id=309)
@@ -1864,7 +1864,7 @@ class TestVisitorWalk:
             BoolLit,
             NullLit,
             StringLit,
-            ListLit,
+            ArrayLit,
             DictLit,
             DictEntry,
             Template,
@@ -1889,7 +1889,7 @@ class TestVisitorWalk:
             IntT,
             DecimalT,
             NameT,
-            ListT,
+            ArrayT,
             DictT,
             UnitT,
             AgentT,
@@ -2792,9 +2792,9 @@ class TestCastNode:
     def test_cast_target_uses_type_expr(self) -> None:
         """target_type accepts any TypeExpr, including generic forms."""
         expr = VarRef(name="xs", span=self._sp(), node_id=0)
-        target = ListT(elem=IntT(span=self._sp(), node_id=1), span=self._sp(), node_id=2)
+        target = ArrayT(elem=IntT(span=self._sp(), node_id=1), span=self._sp(), node_id=2)
         node = Cast(expr=expr, target_type=target, test_only=False, span=self._sp(), node_id=3)
-        assert isinstance(node.target_type, ListT)
+        assert isinstance(node.target_type, ArrayT)
 
     def test_cast_walk_visits_cast_and_children(self) -> None:
         """walk() visits Cast, its expr child, and its target_type child."""

@@ -6,7 +6,7 @@
       "expect": {"stdout": "6\n"}
     },
     {
-      "name": "empty_list_zero_iterations",
+      "name": "empty_array_zero_iterations",
       "params": {"items": []},
       "expect": {"stdout": "0\n"}
     },

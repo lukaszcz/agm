@@ -526,9 +526,9 @@ class TestRecursiveTypesAcrossEntries:
         # the same name with a different (still recursive) shape shadows it,
         # exactly like any other record redefinition.
         s = ReplSession()
-        first = s.eval_entry("record Category\n  name: text\n  subcategories: list[Category]")
+        first = s.eval_entry("record Category\n  name: text\n  subcategories: array[Category]")
         assert first.ok
-        second = s.eval_entry("record Category\n  label: text\n  kids: list[Category]")
+        second = s.eval_entry("record Category\n  label: text\n  kids: array[Category]")
         assert second.ok
         use = s.eval_entry('let c = Category(label = "root", kids = [])')
         assert use.ok
@@ -537,10 +537,10 @@ class TestRecursiveTypesAcrossEntries:
 
     def test_type_redefinition_invalidation_detects_nested_nominal_types(self) -> None:
         from agm.agl.semantics.types import (
+            ArrayType,
             DictType,
             ExceptionType,
             FunctionType,
-            ListType,
             RecordType,
             TextType,
         )
@@ -548,7 +548,7 @@ class TestRecursiveTypesAcrossEntries:
         identities = frozenset({((), "R")})
 
         assert ReplSession._type_mentions_entry_nominal(ExceptionType("R"), identities)
-        assert ReplSession._type_mentions_entry_nominal(ListType(RecordType("R")), identities)
+        assert ReplSession._type_mentions_entry_nominal(ArrayType(RecordType("R")), identities)
         assert ReplSession._type_mentions_entry_nominal(DictType(RecordType("R")), identities)
         assert ReplSession._type_mentions_entry_nominal(
             FunctionType((RecordType("R"),), TextType()), identities
@@ -1188,7 +1188,7 @@ class TestFailureEffects:
         assert vals["v"] == 99
 
     def test_runtime_raise_preserves_indexed_assign_to_prior_var(self) -> None:
-        from agm.agl.semantics.values import IntValue, ListValue
+        from agm.agl.semantics.values import ArrayValue, IntValue
 
         s = ReplSession()
         r1 = s.eval_entry("var xs = [1, 2, 3]")
@@ -1197,7 +1197,7 @@ class TestFailureEffects:
         assert not r2.ok
         assert r2.error is not None
         vals = {n: v for n, _t, v in s.bindings()}
-        assert vals["xs"] == ListValue((IntValue(99), IntValue(2), IntValue(3)))
+        assert vals["xs"] == ArrayValue((IntValue(99), IntValue(2), IntValue(3)))
 
     def test_successful_assign_to_prior_var_persists(self) -> None:
         # The positive counterpart: a successful ``:=`` in a later entry DOES
@@ -3294,13 +3294,13 @@ class TestBareTypeEntry:
         assert render_entry_result(r, echo=True) == "<type: int>"
 
     def test_builtin_container_types_echo_as_type(self) -> None:
-        from agm.agl.semantics.types import DictType, ListType
+        from agm.agl.semantics.types import ArrayType, DictType
 
         s = ReplSession()
-        r = s.eval_entry("list[int]")
+        r = s.eval_entry("array[int]")
         assert r.ok
         assert r.kind == "type"
-        assert isinstance(r.value_type, ListType)
+        assert isinstance(r.value_type, ArrayType)
         assert isinstance(r.value_type.elem, IntType)
 
         r2 = s.eval_entry("dict[text, int]")
@@ -3333,15 +3333,15 @@ class TestBareTypeEntry:
         )
 
     def test_generic_type_application_echoes_as_type(self) -> None:
-        from agm.agl.semantics.types import ListType
+        from agm.agl.semantics.types import ArrayType
 
         s = ReplSession()
-        s.eval_entry("type Pair[A, B] = list[A]")
-        # The alias resolves transparently to its target: list[int].
+        s.eval_entry("type Pair[A, B] = array[A]")
+        # The alias resolves transparently to its target: array[int].
         r = s.eval_entry("Pair[int, text]")
         assert r.ok
         assert r.kind == "type"
-        assert isinstance(r.value_type, ListType)
+        assert isinstance(r.value_type, ArrayType)
         assert isinstance(r.value_type.elem, IntType)
 
     def test_bare_generic_enum_name_echoes_definition(self) -> None:

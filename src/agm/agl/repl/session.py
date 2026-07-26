@@ -318,7 +318,7 @@ class ReplSession:
 
         REPL-only fallback: when the entry fails to evaluate as a program, the
         loop tries to read it as a bare type expression (e.g. ``int``, a declared
-        enum/record name, a bare generic type definition, ``list[T]``).  If
+        enum/record name, a bare generic type definition, ``array[T]``).  If
         that resolves to a known type, a ``kind == "type"`` result echoing the
         type is returned instead of the original ``'X' is not defined`` error.
         Entries that evaluate

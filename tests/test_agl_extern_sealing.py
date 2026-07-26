@@ -13,7 +13,7 @@ programs:
 - every sealing violation, each surfacing as a catchable `ExternError`: a
   forged raw value at a type-variable return position, a handle stashed from
   a previous call, a handle swapped between two type variables of one call,
-  and partial forgery inside a returned `list[T]`/`dict[T]`.
+  and partial forgery inside a returned `array[T]`/`dict[T]`.
 - an extern called from inside another generic AgL function, at a rigid type
   variable.
 
@@ -26,7 +26,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from agm.agl.semantics.values import BoolValue, IntValue, ListValue, TextValue
+from agm.agl.semantics.values import ArrayValue, BoolValue, IntValue, TextValue
 from tests.agl.ir_harness import evaluate_ir_raises_with_externs, evaluate_ir_with_externs
 
 # ---------------------------------------------------------------------------
@@ -36,23 +36,23 @@ from tests.agl.ir_harness import evaluate_ir_raises_with_externs, evaluate_ir_wi
 
 class TestParametricUtilitiesAtSeveralInstantiations:
     def test_reverse_at_int(self, tmp_path: Path) -> None:
-        source = "extern def reverse[T](xs: list[T]) -> list[T]\nlet r = reverse([1, 2, 3])\nr\n"
+        source = "extern def reverse[T](xs: array[T]) -> array[T]\nlet r = reverse([1, 2, 3])\nr\n"
         companion = "def reverse(xs):\n    return list(reversed(xs))\n"
         result, _ = evaluate_ir_with_externs(source, companion, tmp_path)
-        assert result["r"] == ListValue((IntValue(3), IntValue(2), IntValue(1)))
+        assert result["r"] == ArrayValue((IntValue(3), IntValue(2), IntValue(1)))
 
     def test_reverse_at_text(self, tmp_path: Path) -> None:
         source = (
-            'extern def reverse[T](xs: list[T]) -> list[T]\nlet r = reverse(["a", "b", "c"])\nr\n'
+            'extern def reverse[T](xs: array[T]) -> array[T]\nlet r = reverse(["a", "b", "c"])\nr\n'
         )
         companion = "def reverse(xs):\n    return list(reversed(xs))\n"
         result, _ = evaluate_ir_with_externs(source, companion, tmp_path)
-        assert result["r"] == ListValue((TextValue("c"), TextValue("b"), TextValue("a")))
+        assert result["r"] == ArrayValue((TextValue("c"), TextValue("b"), TextValue("a")))
 
     def test_reverse_at_record(self, tmp_path: Path) -> None:
         source = (
             "record Box\n  value: int\n"
-            "extern def reverse[T](xs: list[T]) -> list[T]\n"
+            "extern def reverse[T](xs: array[T]) -> array[T]\n"
             "let r = reverse([Box(value = 1), Box(value = 2)])\n"
             "let first = r[0].value\n"
             "first\n"
@@ -67,7 +67,7 @@ class TestParametricUtilitiesAtSeveralInstantiations:
         to (only a function/agent type in the extern's own declared signature
         is a static error)."""
         source = (
-            "extern def reverse[T](xs: list[T]) -> list[T]\n"
+            "extern def reverse[T](xs: array[T]) -> array[T]\n"
             "def inc(x: int) -> int = x + 1\n"
             "def dec(x: int) -> int = x - 1\n"
             "let fs = reverse([inc, dec])\n"
@@ -79,7 +79,7 @@ class TestParametricUtilitiesAtSeveralInstantiations:
         assert result["r"] == IntValue(9)
 
     def test_count_at_int(self, tmp_path: Path) -> None:
-        source = "extern def count[T](xs: list[T]) -> int\nlet r = count([1, 2, 3, 4])\nr\n"
+        source = "extern def count[T](xs: array[T]) -> int\nlet r = count([1, 2, 3, 4])\nr\n"
         companion = "def count(xs):\n    return len(xs)\n"
         result, _ = evaluate_ir_with_externs(source, companion, tmp_path)
         assert result["r"] == IntValue(4)
@@ -87,7 +87,7 @@ class TestParametricUtilitiesAtSeveralInstantiations:
     def test_count_at_record(self, tmp_path: Path) -> None:
         source = (
             "record Box\n  value: int\n"
-            "extern def count[T](xs: list[T]) -> int\n"
+            "extern def count[T](xs: array[T]) -> int\n"
             "let r = count([Box(value = 1), Box(value = 2), Box(value = 3)])\n"
             "r\n"
         )
@@ -97,13 +97,13 @@ class TestParametricUtilitiesAtSeveralInstantiations:
 
     def test_merge_at_text(self, tmp_path: Path) -> None:
         source = (
-            "extern def merge[T](a: list[T], b: list[T]) -> list[T]\n"
+            "extern def merge[T](a: array[T], b: array[T]) -> array[T]\n"
             'let r = merge(["a"], ["b", "c"])\n'
             "r\n"
         )
         companion = "def merge(a, b):\n    return a + b\n"
         result, _ = evaluate_ir_with_externs(source, companion, tmp_path)
-        assert result["r"] == ListValue((TextValue("a"), TextValue("b"), TextValue("c")))
+        assert result["r"] == ArrayValue((TextValue("a"), TextValue("b"), TextValue("c")))
 
     def test_identity_at_int(self, tmp_path: Path) -> None:
         source = "extern def identity[T](x: T) -> T\nlet r = identity(42)\nr\n"
@@ -120,7 +120,7 @@ class TestParametricUtilitiesAtSeveralInstantiations:
 class TestHandleEqualityHashReprInPython:
     def test_companion_deduplicates_int_handles_via_a_python_set(self, tmp_path: Path) -> None:
         source = (
-            "extern def unique_count[T](xs: list[T]) -> int\n"
+            "extern def unique_count[T](xs: array[T]) -> int\n"
             "let r = unique_count([1, 1, 2, 2, 2, 3])\n"
             "r\n"
         )
@@ -131,7 +131,7 @@ class TestHandleEqualityHashReprInPython:
     def test_companion_deduplicates_equal_record_handles(self, tmp_path: Path) -> None:
         source = (
             "record Box\n  value: int\n"
-            "extern def unique_count[T](xs: list[T]) -> int\n"
+            "extern def unique_count[T](xs: array[T]) -> int\n"
             "let r = unique_count([Box(value = 1), Box(value = 1), Box(value = 2)])\n"
             "r\n"
         )
@@ -141,13 +141,13 @@ class TestHandleEqualityHashReprInPython:
 
     def test_companion_sorts_handles_stably_via_repr(self, tmp_path: Path) -> None:
         source = (
-            "extern def sort_by_repr[T](xs: list[T]) -> list[T]\n"
+            "extern def sort_by_repr[T](xs: array[T]) -> array[T]\n"
             'let r = sort_by_repr(["banana", "apple", "cherry"])\n'
             "r\n"
         )
         companion = "def sort_by_repr(xs):\n    return sorted(xs, key=repr)\n"
         result, _ = evaluate_ir_with_externs(source, companion, tmp_path)
-        assert result["r"] == ListValue(
+        assert result["r"] == ArrayValue(
             (TextValue("apple"), TextValue("banana"), TextValue("cherry"))
         )
 
@@ -155,7 +155,7 @@ class TestHandleEqualityHashReprInPython:
         """Reprs render the wrapped AgL value for debugging but expose no
         other surface; assert the observable count of distinct entries, never
         the rendered text itself."""
-        source = "extern def log_count[T](xs: list[T]) -> int\nlet r = log_count([1, 2, 1])\nr\n"
+        source = "extern def log_count[T](xs: array[T]) -> int\nlet r = log_count([1, 2, 1])\nr\n"
         companion = (
             "def log_count(xs):\n    log = [repr(x) for x in xs]\n    return len(set(log))\n"
         )
@@ -238,8 +238,8 @@ class TestSealingViolations:
         exc = evaluate_ir_raises_with_externs(source, companion, tmp_path)
         assert exc.display_name == "ExternError"
 
-    def test_partial_forgery_inside_a_returned_list_rejected(self, tmp_path: Path) -> None:
-        source = "extern def process[T](xs: list[T]) -> list[T]\nlet _ = process([1, 2])\n()\n"
+    def test_partial_forgery_inside_a_returned_array_rejected(self, tmp_path: Path) -> None:
+        source = "extern def process[T](xs: array[T]) -> array[T]\nlet _ = process([1, 2])\n()\n"
         companion = "def process(xs):\n    return [xs[0], 999]\n"
         exc = evaluate_ir_raises_with_externs(source, companion, tmp_path)
         assert exc.display_name == "ExternError"

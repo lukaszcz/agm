@@ -96,7 +96,7 @@ _CAPS = HostCapabilities(
     supports_shell_exec=True,
     codec_kinds={
         "text": frozenset({"text"}),
-        "json": frozenset({"json", "record", "enum", "list", "dict", "int", "decimal", "bool"}),
+        "json": frozenset({"json", "record", "enum", "array", "dict", "int", "decimal", "bool"}),
     },
 )
 
@@ -1743,7 +1743,7 @@ def test_source_owner_candidates_are_finite_over_visible_declarations() -> None:
         "  value: T\n"
         "enum Carrier[T]\n"
         "  | carrier\n"
-        "let subject: Carrier[Holder[list[dict[text, (Box[int]) -> Box[int]]]]] = "
+        "let subject: Carrier[Holder[array[dict[text, (Box[int]) -> Box[int]]]]] = "
         "Carrier::carrier\n"
         "case subject of | _ => 0\n"
     )

@@ -64,8 +64,8 @@ def test_print_bool_false() -> None:
     assert out == "false\n"
 
 
-def test_print_list() -> None:
-    """print(list) — IR pipeline renders list correctly."""
+def test_print_array() -> None:
+    """print(array) — IR pipeline renders array correctly."""
     source = "let x = [1, 2, 3]\nprint(x)\n()"
     out = evaluate_ir_output(source)
     assert out == "[1, 2, 3]\n"

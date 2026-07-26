@@ -1,7 +1,7 @@
 # The same boundary workflow without named scopes remains unchanged.
 record Task
   name: text
-  children: list[Task]
+  children: array[Task]
 
 enum Status
   | waiting

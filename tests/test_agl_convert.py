@@ -7,7 +7,7 @@ Covers:
 3. normalize_integral_decimals: integral Decimal→int; non-integral preserved;
    nested containers; bool not confused with int.
 4. _clean_validation_message: Decimal repr is stripped from jsonschema messages.
-5. decode_value / _decode_scalar: all ScalarKind branches, list/dict/record/enum
+5. decode_value / _decode_scalar: all ScalarKind branches, array/dict/record/enum
    happy-path and every ValueError branch for 100% coverage.
 """
 
@@ -20,9 +20,9 @@ import pytest
 from jsonschema import ValidationError as JsonschemaValidationError
 
 from agm.agl.ir.contracts import (
+    ArrayDecode,
     DictDecode,
     EnumDecode,
-    ListDecode,
     RecordDecode,
     RefDecode,
     ScalarDecode,
@@ -40,13 +40,13 @@ from agm.agl.runtime.convert import (
     parse_json_strict,
 )
 from agm.agl.semantics.values import (
+    ArrayValue,
     BoolValue,
     DecimalValue,
     DictValue,
     EnumValue,
     IntValue,
     JsonValue,
-    ListValue,
     RecordValue,
     TextValue,
 )
@@ -186,7 +186,7 @@ class TestParseJsonStrict:
 class TestParseJsonStrictNested:
     """parse_json_strict must reject NaN/Infinity even when nested inside containers."""
 
-    def test_rejects_nan_in_list(self) -> None:
+    def test_rejects_nan_in_array(self) -> None:
         with pytest.raises(StrictJsonParseError):
             parse_json_strict("[NaN]")
 
@@ -194,7 +194,7 @@ class TestParseJsonStrictNested:
         with pytest.raises(StrictJsonParseError):
             parse_json_strict('{"x": Infinity}')
 
-    def test_rejects_negative_infinity_in_list(self) -> None:
+    def test_rejects_negative_infinity_in_array(self) -> None:
         with pytest.raises(StrictJsonParseError):
             parse_json_strict("[-Infinity]")
 
@@ -312,10 +312,10 @@ class TestDecodeValueHappy:
         result = decode_value(ScalarDecode(kind=ScalarKind.JSON), {"a": 1})
         assert result == JsonValue({"a": 1})
 
-    def test_list(self) -> None:
-        schema = ListDecode(elem=ScalarDecode(kind=ScalarKind.INT))
+    def test_array(self) -> None:
+        schema = ArrayDecode(elem=ScalarDecode(kind=ScalarKind.INT))
         result = decode_value(schema, [1, 2, 3])
-        assert result == ListValue((IntValue(1), IntValue(2), IntValue(3)))
+        assert result == ArrayValue((IntValue(1), IntValue(2), IntValue(3)))
 
     def test_dict(self) -> None:
         schema = DictDecode(value=ScalarDecode(kind=ScalarKind.INT))
@@ -404,8 +404,8 @@ class TestDecodeValueErrors:
         with pytest.raises(ValueError, match="bool"):
             decode_value(ScalarDecode(kind=ScalarKind.BOOL), 1)
 
-    def test_list_type_got_non_list(self) -> None:
-        schema = ListDecode(elem=ScalarDecode(kind=ScalarKind.TEXT))
+    def test_array_type_got_non_array(self) -> None:
+        schema = ArrayDecode(elem=ScalarDecode(kind=ScalarKind.TEXT))
         with pytest.raises(ValueError, match="array"):
             decode_value(schema, "not a list")
 
@@ -546,14 +546,14 @@ class TestDecodeValueRefDecode:
             node = next_node
         assert node.variant == "Leaf"
 
-    def test_ref_nested_inside_list_and_record(self) -> None:
-        """A RefDecode reachable through ListDecode/RecordDecode fields resolves the same way."""
+    def test_ref_nested_inside_array_and_record(self) -> None:
+        """A RefDecode reachable through ArrayDecode/RecordDecode fields resolves the same way."""
         defs = self._tree_defs()
         category_nominal = NominalId(ENTRY_ID, "Wrapper")
         schema = RecordDecode(
             nominal=category_nominal,
             display_name="Wrapper",
-            fields=(("trees", ListDecode(RefDecode("Tree"))),),
+            fields=(("trees", ArrayDecode(RefDecode("Tree"))),),
         )
         node_payload = {
             "$case": "Node",
@@ -565,7 +565,7 @@ class TestDecodeValueRefDecode:
         result = decode_value(schema, payload, defs)
         assert isinstance(result, RecordValue)
         trees = result.fields["trees"]
-        assert isinstance(trees, ListValue)
+        assert isinstance(trees, ArrayValue)
         assert len(trees.elements) == 2
         first = trees.elements[0]
         second = trees.elements[1]

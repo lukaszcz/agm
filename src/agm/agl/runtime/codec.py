@@ -25,11 +25,11 @@ from jsonschema import Draft202012Validator
 from jsonschema import ValidationError as JsonschemaValidationError
 
 from agm.agl.ir.contracts import (
+    ArrayDecode,
     ContractRequest,
     DecodeSchema,
     DictDecode,
     EnumDecode,
-    ListDecode,
     RecordDecode,
     RefDecode,
 )
@@ -417,7 +417,7 @@ def _decode_contains_ref(decode: DecodeSchema) -> bool:
     """Return whether *decode* contains any ``RefDecode`` node."""
     if isinstance(decode, RefDecode):
         return True
-    if isinstance(decode, ListDecode):
+    if isinstance(decode, ArrayDecode):
         return _decode_contains_ref(decode.elem)
     if isinstance(decode, DictDecode):
         return _decode_contains_ref(decode.value)
@@ -449,7 +449,7 @@ def _find_enum_decode_at_path(
     """Navigate the decode schema to find an ``EnumDecode`` at the given JSON path."""
     decode = _resolve_ref(decode, defs)
     for elem in path_elements:
-        if isinstance(decode, ListDecode):
+        if isinstance(decode, ArrayDecode):
             decode = decode.elem
         elif isinstance(decode, DictDecode):
             decode = decode.value
@@ -682,7 +682,7 @@ def _parse_contract_output(
 
 # The type kinds this codec handles (matches Type.kind property strings).
 _JSON_CODEC_KINDS: frozenset[str] = frozenset(
-    {"json", "record", "enum", "list", "dict", "int", "decimal", "bool"}
+    {"json", "record", "enum", "array", "dict", "int", "decimal", "bool"}
 )
 
 

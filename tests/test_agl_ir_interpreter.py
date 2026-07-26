@@ -6,11 +6,11 @@ boilerplate minimal.
 
 Coverage targets:
 - Every constant type.
-- List and dict construction.
+- Array and dict construction.
 - let (immutable) bind + load.
 - var (mutable) bind + load + assign (cell mutation).
 - IrSequence and IrBlock (value-of-last).
-- All IrCoerce operations: IntToDecimal, ToJson (scalar + container), MapList,
+- All IrCoerce operations: IntToDecimal, ToJson (scalar + container), MapArray,
   MapDictValues, MapRecordFields, MapEnumFields.
 - Decimal context: IntToDecimal of a large int is exact (no float).
 - Defensive InvalidIrError on a malformed coercion.
@@ -56,20 +56,20 @@ from agm.agl.ir import (
     IrIndexStep,
     IrIndirectCall,
     IrLoad,
+    IrMakeArray,
     IrMakeClosure,
     IrMakeDict,
     IrMakeEnum,
     IrMakeException,
-    IrMakeList,
     IrMakeRecord,
     IrPrint,
     IrRaise,
     IrSequence,
     IrUpdateRecord,
     Location,
+    MapArray,
     MapDictValues,
     MapEnumFields,
-    MapList,
     MapRecordFields,
     NominalDescriptor,
     NominalKind,
@@ -85,13 +85,13 @@ from agm.agl.ir.ids import NominalId
 from agm.agl.modules.ids import ENTRY_ID, PRELUDE_ID
 from agm.agl.semantics.values import (
     VOID_VALUE,
+    ArrayValue,
     BoolValue,
     DecimalValue,
     DictValue,
     EnumValue,
     IntValue,
     JsonValue,
-    ListValue,
     RecordValue,
     TextValue,
     UnitValue,
@@ -223,14 +223,14 @@ class TestConstants:
 
 
 class TestContainers:
-    def test_make_list(self) -> None:
+    def test_make_array(self) -> None:
         sym, desc = _let_sym(0, "lst")
         result = _run(
             (
                 IrBind(
                     _LOC,
                     sym,
-                    IrMakeList(
+                    IrMakeArray(
                         _LOC,
                         (
                             IrConstInt(_LOC, 1),
@@ -242,15 +242,15 @@ class TestContainers:
             ),
             {sym: desc},
         )
-        assert result == {"lst": ListValue((IntValue(1), IntValue(2), IntValue(3)))}
+        assert result == {"lst": ArrayValue((IntValue(1), IntValue(2), IntValue(3)))}
 
-    def test_make_list_empty(self) -> None:
+    def test_make_array_empty(self) -> None:
         sym, desc = _let_sym(0, "empty")
         result = _run(
-            (IrBind(_LOC, sym, IrMakeList(_LOC, ())),),
+            (IrBind(_LOC, sym, IrMakeArray(_LOC, ())),),
             {sym: desc},
         )
-        assert result == {"empty": ListValue(())}
+        assert result == {"empty": ArrayValue(())}
 
     def test_make_dict(self) -> None:
         sym, desc = _let_sym(0, "d")
@@ -535,8 +535,8 @@ class TestCoerceToJson:
         )
         assert result == {"j": JsonValue(True)}
 
-    def test_to_json_list(self) -> None:
-        """ToJson converts a ListValue to a JsonValue wrapping a list."""
+    def test_to_json_array(self) -> None:
+        """ToJson converts an ArrayValue to a JsonValue wrapping a list."""
         sym, desc = _let_sym(0, "j")
         result = _run(
             (
@@ -545,7 +545,7 @@ class TestCoerceToJson:
                     sym,
                     IrCoerce(
                         _LOC,
-                        IrMakeList(_LOC, (IrConstInt(_LOC, 1), IrConstInt(_LOC, 2))),
+                        IrMakeArray(_LOC, (IrConstInt(_LOC, 1), IrConstInt(_LOC, 2))),
                         ToJson(),
                     ),
                 ),
@@ -571,12 +571,12 @@ class TestCoerceToJson:
 
 
 # ---------------------------------------------------------------------------
-# IrCoerce — MapList
+# IrCoerce — MapArray
 # ---------------------------------------------------------------------------
 
 
-class TestCoerceMapList:
-    def test_map_list_int_to_decimal(self) -> None:
+class TestCoerceMapArray:
+    def test_map_array_int_to_decimal(self) -> None:
         sym, desc = _let_sym(0, "lst")
         result = _run(
             (
@@ -585,18 +585,18 @@ class TestCoerceMapList:
                     sym,
                     IrCoerce(
                         _LOC,
-                        IrMakeList(
+                        IrMakeArray(
                             _LOC,
                             (IrConstInt(_LOC, 1), IrConstInt(_LOC, 2), IrConstInt(_LOC, 3)),
                         ),
-                        MapList(IntToDecimal()),
+                        MapArray(IntToDecimal()),
                     ),
                 ),
             ),
             {sym: desc},
         )
         assert result == {
-            "lst": ListValue(
+            "lst": ArrayValue(
                 (
                     DecimalValue(decimal.Decimal(1)),
                     DecimalValue(decimal.Decimal(2)),
@@ -605,7 +605,7 @@ class TestCoerceMapList:
             )
         }
 
-    def test_map_list_to_json(self) -> None:
+    def test_map_array_to_json(self) -> None:
         sym, desc = _let_sym(0, "lst")
         result = _run(
             (
@@ -614,24 +614,24 @@ class TestCoerceMapList:
                     sym,
                     IrCoerce(
                         _LOC,
-                        IrMakeList(_LOC, (IrConstText(_LOC, "a"), IrConstText(_LOC, "b"))),
-                        MapList(ToJson()),
+                        IrMakeArray(_LOC, (IrConstText(_LOC, "a"), IrConstText(_LOC, "b"))),
+                        MapArray(ToJson()),
                     ),
                 ),
             ),
             {sym: desc},
         )
-        assert result == {"lst": ListValue((JsonValue("a"), JsonValue("b")))}
+        assert result == {"lst": ArrayValue((JsonValue("a"), JsonValue("b")))}
 
-    def test_map_list_wrong_value_type_raises(self) -> None:
-        """MapList on a non-list value raises InvalidIrError."""
+    def test_map_array_wrong_value_type_raises(self) -> None:
+        """MapArray on a non-array value raises InvalidIrError."""
         sym, desc = _let_sym(0, "x")
         prog = _make_program(
             (
                 IrBind(
                     _LOC,
                     sym,
-                    IrCoerce(_LOC, IrConstInt(_LOC, 1), MapList(IntToDecimal())),
+                    IrCoerce(_LOC, IrConstInt(_LOC, 1), MapArray(IntToDecimal())),
                 ),
             ),
             {sym: desc},
@@ -915,25 +915,25 @@ class TestDefensiveErrors:
         with pytest.raises(InvalidIrError):
             IrInterpreter(prog).run()
 
-    def test_assign_with_path_list(self) -> None:
-        """IrAssign with a non-empty path performs indexed assignment on a list."""
-        from agm.agl.semantics.values import IntValue, ListValue
+    def test_assign_with_path_array(self) -> None:
+        """IrAssign with a non-empty path performs indexed assignment on an array."""
+        from agm.agl.semantics.values import ArrayValue, IntValue
 
         sym, desc = _var_sym(0, "v")
         prog = _make_program(
             (
-                IrBind(_LOC, sym, IrMakeList(_LOC, (IrConstInt(_LOC, 10), IrConstInt(_LOC, 20)))),
+                IrBind(_LOC, sym, IrMakeArray(_LOC, (IrConstInt(_LOC, 10), IrConstInt(_LOC, 20)))),
                 IrAssign(
                     _LOC,
                     sym,
-                    (IrIndexStep(kind=IndexKind.LIST, index=IrConstInt(_LOC, 0), location=_LOC),),
+                    (IrIndexStep(kind=IndexKind.ARRAY, index=IrConstInt(_LOC, 0), location=_LOC),),
                     IrConstInt(_LOC, 99),
                 ),
             ),
             {sym: desc},
         )
         result = IrInterpreter(prog).run()
-        assert result["v"] == ListValue((IntValue(99), IntValue(20)))
+        assert result["v"] == ArrayValue((IntValue(99), IntValue(20)))
 
     def test_ir_and_non_bool_lhs_raises(self) -> None:
         """IrAnd with a non-BoolValue lhs raises InvalidIrError."""
@@ -1323,22 +1323,22 @@ class TestIrAssignPathErrors:
     def _var(self, n: int, name: str) -> tuple[SymbolId, SymbolDescriptor]:
         return _var_sym(n, name)
 
-    def test_assign_path_intermediate_list_oob_raises(self) -> None:
-        """IrAssign: intermediate step with out-of-bounds list index raises AglRaise."""
+    def test_assign_path_intermediate_array_oob_raises(self) -> None:
+        """IrAssign: intermediate step with out-of-bounds array index raises AglRaise."""
         from agm.agl.semantics.exceptions import AglRaise
 
         # xss = [[1, 2]], then xss[5][0] := 99 — step 0 is OOB
         sym, desc = self._var(0, "xss")
-        inner = IrMakeList(_LOC, (IrConstInt(_LOC, 1), IrConstInt(_LOC, 2)))
+        inner = IrMakeArray(_LOC, (IrConstInt(_LOC, 1), IrConstInt(_LOC, 2)))
         prog = _make_program(
             (
-                IrBind(_LOC, sym, IrMakeList(_LOC, (inner,))),
+                IrBind(_LOC, sym, IrMakeArray(_LOC, (inner,))),
                 IrAssign(
                     _LOC,
                     sym,
                     (
-                        IrIndexStep(kind=IndexKind.LIST, index=IrConstInt(_LOC, 5), location=_LOC),
-                        IrIndexStep(kind=IndexKind.LIST, index=IrConstInt(_LOC, 0), location=_LOC),
+                        IrIndexStep(kind=IndexKind.ARRAY, index=IrConstInt(_LOC, 5), location=_LOC),
+                        IrIndexStep(kind=IndexKind.ARRAY, index=IrConstInt(_LOC, 0), location=_LOC),
                     ),
                     IrConstInt(_LOC, 99),
                 ),
@@ -1355,7 +1355,7 @@ class TestIrAssignPathErrors:
 
         # m = {"a": [1, 2]}, then m["z"]["a"] := 99 — step 0 key is missing
         sym, desc = self._var(0, "m")
-        inner = IrMakeList(_LOC, (IrConstInt(_LOC, 1), IrConstInt(_LOC, 2)))
+        inner = IrMakeArray(_LOC, (IrConstInt(_LOC, 1), IrConstInt(_LOC, 2)))
         prog = _make_program(
             (
                 IrBind(_LOC, sym, IrMakeDict(_LOC, ((IrConstText(_LOC, "a"), inner),))),
@@ -1368,7 +1368,7 @@ class TestIrAssignPathErrors:
                             index=IrConstText(_LOC, "z"),
                             location=_LOC,
                         ),
-                        IrIndexStep(kind=IndexKind.LIST, index=IrConstInt(_LOC, 0), location=_LOC),
+                        IrIndexStep(kind=IndexKind.ARRAY, index=IrConstInt(_LOC, 0), location=_LOC),
                     ),
                     IrConstInt(_LOC, 99),
                 ),
@@ -1379,19 +1379,19 @@ class TestIrAssignPathErrors:
             IrInterpreter(prog).run()
         assert exc.value.exc.display_name == "KeyError"
 
-    def test_assign_path_final_list_oob_raises(self) -> None:
-        """IrAssign: final step with out-of-bounds list index raises AglRaise."""
+    def test_assign_path_final_array_oob_raises(self) -> None:
+        """IrAssign: final step with out-of-bounds array index raises AglRaise."""
         from agm.agl.semantics.exceptions import AglRaise
 
         # xs = [1, 2], then xs[5] := 99 — final step is OOB
         sym, desc = self._var(0, "xs")
         prog = _make_program(
             (
-                IrBind(_LOC, sym, IrMakeList(_LOC, (IrConstInt(_LOC, 1), IrConstInt(_LOC, 2)))),
+                IrBind(_LOC, sym, IrMakeArray(_LOC, (IrConstInt(_LOC, 1), IrConstInt(_LOC, 2)))),
                 IrAssign(
                     _LOC,
                     sym,
-                    (IrIndexStep(kind=IndexKind.LIST, index=IrConstInt(_LOC, 5), location=_LOC),),
+                    (IrIndexStep(kind=IndexKind.ARRAY, index=IrConstInt(_LOC, 5), location=_LOC),),
                     IrConstInt(_LOC, 99),
                 ),
             ),
@@ -1686,8 +1686,8 @@ class TestFunctionEvaluation:
         g_id = FunctionId(1)
         g_body = IrIndex(
             _loc_at_line(20),
-            IndexKind.LIST,
-            IrMakeList(_LOC, (IrConstInt(_LOC, 1),)),
+            IndexKind.ARRAY,
+            IrMakeArray(_LOC, (IrConstInt(_LOC, 1),)),
             IrConstInt(_LOC, 5),
         )
         g_desc = FunctionDescriptor(

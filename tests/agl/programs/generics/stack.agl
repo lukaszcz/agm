@@ -1,8 +1,8 @@
-# Generics capstone: a generic `record Stack[T]` wrapping `list[T]`, a generic
+# Generics capstone: a generic `record Stack[T]` wrapping `array[T]`, a generic
 # `enum Option[T]`, generic functions over them (`peek` returns `Option[T]`,
 # `top_or` maps an Option through a default), a generic higher-order `map_top`,
 # and `case` destructuring — exercised at `int`, `text`, and a record element
-# type. Combines generics + records + enums + lists + HOFs + `case`. A host
+# type. Combines generics + records + enums + arrays + HOFs + `case`. A host
 # param drives the top-of-stack int so two scenarios exercise the same generic
 # body with different runtime values (demonstrating erasure).
 record Item
@@ -10,7 +10,7 @@ record Item
   qty: int
 
 record Stack[T]
-  items: list[T]
+  items: array[T]
   size: int
 
 enum Option[T]
@@ -39,7 +39,7 @@ case map_top(ints, fn(n: int) -> text => "v%{n}") of
   | some(value) => print "mapped: %{value}"
 
 # Empty text stack: the nullary branch.
-let no_words: list[text] = []
+let no_words: array[text] = []
 let words: Stack[text] = Stack(items = no_words, size = 0)
 case peek(words) of
   | none() => print "words: empty"

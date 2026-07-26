@@ -16,6 +16,7 @@ Public API
 
 from agm.agl.semantics.types import (
     AgentType,
+    ArrayType,
     BoolType,
     BottomType,
     DecimalType,
@@ -27,7 +28,6 @@ from agm.agl.semantics.types import (
     FunctionType,
     IntType,
     JsonType,
-    ListType,
     RecordType,
     TextType,
     Type,
@@ -62,6 +62,7 @@ from agm.agl.typecheck.program import (
 __all__ = [
     "AgentType",
     "AglTypeError",
+    "ArrayType",
     "BoolType",
     "BottomType",
     "CallSiteRecord",
@@ -79,7 +80,6 @@ __all__ = [
     "GenericTypeDef",
     "IntType",
     "JsonType",
-    "ListType",
     "OutputContractSpec",
     "ParamSpec",
     "PartialCallSpec",

@@ -1,11 +1,11 @@
-# List-guarded recursive record at the agent boundary: `Category`'s own
-# `subcategories: list[Category]` field closes the recursive instantiation
-# graph exactly like a self-referencing enum variant does — the empty list is
+# Array-guarded recursive record at the agent boundary: `Category`'s own
+# `subcategories: array[Category]` field closes the recursive instantiation
+# graph exactly like a self-referencing enum variant does — the empty array is
 # the base case for inhabitation, and the SAME self-loop makes `Category`
 # recursive for the `$defs`/`$ref` schema and `RefDecode` decode derivation.
 record Category
   name: text
-  subcategories: list[Category]
+  subcategories: array[Category]
 
 agent tree_source
 

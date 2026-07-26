@@ -6,7 +6,7 @@ open Workflow::Status
 scope Workflow
 record Task
   name: text
-  children: list[Task]
+  children: array[Task]
 agent reviewer = "reviewer"
 end Workflow
 

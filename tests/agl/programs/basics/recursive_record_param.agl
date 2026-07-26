@@ -4,7 +4,7 @@
 # any other structured param.
 record Category
   name: text
-  subcategories: list[Category]
+  subcategories: array[Category]
 
 param root: Category
 

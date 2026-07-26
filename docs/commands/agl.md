@@ -57,7 +57,7 @@ like any other static error.
 - `--PARAM VALUE`: Provide a value for a `param` declaration. Each declared param
   becomes a program-specific option; booleans use `--name` / `--no-name`. Values for
   `text` params are taken verbatim; every other scalar or structured type
-  (`int`/`decimal`/`bool`/`json`/`list`/`dict`/`record`/`enum`) is parsed as exactly
+  (`int`/`decimal`/`bool`/`json`/`array`/`dict`/`record`/`enum`) is parsed as exactly
   one strict JSON value and validated against the declared type. Missing required
   params or invalid values are reported before any agent runs. Run
   `agm exec FILE --help` to show the discovered param options for that program.
@@ -300,7 +300,7 @@ again as though the session were new.
   so you can always escape.
 - Syntax highlighting and tab-completion are driven from the live session.
   Highlighting colours keywords, string/number literals, operators, the builtin types
-  (`text`, `int`, `decimal`, `bool`, `json`, `list`, `dict`, `unit`), and the types and
+  (`text`, `int`, `decimal`, `bool`, `json`, `array`, `dict`, `unit`), and the types and
   constructors declared in the session or in the line being typed. Declaration sites
   colour by position (the name after `record`/`enum`/`type` is a type; an enum variant
   after `|` is a constructor), so a type and a like-named constructor are distinguished
@@ -381,7 +381,7 @@ Meta-commands begin with a leading `:` (which never collides with AgL syntax):
   fixity declarations echo nothing.
 - **Bare type expressions** typed at the prompt are recognized as types rather than
   value expressions: entering `int`, a declared `enum`/`record`/`type` name, or a
-  parameterized form like `list[int]` or `(int) -> bool` echoes the resolved type (e.g.
+  parameterized form like `array[int]` or `(int) -> bool` echoes the resolved type (e.g.
   `<type: int>`) instead of reporting ``'X' is not defined.``. This is a REPL
   convenience only — the language is unchanged, and names that are also values (a record
   constructor, a binding) keep evaluating normally.

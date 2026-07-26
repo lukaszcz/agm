@@ -547,7 +547,9 @@ def _lower(source: str) -> object:
         supports_shell_exec=False,
         codec_kinds={
             "text": frozenset({"text"}),
-            "json": frozenset({"json", "record", "enum", "list", "dict", "int", "decimal", "bool"}),
+            "json": frozenset(
+                {"json", "record", "enum", "array", "dict", "int", "decimal", "bool"}
+            ),
         },
     )
     prog = parse_program(source)

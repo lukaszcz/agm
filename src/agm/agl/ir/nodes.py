@@ -99,7 +99,7 @@ __all__ = [
     "IrMakeDict",
     "IrMakeEnum",
     "IrMakeException",
-    "IrMakeList",
+    "IrMakeArray",
     "IrMakeRecord",
     "IrOr",
     "IrParseJson",
@@ -178,11 +178,11 @@ class IrConstJsonNull:
 
 
 @dataclass(frozen=True, slots=True)
-class IrMakeList:
-    """IR list construction: ``[items...]``.
+class IrMakeArray:
+    """IR array construction: ``[items...]``.
 
     Each element is an ``IrExpr`` evaluated left-to-right.
-    Mirrors the AST ``ListLit`` node.
+    Mirrors the AST ``ArrayLit`` node.
     """
 
     location: Location
@@ -356,7 +356,7 @@ class IrCompare:
 
 @dataclass(frozen=True, slots=True)
 class IrContains:
-    """IR containment: x in container (list, dict, text)."""
+    """IR containment: x in container (array, dict, text)."""
 
     location: Location
     kind: ContainsKind
@@ -447,7 +447,7 @@ class IrUpdateRecord:
 
 @dataclass(frozen=True, slots=True)
 class IrIndex:
-    """IR index access: obj[index] on a list (LIST) or dict (DICT)."""
+    """IR index access: obj[index] on an array (ARRAY) or dict (DICT)."""
 
     location: Location
     kind: IndexKind
@@ -826,7 +826,7 @@ class IrLoop:
     bound (which raises ``MaxIterationsExceeded`` itself) or a ``for`` clause
     (bounded by a finite collection).  The host's global ``max-iters`` safety
     valve applies ONLY to unguarded loops (``guarded=False``): a ``for`` over a
-    million-element list or a ``do[n]`` with a large ``n`` must never be cut
+    million-element array or a ``do[n]`` with a large ``n`` must never be cut
     short by the host safety net, which exists solely to catch runaway
     unbounded ``while``/``do…until`` loops.
     """
@@ -865,7 +865,7 @@ class IrContinue:
 class IrIterInit:
     """Initialize a loop iterator over a collection.
 
-    ``kind`` selects list / dict-keys / text iteration.
+    ``kind`` selects array / dict-keys / text iteration.
     ``collection`` evaluates to the collection to iterate.
     Yields an ``IteratorValue`` (internal; never user-visible).
     """
@@ -1118,7 +1118,7 @@ IrExpr = (
     | IrConstText
     | IrConstUnit
     | IrConstJsonNull
-    | IrMakeList
+    | IrMakeArray
     | IrMakeDict
     | IrLoad
     | IrBind

@@ -40,6 +40,7 @@ from agm.agl.syntax.spans import UNKNOWN_SOURCE, SourceId, SourceSpan
 from agm.agl.syntax.types import (
     AgentT,
     AppliedT,
+    ArrayT,
     BoolT,
     DecimalT,
     DictT,
@@ -47,7 +48,6 @@ from agm.agl.syntax.types import (
     ImportMode,
     IntT,
     JsonT,
-    ListT,
     NameT,
     TextT,
     TypeExpr,
@@ -228,7 +228,7 @@ _ALL_TYPE_EXPRS = (
     IntT,
     DecimalT,
     NameT,
-    ListT,
+    ArrayT,
     DictT,
     UnitT,
     AgentT,
@@ -1154,10 +1154,10 @@ class AstBuilder(Transformer):
         type_args = _find_type_args(args)
         span = self._span_from_meta(meta)
         nid = self._next_id()
-        if name == "list":
+        if name == "array":
             if len(type_args) == 1:
-                return ListT(elem=type_args[0], span=span, node_id=nid)
-            raise syntax_error_from_meta(meta, "list[] takes exactly one type argument")
+                return ArrayT(elem=type_args[0], span=span, node_id=nid)
+            raise syntax_error_from_meta(meta, "array[] takes exactly one type argument")
         if name == "dict":
             if len(type_args) == 2:
                 key_type = type_args[0]
@@ -1386,7 +1386,7 @@ class AstBuilder(Transformer):
         )
 
     def index_access(self, meta: Meta, args: _Args) -> syntax.IndexAccess:
-        """postfix INDEX_LSQB expr RSQB — list/dict index access."""
+        """postfix INDEX_LSQB expr RSQB — array/dict index access."""
         exprs = [a for a in args if _is_expr_node(a)]
         obj_expr, index_expr = exprs
         return syntax.IndexAccess(
@@ -2870,15 +2870,15 @@ class AstBuilder(Transformer):
         )
 
     # ------------------------------------------------------------------
-    # List and dict literals
+    # Array and dict literals
     # ------------------------------------------------------------------
 
-    def lit_list(self, meta: Meta, args: _Args) -> syntax.ListLit:
-        """lit_list: LSQB (expr (COMMA expr)* COMMA?)? RSQB"""
+    def lit_array(self, meta: Meta, args: _Args) -> syntax.ArrayLit:
+        """lit_array: LSQB (expr (COMMA expr)* COMMA?)? RSQB"""
         elements = tuple(
             cast(syntax.Expr, a) for a in args if a is not None and not isinstance(a, Token)
         )
-        return syntax.ListLit(
+        return syntax.ArrayLit(
             elements=elements,
             span=self._span_from_meta(meta),
             node_id=self._next_id(),
@@ -3387,7 +3387,7 @@ def _rewrite_expr(
             expr,
             value=None if expr.value is None else _rewrite_expr(expr.value, table, builder),
         )
-    if isinstance(expr, syntax.ListLit):
+    if isinstance(expr, syntax.ArrayLit):
         return replace(
             expr,
             elements=tuple(_rewrite_expr(element, table, builder) for element in expr.elements),
@@ -3609,7 +3609,7 @@ def _type_expr_spelling(t: TypeExpr) -> str:
         return spelling
     if isinstance(t, NameT):
         return t.name
-    # Fallback for complex types (ListT, DictT, FuncT, AppliedT): strip trailing 'T'.
+    # Fallback for complex types (ArrayT, DictT, FuncT, AppliedT): strip trailing 'T'.
     cls = type(t).__name__
     return cls[:-1].lower() if cls.endswith("T") else cls.lower()
 

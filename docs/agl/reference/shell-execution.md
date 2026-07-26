@@ -89,7 +89,7 @@ command needs named parsing options (`format`, `strict_json`, or
 The command template uses the same uniform rendering as all other templates
 ([Strings and interpolation](strings-and-interpolation.md)): `text` values
 interpolate verbatim; `int`, `decimal`, and `bool` as plain scalar text;
-structured values (`list`, `dict`, record, enum, exception) in AgL form —
+structured values (`array`, `dict`, record, enum, exception) in AgL form —
 single-line, no injected newlines. To interpolate a structured value as JSON,
 use an explicit cast: `%{value as json}`.
 

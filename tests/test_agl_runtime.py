@@ -1386,11 +1386,11 @@ class TestRenderValue:
         from agm.agl.semantics.values import IrClosureValue
 
         rt = PipelineDriver()
-        result = rt.run("let f = fn(gs: list[int -> int]) -> int => 0\nf\n")
+        result = rt.run("let f = fn(gs: array[int -> int]) -> int => 0\nf\n")
         assert result.ok is True
         closure = result.bindings["f"]
         assert isinstance(closure, IrClosureValue)
-        assert render_value(closure) == "<function: list[int -> int] -> int>"
+        assert render_value(closure) == "<function: array[int -> int] -> int>"
 
     def test_closure_zero_arity_renders_correctly(self) -> None:
         """A zero-parameter closure renders as ``<function: () -> T>``."""
@@ -1420,30 +1420,30 @@ class TestRenderValue:
         assert render_value(closure) == "<function: (?, ?) -> int>"
 
     # ------------------------------------------------------------------
-    # list: single-line AgL form
+    # array: single-line AgL form
     # ------------------------------------------------------------------
 
-    def test_list_single_line(self) -> None:
-        """Lists render as single-line ``[e1, e2, ...]``."""
+    def test_array_single_line(self) -> None:
+        """Arrays render as single-line ``[e1, e2, ...]``."""
         from agm.agl.runtime.render import render_value
-        from agm.agl.semantics.values import IntValue, ListValue
+        from agm.agl.semantics.values import ArrayValue, IntValue
 
-        v = ListValue(elements=(IntValue(1), IntValue(2)))
+        v = ArrayValue(elements=(IntValue(1), IntValue(2)))
         assert render_value(v) == "[1, 2]"
 
-    def test_list_empty(self) -> None:
-        """Empty list renders as ``[]``."""
+    def test_array_empty(self) -> None:
+        """Empty array renders as ``[]``."""
         from agm.agl.runtime.render import render_value
-        from agm.agl.semantics.values import ListValue
+        from agm.agl.semantics.values import ArrayValue
 
-        assert render_value(ListValue(elements=())) == "[]"
+        assert render_value(ArrayValue(elements=())) == "[]"
 
-    def test_list_nested_text_is_quoted(self) -> None:
-        """Text inside a list is quoted."""
+    def test_array_nested_text_is_quoted(self) -> None:
+        """Text inside an array is quoted."""
         from agm.agl.runtime.render import render_value
-        from agm.agl.semantics.values import ListValue, TextValue
+        from agm.agl.semantics.values import ArrayValue, TextValue
 
-        v = ListValue(elements=(TextValue("tests"), TextValue("coverage")))
+        v = ArrayValue(elements=(TextValue("tests"), TextValue("coverage")))
         assert render_value(v) == '["tests", "coverage"]'
 
     # ------------------------------------------------------------------
@@ -1523,10 +1523,10 @@ class TestRenderValue:
         out = render_value(issue)
         assert out == 'Issue(title = "Missing tests", author = Author(name = "Ada", active = true))'
 
-    def test_record_with_list_field(self) -> None:
-        """Record with a list field renders correctly (list inline)."""
+    def test_record_with_array_field(self) -> None:
+        """Record with an array field renders correctly (array inline)."""
         from agm.agl.runtime.render import render_value
-        from agm.agl.semantics.values import IntValue, ListValue, RecordValue, TextValue
+        from agm.agl.semantics.values import ArrayValue, IntValue, RecordValue, TextValue
 
         v = RecordValue(
             nominal=NominalId(ENTRY_ID, "Issue"),
@@ -1534,7 +1534,7 @@ class TestRenderValue:
             fields={
                 "title": TextValue("Missing tests"),
                 "severity": IntValue(3),
-                "tags": ListValue(elements=(TextValue("tests"), TextValue("coverage"))),
+                "tags": ArrayValue(elements=(TextValue("tests"), TextValue("coverage"))),
             },
         )
         out = render_value(v)
@@ -1634,18 +1634,18 @@ class TestRenderValue:
     def test_nested_text_escapes_percent(self) -> None:
         """Nested text containing ``%{`` escapes ``%`` as ``\\%``."""
         from agm.agl.runtime.render import render_value
-        from agm.agl.semantics.values import ListValue, TextValue
+        from agm.agl.semantics.values import ArrayValue, TextValue
 
-        v = ListValue(elements=(TextValue("a%{b}"),))
+        v = ArrayValue(elements=(TextValue("a%{b}"),))
         out = render_value(v)
         assert out == r'["a\%{b}"]'
 
     def test_nested_text_escapes_quotes_and_newlines(self) -> None:
         """Nested text: quotes and newlines are escaped."""
         from agm.agl.runtime.render import render_value
-        from agm.agl.semantics.values import ListValue, TextValue
+        from agm.agl.semantics.values import ArrayValue, TextValue
 
-        v = ListValue(elements=(TextValue('say "hi"\nbye'),))
+        v = ArrayValue(elements=(TextValue('say "hi"\nbye'),))
         out = render_value(v)
         assert out == r'["say \"hi\"\nbye"]'
 
@@ -1699,12 +1699,12 @@ class TestRenderValue:
         assert "\n" not in out
         assert out == 'R(data = {"a": 1, "b": 2})'
 
-    def test_list_pretty(self) -> None:
+    def test_array_pretty(self) -> None:
         """Pretty lists render over multiple indented lines."""
         from agm.agl.runtime.render import render_value
-        from agm.agl.semantics.values import IntValue, ListValue
+        from agm.agl.semantics.values import ArrayValue, IntValue
 
-        v = ListValue(elements=(IntValue(1), IntValue(2)))
+        v = ArrayValue(elements=(IntValue(1), IntValue(2)))
         assert render_value(v, pretty=True) == "[\n  1,\n  2\n]"
 
     def test_dict_pretty(self) -> None:
@@ -1732,14 +1732,14 @@ class TestRenderValue:
     def test_pretty_nested_indentation(self) -> None:
         """Pretty rendering indents nested structures recursively."""
         from agm.agl.runtime.render import render_value
-        from agm.agl.semantics.values import IntValue, ListValue, RecordValue, TextValue
+        from agm.agl.semantics.values import ArrayValue, IntValue, RecordValue, TextValue
 
         v = RecordValue(
             nominal=NominalId(ENTRY_ID, "Issue"),
             display_name="Issue",
             fields={
                 "title": TextValue("Missing tests"),
-                "scores": ListValue(elements=(IntValue(1), IntValue(2))),
+                "scores": ArrayValue(elements=(IntValue(1), IntValue(2))),
             },
         )
         assert (
@@ -1757,10 +1757,10 @@ class TestRenderValue:
 
         from agm.agl.runtime.render import render_value
         from agm.agl.semantics.values import (
+            ArrayValue,
             BoolValue,
             DecimalValue,
             IntValue,
-            ListValue,
             UnitValue,
         )
 
@@ -1769,16 +1769,16 @@ class TestRenderValue:
             DecimalValue(Decimal("1.5")),
             BoolValue(True),
             UnitValue(),
-            ListValue(elements=(IntValue(1),)),
+            ArrayValue(elements=(IntValue(1),)),
         ):
             assert render_value(v, pretty=True, quote_strings=True) == render_value(v, pretty=True)
 
-    def test_nested_text_in_list_is_quoted(self) -> None:
-        """Text inside a list is quoted regardless of top-level quote mode."""
+    def test_nested_text_in_array_is_quoted(self) -> None:
+        """Text inside an array is quoted regardless of top-level quote mode."""
         from agm.agl.runtime.render import render_value
-        from agm.agl.semantics.values import ListValue, TextValue
+        from agm.agl.semantics.values import ArrayValue, TextValue
 
-        out = render_value(ListValue(elements=(TextValue("v"),)), quote_strings=False)
+        out = render_value(ArrayValue(elements=(TextValue("v"),)), quote_strings=False)
         assert out == '["v"]'
 
     # ------------------------------------------------------------------
@@ -1841,7 +1841,7 @@ class TestSerialize:
         )
         assert result == {"$case": "A", "msg": "hi"}
 
-    def test_pretty_list_serialized(self) -> None:
+    def test_pretty_array_serialized(self) -> None:
         from agm.agl.runtime.serialize import dumps_exact
 
         assert dumps_exact([1, 2], indent=2) == "[\n  1,\n  2\n]"
@@ -1878,12 +1878,12 @@ class TestSerialize:
 
         assert dumps_exact(False) == "false"
 
-    def test_dumps_exact_list_empty(self) -> None:
+    def test_dumps_exact_array_empty(self) -> None:
         from agm.agl.runtime.serialize import dumps_exact
 
         assert dumps_exact([]) == "[]"
 
-    def test_dumps_exact_list_no_indent(self) -> None:
+    def test_dumps_exact_array_no_indent(self) -> None:
         from agm.agl.runtime.serialize import dumps_exact
 
         result = dumps_exact([1, 2], indent=None)
@@ -2167,6 +2167,7 @@ class TestRuntimeErrorPaths:
 
         from agm.agl.pipeline import RunError, exception_value_to_run_error
         from agm.agl.semantics.values import (
+            ArrayValue,
             BoolValue,
             DecimalValue,
             DictValue,
@@ -2174,7 +2175,6 @@ class TestRuntimeErrorPaths:
             ExceptionValue,
             IntValue,
             JsonValue,
-            ListValue,
             RecordValue,
             TextValue,
         )
@@ -2192,7 +2192,7 @@ class TestRuntimeErrorPaths:
                 "decimal_val": DecimalValue(decimal.Decimal("1.5")),
                 "bool_val": BoolValue(True),
                 "json_val": JsonValue({"k": "v"}),
-                "list_val": ListValue(elements=(IntValue(1),)),
+                "list_val": ArrayValue(elements=(IntValue(1),)),
                 "dict_val": DictValue(entries={"x": IntValue(2)}),
                 "rec_val": RecordValue(
                     nominal=NominalId(ENTRY_ID, "R"),
@@ -2241,16 +2241,16 @@ class TestRuntimeErrorPaths:
         assert result == JsonValue(1)
         assert isinstance(result.raw, int)
 
-    def test_convert_param_value_list_type_parsed_via_json_codec(self) -> None:
-        # list/dict/record/enum params are now accepted via the JsonCodec.
+    def test_convert_param_value_array_type_parsed_via_json_codec(self) -> None:
+        # array/dict/record/enum params are now accepted via the JsonCodec.
         from agm.agl.runtime.params import convert_param_value
-        from agm.agl.semantics.types import ListType, TextType
-        from agm.agl.semantics.values import ListValue, TextValue
+        from agm.agl.semantics.types import ArrayType, TextType
+        from agm.agl.semantics.values import ArrayValue, TextValue
 
         result = convert_param_value(
-            "xs", '["a", "b"]', ListType(elem=TextType()), type_table_for()
+            "xs", '["a", "b"]', ArrayType(elem=TextType()), type_table_for()
         )
-        assert isinstance(result, ListValue)
+        assert isinstance(result, ArrayValue)
         assert result.elements == (TextValue("a"), TextValue("b"))
 
     def test_agl_raise_from_interpreter_becomes_run_error(
@@ -2280,8 +2280,8 @@ class TestRuntimeErrorPaths:
 
     # --- Structured Decimal params and non-JSON-shaped rejection ---
 
-    def test_list_decimal_param_validates_exactly(self) -> None:
-        """A list[decimal] param with native Decimal values must bind
+    def test_array_decimal_param_validates_exactly(self) -> None:
+        """A array[decimal] param with native Decimal values must bind
         correctly without the old default=str corruption.
 
         Before the fix, Decimal("1.5") was serialized as the JSON string "1.5"
@@ -2290,16 +2290,16 @@ class TestRuntimeErrorPaths:
         import decimal as _decimal
 
         from agm.agl.runtime.params import convert_param_value
-        from agm.agl.semantics.types import DecimalType, ListType
-        from agm.agl.semantics.values import DecimalValue, ListValue
+        from agm.agl.semantics.types import ArrayType, DecimalType
+        from agm.agl.semantics.values import ArrayValue, DecimalValue
 
         result = convert_param_value(
             "xs",
             [_decimal.Decimal("1.5"), _decimal.Decimal("2.75")],
-            ListType(elem=DecimalType()),
+            ArrayType(elem=DecimalType()),
             type_table_for(),
         )
-        assert isinstance(result, ListValue)
+        assert isinstance(result, ArrayValue)
         assert result.elements == (
             DecimalValue(_decimal.Decimal("1.5")),
             DecimalValue(_decimal.Decimal("2.75")),
@@ -2311,21 +2311,21 @@ class TestRuntimeErrorPaths:
         traceback.
         """
         from agm.agl.runtime.params import convert_param_value
-        from agm.agl.semantics.types import ListType, TextType
+        from agm.agl.semantics.types import ArrayType, TextType
 
         with pytest.raises(ValueError, match="xs") as exc_info:
-            convert_param_value("xs", {1, 2, 3}, ListType(elem=TextType()), type_table_for())
+            convert_param_value("xs", {1, 2, 3}, ArrayType(elem=TextType()), type_table_for())
         # The error message must name the param and mention the type, not
         # contain a raw repr of the set or a json.dumps traceback.
         msg = str(exc_info.value)
         assert "set" in msg  # type name named
 
-    def test_decimal_native_in_list_end_to_end(self, capsys: pytest.CaptureFixture[str]) -> None:
-        """E2e: param xs: list[decimal] with Decimal values binds and prints."""
+    def test_decimal_native_in_array_end_to_end(self, capsys: pytest.CaptureFixture[str]) -> None:
+        """E2e: param xs: array[decimal] with Decimal values binds and prints."""
         import decimal as _decimal
 
         result = PipelineDriver().run(
-            "param xs: list[decimal]\nprint xs\n",
+            "param xs: array[decimal]\nprint xs\n",
             param_values={"xs": [_decimal.Decimal("1.5"), _decimal.Decimal("2.25")]},
         )
         assert result.ok is True
@@ -2333,12 +2333,12 @@ class TestRuntimeErrorPaths:
         assert "1.5" in out
         assert "2.25" in out
 
-    def test_float_native_in_decimal_list_end_to_end(
+    def test_float_native_in_decimal_array_end_to_end(
         self, capsys: pytest.CaptureFixture[str]
     ) -> None:
         """Native JSON-shaped floats are canonicalized before typed decoding."""
         result = PipelineDriver().run(
-            "param xs: list[decimal]\nprint xs\n",
+            "param xs: array[decimal]\nprint xs\n",
             param_values={"xs": [1.5, 2.25]},
         )
 
@@ -2403,7 +2403,7 @@ class TestUniformRenderingInPrompts:
         assert "hello" in prompt
         assert "<dsl-value" not in prompt
 
-    def test_list_interpolation_in_prompt_is_pretty_json(self) -> None:
+    def test_array_interpolation_in_prompt_is_pretty_json(self) -> None:
         received: list[AgentRequest] = []
 
         def agent(req: AgentRequest) -> str:
@@ -2412,7 +2412,7 @@ class TestUniformRenderingInPrompts:
 
         rt = PipelineDriver(default_agent=agent)
         result = rt.run(
-            'let items: list[text] = ["a", "b"]\nask("items: %{items}")',
+            'let items: array[text] = ["a", "b"]\nask("items: %{items}")',
         )
         assert result.ok is True
         prompt = received[0].prompt
@@ -3217,7 +3217,7 @@ class TestDefaultCallDepthLimit:
 
 
 class TestConvertInputUnsupportedType:
-    """convert_param_value raises ValueError for unsupported types (e.g. ListType of records)."""
+    """convert_param_value raises ValueError for unsupported types (e.g. ArrayType of records)."""
 
     def test_unsupported_type_raises(self) -> None:
         from agm.agl.runtime.params import convert_param_value

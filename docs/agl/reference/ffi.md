@@ -97,7 +97,7 @@ guarantee end to end.
 | `text` | `str` |
 | `unit` | `None` |
 | `json` | a JSON-shaped value: `dict` / `list` / `str` / `int` / `Decimal` / `bool` / `None` |
-| `list[T]` | a `list` of mapped `T` elements |
+| `array[T]` | a `list` of mapped `T` elements |
 | `dict[text, V]` | a `dict` of `str` keys to mapped `V` values |
 | a record | a `dict` of its mapped fields, keyed by field name |
 | an enum | `{"$case": <variant name>, ...mapped fields}` |
@@ -144,7 +144,7 @@ enforces the same **strict parametricity** guarantee across the Python
 boundary that it enforces within the language itself
 ([Generics](generics.md#strict-parametricity)): a companion cannot inspect,
 depend on, or fabricate a value at a type-variable position. Every value at a
-type-variable position — an argument or a nested element inside a `list[T]`
+type-variable position — an argument or a nested element inside an `array[T]`
 or `dict[text, T]` — crosses as an **opaque sealed handle** instead of its
 underlying representation. A fresh seal is minted for every extern call and
 every type parameter of that call, so a handle is only ever valid for the
@@ -178,7 +178,7 @@ extern happens to be instantiated at.
 
 <!-- agl-check: fragment -->
 ```agl
-extern def reverse[T](xs: list[T]) -> list[T]
+extern def reverse[T](xs: array[T]) -> array[T]
 ```
 
 ```python

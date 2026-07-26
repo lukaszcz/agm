@@ -253,21 +253,21 @@ def test_ordering_mixed_int_decimal() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_in_list() -> None:
-    source = "let xs: list[int] = [1, 2, 3]\nlet x: bool = 2 in xs\n()"
+def test_in_array() -> None:
+    source = "let xs: array[int] = [1, 2, 3]\nlet x: bool = 2 in xs\n()"
     ir = evaluate_ir(source)
     assert ir["x"] == BoolValue(True)
 
 
-def test_not_in_list() -> None:
-    source = "let xs: list[int] = [1, 2, 3]\nlet x: bool = 5 in xs\n()"
+def test_not_in_array() -> None:
+    source = "let xs: array[int] = [1, 2, 3]\nlet x: bool = 5 in xs\n()"
     ir = evaluate_ir(source)
     assert ir["x"] == BoolValue(False)
 
 
-def test_membership_in_empty_list_is_false() -> None:
-    """`x in xs` on an empty list evaluates to false."""
-    ir = evaluate_ir("let xs: list[int] = []\nlet has = 5 in xs\nhas\n")
+def test_membership_in_empty_array_is_false() -> None:
+    """`x in xs` on an empty array evaluates to false."""
+    ir = evaluate_ir("let xs: array[int] = []\nlet has = 5 in xs\nhas\n")
     assert ir["has"] == BoolValue(False)
 
 
@@ -439,14 +439,14 @@ def test_order_called_with_eq_raises() -> None:
         order(CmpOp.EQ, IntValue(1), IntValue(2))
 
 
-def test_contains_list_wrong_container() -> None:
-    """contains LIST with a non-ListValue raises AssertionError."""
+def test_contains_array_wrong_container() -> None:
+    """contains ARRAY with a non-ArrayValue raises AssertionError."""
     from agm.agl.eval.arith import contains
     from agm.agl.ir.operations import ContainsKind
     from agm.agl.semantics.values import IntValue, TextValue
 
-    with pytest.raises(AssertionError, match="contains LIST"):
-        contains(ContainsKind.LIST, IntValue(1), TextValue("not-a-list"))
+    with pytest.raises(AssertionError, match="contains ARRAY"):
+        contains(ContainsKind.ARRAY, IntValue(1), TextValue("not-a-list"))
 
 
 def test_contains_dict_wrong_container() -> None:

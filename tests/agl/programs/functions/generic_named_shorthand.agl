@@ -11,7 +11,7 @@
 def g[T, U](x: int, *, z: T, w: U) -> T = z
 
 # h exercises inference of a named-only shorthand combined with a container return.
-def h[A](n: int, *, label: A) -> list[A] = [label]
+def h[A](n: int, *, label: A) -> array[A] = [label]
 
 param zval: text
 param wval: int
@@ -29,7 +29,7 @@ print(g(1, w, z = zval))
 # Two out-of-order shorthands: w first, then z.  The same locals are in scope.
 print(g(1, w, z))
 
-# Combine with h: label shorthand (named-only) drives list[text] inference.
+# Combine with h: label shorthand (named-only) drives array[text] inference.
 let label = zval
 let ls = h(42, label)
 print(ls[0])

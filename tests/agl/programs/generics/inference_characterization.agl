@@ -23,7 +23,7 @@ def pair[A, B](first: A -> A, second: B -> B, a: A, b: B) -> Duo[A, B] =
   Duo(first = first(a), second = second(b))
 def apply_to[A, B](x: A, f: A -> B) -> B = f(x)
 def relay[T](value: T, f: T -> T) -> T = f(value)
-def same_lists[T](left: list[T], right: list[T]) -> list[T] = right
+def same_arrays[T](left: array[T], right: array[T]) -> array[T] = right
 def choose[T](left: T, right: T) -> T = right
 
 def stringify(n: int) -> text = "n=%{n}"
@@ -57,8 +57,8 @@ if
       print(from_sibling)
       print(from_result(11))
   | mode == "empty_literal" =>
-      # The later list argument determines the empty literal's element type.
-      let values = same_lists([], [12])
+      # The later array argument determines the empty literal's element type.
+      let values = same_arrays([], [12])
       print(values[0])
   | mode == "ask_target" =>
       # The mocked `ask` target is determined by `choose`'s sibling argument.

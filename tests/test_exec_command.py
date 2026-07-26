@@ -1714,7 +1714,7 @@ class TestExecFFI:
 
 
 class TestJsonParamsCLI:
-    """--param with structured (record/list/decimal) types via JsonCodec."""
+    """--param with structured (record/array/decimal) types via JsonCodec."""
 
     def test_record_param_parsed_from_json_string(self, tmp_path: Path) -> None:
         """A record-typed param provided as a JSON string is parsed and usable."""
@@ -1772,10 +1772,10 @@ class TestJsonParamsCLI:
         assert result is None
         assert out.getvalue().strip() == "1.5"
 
-    def test_list_param_parsed_from_json_string(self, tmp_path: Path) -> None:
-        """A list-typed param provided as a JSON array string is accepted."""
+    def test_array_param_parsed_from_json_string(self, tmp_path: Path) -> None:
+        """An array-typed param provided as a JSON array string is accepted."""
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text("param tags: list[text]\nprint tags\n")
+        agl_file.write_text("param tags: array[text]\nprint tags\n")
         from agm.cli_support.args import ExecArgs
 
         args = ExecArgs(
@@ -1798,7 +1798,7 @@ class TestJsonParamsCLI:
         finally:
             sys.stdout = old_stdout
         assert result is None
-        # The output should contain the rendered list.
+        # The output should contain the rendered array.
         output = out.getvalue().strip()
         assert output  # non-empty
 

@@ -2,7 +2,7 @@
 param spec
 enum Review
   | Pass
-  | Fail(issues: list[text])
+  | Fail(issues: array[text])
 agent impl
 agent reviewer
 var artifact: text = ask("Implement %{spec}", agent = impl)

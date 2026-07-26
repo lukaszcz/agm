@@ -14,11 +14,11 @@ from typing import TypeVar, assert_never
 
 from agm.agl.ir.operations import ArithKind, CmpOp, ContainsKind, NumericKind
 from agm.agl.semantics.values import (
+    ArrayValue,
     BoolValue,
     DecimalValue,
     DictValue,
     IntValue,
-    ListValue,
     TextValue,
     Value,
 )
@@ -93,12 +93,12 @@ def order(op: CmpOp, left: Value, right: Value) -> bool:
 
 
 def contains(kind: ContainsKind, item: Value, container: Value) -> bool:
-    """Containment check for list/dict/text."""
+    """Containment check for array/dict/text."""
     match kind:
-        case ContainsKind.LIST:
-            if not isinstance(container, ListValue):
+        case ContainsKind.ARRAY:
+            if not isinstance(container, ArrayValue):
                 raise AssertionError(
-                    f"contains LIST: expected ListValue, got {type(container).__name__}"
+                    f"contains ARRAY: expected ArrayValue, got {type(container).__name__}"
                 )
             return any(value_eq(item, elem) for elem in container.elements)
         case ContainsKind.DICT:

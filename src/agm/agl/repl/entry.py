@@ -34,7 +34,7 @@ class EntryResult:
         ``"declaration"``; ``:=``, an ``import``/``export``/``open``/fixity
         declaration, or a side-effecting expr (``print``, etc.) →
         ``"statement"``; a REPL-only bare type expression (``int``, a declared
-        type name, ``list[T]``) → ``"type"`` (``value_type`` set, no value, no
+        type name, ``array[T]``) → ``"type"`` (``value_type`` set, no value, no
         state change).
     ``name``
         The bound/declared name, when meaningful (binding / declaration).  A

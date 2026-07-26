@@ -6,7 +6,7 @@
       "expect": {"stdout": "15\n"}
     },
     {
-      "name": "empty_list_omitted",
+      "name": "empty_array_omitted",
       "params": {"items": []},
       "expect": {"stdout": "0\n"}
     }

@@ -7995,7 +7995,7 @@ class TestExecCommand:
             "  description: text\n"
             "enum Review\n"
             "  | Pass\n"
-            "  | Fail(issues: list[Issue])\n"
+            "  | Fail(issues: array[Issue])\n"
             "enum Fix\n"
             "  | Complete(output: text)\n"
             'agent impl = "impl-runner"\n'

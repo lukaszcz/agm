@@ -52,10 +52,10 @@ from agm.agl.ir.nodes import (
     IrIterNext,
     IrLoad,
     IrLoop,
+    IrMakeArray,
     IrMakeClosure,
     IrMakeDict,
     IrMakeException,
-    IrMakeList,
     IrMakeRecord,
     IrRaise,
     IrRenderTemplate,
@@ -74,9 +74,9 @@ from agm.agl.ir.operations import (
     ContainsKind,
     IntToDecimal,
     IterKind,
+    MapArray,
     MapDictValues,
     MapEnumFields,
-    MapList,
     MapRecordFields,
     ToJson,
     UnaryOp,
@@ -90,13 +90,13 @@ from agm.agl.matchcompile import MatchCompiledModule, compile_module_matches
 from agm.agl.parser import parse_program, parse_program_seeded
 from agm.agl.scope import resolve_module
 from agm.agl.semantics.types import (
+    ArrayType,
     BoolType,
     DecimalType,
     DictType,
     ExceptionType,
     IntType,
     JsonType,
-    ListType,
     RecordType,
     TextType,
     TypeVarType,
@@ -133,7 +133,9 @@ def _caps() -> HostCapabilities:
         supports_shell_exec=True,
         codec_kinds={
             "text": frozenset({"text"}),
-            "json": frozenset({"json", "record", "enum", "list", "dict", "int", "decimal", "bool"}),
+            "json": frozenset(
+                {"json", "record", "enum", "array", "dict", "int", "decimal", "bool"}
+            ),
         },
     )
 
@@ -542,32 +544,32 @@ class TestCompileCoercion:
         result = compile_coercion(DecimalType(), JsonType(), type_table_for())
         assert result == ToJson()
 
-    def test_list_int_to_json(self) -> None:
-        result = compile_coercion(ListType(IntType()), JsonType(), type_table_for())
+    def test_array_int_to_json(self) -> None:
+        result = compile_coercion(ArrayType(IntType()), JsonType(), type_table_for())
         assert result == ToJson()
 
-    # List coercions
+    # Array coercions
 
-    def test_list_int_to_list_decimal(self) -> None:
-        result = compile_coercion(ListType(IntType()), ListType(DecimalType()), type_table_for())
-        assert result == MapList(IntToDecimal())
+    def test_array_int_to_array_decimal(self) -> None:
+        result = compile_coercion(ArrayType(IntType()), ArrayType(DecimalType()), type_table_for())
+        assert result == MapArray(IntToDecimal())
 
-    def test_list_int_to_list_int_is_none(self) -> None:
+    def test_array_int_to_array_int_is_none(self) -> None:
         # Element coercion is None → outer is None
-        result = compile_coercion(ListType(IntType()), ListType(IntType()), type_table_for())
+        result = compile_coercion(ArrayType(IntType()), ArrayType(IntType()), type_table_for())
         assert result is None
 
-    def test_list_int_to_list_json(self) -> None:
-        result = compile_coercion(ListType(IntType()), ListType(JsonType()), type_table_for())
-        assert result == MapList(ToJson())
+    def test_array_int_to_array_json(self) -> None:
+        result = compile_coercion(ArrayType(IntType()), ArrayType(JsonType()), type_table_for())
+        assert result == MapArray(ToJson())
 
-    def test_nested_list_int_to_list_list_decimal(self) -> None:
+    def test_nested_array_int_to_array_array_decimal(self) -> None:
         result = compile_coercion(
-            ListType(ListType(IntType())),
-            ListType(ListType(DecimalType())),
+            ArrayType(ArrayType(IntType())),
+            ArrayType(ArrayType(DecimalType())),
             type_table_for(),
         )
-        assert result == MapList(MapList(IntToDecimal()))
+        assert result == MapArray(MapArray(IntToDecimal()))
 
     # Dict coercions
 
@@ -734,10 +736,10 @@ class TestCompileCoercion:
     def test_unequal_instantiations_of_recursive_declaration_raise_instead_of_looping(
         self,
     ) -> None:
-        # Box[T] here ALSO has a `list[Box[T]]` field, unlike the
+        # Box[T] here ALSO has an `array[Box[T]]` field, unlike the
         # non-recursive Box[T] above: naively coercing Box[int] -> Box[decimal]
-        # would recurse into that same unequal pair forever (list[Box[int]] ->
-        # list[Box[decimal]] -> Box[int] -> Box[decimal] -> ...), a genuine
+        # would recurse into that same unequal pair forever (array[Box[int]] ->
+        # array[Box[decimal]] -> Box[int] -> Box[decimal] -> ...), a genuine
         # Python RecursionError. This pair is never actually produced by the
         # checker (nominal types are invariant — see
         # docs/agl/reference/generics.md), so the internal cycle guard is the
@@ -758,7 +760,7 @@ class TestCompileCoercion:
                     ("value", TypeVarType("T")),
                     (
                         "children",
-                        ListType(
+                        ArrayType(
                             RecordType("Box", type_args=(TypeVarType("T"),), module_id=module_id)
                         ),
                     ),
@@ -871,53 +873,53 @@ class TestLiteralLowering:
 
 
 # ---------------------------------------------------------------------------
-# lower_module: list literal lowering
+# lower_module: array literal lowering
 # ---------------------------------------------------------------------------
 
 
-class TestListLitLowering:
-    def test_empty_list(self) -> None:
-        # list[int] with no elements
-        prog = _lower("let _x: list[int] = []\n()")
+class TestArrayLitLowering:
+    def test_empty_array(self) -> None:
+        # array[int] with no elements
+        prog = _lower("let _x: array[int] = []\n()")
         inits = prog.modules[prog.entry_module].initializers
         bind = _let_root_capture(inits[0])
-        make_list = bind.value
-        assert isinstance(make_list, IrMakeList)
-        assert make_list.items == ()
+        make_array = bind.value
+        assert isinstance(make_array, IrMakeArray)
+        assert make_array.items == ()
 
-    def test_list_int_elements_no_coercion(self) -> None:
-        prog = _lower("let _x: list[int] = [1, 2, 3]\n()")
+    def test_array_int_elements_no_coercion(self) -> None:
+        prog = _lower("let _x: array[int] = [1, 2, 3]\n()")
         inits = prog.modules[prog.entry_module].initializers
         bind = _let_root_capture(inits[0])
-        make_list = bind.value
-        assert isinstance(make_list, IrMakeList)
+        make_array = bind.value
+        assert isinstance(make_array, IrMakeArray)
         # Elements are plain IrConstInt (no coercion needed)
-        for item in make_list.items:
+        for item in make_array.items:
             assert isinstance(item, IrConstInt)
 
-    def test_list_with_element_coercion(self) -> None:
-        # list[decimal] = [1, 2] — elements need IntToDecimal
-        prog = _lower("let _x: list[decimal] = [1, 2]\n()")
+    def test_array_with_element_coercion(self) -> None:
+        # array[decimal] = [1, 2] — elements need IntToDecimal
+        prog = _lower("let _x: array[decimal] = [1, 2]\n()")
         inits = prog.modules[prog.entry_module].initializers
         bind = _let_root_capture(inits[0])
-        make_list = bind.value
-        assert isinstance(make_list, IrMakeList)
+        make_array = bind.value
+        assert isinstance(make_array, IrMakeArray)
         # Each element is IrCoerce(IrConstInt, IntToDecimal())
-        for item in make_list.items:
+        for item in make_array.items:
             assert isinstance(item, IrCoerce)
             assert isinstance(item.value, IrConstInt)
             assert item.operation == IntToDecimal()
 
-    def test_list_int_to_json_whole_list_coercion(self) -> None:
-        # let j: json = [1, 2] — entire list is wrapped in ToJson
+    def test_array_int_to_json_whole_array_coercion(self) -> None:
+        # let j: json = [1, 2] — entire array is wrapped in ToJson
         prog = _lower("let _x: json = [1, 2]\n()")
         inits = prog.modules[prog.entry_module].initializers
         bind = _let_root_capture(inits[0])
-        # The value should be IrCoerce(IrMakeList(...), ToJson())
+        # The value should be IrCoerce(IrMakeArray(...), ToJson())
         coerce = bind.value
         assert isinstance(coerce, IrCoerce)
         assert coerce.operation == ToJson()
-        assert isinstance(coerce.value, IrMakeList)
+        assert isinstance(coerce.value, IrMakeArray)
 
 
 # ---------------------------------------------------------------------------
@@ -1007,27 +1009,27 @@ class TestBindingLowering:
         assert isinstance(coerce, IrCoerce)
         assert coerce.operation == ToJson()
 
-    def test_let_binding_list_decimal_elements_coerced_not_outer(self) -> None:
-        # let xs: list[decimal] = [1, 2]
-        # Elements each get IntToDecimal; the list itself does NOT get MapList
-        # because the list's own checked type is already list[decimal]
-        # (the element coercion is applied at element level, not list level).
-        prog = _lower("let _xs: list[decimal] = [1, 2]\n()")
+    def test_let_binding_array_decimal_elements_coerced_not_outer(self) -> None:
+        # let xs: array[decimal] = [1, 2]
+        # Elements each get IntToDecimal; the array itself does NOT get MapArray
+        # because the array's own checked type is already array[decimal]
+        # (the element coercion is applied at element level, not array level).
+        prog = _lower("let _xs: array[decimal] = [1, 2]\n()")
         inits = prog.modules[prog.entry_module].initializers
         bind = _let_root_capture(inits[0])
-        # The bind value should be IrMakeList with coerced elements
-        make_list = bind.value
-        assert isinstance(make_list, IrMakeList)
-        for item in make_list.items:
+        # The bind value should be IrMakeArray with coerced elements
+        make_array = bind.value
+        assert isinstance(make_array, IrMakeArray)
+        for item in make_array.items:
             assert isinstance(item, IrCoerce)
             assert item.operation == IntToDecimal()
 
     def test_let_var_ref_identity_no_coerce(self) -> None:
-        # let a: list[int] = [1]; let b: list[int] = a — no coercion needed
-        # (list[int] → list[decimal] is rejected by the type checker, so
-        # MapList(IntToDecimal) on an IrLoad can only arise in future work
+        # let a: array[int] = [1]; let b: array[int] = a — no coercion needed
+        # (array[int] → array[decimal] is rejected by the type checker, so
+        # MapArray(IntToDecimal) on an IrLoad can only arise in future work
         # that extend assignability.  The contract example is forward-looking.)
-        prog = _lower("let _a: list[int] = [1]\nlet _b: list[int] = _a\n()")
+        prog = _lower("let _a: array[int] = [1]\nlet _b: array[int] = _a\n()")
         inits = prog.modules[prog.entry_module].initializers
         bind_b = _let_root_capture(inits[1])
         # No coercion wrap — direct IrLoad
@@ -1512,7 +1514,7 @@ class TestValidateIrIntegration:
         source = (
             "let _a: int = 1\n"
             "let _b: decimal = 2\n"
-            "let _c: list[decimal] = [1, 2]\n"
+            "let _c: array[decimal] = [1, 2]\n"
             'let _d: dict[text, decimal] = {"x": 1}\n'
             "var _v: int = 0\n"
             "_v := 3\n"
@@ -2745,13 +2747,13 @@ class TestBinaryOpKindSelection:
         assert cmp.op is CmpOp.EQ
         assert cmp.kind is CompareKind.STRUCTURAL
 
-    def test_in_list_lowers_to_contains_list(self) -> None:
-        """'in' on a list → IrContains with kind=LIST."""
+    def test_in_array_lowers_to_contains_array(self) -> None:
+        """'in' on an array → IrContains with kind=ARRAY."""
         prog = _lower("let r = 1 in [1, 2, 3]\n()")
         bind = _let_root_capture(prog.modules[prog.entry_module].initializers[0])
         contains = bind.value
         assert isinstance(contains, IrContains)
-        assert contains.kind is ContainsKind.LIST
+        assert contains.kind is ContainsKind.ARRAY
 
     def test_in_dict_lowers_to_contains_dict(self) -> None:
         """'in' (key lookup) on a dict → IrContains with kind=DICT."""
@@ -3260,7 +3262,7 @@ class TestLoopDesugar:
         __n and __count, before the IrLoop.
         """
         source = (
-            "param items: list[int]\n"
+            "param items: array[int]\n"
             "var total: int = 0\n"
             "for x in items while x < 10 do[5]\n"
             "  total := total + x\n"
@@ -3277,15 +3279,15 @@ class TestLoopDesugar:
         count_bind = node.items[2]
         loop = node.items[3]
 
-        # __it bind: IrBind(IrIterInit(LIST, ...))
+        # __it bind: IrBind(IrIterInit(ARRAY, ...))
         assert isinstance(it_bind, IrBind), (
             f"item 0 must be IrBind(__it), got {type(it_bind).__name__}"
         )
         assert isinstance(it_bind.value, IrIterInit), (
             f"__it value must be IrIterInit, got {type(it_bind.value).__name__}"
         )
-        assert it_bind.value.kind is IterKind.LIST, (
-            f"__it kind must be LIST for list[int], got {it_bind.value.kind!r}"
+        assert it_bind.value.kind is IterKind.ARRAY, (
+            f"__it kind must be ARRAY for array[int], got {it_bind.value.kind!r}"
         )
         # __n bind: IrBind(IrConstInt(5))
         assert isinstance(n_bind, IrBind), (
@@ -3359,20 +3361,20 @@ class TestLoopDesugar:
         assert item7.has_else is False
         assert isinstance(item7.branches[0].body, IrBreak), "item 7 branch body must be IrBreak"
 
-    def test_for_iter_kind_list(self) -> None:
-        """``for x in items`` over ``list[int]`` selects IterKind.LIST."""
-        source = "param items: list[int]\nvar n: int = 0\nfor x in items do\n  n := n + x\ndone\n"
+    def test_for_iter_kind_array(self) -> None:
+        """``for x in items`` over ``array[int]`` selects IterKind.ARRAY."""
+        source = "param items: array[int]\nvar n: int = 0\nfor x in items do\n  n := n + x\ndone\n"
         node = _get_loop_ir(source)
         assert isinstance(node, IrSequence), (
-            f"for over list: expected IrSequence, got {type(node).__name__}"
+            f"for over array: expected IrSequence, got {type(node).__name__}"
         )
         it_bind = node.items[0]
         assert isinstance(it_bind, IrBind)
         assert isinstance(it_bind.value, IrIterInit), (
             f"expected IrIterInit, got {type(it_bind.value).__name__}"
         )
-        assert it_bind.value.kind is IterKind.LIST, (
-            f"expected IterKind.LIST for list[int], got {it_bind.value.kind!r}"
+        assert it_bind.value.kind is IterKind.ARRAY, (
+            f"expected IterKind.ARRAY for array[int], got {it_bind.value.kind!r}"
         )
 
     def test_for_iter_kind_dict_keys(self) -> None:
@@ -3727,7 +3729,7 @@ class TestRangeForDesugar:
     def test_collection_for_regression(self) -> None:
         """Collection ``for`` still lowers to IrIterInit / IrIterHasNext / IrIterNext."""
         source = (
-            "param items: list[int]\n"
+            "param items: array[int]\n"
             "var total: int = 0\n"
             "for x in items do\n"
             "  total := total + x\n"

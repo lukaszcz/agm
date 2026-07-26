@@ -67,7 +67,9 @@ def base_caps() -> HostCapabilities:
     return HostCapabilities(
         codec_kinds={
             "text": frozenset({"text"}),
-            "json": frozenset({"json", "record", "enum", "list", "dict", "int", "decimal", "bool"}),
+            "json": frozenset(
+                {"json", "record", "enum", "array", "dict", "int", "decimal", "bool"}
+            ),
         }
     )
 

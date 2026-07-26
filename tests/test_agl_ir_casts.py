@@ -15,12 +15,12 @@ import pytest
 from agm.agl.eval.conversions import AglCastConversion, run_recipe
 from agm.agl.eval.conversions import decode_value as _decode
 from agm.agl.ir.contracts import (
+    ArrayDecode,
     ConversionFailureMode,
     ConversionRecipe,
     ConversionStrategy,
     DictDecode,
     EnumDecode,
-    ListDecode,
     RecordDecode,
     RefDecode,
     ScalarDecode,
@@ -31,12 +31,12 @@ from agm.agl.ir.ids import NominalId
 from agm.agl.ir.nodes import IrBind, IrConvert, IrSequence
 from agm.agl.modules.ids import ENTRY_ID
 from agm.agl.semantics.values import (
+    ArrayValue,
     BoolValue,
     DecimalValue,
     EnumValue,
     IntValue,
     JsonValue,
-    ListValue,
     RecordValue,
     TextValue,
 )
@@ -105,10 +105,10 @@ let c_json = Color::Red() as json
         'let x = "4.5" as decimal\n()\n',
         'let x = "true" as bool\n()\n',
         'let x = "4.0" as int\n()\n',  # integral decimal narrows to int
-        'let x = "[1, 2, 3]" as list[int]\n()\n',
-        'let x = "[\\"a\\", \\"b\\"]" as list[text]\n()\n',
-        'let x = "[1, 2]" as list[json]\n()\n',  # json leaf decode
-        'let x = "{\\"k\\": [1, 2]}" as dict[text, list[int]]\n()\n',
+        'let x = "[1, 2, 3]" as array[int]\n()\n',
+        'let x = "[\\"a\\", \\"b\\"]" as array[text]\n()\n',
+        'let x = "[1, 2]" as array[json]\n()\n',  # json leaf decode
+        'let x = "{\\"k\\": [1, 2]}" as dict[text, array[int]]\n()\n',
     ],
 )
 def test_fallible_text_cast_success_agrees(source: str) -> None:
@@ -124,7 +124,7 @@ def test_text_to_record_and_nested_agrees() -> None:
 record Foo
   a: int
 let one = "{\\"a\\": 1}" as Foo
-let many = "[{\\"a\\": 1}, {\\"a\\": 2}]" as list[Foo]
+let many = "[{\\"a\\": 1}, {\\"a\\": 2}]" as array[Foo]
 ()
 """
     evaluate_ir(source)
@@ -291,9 +291,9 @@ def test_golden_widen_and_render_and_tojson_strategies() -> None:
 
 
 def test_golden_nested_decode_schema_shape() -> None:
-    value = _bound_value('let x = "{\\"k\\": [1, 2]}" as dict[text, list[int]]\n()\n', "x")
+    value = _bound_value('let x = "{\\"k\\": [1, 2]}" as dict[text, array[int]]\n()\n', "x")
     assert isinstance(value, IrConvert)
-    assert value.recipe.decode == DictDecode(ListDecode(ScalarDecode(ScalarKind.INT)))
+    assert value.recipe.decode == DictDecode(ArrayDecode(ScalarDecode(ScalarKind.INT)))
 
 
 def test_golden_decimal_to_int_strategy() -> None:
@@ -331,7 +331,7 @@ def test_decode_scalar_success_branches() -> None:
         (ScalarDecode(ScalarKind.DECIMAL), True, "Expected decimal, got bool"),
         (ScalarDecode(ScalarKind.DECIMAL), "x", "Expected decimal, got str 'x'"),
         (ScalarDecode(ScalarKind.BOOL), 1, "Expected bool, got int"),
-        (ListDecode(ScalarDecode(ScalarKind.INT)), 5, "Expected array, got int"),
+        (ArrayDecode(ScalarDecode(ScalarKind.INT)), 5, "Expected array, got int"),
         (DictDecode(ScalarDecode(ScalarKind.INT)), 5, "Expected object, got int"),
         (DictDecode(ScalarDecode(ScalarKind.INT)), {1: 2}, "Dict key must be string, got int"),
         (
@@ -380,8 +380,8 @@ def test_decode_nested_record_and_enum_success() -> None:
     assert rec == RecordValue(nominal=_FOO, display_name="Foo", fields={"a": IntValue(3)})
     enum_val = _decode(EnumDecode(_RED, "Color", (VariantDecode("Red", ()),)), {"$case": "Red"})
     assert enum_val == EnumValue(nominal=_RED, display_name="Color", variant="Red", fields={})
-    lst = _decode(ListDecode(ScalarDecode(ScalarKind.INT)), [1, 2])
-    assert lst == ListValue((IntValue(1), IntValue(2)))
+    lst = _decode(ArrayDecode(ScalarDecode(ScalarKind.INT)), [1, 2])
+    assert lst == ArrayValue((IntValue(1), IntValue(2)))
     dct = _decode(DictDecode(ScalarDecode(ScalarKind.INT)), {"k": 1})
     assert dct.entries == {"k": IntValue(1)}
     variant_with_field = _decode(
@@ -494,7 +494,7 @@ def test_validate_rejects_decode_with_unregistered_nominal() -> None:
         source_label="json",
         target_label="Ghost",
         json_schema="{}",
-        decode=ListDecode(
+        decode=ArrayDecode(
             RecordDecode(NominalId(ENTRY_ID, "Ghost"), "Ghost", ()),
         ),
     )

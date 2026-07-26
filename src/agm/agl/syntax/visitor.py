@@ -30,6 +30,7 @@ from typing import cast
 
 from agm.agl.syntax.nodes import (
     AgentDecl,
+    ArrayLit,
     AsPattern,
     AssignStmt,
     BinaryOp,
@@ -66,7 +67,6 @@ from agm.agl.syntax.nodes import (
     IsTest,
     Lambda,
     LetDecl,
-    ListLit,
     LiteralPattern,
     Loop,
     NamedArg,
@@ -106,13 +106,13 @@ from agm.agl.syntax.nodes import (
 from agm.agl.syntax.types import (
     AgentT,
     AppliedT,
+    ArrayT,
     BoolT,
     DecimalT,
     DictT,
     FuncT,
     IntT,
     JsonT,
-    ListT,
     NameT,
     TextT,
     UnitT,
@@ -164,7 +164,7 @@ class Visitor:
     def visit_IntT(self, node: IntT) -> None: ...
     def visit_DecimalT(self, node: DecimalT) -> None: ...
     def visit_NameT(self, node: NameT) -> None: ...
-    def visit_ListT(self, node: ListT) -> None: ...
+    def visit_ArrayT(self, node: ArrayT) -> None: ...
     def visit_DictT(self, node: DictT) -> None: ...
     def visit_UnitT(self, node: UnitT) -> None: ...
     def visit_AgentT(self, node: AgentT) -> None: ...
@@ -210,7 +210,7 @@ class Visitor:
     def visit_BoolLit(self, node: BoolLit) -> None: ...
     def visit_NullLit(self, node: NullLit) -> None: ...
     def visit_StringLit(self, node: StringLit) -> None: ...
-    def visit_ListLit(self, node: ListLit) -> None: ...
+    def visit_ArrayLit(self, node: ArrayLit) -> None: ...
     def visit_DictEntry(self, node: DictEntry) -> None: ...
     def visit_DictLit(self, node: DictLit) -> None: ...
 
@@ -277,7 +277,7 @@ _KNOWN_NODE_TYPES: frozenset[type] = frozenset(
         IntT,
         DecimalT,
         NameT,
-        ListT,
+        ArrayT,
         DictT,
         UnitT,
         AgentT,
@@ -319,7 +319,7 @@ _KNOWN_NODE_TYPES: frozenset[type] = frozenset(
         BoolLit,
         NullLit,
         StringLit,
-        ListLit,
+        ArrayLit,
         DictEntry,
         DictLit,
         # template nodes
@@ -400,7 +400,7 @@ def walk(node: object, callback: Callable[[object], None]) -> None:
         if node.qualifier is not None:
             walk(node.qualifier, callback)
 
-    elif isinstance(node, ListT):
+    elif isinstance(node, ArrayT):
         walk(node.elem, callback)
 
     elif isinstance(node, DictT):
@@ -547,7 +547,7 @@ def walk(node: object, callback: Callable[[object], None]) -> None:
     elif isinstance(node, (UnitLit, IntLit, DecimalLit, BoolLit, NullLit, StringLit)):
         pass  # leaves
 
-    elif isinstance(node, ListLit):
+    elif isinstance(node, ArrayLit):
         for elem in node.elements:
             walk(elem, callback)
 

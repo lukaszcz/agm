@@ -25,6 +25,7 @@ from agm.agl.semantics.types import (
 from agm.agl.typecheck import (
     AgentType,
     AglTypeError,
+    ArrayType,
     BoolType,
     CheckedModule,
     CheckedProgram,
@@ -32,7 +33,6 @@ from agm.agl.typecheck import (
     ExceptionType,
     FunctionType,
     IntType,
-    ListType,
     RecordType,
     TextType,
     Type,
@@ -54,7 +54,7 @@ _CAPS = HostCapabilities(
     supports_shell_exec=True,
     codec_kinds={
         "text": frozenset({"text"}),
-        "json": frozenset({"json", "record", "enum", "list", "dict", "int", "decimal", "bool"}),
+        "json": frozenset({"json", "record", "enum", "array", "dict", "int", "decimal", "bool"}),
     },
 )
 
@@ -742,7 +742,9 @@ def test_agent_typed_arg_in_imported_function(tmp_path: Path) -> None:
         supports_shell_exec=True,
         codec_kinds={
             "text": frozenset({"text"}),
-            "json": frozenset({"json", "record", "enum", "list", "dict", "int", "decimal", "bool"}),
+            "json": frozenset(
+                {"json", "record", "enum", "array", "dict", "int", "decimal", "bool"}
+            ),
         },
     )
     modules = {
@@ -958,12 +960,12 @@ def test_imported_generic_alias_preserves_constructor_constraints(tmp_path: Path
         tmp_path,
         {
             "entry": "import lib\nlet box = lib::Alias::[int](value = [1])\nbox",
-            "lib": "record Box[T]\n  value: T\ntype Alias[T] = Box[list[T]]",
+            "lib": "record Box[T]\n  value: T\ntype Alias[T] = Box[array[T]]",
         },
     )
 
     assert _binding_value_type(checked, ENTRY_ID, "box") == RecordType(
-        "Box", (ListType(IntType()),), module_id=ModuleId.from_path("lib")
+        "Box", (ArrayType(IntType()),), module_id=ModuleId.from_path("lib")
     )
 
 
@@ -974,7 +976,7 @@ def test_imported_generic_alias_to_non_nominal_is_a_type_error(tmp_path: Path) -
             tmp_path,
             {
                 "entry": "import lib\nlib::Alias(value = 1)",
-                "lib": "type Alias[T] = list[T]",
+                "lib": "type Alias[T] = array[T]",
             },
         )
 
@@ -1100,7 +1102,7 @@ def test_later_module_parameterized_alias_available_to_entry_type_body(
         tmp_path,
         {
             "entry": "import zzz\nrecord Box\n  xs: zzz::Alias[int]\nlet b = Box(xs = [])\nb",
-            "zzz": "type Alias[T] = list[T]",
+            "zzz": "type Alias[T] = array[T]",
         },
     )
     assert _binding_value_type(cg, ENTRY_ID, "b") == RecordType("Box", module_id=ENTRY_ID)
@@ -1114,7 +1116,7 @@ def test_later_module_parameterized_alias_available_via_open_import(
         tmp_path,
         {
             "entry": "open import zzz\nrecord Box\n  xs: Alias[int]\nlet b = Box(xs = [])\nb",
-            "zzz": "type Alias[T] = list[T]",
+            "zzz": "type Alias[T] = array[T]",
         },
     )
     assert _binding_value_type(cg, ENTRY_ID, "b") == RecordType("Box", module_id=ENTRY_ID)
@@ -1129,7 +1131,7 @@ def test_later_module_parameterized_alias_bare_reference_is_rejected(
             tmp_path,
             {
                 "entry": "open import zzz\nrecord Box\n  xs: Alias\nBox(xs = [])",
-                "zzz": "type Alias[T] = list[T]",
+                "zzz": "type Alias[T] = array[T]",
             },
         )
 
@@ -1141,7 +1143,7 @@ def test_resolve_named_type_treats_open_parameterized_alias_as_non_concrete(
         tmp_path,
         {
             "entry": "import library/remote using Alias\n()",
-            "library/remote": "type Alias[T] = list[T]",
+            "library/remote": "type Alias[T] = array[T]",
         },
     )
 
@@ -1837,7 +1839,7 @@ def test_cross_module_generic_argument_cycle_is_uninhabitable(tmp_path: Path) ->
 def test_record_exception_field_cycle_across_check_is_uninhabitable(tmp_path: Path) -> None:
     """A record/exception field cycle with no guard is uninhabitable in program context.
 
-    ``R.e: E`` and ``E.r: R`` reference each other with no list/dict guard or
+    ``R.e: E`` and ``E.r: R`` reference each other with no array/dict guard or
     base case; both the whole-program inhabitation pre-pass and the per-module
     builder re-check treat ``E`` and ``R`` symmetrically and reject the cycle.
     """
@@ -1948,14 +1950,14 @@ def test_type_expr_deps_unqualified_open_import_field(tmp_path: Path) -> None:
     assert _binding_value_type(cg, ENTRY_ID, "p") == RecordType("Wrapper", module_id=mylib_id)
 
 
-def test_type_expr_deps_list_field(tmp_path: Path) -> None:
-    """A field typed 'list[other::Type]' recurses into the elem type for deps."""
+def test_type_expr_deps_array_field(tmp_path: Path) -> None:
+    """A field typed 'array[other::Type]' recurses into the elem type for deps."""
     modules = {
         "entry": ("import mylib\nlet p: mylib::Wrapper = mylib::mk()\np"),
         "mylib": (
             "import payload\n"
             "record Wrapper\n"
-            "  items: list[payload::Data]\n"
+            "  items: array[payload::Data]\n"
             "def mk() -> Wrapper = Wrapper(items = [payload::Data(n = 1)])"
         ),
         "payload": ("record Data\n  n: int"),
@@ -2011,7 +2013,7 @@ def test_cross_module_structural_cycle_is_uninhabitable(tmp_path: Path) -> None:
     """A cross-module type cycle with no guard is uninhabitable.
 
     modA.Foo has field 'other: modB::Bar' and modB.Bar has field 'other: modA::Foo'.
-    Neither side has a list/dict guard or independent evidence, so both stay
+    Neither side has an array/dict guard or independent evidence, so both stay
     uninhabited and the checker must raise AglTypeError.
     """
     from agm.agl.typecheck.env import AglTypeError as _AglTypeError
@@ -3223,7 +3225,7 @@ def test_imported_parameterized_alias_in_function_signature(tmp_path: Path) -> N
 def test_same_module_parameterized_alias_in_function_signature(tmp_path: Path) -> None:
     """Graph signature pre-pass resolves a module's own generic aliases."""
     modules = {
-        "entry": "type Box[T] = list[T]\ndef f(x: Box[int]) -> int = 1\nf([1])",
+        "entry": "type Box[T] = array[T]\ndef f(x: Box[int]) -> int = 1\nf([1])",
     }
 
     _check_program(tmp_path, modules)
@@ -3231,7 +3233,7 @@ def test_same_module_parameterized_alias_in_function_signature(tmp_path: Path) -
 
 def test_same_module_parameterized_alias_bare_reference_is_rejected(tmp_path: Path) -> None:
     modules = {
-        "entry": "type Box[T] = list[T]\ndef f(x: Box) -> int = 1\nf([1])",
+        "entry": "type Box[T] = array[T]\ndef f(x: Box) -> int = 1\nf([1])",
     }
 
     with pytest.raises(AglTypeError):

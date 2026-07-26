@@ -41,7 +41,7 @@ param spec: text
 
 enum Review
   | Pass
-  | Fail(issues: list[text])
+  | Fail(issues: array[text])
 
 agent reviewer
 agent impl

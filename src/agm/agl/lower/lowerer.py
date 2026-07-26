@@ -536,7 +536,7 @@ class _Lowerer:
             funcdef.node_id,
             name=funcdef.name,
             mutable=False,
-            public=not funcdef.is_private and not funcdef.scope_path,
+            public=not funcdef.scope_path,
             owner=self._module_id,
         )
         self._link.fn_node_to_sym[funcdef.node_id] = sym

@@ -98,13 +98,6 @@ class TestGrammarAndTransformer:
         assert isinstance(fd, FuncDef)
         assert [p.kind.value for p in fd.params] == ["standard", "named_only"]
 
-    def test_private_extern_def(self) -> None:
-        fd = first("private extern def f(x: int) -> int")
-        assert isinstance(fd, FuncDef)
-        assert fd.is_private is True
-        assert fd.is_extern is True
-        assert fd.body is None
-
     def test_extern_modifier_on_its_own_line(self) -> None:
         fd = first("extern\ndef f(x: int) -> int")
         assert isinstance(fd, FuncDef)
@@ -123,14 +116,6 @@ class TestGrammarAndTransformer:
             parse_program("extern builtin def f(x: int) -> int")
         with pytest.raises(AglSyntaxError):
             parse_program("builtin extern def f(x: int) -> int")
-
-    def test_private_func_def_still_carries_is_extern_false(self) -> None:
-        # Regression: the shared private-wrap helper must not accidentally
-        # flip is_extern on ordinary private defs.
-        fd = first("private def f(x: int) -> int = x")
-        assert isinstance(fd, FuncDef)
-        assert fd.is_extern is False
-        assert fd.is_private is True
 
 
 # ---------------------------------------------------------------------------

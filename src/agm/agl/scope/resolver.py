@@ -233,7 +233,6 @@ class _Resolver:
         import_env: ImportEnv | None = None,
         decl_info: dict[tuple[ModuleId, NameAtom], tuple[int, SourceSpan, BinderKind]]
         | None = None,
-        private_info: dict[tuple[ModuleId, NameAtom], bool] | None = None,
         cross_module_constructor_refs: Mapping[tuple[ModuleId, NameAtom], ConstructorRef]
         | None = None,
         cross_module_constructible_types: frozenset[tuple[ModuleId, NameAtom]] = frozenset(),
@@ -255,10 +254,6 @@ class _Resolver:
         # Maps (module_id, name) → (node_id, span, kind) for cross-module refs.
         self._decl_info: dict[tuple[ModuleId, NameAtom], tuple[int, SourceSpan, BinderKind]] = (
             decl_info if decl_info is not None else {}
-        )
-        # Maps (module_id, name) → True for private declarations.
-        self._private_info: dict[tuple[ModuleId, NameAtom], bool] = (
-            private_info if private_info is not None else {}
         )
         self._cross_module_constructor_refs: Mapping[tuple[ModuleId, NameAtom], ConstructorRef] = (
             cross_module_constructor_refs if cross_module_constructor_refs is not None else {}
@@ -2554,15 +2549,9 @@ class _Resolver:
             self._import_env,
             route,
             atom,
-            self._private_info,
             anchored=qualifier.anchored,
             unknown_qualifier=lambda rendered: AglScopeError(
                 f"No module imported under qualifier '{rendered}'.", span=span
-            ),
-            private_member=lambda module: AglScopeError(
-                f"'{name}' in module '{module.display()}' is declared private and cannot be "
-                "accessed from outside the module.",
-                span=span,
             ),
             missing_member=lambda rendered: AglScopeError(
                 f"'{name}' is not in the imported set of '{rendered}'.", span=span

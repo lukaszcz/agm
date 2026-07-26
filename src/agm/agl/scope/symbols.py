@@ -255,8 +255,8 @@ def alias_denotes_constructible_type(
     *lookup* is scoped to whatever declarations the caller can see (a
     module's own root declarations and import environment, or a whole
     program's public types); a link the callback cannot resolve — no import
-    environment available, a private target, a container/primitive alias, or
-    an unresolvable name — makes the alias presumed constructible, preserving
+    environment available, a container/primitive alias, or an unresolvable
+    name — makes the alias presumed constructible, preserving
     today's permissive default. The walk guards against a cyclic chain by
     tracking the ``node_id`` of every declaration visited, not the bare name
     spelling, since a qualified chain can revisit the same name in a

@@ -5,7 +5,7 @@ detect:
 
 rules:
     # Root declarations and declaration modifiers.
-    - preproc: "\\b(import|qualified|using|hiding|private|builtin)\\b"
+    - preproc: "\\b(import|qualified|using|hiding|builtin)\\b"
     - statement: "\\b(record|enum|type|exception|extends|param|program|agent|config|def|fn|let|var)\\b"
 
     # Control flow and expression keywords.

@@ -9,7 +9,6 @@ These tests drive multi-module AgL programs through ``resolve_program`` and asse
 - multiple import declarations merging
 - duplicate-alias and alias-root-collision static errors
 - ``::name`` self-reference
-- private boundary enforcement
 - declaration-only enforcement for non-entry modules
 - entry-only enforcement (agent, param, program)
 - header-only import placement
@@ -212,21 +211,6 @@ class TestResolvedProgramShape:
         mylib_id = ModuleId.from_path("mylib")
         assert ENTRY_ID in result.modules
         assert mylib_id in result.modules
-
-    def test_exports_excludes_private(self, tmp_path: Path) -> None:
-        """Private functions are excluded from exports."""
-        graph = _make_graph_from_files(
-            tmp_path,
-            {
-                "entry": "open import mylib\n()",
-                "mylib": "def pub() -> int = 1\nprivate def priv() -> int = 2",
-            },
-        )
-        result = resolve_program(graph)
-        mylib_id = ModuleId.from_path("mylib")
-        exports = result.modules[mylib_id].exports
-        assert "pub" in exports
-        assert "priv" not in exports
 
     def test_pre_pass_tables_populated(self, tmp_path: Path) -> None:
         """all_public_funcs and all_public_types are populated."""
@@ -903,96 +887,28 @@ class TestSelfReference:
 
 
 # ---------------------------------------------------------------------------
-# Test: private boundary enforcement
+# Test: qualified-member diagnostics
 # ---------------------------------------------------------------------------
 
 
-class TestPrivateBoundary:
-    def test_private_not_in_exports(self, tmp_path: Path) -> None:
-        """Private functions don't appear in the exporting module's exports."""
-        graph = _make_graph_from_files(
-            tmp_path,
-            {
-                "entry": "open import mylib\n()",
-                "mylib": "private def secret() -> int = 1",
-            },
-        )
-        result = resolve_program(graph)
-        mylib_id = ModuleId.from_path("mylib")
-        assert "secret" not in result.modules[mylib_id].exports
+class TestQualifiedMemberDiagnostics:
+    def test_missing_member_error_names_the_qualified_module(self, tmp_path: Path) -> None:
+        """'libA::secret' must name libA when 'secret' is declared only by libB.
 
-    def test_private_not_accessible_via_open_import(self, tmp_path: Path) -> None:
-        """A private function from an imported module is not accessible unqualified."""
-        graph = _make_graph_from_files(
-            tmp_path,
-            {
-                "entry": "open import mylib\nlet x = secret()",
-                "mylib": "private def secret() -> int = 1",
-            },
-        )
-        with pytest.raises(AglScopeError, match="secret"):
-            resolve_program(graph)
-
-    def test_private_not_accessible_via_qualified_access(self, tmp_path: Path) -> None:
-        """A private function is not accessible via qualified access.
-
-        When a module has only private exports, its qualifier is not registered
-        (no names to qualify). When it has public exports, 'mylib::secret'
-        raises the private-access error naming mylib specifically.
-        """
-        graph = _make_graph_from_files(
-            tmp_path,
-            {
-                "entry": "open import mylib\nlet x = mylib::secret()",
-                "mylib": "def pub() -> int = 1\nprivate def secret() -> int = 2",
-            },
-        )
-        with pytest.raises(AglScopeError, match="[Pp]rivate"):
-            resolve_program(graph)
-
-    def test_private_error_message_names_owning_module(self, tmp_path: Path) -> None:
-        """Qualified access to a private name names the MODULE that owns the private decl.
-
-        Regression: when libA::secret is accessed but 'secret' only exists as
-        a private name in libB (a different module), the error used to name libB
-        instead of correctly resolving libA as the owning module and emitting 'private'
-        (if secret is private in libA) or 'not in imported set of libA' (if it isn't).
-        """
-        graph = _make_graph_from_files(
-            tmp_path,
-            {
-                "entry": "open import mylib\nlet x = mylib::secret()",
-                "mylib": "def pub() -> int = 1\nprivate def secret() -> int = 2",
-            },
-        )
-        with pytest.raises(AglScopeError) as exc_info:
-            resolve_program(graph)
-        msg = str(exc_info.value)
-        # The error must specifically say 'private' (owning module is mylib and
-        # 'secret' IS private in mylib), not a generic 'not in imported set'.
-        assert "private" in msg.lower(), f"Expected 'private' in error, got: {msg!r}"
-        # The error must name 'mylib' — not some other unrelated module.
-        assert "mylib" in msg, f"Expected 'mylib' in error message, got: {msg!r}"
-
-    def test_private_error_does_not_blame_wrong_module(self, tmp_path: Path) -> None:
-        """'libA::secret' must NOT name libB in the error when secret is private in libB only.
-
-        When libA is imported with a public export, and libB is a different module
-        that has a private 'secret', accessing libA::secret must report 'not in
-        imported set of libA' — not 'secret in libB is private'.
+        The qualifier chosen at the use site decides which module the error
+        blames, not whichever imported module happens to declare that name.
         """
         graph = _make_graph_from_files(
             tmp_path,
             {
                 "entry": "open import libA\nopen import libB\nlet x = libA::secret()",
                 "libA": "def pub() -> int = 1",
-                "libB": "def other() -> int = 2\nprivate def secret() -> int = 99",
+                "libB": "def other() -> int = 2\ndef secret() -> int = 99",
             },
         )
         with pytest.raises(AglScopeError) as exc_info:
             resolve_program(graph)
         msg = str(exc_info.value)
-        # Must mention libA (the qualifier used), not libB (which has the private decl)
         assert "libA" in msg, f"Expected 'libA' in error, got: {msg!r}"
         assert "libB" not in msg, f"libB should NOT be named, got: {msg!r}"
 
@@ -1582,19 +1498,6 @@ class TestTypeDeclarationsInModules:
         mylib_id = ModuleId.from_path("mylib")
         assert "Point" in result.modules[mylib_id].exports
 
-    def test_private_record_not_in_exports(self, tmp_path: Path) -> None:
-        """A private record is not in exports."""
-        graph = _make_graph_from_files(
-            tmp_path,
-            {
-                "entry": "open import mylib\n()",
-                "mylib": "private record Hidden\n  x: int",
-            },
-        )
-        result = resolve_program(graph)
-        mylib_id = ModuleId.from_path("mylib")
-        assert "Hidden" not in result.modules[mylib_id].exports
-
     def test_enum_in_module_in_pre_pass_tables(self, tmp_path: Path) -> None:
         """An enum in a module is in all_public_types."""
         graph = _make_graph_from_files(
@@ -1622,27 +1525,13 @@ class TestTypeDeclarationsInModules:
         assert "MyInt" in result.modules[mylib_id].exports
         assert (mylib_id, "MyInt") in result.all_public_types
 
-    def test_private_func_qualified_access_errors(self, tmp_path: Path) -> None:
-        """Qualified access to a private function gives an informative error."""
-        graph = _make_graph_from_files(
-            tmp_path,
-            {
-                "entry": "open import mylib\nlet x = mylib::secret()",
-                "mylib": "def pub() -> int = 1\nprivate def secret() -> int = 2",
-            },
-        )
-        with pytest.raises(AglScopeError, match="[Pp]rivate|secret|imported set"):
-            resolve_program(graph)
-
-    def test_non_private_name_not_in_imported_set_errors(self, tmp_path: Path) -> None:
-        """Qualified access to a non-private name not in S gives 'not in imported set'."""
+    def test_name_not_in_imported_set_errors(self, tmp_path: Path) -> None:
+        """Qualified access to a name outside the imported set gives 'not in imported set'."""
         graph = _make_graph_from_files(
             tmp_path,
             {
                 "entry": "import mylib using foo\nlet x = mylib::bar()",
-                "mylib": (
-                    "def foo() -> int = 1\ndef bar() -> int = 2\nprivate def hidden() -> int = 3"
-                ),
+                "mylib": "def foo() -> int = 1\ndef bar() -> int = 2",
             },
         )
         with pytest.raises(AglScopeError, match="bar|imported set"):
@@ -1793,17 +1682,6 @@ class TestFieldAccessCoverage:
 
         assert resolve_program(graph).entry_id == ENTRY_ID
 
-    def test_private_type_in_qualified_constructor_errors(self, tmp_path: Path) -> None:
-        graph = _make_graph_from_files(
-            tmp_path,
-            {
-                "mylib": "private enum Hidden\n  | Red\ndef public() -> int = 1",
-                "entry": "open import mylib\nlet x = mylib::Hidden::Red\nx",
-            },
-        )
-        with pytest.raises(AglScopeError, match="private"):
-            resolve_program(graph)
-
     def test_non_constructible_qualified_type_errors(self, tmp_path: Path) -> None:
         graph = _make_graph_from_files(
             tmp_path,
@@ -1889,19 +1767,6 @@ class TestExceptionDefInGraph:
         result = resolve_program(graph)
         mylib_id = ModuleId.from_path("mylib")
         assert (mylib_id, "MyErr") in result.all_public_types
-
-    def test_private_exception_not_exported(self, tmp_path: Path) -> None:
-        """A private exception is not in exports."""
-        graph = _make_graph_from_files(
-            tmp_path,
-            {
-                "entry": "open import mylib\n()",
-                "mylib": "private exception HiddenErr(code: int)",
-            },
-        )
-        result = resolve_program(graph)
-        mylib_id = ModuleId.from_path("mylib")
-        assert "HiddenErr" not in result.modules[mylib_id].exports
 
     def test_exception_constructor_candidate_available(self, tmp_path: Path) -> None:
         """An open-imported exception exposes its name as a constructor candidate."""
@@ -2078,13 +1943,13 @@ class TestExportDecl:
     """Tests for explicit export declarations."""
 
     def test_reexport_all_adds_to_exports(self, tmp_path: Path) -> None:
-        """export lib — all public names from lib appear in the facade's exports."""
+        """export lib — every name declared by lib appears in the facade's exports."""
         graph = _make_graph_from_files(
             tmp_path,
             {
                 "entry": "open import facade\n()",
                 "facade": "export lib",
-                "lib": "def foo() -> int = 1\nprivate def _bar() -> int = 2",
+                "lib": "def foo() -> int = 1\ndef bar() -> int = 2",
             },
         )
         result = resolve_program(graph)
@@ -2093,7 +1958,7 @@ class TestExportDecl:
         facade_exports = result.modules[facade_id].exports
         assert "foo" in facade_exports
         assert facade_exports["foo"] == (lib_id, "foo")
-        assert "_bar" not in facade_exports
+        assert facade_exports["bar"] == (lib_id, "bar")
 
     def test_reexport_origin_is_preserved_through_chain(self, tmp_path: Path) -> None:
         """Re-export is transparent: B re-exports from A, C uses B — origin is A, not B."""

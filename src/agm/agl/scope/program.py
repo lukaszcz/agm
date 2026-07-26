@@ -7,9 +7,9 @@ results plus whole-program pre-pass tables.
 
 Design
 ------
-- **Export maps**: non-private top-level ``def``/``record``/``enum``/``type``
-  names per module plus explicit ``export`` declarations, computed before any
-  body is resolved.
+- **Export maps**: top-level ``def``/``record``/``enum``/``type`` names per
+  module plus explicit ``export`` declarations, computed before any body is
+  resolved.
 - **Contribution import environment per module**: built from each module's
   import declarations against the already-loaded graph (no re-reading files).
 - **Whole-program pre-pass tables**: ``all_public_funcs`` and ``all_public_types``
@@ -95,7 +95,7 @@ class ResolvedModule:
         The import environment computed from this module's import declarations.
     ``exports``
         Export map for this module: maps each exported name to its origin
-        :data:`~agm.agl.scope.imports.QName`.  For locally-defined public names
+        :data:`~agm.agl.scope.imports.QName`.  For locally-declared names
         the origin is ``(self_module_id, name)``; for re-exported imported names
         it is the original defining module and name, preserved through chains.
     """
@@ -118,8 +118,8 @@ class ResolvedProgram:
         Always :data:`~agm.agl.modules.ids.ENTRY_ID`.
     ``all_public_funcs``
         Whole-program pre-pass table mapping ``(ModuleId, name)`` to the
-        :class:`~agm.agl.syntax.nodes.FuncDef` node.  Contains only
-        non-private top-level functions across all modules.
+        :class:`~agm.agl.syntax.nodes.FuncDef` node.  Contains every
+        top-level function across all modules.
     ``all_public_types``
         Whole-program pre-pass table mapping ``(ModuleId, name)`` to the
         type declaration node (``RecordDef | EnumDef | TypeAlias``).
@@ -140,7 +140,6 @@ class ResolvedProgram:
     entry_agents: dict[AgentKey, AgentDecl]
     import_sccs: tuple[tuple[ModuleId, ...], ...]
     warnings: tuple[Diagnostic, ...]
-    private_info: Mapping[QName, bool]
 
 
 # ---------------------------------------------------------------------------
@@ -267,14 +266,13 @@ def _item_atom(item: FuncDef | RecordDef | EnumDef | ExceptionDef | TypeAlias) -
 
 
 def _compute_local_exports(self_id: ModuleId, program: Program) -> dict[NameAtom, QName]:
-    """Compute public declaration paths, including members below named scopes."""
+    """Compute declaration paths, including members below named scopes."""
     result: dict[NameAtom, QName] = {}
     for item in _declaration_items(program.body.items):
         if isinstance(item, (FuncDef, RecordDef, EnumDef, ExceptionDef, TypeAlias)):
             atom = _item_atom(item)
-            if not item.is_private:
-                result[atom] = (self_id, atom)
-            if isinstance(item, EnumDef) and not item.is_private:
+            result[atom] = (self_id, atom)
+            if isinstance(item, EnumDef):
                 for variant in item.variants:
                     variant_atom = _atom(
                         (
@@ -474,9 +472,6 @@ def _decl_to_import_target(
 # when building BindingRef for cross-module references.
 _DeclInfo = dict[QName, tuple[int, SourceSpan, BinderKind]]
 
-# Maps (module_id, name) → True for private decls (for private-access error messages).
-_PrivateInfo = dict[QName, bool]
-
 
 # ---------------------------------------------------------------------------
 # Public entry point
@@ -570,7 +565,7 @@ def resolve_program(
         import_envs[mid] = build_import_env(decls, module_targets, export_maps)
 
     # ------------------------------------------------------------------
-    # Step 5: Whole-program pre-pass — collect public funcs/types and
+    # Step 5: Whole-program pre-pass — collect all funcs/types and
     # build decl_info for cross-module BindingRef construction.
     # ------------------------------------------------------------------
     all_public_funcs: dict[QName, FuncDef] = {}
@@ -578,31 +573,23 @@ def resolve_program(
 
     # decl_info: (mid, name) → (node_id, span, kind) for building BindingRefs
     decl_info: _DeclInfo = {}
-    # private_info: (mid, name) → True for private decls (for error msgs)
-    private_info: _PrivateInfo = {}
 
     for mid, loaded in graph.modules.items():
         for item in _declaration_items(loaded.program.body.items):
             if isinstance(item, FuncDef):
                 key = (mid, _item_atom(item))
-                if item.is_private:
-                    private_info[key] = True
-                else:
-                    all_public_funcs[key] = item
-                    decl_info[key] = (item.node_id, item.span, BinderKind.function_binding)
+                all_public_funcs[key] = item
+                decl_info[key] = (item.node_id, item.span, BinderKind.function_binding)
             elif isinstance(item, (RecordDef, EnumDef, ExceptionDef, TypeAlias)):
                 key = (mid, _item_atom(item))
-                if item.is_private:
-                    private_info[key] = True
-                else:
-                    all_public_types[key] = item
-                    kind = (
-                        BinderKind.constructor_binding
-                        if not isinstance(item, TypeAlias)
-                        or isinstance(item.type_expr, (NameT, AppliedT))
-                        else BinderKind.let_binding
-                    )
-                    decl_info[key] = (item.node_id, item.span, kind)
+                all_public_types[key] = item
+                kind = (
+                    BinderKind.constructor_binding
+                    if not isinstance(item, TypeAlias)
+                    or isinstance(item.type_expr, (NameT, AppliedT))
+                    else BinderKind.let_binding
+                )
+                decl_info[key] = (item.node_id, item.span, kind)
             elif isinstance(item, BuiltinVarDecl):
                 key = (mid, item.name)
                 decl_info[key] = (item.node_id, item.span, BinderKind.builtin_var_binding)
@@ -640,7 +627,6 @@ def resolve_program(
             module_id=mid,
             import_env=import_envs[mid],
             decl_info=decl_info,
-            private_info=private_info,
             cross_module_constructor_refs=cross_module_constructor_refs,
             cross_module_constructible_types=cross_module_constructible_types,
             cross_module_type_scopes=frozenset(all_public_types),
@@ -678,5 +664,4 @@ def resolve_program(
         entry_agents=entry_agents,
         import_sccs=graph.sccs,
         warnings=tuple(all_warnings),
-        private_info=private_info,
     )

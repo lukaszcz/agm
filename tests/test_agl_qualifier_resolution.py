@@ -125,14 +125,18 @@ def test_type_name_and_module_route_clash_stays_rejected_in_both_positions(
     assert _program_outcome(tmp_path / "pattern", pattern) == "typecheck"
 
 
-def test_private_qualified_owner_is_rejected_in_both_positions(tmp_path: Path) -> None:
+def test_unselected_qualified_owner_is_rejected_in_both_positions(tmp_path: Path) -> None:
     modules = {
-        "entry": "import Pal\nPal::Secret::hidden",
-        "Pal": "def public() -> int = 1\nprivate enum Secret\n  | hidden",
+        "entry": "import Pal using public\nPal::Secret::hidden",
+        "Pal": "def public() -> int = 1\nenum Secret\n  | hidden",
     }
     pattern_modules = {
         **modules,
-        "entry": ("import Pal\nlet value = 1\ncase value of | Pal::Secret::hidden => 1 | _ => 2"),
+        "entry": (
+            "import Pal using public\n"
+            "let value = 1\n"
+            "case value of | Pal::Secret::hidden => 1 | _ => 2"
+        ),
     }
 
     assert _program_outcome(tmp_path / "expression", modules) == "scope"
@@ -201,12 +205,18 @@ def test_typecheck_import_member_query_uses_the_shared_route_environment() -> No
     assert not TypeEnvironment().has_qualified_import_member(_qualifier("types"), "Color")
 
 
-def test_private_qualified_owner_is_rejected_by_typecheck_in_an_is_test(tmp_path: Path) -> None:
+def test_unselected_qualified_owner_is_rejected_by_typecheck_in_an_is_test(
+    tmp_path: Path,
+) -> None:
     modules = {
         "entry": (
-            "import Pal\nenum Local\n  | ok\nlet value = Local::ok\nvalue is Pal::Secret::hidden"
+            "import Pal using public\n"
+            "enum Local\n"
+            "  | ok\n"
+            "let value = Local::ok\n"
+            "value is Pal::Secret::hidden"
         ),
-        "Pal": "def public() -> int = 1\nprivate enum Secret\n  | hidden",
+        "Pal": "def public() -> int = 1\nenum Secret\n  | hidden",
     }
 
     assert _program_outcome(tmp_path, modules) == "typecheck"

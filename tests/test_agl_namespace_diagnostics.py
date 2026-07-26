@@ -359,25 +359,21 @@ def test_spaced_qualifier_near_miss_reaches_a_non_juxtaposition_mis_parse(
     assert "whitespace" in diagnostic
 
 
-def test_qualified_scope_errors_distinguish_route_set_and_private_access(tmp_path: Path) -> None:
+def test_qualified_scope_errors_distinguish_unknown_route_from_unselected_member(
+    tmp_path: Path,
+) -> None:
     cases: tuple[tuple[str, dict[str, str], tuple[str, ...], tuple[str, ...]], ...] = (
         (
             "missing::read()",
             {},
             ("qualifier", "missing"),
-            ("private", "imported set"),
+            ("imported set",),
         ),
         (
             "import app/config using read\nconfig::write()",
             {"app/config": "def read() -> int = 1\ndef write() -> int = 2"},
             ("config", "imported set", "write"),
-            ("private",),
-        ),
-        (
-            "import app/config\nconfig::secret()",
-            {"app/config": "def read() -> int = 1\nprivate def secret() -> int = 2"},
-            ("config", "private", "secret"),
-            ("imported set",),
+            ("qualifier",),
         ),
     )
 
@@ -400,11 +396,6 @@ def test_qualified_type_errors_keep_the_same_distinctions(tmp_path: Path) -> Non
             "import app/types using Public\nlet value: types::Hidden = null\nvalue",
             {"app/types": "record Public\n  value: int\nrecord Hidden\n  value: int"},
             ("types", "accessible", "hidden"),
-        ),
-        (
-            "import app/types\nlet value: types::Secret = null\nvalue",
-            {"app/types": "record Public\n  value: int\nprivate record Secret\n  value: int"},
-            ("types", "private", "secret"),
         ),
     )
 

@@ -65,7 +65,7 @@ from typing import Generic, Mapping, TypeVar, cast
 from agm.agl.capabilities import HostCapabilities
 from agm.agl.diagnostics import Diagnostic
 from agm.agl.modules.ids import ModuleId
-from agm.agl.scope.imports import ImportEnv, QName
+from agm.agl.scope.imports import ImportEnv
 from agm.agl.scope.program import ResolvedProgram
 from agm.agl.scope.symbols import ModuleResolution
 from agm.agl.semantics.analyses import compute_uninhabited, uninhabitable_message
@@ -557,7 +557,6 @@ def _build_program_type_table(
             program_ctor_sig_table=program_ctor_sig_table,
             program_ctor_field_kinds_table=program_ctor_field_kinds_table,
             import_env=import_env,
-            private_info=resolved.private_info,
             local_scope_paths=frozenset(rmod.resolved.scope_nodes),
             scope_nodes=rmod.resolved.scope_nodes,
             module_id=mid,
@@ -666,7 +665,6 @@ def _build_program_func_sig_table(
             program_generic_table=program_generic_table,
             program_alias_table=program_alias_table,
             import_env=import_env,
-            private_info=resolved.private_info,
             local_scope_paths=frozenset(rmod.resolved.scope_nodes),
             scope_nodes=rmod.resolved.scope_nodes,
             module_id=mid,
@@ -768,7 +766,6 @@ def _prepare_module_environment(
     resolved: ModuleResolution,
     program_type_table: dict[DeclKey, Type],
     import_env_map: Mapping[ModuleId, object],
-    private_info: Mapping[QName, bool],
     program_func_sig_table: dict[int, FunctionSignatureRecord],
     program_builtin_var_table: dict[int, Type],
     program_generic_table: dict[DeclKey, GenericTypeDef],
@@ -806,7 +803,6 @@ def _prepare_module_environment(
         program_ctor_sig_table=program_ctor_sig_table,
         program_ctor_field_kinds_table=program_ctor_field_kinds_table,
         import_env=import_env,
-        private_info=private_info,
         local_scope_paths=frozenset(resolved.scope_nodes),
         scope_nodes=resolved.scope_nodes,
         module_id=mid,
@@ -948,7 +944,6 @@ def check_program(
             resolved.modules[mid].resolved,
             program_type_table,
             import_env_map,
-            resolved.private_info,
             program_func_sig_table,
             program_builtin_var_table,
             program_generic_table,

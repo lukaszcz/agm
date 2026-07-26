@@ -143,8 +143,10 @@ class TestExternDescriptor:
         assert contract.params == (ExternParamSchema(schema=BoundaryScalar(ScalarKind.INT)),)
         assert contract.result == BoundaryScalar(ScalarKind.INT)
 
-    def test_private_extern_is_unexported_but_lowers_the_same(self) -> None:
-        executable = _lower_source("private extern def f(x: int) -> int\nf(1)")
+    def test_scoped_extern_is_unexported_but_lowers_the_same(self) -> None:
+        executable = _lower_source(
+            "scope Native\nextern def f(x: int) -> int\nend Native\nNative::f(1)"
+        )
         desc = _only_extern(executable)
         assert executable.symbols[desc.function_symbol].public_name is None
 

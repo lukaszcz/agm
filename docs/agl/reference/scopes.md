@@ -92,10 +92,6 @@ explicit type arguments on the constructor just as an unqualified one does
 (`A::Pair::[int]`); only a variant qualified by its owning enum puts them on the
 type (`Option[int]::some`).
 
-`private` applies to individual declarations, not an entire scope. A private
-member remains available within its defining module but is not selectable,
-opened, or reached through another module.
-
 ## Opening a scope
 
 `open` contributes selected members of a local scope, or of a scope in an
@@ -127,7 +123,7 @@ renames the selected path: a direct member becomes `replacement`, while a
 selected nested scope retains its path below the replacement. An open in a
 scope region contributes only to that region and its nested regions.
 
-Cross-module opens see public members only:
+An open reaches a scope in another module through its import route:
 
 <!-- agl-check: fragment -->
 ```agl
@@ -137,5 +133,5 @@ open geo/shapes::Point hiding internal-distance
 
 An open neither exports its contributions nor makes another module's opens
 transitive. If several contributions provide the same bare name, the ambiguity
-is reported when that name is used. Import selection and cross-module visibility
+is reported when that name is used. Import selection and cross-module reach
 are described in [Modules](modules.md).

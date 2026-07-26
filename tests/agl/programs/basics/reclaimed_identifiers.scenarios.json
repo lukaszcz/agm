@@ -1,0 +1,24 @@
+{
+  "scenarios": [
+    {
+      "name": "named_entry",
+      "params": {
+        "label": "count"
+      },
+      "expect": {
+        "stdout": "count=10\n4\n",
+        "calls": {}
+      }
+    },
+    {
+      "name": "blank_label",
+      "params": {
+        "label": ""
+      },
+      "expect": {
+        "stdout": "=10\n4\n",
+        "calls": {}
+      }
+    }
+  ]
+}

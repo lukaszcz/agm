@@ -1308,7 +1308,7 @@ class TestDeclarations:
         assert FuncDef in args
 
     def test_exception_def_fields(self) -> None:
-        """ExceptionDef stores name, fields, base, and privacy/builtin flags."""
+        """ExceptionDef stores name, fields, base, and the builtin flag."""
         t = TextT(span=self._s(), node_id=3)
         f = Param(
             name="msg",
@@ -1324,7 +1324,6 @@ class TestDeclarations:
         assert len(node.fields) == 1
         assert node.fields[0].name == "msg"
         assert node.base is None
-        assert node.is_private is False
         assert node.is_builtin is False
 
     def test_exception_def_with_base(self) -> None:
@@ -3053,47 +3052,6 @@ class TestModuleSystemNodes:
         visited: list[object] = []
         walk(decl, visited.append)
         assert visited == [decl]
-
-    def test_func_def_is_private_default_false(self) -> None:
-        """FuncDef.is_private defaults to False."""
-        func = FuncDef(
-            name="f",
-            params=(),
-            return_type=TextT(span=self._sp(), node_id=0),
-            body=NullLit(span=self._sp(), node_id=1),
-            span=self._sp(),
-            node_id=2,
-        )
-        assert func.is_private is False
-
-    def test_func_def_is_private_true(self) -> None:
-        func = FuncDef(
-            name="g",
-            params=(),
-            return_type=TextT(span=self._sp(), node_id=0),
-            body=NullLit(span=self._sp(), node_id=1),
-            span=self._sp(),
-            node_id=2,
-            is_private=True,
-        )
-        assert func.is_private is True
-
-    def test_record_def_is_private_default(self) -> None:
-        rec = RecordDef(name="R", fields=(), span=self._sp(), node_id=0)
-        assert rec.is_private is False
-
-    def test_enum_def_is_private_default(self) -> None:
-        e = EnumDef(name="E", variants=(), span=self._sp(), node_id=0)
-        assert e.is_private is False
-
-    def test_type_alias_is_private_default(self) -> None:
-        ta = TypeAlias(
-            name="T",
-            type_expr=TextT(span=self._sp(), node_id=0),
-            span=self._sp(),
-            node_id=1,
-        )
-        assert ta.is_private is False
 
     def test_var_ref_qualifier_chain_default_none(self) -> None:
         ref = VarRef(name="x", span=self._sp(), node_id=0)

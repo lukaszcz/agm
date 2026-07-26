@@ -2661,15 +2661,10 @@ class TestModuleSystemLexer:
         assert "IMPORT" not in types
         assert ("NAME", "import") in result
 
-    def test_private_at_line_start_is_private_token(self) -> None:
-        result = tok("private def f() -> text = x")
-        assert result[0] == ("PRIVATE", "private")
-
-    def test_private_not_at_line_start_stays_name(self) -> None:
-        result = tok("x + private")
-        assert ("NAME", "private") in result
-        types = [t for t, _ in result]
-        assert "PRIVATE" not in types
+    def test_private_is_an_ordinary_identifier(self) -> None:
+        assert tok("private") == [("NAME", "private")]
+        assert ("NAME", "private") in tok("x + private")
+        assert ("NAME", "private") in tok("let private = 1")
 
     def test_using_in_import_line(self) -> None:
         result = tok("import foo using bar")

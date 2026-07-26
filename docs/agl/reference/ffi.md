@@ -36,10 +36,6 @@ call crosses the boundary — a companion never sees an unfilled default. The
 `extern` marker may be on the same line as `def` or on the line directly above
 it; the optional newline is insignificant.
 
-`private` composes with `extern def` exactly as it does with `def`: a private
-extern is callable only from within its declaring module
-([Modules](modules.md#public-and-private-names)).
-
 An extern's declared name must be a **valid Python identifier and not a
 Python keyword** — this is a static error otherwise, since the companion is
 looked up by that exact name.

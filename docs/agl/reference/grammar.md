@@ -25,23 +25,21 @@ block         ::= item ((NEWLINE | ";") item)* (NEWLINE | ";")?
 item       ::= import_decl                  (* header position only *)
              | open_decl                    (* module-root or scope-region header only *)
              | builtin_var_def              (* root only; standard library only *)
-             | nominal_modifier? record_def (* root only *)
-             | nominal_modifier? enum_def   (* root only *)
-             | private_modifier? type_alias (* root only *)
-             | nominal_modifier? exception_def (* root only *)
+             | builtin_modifier? record_def (* root only *)
+             | builtin_modifier? enum_def   (* root only *)
+             | type_alias                   (* root only *)
+             | builtin_modifier? exception_def (* root only *)
              | export_decl                  (* root only *)
              | param_decl                   (* root only *)
              | program_decl                 (* root only *)
              | agent_decl                   (* entry module root; scope_item also permits it *)
              | infix_decl                   (* root only *)
-             | private_modifier? func_def   (* root only *)
+             | func_def                     (* root only *)
              | builtin_func_def             (* root only *)
-             | private_modifier? extern_func_def  (* module root only; file-backed modules only *)
+             | extern_func_def              (* module root only; file-backed modules only *)
              | let_decl | var_decl | assign_stmt
              | expr
 
-nominal_modifier ::= private_modifier | builtin_modifier
-private_modifier ::= "private" NEWLINE?
 builtin_modifier ::= "builtin" NEWLINE?
 ```
 
@@ -58,9 +56,8 @@ scope_region ::= "scope" scope_path (NEWLINE | ";")
                  "end" scope_path
 scope_path   ::= NAME ("::" NAME)*
 scope_item   ::= scope_region | open_decl
-               | private_modifier? record_def | private_modifier? enum_def
-               | private_modifier? exception_def | private_modifier? type_alias
-               | private_modifier? func_def | private_modifier? extern_func_def
+               | record_def | enum_def | exception_def | type_alias
+               | func_def | extern_func_def
                | agent_decl
 ```
 
@@ -74,14 +71,13 @@ imports, exports, `program`, and `param` declarations are not permitted. `scope`
 scope path, and `end` is contextual only for a complete closer at an open
 region's layout level; both remain ordinary names in expression positions.
 
-`"private"` and `"builtin"` are **declaration modifiers** that behave like
-decorators: they may sit on the same line as the declaration they adorn
-(`builtin enum …`) or on the line directly above it (`builtin` then `enum …`).
-The newline after a modifier is insignificant. `private` and `builtin` each
-prefix a `record`, `enum`, or `exception`; they do not combine. Only `private`
-prefixes a `type` alias, an ordinary `def`, or an `extern def`. `builtin def`
-is a body-less declaration form, not a modifier applied to an ordinary `def`.
-Thus `builtin` is not accepted for type aliases or extern functions.
+`"builtin"` is a **declaration modifier** that behaves like a decorator: it may
+sit on the same line as the declaration it adorns (`builtin enum …`) or on the
+line directly above it (`builtin` then `enum …`). The newline after a modifier
+is insignificant. `builtin` prefixes a `record`, `enum`, or `exception`.
+`builtin def` is a body-less declaration form, not a modifier applied to an
+ordinary `def`. `builtin` is not accepted for type aliases or extern
+functions.
 
 ## Import and export declarations
 
@@ -105,9 +101,9 @@ path_atom    ::= scope_path
 ```
 
 `"open"` is a contextual soft keyword at item start before an import or scope
-reference. `"import"`, `"export"`, and `"private"` are
-contextual at item-start; `"using"` and `"hiding"` are contextual within
-import, export, and `open` declarations. They remain valid identifiers elsewhere.
+reference. `"import"` and `"export"` are contextual at item-start; `"using"`
+and `"hiding"` are contextual within import, export, and `open` declarations.
+They remain valid identifiers elsewhere.
 
 Examples:
 

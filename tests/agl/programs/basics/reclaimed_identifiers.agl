@@ -1,0 +1,18 @@
+# `private` carries no special meaning, so it is an ordinary name in every
+# binder position: a top-level function, a record field, a function parameter,
+# and a local binding. Item-start position does not change how it is read.
+param label: text
+
+record Entry
+  private: int
+  label: text
+
+def combine(private: int, other: int) -> int =
+  let private = private + other
+  private * 2
+
+def private(entry: Entry) -> text = "%{entry.label}=%{entry.private}"
+
+let entry = Entry(private = combine(2, 3), label = label)
+print(private(entry))
+print(combine(1, 1))

@@ -459,7 +459,6 @@ class FuncDef:
     span: SourceSpan = dc_field(compare=False)
     node_id: int = dc_field(compare=False)
     type_params: tuple[str, ...] = ()
-    is_private: bool = False
     is_builtin: bool = False
     is_extern: bool = False
     scope_path: tuple[ScopeSegment, ...] = ()
@@ -1102,7 +1101,6 @@ class RecordDef:
     span: SourceSpan = dc_field(compare=False)
     node_id: int = dc_field(compare=False)
     type_params: tuple[str, ...] = ()
-    is_private: bool = False
     is_builtin: bool = False
     scope_path: tuple[ScopeSegment, ...] = ()
 
@@ -1126,7 +1124,6 @@ class EnumDef:
     span: SourceSpan = dc_field(compare=False)
     node_id: int = dc_field(compare=False)
     type_params: tuple[str, ...] = ()
-    is_private: bool = False
     is_builtin: bool = False
     scope_path: tuple[ScopeSegment, ...] = ()
 
@@ -1141,7 +1138,6 @@ class ExceptionDef:
     span: SourceSpan = dc_field(compare=False)
     node_id: int = dc_field(compare=False)
     type_params: tuple[str, ...] = ()
-    is_private: bool = False
     is_builtin: bool = False
     scope_path: tuple[ScopeSegment, ...] = ()
 
@@ -1155,7 +1151,6 @@ class TypeAlias:
     span: SourceSpan = dc_field(compare=False)
     node_id: int = dc_field(compare=False)
     type_params: tuple[str, ...] = ()
-    is_private: bool = False
     scope_path: tuple[ScopeSegment, ...] = ()
 
 

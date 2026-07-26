@@ -132,20 +132,6 @@ class TestWildcardImport:
         assert "7" in captured.out
         assert "Hello, World!" in captured.out
 
-    def test_wildcard_import_private_name_not_accessible(self, tmp_path: Path) -> None:
-        """Private names from wildcard-imported modules are not accessible."""
-        lib_dir = tmp_path / "lib"
-        utils_dir = lib_dir / "utils"
-        utils_dir.mkdir(parents=True)
-        (utils_dir / "math.agl").write_text(
-            "def pub(n: int) -> int = n + 1\nprivate def priv(n: int) -> int = n * 2\n"
-        )
-        # Calling the private name should produce a scope error.
-        source = "open import utils/*\nlet r = priv(1)\nr\n"
-        result = _run_program(source, roots_dirs=[lib_dir])
-        assert result.ok is False
-        assert len(result.diagnostics) >= 1
-
 
 # ---------------------------------------------------------------------------
 # Scenario 2: qualified import (import ... qualified)
@@ -798,7 +784,7 @@ class TestScopedModuleSelections:
         assert result.ok is True
         assert capsys.readouterr().out == "3\n"
 
-    def test_private_scoped_members_remain_module_visible(
+    def test_selected_scoped_member_reaches_its_scope_siblings(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
         self._write_geo(tmp_path)
@@ -811,28 +797,12 @@ class TestScopedModuleSelections:
         assert result.ok is True
         assert capsys.readouterr().out == "99\n"
 
-    def test_private_scoped_members_are_not_selected(self, tmp_path: Path) -> None:
-        self._write_geo(tmp_path)
-
-        result = _run_program(
-            "import geo using Point::secret\ngeo::Point::secret()\n",
-            roots_dirs=[tmp_path],
-        )
-
-        assert result.ok is False
-
-    @pytest.mark.parametrize(
-        "selection",
-        ("Empty", "Hidden"),
-    )
-    def test_selecting_a_scope_without_public_content_fails(
-        self, tmp_path: Path, selection: str
-    ) -> None:
+    def test_selecting_a_scope_without_members_fails(self, tmp_path: Path) -> None:
         source = MULTI_FILE_DIR / "scoped_selection" / "empty.agl"
         (tmp_path / "geo.agl").write_text(source.read_text())
 
         result = _run_program(
-            f"import geo using {selection}\n()\n",
+            "import geo using Empty\n()\n",
             roots_dirs=[tmp_path],
         )
 
@@ -918,7 +888,7 @@ class TestCrossModuleScopedPaths:
         (tmp_path / "geo.agl").write_text(
             "def Point::distance() -> int = 7\n"
             "def Point::bearing() -> int = 3\n"
-            "private def Point::secret() -> int = 99\n"
+            "def Point::secret() -> int = 99\n"
             "def Point::public_secret() -> int = secret()\n"
         )
 
@@ -935,19 +905,16 @@ class TestCrossModuleScopedPaths:
         assert full.ok is True
         assert capsys.readouterr().out == "3\n"
 
-        private = _run_program("open import geo\nPoint::secret()\n", roots_dirs=[tmp_path])
-        assert private.ok is False
-
-    def test_wildcard_selection_distributes_scoped_paths_and_excludes_private_members(
+    def test_wildcard_selection_distributes_scoped_paths_and_excludes_unselected_members(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
         shapes = tmp_path / "shapes"
         shapes.mkdir()
         (shapes / "circle.agl").write_text(
-            "def Point::measure() -> int = 3\nprivate def Point::secret() -> int = 30\n"
+            "def Point::measure() -> int = 3\ndef Point::secret() -> int = 30\n"
         )
         (shapes / "square.agl").write_text(
-            "def Point::measure() -> int = 4\nprivate def Point::secret() -> int = 40\n"
+            "def Point::measure() -> int = 4\ndef Point::secret() -> int = 40\n"
         )
 
         result = _run_program(
@@ -959,15 +926,15 @@ class TestCrossModuleScopedPaths:
         assert result.ok is True
         assert capsys.readouterr().out == "3\n4\n"
 
-        private = _run_program(
+        unselected = _run_program(
             "import shapes/* using Point::measure\ncircle::Point::secret()\n", roots_dirs=[tmp_path]
         )
-        assert private.ok is False
+        assert unselected.ok is False
 
 
 # ---------------------------------------------------------------------------
 # extern def (Python FFI): a library module's extern reachable across
-# qualified/open imports, private-extern invisibility, and re-export.
+# qualified/open imports and re-export.
 #
 # Companion loading, boundary crossing, and the full conversion matrix are
 # covered end to end elsewhere (test_agl_extern_runtime.py); this class only
@@ -978,14 +945,14 @@ class TestCrossModuleScopedPaths:
 
 
 class TestOpenedScopes:
-    """Opening local and imported named scopes exposes only selected public members."""
+    """Opening local and imported named scopes exposes only selected members."""
 
-    def test_imported_scope_opens_public_members_and_type_variants(
+    def test_imported_scope_opens_members_and_type_variants(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
         (tmp_path / "geo.agl").write_text(
             "def Point::distance() -> int = 7\n"
-            "private def Point::secret() -> int = 99\n"
+            "def Point::secret() -> int = 99\n"
             "enum Flag | Ready\n"
             'def Flag::label() -> text = "ready"\n'
         )
@@ -1051,17 +1018,17 @@ class TestOpenedScopes:
     @pytest.mark.parametrize(
         "source",
         (
-            "import geo\nopen geo::Point using secret\n()",
+            "import geo\nopen geo::Point using missing\n()",
             "import geo\nopen geo::Missing\n()",
             "scope Point\ndef distance() -> int = 1\nend Point\nopen Point using missing\n()",
             "scope Point\ndef secret() -> int = 1\nend Point\nopen Point hiding secret\nsecret()",
         ),
     )
-    def test_open_rejects_private_unknown_and_unknown_scope_members(
+    def test_open_rejects_unknown_scopes_and_unselected_members(
         self, tmp_path: Path, source: str
     ) -> None:
         (tmp_path / "geo.agl").write_text(
-            "def Point::distance() -> int = 7\nprivate def Point::secret() -> int = 99\n"
+            "def Point::distance() -> int = 7\ndef Point::secret() -> int = 99\n"
         )
 
         assert _run_program(source, roots_dirs=[tmp_path]).ok is False
@@ -1166,22 +1133,6 @@ class TestOpenedScopes:
         assert result.ok is True
         assert capsys.readouterr().out == "5\n"
 
-    def test_opened_imported_scope_does_not_expose_private_types(self, tmp_path: Path) -> None:
-        (tmp_path / "geo.agl").write_text(
-            "scope Shapes\n"
-            "record Point\n"
-            "  value: int\n"
-            "private record Secret\n"
-            "  value: int\n"
-            "end Shapes\n"
-        )
-
-        source = (
-            "import geo\nopen geo::Shapes\ndef reveal(value: Secret) -> int = value.value\n()\n"
-        )
-
-        assert _run_program(source, roots_dirs=[tmp_path]).ok is False
-
     def test_opened_generic_type_is_resolved_by_its_bare_rename(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
@@ -1282,22 +1233,11 @@ class TestExternMultiFile:
         assert result.ok is True
         assert "42" in capsys.readouterr().out
 
-    def test_private_extern_invisible_via_open_import(self) -> None:
-        source = "open import utils/ext_math\nlet r = secret(21)\nprint r\n"
-        result = _run_program(source, roots_dirs=[MULTI_FILE_DIR])
-        assert result.ok is False
-
-    def test_private_extern_invisible_via_qualified_access(self) -> None:
-        source = "open import utils/ext_math\nlet r = utils/ext_math::secret(21)\nprint r\n"
-        result = _run_program(source, roots_dirs=[MULTI_FILE_DIR])
-        assert result.ok is False
-
-    def test_private_extern_usable_from_a_public_function_in_its_own_module(
+    def test_extern_usable_from_an_agl_function_in_its_own_module(
         self, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        # `use_secret` (public) calls the private extern `secret` internally —
-        # the private extern is only invisible to IMPORTERS, not to code in
-        # its own declaring module.
+        # `use_secret` calls the extern `secret` internally, so the importer
+        # reaches the extern through an ordinary AgL wrapper.
         source = "open import utils/ext_math\nlet r = use_secret(21)\nprint r\n"
         result = _run_program(source, roots_dirs=[MULTI_FILE_DIR])
         assert result.ok is True

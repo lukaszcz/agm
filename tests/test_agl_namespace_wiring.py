@@ -348,41 +348,47 @@ def test_qualified_enum_patterns_and_is_tests_keep_resolution_verdicts(
     assert expected in str(exc_info.value)
 
 
-def test_qualified_private_type_keeps_the_private_diagnostic(tmp_path: Path) -> None:
+def test_qualified_unselected_type_keeps_its_inaccessible_diagnostic(tmp_path: Path) -> None:
     graph = make_graph_from_files(
         tmp_path,
         {
-            "entry": "import remote/config\nlet value: /remote/config::Flag = 1\nvalue",
-            "remote/config": "private enum Flag | On",
+            "entry": (
+                "import remote/config using read\nlet value: /remote/config::Flag = 1\nvalue"
+            ),
+            "remote/config": "def read() -> int = 1\nenum Flag | On",
         },
     )
 
     with pytest.raises(AglTypeError) as exc_info:
         check_program(resolve_program(graph), base_caps())
 
-    assert "private" in str(exc_info.value)
+    assert "accessible" in str(exc_info.value)
 
 
 @pytest.mark.parametrize(
     "entry",
     [
-        "import remote/config\nrecord Wrapper\n  flag: /remote/config::Flag\nWrapper",
-        "import remote/config\ndef inspect(flag: /remote/config::Flag) -> int = 1\ninspect",
+        ("import remote/config using read\nrecord Wrapper\n  flag: /remote/config::Flag\nWrapper"),
+        (
+            "import remote/config using read\n"
+            "def inspect(flag: /remote/config::Flag) -> int = 1\n"
+            "inspect"
+        ),
     ],
 )
-def test_qualified_private_type_keeps_private_diagnostic_during_prepasses(
+def test_qualified_unselected_type_keeps_its_diagnostic_during_prepasses(
     tmp_path: Path, entry: str
 ) -> None:
-    """Type-body and signature pre-passes retain private declaration metadata."""
+    """Type-body and signature pre-passes retain the import's selected set."""
     graph = make_graph_from_files(
         tmp_path,
         {
             "entry": entry,
-            "remote/config": "private enum Flag | On",
+            "remote/config": "def read() -> int = 1\nenum Flag | On",
         },
     )
 
-    with pytest.raises(AglTypeError, match="private"):
+    with pytest.raises(AglTypeError, match="accessible"):
         check_program(resolve_program(graph), base_caps())
 
 

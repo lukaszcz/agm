@@ -7,7 +7,7 @@
 // leading underscore convention.
 //
 // LALR(1) conflict-freeness verified: 0 shift/reduce, 0 reduce/reduce.
-// Module system (import/private/qualified refs) is conflict-free because:
+// Module system (import/export/qualified refs) is conflict-free because:
 //   - import module paths are pre-merged into MODPATH tokens by the lexer,
 //     keeping slash-separated header paths out of the expression grammar.
 //   - Qualified prefixes are pre-merged into MODQUAL by the lexer, eliminating
@@ -81,7 +81,7 @@
 // ---------------------------------------------------------------------------
 
 %declare NAME OP_NAME
-%declare OPEN IMPORT USING HIDING EXPORT PRIVATE SCOPE END MODQUAL MODPATH WILDCARD
+%declare OPEN IMPORT USING HIDING EXPORT SCOPE END MODQUAL MODPATH WILDCARD
 %declare PLACEHOLDER PLACEHOLDER_NUM
 %declare AS_QUESTION
 // AGENT: the reserved word `agent`.  Declared (rather than written as the
@@ -157,12 +157,6 @@ _sep: _NEWLINE | SEMICOLON
             | import_decl
             | export_decl
             | open_decl
-            | private_record_def
-            | private_enum_def
-            | private_exception_def
-            | private_type_alias
-            | private_func_def
-            | private_extern_func_def
 
 // ---------------------------------------------------------------------------
 // Scope regions
@@ -857,7 +851,7 @@ pattern_field: field_name EQ pattern   -> pat_field_named
              | pattern            -> pat_field_positional
 
 // ---------------------------------------------------------------------------
-// Module system: import/export declarations and private declarations
+// Module system: import/export declarations
 //
 // The lexer pre-merges `NAME (SLASH NAME)*` after IMPORT or EXPORT into a
 // MODPATH token, eliminating the LALR(1) ambiguity with the expression grammar.
@@ -891,16 +885,6 @@ open_decl : OPEN scope_ref import_clause?
 scope_ref : MODQUAL* NAME
 path_atom : MODQUAL* name
 decl_head : MODQUAL* name
-
-// Private declaration wrappers.  `private` is a decorator-style modifier: the
-// `_NEWLINE?` makes the newline after it insignificant, so the modifier may sit
-// on its own line above the declaration (`private\nenum …`) or on the same line.
-private_record_def  : PRIVATE _NEWLINE? record_def
-private_enum_def    : PRIVATE _NEWLINE? enum_def
-private_exception_def : PRIVATE _NEWLINE? exception_def
-private_type_alias  : PRIVATE _NEWLINE? type_alias
-private_func_def    : PRIVATE _NEWLINE? func_def
-private_extern_func_def : PRIVATE _NEWLINE? extern_func_def
 
 // ---------------------------------------------------------------------------
 // Qualified references in expressions, types, and patterns

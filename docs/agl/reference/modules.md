@@ -95,9 +95,8 @@ plain name. `hiding` selects every member except its listed paths. Members of
 nested scopes retain their relative paths. An `open` in a scope region affects
 only that region and its nested regions.
 
-An opened scope may be local or reached through an imported module route. A
-cross-module opening sees public members only; selecting an unknown or private
-member is an error. Type-named scopes include enum variants and extension
+An opened scope may be local or reached through an imported module route.
+Selecting an unknown member is an error. Type-named scopes include enum variants and extension
 members. Opens neither export their members nor make another module's opens
 transitively available. Bare-name collisions are reported when the name is
 used, including collisions with an `open import` contribution.
@@ -179,12 +178,15 @@ in-scope type or a module route and is resolved at the use site.
 
 ## Re-exports and visibility
 
-Public `def`, `record`, `enum`, `exception`, and `type` declarations are
-exported by default under their full declaration paths. Prefix a declaration
-with `private` to keep it within its defining module.
+`def`, `record`, `enum`, `exception`, and `type` declarations are exported
+under their full declaration paths. Grouping helpers in a
+[named scope](scopes.md) keeps them off a module's bare surface: an importer
+reaches such a member only through its full scope path. A module that must
+publish a narrower surface does so with a facade — the implementation lives in
+one module, and another re-exports the selection it means to publish.
 
-`export` re-exports public members without injecting them into the exporting
-module's local scope:
+`export` re-exports members without injecting them into the exporting module's
+local scope:
 
 <!-- agl-check: fragment -->
 ```agl
@@ -228,10 +230,9 @@ bindings. Each REPL entry and its loaded library modules receive the
 
 ## Diagnostics
 
-Imports report a missing or ambiguous module path, a selected name that is not
-public, redundant `open ... using`, or an import placed after a non-import
+Imports report a missing or ambiguous module path, a selected name the module
+does not declare, redundant `open ... using`, or an import placed after a non-import
 item. A qualified use reports an unknown qualifier, a member outside its
-contributed set (including a private member), or every candidate of an
-ambiguous route. A bare use reports an ambiguous bare name only at its use
+contributed set, or every candidate of an ambiguous route. A bare use reports an ambiguous bare name only at its use
 site. These diagnostics identify a direct repair: add a longer suffix or an
 anchored path, use an alias, adjust `hiding`, or select the required name.

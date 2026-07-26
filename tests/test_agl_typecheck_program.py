@@ -615,16 +615,11 @@ def test_qualified_access_bounded_by_s(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_private_type_not_importable(tmp_path: Path) -> None:
-    """'private record Hidden' in mylib cannot be used from entry."""
+def test_plain_import_does_not_expose_type_names_bare(tmp_path: Path) -> None:
+    """A plain (non-open) import leaves 'Hidden' unavailable as a bare type name."""
     modules = {
-        "entry": (
-            "import mylib\n"
-            # Hidden is private in mylib; should not be accessible here
-            "let h: Hidden = mylib::mkHidden()\n"
-            "h"
-        ),
-        "mylib": ("private record Hidden\n  x: int\ndef mkHidden() -> Hidden = Hidden(x = 1)"),
+        "entry": ("import mylib\nlet h: Hidden = mylib::mkHidden()\nh"),
+        "mylib": ("record Hidden\n  x: int\ndef mkHidden() -> Hidden = Hidden(x = 1)"),
     }
     with pytest.raises(AglTypeError, match="Unknown type"):
         _check_program(tmp_path, modules)
@@ -1527,10 +1522,10 @@ def test_self_ref_type_builtin_exception_fallback(tmp_path: Path) -> None:
 
 
 def test_qualified_type_not_in_s_error(tmp_path: Path) -> None:
-    """Using mylib::Secret when Secret is private in mylib → type error."""
+    """Using mylib::Secret when Secret is outside the selected set → type error."""
     modules = {
         "entry": ("import mylib using pub\nlet n: mylib::Secret = mylib::pub()\nn"),
-        "mylib": ("private record Secret\n  x: int\ndef pub() -> int = 1"),
+        "mylib": ("record Secret\n  x: int\ndef pub() -> int = 1"),
     }
     with pytest.raises(AglTypeError):
         _check_program(tmp_path, modules)
@@ -2415,13 +2410,13 @@ def test_candidate_results_are_independent_of_module_discovery_order(tmp_path: P
         )
 
 
-def test_private_candidate_participates_without_becoming_importable(tmp_path: Path) -> None:
-    """Private helpers contribute inside their owner without entering import visibility."""
+def test_unannotated_helper_participates_in_caller_signature_inference(tmp_path: Path) -> None:
+    """An unannotated helper's inferred result flows into its same-module caller."""
     checked = _check_program(
         tmp_path,
         {
             "entry": "import lib\nlib::public()",
-            "lib": "private def helper() = 1\ndef public() = helper()",
+            "lib": "def helper() = 1\ndef public() = helper()",
         },
     )
 

@@ -2600,95 +2600,8 @@ class AstBuilder(Transformer):
         return self._export_item(meta, path, None)
 
     # ------------------------------------------------------------------
-    # Private declarations
+    # Builtin declarations
     # ------------------------------------------------------------------
-
-    def private_record_def(self, meta: Meta, args: _Args) -> syntax.RecordDef:
-        """private_record_def: PRIVATE record_def"""
-        rec = next(a for a in args if isinstance(a, syntax.RecordDef))
-        return syntax.RecordDef(
-            name=rec.name,
-            fields=rec.fields,
-            type_params=rec.type_params,
-            span=self._span_from_meta(meta),
-            node_id=self._next_id(),
-            is_private=True,
-            is_builtin=rec.is_builtin,
-            scope_path=rec.scope_path,
-        )
-
-    def private_enum_def(self, meta: Meta, args: _Args) -> syntax.EnumDef:
-        """private_enum_def: PRIVATE enum_def"""
-        e = next(a for a in args if isinstance(a, syntax.EnumDef))
-        return syntax.EnumDef(
-            name=e.name,
-            variants=e.variants,
-            type_params=e.type_params,
-            span=self._span_from_meta(meta),
-            node_id=self._next_id(),
-            is_private=True,
-            is_builtin=e.is_builtin,
-            scope_path=e.scope_path,
-        )
-
-    def private_exception_def(self, meta: Meta, args: _Args) -> syntax.ExceptionDef:
-        """private_exception_def: PRIVATE exception_def"""
-        exc = next(a for a in args if isinstance(a, syntax.ExceptionDef))
-        return syntax.ExceptionDef(
-            name=exc.name,
-            fields=exc.fields,
-            base=exc.base,
-            type_params=exc.type_params,
-            span=self._span_from_meta(meta),
-            node_id=self._next_id(),
-            is_private=True,
-            is_builtin=exc.is_builtin,
-            scope_path=exc.scope_path,
-        )
-
-    def private_type_alias(self, meta: Meta, args: _Args) -> syntax.TypeAlias:
-        """private_type_alias: PRIVATE type_alias"""
-        ta = next(a for a in args if isinstance(a, syntax.TypeAlias))
-        return syntax.TypeAlias(
-            name=ta.name,
-            type_expr=ta.type_expr,
-            type_params=ta.type_params,
-            span=self._span_from_meta(meta),
-            node_id=self._next_id(),
-            is_private=True,
-            scope_path=ta.scope_path,
-        )
-
-    def _private_wrap_func_def(self, meta: Meta, f: syntax.FuncDef) -> syntax.FuncDef:
-        """Shared construction for ``private`` wrapping of a ``FuncDef``.
-
-        Shared by ``private_func_def`` and ``private_extern_func_def`` — both
-        re-emit a copy of the wrapped ``FuncDef`` with ``is_private=True``,
-        preserving ``is_builtin``/``is_extern``.
-        """
-        return syntax.FuncDef(
-            name=f.name,
-            params=f.params,
-            return_type=f.return_type,
-            body=f.body,
-            type_params=f.type_params,
-            span=self._span_from_meta(meta),
-            node_id=self._next_id(),
-            is_private=True,
-            is_builtin=f.is_builtin,
-            is_extern=f.is_extern,
-            scope_path=f.scope_path,
-        )
-
-    def private_func_def(self, meta: Meta, args: _Args) -> syntax.FuncDef:
-        """private_func_def: PRIVATE func_def"""
-        f = next(a for a in args if isinstance(a, syntax.FuncDef))
-        return self._private_wrap_func_def(meta, f)
-
-    def private_extern_func_def(self, meta: Meta, args: _Args) -> syntax.FuncDef:
-        """private_extern_func_def: PRIVATE extern_func_def"""
-        f = next(a for a in args if isinstance(a, syntax.FuncDef))
-        return self._private_wrap_func_def(meta, f)
 
     def builtin_record_def(self, meta: Meta, args: _Args) -> syntax.RecordDef:
         """builtin_record_def: BUILTIN record_def"""
@@ -2699,7 +2612,6 @@ class AstBuilder(Transformer):
             type_params=rec.type_params,
             span=self._span_from_meta(meta),
             node_id=self._next_id(),
-            is_private=rec.is_private,
             is_builtin=True,
             scope_path=rec.scope_path,
         )
@@ -2713,7 +2625,6 @@ class AstBuilder(Transformer):
             type_params=e.type_params,
             span=self._span_from_meta(meta),
             node_id=self._next_id(),
-            is_private=e.is_private,
             is_builtin=True,
             scope_path=e.scope_path,
         )
@@ -2728,7 +2639,6 @@ class AstBuilder(Transformer):
             type_params=exc.type_params,
             span=self._span_from_meta(meta),
             node_id=self._next_id(),
-            is_private=exc.is_private,
             is_builtin=True,
             scope_path=exc.scope_path,
         )

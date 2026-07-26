@@ -233,7 +233,6 @@ IMPORT = "IMPORT"  # contextual: 'import' at item-start
 USING = "USING"  # contextual: 'using' in an import or export declaration
 HIDING = "HIDING"  # contextual: 'hiding' in an import or export declaration
 EXPORT = "EXPORT"  # contextual: 'export' at item-start
-PRIVATE = "PRIVATE"  # contextual: 'private' at item-start
 SCOPE = "SCOPE"  # contextual: 'scope' at item-start before a scope path
 END = "END"  # contextual: 'end' at item-start while a scope region is open
 MODQUAL = "MODQUAL"  # synthetic: merged qualifier prefix (e.g. "foo/bar::")

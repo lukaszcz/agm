@@ -58,7 +58,6 @@ from agm.agl.lexer.tokens import (
     NAME,
     OP_NAME,
     OPEN,
-    PRIVATE,
     RPAR,
     RSQB,
     SCOPE,
@@ -201,7 +200,7 @@ def _promote_soft_keywords(tokens: list[Token]) -> list[Token]:
     Rules:
     - 'open' → OPEN at item-start before an import or scope reference.
     - 'import' → IMPORT at item-start, or immediately after OPEN.
-    - 'private' → PRIVATE and 'export' → EXPORT at item-start.
+    - 'export' → EXPORT at item-start.
     - 'using' → USING and 'hiding' → HIDING within import or export declarations.
     - 'scope' → SCOPE at item-start before a scope path.
     - 'end' → END only for a complete closer at its region's layout level.
@@ -241,8 +240,6 @@ def _promote_soft_keywords(tokens: list[Token]) -> list[Token]:
             elif tv == "export" and at_item_start:
                 tok = _retype(tok, EXPORT)
                 in_module_header = True
-            elif tv == "private" and at_item_start:
-                tok = _retype(tok, PRIVATE)
             elif tv == "scope" and at_item_start and _is_scope_path(tokens, index + 1):
                 tok = _retype(tok, SCOPE)
                 scope_layouts.append(layout_depth)

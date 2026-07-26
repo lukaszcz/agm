@@ -37,14 +37,14 @@ to the use site. Value and type lookup both consume those layers, so selected an
 type members follow the same region boundaries and provenance; they never alter export maps
 or import contributions. One shared suffix/anchored resolver serves value reads and writes,
 constructors, and type qualification, retaining ambiguity and route identity until the use
-site; bare candidates remain limited to open imports. Its diagnostics distinguish private
-declarations from names outside a contribution.
+site; bare candidates remain limited to open imports. Its diagnostics distinguish an
+unknown route from a name outside a contribution.
 One shared translator walks those verdicts and raises an error the caller constructs, so
 the scope and typecheck passes share the walk while keeping their own exception types and
 wording.
 Constructor *owner* selection runs through the same ordered chain resolver: a chain ending at
 a local type path, an opened contribution, or an imported route yields one `ConstructorRef`,
-including the type-name versus module-route clash and the owner's privacy. Expression positions
+including the type-name versus module-route clash. Expression positions
 raise that verdict as a scope error; pattern positions defer every failure to an empty candidate
 set, because a pattern's owner cannot be settled before its subject type is known, leaving
 typecheck to produce the more specific diagnostic.

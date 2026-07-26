@@ -38,7 +38,6 @@ __all__ = [
     "ambiguous_qualification_message",
     "build_import_env",
     "contribution_routes",
-    "private_missing_member_module",
     "qualification_repair_guidance",
     "qualifier_candidates",
     "qualifier_contributes",
@@ -368,17 +367,6 @@ def qualifier_contributes(
     )
 
 
-def private_missing_member_module(
-    result: QualResolutionMissingMember, private_info: Mapping[QName, bool]
-) -> ModuleId | None:
-    requested = _path(result.member)
-    for module in result.candidates:
-        for (owner, atom), private in private_info.items():
-            if owner == module and private and requested[: len(_path(atom))] == _path(atom):
-                return module
-    return None
-
-
 def try_resolve_qualified_member(
     env: ImportEnv, qualifier: tuple[str, ...], member: NameAtom, *, anchored: bool = False
 ) -> QName | None:
@@ -406,14 +394,14 @@ def resolve_alias_target(
 
     For an unqualified *name*, tries *self_module_id*'s own declaration under
     *scope_path* first (when both *self_module_id* and *all_public_types* are
-    given — a caller that already checked richer local state, e.g. private
-    declarations, passes ``self_module_id=None`` to skip this step), then the
+    given — a caller that already checked richer local state passes
+    ``self_module_id=None`` to skip this step), then the
     unqualified name exposed by *import_env*'s open imports. For a qualified
     *name*, resolves through the ordinary qualified-member route.
 
     Returns ``None`` for anything it cannot resolve — no import environment or
-    public-types table, a private target, an ambiguous unqualified name, or an
-    unknown route — which the caller treats as "presumed constructible".
+    public-types table, an ambiguous unqualified name, or an unknown route —
+    which the caller treats as "presumed constructible".
     """
     if qualifier is None or not qualifier.segments:
         if self_module_id is not None and all_public_types is not None:
@@ -444,11 +432,9 @@ def resolve_qualified_member(
     env: ImportEnv,
     qualifier: tuple[str, ...],
     member: NameAtom,
-    private_info: Mapping[QName, bool],
     *,
     anchored: bool = False,
     unknown_qualifier: Callable[[str], Exception],
-    private_member: Callable[[ModuleId], Exception],
     missing_member: Callable[[str], Exception],
     ambiguous: Callable[[str], Exception],
 ) -> QName:
@@ -459,9 +445,6 @@ def resolve_qualified_member(
     if isinstance(result, QualResolutionUnknownQualifier):
         raise unknown_qualifier(rendered)
     if isinstance(result, QualResolutionMissingMember):
-        module = private_missing_member_module(result, private_info)
-        if module is not None:
-            raise private_member(module)
         raise missing_member(rendered)
     raise ambiguous(
         ambiguous_qualification_message(qualifier, member, result.candidates, anchored=anchored)

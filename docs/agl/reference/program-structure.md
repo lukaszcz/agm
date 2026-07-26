@@ -18,23 +18,22 @@ block         ::= item ((NEWLINE | ";") item)* (NEWLINE | ";")?
 item          ::= import_decl                     (* header position only *)
              | open_decl                          (* header position only *)
              | export_decl                        (* root only *)
-             | nominal_modifier? record_def        (* root only *)
-             | nominal_modifier? enum_def          (* root only *)
-             | private_modifier? type_alias        (* root only *)
-             | nominal_modifier? exception_def     (* root only *)
+             | builtin_modifier? record_def        (* root only *)
+             | builtin_modifier? enum_def          (* root only *)
+             | type_alias                          (* root only *)
+             | builtin_modifier? exception_def     (* root only *)
              | param_decl                          (* root only *)
              | program_decl                        (* root only *)
              | agent_decl                          (* entry module root only *)
              | infix_decl                          (* root only *)
              | builtin_var_def                     (* root only; std/config only *)
-             | private_modifier? func_def          (* root only *)
+             | func_def                            (* root only *)
              | builtin_func_def                    (* root only *)
-             | private_modifier? extern_func_def   (* module root only; file-backed modules *)
+             | extern_func_def                     (* module root only; file-backed modules *)
              | let_decl | var_decl | assign_stmt
              | expr
 
-nominal_modifier ::= "private" NEWLINE? | "builtin" NEWLINE?
-private_modifier ::= "private" NEWLINE?
+builtin_modifier ::= "builtin" NEWLINE?
 ```
 
 ### Import declarations
@@ -60,11 +59,9 @@ region.
   later in the program. `record`,
   `enum`, and `type` declarations may be **generic**, declaring type parameters
   in a bracketed list after the name (`record Box[T]`, `enum Option[T]`,
-  `type Pair[A, B] = …`); see [Generics](generics.md). `private` restricts a
-  declaration's visibility to its defining module. It may prefix any of these
-  forms; `builtin` may instead prefix `record`, `enum`, or `exception` for a
-  host-recognized declaration. The modifiers do not combine, and a type alias
-  accepts only `private`, not `builtin`.
+  `type Pair[A, B] = …`); see [Generics](generics.md). `builtin` may prefix
+  `record`, `enum`, or `exception` for a host-recognized declaration; a type
+  alias does not accept it.
 - **`param` declarations** — the program's host/config/CLI-supplied parameters.
   Entry-module only.
 - **`program` declaration** — the program name used for params config lookup.
@@ -82,9 +79,8 @@ region.
   Root and same-scope `def`s may refer to declarations that appear later,
   enabling mutual recursion (see [Functions](functions.md)). An ordinary `def`
   may be **generic** (`def id[T](x: T) -> T = x`); see [Generics](generics.md).
-  `private` may prefix ordinary and extern functions; `builtin` introduces only
-  the body-less `builtin def` form and does not combine with `private`. Extern
-  functions are file-backed-module only.
+  `builtin` introduces only the body-less `builtin def` form. Extern functions
+  are file-backed-module only.
 
 ### The block's value
 

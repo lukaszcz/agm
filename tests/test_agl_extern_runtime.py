@@ -941,12 +941,12 @@ class TestEndToEndFileRuns:
         assert result.ok is True, result.diagnostics
         assert result.bindings["r"] == IntValue(2)
 
-    def test_private_extern_callable_inside_module_invisible_outside(self, tmp_path: Path) -> None:
+    def test_library_module_extern_reachable_through_agl_wrapper(self, tmp_path: Path) -> None:
         root = tmp_path / "root"
         write_module_file(
             root,
             "lib/mod",
-            "private extern def f(x: int) -> int\ndef g(x: int) -> int = f(x) + 1",
+            "extern def f(x: int) -> int\ndef g(x: int) -> int = f(x) + 1",
         )
         write_companion_file(root, "lib/mod", "def f(x):\n    return x + 1\n")
         driver = PipelineDriver()
@@ -960,15 +960,6 @@ class TestEndToEndFileRuns:
         result = driver.run_prepared(prepared)
         assert result.ok is True, result.diagnostics
         assert result.bindings["r"] == IntValue(3)
-
-        outside_prepared = PipelineDriver.prepare_program(
-            "import lib/mod\nlib/mod::f(1)",
-            entry_path=None,
-            roots=_roots(root),
-            default_stdlib=False,
-        )
-        outside_result = driver.run_prepared(outside_prepared)
-        assert outside_result.ok is False
 
 
 # ---------------------------------------------------------------------------

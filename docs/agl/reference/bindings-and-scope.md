@@ -136,7 +136,7 @@ Static rules, all checked before execution:
 ## `def` — function declarations
 
 ```ebnf
-func_def ::= ["private"] "def" decl_head type_params? "(" param_list? ")" ("->" type_expr)? ("=" func_body | suite)
+func_def ::= "def" decl_head type_params? "(" param_list? ")" ("->" type_expr)? ("=" func_body | suite)
 decl_head ::= [scope_path "::"] name
 ```
 
@@ -147,10 +147,6 @@ function binding in its declaration layer.
 A root `def` may call itself or any other root `def`, including one declared
 later. `def`s in the same named scope have the same visibility, so they may
 call one another recursively without a forward declaration.
-
-A `def` may be prefixed with `private`, making it invisible to other modules
-(see [Modules](modules.md)). The `private` modifier has no effect on lexical
-scoping within the same module.
 
 ```agl
 def is_even(n: int) -> bool =

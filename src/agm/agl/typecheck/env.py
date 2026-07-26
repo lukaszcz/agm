@@ -588,7 +588,6 @@ class TypeEnvironment:
         ]
         | None = None,
         import_env: ImportEnv | None = None,
-        private_info: Mapping[QName, bool] | None = None,
         local_scope_paths: frozenset[ScopePath] = frozenset(),
         scope_nodes: Mapping[ScopePath, ScopeNode] | None = None,
         module_id: ModuleId = ENTRY_ID,
@@ -681,9 +680,6 @@ class TypeEnvironment:
             Mapping[tuple[DeclKey, str | None], ConstructorSignature] | None
         ) = program_ctor_sig_table
         self._import_env: ImportEnv | None = import_env
-        # Scope collects this once from declarations; sharing it here preserves
-        # the public/private distinction for qualified type diagnostics.
-        self._private_info: Mapping[QName, bool] = private_info if private_info is not None else {}
         self._module_id: ModuleId = module_id
         # Scope resolution supplies every local path, including regions with no
         # type declarations, so failed qualified type references retain their
@@ -793,15 +789,9 @@ class TypeEnvironment:
             import_env,
             route,
             atom,
-            self._private_info,
             anchored=qualifier.anchored,
             unknown_qualifier=lambda rendered: AglTypeError(
                 f"Unknown module qualifier '{rendered}::'.", span=span
-            ),
-            private_member=lambda module: AglTypeError(
-                f"Type '{name}' in module '{module.display()}' is declared private "
-                "and cannot be accessed from outside the module.",
-                span=span,
             ),
             missing_member=lambda rendered: AglTypeError(
                 f"Type '{name}' is not accessible via qualifier '{rendered}::'.", span=span

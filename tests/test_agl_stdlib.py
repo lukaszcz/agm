@@ -276,10 +276,6 @@ def test_single_module_exception_extends_cycle_is_uninhabitable() -> None:
         check_module(resolve_module(parse_program(source)), _CAPS)
 
 
-def test_private_exception_definition_parses_and_checks() -> None:
-    _check("private exception Hidden extends Exception\n  code: int\n()\n")
-
-
 def test_single_module_lowerer_skips_builtin_function_definitions() -> None:
     from tests.agl.ir_harness import _compiled_checked
 

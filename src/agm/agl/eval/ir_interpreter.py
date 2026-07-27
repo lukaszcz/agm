@@ -134,6 +134,7 @@ from agm.agl.runtime.params import build_engine_config_base
 from agm.agl.runtime.render import render_value
 from agm.agl.runtime.serialize import value_to_json_obj
 from agm.agl.runtime.trace import TraceStore, noop_trace
+from agm.agl.semantics.cycles import AglCyclicValue, cyclic_value_raise
 from agm.agl.semantics.exceptions import AglRaise
 from agm.agl.semantics.exceptions import make_builtin_exception as _make_exc_value
 from agm.agl.semantics.values import (
@@ -560,6 +561,15 @@ class IrInterpreter:
             case _ as unreachable:  # pragma: no cover
                 assert_never(unreachable)
 
+    def _cyclic_failure(self) -> AglRaise:
+        """Convert a detected reference cycle into an ``AglRaise(CyclicValueError)``.
+
+        Mirrors ``_index_failure``: centralizes the sentinel-to-exception
+        conversion so every ``render``/``as json``/coercion site that can
+        reach a cyclic array or dict raises identical exception fields.
+        """
+        return cyclic_value_raise(self._trace.new_event_id())
+
     def _on_cast_failure(
         self, failure_mode: ConversionFailureMode, exc: AglCastConversion
     ) -> BoolValue:
@@ -950,6 +960,12 @@ class IrInterpreter:
                     result[key_val.value] = self._eval(val_expr)
                 return DictValue(result)
 
+            # `IrMakeJsonArray`/`IrMakeJsonObject`: every item/value here is already
+            # scalar or `JsonValue` (never a raw array/dict): the checker requires an
+            # explicit `as json` cast to embed a container in a json literal, and that
+            # cast's own `IrConvert` handling is what detects a cyclic source. So
+            # `value_to_json_obj` in both arms below is a leaf conversion, never a walk
+            # that could re-enter a container — no cycle guard needed in either.
             case IrMakeJsonArray(items=json_items):
                 return JsonValue([value_to_json_obj(self._eval(item)) for item in json_items])
 
@@ -1175,7 +1191,10 @@ class IrInterpreter:
                         case IrTemplateText(text=t):
                             parts.append(t)
                         case IrTemplateValue(value=v_expr):
-                            parts.append(render_value(self._eval(v_expr)))
+                            try:
+                                parts.append(render_value(self._eval(v_expr)))
+                            except AglCyclicValue:
+                                raise self._cyclic_failure()
                         case _ as unreachable_seg:  # pragma: no cover
                             assert_never(unreachable_seg)
                 return TextValue("".join(parts))
@@ -1239,6 +1258,16 @@ class IrInterpreter:
                     converted = run_recipe(recipe, source_value)
                 except AglCastConversion as exc:
                     return self._on_cast_failure(failure_mode, exc)
+                except AglCyclicValue:
+                    # `as` (RAISE_CAST_ERROR) raises the catchable CyclicValueError.
+                    # `as?` (RETURN_BOOL) is a trial conversion: a cyclic value fails
+                    # the same as any other unconvertible source, so it yields False
+                    # rather than raising — see the lowerer's `as?` short-circuit
+                    # comment for why RENDER/JSON casts reach here instead of
+                    # skipping straight to True.
+                    if failure_mode is ConversionFailureMode.RETURN_BOOL:
+                        return BoolValue(False)
+                    raise self._cyclic_failure()
                 if failure_mode is ConversionFailureMode.RETURN_BOOL:
                     return BoolValue(True)
                 return converted
@@ -1447,7 +1476,10 @@ class IrInterpreter:
 
             case IrPrint(value=val_expr):
                 val = self._eval(val_expr)
-                rendered = render_value(val)
+                try:
+                    rendered = render_value(val)
+                except AglCyclicValue:
+                    raise self._cyclic_failure()
                 print(rendered)
                 self._trace.print_stmt(rendered=rendered, span=node.location)
                 return VOID_VALUE
@@ -1467,13 +1499,16 @@ class IrInterpreter:
                     if quote_strings_expr is not None
                     else True
                 )
-                return TextValue(
-                    render_value(
-                        self._eval(val_expr),
-                        pretty=pretty,
-                        quote_strings=quote_strings,
+                try:
+                    return TextValue(
+                        render_value(
+                            self._eval(val_expr),
+                            pretty=pretty,
+                            quote_strings=quote_strings,
+                        )
                     )
-                )
+                except AglCyclicValue:
+                    raise self._cyclic_failure()
 
             case IrParseJson(value=val_expr):
                 val = self._eval(val_expr)

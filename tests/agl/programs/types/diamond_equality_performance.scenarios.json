@@ -1,0 +1,10 @@
+{
+  "scenarios": [
+    {
+      "name": "deep_diamond_self_comparison_terminates_quickly",
+      "expect": {
+        "stdout": "true\n"
+      }
+    }
+  ]
+}

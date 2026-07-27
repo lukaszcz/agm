@@ -1,0 +1,27 @@
+# An uncaught exception whose own field is a cyclic array. Converting the
+# exception to a reported error runs while an error is already in flight, so
+# the field that could not be serialized reports as a marker instead of
+# raising and masking the original exception. `mode` selects how `xs` (the
+# exception's `data` field) is built: "cycle" closes a genuine reference
+# cycle through `xs`, "acyclic" leaves it as an ordinary nested array, and
+# "diamond" makes the same inner `Node` reachable twice through `xs` without
+# `xs` ever reaching back to itself -- confirming sharing alone is not
+# mistaken for a cycle in the error-reporting path either.
+param mode: text
+
+record Node(children: array[Node])
+
+exception Boom extends Exception
+  data: array[Node]
+
+let leaf = Node(children = [])
+var xs: array[Node] = [leaf]
+
+if mode == "cycle" =>
+  let n = Node(children = xs)
+  xs[0] := n
+
+if mode == "diamond" =>
+  xs := [leaf, leaf]
+
+raise Boom(message = "boom", data = xs)

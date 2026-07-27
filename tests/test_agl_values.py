@@ -213,6 +213,97 @@ def test_dict_value_eq_contract() -> None:
     assert d1 != d3
 
 
+def test_dict_value_eq_different_key_sets_is_false() -> None:
+    """Two dicts with different key sets are unequal (never reach a per-key compare)."""
+    from agm.agl.semantics.values import DictValue, IntValue
+
+    d1 = DictValue(entries={"a": IntValue(1)})
+    d2 = DictValue(entries={"a": IntValue(1), "b": IntValue(2)})
+    assert d1 != d2
+
+
+def test_array_value_eq_self_referential_array_terminates() -> None:
+    """Comparing a self-referential array to itself terminates and is true.
+
+    This passes whether or not the identity fast path (finding 1's regression
+    fix) is present: co-induction alone (the ``_seen`` memo in
+    ``_arrays_equal``) already makes ``xs == xs`` terminate for a
+    self-referential array. It pins termination, not the identity fast path —
+    see ``test_values_equal_diamond_short_circuit_bounded_calls`` for a test
+    that genuinely pins the fast path.
+    """
+    from agm.agl.semantics.values import ArrayValue, IntValue
+
+    xs = ArrayValue([IntValue(1)])
+    xs.elements.append(xs)  # a genuine self-reference, not just two equal arrays
+    assert xs == xs
+
+
+def test_values_equal_diamond_short_circuit_bounded_calls(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A deep diamond-shared record compared to itself makes O(1) values_equal calls.
+
+    Reproduces the shape of the reported regression from AgL source: an enum/record
+    built by repeatedly wrapping the current value in both of a new node's fields
+    (``t := Pair(a = t, b = t)``) shares one object from two sibling positions at
+    every level. Without the identity fast path (finding 1), the ``RecordValue`` arm
+    of ``values_equal`` recurses into ``_fields_equal`` even when comparing a value to
+    itself, so the shared subtree is re-walked down both the ``a`` and ``b`` branches
+    independently at every level — exponential in depth. A call-count bound (rather
+    than a wall-clock budget) pins this deterministically: with the fast path, the top
+    ``a is b`` check fires on the very first call and the total call count is O(1);
+    without it, the count would blow past the budget almost immediately, so this test
+    fails fast rather than hanging even if the fast path regresses.
+    """
+    import agm.agl.semantics.values as values_module
+    from agm.agl.semantics.values import IntValue, RecordValue, Value
+
+    nominal = _make_nominal("mod/example", "diamond")
+    depth = 32
+    node: RecordValue = RecordValue(nominal=nominal, display_name="T", fields={"tag": IntValue(0)})
+    for i in range(1, depth + 1):
+        node = RecordValue(
+            nominal=nominal,
+            display_name="T",
+            fields={"a": node, "b": node, "tag": IntValue(i)},
+        )
+
+    call_count = 0
+    call_budget = depth * 8  # generous linear bound, astronomically below 2**depth
+    original_values_equal = values_module.values_equal
+
+    def counting_values_equal(
+        a: Value, b: Value, _seen: "set[tuple[int, int]] | None" = None
+    ) -> bool:
+        nonlocal call_count
+        call_count += 1
+        if call_count > call_budget:
+            raise AssertionError(f"values_equal exceeded the call budget of {call_budget}")
+        return original_values_equal(a, b, _seen)
+
+    monkeypatch.setattr(values_module, "values_equal", counting_values_equal)
+
+    assert node == node
+    assert call_count <= call_budget
+
+
+def test_dict_value_eq_terminates_on_cyclic_dicts() -> None:
+    """`==` on two separately-built cyclic dicts is co-inductive and terminates."""
+    from agm.agl.semantics.values import DictValue, IntValue
+
+    d1 = DictValue(entries={"tag": IntValue(1)})
+    d1.entries["self"] = d1
+    d2 = DictValue(entries={"tag": IntValue(1)})
+    d2.entries["self"] = d2
+
+    assert d1 == d2
+
+    d3 = DictValue(entries={"tag": IntValue(2)})
+    d3.entries["self"] = d3
+    assert d1 != d3
+
+
 # ---------------------------------------------------------------------------
 # RecordValue eq/hash contract (type lives in agm.agl.semantics.values)
 # ---------------------------------------------------------------------------

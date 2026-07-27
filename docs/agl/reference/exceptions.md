@@ -382,6 +382,22 @@ The general-purpose user abort; carries only the base fields.
 (base fields only)
 ```
 
+### `CyclicValueError`
+
+Binding and assignment are by reference, so an array or dict can be mutated
+into holding a reference back to a container that contains it — a value with
+a genuine reference cycle. Rendering (`print`, `render`, string
+interpolation), `as text`, `as json`, and an `extern def` call that must walk
+the value all detect a cycle and raise this rather than recursing forever.
+`as?` never raises: it predicts `as` by trial-converting, so `as? text` and
+`as? json` on a cyclic value evaluate to `false` rather than raising.
+Carries only the base fields. See [Types](types.md#cycles) for how a cycle
+arises and how equality treats one.
+
+```text
+(base fields only)
+```
+
 ## Where exceptions come from
 
 | Source | Exception |
@@ -401,6 +417,7 @@ The general-purpose user abort; carries only the base fields.
 | Division by zero | `ArithmeticError` |
 | Fallible `as` cast — source does not conform to target type | `CastError` |
 | `parse_json` — input is not well-formed JSON | `JsonParseError` |
+| Rendering, `as text`, `as json`, or an `extern def` call walks a value with a reference cycle | `CyclicValueError` |
 | `raise` of a constructed or re-raised value | any concrete type |
 
 An exception that reaches the top of the program uncaught terminates the

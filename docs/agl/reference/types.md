@@ -159,6 +159,40 @@ independent snapshot — see [Casts and convertibility](#casts-and-convertibilit
 below — and `with` ([Expressions](expressions.md)) builds a shallow copy of
 a record.)
 
+#### Cycles
+
+Because an array or dict is a mutable reference value, an indexed assignment
+can make one hold a reference back to a container that (transitively)
+contains it — a genuine reference cycle:
+
+```agl
+record Node(children: array[Node])
+
+var xs: array[Node] = [Node(children = [])]
+let n = Node(children = xs)
+xs[0] := n            # xs now contains n, and n.children is xs itself
+```
+
+A record, enum, or exception cannot be self-referential on its own — every
+field is fixed at construction — so a cycle is always closed through at
+least one array or dict, however many nominal layers it passes through.
+
+Rendering (`print`, `render`, string interpolation), `as text`, `as json`, and
+an `extern def` call all walk a value's containers and therefore raise the
+catchable `CyclicValueError` ([Exceptions](exceptions.md#cyclicvalueerror))
+if the walk re-enters a container already on its own path. `as?` never
+raises: it predicts whether the corresponding `as` would succeed, so
+`as? text` and `as? json` on a cyclic value evaluate to `false` instead. A
+**shared** (diamond) structure — the same array or dict reachable twice from
+different paths, but never from itself — is not a cycle and renders
+normally.
+
+Equality (`==`) is different: it never raises. Comparing two values assumes a
+pair already being compared is equal, so `==` on a cyclic array or dict
+terminates and answers the same structural relation co-inductively — the
+comparison never needs a base case for the parts of the structure it has
+already matched up.
+
 ### `agent`
 
 `agent` is an opaque type for declared agent values. Every `agent`

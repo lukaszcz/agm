@@ -38,6 +38,30 @@ def _is_repl_printable_value(value: "Value") -> bool:
     return not isinstance(value, UnitValue) or value.printable_in_repl
 
 
+def _render_value_or_cyclic_message(value: "Value", *, pretty: bool, quote_strings: bool) -> str:
+    """Render *value*, or the ``AgL exception: CyclicValueError: ...`` line.
+
+    Reference semantics lets a value bound at the REPL prompt become cyclic
+    across entries (e.g. an indexed assignment that closes a cycle in a prior
+    entry), so echoing an already-successful entry's value can still hit a
+    cycle. There is no ``try``/``catch`` scope around a REPL echo — it runs
+    after the entry's own evaluation already completed — so this reports the
+    same one-line message a runtime raise would, via ``RunError.to_message``,
+    rather than crashing the session.
+    """
+    from agm.agl.pipeline import RunError
+    from agm.agl.runtime.render import render_value
+    from agm.agl.semantics.cycles import CYCLE_MESSAGE, AglCyclicValue
+
+    try:
+        return render_value(value, pretty=pretty, quote_strings=quote_strings)
+    except AglCyclicValue:
+        return RunError(
+            type_name="CyclicValueError",
+            fields={"message": CYCLE_MESSAGE},
+        ).to_message()
+
+
 def format_typed_value(name: "str | None", value_type: "Type", value: "Value") -> str:
     """Format a ``name : Type = value`` line, or ``: Type = value`` when unnamed.
 
@@ -45,12 +69,13 @@ def format_typed_value(name: "str | None", value_type: "Type", value: "Value") -
     the entry-echo path (:func:`_render_echo`) and the ``:bindings`` / ``:params``
     meta-commands, so the two never drift in how a value is rendered. *name* is
     ``None`` for a destructuring ``let`` binding echo, which has no single
-    public name to show.
+    public name to show.  A value that turned cyclic since its entry ran
+    reports as a runtime-error line instead (see
+    :func:`_render_value_or_cyclic_message`).
     """
-    from agm.agl.runtime.render import render_value
-
     prefix = f"{name} :" if name is not None else ":"
-    return f"{prefix} {value_type!r} = {render_value(value, pretty=True, quote_strings=True)}"
+    rendered = _render_value_or_cyclic_message(value, pretty=True, quote_strings=True)
+    return f"{prefix} {value_type!r} = {rendered}"
 
 
 def render_entry_result(
@@ -136,8 +161,6 @@ def _render_check_only(result: "EntryResult") -> str | None:
 
 def _render_echo(result: "EntryResult") -> str | None:
     """Render the success echo line for *result*, or ``None`` for statements."""
-    from agm.agl.runtime.render import render_value
-
     if result.kind == "type":
         # A bare type expression entered at the prompt is not a value; echo it
         # in the same ``<…>`` surface form used for other non-value echoes
@@ -157,7 +180,7 @@ def _render_echo(result: "EntryResult") -> str | None:
         assert result.value_type is not None
         if not _is_repl_printable_value(result.value):
             return None
-        return render_value(
+        return _render_value_or_cyclic_message(
             result.value,
             pretty=True,
             quote_strings=result.quote_strings,

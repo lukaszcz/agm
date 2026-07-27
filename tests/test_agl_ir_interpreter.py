@@ -2070,6 +2070,67 @@ class TestIrExec:
         assert call_args[0][0] == ["sh", "-c", "true"]
         assert result == {}  # no named bindings
 
+    def test_ir_exec_cyclic_command_raises_cyclic_value_error(self) -> None:
+        """IrExec: a cyclic-array command raises the catchable CyclicValueError.
+
+        A non-text command is rendered via ``render_value`` (see the non-text
+        command test above); rendering a self-referential array must raise
+        rather than recurse forever, before any shell command is spawned.
+        """
+        from agm.agl.ir.contracts import ContractRequest
+        from agm.agl.ir.ids import ContractId, SymbolId
+        from agm.agl.ir.nodes import IrConstInt, IrExec, IrIndexSet, IrLoad, IrMakeArray
+        from agm.agl.ir.operations import IndexKind
+        from agm.agl.ir.program import SymbolDescriptor
+        from agm.agl.semantics.exceptions import AglRaise
+
+        cid = ContractId(value=0)
+        contract = ContractRequest(
+            codec_name="text",
+            strict_json=None,
+            json_schema=None,
+            decode=None,
+            target_type_label="unit",
+            structured_exec=False,
+            format_instructions="",
+            is_unit=True,
+        )
+        sym_xs = SymbolId(0)
+        array_lit = IrMakeArray(location=_LOC, items=(IrConstInt(_LOC, 0),))
+        bind_xs = IrBind(location=_LOC, symbol=sym_xs, value=array_lit)
+        set_node = IrIndexSet(
+            location=_LOC,
+            container=IrLoad(location=_LOC, symbol=sym_xs),
+            index=IrConstInt(_LOC, 0),
+            kind=IndexKind.ARRAY,
+            value=IrLoad(location=_LOC, symbol=sym_xs),
+        )
+        exec_node = IrExec(
+            location=_LOC,
+            command=IrLoad(location=_LOC, symbol=sym_xs),
+            contract_id=cid,
+            max_attempts=1,
+        )
+        sym_desc = SymbolDescriptor(
+            symbol_id=sym_xs, mutable=False, public_name=None, owner=ENTRY_ID
+        )
+        prog = ExecutableProgram(
+            entry_module=ENTRY_ID,
+            modules={
+                ENTRY_ID: ExecutableModule(
+                    module_id=ENTRY_ID, initializers=(bind_xs, set_node, exec_node)
+                )
+            },
+            symbols={sym_xs: sym_desc},
+            nominals={},
+            sources={_SOURCE_ID: SourceFile(display_name="<test>", normalized_text="x")},
+            functions={},
+            contracts={cid: contract},
+        )
+        with pytest.raises(AglRaise) as exc_info:
+            IrInterpreter(prog).run()
+        assert exc_info.value.exc.display_name == "CyclicValueError"
+
     def test_ir_exec_retry_spawn_error_raises_exec_error(self) -> None:
         """On retry, spawn_error in subsequent shell call raises ExecError."""
         import unittest.mock

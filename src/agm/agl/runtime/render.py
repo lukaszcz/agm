@@ -17,6 +17,7 @@ declaration order already, so rendering walks ``value.fields`` directly.
 from __future__ import annotations
 
 from agm.agl.runtime.serialize import dumps_exact, value_to_json_obj
+from agm.agl.semantics.cycles import enter_container
 from agm.agl.semantics.text_literal import quote_text
 from agm.agl.semantics.values import (
     AgentValue,
@@ -60,13 +61,14 @@ def _shift_after_first(text: str, *, level: int) -> str:
     return "\n".join((lines[0], *(prefix + line for line in lines[1:])))
 
 
-def _render_child(value: Value, *, pretty: bool, level: int) -> str:
+def _render_child(value: Value, *, pretty: bool, level: int, active: "set[int] | None") -> str:
     return _render(
         value,
         pretty=pretty,
         quote_strings=False,
         top_level=False,
         level=level,
+        active=active,
     )
 
 
@@ -121,7 +123,15 @@ def _render_function_signature(param_labels: tuple[str, ...], result_label: str)
     return f"{params} -> {result_label}"
 
 
-def _render(value: Value, *, pretty: bool, quote_strings: bool, top_level: bool, level: int) -> str:
+def _render(
+    value: Value,
+    *,
+    pretty: bool,
+    quote_strings: bool,
+    top_level: bool,
+    level: int,
+    active: "set[int] | None" = None,
+) -> str:
     if isinstance(value, TextValue):
         if top_level and not quote_strings:
             return value.value
@@ -153,21 +163,31 @@ def _render(value: Value, *, pretty: bool, quote_strings: bool, top_level: bool,
         return _shift_after_first(rendered, level=level) if pretty else rendered
 
     if isinstance(value, ArrayValue):
-        items = [
-            _render_child(element, pretty=pretty, level=level + 1) for element in value.elements
-        ]
+        active = enter_container(id(value), active)
+        try:
+            items = [
+                _render_child(element, pretty=pretty, level=level + 1, active=active)
+                for element in value.elements
+            ]
+        finally:
+            active.discard(id(value))
         return _render_sequence("[", "]", items, level=level, pretty=pretty)
 
     if isinstance(value, DictValue):
-        items = [
-            f"{quote_text(key)}: {_render_child(child, pretty=pretty, level=level + 1)}"
-            for key, child in value.entries.items()
-        ]
+        active = enter_container(id(value), active)
+        try:
+            items = [
+                f"{quote_text(key)}: "
+                f"{_render_child(child, pretty=pretty, level=level + 1, active=active)}"
+                for key, child in value.entries.items()
+            ]
+        finally:
+            active.discard(id(value))
         return _render_sequence("{", "}", items, level=level, pretty=pretty)
 
     if isinstance(value, RecordValue):
         items = [
-            f"{name} = {_render_child(child, pretty=pretty, level=level + 1)}"
+            f"{name} = {_render_child(child, pretty=pretty, level=level + 1, active=active)}"
             for name, child in value.fields.items()
         ]
         return _render_sequence(f"{value.display_name}(", ")", items, level=level, pretty=pretty)
@@ -181,7 +201,7 @@ def _render(value: Value, *, pretty: bool, quote_strings: bool, top_level: bool,
         if not value.fields:
             return prefix if isinstance(value, EnumValue) else f"{prefix}()"
         items = [
-            f"{name} = {_render_child(child, pretty=pretty, level=level + 1)}"
+            f"{name} = {_render_child(child, pretty=pretty, level=level + 1, active=active)}"
             for name, child in value.fields.items()
         ]
         return _render_sequence(f"{prefix}(", ")", items, level=level, pretty=pretty)

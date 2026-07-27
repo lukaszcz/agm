@@ -132,6 +132,9 @@ exception JsonParseError extends Exception
 builtin
 exception RangeError extends Exception()
 
+builtin
+exception CyclicValueError extends Exception()
+
 builtin def print[T](value: T) -> unit
 builtin def render[T](value: T) -> text
 builtin def parse_json(value: text) -> json

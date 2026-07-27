@@ -1,0 +1,18 @@
+{
+  "scenarios": [
+    {
+      "name": "cycles_caught_and_program_continues",
+      "params": {"close_cycle": true},
+      "expect": {
+        "stdout": "array print caught: value contains a reference cycle\narray render caught\narray json caught\ntemplate caught\ndict print caught: value contains a reference cycle\nmulti-level print caught: value contains a reference cycle\n[[1, 2], [1, 2]]\ndone\n"
+      }
+    },
+    {
+      "name": "acyclic_values_render_and_serialize_normally",
+      "params": {"close_cycle": false},
+      "expect": {
+        "stdout": "[Node(children = [])]\ninterpolated: [Node(children = [])]\n{\"a\": DNode(children = {})}\n[Level2(inner = [])]\n[[1, 2], [1, 2]]\ndone\n"
+      }
+    }
+  ]
+}

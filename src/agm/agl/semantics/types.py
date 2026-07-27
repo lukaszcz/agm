@@ -846,6 +846,10 @@ BUILTIN_EXCEPTIONS: dict[str, ExceptionType] = {
     "CastError": ExceptionType(name="CastError", module_id=PRELUDE_ID),
     "JsonParseError": ExceptionType(name="JsonParseError", module_id=PRELUDE_ID),
     "RangeError": ExceptionType(name="RangeError", module_id=PRELUDE_ID),
+    # Reference semantics makes cyclic array/dict values constructible; raised
+    # by any walk that would otherwise recurse forever (print, render, `as
+    # json`, extern encode) when it re-enters a container already on its path.
+    "CyclicValueError": ExceptionType(name="CyclicValueError", module_id=PRELUDE_ID),
 }
 
 # Names of built-in exception types (cannot be redeclared as records/enums/aliases).

@@ -170,12 +170,32 @@ class TestHandleEqualityHashReprInPython:
         result, _ = evaluate_ir_with_externs(source, companion, tmp_path)
         assert result["r"] == BoolValue(True)
 
-    def test_companion_compares_equal_dict_handles_with_different_render_order(
+    def test_companion_compares_distinct_but_structurally_equal_dict_handles_as_unequal(
         self, tmp_path: Path
     ) -> None:
+        """A sealed dict/array's handle equality is by container **identity**, not
+        structure: reference semantics makes a dict mutable (a structural key could
+        go stale the moment it is mutated, or loop forever on a cycle), so two
+        separately built dicts with the same entries seal to different handles even
+        though the dicts themselves would compare equal in AgL."""
         source = (
             "extern def same[T](a: T, b: T) -> bool\n"
             'let r = same({"a": 1, "b": 2}, {"b": 2, "a": 1})\n'
+            "r\n"
+        )
+        companion = "def same(a, b):\n    return a == b\n"
+        result, _ = evaluate_ir_with_externs(source, companion, tmp_path)
+        assert result["r"] == BoolValue(False)
+
+    def test_companion_compares_one_dict_handled_twice_as_equal_to_itself(
+        self, tmp_path: Path
+    ) -> None:
+        """The same dict, aliased and sealed at two argument positions, seals to
+        two handles sharing one identity key: they compare equal."""
+        source = (
+            "extern def same[T](a: T, b: T) -> bool\n"
+            'let d = {"a": 1, "b": 2}\n'
+            "let r = same(d, d)\n"
             "r\n"
         )
         companion = "def same(a, b):\n    return a == b\n"

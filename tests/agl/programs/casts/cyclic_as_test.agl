@@ -1,0 +1,17 @@
+# Reference semantics makes a cyclic array/dict value constructible, and both
+# `as text` (TOTAL_RENDER) and `as json` (TOTAL_JSON) walk the value's
+# containers, raising `CyclicValueError` on a cycle. `as?` is documented as
+# predicting whether the corresponding `as` would succeed, so it must
+# trial-convert these casts rather than short-circuit to `true`: a cyclic
+# value tests `false`, while an acyclic value still tests `true`.
+param close_cycle: bool
+
+record Node(children: array[Node])
+
+var xs: array[Node] = [Node(children = [])]
+let n = Node(children = xs)
+if close_cycle =>
+  xs[0] := n
+
+print(n as? text)
+print(n as? json)

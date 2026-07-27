@@ -133,6 +133,10 @@ assignment uses the same negative-index and `IndexError` rules as array
 access. Dictionary assignment updates existing keys only; assigning to a
 missing key raises `KeyError`.
 
+Because indexed assignment mutates in place, it can make an array or dict
+hold a reference back to a container that contains it — see
+[Cycles](types.md#cycles) for how that arises and which operations detect it.
+
 Evaluation order for `target[index] := value` is left to right: the
 container, then the index, then `value`, then the checked in-place store. A
 nested target such as `m["a"]["b"] := v` evaluates the outer container, reads

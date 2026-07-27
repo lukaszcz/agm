@@ -23,6 +23,7 @@ import json
 from decimal import Decimal
 from typing import assert_never
 
+from agm.agl.semantics.cycles import enter_container
 from agm.agl.semantics.values import (
     AgentValue,
     ArrayValue,
@@ -43,12 +44,18 @@ from agm.agl.semantics.values import (
 )
 
 
-def value_to_json_obj(value: Value) -> object:
+def value_to_json_obj(value: Value, active: "set[int] | None" = None) -> object:
     """Convert a ``Value`` to a JSON-shaped Python object.
 
     The result is drawn from the closed JSON-shape domain
     ``dict | list | str | int | Decimal | bool | None``.  ``DecimalValue`` is
     preserved as :class:`decimal.Decimal` (never converted to ``float``).
+
+    Reference semantics makes a cyclic array/dict constructible; ``active``
+    (an active-container-id set, allocated lazily on first use) detects a
+    cycle and raises :class:`~agm.agl.semantics.cycles.AglCyclicValue` rather
+    than recursing forever. Callers pass no *active* argument — it exists
+    only to thread the walk's own recursive calls.
     """
     if isinstance(value, TextValue):
         return value.value
@@ -61,17 +68,25 @@ def value_to_json_obj(value: Value) -> object:
     if isinstance(value, JsonValue):
         return value.raw
     if isinstance(value, ArrayValue):
-        return [value_to_json_obj(e) for e in value.elements]
+        active = enter_container(id(value), active)
+        try:
+            return [value_to_json_obj(e, active) for e in value.elements]
+        finally:
+            active.discard(id(value))
     if isinstance(value, DictValue):
-        return {k: value_to_json_obj(v) for k, v in value.entries.items()}
+        active = enter_container(id(value), active)
+        try:
+            return {k: value_to_json_obj(v, active) for k, v in value.entries.items()}
+        finally:
+            active.discard(id(value))
     if isinstance(value, RecordValue):
-        return {k: value_to_json_obj(v) for k, v in value.fields.items()}
+        return {k: value_to_json_obj(v, active) for k, v in value.fields.items()}
     if isinstance(value, EnumValue):
         result: dict[str, object] = {"$case": value.variant}
-        result.update({k: value_to_json_obj(v) for k, v in value.fields.items()})
+        result.update({k: value_to_json_obj(v, active) for k, v in value.fields.items()})
         return result
     if isinstance(value, ExceptionValue):
-        return {k: value_to_json_obj(v) for k, v in value.fields.items()}
+        return {k: value_to_json_obj(v, active) for k, v in value.fields.items()}
     if isinstance(value, UnitValue):
         raise TypeError("UnitValue has no JSON representation")
     if isinstance(value, AgentValue):

@@ -25,6 +25,7 @@ from agm.agl.runtime.render import render_value
 from agm.agl.runtime.request import AgentRequest, AgentResponse
 from agm.agl.runtime.request import ValidationError as ReqValidationError
 from agm.agl.runtime.trace import TraceStore
+from agm.agl.semantics.cycles import AglCyclicValue, cyclic_value_raise
 from agm.agl.semantics.exceptions import AglRaise
 from agm.agl.semantics.exceptions import make_builtin_exception as _make_exc_value
 from agm.agl.semantics.values import (
@@ -192,7 +193,10 @@ class EffectHandlers:
 
         prompt_val = self._ctx._eval(prompt_expr)
         if not isinstance(prompt_val, TextValue):
-            prompt_text = render_value(prompt_val)
+            try:
+                prompt_text = render_value(prompt_val)
+            except AglCyclicValue as exc:
+                raise cyclic_value_raise(self._ctx._trace.new_event_id()) from exc
         else:
             prompt_text = prompt_val.value
 
@@ -305,7 +309,10 @@ class EffectHandlers:
 
         prompt_val = self._ctx._eval(prompt_expr)
         if not isinstance(prompt_val, TextValue):
-            prompt_text = render_value(prompt_val)
+            try:
+                prompt_text = render_value(prompt_val)
+            except AglCyclicValue as exc:
+                raise cyclic_value_raise(self._ctx._trace.new_event_id()) from exc
         else:
             prompt_text = prompt_val.value
 
@@ -430,7 +437,10 @@ class EffectHandlers:
         # 1. Evaluate command expression
         command_val = self._ctx._eval(command_expr)
         if not isinstance(command_val, TextValue):
-            cmd = render_value(command_val)
+            try:
+                cmd = render_value(command_val)
+            except AglCyclicValue as exc:
+                raise cyclic_value_raise(self._ctx._trace.new_event_id()) from exc
         else:
             cmd = command_val.value
 

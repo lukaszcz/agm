@@ -2722,6 +2722,36 @@ class TestIrConvertLowering:
         assert conv.failure_mode is ConversionFailureMode.RAISE_CAST_ERROR
         assert conv.recipe.strategy is ConversionStrategy.RENDER_TO_TEXT
 
+    def test_render_as_test_lowers_to_ir_convert_return_bool_not_sequence(self) -> None:
+        """'as? text' (TOTAL_RENDER) emits IrConvert(RETURN_BOOL), NOT IrSequence.
+
+        Rendering can raise CyclicValueError on a cyclic value, so `as?` must
+        trial-convert rather than short-circuit to True (unlike TOTAL_NOOP).
+        """
+        prog = _lower("let r = 42 as? text\n()")
+        bind = _let_root_capture(prog.modules[prog.entry_module].initializers[0])
+        conv = bind.value
+        assert isinstance(conv, IrConvert), (
+            f"'as? text' must emit IrConvert, not {type(conv).__name__}"
+        )
+        assert conv.failure_mode is ConversionFailureMode.RETURN_BOOL
+        assert conv.recipe.strategy is ConversionStrategy.RENDER_TO_TEXT
+
+    def test_json_as_test_lowers_to_ir_convert_return_bool_not_sequence(self) -> None:
+        """'as? json' (TOTAL_JSON) emits IrConvert(RETURN_BOOL), NOT IrSequence.
+
+        JSON serialization can raise CyclicValueError on a cyclic value, so
+        `as?` must trial-convert rather than short-circuit to True.
+        """
+        prog = _lower("let r = 42 as? json\n()")
+        bind = _let_root_capture(prog.modules[prog.entry_module].initializers[0])
+        conv = bind.value
+        assert isinstance(conv, IrConvert), (
+            f"'as? json' must emit IrConvert, not {type(conv).__name__}"
+        )
+        assert conv.failure_mode is ConversionFailureMode.RETURN_BOOL
+        assert conv.recipe.strategy is ConversionStrategy.TO_JSON
+
 
 # ---------------------------------------------------------------------------
 # Structural lowering: template string lowering

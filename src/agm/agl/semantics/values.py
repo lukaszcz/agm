@@ -207,13 +207,17 @@ class ArrayValue:
     and that mutation is observed by every binding, field, capture, or
     iterator that holds a reference to this ``ArrayValue``. Unhashable: the
     payload is mutable, so a stable hash is impossible.
+
+    Equality delegates to :func:`values_equal`, which is cycle-safe and
+    co-inductive — reference semantics makes a cyclic array constructible, and
+    ``==`` on one must terminate rather than recurse forever.
     """
 
     elements: list[Value]
 
     def __eq__(self, other: object) -> bool:
         if isinstance(other, ArrayValue):
-            return self.elements == other.elements
+            return values_equal(self, other)
         return NotImplemented
 
 
@@ -225,13 +229,16 @@ class DictValue:
     that mutation is observed by every binding, field, capture, or iterator
     that holds a reference to this ``DictValue``. Unhashable: the payload is
     mutable, so a stable hash is impossible.
+
+    Equality delegates to :func:`values_equal` (cycle-safe, co-inductive) —
+    see :class:`ArrayValue`.
     """
 
     entries: dict[str, Value] = field(default_factory=dict)
 
     def __eq__(self, other: object) -> bool:
         if isinstance(other, DictValue):
-            return self.entries == other.entries
+            return values_equal(self, other)
         return NotImplemented
 
 
@@ -252,7 +259,8 @@ class RecordValue:
     Equality is by ``(nominal, fields)``; ``display_name`` is
     excluded (rendering metadata only, mirroring how ``RecordType`` excludes
     ``fields`` from its own equality). Unhashable: ``fields`` may hold a
-    mutable array or dict, so a stable hash is impossible.
+    mutable array or dict, so a stable hash is impossible. Delegates to
+    :func:`values_equal` (cycle-safe, co-inductive) — see :class:`ArrayValue`.
     """
 
     nominal: NominalId
@@ -261,7 +269,7 @@ class RecordValue:
 
     def __eq__(self, other: object) -> bool:
         if isinstance(other, RecordValue):
-            return self.nominal == other.nominal and self.fields == other.fields
+            return values_equal(self, other)
         return NotImplemented
 
 
@@ -276,7 +284,8 @@ class EnumValue:
 
     Equality is by ``(nominal, variant, fields)``; ``display_name``
     is excluded (rendering metadata only). Unhashable: ``fields`` may hold a
-    mutable array or dict, so a stable hash is impossible.
+    mutable array or dict, so a stable hash is impossible. Delegates to
+    :func:`values_equal` (cycle-safe, co-inductive) — see :class:`ArrayValue`.
     """
 
     nominal: NominalId
@@ -286,11 +295,7 @@ class EnumValue:
 
     def __eq__(self, other: object) -> bool:
         if isinstance(other, EnumValue):
-            return (
-                self.nominal == other.nominal
-                and self.variant == other.variant
-                and self.fields == other.fields
-            )
+            return values_equal(self, other)
         return NotImplemented
 
 
@@ -308,7 +313,8 @@ class ExceptionValue:
 
     Equality is by ``(nominal, fields)``; ``display_name`` is
     excluded (rendering metadata only). Unhashable: ``fields`` may hold a
-    mutable array or dict, so a stable hash is impossible.
+    mutable array or dict, so a stable hash is impossible. Delegates to
+    :func:`values_equal` (cycle-safe, co-inductive) — see :class:`ArrayValue`.
     """
 
     nominal: NominalId
@@ -317,8 +323,114 @@ class ExceptionValue:
 
     def __eq__(self, other: object) -> bool:
         if isinstance(other, ExceptionValue):
-            return self.nominal == other.nominal and self.fields == other.fields
+            return values_equal(self, other)
         return NotImplemented
+
+
+# ---------------------------------------------------------------------------
+# Cycle-safe structural equality
+# ---------------------------------------------------------------------------
+
+
+def values_equal(a: Value, b: Value, _seen: "set[tuple[int, int]] | None" = None) -> bool:
+    """Structural equality between two values — cycle-safe and co-inductive.
+
+    Every container/nominal ``__eq__`` above delegates here rather than
+    recursing through Python's own ``list``/``dict`` equality, which cannot
+    thread a memo. This function recurses through itself instead, carrying
+    ``_seen`` — a set of ``(id(a), id(b))`` pairs already assumed equal by an
+    enclosing call.  A pair re-entered while still being compared is
+    co-inductively assumed equal (the standard construction for equality on a
+    possibly-cyclic graph): comparing two cyclic structures terminates and
+    answers the co-inductive relation. This must never raise.
+
+    Only ``ArrayValue``/``DictValue`` comparisons extend ``_seen`` — records,
+    enums, and exceptions cannot be self-referential (their fields are fixed
+    at construction), so any infinite recursion must pass back through an
+    array or dict pair already tracked; nominal field comparisons simply
+    thread ``_seen`` through unchanged.
+
+    Every other value kind (scalars, ``json``, agents, constructors,
+    closures) falls through to its own ``__eq__`` unchanged — this function
+    only replaces the *container* recursion, never leaf comparison, so
+    equality on acyclic values is byte-for-byte the relation it always was
+    (in particular, no int/decimal widening happens *inside* a container).
+
+    The identity check is the first thing this function does, for every
+    ``Value`` kind (there is no NaN-like value in AgL where ``a is b`` would
+    not imply equal): without it, a nominal value's ``__eq__`` recurses into
+    its fields even when compared to itself, and a diamond-shared field
+    reachable from two sibling positions is re-walked down both instead of
+    being recognized as the same object — exponential in the depth of a
+    shared tree.
+    """
+    if a is b:
+        return True
+    if isinstance(a, ArrayValue):
+        return isinstance(b, ArrayValue) and _arrays_equal(a, b, _seen)
+    if isinstance(a, DictValue):
+        return isinstance(b, DictValue) and _dicts_equal(a, b, _seen)
+    if isinstance(a, RecordValue):
+        return (
+            isinstance(b, RecordValue)
+            and a.nominal == b.nominal
+            and _fields_equal(a.fields, b.fields, _seen)
+        )
+    if isinstance(a, EnumValue):
+        return (
+            isinstance(b, EnumValue)
+            and a.nominal == b.nominal
+            and a.variant == b.variant
+            and _fields_equal(a.fields, b.fields, _seen)
+        )
+    if isinstance(a, ExceptionValue):
+        return (
+            isinstance(b, ExceptionValue)
+            and a.nominal == b.nominal
+            and _fields_equal(a.fields, b.fields, _seen)
+        )
+    return a == b
+
+
+def _arrays_equal(a: ArrayValue, b: ArrayValue, seen: "set[tuple[int, int]] | None") -> bool:
+    if len(a.elements) != len(b.elements):
+        return False
+    key = (id(a), id(b))
+    if seen is None:
+        seen = set()
+    elif key in seen:
+        return True
+    seen.add(key)
+    try:
+        return all(values_equal(x, y, seen) for x, y in zip(a.elements, b.elements))
+    finally:
+        seen.discard(key)
+
+
+def _dicts_equal(a: DictValue, b: DictValue, seen: "set[tuple[int, int]] | None") -> bool:
+    if a.entries.keys() != b.entries.keys():
+        return False
+    key = (id(a), id(b))
+    if seen is None:
+        seen = set()
+    elif key in seen:
+        return True
+    seen.add(key)
+    try:
+        return all(values_equal(v, b.entries[k], seen) for k, v in a.entries.items())
+    finally:
+        seen.discard(key)
+
+
+def _fields_equal(
+    a_fields: dict[str, Value],
+    b_fields: dict[str, Value],
+    seen: "set[tuple[int, int]] | None",
+) -> bool:
+    """Compare two nominal field maps; no cycle tracking of its own (see ``values_equal``)."""
+    return a_fields.keys() == b_fields.keys() and all(
+        values_equal(v, b_fields[k], seen) for k, v in a_fields.items()
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -438,4 +550,5 @@ __all__ = [
     "Value",
     "_json_eq",
     "_json_hash",
+    "values_equal",
 ]

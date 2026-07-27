@@ -154,9 +154,13 @@ A companion may, with a handle it received:
 
 - pass it along unchanged, including inside a container it rebuilds
   (rearranging, filtering, or duplicating a list of handles is fine),
-- compare two handles for equality (`==`) — equal exactly when the AgL values
-  they wrap are equal,
-- hash a handle and use it in a Python `set` or as a `dict` key,
+- compare two handles for equality (`==`) — a handle wrapping an `array` or
+  `dict` (or a record, enum, or exception whose fields include one) is equal
+  only to a handle wrapping the very **same** container object, never merely
+  an equal one; a handle wrapping a scalar, `json`, or a purely-scalar
+  nominal value compares by value,
+- hash a handle and use it in a Python `set` or as a `dict` key — consistent
+  with the equality above,
 - print or `repr()` it for debugging.
 
 A companion may **not**:
@@ -214,6 +218,11 @@ A problem discovered before any extern is ever called — a missing companion
 file, a missing attribute, or a non-callable attribute — is a **load-time
 diagnostic**, not an `ExternError`: it is reported before the program runs at
 all, the same way a static type error is, never as a catchable exception.
+
+A cyclic argument is a narrower failure that surfaces as `CyclicValueError`
+([Exceptions](exceptions.md#cyclicvalueerror)) instead: encoding a value with
+a reference cycle at the boundary, or a companion `repr()`-ing a sealed
+handle wrapping one, is not folded into `ExternError`.
 
 ## Trust
 

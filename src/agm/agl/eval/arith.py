@@ -21,6 +21,7 @@ from agm.agl.semantics.values import (
     IntValue,
     TextValue,
     Value,
+    values_equal,
 )
 
 __all__ = [
@@ -52,12 +53,18 @@ def _to_decimal(value: IntValue | DecimalValue) -> decimal.Decimal:
 
 
 def value_eq(left: Value, right: Value) -> bool:
-    """Value equality with int↔decimal widening."""
+    """Value equality with int↔decimal widening.
+
+    Delegates the structural comparison to ``values_equal``, which is
+    cycle-safe and co-inductive, so ``==`` on a cyclic array or dict
+    terminates instead of recursing forever. The widening here only applies
+    at this top level, never inside a container (unchanged from before).
+    """
     if isinstance(left, IntValue) and isinstance(right, DecimalValue):
         return decimal.Decimal(left.value) == right.value
     if isinstance(left, DecimalValue) and isinstance(right, IntValue):
         return left.value == decimal.Decimal(right.value)
-    return left == right
+    return values_equal(left, right)
 
 
 _Ordered = TypeVar("_Ordered", int, decimal.Decimal, str)

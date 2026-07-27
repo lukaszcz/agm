@@ -1626,6 +1626,86 @@ def test_ir_ask_non_text_prompt_renders_to_string() -> None:
     assert bindings["result"] == IntValue(99)
 
 
+def test_ir_ask_cyclic_prompt_raises_cyclic_value_error() -> None:
+    """IrAsk: a cyclic-array prompt raises the catchable CyclicValueError.
+
+    Reference semantics makes a self-referential array constructible; a
+    non-text prompt is rendered via ``render_value`` (see
+    ``test_ir_ask_non_text_prompt_renders_to_string`` above), and rendering a
+    cyclic value must raise rather than recurse forever, converted to
+    ``AglRaise(CyclicValueError)`` before any agent dispatch happens.
+    """
+    from agm.agl.eval.ir_interpreter import IrInterpreter
+    from agm.agl.ir.contracts import ContractRequest
+    from agm.agl.ir.ids import ContractId, Location, SourceId, SymbolId
+    from agm.agl.ir.nodes import IrAsk, IrBind, IrConstInt, IrIndexSet, IrLoad, IrMakeArray
+    from agm.agl.ir.operations import IndexKind
+    from agm.agl.ir.program import (
+        ExecutableModule,
+        ExecutableProgram,
+        SourceFile,
+        SymbolDescriptor,
+    )
+    from agm.agl.modules.ids import ENTRY_ID
+    from agm.agl.runtime.agents import AgentRegistry
+    from agm.agl.semantics.exceptions import AglRaise
+
+    src_id = SourceId(0)
+    dummy_loc = Location(source_id=src_id, start_offset=0, end_offset=1, start_line=1, start_col=0)
+    cid = ContractId(0)
+    sym_xs = SymbolId(0)
+    req = ContractRequest(
+        codec_name="text",
+        strict_json=None,
+        json_schema=None,
+        decode=None,
+        target_type_label="unit",
+        structured_exec=False,
+        format_instructions="",
+        is_unit=True,
+    )
+    # Build a self-referential array `xs` directly at the IR level: bind
+    # xs = [0], then xs[0] := xs (bypasses the checker, which would never
+    # allow a cycle to be observed this directly).
+    bind_xs = IrBind(
+        location=dummy_loc,
+        symbol=sym_xs,
+        value=IrMakeArray(location=dummy_loc, items=(IrConstInt(location=dummy_loc, value=0),)),
+    )
+    set_node = IrIndexSet(
+        location=dummy_loc,
+        container=IrLoad(location=dummy_loc, symbol=sym_xs),
+        index=IrConstInt(location=dummy_loc, value=0),
+        kind=IndexKind.ARRAY,
+        value=IrLoad(location=dummy_loc, symbol=sym_xs),
+    )
+    ask_node = IrAsk(
+        location=dummy_loc,
+        agent=IrConstInt(location=dummy_loc, value=0),
+        prompt=IrLoad(location=dummy_loc, symbol=sym_xs),
+        contract_id=cid,
+        max_attempts=1,
+    )
+    sym_desc = SymbolDescriptor(symbol_id=sym_xs, mutable=False, public_name=None, owner=ENTRY_ID)
+    prog = ExecutableProgram(
+        entry_module=ENTRY_ID,
+        modules={
+            ENTRY_ID: ExecutableModule(
+                module_id=ENTRY_ID, initializers=(bind_xs, set_node, ask_node)
+            )
+        },
+        symbols={sym_xs: sym_desc},
+        nominals={},
+        sources={src_id: SourceFile(display_name="<test>", normalized_text="test")},
+        contracts={cid: req},
+    )
+    registry = AgentRegistry(named={}, default_agent=None)
+    interp = IrInterpreter(prog, registry=registry)
+    with pytest.raises(AglRaise) as exc_info:
+        interp.run()
+    assert exc_info.value.exc.display_name == "CyclicValueError"
+
+
 def test_ir_ask_request_unit_contract() -> None:
     """IrAskRequest with is_unit contract -> AgentRequest.target_type is None."""
     source = """\
@@ -1696,6 +1776,81 @@ def test_ir_ask_request_non_text_prompt() -> None:
     val = bindings["req"]
     assert isinstance(val, RecordValue)
     assert val.fields["prompt"] == TextValue("7")
+
+
+def test_ir_ask_request_cyclic_prompt_raises_cyclic_value_error() -> None:
+    """IrAskRequest: a cyclic-array prompt raises the catchable CyclicValueError.
+
+    Mirrors ``test_ir_ask_cyclic_prompt_raises_cyclic_value_error`` for the
+    ``ask-request`` builtin, which renders a non-text prompt the same way but
+    never dispatches to an agent.
+    """
+    from agm.agl.eval.ir_interpreter import IrInterpreter
+    from agm.agl.ir.contracts import ContractRequest
+    from agm.agl.ir.ids import ContractId, Location, SourceId, SymbolId
+    from agm.agl.ir.nodes import IrAskRequest, IrBind, IrConstInt, IrIndexSet, IrLoad, IrMakeArray
+    from agm.agl.ir.operations import IndexKind
+    from agm.agl.ir.program import (
+        ExecutableModule,
+        ExecutableProgram,
+        SourceFile,
+        SymbolDescriptor,
+    )
+    from agm.agl.modules.ids import ENTRY_ID
+    from agm.agl.runtime.agents import AgentRegistry
+    from agm.agl.semantics.exceptions import AglRaise
+
+    src_id = SourceId(0)
+    dummy_loc = Location(source_id=src_id, start_offset=0, end_offset=1, start_line=1, start_col=0)
+    cid = ContractId(0)
+    sym_xs = SymbolId(0)
+    req = ContractRequest(
+        codec_name="text",
+        strict_json=None,
+        json_schema=None,
+        decode=None,
+        target_type_label="text",
+        structured_exec=False,
+        format_instructions="",
+        is_unit=False,
+    )
+    bind_xs = IrBind(
+        location=dummy_loc,
+        symbol=sym_xs,
+        value=IrMakeArray(location=dummy_loc, items=(IrConstInt(location=dummy_loc, value=0),)),
+    )
+    set_node = IrIndexSet(
+        location=dummy_loc,
+        container=IrLoad(location=dummy_loc, symbol=sym_xs),
+        index=IrConstInt(location=dummy_loc, value=0),
+        kind=IndexKind.ARRAY,
+        value=IrLoad(location=dummy_loc, symbol=sym_xs),
+    )
+    ask_req_node = IrAskRequest(
+        location=dummy_loc,
+        agent=IrConstInt(location=dummy_loc, value=0),
+        prompt=IrLoad(location=dummy_loc, symbol=sym_xs),
+        contract_id=cid,
+        max_attempts=1,
+    )
+    sym_desc = SymbolDescriptor(symbol_id=sym_xs, mutable=False, public_name=None, owner=ENTRY_ID)
+    prog = ExecutableProgram(
+        entry_module=ENTRY_ID,
+        modules={
+            ENTRY_ID: ExecutableModule(
+                module_id=ENTRY_ID, initializers=(bind_xs, set_node, ask_req_node)
+            )
+        },
+        symbols={sym_xs: sym_desc},
+        nominals={},
+        sources={src_id: SourceFile(display_name="<test>", normalized_text="test")},
+        contracts={cid: req},
+    )
+    registry = AgentRegistry(named={}, default_agent=None)
+    interp = IrInterpreter(prog, registry=registry)
+    with pytest.raises(AglRaise) as exc_info:
+        interp.run()
+    assert exc_info.value.exc.display_name == "CyclicValueError"
 
 
 # ---------------------------------------------------------------------------

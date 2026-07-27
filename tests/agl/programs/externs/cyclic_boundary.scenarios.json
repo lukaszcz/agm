@@ -1,0 +1,25 @@
+{
+  "scenarios": [
+    {
+      "name": "encode_and_sealed_round_trip_raise_on_cyclic_value",
+      "params": {"mode": "cycle"},
+      "expect": {
+        "stdout": "count caught: value contains a reference cycle\nidentity caught: value contains a reference cycle\ndone\n"
+      }
+    },
+    {
+      "name": "encode_and_sealed_round_trip_succeed_on_acyclic_value",
+      "params": {"mode": "acyclic"},
+      "expect": {
+        "stdout": "count: 1\nidentity: [Node(children = [])]\ndone\n"
+      }
+    },
+    {
+      "name": "encode_and_sealed_round_trip_succeed_on_diamond_shared_value",
+      "params": {"mode": "diamond"},
+      "expect": {
+        "stdout": "count: 2\nidentity: [Node(children = []), Node(children = [])]\ndone\n"
+      }
+    }
+  ]
+}

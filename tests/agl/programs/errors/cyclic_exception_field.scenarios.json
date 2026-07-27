@@ -1,0 +1,37 @@
+{
+  "scenarios": [
+    {
+      "name": "uncaught_exception_with_cyclic_field_reports_marker",
+      "params": {"mode": "cycle"},
+      "expect": {
+        "raises": {
+          "type": "Boom",
+          "fields": {"data": "<cyclic value>"},
+          "message_contains": ["boom"]
+        }
+      }
+    },
+    {
+      "name": "uncaught_exception_with_acyclic_field_serializes_normally",
+      "params": {"mode": "acyclic"},
+      "expect": {
+        "raises": {
+          "type": "Boom",
+          "fields": {"data": [{"children": []}]},
+          "message_contains": ["boom"]
+        }
+      }
+    },
+    {
+      "name": "uncaught_exception_with_diamond_shared_field_serializes_normally",
+      "params": {"mode": "diamond"},
+      "expect": {
+        "raises": {
+          "type": "Boom",
+          "fields": {"data": [{"children": []}, {"children": []}]},
+          "message_contains": ["boom"]
+        }
+      }
+    }
+  ]
+}

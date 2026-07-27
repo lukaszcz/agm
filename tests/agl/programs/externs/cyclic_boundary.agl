@@ -1,0 +1,41 @@
+# A cyclic array crossing the Python FFI boundary. `count` walks its
+# `array[Node]` argument structurally at encode time and raises the catchable
+# `CyclicValueError` on a cyclic argument instead of recursing forever.
+# `identity` seals its argument opaquely (no walk at encode time), but the
+# companion `repr()`s the sealed handle -- a sealed-handle round trip -- which
+# still detects the cycle and raises the same catchable exception, converted
+# at the enclosing extern call rather than folded into `ExternError`. `mode`
+# selects how `xs` is built: "cycle" closes a genuine reference cycle through
+# it, "acyclic" leaves it as an ordinary nested array that both externs
+# process and return normally, and "diamond" makes the same inner `Node`
+# reachable twice through `xs` without `xs` ever reaching back to itself.
+param mode: text
+
+record Node(children: array[Node])
+
+extern def count(xs: array[Node]) -> int
+extern def identity[T](x: T) -> T
+
+let leaf = Node(children = [])
+var xs: array[Node] = [leaf]
+
+if mode == "cycle" =>
+  let n = Node(children = xs)
+  xs[0] := n
+
+if mode == "diamond" =>
+  xs := [leaf, leaf]
+
+try
+  let c = count(xs)
+  print "count: %{c}"
+catch CyclicValueError as e =>
+  print "count caught: %{e.message}"
+
+try
+  let r = identity(xs)
+  print "identity: %{r}"
+catch CyclicValueError as e =>
+  print "identity caught: %{e.message}"
+
+print "done"

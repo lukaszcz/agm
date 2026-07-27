@@ -259,6 +259,29 @@ class TestPersistence:
         assert result.ok, result.diagnostics
         assert result.value == ArrayValue([IntValue(9), IntValue(2)])
 
+    def test_echoing_a_value_that_turned_cyclic_since_its_entry_reports_instead_of_crashing(
+        self,
+    ) -> None:
+        """A binding can become cyclic through a *later* entry's indexed
+        assignment. Echoing it back afterward runs outside any `try`/`catch`
+        scope (the entry that would raise already succeeded), so the REPL
+        reports the same one-line message a runtime raise would rather than
+        crashing the session."""
+        from agm.agl.repl.render import render_entry_result
+
+        s = ReplSession()
+        assert s.eval_entry("record Node(children: array[Node])").ok
+        assert s.eval_entry("var xs: array[Node] = [Node(children = [])]").ok
+        assert s.eval_entry("let n = Node(children = xs)").ok
+        assert s.eval_entry("xs[0] := n").ok
+
+        echoed = s.eval_entry("xs")
+
+        assert echoed.ok, echoed.diagnostics
+        rendered = render_entry_result(echoed, echo=True)
+        assert rendered is not None
+        assert "CyclicValueError" in rendered
+
     def test_assign_to_prior_immutable_binding_is_rejected(self) -> None:
         """A later entry cannot reassign an earlier ``let``, and it survives."""
         s = ReplSession()

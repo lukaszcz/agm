@@ -1258,13 +1258,14 @@ class _Lowerer:
                         recipe=recipe,
                         failure_mode=ConversionFailureMode.RAISE_CAST_ERROR,
                     )
-                # `as?`: total casts always succeed — evaluate the (possibly
-                # effectful) source, then yield True.  Fallible casts trial-convert.
-                if spec.kind in (
-                    CastKind.TOTAL_NOOP,
-                    CastKind.TOTAL_RENDER,
-                    CastKind.TOTAL_JSON,
-                ):
+                # `as?`: a no-op conversion performs no walk and cannot fail, so it
+                # short-circuits to evaluating the (possibly effectful) source, then
+                # yielding True.  `TOTAL_RENDER`/`TOTAL_JSON` are NOT short-circuited
+                # here even though they always succeed on an acyclic value: rendering
+                # or JSON-serializing a cyclic value raises `CyclicValueError`, so
+                # `as?` must trial-convert them too and yield False on that failure
+                # (see `_on_cast_failure`'s `RETURN_BOOL` handling in the evaluator).
+                if spec.kind is CastKind.TOTAL_NOOP:
                     return IrSequence(
                         location=self._loc(span),
                         items=(inner, IrConstBool(location=self._loc(span), value=True)),

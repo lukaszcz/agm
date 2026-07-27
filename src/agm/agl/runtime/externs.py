@@ -50,6 +50,7 @@ from agm.agl.ir.contracts import (
 from agm.agl.modules.ids import ModuleId
 from agm.agl.runtime.render import render_value
 from agm.agl.runtime.serialize import value_to_json_obj
+from agm.agl.semantics.cycles import AglCyclicValue, cyclic_value_raise, enter_container
 from agm.agl.semantics.exceptions import AglRaise, make_builtin_exception
 from agm.agl.semantics.values import (
     AgentValue,
@@ -141,8 +142,13 @@ class SealedHandle:
 
     ``__eq__``/``__hash__`` mirror the wrapped value's own equality and hash
     (never equal to a non-handle), so handles compose correctly in Python sets
-    and dicts without exposing the wrapped value on the handle.  ``__repr__``
-    shows the rendered AgL value as a debugging aid.
+    and dicts without exposing the wrapped value on the handle — except for a
+    wrapped array or dict, where the key is the container's **identity**, not
+    its structure (see ``_sealed_value_eq_key``): two handles wrapping equal
+    but distinct arrays are not equal.  ``__repr__`` shows the rendered AgL
+    value as a debugging aid; repr'ing a wrapped value that contains a
+    reference cycle surfaces as the catchable ``CyclicValueError`` at the
+    enclosing extern call, mirroring ``render``/``print`` on a cyclic value.
     """
 
     __slots__ = ("__weakref__",)
@@ -236,7 +242,19 @@ def _drop_handle_state(payloads: dict[int, _SealedPayload], handle_id: int) -> N
 
 
 def _sealed_value_eq_key(value: Value) -> object:
-    """Return an immutable equality key for a sealed value, without retaining it."""
+    """Return an immutable equality key for a sealed value.
+
+    ``ArrayValue``/``DictValue`` use **object identity**, not a structural
+    walk: reference semantics makes a mutable array/dict cyclic and its
+    payload never stable, so a structural key could both loop forever and go
+    stale the moment the container is mutated. Identity sidesteps both
+    problems, and is sound precisely because ``_HandleState`` retains the
+    wrapped value for as long as the handle — and therefore this key — can be
+    observed, so the ``id()`` can never be reused by an unrelated object while
+    it is still in play. The nominal arms below still recurse into their
+    fields structurally, which is safe because a cycle can only ever be
+    closed through an array or dict.
+    """
     if isinstance(value, TextValue):
         return ("text", value.value)
     if isinstance(value, IntValue):
@@ -248,12 +266,9 @@ def _sealed_value_eq_key(value: Value) -> object:
     if isinstance(value, JsonValue):
         return ("json", _json_eq_key(value.raw))
     if isinstance(value, ArrayValue):
-        return ("array", tuple(_sealed_value_eq_key(item) for item in value.elements))
+        return ("array", id(value))
     if isinstance(value, DictValue):
-        return (
-            "dict",
-            tuple(sorted((key, _sealed_value_eq_key(item)) for key, item in value.entries.items())),
-        )
+        return ("dict", id(value))
     if isinstance(value, RecordValue):
         return (
             "record",
@@ -318,6 +333,7 @@ def encode_boundary_value(
     seals: Mapping[str, object],
     defs: Mapping[str, BoundarySchema] = _NO_DEFS,
     vault: _HandleVault = _DEFAULT_HANDLE_VAULT,
+    active: "set[int] | None" = None,
 ) -> object:
     """Encode one AgL value crossing an extern boundary as a Python argument.
 
@@ -333,6 +349,13 @@ def encode_boundary_value(
     finite walk.  A *value* whose runtime shape does not match *schema* raises
     :class:`BoundaryViolation` (an argument-conversion failure at the call
     site, reported by :meth:`ExternRegistry.invoke` as ``ExternError``).
+
+    Reference semantics makes a cyclic array/dict constructible; *active*
+    (an active-container-id set, allocated lazily) detects that and raises
+    :class:`~agm.agl.semantics.cycles.AglCyclicValue`, converted by
+    :meth:`ExternRegistry.invoke` into the catchable ``CyclicValueError``.
+    Callers pass no *active* argument — it exists only to thread the walk's
+    own recursive calls.
     """
     match schema:
         case BoundaryScalar(kind=kind):
@@ -344,20 +367,29 @@ def encode_boundary_value(
         case BoundaryArray(element=elem_schema):
             if not isinstance(value, ArrayValue):
                 raise BoundaryViolation(f"expected an array value, got {_typename(value)}")
-            return [
-                encode_boundary_value(elem_schema, e, seals, defs, vault) for e in value.elements
-            ]
+            active = enter_container(id(value), active)
+            try:
+                return [
+                    encode_boundary_value(elem_schema, e, seals, defs, vault, active)
+                    for e in value.elements
+                ]
+            finally:
+                active.discard(id(value))
         case BoundaryDict(value=val_schema):
             if not isinstance(value, DictValue):
                 raise BoundaryViolation(f"expected a dict value, got {_typename(value)}")
-            return {
-                k: encode_boundary_value(val_schema, v, seals, defs, vault)
-                for k, v in value.entries.items()
-            }
+            active = enter_container(id(value), active)
+            try:
+                return {
+                    k: encode_boundary_value(val_schema, v, seals, defs, vault, active)
+                    for k, v in value.entries.items()
+                }
+            finally:
+                active.discard(id(value))
         case BoundaryRecord(display_name=display_name, fields=fields):
             if not isinstance(value, RecordValue):
                 raise BoundaryViolation(f"expected record {display_name!r}, got {_typename(value)}")
-            return _encode_boundary_fields(fields, value.fields, seals, defs, vault)
+            return _encode_boundary_fields(fields, value.fields, seals, defs, vault, active)
         case BoundaryEnum(display_name=display_name, variants=variants):
             if not isinstance(value, EnumValue):
                 raise BoundaryViolation(f"expected enum {display_name!r}, got {_typename(value)}")
@@ -365,18 +397,20 @@ def encode_boundary_value(
             if variant is None:
                 raise BoundaryViolation(f"enum {display_name!r}: unknown variant {value.variant!r}")
             result: dict[str, object] = {"$case": value.variant}
-            result.update(_encode_boundary_fields(variant.fields, value.fields, seals, defs, vault))
+            result.update(
+                _encode_boundary_fields(variant.fields, value.fields, seals, defs, vault, active)
+            )
             return result
         case BoundaryException(display_name=display_name, fields=fields):
             if not isinstance(value, ExceptionValue):
                 raise BoundaryViolation(
                     f"expected exception {display_name!r}, got {_typename(value)}"
                 )
-            return _encode_boundary_fields(fields, value.fields, seals, defs, vault)
+            return _encode_boundary_fields(fields, value.fields, seals, defs, vault, active)
         case BoundarySealVar(var=var):
             return vault.make(value, seals[var])
         case BoundaryRef(key=key):
-            return encode_boundary_value(defs[key], value, seals, defs, vault)
+            return encode_boundary_value(defs[key], value, seals, defs, vault, active)
         case _ as unreachable:  # pragma: no cover
             assert_never(unreachable)
 
@@ -387,10 +421,11 @@ def _encode_boundary_fields(
     seals: Mapping[str, object],
     defs: Mapping[str, BoundarySchema],
     vault: _HandleVault,
+    active: "set[int] | None",
 ) -> dict[str, object]:
     """Encode a nominal payload's ordered fields through the boundary schema."""
     return {
-        fname: encode_boundary_value(fschema, values[fname], seals, defs, vault)
+        fname: encode_boundary_value(fschema, values[fname], seals, defs, vault, active)
         for fname, fschema in fields
     }
 
@@ -818,6 +853,12 @@ class ExternRegistry:
         chokepoint mirroring ``AgentRegistry.dispatch``.  ``python_type`` is
         the raising Python exception's class name, or empty for a contract
         violation.
+
+        A cyclic argument is a separate, narrower failure: encoding a cyclic
+        array/dict argument, or a companion repr'ing a sealed handle wrapping
+        one (``SealedHandle.__repr__``, during *fn*), raises
+        ``AglCyclicValue``; both are converted here into the catchable
+        ``CyclicValueError`` rather than being folded into ``ExternError``.
         """
         seals: dict[str, object] = {var: object() for var in contract.type_params}
         vault = _HandleVault()
@@ -835,10 +876,14 @@ class ExternRegistry:
             raise _extern_error(
                 function_name, f"argument conversion failed: {exc}", trace_id, python_type=""
             ) from exc
+        except AglCyclicValue as exc:
+            raise cyclic_value_raise(trace_id) from exc
 
         try:
             with decimal.localcontext():
                 result = fn(*encoded_args)
+        except AglCyclicValue as exc:
+            raise cyclic_value_raise(trace_id) from exc
         except Exception as exc:
             raise _extern_error(
                 function_name,

@@ -193,6 +193,27 @@ class TestMutationRecord:
         assert mutation["name"] == "strict-json"
         assert mutation["value"] == "true"
 
+    def test_mutation_record_of_a_cyclic_value_degrades_to_a_marker(self, tmp_path: Path) -> None:
+        """Trace logging is an opt-in debug facility: storing a cyclic array into
+        a traced `var` must not fail the program -- the mutation record substitutes
+        a marker for the value it could not serialize."""
+        log_path = tmp_path / "trace.jsonl"
+        rt = PipelineDriver()
+        source = (
+            "record Node(children: array[Node])\n"
+            "var xs: array[Node] = [Node(children = [])]\n"
+            "let n = Node(children = xs)\n"
+            "xs[0] := n\n"
+            "var latest: array[Node] = []\n"
+            "latest := xs\n"
+        )
+        result = rt.run(source, log_file=log_path)
+        assert result.ok, result.error
+        records = _load_jsonl(log_path)
+        mut_recs = [r for r in records if r.get("kind") == "mutation" and r.get("name") == "latest"]
+        assert mut_recs
+        assert mut_recs[0]["value"] == "<cyclic value>"
+
 
 class TestExecCommandRecord:
     def test_exec_produces_exec_record(self, tmp_path: Path) -> None:

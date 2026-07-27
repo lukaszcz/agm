@@ -1068,6 +1068,12 @@ BUILTIN_EXCEPTION_TYPE_DEFS: Mapping[str, TypeDef] = {
         module_id=PRELUDE_ID,
         base=_EXCEPTION_ROOT_KEY,
     ),
+    "CyclicValueError": TypeDef(
+        kind="exception",
+        name="CyclicValueError",
+        module_id=PRELUDE_ID,
+        base=_EXCEPTION_ROOT_KEY,
+    ),
 }
 
 

@@ -1513,6 +1513,10 @@ def exception_value_to_run_error(
 
     Field values are converted via the shared serializer, which preserves
     ``Decimal`` exactness (never routed through binary ``float``; design ).
+    This runs while reporting an error already in flight, so a field that is
+    itself a cyclic array/dict (e.g. a user exception's own data payload) must
+    not raise and mask the real error — that one field is reported as a
+    marker instead.
 
     *span* is the optional raise-site source span threaded from ``AglRaise``;
     when present, ``RunError.line`` and ``RunError.col`` are populated from it
@@ -1520,9 +1524,15 @@ def exception_value_to_run_error(
     """
     from agm.agl.ir.ids import Location
     from agm.agl.runtime.serialize import value_to_json_obj
+    from agm.agl.semantics.cycles import CYCLIC_VALUE_MARKER, AglCyclicValue
     from agm.agl.syntax.spans import SourceSpan
 
-    fields: dict[str, object] = {k: value_to_json_obj(v) for k, v in exc.fields.items()}
+    fields: dict[str, object] = {}
+    for k, v in exc.fields.items():
+        try:
+            fields[k] = value_to_json_obj(v)
+        except AglCyclicValue:
+            fields[k] = CYCLIC_VALUE_MARKER
     line: int | None = None
     col: int | None = None
     if isinstance(span, (SourceSpan, Location)):

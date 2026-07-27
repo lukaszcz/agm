@@ -1,0 +1,77 @@
+# Reference semantics makes a cyclic array/dict value constructible via
+# indexed assignment. `print`, `render`, and `as json` each detect the cycle
+# and raise a catchable `CyclicValueError` instead of recursing forever, and
+# the program continues after each catch. `close_cycle` selects whether each
+# structure below actually closes into a cycle: when true, every walk below
+# hits the cycle and is caught; when false, the identical code paths run
+# over an acyclic (but still nested) value instead and produce their
+# ordinary rendered/serialized output. Covers a cycle closed through an
+# array, one through a dict, one through two levels of records and arrays,
+# and confirms a shared (diamond) non-cyclic structure is NOT mistaken for a
+# cycle in either mode.
+param close_cycle: bool
+
+record Node(children: array[Node])
+
+var xs: array[Node] = [Node(children = [])]
+let n = Node(children = xs)
+if close_cycle =>
+  xs[0] := n
+
+try
+  print xs
+catch CyclicValueError as e =>
+  print "array print caught: %{e.message}"
+
+try
+  let _ = render(xs)
+catch CyclicValueError as e =>
+  print "array render caught"
+
+try
+  let _: json = n as json
+catch CyclicValueError as e =>
+  print "array json caught"
+
+try
+  print "interpolated: %{xs}"
+catch CyclicValueError as e =>
+  print "template caught"
+
+# A cycle closed through a dict instead of an array.
+record DNode(children: dict[text, DNode])
+
+var dm: dict[text, DNode] = {"a": DNode(children = {})}
+let dn = DNode(children = dm)
+if close_cycle =>
+  dm["a"] := dn
+
+try
+  print dm
+catch CyclicValueError as e =>
+  print "dict print caught: %{e.message}"
+
+# A cycle that only closes after passing through two record types and two
+# arrays, not the one-hop repro above.
+record Level1(inner: array[Level2])
+record Level2(inner: array[Level1])
+
+var a: array[Level2] = [Level2(inner = [])]
+let l1 = Level1(inner = a)
+var b: array[Level1] = [l1]
+if close_cycle =>
+  a[0] := Level2(inner = b)
+
+try
+  print a
+catch CyclicValueError as e =>
+  print "multi-level print caught: %{e.message}"
+
+# A shared (diamond) structure: `shared` is reachable twice from `pair`, but
+# never from itself, so it is not a cycle and renders normally regardless of
+# `close_cycle`.
+let shared = [1, 2]
+let pair = [shared, shared]
+print pair
+
+print "done"

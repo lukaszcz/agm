@@ -229,7 +229,12 @@ def test_as_optional_booleans_agree(source: str, expected: bool) -> None:
 
 
 def test_total_as_optional_evaluates_source_then_true() -> None:
-    """A total `as?` evaluates its (bound) source and yields True (IrSequence path)."""
+    """A total `as?` evaluates its (bound) source and yields True.
+
+    `x as? text` is TOTAL_RENDER: it trial-converts via IrConvert (rendering
+    a plain int cannot fail) rather than short-circuiting, but still
+    evaluates the bound source and yields True.
+    """
     source = """\
 let x = 5
 let r = x as? text
@@ -282,8 +287,15 @@ def test_golden_fallible_as_optional_lowers_to_ir_convert_return_bool() -> None:
     assert value.failure_mode is ConversionFailureMode.RETURN_BOOL
 
 
-def test_golden_total_as_optional_lowers_to_sequence() -> None:
-    value = _bound_value("let r = 42 as? text\n()\n", "r")
+def test_golden_total_noop_as_optional_lowers_to_sequence() -> None:
+    """Only TOTAL_NOOP short-circuits `as?` to IrSequence — it performs no walk.
+
+    TOTAL_RENDER/TOTAL_JSON as? casts (e.g. `42 as? text`) instead lower to a
+    trial IrConvert(RETURN_BOOL): rendering/JSON-serializing can raise
+    CyclicValueError, so `as?` must trial-convert them and yield False on
+    that failure rather than always short-circuiting to True.
+    """
+    value = _bound_value("let r = 3 as? decimal\n()\n", "r")
     assert isinstance(value, IrSequence)
     # last item is the constant True; the source is preserved as the first item.
     assert len(value.items) == 2

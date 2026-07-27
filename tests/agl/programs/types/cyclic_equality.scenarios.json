@@ -1,0 +1,18 @@
+{
+  "scenarios": [
+    {
+      "name": "coinductive_equality_and_diamond_sharing_with_cycles",
+      "params": {"close_cycle": true},
+      "expect": {
+        "stdout": "true\nfalse\ntrue\nfalse\n"
+      }
+    },
+    {
+      "name": "same_equality_and_diamond_sharing_without_cycles",
+      "params": {"close_cycle": false},
+      "expect": {
+        "stdout": "true\nfalse\ntrue\nfalse\n"
+      }
+    }
+  ]
+}

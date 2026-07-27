@@ -1428,7 +1428,7 @@ class TestRenderValue:
         from agm.agl.runtime.render import render_value
         from agm.agl.semantics.values import ArrayValue, IntValue
 
-        v = ArrayValue(elements=(IntValue(1), IntValue(2)))
+        v = ArrayValue(elements=[IntValue(1), IntValue(2)])
         assert render_value(v) == "[1, 2]"
 
     def test_array_empty(self) -> None:
@@ -1436,14 +1436,14 @@ class TestRenderValue:
         from agm.agl.runtime.render import render_value
         from agm.agl.semantics.values import ArrayValue
 
-        assert render_value(ArrayValue(elements=())) == "[]"
+        assert render_value(ArrayValue(elements=[])) == "[]"
 
     def test_array_nested_text_is_quoted(self) -> None:
         """Text inside an array is quoted."""
         from agm.agl.runtime.render import render_value
         from agm.agl.semantics.values import ArrayValue, TextValue
 
-        v = ArrayValue(elements=(TextValue("tests"), TextValue("coverage")))
+        v = ArrayValue(elements=[TextValue("tests"), TextValue("coverage")])
         assert render_value(v) == '["tests", "coverage"]'
 
     # ------------------------------------------------------------------
@@ -1534,7 +1534,7 @@ class TestRenderValue:
             fields={
                 "title": TextValue("Missing tests"),
                 "severity": IntValue(3),
-                "tags": ArrayValue(elements=(TextValue("tests"), TextValue("coverage"))),
+                "tags": ArrayValue(elements=[TextValue("tests"), TextValue("coverage")]),
             },
         )
         out = render_value(v)
@@ -1636,7 +1636,7 @@ class TestRenderValue:
         from agm.agl.runtime.render import render_value
         from agm.agl.semantics.values import ArrayValue, TextValue
 
-        v = ArrayValue(elements=(TextValue("a%{b}"),))
+        v = ArrayValue(elements=[TextValue("a%{b}")])
         out = render_value(v)
         assert out == r'["a\%{b}"]'
 
@@ -1645,7 +1645,7 @@ class TestRenderValue:
         from agm.agl.runtime.render import render_value
         from agm.agl.semantics.values import ArrayValue, TextValue
 
-        v = ArrayValue(elements=(TextValue('say "hi"\nbye'),))
+        v = ArrayValue(elements=[TextValue('say "hi"\nbye')])
         out = render_value(v)
         assert out == r'["say \"hi\"\nbye"]'
 
@@ -1704,7 +1704,7 @@ class TestRenderValue:
         from agm.agl.runtime.render import render_value
         from agm.agl.semantics.values import ArrayValue, IntValue
 
-        v = ArrayValue(elements=(IntValue(1), IntValue(2)))
+        v = ArrayValue(elements=[IntValue(1), IntValue(2)])
         assert render_value(v, pretty=True) == "[\n  1,\n  2\n]"
 
     def test_dict_pretty(self) -> None:
@@ -1739,7 +1739,7 @@ class TestRenderValue:
             display_name="Issue",
             fields={
                 "title": TextValue("Missing tests"),
-                "scores": ArrayValue(elements=(IntValue(1), IntValue(2))),
+                "scores": ArrayValue(elements=[IntValue(1), IntValue(2)]),
             },
         )
         assert (
@@ -1769,7 +1769,7 @@ class TestRenderValue:
             DecimalValue(Decimal("1.5")),
             BoolValue(True),
             UnitValue(),
-            ArrayValue(elements=(IntValue(1),)),
+            ArrayValue(elements=[IntValue(1)]),
         ):
             assert render_value(v, pretty=True, quote_strings=True) == render_value(v, pretty=True)
 
@@ -1778,7 +1778,10 @@ class TestRenderValue:
         from agm.agl.runtime.render import render_value
         from agm.agl.semantics.values import ArrayValue, TextValue
 
-        out = render_value(ArrayValue(elements=(TextValue("v"),)), quote_strings=False)
+        out = render_value(
+            ArrayValue(elements=[TextValue("v")]),
+            quote_strings=False,
+        )
         assert out == '["v"]'
 
     # ------------------------------------------------------------------
@@ -2192,7 +2195,7 @@ class TestRuntimeErrorPaths:
                 "decimal_val": DecimalValue(decimal.Decimal("1.5")),
                 "bool_val": BoolValue(True),
                 "json_val": JsonValue({"k": "v"}),
-                "list_val": ArrayValue(elements=(IntValue(1),)),
+                "list_val": ArrayValue(elements=[IntValue(1)]),
                 "dict_val": DictValue(entries={"x": IntValue(2)}),
                 "rec_val": RecordValue(
                     nominal=NominalId(ENTRY_ID, "R"),
@@ -2251,7 +2254,7 @@ class TestRuntimeErrorPaths:
             "xs", '["a", "b"]', ArrayType(elem=TextType()), type_table_for()
         )
         assert isinstance(result, ArrayValue)
-        assert result.elements == (TextValue("a"), TextValue("b"))
+        assert result.elements == [TextValue("a"), TextValue("b")]
 
     def test_agl_raise_from_interpreter_becomes_run_error(
         self, monkeypatch: pytest.MonkeyPatch
@@ -2300,10 +2303,10 @@ class TestRuntimeErrorPaths:
             type_table_for(),
         )
         assert isinstance(result, ArrayValue)
-        assert result.elements == (
+        assert result.elements == [
             DecimalValue(_decimal.Decimal("1.5")),
             DecimalValue(_decimal.Decimal("2.75")),
-        )
+        ]
 
     def test_non_json_shaped_object_yields_clean_diagnostic(self) -> None:
         """A non-JSON-shaped object (e.g. a set) must yield a clean

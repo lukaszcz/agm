@@ -192,7 +192,17 @@ until finished
 **`for` — collection iteration.** `for x in COLLECTION` iterates `array[T]`
 (elements, in order), `dict[text, V]` (keys, in dict order), or `text`
 (each character as a length-1 `text`). The loop variable `x` takes the
-element/key/char type respectively.
+element/key/char type respectively. `COLLECTION` is evaluated once, at loop
+entry. For an `array`, the loop observes that same mutable value for its
+whole run, so an indexed assignment to an element the cursor has not yet
+reached (through any alias of the array, including the loop body itself)
+changes what `x` is bound to when the cursor gets there. For a `dict`, `x`
+ranges over the key sequence fixed at loop entry — an indexed assignment
+cannot change the key set, so it can never change what `x` is bound to; a
+`d[k]` read inside the body, however, reflects any mutation performed to
+that key's value during the loop. An indexed assignment can change neither
+an array's length nor a dict's key set, so the number of iterations is fixed
+at loop entry regardless of any mutation performed during the loop.
 
 **`for` — integer range.** `for i in a to b` runs `i = a, a+1, …, b`
 (inclusive); `for i in a downto b` runs `i = a, a-1, …, b` (inclusive).

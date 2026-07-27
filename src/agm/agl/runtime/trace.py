@@ -203,7 +203,14 @@ class TraceStore:
         value: "Value",
         span: "SourceSpan | Location | None" = None,
     ) -> None:
-        """Record a ``:=`` mutation of a mutable binding."""
+        """Record a store into a mutable (``var``) binding or an engine setting.
+
+        An indexed assignment (``xs[0] := v``) mutates the referenced array or
+        dict container, not a binding, and under reference semantics that
+        container may be reachable from any number of bindings — attributing
+        the mutation to one name would be wrong. It therefore emits no
+        ``mutation`` event; only a direct ``name := value`` store does.
+        """
         if self._path is None:
             return
         from agm.agl.runtime.serialize import dumps_exact

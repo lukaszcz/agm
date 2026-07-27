@@ -1,0 +1,18 @@
+{
+  "scenarios": [
+    {
+      "name": "small_values",
+      "params": {"first": 1, "second": 2},
+      "expect": {
+        "stdout": "1\n99\n99\n2\nfound 99\nmissing\n[1, 2]\n[999, 2]\n[999, 2]\n"
+      }
+    },
+    {
+      "name": "larger_values",
+      "params": {"first": 10, "second": 20},
+      "expect": {
+        "stdout": "10\n99\n99\n20\nfound 99\nmissing\n[10, 20]\n[999, 20]\n[999, 20]\n"
+      }
+    }
+  ]
+}

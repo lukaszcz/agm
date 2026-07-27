@@ -1,0 +1,19 @@
+{
+  "scenarios": [
+    {
+      "name": "mutate_ahead_of_cursor",
+      "params": {"trigger": 0},
+      "expect": {"stdout": "106\n[1, 2, 3, 100]\n"}
+    },
+    {
+      "name": "mutate_after_cursor_passed",
+      "params": {"trigger": 3},
+      "expect": {"stdout": "10\n[1, 2, 3, 100]\n"}
+    },
+    {
+      "name": "never_mutates",
+      "params": {"trigger": -1},
+      "expect": {"stdout": "10\n[1, 2, 3, 4]\n"}
+    }
+  ]
+}

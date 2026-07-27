@@ -1,0 +1,18 @@
+{
+  "scenarios": [
+    {
+      "name": "small_seed",
+      "params": {"seed": 1},
+      "expect": {
+        "stdout": "[0, 2]\n[0, 2]\n[0, 2]\n[0, 2]\n0\n[1, 2]\n[1, 2]\n[1, 2]\n[1, 2]\n1\n"
+      }
+    },
+    {
+      "name": "larger_seed",
+      "params": {"seed": 10},
+      "expect": {
+        "stdout": "[0, 11]\n[0, 11]\n[0, 11]\n[0, 11]\n0\n[1, 11]\n[1, 11]\n[1, 11]\n[1, 11]\n1\n"
+      }
+    }
+  ]
+}

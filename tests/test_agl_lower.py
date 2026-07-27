@@ -969,12 +969,12 @@ class TestVarRefLowering:
 
 
 class TestAssignStmtLowering:
-    def test_simple_assign_emits_ir_assign_empty_path(self) -> None:
+    def test_simple_assign_emits_ir_assign(self) -> None:
         prog = _lower("var _x: int = 0\n_x := 5\n()")
         inits = prog.modules[prog.entry_module].initializers
         assign = inits[1]
         assert isinstance(assign, IrAssign)
-        assert assign.path == ()
+        assert isinstance(assign.value, IrConstInt)
 
     def test_simple_assign_symbol_matches_binding(self) -> None:
         prog = _lower("var _x: int = 0\n_x := 5\n()")
@@ -1295,19 +1295,19 @@ let c = Color::Red
         assert isinstance(root_capture.value, IrIf)
         assert root_capture.value.has_else
 
-    def test_indexed_assign_lowers_to_ir_assign_with_path(self) -> None:
-        """IndexTarget assignment lowers to IrAssign with a non-empty path."""
-        from agm.agl.ir import IrAssign
+    def test_indexed_assign_lowers_to_ir_index_set(self) -> None:
+        """IndexTarget assignment lowers to IrIndexSet with a container reference."""
+        from agm.agl.ir import IrIndexSet, IrLoad
 
         prog = _lower('var _d: dict[text, int] = {"a": 1}\n_d["a"] := 2\n()')
         entry = prog.modules[prog.entry_module]
-        # AssignStmt lowers directly to IrAssign in the initializers list
+        # AssignStmt lowers directly to IrIndexSet in the initializers list
         found = False
         for node in entry.initializers:
-            if isinstance(node, IrAssign):
-                assert len(node.path) >= 1
+            if isinstance(node, IrIndexSet):
+                assert isinstance(node.container, IrLoad)
                 found = True
-        assert found, "Expected IrAssign(path=[...]) in initializers"
+        assert found, "Expected IrIndexSet in initializers"
 
 
 # ---------------------------------------------------------------------------
@@ -1467,18 +1467,6 @@ result
         lowerer = _make_lowerer(checked, "()")
         with pytest.raises(AssertionError, match="compiler bug"):
             lowerer._kind_for_container(IntType())
-
-    def test_elem_type_for_non_container_raises_assertion(self) -> None:
-        """_elem_type_for_container raises AssertionError for a non-container type.
-
-        Defensive guard: can only be triggered by a compiler bug.
-        """
-        import pytest
-
-        checked = _check("()")
-        lowerer = _make_lowerer(checked, "()")
-        with pytest.raises(AssertionError, match="compiler bug"):
-            lowerer._elem_type_for_container(TextType())
 
 
 # ---------------------------------------------------------------------------

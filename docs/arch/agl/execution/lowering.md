@@ -16,6 +16,8 @@ A `let` with a bare-name or `_` pattern lowers directly to a single immutable bi
 
 The IR is a runtime-neutral data model: program-local identities and source locations, a closed family of expression nodes, and a program container holding modules, symbols, functions, sources, nominals, contracts, and the dry-run inventory. Host operations carry typeless contract requests — codec selection, format instructions, JSON schema, and a decode walk — compiled from checker types during lowering; a recursive target type's decode walk mirrors its JSON Schema `$defs`/`$ref` shape so it closes exactly where the schema does.
 
+`IrAssign` is a plain `var`-cell store (`symbol := value`). An indexed assignment (`target[index] := value`) instead lowers to `IrIndexSet`, which carries the target's *object* expression as a `container` reference rather than a root symbol — under reference semantics the container is mutated in place, so no symbol or `Cell` is needed to reach it. A nested target such as `m["a"]["b"] := v` needs no dedicated multi-step representation: `container` is itself an `IrIndex` reading the inner container by reference, so `IrIndexSet` composes with ordinary index reads instead of carrying its own path.
+
 `validate_ir` provides node-local and deep whole-program validation tiers. Like match-artifact validation, it re-checks output the lowerer just produced from already-checked source, so it runs only under the AgL self-validation toggle ([testing.md](testing.md)) — never in production.
 
 ## Code Entry Points

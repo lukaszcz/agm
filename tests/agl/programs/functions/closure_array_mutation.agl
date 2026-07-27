@@ -1,0 +1,32 @@
+# A closure mutating a `var`-captured array is observed through a second
+# closure that only reads a `let`-captured alias of the same array: a closure
+# captures a `var` by sharing its cell and a `let` by its value, but a let's
+# "value" for an array is the array reference itself, not a copy, so the
+# reader closure still sees every mutation the writer closure performs.
+#
+# The bindings live inside a factory `def` so both lambdas are genuinely
+# closures over the `def`'s local frame (not the module's base frame): the
+# factory returns a record of two function-typed fields, one closing over the
+# `var` cell and the other over the `let` value.
+record Closures
+  mutate: () -> unit
+  view: () -> array[int]
+
+def make_closures(first: int, second: int) -> Closures =
+  var shared = [first, second]
+  let viewer_source = shared
+  Closures(
+    mutate = fn() => do shared[0] := shared[0] + 10 until true,
+    view = fn() => viewer_source,
+  )
+
+param first: int
+param second: int
+
+let closures = make_closures(first, second)
+
+print closures.view()
+closures.mutate()
+print closures.view()
+closures.mutate()
+print closures.view()

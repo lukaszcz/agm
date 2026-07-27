@@ -1,0 +1,25 @@
+# Negative coverage: `int` -> `decimal` widening and scalar -> `json`
+# absorption are implicit coercions, but scalars have no identity to share in
+# the first place, so mutating the source afterwards proves nothing about
+# aliasing on its own. The load-bearing check is the explicit `xs as json`
+# cast, which is not a coercion: it takes a snapshot, so mutating `xs`
+# afterwards never reaches it. The guarantee that an implicit coercion never
+# rebuilds -- or silently snapshots -- an `array`/`dict` structure is pinned
+# separately, by the static rejection fixtures
+# tests/agl/rejections/type/{array,dict}_into_json_{let,arg}: assigning a
+# container into a `json`-typed slot is a static error, not a silent copy.
+param seed: int
+
+var n: int = seed
+let widened: decimal = n
+let boxed: json = n
+n := n + 1
+print widened
+print boxed
+print n
+
+var xs = [seed, seed + 1]
+let snapshot: json = xs as json
+xs[0] := -1
+print snapshot
+print xs

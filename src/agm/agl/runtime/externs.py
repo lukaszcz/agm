@@ -467,10 +467,10 @@ def decode_boundary_value(
             marker = _enter_container(items, active_containers, "array")
             try:
                 return ArrayValue(
-                    tuple(
+                    [
                         decode_boundary_value(elem_schema, e, seals, defs, vault, active_containers)
                         for e in items
-                    )
+                    ]
                 )
             finally:
                 active_containers.remove(marker)

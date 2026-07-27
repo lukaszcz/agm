@@ -170,6 +170,15 @@ class TestMutationRecord:
         rec = mut_recs[0]
         assert rec.get("name") == "x"
 
+    def test_indexed_assignment_produces_no_mutation_record(self, tmp_path: Path) -> None:
+        """`xs[0] := v` mutates a container, not a binding, so it emits no event."""
+        log_path = tmp_path / "trace.jsonl"
+        rt = PipelineDriver()
+        rt.run("var xs = [1, 2]\nxs[0] := 9", log_file=log_path)
+        records = _load_jsonl(log_path)
+        mut_recs = [r for r in records if r.get("kind") == "mutation"]
+        assert mut_recs == []
+
     def test_builtin_setting_store_produces_mutation_record(self, tmp_path: Path) -> None:
         log_path = tmp_path / "trace.jsonl"
         agl_file = tmp_path / "settings.agl"

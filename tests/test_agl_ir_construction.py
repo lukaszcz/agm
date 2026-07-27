@@ -284,19 +284,14 @@ let s = Size::Big(amount = 7)
 # ---------------------------------------------------------------------------
 
 
-def test_nominal_id_hashing_record_as_set_member() -> None:
-    """NominalId-based hashing: constructed records are usable as set members / dict keys.
+def test_nominal_id_equality_record() -> None:
+    """NominalId-based equality: constructed records compare by nominal + fields.
 
-    AgL's dict type only supports text keys, so we cannot express "use a record
-    as a dict key" in AgL source.  Instead we:
-      1. Construct two *equal* records (p1, p2) and one *different* record (p3)
-         via AgL and assert on the evaluated values.
-      2. Use the returned RecordValue objects as Python set members / dict keys
-         to verify that __hash__ and __eq__ (both NominalId-based per ) are
-         consistent: equal records land in the same slot, the different record
-         in its own slot.
-    This exercises the full pipeline — lowering → evaluation → NominalId equality
-    and hashing — and asserts the IR pipeline produces hash-identical values.
+    Records hold a mutable ``fields`` dict (it may embed an array or dict), so
+    a ``RecordValue`` is unhashable — it cannot be a set member or dict key.
+    Instead we construct two *equal* records (p1, p2) and one *different*
+    record (p3) via AgL and assert on ``==``, exercising the full pipeline —
+    lowering → evaluation → NominalId equality.
     """
     source = """\
 record Point
@@ -309,50 +304,25 @@ let p3 = Point(x = 9, y = 9)
 """
     ir = evaluate_ir(source)
 
-    # --- ir pipeline hashing ---
-    lp1 = ir["p1"]
-    lp2 = ir["p2"]
-    lp3 = ir["p3"]
-    assert isinstance(lp1, RecordValue)
-    assert isinstance(lp2, RecordValue)
-    assert isinstance(lp3, RecordValue)
+    p1 = ir["p1"]
+    p2 = ir["p2"]
+    p3 = ir["p3"]
+    assert isinstance(p1, RecordValue)
+    assert isinstance(p2, RecordValue)
+    assert isinstance(p3, RecordValue)
 
-    # Equal records must hash identically (set deduplication / dict key lookup).
-    ir_set = {lp1, lp2, lp3}
-    assert len(ir_set) == 2, f"Expected 2 distinct members in set (p1==p2), got {len(ir_set)}"
-    # Use as dict keys: p1 and p2 must map to the same slot.
-    ir_dict: dict[RecordValue, str] = {lp1: "first"}
-    ir_dict[lp2] = "second"  # should overwrite lp1's slot (same key)
-    assert len(ir_dict) == 1, "p1 and p2 must occupy the same dict slot"
-    assert ir_dict[lp1] == "second"
-
-    # p3 is distinct — it lands in its own slot.
-    ir_dict[lp3] = "third"
-    assert len(ir_dict) == 2
-
-    # --- IR pipeline hashing (same assertions) ---
-    ip1 = ir["p1"]
-    ip2 = ir["p2"]
-    ip3 = ir["p3"]
-    assert isinstance(ip1, RecordValue)
-    assert isinstance(ip2, RecordValue)
-    assert isinstance(ip3, RecordValue)
-
-    ir_set = {ip1, ip2, ip3}
-    assert len(ir_set) == 2, f"IR: expected 2 distinct set members, got {len(ir_set)}"
-    ir_dict: dict[RecordValue, str] = {ip1: "first"}
-    ir_dict[ip2] = "second"
-    assert len(ir_dict) == 1
-    ir_dict[ip3] = "third"
-    assert len(ir_dict) == 2
+    assert p1 == p2
+    assert p1 != p3
+    with pytest.raises(TypeError):
+        hash(p1)
 
 
-def test_nominal_id_hashing_enum_as_set_member() -> None:
-    """NominalId-based hashing: constructed enum values are usable as set members / dict keys.
+def test_nominal_id_equality_enum() -> None:
+    """NominalId-based equality: constructed enum values compare by nominal + variant + fields.
 
-    Two equal enum values (same variant, same nominal) must deduplicate in a set;
-    a value from a different variant must be distinct.  Evaluation must produce
-    hash-identical results (IR evaluation agreement).
+    Two equal enum values (same variant, same nominal) compare equal; a value
+    from a different variant does not. An ``EnumValue`` is unhashable for the
+    same reason a ``RecordValue`` is — its ``fields`` may hold an array or dict.
     """
     source = """\
 enum Color | Red | Blue
@@ -363,37 +333,17 @@ let c3 = Color::Blue()
 """
     ir = evaluate_ir(source)
 
-    # --- ir pipeline hashing ---
-    lc1 = ir["c1"]
-    lc2 = ir["c2"]
-    lc3 = ir["c3"]
-    assert isinstance(lc1, EnumValue)
-    assert isinstance(lc2, EnumValue)
-    assert isinstance(lc3, EnumValue)
+    c1 = ir["c1"]
+    c2 = ir["c2"]
+    c3 = ir["c3"]
+    assert isinstance(c1, EnumValue)
+    assert isinstance(c2, EnumValue)
+    assert isinstance(c3, EnumValue)
 
-    ir_set = {lc1, lc2, lc3}
-    assert len(ir_set) == 2, f"Expected 2 distinct set members (c1==c2), got {len(ir_set)}"
-    ir_dict: dict[EnumValue, str] = {lc1: "red-1"}
-    ir_dict[lc2] = "red-2"  # must overwrite lc1's slot
-    assert len(ir_dict) == 1
-    ir_dict[lc3] = "blue"
-    assert len(ir_dict) == 2
-
-    # --- IR pipeline hashing ---
-    ic1 = ir["c1"]
-    ic2 = ir["c2"]
-    ic3 = ir["c3"]
-    assert isinstance(ic1, EnumValue)
-    assert isinstance(ic2, EnumValue)
-    assert isinstance(ic3, EnumValue)
-
-    ir_set = {ic1, ic2, ic3}
-    assert len(ir_set) == 2, f"IR: expected 2 distinct set members, got {len(ir_set)}"
-    ir_dict: dict[EnumValue, str] = {ic1: "red-1"}
-    ir_dict[ic2] = "red-2"
-    assert len(ir_dict) == 1
-    ir_dict[ic3] = "blue"
-    assert len(ir_dict) == 2
+    assert c1 == c2
+    assert c1 != c3
+    with pytest.raises(TypeError):
+        hash(c1)
 
 
 # ---------------------------------------------------------------------------

@@ -75,6 +75,7 @@ from agm.agl.ir.nodes import (
     IrFunctionParam,
     IrIf,
     IrIndex,
+    IrIndexSet,
     IrIndirectCall,
     IrIterHasNext,
     IrIterInit,
@@ -112,7 +113,6 @@ from agm.agl.ir.operations import (
     ArithOp,
     CmpOp,
     Coercion,
-    IndexKind,
     IntToDecimal,
     ToJson,
     UnaryOp,
@@ -533,9 +533,9 @@ class IrInterpreter:
     def _index_failure(self, err: AglIndexOutOfRange | AglMissingKey) -> AglRaise:
         """Convert an index/key sentinel into an ``AglRaise`` with the appropriate fields.
 
-        Centralises the three identical sentinel-wrapping sites (IrIndex handler and both
-        steps of the IrAssign-with-path handler) so the exception message and field shapes
-        are defined exactly once.
+        Centralises the identical sentinel-wrapping sites (the ``IrIndex`` and
+        ``IrIndexSet`` handlers) so the exception message and field shapes are
+        defined exactly once.
         """
         match err:
             case AglIndexOutOfRange():
@@ -936,7 +936,7 @@ class IrInterpreter:
                 return JsonValue(None)
 
             case IrMakeArray(items=items):
-                return ArrayValue(tuple(self._eval(item) for item in items))
+                return ArrayValue([self._eval(item) for item in items])
 
             case IrMakeDict(entries=entries):
                 result: dict[str, Value] = {}
@@ -990,7 +990,7 @@ class IrInterpreter:
                     self._frame[sym] = value
                 return value
 
-            case IrAssign(symbol=sym, path=path, value=val_expr):
+            case IrAssign(symbol=sym, value=val_expr):
                 slot = self._frame.get(sym)
                 if slot is None and self._frames[0] is not self._frame:
                     # Module vars live in the base frame and are intentionally
@@ -1006,52 +1006,30 @@ class IrInterpreter:
                         f"IrAssign: symbol_id={sym.value!r}"
                         f" (public_name={desc.public_name!r}) is not a mutable var"
                     )
-                if not path:
-                    # Simple assignment.  An assignment statement yields unit
-                    # The mutation is the
-                    # side effect.
-                    slot.value = self._eval(val_expr)
-                    mutation_desc = self._program.symbols[sym]
-                    self._trace.mutation(
-                        name=mutation_desc.public_name or f"symbol#{sym.value}",
-                        value=slot.value,
-                        span=node.location,
-                    )
-                    return VOID_VALUE
-                # Indexed assignment with non-empty path
-                root = slot.value
-                # Traverse all intermediate steps, collecting (container, index_val, kind)
-                containers: list[tuple[Value, Value, IndexKind]] = []
-                current = root
-                for step in path[:-1]:
-                    idx_val = self._eval(step.index)
-                    try:
-                        next_val = index_get(step.kind, current, idx_val)
-                    except (AglIndexOutOfRange, AglMissingKey) as e:
-                        raise self._index_failure(e)
-                    containers.append((current, idx_val, step.kind))
-                    current = next_val
-                # Final step: evaluate index, validate via index_get
-                final_step = path[-1]
-                final_idx = self._eval(final_step.index)
-                try:
-                    index_get(final_step.kind, current, final_idx)
-                except (AglIndexOutOfRange, AglMissingKey) as e:
-                    raise self._index_failure(e)
-                # Evaluate RHS once
-                new_value = self._eval(val_expr)
-                # Rebuild containers leaf-outward
-                updated = index_set(final_step.kind, current, final_idx, new_value)
-                for container, idx_val, kind in reversed(containers):
-                    updated = index_set(kind, container, idx_val, updated)
-                slot.value = updated
+                # A simple var-cell store.  An assignment statement yields unit;
+                # the mutation is the side effect.
+                slot.value = self._eval(val_expr)
                 mutation_desc = self._program.symbols[sym]
                 self._trace.mutation(
                     name=mutation_desc.public_name or f"symbol#{sym.value}",
                     value=slot.value,
                     span=node.location,
                 )
-                # Assignment is statement-like: it yields the non-printable unit.
+                return VOID_VALUE
+
+            case IrIndexSet(container=container_expr, kind=kind, index=idx_expr, value=val_expr):
+                # Plain left-to-right evaluation order: container, then index,
+                # then the right-hand side, then the checked in-place store.
+                container = self._eval(container_expr)
+                index_val = self._eval(idx_expr)
+                new_value = self._eval(val_expr)
+                try:
+                    index_set(kind, container, index_val, new_value)
+                except (AglIndexOutOfRange, AglMissingKey) as e:
+                    raise self._index_failure(e)
+                # Mutates a container, not a binding, so no trace.mutation event:
+                # under reference semantics that container may be reachable from
+                # any number of bindings, so attributing it to one name is wrong.
                 return VOID_VALUE
 
             case IrCoerce(value=val_expr, operation=op):
@@ -1390,12 +1368,18 @@ class IrInterpreter:
 
             case IrIterInit(collection=collection_expr):
                 coll = self._eval(collection_expr)
+                elements: list[Value] | tuple[TextValue, ...]
                 if isinstance(coll, ArrayValue):
-                    elements: list[Value] = list(coll.elements)
+                    # The ArrayValue's own element list, by reference: no copy,
+                    # so an in-place element mutation is visible to the cursor.
+                    elements = coll.elements
                 elif isinstance(coll, DictValue):
-                    elements = [TextValue(k) for k in coll.entries]
+                    # The key set is fixed for the collection's lifetime, so a
+                    # one-time tuple of keys is sound even though the values
+                    # behind those keys may still be mutated.
+                    elements = tuple(TextValue(k) for k in coll.entries)
                 elif isinstance(coll, TextValue):
-                    elements = [TextValue(ch) for ch in coll.value]
+                    elements = tuple(TextValue(ch) for ch in coll.value)
                 else:  # pragma: no cover
                     raise InvalidIrError(f"IrIterInit: unexpected collection type {type(coll)!r}")
                 return IteratorValue(elements=elements)

@@ -338,7 +338,6 @@ def test_irloop_break_exits_after_several_iterations() -> None:
             IrAssign(
                 location=_DUMMY_LOC,
                 symbol=count_sym,
-                path=(),
                 value=IrArith(
                     location=_DUMMY_LOC,
                     op=ArithOp.ADD,
@@ -391,7 +390,6 @@ def test_irloop_continue_reruns_body() -> None:
             IrAssign(
                 location=_DUMMY_LOC,
                 symbol=count_sym,
-                path=(),
                 value=IrArith(
                     location=_DUMMY_LOC,
                     op=ArithOp.ADD,
@@ -436,7 +434,6 @@ def test_break_bypasses_irtry() -> None:
                 body=IrAssign(
                     location=_DUMMY_LOC,
                     symbol=count_sym,
-                    path=(),
                     value=IrArith(
                         location=_DUMMY_LOC,
                         op=ArithOp.ADD,
@@ -469,7 +466,6 @@ def test_break_bypasses_irtry() -> None:
             IrAssign(
                 location=_DUMMY_LOC,
                 symbol=count_sym,
-                path=(),
                 value=IrArith(
                     location=_DUMMY_LOC,
                     op=ArithOp.ADD,
@@ -509,7 +505,6 @@ def test_continue_bypasses_irtry() -> None:
                 body=IrAssign(
                     location=_DUMMY_LOC,
                     symbol=count_sym,
-                    path=(),
                     value=IrArith(
                         location=_DUMMY_LOC,
                         op=ArithOp.ADD,
@@ -553,7 +548,6 @@ def test_continue_bypasses_irtry() -> None:
                 IrAssign(
                     location=_DUMMY_LOC,
                     symbol=count_sym,
-                    path=(),
                     value=IrArith(
                         location=_DUMMY_LOC,
                         op=ArithOp.ADD,

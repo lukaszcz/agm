@@ -16,6 +16,7 @@ from agm.agl.runtime.render import render_value
 from agm.agl.runtime.serialize import value_to_json_obj
 from agm.agl.semantics.types import DecimalType, TextType, UnitType
 from agm.agl.semantics.values import (
+    ArrayValue,
     ConstructorValue,
     DecimalValue,
     DictValue,
@@ -48,9 +49,10 @@ def test_arithmetic_mixed_and_defensive_edges() -> None:
         div(TextValue("x"), one)
 
 
-def test_runtime_value_notimplemented_and_hash_edges() -> None:
+def test_runtime_value_notimplemented_and_unhashable_edges() -> None:
     nominal = NominalId(ENTRY_ID, "Thing")
     values = [
+        ArrayValue([IntValue(1)]),
         DictValue({"x": IntValue(1)}),
         RecordValue(nominal, "Thing", {"x": IntValue(1)}),
         EnumValue(nominal, "Thing", "Case", {"x": IntValue(1)}),
@@ -58,7 +60,8 @@ def test_runtime_value_notimplemented_and_hash_edges() -> None:
     ]
     for value in values:
         assert value.__eq__(object()) is NotImplemented
-        assert isinstance(hash(value), int)
+        with pytest.raises(TypeError):
+            hash(value)
 
 
 def test_json_value_helper_edges() -> None:

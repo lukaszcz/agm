@@ -19,7 +19,7 @@ Two tiers (validate_ir runs ONLY when explicitly called):
     4. Every ``SymbolId`` referenced by ``IrLoad``/``IrBind``/``IrAssign``
        exists in ``program.symbols``.
     5. The root symbol of every ``IrAssign`` is mutable (``mutable=True``).
-    6. Every ``Location`` on every node (and ``IrIndexStep``): its
+    6. Every ``Location`` on every node: its
        ``source_id`` exists in ``program.sources``; and
        ``0 <= start_offset <= end_offset <= len(normalized_text)``.
     7. ``program.functions`` contains every callable descriptor. A reference
@@ -103,7 +103,7 @@ from agm.agl.ir.nodes import (
     IrFunctionParam,
     IrIf,
     IrIndex,
-    IrIndexStep,
+    IrIndexSet,
     IrIndirectCall,
     IrIterHasNext,
     IrIterInit,
@@ -557,16 +557,6 @@ def _resolve_callable_params(
 
 
 # ---------------------------------------------------------------------------
-# IrIndexStep validation
-# ---------------------------------------------------------------------------
-
-
-def _validate_index_step(step: IrIndexStep, ctx: _Context) -> None:
-    _validate_location(step.location, ctx)
-    _validate_expr(step.index, ctx)
-
-
-# ---------------------------------------------------------------------------
 # IrCatchHandler validation (deep tier)
 # ---------------------------------------------------------------------------
 
@@ -841,8 +831,6 @@ def _validate_expr_node(node: IrExpr, ctx: _Context) -> None:
                         f"IrAssign targets symbol_id={node.symbol.value!r}"
                         f" (public_name={desc.public_name!r}) which is not mutable"
                     )
-            for step in node.path:
-                _validate_index_step(step, ctx)
             _validate_expr(node.value, ctx)
 
         case IrCoerce():
@@ -932,6 +920,12 @@ def _validate_expr_node(node: IrExpr, ctx: _Context) -> None:
             _validate_location(node.location, ctx)
             _validate_expr(val, ctx)
             _validate_expr(idx, ctx)
+
+        case IrIndexSet(container=container, kind=_kind, index=idx, value=val):
+            _validate_location(node.location, ctx)
+            _validate_expr(container, ctx)
+            _validate_expr(idx, ctx)
+            _validate_expr(val, ctx)
 
         case IrRenderTemplate(segments=segs):
             _validate_location(node.location, ctx)

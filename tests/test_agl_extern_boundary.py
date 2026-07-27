@@ -135,7 +135,7 @@ class TestEncodeScalarsAndContainers:
 
     def test_array(self) -> None:
         contract = build_contract("extern def f(x: array[int]) -> array[int]\n0")
-        value = ArrayValue((IntValue(1), IntValue(2)))
+        value = ArrayValue([IntValue(1), IntValue(2)])
         assert encode_boundary_value(contract.params[0].schema, value, {}) == [1, 2]
 
     def test_dict(self) -> None:
@@ -196,11 +196,11 @@ class TestEncodeNominals:
 class TestEncodeDeepCopy:
     def test_mutating_encoded_array_does_not_affect_agl_value(self) -> None:
         contract = build_contract("extern def f(x: array[int]) -> array[int]\n0")
-        original = ArrayValue((IntValue(1), IntValue(2)))
+        original = ArrayValue([IntValue(1), IntValue(2)])
         encoded = encode_boundary_value(contract.params[0].schema, original, {})
         assert isinstance(encoded, list)
         encoded.append(99)
-        assert original.elements == (IntValue(1), IntValue(2))
+        assert original.elements == [IntValue(1), IntValue(2)]
 
     def test_mutating_encoded_json_does_not_affect_agl_value(self) -> None:
         contract = build_contract("extern def f(x: json) -> json\n0")
@@ -217,7 +217,7 @@ class TestEncodeDeepCopy:
     def test_mutating_encoded_nested_json_list_element_does_not_affect_agl_value(self) -> None:
         contract = build_contract("extern def f(x: array[json]) -> array[json]\n0")
         inner_list: list[object] = [1, 2]
-        original = ArrayValue((JsonValue(inner_list),))
+        original = ArrayValue([JsonValue(inner_list)])
         encoded = encode_boundary_value(contract.params[0].schema, original, {})
         assert isinstance(encoded, list)
         encoded[0].append(999)
@@ -372,7 +372,7 @@ class TestDecodeContainers:
     def test_array(self) -> None:
         contract = build_contract("extern def f(x: int) -> array[int]\n0")
         assert decode_boundary_value(contract.result, [1, 2], {}) == ArrayValue(
-            (IntValue(1), IntValue(2))
+            [IntValue(1), IntValue(2)]
         )
 
     def test_array_wrong_type_rejected(self) -> None:
@@ -582,7 +582,7 @@ class TestSealing:
             "extern def reverse[T](xs: array[T]) -> array[T]\n0", fn_name="reverse"
         )
         seals = {"T": object()}
-        value = ArrayValue((IntValue(1),))
+        value = ArrayValue([IntValue(1)])
         encoded = encode_boundary_value(contract.params[0].schema, value, seals)
         assert isinstance(encoded[0], SealedHandle)
 
@@ -609,7 +609,7 @@ class TestSealing:
             DecimalValue(Decimal("1.5")),
             BoolValue(True),
             JsonValue({"items": [True, 1, Decimal("2"), "x", None]}),
-            ArrayValue((IntValue(1),)),
+            ArrayValue([IntValue(1)]),
             EnumValue(nominal=nominal, display_name="Choice", variant="some", fields={}),
             ExceptionValue(nominal=nominal, display_name="Oops", fields={"msg": TextValue("x")}),
             UnitValue(),

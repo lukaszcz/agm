@@ -98,7 +98,7 @@ def test_identity_array_int() -> None:
     """let xs: array[int] = [1, 2, 3]  — no coercion at element or array level."""
     source = "let xs: array[int] = [1, 2, 3]\n()"
     ir = evaluate_ir(source)
-    assert ir["xs"] == ArrayValue((IntValue(1), IntValue(2), IntValue(3)))
+    assert ir["xs"] == ArrayValue([IntValue(1), IntValue(2), IntValue(3)])
 
     # Structural: no IrCoerce around the IrMakeArray.
     prog = _lower(source)
@@ -153,11 +153,11 @@ def test_array_decimal_element_coercion() -> None:
     source = "let xs: array[decimal] = [1, 2, 3]\n()"
     ir = evaluate_ir(source)
     expected: Value = ArrayValue(
-        (
+        [
             DecimalValue(decimal.Decimal(1)),
             DecimalValue(decimal.Decimal(2)),
             DecimalValue(decimal.Decimal(3)),
-        )
+        ]
     )
     assert ir["xs"] == expected
 
@@ -189,7 +189,7 @@ def test_array_ref_identity_no_coercion() -> None:
     """let a: array[int] = [1, 2]; let b: array[int] = a  — exact type, no coercion."""
     source = "let a: array[int] = [1, 2]\nlet b: array[int] = a\n()"
     ir = evaluate_ir(source)
-    expected: Value = ArrayValue((IntValue(1), IntValue(2)))
+    expected: Value = ArrayValue([IntValue(1), IntValue(2)])
     assert ir["a"] == expected
     assert ir["b"] == expected
 
@@ -313,7 +313,7 @@ def test_nested_array_dict_decimal() -> None:
     """
     source = 'let n: array[dict[text, decimal]] = [{"a": 1}]\n()'
     ir = evaluate_ir(source)
-    expected: Value = ArrayValue((DictValue({"a": DecimalValue(decimal.Decimal(1))}),))
+    expected: Value = ArrayValue([DictValue({"a": DecimalValue(decimal.Decimal(1))})])
     assert ir["n"] == expected
 
 
@@ -321,7 +321,7 @@ def test_nested_array_dict_json() -> None:
     """let n: array[dict[text, json]] = [{\"a\": 1, \"b\": true}]."""
     source = 'let n: array[dict[text, json]] = [{"a": 1, "b": true}]\n()'
     ir = evaluate_ir(source)
-    expected: Value = ArrayValue((DictValue({"a": JsonValue(1), "b": JsonValue(True)}),))
+    expected: Value = ArrayValue([DictValue({"a": JsonValue(1), "b": JsonValue(True)})])
     assert ir["n"] == expected
 
 
@@ -368,7 +368,7 @@ def test_multiple_coercions_in_one_program() -> None:
     ir = evaluate_ir(source)
     assert ir["a"] == DecimalValue(decimal.Decimal(1))
     assert ir["b"] == ArrayValue(
-        (DecimalValue(decimal.Decimal(2)), DecimalValue(decimal.Decimal(3)))
+        [DecimalValue(decimal.Decimal(2)), DecimalValue(decimal.Decimal(3))]
     )
     assert ir["c"] == JsonValue(4)
     assert ir["d"] == DictValue({"x": JsonValue(5)})
@@ -395,7 +395,7 @@ def test_empty_array() -> None:
     """let xs: array[int] = []  — empty array; no coercions."""
     source = "let xs: array[int] = []\n()"
     ir = evaluate_ir(source)
-    assert ir["xs"] == ArrayValue(())
+    assert ir["xs"] == ArrayValue([])
 
 
 def test_empty_dict() -> None:
@@ -426,7 +426,7 @@ def test_coercion_evaluates_operand_once() -> None:
     assert ir["a"] == DecimalValue(decimal.Decimal(10))
     assert ir["b"] == DecimalValue(decimal.Decimal(20))
     assert ir["c"] == ArrayValue(
-        (DecimalValue(decimal.Decimal(10)), DecimalValue(decimal.Decimal(20)))
+        [DecimalValue(decimal.Decimal(10)), DecimalValue(decimal.Decimal(20))]
     )
 
 
@@ -439,4 +439,4 @@ def test_array_text_to_array_json_element_coercion() -> None:
     """let xs: array[json] = [\"a\", \"b\"]  — element-level ToJson."""
     source = 'let xs: array[json] = ["a", "b"]\n()'
     ir = evaluate_ir(source)
-    assert ir["xs"] == ArrayValue((JsonValue("a"), JsonValue("b")))
+    assert ir["xs"] == ArrayValue([JsonValue("a"), JsonValue("b")])

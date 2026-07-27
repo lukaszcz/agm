@@ -395,7 +395,7 @@ def test_decode_nested_record_and_enum_success() -> None:
     enum_val = _decode(EnumDecode(_RED, "Color", (VariantDecode("Red", ()),)), {"$case": "Red"})
     assert enum_val == EnumValue(nominal=_RED, display_name="Color", variant="Red", fields={})
     lst = _decode(ArrayDecode(ScalarDecode(ScalarKind.INT)), [1, 2])
-    assert lst == ArrayValue((IntValue(1), IntValue(2)))
+    assert lst == ArrayValue([IntValue(1), IntValue(2)])
     dct = _decode(DictDecode(ScalarDecode(ScalarKind.INT)), {"k": 1})
     assert dct.entries == {"k": IntValue(1)}
     variant_with_field = _decode(

@@ -54,7 +54,7 @@ from agm.agl.ir import (
     IrFunctionBody,
     IrFunctionParam,
     IrIndex,
-    IrIndexStep,
+    IrIndexSet,
     IrIndirectCall,
     IrLoad,
     IrMakeArray,
@@ -240,7 +240,7 @@ class TestContainers:
             ),
             {sym: desc},
         )
-        assert result == {"lst": ArrayValue((IntValue(1), IntValue(2), IntValue(3)))}
+        assert result == {"lst": ArrayValue([IntValue(1), IntValue(2), IntValue(3)])}
 
     def test_make_array_empty(self) -> None:
         sym, desc = _let_sym(0, "empty")
@@ -248,7 +248,7 @@ class TestContainers:
             (IrBind(_LOC, sym, IrMakeArray(_LOC, ())),),
             {sym: desc},
         )
-        assert result == {"empty": ArrayValue(())}
+        assert result == {"empty": ArrayValue([])}
 
     def test_make_dict(self) -> None:
         sym, desc = _let_sym(0, "d")
@@ -409,7 +409,7 @@ class TestVarCell:
         result = _run(
             (
                 IrBind(_LOC, sym, IrConstInt(_LOC, 0)),
-                IrAssign(_LOC, sym, (), IrConstInt(_LOC, 42)),
+                IrAssign(_LOC, sym, IrConstInt(_LOC, 42)),
                 IrLoad(_LOC, sym),
             ),
             {sym: desc},
@@ -422,7 +422,7 @@ class TestVarCell:
         prog = _make_program(
             (
                 IrBind(_LOC, sym, IrConstInt(_LOC, 0)),
-                IrAssign(_LOC, sym, (), IrConstInt(_LOC, 42)),
+                IrAssign(_LOC, sym, IrConstInt(_LOC, 42)),
             ),
             {sym: desc},
         )
@@ -439,8 +439,8 @@ class TestVarCell:
         result = _run(
             (
                 IrBind(_LOC, sym, IrConstInt(_LOC, 1)),
-                IrAssign(_LOC, sym, (), IrConstInt(_LOC, 2)),
-                IrAssign(_LOC, sym, (), IrConstInt(_LOC, 3)),
+                IrAssign(_LOC, sym, IrConstInt(_LOC, 2)),
+                IrAssign(_LOC, sym, IrConstInt(_LOC, 3)),
             ),
             {sym: desc},
         )
@@ -450,7 +450,7 @@ class TestVarCell:
         """IrAssign to an unbound symbol raises InvalidIrError."""
         sym = SymbolId(99)
         prog = _make_program(
-            (IrAssign(_LOC, sym, (), IrConstInt(_LOC, 1)),),
+            (IrAssign(_LOC, sym, IrConstInt(_LOC, 1)),),
             symbols={},
         )
         with pytest.raises(InvalidIrError):
@@ -462,7 +462,7 @@ class TestVarCell:
         prog = _make_program(
             (
                 IrBind(_LOC, sym, IrConstInt(_LOC, 5)),
-                IrAssign(_LOC, sym, (), IrConstInt(_LOC, 10)),
+                IrAssign(_LOC, sym, IrConstInt(_LOC, 10)),
             ),
             {sym: desc},
         )
@@ -783,25 +783,26 @@ class TestDefensiveErrors:
         with pytest.raises(InvalidIrError):
             IrInterpreter(prog).run()
 
-    def test_assign_with_path_array(self) -> None:
-        """IrAssign with a non-empty path performs indexed assignment on an array."""
+    def test_index_set_mutates_array_in_place(self) -> None:
+        """IrIndexSet performs an in-place indexed assignment on an array."""
         from agm.agl.semantics.values import ArrayValue, IntValue
 
         sym, desc = _var_sym(0, "v")
         prog = _make_program(
             (
                 IrBind(_LOC, sym, IrMakeArray(_LOC, (IrConstInt(_LOC, 10), IrConstInt(_LOC, 20)))),
-                IrAssign(
+                IrIndexSet(
                     _LOC,
-                    sym,
-                    (IrIndexStep(kind=IndexKind.ARRAY, index=IrConstInt(_LOC, 0), location=_LOC),),
-                    IrConstInt(_LOC, 99),
+                    container=IrLoad(_LOC, sym),
+                    kind=IndexKind.ARRAY,
+                    index=IrConstInt(_LOC, 0),
+                    value=IrConstInt(_LOC, 99),
                 ),
             ),
             {sym: desc},
         )
         result = IrInterpreter(prog).run()
-        assert result["v"] == ArrayValue((IntValue(99), IntValue(20)))
+        assert result["v"] == ArrayValue([IntValue(99), IntValue(20)])
 
     def test_ir_and_non_bool_lhs_raises(self) -> None:
         """IrAnd with a non-BoolValue lhs raises InvalidIrError."""
@@ -1176,39 +1177,43 @@ class TestIrUpdateRecord:
 
 
 # ---------------------------------------------------------------------------
-# IrAssign with path — IndexError / KeyError at intermediate and final steps
+# IrIndexSet — IndexError / KeyError raised by the container or the final store
 # ---------------------------------------------------------------------------
 
 
-class TestIrAssignPathErrors:
-    """Tests for IrAssign path error handling (IndexError/KeyError in path steps).
+class TestIrIndexSetErrors:
+    """Tests for IrIndexSet error handling (IndexError/KeyError).
 
     These tests exercise the exception-handling branches in IrInterpreter._eval
-    for the IrAssign case with a non-empty path.  Each test constructs a depth-2
-    assignment where the intermediate or final index is out-of-range or missing.
+    for IrIndexSet.  Each test constructs a depth-2 assignment where either the
+    container sub-expression (an IrIndex, evaluated to reach the inner
+    container) or the final indexed store is out-of-range or missing.
     """
 
     def _var(self, n: int, name: str) -> tuple[SymbolId, SymbolDescriptor]:
         return _var_sym(n, name)
 
-    def test_assign_path_intermediate_array_oob_raises(self) -> None:
-        """IrAssign: intermediate step with out-of-bounds array index raises AglRaise."""
+    def test_index_set_container_array_oob_raises(self) -> None:
+        """IrIndexSet: the container expression (IrIndex) raises out-of-bounds."""
         from agm.agl.semantics.exceptions import AglRaise
 
-        # xss = [[1, 2]], then xss[5][0] := 99 — step 0 is OOB
+        # xss = [[1, 2]], then xss[5][0] := 99 — reaching the container is OOB
         sym, desc = self._var(0, "xss")
         inner = IrMakeArray(_LOC, (IrConstInt(_LOC, 1), IrConstInt(_LOC, 2)))
         prog = _make_program(
             (
                 IrBind(_LOC, sym, IrMakeArray(_LOC, (inner,))),
-                IrAssign(
+                IrIndexSet(
                     _LOC,
-                    sym,
-                    (
-                        IrIndexStep(kind=IndexKind.ARRAY, index=IrConstInt(_LOC, 5), location=_LOC),
-                        IrIndexStep(kind=IndexKind.ARRAY, index=IrConstInt(_LOC, 0), location=_LOC),
+                    container=IrIndex(
+                        location=_LOC,
+                        kind=IndexKind.ARRAY,
+                        value=IrLoad(_LOC, sym),
+                        index=IrConstInt(_LOC, 5),
                     ),
-                    IrConstInt(_LOC, 99),
+                    kind=IndexKind.ARRAY,
+                    index=IrConstInt(_LOC, 0),
+                    value=IrConstInt(_LOC, 99),
                 ),
             ),
             {sym: desc},
@@ -1217,28 +1222,27 @@ class TestIrAssignPathErrors:
             IrInterpreter(prog).run()
         assert exc.value.exc.display_name == "IndexError"
 
-    def test_assign_path_intermediate_dict_missing_key_raises(self) -> None:
-        """IrAssign: intermediate step with missing dict key raises AglRaise."""
+    def test_index_set_container_dict_missing_key_raises(self) -> None:
+        """IrIndexSet: the container expression (IrIndex) raises missing key."""
         from agm.agl.semantics.exceptions import AglRaise
 
-        # m = {"a": [1, 2]}, then m["z"]["a"] := 99 — step 0 key is missing
+        # m = {"a": [1, 2]}, then m["z"][0] := 99 — reaching the container is missing
         sym, desc = self._var(0, "m")
         inner = IrMakeArray(_LOC, (IrConstInt(_LOC, 1), IrConstInt(_LOC, 2)))
         prog = _make_program(
             (
                 IrBind(_LOC, sym, IrMakeDict(_LOC, ((IrConstText(_LOC, "a"), inner),))),
-                IrAssign(
+                IrIndexSet(
                     _LOC,
-                    sym,
-                    (
-                        IrIndexStep(
-                            kind=IndexKind.DICT,
-                            index=IrConstText(_LOC, "z"),
-                            location=_LOC,
-                        ),
-                        IrIndexStep(kind=IndexKind.ARRAY, index=IrConstInt(_LOC, 0), location=_LOC),
+                    container=IrIndex(
+                        location=_LOC,
+                        kind=IndexKind.DICT,
+                        value=IrLoad(_LOC, sym),
+                        index=IrConstText(_LOC, "z"),
                     ),
-                    IrConstInt(_LOC, 99),
+                    kind=IndexKind.ARRAY,
+                    index=IrConstInt(_LOC, 0),
+                    value=IrConstInt(_LOC, 99),
                 ),
             ),
             {sym: desc},
@@ -1247,20 +1251,21 @@ class TestIrAssignPathErrors:
             IrInterpreter(prog).run()
         assert exc.value.exc.display_name == "KeyError"
 
-    def test_assign_path_final_array_oob_raises(self) -> None:
-        """IrAssign: final step with out-of-bounds array index raises AglRaise."""
+    def test_index_set_final_array_oob_raises(self) -> None:
+        """IrIndexSet: the final indexed store is out-of-bounds."""
         from agm.agl.semantics.exceptions import AglRaise
 
-        # xs = [1, 2], then xs[5] := 99 — final step is OOB
+        # xs = [1, 2], then xs[5] := 99 — the store itself is OOB
         sym, desc = self._var(0, "xs")
         prog = _make_program(
             (
                 IrBind(_LOC, sym, IrMakeArray(_LOC, (IrConstInt(_LOC, 1), IrConstInt(_LOC, 2)))),
-                IrAssign(
+                IrIndexSet(
                     _LOC,
-                    sym,
-                    (IrIndexStep(kind=IndexKind.ARRAY, index=IrConstInt(_LOC, 5), location=_LOC),),
-                    IrConstInt(_LOC, 99),
+                    container=IrLoad(_LOC, sym),
+                    kind=IndexKind.ARRAY,
+                    index=IrConstInt(_LOC, 5),
+                    value=IrConstInt(_LOC, 99),
                 ),
             ),
             {sym: desc},
@@ -1269,11 +1274,11 @@ class TestIrAssignPathErrors:
             IrInterpreter(prog).run()
         assert exc.value.exc.display_name == "IndexError"
 
-    def test_assign_path_final_dict_missing_key_raises(self) -> None:
-        """IrAssign: final step with missing dict key raises AglRaise."""
+    def test_index_set_final_dict_missing_key_raises(self) -> None:
+        """IrIndexSet: the final indexed store hits a missing key."""
         from agm.agl.semantics.exceptions import AglRaise
 
-        # m = {"a": 1}, then m["z"] := 99 — final step key is missing
+        # m = {"a": 1}, then m["z"] := 99 — the store itself is missing
         sym, desc = self._var(0, "m")
         prog = _make_program(
             (
@@ -1282,17 +1287,12 @@ class TestIrAssignPathErrors:
                     sym,
                     IrMakeDict(_LOC, ((IrConstText(_LOC, "a"), IrConstInt(_LOC, 1)),)),
                 ),
-                IrAssign(
+                IrIndexSet(
                     _LOC,
-                    sym,
-                    (
-                        IrIndexStep(
-                            kind=IndexKind.DICT,
-                            index=IrConstText(_LOC, "z"),
-                            location=_LOC,
-                        ),
-                    ),
-                    IrConstInt(_LOC, 99),
+                    container=IrLoad(_LOC, sym),
+                    kind=IndexKind.DICT,
+                    index=IrConstText(_LOC, "z"),
+                    value=IrConstInt(_LOC, 99),
                 ),
             ),
             {sym: desc},

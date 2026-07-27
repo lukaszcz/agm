@@ -14,6 +14,8 @@ from __future__ import annotations
 
 import decimal
 
+import pytest
+
 # ---------------------------------------------------------------------------
 # Import tests
 # ---------------------------------------------------------------------------
@@ -190,15 +192,14 @@ def test_json_value_dict_eq() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_dict_value_hash_order_insensitive() -> None:
-    """DictValue hash is order-insensitive (same keys/values → same hash)."""
+def test_dict_value_eq_order_insensitive() -> None:
+    """DictValue equality is order-insensitive (same keys/values → equal)."""
     from agm.agl.semantics.values import DictValue, IntValue
 
     d1 = DictValue(entries={"a": IntValue(1), "b": IntValue(2)})
     d2 = DictValue(entries={"b": IntValue(2), "a": IntValue(1)})
-    # Python dicts preserve insertion order, but hash should ignore order.
+    # Python dicts preserve insertion order, but equality should ignore order.
     assert d1 == d2
-    assert hash(d1) == hash(d2)
 
 
 def test_dict_value_eq_contract() -> None:
@@ -224,8 +225,8 @@ def _make_nominal(module_slash_path: str, name: str) -> "object":
     return NominalId(ModuleId.from_path(module_slash_path), name)
 
 
-def test_record_value_eq_and_hash() -> None:
-    """RecordValue equality and hash consider nominal identity and fields.
+def test_record_value_eq() -> None:
+    """RecordValue equality considers nominal identity and fields.
 
     Two records with same nominal+fields but different display_name are equal;
     same declared_name in different modules are NOT equal.
@@ -253,9 +254,7 @@ def test_record_value_eq_and_hash() -> None:
     r5 = RecordValue(nominal=nom_foo_a, display_name="Foo", fields={"x": IntValue(2)})
 
     assert r1 == r2
-    assert hash(r1) == hash(r2)
     assert r1 == r_diff_display  # display_name excluded from eq
-    assert hash(r1) == hash(r_diff_display)
     assert r1 != r3  # different module
     assert r1 != r4  # different name
     assert r1 != r5  # different fields
@@ -287,8 +286,8 @@ def test_constructor_value_eq_and_hash() -> None:
     assert c1 != c4  # different variant
 
 
-def test_record_value_hash_with_json_payload() -> None:
-    """RecordValue hash is consistent with JsonValue eq (numerically equal payloads)."""
+def test_record_value_eq_with_json_payload() -> None:
+    """RecordValue equality is consistent with JsonValue eq (numerically equal payloads)."""
     from agm.agl.modules.ids import ModuleId
     from agm.agl.semantics.values import JsonValue, NominalId, RecordValue
 
@@ -297,7 +296,6 @@ def test_record_value_hash_with_json_payload() -> None:
     r2 = RecordValue(nominal=nom, display_name="R", fields={"v": JsonValue(decimal.Decimal("1"))})
     # JsonValue(1) == JsonValue(Decimal("1")), so records are equal.
     assert r1 == r2
-    assert hash(r1) == hash(r2)
 
 
 # ---------------------------------------------------------------------------
@@ -305,10 +303,10 @@ def test_record_value_hash_with_json_payload() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_enum_value_eq_and_hash() -> None:
-    """EnumValue equality and hash consider nominal identity, variant, and fields.
+def test_enum_value_eq() -> None:
+    """EnumValue equality considers nominal identity, variant, and fields.
 
-    display_name is excluded from eq/hash.
+    display_name is excluded from eq.
     """
     from agm.agl.modules.ids import ModuleId
     from agm.agl.semantics.values import EnumValue, NominalId
@@ -331,9 +329,7 @@ def test_enum_value_eq_and_hash() -> None:
     e5 = EnumValue(nominal=nom_color_other, display_name="Color", variant="Red", fields={})
 
     assert e1 == e2
-    assert hash(e1) == hash(e2)
     assert e1 == e_diff_disp
-    assert hash(e1) == hash(e_diff_disp)
     assert e1 != e3
     assert e1 != e4
     assert e1 != e5
@@ -347,7 +343,7 @@ def test_enum_value_eq_and_hash() -> None:
 def test_exception_value_eq() -> None:
     """ExceptionValue equality considers nominal identity and fields.
 
-    display_name is excluded from eq/hash. Built-in exceptions use PRELUDE_ID.
+    display_name is excluded from eq. Built-in exceptions use PRELUDE_ID.
     """
     from agm.agl.modules.ids import PRELUDE_ID, ModuleId
     from agm.agl.semantics.values import ExceptionValue, NominalId, TextValue
@@ -397,17 +393,86 @@ def test_builtin_exception_value_uses_prelude_id() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_array_value_eq_and_hash() -> None:
-    """ArrayValue equality and hash compare elements structurally."""
+def test_array_value_eq() -> None:
+    """ArrayValue equality compares elements structurally."""
     from agm.agl.semantics.values import ArrayValue, IntValue
 
-    lv1 = ArrayValue(elements=(IntValue(1), IntValue(2)))
-    lv2 = ArrayValue(elements=(IntValue(1), IntValue(2)))
-    lv3 = ArrayValue(elements=(IntValue(1),))
+    lv1 = ArrayValue(elements=[IntValue(1), IntValue(2)])
+    lv2 = ArrayValue(elements=[IntValue(1), IntValue(2)])
+    lv3 = ArrayValue(elements=[IntValue(1)])
 
     assert lv1 == lv2
-    assert hash(lv1) == hash(lv2)
     assert lv1 != lv3
+
+
+def test_array_value_mutation_visible_through_alias() -> None:
+    """Mutating ArrayValue.elements in place is observed through any reference to it."""
+    from agm.agl.semantics.values import ArrayValue, IntValue
+
+    original = ArrayValue(elements=[IntValue(1), IntValue(2)])
+    alias = original
+
+    alias.elements[0] = IntValue(99)
+
+    assert original == ArrayValue(elements=[IntValue(99), IntValue(2)])
+
+
+# ---------------------------------------------------------------------------
+# Unhashability: ArrayValue, DictValue, RecordValue, EnumValue, ExceptionValue
+# ---------------------------------------------------------------------------
+
+
+def test_array_dict_record_enum_exception_are_genuinely_unhashable() -> None:
+    """These types have ``__hash__`` set to ``None`` — not merely raising incidentally.
+
+    Asserting ``type.__hash__ is None`` (rather than just ``pytest.raises(TypeError)``
+    around ``hash(...)``) proves the type itself is unhashable, as opposed to happening
+    to hold an unhashable field (e.g. a ``dict``) that raises for an unrelated reason.
+    """
+    from agm.agl.semantics.values import (
+        ArrayValue,
+        DictValue,
+        EnumValue,
+        ExceptionValue,
+        RecordValue,
+    )
+
+    assert ArrayValue.__hash__ is None
+    assert DictValue.__hash__ is None
+    assert RecordValue.__hash__ is None
+    assert EnumValue.__hash__ is None
+    assert ExceptionValue.__hash__ is None
+
+
+def test_array_dict_record_enum_exception_hash_raises() -> None:
+    """Every mutable-payload value type raises TypeError on hash() — never a stable hash."""
+    from agm.agl.modules.ids import PRELUDE_ID, ModuleId
+    from agm.agl.semantics.values import (
+        ArrayValue,
+        DictValue,
+        EnumValue,
+        ExceptionValue,
+        IntValue,
+        NominalId,
+        RecordValue,
+        TextValue,
+    )
+
+    nom = NominalId(ModuleId.from_path("m"), "Foo")
+    values: tuple[object, ...] = (
+        ArrayValue(elements=[IntValue(1)]),
+        DictValue(entries={"a": IntValue(1)}),
+        RecordValue(nominal=nom, display_name="Foo", fields={"x": IntValue(1)}),
+        EnumValue(nominal=nom, display_name="Foo", variant="Bar", fields={}),
+        ExceptionValue(
+            nominal=NominalId(PRELUDE_ID, "Err"),
+            display_name="Err",
+            fields={"message": TextValue("oops")},
+        ),
+    )
+    for value in values:
+        with pytest.raises(TypeError):
+            hash(value)
 
 
 # ---------------------------------------------------------------------------

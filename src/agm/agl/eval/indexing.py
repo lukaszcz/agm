@@ -77,8 +77,15 @@ def index_get(kind: IndexKind, container: Value, index: Value) -> Value:
             assert_never(unreachable)
 
 
-def index_set(kind: IndexKind, container: Value, index: Value, value: Value) -> Value:
-    """Return a new immutable container with the slot at index replaced by value."""
+def index_set(kind: IndexKind, container: Value, index: Value, value: Value) -> None:
+    """Mutate the array or dict *container* in place, storing *value* at *index*.
+
+    An out-of-range array index raises ``AglIndexOutOfRange``. A dict
+    assignment updates an **existing key only**; a missing key raises
+    ``AglMissingKey`` rather than inserting it, so this is the single source
+    of truth for the missing-key rule (callers must not pre-check via
+    ``index_get``).
+    """
     match kind:
         case IndexKind.ARRAY:
             if not isinstance(container, ArrayValue):
@@ -90,9 +97,7 @@ def index_set(kind: IndexKind, container: Value, index: Value, value: Value) -> 
                     f"index_set ARRAY: expected IntValue index, got {type(index).__name__}"
                 )
             normalized = _normalize_array_index(index.value, len(container.elements))
-            elements = list(container.elements)
-            elements[normalized] = value
-            return ArrayValue(tuple(elements))
+            container.elements[normalized] = value
         case IndexKind.DICT:
             if not isinstance(container, DictValue):
                 raise AssertionError(
@@ -102,8 +107,8 @@ def index_set(kind: IndexKind, container: Value, index: Value, value: Value) -> 
                 raise AssertionError(
                     f"index_set DICT: expected TextValue index, got {type(index).__name__}"
                 )
-            entries = dict(container.entries)
-            entries[index.value] = value
-            return DictValue(entries)
+            if index.value not in container.entries:
+                raise AglMissingKey(index.value)
+            container.entries[index.value] = value
         case _ as unreachable:  # pragma: no cover
             assert_never(unreachable)

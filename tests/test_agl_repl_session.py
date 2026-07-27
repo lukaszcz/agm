@@ -34,7 +34,7 @@ from agm.agl.semantics.types import (
     TextType,
     Type,
 )
-from agm.agl.semantics.values import VOID_VALUE, BoolValue, IntValue, UnitValue
+from agm.agl.semantics.values import VOID_VALUE, ArrayValue, BoolValue, IntValue, UnitValue
 
 # ---------------------------------------------------------------------------
 # Fake agents
@@ -243,6 +243,21 @@ class TestPersistence:
         assert r.kind == "expression"
         assert r.value is not None
         assert _int(r.value) == 8
+
+    def test_later_entry_mutates_array_bound_in_earlier_entry(self) -> None:
+        """Arrays are mutable reference values, so a later entry's indexed
+        assignment through the same binding is visible when that binding is
+        read again -- the REPL's cross-entry persistence shares the array
+        object, not a copy of it."""
+        s = ReplSession()
+        assert s.eval_entry("var xs = [1, 2]").ok
+
+        assign = s.eval_entry("xs[0] := 9")
+        result = s.eval_entry("xs")
+
+        assert assign.ok, assign.diagnostics
+        assert result.ok, result.diagnostics
+        assert result.value == ArrayValue([IntValue(9), IntValue(2)])
 
     def test_assign_to_prior_immutable_binding_is_rejected(self) -> None:
         """A later entry cannot reassign an earlier ``let``, and it survives."""
@@ -1197,7 +1212,7 @@ class TestFailureEffects:
         assert not r2.ok
         assert r2.error is not None
         vals = {n: v for n, _t, v in s.bindings()}
-        assert vals["xs"] == ArrayValue((IntValue(99), IntValue(2), IntValue(3)))
+        assert vals["xs"] == ArrayValue([IntValue(99), IntValue(2), IntValue(3)])
 
     def test_successful_assign_to_prior_var_persists(self) -> None:
         # The positive counterpart: a successful ``:=`` in a later entry DOES

@@ -1,6 +1,6 @@
 # AgL Evaluator
 
-The evaluator interprets the linked program and nothing else — it never imports the frontend. Its frame stack holds immutable bindings by value and mutable bindings in shared cells; the base frame is module scope, and function frames hold parameters and captured lexical bindings. Programs run under a pinned decimal arithmetic context so results never depend on the host's ambient precision.
+The evaluator interprets the linked program and nothing else — it never imports the frontend. Its frame stack holds `let`/param bindings directly and `var` bindings in shared cells, but binding is never copying: an array or dict value is a reference to a mutable payload (`ArrayValue`/`DictValue` in `semantics/values.py`), so every slot, field, capture, or iterator holding that reference observes an in-place indexed-assignment mutation. Records, enums, and exceptions are themselves immutable (no field assignment) but are likewise held and passed by reference. The base frame is module scope, and function frames hold parameters and captured lexical bindings. Programs run under a pinned decimal arithmetic context so results never depend on the host's ambient precision.
 
 ## Control Flow
 

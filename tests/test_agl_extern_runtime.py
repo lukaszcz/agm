@@ -406,7 +406,10 @@ class TestArrayDictDeepNesting:
         companion = "def echo(x):\n    return x\n"
         result, _ = evaluate_ir_with_externs(source, companion, tmp_path)
         assert result["r"] == DictValue(
-            entries={"a": ArrayValue((IntValue(1), IntValue(2))), "b": ArrayValue((IntValue(3),))}
+            entries={
+                "a": ArrayValue([IntValue(1), IntValue(2)]),
+                "b": ArrayValue([IntValue(3)]),
+            }
         )
 
     def test_dict_non_string_key_on_return_rejected(self, tmp_path: Path) -> None:
@@ -656,7 +659,7 @@ class TestDeepCopyIsolation:
         companion = "def touch(xs):\n    xs.append(99)\n    return xs\n"
         result, _ = evaluate_ir_with_externs(source, companion, tmp_path)
         assert result["touched"] == ArrayValue(
-            (IntValue(1), IntValue(2), IntValue(3), IntValue(99))
+            [IntValue(1), IntValue(2), IntValue(3), IntValue(99)]
         )
 
     def test_mutating_a_received_json_object_does_not_affect_the_agl_value_used_after_the_call(

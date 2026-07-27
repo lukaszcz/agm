@@ -134,10 +134,29 @@ enum MaybeText
 
 ### `array[T]` and `dict[text, T]`
 
-Homogeneous containers. Elements and values are read with indexing
-(`xs[0]`, `metadata["key"]`). A mutable `var` binding can be updated through
-an index with `:=`; this replaces the binding with a new array or dictionary
-value. There is no `len` operator.
+Homogeneous containers, and **mutable reference values**: binding, assignment,
+passing as an argument, and storing in a field never copy an array or dict —
+every alias shares the same underlying object. Elements and values are read
+with indexing (`xs[0]`, `metadata["key"]`). A mutable `var` binding can be
+updated through an index with `:=`, which mutates the array or dictionary
+**in place**; every other binding, field, capture, or loop cursor that
+references the same array or dictionary observes the change. There is no
+`len` operator.
+
+Records, enums, and exceptions are immutable — none of their fields can be
+reassigned, and `with` ([Expressions](expressions.md)) builds a new value
+rather than mutating one — but they too are shared by reference: two
+bindings holding "the same" record share it, so a record or enum that holds
+an array or dict makes that container's mutability observable through every
+binding that reaches it.
+
+See [Bindings and Scope](bindings-and-scope.md) for the `:=` indexed-assignment
+rules, and [Foreign Function Interface](ffi.md) for the guarantee that
+crossing the FFI boundary always deep-copies. (It is not the only place a
+copy is made: an explicit `as json` cast of an array or dict builds an
+independent snapshot — see [Casts and convertibility](#casts-and-convertibility)
+below — and `with` ([Expressions](expressions.md)) builds a shallow copy of
+a record.)
 
 ### `agent`
 
@@ -673,7 +692,11 @@ are all static errors — booleans never convert to or from numbers.
 A **total** cast is guaranteed to succeed at runtime; it never raises and has
 no runtime cost beyond the conversion itself. Redundant total casts (casting
 a value to its own type, or `int as decimal`) are accepted and are no-ops;
-no warning is emitted.
+no warning is emitted. Casting an array or dict to its own type (`xs as
+array[int]`) is a true no-op: it yields the *same* value, not a copy, so a
+mutation through the result is visible through `xs` and vice versa. This
+differs from `as json` on a container, which builds an independent snapshot
+(see [`array[T]` and `dict[text, T]`](#arrayt-and-dicttext-t) above).
 
 A **fallible** cast may raise `CastError` if the value does not conform to
 the target type. The `as?` form lets you probe convertibility without

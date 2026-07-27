@@ -50,7 +50,7 @@ from agm.agl.ir import (
     IrFunctionBody,
     IrFunctionParam,
     IrIndex,
-    IrIndexStep,
+    IrIndexSet,
     IrIndirectCall,
     IrLiteralCaseKey,
     IrLiteralKind,
@@ -190,7 +190,6 @@ def _assign_sym_mut(value: IrConstInt | None = None) -> IrAssign:
     return IrAssign(
         location=LOC,
         symbol=SYM_MUT,
-        path=(),
         value=value if value is not None else IrConstInt(location=LOC, value=42),
     )
 
@@ -512,10 +511,15 @@ class TestValidProgram:
 
         validate_ir(program, deep=True)
 
-    def test_assign_with_index_path(self) -> None:
-        idx_step = IrIndexStep(kind=IndexKind.ARRAY, index=_int(0), location=LOC)
-        assign = IrAssign(location=LOC, symbol=SYM_MUT, path=(idx_step,), value=_int(99))
-        prog = _make_program(initializers=(assign,))
+    def test_index_set_container_and_value(self) -> None:
+        index_set = IrIndexSet(
+            location=LOC,
+            container=_load_sym0(),
+            kind=IndexKind.ARRAY,
+            index=_int(0),
+            value=_int(99),
+        )
+        prog = _make_program(initializers=(index_set,))
         validate_ir(prog)
 
     def test_nested_sequence_in_block(self) -> None:
@@ -569,21 +573,29 @@ class TestCheapTierLocation:
         with pytest.raises(InvalidIrError, match="start_col"):
             validate_ir(prog, deep=False)
 
-    def test_index_step_bad_location(self) -> None:
+    def test_index_set_bad_location(self) -> None:
         bad_loc = loc(start_offset=-5, end_offset=0)
-        step = IrIndexStep(kind=IndexKind.ARRAY, index=_int(0), location=bad_loc)
-        assign = IrAssign(location=LOC, symbol=SYM_MUT, path=(step,), value=_int())
-        prog = _make_program(initializers=(assign,))
+        index_set = IrIndexSet(
+            location=bad_loc,
+            container=_load_sym0(),
+            kind=IndexKind.ARRAY,
+            index=_int(0),
+            value=_int(),
+        )
+        prog = _make_program(initializers=(index_set,))
         with pytest.raises(InvalidIrError, match="start_offset"):
             validate_ir(prog, deep=False)
 
-    def test_index_step_index_bad_location(self) -> None:
+    def test_index_set_index_bad_location(self) -> None:
         bad_loc = loc(start_offset=10, end_offset=5)
-        step = IrIndexStep(
-            kind=IndexKind.ARRAY, index=IrConstInt(location=bad_loc, value=0), location=LOC
+        index_set = IrIndexSet(
+            location=LOC,
+            container=_load_sym0(),
+            kind=IndexKind.ARRAY,
+            index=IrConstInt(location=bad_loc, value=0),
+            value=_int(),
         )
-        assign = IrAssign(location=LOC, symbol=SYM_MUT, path=(step,), value=_int())
-        prog = _make_program(initializers=(assign,))
+        prog = _make_program(initializers=(index_set,))
         with pytest.raises(InvalidIrError, match="start_offset"):
             validate_ir(prog, deep=False)
 
@@ -812,7 +824,7 @@ class TestDeepTierSymbolResolution:
 
     def test_ir_assign_dangling_symbol(self) -> None:
         dangling = SymbolId(value=666)
-        node = IrAssign(location=LOC, symbol=dangling, path=(), value=_int())
+        node = IrAssign(location=LOC, symbol=dangling, value=_int())
         prog = _make_program(initializers=(node,))
         with pytest.raises(InvalidIrError, match="666"):
             validate_ir(prog)
@@ -826,7 +838,7 @@ class TestDeepTierSymbolResolution:
 
     def test_ir_assign_dangling_skipped_cheap(self) -> None:
         dangling = SymbolId(value=666)
-        node = IrAssign(location=LOC, symbol=dangling, path=(), value=_int())
+        node = IrAssign(location=LOC, symbol=dangling, value=_int())
         prog = _make_program(initializers=(node,))
         validate_ir(prog, deep=False)  # no exception
 
@@ -842,7 +854,6 @@ class TestDeepTierAssignMutability:
         node = IrAssign(
             location=LOC,
             symbol=SYM0,  # SYM0 is immutable (let)
-            path=(),
             value=_int(),
         )
         prog = _make_program(initializers=(node,))
@@ -858,7 +869,6 @@ class TestDeepTierAssignMutability:
         node = IrAssign(
             location=LOC,
             symbol=SYM0,  # immutable, but deep=False won't catch it
-            path=(),
             value=_int(),
         )
         prog = _make_program(initializers=(node,))
@@ -903,12 +913,17 @@ class TestDeepTierLocationSourceId:
         prog = _make_program(initializers=(node,), sources={SID0: sf})
         validate_ir(prog)  # no exception
 
-    def test_index_step_location_source_id_missing(self) -> None:
-        """IrIndexStep.location source_id is also validated."""
+    def test_index_set_location_source_id_missing(self) -> None:
+        """IrIndexSet.location source_id is also validated."""
         bad_loc = loc(source_id=SID1)
-        step = IrIndexStep(kind=IndexKind.ARRAY, index=_int(), location=bad_loc)
-        assign = IrAssign(location=LOC, symbol=SYM_MUT, path=(step,), value=_int())
-        prog = _make_program(initializers=(assign,))
+        index_set = IrIndexSet(
+            location=bad_loc,
+            container=_load_sym0(),
+            kind=IndexKind.ARRAY,
+            index=_int(),
+            value=_int(),
+        )
+        prog = _make_program(initializers=(index_set,))
         with pytest.raises(InvalidIrError, match="source_id"):
             validate_ir(prog)
 
@@ -1037,7 +1052,7 @@ class TestChildTraversal:
     def test_assign_value_dangling_symbol(self) -> None:
         dangling = SymbolId(value=444)
         child = IrLoad(location=LOC, symbol=dangling)
-        node = IrAssign(location=LOC, symbol=SYM_MUT, path=(), value=child)
+        node = IrAssign(location=LOC, symbol=SYM_MUT, value=child)
         prog = _make_program(initializers=(node,))
         with pytest.raises(InvalidIrError, match="444"):
             validate_ir(prog)

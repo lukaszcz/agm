@@ -8,9 +8,6 @@ The evaluator and lowerer dispatch over it with a structural ``match`` whose
 final arm is ``assert_never(node)``, so mypy exhaustiveness makes a
 missing case a compile-time error.
 
-``IrIndexStep`` is a helper child record used by ``IrAssign``; it is NOT a
-member of ``IrExpr``.
-
 Invariant: ``IrSequence`` and ``IrBlock``
 must be non-empty (``len(items) >= 1``).  The validator checks this; do not
 rely on the constructor to enforce it, so that the linker can build nodes
@@ -86,7 +83,7 @@ __all__ = [
     "IrIf",
     "IrIfBranch",
     "IrIndex",
-    "IrIndexStep",
+    "IrIndexSet",
     "IrIndirectCall",
     "IrEnumCaseKey",
     "IrLiteralCaseKey",
@@ -266,31 +263,15 @@ class IrBind:
 
 
 @dataclass(frozen=True, slots=True)
-class IrIndexStep:
-    """A single index step on a mutable assignment path.
-
-    Used by ``IrAssign`` to represent ``target[index] := value`` paths.
-    This is a helper child record and is NOT a member of ``IrExpr``.
-    """
-
-    kind: IndexKind
-    index: "IrExpr"
-    location: Location
-
-
-@dataclass(frozen=True, slots=True)
 class IrAssign:
-    """IR assignment: ``symbol[path...] := value``.
+    """IR assignment: ``symbol := value``, a simple ``var``-cell store.
 
-    When ``path`` is empty this is a simple variable assignment (``x := v``).
-    When ``path`` is non-empty it is a chained index assignment
-    (``x[i][j] := v``).  The mutable root ``symbol`` must be a ``var``
-    (``mutable=True`` in its ``SymbolDescriptor``).
+    The mutable root ``symbol`` must be a ``var`` (``mutable=True`` in its
+    ``SymbolDescriptor``).
     """
 
     location: Location
     symbol: SymbolId
-    path: tuple[IrIndexStep, ...]
     value: "IrExpr"
 
 
@@ -485,6 +466,29 @@ class IrIndex:
     kind: IndexKind
     value: "IrExpr"
     index: "IrExpr"
+
+
+@dataclass(frozen=True, slots=True)
+class IrIndexSet:
+    """IR indexed assignment: ``container[index] := value``.
+
+    ``container`` evaluates to the array or dict being mutated; under
+    reference semantics it needs no root symbol or ``Cell`` — only a
+    container reference, which ``container`` supplies directly. Nesting
+    (``m["a"]["b"] := v``) falls out for free: ``container`` is itself an
+    ``IrIndex`` that reads the inner container by reference. Mutates the
+    container in place and evaluates to the non-printable unit, exactly as
+    ``IrAssign`` does. Emits no ``trace.mutation`` event: it mutates a
+    container, not a binding, and that container may be reachable from any
+    number of bindings, so attributing the mutation to one name would be
+    wrong.
+    """
+
+    location: Location
+    container: "IrExpr"
+    kind: IndexKind
+    index: "IrExpr"
+    value: "IrExpr"
 
 
 @dataclass(frozen=True, slots=True)
@@ -1169,6 +1173,7 @@ IrExpr = (
     | IrField
     | IrUpdateRecord
     | IrIndex
+    | IrIndexSet
     | IrRenderTemplate
     | IrMakeRecord
     | IrMakeEnum

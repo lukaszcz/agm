@@ -1,0 +1,11 @@
+# The canonical reference-semantics defect: a `var` alias of an array is the
+# same array, so an indexed assignment through the original binding is
+# observed through the alias too -- never a stale copy.
+param a: int
+param b: int
+
+var l = [a, b]
+var l2 = l
+l[0] := 0
+print(l)
+print(l2)

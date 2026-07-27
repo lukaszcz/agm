@@ -1399,7 +1399,7 @@ class TestTypedValueConstruction:
         result = _parse_typed(codec, '["a", "b"]', typ, strict_json=False)
         assert result.ok is True
         assert isinstance(result.value, ArrayValue)
-        assert result.value.elements == (TextValue("a"), TextValue("b"))
+        assert result.value.elements == [TextValue("a"), TextValue("b")]
 
     def test_array_of_int(self) -> None:
         codec = JsonCodec()
@@ -1407,7 +1407,7 @@ class TestTypedValueConstruction:
         result = _parse_typed(codec, "[1, 2, 3]", typ, strict_json=False)
         assert result.ok is True
         assert isinstance(result.value, ArrayValue)
-        assert result.value.elements == (IntValue(1), IntValue(2), IntValue(3))
+        assert result.value.elements == [IntValue(1), IntValue(2), IntValue(3)]
 
     def test_dict_of_text(self) -> None:
         codec = JsonCodec()
@@ -1449,7 +1449,7 @@ class TestTypedValueConstruction:
         assert result.value.variant == "Fail"
         issues = result.value.fields["issues"]
         assert isinstance(issues, ArrayValue)
-        assert issues.elements == (TextValue("a"), TextValue("b"))
+        assert issues.elements == [TextValue("a"), TextValue("b")]
 
     def test_json_value_wraps_raw(self) -> None:
         codec = JsonCodec()
@@ -1481,7 +1481,7 @@ class TestTypedValueConstruction:
         assert isinstance(result.value, RecordValue)
         tags = result.value.fields["tags"]
         assert isinstance(tags, ArrayValue)
-        assert tags.elements == (TextValue("x"), TextValue("y"))
+        assert tags.elements == [TextValue("x"), TextValue("y")]
 
 
 # ---------------------------------------------------------------------------
@@ -1997,7 +1997,7 @@ class TestPipelineDriverWireUp:
         scope = _run_with_json_codec((let_xs,), default_agent=lambda req: '["a", "b"]')
         xs = scope.snapshot()["xs"]
         assert isinstance(xs, ArrayValue)
-        assert xs.elements == (TextValue("a"), TextValue("b"))
+        assert xs.elements == [TextValue("a"), TextValue("b")]
 
     def test_dict_target_accepted(self) -> None:
         let_d = _let(
@@ -2273,7 +2273,7 @@ issue
 
         result = convert_param_value("xs", [1, 2, 3], ArrayType(elem=IntType()), type_table_for())
         assert isinstance(result, ArrayValue)
-        assert result.elements == (IntValue(1), IntValue(2), IntValue(3))
+        assert result.elements == [IntValue(1), IntValue(2), IntValue(3)]
 
     def test_structured_param_must_be_string_or_compatible(self) -> None:
         """Structured params that are not a string or JSON-compatible Python value raise."""
@@ -3624,7 +3624,7 @@ class TestRegisterCodec:
                 defs: Mapping[str, DecodeSchema] | None = None,
             ) -> ParseResult:
                 seen_decode.append(decode)
-                return ParseResult.success(ArrayValue((IntValue(int(raw)),)))
+                return ParseResult.success(ArrayValue([IntValue(int(raw))]))
 
         def agent(req: AgentRequest) -> str:
             received.append(req)
@@ -3635,7 +3635,7 @@ class TestRegisterCodec:
         result = rt.run('let xs: array[int] = ask("Q", format = "array-int-codec")\nxs')
 
         assert result.ok is True
-        assert result.bindings["xs"] == ArrayValue((IntValue(3),))
+        assert result.bindings["xs"] == ArrayValue([IntValue(3)])
         assert seen_decode == [None]
         assert received[0].output_contract is not None
         assert received[0].output_contract.format_instructions == "ARRAY-INT-CUSTOM-FORMAT"

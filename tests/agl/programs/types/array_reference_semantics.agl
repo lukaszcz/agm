@@ -1,0 +1,32 @@
+# Arrays are mutable reference values: `var`, `let`, a record field, and a
+# function parameter can all alias the same array, and an indexed assignment
+# through any one of them mutates the shared array in place -- every other
+# alias observes the change, including a generic function reading through it.
+record Box(items: array[int])
+
+def first_of[T](xs: array[T]) -> T = xs[0]
+
+def bump(xs: array[int]) -> unit =
+  var writer = xs
+  writer[0] := writer[0] + 1
+
+param seed: int
+
+var l = [seed, seed + 1]
+var l2 = l
+let l3 = l
+let box = Box(items = l)
+
+l[0] := 0
+print(l)
+print(l2)
+print(l3)
+print(box.items)
+print(first_of(l))
+
+bump(l)
+print(l)
+print(l2)
+print(l3)
+print(box.items)
+print(first_of(l))

@@ -111,9 +111,9 @@ items
         scripts={"lister": ['["alpha", "beta", "gamma"]']},
     )
     assert isinstance(ir["items"], ArrayValue)
-    assert ir["items"].elements == (TextValue("alpha"), TextValue("beta"), TextValue("gamma"))
+    assert ir["items"].elements == [TextValue("alpha"), TextValue("beta"), TextValue("gamma")]
     assert isinstance(ir["items"], ArrayValue)
-    assert ir["items"].elements == (TextValue("alpha"), TextValue("beta"), TextValue("gamma"))
+    assert ir["items"].elements == [TextValue("alpha"), TextValue("beta"), TextValue("gamma")]
 
 
 # ---------------------------------------------------------------------------

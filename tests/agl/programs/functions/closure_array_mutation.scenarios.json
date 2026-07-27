@@ -1,0 +1,14 @@
+{
+  "scenarios": [
+    {
+      "name": "small_pair",
+      "params": {"first": 1, "second": 2},
+      "expect": {"stdout": "[1, 2]\n[11, 2]\n[21, 2]\n"}
+    },
+    {
+      "name": "larger_pair",
+      "params": {"first": 5, "second": 9},
+      "expect": {"stdout": "[5, 9]\n[15, 9]\n[25, 9]\n"}
+    }
+  ]
+}

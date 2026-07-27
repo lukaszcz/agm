@@ -39,7 +39,7 @@ class TestParametricUtilitiesAtSeveralInstantiations:
         source = "extern def reverse[T](xs: array[T]) -> array[T]\nlet r = reverse([1, 2, 3])\nr\n"
         companion = "def reverse(xs):\n    return list(reversed(xs))\n"
         result, _ = evaluate_ir_with_externs(source, companion, tmp_path)
-        assert result["r"] == ArrayValue((IntValue(3), IntValue(2), IntValue(1)))
+        assert result["r"] == ArrayValue([IntValue(3), IntValue(2), IntValue(1)])
 
     def test_reverse_at_text(self, tmp_path: Path) -> None:
         source = (
@@ -47,7 +47,7 @@ class TestParametricUtilitiesAtSeveralInstantiations:
         )
         companion = "def reverse(xs):\n    return list(reversed(xs))\n"
         result, _ = evaluate_ir_with_externs(source, companion, tmp_path)
-        assert result["r"] == ArrayValue((TextValue("c"), TextValue("b"), TextValue("a")))
+        assert result["r"] == ArrayValue([TextValue("c"), TextValue("b"), TextValue("a")])
 
     def test_reverse_at_record(self, tmp_path: Path) -> None:
         source = (
@@ -103,7 +103,7 @@ class TestParametricUtilitiesAtSeveralInstantiations:
         )
         companion = "def merge(a, b):\n    return a + b\n"
         result, _ = evaluate_ir_with_externs(source, companion, tmp_path)
-        assert result["r"] == ArrayValue((TextValue("a"), TextValue("b"), TextValue("c")))
+        assert result["r"] == ArrayValue([TextValue("a"), TextValue("b"), TextValue("c")])
 
     def test_identity_at_int(self, tmp_path: Path) -> None:
         source = "extern def identity[T](x: T) -> T\nlet r = identity(42)\nr\n"
@@ -148,7 +148,7 @@ class TestHandleEqualityHashReprInPython:
         companion = "def sort_by_repr(xs):\n    return sorted(xs, key=repr)\n"
         result, _ = evaluate_ir_with_externs(source, companion, tmp_path)
         assert result["r"] == ArrayValue(
-            (TextValue("apple"), TextValue("banana"), TextValue("cherry"))
+            [TextValue("apple"), TextValue("banana"), TextValue("cherry")]
         )
 
     def test_companion_counts_distinct_log_entries_built_from_reprs(self, tmp_path: Path) -> None:

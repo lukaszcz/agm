@@ -198,26 +198,36 @@ class ConstructorValue:
 # ---------------------------------------------------------------------------
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, eq=False)
 class ArrayValue:
-    """An ``array[T]`` value: an immutable tuple of ``Value`` items."""
+    """An ``array[T]`` value: a mutable reference to a list of ``Value`` items.
 
-    elements: tuple[Value, ...]
+    ``frozen=True`` prevents rebinding the ``elements`` attribute to a new
+    list; the payload list itself is mutated in place by indexed assignment,
+    and that mutation is observed by every binding, field, capture, or
+    iterator that holds a reference to this ``ArrayValue``. Unhashable: the
+    payload is mutable, so a stable hash is impossible.
+    """
+
+    elements: list[Value]
+
+    def __eq__(self, other: object) -> bool:
+        if isinstance(other, ArrayValue):
+            return self.elements == other.elements
+        return NotImplemented
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, eq=False)
 class DictValue:
-    """A ``dict[text, V]`` value: an immutable mapping of str → Value."""
+    """A ``dict[text, V]`` value: a mutable reference to a mapping of str → Value.
 
-    # Stored as a plain dict; frozen by convention (no mutation after creation).
+    Stored as a plain ``dict`` and mutated in place by indexed assignment;
+    that mutation is observed by every binding, field, capture, or iterator
+    that holds a reference to this ``DictValue``. Unhashable: the payload is
+    mutable, so a stable hash is impossible.
+    """
+
     entries: dict[str, Value] = field(default_factory=dict)
-
-    def __hash__(self) -> int:
-        # Hash via hash(v) so that the contract hash(a) == hash(b) whenever a == b
-        # is preserved.  JsonValue.__hash__ uses _json_hash (order-insensitive,
-        # numeric-canonical), so equal-but-differently-ordered or int-vs-Decimal
-        # payloads hash the same.
-        return hash(tuple(sorted((k, hash(v)) for k, v in self.entries.items())))
 
     def __eq__(self, other: object) -> bool:
         if isinstance(other, DictValue):
@@ -230,28 +240,24 @@ class DictValue:
 # ---------------------------------------------------------------------------
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, eq=False)
 class RecordValue:
     """A record-typed value.
 
     ``nominal`` is the ``NominalId`` (module + scope path + declared name) — the identity
     key.  ``display_name`` is the user-facing name for rendering and
-    diagnostics; it is excluded from equality and hash.  ``fields`` holds
+    diagnostics; it is excluded from equality.  ``fields`` holds
     the record's field values.
 
-    Equality and hash are by ``(nominal, fields)``; ``display_name`` is
+    Equality is by ``(nominal, fields)``; ``display_name`` is
     excluded (rendering metadata only, mirroring how ``RecordType`` excludes
-    ``fields`` from its own equality).
+    ``fields`` from its own equality). Unhashable: ``fields`` may hold a
+    mutable array or dict, so a stable hash is impossible.
     """
 
     nominal: NominalId
-    display_name: str = field(compare=False, hash=False)
+    display_name: str
     fields: dict[str, Value] = field(default_factory=dict)
-
-    def __hash__(self) -> int:
-        # Use hash(v) rather than repr(v) so that the eq/hash contract holds:
-        # equal values (e.g. JsonValue(1) == JsonValue(Decimal("1.0"))) hash the same.
-        return hash((self.nominal, tuple(sorted((k, hash(v)) for k, v in self.fields.items()))))
 
     def __eq__(self, other: object) -> bool:
         if isinstance(other, RecordValue):
@@ -259,33 +265,24 @@ class RecordValue:
         return NotImplemented
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, eq=False)
 class EnumValue:
     """An enum-typed value: the active variant name plus any payload fields.
 
     ``nominal`` is the ``NominalId`` (module + scope path + declared name) — the identity
     key.  ``display_name`` is the user-facing name for rendering and
-    diagnostics; it is excluded from equality and hash.  ``variant`` is the
+    diagnostics; it is excluded from equality.  ``variant`` is the
     active variant name.  ``fields`` holds the variant's payload field values.
 
-    Equality and hash are by ``(nominal, variant, fields)``; ``display_name``
-    is excluded (rendering metadata only).
+    Equality is by ``(nominal, variant, fields)``; ``display_name``
+    is excluded (rendering metadata only). Unhashable: ``fields`` may hold a
+    mutable array or dict, so a stable hash is impossible.
     """
 
     nominal: NominalId
-    display_name: str = field(compare=False, hash=False)
+    display_name: str
     variant: str
     fields: dict[str, Value] = field(default_factory=dict)
-
-    def __hash__(self) -> int:
-        # Use hash(v) rather than repr(v) so that the eq/hash contract holds.
-        return hash(
-            (
-                self.nominal,
-                self.variant,
-                tuple(sorted((k, hash(v)) for k, v in self.fields.items())),
-            )
-        )
 
     def __eq__(self, other: object) -> bool:
         if isinstance(other, EnumValue):
@@ -297,29 +294,26 @@ class EnumValue:
         return NotImplemented
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, eq=False)
 class ExceptionValue:
     """A built-in AgL exception value.
 
     ``nominal`` is the ``NominalId`` (module + scope path + declared name) — the identity
     key.  Built-in exceptions use ``NominalId(PRELUDE_ID, name)``.
     ``display_name`` is the user-facing exception class name (e.g.
-    ``"AgentParseError"``); it is excluded from equality and hash.
+    ``"AgentParseError"``); it is excluded from equality.
     ``fields`` maps the exception's declared field names to their values.
     The ``"message"`` and ``"trace_id"`` fields are always present (base
     ``Exception`` contract).
 
-    Equality and hash are by ``(nominal, fields)``; ``display_name`` is
-    excluded (rendering metadata only).
+    Equality is by ``(nominal, fields)``; ``display_name`` is
+    excluded (rendering metadata only). Unhashable: ``fields`` may hold a
+    mutable array or dict, so a stable hash is impossible.
     """
 
     nominal: NominalId
-    display_name: str = field(compare=False, hash=False)
+    display_name: str
     fields: dict[str, Value] = field(default_factory=dict)
-
-    def __hash__(self) -> int:
-        # Use hash(v) rather than repr(v) so that the eq/hash contract holds.
-        return hash((self.nominal, tuple(sorted((k, hash(v)) for k, v in self.fields.items()))))
 
     def __eq__(self, other: object) -> bool:
         if isinstance(other, ExceptionValue):
@@ -348,15 +342,25 @@ class IrClosureValue:
 class IteratorValue:
     """Internal loop iterator cursor.
 
-    Holds a materialized snapshot of the collection as a list of element
-    values and a position index.  Mutable in place so ``IrIterNext`` can
-    advance without rebuilding the object.
+    Holds the source collection **by reference**, plus a position index, so
+    a mutation performed elsewhere while the loop is running is observed at
+    the cursor's not-yet-reached positions. For an ``array`` source,
+    ``elements`` is the ``ArrayValue``'s own element list object (no copy),
+    so an in-place element mutation is visible immediately. For a ``dict``
+    source, ``elements`` is a tuple of ``TextValue`` materialized once (the
+    keys) — sound because indexed assignment can never change a dict's key
+    set, so the key sequence is fixed for the collection's lifetime even
+    though the values behind those keys may still change. For a ``text``
+    source, ``elements`` is a tuple of ``TextValue`` materialized once (the
+    characters) — sound because ``text`` is immutable, so no assignment can
+    ever change it. Mutable in place so ``IrIterNext`` can advance without
+    rebuilding the object.
 
     Never rendered, hashed for equality, serialized, or returned to user
     code — it is an evaluator-internal value only.
     """
 
-    elements: list["Value"]
+    elements: "list[Value] | tuple[TextValue, ...]"
     pos: int = 0
 
 

@@ -82,7 +82,7 @@ from agm.agl.ir.nodes import (
     IrIf,
     IrIfBranch,
     IrIndex,
-    IrIndexStep,
+    IrIndexSet,
     IrIndirectCall,
     IrIterHasNext,
     IrIterInit,
@@ -1588,7 +1588,6 @@ class _Lowerer:
                 IrAssign(
                     location=loc,
                     symbol=cur_sym,
-                    path=(),
                     value=IrArith(
                         location=loc,
                         op=advance_op,
@@ -1738,7 +1737,6 @@ class _Lowerer:
                 IrAssign(
                     location=loc,
                     symbol=count_sym,
-                    path=(),
                     value=IrArith(
                         location=loc,
                         op=ArithOp.ADD,
@@ -3256,8 +3254,8 @@ class _Lowerer:
         rhs: Expr,
         span: SourceSpan,
         assign_node_id: int,
-    ) -> "IrAssign | IrBuiltinStore":
-        """Lower an assignment statement (simple name, indexed path, or builtin var)."""
+    ) -> "IrAssign | IrIndexSet | IrBuiltinStore":
+        """Lower an assignment statement (simple name, indexed target, or builtin var)."""
         ref = self._checked.binding_for(assign_node_id)
         assert ref is not None, (
             f"compiler bug: no binding for AssignStmt node_id={assign_node_id!r}"
@@ -3273,36 +3271,30 @@ class _Lowerer:
                 value=self.lower_coerced(rhs, slot_type),
             )
 
-        sym = self._sym_for_decl(ref.decl_node_id)
-
         if isinstance(target, NameTarget):
+            sym = self._sym_for_decl(ref.decl_node_id)
             slot_type = self._binding_type(ref.decl_node_id)
             ir_val = self.lower_coerced(rhs, slot_type)
             return IrAssign(
                 location=self._loc(span),
                 symbol=sym,
-                path=(),
                 value=ir_val,
             )
 
-        # IndexTarget: flatten the index path into IrIndexStep list.
-        root_type = self._binding_type(ref.decl_node_id)
-        steps: list[IrIndexStep] = []
-        container_type = self._collect_index_steps_from_obj(target.obj, root_type, steps)
+        # IndexTarget: under reference semantics an indexed assignment needs no
+        # root symbol or Cell, only a container reference — lower the target's
+        # object expression generically (an IrLoad for a bare root, an IrIndex
+        # for a nested one), so `m["a"]["b"] := v` falls out for free because
+        # IrIndex returns the inner container by reference.
+        container_type = self._node_type(target.obj.node_id)
         kind = self._kind_for_container(container_type)
-        steps.append(
-            IrIndexStep(
-                kind=kind,
-                index=self.lower_expr(target.index),
-                location=self._loc(target.span),
-            )
-        )
-        slot_type = self._elem_type_for_container(container_type)
+        slot_type = self._node_type(target.node_id)
         ir_val = self.lower_coerced(rhs, slot_type)
-        return IrAssign(
+        return IrIndexSet(
             location=self._loc(span),
-            symbol=sym,
-            path=tuple(steps),
+            container=self.lower_expr(target.obj),
+            kind=kind,
+            index=self.lower_expr(target.index),
             value=ir_val,
         )
 
@@ -3313,38 +3305,6 @@ class _Lowerer:
         if isinstance(t, DictType):
             return IndexKind.DICT
         raise AssertionError(f"compiler bug: non-container type in index path: {t!r}")
-
-    def _elem_type_for_container(self, t: Type) -> Type:
-        """Return the element/value type for a container type."""
-        if isinstance(t, ArrayType):
-            return t.elem
-        if isinstance(t, DictType):
-            return t.value
-        raise AssertionError(f"compiler bug: non-container type in index path: {t!r}")
-
-    def _collect_index_steps_from_obj(
-        self, obj: Expr, root_type: Type, out: list[IrIndexStep]
-    ) -> Type:
-        """Recursively descend into obj (VarRef or IndexAccess), collecting IrIndexSteps.
-
-        Returns the container type at the deepest level (i.e., the type of ``obj``).
-        """
-        if isinstance(obj, VarRef):
-            return root_type
-        if isinstance(obj, IndexAccess):
-            parent_type = self._collect_index_steps_from_obj(obj.obj, root_type, out)
-            kind = self._kind_for_container(parent_type)
-            out.append(
-                IrIndexStep(
-                    kind=kind,
-                    index=self.lower_expr(obj.index),
-                    location=self._loc(obj.span),
-                )
-            )
-            return self._elem_type_for_container(parent_type)
-        raise AssertionError(  # pragma: no cover
-            f"compiler bug: unexpected expr in indexed assignment path: {type(obj).__name__}"
-        )
 
     # ------------------------------------------------------------------
     # Top-level entry point

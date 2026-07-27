@@ -315,7 +315,7 @@ class TestDecodeValueHappy:
     def test_array(self) -> None:
         schema = ArrayDecode(elem=ScalarDecode(kind=ScalarKind.INT))
         result = decode_value(schema, [1, 2, 3])
-        assert result == ArrayValue((IntValue(1), IntValue(2), IntValue(3)))
+        assert result == ArrayValue([IntValue(1), IntValue(2), IntValue(3)])
 
     def test_dict(self) -> None:
         schema = DictDecode(value=ScalarDecode(kind=ScalarKind.INT))

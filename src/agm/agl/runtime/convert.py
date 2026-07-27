@@ -239,7 +239,7 @@ def decode_value(
         case ArrayDecode(elem=elem):
             if not isinstance(obj, list):
                 raise ValueError(f"Expected array, got {type(obj).__name__}")
-            return ArrayValue(tuple(decode_value(elem, e, defs) for e in obj))
+            return ArrayValue([decode_value(elem, e, defs) for e in obj])
         case DictDecode(value=value_schema):
             if not isinstance(obj, dict):
                 raise ValueError(f"Expected object, got {type(obj).__name__}")

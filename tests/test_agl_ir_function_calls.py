@@ -251,7 +251,7 @@ def test_function_with_array_in_body() -> None:
     from agm.agl.semantics.values import ArrayValue
 
     ir = evaluate_ir(source)
-    assert ir["result"] == ArrayValue((IntValue(1), IntValue(3), IntValue(6)))
+    assert ir["result"] == ArrayValue([IntValue(1), IntValue(3), IntValue(6)])
 
 
 def test_function_with_field_access_in_body() -> None:
@@ -422,7 +422,7 @@ def test_index_target_capture() -> None:
 
     source = "var arr = [0, 0, 0]\nlet k = 1\ndef setit() -> unit =\n  arr[k] := 99\nsetit()\n()"
     ir = evaluate_ir(source)
-    assert ir["arr"] == ArrayValue((IntValue(0), IntValue(99), IntValue(0)))
+    assert ir["arr"] == ArrayValue([IntValue(0), IntValue(99), IntValue(0)])
 
 
 def test_assignment_as_function_result_yields_unit() -> None:

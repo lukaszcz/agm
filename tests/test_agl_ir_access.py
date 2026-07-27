@@ -1,6 +1,6 @@
 """IR evaluation tests for field access, index access, templates, and indexed assignment.
 
-Tests all node types: IrField, IrIndex, IrRenderTemplate, IrAssign(path).
+Tests all node types: IrField, IrIndex, IrRenderTemplate, IrIndexSet.
 """
 
 from __future__ import annotations
@@ -28,14 +28,14 @@ from tests.agl.ir_harness import _compiled_checked, evaluate_ir, evaluate_ir_rai
 
 
 def test_index_get_array_basic() -> None:
-    lst = ArrayValue((IntValue(10), IntValue(20), IntValue(30)))
+    lst = ArrayValue([IntValue(10), IntValue(20), IntValue(30)])
     assert index_get(IndexKind.ARRAY, lst, IntValue(0)) == IntValue(10)
     assert index_get(IndexKind.ARRAY, lst, IntValue(1)) == IntValue(20)
     assert index_get(IndexKind.ARRAY, lst, IntValue(-1)) == IntValue(30)
 
 
 def test_index_get_array_out_of_range() -> None:
-    lst = ArrayValue((IntValue(1), IntValue(2)))
+    lst = ArrayValue([IntValue(1), IntValue(2)])
     with pytest.raises(AglIndexOutOfRange) as exc_info:
         index_get(IndexKind.ARRAY, lst, IntValue(5))
     assert exc_info.value.index == 5
@@ -55,19 +55,21 @@ def test_index_get_dict_missing_key() -> None:
 
 
 def test_index_set_array_basic() -> None:
-    lst = ArrayValue((IntValue(1), IntValue(2), IntValue(3)))
+    lst = ArrayValue([IntValue(1), IntValue(2), IntValue(3)])
     result = index_set(IndexKind.ARRAY, lst, IntValue(1), IntValue(99))
-    assert result == ArrayValue((IntValue(1), IntValue(99), IntValue(3)))
+    assert result is None
+    assert lst == ArrayValue([IntValue(1), IntValue(99), IntValue(3)])
 
 
 def test_index_set_array_negative() -> None:
-    lst = ArrayValue((IntValue(1), IntValue(2), IntValue(3)))
+    lst = ArrayValue([IntValue(1), IntValue(2), IntValue(3)])
     result = index_set(IndexKind.ARRAY, lst, IntValue(-1), IntValue(99))
-    assert result == ArrayValue((IntValue(1), IntValue(2), IntValue(99)))
+    assert result is None
+    assert lst == ArrayValue([IntValue(1), IntValue(2), IntValue(99)])
 
 
 def test_index_set_array_oob() -> None:
-    lst = ArrayValue((IntValue(1), IntValue(2)))
+    lst = ArrayValue([IntValue(1), IntValue(2)])
     with pytest.raises(AglIndexOutOfRange):
         index_set(IndexKind.ARRAY, lst, IntValue(5), IntValue(99))
 
@@ -75,7 +77,14 @@ def test_index_set_array_oob() -> None:
 def test_index_set_dict_basic() -> None:
     d = DictValue({"a": IntValue(1)})
     result = index_set(IndexKind.DICT, d, TextValue("a"), IntValue(99))
-    assert result == DictValue({"a": IntValue(99)})
+    assert result is None
+    assert d == DictValue({"a": IntValue(99)})
+
+
+def test_index_set_dict_missing_key_raises() -> None:
+    d = DictValue({"a": IntValue(1)})
+    with pytest.raises(AglMissingKey):
+        index_set(IndexKind.DICT, d, TextValue("z"), IntValue(99))
 
 
 def test_index_get_array_wrong_container() -> None:
@@ -85,13 +94,13 @@ def test_index_get_array_wrong_container() -> None:
 
 
 def test_index_get_array_wrong_index() -> None:
-    lst = ArrayValue((IntValue(1),))
+    lst = ArrayValue([IntValue(1)])
     with pytest.raises(AssertionError, match="index_get ARRAY: expected IntValue"):
         index_get(IndexKind.ARRAY, lst, TextValue("x"))
 
 
 def test_index_get_dict_wrong_container() -> None:
-    lst = ArrayValue((IntValue(1),))
+    lst = ArrayValue([IntValue(1)])
     with pytest.raises(AssertionError, match="index_get DICT: expected DictValue"):
         index_get(IndexKind.DICT, lst, TextValue("x"))
 
@@ -109,13 +118,13 @@ def test_index_set_array_wrong_container() -> None:
 
 
 def test_index_set_dict_wrong_container() -> None:
-    lst = ArrayValue((IntValue(1),))
+    lst = ArrayValue([IntValue(1)])
     with pytest.raises(AssertionError, match="index_set DICT: expected DictValue"):
         index_set(IndexKind.DICT, lst, TextValue("x"), IntValue(99))
 
 
 def test_index_set_array_wrong_index() -> None:
-    lst = ArrayValue((IntValue(1),))
+    lst = ArrayValue([IntValue(1)])
     with pytest.raises(AssertionError, match="index_set ARRAY: expected IntValue"):
         index_set(IndexKind.ARRAY, lst, TextValue("x"), IntValue(99))
 
@@ -255,7 +264,7 @@ xs[0] := 99
 ()
 """
     ir = evaluate_ir(source)
-    assert ir["xs"] == ArrayValue((IntValue(99), IntValue(2), IntValue(3)))
+    assert ir["xs"] == ArrayValue([IntValue(99), IntValue(2), IntValue(3)])
 
 
 def test_indexed_assignment_dict_depth1() -> None:
@@ -278,10 +287,10 @@ xss[0][1] := 99
 """
     ir = evaluate_ir(source)
     assert ir["xss"] == ArrayValue(
-        (
-            ArrayValue((IntValue(1), IntValue(99))),
-            ArrayValue((IntValue(3), IntValue(4))),
-        )
+        [
+            ArrayValue([IntValue(1), IntValue(99)]),
+            ArrayValue([IntValue(3), IntValue(4)]),
+        ]
     )
 
 
@@ -295,7 +304,7 @@ m["a"][0] := 99
     ir = evaluate_ir(source)
     assert ir["m"] == DictValue(
         {
-            "a": ArrayValue((IntValue(99), IntValue(2))),
+            "a": ArrayValue([IntValue(99), IntValue(2)]),
         }
     )
 
@@ -308,7 +317,7 @@ m[0]["x"] := 99
 ()
 """
     ir = evaluate_ir(source)
-    assert ir["m"] == ArrayValue((DictValue({"x": IntValue(99)}),))
+    assert ir["m"] == ArrayValue([DictValue({"x": IntValue(99)})])
 
 
 def test_indexed_assignment_depth3_array_of_array_of_array() -> None:
@@ -320,20 +329,20 @@ xsss[0][1][0] := 99
 """
     ir = evaluate_ir(source)
     assert ir["xsss"] == ArrayValue(
-        (
+        [
             ArrayValue(
-                (
-                    ArrayValue((IntValue(1), IntValue(2))),
-                    ArrayValue((IntValue(99), IntValue(4))),
-                )
+                [
+                    ArrayValue([IntValue(1), IntValue(2)]),
+                    ArrayValue([IntValue(99), IntValue(4)]),
+                ]
             ),
             ArrayValue(
-                (
-                    ArrayValue((IntValue(5), IntValue(6))),
-                    ArrayValue((IntValue(7), IntValue(8))),
-                )
+                [
+                    ArrayValue([IntValue(5), IntValue(6)]),
+                    ArrayValue([IntValue(7), IntValue(8)]),
+                ]
             ),
-        )
+        ]
     )
 
 
@@ -403,7 +412,7 @@ m["a"] := 7
 def test_empty_array_literal_evaluates_to_empty_array() -> None:
     """An annotated empty array literal evaluates to an empty ArrayValue."""
     ir = evaluate_ir("let xs: array[int] = []\nxs\n")
-    assert ir["xs"] == ArrayValue(elements=())
+    assert ir["xs"] == ArrayValue(elements=[])
 
 
 def test_empty_dict_literal_evaluates_to_empty_dict() -> None:
@@ -542,9 +551,9 @@ def test_golden_template_lowers_to_ir_render_template() -> None:
     assert found, "Expected IrBind(value=IrRenderTemplate) in initializers"
 
 
-def test_golden_indexed_assign_lowers_to_ir_assign_with_path() -> None:
-    """Indexed assignment lowers to IrAssign with non-empty path."""
-    from agm.agl.ir.nodes import IrAssign
+def test_golden_indexed_assign_lowers_to_ir_index_set() -> None:
+    """Indexed assignment lowers to IrIndexSet with a container reference."""
+    from agm.agl.ir.nodes import IrIndexSet, IrLoad
 
     source = """\
 var xs = [1, 2, 3]
@@ -555,8 +564,8 @@ xs[0] := 99
     entry = prog.modules[prog.entry_module]
     found = False
     for node in entry.initializers:
-        if isinstance(node, IrAssign) and node.path:
-            assert len(node.path) == 1
-            assert node.path[0].kind is IndexKind.ARRAY
+        if isinstance(node, IrIndexSet):
+            assert node.kind is IndexKind.ARRAY
+            assert isinstance(node.container, IrLoad)
             found = True
-    assert found, "Expected IrAssign with non-empty path in initializers"
+    assert found, "Expected IrIndexSet in initializers"

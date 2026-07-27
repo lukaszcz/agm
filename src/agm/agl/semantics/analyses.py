@@ -143,8 +143,8 @@ def uninhabitable_message(kind: TypeDefKind, name: str) -> str:
     label = {"record": "Record", "enum": "Enum", "exception": "Exception"}[kind]
     return (
         f"{label} type '{name}' is uninhabitable: every value of '{name}' would be "
-        "infinite. Recursion must be guarded by an enum base-case variant or a "
-        "array/dict field."
+        "infinite. Recursion must be guarded by an enum base-case variant or "
+        "an array/dict field."
     )
 
 

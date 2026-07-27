@@ -131,7 +131,7 @@ class TestRenderEntryResult:
         value = RecordValue(
             nominal=NominalId(ENTRY_ID, "Box"),
             display_name="Box",
-            fields={"items": ArrayValue((IntValue(1), IntValue(2)))},
+            fields={"items": ArrayValue([IntValue(1), IntValue(2)])},
         )
         result = _result(kind="expression", value=value, value_type=TextType(), ok=True)
 

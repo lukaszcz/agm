@@ -1192,17 +1192,27 @@ class _Checker:
         container_type = self._check_index_target_container_type(
             target.obj, root_type, binding_node_ids=binding_node_ids
         )
-        return self._check_index_operand(
+        elem_type = self._check_index_operand(
             container_type,
             target.index,
             span=target.span,
             binding_node_ids=binding_node_ids,
         )
+        # Recorded so the lowerer can generically lower the target's own node
+        # (an IndexTarget is not an Expr, so it has no other node-type slot)
+        # to size the coercion of the assigned value, without a dedicated
+        # element-type-for-container helper of its own.
+        self._record_node_type(target.node_id, elem_type)
+        return elem_type
 
     def _check_index_target_container_type(
         self, obj: Expr, root_type: Type, *, binding_node_ids: Sequence[int]
     ) -> Type:
         if isinstance(obj, VarRef):
+            # Recorded so the lowerer can generically lower `obj` (an
+            # IrLoad needs no node type, but a further IndexAccess wrapping
+            # this VarRef needs its container's type to pick ARRAY vs DICT).
+            self._record_node_type(obj.node_id, root_type)
             return root_type
         if isinstance(obj, IndexAccess):
             container_type = self._check_index_target_container_type(

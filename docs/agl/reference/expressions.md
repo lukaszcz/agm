@@ -313,9 +313,11 @@ matching to extract variant payloads), dictionaries, or arrays.
 
 ## Record update
 
-`target with field = value, ...` builds a copy of a **record** or
+`target with field = value, ...` builds a **shallow copy** of a **record** or
 **exception** value with the listed fields replaced; all other fields keep
-their values. The target itself is unchanged (values are immutable):
+their values — an unlisted array or dict field is shared with the target, not
+copied, so mutating it through the update's result is observed through the
+target too. The target itself is unchanged (values are immutable):
 
 <!-- agl-check: fragment -->
 ```agl

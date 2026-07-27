@@ -34,6 +34,7 @@ from agm.agl.ir import (
     IrAssign,
     IrBind,
     IrBlock,
+    IrCaseArm,
     IrCoerce,
     IrConstBool,
     IrConstDecimal,
@@ -42,7 +43,7 @@ from agm.agl.ir import (
     IrConstText,
     IrConstUnit,
     IrExpr,
-    IrIndexStep,
+    IrIndexSet,
     IrLiteralCaseKey,
     IrLiteralKind,
     IrLoad,
@@ -317,28 +318,30 @@ class TestIrExprUnion:
         assert isinstance(node, IrConstInt)
         assert node.value == 42
 
-    def test_index_step_not_in_expr_union(self) -> None:
-        # IrIndexStep is a helper record, not a member of IrExpr.
+    def test_ir_case_arm_not_in_expr_union(self) -> None:
+        # IrCaseArm is a helper record, not a member of IrExpr.
         # We verify this by confirming it is not an instance of any IrExpr member type.
-        step = IrIndexStep(
-            kind=IndexKind.ARRAY, index=IrConstInt(location=LOC, value=0), location=LOC
+        arm = IrCaseArm(
+            key=IrLiteralCaseKey(kind=IrLiteralKind.NUMERIC, scalar_value=decimal.Decimal(0)),
+            field_bindings=(),
+            body=IrConstInt(location=LOC, value=0),
         )
-        assert not isinstance(step, IrConstInt)
-        assert not isinstance(step, IrConstDecimal)
-        assert not isinstance(step, IrConstBool)
-        assert not isinstance(step, IrConstText)
-        assert not isinstance(step, IrConstUnit)
-        assert not isinstance(step, IrConstJsonNull)
-        assert not isinstance(step, IrMakeArray)
-        assert not isinstance(step, IrMakeDict)
-        assert not isinstance(step, IrMakeJsonArray)
-        assert not isinstance(step, IrMakeJsonObject)
-        assert not isinstance(step, IrLoad)
-        assert not isinstance(step, IrBind)
-        assert not isinstance(step, IrAssign)
-        assert not isinstance(step, IrCoerce)
-        assert not isinstance(step, IrSequence)
-        assert not isinstance(step, IrBlock)
+        assert not isinstance(arm, IrConstInt)
+        assert not isinstance(arm, IrConstDecimal)
+        assert not isinstance(arm, IrConstBool)
+        assert not isinstance(arm, IrConstText)
+        assert not isinstance(arm, IrConstUnit)
+        assert not isinstance(arm, IrConstJsonNull)
+        assert not isinstance(arm, IrMakeArray)
+        assert not isinstance(arm, IrMakeDict)
+        assert not isinstance(arm, IrMakeJsonArray)
+        assert not isinstance(arm, IrMakeJsonObject)
+        assert not isinstance(arm, IrLoad)
+        assert not isinstance(arm, IrBind)
+        assert not isinstance(arm, IrAssign)
+        assert not isinstance(arm, IrCoerce)
+        assert not isinstance(arm, IrSequence)
+        assert not isinstance(arm, IrBlock)
 
 
 # ---------------------------------------------------------------------------
@@ -498,44 +501,43 @@ class TestIrBindingsStorage:
         with pytest.raises(dataclasses.FrozenInstanceError):
             setattr(n, "symbol", SYM1)
 
-    def test_ir_index_step(self) -> None:
-        idx = IrConstInt(location=LOC, value=0)
-        step = IrIndexStep(kind=IndexKind.ARRAY, index=idx, location=LOC)
-        assert step.kind is IndexKind.ARRAY
-        assert step.index == idx
-        assert step.location == LOC
-
-    def test_ir_index_step_frozen(self) -> None:
-        step = IrIndexStep(
-            kind=IndexKind.ARRAY, index=IrConstInt(location=LOC, value=0), location=LOC
-        )
-        with pytest.raises(dataclasses.FrozenInstanceError):
-            setattr(step, "index", IrConstInt(location=LOC, value=1))
-
-    def test_ir_assign_no_path(self) -> None:
+    def test_ir_assign(self) -> None:
         val = IrConstInt(location=LOC, value=7)
-        n = IrAssign(location=LOC, symbol=SYM0, path=(), value=val)
+        n = IrAssign(location=LOC, symbol=SYM0, value=val)
         assert n.symbol == SYM0
-        assert n.path == ()
         assert n.value == val
-
-    def test_ir_assign_with_path(self) -> None:
-        idx_expr = IrConstInt(location=LOC, value=0)
-        step = IrIndexStep(kind=IndexKind.ARRAY, index=idx_expr, location=LOC)
-        val = IrConstText(location=LOC, value="v")
-        n = IrAssign(location=LOC, symbol=SYM0, path=(step,), value=val)
-        assert len(n.path) == 1
-        assert n.path[0] == step
 
     def test_ir_assign_frozen(self) -> None:
         n = IrAssign(
             location=LOC,
             symbol=SYM0,
-            path=(),
             value=IrConstUnit(location=LOC),
         )
         with pytest.raises(dataclasses.FrozenInstanceError):
             setattr(n, "symbol", SYM1)
+
+    def test_ir_index_set(self) -> None:
+        container = IrLoad(location=LOC, symbol=SYM0)
+        idx = IrConstInt(location=LOC, value=0)
+        val = IrConstText(location=LOC, value="v")
+        n = IrIndexSet(
+            location=LOC, container=container, kind=IndexKind.ARRAY, index=idx, value=val
+        )
+        assert n.container == container
+        assert n.kind is IndexKind.ARRAY
+        assert n.index == idx
+        assert n.value == val
+
+    def test_ir_index_set_frozen(self) -> None:
+        n = IrIndexSet(
+            location=LOC,
+            container=IrLoad(location=LOC, symbol=SYM0),
+            kind=IndexKind.ARRAY,
+            index=IrConstInt(location=LOC, value=0),
+            value=IrConstInt(location=LOC, value=1),
+        )
+        with pytest.raises(dataclasses.FrozenInstanceError):
+            setattr(n, "index", IrConstInt(location=LOC, value=2))
 
 
 # ---------------------------------------------------------------------------

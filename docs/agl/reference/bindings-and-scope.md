@@ -115,13 +115,23 @@ Assignment indexes are adjacency-sensitive: the opening `[` must be adjacent
 to the target name or preceding index, as in `xs[0]`. A spaced form such as
 `xs [0]` is not an indexed assignment target.
 
-Indexed assignment is copy-on-write: the binding is updated with a new array or
-dictionary value containing the changed element. The root must be a `var`
-binding. Assigning through `let`, `param`, function arguments, function return
+Arrays and dicts are mutable reference values ([Types](types.md)), so an
+indexed assignment mutates the array or dictionary **in place**: every other
+binding, field, closure capture, or loop cursor that references the same
+array or dictionary observes the change. The root must be a `var` binding.
+Assigning through `let`, `param`, function arguments, function return
 temporaries, fields, or a type-qualified constructor reference is a static
-error. Array assignment uses the same
-negative-index and `IndexError` rules as array access. Dictionary assignment
-updates existing keys only; assigning to a missing key raises `KeyError`.
+error. Array assignment uses the same negative-index and `IndexError` rules
+as array access. Dictionary assignment updates existing keys only; assigning
+to a missing key raises `KeyError`.
+
+Evaluation order for `target[index] := value` is left to right: the
+container, then the index, then `value`, then the checked in-place store. A
+nested target such as `m["a"]["b"] := v` evaluates the outer container, reads
+its `"a"` entry to reach the inner container, evaluates `"b"` and `v`, then
+stores into the inner container — so a `KeyError` or `IndexError` raised
+while reaching the target aborts before `value` is evaluated, but a `value`
+with a side effect always runs before the store is checked.
 
 Static rules, all checked before execution:
 

@@ -1,0 +1,41 @@
+# Nested indexed assignment through a `var`-rooted dict mutates the inner
+# dict, and one level further an inner array, in place -- observed through
+# aliases bound to either -- the defect the old leaf-outward rebuild broke at
+# every level. A missing key still raises the catchable KeyError.
+enum Lookup
+  | Found(value: int)
+  | Missing
+
+def try_get(d: dict[text, int], key: text) -> Lookup =
+  try Found(value = d[key])
+  catch KeyError => Missing
+
+param first: int
+param second: int
+
+var m: dict[text, dict[text, int]] = {"a": {"b": first, "c": second}}
+let inner = m["a"]
+
+print inner["b"]
+m["a"]["b"] := 99
+print inner["b"]
+print m["a"]["b"]
+print inner["c"]
+
+case try_get(inner, "b") of
+  | Found(value) => print "found %{value}"
+  | Missing => print "missing"
+
+case try_get(inner, "z") of
+  | Found(value) => print "found %{value}"
+  | Missing => print "missing"
+
+# The dict-of-array level: the mutation reaches through TWO index steps (a
+# dict key, then an array index) to an alias bound to the innermost array.
+var groups: dict[text, array[int]] = {"a": [first, second]}
+let members = groups["a"]
+
+print members
+groups["a"][0] := 999
+print members
+print groups["a"]

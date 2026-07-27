@@ -18,14 +18,18 @@ representation shared by records, enums, and exceptions.
 ``TypeTable.exception_fields`` has no ``type_args`` to substitute but instead
 flattens the ``extends`` base chain into one field mapping.
 
-``comparable_types``/``_has_no_value_equality`` live here rather than in
+``comparable_types``/``_reaches_non_data`` live here rather than in
 ``semantics.types`` because their record/enum/exception arms consult the
-table's declaration-level equality-capability flags instead of walking
+table's declaration-level non-data-reachability flags instead of walking
 embedded fields; ``semantics.types`` cannot import this module without a
 circular import. The flags themselves are a fixpoint over the whole table
-(``semantics.analyses.compute_equality_capabilities``, cycle-safe by
+(``semantics.analyses.compute_non_data_reachability``, cycle-safe by
 construction), cached on :class:`TypeTable` and invalidated whenever the
-table's declarations change.
+table's declarations change. That one fact answers two separate language
+questions — :meth:`TypeTable.has_no_value_equality` (may ``=``/``!=`` be
+applied?) and :meth:`TypeTable.nominal_is_json_convertible` (is there a JSON
+representation?) — which is why it is named for the fact rather than for
+either consumer.
 
 :meth:`TypeTable.has_finite_closure`/:meth:`TypeTable.has_finite_schema`
 answer a related but distinct whole-type question: not "does this type
@@ -34,7 +38,7 @@ support ``=``?" but "is this type's reachable *instantiation closure* finite
 reference itself at ever-larger arguments (polymorphic recursion), which
 never blocks construction/matching/equality but does mean no finite schema
 exists. Backed by ``semantics.analyses.compute_finite_closure``, cached and
-invalidated the same way as the equality-capability fixpoint.
+invalidated the same way as the non-data-reachability fixpoint.
 :meth:`TypeTable.first_infinite_declaration`/:meth:`TypeTable.no_finite_schema_message`
 build on the same query to name the culprit declaration for a use-site
 diagnostic (agent output target, cast target, parameter type).
@@ -70,7 +74,7 @@ from agm.agl.semantics.types import (
 )
 
 if TYPE_CHECKING:
-    from agm.agl.semantics.analyses import EqualityCapabilities, FiniteClosure
+    from agm.agl.semantics.analyses import FiniteClosure, NonDataReachability
 
 TypeDefKind = Literal["record", "enum", "exception"]
 DeclKey = tuple[ModuleId, tuple[str, ...], str]
@@ -176,13 +180,13 @@ class TypeTable:
         # Memo for exception_field_kinds — same keying convention as
         # _exception_fields_cache above.
         self._exception_field_kinds_cache: dict[DeclKey, tuple[tuple[str, str], ...]] = {}
-        # Whole-table equality-capability fixpoint (see
-        # :meth:`has_no_value_equality`), computed lazily on first use and
+        # Whole-table non-data-reachability fixpoint (see
+        # :meth:`nominal_reaches_non_data`), computed lazily on first use and
         # invalidated (set back to ``None``) whenever a declaration is added,
         # removed, or overwritten.
-        self._equality_caps: EqualityCapabilities | None = None
+        self._non_data_caps: NonDataReachability | None = None
         # Whole-table finiteness fixpoint (see :meth:`has_finite_schema`),
-        # cached and invalidated the same way as ``_equality_caps``.
+        # cached and invalidated the same way as ``_non_data_caps``.
         self._finite_closure: FiniteClosure | None = None
 
     def register(self, typedef: TypeDef) -> None:
@@ -203,7 +207,7 @@ class TypeTable:
         existing = self._defs.get(key)
         if existing is None:
             self._defs[key] = typedef
-            self._equality_caps = None
+            self._non_data_caps = None
             self._finite_closure = None
             return
         if existing != typedef:
@@ -242,11 +246,11 @@ class TypeTable:
         # maintain a reverse-inheritance index.
         self._exception_fields_cache.clear()
         self._exception_field_kinds_cache.clear()
-        # The equality-capability and finiteness fixpoints are whole-table
+        # The non-data-reachability and finiteness fixpoints are whole-table
         # (any declaration's flag can in principle depend on any other's), so
         # a single changed key invalidates the whole cached result rather
         # than just this key.
-        self._equality_caps = None
+        self._non_data_caps = None
         self._finite_closure = None
 
     def record_fields(self, handle: RecordType) -> Mapping[str, Type]:
@@ -426,22 +430,22 @@ class TypeTable:
         """Return all registered ``TypeDef``s (used for REPL and program table sharing)."""
         return tuple(self._defs.values())
 
-    def has_no_value_equality(self, handle: RecordType | EnumType | ExceptionType) -> bool:
-        """Return ``True`` if *handle* has no value equality (cycle-safe).
+    def nominal_reaches_non_data(self, handle: RecordType | EnumType | ExceptionType) -> bool:
+        """Return ``True`` if a non-data type is reachable from *handle* (cycle-safe).
 
-        Declaration-level: *handle*'s declaration is unconditionally
-        non-comparable (``EqualityCapabilities.no_equality``), or one of its
-        concrete ``type_args`` at an equality-relevant parameter position is
-        itself non-comparable — see
-        :func:`~agm.agl.semantics.analyses.compute_equality_capabilities` for
+        The non-data types are ``unit``, ``agent``, and function types.
+        Declaration-level: *handle*'s declaration reaches one unconditionally
+        (``NonDataReachability.reaches_non_data``), or one of its concrete
+        ``type_args`` at a relevant parameter position does — see
+        :func:`~agm.agl.semantics.analyses.compute_non_data_reachability` for
         why this reproduces the substitute-then-walk answer without ever
         expanding *handle*'s own fields (so it never re-enters a cycle).
         Exceptions carry no ``type_args``, so only the declaration flag
         applies to them.
         """
-        caps = self._equality_capabilities()
+        caps = self._non_data_reachability()
         key = (handle.module_id, handle.scope_path, handle.name)
-        if key in caps.no_equality:
+        if key in caps.reaches_non_data:
             return True
         if isinstance(handle, ExceptionType):
             return False
@@ -450,17 +454,38 @@ class TypeTable:
             return False
         relevant = caps.relevant_params.get(key, frozenset())
         return any(
-            _has_no_value_equality(arg, self)
+            _reaches_non_data(arg, self)
             for pname, arg in zip(typedef.type_params, handle.type_args)
             if pname in relevant
         )
 
-    def _equality_capabilities(self) -> "EqualityCapabilities":
-        if self._equality_caps is None:
-            from agm.agl.semantics.analyses import compute_equality_capabilities
+    def has_no_value_equality(self, handle: RecordType | EnumType | ExceptionType) -> bool:
+        """Return ``True`` if *handle* has no value equality.
 
-            self._equality_caps = compute_equality_capabilities(self)
-        return self._equality_caps
+        ``=``/``!=`` are undefined for a non-data value and for anything that
+        transitively holds one, so this is exactly
+        :meth:`nominal_reaches_non_data` — the two questions are kept apart at
+        the API so either can grow its own rule without silently changing the
+        other.
+        """
+        return self.nominal_reaches_non_data(handle)
+
+    def nominal_is_json_convertible(self, handle: RecordType | EnumType | ExceptionType) -> bool:
+        """Return ``True`` if *handle* has a JSON representation.
+
+        A record and an exception convert to a JSON object of their fields, an
+        enum to ``{"$case": variant, …fields}``, so the only obstacle is a
+        non-data leaf somewhere inside — exactly
+        :meth:`nominal_reaches_non_data`, negated.
+        """
+        return not self.nominal_reaches_non_data(handle)
+
+    def _non_data_reachability(self) -> "NonDataReachability":
+        if self._non_data_caps is None:
+            from agm.agl.semantics.analyses import compute_non_data_reachability
+
+            self._non_data_caps = compute_non_data_reachability(self)
+        return self._non_data_caps
 
     def has_finite_closure(
         self, module_id: ModuleId, name: str, scope_path: tuple[str, ...] = ()
@@ -707,16 +732,16 @@ def decl_key_sort_key(key: DeclKey) -> tuple[tuple[str, ...], tuple[str, ...], s
     return (key[0].segments, key[1], key[2])
 
 
-def _has_no_value_equality(t: Type, table: TypeTable) -> bool:
-    """True if ``t`` is, or transitively contains, a type with no value equality.
+def _reaches_non_data(t: Type, table: TypeTable) -> bool:
+    """True if ``t`` is, or transitively contains, a non-data type.
 
-    Function, agent, and unit values are opaque / identity-only and AgL gives
-    them no ``=``/``!=`` operator; ``unit`` has a single value but no equality
-    operator.  An array, dict, record, enum, or exception that transitively holds
-    such a type is therefore itself not comparable.  ``t`` is always a finite
-    tree (array/dict wrapping is structural, not nominal), so recursing through
+    The non-data types are function, agent, and ``unit``: function and agent
+    values are opaque / identity-only, and ``unit`` has a single value carrying
+    nothing.  An array, dict, record, enum, or exception that transitively
+    holds one is therefore itself affected.  ``t`` is always a finite tree
+    (array/dict wrapping is structural, not nominal), so recursing through
     ``ArrayType``/``DictType`` always terminates; a record/enum/exception
-    handle instead defers to :meth:`TypeTable.has_no_value_equality`, which
+    handle instead defers to :meth:`TypeTable.nominal_reaches_non_data`, which
     consults a precomputed declaration-level fixpoint rather than re-walking
     the handle's own fields — the type declarations themselves may be
     recursive, but this function never re-enters them.
@@ -725,11 +750,11 @@ def _has_no_value_equality(t: Type, table: TypeTable) -> bool:
         case FunctionType() | AgentType() | UnitType():
             return True
         case ArrayType():
-            return _has_no_value_equality(t.elem, table)
+            return _reaches_non_data(t.elem, table)
         case DictType():
-            return _has_no_value_equality(t.value, table)
+            return _reaches_non_data(t.value, table)
         case RecordType() | EnumType() | ExceptionType():
-            return table.has_no_value_equality(t)
+            return table.nominal_reaches_non_data(t)
         case (
             TextType()
             | JsonType()
@@ -765,7 +790,7 @@ def comparable_types(left: Type, right: Type, table: TypeTable) -> bool:
     """
     # Function/agent/unit values — and any container/record/enum that transitively
     # holds one — have no value equality.
-    if _has_no_value_equality(left, table) or _has_no_value_equality(right, table):
+    if _reaches_non_data(left, table) or _reaches_non_data(right, table):
         return False
     # Bare type variables and the bottom type are never comparable here (the
     # checker additionally rejects bare type variables at the comparison site).

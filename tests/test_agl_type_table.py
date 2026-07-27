@@ -1199,7 +1199,7 @@ class TestReplSeeding:
 
 
 # ---------------------------------------------------------------------------
-# comparable_types / _has_no_value_equality: table-aware record/enum walk
+# comparable_types / _reaches_non_data: table-aware record/enum walk
 # ---------------------------------------------------------------------------
 
 
@@ -1379,7 +1379,7 @@ class TestComparableTypesTableAware:
 
     def test_recursive_tree_is_comparable(self) -> None:
         # A self-referential enum (array/dict guard not even needed for
-        # equality — only for inhabitation): the equality-capability fixpoint
+        # equality — only for inhabitation): the non-data-reachability fixpoint
         # must terminate on a cycle instead of recursing through the same
         # declaration's fields forever.
         table = TypeTable()
@@ -1459,6 +1459,99 @@ class TestComparableTypesTableAware:
         b_handle = RecordType(name="B", module_id=ENTRY_ID)
         assert comparable_types(a_handle, a_handle, table) is True
         assert comparable_types(b_handle, b_handle, table) is True
+
+
+# ---------------------------------------------------------------------------
+# The two consumers of the shared non-data-reachability fact
+# ---------------------------------------------------------------------------
+
+
+class TestHasNoValueEquality:
+    def test_record_of_scalars_has_equality(self) -> None:
+        table = TypeTable()
+        table.register(
+            TypeDef(
+                kind="record",
+                name="Point",
+                module_id=ENTRY_ID,
+                fields=(("x", IntType()), ("y", IntType())),
+            )
+        )
+        handle = RecordType(name="Point", module_id=ENTRY_ID)
+        assert table.has_no_value_equality(handle) is False
+
+    def test_record_with_agent_field_has_no_equality(self) -> None:
+        table = TypeTable()
+        table.register(
+            TypeDef(
+                kind="record",
+                name="Bad",
+                module_id=ENTRY_ID,
+                fields=(("a", AgentType()), ("x", IntType())),
+            )
+        )
+        handle = RecordType(name="Bad", module_id=ENTRY_ID)
+        assert table.has_no_value_equality(handle) is True
+
+    def test_generic_record_answer_follows_its_type_argument(self) -> None:
+        table = TypeTable()
+        table.register(
+            TypeDef(
+                kind="record",
+                name="Box",
+                module_id=ENTRY_ID,
+                type_params=("T",),
+                fields=(("value", TypeVarType("T")),),
+            )
+        )
+        agent_handle = RecordType(name="Box", type_args=(AgentType(),), module_id=ENTRY_ID)
+        int_handle = RecordType(name="Box", type_args=(IntType(),), module_id=ENTRY_ID)
+        assert table.has_no_value_equality(agent_handle) is True
+        assert table.has_no_value_equality(int_handle) is False
+
+
+class TestNominalIsJsonConvertible:
+    def test_record_of_scalars_is_convertible(self) -> None:
+        table = TypeTable()
+        table.register(
+            TypeDef(
+                kind="record",
+                name="Point",
+                module_id=ENTRY_ID,
+                fields=(("x", IntType()), ("y", IntType())),
+            )
+        )
+        handle = RecordType(name="Point", module_id=ENTRY_ID)
+        assert table.nominal_is_json_convertible(handle) is True
+
+    def test_record_with_agent_field_is_not_convertible(self) -> None:
+        table = TypeTable()
+        table.register(
+            TypeDef(
+                kind="record",
+                name="Bad",
+                module_id=ENTRY_ID,
+                fields=(("a", AgentType()), ("x", IntType())),
+            )
+        )
+        handle = RecordType(name="Bad", module_id=ENTRY_ID)
+        assert table.nominal_is_json_convertible(handle) is False
+
+    def test_generic_record_answer_follows_its_type_argument(self) -> None:
+        table = TypeTable()
+        table.register(
+            TypeDef(
+                kind="record",
+                name="Box",
+                module_id=ENTRY_ID,
+                type_params=("T",),
+                fields=(("value", TypeVarType("T")),),
+            )
+        )
+        agent_handle = RecordType(name="Box", type_args=(AgentType(),), module_id=ENTRY_ID)
+        int_handle = RecordType(name="Box", type_args=(IntType(),), module_id=ENTRY_ID)
+        assert table.nominal_is_json_convertible(agent_handle) is False
+        assert table.nominal_is_json_convertible(int_handle) is True
 
 
 # ---------------------------------------------------------------------------
@@ -2164,7 +2257,7 @@ class TestFiniteClosure:
 
     def test_dangling_reference_defaults_to_finite(self) -> None:
         # A field referencing a declaration that was never registered (same
-        # defensive scenario as the equality-capability fixpoint): the
+        # defensive scenario as the non-data-reachability fixpoint): the
         # dangling reference must not crash finiteness analysis, and
         # defaults permissively to finite.
         table = TypeTable()
@@ -2211,7 +2304,7 @@ class TestFiniteClosure:
         # Defensive: an argument template's type variable that is not among
         # the REFERENCING declaration's own type parameters (a malformed
         # template — never produced by the real type builder) is simply
-        # ignored rather than crashing, mirroring the equality-capability
+        # ignored rather than crashing, mirroring the non-data-reachability
         # fixpoint's "ignore what does not fit the expected shape" stance.
         table = TypeTable()
         table.register(_pair_def())

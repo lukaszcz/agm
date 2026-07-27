@@ -3,8 +3,9 @@
 Nominal types are handles (``semantics.types``) backed by ``TypeDef``
 templates in a ``TypeTable`` (``semantics.type_table``); a declaration may
 reference itself or another declaration directly or indirectly, so any
-whole-type question ("does every value of this type terminate?", "does this
-type support ``=``?") must be answered over the finite *declaration graph*
+whole-type question ("does every value of this type terminate?", "can a
+non-data value hide inside this type?") must be answered over the finite
+*declaration graph*
 rather than by walking an individual type tree, which may be cyclic.  Both
 analyses below share that shape: start from a conservative default, and grow
 a set of facts to a least fixpoint by repeatedly re-examining every
@@ -23,18 +24,22 @@ without needing another value of the same (or a mutually recursive)
 declaration. :func:`compute_uninhabited` returns the declarations that never
 reach that bottom.
 
-Equality capability
---------------------
-``=``/``!=`` are undefined for function, agent, and unit values (and for
-anything that transitively contains one). :func:`compute_equality_capabilities`
-replaces a walk of each concrete instantiation's substituted fields (which
-cannot terminate once field types may reference cyclic declarations) with two
-per-declaration fixpoint facts: whether the declaration's body is
-unconditionally non-comparable, and which of its own type parameters actually
-affect comparability of a concrete instantiation ("equality-relevant"
-parameters) — see :func:`compute_equality_capabilities` for the full
-definition and :meth:`~agm.agl.semantics.type_table.TypeTable.has_no_value_equality`
-for how a concrete handle's answer is derived from them.
+Non-data reachability
+---------------------
+The *non-data* types are exactly ``unit``, ``agent``, and function types:
+opaque handles rather than data. Two independent language rules turn on
+whether one of them is reachable from a type — ``=``/``!=`` are undefined for
+such a value (and for anything that transitively contains one), and there is
+no JSON representation for one either — so the underlying fact is computed
+once, here. :func:`compute_non_data_reachability` replaces a walk of each
+concrete instantiation's substituted fields (which cannot terminate once
+field types may reference cyclic declarations) with two per-declaration
+fixpoint facts: whether the declaration's body unconditionally reaches a
+non-data type, and which of its own type parameters actually affect the
+answer for a concrete instantiation ("relevant" parameters) — see
+:func:`compute_non_data_reachability` for the full definition and
+:meth:`~agm.agl.semantics.type_table.TypeTable.nominal_reaches_non_data` for
+how a concrete handle's answer is derived from them.
 
 Finiteness (instantiation-closure) capability
 ----------------------------------------------
@@ -300,57 +305,57 @@ def _template_inhabited(
 
 
 # ---------------------------------------------------------------------------
-# Equality capability flags
+# Non-data reachability flags
 # ---------------------------------------------------------------------------
 
 
 @dataclass(frozen=True, slots=True)
-class EqualityCapabilities:
-    """Whole-table equality-capability fixpoint result.
+class NonDataReachability:
+    """Whole-table non-data-reachability fixpoint result.
 
-    ``no_equality`` — declarations that are unconditionally non-comparable
-    (their body contains a function/agent/unit type, or reaches a
+    ``reaches_non_data`` — declarations that unconditionally reach a non-data
+    type (their body contains a function/agent/unit type, or reaches a
     declaration that does, outside of a type-variable position).
     ``relevant_params`` — for every declaration, the subset of its own type
-    parameters whose instantiation can affect comparability (see
-    :func:`compute_equality_capabilities`).
+    parameters whose instantiation can affect that answer (see
+    :func:`compute_non_data_reachability`).
     """
 
-    no_equality: frozenset[DeclKey]
+    reaches_non_data: frozenset[DeclKey]
     relevant_params: Mapping[DeclKey, frozenset[str]]
 
 
-def compute_equality_capabilities(table: TypeTable) -> EqualityCapabilities:
-    """Compute the declaration-level equality-capability fixpoint over *table*.
+def compute_non_data_reachability(table: TypeTable) -> NonDataReachability:
+    """Compute the declaration-level non-data-reachability fixpoint over *table*.
 
     Two facts are grown together to a least fixpoint, per declaration:
 
-    - ``no_equality`` (an unconditional, argument-independent fact): true iff
-      some field/variant-field template contains a function/agent/unit type,
-      or references a declaration whose own ``no_equality`` is already true —
-      at any depth, but never through a bare type-variable position (a
-      parameter standing for "whatever the caller instantiates" is not
-      itself a problem). For exceptions this also accounts for subtyping:
-      inherited field problems flow from base to child, while a child with no
-      equality also makes each catchable ancestor non-comparable because a
-      value statically typed as that ancestor may hold the child at runtime.
+    - ``reaches_non_data`` (an unconditional, argument-independent fact): true
+      iff some field/variant-field template contains a function/agent/unit
+      type, or references a declaration whose own ``reaches_non_data`` is
+      already true — at any depth, but never through a bare type-variable
+      position (a parameter standing for "whatever the caller instantiates" is
+      not itself a problem). For exceptions this also accounts for subtyping:
+      inherited field problems flow from base to child, while an affected
+      child also affects each catchable ancestor, because a value statically
+      typed as that ancestor may hold the child at runtime.
     - ``relevant_params``: the subset of a declaration's OWN type parameters
       whose concrete instantiation can flip a reference to it from
-      comparable to not. A parameter is relevant if it appears directly in a
-      field (including nested in ``array``/``dict``/function-parameter/
+      non-data-free to not. A parameter is relevant if it appears directly in
+      a field (including nested in ``array``/``dict``/function-parameter/
       result position), or is passed to another reference's parameter that
       is ITSELF relevant for that reference's declaration — transitively.
       Unused ("phantom") parameters are therefore never relevant, matching
       the substitute-then-walk semantics this replaces: instantiating a
-      phantom parameter with a non-comparable type cannot poison equality
+      phantom parameter with a non-data type cannot poison a declaration
       because the field template never actually mentions it.
 
     A concrete handle's answer
-    (:meth:`~agm.agl.semantics.type_table.TypeTable.has_no_value_equality`) is
-    then: its declaration's ``no_equality`` flag, OR its declaration is
-    non-comparable for some ``type_args[i]`` whose parameter is in
-    ``relevant_params`` — reproducing today's substitute-then-walk answer
-    exactly, without ever expanding an instantiation.
+    (:meth:`~agm.agl.semantics.type_table.TypeTable.nominal_reaches_non_data`)
+    is then: its declaration's ``reaches_non_data`` flag, OR its declaration
+    reaches a non-data type for some ``type_args[i]`` whose parameter is in
+    ``relevant_params`` — reproducing the substitute-then-walk answer exactly,
+    without ever expanding an instantiation.
     """
     defs = _all_defs(table)
     exception_children: dict[DeclKey, set[DeclKey]] = {key: set() for key in defs}
@@ -358,11 +363,12 @@ def compute_equality_capabilities(table: TypeTable) -> EqualityCapabilities:
         if typedef.kind == "exception" and typedef.base in exception_children:
             exception_children[typedef.base].add(key)
 
-    # ``field_no_eq`` is the exact-value/inherited-field fact for exceptions.
-    # ``no_eq`` additionally includes non-comparable descendants, which should
-    # poison ancestor catch/base types but must not flow back down to siblings.
-    field_no_eq: set[DeclKey] = set()
-    no_eq: set[DeclKey] = set()
+    # ``field_non_data`` is the exact-value/inherited-field fact for
+    # exceptions. ``non_data`` additionally includes affected descendants,
+    # which should poison ancestor catch/base types but must not flow back
+    # down to siblings.
+    field_non_data: set[DeclKey] = set()
+    non_data: set[DeclKey] = set()
     relevant: dict[DeclKey, set[str]] = {key: set() for key in defs}
     changed = True
     while changed:
@@ -370,23 +376,25 @@ def compute_equality_capabilities(table: TypeTable) -> EqualityCapabilities:
         for key, typedef in defs.items():
             own_params = frozenset(typedef.type_params)
             templates = tuple(_own_field_templates(typedef))
-            template_bad = any(_template_no_eq(t, no_eq, relevant, defs) for t in templates)
+            template_bad = any(
+                _template_reaches_non_data(t, non_data, relevant, defs) for t in templates
+            )
             inherited_field_bad = (
                 typedef.kind == "exception"
                 and typedef.base is not None
-                and typedef.base in field_no_eq
+                and typedef.base in field_non_data
             )
-            exact_bad = key in field_no_eq or template_bad or inherited_field_bad
-            if exact_bad and key not in field_no_eq:
-                field_no_eq.add(key)
+            exact_bad = key in field_non_data or template_bad or inherited_field_bad
+            if exact_bad and key not in field_non_data:
+                field_non_data.add(key)
                 changed = True
 
             descendant_bad = typedef.kind == "exception" and any(
-                child_key in no_eq for child_key in exception_children[key]
+                child_key in non_data for child_key in exception_children[key]
             )
             bad = exact_bad or descendant_bad
-            if bad and key not in no_eq:
-                no_eq.add(key)
+            if bad and key not in non_data:
+                non_data.add(key)
                 changed = True
 
             gained: set[str] = set()
@@ -395,8 +403,8 @@ def compute_equality_capabilities(table: TypeTable) -> EqualityCapabilities:
             if not gained <= relevant[key]:
                 relevant[key] |= gained
                 changed = True
-    return EqualityCapabilities(
-        no_equality=frozenset(no_eq),
+    return NonDataReachability(
+        reaches_non_data=frozenset(non_data),
         relevant_params={key: frozenset(params) for key, params in relevant.items()},
     )
 
@@ -406,19 +414,19 @@ def _own_field_templates(typedef: TypeDef) -> list[Type]:
 
     Unlike :func:`_decl_inhabited`'s enum handling (which groups fields by
     variant, since only ONE variant needs to be fully inhabited), both the
-    equality-capability and reference-edge fixpoints look at every field of
-    every variant flat: a function/agent/unit anywhere makes every value
-    non-comparable, and a reference to another declaration matters, regardless
-    of which variant carries it.
+    non-data-reachability and reference-edge fixpoints look at every field of
+    every variant flat: a function/agent/unit anywhere is reachable from some
+    value of the declaration, and a reference to another declaration matters,
+    regardless of which variant carries it.
     """
     if typedef.kind == "enum":
         return [ftype for _vname, vfields in typedef.variants for _fname, ftype in vfields]
     return [ftype for _fname, ftype in typedef.fields]
 
 
-def _template_no_eq(
+def _template_reaches_non_data(
     t: Type,
-    no_eq: set[DeclKey],
+    non_data: set[DeclKey],
     relevant: Mapping[DeclKey, set[str]],
     defs: Mapping[DeclKey, TypeDef],
 ) -> bool:
@@ -426,21 +434,21 @@ def _template_no_eq(
         case FunctionType() | AgentType() | UnitType():
             return True
         case ArrayType():
-            return _template_no_eq(t.elem, no_eq, relevant, defs)
+            return _template_reaches_non_data(t.elem, non_data, relevant, defs)
         case DictType():
-            return _template_no_eq(t.value, no_eq, relevant, defs)
+            return _template_reaches_non_data(t.value, non_data, relevant, defs)
         case ExceptionType():
-            return (t.module_id, t.scope_path, t.name) in no_eq
+            return (t.module_id, t.scope_path, t.name) in non_data
         case RecordType() | EnumType():
             key = (t.module_id, t.scope_path, t.name)
-            if key in no_eq:
+            if key in non_data:
                 return True
             target = defs.get(key)
             if target is None:
                 return False
             own_relevant = relevant.get(key, set())
             return any(
-                _template_no_eq(arg, no_eq, relevant, defs)
+                _template_reaches_non_data(arg, non_data, relevant, defs)
                 for pname, arg in zip(target.type_params, t.type_args)
                 if pname in own_relevant
             )
@@ -740,7 +748,7 @@ def _scc_has_growing_cycle(
         # A member of an SCC is normally a registered declaration, but a
         # dangling reference (a field naming a declaration that was never
         # registered — an internal-invariant violation, defensively handled
-        # the same way as the equality-capability fixpoint) can surface here
+        # the same way as the non-data-reachability fixpoint) can surface here
         # as its own singleton SCC; treat it as contributing no edges rather
         # than crashing.
         source_def = defs.get(source_key)

@@ -22,6 +22,7 @@ Design constraints
 from __future__ import annotations
 
 import decimal
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from typing import TypeAlias
 
@@ -332,23 +333,30 @@ class ExceptionValue:
 # ---------------------------------------------------------------------------
 
 
+#: The value kinds whose equality is structural — the only ones that recurse.
+#: Everything else (scalars, ``json``, agents, constructors, closures,
+#: iterators, ``unit``) is compared by its own ``__eq__``, so the common
+#: scalar comparison leaves :func:`values_equal` after a single check.
+_STRUCTURAL_KINDS = (ArrayValue, DictValue, RecordValue, EnumValue, ExceptionValue)
+
+
 def values_equal(a: Value, b: Value, _seen: "set[tuple[int, int]] | None" = None) -> bool:
     """Structural equality between two values — cycle-safe and co-inductive.
 
     Every container/nominal ``__eq__`` above delegates here rather than
     recursing through Python's own ``list``/``dict`` equality, which cannot
     thread a memo. This function recurses through itself instead, carrying
-    ``_seen`` — a set of ``(id(a), id(b))`` pairs already assumed equal by an
-    enclosing call.  A pair re-entered while still being compared is
-    co-inductively assumed equal (the standard construction for equality on a
-    possibly-cyclic graph): comparing two cyclic structures terminates and
-    answers the co-inductive relation. This must never raise.
+    ``_seen`` — a set of ``(id(a), id(b))`` pairs taken to be equal.  A pair
+    re-entered while still being compared is co-inductively assumed equal
+    (the standard construction for equality on a possibly-cyclic graph):
+    comparing two cyclic structures terminates and answers the co-inductive
+    relation. This must never raise.
 
-    Only ``ArrayValue``/``DictValue`` comparisons extend ``_seen`` — records,
-    enums, and exceptions cannot be self-referential (their fields are fixed
-    at construction), so any infinite recursion must pass back through an
-    array or dict pair already tracked; nominal field comparisons simply
-    thread ``_seen`` through unchanged.
+    Every structural kind extends ``_seen``, including the nominal ones.
+    Records, enums, and exceptions cannot be self-referential (their fields
+    are fixed at construction), so for them the entry is never needed to
+    *terminate* — but it is what keeps a shared subterm from being re-compared
+    once per path that reaches it.
 
     Every other value kind (scalars, ``json``, agents, constructors,
     closures) falls through to its own ``__eq__`` unchanged — this function
@@ -359,77 +367,76 @@ def values_equal(a: Value, b: Value, _seen: "set[tuple[int, int]] | None" = None
     The identity check is the first thing this function does, for every
     ``Value`` kind (there is no NaN-like value in AgL where ``a is b`` would
     not imply equal): without it, a nominal value's ``__eq__`` recurses into
-    its fields even when compared to itself, and a diamond-shared field
-    reachable from two sibling positions is re-walked down both instead of
-    being recognized as the same object — exponential in the depth of a
-    shared tree.
+    its fields even when compared to itself.
     """
     if a is b:
         return True
+    if not isinstance(a, _STRUCTURAL_KINDS):
+        return a == b
     if isinstance(a, ArrayValue):
-        return isinstance(b, ArrayValue) and _arrays_equal(a, b, _seen)
+        if not isinstance(b, ArrayValue) or len(a.elements) != len(b.elements):
+            return False
+        return _children_equal(a, b, _seen, lambda: zip(a.elements, b.elements))
     if isinstance(a, DictValue):
-        return isinstance(b, DictValue) and _dicts_equal(a, b, _seen)
+        if not isinstance(b, DictValue) or a.entries.keys() != b.entries.keys():
+            return False
+        return _children_equal(
+            a, b, _seen, lambda: ((v, b.entries[k]) for k, v in a.entries.items())
+        )
     if isinstance(a, RecordValue):
-        return (
-            isinstance(b, RecordValue)
-            and a.nominal == b.nominal
-            and _fields_equal(a.fields, b.fields, _seen)
-        )
+        if not isinstance(b, RecordValue) or a.nominal != b.nominal:
+            return False
+        return _fields_equal(a, b, a.fields, b.fields, _seen)
     if isinstance(a, EnumValue):
-        return (
-            isinstance(b, EnumValue)
-            and a.nominal == b.nominal
-            and a.variant == b.variant
-            and _fields_equal(a.fields, b.fields, _seen)
-        )
-    if isinstance(a, ExceptionValue):
-        return (
-            isinstance(b, ExceptionValue)
-            and a.nominal == b.nominal
-            and _fields_equal(a.fields, b.fields, _seen)
-        )
-    return a == b
-
-
-def _arrays_equal(a: ArrayValue, b: ArrayValue, seen: "set[tuple[int, int]] | None") -> bool:
-    if len(a.elements) != len(b.elements):
+        if not isinstance(b, EnumValue) or a.nominal != b.nominal or a.variant != b.variant:
+            return False
+        return _fields_equal(a, b, a.fields, b.fields, _seen)
+    if not isinstance(b, ExceptionValue) or a.nominal != b.nominal:
         return False
+    return _fields_equal(a, b, a.fields, b.fields, _seen)
+
+
+def _children_equal(
+    a: Value,
+    b: Value,
+    seen: "set[tuple[int, int]] | None",
+    pairs: "Callable[[], Iterable[tuple[Value, Value]]]",
+    /,
+) -> bool:
+    """Compare the aligned children of *a* and *b*, memoizing the ``(a, b)`` pair.
+
+    *seen* is monotone: a pair is recorded before its children are compared
+    (so a cyclic re-entry terminates by co-inductive assumption) and is never
+    withdrawn (so a subterm reachable by several paths — a diamond — is
+    compared once rather than once per path; withdrawing it on the way out
+    makes equality exponential in the depth of a shared structure).
+
+    Retaining a pair whose comparison ultimately FAILS is sound because a
+    single ``False`` anywhere aborts the whole comparison: every recursive
+    call sits inside an ``all(...)``, so the first mismatch short-circuits
+    every enclosing walk and the root returns ``False`` without consulting
+    *seen* again. *pairs* is a thunk so the child iterable is only built once
+    the memo has been missed.
+    """
     key = (id(a), id(b))
     if seen is None:
         seen = set()
     elif key in seen:
         return True
     seen.add(key)
-    try:
-        return all(values_equal(x, y, seen) for x, y in zip(a.elements, b.elements))
-    finally:
-        seen.discard(key)
-
-
-def _dicts_equal(a: DictValue, b: DictValue, seen: "set[tuple[int, int]] | None") -> bool:
-    if a.entries.keys() != b.entries.keys():
-        return False
-    key = (id(a), id(b))
-    if seen is None:
-        seen = set()
-    elif key in seen:
-        return True
-    seen.add(key)
-    try:
-        return all(values_equal(v, b.entries[k], seen) for k, v in a.entries.items())
-    finally:
-        seen.discard(key)
+    return all(values_equal(x, y, seen) for x, y in pairs())
 
 
 def _fields_equal(
+    a: Value,
+    b: Value,
     a_fields: dict[str, Value],
     b_fields: dict[str, Value],
     seen: "set[tuple[int, int]] | None",
 ) -> bool:
-    """Compare two nominal field maps; no cycle tracking of its own (see ``values_equal``)."""
-    return a_fields.keys() == b_fields.keys() and all(
-        values_equal(v, b_fields[k], seen) for k, v in a_fields.items()
+    """Compare two nominal field maps, memoizing the owning ``(a, b)`` pair."""
+    return a_fields.keys() == b_fields.keys() and _children_equal(
+        a, b, seen, lambda: ((v, b_fields[k]) for k, v in a_fields.items())
     )
 
 

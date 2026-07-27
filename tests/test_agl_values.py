@@ -225,9 +225,9 @@ def test_dict_value_eq_different_key_sets_is_false() -> None:
 def test_array_value_eq_self_referential_array_terminates() -> None:
     """Comparing a self-referential array to itself terminates and is true.
 
-    This passes whether or not the identity fast path (finding 1's regression
-    fix) is present: co-induction alone (the ``_seen`` memo in
-    ``_arrays_equal``) already makes ``xs == xs`` terminate for a
+    This passes whether or not the identity fast path is present: co-induction
+    alone (the ``_seen`` memo threaded through ``_children_equal``) already
+    makes ``xs == xs`` terminate for a
     self-referential array. It pins termination, not the identity fast path —
     see ``test_values_equal_diamond_short_circuit_bounded_calls`` for a test
     that genuinely pins the fast path.
@@ -247,7 +247,7 @@ def test_values_equal_diamond_short_circuit_bounded_calls(
     Reproduces the shape of the reported regression from AgL source: an enum/record
     built by repeatedly wrapping the current value in both of a new node's fields
     (``t := Pair(a = t, b = t)``) shares one object from two sibling positions at
-    every level. Without the identity fast path (finding 1), the ``RecordValue`` arm
+    every level. Without the identity fast path, the ``RecordValue`` arm
     of ``values_equal`` recurses into ``_fields_equal`` even when comparing a value to
     itself, so the shared subtree is re-walked down both the ``a`` and ``b`` branches
     independently at every level — exponential in depth. A call-count bound (rather

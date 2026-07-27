@@ -1,12 +1,17 @@
 # Regression: a diamond-shared enum tree built by repeatedly wrapping the
 # current value in both fields of a new node (`t := Pair(a = t, b = t)`)
 # shares one object from two sibling positions at every level. Comparing
-# such a value to itself must stay cheap regardless of depth: the identity
-# fast path in `values_equal` recognizes the self-comparison (and every
-# shared subtree the comparison recurses into) without re-walking it.
-# Without that fast path this is exponential in depth -- each extra level
-# doubles the walk -- so this program pins the fix at a depth where the
-# unfixed relation would be intractably slow.
+# such a value must stay cheap regardless of depth. Two separate mechanisms
+# in `values_equal` are needed, and this program pins both at a depth where
+# the unfixed relation would be intractably slow:
+#
+#   * `t == t` -- the identity fast path recognizes the self-comparison (and
+#     every shared subtree the comparison recurses into) without re-walking.
+#   * `t == u` -- two structurally equal but DISTINCT trees, where identity
+#     never fires. Here the memo carries the work: a pair already found equal
+#     stays recorded, so each shared subterm is compared once instead of once
+#     per path reaching it. Withdrawing pairs on the way out makes this
+#     exponential in depth -- each extra level quadruples the walk.
 enum T
   | Leaf
   | Pair(a: T, b: T)
@@ -16,4 +21,19 @@ for i in 1 to 32 do
   t := Pair(a = t, b = t)
 done
 
+var u: T = Leaf()
+for i in 1 to 32 do
+  u := Pair(a = u, b = u)
+done
+
 print(t == t)
+print(t == u)
+
+# A mismatch buried under the shared structure must still be reported, so the
+# memo cannot be masking real differences.
+var v: T = Pair(a = Leaf(), b = Leaf())
+for i in 1 to 32 do
+  v := Pair(a = v, b = v)
+done
+
+print(t == v)

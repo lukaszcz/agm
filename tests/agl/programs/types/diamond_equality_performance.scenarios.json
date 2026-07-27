@@ -1,9 +1,9 @@
 {
   "scenarios": [
     {
-      "name": "deep_diamond_self_comparison_terminates_quickly",
+      "name": "deep_diamond_comparisons_terminate_quickly",
       "expect": {
-        "stdout": "true\n"
+        "stdout": "true\ntrue\nfalse\n"
       }
     }
   ]

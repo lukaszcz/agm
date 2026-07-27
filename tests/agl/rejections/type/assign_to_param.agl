@@ -1,0 +1,2 @@
+param p: int
+p := 2

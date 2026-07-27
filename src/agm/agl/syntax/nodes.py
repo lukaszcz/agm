@@ -1064,15 +1064,6 @@ class IndexTarget:
 AssignTarget = NameTarget | IndexTarget
 
 
-def assign_target_root_name(target: object) -> str | None:
-    """Return the mutable root binding name for an assignment target."""
-    if isinstance(target, (NameTarget, VarRef)):
-        return target.name
-    if isinstance(target, (IndexTarget, IndexAccess)):
-        return assign_target_root_name(target.obj)
-    return None
-
-
 @dataclass(frozen=True, slots=True)
 class AssignStmt:
     """``target := expr`` — assignment to a mutable target.  Yields ``unit``."""

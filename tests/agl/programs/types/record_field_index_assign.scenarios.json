@@ -1,0 +1,14 @@
+{
+  "scenarios": [
+    {
+      "name": "positive_pair",
+      "params": {"a": 1, "b": 2},
+      "expect": {"stdout": "[0, 2]\n[0, 2]\n[[1, 2], [999, 1]]\n"}
+    },
+    {
+      "name": "negative_pair",
+      "params": {"a": 9, "b": -3},
+      "expect": {"stdout": "[0, -3]\n[0, -3]\n[[9, -3], [999, 9]]\n"}
+    }
+  ]
+}

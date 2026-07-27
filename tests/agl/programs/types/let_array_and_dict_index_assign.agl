@@ -1,0 +1,18 @@
+# `let` means "cannot rebind", not "contents frozen": indexed assignment is
+# legal on a `let`-bound array or dict exactly like on a `var`-bound one, and
+# every alias of the same container observes the mutation.
+param a: int
+param b: int
+
+let xs = [a, b]
+let xs_alias = xs
+xs[0] := 0
+print(xs)
+print(xs_alias)
+
+let counts = {"first": a, "second": b}
+let counts_alias = counts
+counts["first"] := 0
+print(counts["first"])
+print(counts_alias["first"])
+print(counts_alias["second"])

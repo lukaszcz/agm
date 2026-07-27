@@ -1,0 +1,2 @@
+var t = "hello"
+t[0] := "x"

@@ -445,20 +445,29 @@ class TestBinders:
     def test_legacy_set_syntax_is_not_assignment(self) -> None:
         assert not isinstance(first(parse("set x == 10")), AssignStmt)
 
-    def test_assignment_target_must_have_variable_root(self) -> None:
-        with pytest.raises(AglSyntaxError, match="assignment target"):
-            parse("make()[0] := 10")
+    def test_assign_index_target_accepts_call_root(self) -> None:
+        """Indexed assignment is legal on any array/dict-typed root, including a
+        call result -- it mutates a container rather than rebinding a name."""
+        s = first(parse("make()[0] := 10"))
+        assert isinstance(s, AssignStmt)
+        assert isinstance(s.target, IndexTarget)
+        assert isinstance(s.target.obj, Call)
 
     @pytest.mark.parametrize(
         "source",
-        (
-            "std/config::NoSuchType::max-iters := 3",
-            "std/config::NoSuchType::max-iters[0] := 3",
-        ),
+        ("f() := 10", "r.x := 10", "1 := 10"),
+        ids=("call", "field", "literal"),
     )
-    def test_type_qualified_assignment_target_rejected(self, source: str) -> None:
+    def test_assign_non_indexed_non_variable_target_rejected(self, source: str) -> None:
+        """A non-indexed target that is neither a variable nor an indexed
+        expression -- a bare call, field access, or literal -- is rejected: it
+        can be neither rebound (not a name) nor mutated in place (no index)."""
         with pytest.raises(AglSyntaxError, match="assignment target"):
             parse(source)
+
+    def test_type_qualified_assignment_target_rejected(self) -> None:
+        with pytest.raises(AglSyntaxError, match="assignment target"):
+            parse("std/config::NoSuchType::max-iters := 3")
 
     def test_module_qualified_assignment_target_preserved(self) -> None:
         assignment = first(parse("std/config::max-iters := 3"))
@@ -472,13 +481,18 @@ class TestBinders:
         (
             "mm::xs[0] := 42",
             "std/config::max-iters[0] := 3",
+            "std/config::NoSuchType::max-iters[0] := 3",
         ),
     )
-    def test_module_qualified_indexed_assignment_target_rejected(self, source: str) -> None:
-        """A qualified assignment target cannot also be indexed (grammar forbids the
-        combination — a qualified target must resolve to a scalar builtin var)."""
-        with pytest.raises(AglSyntaxError, match="assignment target"):
-            parse(source)
+    def test_module_qualified_indexed_assignment_target_accepted(self, source: str) -> None:
+        """A qualified indexed target has no root binding of its own -- its object
+        expression is an ordinary (possibly qualified) read, so it is not subject
+        to the single-segment restriction a qualified *rebinding* target needs."""
+        s = first(parse(source))
+        assert isinstance(s, AssignStmt)
+        assert isinstance(s.target, IndexTarget)
+        assert isinstance(s.target.obj, VarRef)
+        assert s.target.obj.qualifier is not None
 
     def test_let_continuation(self) -> None:
         """let-continuation: let x = 1; x parses as two block items."""

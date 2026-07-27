@@ -137,11 +137,12 @@ enum MaybeText
 Homogeneous containers, and **mutable reference values**: binding, assignment,
 passing as an argument, and storing in a field never copy an array or dict —
 every alias shares the same underlying object. Elements and values are read
-with indexing (`xs[0]`, `metadata["key"]`). A mutable `var` binding can be
-updated through an index with `:=`, which mutates the array or dictionary
-**in place**; every other binding, field, capture, or loop cursor that
-references the same array or dictionary observes the change. There is no
-`len` operator.
+with indexing (`xs[0]`, `metadata["key"]`). However an array or dict is
+reached — a `let` or `var` binding, a `param`, a field, a call result — it
+can be updated through an index with `:=`, which mutates the array or
+dictionary **in place**; every other binding, field, capture, or loop
+cursor that references the same array or dictionary observes the change.
+There is no `len` operator.
 
 Records, enums, and exceptions are immutable — none of their fields can be
 reassigned, and `with` ([Expressions](expressions.md)) builds a new value

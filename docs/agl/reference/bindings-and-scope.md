@@ -86,13 +86,14 @@ var artifact: text = ask("Implement %{spec}", agent = impl)
 
 ```ebnf
 assign_stmt ::= assign_target ":=" expr
-assign_target ::= name ("[" expr "]")*
-                | qualifier_chain name
+assign_target ::= qualifier_chain? name
+                | postfix "[" expr "]"
 ```
 
-`:=` updates the nearest visible **mutable** binding, has type `unit`, and
-returns `void`. It never creates a binding. The expected type of the
-right-hand side is the declared type of the binding being updated:
+A bare `:=` (no index) rebinds the nearest visible **mutable** binding, has
+type `unit`, and returns `void`. It never creates a binding. The expected
+type of the right-hand side is the declared type of the binding being
+updated:
 
 <!-- agl-check: fragment -->
 ```agl
@@ -100,11 +101,11 @@ var proposal: Turn = ask("Initial proposal.", agent = researcher)
 proposal := ask("Revise proposal.", agent = researcher)   # target type: Turn
 ```
 
-`:=` can also update an element of a mutable array or an existing key of a
-mutable dictionary:
+`:=` can also update an element of an array or an existing key of a
+dictionary:
 
 ```agl
-var xs = [1, 2]
+let xs = [1, 2]
 xs[0] := 10
 
 var metadata = {"status": "draft"}
@@ -118,12 +119,19 @@ to the target name or preceding index, as in `xs[0]`. A spaced form such as
 Arrays and dicts are mutable reference values ([Types](types.md)), so an
 indexed assignment mutates the array or dictionary **in place**: every other
 binding, field, closure capture, or loop cursor that references the same
-array or dictionary observes the change. The root must be a `var` binding.
-Assigning through `let`, `param`, function arguments, function return
-temporaries, fields, or a type-qualified constructor reference is a static
-error. Array assignment uses the same negative-index and `IndexError` rules
-as array access. Dictionary assignment updates existing keys only; assigning
-to a missing key raises `KeyError`.
+array or dictionary observes the change.
+
+Indexed assignment is legal on **any** array- or dict-typed expression: a
+`let` binding, a `param`, a function argument, a record or exception field, a
+function call result, and a qualified read all work as the container of
+`target[index] := value`. `let` and `param` guarantee only that the *name*
+cannot be rebound; they say nothing about the contents of what the name
+refers to, so mutating an array or dict through one is not a rebinding and is
+not restricted. A bare `name := value` — an actual rebinding, with no index —
+remains a static error unless `name` is a mutable `var` binding. Array
+assignment uses the same negative-index and `IndexError` rules as array
+access. Dictionary assignment updates existing keys only; assigning to a
+missing key raises `KeyError`.
 
 Evaluation order for `target[index] := value` is left to right: the
 container, then the index, then `value`, then the checked in-place store. A
@@ -137,8 +145,9 @@ Static rules, all checked before execution:
 
 1. Redeclaring a name in the same scope is an error.
 2. Assignment to an undeclared name is an error.
-3. Assignment to an immutable binding is an error; the diagnostic names the binder
-   kind — `let`, `param`, a catch binder, or a pattern binding.
+3. A bare `name := value` (no index) to an immutable binding is an error; the
+   diagnostic names the binder kind — `let`, `param`, a catch binder, or a
+   pattern binding.
 4. Reading a name that is not visible in the current scope chain is an error.
 5. The contextual keywords `ask` and `exec` cannot be used as binding or
    param names.

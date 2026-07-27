@@ -1,0 +1,26 @@
+# A closure captures a `let`'s array value by sharing the array reference,
+# not a copy, and `let` only forbids rebinding -- not mutating what it refers
+# to. An indexed assignment inside one closure against a `let`-captured array
+# is legal and is observed through a second closure's own capture of the
+# same array.
+record Closures
+  mutate: () -> unit
+  view: () -> array[int]
+
+def make_closures(first: int, second: int) -> Closures =
+  let shared = [first, second]
+  Closures(
+    mutate = fn() => do shared[0] := shared[0] + 10 until true,
+    view = fn() => shared,
+  )
+
+param first: int
+param second: int
+
+let closures = make_closures(first, second)
+
+print closures.view()
+closures.mutate()
+print closures.view()
+closures.mutate()
+print closures.view()

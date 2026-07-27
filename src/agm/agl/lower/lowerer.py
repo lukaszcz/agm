@@ -15,7 +15,7 @@ Supported AST nodes
     Block
 
   Items (top-level and block-level)
-    LetDecl, VarDecl, AssignStmt (simple name target only)
+    LetDecl, VarDecl, AssignStmt (name target and indexed target)
     Declarations that have no runtime action:
       RecordDef, EnumDef, TypeAlias, FuncDef, AgentDecl, ParamDecl,
       ProgramDecl, ImportDecl, ExportDecl
@@ -631,10 +631,14 @@ class _Lowerer:
                 local_ids.add(node.node_id)
                 self._scan_captures(node.value, local_ids, captured)
             case AssignStmt():
-                # The assigned binding (NameTarget root, or IndexTarget root) must be
-                # captured even when it is never otherwise read (e.g. `x := 5`).
-                self._record_capture(node.node_id, local_ids, captured)
-                if isinstance(node.target, IndexTarget):
+                if isinstance(node.target, NameTarget):
+                    # The assigned binding must be captured even when it is
+                    # never otherwise read (e.g. `x := 5`).
+                    self._record_capture(node.node_id, local_ids, captured)
+                else:
+                    # An IndexTarget has no binding of its own -- its `obj`/
+                    # `index` are ordinary expressions, so scanning them finds
+                    # every capture the assignment needs.
                     self._scan_captures(node.target.obj, local_ids, captured)
                     self._scan_captures(node.target.index, local_ids, captured)
                 self._scan_captures(node.value, local_ids, captured)
@@ -3256,6 +3260,25 @@ class _Lowerer:
         assign_node_id: int,
     ) -> "IrAssign | IrIndexSet | IrBuiltinStore":
         """Lower an assignment statement (simple name, indexed target, or builtin var)."""
+        if isinstance(target, IndexTarget):
+            # An IndexTarget has no binding of its own -- under reference
+            # semantics an indexed assignment needs no root symbol or Cell,
+            # only a container reference. Lower the target's object
+            # expression generically (an IrLoad for a bare root, an IrIndex
+            # for a nested one), so `m["a"]["b"] := v` falls out for free
+            # because IrIndex returns the inner container by reference.
+            container_type = self._node_type(target.obj.node_id)
+            kind = self._kind_for_container(container_type)
+            slot_type = self._node_type(target.node_id)
+            ir_val = self.lower_coerced(rhs, slot_type)
+            return IrIndexSet(
+                location=self._loc(span),
+                container=self.lower_expr(target.obj),
+                kind=kind,
+                index=self.lower_expr(target.index),
+                value=ir_val,
+            )
+
         ref = self._checked.binding_for(assign_node_id)
         assert ref is not None, (
             f"compiler bug: no binding for AssignStmt node_id={assign_node_id!r}"
@@ -3271,30 +3294,12 @@ class _Lowerer:
                 value=self.lower_coerced(rhs, slot_type),
             )
 
-        if isinstance(target, NameTarget):
-            sym = self._sym_for_decl(ref.decl_node_id)
-            slot_type = self._binding_type(ref.decl_node_id)
-            ir_val = self.lower_coerced(rhs, slot_type)
-            return IrAssign(
-                location=self._loc(span),
-                symbol=sym,
-                value=ir_val,
-            )
-
-        # IndexTarget: under reference semantics an indexed assignment needs no
-        # root symbol or Cell, only a container reference — lower the target's
-        # object expression generically (an IrLoad for a bare root, an IrIndex
-        # for a nested one), so `m["a"]["b"] := v` falls out for free because
-        # IrIndex returns the inner container by reference.
-        container_type = self._node_type(target.obj.node_id)
-        kind = self._kind_for_container(container_type)
-        slot_type = self._node_type(target.node_id)
+        sym = self._sym_for_decl(ref.decl_node_id)
+        slot_type = self._binding_type(ref.decl_node_id)
         ir_val = self.lower_coerced(rhs, slot_type)
-        return IrIndexSet(
+        return IrAssign(
             location=self._loc(span),
-            container=self.lower_expr(target.obj),
-            kind=kind,
-            index=self.lower_expr(target.index),
+            symbol=sym,
             value=ir_val,
         )
 

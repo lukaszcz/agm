@@ -3,7 +3,7 @@
 ``resolve_module(program)`` performs a full single-pass walk over the AST,
 building the lexical scope chain and populating side tables:
 
-- ``resolution``:     ``VarRef.node_id`` / ``AssignStmt.node_id`` → ``BindingRef``
+- ``resolution``:     ``VarRef.node_id`` / bare-name ``AssignStmt.node_id`` → ``BindingRef``
 - ``builtin_calls``:  ``Call.node_id`` → ``BuiltinKind``  (for contextual built-ins)
 - ``pattern_slots``: metadata for shared bindings owned by a pattern match site
 - ``match_site_pattern_slots``: match-site node id → the slot ids it created
@@ -13,11 +13,14 @@ Scope rules
 1. ``let``/``var``/``def`` bind in the current scope; redeclaration in the
    *same* scope is an error. ``let _`` and ``var _`` resolve their right-hand
    sides but bind no name.
-2. ``:=`` resolves to the nearest visible binding; ``:=`` on an undeclared
-   name → error.  Whether that binding is assignable is decided by type
-   checking, which alone knows a pattern slot's selected meaning.  A
+2. A bare-name ``:=`` resolves to the nearest visible binding; ``:=`` on an
+   undeclared name → error.  Whether that binding is assignable is decided by
+   type checking, which alone knows a pattern slot's selected meaning.  A
    *qualified* target is settled here: only ``builtin var`` is assignable
    across a module boundary, and no qualified name is ever a pattern slot.
+   An *indexed* target (``target[index] := value``) has no binding of its
+   own: ``obj`` and ``index`` are resolved as ordinary expressions, and no
+   ``resolution`` entry is recorded for the ``AssignStmt``.
 3. Reading (``VarRef``) a name not visible in the current scope chain → error.
    ``_`` is always a discard wildcard and never resolves as a readable name.
 4. Pattern variables and catch binders are immutable and branch-local.
@@ -159,7 +162,6 @@ from agm.agl.syntax.nodes import (
     VarPattern,
     VarRef,
     WildcardPattern,
-    assign_target_root_name,
     pattern_binder_candidates,
 )
 from agm.agl.syntax.spans import SourceSpan
@@ -1718,15 +1720,19 @@ class _Resolver:
 
     def _resolve_assign(self, node: AssignStmt) -> None:
         target = node.target
-        if isinstance(target, NameTarget) and target.qualifier is not None:
+        if isinstance(target, IndexTarget):
+            # An indexed target has no binding of its own: it mutates whatever
+            # container its object expression evaluates to, so scope resolves
+            # ``obj`` and ``index`` as ordinary expressions rather than looking
+            # up a mutable binding.
+            self._resolve_expr(target.obj)
+            self._resolve_expr(target.index)
+            self._resolve_expr(node.value)
+            return
+        if target.qualifier is not None:
             self._resolve_qualified_assign(node, target)
             return
-        name = assign_target_root_name(node.target)
-        if name is None:
-            raise AglScopeError(
-                "indexed assignment requires a variable array or dict root.",
-                span=node.target.span,
-            )
+        name = target.name
         ref = self._current_scope().lookup(name)
         if ref is None:
             ref = self._lookup_bare_contribution(name, node.span)
@@ -1743,7 +1749,6 @@ class _Resolver:
         # binding is only known once checking selects it, so type checking owns
         # the ``:=``-on-immutable rejection for every unqualified target.
         self._resolution[node.node_id] = ref
-        self._resolve_assign_target_indexes(node.target)
         self._resolve_expr(node.value)
 
     def _resolve_qualified_assign(self, node: AssignStmt, target: NameTarget) -> None:
@@ -1770,11 +1775,6 @@ class _Resolver:
             )
         self._resolution[node.node_id] = ref
         self._resolve_expr(node.value)
-
-    def _resolve_assign_target_indexes(self, target: object) -> None:
-        if isinstance(target, IndexTarget):
-            self._resolve_expr(target.obj)
-            self._resolve_expr(target.index)
 
     def _resolve_param(self, node: ParamDecl) -> None:
         if not self._at_root:

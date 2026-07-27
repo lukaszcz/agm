@@ -344,8 +344,8 @@ let_decl       ::= "let" pattern type_ann? "=" expr
 var_decl       ::= "var" name type_ann? "=" expr
 builtin_var_def ::= "builtin" NEWLINE? "var" name type_ann  (* body-less; std/config only *)
 assign_stmt ::= assign_target ":=" expr
-assign_target ::= name ("[" expr "]")*
-                | qualifier_chain name
+assign_target ::= qualifier_chain? name
+                | postfix "[" expr "]"
 ```
 
 A `builtin var` is a body-less, host-backed mutable binding with a mandatory
@@ -353,12 +353,15 @@ type and no initializer; the `builtin` modifier may sit on the same line or the
 line directly above (like `builtin def`). It may be declared only at the root of
 `std/config`; entry modules and other library modules cannot declare one.
 
-Assignment has type `unit` and returns `void`. A cross-module assignment target
-— written with a qualifier, or bare when an open import puts the name in scope —
-is valid only when it resolves to a `builtin var`; type-qualified constructor
-forms are not assignment targets. In an indexed assignment target,
-each opening `[` must be adjacent to the target name or preceding index:
-`xs[0]` is indexed assignment, while `xs [0]` is not.
+Assignment has type `unit` and returns `void`. A bare (non-indexed) cross-module
+assignment target — written with a qualifier, or bare when an open import puts
+the name in scope — is valid only when it resolves to a `builtin var`;
+type-qualified constructor forms are not assignment targets. An indexed
+assignment target has no binding of its own: its object expression is
+evaluated like any other read, so it is legal on any array- or dict-typed
+expression, qualified or not — a `let` binding, a `param`, a field, or a call
+result. Each opening `[` must be adjacent to the target name or preceding
+index: `xs[0]` is indexed assignment, while `xs [0]` is not.
 
 ## Loops
 

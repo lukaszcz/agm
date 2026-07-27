@@ -11,8 +11,6 @@ deliberately do *not* pin internal implementation details.
 
 from __future__ import annotations
 
-from typing import cast
-
 import pytest
 
 from agm.agl.modules.ids import ENTRY_ID
@@ -27,7 +25,6 @@ from agm.agl.scope.symbols import BinderKind, BindingRef
 from agm.agl.syntax.nodes import (
     AsPattern,
     AssignStmt,
-    AssignTarget,
     Block,
     BoolLit,
     Call,
@@ -755,17 +752,6 @@ class TestAssignErrors:
         assignment = resolved.program.body.items[1].branches[0].body.items[0]
         assert isinstance(assignment, AssignStmt)
         assert resolved.resolution[assignment.node_id].kind is BinderKind.pattern_slot
-
-    def test_invalid_direct_ast_assign_target_rejected(self) -> None:
-        assign_bad = AssignStmt(
-            target=cast(AssignTarget, _make_unitlit()),
-            value=_make_intlit(1),
-            span=_sp(),
-            node_id=_nid(),
-        )
-        err = reject_program(assign_bad, _make_unitlit())
-        _, msg = diag(err)
-        assert "indexed assignment requires a variable array or dict root" in msg
 
     def test_assign_to_var_resolves(self) -> None:
         r = parse_and_resolve("var n = 0\nn := 1\nn")

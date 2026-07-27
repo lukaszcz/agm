@@ -1159,77 +1159,31 @@ class _Checker:
             return self._check_indexed_assign_stmt(stmt, stmt.target)
 
         raise AglTypeError(
-            "assignment target must be a mutable variable or indexed mutable variable.",
+            "assignment target must be a mutable variable or an indexed expression.",
             span=stmt.span,
         )
 
     def _check_indexed_assign_stmt(self, stmt: AssignStmt, target: IndexTarget) -> Type:
-        ref = self._binding_for(stmt.node_id)
-        if not ref.mutable:
-            raise AglTypeError(
-                f"Cannot assign through index of '{ref.name}': "
-                "indexed assignment requires a mutable 'var' binding.",
-                span=target.span,
-            )
-        root_type = self._require_binding_type(ref)
-        elem_type = self._check_index_target_type(
-            target, root_type, binding_node_id=ref.decl_node_id
-        )
-        value_type = self._check_boundary_expr(stmt.value, expected=elem_type)
-        self._assert_assignable_from(
-            value_type,
-            elem_type,
-            stmt.span,
-            stmt.value,
-            binding_node_ids=(ref.decl_node_id,),
-        )
-        return self._binder_result(value_type)
-
-    def _check_index_target_type(
-        self, target: IndexTarget, root_type: Type, *, binding_node_id: int
-    ) -> Type:
-        binding_node_ids = (binding_node_id,)
-        container_type = self._check_index_target_container_type(
-            target.obj, root_type, binding_node_ids=binding_node_ids
-        )
+        # An indexed target has no binding of its own: `target.obj` is an
+        # ordinary expression that must produce an array or dict, and
+        # indexed assignment mutates whatever container it evaluates to --
+        # legal on any array/dict-typed root, including a `let` binding, a
+        # param, a field, or a call result. `_check_index_operand` is the
+        # same helper a read uses, so a non-container root is framed with the
+        # same inferred-return-provenance guidance as `expr[index]`.
+        container_type = self._check_boundary_expr(target.obj, expected=None)
         elem_type = self._check_index_operand(
-            container_type,
-            target.index,
-            span=target.span,
-            binding_node_ids=binding_node_ids,
+            container_type, target.index, span=target.span, obj_expr=target.obj
         )
         # Recorded so the lowerer can generically lower the target's own node
         # (an IndexTarget is not an Expr, so it has no other node-type slot)
         # to size the coercion of the assigned value, without a dedicated
         # element-type-for-container helper of its own.
         self._record_node_type(target.node_id, elem_type)
-        return elem_type
-
-    def _check_index_target_container_type(
-        self, obj: Expr, root_type: Type, *, binding_node_ids: Sequence[int]
-    ) -> Type:
-        if isinstance(obj, VarRef):
-            # Recorded so the lowerer can generically lower `obj` (an
-            # IrLoad needs no node type, but a further IndexAccess wrapping
-            # this VarRef needs its container's type to pick ARRAY vs DICT).
-            self._record_node_type(obj.node_id, root_type)
-            return root_type
-        if isinstance(obj, IndexAccess):
-            container_type = self._check_index_target_container_type(
-                obj.obj, root_type, binding_node_ids=binding_node_ids
-            )
-            indexed_type = self._check_index_operand(
-                container_type,
-                obj.index,
-                span=obj.span,
-                binding_node_ids=binding_node_ids,
-            )
-            self._record_node_type(obj.node_id, indexed_type)
-            return indexed_type
-        raise AglTypeError(
-            "indexed assignment requires a variable array or dict root.",
-            span=obj.span,
-        )
+        value_type = self._check_boundary_expr(stmt.value, expected=elem_type)
+        with self._frame_direct_candidate_use(exprs=(stmt.value, target.obj)):
+            self._assert_assignable(value_type, elem_type, stmt.span)
+        return self._binder_result(value_type)
 
     # ------------------------------------------------------------------
     # Expression type inference

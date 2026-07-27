@@ -4925,11 +4925,18 @@ class TestConstructorRefDispatch:
         assert isinstance(body, Block)
         assignment = body.items[0]
         assert isinstance(assignment, AssignStmt)
+        assert isinstance(assignment.target, IndexTarget)
         outer_var = resolved.program.body.items[2]
         assert isinstance(outer_var, VarDecl)
 
         checked = check_module(resolved, default_capabilities())
-        assert checked.binding_for(assignment.node_id).decl_node_id == outer_var.node_id
+        # The indexed target's object expression is checked like any ordinary
+        # read, so the field-directed restoration is keyed by its own node --
+        # once the checker determines `on` selected the constructor pattern
+        # (not a fresh binder), the bare name inside the branch resolves back
+        # to the enclosing `var`.
+        obj_node_id = assignment.target.obj.node_id
+        assert checked.binding_for(obj_node_id).decl_node_id == outer_var.node_id
 
     def test_failed_field_directed_check_preserves_scope_resolution(self) -> None:
         source = (
@@ -6656,218 +6663,80 @@ class TestIndexTypechecking:
         err = reject_type("var n = 1\nn[0] := 2\nn")
         assert "array or dict" in str(err)
 
-    def test_indexed_assignment_accepts_var_array_and_dict(self) -> None:
+    def test_indexed_assignment_accepts_var_and_let_array_and_dict(self) -> None:
+        # Indexed assignment is legal on any array/dict-typed root -- a `let`
+        # binding no less than a `var` one, since `:=` on an index mutates
+        # the container rather than rebinding the name.
         sp = mk_span()
-        array_decl, array_obj, array_ref = self._array_decl_and_ref(mutable=True)
-        array_assign = AssignStmt(
-            target=IndexTarget(
-                obj=array_obj,
-                index=IntLit(value=0, span=sp, node_id=_mk_node_id()),
-                span=sp,
-                node_id=_mk_node_id(),
-            ),
-            value=IntLit(value=3, span=sp, node_id=_mk_node_id()),
-            span=sp,
-            node_id=_mk_node_id(),
-        )
-        self._check_items(
-            (array_decl, array_assign),
-            {array_obj.node_id: array_ref, array_assign.node_id: array_ref},
-        )
-
-        dict_decl, dict_obj, dict_ref = self._dict_decl_and_ref(mutable=True)
-        dict_assign = AssignStmt(
-            target=IndexTarget(
-                obj=dict_obj,
-                index=StringLit(value="a", span=sp, node_id=_mk_node_id()),
-                span=sp,
-                node_id=_mk_node_id(),
-            ),
-            value=IntLit(value=3, span=sp, node_id=_mk_node_id()),
-            span=sp,
-            node_id=_mk_node_id(),
-        )
-        self._check_items(
-            (dict_decl, dict_assign),
-            {dict_obj.node_id: dict_ref, dict_assign.node_id: dict_ref},
-        )
-
-    def test_indexed_assignment_rejects_immutable_and_invalid_roots(self) -> None:
-        sp = mk_span()
-        decl, obj, ref = self._array_decl_and_ref()
-        let_assign = AssignStmt(
-            target=IndexTarget(
-                obj=obj,
-                index=IntLit(value=0, span=sp, node_id=_mk_node_id()),
-                span=sp,
-                node_id=_mk_node_id(),
-            ),
-            value=IntLit(value=3, span=sp, node_id=_mk_node_id()),
-            span=sp,
-            node_id=_mk_node_id(),
-        )
-        with pytest.raises(AglTypeError, match="mutable 'var'"):
-            self._check_items((decl, let_assign), {obj.node_id: ref, let_assign.node_id: ref})
-
-        mutable_decl, mutable_obj, mutable_ref = self._array_decl_and_ref(mutable=True)
-        field_assign = AssignStmt(
-            target=IndexTarget(
-                obj=FieldAccess(
-                    obj=mutable_obj,
-                    field="field",
+        for mutable in (True, False):
+            array_decl, array_obj, array_ref = self._array_decl_and_ref(mutable=mutable)
+            array_assign = AssignStmt(
+                target=IndexTarget(
+                    obj=array_obj,
+                    index=IntLit(value=0, span=sp, node_id=_mk_node_id()),
                     span=sp,
                     node_id=_mk_node_id(),
                 ),
-                index=IntLit(value=0, span=sp, node_id=_mk_node_id()),
+                value=IntLit(value=3, span=sp, node_id=_mk_node_id()),
                 span=sp,
                 node_id=_mk_node_id(),
-            ),
-            value=IntLit(value=3, span=sp, node_id=_mk_node_id()),
-            span=sp,
-            node_id=_mk_node_id(),
-        )
-        with pytest.raises(AglTypeError, match="variable array or dict root"):
-            self._check_items(
-                (mutable_decl, field_assign),
-                {
-                    mutable_obj.node_id: mutable_ref,
-                    field_assign.node_id: mutable_ref,
-                },
             )
+            self._check_items((array_decl, array_assign), {array_obj.node_id: array_ref})
 
-        temporary_assign = AssignStmt(
-            target=IndexTarget(
-                obj=ArrayLit(
-                    elements=(IntLit(value=1, span=sp, node_id=_mk_node_id()),),
+            dict_decl, dict_obj, dict_ref = self._dict_decl_and_ref(mutable=mutable)
+            dict_assign = AssignStmt(
+                target=IndexTarget(
+                    obj=dict_obj,
+                    index=StringLit(value="a", span=sp, node_id=_mk_node_id()),
                     span=sp,
                     node_id=_mk_node_id(),
                 ),
-                index=IntLit(value=0, span=sp, node_id=_mk_node_id()),
+                value=IntLit(value=3, span=sp, node_id=_mk_node_id()),
                 span=sp,
                 node_id=_mk_node_id(),
-            ),
-            value=IntLit(value=3, span=sp, node_id=_mk_node_id()),
-            span=sp,
-            node_id=_mk_node_id(),
-        )
-        with pytest.raises(AglTypeError, match="variable array or dict root"):
-            self._check_items(
-                (mutable_decl, temporary_assign),
-                {temporary_assign.node_id: mutable_ref},
             )
+            self._check_items((dict_decl, dict_assign), {dict_obj.node_id: dict_ref})
 
-    def test_indexed_assignment_rejects_param_function_arg_and_non_container(self) -> None:
-        sp = mk_span()
-        param = ParamDecl(
-            name="xs",
-            annotation=ArrayT(
-                elem=IntT(span=sp, node_id=_mk_node_id()),
-                span=sp,
-                node_id=_mk_node_id(),
-            ),
-            default=None,
-            span=sp,
-            node_id=_mk_node_id(),
+    def test_parsed_indexed_assignment_accepts_record_field_root(self) -> None:
+        result = accept_type(
+            "record Box\n  items: array[int]\nlet b = Box(items = [1, 2])\nb.items[0] := 3\nb.items"
         )
-        param_obj = VarRef(name="xs", span=sp, node_id=_mk_node_id())
-        param_ref = self._binding_ref(
-            "xs",
-            mutable=False,
-            decl_node_id=param.node_id,
-            kind=BinderKind.param_binding,
-        )
-        param_assign = AssignStmt(
-            target=IndexTarget(
-                obj=param_obj,
-                index=IntLit(value=0, span=sp, node_id=_mk_node_id()),
-                span=sp,
-                node_id=_mk_node_id(),
-            ),
-            value=IntLit(value=3, span=sp, node_id=_mk_node_id()),
-            span=sp,
-            node_id=_mk_node_id(),
-        )
-        with pytest.raises(AglTypeError, match="mutable 'var'"):
-            self._check_items(
-                (param, param_assign),
-                {param_obj.node_id: param_ref, param_assign.node_id: param_ref},
-            )
+        program = result.resolved.program
+        assert program is not None
+        final_expr = program.body.items[-1]
+        assert isinstance(final_expr, FieldAccess)
+        assert result.node_types[final_expr.node_id] == ArrayType(elem=IntType())
 
-        fn_param = Param(
-            name="arg",
-            type_expr=ArrayT(
-                elem=IntT(span=sp, node_id=_mk_node_id()),
-                span=sp,
-                node_id=_mk_node_id(),
-            ),
-            kind=ParamKind.STANDARD,
-            default=None,
-            span=sp,
-            node_id=_mk_node_id(),
-        )
-        arg_obj = VarRef(name="arg", span=sp, node_id=_mk_node_id())
-        arg_ref = self._binding_ref(
-            "arg",
-            mutable=False,
-            decl_node_id=fn_param.node_id,
-            kind=BinderKind.param_binding,
-        )
-        arg_assign = AssignStmt(
-            target=IndexTarget(
-                obj=arg_obj,
-                index=IntLit(value=0, span=sp, node_id=_mk_node_id()),
-                span=sp,
-                node_id=_mk_node_id(),
-            ),
-            value=IntLit(value=3, span=sp, node_id=_mk_node_id()),
-            span=sp,
-            node_id=_mk_node_id(),
-        )
-        fn = FuncDef(
-            name="f",
-            params=(fn_param,),
-            return_type=UnitT(span=sp, node_id=_mk_node_id()),
-            body=Block(
-                items=(arg_assign, UnitLit(span=sp, node_id=_mk_node_id())),
-                span=sp,
-                node_id=_mk_node_id(),
-            ),
-            span=sp,
-            node_id=_mk_node_id(),
-        )
-        with pytest.raises(AglTypeError, match="mutable 'var'"):
-            self._check_items((fn,), {arg_obj.node_id: arg_ref, arg_assign.node_id: arg_ref})
+    def test_parsed_indexed_assignment_accepts_temporary_root(self) -> None:
+        # Any array/dict-typed expression is a legal root, even an ephemeral
+        # literal that is discarded immediately after the mutation.
+        result = accept_type("[1][0] := 3\n()")
+        program = result.resolved.program
+        assert program is not None
+        assign = program.body.items[0]
+        assert isinstance(assign, AssignStmt)
+        assert isinstance(assign.target, IndexTarget)
+        assert result.node_types[assign.target.obj.node_id] == ArrayType(elem=IntType())
 
-        var_decl = VarDecl(
-            name="n",
-            type_ann=IntT(span=sp, node_id=_mk_node_id()),
-            value=IntLit(value=1, span=sp, node_id=_mk_node_id()),
-            span=sp,
-            node_id=_mk_node_id(),
-        )
-        var_obj = VarRef(name="n", span=sp, node_id=_mk_node_id())
-        var_ref = self._binding_ref(
-            "n",
-            mutable=True,
-            decl_node_id=var_decl.node_id,
-            kind=BinderKind.var_binding,
-        )
-        non_container_assign = AssignStmt(
-            target=IndexTarget(
-                obj=var_obj,
-                index=IntLit(value=0, span=sp, node_id=_mk_node_id()),
-                span=sp,
-                node_id=_mk_node_id(),
-            ),
-            value=IntLit(value=3, span=sp, node_id=_mk_node_id()),
-            span=sp,
-            node_id=_mk_node_id(),
-        )
-        with pytest.raises(AglTypeError, match="array or dict"):
-            self._check_items(
-                (var_decl, non_container_assign),
-                {var_obj.node_id: var_ref, non_container_assign.node_id: var_ref},
-            )
+    def test_parsed_indexed_assignment_accepts_param_array(self) -> None:
+        result = accept_type("param xs: array[int]\nxs[0] := 2\nxs")
+        program = result.resolved.program
+        assert program is not None
+        final_expr = program.body.items[-1]
+        assert isinstance(final_expr, VarRef)
+        assert result.node_types[final_expr.node_id] == ArrayType(elem=IntType())
+
+    def test_parsed_indexed_assignment_accepts_function_arg(self) -> None:
+        result = accept_type("def f(xs: array[int]) -> array[int] =\n  xs[0] := 2\n  xs\nf([1])")
+        program = result.resolved.program
+        assert program is not None
+        func_def = program.body.items[0]
+        assert isinstance(func_def, FuncDef)
+        assert isinstance(func_def.body, Block)
+        assign = func_def.body.items[0]
+        assert isinstance(assign, AssignStmt)
+        assert isinstance(assign.target, IndexTarget)
+        assert result.node_types[assign.target.node_id] == IntType()
 
     def test_indexed_assignment_value_type_mismatch_rejected(self) -> None:
         sp = mk_span()
@@ -6884,7 +6753,18 @@ class TestIndexTypechecking:
             node_id=_mk_node_id(),
         )
         with pytest.raises(AglTypeError, match="expected 'int'"):
-            self._check_items((decl, stmt), {obj.node_id: ref, stmt.node_id: ref})
+            self._check_items((decl, stmt), {obj.node_id: ref})
+
+    def test_indexed_assignment_value_type_mismatch_frames_inferred_return(self) -> None:
+        # The container's evidence (`target.obj`, whose type traces back to
+        # `mk`'s inferred return) must still frame the value-type mismatch,
+        # matching the sibling `NameTarget` assignment and the analogous
+        # read `xs[0]`.
+        err = reject_type('def mk() = [1, 2]\nvar xs = mk()\nxs[0] := "bad"')
+        message = str(err)
+        assert "expected 'int'" in message
+        assert "inferred return type" in message.lower()
+        assert "mk" in message
 
     def test_invalid_direct_ast_assign_target_rejected(self) -> None:
         sp = mk_span()

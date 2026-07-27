@@ -1061,35 +1061,29 @@ class AstBuilder(Transformer):
     def assign_stmt(self, meta: Meta, args: _Args) -> syntax.AssignStmt:
         # Grammar: postfix ASSIGN expr
         lhs, value = (cast(syntax.Expr, a) for a in args if _is_expr_node(a))
-        root = lhs
-        while isinstance(root, syntax.IndexAccess):
-            root = root.obj
-        if not isinstance(root, syntax.VarRef):
-            raise AglSyntaxError(
-                "assignment target must be a variable or indexed variable.",
-                span=lhs.span,
-            )
-        qualifier = self._assignment_qualifier(root)
-        if qualifier is not None and isinstance(lhs, syntax.IndexAccess):
-            raise AglSyntaxError(
-                "assignment target cannot combine a module qualifier with indexing; "
-                "a qualified assignment target must be a bare name.",
-                span=lhs.span,
-            )
+        target: syntax.AssignTarget
         if isinstance(lhs, syntax.VarRef):
-            target: syntax.AssignTarget = syntax.NameTarget(
+            target = syntax.NameTarget(
                 name=lhs.name,
                 span=lhs.span,
                 node_id=self._next_id(),
-                qualifier=qualifier,
+                qualifier=self._assignment_qualifier(lhs),
             )
-        else:
-            assert isinstance(lhs, syntax.IndexAccess)
+        elif isinstance(lhs, syntax.IndexAccess):
+            # Indexed assignment is legal on any array/dict-typed expression
+            # root -- a `let` binding, a param, a field, a call result, or a
+            # qualified read -- since it mutates a container rather than
+            # rebinding a name.
             target = syntax.IndexTarget(
                 obj=lhs.obj,
                 index=lhs.index,
                 span=lhs.span,
                 node_id=self._next_id(),
+            )
+        else:
+            raise AglSyntaxError(
+                "assignment target must be a variable or an indexed expression.",
+                span=lhs.span,
             )
         span = self._span_from_meta(meta)
         return syntax.AssignStmt(
@@ -1110,7 +1104,9 @@ class AstBuilder(Transformer):
         if len(chain.segments) == 1 and chain.segments[0].type_args is None:
             return chain
         raise AglSyntaxError(
-            "assignment target must be a variable or indexed variable.", span=ref.span
+            "a qualified assignment target must name a module member; type-qualified "
+            "constructor forms are not assignment targets.",
+            span=ref.span,
         )
 
     # ------------------------------------------------------------------

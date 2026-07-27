@@ -1,0 +1,12 @@
+# `param` forbids rebinding the parameter itself, not mutating the container
+# it is bound to: an indexed assignment through a param-bound array or dict
+# is legal, exactly like through a `let` or `var` binding.
+param xs: array[int]
+param counts: dict[text, int]
+
+xs[0] := 0
+counts["first"] := 0
+
+print(xs)
+print(counts["first"])
+print(counts["second"])

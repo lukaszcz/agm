@@ -1,0 +1,17 @@
+# A call result is a legal indexed-assignment root just like a binding: the
+# record a function returns holds its array field by reference, never a
+# copy, so `f().items[0] := v` lands on the very array a plain binding to
+# that same array still observes.
+record Bucket
+  items: array[int]
+
+param a: int
+param b: int
+
+let shared = [a, b]
+
+def make_bucket() -> Bucket = Bucket(items = shared)
+
+make_bucket().items[0] := 0
+print(shared)
+print(make_bucket().items)

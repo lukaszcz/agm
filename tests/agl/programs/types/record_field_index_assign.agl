@@ -1,0 +1,24 @@
+# Indexed assignment on a record field (`r.items[0] := v`) mutates the
+# field's array in place -- an alias bound to the same array observes the
+# change, and the record itself is never rebuilt or reassigned. A field
+# holding a nested array supports the same mixed field+index chain one level
+# deeper (`r.grid[1][2] := v`).
+record Box
+  items: array[int]
+
+record Grid
+  cells: array[array[int]]
+
+param a: int
+param b: int
+
+let box = Box(items = [a, b])
+let shared = box.items
+
+box.items[0] := 0
+print(box.items)
+print(shared)
+
+let grid = Grid(cells = [[a, b], [b, a]])
+grid.cells[1][0] := 999
+print(grid.cells)

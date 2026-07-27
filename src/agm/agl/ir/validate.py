@@ -118,6 +118,8 @@ from agm.agl.ir.nodes import (
     IrMakeDict,
     IrMakeEnum,
     IrMakeException,
+    IrMakeJsonArray,
+    IrMakeJsonObject,
     IrMakeRecord,
     IrOr,
     IrParseJson,
@@ -788,6 +790,17 @@ def _validate_expr_node(node: IrExpr, ctx: _Context) -> None:
                 _validate_expr(item, ctx)
 
         case IrMakeDict():
+            _validate_location(node.location, ctx)
+            for key_expr, val_expr in node.entries:
+                _validate_expr(key_expr, ctx)
+                _validate_expr(val_expr, ctx)
+
+        case IrMakeJsonArray():
+            _validate_location(node.location, ctx)
+            for item in node.items:
+                _validate_expr(item, ctx)
+
+        case IrMakeJsonObject():
             _validate_location(node.location, ctx)
             for key_expr, val_expr in node.entries:
                 _validate_expr(key_expr, ctx)

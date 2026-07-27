@@ -44,6 +44,7 @@ from agm.agl.semantics.types import (
     free_type_vars,
     is_assignable,
     is_json_shaped,
+    is_scalar_json_shaped,
     iter_type,
     match_type_template,
     substitute,
@@ -184,6 +185,35 @@ class TestIsJsonShaped:
     def test_record_not_json_shaped(self) -> None:
         r = RecordType(name="R")
         assert is_json_shaped(r) is False
+
+    # Containers stay JSON-shaped when recursively so — is_json_shaped is the
+    # cast rule, unlike is_assignable which narrows to scalars (see
+    # TestIsScalarJsonShaped / TestIsAssignable).
+    def test_array_of_json_shaped_is_json_shaped(self) -> None:
+        assert is_json_shaped(ArrayType(elem=IntType())) is True
+
+    def test_dict_of_json_shaped_is_json_shaped(self) -> None:
+        assert is_json_shaped(DictType(value=TextType())) is True
+
+
+# ---------------------------------------------------------------------------
+# is_scalar_json_shaped — the narrower rule an implicit coercion uses
+# ---------------------------------------------------------------------------
+
+
+class TestIsScalarJsonShaped:
+    def test_scalars_are_scalar_json_shaped(self) -> None:
+        for t in (TextType(), JsonType(), BoolType(), IntType(), DecimalType()):
+            assert is_scalar_json_shaped(t) is True
+
+    def test_array_is_not_scalar_json_shaped(self) -> None:
+        assert is_scalar_json_shaped(ArrayType(elem=IntType())) is False
+
+    def test_dict_is_not_scalar_json_shaped(self) -> None:
+        assert is_scalar_json_shaped(DictType(value=IntType())) is False
+
+    def test_record_is_not_scalar_json_shaped(self) -> None:
+        assert is_scalar_json_shaped(RecordType(name="R")) is False
 
 
 # ---------------------------------------------------------------------------
@@ -1035,6 +1065,18 @@ class TestCastClassification:
 
         r = RecordType(name="R")
         assert cast_classification(r, JsonType()) == CastKind.TOTAL_JSON
+
+    def test_array_of_scalars_to_json_total(self) -> None:
+        # array[int] is JSON-shaped: not implicitly assignable to json (see
+        # TestIsAssignable), but still convertible via an explicit cast.
+        from agm.agl.semantics.types import ArrayType, CastKind, JsonType, cast_classification
+
+        assert cast_classification(ArrayType(elem=IntType()), JsonType()) == CastKind.TOTAL_JSON
+
+    def test_dict_of_scalars_to_json_total(self) -> None:
+        from agm.agl.semantics.types import CastKind, DictType, JsonType, cast_classification
+
+        assert cast_classification(DictType(value=IntType()), JsonType()) == CastKind.TOTAL_JSON
 
     def test_array_of_record_to_json_static_error(self) -> None:
         # An array whose elements are nominal is not json-shaped and not itself a

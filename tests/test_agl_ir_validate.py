@@ -58,6 +58,8 @@ from agm.agl.ir import (
     IrMakeArray,
     IrMakeClosure,
     IrMakeDict,
+    IrMakeJsonArray,
+    IrMakeJsonObject,
     IrRenderTemplate,
     IrSequence,
     IrTemplateText,
@@ -465,6 +467,11 @@ class TestValidProgram:
             IrConstJsonNull(location=LOC),
             IrMakeArray(location=LOC, items=(IrConstInt(location=LOC, value=0),)),
             IrMakeDict(
+                location=LOC,
+                entries=((IrConstText(location=LOC, value="k"), _int(1)),),
+            ),
+            IrMakeJsonArray(location=LOC, items=(IrConstInt(location=LOC, value=0),)),
+            IrMakeJsonObject(
                 location=LOC,
                 entries=((IrConstText(location=LOC, value="k"), _int(1)),),
             ),
@@ -973,6 +980,32 @@ class TestChildTraversal:
         key = IrConstText(location=LOC, value="k")
         val = IrConstInt(location=bad_loc, value=1)
         node = IrMakeDict(location=LOC, entries=((key, val),))
+        prog = _make_program(initializers=(node,))
+        with pytest.raises(InvalidIrError):
+            validate_ir(prog, deep=False)
+
+    def test_make_json_array_item_bad_location(self) -> None:
+        bad_loc = loc(start_offset=-1, end_offset=0)
+        item = IrConstInt(location=bad_loc, value=1)
+        node = IrMakeJsonArray(location=LOC, items=(item,))
+        prog = _make_program(initializers=(node,))
+        with pytest.raises(InvalidIrError):
+            validate_ir(prog, deep=False)
+
+    def test_make_json_object_key_bad_location(self) -> None:
+        bad_loc = loc(start_line=0)
+        key = IrConstText(location=bad_loc, value="k")
+        val = _int(1)
+        node = IrMakeJsonObject(location=LOC, entries=((key, val),))
+        prog = _make_program(initializers=(node,))
+        with pytest.raises(InvalidIrError):
+            validate_ir(prog, deep=False)
+
+    def test_make_json_object_value_bad_location(self) -> None:
+        bad_loc = loc(start_col=-1)
+        key = IrConstText(location=LOC, value="k")
+        val = IrConstInt(location=bad_loc, value=1)
+        node = IrMakeJsonObject(location=LOC, entries=((key, val),))
         prog = _make_program(initializers=(node,))
         with pytest.raises(InvalidIrError):
             validate_ir(prog, deep=False)

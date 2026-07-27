@@ -1,0 +1,25 @@
+{
+  "scenarios": [
+    {
+      "name": "positive_values",
+      "params": {"a": 7, "b": 13},
+      "expect": {
+        "stdout": "[7, 13]\n{\"x\": 7, \"y\": 13}\n7\n7\n{\"values\": [7, 13], \"count\": 7}\n{\"n\": 1, \"s\": \"text\", \"flag\": true, \"nothing\": null}\n"
+      }
+    },
+    {
+      "name": "zero_and_negative",
+      "params": {"a": 0, "b": -5},
+      "expect": {
+        "stdout": "[0, -5]\n{\"x\": 0, \"y\": -5}\n0\n0\n{\"values\": [0, -5], \"count\": 0}\n{\"n\": 1, \"s\": \"text\", \"flag\": true, \"nothing\": null}\n"
+      }
+    },
+    {
+      "name": "larger_values",
+      "params": {"a": 100, "b": 250},
+      "expect": {
+        "stdout": "[100, 250]\n{\"x\": 100, \"y\": 250}\n100\n100\n{\"values\": [100, 250], \"count\": 100}\n{\"n\": 1, \"s\": \"text\", \"flag\": true, \"nothing\": null}\n"
+      }
+    }
+  ]
+}

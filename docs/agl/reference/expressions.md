@@ -72,6 +72,13 @@ expression ends, add an annotation:
 let items: array[Issue] = []
 ```
 
+Under an expected type of `json`, each element is checked against `json`
+directly, so elements need **not** share a type — `[1, "two", true, null]` is
+a valid `json` value — and the literal itself is typed as `json`, not
+`array[json]`: a fresh literal is not an existing value being absorbed, so no
+`as json` cast is needed at that boundary. The same rule applies to
+dictionary literals below.
+
 ### Dictionary literals
 
 ```agl

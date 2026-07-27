@@ -1,0 +1,3 @@
+def take(x: json) -> unit = ()
+let d: dict[text, int] = {"a": 1}
+take(d)

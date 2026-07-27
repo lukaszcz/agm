@@ -515,6 +515,15 @@ class TestIsAssignable:
         assert not is_assignable(UnitType(), JsonType())
         assert not is_assignable(AgentType(), JsonType())
 
+    def test_json_rejects_json_shaped_container(self) -> None:
+        """An array/dict source is not implicitly absorbed into json — even one
+        that is JSON-shaped (is_json_shaped stays True; only is_assignable
+        narrows to scalars, since absorbing a container would rebuild it)."""
+        assert is_json_shaped(ArrayType(elem=IntType()))
+        assert not is_assignable(ArrayType(elem=IntType()), JsonType())
+        assert is_json_shaped(DictType(value=IntType()))
+        assert not is_assignable(DictType(value=IntType()), JsonType())
+
     def test_bottom_to_any(self) -> None:
         assert is_assignable(BottomType(), IntType())
         assert is_assignable(BottomType(), TextType())
@@ -4531,6 +4540,13 @@ class TestBinaryOps:
         err = reject_type('let xs: array[int] = [1, 2]\n"hello" in xs')
         assert "in" in str(err).lower() or "mismatch" in str(err).lower()
 
+    def test_in_array_json_element_raises_with_cast_hint(self) -> None:
+        # The left operand is a JSON-shaped array; 'in' element mismatch
+        # against array[json] fails only because a container isn't
+        # implicitly absorbed into json — the diagnostic must name the cast.
+        err = reject_type("let xs: array[int] = [1, 2]\nlet ys: array[json] = []\nxs in ys")
+        assert "as json" in str(err).lower()
+
     def test_in_invalid_container_raises(self) -> None:
         err = reject_type("1 in 2")
         assert "in" in str(err).lower()
@@ -5284,14 +5300,42 @@ class TestArrayLiterals:
         err = reject_type('["a", 1]')
         assert "inconsistent" in str(err).lower() or "type" in str(err).lower()
 
+    def test_array_json_and_array_elements_inconsistent_raises_with_cast_hint(self) -> None:
+        # Elements are a json value and a JSON-shaped array — with no
+        # expected type driving both to json, unification fails only because
+        # a container isn't implicitly absorbed into json; the diagnostic
+        # must name the explicit cast.
+        err = reject_type("let j: json = 1\nlet xs: array[int] = [1]\n[j, xs]")
+        assert "as json" in str(err).lower()
+
     def test_array_int_decimal_widening(self) -> None:
         r = accept_type("[1, 2.5]")
         node = r.resolved.program.body.items[0]
         assert r.node_types[node.node_id] == ArrayType(elem=DecimalType())
 
     def test_array_in_json_context(self) -> None:
+        # A literal directly in an expected-json position is typed as json
+        # itself, not array[json] — an implicit coercion never rebuilds a
+        # structure, so the literal must not need a further boundary cast.
         r = accept_type("let xs: json = [1, 2, 3]\nxs")
-        assert r.resolved.program is not None
+        node = r.resolved.program.body.items[0]
+        assert isinstance(node, LetDecl)
+        assert r.node_types[node.value.node_id] == JsonType()
+
+    def test_heterogeneous_array_in_json_context(self) -> None:
+        # Elements with no common type still each check individually against
+        # json (mirroring the plain-unify path's homogeneity requirement,
+        # which does not apply here).
+        r = accept_type('let xs: json = [1, "two", true, null]\nxs')
+        node = r.resolved.program.body.items[0]
+        assert isinstance(node, LetDecl)
+        assert r.node_types[node.value.node_id] == JsonType()
+
+    def test_array_variable_in_json_context_raises(self) -> None:
+        # Only a fresh literal is typed as json directly; an existing
+        # array-typed variable still requires an explicit `as json` cast.
+        err = reject_type("let xs: array[int] = [1, 2]\nlet j: json = xs\nj")
+        assert "as json" in str(err).lower()
 
     def test_array_record_in_json_raises(self) -> None:
         err = reject_type("record R\n  x: int\nlet xs: array[json] = [R(x = 1)]\nxs")
@@ -5329,7 +5373,28 @@ class TestDictLiterals:
 
     def test_dict_in_json_context(self) -> None:
         r = accept_type('let d: json = {"a": 1}\nd')
-        assert r.resolved.program is not None
+        node = r.resolved.program.body.items[0]
+        assert isinstance(node, LetDecl)
+        assert r.node_types[node.value.node_id] == JsonType()
+
+    def test_heterogeneous_dict_in_json_context(self) -> None:
+        r = accept_type('let d: json = {"n": 1, "s": "x", "flag": true, "nothing": null}\nd')
+        node = r.resolved.program.body.items[0]
+        assert isinstance(node, LetDecl)
+        assert r.node_types[node.value.node_id] == JsonType()
+
+    def test_nested_container_literal_in_json_context(self) -> None:
+        # A container literal nested inside another json-typed literal is
+        # itself typed as json directly (recursively), so no cast is needed
+        # at any nesting depth for a fresh literal.
+        r = accept_type('let d: json = {"tags": [1, "two"], "inner": {"x": 1}}\nd')
+        node = r.resolved.program.body.items[0]
+        assert isinstance(node, LetDecl)
+        assert r.node_types[node.value.node_id] == JsonType()
+
+    def test_dict_variable_in_json_context_raises(self) -> None:
+        err = reject_type('let d: dict[text, int] = {"a": 1}\nlet j: json = d\nj')
+        assert "as json" in str(err).lower()
 
 
 # ---------------------------------------------------------------------------

@@ -48,12 +48,10 @@ from agm.agl.ir import (
     IrLoad,
     IrMakeArray,
     IrMakeDict,
+    IrMakeJsonArray,
+    IrMakeJsonObject,
     IrSequence,
     Location,
-    MapArray,
-    MapDictValues,
-    MapEnumFields,
-    MapRecordFields,
     NominalDescriptor,
     NominalId,
     NominalKind,
@@ -289,73 +287,21 @@ class TestCoercion:
         c = ToJson()
         assert isinstance(c, ToJson)
 
-    def test_map_array(self) -> None:
-        inner = IntToDecimal()
-        c = MapArray(item=inner)
-        assert c.item == inner
-
-    def test_map_array_frozen(self) -> None:
-        c = MapArray(item=IntToDecimal())
-        with pytest.raises(dataclasses.FrozenInstanceError):
-            setattr(c, "item", ToJson())
-
-    def test_map_dict_values(self) -> None:
-        c = MapDictValues(value=IntToDecimal())
-        assert isinstance(c.value, IntToDecimal)
-
-    def test_map_dict_values_frozen(self) -> None:
-        c = MapDictValues(value=IntToDecimal())
-        with pytest.raises(dataclasses.FrozenInstanceError):
-            setattr(c, "value", ToJson())
-
-    def test_map_record_fields(self) -> None:
-        fields: tuple[tuple[str, Coercion], ...] = (("x", IntToDecimal()), ("y", ToJson()))
-        c = MapRecordFields(fields=fields)
-        assert c.fields == fields
-
-    def test_map_record_fields_frozen(self) -> None:
-        c = MapRecordFields(fields=(("x", IntToDecimal()),))
-        with pytest.raises(dataclasses.FrozenInstanceError):
-            setattr(c, "fields", ())
-
-    def test_map_enum_fields(self) -> None:
-        variants: tuple[tuple[str, tuple[tuple[str, Coercion], ...]], ...] = (
-            ("VariantA", (("f1", IntToDecimal()),)),
-            ("VariantB", (("f2", ToJson()),)),
-        )
-        c = MapEnumFields(variants=variants)
-        assert c.variants == variants
-
-    def test_map_enum_fields_frozen(self) -> None:
-        c = MapEnumFields(variants=())
-        with pytest.raises(dataclasses.FrozenInstanceError):
-            setattr(c, "variants", (("X", ()),))
-
-    def test_nested_coercion(self) -> None:
-        # MapArray(MapRecordFields((("x", IntToDecimal()),)))
-        inner = MapRecordFields(fields=(("x", IntToDecimal()),))
-        outer = MapArray(item=inner)
-        assert outer.item == inner
-        assert isinstance(outer.item, MapRecordFields)
-        assert outer.item.fields[0][0] == "x"
-        assert isinstance(outer.item.fields[0][1], IntToDecimal)
-
     def test_coercion_equality(self) -> None:
-        a = MapArray(item=IntToDecimal())
-        b = MapArray(item=IntToDecimal())
-        assert a == b
+        assert IntToDecimal() == IntToDecimal()
+        assert ToJson() == ToJson()
 
     def test_coercion_hash(self) -> None:
-        s = {MapArray(item=IntToDecimal()), MapArray(item=IntToDecimal())}
-        assert len(s) == 1
+        s = {IntToDecimal(), IntToDecimal(), ToJson()}
+        assert len(s) == 2
 
     def test_coercion_type_alias(self) -> None:
         # Coercion is a type alias — each member is an instance of its class
         c: Coercion = IntToDecimal()
         assert isinstance(c, IntToDecimal)
 
-        c2: Coercion = MapArray(item=IntToDecimal())
-        assert isinstance(c2, MapArray)
+        c2: Coercion = ToJson()
+        assert isinstance(c2, ToJson)
 
 
 # ---------------------------------------------------------------------------
@@ -385,6 +331,8 @@ class TestIrExprUnion:
         assert not isinstance(step, IrConstJsonNull)
         assert not isinstance(step, IrMakeArray)
         assert not isinstance(step, IrMakeDict)
+        assert not isinstance(step, IrMakeJsonArray)
+        assert not isinstance(step, IrMakeJsonObject)
         assert not isinstance(step, IrLoad)
         assert not isinstance(step, IrBind)
         assert not isinstance(step, IrAssign)
@@ -490,6 +438,35 @@ class TestIrContainerLiterals:
 
     def test_make_dict_frozen(self) -> None:
         n = IrMakeDict(location=LOC, entries=())
+        with pytest.raises(dataclasses.FrozenInstanceError):
+            setattr(n, "entries", ())
+
+    def test_make_json_array_empty(self) -> None:
+        n = IrMakeJsonArray(location=LOC, items=())
+        assert n.items == ()
+
+    def test_make_json_array_with_items(self) -> None:
+        item = IrConstInt(location=LOC, value=1)
+        n = IrMakeJsonArray(location=LOC, items=(item,))
+        assert n.items == (item,)
+
+    def test_make_json_array_frozen(self) -> None:
+        n = IrMakeJsonArray(location=LOC, items=())
+        with pytest.raises(dataclasses.FrozenInstanceError):
+            setattr(n, "items", (IrConstInt(location=LOC, value=1),))
+
+    def test_make_json_object_empty(self) -> None:
+        n = IrMakeJsonObject(location=LOC, entries=())
+        assert n.entries == ()
+
+    def test_make_json_object_with_entries(self) -> None:
+        key = IrConstText(location=LOC, value="k")
+        val = IrConstInt(location=LOC, value=42)
+        n = IrMakeJsonObject(location=LOC, entries=((key, val),))
+        assert n.entries[0] == (key, val)
+
+    def test_make_json_object_frozen(self) -> None:
+        n = IrMakeJsonObject(location=LOC, entries=())
         with pytest.raises(dataclasses.FrozenInstanceError):
             setattr(n, "entries", ())
 

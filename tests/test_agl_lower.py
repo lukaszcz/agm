@@ -56,6 +56,8 @@ from agm.agl.ir.nodes import (
     IrMakeClosure,
     IrMakeDict,
     IrMakeException,
+    IrMakeJsonArray,
+    IrMakeJsonObject,
     IrMakeRecord,
     IrRaise,
     IrRenderTemplate,
@@ -74,10 +76,6 @@ from agm.agl.ir.operations import (
     ContainsKind,
     IntToDecimal,
     IterKind,
-    MapArray,
-    MapDictValues,
-    MapEnumFields,
-    MapRecordFields,
     ToJson,
     UnaryOp,
 )
@@ -105,7 +103,6 @@ from agm.agl.semantics.types import (
 from agm.agl.syntax.nodes import Case, FuncDef, ParamDecl, Placeholder
 from agm.agl.typecheck import check_module
 from agm.agl.typecheck.env import CheckedModule
-from tests._agl_helpers import enum_type, record_type, type_table_for
 from tests.agl.ir_harness import _compiled_checked
 
 _REPO_STDLIB_ROOT = Path(__file__).resolve().parents[1] / "stdlib"
@@ -496,290 +493,94 @@ class TestCompileCoercion:
     # Identity / None cases
 
     def test_same_int_type_is_none(self) -> None:
-        assert compile_coercion(IntType(), IntType(), type_table_for()) is None
+        assert compile_coercion(IntType(), IntType()) is None
 
     def test_same_text_type_is_none(self) -> None:
-        assert compile_coercion(TextType(), TextType(), type_table_for()) is None
+        assert compile_coercion(TextType(), TextType()) is None
 
     def test_same_bool_type_is_none(self) -> None:
-        assert compile_coercion(BoolType(), BoolType(), type_table_for()) is None
+        assert compile_coercion(BoolType(), BoolType()) is None
 
     def test_same_decimal_type_is_none(self) -> None:
-        assert compile_coercion(DecimalType(), DecimalType(), type_table_for()) is None
+        assert compile_coercion(DecimalType(), DecimalType()) is None
 
     def test_same_unit_type_is_none(self) -> None:
-        assert compile_coercion(UnitType(), UnitType(), type_table_for()) is None
+        assert compile_coercion(UnitType(), UnitType()) is None
 
     def test_same_json_type_is_none(self) -> None:
         # json → json: identity, no coercion
-        assert compile_coercion(JsonType(), JsonType(), type_table_for()) is None
+        assert compile_coercion(JsonType(), JsonType()) is None
 
     def test_type_var_source_is_none(self) -> None:
-        # TypeVarType source → opaque, no coercion
-        assert compile_coercion(TypeVarType("T"), IntType(), type_table_for()) is None
+        # A bare TypeVarType source matches no scalar rule → falls through to None
+        assert compile_coercion(TypeVarType("T"), IntType()) is None
 
     def test_type_var_target_is_none(self) -> None:
-        assert compile_coercion(IntType(), TypeVarType("T"), type_table_for()) is None
+        assert compile_coercion(IntType(), TypeVarType("T")) is None
 
     # Scalar coercions
 
     def test_int_to_decimal(self) -> None:
-        result = compile_coercion(IntType(), DecimalType(), type_table_for())
+        result = compile_coercion(IntType(), DecimalType())
         assert result == IntToDecimal()
 
     def test_int_to_json(self) -> None:
-        # Rule 1: target is JsonType and source is not JsonType → ToJson
-        result = compile_coercion(IntType(), JsonType(), type_table_for())
+        # target is json and source is a scalar JSON-shaped type → ToJson
+        result = compile_coercion(IntType(), JsonType())
         assert result == ToJson()
 
     def test_text_to_json(self) -> None:
-        result = compile_coercion(TextType(), JsonType(), type_table_for())
+        result = compile_coercion(TextType(), JsonType())
         assert result == ToJson()
 
     def test_bool_to_json(self) -> None:
-        result = compile_coercion(BoolType(), JsonType(), type_table_for())
+        result = compile_coercion(BoolType(), JsonType())
         assert result == ToJson()
 
     def test_decimal_to_json(self) -> None:
-        result = compile_coercion(DecimalType(), JsonType(), type_table_for())
+        result = compile_coercion(DecimalType(), JsonType())
         assert result == ToJson()
 
-    def test_array_int_to_json(self) -> None:
-        result = compile_coercion(ArrayType(IntType()), JsonType(), type_table_for())
-        assert result == ToJson()
+    # Container/nominal sources never get an implicit coercion — an array or
+    # dict flowing into json requires an explicit `as json` cast (the checker
+    # rejects the assignment before lowering ever calls compile_coercion).
 
-    # Array coercions
-
-    def test_array_int_to_array_decimal(self) -> None:
-        result = compile_coercion(ArrayType(IntType()), ArrayType(DecimalType()), type_table_for())
-        assert result == MapArray(IntToDecimal())
-
-    def test_array_int_to_array_int_is_none(self) -> None:
-        # Element coercion is None → outer is None
-        result = compile_coercion(ArrayType(IntType()), ArrayType(IntType()), type_table_for())
+    def test_array_int_to_json_is_none(self) -> None:
+        result = compile_coercion(ArrayType(IntType()), JsonType())
         assert result is None
 
-    def test_array_int_to_array_json(self) -> None:
-        result = compile_coercion(ArrayType(IntType()), ArrayType(JsonType()), type_table_for())
-        assert result == MapArray(ToJson())
-
-    def test_nested_array_int_to_array_array_decimal(self) -> None:
-        result = compile_coercion(
-            ArrayType(ArrayType(IntType())),
-            ArrayType(ArrayType(DecimalType())),
-            type_table_for(),
-        )
-        assert result == MapArray(MapArray(IntToDecimal()))
-
-    # Dict coercions
-
-    def test_dict_int_to_dict_decimal(self) -> None:
-        result = compile_coercion(DictType(IntType()), DictType(DecimalType()), type_table_for())
-        assert result == MapDictValues(IntToDecimal())
-
-    def test_dict_int_to_dict_int_is_none(self) -> None:
-        result = compile_coercion(DictType(IntType()), DictType(IntType()), type_table_for())
+    def test_array_int_to_array_decimal_is_none(self) -> None:
+        # array[int] → array[decimal] is already a type error (no container
+        # variance), so compile_coercion never needs to build one.
+        result = compile_coercion(ArrayType(IntType()), ArrayType(DecimalType()))
         assert result is None
 
-    def test_dict_int_to_dict_json(self) -> None:
-        result = compile_coercion(DictType(IntType()), DictType(JsonType()), type_table_for())
-        assert result == MapDictValues(ToJson())
-
-    # Record coercions
-    #
-    # Source/target pairs that need genuinely different field shapes under the
-    # same display name are constructed with distinct module_ids: a TypeTable
-    # entry is keyed by (module_id, name), so two independent declarations
-    # named "R"/"E" in different modules resolve to independent shapes, while
-    # compile_coercion's record/enum branches don't care whether module_ids
-    # match (they only dispatch on isinstance).
-
-    def test_record_no_field_needs_coercion_is_none(self) -> None:
-        rec, rec_def = record_type("R", {"x": IntType()})
-        result = compile_coercion(rec, rec, type_table_for(rec_def))
+    def test_dict_int_to_json_is_none(self) -> None:
+        result = compile_coercion(DictType(IntType()), JsonType())
         assert result is None
 
-    def test_record_one_field_needs_coercion(self) -> None:
-        from agm.agl.modules.ids import ModuleId
-
-        src, src_def = record_type(
-            "R", {"x": IntType(), "y": TextType()}, module_id=ModuleId.from_path("src_mod")
-        )
-        tgt, tgt_def = record_type(
-            "R", {"x": DecimalType(), "y": TextType()}, module_id=ModuleId.from_path("tgt_mod")
-        )
-        result = compile_coercion(src, tgt, type_table_for(src_def, tgt_def))
-        assert result == MapRecordFields((("x", IntToDecimal()),))
-
-    def test_record_multiple_fields_need_coercion(self) -> None:
-        from agm.agl.modules.ids import ModuleId
-
-        src, src_def = record_type(
-            "R", {"x": IntType(), "y": IntType()}, module_id=ModuleId.from_path("src_mod")
-        )
-        tgt, tgt_def = record_type(
-            "R",
-            {"x": DecimalType(), "y": DecimalType()},
-            module_id=ModuleId.from_path("tgt_mod"),
-        )
-        result = compile_coercion(src, tgt, type_table_for(src_def, tgt_def))
-        assert result == MapRecordFields((("x", IntToDecimal()), ("y", IntToDecimal())))
-
-    def test_record_target_field_not_in_source_skipped(self) -> None:
-        # Only shared fields are coerced; fields not in source are ignored
-        from agm.agl.modules.ids import ModuleId
-
-        src, src_def = record_type("R", {"x": IntType()}, module_id=ModuleId.from_path("src_mod"))
-        tgt, tgt_def = record_type(
-            "R",
-            {"x": DecimalType(), "z": TextType()},
-            module_id=ModuleId.from_path("tgt_mod"),
-        )
-        result = compile_coercion(src, tgt, type_table_for(src_def, tgt_def))
-        assert result == MapRecordFields((("x", IntToDecimal()),))
-
-    # Enum coercions
-
-    def test_enum_no_field_coercion_needed_is_none(self) -> None:
-        e, e_def = enum_type("E", {"A": {"x": IntType()}, "B": {}})
-        result = compile_coercion(e, e, type_table_for(e_def))
+    def test_dict_int_to_dict_decimal_is_none(self) -> None:
+        result = compile_coercion(DictType(IntType()), DictType(DecimalType()))
         assert result is None
 
-    def test_enum_one_variant_field_needs_coercion(self) -> None:
+    def test_record_field_mismatch_is_none(self) -> None:
+        # Box[int] → Box[decimal] is already a type error (type arguments are
+        # invariant), so compile_coercion never needs to build one.
         from agm.agl.modules.ids import ModuleId
-
-        src, src_def = enum_type(
-            "E", {"A": {"x": IntType()}, "B": {}}, module_id=ModuleId.from_path("src_mod")
-        )
-        tgt, tgt_def = enum_type(
-            "E", {"A": {"x": DecimalType()}, "B": {}}, module_id=ModuleId.from_path("tgt_mod")
-        )
-        result = compile_coercion(src, tgt, type_table_for(src_def, tgt_def))
-        assert result == MapEnumFields((("A", (("x", IntToDecimal()),)),))
-
-    def test_enum_empty_result_variant_excluded(self) -> None:
-        # Variant B has no fields needing coercion → only A in result
-        from agm.agl.modules.ids import ModuleId
-
-        src, src_def = enum_type(
-            "E",
-            {"A": {"x": IntType()}, "B": {"y": TextType()}},
-            module_id=ModuleId.from_path("src_mod"),
-        )
-        tgt, tgt_def = enum_type(
-            "E",
-            {"A": {"x": DecimalType()}, "B": {"y": TextType()}},
-            module_id=ModuleId.from_path("tgt_mod"),
-        )
-        result = compile_coercion(src, tgt, type_table_for(src_def, tgt_def))
-        assert result == MapEnumFields((("A", (("x", IntToDecimal()),)),))
-
-    def test_enum_target_field_not_in_source_skipped(self) -> None:
-        # Target variant A has field "extra" not in source → only "x" can be coerced
-        from agm.agl.modules.ids import ModuleId
-
-        src, src_def = enum_type(
-            "E", {"A": {"x": IntType()}}, module_id=ModuleId.from_path("src_mod")
-        )
-        tgt, tgt_def = enum_type(
-            "E",
-            {"A": {"x": DecimalType(), "extra": TextType()}},
-            module_id=ModuleId.from_path("tgt_mod"),
-        )
-        result = compile_coercion(src, tgt, type_table_for(src_def, tgt_def))
-        # "extra" is not in source so it's skipped; only "x" coercion emitted
-        assert result == MapEnumFields((("A", (("x", IntToDecimal()),)),))
-
-    def test_enum_source_variant_not_in_target_skipped(self) -> None:
-        # Source has variant B that target doesn't; only target variants are processed
-        from agm.agl.modules.ids import ModuleId
-
-        src, src_def = enum_type(
-            "E",
-            {"A": {"x": IntType()}, "B": {"y": IntType()}},
-            module_id=ModuleId.from_path("src_mod"),
-        )
-        tgt, tgt_def = enum_type(
-            "E", {"A": {"x": DecimalType()}}, module_id=ModuleId.from_path("tgt_mod")
-        )
-        result = compile_coercion(src, tgt, type_table_for(src_def, tgt_def))
-        assert result == MapEnumFields((("A", (("x", IntToDecimal()),)),))
-
-    def test_generic_instantiations_sharing_one_declaration(self) -> None:
-        # The real production scenario: a single generic record declaration
-        # (one (module_id, name) key) instantiated twice with different
-        # type_args.  Box[int] and Box[decimal] are two handles that share
-        # the SAME module_id/name — unlike the other record/enum cases above,
-        # which model two independent declarations via distinct module_ids —
-        # so their field shapes must come from substituting each handle's own
-        # type_args into the one registered TypeDef template, not from two
-        # separate table entries.
-        from agm.agl.modules.ids import ModuleId
-        from agm.agl.semantics.type_table import TypeDef, create_seeded_type_table
 
         module_id = ModuleId.from_path("generics_mod")
-        table = create_seeded_type_table()
-        table.register(
-            TypeDef(
-                kind="record",
-                name="Box",
-                module_id=module_id,
-                type_params=("T",),
-                fields=(("value", TypeVarType("T")),),
-            )
-        )
         box_int = RecordType("Box", type_args=(IntType(),), module_id=module_id)
         box_decimal = RecordType("Box", type_args=(DecimalType(),), module_id=module_id)
-        result = compile_coercion(box_int, box_decimal, table)
-        assert result == MapRecordFields((("value", IntToDecimal()),))
-
-    def test_unequal_instantiations_of_recursive_declaration_raise_instead_of_looping(
-        self,
-    ) -> None:
-        # Box[T] here ALSO has an `array[Box[T]]` field, unlike the
-        # non-recursive Box[T] above: naively coercing Box[int] -> Box[decimal]
-        # would recurse into that same unequal pair forever (array[Box[int]] ->
-        # array[Box[decimal]] -> Box[int] -> Box[decimal] -> ...), a genuine
-        # Python RecursionError. This pair is never actually produced by the
-        # checker (nominal types are invariant — see
-        # docs/agl/reference/generics.md), so the internal cycle guard is the
-        # right response: fail loudly and immediately with a clear internal
-        # diagnostic rather than hang or silently mis-coerce.
-        from agm.agl.modules.ids import ModuleId
-        from agm.agl.semantics.type_table import TypeDef, create_seeded_type_table
-
-        module_id = ModuleId.from_path("recursive_generics_mod")
-        table = create_seeded_type_table()
-        table.register(
-            TypeDef(
-                kind="record",
-                name="Box",
-                module_id=module_id,
-                type_params=("T",),
-                fields=(
-                    ("value", TypeVarType("T")),
-                    (
-                        "children",
-                        ArrayType(
-                            RecordType("Box", type_args=(TypeVarType("T"),), module_id=module_id)
-                        ),
-                    ),
-                ),
-            )
-        )
-        box_int = RecordType("Box", type_args=(IntType(),), module_id=module_id)
-        box_decimal = RecordType("Box", type_args=(DecimalType(),), module_id=module_id)
-        with pytest.raises(AssertionError, match="compile_coercion re-entered"):
-            compile_coercion(box_int, box_decimal, table)
+        assert compile_coercion(box_int, box_decimal) is None
 
     # Fallthrough — otherwise → None
 
     def test_int_to_text_is_none(self) -> None:
         # No implicit int→text coercion; the checker would reject this
-        assert compile_coercion(IntType(), TextType(), type_table_for()) is None
+        assert compile_coercion(IntType(), TextType()) is None
 
     def test_text_to_bool_is_none(self) -> None:
-        assert compile_coercion(TextType(), BoolType(), type_table_for()) is None
+        assert compile_coercion(TextType(), BoolType()) is None
 
 
 # ---------------------------------------------------------------------------
@@ -910,16 +711,29 @@ class TestArrayLitLowering:
             assert isinstance(item.value, IrConstInt)
             assert item.operation == IntToDecimal()
 
-    def test_array_int_to_json_whole_array_coercion(self) -> None:
-        # let j: json = [1, 2] — entire array is wrapped in ToJson
+    def test_array_json_literal_direct_construction(self) -> None:
+        # let j: json = [1, 2] — the literal's own type is json, so it lowers
+        # directly to IrMakeJsonArray; no IrMakeArray/IrCoerce(ToJson) pair.
         prog = _lower("let _x: json = [1, 2]\n()")
         inits = prog.modules[prog.entry_module].initializers
         bind = _let_root_capture(inits[0])
-        # The value should be IrCoerce(IrMakeArray(...), ToJson())
-        coerce = bind.value
-        assert isinstance(coerce, IrCoerce)
-        assert coerce.operation == ToJson()
-        assert isinstance(coerce.value, IrMakeArray)
+        make_json_array = bind.value
+        assert isinstance(make_json_array, IrMakeJsonArray)
+        assert not isinstance(make_json_array, IrCoerce)
+        # Each element is individually coerced to json (scalar leaf conversion).
+        for item in make_json_array.items:
+            assert isinstance(item, IrCoerce)
+            assert item.operation == ToJson()
+
+    def test_array_json_literal_heterogeneous_direct_construction(self) -> None:
+        # let j: json = [1, "x", true] — heterogeneous elements, still a
+        # direct IrMakeJsonArray (never IrMakeArray/IrCoerce).
+        prog = _lower('let _x: json = [1, "x", true]\n()')
+        inits = prog.modules[prog.entry_module].initializers
+        bind = _let_root_capture(inits[0])
+        make_json_array = bind.value
+        assert isinstance(make_json_array, IrMakeJsonArray)
+        assert len(make_json_array.items) == 3
 
 
 # ---------------------------------------------------------------------------
@@ -957,6 +771,21 @@ class TestDictLitLowering:
         _key, val_expr = make_dict.entries[0]
         assert isinstance(val_expr, IrCoerce)
         assert val_expr.operation == IntToDecimal()
+
+    def test_dict_json_literal_direct_construction(self) -> None:
+        # let j: json = {"a": 1} — the literal's own type is json, so it
+        # lowers directly to IrMakeJsonObject; no IrMakeDict/IrCoerce(ToJson).
+        prog = _lower('let _x: json = {"a": 1}\n()')
+        inits = prog.modules[prog.entry_module].initializers
+        bind = _let_root_capture(inits[0])
+        make_json_object = bind.value
+        assert isinstance(make_json_object, IrMakeJsonObject)
+        assert not isinstance(make_json_object, IrCoerce)
+        key_expr, val_expr = make_json_object.entries[0]
+        assert isinstance(key_expr, IrConstText)
+        assert key_expr.value == "a"
+        assert isinstance(val_expr, IrCoerce)
+        assert val_expr.operation == ToJson()
 
 
 # ---------------------------------------------------------------------------
@@ -1011,9 +840,9 @@ class TestBindingLowering:
 
     def test_let_binding_array_decimal_elements_coerced_not_outer(self) -> None:
         # let xs: array[decimal] = [1, 2]
-        # Elements each get IntToDecimal; the array itself does NOT get MapArray
-        # because the array's own checked type is already array[decimal]
-        # (the element coercion is applied at element level, not array level).
+        # Elements each get IntToDecimal; there is no whole-array coercion,
+        # because an implicit coercion is always a scalar leaf conversion —
+        # the element coercion is applied at element level, not array level.
         prog = _lower("let _xs: array[decimal] = [1, 2]\n()")
         inits = prog.modules[prog.entry_module].initializers
         bind = _let_root_capture(inits[0])
@@ -1025,10 +854,10 @@ class TestBindingLowering:
             assert item.operation == IntToDecimal()
 
     def test_let_var_ref_identity_no_coerce(self) -> None:
-        # let a: array[int] = [1]; let b: array[int] = a — no coercion needed
-        # (array[int] → array[decimal] is rejected by the type checker, so
-        # MapArray(IntToDecimal) on an IrLoad can only arise in future work
-        # that extend assignability.  The contract example is forward-looking.)
+        # let a: array[int] = [1]; let b: array[int] = a — no coercion needed.
+        # An array[int] → array[decimal] binding is a type error (containers
+        # are invariant), so no coercion node is ever emitted for a container
+        # var ref; only same-type identity is reachable here.
         prog = _lower("let _a: array[int] = [1]\nlet _b: array[int] = _a\n()")
         inits = prog.modules[prog.entry_module].initializers
         bind_b = _let_root_capture(inits[1])
@@ -2938,6 +2767,29 @@ class TestTemplateLowering:
         # Second segment: interpolated expression → IrLoad of name's symbol
         assert isinstance(segs[1], IrTemplateValue)
         assert isinstance(segs[1].value, IrLoad)
+
+    def test_template_nested_array_literal_lowers_to_ir_make_json_array(self) -> None:
+        """ "%{[1, [2, 3]]}" — the nested array literal child is typed json directly.
+
+        Regression test: the nested array literal is checked against an
+        expected type of json (not array[json]), so it lowers to
+        IrMakeJsonArray, never IrMakeArray. The two render identically, so
+        only a structural/value-representation assertion like this one
+        catches a regression here.
+        """
+        source = 'let msg = "%{[1, [2, 3]]}"\n()\n'
+        prog = _lower(source)
+        inits = prog.modules[prog.entry_module].initializers
+        msg_bind = _let_root_capture(inits[0])
+        template = msg_bind.value
+        assert isinstance(template, IrRenderTemplate)
+        (seg,) = template.segments
+        assert isinstance(seg, IrTemplateValue)
+        outer = seg.value
+        assert isinstance(outer, IrMakeArray)
+        nested = outer.items[1]
+        assert isinstance(nested, IrMakeJsonArray)
+        assert not isinstance(nested, IrCoerce)
 
 
 # ---------------------------------------------------------------------------

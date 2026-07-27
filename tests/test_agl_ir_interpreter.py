@@ -10,8 +10,9 @@ Coverage targets:
 - let (immutable) bind + load.
 - var (mutable) bind + load + assign (cell mutation).
 - IrSequence and IrBlock (value-of-last).
-- All IrCoerce operations: IntToDecimal, ToJson (scalar + container), MapArray,
-  MapDictValues, MapRecordFields, MapEnumFields.
+- All IrCoerce operations: IntToDecimal, ToJson (scalar and, at the
+  ``_apply_coercion`` level, container — the compiler only ever emits it for a
+  scalar source, but the interpreter arm itself has no shape restriction).
 - Decimal context: IntToDecimal of a large int is exact (no float).
 - Defensive InvalidIrError on a malformed coercion.
 - Import-scan: IrInterpreter must NOT import syntax/scope/typecheck modules.
@@ -61,16 +62,14 @@ from agm.agl.ir import (
     IrMakeDict,
     IrMakeEnum,
     IrMakeException,
+    IrMakeJsonArray,
+    IrMakeJsonObject,
     IrMakeRecord,
     IrPrint,
     IrRaise,
     IrSequence,
     IrUpdateRecord,
     Location,
-    MapArray,
-    MapDictValues,
-    MapEnumFields,
-    MapRecordFields,
     NominalDescriptor,
     NominalKind,
     SourceFile,
@@ -89,7 +88,6 @@ from agm.agl.semantics.values import (
     BoolValue,
     DecimalValue,
     DictValue,
-    EnumValue,
     IntValue,
     JsonValue,
     RecordValue,
@@ -279,6 +277,84 @@ class TestContainers:
             {sym: desc},
         )
         assert result == {"d": DictValue({})}
+
+    def test_make_json_array(self) -> None:
+        """IrMakeJsonArray builds a JsonValue directly — no ArrayValue involved."""
+        sym, desc = _let_sym(0, "j")
+        result = _run(
+            (
+                IrBind(
+                    _LOC,
+                    sym,
+                    IrMakeJsonArray(
+                        _LOC,
+                        (IrConstInt(_LOC, 1), IrConstInt(_LOC, 2)),
+                    ),
+                ),
+            ),
+            {sym: desc},
+        )
+        assert result == {"j": JsonValue([1, 2])}
+
+    def test_make_json_array_empty(self) -> None:
+        sym, desc = _let_sym(0, "j")
+        result = _run(
+            (IrBind(_LOC, sym, IrMakeJsonArray(_LOC, ())),),
+            {sym: desc},
+        )
+        assert result == {"j": JsonValue([])}
+
+    def test_make_json_array_nested(self) -> None:
+        """A nested IrMakeJsonArray/IrMakeJsonObject item builds a nested JsonValue payload."""
+        sym, desc = _let_sym(0, "j")
+        result = _run(
+            (
+                IrBind(
+                    _LOC,
+                    sym,
+                    IrMakeJsonArray(
+                        _LOC,
+                        (
+                            IrMakeJsonObject(
+                                _LOC,
+                                ((IrConstText(_LOC, "a"), IrConstInt(_LOC, 1)),),
+                            ),
+                        ),
+                    ),
+                ),
+            ),
+            {sym: desc},
+        )
+        assert result == {"j": JsonValue([{"a": 1}])}
+
+    def test_make_json_object(self) -> None:
+        """IrMakeJsonObject builds a JsonValue directly — no DictValue involved."""
+        sym, desc = _let_sym(0, "j")
+        result = _run(
+            (
+                IrBind(
+                    _LOC,
+                    sym,
+                    IrMakeJsonObject(
+                        _LOC,
+                        (
+                            (IrConstText(_LOC, "a"), IrConstInt(_LOC, 1)),
+                            (IrConstText(_LOC, "b"), IrConstInt(_LOC, 2)),
+                        ),
+                    ),
+                ),
+            ),
+            {sym: desc},
+        )
+        assert result == {"j": JsonValue({"a": 1, "b": 2})}
+
+    def test_make_json_object_empty(self) -> None:
+        sym, desc = _let_sym(0, "j")
+        result = _run(
+            (IrBind(_LOC, sym, IrMakeJsonObject(_LOC, ())),),
+            {sym: desc},
+        )
+        assert result == {"j": JsonValue({})}
 
 
 # ---------------------------------------------------------------------------
@@ -571,233 +647,6 @@ class TestCoerceToJson:
 
 
 # ---------------------------------------------------------------------------
-# IrCoerce — MapArray
-# ---------------------------------------------------------------------------
-
-
-class TestCoerceMapArray:
-    def test_map_array_int_to_decimal(self) -> None:
-        sym, desc = _let_sym(0, "lst")
-        result = _run(
-            (
-                IrBind(
-                    _LOC,
-                    sym,
-                    IrCoerce(
-                        _LOC,
-                        IrMakeArray(
-                            _LOC,
-                            (IrConstInt(_LOC, 1), IrConstInt(_LOC, 2), IrConstInt(_LOC, 3)),
-                        ),
-                        MapArray(IntToDecimal()),
-                    ),
-                ),
-            ),
-            {sym: desc},
-        )
-        assert result == {
-            "lst": ArrayValue(
-                (
-                    DecimalValue(decimal.Decimal(1)),
-                    DecimalValue(decimal.Decimal(2)),
-                    DecimalValue(decimal.Decimal(3)),
-                )
-            )
-        }
-
-    def test_map_array_to_json(self) -> None:
-        sym, desc = _let_sym(0, "lst")
-        result = _run(
-            (
-                IrBind(
-                    _LOC,
-                    sym,
-                    IrCoerce(
-                        _LOC,
-                        IrMakeArray(_LOC, (IrConstText(_LOC, "a"), IrConstText(_LOC, "b"))),
-                        MapArray(ToJson()),
-                    ),
-                ),
-            ),
-            {sym: desc},
-        )
-        assert result == {"lst": ArrayValue((JsonValue("a"), JsonValue("b")))}
-
-    def test_map_array_wrong_value_type_raises(self) -> None:
-        """MapArray on a non-array value raises InvalidIrError."""
-        sym, desc = _let_sym(0, "x")
-        prog = _make_program(
-            (
-                IrBind(
-                    _LOC,
-                    sym,
-                    IrCoerce(_LOC, IrConstInt(_LOC, 1), MapArray(IntToDecimal())),
-                ),
-            ),
-            {sym: desc},
-        )
-        with pytest.raises(InvalidIrError):
-            IrInterpreter(prog).run()
-
-
-# ---------------------------------------------------------------------------
-# IrCoerce — MapDictValues
-# ---------------------------------------------------------------------------
-
-
-class TestCoerceMapDictValues:
-    def test_map_dict_values_to_json(self) -> None:
-        sym, desc = _let_sym(0, "d")
-        result = _run(
-            (
-                IrBind(
-                    _LOC,
-                    sym,
-                    IrCoerce(
-                        _LOC,
-                        IrMakeDict(
-                            _LOC,
-                            (
-                                (IrConstText(_LOC, "k1"), IrConstInt(_LOC, 10)),
-                                (IrConstText(_LOC, "k2"), IrConstInt(_LOC, 20)),
-                            ),
-                        ),
-                        MapDictValues(ToJson()),
-                    ),
-                ),
-            ),
-            {sym: desc},
-        )
-        assert result == {"d": DictValue({"k1": JsonValue(10), "k2": JsonValue(20)})}
-
-    def test_map_dict_values_wrong_type_raises(self) -> None:
-        sym, desc = _let_sym(0, "x")
-        prog = _make_program(
-            (
-                IrBind(
-                    _LOC,
-                    sym,
-                    IrCoerce(_LOC, IrConstInt(_LOC, 1), MapDictValues(ToJson())),
-                ),
-            ),
-            {sym: desc},
-        )
-        with pytest.raises(InvalidIrError):
-            IrInterpreter(prog).run()
-
-
-# ---------------------------------------------------------------------------
-# IrCoerce — MapRecordFields
-# ---------------------------------------------------------------------------
-
-
-class TestCoerceMapRecordFields:
-    def _make_record_value(self) -> RecordValue:
-        return RecordValue(
-            nominal=NominalId(ENTRY_ID, "Point"),
-            display_name="Point",
-            fields={"x": IntValue(3), "y": IntValue(4), "label": TextValue("origin")},
-        )
-
-    def test_map_record_fields(self) -> None:
-        """MapRecordFields coerces only the named fields; others pass through."""
-        # Exercise record coercion via the module-level _apply_coercion helper.
-        from agm.agl.eval.ir_interpreter import _apply_coercion
-
-        rec = self._make_record_value()
-        coercion = MapRecordFields(
-            fields=(
-                ("x", IntToDecimal()),
-                ("y", IntToDecimal()),
-            )
-        )
-        result = _apply_coercion(rec, coercion)
-        assert result == RecordValue(
-            nominal=NominalId(ENTRY_ID, "Point"),
-            display_name="Point",
-            fields={
-                "x": DecimalValue(decimal.Decimal(3)),
-                "y": DecimalValue(decimal.Decimal(4)),
-                "label": TextValue("origin"),
-            },
-        )
-
-    def test_map_record_fields_wrong_type_raises(self) -> None:
-        from agm.agl.eval.ir_interpreter import _apply_coercion
-
-        with pytest.raises(InvalidIrError):
-            _apply_coercion(IntValue(1), MapRecordFields(fields=(("x", IntToDecimal()),)))
-
-    def test_map_record_fields_partial_fields(self) -> None:
-        """MapRecordFields with a different field set; unlisted fields pass through."""
-        from agm.agl.eval.ir_interpreter import _apply_coercion
-
-        rec = RecordValue(
-            nominal=NominalId(ENTRY_ID, "Pt"),
-            display_name="Pt",
-            fields={"a": IntValue(10), "b": TextValue("keep")},
-        )
-        coercion = MapRecordFields(fields=(("a", IntToDecimal()),))
-        result = _apply_coercion(rec, coercion)
-        assert result == RecordValue(
-            nominal=NominalId(ENTRY_ID, "Pt"),
-            display_name="Pt",
-            fields={"a": DecimalValue(decimal.Decimal(10)), "b": TextValue("keep")},
-        )
-
-
-# ---------------------------------------------------------------------------
-# IrCoerce — MapEnumFields
-# ---------------------------------------------------------------------------
-
-
-class TestCoerceMapEnumFields:
-    def test_map_enum_fields(self) -> None:
-        from agm.agl.eval.ir_interpreter import _apply_coercion
-
-        ev = EnumValue(
-            nominal=NominalId(ENTRY_ID, "Shape"),
-            display_name="Shape",
-            variant="Circle",
-            fields={"radius": IntValue(5), "label": TextValue("c")},
-        )
-        coercion = MapEnumFields(
-            variants=(
-                ("Circle", (("radius", IntToDecimal()),)),
-                ("Square", (("side", IntToDecimal()),)),
-            )
-        )
-        result = _apply_coercion(ev, coercion)
-        assert result == EnumValue(
-            nominal=NominalId(ENTRY_ID, "Shape"),
-            display_name="Shape",
-            variant="Circle",
-            fields={"radius": DecimalValue(decimal.Decimal(5)), "label": TextValue("c")},
-        )
-
-    def test_map_enum_fields_unmatched_variant_is_passthrough(self) -> None:
-        """A variant not listed in MapEnumFields is left unchanged."""
-        from agm.agl.eval.ir_interpreter import _apply_coercion
-
-        ev = EnumValue(
-            nominal=NominalId(ENTRY_ID, "Shape"),
-            display_name="Shape",
-            variant="Triangle",
-            fields={"sides": IntValue(3)},
-        )
-        coercion = MapEnumFields(variants=(("Circle", (("radius", IntToDecimal()),)),))
-        result = _apply_coercion(ev, coercion)
-        # Triangle variant is not in the coercion → returned unchanged.
-        assert result == ev
-
-    def test_map_enum_fields_wrong_type_raises(self) -> None:
-        from agm.agl.eval.ir_interpreter import _apply_coercion
-
-        with pytest.raises(InvalidIrError):
-            _apply_coercion(IntValue(1), MapEnumFields(variants=()))
-
-
-# ---------------------------------------------------------------------------
 # Decimal context
 # ---------------------------------------------------------------------------
 
@@ -894,6 +743,25 @@ class TestDefensiveErrors:
                     _LOC,
                     sym,
                     IrMakeDict(
+                        _LOC,
+                        ((IrConstInt(_LOC, 99), IrConstInt(_LOC, 1)),),
+                    ),
+                ),
+            ),
+            {sym: desc},
+        )
+        with pytest.raises(InvalidIrError):
+            IrInterpreter(prog).run()
+
+    def test_make_json_object_non_text_key_raises(self) -> None:
+        """IrMakeJsonObject key that evaluates to a non-TextValue raises InvalidIrError."""
+        sym, desc = _let_sym(0, "d")
+        prog = _make_program(
+            (
+                IrBind(
+                    _LOC,
+                    sym,
+                    IrMakeJsonObject(
                         _LOC,
                         ((IrConstInt(_LOC, 99), IrConstInt(_LOC, 1)),),
                     ),

@@ -1,0 +1,32 @@
+# An array/dict *variable* is never implicitly absorbed into a `json` slot —
+# an implicit coercion never rebuilds a structure — so it needs an explicit
+# `as json` cast. Scalar `int -> decimal` widening and `int -> json`
+# absorption stay implicit, and json literals (heterogeneous, and ones
+# embedding a container via an explicit cast) still compile and run.
+param a: int
+param b: int
+
+let xs: array[int] = [a, b]
+let xs_json: json = xs as json
+print xs_json
+
+let d: dict[text, int] = {"x": a, "y": b}
+let d_json: json = d as json
+print d_json
+
+# int -> decimal still coerces implicitly
+let ratio: decimal = a
+print ratio
+
+# int -> json still coerces implicitly (scalar)
+let count: json = a
+print count
+
+# A container embedded in a json-typed literal position needs its own cast
+let doc: json = {"values": xs as json, "count": a}
+print doc
+
+# json literals stay unaffected by the narrowed rule: heterogeneous, no
+# container variables embedded
+let mixed: json = {"n": 1, "s": "text", "flag": true, "nothing": null}
+print mixed

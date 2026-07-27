@@ -8,7 +8,8 @@ Allowed imports:
 - ``agm.agl.semantics.values`` (all value types, Cell, Frame)
 - ``agm.agl.semantics.exceptions`` (AglRaise, make_builtin_exception)
 - ``agm.agl.eval._decimal`` (shared pinned decimal context)
-- ``agm.agl.runtime.serialize`` (value_to_json_obj for ToJson coercion)
+- ``agm.agl.runtime.serialize`` (value_to_json_obj for ToJson and direct JSON
+  construction)
 - ``agm.config.engine_keys`` (the canonical engine-key catalog data leaf)
 
 NOT allowed: ``agm.agl.syntax``, ``agm.agl.scope``, ``agm.agl.typecheck``.
@@ -88,6 +89,8 @@ from agm.agl.ir.nodes import (
     IrMakeDict,
     IrMakeEnum,
     IrMakeException,
+    IrMakeJsonArray,
+    IrMakeJsonObject,
     IrMakeRecord,
     IrOr,
     IrParseJson,
@@ -111,10 +114,6 @@ from agm.agl.ir.operations import (
     Coercion,
     IndexKind,
     IntToDecimal,
-    MapArray,
-    MapDictValues,
-    MapEnumFields,
-    MapRecordFields,
     ToJson,
     UnaryOp,
 )
@@ -346,6 +345,12 @@ def _apply_coercion(value: Value, coercion: Coercion) -> Value:
 
     Switches on the closed ``Coercion`` union — no runtime type
     sniffing of *value*; the coercion op is pre-resolved by the lowerer.
+    Every coercion is a scalar leaf conversion; neither arm rebuilds a
+    structure. In particular ``ToJson`` is only ever compiled for a scalar
+    source (see ``lower.coercions.compile_coercion``) — a container literal
+    typed ``json`` lowers to ``IrMakeJsonArray``/``IrMakeJsonObject`` instead,
+    so ``value`` here is never already a ``JsonValue``, an ``ArrayValue``, or
+    a ``DictValue``.
 
     Raises ``InvalidIrError`` when the value tag does not match the coercion
     (cannot occur in well-lowered IR; defensive check only).
@@ -359,56 +364,7 @@ def _apply_coercion(value: Value, coercion: Coercion) -> Value:
             return DecimalValue(decimal.Decimal(value.value))
 
         case ToJson():
-            if isinstance(value, JsonValue):
-                # Idempotent: already JSON, return as-is.
-                return value
             return JsonValue(value_to_json_obj(value))
-
-        case MapArray(item=child_op):
-            if not isinstance(value, ArrayValue):
-                raise InvalidIrError(
-                    f"MapArray coercion requires ArrayValue, got {type(value).__name__}"
-                )
-            return ArrayValue(tuple(_apply_coercion(elem, child_op) for elem in value.elements))
-
-        case MapDictValues(value=child_op):
-            if not isinstance(value, DictValue):
-                raise InvalidIrError(
-                    f"MapDictValues coercion requires DictValue, got {type(value).__name__}"
-                )
-            return DictValue({k: _apply_coercion(v, child_op) for k, v in value.entries.items()})
-
-        case MapRecordFields(fields=field_coercions):
-            if not isinstance(value, RecordValue):
-                raise InvalidIrError(
-                    f"MapRecordFields coercion requires RecordValue, got {type(value).__name__}"
-                )
-            new_fields = dict(value.fields)
-            for field_name, child_op in field_coercions:
-                new_fields[field_name] = _apply_coercion(new_fields[field_name], child_op)
-            return RecordValue(
-                nominal=value.nominal, display_name=value.display_name, fields=new_fields
-            )
-
-        case MapEnumFields(variants=variant_coercions):
-            if not isinstance(value, EnumValue):
-                raise InvalidIrError(
-                    f"MapEnumFields coercion requires EnumValue, got {type(value).__name__}"
-                )
-            # Find the entry for the active variant; if not listed, pass through.
-            for variant_name, field_coercions in variant_coercions:
-                if variant_name == value.variant:
-                    new_fields = dict(value.fields)
-                    for field_name, child_op in field_coercions:
-                        new_fields[field_name] = _apply_coercion(new_fields[field_name], child_op)
-                    return EnumValue(
-                        nominal=value.nominal,
-                        display_name=value.display_name,
-                        variant=value.variant,
-                        fields=new_fields,
-                    )
-            # Variant not listed in coercion — return unchanged.
-            return value
 
         case _ as unreachable:  # pragma: no cover
             assert_never(unreachable)
@@ -993,6 +949,21 @@ class IrInterpreter:
                         )
                     result[key_val.value] = self._eval(val_expr)
                 return DictValue(result)
+
+            case IrMakeJsonArray(items=json_items):
+                return JsonValue([value_to_json_obj(self._eval(item)) for item in json_items])
+
+            case IrMakeJsonObject(entries=json_entries):
+                json_result: dict[str, object] = {}
+                for key_expr, val_expr in json_entries:
+                    key_val = self._eval(key_expr)
+                    if not isinstance(key_val, TextValue):
+                        raise InvalidIrError(
+                            f"IrMakeJsonObject key must evaluate to TextValue,"
+                            f" got {type(key_val).__name__}"
+                        )
+                    json_result[key_val.value] = value_to_json_obj(self._eval(val_expr))
+                return JsonValue(json_result)
 
             case IrLoad(symbol=sym):
                 slot = self._frame.get(sym)

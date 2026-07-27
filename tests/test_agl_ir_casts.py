@@ -79,6 +79,20 @@ def test_total_cast_agrees(source: str) -> None:
     evaluate_ir(source)
 
 
+def test_array_int_ref_to_json() -> None:
+    """let a: array[int] = [1, 2]; let j: json = a as json  — explicit cast, whole-array."""
+    source = "let a: array[int] = [1, 2]\nlet j: json = a as json\n()\n"
+    ir = evaluate_ir(source)
+    assert ir["j"] == JsonValue([1, 2])
+
+
+def test_dict_int_ref_to_json() -> None:
+    """let d: dict[text, int] = {"k": 5}; let j: json = d as json  — explicit cast, whole-dict."""
+    source = 'let d: dict[text, int] = {"k": 5}\nlet j: json = d as json\n()\n'
+    ir = evaluate_ir(source)
+    assert ir["j"] == JsonValue({"k": 5})
+
+
 def test_record_and_enum_render_and_json() -> None:
     source = """\
 record Foo

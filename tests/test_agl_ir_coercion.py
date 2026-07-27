@@ -7,33 +7,40 @@ Where noted, a test also structurally asserts that the lowered IR contains
 the expected ``IrCoerce``/``Coercion`` node (complementing the golden
 tests in ``test_agl_lower.py``).
 
+An implicit coercion is only ever a scalar leaf conversion (``IntToDecimal`` /
+``ToJson``); an array or dict variable flowing into a ``json`` slot is a
+static error requiring an explicit ``as json`` cast (covered in
+``tests/test_agl_ir_casts.py`` and ``tests/agl/programs/types/``), not an
+implicit coercion, so it is not exercised here.
+
 Coercion families covered
 --------------------------
 1. Identity (no coercion) — scalar, array, dict.
 2. ``IntToDecimal`` — scalar ``let d: decimal = 1``.
 3. ``IntToDecimal`` — nested in an array literal (element-level).
-4. ``IntToDecimal`` — not reachable as whole-value container coercion
-   (``array[int] → array[decimal]`` is rejected by the type checker) — deferred.
-5. ``IntToDecimal`` — dict values whole-value coercion — not reachable
-   (``dict[text, int] → dict[text, decimal]`` rejected by checker) — deferred.
-6. ``ToJson`` — scalar (``let j: json = 42``).
-7. ``ToJson`` — array literal (``let j: json = [1, 2]``).
-8. ``ToJson`` — dict literal (``let m: dict[text, json] = {"a": 1}``).
-9. ``ToJson`` — via record-like dict (``let r: json = {"x": 1}``).
-10. ``MapArray(ToJson)`` — whole-value via var ref (array[int] → json).
-11. ``MapDictValues(ToJson)`` — whole-value via var ref (dict[text, int] → json).
-12. ``MapDictValues(IntToDecimal)`` — not reachable — deferred (see #5).
-13. Deeper nesting — ``array[dict[text, decimal]]``.
-14. Mutable assignment with coercion — ``var x: decimal = 0; x := 5``.
-15. Multiple bindings — several coercions in one program.
-16. "Effectful once" note — coercion does not duplicate evaluation (trivial for pure programs).
+4. Whole-value container widening via a var ref — not reachable
+   (``array[int] → array[decimal]`` / ``dict[text, int] → dict[text, decimal]``
+   are rejected by the type checker; containers are invariant).
+5. ``ToJson`` — scalar (``let j: json = 42``).
+6. Direct JSON construction — array literal typed json (``let j: json = [1, 2]``),
+   lowers to ``IrMakeJsonArray``, never ``IrCoerce``.
+7. ``ToJson`` — dict literal value coercion (``let m: dict[text, json] = {"a": 1}``).
+8. Direct JSON construction — dict literal typed json (``let r: json = {"x": 1}``),
+   lowers to ``IrMakeJsonObject``, never ``IrCoerce``.
+9. Deeper nesting — ``array[dict[text, decimal]]``.
+10. Mutable assignment with coercion — ``var x: decimal = 0; x := 5``.
+11. Multiple bindings — several coercions in one program.
+12. Var binding + load (no assignment).
+13. Empty containers.
+14. "Effectful once" note — coercion does not duplicate evaluation (trivial for pure programs).
+15. Additional coercion families — ``array[json]`` from ``array[text]``.
 """
 
 from __future__ import annotations
 
 import decimal
 
-from agm.agl.ir.nodes import IrCoerce, IrMakeArray, IrMakeDict
+from agm.agl.ir.nodes import IrCoerce, IrMakeArray, IrMakeDict, IrMakeJsonArray, IrMakeJsonObject
 from agm.agl.ir.operations import IntToDecimal, ToJson
 from agm.agl.ir.program import ExecutableProgram
 from agm.agl.lower import lower_module
@@ -166,20 +173,15 @@ def test_array_decimal_element_coercion() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 4. Whole-value container coercion via literal (MapArray, MapDictValues)
+# 4. Whole-value container widening via a var ref — no coercion node at all
 #
-# Note: the current type checker's ``is_assignable`` does NOT allow
+# Note: the type checker's ``is_assignable`` does NOT allow
 # ``array[int] → array[decimal]`` or ``dict[text,int] → dict[text,decimal]``
 # at binding boundaries — those require exact structural match (or int→decimal
-# scalar widening, which is not extended to containers by ``is_assignable``).
-# The MapArray/MapDictValues coercions from ``compile_coercion`` are wired into
-# the IR machinery and exercised by the lowerer unit tests; they do not arise
-# from valid programs that the current type checker accepts.
-#
-# What we CAN prove is that these coercions are correctly applied at
-# literal-element boundaries (already covered in test 3 above) and via ToJson
-# (covered in tests 8–10 below).  The whole-value container widening path will
-# be exercised once the type checker is extended in a future change.
+# scalar widening, which does not extend to containers). A container-to-
+# container assignment through a var ref is therefore always the identity
+# case (test 3 above covers literal-element coercion; the ToJson whole-value
+# case is a different pairing, covered in tests 6–8 below).
 # ---------------------------------------------------------------------------
 
 
@@ -209,32 +211,7 @@ def test_dict_ref_identity_no_coercion() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 5. Array-to-JSON coercion via var ref (whole-value MapArray not applicable,
-#    but ToJson of an array[int] variable IS allowed because json accepts any
-#    JSON-shaped type — proven here)
-# ---------------------------------------------------------------------------
-
-
-def test_array_int_ref_to_json() -> None:
-    """let a: array[int] = [1, 2]; let j: json = a  — whole array coerced via ToJson."""
-    source = "let a: array[int] = [1, 2]\nlet j: json = a\n()"
-    ir = evaluate_ir(source)
-    assert ir["j"] == JsonValue([1, 2])
-
-    # Structural: IrBind for j wraps IrLoad(a) in IrCoerce(ToJson).
-    from agm.agl.ir.nodes import IrLoad
-
-    prog = _lower(source)
-    inits = prog.modules[prog.entry_module].initializers
-    bind_j = let_root_capture(inits[1])
-    coerce = bind_j.value
-    assert isinstance(coerce, IrCoerce)
-    assert coerce.operation == ToJson()
-    assert isinstance(coerce.value, IrLoad)
-
-
-# ---------------------------------------------------------------------------
-# 6. ToJson — scalar
+# 5. ToJson — scalar
 # ---------------------------------------------------------------------------
 
 
@@ -260,28 +237,28 @@ def test_to_json_null() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 7. ToJson — array literal
+# 6. Direct JSON construction — array literal typed json
 # ---------------------------------------------------------------------------
 
 
 def test_to_json_array_literal() -> None:
-    """let j: json = [1, 2]  — array[int] literal coerced to JsonValue."""
+    """let j: json = [1, 2]  — array literal typed json builds a JsonValue directly."""
     source = "let j: json = [1, 2]\n()"
     ir = evaluate_ir(source)
     assert ir["j"] == JsonValue([1, 2])
 
-    # Structural: the whole IrMakeArray is wrapped in IrCoerce(ToJson).
+    # Structural: the literal lowers to IrMakeJsonArray directly — no
+    # IrMakeArray is ever built and no IrCoerce is involved.
     prog = _lower(source)
     inits = prog.modules[prog.entry_module].initializers
     bind = let_root_capture(inits[0])
-    coerce = bind.value
-    assert isinstance(coerce, IrCoerce)
-    assert coerce.operation == ToJson()
-    assert isinstance(coerce.value, IrMakeArray)
+    make_json_array = bind.value
+    assert isinstance(make_json_array, IrMakeJsonArray)
+    assert not isinstance(make_json_array, IrCoerce)
 
 
 # ---------------------------------------------------------------------------
-# 8. ToJson — dict literal value coercion
+# 7. ToJson — dict literal value coercion
 # ---------------------------------------------------------------------------
 
 
@@ -303,46 +280,28 @@ def test_dict_text_json_from_int_values() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 9. ToJson — dict literal as json
+# 8. Direct JSON construction — dict literal typed json
 # ---------------------------------------------------------------------------
 
 
 def test_to_json_dict_literal_as_json() -> None:
-    """let r: json = {\"x\": 1}  — dict literal coerced to JsonValue."""
+    """let r: json = {\"x\": 1}  — dict literal typed json builds a JsonValue directly."""
     source = 'let r: json = {"x": 1}\n()'
     ir = evaluate_ir(source)
     assert ir["r"] == JsonValue({"x": 1})
 
-
-# ---------------------------------------------------------------------------
-# 10. Dict[text, json] from dict[text, int] via ref — via ToJson (whole-value)
-#
-# The current type checker DOES allow dict[text, int] → json because a dict of
-# ints is JSON-shaped.  However, dict[text, int] → dict[text, json] is not
-# allowed (requires exact structural match).  We prove the json-target path.
-# ---------------------------------------------------------------------------
-
-
-def test_dict_int_ref_to_json() -> None:
-    """let a: dict[text, int] = {\"k\": 5}; let j: json = a  — whole dict coerced via ToJson."""
-    source = 'let a: dict[text, int] = {"k": 5}\nlet j: json = a\n()'
-    ir = evaluate_ir(source)
-    assert ir["j"] == JsonValue({"k": 5})
-
-    # Structural: IrCoerce(ToJson) around the IrLoad(a).
-    from agm.agl.ir.nodes import IrLoad
-
+    # Structural: the literal lowers to IrMakeJsonObject directly — no
+    # IrMakeDict is ever built and no IrCoerce is involved.
     prog = _lower(source)
     inits = prog.modules[prog.entry_module].initializers
-    bind_j = let_root_capture(inits[1])
-    coerce = bind_j.value
-    assert isinstance(coerce, IrCoerce)
-    assert coerce.operation == ToJson()
-    assert isinstance(coerce.value, IrLoad)
+    bind = let_root_capture(inits[0])
+    make_json_object = bind.value
+    assert isinstance(make_json_object, IrMakeJsonObject)
+    assert not isinstance(make_json_object, IrCoerce)
 
 
 # ---------------------------------------------------------------------------
-# 11. Deeper nesting — array[dict[text, decimal]]
+# 9. Deeper nesting — array[dict[text, decimal]]
 # ---------------------------------------------------------------------------
 
 
@@ -367,7 +326,7 @@ def test_nested_array_dict_json() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 12. Mutable assignment coercion (var + :=)
+# 10. Mutable assignment coercion (var + :=)
 # ---------------------------------------------------------------------------
 
 
@@ -393,7 +352,7 @@ def test_var_assign_multiple_coercions() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 13. Multiple bindings in one program
+# 11. Multiple bindings in one program
 # ---------------------------------------------------------------------------
 
 
@@ -416,7 +375,7 @@ def test_multiple_coercions_in_one_program() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 14. Var binding + load (no assignment)
+# 12. Var binding + load (no assignment)
 # ---------------------------------------------------------------------------
 
 
@@ -428,7 +387,7 @@ def test_var_binding_no_assign() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 15. Empty containers
+# 13. Empty containers
 # ---------------------------------------------------------------------------
 
 
@@ -447,7 +406,7 @@ def test_empty_dict() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 16. "Effectful once" note (trivial for pure programs, documents extension point)
+# 14. "Effectful once" note (trivial for pure programs, documents extension point)
 # ---------------------------------------------------------------------------
 
 
@@ -472,7 +431,7 @@ def test_coercion_evaluates_operand_once() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 17. Additional coercion families — array[json] from array[text]
+# 15. Additional coercion families — array[json] from array[text]
 # ---------------------------------------------------------------------------
 
 

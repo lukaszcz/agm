@@ -32,11 +32,12 @@ Type hierarchy
 
 ``Type`` is the closed union of all semantic types.
 
-Single coercion rule
+Implicit coercion rules
 -------------------------------------
-``int → decimal`` widening is the **only** implicit type coercion.  Use
-:func:`is_assignable` to check assignability with this single coercion
-applied.
+``int → decimal`` widening, and absorbing a *scalar* JSON-shaped value into
+``json``, are the only implicit type coercions — both are leaf conversions
+that never rebuild a structure. Use :func:`is_assignable` to check
+assignability with these coercions applied.
 
 Type-kind strings (for codec capability lookup)
 ------------------------------------------------
@@ -687,6 +688,28 @@ def _format_function_type(typ: FunctionType) -> str:
 # ---------------------------------------------------------------------------
 
 
+_SCALAR_JSON_SHAPED_TYPES: tuple[type[Type], ...] = (
+    TextType,
+    JsonType,
+    BoolType,
+    IntType,
+    DecimalType,
+)
+
+
+def is_scalar_json_shaped(value_type: Type) -> bool:
+    """Return ``True`` if ``value_type`` is a *scalar* JSON-shaped type.
+
+    The scalar JSON-shaped types are ``null``/``json``, ``bool``, ``int``,
+    ``decimal``, and ``text`` — the leaf types an implicit coercion may absorb
+    into a ``json`` slot without rebuilding any structure. ``array``/``dict``
+    are JSON-shaped (see :func:`is_json_shaped`) but not scalar: absorbing one
+    into ``json`` would require rebuilding the whole container, which is an
+    implicit deep copy, so it requires an explicit ``as json`` cast instead.
+    """
+    return isinstance(value_type, _SCALAR_JSON_SHAPED_TYPES)
+
+
 def is_json_shaped(value_type: Type) -> bool:
     """Return ``True`` if ``value_type`` is JSON-shaped.
 
@@ -698,8 +721,12 @@ def is_json_shaped(value_type: Type) -> bool:
 
     AgL: ``UnitType``, ``AgentType``, and ``FunctionType`` are also NOT
     JSON-shaped; function and agent values render only as opaque handles.
+
+    This is the shape rule for what an explicit ``as json`` cast accepts; see
+    :func:`is_scalar_json_shaped` for the narrower rule an *implicit*
+    coercion uses.
     """
-    if isinstance(value_type, (TextType, JsonType, BoolType, IntType, DecimalType)):
+    if is_scalar_json_shaped(value_type):
         return True
     if isinstance(value_type, ArrayType):
         return is_json_shaped(value_type.elem)
@@ -718,9 +745,12 @@ def is_assignable(value_type: Type, target_type: Type) -> bool:
     Implicit coercions:
 
     1. ``int → decimal`` widening is the only scalar coercion.
-    2. ``json`` accepts any JSON-shaped value (rule 3): ``null``/``json``,
-       ``bool``, ``int``, ``decimal``, ``text``, and ``array``/``dict`` of
-       JSON-shaped types.  Records/enums/exceptions are rejected.
+    2. ``json`` accepts any *scalar* JSON-shaped value (rule 3): ``null``/
+       ``json``, ``bool``, ``int``, ``decimal``, ``text``. An ``array`` or
+       ``dict`` source — even one that is JSON-shaped — is rejected here: an
+       implicit coercion never rebuilds a structure, so absorbing a container
+       into ``json`` requires an explicit ``as json`` cast. Records/enums/
+       exceptions are rejected outright (not JSON-shaped at all).
 
     All other assignments require exact structural equality.
 
@@ -740,10 +770,10 @@ def is_assignable(value_type: Type, target_type: Type) -> bool:
     # Single scalar coercion: int can widen to decimal.
     if isinstance(value_type, IntType) and isinstance(target_type, DecimalType):
         return True
-    # json accepts any JSON-shaped value (records/enums/exceptions excluded;
-    # UnitType/AgentType/FunctionType also excluded via is_json_shaped).
+    # json accepts a scalar JSON-shaped value only; array/dict sources require
+    # an explicit `as json` cast (see is_scalar_json_shaped).
     if isinstance(target_type, JsonType):
-        return is_json_shaped(value_type)
+        return is_scalar_json_shaped(value_type)
     return False
 
 
@@ -921,7 +951,7 @@ def cast_classification(source: Type, target: Type) -> CastKind:
     # Handle is_assignable cases first (no-op / widen / json-absorb).
     # Note: is_assignable(X, TextType) is true only when X is TextType itself
     # (no implicit widening to text), so the only assignable-to-text case is noop.
-    # is_assignable(X, JsonType) is true for all json-shaped types.
+    # is_assignable(X, JsonType) is true only for scalar json-shaped types.
     if is_assignable(source, target):
         if isinstance(target, JsonType):
             # json → json: noop; all other json-shaped sources → canonicalize
@@ -943,10 +973,12 @@ def cast_classification(source: Type, target: Type) -> CastKind:
         return CastKind.TOTAL_RENDER
 
     if isinstance(target, JsonType):
-        # All json-shaped sources are assignable to json (handled above), so
-        # anything reaching here is NOT json-shaped.
-        # Nominal types (record/enum/exception) support an explicit structural JSON cast.
-        if isinstance(source, (RecordType, EnumType, ExceptionType)):
+        # Scalar json-shaped sources are assignable to json (handled above),
+        # so anything reaching here is either a JSON-shaped array/dict — not
+        # assignable, but still convertible via an explicit cast — or a
+        # nominal record/enum/exception, which supports an explicit
+        # structural JSON cast.
+        if is_json_shaped(source) or isinstance(source, (RecordType, EnumType, ExceptionType)):
             return CastKind.TOTAL_JSON
         return CastKind.STATIC_ERROR
 

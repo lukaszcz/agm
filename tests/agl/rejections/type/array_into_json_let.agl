@@ -1,0 +1,3 @@
+let xs: array[int] = [1, 2]
+let j: json = xs
+j

@@ -97,6 +97,8 @@ from agm.agl.ir.nodes import (
     IrMakeDict,
     IrMakeEnum,
     IrMakeException,
+    IrMakeJsonArray,
+    IrMakeJsonObject,
     IrMakeRecord,
     IrOr,
     IrParseJson,
@@ -177,6 +179,7 @@ from agm.agl.semantics.types import (
     ExceptionType,
     FunctionType,
     IntType,
+    JsonType,
     RecordType,
     TextType,
     Type,
@@ -1050,7 +1053,7 @@ class _Lowerer:
         location: Location,
     ) -> IrExpr:
         """Wrap pre-lowered IR in ``IrCoerce`` when ``source`` needs ``expected``."""
-        op = compile_coercion(source, expected, self._type_table)
+        op = compile_coercion(source, expected)
         if op is None:
             return ir
         return IrCoerce(location=location, value=ir, operation=op)
@@ -1784,18 +1787,40 @@ class _Lowerer:
     # Container literal helpers
     # ------------------------------------------------------------------
 
-    def _lower_array_lit(self, node: ArrayLit) -> IrMakeArray:
-        """Lower an ``ArrayLit``, applying element-level coercions."""
+    def _lower_array_lit(self, node: ArrayLit) -> IrExpr:
+        """Lower an ``ArrayLit``, applying element-level coercions.
+
+        A literal typed directly as ``json`` (checker: a literal in an
+        expected-json position, so every element already checks against
+        ``json`` — see ``typecheck.checker._check_array_lit``) lowers each
+        element against ``json`` and builds an ``IrMakeJsonArray`` directly:
+        a ``JsonValue`` is constructed from the start, and no AgL ``array``
+        value is ever materialized or coerced.
+        """
         own_type = self._node_type(node.node_id)
+        if isinstance(own_type, JsonType):
+            json_items = tuple(self.lower_coerced(e, JsonType()) for e in node.elements)
+            return IrMakeJsonArray(location=self._loc(node.span), items=json_items)
         assert isinstance(own_type, ArrayType), (
             f"compiler bug: ArrayLit has node_type {own_type!r}, expected ArrayType"
         )
         items = tuple(self.lower_coerced(e, own_type.elem) for e in node.elements)
         return IrMakeArray(location=self._loc(node.span), items=items)
 
-    def _lower_dict_lit(self, node: DictLit) -> IrMakeDict:
-        """Lower a ``DictLit``, applying value-level coercions."""
+    def _lower_dict_lit(self, node: DictLit) -> IrExpr:
+        """Lower a ``DictLit``, applying value-level coercions.
+
+        See ``_lower_array_lit`` for the ``json``-typed literal case: it
+        lowers to ``IrMakeJsonObject`` directly rather than building a
+        ``DictValue`` and coercing it.
+        """
         own_type = self._node_type(node.node_id)
+        if isinstance(own_type, JsonType):
+            json_entries = tuple(
+                (self.lower_expr(e.key), self.lower_coerced(e.value, JsonType()))
+                for e in node.entries
+            )
+            return IrMakeJsonObject(location=self._loc(node.span), entries=json_entries)
         assert isinstance(own_type, DictType), (
             f"compiler bug: DictLit has node_type {own_type!r}, expected DictType"
         )

@@ -1,0 +1,3 @@
+let d: dict[text, int] = {"a": 1}
+let j: json = d
+j

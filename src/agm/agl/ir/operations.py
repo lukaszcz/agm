@@ -11,7 +11,7 @@ Enums are derived directly from the operator sets supported by AgL:
 
 ``Coercion`` is a closed union of frozen dataclasses.  An identity coercion
 (no-op) is represented by ``None`` at use sites — it is not a member here.
-Container coercions carry only child ops that do real work.
+Every coercion is a scalar leaf conversion; none rebuilds a structure.
 """
 
 from __future__ import annotations
@@ -29,10 +29,6 @@ __all__ = [
     "IndexKind",
     "IntToDecimal",
     "IterKind",
-    "MapArray",
-    "MapDictValues",
-    "MapEnumFields",
-    "MapRecordFields",
     "NumericKind",
     "ToJson",
     "UnaryOp",
@@ -140,47 +136,9 @@ class IntToDecimal:
 
 @dataclass(frozen=True, slots=True)
 class ToJson:
-    """Coercion: convert a structured value to its JSON representation (text)."""
-
-
-@dataclass(frozen=True, slots=True)
-class MapArray:
-    """Coercion: apply a child coercion to every element of an array."""
-
-    item: "Coercion"
-
-
-@dataclass(frozen=True, slots=True)
-class MapDictValues:
-    """Coercion: apply a child coercion to every value of a dict (keys unchanged)."""
-
-    value: "Coercion"
-
-
-@dataclass(frozen=True, slots=True)
-class MapRecordFields:
-    """Coercion: apply per-field coercions to a record value.
-
-    ``fields`` is a tuple of ``(field_name, child_coercion)`` pairs.
-    The target nominal is known from the enclosing construct; field coercions
-    are addressed by name only.
-    """
-
-    fields: tuple[tuple[str, "Coercion"], ...]
-
-
-@dataclass(frozen=True, slots=True)
-class MapEnumFields:
-    """Coercion: apply per-variant/per-field coercions to an enum value.
-
-    ``variants`` is a tuple of ``(variant_name, field_coercions)`` pairs where
-    ``field_coercions`` is a tuple of ``(field_name, child_coercion)`` pairs.
-    The target nominal is known from the enclosing construct.
-    """
-
-    variants: tuple[tuple[str, tuple[tuple[str, "Coercion"], ...]], ...]
+    """Coercion: convert a scalar value to its JSON representation."""
 
 
 #: Closed union of coercion operations.  An identity (no-op) coercion is
 #: represented by ``None`` at use sites; it is NOT a member of this union.
-Coercion = IntToDecimal | ToJson | MapArray | MapDictValues | MapRecordFields | MapEnumFields
+Coercion = IntToDecimal | ToJson

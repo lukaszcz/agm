@@ -100,6 +100,8 @@ __all__ = [
     "IrMakeEnum",
     "IrMakeException",
     "IrMakeArray",
+    "IrMakeJsonArray",
+    "IrMakeJsonObject",
     "IrMakeRecord",
     "IrOr",
     "IrParseJson",
@@ -196,6 +198,36 @@ class IrMakeDict:
     Each entry is a ``(key_expr, value_expr)`` pair evaluated left-to-right.
     Mirrors the AST ``DictLit`` node (whose ``DictEntry.key`` is a
     ``StringLit``; at IR level keys are already resolved to ``IrExpr``).
+    """
+
+    location: Location
+    entries: "tuple[tuple[IrExpr, IrExpr], ...]"
+
+
+@dataclass(frozen=True, slots=True)
+class IrMakeJsonArray:
+    """IR direct JSON array construction: an ``array`` literal typed ``json``.
+
+    Mirrors ``IrMakeArray`` in shape, but every item is already typed ``json``
+    (a scalar coerced to ``json``, an already-``json`` expression, or a
+    nested ``json``-typed literal), so evaluation builds a ``JsonValue``
+    directly from the elements' JSON payloads. No AgL ``array`` value is ever
+    materialized, and no ``IrCoerce`` is involved.
+    """
+
+    location: Location
+    items: "tuple[IrExpr, ...]"
+
+
+@dataclass(frozen=True, slots=True)
+class IrMakeJsonObject:
+    """IR direct JSON object construction: a ``dict`` literal typed ``json``.
+
+    Mirrors ``IrMakeDict`` in shape and key rules (including the checker's
+    duplicate-key rejection); every entry value is already typed ``json``.
+    Evaluation builds a ``JsonValue`` directly from the elements' JSON
+    payloads. No AgL ``dict`` value is ever materialized, and no ``IrCoerce``
+    is involved.
     """
 
     location: Location
@@ -1120,6 +1152,8 @@ IrExpr = (
     | IrConstJsonNull
     | IrMakeArray
     | IrMakeDict
+    | IrMakeJsonArray
+    | IrMakeJsonObject
     | IrLoad
     | IrBind
     | IrAssign

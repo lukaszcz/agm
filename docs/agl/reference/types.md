@@ -3,7 +3,7 @@
 [← Index](index.md)
 
 AgL is statically typed with nominal user types, a small set of built-ins,
-and exactly one implicit coercion. The full program is scope-resolved and
+and two implicit coercions. The full program is scope-resolved and
 type-checked before any expression executes; checking stops at the first
 error, and a program with a static error never runs.
 
@@ -593,15 +593,19 @@ regions](scopes.md), but not in ordinary expression blocks.
 
 ## Assignability and coercion
 
-Typing is exact nominal matching with **one** implicit coercion:
+Typing is exact nominal matching with **two** implicit coercions:
 
 1. **`int` widens to `decimal`.** An `int` value is accepted wherever a
    `decimal` is expected. Mixed arithmetic yields `decimal`, and `1 == 1.0`
    is true.
-2. There are no other implicit conversions.
-3. A `json` target accepts any JSON-shaped value. When a JSON-shaped value of
-   a more specific static type is bound into a `json` slot, it is stored in
-   canonical `json` representation.
+2. **A `json` target accepts any *scalar* JSON-shaped value** — `null`,
+   `bool`, `int`, `decimal`, or `text` — storing it in canonical `json`
+   representation.
+3. There are no other implicit conversions. In particular, an `array` or
+   `dict` value — even one that is JSON-shaped — is never implicitly absorbed
+   into `json`: an implicit conversion never copies a data structure, and
+   converting a container to `json` builds one. Use an explicit `as json`
+   cast (see [Casts and convertibility](#casts-and-convertibility) below).
 4. Equality (`==`, `!=`) and ordering comparisons require both operands to
    have the *same* type after rule 1. Operands whose type is, or transitively
    contains, a function, agent, or `unit` value are a static error — see

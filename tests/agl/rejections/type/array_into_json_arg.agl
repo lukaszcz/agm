@@ -1,0 +1,3 @@
+def take(x: json) -> unit = ()
+let xs: array[int] = [1, 2]
+take(xs)

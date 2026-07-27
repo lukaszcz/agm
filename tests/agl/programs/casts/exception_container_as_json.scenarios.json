@@ -1,0 +1,45 @@
+{
+  "scenarios": [
+    {
+      "name": "single_digit_code",
+      "params": {"code": 7, "note": "broken"},
+      "expect": {
+        "stdout_contains": [
+          "\"message\": \"broken\"",
+          "\"code\": 7",
+          "[{\"message\": \"broken\"",
+          "\"code\": 8",
+          "{\"build\": {\"message\": \"broken\"",
+          "\"causes\": [{\"message\": \"broken\"",
+          "true\ntrue\n"
+        ],
+        "stdout_not_contains": ["<agent", "<function"]
+      }
+    },
+    {
+      "name": "zero_code_and_empty_note",
+      "params": {"code": 0, "note": ""},
+      "expect": {
+        "stdout_contains": [
+          "\"message\": \"\"",
+          "\"code\": 0",
+          "\"code\": 1",
+          "\"causes\": [{\"message\": \"\"",
+          "true\ntrue\n"
+        ]
+      }
+    },
+    {
+      "name": "negative_code",
+      "params": {"code": -2, "note": "n/a"},
+      "expect": {
+        "stdout_contains": [
+          "\"message\": \"n/a\"",
+          "\"code\": -2",
+          "\"code\": -1",
+          "true\ntrue\n"
+        ]
+      }
+    }
+  ]
+}

@@ -1,0 +1,28 @@
+# An exception value converts to a JSON object of its own and inherited
+# fields, and a container of exceptions converts element by element. The
+# inherited `trace_id` is part of the encoding, so the shape is asserted by
+# fragment rather than pinned exactly.
+param code: int
+param note: text
+
+exception Failure extends Exception
+  code: int
+
+exception Nested extends Failure
+  causes: array[Failure]
+
+let one = Failure(message = note, code = code)
+print(one as json)
+
+let many: array[Failure] = [one, Failure(message = note, code = code + 1)]
+print(many as json)
+
+let by_stage: dict[text, Failure] = {"build": one}
+print(by_stage as json)
+
+# A subtype is convertible on its own terms, and its array field converts too.
+let deep = Nested(message = note, code = code, causes = [one])
+print(deep as json)
+
+print(one as? json)
+print(many as? json)

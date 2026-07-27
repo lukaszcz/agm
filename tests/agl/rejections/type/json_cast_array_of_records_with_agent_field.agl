@@ -1,0 +1,5 @@
+record Bad
+  a: agent
+  x: int
+def encode(bs: array[Bad]) -> json = bs as json
+encode

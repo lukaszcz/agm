@@ -57,6 +57,7 @@ from agm.agl.semantics.types import (
     ArrayType,
     BoolType,
     BottomType,
+    CastKind,
     DecimalType,
     DictType,
     EnumType,
@@ -70,6 +71,9 @@ from agm.agl.semantics.types import (
     Type,
     TypeVarType,
     UnitType,
+    contains_type_var,
+    free_type_vars,
+    is_assignable,
     substitute,
 )
 
@@ -680,21 +684,114 @@ class TypeTable:
                 f"type '{t!r}' cannot be used as {use}: its recursive instantiations "
                 "never close, so it has no finite JSON schema."
             )
-        culprit_module, culprit_scope_path, culprit_name = culprit
-        # Qualify the culprit with its module when it is not the entry module
-        # (bare names from an imported module can otherwise be ambiguous),
-        # matching the ``module.path_str()::name`` convention used by
-        # RecordType/EnumType's own ``__repr__``.
-        scoped_culprit = "::".join((*culprit_scope_path, culprit_name))
-        qualified_culprit = (
-            scoped_culprit
-            if culprit_module.is_entry
-            else f"{culprit_module.path_str()}::{scoped_culprit}"
-        )
         return (
-            f"type '{t!r}' cannot be used as {use}: it contains '{qualified_culprit}', whose "
-            "recursive instantiations never close, so it has no finite JSON schema."
+            f"type '{t!r}' cannot be used as {use}: it contains "
+            f"'{_qualified_decl_name(culprit)}', whose recursive instantiations never "
+            "close, so it has no finite JSON schema."
         )
+
+    def json_representation_obstacle(self, t: Type) -> str | None:
+        """Return why *t* has no JSON representation, as a diagnostic clause.
+
+        ``None`` when *t* converts (:func:`is_json_convertible` is true) or
+        when nothing more specific than "this type does not convert" can be
+        said — an unresolved inference variable, say, whose real problem is
+        inference rather than representation. Otherwise a clause naming the
+        culprit, for a caller to splice into its own sentence: a non-data type
+        reached structurally, the declaration field that carries one, or the
+        type variable that may stand for one. Shaped like
+        :meth:`no_finite_schema_message`, whose culprit search this mirrors.
+        """
+        if is_json_convertible(t, self):
+            return None
+        leaf = _first_non_data_leaf(t)
+        if leaf is not None:
+            return f"'{leaf!r}' has no JSON representation"
+        culprit = self.first_non_data_field(t)
+        if culprit is not None:
+            key, field_name, field_type = culprit
+            return (
+                f"field '{field_name}' of '{_qualified_decl_name(key)}' has type "
+                f"'{field_type!r}', which has no JSON representation"
+            )
+        type_vars = sorted(free_type_vars(t))
+        if type_vars:
+            return (
+                f"type variable '{type_vars[0]}' may stand for a type with no JSON representation"
+            )
+        return None
+
+    def first_non_data_field(self, t: Type) -> tuple[DeclKey, str, Type] | None:
+        """Return the declaration field that costs *t* its JSON representation.
+
+        The result is ``(declaration key, field name, that field's declared
+        type)``. Breadth-first from *t*'s own nominal references, so the
+        shallowest declaration carrying a non-data field is reported — the
+        most useful culprit for a use-site diagnostic — before one reachable
+        only through further hops. Follows a declaration's affected field
+        references, an exception's ``extends`` base (whose fields are
+        inherited) and its affected descendants (a value statically typed as
+        the ancestor may hold one at runtime). Never expands an instantiation,
+        so it terminates however the declarations recurse. ``None`` when no
+        reachable declaration is to blame.
+        """
+        from agm.agl.semantics.analyses import nominal_references
+
+        seen: set[DeclKey] = set()
+        queue: deque[DeclKey] = deque(
+            (ref.module_id, ref.scope_path, ref.name)
+            for ref in nominal_references(t)
+            if self.nominal_reaches_non_data(ref)
+        )
+        while queue:
+            key = queue.popleft()
+            if key in seen:
+                continue
+            seen.add(key)
+            typedef = self._defs.get(key)
+            if typedef is None:  # pragma: no cover
+                # Unreachable by construction: every key enqueued was first
+                # confirmed to reach a non-data type, which a dangling
+                # (never-registered) declaration never does. Kept as a
+                # defensive guard, matching the dangling-reference handling in
+                # the fixpoints themselves, in case that ever stops holding.
+                continue
+            direct = self._own_non_data_field(typedef)
+            if direct is not None:
+                return (key, *direct)
+            queue.extend(
+                sorted(self._affected_successors(key, typedef) - seen, key=decl_key_sort_key)
+            )
+        return None
+
+    def _own_non_data_field(self, typedef: TypeDef) -> tuple[str, Type] | None:
+        """Return *typedef*'s first own field whose type structurally reaches non-data."""
+        from agm.agl.semantics.analyses import field_templates
+
+        for field_name, template in field_templates(typedef):
+            if _first_non_data_leaf(template) is not None:
+                return field_name, template
+        return None
+
+    def _affected_successors(self, key: DeclKey, typedef: TypeDef) -> set[DeclKey]:
+        """Return the declarations *typedef* reaches non-data through."""
+        from agm.agl.semantics.analyses import field_templates, nominal_references
+
+        flags = self._non_data_reachability().reaches_non_data
+        result: set[DeclKey] = set()
+        for _field_name, template in field_templates(typedef):
+            for ref in nominal_references(template):
+                if self.nominal_reaches_non_data(ref):
+                    result.add((ref.module_id, ref.scope_path, ref.name))
+        if typedef.kind == "exception":
+            if typedef.base is not None and typedef.base in flags:
+                result.add(typedef.base)
+            result.update(
+                child_key
+                for child_key, child in self._defs.items()
+                if child.kind == "exception" and child.base == key and child_key in flags
+            )
+        return result
 
     def _finite_closure_result(self) -> "FiniteClosure":
         if self._finite_closure is None:
@@ -730,6 +827,34 @@ class TypeTable:
 def decl_key_sort_key(key: DeclKey) -> tuple[tuple[str, ...], tuple[str, ...], str]:
     """Deterministic sort key for a declaration key (module, scope path, then name)."""
     return (key[0].segments, key[1], key[2])
+
+
+def _qualified_decl_name(key: DeclKey) -> str:
+    """Return *key*'s user-facing name, module-qualified unless it is the entry module.
+
+    Bare names from an imported module can otherwise be ambiguous; the
+    ``module.path_str()::name`` convention matches ``RecordType``/``EnumType``'s
+    own ``__repr__``.
+    """
+    module, scope_path, name = key
+    scoped = "::".join((*scope_path, name))
+    return scoped if module.is_entry else f"{module.path_str()}::{scoped}"
+
+
+def _first_non_data_leaf(t: Type) -> Type | None:
+    """Return the first non-data type reachable through *t*'s own structure.
+
+    Structural only: recurses through ``array``/``dict`` but stops at a nominal
+    handle, whose own fields are a declaration-level question answered by
+    :meth:`TypeTable.first_non_data_field` instead.
+    """
+    if isinstance(t, (UnitType, AgentType, FunctionType)):
+        return t
+    if isinstance(t, ArrayType):
+        return _first_non_data_leaf(t.elem)
+    if isinstance(t, DictType):
+        return _first_non_data_leaf(t.value)
+    return None
 
 
 def _reaches_non_data(t: Type, table: TypeTable) -> bool:
@@ -803,6 +928,128 @@ def comparable_types(left: Type, right: Type, table: TypeTable) -> bool:
     # The only cross-type comparison is numeric int↔decimal (either direction).
     numeric = (IntType, DecimalType)
     return isinstance(left, numeric) and isinstance(right, numeric)
+
+
+# ---------------------------------------------------------------------------
+# JSON convertibility and cast classification
+# ---------------------------------------------------------------------------
+
+
+def is_json_convertible(t: Type, table: TypeTable) -> bool:
+    """Return ``True`` if ``t`` has a JSON representation.
+
+    The scalars (``text``/``json``/``bool``/``int``/``decimal``) convert
+    directly; an ``array``/``dict`` converts iff its element/value type does;
+    a record or exception converts to a JSON object of its fields and an enum
+    to ``{"$case": variant, …fields}``, so a nominal converts iff no non-data
+    type is reachable from its declaration
+    (:meth:`TypeTable.nominal_is_json_convertible`). The non-data types —
+    ``unit``, ``agent``, and function types — have no representation at all.
+
+    A free type variable is never convertible, its own arm here and, for a
+    nominal, in its type arguments: casts are compiled once and type arguments
+    are erased, so a ``T`` later instantiated with ``agent`` would otherwise
+    reach the conversion at runtime. Note the deliberate asymmetry with the
+    declaration-level fixpoint, which correctly treats a type variable in a
+    field template as *not* a problem — that is what its relevant-parameter
+    analysis is for.
+
+    This is what an explicit ``as json`` cast accepts. It is deliberately
+    wider than :func:`~agm.agl.semantics.types.is_json_shaped` (what may
+    *inhabit* a ``json`` slot) and than
+    :func:`~agm.agl.semantics.types.is_scalar_json_shaped` (what an *implicit*
+    coercion absorbs); all three answer different questions.
+    """
+    match t:
+        case TextType() | JsonType() | BoolType() | IntType() | DecimalType():
+            return True
+        case ArrayType():
+            return is_json_convertible(t.elem, table)
+        case DictType():
+            return is_json_convertible(t.value, table)
+        case ExceptionType():
+            return table.nominal_is_json_convertible(t)
+        case RecordType() | EnumType():
+            return table.nominal_is_json_convertible(t) and not any(
+                contains_type_var(arg) for arg in t.type_args
+            )
+        case (
+            UnitType()
+            | AgentType()
+            | FunctionType()
+            | BottomType()
+            | TypeVarType()
+            | InferenceVarType()
+        ):
+            return False
+        case _ as unreachable:  # pragma: no cover
+            assert_never(unreachable)
+
+
+def cast_classification(source: Type, target: Type, table: TypeTable) -> CastKind:
+    """Classify a cast from source to target type.
+
+    Returns the CastKind for the (source, target) pair. ``table`` resolves the
+    declaration-level facts a ``json`` target needs (see
+    :func:`is_json_convertible`).
+    """
+    # Bottom is a valid source because a raise expression never reaches the
+    # conversion. Other non-data sources and all non-data targets are invalid.
+    if isinstance(source, (UnitType, AgentType, FunctionType)) or isinstance(
+        target, (UnitType, AgentType, FunctionType, BottomType)
+    ):
+        return CastKind.STATIC_ERROR
+    # ExceptionType as target is not in the matrix
+    if isinstance(target, ExceptionType):
+        return CastKind.STATIC_ERROR
+
+    # Handle is_assignable cases first (no-op / widen / json-absorb).
+    # Note: is_assignable(X, TextType) is true only when X is TextType itself
+    # (no implicit widening to text), so the only assignable-to-text case is noop.
+    # is_assignable(X, JsonType) is true only for scalar json-shaped types.
+    if is_assignable(source, target):
+        if isinstance(target, JsonType):
+            # json → json: noop; all other json-shaped sources → canonicalize
+            if isinstance(source, JsonType):
+                return CastKind.TOTAL_NOOP
+            return CastKind.TOTAL_JSON
+        # All other assignable cases are no-ops (including int→decimal widen,
+        # same-type identity, etc.)
+        return CastKind.TOTAL_NOOP
+
+    # Now source is NOT assignable to target.
+    _text_or_json = (TextType, JsonType)
+
+    if isinstance(target, TextType):
+        # Every data value renders to text. Non-data sources (unit/agent/function)
+        # are filtered at the top, and json-shaped/exact-type sources are handled by
+        # the is_assignable block above, so any source reaching here is a renderable
+        # data type (json/bool/int/decimal/array/dict/record/enum/exception).
+        return CastKind.TOTAL_RENDER
+
+    if isinstance(target, JsonType):
+        # Scalar json-shaped sources are assignable to json (handled above), so
+        # anything reaching here needs the full rule: every type with a JSON
+        # representation converts, and nothing else does.
+        if is_json_convertible(source, table):
+            return CastKind.TOTAL_JSON
+        return CastKind.STATIC_ERROR
+
+    if isinstance(target, (BoolType, IntType, DecimalType)):
+        # decimal → int is a narrowing cast (fallible); text/json → numeric is fallible.
+        if isinstance(source, _text_or_json) or (
+            isinstance(target, IntType) and isinstance(source, DecimalType)
+        ):
+            return CastKind.FALLIBLE
+        return CastKind.STATIC_ERROR
+
+    if isinstance(target, (ArrayType, DictType, RecordType, EnumType)):
+        if isinstance(source, _text_or_json):
+            return CastKind.FALLIBLE
+        return CastKind.STATIC_ERROR
+
+    # All target types are covered above; this is a safety fallback.
+    return CastKind.STATIC_ERROR  # pragma: no cover
 
 
 # ---------------------------------------------------------------------------

@@ -1,0 +1,25 @@
+{
+  "scenarios": [
+    {
+      "name": "small_values",
+      "params": {"n": 1, "tag": "a"},
+      "expect": {
+        "stdout": "[{\"x\": 1, \"label\": \"a\"}, {\"x\": 2, \"label\": \"a\"}]\n{\"first\": {\"x\": 1, \"label\": \"a\"}}\n[[{\"x\": 1, \"label\": \"a\"}], []]\n{\"g\": [{\"x\": 1, \"label\": \"a\"}]}\n[{\"$case\": \"Present\", \"value\": 1}, {\"$case\": \"Missing\"}]\n{\"tag\": 1, \"children\": [{\"tag\": 2, \"children\": []}]}\nround trip ok\ntrue\ntrue\ntrue\ntrue\n"
+      }
+    },
+    {
+      "name": "zero_and_empty_tag",
+      "params": {"n": 0, "tag": ""},
+      "expect": {
+        "stdout": "[{\"x\": 0, \"label\": \"\"}, {\"x\": 1, \"label\": \"\"}]\n{\"first\": {\"x\": 0, \"label\": \"\"}}\n[[{\"x\": 0, \"label\": \"\"}], []]\n{\"g\": [{\"x\": 0, \"label\": \"\"}]}\n[{\"$case\": \"Present\", \"value\": 0}, {\"$case\": \"Missing\"}]\n{\"tag\": 0, \"children\": [{\"tag\": 1, \"children\": []}]}\nround trip ok\ntrue\ntrue\ntrue\ntrue\n"
+      }
+    },
+    {
+      "name": "negative_value_and_quoting_tag",
+      "params": {"n": -3, "tag": "a\"b"},
+      "expect": {
+        "stdout": "[{\"x\": -3, \"label\": \"a\\\"b\"}, {\"x\": -2, \"label\": \"a\\\"b\"}]\n{\"first\": {\"x\": -3, \"label\": \"a\\\"b\"}}\n[[{\"x\": -3, \"label\": \"a\\\"b\"}], []]\n{\"g\": [{\"x\": -3, \"label\": \"a\\\"b\"}]}\n[{\"$case\": \"Present\", \"value\": -3}, {\"$case\": \"Missing\"}]\n{\"tag\": -3, \"children\": [{\"tag\": -2, \"children\": []}]}\nround trip ok\ntrue\ntrue\ntrue\ntrue\n"
+      }
+    }
+  ]
+}

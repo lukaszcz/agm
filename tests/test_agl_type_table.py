@@ -28,19 +28,26 @@ from agm.agl.semantics.type_table import (
     BUILTIN_PRELUDE_TYPE_DEFS,
     TypeDef,
     TypeTable,
+    cast_classification,
     comparable_types,
     create_seeded_type_table,
+    is_json_convertible,
 )
 from agm.agl.semantics.types import (
     BUILTIN_PRELUDE_TYPES,
     AgentType,
     ArrayType,
     BoolType,
+    BottomType,
+    CastKind,
+    DecimalType,
     DictType,
     EnumType,
     ExceptionType,
     FunctionType,
+    InferenceVarType,
     IntType,
+    JsonType,
     RecordType,
     TextType,
     TypeVarType,
@@ -1552,6 +1559,399 @@ class TestNominalIsJsonConvertible:
         int_handle = RecordType(name="Box", type_args=(IntType(),), module_id=ENTRY_ID)
         assert table.nominal_is_json_convertible(agent_handle) is False
         assert table.nominal_is_json_convertible(int_handle) is True
+
+
+# ---------------------------------------------------------------------------
+# The cast matrix — `cast_classification` and the `as json` rule it applies
+# ---------------------------------------------------------------------------
+
+
+def _bad_record_table() -> TypeTable:
+    """A table with ``Bad(a: agent, x: int)`` and ``Good(x: int)``."""
+    table = TypeTable()
+    table.register(
+        TypeDef(
+            kind="record",
+            name="Bad",
+            module_id=ENTRY_ID,
+            fields=(("a", AgentType()), ("x", IntType())),
+        )
+    )
+    table.register(
+        TypeDef(kind="record", name="Good", module_id=ENTRY_ID, fields=(("x", IntType()),))
+    )
+    return table
+
+
+class TestCastClassification:
+    def test_bottom_source_is_assignable_to_cast_target(self) -> None:
+        assert cast_classification(BottomType(), TextType(), TypeTable()) == CastKind.TOTAL_NOOP
+
+    def test_text_to_text_noop(self) -> None:
+        assert cast_classification(TextType(), TextType(), TypeTable()) == CastKind.TOTAL_NOOP
+
+    def test_int_to_text_render(self) -> None:
+        assert cast_classification(IntType(), TextType(), TypeTable()) == CastKind.TOTAL_RENDER
+
+    def test_bool_to_text_render(self) -> None:
+        assert cast_classification(BoolType(), TextType(), TypeTable()) == CastKind.TOTAL_RENDER
+
+    def test_int_to_json_total_json(self) -> None:
+        assert cast_classification(IntType(), JsonType(), TypeTable()) == CastKind.TOTAL_JSON
+
+    def test_text_to_json_total_json(self) -> None:
+        assert cast_classification(TextType(), JsonType(), TypeTable()) == CastKind.TOTAL_JSON
+
+    def test_json_to_json_noop(self) -> None:
+        assert cast_classification(JsonType(), JsonType(), TypeTable()) == CastKind.TOTAL_NOOP
+
+    def test_text_to_int_fallible(self) -> None:
+        assert cast_classification(TextType(), IntType(), TypeTable()) == CastKind.FALLIBLE
+
+    def test_json_to_bool_fallible(self) -> None:
+        assert cast_classification(JsonType(), BoolType(), TypeTable()) == CastKind.FALLIBLE
+
+    def test_decimal_to_int_fallible(self) -> None:
+        assert cast_classification(DecimalType(), IntType(), TypeTable()) == CastKind.FALLIBLE
+
+    def test_int_to_decimal_noop(self) -> None:
+        assert cast_classification(IntType(), DecimalType(), TypeTable()) == CastKind.TOTAL_NOOP
+
+    def test_bool_to_int_static_error(self) -> None:
+        assert cast_classification(BoolType(), IntType(), TypeTable()) == CastKind.STATIC_ERROR
+
+    def test_int_to_bool_static_error(self) -> None:
+        assert cast_classification(IntType(), BoolType(), TypeTable()) == CastKind.STATIC_ERROR
+
+    def test_unit_source_static_error(self) -> None:
+        assert cast_classification(UnitType(), TextType(), TypeTable()) == CastKind.STATIC_ERROR
+
+    def test_agent_target_static_error(self) -> None:
+        assert cast_classification(TextType(), AgentType(), TypeTable()) == CastKind.STATIC_ERROR
+
+    def test_array_of_scalars_to_json_total(self) -> None:
+        # array[int] is JSON-shaped: not implicitly assignable to json (see
+        # TestIsAssignable), but still convertible via an explicit cast.
+        assert (
+            cast_classification(ArrayType(elem=IntType()), JsonType(), TypeTable())
+            == CastKind.TOTAL_JSON
+        )
+
+    def test_dict_of_scalars_to_json_total(self) -> None:
+        assert (
+            cast_classification(DictType(value=IntType()), JsonType(), TypeTable())
+            == CastKind.TOTAL_JSON
+        )
+
+    def test_text_to_record_fallible(self) -> None:
+        r = RecordType(name="R")
+        assert cast_classification(TextType(), r, TypeTable()) == CastKind.FALLIBLE
+
+    def test_json_to_record_fallible(self) -> None:
+        r = RecordType(name="R")
+        assert cast_classification(JsonType(), r, TypeTable()) == CastKind.FALLIBLE
+
+    def test_exception_as_target_static_error(self) -> None:
+        exc = ExceptionType(name="MyError")
+        assert cast_classification(TextType(), exc, TypeTable()) == CastKind.STATIC_ERROR
+
+    def test_exception_source_to_text_render(self) -> None:
+        exc = ExceptionType(name="MyError")
+        assert cast_classification(exc, TextType(), TypeTable()) == CastKind.TOTAL_RENDER
+
+    def test_json_to_text_render(self) -> None:
+        assert cast_classification(JsonType(), TextType(), TypeTable()) == CastKind.TOTAL_RENDER
+
+    def test_int_to_array_static_error(self) -> None:
+        assert (
+            cast_classification(IntType(), ArrayType(IntType()), TypeTable())
+            == CastKind.STATIC_ERROR
+        )
+
+    def test_record_to_json_total(self) -> None:
+        table = _bad_record_table()
+        good = RecordType(name="Good", module_id=ENTRY_ID)
+        assert cast_classification(good, JsonType(), table) == CastKind.TOTAL_JSON
+
+    def test_enum_to_json_total(self) -> None:
+        table = TypeTable()
+        table.register(
+            TypeDef(
+                kind="enum",
+                name="E",
+                module_id=ENTRY_ID,
+                variants=(("A", ()), ("B", (("x", IntType()),))),
+            )
+        )
+        assert (
+            cast_classification(EnumType(name="E", module_id=ENTRY_ID), JsonType(), table)
+            == CastKind.TOTAL_JSON
+        )
+
+    def test_exception_to_json_total(self) -> None:
+        table = create_seeded_type_table()
+        source = ExceptionType(name="Abort", module_id=PRELUDE_ID)
+        assert cast_classification(source, JsonType(), table) == CastKind.TOTAL_JSON
+
+    def test_array_of_record_to_json_total(self) -> None:
+        table = _bad_record_table()
+        good = ArrayType(elem=RecordType(name="Good", module_id=ENTRY_ID))
+        assert cast_classification(good, JsonType(), table) == CastKind.TOTAL_JSON
+
+    def test_record_with_agent_field_to_json_static_error(self) -> None:
+        table = _bad_record_table()
+        bad = RecordType(name="Bad", module_id=ENTRY_ID)
+        assert cast_classification(bad, JsonType(), table) == CastKind.STATIC_ERROR
+
+    def test_array_of_record_with_agent_field_to_json_static_error(self) -> None:
+        table = _bad_record_table()
+        bad = ArrayType(elem=RecordType(name="Bad", module_id=ENTRY_ID))
+        assert cast_classification(bad, JsonType(), table) == CastKind.STATIC_ERROR
+
+
+class TestIsJsonConvertible:
+    def test_scalars_convert(self) -> None:
+        table = TypeTable()
+        for scalar in (TextType(), JsonType(), BoolType(), IntType(), DecimalType()):
+            assert is_json_convertible(scalar, table) is True
+
+    def test_non_data_types_do_not_convert(self) -> None:
+        table = TypeTable()
+        for non_data in (
+            UnitType(),
+            AgentType(),
+            FunctionType(params=(IntType(),), result=IntType()),
+        ):
+            assert is_json_convertible(non_data, table) is False
+
+    def test_nested_containers_follow_their_element_type(self) -> None:
+        table = _bad_record_table()
+        good = RecordType(name="Good", module_id=ENTRY_ID)
+        bad = RecordType(name="Bad", module_id=ENTRY_ID)
+        assert is_json_convertible(ArrayType(elem=ArrayType(elem=good)), table) is True
+        assert is_json_convertible(DictType(value=ArrayType(elem=good)), table) is True
+        assert is_json_convertible(ArrayType(elem=ArrayType(elem=bad)), table) is False
+        assert is_json_convertible(DictType(value=ArrayType(elem=bad)), table) is False
+
+    def test_recursive_declaration_converts(self) -> None:
+        table = TypeTable()
+        table.register(
+            TypeDef(
+                kind="record",
+                name="Node",
+                module_id=ENTRY_ID,
+                fields=(
+                    ("tag", IntType()),
+                    ("children", ArrayType(elem=RecordType(name="Node", module_id=ENTRY_ID))),
+                ),
+            )
+        )
+        node = RecordType(name="Node", module_id=ENTRY_ID)
+        assert is_json_convertible(node, table) is True
+
+    def test_free_type_variable_never_converts(self) -> None:
+        table = TypeTable()
+        table.register(
+            TypeDef(
+                kind="record",
+                name="Box",
+                module_id=ENTRY_ID,
+                type_params=("T",),
+                fields=(("value", TypeVarType("T")),),
+            )
+        )
+        assert is_json_convertible(TypeVarType("T"), table) is False
+        assert is_json_convertible(ArrayType(elem=TypeVarType("T")), table) is False
+        boxed = RecordType(name="Box", type_args=(TypeVarType("T"),), module_id=ENTRY_ID)
+        assert is_json_convertible(boxed, table) is False
+        concrete = RecordType(name="Box", type_args=(IntType(),), module_id=ENTRY_ID)
+        assert is_json_convertible(concrete, table) is True
+
+    def test_phantom_type_parameter_still_rejects_a_type_variable(self) -> None:
+        # The declaration itself never mentions T, so the fixpoint calls the
+        # parameter irrelevant — but the cast is compiled once with type
+        # arguments erased, so a free T at the use site is still refused.
+        table = TypeTable()
+        table.register(
+            TypeDef(
+                kind="record",
+                name="Phantom",
+                module_id=ENTRY_ID,
+                type_params=("T",),
+                fields=(("x", IntType()),),
+            )
+        )
+        handle = RecordType(name="Phantom", type_args=(TypeVarType("T"),), module_id=ENTRY_ID)
+        assert is_json_convertible(handle, table) is False
+        concrete = RecordType(name="Phantom", type_args=(AgentType(),), module_id=ENTRY_ID)
+        assert is_json_convertible(concrete, table) is True
+
+
+class TestJsonRepresentationObstacle:
+    def test_convertible_type_has_no_obstacle(self) -> None:
+        table = _bad_record_table()
+        good = ArrayType(elem=RecordType(name="Good", module_id=ENTRY_ID))
+        assert table.json_representation_obstacle(good) is None
+
+    def test_structural_non_data_leaf_is_named(self) -> None:
+        table = TypeTable()
+        message = table.json_representation_obstacle(ArrayType(elem=AgentType()))
+        assert message is not None
+        assert "agent" in message
+
+    def test_structural_non_data_leaf_through_a_dict_is_named(self) -> None:
+        table = TypeTable()
+        message = table.json_representation_obstacle(DictType(value=ArrayType(elem=UnitType())))
+        assert message is not None
+        assert "unit" in message
+
+    def test_declaration_field_is_named(self) -> None:
+        table = _bad_record_table()
+        bad = ArrayType(elem=RecordType(name="Bad", module_id=ENTRY_ID))
+        message = table.json_representation_obstacle(bad)
+        assert message is not None
+        assert "'a'" in message
+        assert "Bad" in message
+        assert "agent" in message
+
+    def test_culprit_is_reported_through_a_nested_declaration(self) -> None:
+        table = _bad_record_table()
+        table.register(
+            TypeDef(
+                kind="record",
+                name="Outer",
+                module_id=ENTRY_ID,
+                fields=(
+                    ("label", TextType()),
+                    ("inner", ArrayType(elem=RecordType(name="Bad", module_id=ENTRY_ID))),
+                ),
+            )
+        )
+        outer = RecordType(name="Outer", module_id=ENTRY_ID)
+        message = table.json_representation_obstacle(outer)
+        assert message is not None
+        assert "'a'" in message
+        assert "Bad" in message
+
+    def test_culprit_search_visits_a_shared_declaration_once(self) -> None:
+        # Two independent paths reach Mid, whose own fields are all clean
+        # (a scalar and a convertible nominal) — the blame lies one hop
+        # further on. The search must converge rather than re-expand Mid.
+        table = _bad_record_table()
+        bad = RecordType(name="Bad", module_id=ENTRY_ID)
+        good = RecordType(name="Good", module_id=ENTRY_ID)
+        mid = RecordType(name="Mid", module_id=ENTRY_ID)
+        table.register(
+            TypeDef(
+                kind="record",
+                name="Mid",
+                module_id=ENTRY_ID,
+                fields=(("x", IntType()), ("ok", good), ("deep", bad)),
+            )
+        )
+        for side in ("Left", "Right"):
+            table.register(
+                TypeDef(kind="record", name=side, module_id=ENTRY_ID, fields=(("m", mid),))
+            )
+        table.register(
+            TypeDef(
+                kind="record",
+                name="Top",
+                module_id=ENTRY_ID,
+                fields=(
+                    ("l", RecordType(name="Left", module_id=ENTRY_ID)),
+                    ("r", RecordType(name="Right", module_id=ENTRY_ID)),
+                ),
+            )
+        )
+        message = table.json_representation_obstacle(RecordType(name="Top", module_id=ENTRY_ID))
+        assert message is not None
+        assert "'a'" in message
+        assert "Bad" in message
+
+    def test_enum_variant_field_is_named(self) -> None:
+        table = TypeTable()
+        table.register(
+            TypeDef(
+                kind="enum",
+                name="Holder",
+                module_id=ENTRY_ID,
+                variants=(
+                    ("Empty", ()),
+                    ("Full", (("run", FunctionType(params=(), result=IntType())),)),
+                ),
+            )
+        )
+        holder = EnumType(name="Holder", module_id=ENTRY_ID)
+        message = table.json_representation_obstacle(holder)
+        assert message is not None
+        assert "'run'" in message
+        assert "Holder" in message
+
+    def test_exception_descendant_poisons_its_ancestor(self) -> None:
+        table = TypeTable()
+        base_key = (ENTRY_ID, (), "Base")
+        table.register(
+            TypeDef(
+                kind="exception", name="Base", module_id=ENTRY_ID, fields=(("code", IntType()),)
+            )
+        )
+        table.register(
+            TypeDef(
+                kind="exception",
+                name="Child",
+                module_id=ENTRY_ID,
+                base=base_key,
+                fields=(("handler", FunctionType(params=(IntType(),), result=IntType())),),
+            )
+        )
+        base = ExceptionType(name="Base", module_id=ENTRY_ID)
+        assert is_json_convertible(base, table) is False
+        message = table.json_representation_obstacle(base)
+        assert message is not None
+        assert "'handler'" in message
+        assert "Child" in message
+
+    def test_exception_inherits_its_base_field_problem(self) -> None:
+        table = TypeTable()
+        base_key = (ENTRY_ID, (), "Base")
+        table.register(
+            TypeDef(kind="exception", name="Base", module_id=ENTRY_ID, fields=(("a", AgentType()),))
+        )
+        table.register(
+            TypeDef(
+                kind="exception",
+                name="Child",
+                module_id=ENTRY_ID,
+                base=base_key,
+                fields=(("code", IntType()),),
+            )
+        )
+        child = ExceptionType(name="Child", module_id=ENTRY_ID)
+        message = table.json_representation_obstacle(child)
+        assert message is not None
+        assert "'a'" in message
+        assert "Base" in message
+
+    def test_type_variable_is_named_when_nothing_else_is_to_blame(self) -> None:
+        table = TypeTable()
+        message = table.json_representation_obstacle(ArrayType(elem=TypeVarType("T")))
+        assert message is not None
+        assert "'T'" in message
+
+    def test_unresolved_inference_variable_has_no_specific_obstacle(self) -> None:
+        table = TypeTable()
+        assert table.json_representation_obstacle(ArrayType(elem=InferenceVarType(1))) is None
+
+    def test_imported_culprit_is_module_qualified(self) -> None:
+        other = ModuleId(("lib", "shapes"))
+        table = TypeTable()
+        table.register(
+            TypeDef(kind="record", name="Bad", module_id=other, fields=(("a", AgentType()),))
+        )
+        message = table.json_representation_obstacle(RecordType(name="Bad", module_id=other))
+        assert message is not None
+        assert "lib/shapes::Bad" in message
 
 
 # ---------------------------------------------------------------------------

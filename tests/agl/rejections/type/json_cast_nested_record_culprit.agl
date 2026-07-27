@@ -1,0 +1,8 @@
+record Bad
+  a: agent
+  x: int
+record Outer
+  label: text
+  inner: array[Bad]
+def encode(o: Outer) -> json = o as json
+encode

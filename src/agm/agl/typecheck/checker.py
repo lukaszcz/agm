@@ -69,7 +69,7 @@ from agm.agl.scope.symbols import (
     duplicate_binder_message,
     immutable_assignment_message,
 )
-from agm.agl.semantics.type_table import TypeTable, comparable_types
+from agm.agl.semantics.type_table import TypeTable, cast_classification, comparable_types
 from agm.agl.semantics.types import (
     AgentType,
     ArrayType,
@@ -92,7 +92,6 @@ from agm.agl.semantics.types import (
     Type,
     TypeVarType,
     UnitType,
-    cast_classification,
     contains_inference_var,
     free_type_vars,
     is_assignable,
@@ -1783,10 +1782,19 @@ class _Checker:
     def _check_cast(self, node: Cast) -> Type:
         source_type = self._check_expr(node.expr, expected=None)
         target_type = self._env.resolve_type_expr(node.target_type, span=node.span)
-        kind = cast_classification(source_type, target_type)
+        table = self._env.type_table
+        kind = cast_classification(source_type, target_type, table)
         if kind == CastKind.STATIC_ERROR:
+            # A rejected `as json` can usually name the culprit — the non-data
+            # type reached, or the declaration field carrying it.
+            obstacle = (
+                table.json_representation_obstacle(source_type)
+                if isinstance(target_type, JsonType)
+                else None
+            )
+            detail = "" if obstacle is None else f": {obstacle}"
             error = AglTypeError(
-                f"cannot cast '{source_type!r}' to '{target_type!r}'.",
+                f"cannot cast '{source_type!r}' to '{target_type!r}'{detail}.",
                 span=node.span,
             )
             raise self._frame_inferred_return_error(error, exprs=(node.expr,)) from error

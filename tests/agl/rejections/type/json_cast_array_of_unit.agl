@@ -1,0 +1,3 @@
+let us: array[unit] = []
+let j = us as json
+j

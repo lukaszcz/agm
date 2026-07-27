@@ -1,0 +1,5 @@
+record Box[T]
+  value: T
+def encode[T](b: Box[T]) -> json = b as json
+let j = encode::[int](Box(value = 1))
+j

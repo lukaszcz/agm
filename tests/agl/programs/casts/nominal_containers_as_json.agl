@@ -1,0 +1,51 @@
+# Every type with a JSON representation converts with `as json`, including
+# containers of records, enums and exceptions, nested containers, and
+# recursive declarations. The encoding is the one the decode direction
+# accepts, so `(rs as json) as array[R]` recovers the values.
+param n: int
+param tag: text
+
+record R
+  x: int
+  label: text
+
+enum Opt
+  | Missing
+  | Present(value: int)
+
+record Node
+  tag: int
+  children: array[Node]
+
+let rs: array[R] = [R(x = n, label = tag), R(x = n + 1, label = tag)]
+print(rs as json)
+
+let by_name: dict[text, R] = {"first": R(x = n, label = tag)}
+print(by_name as json)
+
+let nested: array[array[R]] = [[R(x = n, label = tag)], []]
+print(nested as json)
+
+let grouped: dict[text, array[R]] = {"g": [R(x = n, label = tag)]}
+print(grouped as json)
+
+# An enum encodes as {"$case": variant, ...fields}.
+let opts: array[Opt] = [Present(value = n), Missing]
+print(opts as json)
+
+# A recursive declaration needs no finite-schema guarantee to encode.
+let tree = Node(tag = n, children = [Node(tag = n + 1, children = [])])
+print(tree as json)
+
+# Round trip through the decode direction.
+let back = (rs as json) as array[R]
+if back == rs =>
+  print "round trip ok"
+else =>
+  print "round trip mismatch"
+
+# `as?` reports the same answer without raising.
+print(rs as? json)
+print(by_name as? json)
+print(opts as? json)
+print(tree as? json)

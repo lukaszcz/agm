@@ -920,7 +920,12 @@ COMPATIBILITY_PRELUDE_TYPE_NAMES: frozenset[str] = frozenset(
 
 
 class CastKind(_enum.Enum):
-    """Classification of a cast operation from cast_classification()."""
+    """Classification of a cast operation.
+
+    Assigned by ``semantics.type_table.cast_classification``, which lives
+    beside the declaration table because deciding a cast to ``json`` needs the
+    table's non-data-reachability flags.
+    """
 
     TOTAL_NOOP = "TOTAL_NOOP"  # source already assignable to target (no-op/widen)
     TOTAL_RENDER = "TOTAL_RENDER"  # render data value to text
@@ -935,69 +940,3 @@ class CastSpec:
 
     target_type: Type
     kind: CastKind
-
-
-def cast_classification(source: Type, target: Type) -> CastKind:
-    """Classify a cast from source to target type.
-
-    Returns the CastKind for the (source, target) pair.
-    """
-    # Bottom is a valid source because a raise expression never reaches the
-    # conversion. Other non-data sources and all non-data targets are invalid.
-    if isinstance(source, (UnitType, AgentType, FunctionType)) or isinstance(
-        target, (UnitType, AgentType, FunctionType, BottomType)
-    ):
-        return CastKind.STATIC_ERROR
-    # ExceptionType as target is not in the matrix
-    if isinstance(target, ExceptionType):
-        return CastKind.STATIC_ERROR
-
-    # Handle is_assignable cases first (no-op / widen / json-absorb).
-    # Note: is_assignable(X, TextType) is true only when X is TextType itself
-    # (no implicit widening to text), so the only assignable-to-text case is noop.
-    # is_assignable(X, JsonType) is true only for scalar json-shaped types.
-    if is_assignable(source, target):
-        if isinstance(target, JsonType):
-            # json → json: noop; all other json-shaped sources → canonicalize
-            if isinstance(source, JsonType):
-                return CastKind.TOTAL_NOOP
-            return CastKind.TOTAL_JSON
-        # All other assignable cases are no-ops (including int→decimal widen,
-        # same-type identity, etc.)
-        return CastKind.TOTAL_NOOP
-
-    # Now source is NOT assignable to target.
-    _text_or_json = (TextType, JsonType)
-
-    if isinstance(target, TextType):
-        # Every data value renders to text. Non-data sources (unit/agent/function)
-        # are filtered at the top, and json-shaped/exact-type sources are handled by
-        # the is_assignable block above, so any source reaching here is a renderable
-        # data type (json/bool/int/decimal/array/dict/record/enum/exception).
-        return CastKind.TOTAL_RENDER
-
-    if isinstance(target, JsonType):
-        # Scalar json-shaped sources are assignable to json (handled above),
-        # so anything reaching here is either a JSON-shaped array/dict — not
-        # assignable, but still convertible via an explicit cast — or a
-        # nominal record/enum/exception, which supports an explicit
-        # structural JSON cast.
-        if is_json_shaped(source) or isinstance(source, (RecordType, EnumType, ExceptionType)):
-            return CastKind.TOTAL_JSON
-        return CastKind.STATIC_ERROR
-
-    if isinstance(target, (BoolType, IntType, DecimalType)):
-        # decimal → int is a narrowing cast (fallible); text/json → numeric is fallible.
-        if isinstance(source, _text_or_json) or (
-            isinstance(target, IntType) and isinstance(source, DecimalType)
-        ):
-            return CastKind.FALLIBLE
-        return CastKind.STATIC_ERROR
-
-    if isinstance(target, (ArrayType, DictType, RecordType, EnumType)):
-        if isinstance(source, _text_or_json):
-            return CastKind.FALLIBLE
-        return CastKind.STATIC_ERROR
-
-    # All target types are covered above; this is a safety fallback.
-    return CastKind.STATIC_ERROR  # pragma: no cover

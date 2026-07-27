@@ -1,0 +1,3 @@
+def encode[T](xs: array[T]) -> json = xs as json
+let j = encode::[int]([1])
+j

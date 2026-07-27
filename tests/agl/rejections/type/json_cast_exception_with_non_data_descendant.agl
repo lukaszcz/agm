@@ -1,0 +1,8 @@
+exception Base extends Exception
+  code: int
+
+exception Child extends Base
+  handler: (int) -> int
+
+def encode(errs: array[Base]) -> json = errs as json
+encode

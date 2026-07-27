@@ -9811,34 +9811,6 @@ class TestCast:
         assert r.node_types[cast.node_id] == TextType()
 
 
-class TestCastClassificationTable:
-    """Direct unit tests for cast_classification() covering the new nominal→json pairs."""
-
-    def test_record_to_json_is_total_json(self) -> None:
-        from agm.agl.semantics.types import CastKind, cast_classification
-
-        source = RecordType(name="R")
-        assert cast_classification(source, JsonType()) == CastKind.TOTAL_JSON
-
-    def test_enum_to_json_is_total_json(self) -> None:
-        from agm.agl.semantics.types import CastKind, cast_classification
-
-        source = EnumType(name="E")
-        assert cast_classification(source, JsonType()) == CastKind.TOTAL_JSON
-
-    def test_exception_to_json_is_total_json(self) -> None:
-        from agm.agl.semantics.types import CastKind, cast_classification
-
-        source = ExceptionType(name="Abort")
-        assert cast_classification(source, JsonType()) == CastKind.TOTAL_JSON
-
-    def test_exception_to_text_is_total_render(self) -> None:
-        from agm.agl.semantics.types import CastKind, cast_classification
-
-        source = ExceptionType(name="Abort")
-        assert cast_classification(source, TextType()) == CastKind.TOTAL_RENDER
-
-
 # ---------------------------------------------------------------------------
 # No-finite-schema use-site enforcement (agent output target, cast target,
 # parameter type): a type whose reachable instantiation closure is infinite

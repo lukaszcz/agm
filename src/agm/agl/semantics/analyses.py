@@ -5,9 +5,9 @@ templates in a ``TypeTable`` (``semantics.type_table``); a declaration may
 reference itself or another declaration directly or indirectly, so any
 whole-type question ("does every value of this type terminate?", "can a
 non-data value hide inside this type?") must be answered over the finite
-*declaration graph*
-rather than by walking an individual type tree, which may be cyclic.  Both
-analyses below share that shape: start from a conservative default, and grow
+*declaration graph* rather than by walking an individual type tree, which may
+be cyclic.  Both analyses below share that shape: start from a conservative
+default, and grow
 a set of facts to a least fixpoint by repeatedly re-examining every
 declaration's own field/variant templates until nothing changes. Because
 there are finitely many declarations, this always terminates, and because
@@ -56,8 +56,8 @@ schema, which matters at schema-producing boundaries such as agent/exec
 outputs, casts from JSON/text, and external params.
 
 :func:`compute_finite_closure` decides, once per table build, which
-declarations have a finite closure. Unlike inhabitation and equality
-capability, this is not a monotone fixpoint grown fact-by-fact — it is a
+declarations have a finite closure. Unlike inhabitation and non-data
+reachability, this is not a monotone fixpoint grown fact-by-fact — it is a
 one-shot graph classification: build the declaration reference graph (which
 declaration reference templates mention which other declarations, and with
 which argument templates), find its strongly-connected components (SCCs),
@@ -375,7 +375,7 @@ def compute_non_data_reachability(table: TypeTable) -> NonDataReachability:
         changed = False
         for key, typedef in defs.items():
             own_params = frozenset(typedef.type_params)
-            templates = tuple(_own_field_templates(typedef))
+            templates = tuple(t for _fname, t in field_templates(typedef))
             template_bad = any(
                 _template_reaches_non_data(t, non_data, relevant, defs) for t in templates
             )
@@ -409,19 +409,20 @@ def compute_non_data_reachability(table: TypeTable) -> NonDataReachability:
     )
 
 
-def _own_field_templates(typedef: TypeDef) -> list[Type]:
-    """Return every field-type template in *typedef*'s own body, flattened.
+def field_templates(typedef: TypeDef) -> list[tuple[str, Type]]:
+    """Return every ``(name, type template)`` in *typedef*'s own body, flattened.
 
     Unlike :func:`_decl_inhabited`'s enum handling (which groups fields by
     variant, since only ONE variant needs to be fully inhabited), both the
     non-data-reachability and reference-edge fixpoints look at every field of
     every variant flat: a function/agent/unit anywhere is reachable from some
     value of the declaration, and a reference to another declaration matters,
-    regardless of which variant carries it.
+    regardless of which variant carries it. Names are carried alongside so a
+    use-site diagnostic can point at the field responsible.
     """
     if typedef.kind == "enum":
-        return [ftype for _vname, vfields in typedef.variants for _fname, ftype in vfields]
-    return [ftype for _fname, ftype in typedef.fields]
+        return [(fname, ftype) for _vname, vfields in typedef.variants for fname, ftype in vfields]
+    return list(typedef.fields)
 
 
 def _template_reaches_non_data(
@@ -707,7 +708,7 @@ def _compute_schema_relevant_params(
         for key, typedef in defs.items():
             own_params = frozenset(typedef.type_params)
             gained: set[str] = set()
-            for template in _own_field_templates(typedef):
+            for _fname, template in field_templates(typedef):
                 gained |= _template_relevant_params(template, own_params, relevant, defs)
             if not gained <= relevant[key]:
                 relevant[key] |= gained
@@ -724,7 +725,7 @@ def _reference_edges(
     result: dict[DeclKey, tuple[_RefEdge, ...]] = {}
     for key, typedef in defs.items():
         found: list[_RefEdge] = []
-        for template in _own_field_templates(typedef):
+        for _fname, template in field_templates(typedef):
             for ref in nominal_references_for_schema(template, defs, frozen_relevant):
                 target = (ref.module_id, ref.scope_path, ref.name)
                 arg_templates = ref.type_args if isinstance(ref, (RecordType, EnumType)) else ()

@@ -1778,6 +1778,97 @@ class TestPrintParseJsonValidation:
 
 
 # ===========================================================================
+# IrCopyValue / IrShallowCopyValue validation
+# ===========================================================================
+
+
+class TestCopyValidation:
+    """Negative validate tests for IrCopyValue and IrShallowCopyValue nodes."""
+
+    def test_ir_copy_value_valid(self) -> None:
+        """IrCopyValue with valid location and inner expr passes validation."""
+        from agm.agl.ir import IrCopyValue
+
+        node = IrCopyValue(location=LOC, value=IrConstInt(location=LOC, value=42))
+        prog = _make_program(initializers=(node,))
+        validate_ir(prog, deep=False)  # no exception
+
+    def test_ir_copy_value_bad_location_raises(self) -> None:
+        """IrCopyValue with invalid own location raises InvalidIrError."""
+        from agm.agl.ir import IrCopyValue
+
+        bad_loc = Location(
+            source_id=SID0,
+            start_offset=10,
+            end_offset=3,  # bad: start > end
+            start_line=1,
+            start_col=0,
+        )
+        node = IrCopyValue(location=bad_loc, value=IrConstInt(location=LOC, value=1))
+        prog = _make_program(initializers=(node,))
+        with pytest.raises(InvalidIrError, match="start_offset"):
+            validate_ir(prog, deep=False)
+
+    def test_ir_copy_value_bad_inner_location_raises(self) -> None:
+        """IrCopyValue validator recurses into the inner value expression."""
+        from agm.agl.ir import IrCopyValue
+
+        bad_loc = Location(
+            source_id=SID0,
+            start_offset=10,
+            end_offset=3,  # bad
+            start_line=1,
+            start_col=0,
+        )
+        inner = IrConstInt(location=bad_loc, value=1)
+        node = IrCopyValue(location=LOC, value=inner)
+        prog = _make_program(initializers=(node,))
+        with pytest.raises(InvalidIrError, match="start_offset"):
+            validate_ir(prog, deep=False)
+
+    def test_ir_shallow_copy_value_valid(self) -> None:
+        """IrShallowCopyValue with valid location and inner expr passes validation."""
+        from agm.agl.ir import IrShallowCopyValue
+
+        node = IrShallowCopyValue(location=LOC, value=IrConstInt(location=LOC, value=42))
+        prog = _make_program(initializers=(node,))
+        validate_ir(prog, deep=False)  # no exception
+
+    def test_ir_shallow_copy_value_bad_location_raises(self) -> None:
+        """IrShallowCopyValue with invalid own location raises InvalidIrError."""
+        from agm.agl.ir import IrShallowCopyValue
+
+        bad_loc = Location(
+            source_id=SID0,
+            start_offset=10,
+            end_offset=3,  # bad: start > end
+            start_line=1,
+            start_col=0,
+        )
+        node = IrShallowCopyValue(location=bad_loc, value=IrConstInt(location=LOC, value=1))
+        prog = _make_program(initializers=(node,))
+        with pytest.raises(InvalidIrError, match="start_offset"):
+            validate_ir(prog, deep=False)
+
+    def test_ir_shallow_copy_value_bad_inner_location_raises(self) -> None:
+        """IrShallowCopyValue validator recurses into the inner value expression."""
+        from agm.agl.ir import IrShallowCopyValue
+
+        bad_loc = Location(
+            source_id=SID0,
+            start_offset=10,
+            end_offset=3,  # bad
+            start_line=1,
+            start_col=0,
+        )
+        inner = IrConstInt(location=bad_loc, value=1)
+        node = IrShallowCopyValue(location=LOC, value=inner)
+        prog = _make_program(initializers=(node,))
+        with pytest.raises(InvalidIrError, match="start_offset"):
+            validate_ir(prog, deep=False)
+
+
+# ===========================================================================
 # IrParam validation
 # ===========================================================================
 

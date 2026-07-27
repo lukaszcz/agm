@@ -115,6 +115,8 @@ def test_builtin_function_signature_mismatches_are_rejected() -> None:
         'builtin def parse_json(value: text = "{}") -> json\n()\n',
         "builtin def ask-request(prompt: text) -> ExecResult\n()\n",
         "builtin def exec(command: int) -> ExecResult\n()\n",
+        "builtin def copy(value: int) -> int\n()\n",
+        "builtin def shallow_copy[T](value: T) -> unit\n()\n",
     ]
     for source in cases:
         with pytest.raises(AglTypeError, match="Builtin function '.*' has an invalid signature"):
@@ -286,6 +288,15 @@ def test_single_module_lowerer_skips_builtin_function_definitions() -> None:
 
 def test_source_declared_builtin_function_call_is_classified() -> None:
     _check('builtin def parse_json(value: text) -> json\nparse_json("{}")\n')
+
+
+def test_copy_and_shallow_copy_source_declared_calls_are_classified() -> None:
+    _check(
+        "builtin def copy[T](value: T) -> T\n"
+        "builtin def shallow_copy[T](value: T) -> T\n"
+        "let _ = copy(1)\n"
+        "shallow_copy(1)\n"
+    )
 
 
 def test_builtin_named_value_call_is_not_classified_as_builtin() -> None:

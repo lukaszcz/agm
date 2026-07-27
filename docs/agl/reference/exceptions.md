@@ -390,7 +390,10 @@ a genuine reference cycle. Rendering (`print`, `render`, string
 interpolation), `as text`, `as json`, and an `extern def` call that must walk
 the value all detect a cycle and raise this rather than recursing forever.
 `as?` never raises: it predicts `as` by trial-converting, so `as? text` and
-`as? json` on a cyclic value evaluate to `false` rather than raising.
+`as? json` on a cyclic value evaluate to `false` rather than raising. `copy`
+is the one deep, structure-rebuilding walk that traverses a cyclic value to
+completion, terminating with an isomorphic independent cycle instead of
+raising this — see [`copy` and `shallow_copy`](types.md#copying-values).
 Carries only the base fields. See [Types](types.md#cycles) for how a cycle
 arises and how equality treats one.
 

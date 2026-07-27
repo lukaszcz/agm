@@ -2233,6 +2233,41 @@ class TestHostOpLowering:
             f"Expected IrBind.value to be IrParseJson, got {type(ir_bind.value).__name__}"
         )
 
+    def test_copy_lowers_to_ir_copy_value(self) -> None:
+        """copy(x) lowers to IrCopyValue wrapping the argument expression."""
+        from agm.agl.ir.nodes import IrCopyValue
+
+        source = "let x = [1, 2]\nlet y = copy(x)\n()"
+        prog = _lower(source)
+        entry = prog.modules[list(prog.modules.keys())[-1]]
+        ir_bind = _let_root_capture(entry.initializers[1])
+        assert isinstance(ir_bind.value, IrCopyValue), (
+            f"Expected IrBind.value to be IrCopyValue, got {type(ir_bind.value).__name__}"
+        )
+
+    def test_shallow_copy_lowers_to_ir_shallow_copy_value(self) -> None:
+        """shallow_copy(x) lowers to IrShallowCopyValue wrapping the argument expression."""
+        from agm.agl.ir.nodes import IrShallowCopyValue
+
+        source = "let x = [1, 2]\nlet y = shallow_copy(x)\n()"
+        prog = _lower(source)
+        entry = prog.modules[list(prog.modules.keys())[-1]]
+        ir_bind = _let_root_capture(entry.initializers[1])
+        assert isinstance(ir_bind.value, IrShallowCopyValue), (
+            f"Expected IrBind.value to be IrShallowCopyValue, got {type(ir_bind.value).__name__}"
+        )
+
+    def test_copy_explicit_type_arg_inserts_scalar_coercion(self) -> None:
+        """copy::[decimal](5) lowers the int argument through IrCoerce to decimal."""
+        from agm.agl.ir.nodes import IrCoerce, IrCopyValue
+
+        source = "let x = copy::[decimal](5)\n()"
+        prog = _lower(source)
+        entry = prog.modules[list(prog.modules.keys())[-1]]
+        ir_bind = _let_root_capture(entry.initializers[0])
+        assert isinstance(ir_bind.value, IrCopyValue)
+        assert isinstance(ir_bind.value.value, IrCoerce)
+
     def test_param_required_lowers_to_ir_param(self) -> None:
         """A required param (no default) produces an IrParam with required=True and no default."""
         from agm.agl.ir.program import IrParam

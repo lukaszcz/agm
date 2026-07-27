@@ -193,6 +193,69 @@ terminates and answers the same structural relation co-inductively — the
 comparison never needs a base case for the parts of the structure it has
 already matched up.
 
+### Copying values
+
+Because binding is by reference, a program that wants an independent value
+must ask for one explicitly:
+
+```agl
+builtin def copy[T](value: T) -> T
+builtin def shallow_copy[T](value: T) -> T
+```
+
+Both are generic and identity-typed — `T -> T` — so they compose with any
+value and never change its type. An explicit type argument
+(`copy::[decimal](5)`) is accepted and behaves like passing that value to any
+other declaration expecting the explicit type: the argument must be
+assignable to it. Like `print`, `render`, and `parse_json`, neither `copy`
+nor `shallow_copy` can be bound as a function value — both are only valid in
+call position.
+
+`shallow_copy` rebuilds exactly **one** level: a new array, dict, record,
+enum, or exception holding the *same* element or field references as the
+original. Replacing the copy's own top-level contents does not affect the
+original, but mutating a container reached *through* the copy — one level
+down or deeper — is observed through the original too, because that nested
+container is the same shared object. Every other value kind (`int`,
+`decimal`, `bool`, `text`, `json`, `unit`, `agent`, a function value) is
+returned as-is: primitives are immutable, so there is nothing to detach, and
+`agent`/function values are capability handles, not data. `shallow_copy`
+never recurses, so it can never loop and never raises, even on a cyclic
+value.
+
+```agl
+var inner = [1, 2]
+var outer = [inner]
+let copied = shallow_copy(outer)
+copied[0][0] := 9
+print(outer)     # [[9, 2]] -- inner is shared, so the mutation is visible
+```
+
+`copy` is deep: every array, dict, record, enum, and exception reachable from
+the value is rebuilt with independently copied contents, all the way down.
+Opaque values reached along the way — `agent` handles and function values —
+are returned as-is, exactly as for `shallow_copy`: a container reachable only
+through a function value's captured environment stays shared after the copy.
+A `json` leaf copies as an independent value. **Sharing is preserved**: if
+two fields or array slots pointed at the same array before the copy, they
+still point at the same (new) array after it — a diamond copies to a
+diamond, never to two independent arrays. `copy` is also the **one deep,
+structure-rebuilding walk in the language that traverses a cyclic value to
+completion**: it terminates and produces an isomorphic, independent cycle
+rather than the `CyclicValueError` ([Exceptions](exceptions.md#cyclicvalueerror))
+that every other container walk raises on one. The result is a genuinely
+separate structure — printing or otherwise walking the *copy* of a cyclic
+value still raises, exactly as it would for the original.
+
+```agl
+var shared = [1]
+var pair = [shared, shared]
+let copied = copy(pair)
+copied[0][0] := 9
+print(pair)     # [[1], [1]]  -- the original is untouched
+print(copied)   # [[9], [9]]  -- both slots still point at the SAME new array
+```
+
 ### `agent`
 
 `agent` is an opaque type for declared agent values. Every `agent`
@@ -468,8 +531,8 @@ declaration with no such escape has no finite value and is rejected:
 record Node
   next: Node
 # Record type 'Node' is uninhabitable: every value of 'Node' would be
-# infinite. Recursion must be guarded by an enum base-case variant or a
-# array/dict field.
+# infinite. Recursion must be guarded by an enum base-case variant or an
+# `array`/`dict` field.
 ```
 
 The same rule rejects an enum whose only variant carries itself, an exception

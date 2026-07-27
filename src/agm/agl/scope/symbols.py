@@ -68,6 +68,15 @@ class BuiltinKind(enum.Enum):
         ``ask-request[prompt, ...)`` — builds the ``AgentRequest`` that the
         corresponding ``ask`` call would dispatch, without invoking the agent;
         yields an ``AgentRequest`` record.
+    ``PARSE_JSON``
+        ``parse_json(text)`` — parses a ``text`` value as strict JSON; yields
+        ``json``.
+    ``COPY``
+        ``copy(value)`` — deep copy, preserving sharing; yields the same type
+        as its argument.
+    ``SHALLOW_COPY``
+        ``shallow_copy(value)`` — one-level copy; yields the same type as its
+        argument.
     """
 
     PRINT = "PRINT"
@@ -76,6 +85,8 @@ class BuiltinKind(enum.Enum):
     ASK = "ASK"
     ASK_REQUEST = "ASK_REQUEST"
     PARSE_JSON = "PARSE_JSON"
+    COPY = "COPY"
+    SHALLOW_COPY = "SHALLOW_COPY"
 
 
 # The single source of truth for the built-in call names and their kinds.
@@ -88,6 +99,8 @@ BUILTIN_CALL_NAMES: dict[str, BuiltinKind] = {
     "ask": BuiltinKind.ASK,
     "ask-request": BuiltinKind.ASK_REQUEST,
     "parse_json": BuiltinKind.PARSE_JSON,
+    "copy": BuiltinKind.COPY,
+    "shallow_copy": BuiltinKind.SHALLOW_COPY,
 }
 
 

@@ -1539,6 +1539,15 @@ class TestPrint:
         err = reject_type("print(x = 42)")
         assert "print" in str(err).lower() or "argument" in str(err).lower()
 
+    def test_print_explicit_type_arg_widens_argument(self) -> None:
+        """print::[decimal](5) is accepted — the argument's int is assignable to it."""
+        accept_type("print::[decimal](5)")
+
+    def test_print_explicit_type_arg_not_assignable_rejected(self) -> None:
+        """print::[text](5) is rejected — int is not assignable to text."""
+        err = reject_type("print::[text](5)")
+        assert "text" in str(err).lower() or "int" in str(err).lower()
+
 
 # ---------------------------------------------------------------------------
 # render() builtin
@@ -1568,6 +1577,15 @@ class TestRenderBuiltin:
     def test_render_option_must_be_bool(self) -> None:
         err = reject_type('render(1, pretty = "yes")')
         assert "bool" in str(err).lower()
+
+    def test_render_explicit_type_arg_widens_argument(self) -> None:
+        """render::[decimal](5) is accepted — the argument's int is assignable to it."""
+        accept_type("render::[decimal](5)")
+
+    def test_render_explicit_type_arg_not_assignable_rejected(self) -> None:
+        """render::[text](5) is rejected — int is not assignable to text."""
+        err = reject_type("render::[text](5)")
+        assert "text" in str(err).lower() or "int" in str(err).lower()
 
 
 # ---------------------------------------------------------------------------
@@ -3557,7 +3575,8 @@ class TestPartialDeclaredCalls:
         assert checked.function_signatures["f"].result == IntType()
 
     @pytest.mark.parametrize(
-        "name", ["print", "render", "exec", "ask", "ask-request", "parse_json"]
+        "name",
+        ["print", "render", "exec", "ask", "ask-request", "parse_json", "copy", "shallow_copy"],
     )
     def test_special_builtin_partial_call_rejected(self, name: str) -> None:
         err = reject_type(f"let g = {name}(?)\ng")
@@ -10044,6 +10063,63 @@ class TestParseJsonCall:
         """parse_json() with no args is rejected."""
         err = reject_type("parse_json()")
         assert "parse_json" in str(err).lower()
+
+
+class TestCopyAndShallowCopyCall:
+    """Tests for the copy/shallow_copy built-ins: identity typing in a single T."""
+
+    @pytest.mark.parametrize("name", ["copy", "shallow_copy"])
+    def test_infers_argument_type(self, name: str) -> None:
+        """copy(x)/shallow_copy(x) yield exactly x's own checked type."""
+        r = accept_type(f"let xs: array[int] = [1, 2]\n{name}(xs)")
+        call = r.resolved.program.body.items[1]
+        assert isinstance(call, Call)
+        assert r.node_types[call.node_id] == ArrayType(elem=IntType())
+
+    @pytest.mark.parametrize("name", ["copy", "shallow_copy"])
+    def test_explicit_type_arg_widens_result(self, name: str) -> None:
+        """copy::[decimal](5) yields decimal — the argument's int is assignable to it."""
+        r = accept_type(f"{name}::[decimal](5)")
+        call = r.resolved.program.body.items[0]
+        assert isinstance(call, Call)
+        assert r.node_types[call.node_id] == DecimalType()
+
+    @pytest.mark.parametrize("name", ["copy", "shallow_copy"])
+    def test_explicit_type_arg_not_assignable_rejected(self, name: str) -> None:
+        """copy::[text](5) is rejected — int is not assignable to text."""
+        err = reject_type(f"{name}::[text](5)")
+        assert "text" in str(err).lower() or "int" in str(err).lower()
+
+    @pytest.mark.parametrize("name", ["copy", "shallow_copy"])
+    def test_named_arg_rejected(self, name: str) -> None:
+        """Named args to copy/shallow_copy are rejected."""
+        err = reject_type(f"{name}(value = 1)")
+        assert name in str(err).lower() or "positional" in str(err).lower()
+
+    @pytest.mark.parametrize("name", ["copy", "shallow_copy"])
+    def test_wrong_arity_rejected(self, name: str) -> None:
+        """copy()/shallow_copy() with wrong arity is rejected."""
+        err = reject_type(f'{name}("a", "b")')
+        assert name in str(err).lower()
+
+    @pytest.mark.parametrize("name", ["copy", "shallow_copy"])
+    def test_no_args_rejected(self, name: str) -> None:
+        """copy()/shallow_copy() with no args is rejected."""
+        err = reject_type(f"{name}()")
+        assert name in str(err).lower()
+
+    def test_copy_is_identity_typed_through_generic_function(self) -> None:
+        """copy composes with a user generic function: T flows through unchanged."""
+        r = accept_type(
+            "def id[T](x: T) -> T = x\nlet xs: array[int] = [1, 2]\nlet ys = id(copy(xs))\nys"
+        )
+        ys_decl = r.resolved.program.body.items[2]
+        assert isinstance(ys_decl, LetDecl)
+        outer_call = ys_decl.value
+        assert isinstance(outer_call, Call)
+        inner_call = outer_call.args[0]
+        assert isinstance(inner_call, Call)
+        assert r.node_types[inner_call.node_id] == ArrayType(elem=IntType())
 
 
 class TestImportDeclTypecheck:

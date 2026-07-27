@@ -1,0 +1,25 @@
+# copy detaches fully at EVERY depth (unlike shallow_copy, which shares one
+# level down), and it preserves diamond sharing: two fields that pointed at
+# the same array before the copy still point at the same (new) array after.
+param first: int
+param second: int
+
+var inner = [first, second]
+var outer = [inner]
+let deep = copy(outer)
+
+deep[0][0] := 99
+print(outer)
+print(deep)
+
+inner[0] := -1
+print(outer)
+print(deep)
+
+var shared = [first]
+var pair = [shared, shared]
+let copied_pair = copy(pair)
+
+copied_pair[0][0] := 42
+print(pair)
+print(copied_pair)

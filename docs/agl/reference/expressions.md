@@ -332,6 +332,10 @@ the same field twice in one update is a static error. `with` does not apply
 to enums (match and reconstruct instead), dictionaries, arrays, or `json`
 values. The target is evaluated once, then the update values left to right.
 
+See [Types](types.md#copying-values) for the general-purpose `copy` and
+`shallow_copy` built-ins, which work over any type rather than only records
+and exceptions.
+
 Update values are ordinary expressions in the enclosing scope — there is no
 implicit field scope. To derive a new value from an old field, read it off the
 target:
@@ -450,7 +454,9 @@ print res.stdout                       # field-access chain as sugar arg
 ```
 
 `print` cannot be bound as a function value (`let f = print` is a static
-error, because built-ins are only valid in call position).
+error, because built-ins are only valid in call position). An explicit type
+argument (`print::[decimal](5)`) is accepted and requires the argument to be
+assignable to it.
 
 ## `render`
 
@@ -474,7 +480,9 @@ let _ = render([1, 2], pretty = false)       # "[1, 2]"
 ```
 
 `render` cannot be bound as a function value (`let f = render` is a static
-error, because built-ins are only valid in call position).
+error, because built-ins are only valid in call position). An explicit type
+argument (`render::[decimal](5)`) is accepted and requires the argument to be
+assignable to it.
 
 ## `parse_json`
 

@@ -1,0 +1,13 @@
+# copy/shallow_copy are identity on opaque values -- an agent handle and a
+# first-class function value are returned as-is, and remain fully usable
+# through the copy.
+agent impl
+
+def inc(x: int) -> int = x + 1
+
+let copied_agent = copy(impl)
+let copied_fn = shallow_copy(inc)
+
+let result = ask("Do it", agent = copied_agent)
+print(result)
+print(copied_fn(4))

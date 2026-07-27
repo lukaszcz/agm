@@ -626,8 +626,8 @@ Error conditions are reported statically:
   forms such as a standalone `?`, `f(? + 1)`, and the single-argument sugar
   `f ?` do not parse.
 - Partial application is not supported by the special built-in calls `print`,
-  `render`, `exec`, `ask`, `ask-request`, and `parse_json`; for example,
-  `print(?)` is rejected.
+  `render`, `exec`, `ask`, `ask-request`, `parse_json`, `copy`, and
+  `shallow_copy`; for example, `print(?)` is rejected.
 - Numbered placeholders must be a permutation from `?1` through `?n`; examples
   such as `f(?0)`, `f(?2)`, `f(?1, ?1)`, and `f(?, ?1)` are rejected.
 - Existing argument-binding errors still apply: arity mismatches such as too

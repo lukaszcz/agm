@@ -1,0 +1,46 @@
+# copy/shallow_copy through records, enums, exceptions, and a generic
+# container (dict[text, array[int]]); copy detaches every array field,
+# shallow_copy shares it. Both are identity on primitives.
+param x: int
+
+record Box(items: array[int])
+
+enum Bag
+  | Full(items: array[int])
+
+exception Batch extends Exception
+  items: array[int]
+
+var b = Box(items = [x, x + 1])
+let deep_box = copy(b)
+let shallow_box = shallow_copy(b)
+deep_box.items[0] := -1
+shallow_box.items[0] := -2
+print(b.items)
+print(deep_box.items)
+print(shallow_box.items)
+
+var bag: Bag = Full(items = [x])
+let deep_bag = copy(bag)
+case deep_bag of
+  | Full(items) => items[0] := -1
+case bag of
+  | Full(items) => print(items)
+
+try
+  raise Batch(message = "boom", items = [x])
+catch Batch as e =>
+  let deep_exc = copy(e)
+  deep_exc.items[0] := -1
+  print(e.items)
+  print(deep_exc.items)
+
+var groups: dict[text, array[int]] = {"a": [x, x + 1]}
+let copied_groups = copy(groups)
+copied_groups["a"][0] := -1
+print(groups["a"])
+print(copied_groups["a"])
+
+print(copy(x))
+print(shallow_copy(true))
+print(copy("hi"))

@@ -1,8 +1,9 @@
-"""Built-in call (print/render/parse_json/ask/ask-request/exec) type-checking collaborator.
+"""Built-in call (print/render/copy/shallow_copy/parse_json/ask/ask-request/exec)
+type-checking collaborator.
 
 Driven by ``_Checker`` via the narrow ``BuiltinCheckCtx`` Protocol.  All logic
 lives here; the host checker instantiates ``BuiltinCallChecker(self)`` and
-delegates the six built-in dispatch branches to the public entry points.
+delegates the built-in dispatch branches to the public entry points.
 """
 
 from __future__ import annotations
@@ -168,7 +169,7 @@ class BuiltinCallChecker:
                 "print() requires exactly one positional argument.",
                 span=node.span,
             )
-        self._ctx._check_expr(node.args[0], expected=None)
+        self._check_arg_with_optional_explicit_target(node, node.args[0], "print")
         return UnitType()
 
     # --- render ---
@@ -190,8 +191,52 @@ class BuiltinCallChecker:
             self._ctx._assert_assignable_from(
                 option_type, BoolType(), named.value.span, named.value
             )
-        self._ctx._check_expr(node.args[0], expected=None)
+        self._check_arg_with_optional_explicit_target(node, node.args[0], "render")
         return TextType()
+
+    # --- copy / shallow_copy ---
+
+    def check_copy(self, node: Call) -> Type:
+        return self._check_identity_builtin(node, "copy")
+
+    def check_shallow_copy(self, node: Call) -> Type:
+        return self._check_identity_builtin(node, "shallow_copy")
+
+    def _check_identity_builtin(self, node: Call, name: str) -> Type:
+        """Type-check ``copy``/``shallow_copy``: identity in the argument's type.
+
+        Both are generic in a single type parameter that is always inferable
+        from the sole argument, so — unlike ``ask``/``exec`` — no contextual
+        ``expected`` type is needed. An optional explicit type argument
+        (``copy::[T](value)``) instead requires the argument to be assignable
+        to ``T`` and fixes the result to ``T``; resolved via the same
+        ``_resolve_explicit_target`` helper ``ask``/``exec``/``ask-request``
+        use for theirs.
+        """
+        if len(node.args) != 1 or node.named_args:
+            raise AglTypeError(
+                f"{name}() requires exactly one positional argument.", span=node.span
+            )
+        return self._check_arg_with_optional_explicit_target(node, node.args[0], name)
+
+    def _check_arg_with_optional_explicit_target(
+        self, node: Call, arg_expr: Expr, name: str
+    ) -> Type:
+        """Check *arg_expr*, honoring an optional explicit ``::[T]`` type argument.
+
+        With no explicit type argument, checks *arg_expr* with no contextual
+        expectation and returns its own inferred type. With one
+        (``name::[T](...)``), *arg_expr* must be assignable to ``T``, and the
+        return is ``T``. Shared by every built-in whose sole type parameter
+        needs no other contextual ``expected`` type: ``print``, ``render``,
+        ``copy``, and ``shallow_copy``.
+        """
+        explicit = self._resolve_explicit_target(node, name)
+        if explicit is None:
+            return self._ctx._check_expr(arg_expr, expected=None)
+        arg_type = self._ctx._check_expr(arg_expr, expected=explicit)
+        self._ctx._assert_assignable_from(arg_type, explicit, arg_expr.span, arg_expr)
+        return explicit
 
     # --- parse_json ---
 
@@ -437,16 +482,21 @@ class BuiltinCallChecker:
     # --- shared explicit-target resolver for --
 
     def _resolve_explicit_target(self, node: Call, builtin_name: str) -> Type | None:
-        """Resolve the explicit type argument of an ask/ask-request/exec call.
+        """Resolve a built-in call with an explicit ``::[T]`` argument.
 
         Returns the resolved ``Type`` when ``node.type_args`` is non-empty, or
         ``None`` when there are no explicit type arguments (caller falls back to
         its contextual/default target logic).
 
         Raises ``AglTypeError`` when more than one type argument is provided
-        (arity error). The  type-variable guard is applied by the caller to
-        the *final* target type (see :meth:`_reject_type_var_target`), so it
-        covers both the explicit and the contextual/inferred target paths.
+        (arity error). The ask/ask-request/exec callers apply the
+        type-variable guard (see :meth:`_reject_type_var_target`) to the
+        *final* target type, covering both the explicit and the
+        contextual/inferred target paths; ``print``, ``render``, ``copy``,
+        and ``shallow_copy`` do not apply that guard, because none of them
+        schema-compile their target — a bare type variable in
+        ``copy::[T](v)`` is exactly what makes it work inside a generic
+        ``def``.
         """
         if not node.type_args:
             return None

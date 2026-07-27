@@ -328,6 +328,10 @@ def _builtin_function_signature(name: str) -> FunctionSignature | None:
             return FunctionSignature(
                 params=(_std_param("value", t),), result=TextType(), type_params=("T",)
             )
+        case "copy":
+            return FunctionSignature(params=(_std_param("value", t),), result=t, type_params=("T",))
+        case "shallow_copy":
+            return FunctionSignature(params=(_std_param("value", t),), result=t, type_params=("T",))
         case "parse_json":
             return FunctionSignature(params=(_std_param("value", TextType()),), result=JsonType())
         case "ask":
@@ -683,7 +687,6 @@ class _Checker:
         """Register a resolved ``def`` signature in every function side table."""
         if node.is_builtin:
             expected_sigs = _builtin_function_signature_alternates(node.name)
-            assert expected_sigs
             if not any(_signature_matches(sig, expected_sig) for expected_sig in expected_sigs):
                 raise AglTypeError(
                     f"Builtin function '{node.name}' has an invalid signature.",
@@ -2425,6 +2428,10 @@ class _Checker:
                 return self._builtins.check_print(node)
             if kind == BuiltinKind.RENDER:
                 return self._builtins.check_render(node)
+            if kind == BuiltinKind.COPY:
+                return self._builtins.check_copy(node)
+            if kind == BuiltinKind.SHALLOW_COPY:
+                return self._builtins.check_shallow_copy(node)
             if kind == BuiltinKind.ASK:
                 return self._builtins.check_ask(node, expected=expected)
             if kind == BuiltinKind.ASK_REQUEST:

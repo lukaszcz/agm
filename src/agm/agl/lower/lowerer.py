@@ -72,6 +72,7 @@ from agm.agl.ir.nodes import (
     IrContains,
     IrContinue,
     IrConvert,
+    IrCopyValue,
     IrDirectCall,
     IrEnumCaseKey,
     IrExec,
@@ -108,6 +109,7 @@ from agm.agl.ir.nodes import (
     IrRenderValue,
     IrReturn,
     IrSequence,
+    IrShallowCopyValue,
     IrTemplateText,
     IrTemplateValue,
     IrTry,
@@ -2001,8 +2003,9 @@ class _Lowerer:
     ) -> IrExpr:
         """Lower a builtin call node by dispatching on ``BuiltinKind``.
 
-        Host builtins (``PRINT``, ``PARSE_JSON``, ``ASK``, ``ASK_REQUEST``,
-        and ``EXEC``) are lowered here.
+        Host builtins (``PRINT``, ``RENDER``, ``PARSE_JSON``, ``COPY``,
+        ``SHALLOW_COPY``, ``ASK``, ``ASK_REQUEST``, and ``EXEC``) are lowered
+        here.
         """
         loc = self._loc(span)
         match kind:
@@ -2035,6 +2038,18 @@ class _Lowerer:
                 arg_ir = self.lower_expr(call_node.args[0])
                 return IrParseJson(location=loc, value=arg_ir)
 
+            case BuiltinKind.COPY | BuiltinKind.SHALLOW_COPY:
+                # copy(value) / shallow_copy(value) — identity in the checker's own
+                # result type for this call node (natural argument type, or the
+                # explicit ``::[T]`` override); coerce the argument to it so an
+                # explicit scalar-widening override (e.g. copy::[decimal](5)) takes
+                # effect, matching how any other call site coerces its arguments.
+                result_type = self._node_type(call_node.node_id)
+                arg_ir = self.lower_coerced(call_node.args[0], result_type)
+                if kind is BuiltinKind.SHALLOW_COPY:
+                    return IrShallowCopyValue(location=loc, value=arg_ir)
+                return IrCopyValue(location=loc, value=arg_ir)
+
             case BuiltinKind.ASK:
                 return self._lower_ask_call(call_node, span, structured_exec=False)
 
@@ -2054,7 +2069,8 @@ class _Lowerer:
         to IrMakeRecord/IrMakeEnum/IrMakeException.  Direct user function
         calls are lowered to IrDirectCall.  Lambda calls are lowered to IrMakeClosure,
         indirect calls to IrIndirectCall, and host builtins to
-        IrPrint/IrRenderValue/IrParseJson/IrAsk/IrAskRequest/IrExec.
+        IrPrint/IrRenderValue/IrParseJson/IrCopyValue/IrShallowCopyValue/IrAsk/
+        IrAskRequest/IrExec.
         """
         callee = call_node.callee
 

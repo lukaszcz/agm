@@ -1,0 +1,18 @@
+{
+  "scenarios": [
+    {
+      "name": "small_values",
+      "params": {"first": 1, "second": 2},
+      "expect": {
+        "stdout": "[[1, 2]]\n[[99, 2]]\n[[-1, 2]]\n[[99, 2]]\n[[1], [1]]\n[[42], [42]]\n"
+      }
+    },
+    {
+      "name": "larger_values",
+      "params": {"first": 10, "second": 20},
+      "expect": {
+        "stdout": "[[10, 20]]\n[[99, 20]]\n[[-1, 20]]\n[[99, 20]]\n[[10], [10]]\n[[42], [42]]\n"
+      }
+    }
+  ]
+}

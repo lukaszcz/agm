@@ -72,6 +72,7 @@ __all__ = [
     "IrContains",
     "IrContinue",
     "IrConvert",
+    "IrCopyValue",
     "IrIterHasNext",
     "IrIterInit",
     "IrIterNext",
@@ -108,6 +109,7 @@ __all__ = [
     "IrRenderValue",
     "IrRenderTemplate",
     "IrSequence",
+    "IrShallowCopyValue",
     "IrTemplateSegment",
     "IrTemplateText",
     "IrTemplateValue",
@@ -1047,6 +1049,43 @@ class IrParseJson:
 
 
 @dataclass(frozen=True, slots=True)
+class IrCopyValue:
+    """IR host-op: ``copy(value)`` — deep copy, memoized by object identity.
+
+    Evaluates *value*, then walks it recursively: every array, dict, record,
+    enum, and exception reachable from it is rebuilt with independent
+    (recursively copied) contents, while a `json` leaf is duplicated via
+    ``copy.deepcopy``. Every other value kind (scalars, ``unit``, agents,
+    constructors, closures) is returned as-is — they are either immutable or
+    opaque, so there is nothing to detach. An identity memo keyed by
+    ``id()`` makes two references to the same object copy to the same new
+    object, so a diamond stays a diamond, and it is what makes copying a
+    cyclic value terminate and produce an isomorphic cycle rather than
+    raising — the one deep, structure-rebuilding walk in the language that
+    traverses a cyclic value to completion instead of raising
+    ``CyclicValueError``.
+    """
+
+    location: Location
+    value: "IrExpr"
+
+
+@dataclass(frozen=True, slots=True)
+class IrShallowCopyValue:
+    """IR host-op: ``shallow_copy(value)`` — one level of copy.
+
+    Evaluates *value*, then returns a new array, dict, record, enum, or
+    exception holding the *same* element/field references as the original —
+    one level deep, no recursion. Every other value kind is returned as-is.
+    Because it never recurses, it can never loop and never raises, even on a
+    cyclic value.
+    """
+
+    location: Location
+    value: "IrExpr"
+
+
+@dataclass(frozen=True, slots=True)
 class IrAgentHandle:
     """IR host-op: evaluate to an AgentValue for one declared agent.
 
@@ -1198,6 +1237,8 @@ IrExpr = (
     | IrPrint
     | IrRenderValue
     | IrParseJson
+    | IrCopyValue
+    | IrShallowCopyValue
     | IrAgentHandle
     | IrAsk
     | IrAskRequest

@@ -136,6 +136,9 @@ missing key raises `KeyError`.
 Because indexed assignment mutates in place, it can make an array or dict
 hold a reference back to a container that contains it — see
 [Cycles](types.md#cycles) for how that arises and which operations detect it.
+Because binding and assignment never copy, a program that wants an
+independent value asks for one with the `copy`/`shallow_copy` built-ins — see
+[`copy` and `shallow_copy`](types.md#copying-values).
 
 Evaluation order for `target[index] := value` is left to right: the
 container, then the index, then `value`, then the checked in-place store. A

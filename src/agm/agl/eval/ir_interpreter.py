@@ -7,6 +7,7 @@ Allowed imports:
 - ``agm.agl.ir.*``
 - ``agm.agl.semantics.values`` (all value types, Cell, Frame)
 - ``agm.agl.semantics.exceptions`` (AglRaise, make_builtin_exception)
+- ``agm.agl.semantics.copying`` (deep_copy_value, shallow_copy_value)
 - ``agm.agl.eval._decimal`` (shared pinned decimal context)
 - ``agm.agl.runtime.serialize`` (value_to_json_obj for ToJson and direct JSON
   construction)
@@ -66,6 +67,7 @@ from agm.agl.ir.nodes import (
     IrContains,
     IrContinue,
     IrConvert,
+    IrCopyValue,
     IrDirectCall,
     IrEnumCaseKey,
     IrExec,
@@ -101,6 +103,7 @@ from agm.agl.ir.nodes import (
     IrRenderValue,
     IrReturn,
     IrSequence,
+    IrShallowCopyValue,
     IrTemplateText,
     IrTemplateValue,
     IrTry,
@@ -134,6 +137,7 @@ from agm.agl.runtime.params import build_engine_config_base
 from agm.agl.runtime.render import render_value
 from agm.agl.runtime.serialize import value_to_json_obj
 from agm.agl.runtime.trace import TraceStore, noop_trace
+from agm.agl.semantics.copying import deep_copy_value, shallow_copy_value
 from agm.agl.semantics.cycles import AglCyclicValue, cyclic_value_raise
 from agm.agl.semantics.exceptions import AglRaise
 from agm.agl.semantics.exceptions import make_builtin_exception as _make_exc_value
@@ -1529,6 +1533,12 @@ class IrInterpreter:
                         span=node.location,
                     ) from exc
                 return JsonValue(obj)
+
+            case IrCopyValue(value=val_expr):
+                return deep_copy_value(self._eval(val_expr))
+
+            case IrShallowCopyValue(value=val_expr):
+                return shallow_copy_value(self._eval(val_expr))
 
             case IrAgentHandle(agent_id=agent_id):
                 return AgentValue(name=agent_id.display_name, agent_id=agent_id)

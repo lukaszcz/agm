@@ -19,6 +19,7 @@ Host operations are dispatched by contract identity:
 - **Agents.** `ask` issues the call through the host agent runtime; the output is shaped by the contract's format metadata and the schema/decode descriptors compiled into it. A unit contract dispatches once and discards the response.
 - **Shell.** `exec` either returns a structured result or parses stdout into a target type, as selected during checking. A structured contract exposes a nonzero exit as data, while spawn failures and timeouts raise `ExecError`; a unit contract also raises for a nonzero exit and discards successful stdout without resolving a codec.
 - **Conversions.** Casts and `parse_json` execute pre-resolved typeless recipes and always parse strictly; agent and `exec` output parsing uses the configurable strict/lenient codec pipeline.
+- **Copying.** `copy` and `shallow_copy` dispatch to `semantics/copying.py`, the single shared implementation of both walks. `shallow_copy` rebuilds one container level only. `copy` recurses with an `id()`-keyed memo, so it preserves diamond sharing and is the one deep, structure-rebuilding walk in the language that terminates on a reference cycle instead of raising `CyclicValueError` — the memo resolves a re-entrant reference to the copy already under construction.
 
 ## Extern (Python FFI) Dispatch
 
@@ -27,5 +28,6 @@ Every callable lives in one `functions` table; a descriptor's `impl` is either a
 ## Code Entry Points
 
 - `src/agm/agl/eval/` — the interpreter, frame model, host dispatch, and conversion execution.
+- `src/agm/agl/semantics/copying.py` — the shared `copy`/`shallow_copy` value walks.
 - `src/agm/agl/runtime/externs.py` — the extern registry and companion loading.
 - Tests: `tests/test_agl_ir_*.py` (the IR semantics suite), `tests/test_agl_convert.py`, `tests/test_agl_extern_*.py`.

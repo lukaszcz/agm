@@ -1,0 +1,18 @@
+{
+  "scenarios": [
+    {
+      "name": "small_value",
+      "params": {"x": 1},
+      "expect": {
+        "stdout": "[-2, 2]\n[-1, 2]\n[-2, 2]\n[1]\n[1]\n[-1]\n[1, 2]\n[-1, 2]\n1\ntrue\nhi\n"
+      }
+    },
+    {
+      "name": "larger_value",
+      "params": {"x": 10},
+      "expect": {
+        "stdout": "[-2, 11]\n[-1, 11]\n[-2, 11]\n[10]\n[10]\n[-1]\n[10, 11]\n[-1, 11]\n10\ntrue\nhi\n"
+      }
+    }
+  ]
+}

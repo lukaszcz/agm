@@ -3007,6 +3007,19 @@ class TestCastScope:
 
         assert BuiltinKind.PARSE_JSON in r.builtin_calls.values()
 
+    def test_copy_and_shallow_copy_resolve_as_builtins(self) -> None:
+        """copy(x)/shallow_copy(x) resolve as builtins, not undefined names."""
+        from agm.agl.scope.symbols import BuiltinKind
+
+        r = parse_and_resolve("let x = [1]\nlet _ = copy(x)\nshallow_copy(x)")
+        assert BuiltinKind.COPY in r.builtin_calls.values()
+        assert BuiltinKind.SHALLOW_COPY in r.builtin_calls.values()
+
+    def test_copy_as_value_is_rejected(self) -> None:
+        """A bare reference to 'copy' (not a call) is rejected as a builtin name."""
+        err = reject_scope("let f = copy\nf")
+        assert "copy" in err.to_diagnostic().message
+
 
 class TestImportDeclScope:
     """Import declarations pass through the scope resolver without errors."""

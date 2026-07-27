@@ -767,8 +767,7 @@ at runtime; **fallible** ones may raise `CastError`.
 | Target type | Permitted source types | Outcome |
 | ----------- | ---------------------- | ------- |
 | `text` | any data type (`text`, `json`, `bool`, `int`, `decimal`, `array[E]`, `dict[text,V]`, record, enum, exception) | total — renders the value to its AgL-form text representation |
-| `json` | `text`, `json`, `bool`, `int`, `decimal`, `array[E]`/`dict[text,V]` **whose `E`/`V` is itself JSON-shaped** | total — canonicalizes the value to `json` |
-| `json` | record, enum, exception | total — structural JSON encoding (record → field object; enum → object with `"$case"` tag; exception → all fields including `trace_id`) |
+| `json` | any type with a JSON representation — see [Convertibility to `json`](#convertibility-to-json) | total — canonicalizes the value to `json` |
 | `bool` | `bool` | total (no-op) |
 | `bool` | `text`, `json` | fallible — value must be a JSON boolean |
 | `int` | `int` | total (no-op) |
@@ -792,14 +791,48 @@ Any source–target combination not listed above is a static cast error. In
 particular: `bool as int`, `int as bool`, `bool as decimal`, `decimal as bool`
 are all static errors — booleans never convert to or from numbers.
 
-An `array[E]`/`dict[text, V]` `as json` cast is itself only legal when `E`/`V`
-is JSON-shaped, unlike the record/enum row directly above it: `array[R] as
-json` for a record (or enum) element type `R` is a **static cast error**,
-even though `R as json` and `array[array[int]] as json` both work. There is
-no single cast that converts a container of nominal values to `json` in one
-step — cast each nominal element to `json` individually
-(`rs[0] as json, rs[1] as json, …`) and assemble the `array[json]`/
-`dict[text, json]` from the converted elements.
+### Convertibility to `json`
+
+A type converts to `json` with `as json` iff no **non-data** type — `unit`,
+`agent`, or a function type — is reachable from it:
+
+- the scalars `text`, `json`, `bool`, `int`, `decimal` always convert;
+- `array[E]`/`dict[text, V]` converts iff `E`/`V` does;
+- a record, enum, or exception converts iff no non-data type is reachable
+  from its declaration, transitively through its fields (and, for an
+  exception, through its `extends` ancestors and its catchable descendants,
+  since a value statically typed as a base may hold a descendant at
+  runtime);
+- `unit`, agents, and function values never convert.
+
+This makes `array[R] as json`, `dict[text, R] as json`, nested containers
+(`array[array[R]]`, `dict[text, array[R]]`), and a recursive declaration such
+as `record Node(tag: int, children: array[Node])` all convert, exactly as a
+bare `R as json` does — a container converts whenever its element type does,
+with no special case for a nominal element.
+
+A record, enum, or exception with a non-data field is a **static cast error**
+that names the offending field:
+
+<!-- agl-check: error -->
+```agl
+record Bad
+  a: agent
+  x: int
+
+agent reviewer
+
+let bad = Bad(a = reviewer, x = 1)
+print(bad as json)
+# static error: cannot cast 'Bad' to 'json': field 'a' of 'Bad' has type
+# 'agent', which has no JSON representation.
+# `array[Bad] as json` names the same field, with 'array[Bad]' as the source.
+```
+
+A **free type variable never converts**, so `T as json`, `array[T] as json`,
+and `Box[T] as json` are static errors inside a generic `def`: type
+arguments are erased, so at the point the cast is checked there is no way to
+know whether the eventual instantiation of `T` will carry a non-data value.
 
 ### Total vs fallible casts
 
@@ -837,14 +870,24 @@ agent-output parsing, which uses lenient recovery by default.
 
 ### Nominal types `as json` — structural encoding
 
-Records, enums, and exceptions can be explicitly cast to `json` with `as json`.
-This is a structural conversion:
+Records, enums, and exceptions can be explicitly cast to `json` with `as
+json`, and so can any `array`/`dict` built from them. This is a structural
+conversion:
 
 - **record** → a JSON object with one key per field, in declaration order.
 - **enum** → a JSON object with a `"$case"` key holding the variant name, plus
   one key per variant field.
 - **exception** → a JSON object with all fields including `trace_id`, in
   declaration order.
+- **`array[E]`/`dict[text, V]`** → the JSON array/object obtained by
+  converting each element/value the same way — so `array[R] as json` is a
+  JSON array of record objects, and a nested `array[array[R]]` or
+  `dict[text, array[R]]` converts to the matching nested JSON shape.
+
+This encoding is exactly what the decode direction (`json as R`, `text as
+array[R]`, and the other record/enum/array/dict rows in the [conversion
+matrix](#conversion-matrix) above) accepts, so a round trip through `json`
+recovers the original value: `(rs as json) as array[R] == rs`.
 
 This is an **explicit cast only**. Nominal values are not JSON-shaped and are
 not implicitly assignable to `json`; `as json` must be written explicitly:
@@ -864,6 +907,11 @@ print render(r as json, pretty = true)   # → {
                                           #      "x": 1
                                           #    }
 ```
+
+A record (or exception) with a field of type `unit`, `agent`, or a function
+type cannot be converted — see [Convertibility to
+`json`](#convertibility-to-json) above for the static error this produces and
+how it names the offending field.
 
 ### `text as json` — embedding, not parsing
 

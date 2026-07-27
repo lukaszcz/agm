@@ -343,7 +343,10 @@ class TypeVarType:
     is constructed.
 
     Capability notes:
-    - Not JSON-shaped (``is_json_shaped`` returns ``False``).
+    - Not JSON-shaped (``is_json_shaped`` returns ``False``), and never
+      convertible to ``json``: a cast is compiled once with type arguments
+      erased, so the conversion could not know what the variable stands for
+      (``semantics.type_table.is_json_convertible``).
     - Not comparable (``semantics.type_table.comparable_types`` returns
       ``False`` for either side).
     - Assignable only to an identical ``TypeVarType`` (same name); ``json``
@@ -722,9 +725,13 @@ def is_json_shaped(value_type: Type) -> bool:
     AgL: ``UnitType``, ``AgentType``, and ``FunctionType`` are also NOT
     JSON-shaped; function and agent values render only as opaque handles.
 
-    This is the shape rule for what an explicit ``as json`` cast accepts; see
-    :func:`is_scalar_json_shaped` for the narrower rule an *implicit*
-    coercion uses.
+    Three predicates answer three different questions and must not be
+    conflated: this one decides ``json``-slot *inhabitation*,
+    :func:`is_scalar_json_shaped` decides what an *implicit* coercion absorbs
+    into a ``json`` slot, and
+    :func:`~agm.agl.semantics.type_table.is_json_convertible` — wider than
+    both, since a nominal does have a JSON representation — decides what an
+    explicit ``as json`` cast accepts.
     """
     if is_scalar_json_shaped(value_type):
         return True

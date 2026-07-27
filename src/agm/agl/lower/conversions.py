@@ -7,7 +7,7 @@ the recipe's ``strategy`` and walks the typeless ``DecodeSchema`` / JSON schema
 without ever sniffing checker types.
 
 Strategy selection follows the cast matrix and the ``CastKind`` classification
-(``semantics.types.cast_classification``):
+(``semantics.type_table.cast_classification``):
 total casts (``TOTAL_NOOP`` / ``TOTAL_RENDER`` / ``TOTAL_JSON``) never fail;
 fallible casts (``decimal → int`` narrowing, ``text → T``, ``json → T``) carry
 the derived JSON schema and the ``decode_value`` decode walk.

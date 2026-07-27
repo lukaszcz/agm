@@ -26,8 +26,8 @@ import uuid
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from agm.agl.runtime.serialize import AglNonDataValue, non_data_value_marker, value_to_json_obj
-from agm.agl.semantics.cycles import CYCLIC_VALUE_MARKER, AglCyclicValue
+from agm.agl.runtime.serialize import AglNonDataValue, degraded_marker, value_to_json_obj
+from agm.agl.semantics.cycles import AglCyclicValue
 from agm.core.log import append_jsonl
 
 if TYPE_CHECKING:
@@ -224,10 +224,8 @@ class TraceStore:
 
         try:
             serialized = dumps_exact(value_to_json_obj(value), indent=None)
-        except AglCyclicValue:
-            serialized = CYCLIC_VALUE_MARKER
-        except AglNonDataValue as exc:
-            serialized = non_data_value_marker(exc)
+        except (AglCyclicValue, AglNonDataValue) as exc:
+            serialized = degraded_marker(exc)
         extra: dict[str, object] = {
             "name": name,
             "value": serialized,

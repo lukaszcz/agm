@@ -1,10 +1,10 @@
-"""Unit tests for agm.util.graph — sccs and toposort."""
+"""Unit tests for agm.util.graph — sccs, toposort, and bfs_first."""
 
 from __future__ import annotations
 
 import pytest
 
-from agm.util.graph import GraphCycleError, sccs, toposort
+from agm.util.graph import GraphCycleError, bfs_first, sccs, toposort
 
 # ---------------------------------------------------------------------------
 # GraphCycleError
@@ -218,3 +218,97 @@ class TestToposort:
         # 2 and 3 both depend on 1; 2 < 3 by key.
         assert result[1] == 2
         assert result[2] == 3
+
+
+# ---------------------------------------------------------------------------
+# bfs_first
+# ---------------------------------------------------------------------------
+
+
+class TestBfsFirst:
+    def test_returns_none_when_nothing_matches(self) -> None:
+        graph = {"a": ["b"], "b": []}
+        result = bfs_first(
+            ["a"], lambda n: graph.get(n, []), lambda n: None if n != "z" else n, key=str
+        )
+        assert result is None
+
+    def test_returns_none_for_empty_seeds(self) -> None:
+        result = bfs_first([], lambda n: [], lambda n: n, key=str)
+        assert result is None
+
+    def test_finds_a_seed_without_walking_further(self) -> None:
+        visited: list[str] = []
+
+        def successors(node: str) -> list[str]:
+            visited.append(node)
+            return ["b"]
+
+        result = bfs_first(["a"], successors, lambda n: n if n == "a" else None, key=str)
+        assert result == "a"
+        # `select` fired on the seed, so no hop was ever expanded.
+        assert visited == []
+
+    def test_prefers_the_shallowest_match(self) -> None:
+        # Both "near" and "deep" match; "near" is one hop from the seed.
+        graph = {"root": ["near"], "near": ["deep"], "deep": []}
+        result = bfs_first(
+            ["root"],
+            lambda n: graph.get(n, []),
+            lambda n: n if n in {"near", "deep"} else None,
+            key=str,
+        )
+        assert result == "near"
+
+    def test_breadth_first_beats_depth_first(self) -> None:
+        # A depth-first walk down "a" would reach "a2" before the sibling "b".
+        graph = {"root": ["a", "b"], "a": ["a2"], "a2": [], "b": []}
+        result = bfs_first(
+            ["root"],
+            lambda n: graph.get(n, []),
+            lambda n: n if n in {"a2", "b"} else None,
+            key=str,
+        )
+        assert result == "b"
+
+    def test_successors_are_sorted_by_key(self) -> None:
+        graph = {"root": ["y", "x"], "x": [], "y": []}
+        result = bfs_first(
+            ["root"],
+            lambda n: graph.get(n, []),
+            lambda n: n if n in {"x", "y"} else None,
+            key=str,
+        )
+        # "y" is listed first but "x" sorts first, so the order is deterministic.
+        assert result == "x"
+
+    def test_visits_each_node_once_in_a_cycle(self) -> None:
+        graph = {"a": ["b"], "b": ["a"]}
+        seen: list[str] = []
+
+        def select(node: str) -> str | None:
+            seen.append(node)
+            return None
+
+        assert bfs_first(["a"], lambda n: graph.get(n, []), select, key=str) is None
+        assert sorted(seen) == ["a", "b"]
+
+    def test_select_result_may_be_any_shape(self) -> None:
+        graph = {"a": ["b"], "b": []}
+        result = bfs_first(
+            ["a"],
+            lambda n: graph.get(n, []),
+            lambda n: (n, len(n)) if n == "b" else None,
+            key=str,
+        )
+        assert result == ("b", 1)
+
+    def test_duplicate_seeds_are_visited_once(self) -> None:
+        seen: list[str] = []
+
+        def select(node: str) -> str | None:
+            seen.append(node)
+            return None
+
+        assert bfs_first(["a", "a"], lambda n: [], select, key=str) is None
+        assert seen == ["a"]

@@ -776,23 +776,12 @@ def _validate_expr_node(node: IrExpr, ctx: _Context) -> None:
         case IrConstJsonNull():
             _validate_location(node.location, ctx)
 
-        case IrMakeArray():
+        case IrMakeArray() | IrMakeJsonArray():
             _validate_location(node.location, ctx)
             for item in node.items:
                 _validate_expr(item, ctx)
 
-        case IrMakeDict():
-            _validate_location(node.location, ctx)
-            for key_expr, val_expr in node.entries:
-                _validate_expr(key_expr, ctx)
-                _validate_expr(val_expr, ctx)
-
-        case IrMakeJsonArray():
-            _validate_location(node.location, ctx)
-            for item in node.items:
-                _validate_expr(item, ctx)
-
-        case IrMakeJsonObject():
+        case IrMakeDict() | IrMakeJsonObject():
             _validate_location(node.location, ctx)
             for key_expr, val_expr in node.entries:
                 _validate_expr(key_expr, ctx)

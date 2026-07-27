@@ -1526,18 +1526,16 @@ def exception_value_to_run_error(
     so the CLI can include the source location in its exit-2 error output.
     """
     from agm.agl.ir.ids import Location
-    from agm.agl.runtime.serialize import AglNonDataValue, non_data_value_marker, value_to_json_obj
-    from agm.agl.semantics.cycles import CYCLIC_VALUE_MARKER, AglCyclicValue
+    from agm.agl.runtime.serialize import AglNonDataValue, degraded_marker, value_to_json_obj
+    from agm.agl.semantics.cycles import AglCyclicValue
     from agm.agl.syntax.spans import SourceSpan
 
     fields: dict[str, object] = {}
     for k, v in exc.fields.items():
         try:
             fields[k] = value_to_json_obj(v)
-        except AglCyclicValue:
-            fields[k] = CYCLIC_VALUE_MARKER
-        except AglNonDataValue as non_data_exc:
-            fields[k] = non_data_value_marker(non_data_exc)
+        except (AglCyclicValue, AglNonDataValue) as field_exc:
+            fields[k] = degraded_marker(field_exc)
     line: int | None = None
     col: int | None = None
     if isinstance(span, (SourceSpan, Location)):

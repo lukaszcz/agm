@@ -20,7 +20,7 @@ Dry-run is a global, cross-cutting mode set from the `--dry-run` CLI flag. The p
 
 ## Generic Utilities
 
-`util/` is a dependency-free leaf: pure algorithms and string helpers with zero `agm` imports, deliberately usable from any layer without creating a cycle. It provides generic graph algorithms (Tarjan strongly-connected components and Kahn topological sort), used by AgL module loading and the program-level passes for deterministic dependency ordering ([agl/modules.md](agl/modules.md)), and universal-newline normalization shared by the AgL lexer and runtime diagnostics so both index source text identically.
+`util/` is a dependency-free leaf: pure algorithms and string helpers with zero `agm` imports, deliberately usable from any layer without creating a cycle. It provides generic graph algorithms (Tarjan strongly-connected components, Kahn topological sort, and a deterministic breadth-first search for the nearest node satisfying a predicate), used by AgL module loading and the program-level passes for deterministic dependency ordering ([agl/modules.md](agl/modules.md)) and by the AgL type table to name the culprit declaration in whole-type diagnostics, plus universal-newline normalization shared by the AgL lexer and runtime diagnostics so both index source text identically.
 
 ## Code Entry Points
 
@@ -30,4 +30,4 @@ Dry-run is a global, cross-cutting mode set from the `--dry-run` CLI flag. The p
 - `src/agm/core/toml.py` and `src/agm/core/dotenv.py` — round-trip TOML and dotenv read/write helpers.
 - `src/agm/core/dry_run.py` — global dry-run state and planned-command printing.
 - `src/agm/core/log.py` — logging setup, including JSON trace logs used by AgL execution.
-- `src/agm/util/graph.py` — generic Tarjan SCC and Kahn toposort; `src/agm/util/text.py` — newline normalization. Both are pure and `agm`-import-free.
+- `src/agm/util/graph.py` — generic Tarjan SCC, Kahn toposort, and nearest-hit BFS; `src/agm/util/text.py` — newline normalization. Both are pure and `agm`-import-free.

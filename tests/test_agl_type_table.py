@@ -1473,7 +1473,7 @@ class TestComparableTypesTableAware:
 # ---------------------------------------------------------------------------
 
 
-class TestHasNoValueEquality:
+class TestNominalReachesNonData:
     def test_record_of_scalars_has_equality(self) -> None:
         table = TypeTable()
         table.register(
@@ -1485,7 +1485,7 @@ class TestHasNoValueEquality:
             )
         )
         handle = RecordType(name="Point", module_id=ENTRY_ID)
-        assert table.has_no_value_equality(handle) is False
+        assert table.nominal_reaches_non_data(handle) is False
 
     def test_record_with_agent_field_has_no_equality(self) -> None:
         table = TypeTable()
@@ -1498,7 +1498,7 @@ class TestHasNoValueEquality:
             )
         )
         handle = RecordType(name="Bad", module_id=ENTRY_ID)
-        assert table.has_no_value_equality(handle) is True
+        assert table.nominal_reaches_non_data(handle) is True
 
     def test_generic_record_answer_follows_its_type_argument(self) -> None:
         table = TypeTable()
@@ -1513,8 +1513,8 @@ class TestHasNoValueEquality:
         )
         agent_handle = RecordType(name="Box", type_args=(AgentType(),), module_id=ENTRY_ID)
         int_handle = RecordType(name="Box", type_args=(IntType(),), module_id=ENTRY_ID)
-        assert table.has_no_value_equality(agent_handle) is True
-        assert table.has_no_value_equality(int_handle) is False
+        assert table.nominal_reaches_non_data(agent_handle) is True
+        assert table.nominal_reaches_non_data(int_handle) is False
 
 
 class TestNominalIsJsonConvertible:

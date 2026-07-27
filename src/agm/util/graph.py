@@ -2,6 +2,7 @@
 
 Provides:
 - ``GraphCycleError`` — raised by :func:`toposort` when a cycle is detected.
+- ``bfs_first`` — deterministic breadth-first search for the nearest hit.
 - ``sccs`` — Tarjan's strongly-connected-components (reverse topological order).
 - ``toposort`` — Kahn's topological sort (leaves first, deterministic).
 """
@@ -9,6 +10,7 @@ Provides:
 from __future__ import annotations
 
 import bisect
+from collections import deque
 from collections.abc import Callable, Iterable, Mapping
 from typing import TYPE_CHECKING, TypeVar
 
@@ -17,8 +19,51 @@ if TYPE_CHECKING:
 
 T = TypeVar("T")
 K = TypeVar("K", bound="SupportsRichComparison")
+R = TypeVar("R")
 
-__all__ = ["GraphCycleError", "sccs", "toposort"]
+__all__ = ["GraphCycleError", "bfs_first", "sccs", "toposort"]
+
+
+def bfs_first(
+    seeds: Iterable[T],
+    successors: Callable[[T], Iterable[T]],
+    select: Callable[[T], R | None],
+    *,
+    key: Callable[[T], K],
+) -> R | None:
+    """Return the first non-``None`` ``select(node)`` reached, or ``None``.
+
+    Breadth-first from *seeds*, visiting each node at most once, so the
+    SHALLOWEST node satisfying *select* wins — which is what makes this
+    useful for "name the culprit" diagnostics, where a node named directly by
+    the query is a better explanation than one buried several hops away.
+
+    Parameters
+    ----------
+    seeds:
+        Starting nodes, explored in the order given (their own order is the
+        caller's to choose and is not re-sorted).
+    successors:
+        Yields the direct successors of a node.
+    select:
+        Applied to each visited node; the first non-``None`` result is
+        returned immediately and the search stops.
+    key:
+        Sort key applied to each hop's newly discovered successors, so the
+        traversal — and therefore the reported result — is deterministic.
+    """
+    seen: set[T] = set()
+    queue: deque[T] = deque(seeds)
+    while queue:
+        node = queue.popleft()
+        if node in seen:
+            continue
+        seen.add(node)
+        found = select(node)
+        if found is not None:
+            return found
+        queue.extend(sorted((s for s in successors(node) if s not in seen), key=key))
+    return None
 
 
 class GraphCycleError(Exception):

@@ -26,10 +26,9 @@ circular import. The flags themselves are a fixpoint over the whole table
 (``semantics.analyses.compute_non_data_reachability``, cycle-safe by
 construction), cached on :class:`TypeTable` and invalidated whenever the
 table's declarations change. That one fact answers two separate language
-questions — :meth:`TypeTable.has_no_value_equality` (may ``=``/``!=`` be
-applied?) and :meth:`TypeTable.nominal_is_json_convertible` (is there a JSON
-representation?) — which is why it is named for the fact rather than for
-either consumer.
+questions — may ``=``/``!=`` be applied (``comparable_types``)? and is there
+a JSON representation (:meth:`TypeTable.nominal_is_json_convertible`)? —
+which is why it is named for the fact rather than for either consumer.
 
 :meth:`TypeTable.has_finite_closure`/:meth:`TypeTable.has_finite_schema`
 answer a related but distinct whole-type question: not "does this type
@@ -46,7 +45,6 @@ diagnostic (agent output target, cast target, parameter type).
 
 from __future__ import annotations
 
-from collections import deque
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Literal, assert_never, cast
@@ -76,6 +74,7 @@ from agm.agl.semantics.types import (
     is_assignable,
     substitute,
 )
+from agm.util.graph import bfs_first
 
 if TYPE_CHECKING:
     from agm.agl.semantics.analyses import FiniteClosure, NonDataReachability
@@ -463,17 +462,6 @@ class TypeTable:
             if pname in relevant
         )
 
-    def has_no_value_equality(self, handle: RecordType | EnumType | ExceptionType) -> bool:
-        """Return ``True`` if *handle* has no value equality.
-
-        ``=``/``!=`` are undefined for a non-data value and for anything that
-        transitively holds one, so this is exactly
-        :meth:`nominal_reaches_non_data` — the two questions are kept apart at
-        the API so either can grow its own rule without silently changing the
-        other.
-        """
-        return self.nominal_reaches_non_data(handle)
-
     def nominal_is_json_convertible(self, handle: RecordType | EnumType | ExceptionType) -> bool:
         """Return ``True`` if *handle* has a JSON representation.
 
@@ -531,21 +519,15 @@ class TypeTable:
         from agm.agl.semantics.analyses import nominal_references_for_schema
 
         caps = self._finite_closure_result()
-        seen: set[DeclKey] = set()
-        queue: deque[DeclKey] = deque(
-            (ref.module_id, ref.scope_path, ref.name)
-            for ref in nominal_references_for_schema(t, self._defs, caps.relevant_params)
+        return bfs_first(
+            (
+                (ref.module_id, ref.scope_path, ref.name)
+                for ref in nominal_references_for_schema(t, self._defs, caps.relevant_params)
+            ),
+            lambda key: caps.successors.get(key, frozenset()),
+            lambda key: key if key in caps.infinite else None,
+            key=decl_key_sort_key,
         )
-        while queue:
-            key = queue.popleft()
-            if key in seen:
-                continue
-            seen.add(key)
-            if key in caps.infinite:
-                return key
-            successors: frozenset[DeclKey] = caps.successors.get(key, frozenset())
-            queue.extend(sorted(successors - seen, key=decl_key_sort_key))
-        return None
 
     def canonical_schema_type(self, t: Type) -> Type:
         """Return *t* with schema-irrelevant nominal type arguments canonicalized.
@@ -737,17 +719,7 @@ class TypeTable:
         """
         from agm.agl.semantics.analyses import nominal_references
 
-        seen: set[DeclKey] = set()
-        queue: deque[DeclKey] = deque(
-            (ref.module_id, ref.scope_path, ref.name)
-            for ref in nominal_references(t)
-            if self.nominal_reaches_non_data(ref)
-        )
-        while queue:
-            key = queue.popleft()
-            if key in seen:
-                continue
-            seen.add(key)
+        def culprit(key: DeclKey) -> tuple[DeclKey, str, Type] | None:
             typedef = self._defs.get(key)
             if typedef is None:  # pragma: no cover
                 # Unreachable by construction: every key enqueued was first
@@ -755,14 +727,24 @@ class TypeTable:
                 # (never-registered) declaration never does. Kept as a
                 # defensive guard, matching the dangling-reference handling in
                 # the fixpoints themselves, in case that ever stops holding.
-                continue
+                return None
             direct = self._own_non_data_field(typedef)
-            if direct is not None:
-                return (key, *direct)
-            queue.extend(
-                sorted(self._affected_successors(key, typedef) - seen, key=decl_key_sort_key)
-            )
-        return None
+            return None if direct is None else (key, *direct)
+
+        def successors(key: DeclKey) -> set[DeclKey]:
+            typedef = self._defs.get(key)
+            return set() if typedef is None else self._affected_successors(key, typedef)
+
+        return bfs_first(
+            (
+                (ref.module_id, ref.scope_path, ref.name)
+                for ref in nominal_references(t)
+                if self.nominal_reaches_non_data(ref)
+            ),
+            successors,
+            culprit,
+            key=decl_key_sort_key,
+        )
 
     def _own_non_data_field(self, typedef: TypeDef) -> tuple[str, Type] | None:
         """Return *typedef*'s first own field whose type structurally reaches non-data."""
@@ -774,7 +756,16 @@ class TypeTable:
         return None
 
     def _affected_successors(self, key: DeclKey, typedef: TypeDef) -> set[DeclKey]:
-        """Return the declarations *typedef* reaches non-data through."""
+        """Return the declarations *typedef* reaches non-data through.
+
+        A field reference is a HANDLE, so it is tested with
+        :meth:`nominal_reaches_non_data`, which also consults the concrete
+        type arguments — ``Box[agent]`` is affected while ``Box`` itself is
+        not. An exception's ``extends`` base and its descendants are bare
+        declaration keys carrying no arguments, so for them the
+        declaration-level ``flags`` set is the whole answer. The two idioms
+        below are therefore not interchangeable.
+        """
         from agm.agl.semantics.analyses import field_templates, nominal_references
 
         flags = self._non_data_reachability().reaches_non_data

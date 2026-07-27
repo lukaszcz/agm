@@ -53,9 +53,8 @@ def enter_container(container_id: int, active: "set[int] | None") -> "set[int]":
     """Mark *container_id* active; raise :class:`AglCyclicValue` on re-entry.
 
     Cheaper than a ``@contextmanager`` guard (an inline check plus explicit
-    ``try``/``finally`` avoids the generator-based context-manager overhead),
-    following the precedent already used by
-    ``runtime/externs.py``'s ``decode_boundary_value``. *active* is allocated
+    ``try``/``finally`` avoids the generator-based context-manager overhead).
+    *active* is allocated
     lazily: every walker's entry point passes ``None``, so an acyclic value
     with no containers never allocates a set — one is created only the first
     time this is called. The returned set must be threaded into every further

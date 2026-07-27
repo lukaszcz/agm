@@ -499,7 +499,7 @@ def decode_boundary_value(
             if type(obj) is not list:
                 raise BoundaryViolation(f"expected a list, got {_typename(obj)}")
             items = cast(list[object], obj)
-            marker = _enter_container(items, active_containers, "array")
+            marker = _enter_python_container(items, active_containers, "array")
             try:
                 return ArrayValue(
                     [
@@ -513,7 +513,7 @@ def decode_boundary_value(
             if type(obj) is not dict:
                 raise BoundaryViolation(f"expected a dict, got {_typename(obj)}")
             mapping = cast(dict[object, object], obj)
-            marker = _enter_container(mapping, active_containers, "dict")
+            marker = _enter_python_container(mapping, active_containers, "dict")
             try:
                 entries: dict[str, Value] = {}
                 for k, v in mapping.items():
@@ -526,7 +526,7 @@ def decode_boundary_value(
             finally:
                 active_containers.remove(marker)
         case BoundaryRecord(nominal=nominal, display_name=display_name, fields=fields):
-            marker = _enter_container(obj, active_containers, display_name)
+            marker = _enter_python_container(obj, active_containers, display_name)
             try:
                 obj_fields = _expect_object(obj, display_name)
                 _check_exact_fields(display_name, {fname for fname, _ in fields}, obj_fields)
@@ -537,7 +537,7 @@ def decode_boundary_value(
             finally:
                 active_containers.remove(marker)
         case BoundaryEnum(nominal=nominal, display_name=display_name, variants=variants):
-            marker = _enter_container(obj, active_containers, display_name)
+            marker = _enter_python_container(obj, active_containers, display_name)
             try:
                 obj_fields = _expect_object(obj, display_name)
                 case_val = obj_fields.get("$case")
@@ -559,7 +559,7 @@ def decode_boundary_value(
             finally:
                 active_containers.remove(marker)
         case BoundaryException(nominal=nominal, display_name=display_name, fields=fields):
-            marker = _enter_container(obj, active_containers, display_name)
+            marker = _enter_python_container(obj, active_containers, display_name)
             try:
                 obj_fields = _expect_object(obj, display_name)
                 _check_exact_fields(display_name, {fname for fname, _ in fields}, obj_fields)
@@ -610,8 +610,16 @@ def _check_exact_fields(
         )
 
 
-def _enter_container(obj: object, active: set[int], label: str) -> int:
-    """Mark *obj* as active during decode, rejecting cyclic Python returns."""
+def _enter_python_container(obj: object, active: set[int], label: str) -> int:
+    """Mark *obj* as active during decode, rejecting cyclic Python returns.
+
+    The decode-direction counterpart to
+    :func:`~agm.agl.semantics.cycles.enter_container`, which this module also
+    uses for the encode direction. They are deliberately separate: a cycle in
+    a Python value arriving from a companion module is a boundary violation
+    (the companion returned something undecodable), whereas a cycle in an AgL
+    value leaving for Python is the language-level ``CyclicValueError``.
+    """
     marker = id(obj)
     if marker in active:
         raise BoundaryViolation(f"cyclic Python return value at {label}")

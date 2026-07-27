@@ -23,7 +23,7 @@ import json
 from decimal import Decimal
 from typing import assert_never
 
-from agm.agl.semantics.cycles import enter_container
+from agm.agl.semantics.cycles import CYCLIC_VALUE_MARKER, AglCyclicValue, enter_container
 from agm.agl.semantics.values import (
     AgentValue,
     ArrayValue,
@@ -75,6 +75,20 @@ def non_data_value_marker(exc: AglNonDataValue) -> str:
     see ``runtime/trace.py`` and ``pipeline.py``.
     """
     return f"<{exc.kind} has no JSON representation>"
+
+
+def degraded_marker(exc: "AglCyclicValue | AglNonDataValue") -> str:
+    """Return the placeholder text substituted for a value that cannot convert.
+
+    Maps either walk sentinel to its marker, so the two callers that must not
+    fail on a value they had no say in — trace logging (an opt-in debug
+    facility) and error reporting (already unwinding a real error) — catch one
+    pair and degrade identically, rather than each pairing up sentinels with
+    markers. Every other caller wants the sentinel and does not use this.
+    """
+    if isinstance(exc, AglNonDataValue):
+        return non_data_value_marker(exc)
+    return CYCLIC_VALUE_MARKER
 
 
 def value_to_json_obj(value: Value, active: "set[int] | None" = None) -> object:

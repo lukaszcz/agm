@@ -78,6 +78,22 @@ class EffectHandlers:
     def __init__(self, ctx: EffectCtx) -> None:
         self._ctx = ctx
 
+    def _text_of(self, value: Value) -> str:
+        """Return the prompt/command text *value* stands for.
+
+        A ``text`` value is used as-is; anything else is rendered. Rendering
+        walks the value's containers, so a cyclic array or dict surfaces here
+        as the walk's sentinel and becomes the catchable ``CyclicValueError``
+        every other rendering site raises. Shared by ``ask``, ``ask``-request,
+        and ``exec``, which all turn one operand into text this way.
+        """
+        if isinstance(value, TextValue):
+            return value.value
+        try:
+            return render_value(value)
+        except AglCyclicValue as exc:
+            raise cyclic_value_raise(self._ctx._trace.new_event_id()) from exc
+
     # ------------------------------------------------------------------
     # Extern (Python FFI) call helper
     # ------------------------------------------------------------------
@@ -191,14 +207,7 @@ class EffectHandlers:
         )
         agent_name = agent_id.display_name
 
-        prompt_val = self._ctx._eval(prompt_expr)
-        if not isinstance(prompt_val, TextValue):
-            try:
-                prompt_text = render_value(prompt_val)
-            except AglCyclicValue as exc:
-                raise cyclic_value_raise(self._ctx._trace.new_event_id()) from exc
-        else:
-            prompt_text = prompt_val.value
+        prompt_text = self._text_of(self._ctx._eval(prompt_expr))
 
         contract = self._ctx._program.contracts[contract_id]
 
@@ -307,14 +316,7 @@ class EffectHandlers:
         )
         agent_name = agent_id.display_name
 
-        prompt_val = self._ctx._eval(prompt_expr)
-        if not isinstance(prompt_val, TextValue):
-            try:
-                prompt_text = render_value(prompt_val)
-            except AglCyclicValue as exc:
-                raise cyclic_value_raise(self._ctx._trace.new_event_id()) from exc
-        else:
-            prompt_text = prompt_val.value
+        prompt_text = self._text_of(self._ctx._eval(prompt_expr))
 
         contract = self._ctx._program.contracts[contract_id]
 
@@ -435,14 +437,7 @@ class EffectHandlers:
     ) -> Value:
         """Handle IrExec: run shell command and parse output."""
         # 1. Evaluate command expression
-        command_val = self._ctx._eval(command_expr)
-        if not isinstance(command_val, TextValue):
-            try:
-                cmd = render_value(command_val)
-            except AglCyclicValue as exc:
-                raise cyclic_value_raise(self._ctx._trace.new_event_id()) from exc
-        else:
-            cmd = command_val.value
+        cmd = self._text_of(self._ctx._eval(command_expr))
 
         contract = self._ctx._program.contracts[contract_id]
 

@@ -31,8 +31,6 @@ are capability handles, not data.
 from __future__ import annotations
 
 import copy as _stdlib_copy
-from collections.abc import Callable
-from typing import TypeVar
 
 from agm.agl.semantics.values import (
     ArrayValue,
@@ -45,8 +43,6 @@ from agm.agl.semantics.values import (
 )
 
 __all__ = ["deep_copy_value", "shallow_copy_value"]
-
-_ShellT = TypeVar("_ShellT", bound=Value)
 
 
 def shallow_copy_value(value: Value) -> Value:
@@ -78,28 +74,10 @@ def deep_copy_value(value: Value) -> Value:
     return _deep_copy(value, {})
 
 
-def _memo_copy(
-    value: Value,
-    memo: dict[int, Value],
-    make_shell: Callable[[], _ShellT],
-    fill_shell: Callable[[_ShellT], None],
-) -> Value:
-    """Return the memoized copy of *value*, or build, register, and fill a fresh one.
-
-    ``make_shell`` runs only on a cache miss. For every recursive container
-    kind it returns an empty shell that ``fill_shell`` populates once the
-    shell is already registered in *memo* — so a self-referential container's
-    re-entrant reference resolves to the shell already under construction
-    instead of recursing forever. For the atomic ``json`` case ``make_shell``
-    performs the whole copy up front and ``fill_shell`` is a no-op.
-    """
-    cached = memo.get(id(value))
-    if cached is not None:
-        return cached
-    shell = make_shell()
-    memo[id(value)] = shell
-    fill_shell(shell)
-    return shell
+#: The value kinds :func:`_deep_copy` rebuilds. Everything else — scalars,
+#: ``unit``, agents, constructors, closures — is returned as-is and never
+#: enters the memo, so copying an array of scalars costs no lookups.
+_COPIED_KINDS = (ArrayValue, DictValue, RecordValue, EnumValue, ExceptionValue, JsonValue)
 
 
 def _fill_field_dict(dest: dict[str, Value], src: dict[str, Value], memo: dict[int, Value]) -> None:
@@ -109,56 +87,55 @@ def _fill_field_dict(dest: dict[str, Value], src: dict[str, Value], memo: dict[i
 
 
 def _deep_copy(value: Value, memo: dict[int, Value]) -> Value:
+    """Copy *value*, reusing *memo* so shared references stay shared.
+
+    Every arm follows the same three steps: build an EMPTY shell, register it
+    in *memo*, then fill it. Registering before filling is what makes a
+    self-referential array or dict terminate — the re-entrant reference
+    resolves to the shell already under construction. (``json`` is atomic, so
+    its arm builds the copy outright; it is still memoized so two references
+    to one ``json`` leaf copy to one new leaf.)
+    """
+    if not isinstance(value, _COPIED_KINDS):
+        return value
+    cached = memo.get(id(value))
+    if cached is not None:
+        return cached
     if isinstance(value, ArrayValue):
-
-        def make_array_shell() -> ArrayValue:
-            return ArrayValue(elements=[])
-
-        def fill_array_shell(shell: ArrayValue) -> None:
-            for e in value.elements:
-                shell.elements.append(_deep_copy(e, memo))
-
-        return _memo_copy(value, memo, make_array_shell, fill_array_shell)
+        array_shell = ArrayValue(elements=[])
+        memo[id(value)] = array_shell
+        for e in value.elements:
+            array_shell.elements.append(_deep_copy(e, memo))
+        return array_shell
     if isinstance(value, DictValue):
-        return _memo_copy(
-            value,
-            memo,
-            lambda: DictValue(entries={}),
-            lambda shell: _fill_field_dict(shell.entries, value.entries, memo),
-        )
+        dict_shell = DictValue(entries={})
+        memo[id(value)] = dict_shell
+        _fill_field_dict(dict_shell.entries, value.entries, memo)
+        return dict_shell
     if isinstance(value, RecordValue):
-        return _memo_copy(
-            value,
-            memo,
-            lambda: RecordValue(nominal=value.nominal, display_name=value.display_name, fields={}),
-            lambda shell: _fill_field_dict(shell.fields, value.fields, memo),
+        record_shell = RecordValue(
+            nominal=value.nominal, display_name=value.display_name, fields={}
         )
+        memo[id(value)] = record_shell
+        _fill_field_dict(record_shell.fields, value.fields, memo)
+        return record_shell
     if isinstance(value, EnumValue):
-        return _memo_copy(
-            value,
-            memo,
-            lambda: EnumValue(
-                nominal=value.nominal,
-                display_name=value.display_name,
-                variant=value.variant,
-                fields={},
-            ),
-            lambda shell: _fill_field_dict(shell.fields, value.fields, memo),
+        enum_shell = EnumValue(
+            nominal=value.nominal,
+            display_name=value.display_name,
+            variant=value.variant,
+            fields={},
         )
+        memo[id(value)] = enum_shell
+        _fill_field_dict(enum_shell.fields, value.fields, memo)
+        return enum_shell
     if isinstance(value, ExceptionValue):
-        return _memo_copy(
-            value,
-            memo,
-            lambda: ExceptionValue(
-                nominal=value.nominal, display_name=value.display_name, fields={}
-            ),
-            lambda shell: _fill_field_dict(shell.fields, value.fields, memo),
+        exception_shell = ExceptionValue(
+            nominal=value.nominal, display_name=value.display_name, fields={}
         )
-    if isinstance(value, JsonValue):
-        return _memo_copy(
-            value,
-            memo,
-            lambda: JsonValue(_stdlib_copy.deepcopy(value.raw)),
-            lambda shell: None,
-        )
-    return value
+        memo[id(value)] = exception_shell
+        _fill_field_dict(exception_shell.fields, value.fields, memo)
+        return exception_shell
+    json_copy = JsonValue(_stdlib_copy.deepcopy(value.raw))
+    memo[id(value)] = json_copy
+    return json_copy

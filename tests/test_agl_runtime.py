@@ -3011,36 +3011,69 @@ class TestBuildFormatInstructions:
 
 
 # ---------------------------------------------------------------------------
-# Coverage: serialize.py — opaque value TypeError branches
+# Coverage: serialize.py — AglNonDataValue branches
 # ---------------------------------------------------------------------------
 
 
 class TestSerializeV2OpaqueValues:
-    """Unit, agent, and IR closure values have no JSON representation."""
+    """Unit, agent, constructor, function, and iterator values have no JSON
+    representation — each raises :class:`AglNonDataValue` with the matching
+    user-facing ``kind``."""
 
     def test_unit_value_raises(self) -> None:
-        from agm.agl.runtime.serialize import value_to_json_obj
+        from agm.agl.runtime.serialize import AglNonDataValue, value_to_json_obj
         from agm.agl.semantics.values import UnitValue
 
-        with pytest.raises(TypeError, match="UnitValue"):
+        with pytest.raises(AglNonDataValue) as exc_info:
             value_to_json_obj(UnitValue())
+        assert exc_info.value.kind == "unit"
 
     def test_agent_value_raises(self) -> None:
-        from agm.agl.runtime.serialize import value_to_json_obj
+        from agm.agl.runtime.serialize import AglNonDataValue, value_to_json_obj
         from agm.agl.semantics.values import AgentValue
 
-        with pytest.raises(TypeError, match="AgentValue"):
+        with pytest.raises(AglNonDataValue) as exc_info:
             value_to_json_obj(AgentValue(name="myagent"))
+        assert exc_info.value.kind == "agent"
+
+    def test_constructor_value_raises(self) -> None:
+        from agm.agl.ir.ids import NominalId
+        from agm.agl.modules.ids import ENTRY_ID
+        from agm.agl.runtime.serialize import AglNonDataValue, value_to_json_obj
+        from agm.agl.semantics.values import ConstructorValue
+
+        ctor = ConstructorValue(
+            nominal=NominalId(ENTRY_ID, "Box"), display_name="Box", variant=None
+        )
+        with pytest.raises(AglNonDataValue) as exc_info:
+            value_to_json_obj(ctor)
+        assert exc_info.value.kind == "constructor"
 
     def test_ir_closure_value_raises(self) -> None:
-        """IrClosureValue has no JSON representation — TypeError is raised."""
+        """IrClosureValue has no JSON representation — AglNonDataValue is raised."""
         from agm.agl.ir.ids import FunctionId
-        from agm.agl.runtime.serialize import value_to_json_obj
+        from agm.agl.runtime.serialize import AglNonDataValue, value_to_json_obj
         from agm.agl.semantics.values import IrClosureValue
 
         ir_closure = IrClosureValue(function_id=FunctionId(0), captures=())
-        with pytest.raises(TypeError, match="IrClosureValue"):
+        with pytest.raises(AglNonDataValue) as exc_info:
             value_to_json_obj(ir_closure)
+        assert exc_info.value.kind == "function"
+
+    def test_iterator_value_raises(self) -> None:
+        from agm.agl.runtime.serialize import AglNonDataValue, value_to_json_obj
+        from agm.agl.semantics.values import IteratorValue
+
+        with pytest.raises(AglNonDataValue) as exc_info:
+            value_to_json_obj(IteratorValue(elements=[]))
+        assert exc_info.value.kind == "iterator"
+
+    def test_marker_text_matches_kind(self) -> None:
+        """``non_data_value_marker`` produces the same text every degrade site relies on."""
+        from agm.agl.runtime.serialize import AglNonDataValue, non_data_value_marker
+
+        exc = AglNonDataValue("unit")
+        assert non_data_value_marker(exc) == "<unit has no JSON representation>"
 
 
 # ---------------------------------------------------------------------------

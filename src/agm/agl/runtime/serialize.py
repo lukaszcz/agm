@@ -44,6 +44,39 @@ from agm.agl.semantics.values import (
 )
 
 
+class AglNonDataValue(Exception):
+    """Sentinel: a value kind with no JSON representation reached the walk.
+
+    Raised by :func:`value_to_json_obj` for ``unit``, ``agent``,
+    ``constructor``, ``function``, and ``iterator`` values — none of these
+    kinds has a JSON-shaped representation. ``kind`` is the user-facing kind
+    name (not the Python class name), used to build the substituted marker
+    text via :func:`non_data_value_marker`.
+
+    No evaluator path can produce a catchable AgL exception from this
+    sentinel: every reachable conversion to ``json`` is statically gated
+    (``is_json_convertible``, see ``semantics/type_table.py``) to types that
+    have a JSON representation, so a non-data value can only ever reach this
+    walk through a caller that degrades it rather than propagating it — see
+    ``runtime/trace.py``'s ``TraceSink.mutation`` and
+    ``pipeline.py``'s ``exception_value_to_run_error``.
+    """
+
+    def __init__(self, kind: str) -> None:
+        super().__init__(f"{kind} has no JSON representation")
+        self.kind = kind
+
+
+def non_data_value_marker(exc: AglNonDataValue) -> str:
+    """Build the placeholder text substituted for a non-data value.
+
+    Single shared constructor so every caller that converts an
+    :class:`AglNonDataValue` sentinel produces byte-identical marker text —
+    see ``runtime/trace.py`` and ``pipeline.py``.
+    """
+    return f"<{exc.kind} has no JSON representation>"
+
+
 def value_to_json_obj(value: Value, active: "set[int] | None" = None) -> object:
     """Convert a ``Value`` to a JSON-shaped Python object.
 
@@ -56,6 +89,13 @@ def value_to_json_obj(value: Value, active: "set[int] | None" = None) -> object:
     cycle and raises :class:`~agm.agl.semantics.cycles.AglCyclicValue` rather
     than recursing forever. Callers pass no *active* argument — it exists
     only to thread the walk's own recursive calls.
+
+    A ``unit``, ``agent``, ``constructor``, ``function``, or ``iterator``
+    value has no JSON representation at all; such a value raises
+    :class:`AglNonDataValue` rather than a bare :class:`TypeError`, so a
+    caller that can legitimately receive one (e.g. because it carries the
+    field of an in-flight exception) can degrade it to a marker instead of
+    crashing.
     """
     if isinstance(value, TextValue):
         return value.value
@@ -88,15 +128,15 @@ def value_to_json_obj(value: Value, active: "set[int] | None" = None) -> object:
     if isinstance(value, ExceptionValue):
         return {k: value_to_json_obj(v, active) for k, v in value.fields.items()}
     if isinstance(value, UnitValue):
-        raise TypeError("UnitValue has no JSON representation")
+        raise AglNonDataValue("unit")
     if isinstance(value, AgentValue):
-        raise TypeError("AgentValue has no JSON representation")
+        raise AglNonDataValue("agent")
     if isinstance(value, ConstructorValue):
-        raise TypeError("ConstructorValue has no JSON representation")
+        raise AglNonDataValue("constructor")
     if isinstance(value, IrClosureValue):
-        raise TypeError("IrClosureValue has no JSON representation")
+        raise AglNonDataValue("function")
     if isinstance(value, IteratorValue):
-        raise TypeError("IteratorValue has no JSON representation")
+        raise AglNonDataValue("iterator")
     assert_never(value)  # pragma: no cover
 
 

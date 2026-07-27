@@ -1,0 +1,37 @@
+{
+  "scenarios": [
+    {
+      "name": "uncaught_exception_with_function_field_reports_marker",
+      "params": {"mode": "function_field"},
+      "expect": {
+        "raises": {
+          "type": "Boom",
+          "fields": {"handler": "<function has no JSON representation>", "code": 7},
+          "message_contains": ["boom"]
+        }
+      }
+    },
+    {
+      "name": "uncaught_exception_with_unit_field_reports_marker",
+      "params": {"mode": "unit_field"},
+      "expect": {
+        "raises": {
+          "type": "WithUnit",
+          "fields": {"note": "<unit has no JSON representation>", "code": 11},
+          "message_contains": ["boom"]
+        }
+      }
+    },
+    {
+      "name": "uncaught_exception_with_all_data_fields_serializes_normally",
+      "params": {"mode": "all_data"},
+      "expect": {
+        "raises": {
+          "type": "Plain",
+          "fields": {"code": 3, "node": {"x": 5}},
+          "message_contains": ["boom"]
+        }
+      }
+    }
+  ]
+}

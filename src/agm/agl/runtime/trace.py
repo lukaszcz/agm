@@ -26,7 +26,7 @@ import uuid
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from agm.agl.runtime.serialize import value_to_json_obj
+from agm.agl.runtime.serialize import AglNonDataValue, non_data_value_marker, value_to_json_obj
 from agm.agl.semantics.cycles import CYCLIC_VALUE_MARKER, AglCyclicValue
 from agm.core.log import append_jsonl
 
@@ -212,9 +212,11 @@ class TraceStore:
         the mutation to one name would be wrong. It therefore emits no
         ``mutation`` event; only a direct ``name := value`` store does.
 
-        Trace logging is an opt-in debug facility: a cyclic value stored into
-        a traced ``var`` must not fail the program, so a detected cycle is
-        recorded as a marker rather than serialized.
+        Trace logging is an opt-in debug facility: a cyclic value, or a value
+        of a kind with no JSON representation (``unit``, ``agent``,
+        ``constructor``, ``function``, ``iterator``), stored into a traced
+        ``var`` must not fail the program, so either case is recorded as a
+        marker rather than serialized.
         """
         if self._path is None:
             return
@@ -224,6 +226,8 @@ class TraceStore:
             serialized = dumps_exact(value_to_json_obj(value), indent=None)
         except AglCyclicValue:
             serialized = CYCLIC_VALUE_MARKER
+        except AglNonDataValue as exc:
+            serialized = non_data_value_marker(exc)
         extra: dict[str, object] = {
             "name": name,
             "value": serialized,

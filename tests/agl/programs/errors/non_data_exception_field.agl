@@ -1,0 +1,34 @@
+# An uncaught exception whose own field has no JSON representation.
+# Converting the exception to a reported error runs while an error is
+# already in flight, so a field that cannot be serialized (a function or a
+# unit value) reports as a marker instead of raising and masking the
+# original exception -- while any other, ordinary data field on the same
+# exception still serializes normally. `mode` selects which exception is
+# raised: "function_field" raises `Boom`, whose `handler` field holds a
+# closure and has no JSON representation; "unit_field" raises `WithUnit`,
+# whose `note` field holds `()` and has no JSON representation; "all_data"
+# raises `Plain`, whose fields are all ordinary data and none degrade to a
+# marker.
+param mode: text
+
+record Node(x: int)
+
+exception Boom extends Exception
+  handler: (int) -> int
+  code: int
+
+exception WithUnit extends Exception
+  note: unit
+  code: int
+
+exception Plain extends Exception
+  code: int
+  node: Node
+
+if mode == "function_field" =>
+  raise Boom(message = "boom", handler = fn(n: int) => n + 1, code = 7)
+
+if mode == "unit_field" =>
+  raise WithUnit(message = "boom", note = (), code = 11)
+
+raise Plain(message = "boom", code = 3, node = Node(x = 5))

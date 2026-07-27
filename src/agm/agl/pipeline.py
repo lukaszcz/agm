@@ -1514,8 +1514,11 @@ def exception_value_to_run_error(
     Field values are converted via the shared serializer, which preserves
     ``Decimal`` exactness (never routed through binary ``float``; design ).
     This runs while reporting an error already in flight, so a field that is
-    itself a cyclic array/dict (e.g. a user exception's own data payload) must
-    not raise and mask the real error — that one field is reported as a
+    itself a cyclic array/dict (e.g. a user exception's own data payload), or
+    a field of a kind with no JSON representation (``unit``, ``agent``,
+    ``constructor``, ``function``, ``iterator`` — legal on an exception field
+    even though a cast to ``json`` of such a type is statically rejected),
+    must not raise and mask the real error — that one field is reported as a
     marker instead.
 
     *span* is the optional raise-site source span threaded from ``AglRaise``;
@@ -1523,7 +1526,7 @@ def exception_value_to_run_error(
     so the CLI can include the source location in its exit-2 error output.
     """
     from agm.agl.ir.ids import Location
-    from agm.agl.runtime.serialize import value_to_json_obj
+    from agm.agl.runtime.serialize import AglNonDataValue, non_data_value_marker, value_to_json_obj
     from agm.agl.semantics.cycles import CYCLIC_VALUE_MARKER, AglCyclicValue
     from agm.agl.syntax.spans import SourceSpan
 
@@ -1533,6 +1536,8 @@ def exception_value_to_run_error(
             fields[k] = value_to_json_obj(v)
         except AglCyclicValue:
             fields[k] = CYCLIC_VALUE_MARKER
+        except AglNonDataValue as non_data_exc:
+            fields[k] = non_data_value_marker(non_data_exc)
     line: int | None = None
     col: int | None = None
     if isinstance(span, (SourceSpan, Location)):

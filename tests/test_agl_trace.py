@@ -214,6 +214,45 @@ class TestMutationRecord:
         assert mut_recs
         assert mut_recs[0]["value"] == "<cyclic value>"
 
+    @pytest.mark.parametrize(
+        ("field_decl", "field_ctor", "marker"),
+        [
+            pytest.param(
+                "run: (int) -> int",
+                "run = fn(n: int) => n + 1",
+                "<function has no JSON representation>",
+                id="function_field",
+            ),
+            pytest.param(
+                "note: unit",
+                "note = ()",
+                "<unit has no JSON representation>",
+                id="unit_field",
+            ),
+        ],
+    )
+    def test_mutation_record_of_a_non_data_value_degrades_to_a_marker(
+        self, tmp_path: Path, field_decl: str, field_ctor: str, marker: str
+    ) -> None:
+        """Trace logging is an opt-in debug facility: storing a record with a
+        field of a kind with no JSON representation (function, unit) into a
+        traced `var` must not fail the program -- the mutation record
+        substitutes a marker for the whole value it could not serialize while
+        the run still succeeds."""
+        log_path = tmp_path / "trace.jsonl"
+        rt = PipelineDriver()
+        source = (
+            f"record Holder({field_decl}, x: int)\n"
+            f"var latest: Holder = Holder({field_ctor}, x = 1)\n"
+            f"latest := Holder({field_ctor}, x = 2)\n"
+        )
+        result = rt.run(source, log_file=log_path)
+        assert result.ok, result.error
+        records = _load_jsonl(log_path)
+        mut_recs = [r for r in records if r.get("kind") == "mutation" and r.get("name") == "latest"]
+        assert mut_recs
+        assert mut_recs[0]["value"] == marker
+
 
 class TestExecCommandRecord:
     def test_exec_produces_exec_record(self, tmp_path: Path) -> None:

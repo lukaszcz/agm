@@ -84,10 +84,20 @@ def greet(n, g):     # parameter names are the companion's own business
 
 ## Type mapping
 
-Every value crossing the boundary is deep-copied, so neither side can observe
-the other's later mutations. `decimal` always crosses as Python's exact
-`decimal.Decimal` — **never** `float` — preserving AgL's exact-decimal
-guarantee end to end.
+A value at a **concrete** parameter or return position is deep-copied
+crossing the boundary, so neither side can observe the other's later
+mutations: a companion that mutates a `list` it received for an `array[int]`
+parameter leaves the caller's AgL array untouched. `decimal` always crosses
+as Python's exact `decimal.Decimal` — **never** `float` — preserving AgL's
+exact-decimal guarantee end to end.
+
+A value at a **bare type-variable** position is different: it crosses as a
+sealed handle wrapping the AgL value itself, not a copy (see
+[Generics and sealed handles](#generics-and-sealed-handles) below). Passing an
+`array[T]` or `dict[text, T]` argument through unchanged, and returning the
+handle you received, yields the *same* array or dict object back — it stays
+aliased with the caller's own binding, exactly as the handle-equality rule
+below implies.
 
 | AgL type | Python value |
 |---|---|

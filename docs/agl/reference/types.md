@@ -87,9 +87,10 @@ loops all have type `unit`.
 let _: unit = print "hello"
 ```
 
-`unit` cannot be rendered, JSON-encoded, or interpolated. The literal `()` is
-both the unit value and the empty argument list of a zero-argument call —
-the two are syntactically unified.
+`unit` cannot be JSON-encoded or stored in a `json` slot; it renders and
+interpolates as `()` — or `void` for the value produced by statement-like
+effects. The literal `()` is both the unit value and the empty argument list
+of a zero-argument call — the two are syntactically unified.
 
 ### `text`
 
@@ -137,12 +138,10 @@ enum MaybeText
 Homogeneous containers, and **mutable reference values**: binding, assignment,
 passing as an argument, and storing in a field never copy an array or dict —
 every alias shares the same underlying object. Elements and values are read
-with indexing (`xs[0]`, `metadata["key"]`). However an array or dict is
-reached — a `let` or `var` binding, a `param`, a field, a call result — it
-can be updated through an index with `:=`, which mutates the array or
-dictionary **in place**; every other binding, field, capture, or loop
-cursor that references the same array or dictionary observes the change.
-There is no `len` operator.
+with indexing (`xs[0]`, `metadata["key"]`). An array or dict can be updated
+in place through an index with `:=` — see [Bindings and scope](bindings-and-scope.md#--destructive-assignment)
+for the assignment-root rules and evaluation order. There is no `len`
+operator.
 
 Records, enums, and exceptions are immutable — none of their fields can be
 reassigned, and `with` ([Expressions](expressions.md)) builds a new value
@@ -152,12 +151,13 @@ an array or dict makes that container's mutability observable through every
 binding that reaches it.
 
 See [Bindings and Scope](bindings-and-scope.md) for the `:=` indexed-assignment
-rules, and [Foreign Function Interface](ffi.md) for the guarantee that
-crossing the FFI boundary always deep-copies. (It is not the only place a
-copy is made: an explicit `as json` cast of an array or dict builds an
-independent snapshot — see [Casts and convertibility](#casts-and-convertibility)
-below — and `with` ([Expressions](expressions.md)) builds a shallow copy of
-a record.)
+rules, and [Foreign Function Interface](ffi.md) for how crossing the FFI
+boundary deep-copies a concrete-typed value but crosses a bare type-variable
+value as a sealed handle to the original. (FFI is not the only place a copy
+is made: an explicit `as json` cast of an array or dict builds an independent
+snapshot — see [Casts and convertibility](#casts-and-convertibility) below —
+and `with` ([Expressions](expressions.md)) builds a shallow copy of a record.
+See [Copying values](#copying-values) below for `copy`/`shallow_copy`.)
 
 #### Cycles
 
@@ -177,14 +177,17 @@ A record, enum, or exception cannot be self-referential on its own — every
 field is fixed at construction — so a cycle is always closed through at
 least one array or dict, however many nominal layers it passes through.
 
-Rendering (`print`, `render`, string interpolation), `as text`, `as json`, and
-an `extern def` call all walk a value's containers and therefore raise the
-catchable `CyclicValueError` ([Exceptions](exceptions.md#cyclicvalueerror))
-if the walk re-enters a container already on its own path. `as?` never
-raises: it predicts whether the corresponding `as` would succeed, so
-`as? text` and `as? json` on a cyclic value evaluate to `false` instead. A
-**shared** (diamond) structure — the same array or dict reachable twice from
-different paths, but never from itself — is not a cycle and renders
+Rendering (`print`, `render`, string interpolation, REPL echo), `as text`,
+`as json`, and an `extern def` call all walk a value's containers and
+therefore raise the catchable `CyclicValueError`
+([Exceptions](exceptions.md#cyclicvalueerror)) if the walk re-enters a
+container already on its own path. `as?` never raises: it predicts whether
+the corresponding `as` would succeed, so `as? text` and `as? json` on a
+cyclic value evaluate to `false` instead. `copy` is the exception: it is the
+one deep, structure-rebuilding walk that traverses a cyclic value to
+completion instead of raising — see [Copying values](#copying-values) below.
+A **shared** (diamond) structure — the same array or dict reachable twice
+from different paths, but never from itself — is not a cycle and renders
 normally.
 
 Equality (`==`) is different: it never raises. Comparing two values assumes a
@@ -192,6 +195,10 @@ pair already being compared is equal, so `==` on a cyclic array or dict
 terminates and answers the same structural relation co-inductively — the
 comparison never needs a base case for the parts of the structure it has
 already matched up.
+
+Trace logging is a narrower exception still: a traced cyclic value is
+recorded as a placeholder marker rather than raising — see
+[Tracing](host-environment.md#tracing).
 
 ### Copying values
 
@@ -760,7 +767,7 @@ at runtime; **fallible** ones may raise `CastError`.
 | Target type | Permitted source types | Outcome |
 | ----------- | ---------------------- | ------- |
 | `text` | any data type (`text`, `json`, `bool`, `int`, `decimal`, `array[E]`, `dict[text,V]`, record, enum, exception) | total — renders the value to its AgL-form text representation |
-| `json` | `text`, `json`, `bool`, `int`, `decimal`, `array[E]`, `dict[text,V]` | total — canonicalizes the value to `json` |
+| `json` | `text`, `json`, `bool`, `int`, `decimal`, `array[E]`/`dict[text,V]` **whose `E`/`V` is itself JSON-shaped** | total — canonicalizes the value to `json` |
 | `json` | record, enum, exception | total — structural JSON encoding (record → field object; enum → object with `"$case"` tag; exception → all fields including `trace_id`) |
 | `bool` | `bool` | total (no-op) |
 | `bool` | `text`, `json` | fallible — value must be a JSON boolean |
@@ -784,6 +791,15 @@ at runtime; **fallible** ones may raise `CastError`.
 Any source–target combination not listed above is a static cast error. In
 particular: `bool as int`, `int as bool`, `bool as decimal`, `decimal as bool`
 are all static errors — booleans never convert to or from numbers.
+
+An `array[E]`/`dict[text, V]` `as json` cast is itself only legal when `E`/`V`
+is JSON-shaped, unlike the record/enum row directly above it: `array[R] as
+json` for a record (or enum) element type `R` is a **static cast error**,
+even though `R as json` and `array[array[int]] as json` both work. There is
+no single cast that converts a container of nominal values to `json` in one
+step — cast each nominal element to `json` individually
+(`rs[0] as json, rs[1] as json, …`) and assemble the `array[json]`/
+`dict[text, json]` from the converted elements.
 
 ### Total vs fallible casts
 
@@ -840,11 +856,13 @@ record R
 let r: R = R(x = 1)
 print r              # → R(x = 1)      (AgL render form — the default)
 
-# A json value printed (or interpolated) directly is top-level, so it renders
-# as pretty, multi-line JSON (2-space indent):
-print(r as json)     # → {
-                     #      "x": 1
-                     #    }
+# print renders a json value as compact JSON, same as any other value:
+print(r as json)     # → {"x": 1}
+
+# For indented, multi-line output, call render explicitly:
+print render(r as json, pretty = true)   # → {
+                                          #      "x": 1
+                                          #    }
 ```
 
 ### `text as json` — embedding, not parsing

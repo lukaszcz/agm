@@ -58,7 +58,7 @@ A **program** is the entry module together with its transitive imports. Unless t
 | Scope / name resolution | `src/agm/agl/scope/` |
 | Type checking | `src/agm/agl/typecheck/` |
 | Pattern-match compilation, artifacts, and diagnostics | `src/agm/agl/matchcompile/` |
-| Semantic foundation (values, types, exceptions, text literals, cycle detection) | `src/agm/agl/semantics/` |
+| Semantic foundation (values, types, exceptions, text literals, cycle detection, value copying) | `src/agm/agl/semantics/` |
 | Lowering / linking | `src/agm/agl/lower/` |
 | Execution IR (data model) | `src/agm/agl/ir/` |
 | Evaluator | `src/agm/agl/eval/` |

@@ -42,8 +42,9 @@ no declaration:
 
 The host's role is to **supply a backing** — the actual agent that runs — for
 each root declaration and each referenced scoped agent path. An unreferenced
-scoped declaration remains a static member and may warn, but lowering defers
-its runtime handle. A declaration may also carry an optional *runner hint*, an
+scoped declaration remains a static member and may warn, but a runtime handle
+for it is materialized only when referenced. A declaration may also carry an
+optional *runner hint*, an
 opaque static string the host may use to launch the agent; the host ignores
 it if it has its own backing, and host configuration for a given name always
 takes precedence over the source hint. The hint is never interpreted by the
@@ -220,6 +221,10 @@ absent. The trace can contain:
 Every exception value carries a `trace_id` field linking it to the
 corresponding trace record. The normalized (recovered) JSON of a lenient
 parse is traced alongside the raw output.
+
+A traced value with a reference cycle ([Types](types.md#cycles)) is recorded
+as a placeholder marker rather than failing the run: tracing is a debug
+facility, so it must never turn an otherwise-working run into a failing one.
 
 ## Results and termination
 

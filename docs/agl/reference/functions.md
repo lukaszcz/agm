@@ -676,7 +676,6 @@ exist because function values are capability handles, not data.
 
 The REPL echoes bare function values with the same opaque rendering. That
 display is available through AgL rendering, but it is not JSON data.
-programs through `print`, interpolation, `as text`, or JSON conversion.
 
 ## Recursion and the call-depth limit
 

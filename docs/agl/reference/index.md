@@ -25,9 +25,12 @@ oriented orchestration language whose core ideas are:
 - **Functions are first-class.** User-defined `def` declarations and `fn`
   lambdas produce values of function type `A -> B` or `(A, B) -> C`; they may be stored,
   passed, and returned.
-- **Mutability is explicit.** `let` binds immutably, `var` binds mutably,
-  `:=` updates; equality is `==`, while a single `=` is a binder and
-  named-argument separator, never assignment.
+- **Mutability is explicit.** `let` binds a name immutably and `var` binds it
+  mutably, with `:=` updating a mutable binding — but binding never copies, so
+  arrays and dicts are mutable objects that every alias observes, regardless
+  of whether the binding that reaches them is `let` or `var`. Equality is
+  `==`, while a single `=` is a binder and named-argument separator, never
+  assignment.
 - **Failures are exceptions.** Parse failures, cast failures, loop exhaustion,
   explicitly raised match errors, recursion depth, and shell errors are typed,
   catchable exceptions.
@@ -76,7 +79,7 @@ until final is Pass
 | [Modules](modules.md) | File-based module system: module identity, import forms, qualified access, visibility, cyclic imports, REPL imports |
 | [Named scopes](scopes.md) | Nestable declaration namespaces, qualifier paths, visibility, and `open` |
 | [Types](types.md) | Built-in types (`unit`, `text`, `int`, `decimal`, `bool`, `json`, `agent`, function types), `record`/`enum`/`type` declarations, standard core types (`Option`, `ExecResult`, `ParsePolicy`), assignability, casts and convertibility (`as`/`as?`), reference semantics, cycles, and copying (`copy`/`shallow_copy`) |
-| [Bindings and scope](bindings-and-scope.md) | `let`, `var`, `:=`, `param`, `program`, `agent`, `def`, lexical scoping, shadowing |
+| [Bindings and scope](bindings-and-scope.md) | `let`, `var`, `:=`, `param`, `builtin var`, `agent`, `def`, lexical scoping, shadowing |
 | [Expressions](expressions.md) | Literals, constructors, calls, operators, `as`/`as?` cast operators, `render`, `parse_json`, `case`/`if` expressions, `unit`-typed forms, expected-type propagation |
 | [Functions](functions.md) | `def` declarations, `fn` lambdas, optional/named arguments, function types, first-class values, recursion and depth limit |
 | [Pattern matching](pattern-matching.md) | Patterns, source priority, exhaustiveness, redundancy |

@@ -357,11 +357,12 @@ Assignment has type `unit` and returns `void`. A bare (non-indexed) cross-module
 assignment target — written with a qualifier, or bare when an open import puts
 the name in scope — is valid only when it resolves to a `builtin var`;
 type-qualified constructor forms are not assignment targets. An indexed
-assignment target has no binding of its own: its object expression is
-evaluated like any other read, so it is legal on any array- or dict-typed
-expression, qualified or not — a `let` binding, a `param`, a field, or a call
-result. Each opening `[` must be adjacent to the target name or preceding
-index: `xs[0]` is indexed assignment, while `xs [0]` is not.
+assignment target's object expression is evaluated like any other read, so
+`assign_target` accepts any array- or dict-typed expression there — see
+[Bindings and scope](bindings-and-scope.md#--destructive-assignment) for which
+roots are legal and the evaluation order. Each opening `[` must be adjacent to
+the target name or preceding index: `xs[0]` is indexed assignment, while
+`xs [0]` is not.
 
 ## Loops
 

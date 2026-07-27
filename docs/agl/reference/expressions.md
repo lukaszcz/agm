@@ -396,7 +396,8 @@ with `key` and `message` fields.
 ## Calls
 
 All calls use the same uniform parenthesized syntax. This applies equally to
-user `def`s, built-in functions (`ask`, `exec`, `print`, `render`), and
+user `def`s, built-in functions (`ask`, `exec`, `print`, `render`, `parse_json`,
+`copy`, `shallow_copy`), and
 function values stored in bindings:
 
 ```ebnf
@@ -525,7 +526,13 @@ catch JsonParseError as e =>
 ```
 
 `parse_json` cannot be bound as a function value (`let f = parse_json` is a
-static error, because `parse_json`'s type is not fully expressible).
+static error, because built-ins are only valid in call position).
+
+## `copy` and `shallow_copy`
+
+`copy` and `shallow_copy` are the built-ins that ask for an independent value
+when binding is by reference — see [Copying values](types.md#copying-values)
+for the full deep-vs-shallow model and how each treats a cyclic value.
 
 ## Operators
 

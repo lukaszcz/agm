@@ -32,7 +32,7 @@ from agm.agl.semantics.type_table import (
     comparable_types,
     create_seeded_type_table,
     is_json_convertible,
-    type_may_be_cyclic,
+    json_cast_hint,
 )
 from agm.agl.semantics.types import (
     BUILTIN_PRELUDE_TYPES,
@@ -1474,142 +1474,6 @@ class TestComparableTypesTableAware:
 # ---------------------------------------------------------------------------
 
 
-class TestTypeMayBeCyclic:
-    def test_scalars_and_containers(self) -> None:
-        table = TypeTable()
-        assert type_may_be_cyclic(IntType(), table) is False
-        assert type_may_be_cyclic(JsonType(), table) is False
-        assert type_may_be_cyclic(ArrayType(IntType()), table) is True
-        assert type_may_be_cyclic(DictType(IntType()), table) is True
-
-    def test_nominals_and_relevant_type_parameters(self) -> None:
-        table = TypeTable()
-        table.register(
-            TypeDef(
-                kind="record",
-                name="Box",
-                module_id=ENTRY_ID,
-                type_params=("T",),
-                fields=(("value", TypeVarType("T")),),
-            )
-        )
-        table.register(
-            TypeDef(
-                kind="record",
-                name="Point",
-                module_id=ENTRY_ID,
-                fields=(("x", IntType()),),
-            )
-        )
-        table.register(
-            TypeDef(
-                kind="record",
-                name="Phantom",
-                module_id=ENTRY_ID,
-                type_params=("T",),
-                fields=(("x", IntType()),),
-            )
-        )
-        table.register(
-            TypeDef(
-                kind="record",
-                name="Node",
-                module_id=ENTRY_ID,
-                fields=(("children", ArrayType(RecordType("Node", module_id=ENTRY_ID))),),
-            )
-        )
-        assert type_may_be_cyclic(RecordType("Point", module_id=ENTRY_ID), table) is False
-        assert (
-            type_may_be_cyclic(RecordType("Box", type_args=(IntType(),), module_id=ENTRY_ID), table)
-            is False
-        )
-        assert (
-            type_may_be_cyclic(
-                RecordType("Box", type_args=(ArrayType(IntType()),), module_id=ENTRY_ID), table
-            )
-            is True
-        )
-        assert (
-            type_may_be_cyclic(
-                RecordType("Phantom", type_args=(ArrayType(IntType()),), module_id=ENTRY_ID), table
-            )
-            is False
-        )
-        assert type_may_be_cyclic(RecordType("Node", module_id=ENTRY_ID), table) is True
-
-    def test_unknown_and_variable_types_are_conservative(self) -> None:
-        table = TypeTable()
-        assert type_may_be_cyclic(TypeVarType("T"), table) is True
-        assert type_may_be_cyclic(InferenceVarType(), table) is True
-        assert type_may_be_cyclic(RecordType("Unknown", module_id=ENTRY_ID), table) is True
-
-    def test_analysis_handles_nominal_dependencies_and_function_fields(self) -> None:
-        table = TypeTable()
-        table.register(
-            TypeDef(
-                kind="record",
-                name="Inner",
-                module_id=ENTRY_ID,
-                fields=(("values", ArrayType(IntType())),),
-            )
-        )
-        table.register(
-            TypeDef(
-                kind="record",
-                name="Outer",
-                module_id=ENTRY_ID,
-                fields=(("inner", RecordType("Inner", module_id=ENTRY_ID)),),
-            )
-        )
-        table.register(
-            TypeDef(
-                kind="record",
-                name="FunctionHolder",
-                module_id=ENTRY_ID,
-                fields=(("f", FunctionType((), IntType())),),
-            )
-        )
-        table.register(
-            TypeDef(
-                kind="record",
-                name="MissingReference",
-                module_id=ENTRY_ID,
-                fields=(("value", RecordType("Missing", module_id=ENTRY_ID)),),
-            )
-        )
-        table.register(TypeDef(kind="exception", name="Fault", module_id=ENTRY_ID))
-        table.register(
-            TypeDef(
-                kind="exception",
-                name="ArrayFault",
-                module_id=ENTRY_ID,
-                fields=(("values", ArrayType(IntType())),),
-            )
-        )
-        table.register(
-            TypeDef(
-                kind="record",
-                name="FaultHolder",
-                module_id=ENTRY_ID,
-                fields=(("fault", ExceptionType("Fault", module_id=ENTRY_ID)),),
-            )
-        )
-        table.register(
-            TypeDef(
-                kind="record",
-                name="ArrayFaultHolder",
-                module_id=ENTRY_ID,
-                fields=(("fault", ExceptionType("ArrayFault", module_id=ENTRY_ID)),),
-            )
-        )
-        assert type_may_be_cyclic(RecordType("Outer", module_id=ENTRY_ID), table) is True
-        assert type_may_be_cyclic(RecordType("FunctionHolder", module_id=ENTRY_ID), table) is False
-        assert type_may_be_cyclic(RecordType("MissingReference", module_id=ENTRY_ID), table) is True
-        assert type_may_be_cyclic(RecordType("FaultHolder", module_id=ENTRY_ID), table) is False
-        assert type_may_be_cyclic(RecordType("ArrayFaultHolder", module_id=ENTRY_ID), table) is True
-        assert type_may_be_cyclic(ExceptionType("Fault", module_id=ENTRY_ID), table) is False
-
-
 class TestNominalReachesNonData:
     def test_record_of_scalars_has_equality(self) -> None:
         table = TypeTable()
@@ -1922,6 +1786,41 @@ class TestIsJsonConvertible:
         assert is_json_convertible(handle, table) is False
         concrete = RecordType(name="Phantom", type_args=(AgentType(),), module_id=ENTRY_ID)
         assert is_json_convertible(concrete, table) is True
+
+
+class TestJsonCastHint:
+    """The hint names ``as json`` only where that cast is what the value needs."""
+
+    def test_container_and_nominal_into_json_are_hinted(self) -> None:
+        table = _bad_record_table()
+        good = RecordType(name="Good", module_id=ENTRY_ID)
+        for value_type in (ArrayType(elem=IntType()), DictType(value=IntType()), good):
+            assert "as json" in json_cast_hint(value_type, JsonType(), table)
+
+    def test_scalar_into_json_is_not_hinted(self) -> None:
+        # A scalar is absorbed into a json slot implicitly, so naming the
+        # explicit cast would point at a step the value does not need.
+        table = TypeTable()
+        for scalar in (TextType(), BoolType(), IntType(), DecimalType(), JsonType()):
+            assert json_cast_hint(scalar, JsonType(), table) == ""
+
+    def test_value_without_a_json_representation_is_not_hinted(self) -> None:
+        # `as json` does not accept these either, so the hint would be wrong.
+        table = _bad_record_table()
+        for non_data in (
+            UnitType(),
+            AgentType(),
+            FunctionType(params=(IntType(),), result=IntType()),
+            RecordType(name="Bad", module_id=ENTRY_ID),
+        ):
+            assert json_cast_hint(non_data, JsonType(), table) == ""
+
+    def test_json_into_another_type_is_not_hinted(self) -> None:
+        # The reverse direction: the fix is a cast to the target type, never
+        # `as json`.
+        table = TypeTable()
+        for target in (TextType(), ArrayType(elem=IntType()), DictType(value=IntType())):
+            assert json_cast_hint(JsonType(), target, table) == ""
 
 
 class TestJsonRepresentationObstacle:

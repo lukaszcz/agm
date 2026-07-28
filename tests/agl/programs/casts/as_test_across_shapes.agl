@@ -1,6 +1,8 @@
-# `as?` skips conversion work only when its static source cannot close a
-# reference cycle. Both generic instantiations remain semantically true here;
-# the array instantiation retains the runtime trial path.
+# `as?` predicts whether the corresponding `as` would succeed. Only a value
+# that actually holds a reference cycle tests `false`: scalars, nominals,
+# enums, and generic instantiations — including one whose type argument is an
+# array — all test `true`, whether or not a cycle exists elsewhere in the
+# program.
 param close_cycle: bool
 
 record Scalar(value: int)

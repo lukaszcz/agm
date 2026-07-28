@@ -1,7 +1,7 @@
 """AgL trace store — records every significant runtime event as JSONL.
 
-Records every agent-call attempt, parse result, retry, mutation, ``print``,
-``exec`` command (with exit code, duration, and outputs), and exception, with a
+Records every agent-call attempt, parse result, retry, ``print``, ``exec``
+command (with exit code, duration, and outputs), and exception, with a
 ``trace_id`` + source span.  Persisted under ``.agent-files/`` via
 ``core/log`` helpers.  Honors ``--no-log``/``--log-file``.
 
@@ -10,7 +10,6 @@ Design :
   ``col`` (from the source span when available).
 - ``agent_call_attempt``: agent name, attempt index, prompt text.
 - ``parse_result``: ok flag, normalized output, error summary.
-- ``mutation``: binding name and serialized new value.
 - ``print``: rendered console output.
 - ``exec_command``: command text, exit_code, duration, stdout, stderr, timed_out.
 - ``exception``: exception type_name + trace_id (for linkage to
@@ -26,13 +25,10 @@ import uuid
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from agm.agl.runtime.serialize import AglNonDataValue, degraded_marker, value_to_json_obj
-from agm.agl.semantics.cycles import AglCyclicValue
 from agm.core.log import append_jsonl
 
 if TYPE_CHECKING:
     from agm.agl.ir.ids import Location
-    from agm.agl.semantics.values import Value
     from agm.agl.syntax.spans import SourceSpan
 
 
@@ -196,44 +192,6 @@ class TraceStore:
             extra["line"] = span.start_line
             extra["col"] = span.start_col
         self._emit("parse_result", new_trace_id(), extra)
-
-    def mutation(
-        self,
-        *,
-        name: str,
-        value: "Value",
-        span: "SourceSpan | Location | None" = None,
-    ) -> None:
-        """Record a store into a mutable (``var``) binding or an engine setting.
-
-        An indexed assignment (``xs[0] := v``) mutates the referenced array or
-        dict container, not a binding, and under reference semantics that
-        container may be reachable from any number of bindings — attributing
-        the mutation to one name would be wrong. It therefore emits no
-        ``mutation`` event; only a direct ``name := value`` store does.
-
-        Trace logging is an opt-in debug facility: a cyclic value, or a value
-        of a kind with no JSON representation (``unit``, ``agent``,
-        ``constructor``, ``function``, ``iterator``), stored into a traced
-        ``var`` must not fail the program, so either case is recorded as a
-        marker rather than serialized.
-        """
-        if self._path is None:
-            return
-        from agm.agl.runtime.serialize import dumps_exact
-
-        try:
-            serialized = dumps_exact(value_to_json_obj(value), indent=None)
-        except (AglCyclicValue, AglNonDataValue) as exc:
-            serialized = degraded_marker(exc)
-        extra: dict[str, object] = {
-            "name": name,
-            "value": serialized,
-        }
-        if span is not None:
-            extra["line"] = span.start_line
-            extra["col"] = span.start_col
-        self._emit("mutation", new_trace_id(), extra)
 
     def print_stmt(
         self,

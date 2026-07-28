@@ -3069,11 +3069,11 @@ class TestSerializeV2OpaqueValues:
         assert exc_info.value.kind == "iterator"
 
     def test_marker_text_matches_kind(self) -> None:
-        """``non_data_value_marker`` produces the same text every degrade site relies on."""
-        from agm.agl.runtime.serialize import AglNonDataValue, non_data_value_marker
+        """``degraded_marker`` produces the same text every degrade site relies on."""
+        from agm.agl.runtime.serialize import AglNonDataValue, degraded_marker
 
         exc = AglNonDataValue("unit")
-        assert non_data_value_marker(exc) == "<unit has no JSON representation>"
+        assert degraded_marker(exc) == "<unit has no JSON representation>"
 
 
 # ---------------------------------------------------------------------------

@@ -51,14 +51,13 @@ class AglNonDataValue(Exception):
     ``constructor``, ``function``, and ``iterator`` values — none of these
     kinds has a JSON-shaped representation. ``kind`` is the user-facing kind
     name (not the Python class name), used to build the substituted marker
-    text via :func:`non_data_value_marker`.
+    text in :func:`degraded_marker`.
 
     No evaluator path can produce a catchable AgL exception from this
     sentinel: every reachable conversion to ``json`` is statically gated
     (``is_json_convertible``, see ``semantics/type_table.py``) to types that
     have a JSON representation, so a non-data value can only ever reach this
     walk through a caller that degrades it rather than propagating it — see
-    ``runtime/trace.py``'s ``TraceSink.mutation`` and
     ``pipeline.py``'s ``exception_value_to_run_error``.
     """
 
@@ -67,27 +66,16 @@ class AglNonDataValue(Exception):
         self.kind = kind
 
 
-def non_data_value_marker(exc: AglNonDataValue) -> str:
-    """Build the placeholder text substituted for a non-data value.
-
-    Single shared constructor so every caller that converts an
-    :class:`AglNonDataValue` sentinel produces byte-identical marker text —
-    see ``runtime/trace.py`` and ``pipeline.py``.
-    """
-    return f"<{exc.kind} has no JSON representation>"
-
-
 def degraded_marker(exc: "AglCyclicValue | AglNonDataValue") -> str:
     """Return the placeholder text substituted for a value that cannot convert.
 
-    Maps either walk sentinel to its marker, so the two callers that must not
-    fail on a value they had no say in — trace logging (an opt-in debug
-    facility) and error reporting (already unwinding a real error) — catch one
-    pair and degrade identically, rather than each pairing up sentinels with
-    markers. Every other caller wants the sentinel and does not use this.
+    Maps either walk sentinel to its marker, so a caller that must not fail on
+    a value it had no say in — error reporting, already unwinding a real
+    error — can degrade it rather than crashing. Every other caller wants the
+    sentinel and does not use this.
     """
     if isinstance(exc, AglNonDataValue):
-        return non_data_value_marker(exc)
+        return f"<{exc.kind} has no JSON representation>"
     return CYCLIC_VALUE_MARKER
 
 

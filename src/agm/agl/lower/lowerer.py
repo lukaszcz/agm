@@ -167,7 +167,7 @@ from agm.agl.matchcompile import (
 from agm.agl.modules.ids import ENTRY_ID, PRELUDE_ID, ModuleId
 from agm.agl.scope.symbols import BinderKind, BindingRef, BuiltinKind
 from agm.agl.self_validation import self_validation_enabled
-from agm.agl.semantics.type_table import TypeTable, type_may_be_cyclic
+from agm.agl.semantics.type_table import TypeTable
 from agm.agl.semantics.types import (
     BUILTIN_EXCEPTIONS,
     BUILTIN_PRELUDE_TYPES,
@@ -1262,14 +1262,12 @@ class _Lowerer:
                     )
                 # `as?`: a no-op conversion performs no walk and cannot fail, so it
                 # short-circuits to evaluating the (possibly effectful) source, then
-                # yielding True. Render and JSON conversions do the same only when
-                # the source cannot hold a reference cycle; otherwise their trial
-                # conversion must yield False on that failure.
-                is_cycle_free_total = spec.kind in (
-                    CastKind.TOTAL_RENDER,
-                    CastKind.TOTAL_JSON,
-                ) and not type_may_be_cyclic(source_type, self._type_table)
-                if spec.kind is CastKind.TOTAL_NOOP or is_cycle_free_total:
+                # yielding True.  `TOTAL_RENDER`/`TOTAL_JSON` are NOT short-circuited
+                # here even though they always succeed on an acyclic value: rendering
+                # or JSON-serializing a cyclic value raises `CyclicValueError`, so
+                # `as?` must trial-convert them too and yield False on that failure
+                # (see `_on_cast_failure`'s `RETURN_BOOL` handling in the evaluator).
+                if spec.kind is CastKind.TOTAL_NOOP:
                     return IrSequence(
                         location=self._loc(span),
                         items=(inner, IrConstBool(location=self._loc(span), value=True)),
@@ -1997,6 +1995,21 @@ class _Lowerer:
         typ = self._checked.node_types.get(ref_node_id)
         return self._lower_constructor_from_type(typ, owner_name, variant, {}, span)
 
+    def _explicit_builtin_target_type(self, call_node: "Call") -> Type | None:
+        """Look up ``print``/``render``'s optional explicit ``::[T]`` type argument.
+
+        Unlike ``copy``/``shallow_copy`` (whose checked result *is* ``T``, so the
+        lowerer reads it straight off ``node_types[call_node.node_id]``), a
+        ``print``/``render`` call's own checked type is always ``unit``/``text`` —
+        the checker's ``_check_arg_with_optional_explicit_target`` resolves ``T``
+        only to validate the argument's assignability and then discards it. So
+        ``T`` is looked up here in ``explicit_builtin_targets``, the checker's
+        side table recording every built-in call's resolved explicit target
+        (see ``CheckedModule.explicit_builtin_targets``); it is absent exactly
+        when ``call_node`` has no explicit type argument.
+        """
+        return self._checked.explicit_builtin_targets.get(call_node.node_id)
+
     def _lower_builtin_call(
         self,
         kind: BuiltinKind,
@@ -2012,14 +2025,27 @@ class _Lowerer:
         loc = self._loc(span)
         match kind:
             case BuiltinKind.PRINT:
-                # print(expr) — lower the single positional argument.
-                arg_ir = self.lower_expr(call_node.args[0])
+                # print(expr) / print::[T](expr) — lower the argument, coerced to
+                # an explicit ``::[T]`` target when present (see
+                # ``_explicit_builtin_target_type``).
+                target = self._explicit_builtin_target_type(call_node)
+                arg_ir = (
+                    self.lower_expr(call_node.args[0])
+                    if target is None
+                    else self.lower_coerced(call_node.args[0], target)
+                )
                 return IrPrint(location=loc, value=arg_ir)
 
             case BuiltinKind.RENDER:
-                # render(expr, pretty:, quote_strings:) — lower the value and
-                # any supplied boolean display options.
-                arg_ir = self.lower_expr(call_node.args[0])
+                # render(expr, pretty:, quote_strings:) / render::[T](expr, ...) —
+                # lower the value (coerced to an explicit ``::[T]`` target when
+                # present) and any supplied boolean display options.
+                target = self._explicit_builtin_target_type(call_node)
+                arg_ir = (
+                    self.lower_expr(call_node.args[0])
+                    if target is None
+                    else self.lower_coerced(call_node.args[0], target)
+                )
                 pretty = None
                 quote_strings = None
                 for named in call_node.named_args:

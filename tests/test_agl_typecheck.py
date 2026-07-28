@@ -5424,6 +5424,48 @@ class TestDictLiterals:
 
 
 # ---------------------------------------------------------------------------
+# json_cast_hint directionality: the hint only makes sense in the
+# value -> json direction (an explicit `as json` cast accepts what an
+# implicit coercion does not absorb). It must never fire when the *value*
+# is json and the target is something else.
+# ---------------------------------------------------------------------------
+
+
+class TestJsonCastHintDirectionality:
+    def test_json_to_text_not_hinted(self) -> None:
+        err = reject_type("let j: json = 1\nlet t: text = j\nt")
+        assert "as json" not in str(err).lower()
+
+    def test_json_to_array_not_hinted(self) -> None:
+        err = reject_type("let j: json = 1\nlet xs: array[int] = j\nxs")
+        assert "as json" not in str(err).lower()
+
+    def test_json_to_dict_not_hinted(self) -> None:
+        err = reject_type("let j: json = 1\nlet d: dict[text, int] = j\nd")
+        assert "as json" not in str(err).lower()
+
+    def test_in_operator_json_value_against_non_json_target_not_hinted(self) -> None:
+        # The 'in' site's value is the left operand and the target is the
+        # array element type; here the value is json and the target is a
+        # plain int, so the hint must not fire even though json is involved.
+        err = reject_type("let j: json = 1\nlet ys: array[int] = [1, 2]\nj in ys")
+        assert "as json" not in str(err).lower()
+
+    def test_value_without_json_representation_not_hinted(self) -> None:
+        # An `as json` cast does not accept an agent either, so naming it
+        # would send the user down a dead end.
+        err = reject_type("agent a\nlet j: json = a\nj")
+        assert "as json" not in str(err).lower()
+
+    def test_in_operator_array_value_against_json_target_still_hinted(self) -> None:
+        # The reverse direction at the same call site: an array value against
+        # a json element target is exactly the case an explicit `as json`
+        # cast fixes, so the hint must still fire.
+        err = reject_type("let xs: array[int] = [1, 2]\nlet ys: array[json] = []\nxs in ys")
+        assert "as json" in str(err).lower()
+
+
+# ---------------------------------------------------------------------------
 # Provisional container literals
 # ---------------------------------------------------------------------------
 
@@ -5689,9 +5731,21 @@ class TestTypeDeclarations:
         err = reject_type("record R\n  x: int\nlet r: json = R(x = 1)\nr")
         assert "json" in str(err).lower() or "mismatch" in str(err).lower()
 
+    def test_record_to_json_raises_with_cast_hint(self) -> None:
+        # A record is not JSON-shaped (it fails is_assignable into json), but
+        # it does have a JSON representation (as json converts it), so the
+        # diagnostic must name the explicit cast — unlike the bare "Type
+        # mismatch" a non-JSON-convertible target would get.
+        err = reject_type("record R\n  x: int\nlet r: json = R(x = 1)\nr")
+        assert "as json" in str(err).lower()
+
     def test_enum_not_json_shaped(self) -> None:
         err = reject_type("enum E\n  | A\nlet e: json = A()\ne")
         assert "json" in str(err).lower() or "mismatch" in str(err).lower()
+
+    def test_enum_to_json_raises_with_cast_hint(self) -> None:
+        err = reject_type("enum E\n  | A\nlet e: json = A()\ne")
+        assert "as json" in str(err).lower()
 
 
 # ---------------------------------------------------------------------------

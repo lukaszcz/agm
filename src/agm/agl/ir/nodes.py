@@ -480,10 +480,7 @@ class IrIndexSet:
     (``m["a"]["b"] := v``) falls out for free: ``container`` is itself an
     ``IrIndex`` that reads the inner container by reference. Mutates the
     container in place and evaluates to the non-printable unit, exactly as
-    ``IrAssign`` does. Emits no ``trace.mutation`` event: it mutates a
-    container, not a binding, and that container may be reachable from any
-    number of bindings, so attributing the mutation to one name would be
-    wrong.
+    ``IrAssign`` does.
     """
 
     location: Location

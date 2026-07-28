@@ -202,6 +202,36 @@ class TestHandleEqualityHashReprInPython:
         result, _ = evaluate_ir_with_externs(source, companion, tmp_path)
         assert result["r"] == BoolValue(True)
 
+    def test_repr_of_a_retained_handle_reflects_a_mutation_made_after_sealing(
+        self, tmp_path: Path
+    ) -> None:
+        """A sealed array/dict is wrapped live, not snapshotted: a companion
+        that retains a handle across two calls (via module state, mirroring
+        `test_handle_stashed_from_a_previous_call_rejected`) and `repr()`s it
+        both times must see the mutation AgL made to the array in between,
+        never a repr cached from the first `repr()` call."""
+        source = (
+            "extern def stash[T](x: T) -> text\n"
+            "extern def show() -> text\n"
+            "var xs: array[int] = [1, 2]\n"
+            "let before = stash(xs)\n"
+            "xs[0] := 99\n"
+            "let after = show()\n"
+            "()\n"
+        )
+        companion = (
+            "_stash = None\n"
+            "def stash(x):\n"
+            "    global _stash\n"
+            "    _stash = x\n"
+            "    return repr(x)\n"
+            "def show():\n"
+            "    return repr(_stash)\n"
+        )
+        result, _ = evaluate_ir_with_externs(source, companion, tmp_path)
+        assert result["before"] == TextValue("[1, 2]")
+        assert result["after"] == TextValue("[99, 2]")
+
 
 # ---------------------------------------------------------------------------
 # Sealing violations: every one an ExternError catchable in AgL

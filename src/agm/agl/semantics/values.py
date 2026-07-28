@@ -22,7 +22,7 @@ Design constraints
 from __future__ import annotations
 
 import decimal
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 from typing import TypeAlias
 
@@ -376,13 +376,11 @@ def values_equal(a: Value, b: Value, _seen: "set[tuple[int, int]] | None" = None
     if isinstance(a, ArrayValue):
         if not isinstance(b, ArrayValue) or len(a.elements) != len(b.elements):
             return False
-        return _children_equal(a, b, _seen, lambda: zip(a.elements, b.elements))
+        return _children_equal(a, b, _seen, zip(a.elements, b.elements))
     if isinstance(a, DictValue):
         if not isinstance(b, DictValue) or a.entries.keys() != b.entries.keys():
             return False
-        return _children_equal(
-            a, b, _seen, lambda: ((v, b.entries[k]) for k, v in a.entries.items())
-        )
+        return _children_equal(a, b, _seen, ((v, b.entries[k]) for k, v in a.entries.items()))
     if isinstance(a, RecordValue):
         if not isinstance(b, RecordValue) or a.nominal != b.nominal:
             return False
@@ -400,7 +398,7 @@ def _children_equal(
     a: Value,
     b: Value,
     seen: "set[tuple[int, int]] | None",
-    pairs: "Callable[[], Iterable[tuple[Value, Value]]]",
+    pairs: "Iterable[tuple[Value, Value]]",
     /,
 ) -> bool:
     """Compare the aligned children of *a* and *b*, memoizing the ``(a, b)`` pair.
@@ -415,8 +413,9 @@ def _children_equal(
     single ``False`` anywhere aborts the whole comparison: every recursive
     call sits inside an ``all(...)``, so the first mismatch short-circuits
     every enclosing walk and the root returns ``False`` without consulting
-    *seen* again. *pairs* is a thunk so the child iterable is only built once
-    the memo has been missed.
+    *seen* again. *pairs* is a plain iterable — every call site already
+    builds it lazily (``zip`` or a generator expression), so there is nothing
+    for a thunk to defer.
     """
     key = (id(a), id(b))
     if seen is None:
@@ -424,7 +423,7 @@ def _children_equal(
     elif key in seen:
         return True
     seen.add(key)
-    return all(values_equal(x, y, seen) for x, y in pairs())
+    return all(values_equal(x, y, seen) for x, y in pairs)
 
 
 def _fields_equal(
@@ -436,7 +435,7 @@ def _fields_equal(
 ) -> bool:
     """Compare two nominal field maps, memoizing the owning ``(a, b)`` pair."""
     return a_fields.keys() == b_fields.keys() and _children_equal(
-        a, b, seen, lambda: ((v, b_fields[k]) for k, v in a_fields.items())
+        a, b, seen, ((v, b_fields[k]) for k, v in a_fields.items())
     )
 
 

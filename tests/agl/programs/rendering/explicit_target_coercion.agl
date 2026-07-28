@@ -1,0 +1,28 @@
+# `print::[T]` and `render::[T]` coerce their argument to the explicit target
+# type first, exactly like `let tmp: T = x; print tmp` -- the same coercion
+# `copy::[T]` already applies to its own argument. `render::[json]` renders a
+# text value as a *quoted* JSON string even when `quote_strings = false`,
+# because `quote_strings` only affects rendering the value at its OWN
+# (unwrapped) type; once coerced to json, the value is JSON, not text.
+param label: text
+
+# No explicit target: unchanged baseline (text prints/renders bare).
+print(label)
+print(render(label, quote_strings = false))
+
+# Explicit `::[json]` target: a text argument coerces to json, so both `print`
+# and `render` quote/escape it -- even `render(..., quote_strings = false)`,
+# since `quote_strings` no longer applies once the value is json.
+print::[json](label)
+print(render::[json](label, quote_strings = false))
+
+# `copy::[json]` already coerces (pre-existing behavior); printing its result
+# must match `print::[json]` exactly, pinning that both paths agree.
+print(copy::[json](label))
+
+# Scalar widening target: int -> decimal. A whole-number decimal renders the
+# same as the originating int: no coercion failure, no unexpected formatting.
+print::[decimal](7)
+
+# An explicit target equal to the argument's own natural type is a no-op.
+print::[text](label)

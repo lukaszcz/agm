@@ -117,7 +117,7 @@ class TestTraceFileCreated:
 
 
 # ---------------------------------------------------------------------------
-# 2. Record kinds: print, mutation (assignment), exec command, agent call
+# 2. Record kinds: print, exec command, agent call
 # ---------------------------------------------------------------------------
 
 
@@ -149,109 +149,6 @@ class TestPrintRecord:
         assert print_recs
         rec = print_recs[0]
         assert "line" in rec or "span" in rec
-
-
-class TestMutationRecord:
-    def test_assign_produces_mutation_record(self, tmp_path: Path) -> None:
-        log_path = tmp_path / "trace.jsonl"
-        rt = PipelineDriver()
-        rt.run("var x = 1\nx := 2", log_file=log_path)
-        records = _load_jsonl(log_path)
-        kinds = [r.get("kind") for r in records]
-        assert "mutation" in kinds
-
-    def test_mutation_record_has_name_and_value(self, tmp_path: Path) -> None:
-        log_path = tmp_path / "trace.jsonl"
-        rt = PipelineDriver()
-        rt.run("var x = 1\nx := 42", log_file=log_path)
-        records = _load_jsonl(log_path)
-        mut_recs = [r for r in records if r.get("kind") == "mutation"]
-        assert mut_recs
-        rec = mut_recs[0]
-        assert rec.get("name") == "x"
-
-    def test_indexed_assignment_produces_no_mutation_record(self, tmp_path: Path) -> None:
-        """`xs[0] := v` mutates a container, not a binding, so it emits no event."""
-        log_path = tmp_path / "trace.jsonl"
-        rt = PipelineDriver()
-        rt.run("var xs = [1, 2]\nxs[0] := 9", log_file=log_path)
-        records = _load_jsonl(log_path)
-        mut_recs = [r for r in records if r.get("kind") == "mutation"]
-        assert mut_recs == []
-
-    def test_builtin_setting_store_produces_mutation_record(self, tmp_path: Path) -> None:
-        log_path = tmp_path / "trace.jsonl"
-        agl_file = tmp_path / "settings.agl"
-        agl_file.write_text(
-            "open import std/config\nstd/config::strict-json := true\n",
-            encoding="utf-8",
-        )
-        exec_command.run(_exec_args(agl_file, log_file=str(log_path)))
-
-        records = _load_jsonl(log_path)
-        mutation = next(r for r in records if r.get("kind") == "mutation")
-        assert mutation["name"] == "strict-json"
-        assert mutation["value"] == "true"
-
-    def test_mutation_record_of_a_cyclic_value_degrades_to_a_marker(self, tmp_path: Path) -> None:
-        """Trace logging is an opt-in debug facility: storing a cyclic array into
-        a traced `var` must not fail the program -- the mutation record substitutes
-        a marker for the value it could not serialize."""
-        log_path = tmp_path / "trace.jsonl"
-        rt = PipelineDriver()
-        source = (
-            "record Node(children: array[Node])\n"
-            "var xs: array[Node] = [Node(children = [])]\n"
-            "let n = Node(children = xs)\n"
-            "xs[0] := n\n"
-            "var latest: array[Node] = []\n"
-            "latest := xs\n"
-        )
-        result = rt.run(source, log_file=log_path)
-        assert result.ok, result.error
-        records = _load_jsonl(log_path)
-        mut_recs = [r for r in records if r.get("kind") == "mutation" and r.get("name") == "latest"]
-        assert mut_recs
-        assert mut_recs[0]["value"] == "<cyclic value>"
-
-    @pytest.mark.parametrize(
-        ("field_decl", "field_ctor", "marker"),
-        [
-            pytest.param(
-                "run: (int) -> int",
-                "run = fn(n: int) => n + 1",
-                "<function has no JSON representation>",
-                id="function_field",
-            ),
-            pytest.param(
-                "note: unit",
-                "note = ()",
-                "<unit has no JSON representation>",
-                id="unit_field",
-            ),
-        ],
-    )
-    def test_mutation_record_of_a_non_data_value_degrades_to_a_marker(
-        self, tmp_path: Path, field_decl: str, field_ctor: str, marker: str
-    ) -> None:
-        """Trace logging is an opt-in debug facility: storing a record with a
-        field of a kind with no JSON representation (function, unit) into a
-        traced `var` must not fail the program -- the mutation record
-        substitutes a marker for the whole value it could not serialize while
-        the run still succeeds."""
-        log_path = tmp_path / "trace.jsonl"
-        rt = PipelineDriver()
-        source = (
-            f"record Holder({field_decl}, x: int)\n"
-            f"var latest: Holder = Holder({field_ctor}, x = 1)\n"
-            f"latest := Holder({field_ctor}, x = 2)\n"
-        )
-        result = rt.run(source, log_file=log_path)
-        assert result.ok, result.error
-        records = _load_jsonl(log_path)
-        mut_recs = [r for r in records if r.get("kind") == "mutation" and r.get("name") == "latest"]
-        assert mut_recs
-        assert mut_recs[0]["value"] == marker
 
 
 class TestExecCommandRecord:
@@ -686,9 +583,9 @@ class TestNoLog:
         jsonl_files = list(tmp_path.rglob("*.jsonl"))
         assert not jsonl_files
 
-    def test_no_log_with_decimal_mutation_still_works(self, tmp_path: Path) -> None:
-        """A no-log run that mutates a decimal binding still succeeds and writes
-        nothing ( early-out before any serialization/UUID work)."""
+    def test_no_log_with_decimal_assignment_still_works(self, tmp_path: Path) -> None:
+        """A no-log run that assigns to a decimal binding still succeeds and
+        writes nothing."""
         rt = PipelineDriver()
         result = rt.run(
             "var x: decimal = 0.1\nx := x + 0.2",
@@ -697,21 +594,6 @@ class TestNoLog:
         assert result.ok
         jsonl_files = list(tmp_path.rglob("*.jsonl"))
         assert not jsonl_files
-
-    def test_noop_store_mutation_early_outs_before_serialize(self) -> None:
-        """``mutation()`` on a no-op store (path=None) returns without invoking
-        the serializer.  Observable via a value the serializer would choke on:
-        the early-out means no serialization (and no file) happens."""
-        from agm.agl.runtime.trace import TraceStore
-        from agm.agl.semantics.values import DecimalValue
-
-        ts = TraceStore(path=None)
-        # If the early-out were missing this would still run dumps_exact; the
-        # honest check is that the no-op call neither raises nor produces output.
-        ts.run_start()
-        ts.mutation(name="x", value=DecimalValue(Decimal("0.3")), span=None)
-        ts.run_end(ok=True)
-        assert ts.path is None
 
 
 # ---------------------------------------------------------------------------
@@ -763,31 +645,7 @@ class TestDryRunNoTrace:
 
 
 # ---------------------------------------------------------------------------
-# 9. Decimal exactness in traced values
-# ---------------------------------------------------------------------------
-
-
-class TestDecimalExactness:
-    def test_decimal_value_traced_exactly(self, tmp_path: Path) -> None:
-        """A Decimal in a mutation trace must survive round-trip without float error."""
-        log_path = tmp_path / "trace.jsonl"
-        rt = PipelineDriver()
-        # 0.1 + 0.2 should NOT produce the float approximation 0.30000000000000004.
-        rt.run(
-            "var x: decimal = 0.1\nx := x + 0.2",
-            log_file=log_path,
-        )
-        records = _load_jsonl(log_path)
-        mut_recs = [r for r in records if r.get("kind") == "mutation"]
-        assert mut_recs
-        # The last mutation should have the value 0.3 (exact decimal semantics).
-        last_val = mut_recs[-1].get("value")
-        # Parsed from JSON: the serialized form must be "0.3" (not "0.30000...")
-        assert last_val == "0.3" or last_val == Decimal("0.3") or str(last_val) == "0.3"
-
-
-# ---------------------------------------------------------------------------
-# 10. Source spans in records
+# 9. Source spans in records
 # ---------------------------------------------------------------------------
 
 
@@ -818,7 +676,7 @@ class TestSourceSpans:
 
 
 # ---------------------------------------------------------------------------
-# 11. append_jsonl general helper in core/log
+# 10. append_jsonl general helper in core/log
 # ---------------------------------------------------------------------------
 
 
@@ -881,7 +739,7 @@ class TestAppendJsonl:
 
 
 # ---------------------------------------------------------------------------
-# 12. TraceStore properties and no-span branches
+# 11. TraceStore properties and no-span branches
 # ---------------------------------------------------------------------------
 
 
@@ -972,14 +830,12 @@ class TestTraceStoreProperties:
         import json as _json
 
         from agm.agl.runtime.trace import TraceStore
-        from agm.agl.semantics.values import IntValue
 
         p = tmp_path / "t.jsonl"
         ts = TraceStore(path=p)
         ts.run_start()
         ts.agent_call_attempt(agent="x", attempt=0, prompt="p", span=None)
         ts.parse_result(ok=True, raw="r", normalized_raw="n", error_summary="", span=None)
-        ts.mutation(name="v", value=IntValue(1), span=None)
         ts.print_stmt(rendered="hi", span=None)
         ts.exec_command(
             command="echo",
@@ -1123,7 +979,7 @@ class TestUnparseableFeedback:
 
 
 # ---------------------------------------------------------------------------
-# 13. prepare_trace_log truncates an existing file (clean-file guarantee)
+# 12. prepare_trace_log truncates an existing file (clean-file guarantee)
 # ---------------------------------------------------------------------------
 
 

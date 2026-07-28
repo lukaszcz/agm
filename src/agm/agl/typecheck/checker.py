@@ -69,7 +69,12 @@ from agm.agl.scope.symbols import (
     duplicate_binder_message,
     immutable_assignment_message,
 )
-from agm.agl.semantics.type_table import TypeTable, cast_classification, comparable_types
+from agm.agl.semantics.type_table import (
+    TypeTable,
+    cast_classification,
+    comparable_types,
+    json_cast_hint,
+)
 from agm.agl.semantics.types import (
     AgentType,
     ArrayType,
@@ -95,7 +100,6 @@ from agm.agl.semantics.types import (
     contains_inference_var,
     free_type_vars,
     is_assignable,
-    json_cast_hint,
     substitute,
 )
 from agm.agl.syntax.nodes import (
@@ -539,6 +543,10 @@ class _Checker:
         # Type variables currently in scope (non-empty inside a generic def body).
         self._current_type_vars: frozenset[str] = frozenset()
         self._cast_specs: dict[int, CastSpec] = {}
+        # A built-in call's explicit ``::[T]`` type argument, keyed by Call.node_id.
+        # Absent when the call has none. Populated by BuiltinCallChecker via
+        # ``_record_explicit_builtin_target``.
+        self._explicit_builtin_targets: dict[int, Type] = {}
         # Argument bindings computed during the check, reused by the lowerer so it
         # never re-binds.  Keyed by Call/Pattern node_id (see ``ArgumentBindings``).
         self._function_call_bindings: dict[int, tuple[Expr | None, ...]] = {}
@@ -1884,6 +1892,7 @@ class _Checker:
             ("partial_calls", self._partial_calls),
             ("contract_specs", self._contract_specs),
             ("cast_specs", self._cast_specs),
+            ("explicit_builtin_targets", self._explicit_builtin_targets),
             ("extern_expr_targets", self._extern_expr_targets),
             ("extern_binding_targets", self._extern_binding_targets),
         ):
@@ -1905,6 +1914,13 @@ class _Checker:
         """Store a region-owned cast specification."""
         self._record_side_table_addition("cast_specs", self._cast_specs, node_id)
         self._cast_specs[node_id] = spec
+
+    def _record_explicit_builtin_target(self, node_id: int, target_type: Type) -> None:
+        """Store a region-owned explicit built-in call target type."""
+        self._record_side_table_addition(
+            "explicit_builtin_targets", self._explicit_builtin_targets, node_id
+        )
+        self._explicit_builtin_targets[node_id] = target_type
 
     def _record_function_call_binding(self, node_id: int, binding: tuple[Expr | None, ...]) -> None:
         """Store a region-owned declared-call argument binding."""
@@ -3526,7 +3542,7 @@ class _Checker:
             if not is_assignable(left_type, right_type.elem):
                 raise AglTypeError(
                     f"'in' element type mismatch: '{left_type!r}' in 'array[{right_type.elem!r}]'."
-                    f"{json_cast_hint(right_type.elem, left_type)}",
+                    f"{json_cast_hint(left_type, right_type.elem, self._env.type_table)}",
                     span=span,
                 )
             return BoolType()
@@ -4031,9 +4047,10 @@ class _Checker:
             elif is_assignable(unified, typ):
                 unified = typ
             elif not is_assignable(typ, unified):
+                table = self._env.type_table
+                hint = json_cast_hint(unified, typ, table) or json_cast_hint(typ, unified, table)
                 raise AglTypeError(
-                    f"{subject} have inconsistent types: '{unified!r}' and '{typ!r}'."
-                    f"{json_cast_hint(unified, typ)}",
+                    f"{subject} have inconsistent types: '{unified!r}' and '{typ!r}'.{hint}",
                     span=span,
                 )
         return unified
@@ -4609,7 +4626,7 @@ class _Checker:
             return
         raise AglTypeError(
             f"Type mismatch: expected '{target_type!r}', got '{value_type!r}'."
-            f"{json_cast_hint(target_type, value_type)}",
+            f"{json_cast_hint(value_type, target_type, self._env.type_table)}",
             span=span,
         )
 
@@ -4648,6 +4665,7 @@ class _Checker:
             pattern_binding_refs=self._pattern_binding_refs,
             pattern_constructor_refs=self._pattern_constructor_refs,
             pattern_constructor_owners=self._pattern_constructor_owners,
+            explicit_builtin_targets=self._explicit_builtin_targets,
         )
 
 

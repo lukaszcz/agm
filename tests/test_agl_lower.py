@@ -2221,6 +2221,78 @@ class TestHostOpLowering:
         assert ir_bind.value.pretty is not None
         assert ir_bind.value.quote_strings is not None
 
+    def test_print_no_explicit_target_lowers_argument_unchanged(self) -> None:
+        """print(x) with no ``::[T]`` type argument never wraps the argument in IrCoerce."""
+        from agm.agl.ir.nodes import IrCoerce, IrPrint
+
+        source = 'print("hi")\n()'
+        prog = _lower(source)
+        entry = prog.modules[list(prog.modules.keys())[-1]]
+        ir_print = next((node for node in entry.initializers if isinstance(node, IrPrint)), None)
+        assert isinstance(ir_print, IrPrint)
+        assert not isinstance(ir_print.value, IrCoerce)
+
+    def test_print_explicit_target_inserts_coercion(self) -> None:
+        """print::[json](x) coerces the argument to the explicit target type.
+
+        Regression test: the checker records a print/render call's own type as
+        unit/text regardless of an explicit ``::[T]``, so the lowerer must
+        re-resolve ``T`` from ``call_node.type_args`` rather than reading it off
+        the call node (which is how ``copy``/``shallow_copy`` do it).
+        """
+        from agm.agl.ir.nodes import IrCoerce, IrPrint
+        from agm.agl.ir.operations import ToJson
+
+        source = 'print::[json]("hi")\n()'
+        prog = _lower(source)
+        entry = prog.modules[list(prog.modules.keys())[-1]]
+        ir_print = next((node for node in entry.initializers if isinstance(node, IrPrint)), None)
+        assert isinstance(ir_print, IrPrint)
+        assert isinstance(ir_print.value, IrCoerce)
+        assert isinstance(ir_print.value.operation, ToJson)
+
+    def test_render_explicit_target_inserts_coercion(self) -> None:
+        """render::[json](x, ...) coerces the argument to the explicit target type."""
+        from agm.agl.ir.nodes import IrCoerce, IrRenderValue
+        from agm.agl.ir.operations import ToJson
+
+        source = 'let s = render::[json]("hi", quote_strings = false)\n()'
+        prog = _lower(source)
+        entry = prog.modules[list(prog.modules.keys())[-1]]
+        ir_bind = _let_root_capture(entry.initializers[0])
+        assert isinstance(ir_bind.value, IrRenderValue)
+        assert isinstance(ir_bind.value.value, IrCoerce)
+        assert isinstance(ir_bind.value.value.operation, ToJson)
+
+    def test_print_explicit_target_scalar_widening(self) -> None:
+        """print::[decimal](5) widens the int argument through IrCoerce, like copy."""
+        from agm.agl.ir.nodes import IrCoerce, IrPrint
+        from agm.agl.ir.operations import IntToDecimal
+
+        source = "print::[decimal](5)\n()"
+        prog = _lower(source)
+        entry = prog.modules[list(prog.modules.keys())[-1]]
+        ir_print = next((node for node in entry.initializers if isinstance(node, IrPrint)), None)
+        assert isinstance(ir_print, IrPrint)
+        assert isinstance(ir_print.value, IrCoerce)
+        assert isinstance(ir_print.value.operation, IntToDecimal)
+
+    def test_print_explicit_type_var_target_inside_generic_def_inserts_no_coercion(self) -> None:
+        """print::[T](x) inside a generic def resolves T to the def's own type variable.
+
+        No coercion is inserted (a bare type variable never triggers one), matching
+        ``copy::[T](x)`` in the same position.
+        """
+        from agm.agl.ir.nodes import IrCoerce, IrPrint
+
+        source = "def show[T](x: T) -> unit = print::[T](x)\n\nshow::[json]('hi')\n"
+        prog = _lower(source)
+        (desc,) = prog.functions.values()
+        assert isinstance(desc.impl, IrFunctionBody)
+        ir_print = desc.impl.body
+        assert isinstance(ir_print, IrPrint)
+        assert not isinstance(ir_print.value, IrCoerce)
+
     def test_parse_json_lowers_to_ir_parse_json(self) -> None:
         """parse_json(s) lowers to IrParseJson wrapping the argument expression."""
         from agm.agl.ir.nodes import IrParseJson
@@ -2761,45 +2833,35 @@ class TestIrConvertLowering:
         assert conv.failure_mode is ConversionFailureMode.RAISE_CAST_ERROR
         assert conv.recipe.strategy is ConversionStrategy.RENDER_TO_TEXT
 
-    def test_cycle_free_render_as_test_lowers_to_sequence(self) -> None:
-        """A cycle-free source skips the otherwise redundant render trial."""
-        from agm.agl.ir.nodes import IrSequence
+    def test_render_as_test_lowers_to_ir_convert_return_bool_not_sequence(self) -> None:
+        """'as? text' (TOTAL_RENDER) emits IrConvert(RETURN_BOOL), NOT IrSequence.
 
+        Rendering can raise CyclicValueError on a cyclic value, so `as?` must
+        trial-convert rather than short-circuit to True (unlike TOTAL_NOOP).
+        """
         prog = _lower("let r = 42 as? text\n()")
         bind = _let_root_capture(prog.modules[prog.entry_module].initializers[0])
-        assert isinstance(bind.value, IrSequence)
+        conv = bind.value
+        assert isinstance(conv, IrConvert), (
+            f"'as? text' must emit IrConvert, not {type(conv).__name__}"
+        )
+        assert conv.failure_mode is ConversionFailureMode.RETURN_BOOL
+        assert conv.recipe.strategy is ConversionStrategy.RENDER_TO_TEXT
 
-    def test_cycle_free_json_as_test_lowers_to_sequence(self) -> None:
-        """A cycle-free source skips the otherwise redundant JSON conversion trial."""
-        from agm.agl.ir.nodes import IrSequence
+    def test_json_as_test_lowers_to_ir_convert_return_bool_not_sequence(self) -> None:
+        """'as? json' (TOTAL_JSON) emits IrConvert(RETURN_BOOL), NOT IrSequence.
 
+        JSON serialization can raise CyclicValueError on a cyclic value, so
+        `as?` must trial-convert rather than short-circuit to True.
+        """
         prog = _lower("let r = 42 as? json\n()")
         bind = _let_root_capture(prog.modules[prog.entry_module].initializers[0])
-        assert isinstance(bind.value, IrSequence)
-
-    def test_container_as_test_keeps_trial_conversion(self) -> None:
-        """A source that can be cyclic retains the evaluator's false-on-cycle path."""
-        prog = _lower("let values = [1]\nlet r = values as? text\n()")
-        bind = _let_root_capture(prog.modules[prog.entry_module].initializers[1])
-        assert isinstance(bind.value, IrConvert)
-        assert bind.value.failure_mode is ConversionFailureMode.RETURN_BOOL
-
-    def test_generic_container_reachability_controls_as_test_lowering(self) -> None:
-        """Only a relevant generic argument containing a container retains conversion."""
-        from agm.agl.ir.nodes import IrSequence
-
-        prog = _lower(
-            "record Box[T]\n"
-            "  value: T\n"
-            "let safe: Box[int] = Box(value = 1)\n"
-            "let unsafe: Box[array[int]] = Box(value = [1])\n"
-            "let safe_test = safe as? json\n"
-            "let unsafe_test = unsafe as? json\n"
-            "()"
+        conv = bind.value
+        assert isinstance(conv, IrConvert), (
+            f"'as? json' must emit IrConvert, not {type(conv).__name__}"
         )
-        initializers = prog.modules[prog.entry_module].initializers
-        assert isinstance(_let_root_capture(initializers[2]).value, IrSequence)
-        assert isinstance(_let_root_capture(initializers[3]).value, IrConvert)
+        assert conv.failure_mode is ConversionFailureMode.RETURN_BOOL
+        assert conv.recipe.strategy is ConversionStrategy.TO_JSON
 
 
 # ---------------------------------------------------------------------------

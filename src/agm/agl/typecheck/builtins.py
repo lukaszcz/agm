@@ -121,6 +121,8 @@ class BuiltinCheckCtx(Protocol):
 
     def _record_contract_spec(self, node_id: int, spec: OutputContractSpec) -> None: ...
 
+    def _record_explicit_builtin_target(self, node_id: int, target_type: Type) -> None: ...
+
     def _append_call_site(self, call_site: CallSiteRecord) -> None: ...
 
     def _append_warning(self, warning: Diagnostic) -> None: ...
@@ -486,6 +488,12 @@ class BuiltinCallChecker:
         schema-compile their target — a bare type variable in
         ``copy::[T](v)`` is exactly what makes it work inside a generic
         ``def``.
+
+        Every resolution is also recorded into the checked module's
+        ``explicit_builtin_targets`` side table, keyed by ``node.node_id`` —
+        the lowerer's authoritative source for a call's explicit target type,
+        needed by ``print``/``render`` whose own checked result type discards
+        it (see ``CheckedModule.explicit_builtin_targets``).
         """
         if not node.type_args:
             return None
@@ -495,9 +503,11 @@ class BuiltinCallChecker:
                 f"got {len(node.type_args)}.",
                 span=node.span,
             )
-        return self._ctx._env.resolve_type_expr(
+        resolved = self._ctx._env.resolve_type_expr(
             node.type_args[0], span=node.span, type_vars=self._ctx._current_type_vars
         )
+        self._ctx._record_explicit_builtin_target(node.node_id, resolved)
+        return resolved
 
     def _reject_type_var_target(self, target_type: Type, span: SourceSpan) -> None:
         """an ask/exec/ask-request target type may not contain a type variable.

@@ -456,8 +456,10 @@ print res.stdout                       # field-access chain as sugar arg
 
 `print` cannot be bound as a function value (`let f = print` is a static
 error, because built-ins are only valid in call position). An explicit type
-argument (`print::[decimal](5)`) is accepted and requires the argument to be
-assignable to it.
+argument (`print::[decimal](5)`) is accepted, requires the argument to be
+assignable to it, and prints the argument coerced to that type — so
+`print::[json]("hi")` prints the quoted json form `"hi"`, not the bare text
+`hi`.
 
 ## `render`
 
@@ -482,8 +484,11 @@ let _ = render([1, 2], pretty = false)       # "[1, 2]"
 
 `render` cannot be bound as a function value (`let f = render` is a static
 error, because built-ins are only valid in call position). An explicit type
-argument (`render::[decimal](5)`) is accepted and requires the argument to be
-assignable to it.
+argument (`render::[decimal](5)`) is accepted, requires the argument to be
+assignable to it, and renders the argument coerced to that type — so
+`render::[json]("hi", quote_strings = false)` renders the quoted json form
+`"hi"`: `quote_strings` controls only a top-level `text` argument, and the
+argument is no longer `text` once coerced to `json`.
 
 ## `parse_json`
 

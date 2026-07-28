@@ -215,16 +215,12 @@ absent. The trace can contain:
   every parse result (raw output, normalized output, error summary);
 - every `exec` invocation (command, exit code, duration, stdout, stderr,
   timeout flag);
-- every `:=` mutation, including engine-setting writes, and every `print`;
+- every `print`;
 - every raised exception.
 
 Every exception value carries a `trace_id` field linking it to the
 corresponding trace record. The normalized (recovered) JSON of a lenient
 parse is traced alongside the raw output.
-
-A traced value with a reference cycle ([Types](types.md#cycles)) is recorded
-as a placeholder marker rather than failing the run: tracing is a debug
-facility, so it must never turn an otherwise-working run into a failing one.
 
 ## Results and termination
 
@@ -236,7 +232,10 @@ A run ends in one of three ways:
    host configuration error; nothing was executed.
 3. **Uncaught exception** — the program started and an exception reached the
    top. The host reports the exception's type name, fields, and the source
-   location of the raise site.
+   location of the raise site. A field holding a value with a reference cycle
+   ([Types](types.md#cycles)), or a value of a kind with no JSON
+   representation, is reported as a placeholder marker, so reporting a failure
+   never fails.
 
 ## Static call inventory
 

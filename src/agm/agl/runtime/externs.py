@@ -183,19 +183,21 @@ class _HandleState:
     """Deferred equality key and repr for a minted sealed handle.
 
     The wrapped value is already retained by the minting vault, so this holder
-    keeps only a reference to it and derives the structural equality key and
-    rendered repr lazily, on first ``__hash__``/``__eq__``/``__repr__``.  A
-    handle that merely crosses the boundary and is passed back — never hashed,
-    compared, or rendered — therefore pays none of that O(size) work.
+    keeps only a reference to it and derives the structural equality key
+    lazily, on first ``__hash__``/``__eq__``.  A handle that merely crosses
+    the boundary and is passed back — never hashed or compared — therefore
+    pays none of that O(size) work.  The repr, by contrast, is never memoized:
+    ``ArrayValue``/``DictValue`` are mutable in place, so a cached repr could
+    report pre-mutation contents for a handle a companion retains across
+    calls; :meth:`rendered` re-renders the wrapped value on every access.
     """
 
-    __slots__ = ("_value", "_eq_key", "_has_eq_key", "_repr")
+    __slots__ = ("_value", "_eq_key", "_has_eq_key")
 
     def __init__(self, value: Value) -> None:
         self._value = value
         self._eq_key: object = None
         self._has_eq_key = False
-        self._repr: str | None = None
 
     def eq_key(self) -> object:
         if not self._has_eq_key:
@@ -204,9 +206,7 @@ class _HandleState:
         return self._eq_key
 
     def rendered(self) -> str:
-        if self._repr is None:
-            self._repr = render_value(self._value)
-        return self._repr
+        return render_value(self._value)
 
 
 class _HandleVault:

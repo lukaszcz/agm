@@ -1,0 +1,18 @@
+{
+  "scenarios": [
+    {
+      "name": "plain_text",
+      "params": {"label": "hello"},
+      "expect": {
+        "stdout": "hello\nhello\n\"hello\"\n\"hello\"\n\"hello\"\n7\nhello\n"
+      }
+    },
+    {
+      "name": "text_needing_json_escaping",
+      "params": {"label": "a \"quoted\" str"},
+      "expect": {
+        "stdout": "a \"quoted\" str\na \"quoted\" str\n\"a \\\"quoted\\\" str\"\n\"a \\\"quoted\\\" str\"\n\"a \\\"quoted\\\" str\"\n7\na \"quoted\" str\n"
+      }
+    }
+  ]
+}

@@ -414,6 +414,16 @@ class CheckedModule:
         constructor pattern because a source-spelling ``ConstructorRef`` can
         name a transparent alias; downstream passes compare this identity
         instead of re-running candidate selection.
+    ``explicit_builtin_targets``
+        Maps a built-in call's ``Call.node_id`` → the resolved ``Type`` of its
+        explicit ``::[T]`` type argument, for every built-in that accepts one
+        (``print``, ``render``, ``copy``, ``shallow_copy``, ``ask``,
+        ``ask-request``, ``exec``). Omitted entirely when the call has no
+        explicit type argument. ``print``/``render`` lowering reads this to
+        recover the coercion target their own checked result type discards
+        (``unit``/``text``); ``copy``/``shallow_copy`` publish the same type
+        here as their checked result in ``node_types``, so either source works
+        for them.
     """
 
     resolved: ModuleResolution
@@ -436,6 +446,7 @@ class CheckedModule:
     pattern_binding_refs: dict[int, BindingRef] = field(default_factory=dict)
     pattern_constructor_refs: dict[int, ConstructorRef] = field(default_factory=dict)
     pattern_constructor_owners: dict[int, NominalId] = field(default_factory=dict)
+    explicit_builtin_targets: dict[int, Type] = field(default_factory=dict)
 
     def binding_for(self, node_id: int) -> BindingRef | None:
         """Return *node_id*'s checked binding, dereferencing a pattern slot."""

@@ -1038,12 +1038,6 @@ class IrInterpreter:
                 # A simple var-cell store.  An assignment statement yields unit;
                 # the mutation is the side effect.
                 slot.value = self._eval(val_expr)
-                mutation_desc = self._program.symbols[sym]
-                self._trace.mutation(
-                    name=mutation_desc.public_name or f"symbol#{sym.value}",
-                    value=slot.value,
-                    span=node.location,
-                )
                 return VOID_VALUE
 
             case IrIndexSet(container=container_expr, kind=kind, index=idx_expr, value=val_expr):
@@ -1056,9 +1050,6 @@ class IrInterpreter:
                     index_set(kind, container, index_val, new_value)
                 except (AglIndexOutOfRange, AglMissingKey) as e:
                     raise self._index_failure(e)
-                # Mutates a container, not a binding, so no trace.mutation event:
-                # under reference semantics that container may be reachable from
-                # any number of bindings, so attributing it to one name is wrong.
                 return VOID_VALUE
 
             case IrCoerce(value=val_expr, operation=op):
@@ -1579,7 +1570,6 @@ class IrInterpreter:
                 except AglRaise as exc:
                     exc.span = node.location
                     raise
-                self._trace.mutation(name=key, value=stored, span=node.location)
                 return VOID_VALUE
 
             case _ as unreachable:  # pragma: no cover

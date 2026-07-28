@@ -713,6 +713,16 @@ def is_scalar_json_shaped(value_type: Type) -> bool:
     return isinstance(value_type, _SCALAR_JSON_SHAPED_TYPES)
 
 
+def json_cast_hint(type_a: Type, type_b: Type) -> str:
+    """Return a diagnostic clause naming an explicit ``as json`` cast."""
+    is_json_gap = (isinstance(type_a, JsonType) and is_json_shaped(type_b)) or (
+        isinstance(type_b, JsonType) and is_json_shaped(type_a)
+    )
+    if not is_json_gap:
+        return ""
+    return " An array or dict is not implicitly absorbed into json; use an explicit 'as json' cast."
+
+
 def is_json_shaped(value_type: Type) -> bool:
     """Return ``True`` if ``value_type`` is JSON-shaped.
 

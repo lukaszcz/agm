@@ -22,7 +22,7 @@ Design constraints
 from __future__ import annotations
 
 import decimal
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
 from typing import TypeAlias
 
@@ -479,7 +479,7 @@ class IteratorValue:
     code — it is an evaluator-internal value only.
     """
 
-    elements: "list[Value] | tuple[TextValue, ...]"
+    elements: "Sequence[Value]"
     pos: int = 0
 
 

@@ -31,6 +31,7 @@ are capability handles, not data.
 from __future__ import annotations
 
 import copy as _stdlib_copy
+from typing import assert_never
 
 from agm.agl.semantics.values import (
     ArrayValue,
@@ -47,26 +48,23 @@ __all__ = ["deep_copy_value", "shallow_copy_value"]
 
 def shallow_copy_value(value: Value) -> Value:
     """Return a one-level copy of *value*: same nested references, new container."""
-    if isinstance(value, ArrayValue):
-        return ArrayValue(elements=list(value.elements))
-    if isinstance(value, DictValue):
-        return DictValue(entries=dict(value.entries))
-    if isinstance(value, RecordValue):
-        return RecordValue(
-            nominal=value.nominal, display_name=value.display_name, fields=dict(value.fields)
-        )
-    if isinstance(value, EnumValue):
-        return EnumValue(
-            nominal=value.nominal,
-            display_name=value.display_name,
-            variant=value.variant,
-            fields=dict(value.fields),
-        )
-    if isinstance(value, ExceptionValue):
-        return ExceptionValue(
-            nominal=value.nominal, display_name=value.display_name, fields=dict(value.fields)
-        )
-    return value
+    if not isinstance(value, _SHELL_KINDS):
+        return value
+    shell = _empty_shell(value)
+    match value, shell:
+        case ArrayValue(elements=elements), ArrayValue():
+            shell.elements.extend(elements)
+        case DictValue(entries=entries), DictValue():
+            shell.entries.update(entries)
+        case RecordValue(fields=fields), RecordValue():
+            shell.fields.update(fields)
+        case EnumValue(fields=fields), EnumValue():
+            shell.fields.update(fields)
+        case ExceptionValue(fields=fields), ExceptionValue():
+            shell.fields.update(fields)
+        case _ as unreachable:  # pragma: no cover
+            raise AssertionError(f"unexpected copy shell pair: {unreachable!r}")
+    return shell
 
 
 def deep_copy_value(value: Value) -> Value:
@@ -77,7 +75,25 @@ def deep_copy_value(value: Value) -> Value:
 #: The value kinds :func:`_deep_copy` rebuilds. Everything else — scalars,
 #: ``unit``, agents, constructors, closures — is returned as-is and never
 #: enters the memo, so copying an array of scalars costs no lookups.
-_COPIED_KINDS = (ArrayValue, DictValue, RecordValue, EnumValue, ExceptionValue, JsonValue)
+_SHELL_KINDS = (ArrayValue, DictValue, RecordValue, EnumValue, ExceptionValue)
+_COPIED_KINDS = (*_SHELL_KINDS, JsonValue)
+
+
+def _empty_shell(value: ArrayValue | DictValue | RecordValue | EnumValue | ExceptionValue) -> Value:
+    """Build an empty mutable-payload shell of the same container kind as *value*."""
+    match value:
+        case ArrayValue():
+            return ArrayValue(elements=[])
+        case DictValue():
+            return DictValue(entries={})
+        case RecordValue(nominal=nominal, display_name=display_name):
+            return RecordValue(nominal=nominal, display_name=display_name, fields={})
+        case EnumValue(nominal=nominal, display_name=display_name, variant=variant):
+            return EnumValue(nominal=nominal, display_name=display_name, variant=variant, fields={})
+        case ExceptionValue(nominal=nominal, display_name=display_name):
+            return ExceptionValue(nominal=nominal, display_name=display_name, fields={})
+        case _ as unreachable:  # pragma: no cover
+            assert_never(unreachable)
 
 
 def _fill_field_dict(dest: dict[str, Value], src: dict[str, Value], memo: dict[int, Value]) -> None:
@@ -101,41 +117,23 @@ def _deep_copy(value: Value, memo: dict[int, Value]) -> Value:
     cached = memo.get(id(value))
     if cached is not None:
         return cached
-    if isinstance(value, ArrayValue):
-        array_shell = ArrayValue(elements=[])
-        memo[id(value)] = array_shell
-        for e in value.elements:
-            array_shell.elements.append(_deep_copy(e, memo))
-        return array_shell
-    if isinstance(value, DictValue):
-        dict_shell = DictValue(entries={})
-        memo[id(value)] = dict_shell
-        _fill_field_dict(dict_shell.entries, value.entries, memo)
-        return dict_shell
-    if isinstance(value, RecordValue):
-        record_shell = RecordValue(
-            nominal=value.nominal, display_name=value.display_name, fields={}
-        )
-        memo[id(value)] = record_shell
-        _fill_field_dict(record_shell.fields, value.fields, memo)
-        return record_shell
-    if isinstance(value, EnumValue):
-        enum_shell = EnumValue(
-            nominal=value.nominal,
-            display_name=value.display_name,
-            variant=value.variant,
-            fields={},
-        )
-        memo[id(value)] = enum_shell
-        _fill_field_dict(enum_shell.fields, value.fields, memo)
-        return enum_shell
-    if isinstance(value, ExceptionValue):
-        exception_shell = ExceptionValue(
-            nominal=value.nominal, display_name=value.display_name, fields={}
-        )
-        memo[id(value)] = exception_shell
-        _fill_field_dict(exception_shell.fields, value.fields, memo)
-        return exception_shell
+    if isinstance(value, _SHELL_KINDS):
+        shell = _empty_shell(value)
+        memo[id(value)] = shell
+        match value, shell:
+            case ArrayValue(elements=elements), ArrayValue():
+                shell.elements.extend(_deep_copy(element, memo) for element in elements)
+            case DictValue(entries=entries), DictValue():
+                _fill_field_dict(shell.entries, entries, memo)
+            case RecordValue(fields=fields), RecordValue():
+                _fill_field_dict(shell.fields, fields, memo)
+            case EnumValue(fields=fields), EnumValue():
+                _fill_field_dict(shell.fields, fields, memo)
+            case ExceptionValue(fields=fields), ExceptionValue():
+                _fill_field_dict(shell.fields, fields, memo)
+            case _ as unreachable:  # pragma: no cover
+                raise AssertionError(f"unexpected copy shell pair: {unreachable!r}")
+        return shell
     json_copy = JsonValue(_stdlib_copy.deepcopy(value.raw))
     memo[id(value)] = json_copy
     return json_copy

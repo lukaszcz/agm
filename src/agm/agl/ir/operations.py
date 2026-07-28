@@ -26,6 +26,7 @@ __all__ = [
     "Coercion",
     "CompareKind",
     "ContainsKind",
+    "CopyKind",
     "IndexKind",
     "IntToDecimal",
     "IterKind",
@@ -107,6 +108,13 @@ class IndexKind(enum.Enum):
 
     ARRAY = "array"
     DICT = "dict"
+
+
+class CopyKind(enum.Enum):
+    """Kind tag for value copying: deep or shallow."""
+
+    DEEP = "deep"
+    SHALLOW = "shallow"
 
 
 class UnaryOp(enum.Enum):

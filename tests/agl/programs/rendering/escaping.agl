@@ -31,6 +31,10 @@ def label(t: Template) -> text =
 
 print(label(t1))
 
+# A direct dict literal is rendered as an AgL dict, including percent escaping
+# in keys. JSON rendering intentionally does not share that escaping rule.
+print "%{{"pct%": 1.50}}"
+
 # Control flow: pick the snippet based on a condition.
 param use_raw: bool
 

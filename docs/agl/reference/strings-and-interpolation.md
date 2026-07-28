@@ -52,6 +52,14 @@ Scalar text conventions:
 
 No boundary tags or other wrappers are added around interpolated values.
 
+### Container literals in interpolation
+
+A non-empty array or dict literal written directly in an interpolation is
+checked as `array[json]` or `dict[text, json]`, respectively. A container
+literal nested inside that direct literal is checked as `json`. This preserves
+AgL container rendering for the direct literal, including its escaping rules;
+use an explicit `as json` cast when JSON rendering is required.
+
 To obtain JSON output use an explicit `as json` cast inside the interpolation:
 
 <!-- agl-check: fragment -->

@@ -103,7 +103,6 @@ from agm.agl.ir.nodes import (
     IrRenderValue,
     IrReturn,
     IrSequence,
-    IrShallowCopyValue,
     IrTemplateText,
     IrTemplateValue,
     IrTry,
@@ -116,6 +115,7 @@ from agm.agl.ir.operations import (
     ArithOp,
     CmpOp,
     Coercion,
+    CopyKind,
     IntToDecimal,
     ToJson,
     UnaryOp,
@@ -573,6 +573,15 @@ class IrInterpreter:
         reach a cyclic array or dict raises identical exception fields.
         """
         return cyclic_value_raise(self._trace.new_event_id())
+
+    def _render_or_raise(
+        self, value: Value, *, pretty: bool = False, quote_strings: bool = False
+    ) -> str:
+        """Render a value, converting only the rendering cycle sentinel."""
+        try:
+            return render_value(value, pretty=pretty, quote_strings=quote_strings)
+        except AglCyclicValue:
+            raise self._cyclic_failure()
 
     def _on_cast_failure(
         self, failure_mode: ConversionFailureMode, exc: AglCastConversion
@@ -1195,10 +1204,7 @@ class IrInterpreter:
                         case IrTemplateText(text=t):
                             parts.append(t)
                         case IrTemplateValue(value=v_expr):
-                            try:
-                                parts.append(render_value(self._eval(v_expr)))
-                            except AglCyclicValue:
-                                raise self._cyclic_failure()
+                            parts.append(self._render_or_raise(self._eval(v_expr)))
                         case _ as unreachable_seg:  # pragma: no cover
                             assert_never(unreachable_seg)
                 return TextValue("".join(parts))
@@ -1401,21 +1407,20 @@ class IrInterpreter:
 
             case IrIterInit(collection=collection_expr):
                 coll = self._eval(collection_expr)
-                elements: list[Value] | tuple[TextValue, ...]
                 if isinstance(coll, ArrayValue):
                     # The ArrayValue's own element list, by reference: no copy,
                     # so an in-place element mutation is visible to the cursor.
-                    elements = coll.elements
-                elif isinstance(coll, DictValue):
+                    return IteratorValue(elements=coll.elements)
+                if isinstance(coll, DictValue):
                     # The key set is fixed for the collection's lifetime, so a
                     # one-time tuple of keys is sound even though the values
                     # behind those keys may still be mutated.
-                    elements = tuple(TextValue(k) for k in coll.entries)
-                elif isinstance(coll, TextValue):
-                    elements = tuple(TextValue(ch) for ch in coll.value)
-                else:  # pragma: no cover
-                    raise InvalidIrError(f"IrIterInit: unexpected collection type {type(coll)!r}")
-                return IteratorValue(elements=elements)
+                    return IteratorValue(elements=tuple(TextValue(k) for k in coll.entries))
+                if isinstance(coll, TextValue):
+                    return IteratorValue(elements=tuple(TextValue(ch) for ch in coll.value))
+                raise InvalidIrError(  # pragma: no cover
+                    f"IrIterInit: unexpected collection type {type(coll)!r}"
+                )
 
             case IrIterHasNext(iterator=iter_expr):
                 it = self._eval(iter_expr)
@@ -1479,11 +1484,7 @@ class IrInterpreter:
                     raise
 
             case IrPrint(value=val_expr):
-                val = self._eval(val_expr)
-                try:
-                    rendered = render_value(val)
-                except AglCyclicValue:
-                    raise self._cyclic_failure()
+                rendered = self._render_or_raise(self._eval(val_expr))
                 print(rendered)
                 self._trace.print_stmt(rendered=rendered, span=node.location)
                 return VOID_VALUE
@@ -1503,16 +1504,11 @@ class IrInterpreter:
                     if quote_strings_expr is not None
                     else True
                 )
-                try:
-                    return TextValue(
-                        render_value(
-                            self._eval(val_expr),
-                            pretty=pretty,
-                            quote_strings=quote_strings,
-                        )
+                return TextValue(
+                    self._render_or_raise(
+                        self._eval(val_expr), pretty=pretty, quote_strings=quote_strings
                     )
-                except AglCyclicValue:
-                    raise self._cyclic_failure()
+                )
 
             case IrParseJson(value=val_expr):
                 val = self._eval(val_expr)
@@ -1534,11 +1530,11 @@ class IrInterpreter:
                     ) from exc
                 return JsonValue(obj)
 
-            case IrCopyValue(value=val_expr):
-                return deep_copy_value(self._eval(val_expr))
-
-            case IrShallowCopyValue(value=val_expr):
-                return shallow_copy_value(self._eval(val_expr))
+            case IrCopyValue(kind=kind, value=val_expr):
+                value = self._eval(val_expr)
+                return (
+                    deep_copy_value(value) if kind is CopyKind.DEEP else shallow_copy_value(value)
+                )
 
             case IrAgentHandle(agent_id=agent_id):
                 return AgentValue(name=agent_id.display_name, agent_id=agent_id)

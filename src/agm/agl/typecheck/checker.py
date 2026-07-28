@@ -95,7 +95,7 @@ from agm.agl.semantics.types import (
     contains_inference_var,
     free_type_vars,
     is_assignable,
-    is_json_shaped,
+    json_cast_hint,
     substitute,
 )
 from agm.agl.syntax.nodes import (
@@ -3163,15 +3163,7 @@ class _Checker:
                 self._check_template_literal_child(elem)
             return ArrayType(elem=JsonType())
         # DictLit — caller guarantees non-empty.
-        seen_keys: dict[str, SourceSpan] = {}
-        for entry in expr.entries:
-            key = entry.key.value
-            if key in seen_keys:
-                raise AglTypeError(
-                    f"Duplicate key '{key}' in dict literal.",
-                    span=entry.span,
-                )
-            seen_keys[key] = entry.span
+        self._check_dict_literal_keys(expr)
         for entry in expr.entries:
             self._check_template_literal_child(entry.value)
         return DictType(value=JsonType())
@@ -3534,7 +3526,7 @@ class _Checker:
             if not is_assignable(left_type, right_type.elem):
                 raise AglTypeError(
                     f"'in' element type mismatch: '{left_type!r}' in 'array[{right_type.elem!r}]'."
-                    f"{self._json_cast_hint(right_type.elem, left_type)}",
+                    f"{json_cast_hint(right_type.elem, left_type)}",
                     span=span,
                 )
             return BoolType()
@@ -3904,6 +3896,11 @@ class _Checker:
             return JsonType()
         return None
 
+    @staticmethod
+    def _literal_result_type(expected: Type | None, container: Type) -> Type:
+        """Return a literal's type, preserving direct expected-json construction."""
+        return JsonType() if isinstance(expected, JsonType) else container
+
     def _complete_empty_literal_shape(
         self,
         expected: Type | None,
@@ -3958,9 +3955,7 @@ class _Checker:
                     "(e.g. 'let xs: array[text] = []').",
                     span=node.span,
                 )
-            # A literal directly in an expected-json position is typed as
-            # json itself, not array[json] — see the non-empty branch below.
-            return JsonType() if isinstance(expected, JsonType) else ArrayType(elem=elem_expected)
+            return self._literal_result_type(expected, ArrayType(elem=elem_expected))
         if elem_expected is not None and not contains_inference_var(elem_expected):
             for elem in node.elements:
                 et = self._check_expr(elem, expected=elem_expected)
@@ -3973,13 +3968,22 @@ class _Checker:
             # it as its own container shape and requiring a further cast
             # would reject exactly the heterogeneous-literal pattern the
             # narrowed json assignability rule is not meant to touch.
-            return JsonType() if isinstance(expected, JsonType) else ArrayType(elem=elem_expected)
+            return self._literal_result_type(expected, ArrayType(elem=elem_expected))
         with self._frame_direct_candidate_use(exprs=node.elements):
             unified = self._unify_elements(node.elements, kind="Array", span=node.span)
         self._set_inferred_return_expr_provenance(
             node.node_id, self._provenance_for_result(unified, node.elements)
         )
         return ArrayType(elem=unified)
+
+    def _check_dict_literal_keys(self, node: DictLit) -> None:
+        """Reject duplicate keys in a dict literal."""
+        seen_keys: dict[str, SourceSpan] = {}
+        for entry in node.entries:
+            key = entry.key.value
+            if key in seen_keys:
+                raise AglTypeError(f"Duplicate key '{key}' in dict literal.", span=entry.span)
+            seen_keys[key] = entry.span
 
     def _check_dict_lit(self, node: DictLit, *, expected: Type | None) -> Type:
         if not node.entries:
@@ -3989,15 +3993,7 @@ class _Checker:
                 literal_name="empty dict literal",
                 span=node.span,
             )
-        seen_keys: dict[str, SourceSpan] = {}
-        for entry in node.entries:
-            key = entry.key.value
-            if key in seen_keys:
-                raise AglTypeError(
-                    f"Duplicate key '{key}' in dict literal.",
-                    span=entry.span,
-                )
-            seen_keys[key] = entry.span
+        self._check_dict_literal_keys(node)
         val_expected = self._expected_value_type(expected)
         if not node.entries:
             if val_expected is None:
@@ -4005,16 +4001,12 @@ class _Checker:
                     "Empty dict literal requires a type annotation.",
                     span=node.span,
                 )
-            # See _check_array_lit: a literal directly in an expected-json
-            # position is typed as json itself, not dict[text, json].
-            return JsonType() if isinstance(expected, JsonType) else DictType(value=val_expected)
+            return self._literal_result_type(expected, DictType(value=val_expected))
         if val_expected is not None and not contains_inference_var(val_expected):
             for entry in node.entries:
                 et = self._check_expr(entry.value, expected=val_expected)
                 self._assert_assignable_from(et, val_expected, entry.span, entry.value)
-            # See _check_array_lit for why a json-expected literal is typed
-            # as json directly rather than dict[text, json].
-            return JsonType() if isinstance(expected, JsonType) else DictType(value=val_expected)
+            return self._literal_result_type(expected, DictType(value=val_expected))
         values = tuple(entry.value for entry in node.entries)
         with self._frame_direct_candidate_use(exprs=values):
             unified = self._unify_elements(values, kind="Dict", span=node.span)
@@ -4041,7 +4033,7 @@ class _Checker:
             elif not is_assignable(typ, unified):
                 raise AglTypeError(
                     f"{subject} have inconsistent types: '{unified!r}' and '{typ!r}'."
-                    f"{self._json_cast_hint(unified, typ)}",
+                    f"{json_cast_hint(unified, typ)}",
                     span=span,
                 )
         return unified
@@ -4602,27 +4594,6 @@ class _Checker:
     # Assignability helpers
     # ------------------------------------------------------------------
 
-    @staticmethod
-    def _json_cast_hint(type_a: Type, type_b: Type) -> str:
-        """Return a diagnostic clause naming an explicit ``as json`` cast.
-
-        Fires whenever a mismatch between *type_a* and *type_b* — in either
-        order — is exactly a JSON-shaped ``array``/``dict`` failing to
-        implicitly absorb into ``json`` (an implicit coercion never rebuilds
-        a structure, but an explicit cast still converts it). Returns the
-        empty string when the mismatch has some other cause, so every call
-        site can unconditionally append the result to its message.
-        """
-        is_json_gap = (isinstance(type_a, JsonType) and is_json_shaped(type_b)) or (
-            isinstance(type_b, JsonType) and is_json_shaped(type_a)
-        )
-        if not is_json_gap:
-            return ""
-        return (
-            " An array or dict is not implicitly absorbed into json; "
-            "use an explicit 'as json' cast."
-        )
-
     def _assert_assignable(self, value_type: Type, target_type: Type, span: SourceSpan) -> None:
         if self._candidate_session is not None and (
             contains_inference_var(value_type) or contains_inference_var(target_type)
@@ -4638,7 +4609,7 @@ class _Checker:
             return
         raise AglTypeError(
             f"Type mismatch: expected '{target_type!r}', got '{value_type!r}'."
-            f"{self._json_cast_hint(target_type, value_type)}",
+            f"{json_cast_hint(target_type, value_type)}",
             span=span,
         )
 

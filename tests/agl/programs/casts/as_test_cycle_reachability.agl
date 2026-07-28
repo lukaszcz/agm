@@ -1,0 +1,35 @@
+# `as?` skips conversion work only when its static source cannot close a
+# reference cycle. Both generic instantiations remain semantically true here;
+# the array instantiation retains the runtime trial path.
+param close_cycle: bool
+
+record Scalar(value: int)
+record Box[T]
+  value: T
+record Node(children: array[Node])
+
+enum Tree
+  | leaf
+  | branch(next: Tree)
+
+let scalar = Scalar(value = 1)
+let tree = leaf
+let boxed_int: Box[int] = Box(value = 1)
+let boxed_array: Box[array[int]] = Box(value = [1])
+var nodes: array[Node] = [Node(children = [])]
+let node = Node(children = nodes)
+if close_cycle =>
+  nodes[0] := node
+
+print(1 as? text)
+print(1 as? json)
+print(scalar as? text)
+print(scalar as? json)
+print(tree as? text)
+print(tree as? json)
+print(boxed_int as? text)
+print(boxed_int as? json)
+print(boxed_array as? text)
+print(boxed_array as? json)
+print(node as? text)
+print(node as? json)

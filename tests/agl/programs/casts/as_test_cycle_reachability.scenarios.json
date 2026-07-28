@@ -1,0 +1,18 @@
+{
+  "scenarios": [
+    {
+      "name": "acyclic_values_test_true",
+      "params": {"close_cycle": false},
+      "expect": {
+        "stdout": "true\ntrue\ntrue\ntrue\ntrue\ntrue\ntrue\ntrue\ntrue\ntrue\ntrue\ntrue\n"
+      }
+    },
+    {
+      "name": "cyclic_node_tests_false",
+      "params": {"close_cycle": true},
+      "expect": {
+        "stdout": "true\ntrue\ntrue\ntrue\ntrue\ntrue\ntrue\ntrue\ntrue\ntrue\nfalse\nfalse\n"
+      }
+    }
+  ]
+}

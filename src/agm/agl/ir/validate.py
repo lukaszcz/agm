@@ -130,7 +130,6 @@ from agm.agl.ir.nodes import (
     IrRenderValue,
     IrReturn,
     IrSequence,
-    IrShallowCopyValue,
     IrTemplateText,
     IrTemplateValue,
     IrTry,
@@ -1089,10 +1088,6 @@ def _validate_expr_node(node: IrExpr, ctx: _Context) -> None:
             _validate_expr(val, ctx)
 
         case IrCopyValue(value=val):
-            _validate_location(node.location, ctx)
-            _validate_expr(val, ctx)
-
-        case IrShallowCopyValue(value=val):
             _validate_location(node.location, ctx)
             _validate_expr(val, ctx)
 

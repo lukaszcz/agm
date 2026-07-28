@@ -36,6 +36,7 @@ from agm.agl.ir.operations import (
     Coercion,
     CompareKind,
     ContainsKind,
+    CopyKind,
     IndexKind,
     IterKind,
     NumericKind,
@@ -109,7 +110,6 @@ __all__ = [
     "IrRenderValue",
     "IrRenderTemplate",
     "IrSequence",
-    "IrShallowCopyValue",
     "IrTemplateSegment",
     "IrTemplateText",
     "IrTemplateValue",
@@ -1050,38 +1050,15 @@ class IrParseJson:
 
 @dataclass(frozen=True, slots=True)
 class IrCopyValue:
-    """IR host-op: ``copy(value)`` — deep copy, memoized by object identity.
+    """IR host-op for deep or shallow copying, selected by ``kind``.
 
-    Evaluates *value*, then walks it recursively: every array, dict, record,
-    enum, and exception reachable from it is rebuilt with independent
-    (recursively copied) contents, while a `json` leaf is duplicated via
-    ``copy.deepcopy``. Every other value kind (scalars, ``unit``, agents,
-    constructors, closures) is returned as-is — they are either immutable or
-    opaque, so there is nothing to detach. An identity memo keyed by
-    ``id()`` makes two references to the same object copy to the same new
-    object, so a diamond stays a diamond, and it is what makes copying a
-    cyclic value terminate and produce an isomorphic cycle rather than
-    raising — the one deep, structure-rebuilding walk in the language that
-    traverses a cyclic value to completion instead of raising
-    ``CyclicValueError``.
+    Deep copying recursively rebuilds every reachable container with an
+    identity memo, preserving sharing and terminating on cycles. Shallow
+    copying rebuilds one container level while retaining nested references.
     """
 
     location: Location
-    value: "IrExpr"
-
-
-@dataclass(frozen=True, slots=True)
-class IrShallowCopyValue:
-    """IR host-op: ``shallow_copy(value)`` — one level of copy.
-
-    Evaluates *value*, then returns a new array, dict, record, enum, or
-    exception holding the *same* element/field references as the original —
-    one level deep, no recursion. Every other value kind is returned as-is.
-    Because it never recurses, it can never loop and never raises, even on a
-    cyclic value.
-    """
-
-    location: Location
+    kind: CopyKind
     value: "IrExpr"
 
 
@@ -1238,7 +1215,6 @@ IrExpr = (
     | IrRenderValue
     | IrParseJson
     | IrCopyValue
-    | IrShallowCopyValue
     | IrAgentHandle
     | IrAsk
     | IrAskRequest

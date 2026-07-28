@@ -32,6 +32,7 @@ from agm.agl.semantics.type_table import (
     comparable_types,
     create_seeded_type_table,
     is_json_convertible,
+    type_may_be_cyclic,
 )
 from agm.agl.semantics.types import (
     BUILTIN_PRELUDE_TYPES,
@@ -1471,6 +1472,142 @@ class TestComparableTypesTableAware:
 # ---------------------------------------------------------------------------
 # The two consumers of the shared non-data-reachability fact
 # ---------------------------------------------------------------------------
+
+
+class TestTypeMayBeCyclic:
+    def test_scalars_and_containers(self) -> None:
+        table = TypeTable()
+        assert type_may_be_cyclic(IntType(), table) is False
+        assert type_may_be_cyclic(JsonType(), table) is False
+        assert type_may_be_cyclic(ArrayType(IntType()), table) is True
+        assert type_may_be_cyclic(DictType(IntType()), table) is True
+
+    def test_nominals_and_relevant_type_parameters(self) -> None:
+        table = TypeTable()
+        table.register(
+            TypeDef(
+                kind="record",
+                name="Box",
+                module_id=ENTRY_ID,
+                type_params=("T",),
+                fields=(("value", TypeVarType("T")),),
+            )
+        )
+        table.register(
+            TypeDef(
+                kind="record",
+                name="Point",
+                module_id=ENTRY_ID,
+                fields=(("x", IntType()),),
+            )
+        )
+        table.register(
+            TypeDef(
+                kind="record",
+                name="Phantom",
+                module_id=ENTRY_ID,
+                type_params=("T",),
+                fields=(("x", IntType()),),
+            )
+        )
+        table.register(
+            TypeDef(
+                kind="record",
+                name="Node",
+                module_id=ENTRY_ID,
+                fields=(("children", ArrayType(RecordType("Node", module_id=ENTRY_ID))),),
+            )
+        )
+        assert type_may_be_cyclic(RecordType("Point", module_id=ENTRY_ID), table) is False
+        assert (
+            type_may_be_cyclic(RecordType("Box", type_args=(IntType(),), module_id=ENTRY_ID), table)
+            is False
+        )
+        assert (
+            type_may_be_cyclic(
+                RecordType("Box", type_args=(ArrayType(IntType()),), module_id=ENTRY_ID), table
+            )
+            is True
+        )
+        assert (
+            type_may_be_cyclic(
+                RecordType("Phantom", type_args=(ArrayType(IntType()),), module_id=ENTRY_ID), table
+            )
+            is False
+        )
+        assert type_may_be_cyclic(RecordType("Node", module_id=ENTRY_ID), table) is True
+
+    def test_unknown_and_variable_types_are_conservative(self) -> None:
+        table = TypeTable()
+        assert type_may_be_cyclic(TypeVarType("T"), table) is True
+        assert type_may_be_cyclic(InferenceVarType(), table) is True
+        assert type_may_be_cyclic(RecordType("Unknown", module_id=ENTRY_ID), table) is True
+
+    def test_analysis_handles_nominal_dependencies_and_function_fields(self) -> None:
+        table = TypeTable()
+        table.register(
+            TypeDef(
+                kind="record",
+                name="Inner",
+                module_id=ENTRY_ID,
+                fields=(("values", ArrayType(IntType())),),
+            )
+        )
+        table.register(
+            TypeDef(
+                kind="record",
+                name="Outer",
+                module_id=ENTRY_ID,
+                fields=(("inner", RecordType("Inner", module_id=ENTRY_ID)),),
+            )
+        )
+        table.register(
+            TypeDef(
+                kind="record",
+                name="FunctionHolder",
+                module_id=ENTRY_ID,
+                fields=(("f", FunctionType((), IntType())),),
+            )
+        )
+        table.register(
+            TypeDef(
+                kind="record",
+                name="MissingReference",
+                module_id=ENTRY_ID,
+                fields=(("value", RecordType("Missing", module_id=ENTRY_ID)),),
+            )
+        )
+        table.register(TypeDef(kind="exception", name="Fault", module_id=ENTRY_ID))
+        table.register(
+            TypeDef(
+                kind="exception",
+                name="ArrayFault",
+                module_id=ENTRY_ID,
+                fields=(("values", ArrayType(IntType())),),
+            )
+        )
+        table.register(
+            TypeDef(
+                kind="record",
+                name="FaultHolder",
+                module_id=ENTRY_ID,
+                fields=(("fault", ExceptionType("Fault", module_id=ENTRY_ID)),),
+            )
+        )
+        table.register(
+            TypeDef(
+                kind="record",
+                name="ArrayFaultHolder",
+                module_id=ENTRY_ID,
+                fields=(("fault", ExceptionType("ArrayFault", module_id=ENTRY_ID)),),
+            )
+        )
+        assert type_may_be_cyclic(RecordType("Outer", module_id=ENTRY_ID), table) is True
+        assert type_may_be_cyclic(RecordType("FunctionHolder", module_id=ENTRY_ID), table) is False
+        assert type_may_be_cyclic(RecordType("MissingReference", module_id=ENTRY_ID), table) is True
+        assert type_may_be_cyclic(RecordType("FaultHolder", module_id=ENTRY_ID), table) is False
+        assert type_may_be_cyclic(RecordType("ArrayFaultHolder", module_id=ENTRY_ID), table) is True
+        assert type_may_be_cyclic(ExceptionType("Fault", module_id=ENTRY_ID), table) is False
 
 
 class TestNominalReachesNonData:

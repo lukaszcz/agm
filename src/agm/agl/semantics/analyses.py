@@ -409,6 +409,147 @@ def compute_non_data_reachability(table: TypeTable) -> NonDataReachability:
     )
 
 
+@dataclass(frozen=True, slots=True)
+class ContainerReachability:
+    """Whole-table fixpoint for declarations that can contain an array or dict."""
+
+    reaches_container: frozenset[DeclKey]
+    relevant_params: Mapping[DeclKey, frozenset[str]]
+
+
+def compute_container_reachability(table: TypeTable) -> ContainerReachability:
+    """Compute whether declarations can reach a runtime-mutable container.
+
+    The result mirrors non-data reachability: an unconditional declaration
+    fact plus only those type parameters whose concrete arguments can change
+    the answer. Function signatures are excluded because functions are opaque
+    runtime values, not contained payloads.
+    """
+    defs = _all_defs(table)
+    exception_children: dict[DeclKey, set[DeclKey]] = {key: set() for key in defs}
+    for key, typedef in defs.items():
+        if typedef.kind == "exception" and typedef.base in exception_children:
+            exception_children[typedef.base].add(key)
+
+    field_reaches: set[DeclKey] = set()
+    reaches: set[DeclKey] = set()
+    relevant: dict[DeclKey, set[str]] = {key: set() for key in defs}
+    changed = True
+    while changed:
+        changed = False
+        for key, typedef in defs.items():
+            templates = tuple(t for _name, t in field_templates(typedef))
+            template_reaches = any(
+                _template_reaches_container(t, reaches, relevant, defs) for t in templates
+            )
+            inherited_reaches = (
+                typedef.kind == "exception"
+                and typedef.base is not None
+                and typedef.base in field_reaches
+            )
+            exact_reaches = key in field_reaches or template_reaches or inherited_reaches
+            if exact_reaches and key not in field_reaches:
+                field_reaches.add(key)
+                changed = True
+            descendant_reaches = typedef.kind == "exception" and any(
+                child in reaches for child in exception_children[key]
+            )
+            if (exact_reaches or descendant_reaches) and key not in reaches:
+                reaches.add(key)
+                changed = True
+
+            gained: set[str] = set()
+            own_params = frozenset(typedef.type_params)
+            for template in templates:
+                gained |= _template_container_relevant_params(template, own_params, relevant, defs)
+            if not gained <= relevant[key]:
+                relevant[key] |= gained
+                changed = True
+    return ContainerReachability(
+        reaches_container=frozenset(reaches),
+        relevant_params={key: frozenset(params) for key, params in relevant.items()},
+    )
+
+
+def _template_reaches_container(
+    t: Type,
+    reaches: set[DeclKey],
+    relevant: Mapping[DeclKey, set[str]],
+    defs: Mapping[DeclKey, TypeDef],
+) -> bool:
+    match t:
+        case ArrayType() | DictType() | InferenceVarType():
+            return True
+        case ExceptionType():
+            key = (t.module_id, t.scope_path, t.name)
+            return key not in defs or key in reaches
+        case RecordType() | EnumType():
+            key = (t.module_id, t.scope_path, t.name)
+            if key in reaches:
+                return True
+            target = defs.get(key)
+            if target is None:
+                return True
+            return any(
+                _template_reaches_container(arg, reaches, relevant, defs)
+                for param, arg in zip(target.type_params, t.type_args)
+                if param in relevant.get(key, set())
+            )
+        case FunctionType():
+            return False
+        case (
+            TextType()
+            | JsonType()
+            | BoolType()
+            | IntType()
+            | DecimalType()
+            | BottomType()
+            | TypeVarType()
+            | AgentType()
+            | UnitType()
+        ):
+            return False
+        case _ as unreachable:  # pragma: no cover
+            assert_never(unreachable)
+
+
+def _template_container_relevant_params(
+    t: Type,
+    own_params: frozenset[str],
+    relevant: Mapping[DeclKey, set[str]],
+    defs: Mapping[DeclKey, TypeDef],
+) -> set[str]:
+    match t:
+        case TypeVarType():
+            return {t.name} if t.name in own_params else set()
+        case ArrayType() | DictType() | FunctionType() | InferenceVarType():
+            return set()
+        case RecordType() | EnumType():
+            key = (t.module_id, t.scope_path, t.name)
+            target = defs.get(key)
+            if target is None:
+                return set()
+            result: set[str] = set()
+            for param, arg in zip(target.type_params, t.type_args):
+                if param in relevant.get(key, set()):
+                    result |= _template_container_relevant_params(arg, own_params, relevant, defs)
+            return result
+        case (
+            ExceptionType()
+            | AgentType()
+            | UnitType()
+            | TextType()
+            | JsonType()
+            | BoolType()
+            | IntType()
+            | DecimalType()
+            | BottomType()
+        ):
+            return set()
+        case _ as unreachable:  # pragma: no cover
+            assert_never(unreachable)
+
+
 def field_templates(typedef: TypeDef) -> list[tuple[str, Type]]:
     """Return every ``(name, type template)`` in *typedef*'s own body, flattened.
 

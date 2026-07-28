@@ -109,7 +109,6 @@ from agm.agl.ir.nodes import (
     IrRenderValue,
     IrReturn,
     IrSequence,
-    IrShallowCopyValue,
     IrTemplateText,
     IrTemplateValue,
     IrTry,
@@ -124,6 +123,7 @@ from agm.agl.ir.operations import (
     CmpOp,
     CompareKind,
     ContainsKind,
+    CopyKind,
     IndexKind,
     IterKind,
     NumericKind,
@@ -167,7 +167,7 @@ from agm.agl.matchcompile import (
 from agm.agl.modules.ids import ENTRY_ID, PRELUDE_ID, ModuleId
 from agm.agl.scope.symbols import BinderKind, BindingRef, BuiltinKind
 from agm.agl.self_validation import self_validation_enabled
-from agm.agl.semantics.type_table import TypeTable
+from agm.agl.semantics.type_table import TypeTable, type_may_be_cyclic
 from agm.agl.semantics.types import (
     BUILTIN_EXCEPTIONS,
     BUILTIN_PRELUDE_TYPES,
@@ -1262,12 +1262,14 @@ class _Lowerer:
                     )
                 # `as?`: a no-op conversion performs no walk and cannot fail, so it
                 # short-circuits to evaluating the (possibly effectful) source, then
-                # yielding True.  `TOTAL_RENDER`/`TOTAL_JSON` are NOT short-circuited
-                # here even though they always succeed on an acyclic value: rendering
-                # or JSON-serializing a cyclic value raises `CyclicValueError`, so
-                # `as?` must trial-convert them too and yield False on that failure
-                # (see `_on_cast_failure`'s `RETURN_BOOL` handling in the evaluator).
-                if spec.kind is CastKind.TOTAL_NOOP:
+                # yielding True. Render and JSON conversions do the same only when
+                # the source cannot hold a reference cycle; otherwise their trial
+                # conversion must yield False on that failure.
+                is_cycle_free_total = spec.kind in (
+                    CastKind.TOTAL_RENDER,
+                    CastKind.TOTAL_JSON,
+                ) and not type_may_be_cyclic(source_type, self._type_table)
+                if spec.kind is CastKind.TOTAL_NOOP or is_cycle_free_total:
                     return IrSequence(
                         location=self._loc(span),
                         items=(inner, IrConstBool(location=self._loc(span), value=True)),
@@ -2046,9 +2048,8 @@ class _Lowerer:
                 # effect, matching how any other call site coerces its arguments.
                 result_type = self._node_type(call_node.node_id)
                 arg_ir = self.lower_coerced(call_node.args[0], result_type)
-                if kind is BuiltinKind.SHALLOW_COPY:
-                    return IrShallowCopyValue(location=loc, value=arg_ir)
-                return IrCopyValue(location=loc, value=arg_ir)
+                copy_kind = CopyKind.SHALLOW if kind is BuiltinKind.SHALLOW_COPY else CopyKind.DEEP
+                return IrCopyValue(location=loc, kind=copy_kind, value=arg_ir)
 
             case BuiltinKind.ASK:
                 return self._lower_ask_call(call_node, span, structured_exec=False)
@@ -2069,7 +2070,7 @@ class _Lowerer:
         to IrMakeRecord/IrMakeEnum/IrMakeException.  Direct user function
         calls are lowered to IrDirectCall.  Lambda calls are lowered to IrMakeClosure,
         indirect calls to IrIndirectCall, and host builtins to
-        IrPrint/IrRenderValue/IrParseJson/IrCopyValue/IrShallowCopyValue/IrAsk/
+        IrPrint/IrRenderValue/IrParseJson/IrCopyValue/IrAsk/
         IrAskRequest/IrExec.
         """
         callee = call_node.callee

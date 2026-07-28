@@ -2235,6 +2235,7 @@ class TestHostOpLowering:
 
     def test_copy_lowers_to_ir_copy_value(self) -> None:
         """copy(x) lowers to IrCopyValue wrapping the argument expression."""
+        from agm.agl.ir import CopyKind
         from agm.agl.ir.nodes import IrCopyValue
 
         source = "let x = [1, 2]\nlet y = copy(x)\n()"
@@ -2244,21 +2245,23 @@ class TestHostOpLowering:
         assert isinstance(ir_bind.value, IrCopyValue), (
             f"Expected IrBind.value to be IrCopyValue, got {type(ir_bind.value).__name__}"
         )
+        assert ir_bind.value.kind is CopyKind.DEEP
 
-    def test_shallow_copy_lowers_to_ir_shallow_copy_value(self) -> None:
-        """shallow_copy(x) lowers to IrShallowCopyValue wrapping the argument expression."""
-        from agm.agl.ir.nodes import IrShallowCopyValue
+    def test_shallow_copy_lowers_to_shallow_ir_copy_value(self) -> None:
+        """shallow_copy(x) lowers to an IrCopyValue with the shallow kind."""
+        from agm.agl.ir import CopyKind
+        from agm.agl.ir.nodes import IrCopyValue
 
         source = "let x = [1, 2]\nlet y = shallow_copy(x)\n()"
         prog = _lower(source)
         entry = prog.modules[list(prog.modules.keys())[-1]]
         ir_bind = _let_root_capture(entry.initializers[1])
-        assert isinstance(ir_bind.value, IrShallowCopyValue), (
-            f"Expected IrBind.value to be IrShallowCopyValue, got {type(ir_bind.value).__name__}"
-        )
+        assert isinstance(ir_bind.value, IrCopyValue)
+        assert ir_bind.value.kind is CopyKind.SHALLOW
 
     def test_copy_explicit_type_arg_inserts_scalar_coercion(self) -> None:
         """copy::[decimal](5) lowers the int argument through IrCoerce to decimal."""
+        from agm.agl.ir import CopyKind
         from agm.agl.ir.nodes import IrCoerce, IrCopyValue
 
         source = "let x = copy::[decimal](5)\n()"
@@ -2266,6 +2269,7 @@ class TestHostOpLowering:
         entry = prog.modules[list(prog.modules.keys())[-1]]
         ir_bind = _let_root_capture(entry.initializers[0])
         assert isinstance(ir_bind.value, IrCopyValue)
+        assert ir_bind.value.kind is CopyKind.DEEP
         assert isinstance(ir_bind.value.value, IrCoerce)
 
     def test_param_required_lowers_to_ir_param(self) -> None:
@@ -2757,35 +2761,45 @@ class TestIrConvertLowering:
         assert conv.failure_mode is ConversionFailureMode.RAISE_CAST_ERROR
         assert conv.recipe.strategy is ConversionStrategy.RENDER_TO_TEXT
 
-    def test_render_as_test_lowers_to_ir_convert_return_bool_not_sequence(self) -> None:
-        """'as? text' (TOTAL_RENDER) emits IrConvert(RETURN_BOOL), NOT IrSequence.
+    def test_cycle_free_render_as_test_lowers_to_sequence(self) -> None:
+        """A cycle-free source skips the otherwise redundant render trial."""
+        from agm.agl.ir.nodes import IrSequence
 
-        Rendering can raise CyclicValueError on a cyclic value, so `as?` must
-        trial-convert rather than short-circuit to True (unlike TOTAL_NOOP).
-        """
         prog = _lower("let r = 42 as? text\n()")
         bind = _let_root_capture(prog.modules[prog.entry_module].initializers[0])
-        conv = bind.value
-        assert isinstance(conv, IrConvert), (
-            f"'as? text' must emit IrConvert, not {type(conv).__name__}"
-        )
-        assert conv.failure_mode is ConversionFailureMode.RETURN_BOOL
-        assert conv.recipe.strategy is ConversionStrategy.RENDER_TO_TEXT
+        assert isinstance(bind.value, IrSequence)
 
-    def test_json_as_test_lowers_to_ir_convert_return_bool_not_sequence(self) -> None:
-        """'as? json' (TOTAL_JSON) emits IrConvert(RETURN_BOOL), NOT IrSequence.
+    def test_cycle_free_json_as_test_lowers_to_sequence(self) -> None:
+        """A cycle-free source skips the otherwise redundant JSON conversion trial."""
+        from agm.agl.ir.nodes import IrSequence
 
-        JSON serialization can raise CyclicValueError on a cyclic value, so
-        `as?` must trial-convert rather than short-circuit to True.
-        """
         prog = _lower("let r = 42 as? json\n()")
         bind = _let_root_capture(prog.modules[prog.entry_module].initializers[0])
-        conv = bind.value
-        assert isinstance(conv, IrConvert), (
-            f"'as? json' must emit IrConvert, not {type(conv).__name__}"
+        assert isinstance(bind.value, IrSequence)
+
+    def test_container_as_test_keeps_trial_conversion(self) -> None:
+        """A source that can be cyclic retains the evaluator's false-on-cycle path."""
+        prog = _lower("let values = [1]\nlet r = values as? text\n()")
+        bind = _let_root_capture(prog.modules[prog.entry_module].initializers[1])
+        assert isinstance(bind.value, IrConvert)
+        assert bind.value.failure_mode is ConversionFailureMode.RETURN_BOOL
+
+    def test_generic_container_reachability_controls_as_test_lowering(self) -> None:
+        """Only a relevant generic argument containing a container retains conversion."""
+        from agm.agl.ir.nodes import IrSequence
+
+        prog = _lower(
+            "record Box[T]\n"
+            "  value: T\n"
+            "let safe: Box[int] = Box(value = 1)\n"
+            "let unsafe: Box[array[int]] = Box(value = [1])\n"
+            "let safe_test = safe as? json\n"
+            "let unsafe_test = unsafe as? json\n"
+            "()"
         )
-        assert conv.failure_mode is ConversionFailureMode.RETURN_BOOL
-        assert conv.recipe.strategy is ConversionStrategy.TO_JSON
+        initializers = prog.modules[prog.entry_module].initializers
+        assert isinstance(_let_root_capture(initializers[2]).value, IrSequence)
+        assert isinstance(_let_root_capture(initializers[3]).value, IrConvert)
 
 
 # ---------------------------------------------------------------------------

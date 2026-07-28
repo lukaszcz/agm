@@ -73,11 +73,16 @@ from agm.agl.semantics.types import (
     free_type_vars,
     is_assignable,
     substitute,
+    type_children,
 )
 from agm.util.graph import bfs_first
 
 if TYPE_CHECKING:
-    from agm.agl.semantics.analyses import FiniteClosure, NonDataReachability
+    from agm.agl.semantics.analyses import (
+        ContainerReachability,
+        FiniteClosure,
+        NonDataReachability,
+    )
 
 TypeDefKind = Literal["record", "enum", "exception"]
 DeclKey = tuple[ModuleId, tuple[str, ...], str]
@@ -188,6 +193,7 @@ class TypeTable:
         # invalidated (set back to ``None``) whenever a declaration is added,
         # removed, or overwritten.
         self._non_data_caps: NonDataReachability | None = None
+        self._container_caps: ContainerReachability | None = None
         # Whole-table finiteness fixpoint (see :meth:`has_finite_schema`),
         # cached and invalidated the same way as ``_non_data_caps``.
         self._finite_closure: FiniteClosure | None = None
@@ -211,6 +217,7 @@ class TypeTable:
         if existing is None:
             self._defs[key] = typedef
             self._non_data_caps = None
+            self._container_caps = None
             self._finite_closure = None
             return
         if existing != typedef:
@@ -254,6 +261,7 @@ class TypeTable:
         # a single changed key invalidates the whole cached result rather
         # than just this key.
         self._non_data_caps = None
+        self._container_caps = None
         self._finite_closure = None
 
     def record_fields(self, handle: RecordType) -> Mapping[str, Type]:
@@ -462,6 +470,24 @@ class TypeTable:
             if pname in relevant
         )
 
+    def nominal_may_be_cyclic(self, handle: RecordType | EnumType | ExceptionType) -> bool:
+        """Return whether *handle* can contain an array or dict at runtime."""
+        caps = self._container_reachability()
+        key = (handle.module_id, handle.scope_path, handle.name)
+        if key in caps.reaches_container:
+            return True
+        if isinstance(handle, ExceptionType):
+            return key not in self._defs
+        typedef = self._defs.get(key)
+        if typedef is None:
+            return True
+        relevant = caps.relevant_params.get(key, frozenset())
+        return any(
+            type_may_be_cyclic(arg, self)
+            for param, arg in zip(typedef.type_params, handle.type_args)
+            if param in relevant
+        )
+
     def nominal_is_json_convertible(self, handle: RecordType | EnumType | ExceptionType) -> bool:
         """Return ``True`` if *handle* has a JSON representation.
 
@@ -478,6 +504,13 @@ class TypeTable:
 
             self._non_data_caps = compute_non_data_reachability(self)
         return self._non_data_caps
+
+    def _container_reachability(self) -> "ContainerReachability":
+        if self._container_caps is None:
+            from agm.agl.semantics.analyses import compute_container_reachability
+
+            self._container_caps = compute_container_reachability(self)
+        return self._container_caps
 
     def has_finite_closure(
         self, module_id: ModuleId, name: str, scope_path: tuple[str, ...] = ()
@@ -841,11 +874,40 @@ def _first_non_data_leaf(t: Type) -> Type | None:
     """
     if isinstance(t, (UnitType, AgentType, FunctionType)):
         return t
-    if isinstance(t, ArrayType):
-        return _first_non_data_leaf(t.elem)
-    if isinstance(t, DictType):
-        return _first_non_data_leaf(t.value)
+    if isinstance(t, (RecordType, EnumType, ExceptionType)):
+        return None
+    for child in type_children(t):
+        leaf = _first_non_data_leaf(child)
+        if leaf is not None:
+            return leaf
     return None
+
+
+def type_may_be_cyclic(t: Type, table: TypeTable) -> bool:
+    """Return whether a value of *t* can close a reference cycle.
+
+    Only arrays and dicts are mutable enough to close a cycle. Unknown and
+    variable types remain conservative because they may later denote either.
+    """
+    match t:
+        case ArrayType() | DictType() | TypeVarType() | InferenceVarType():
+            return True
+        case RecordType() | EnumType() | ExceptionType():
+            return table.nominal_may_be_cyclic(t)
+        case (
+            TextType()
+            | JsonType()
+            | BoolType()
+            | IntType()
+            | DecimalType()
+            | UnitType()
+            | AgentType()
+            | FunctionType()
+            | BottomType()
+        ):
+            return False
+        case _ as unreachable:  # pragma: no cover
+            assert_never(unreachable)
 
 
 def _reaches_non_data(t: Type, table: TypeTable) -> bool:

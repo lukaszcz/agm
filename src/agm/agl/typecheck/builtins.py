@@ -197,27 +197,16 @@ class BuiltinCallChecker:
     # --- copy / shallow_copy ---
 
     def check_copy(self, node: Call) -> Type:
-        return self._check_identity_builtin(node, "copy")
+        if len(node.args) != 1 or node.named_args:
+            raise AglTypeError("copy() requires exactly one positional argument.", span=node.span)
+        return self._check_arg_with_optional_explicit_target(node, node.args[0], "copy")
 
     def check_shallow_copy(self, node: Call) -> Type:
-        return self._check_identity_builtin(node, "shallow_copy")
-
-    def _check_identity_builtin(self, node: Call, name: str) -> Type:
-        """Type-check ``copy``/``shallow_copy``: identity in the argument's type.
-
-        Both are generic in a single type parameter that is always inferable
-        from the sole argument, so — unlike ``ask``/``exec`` — no contextual
-        ``expected`` type is needed. An optional explicit type argument
-        (``copy::[T](value)``) instead requires the argument to be assignable
-        to ``T`` and fixes the result to ``T``; resolved via the same
-        ``_resolve_explicit_target`` helper ``ask``/``exec``/``ask-request``
-        use for theirs.
-        """
         if len(node.args) != 1 or node.named_args:
             raise AglTypeError(
-                f"{name}() requires exactly one positional argument.", span=node.span
+                "shallow_copy() requires exactly one positional argument.", span=node.span
             )
-        return self._check_arg_with_optional_explicit_target(node, node.args[0], name)
+        return self._check_arg_with_optional_explicit_target(node, node.args[0], "shallow_copy")
 
     def _check_arg_with_optional_explicit_target(
         self, node: Call, arg_expr: Expr, name: str

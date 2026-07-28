@@ -49,6 +49,11 @@ let review: Review = ask(
 let count = 3
 ```
 
+`let` freezes the *name*, never the *data*: a `let`-bound array or dict is
+still a mutable reference value and can be updated in place through the name
+([Types](types.md)). A program that wants an independent value detaches one
+with `copy` ([Copying values](types.md#copying-values)).
+
 `_` is a wildcard binder. `let _ = e` evaluates `e` and discards its value
 without introducing a readable name; it may be repeated in a scope. `var _ =
 e` has the same discard behavior. `_` is never readable, even if an outer

@@ -102,7 +102,12 @@ def _is_allowed(module: str, prefixes: tuple[str, ...]) -> bool:
         ),
         (
             "semantics",
-            ("agm.agl.ir", "agm.agl.modules.ids", "agm.agl.semantics"),
+            (
+                "agm.agl.ir",
+                "agm.agl.modules.ids",
+                "agm.agl.self_validation",
+                "agm.agl.semantics",
+            ),
         ),
         (
             "eval",

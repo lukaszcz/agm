@@ -1,11 +1,12 @@
 """AgL's invariant self-checks are optional and gated by a single flag.
 
-The checks re-verify artifacts the compiler itself just produced — match
-compilation and the structural validation of the lowered IR — and never change a
-result, so they are disabled in normal execution.  The test suite enables them
-globally (see ``tests/conftest.py``); these tests pin the gating contract and
-confirm the production path — validation disabled — trusts the compiler and the
-lowerer without re-checking either.
+The checks re-verify artifacts the compiler itself just produced — the
+typechecker's own closed-output boundary, match compilation, and the structural
+validation of the lowered IR — and never change a result, so they are disabled
+in normal execution.  The test suite enables them globally (see
+``tests/conftest.py``); these tests pin the gating contract and confirm the
+production path — validation disabled — trusts the checker, the compiler, and
+the lowerer without re-checking any of them.
 """
 
 from __future__ import annotations
@@ -28,10 +29,14 @@ from agm.agl.matchcompile import (
 from agm.agl.matchcompile.normalize import MatchCompileInvariantError
 from agm.agl.modules.ids import ENTRY_ID
 from agm.agl.parser import parse_program
+from agm.agl.repl import ReplSession
 from agm.agl.scope import resolve_module
 from agm.agl.scope.program import resolve_program
 from agm.agl.self_validation import self_validation_enabled
+from agm.agl.semantics.type_table import TypeDef, TypeTable
+from agm.agl.semantics.types import InferenceVarType
 from agm.agl.typecheck import check_module
+from agm.agl.typecheck.env import assert_checked_module_closed
 from agm.agl.typecheck.program import check_program
 from tests.agl.ir_harness import base_caps, make_graph_from_files
 from tests.agl.match_reference import case_sites
@@ -242,3 +247,110 @@ def test_lowering_validates_ir_when_enabled(monkeypatch: pytest.MonkeyPatch) -> 
 
     with pytest.raises(InvalidIrError):
         _lower(_SOURCE)
+
+
+# ---------------------------------------------------------------------------
+# Typechecker self-checks: the closed-output boundary and its call sites
+# ---------------------------------------------------------------------------
+
+
+def test_disabled_validation_still_seals_the_checked_type_env(
+    self_validation_disabled: None,
+) -> None:
+    """Sealing is functional state, not a self-check, so it survives being disabled.
+
+    ``TypeEnvironment.seal`` freezes the environment (gating further mutation and
+    enabling memoization/seeding) independently of whether it also re-verifies
+    itself; a checked module's ``type_env`` must come out sealed either way.
+    """
+    checked = check_module(resolve_module(parse_program(_SOURCE)), base_caps())
+
+    assert checked.type_env.is_sealed is True
+
+
+def test_disabled_validation_skips_the_inference_region_leak_check(
+    self_validation_disabled: None,
+) -> None:
+    """A region that actually allocates inference variables is trusted once resolved.
+
+    Calling a generic function forces the checker to allocate a flexible
+    inference variable for its type parameter and resolve it from the argument;
+    the finalized-region leak check that re-walks the result is a self-check
+    only, so disabling it does not stop the call from checking normally.
+    """
+    source = "def id[T](value: T) -> T = value\nlet result = id(1)\nresult"
+    checked = check_module(resolve_module(parse_program(source)), base_caps())
+
+    assert checked.node_types
+
+
+def test_disabled_validation_skips_the_extern_target_leak_check(
+    self_validation_disabled: None,
+) -> None:
+    """A generic extern referenced first-class also carries a resolved leak check.
+
+    Taking a generic extern function as a value (rather than calling it
+    directly) routes its result type through ``_zonk_extern_targets``, which
+    re-verifies the zonked provenance is free of inference variables. That
+    re-verification is a self-check only: disabling it does not stop the
+    reference from resolving to a concrete call site.
+    """
+    source = "extern def id[T](value: T) -> T\nlet apply: (int) -> int = id\napply(1)"
+    checked = check_module(
+        resolve_module(parse_program(source), origin_path=Path("/virtual/self_validation.agl")),
+        base_caps(),
+    )
+
+    assert [site.callee for site in checked.call_sites] == ["id"]
+
+
+def test_disabled_validation_skips_the_repl_entry_closure_check(
+    self_validation_disabled: None,
+) -> None:
+    """Promoting a REPL entry trusts its own checked output without re-verifying it."""
+    result = ReplSession().eval_entry("let x = 1")
+
+    assert result.ok
+
+
+def test_disabled_validation_accepts_a_re_registered_typedef_that_actually_conflicts(
+    self_validation_disabled: None,
+) -> None:
+    """Re-registering under an existing key is always accepted once disabled.
+
+    In production, re-registering the identical declaration is expected (e.g.
+    the program pre-pass and the per-module check both build the same module);
+    the full recursive-dataclass comparison that would additionally reject a
+    genuinely *different* redefinition is a self-check only, so a conflicting
+    re-registration is silently accepted too, rather than raising.
+    """
+    table = TypeTable()
+    table.register(TypeDef(kind="record", name="Box", module_id=ENTRY_ID))
+
+    table.register(TypeDef(kind="record", name="Box", module_id=ENTRY_ID, type_params=("T",)))
+
+    assert table.get(ENTRY_ID, "Box") == TypeDef(kind="record", name="Box", module_id=ENTRY_ID)
+
+
+def test_enabled_validation_rejects_a_conflicting_typedef_re_registration() -> None:
+    """With the flag on (the suite default), a genuinely conflicting redefinition is caught."""
+    table = TypeTable()
+    table.register(TypeDef(kind="record", name="Box", module_id=ENTRY_ID))
+
+    with pytest.raises(AssertionError, match="conflicting TypeDef registration"):
+        table.register(TypeDef(kind="record", name="Box", module_id=ENTRY_ID, type_params=("T",)))
+
+
+def test_closed_output_covers_explicit_builtin_targets() -> None:
+    """A leaked inference variable in ``explicit_builtin_targets`` is caught like any sibling.
+
+    ``explicit_builtin_targets`` is the side table for an explicit ``::[T]``
+    type argument on a builtin call (``print``, ``ask``, ``exec``, ...); it must
+    be walked by the closed-output boundary exactly like every other
+    type-bearing side table.
+    """
+    checked = check_module(resolve_module(parse_program(_SOURCE)), base_caps())
+    leaked = replace(checked, explicit_builtin_targets={-1: InferenceVarType("leak")})
+
+    with pytest.raises(AssertionError, match="inference variable leaked"):
+        assert_checked_module_closed(leaked)

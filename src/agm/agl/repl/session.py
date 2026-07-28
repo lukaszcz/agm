@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING
 from agm.agl.diagnostics import AglError, Diagnostic, diagnostic_from_span
 from agm.agl.repl.entry import EntryKind, EntryResult
 from agm.agl.repl.entry_pipeline import EntryPipeline
+from agm.agl.self_validation import self_validation_enabled
 from agm.config.engine_keys import HOST_CONSUMED_ENGINE_KEYS
 
 if TYPE_CHECKING:
@@ -720,7 +721,8 @@ class ReplSession:
             return result
 
         entry_declarations = declarations(program.body.items)
-        self._assert_checked_state_closed(checked)
+        if self_validation_enabled():
+            self._assert_checked_state_closed(checked)
         entry_root = checked.resolved.root_scope
         named_declarations = (
             AgentDecl,

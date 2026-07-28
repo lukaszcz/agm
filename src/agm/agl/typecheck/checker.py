@@ -69,6 +69,7 @@ from agm.agl.scope.symbols import (
     duplicate_binder_message,
     immutable_assignment_message,
 )
+from agm.agl.self_validation import self_validation_enabled
 from agm.agl.semantics.type_table import (
     TypeTable,
     cast_classification,
@@ -1285,16 +1286,17 @@ class _Checker:
                 # inference variables by ``_finalize_extern_provenance`` above (via
                 # ``_zonk_extern_targets``), so they are deliberately not re-walked
                 # here — this pass covers only node/param types and call sites.
-                region.engine.assert_no_inference_vars(
-                    (
-                        *final_node_types.values(),
-                        *(t for ts in final_param_types.values() for t in ts),
-                        *(
-                            call_site.target_type
-                            for call_site in self._call_sites[region.call_sites_start :]
-                        ),
+                if self_validation_enabled():
+                    region.engine.assert_no_inference_vars(
+                        (
+                            *final_node_types.values(),
+                            *(t for ts in final_param_types.values() for t in ts),
+                            *(
+                                call_site.target_type
+                                for call_site in self._call_sites[region.call_sites_start :]
+                            ),
+                        )
                     )
-                )
             else:
                 # No inference variable was ever allocated, so the recorded types
                 # are already final — skip zonking and the leak-check entirely.
@@ -1646,7 +1648,7 @@ class _Checker:
             zonked = self._inference_region.engine.zonk(owner)
             assert isinstance(zonked, (RecordType, EnumType, ExceptionType))
             owner = zonked
-        if contains_inference_var(owner):
+        if self_validation_enabled() and contains_inference_var(owner):
             raise AssertionError(
                 "TypeTable received a constructor owner with flexible type arguments"
             )
@@ -2401,11 +2403,12 @@ class _Checker:
     def _zonk_extern_targets(
         self, targets: _ExternTargets, engine: InferenceEngine
     ) -> _ExternTargets:
-        """Zonk and validate one function-provenance target group."""
+        """Zonk one function-provenance target group, self-validating it when enabled."""
         zonked = tuple(
             replace(target, result_type=engine.zonk(target.result_type)) for target in targets
         )
-        engine.assert_no_inference_vars(target.result_type for target in zonked)
+        if self_validation_enabled():
+            engine.assert_no_inference_vars(target.result_type for target in zonked)
         return self._merge_extern_targets(zonked)
 
     def _finalize_extern_provenance(self, region: _InferenceRegion) -> None:
@@ -4747,7 +4750,9 @@ def _check_prepared_module(
     )
     checker.check_module(resolved.program)
     checked = checker.result()
-    assert_checked_module_closed(checked)
+    checked.type_env.seal()
+    if self_validation_enabled():
+        assert_checked_module_closed(checked)
     return checked
 
 

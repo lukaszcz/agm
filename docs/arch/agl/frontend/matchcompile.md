@@ -16,7 +16,7 @@ Whole-program entry points visit every nested case and every destructuring immut
 
 A destructuring let is normalized as one row over its initializer occurrence. A reachable DAG failure is a static refutable-let diagnostic carrying the same structured missing-pattern witness as case exhaustiveness; accepted lets therefore have failure-free decisions. No runtime match failure, continuation capture, lowering, or evaluation is introduced at this stage. Any issue yields sorted static diagnostics and no artifact, so lowering can only ever see fully compiled programs. Downstream pipelines reuse a static artifact only when its resolved-program identity and host capabilities match the consuming pipeline; otherwise they recheck before lowering.
 
-Artifact validation — source kind and ownership, mapping totality, provenance, and decision semantic replay — is a self-check gated by the AgL self-validation toggle ([testing.md](testing.md)), so the suite re-verifies every compiled match site while production lowering trusts the artifact.
+Artifact validation — source kind and ownership, mapping totality, provenance, and decision semantic replay — is a self-check gated by the AgL self-validation toggle ([testing.md](../../testing.md)), so the suite re-verifies every compiled match site while production lowering trusts the artifact.
 
 ## Package Boundary
 

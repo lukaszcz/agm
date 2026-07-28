@@ -35,6 +35,7 @@ from agm.agl.scope.imports import (
     try_resolve_qualified_member,
 )
 from agm.agl.scope.symbols import BindingRef, ConstructorRef, ModuleResolution, ScopeNode, ScopePath
+from agm.agl.self_validation import self_validation_enabled
 from agm.agl.semantics.persistent import PersistentDict
 from agm.agl.semantics.type_table import (
     BUILTIN_PRELUDE_TYPE_DEFS,
@@ -489,11 +490,11 @@ def assert_checked_output_closed(
     node_types: Mapping[int, Type],
     contract_specs: Mapping[int, OutputContractSpec],
     call_sites: Iterable[CallSiteRecord],
-    type_env: "TypeEnvironment",
     function_signatures: Mapping[str, FunctionSignature],
     cast_specs: Mapping[int, CastSpec],
     argument_bindings: ArgumentBindings,
     let_matched_types: Mapping[int, Type],
+    explicit_builtin_targets: Mapping[int, Type],
     owner: str,
 ) -> None:
     """Assert that all type-bearing checked metadata is concrete or rigid.
@@ -501,7 +502,10 @@ def assert_checked_output_closed(
     Partial-call routing is deliberately absent: it is syntax-and-binding metadata
     only; its function type is published in ``node_types``.  Rigid declaration
     variables remain valid in generic templates and signatures, while flexible
-    ``InferenceVarType`` instances are a compiler invariant failure here.
+    ``InferenceVarType`` instances are a compiler invariant failure here.  Purely
+    a self-check: it does not seal the type environment (see
+    :meth:`TypeEnvironment.seal`, which every caller runs unconditionally at the
+    same point regardless of this check).
     """
     _assert_checked_types_closed(
         (
@@ -521,10 +525,10 @@ def assert_checked_output_closed(
                 for param_type in param_types
             ),
             *let_matched_types.values(),
+            *explicit_builtin_targets.values(),
         ),
         owner=owner,
     )
-    type_env.seal()
 
 
 def assert_checked_module_closed(checked: CheckedModule) -> None:
@@ -533,13 +537,17 @@ def assert_checked_module_closed(checked: CheckedModule) -> None:
         node_types=checked.node_types,
         contract_specs=checked.contract_specs,
         call_sites=checked.call_sites,
-        type_env=checked.type_env,
         function_signatures=checked.function_signatures,
         cast_specs=checked.cast_specs,
         argument_bindings=checked.argument_bindings,
         let_matched_types=checked.let_matched_types,
+        explicit_builtin_targets=checked.explicit_builtin_targets,
         owner="checked program",
     )
+    # The environment's own binding table is not one of the side tables above
+    # (it is validated as a whole by ``assert_closed``, independent of which
+    # published node/call/signature happens to reference each binding).
+    checked.type_env.assert_closed()
     checked.type_env.assert_shared_tables_closed()
 
 
@@ -758,8 +766,14 @@ class TypeEnvironment:
             raise AssertionError("cannot mutate a sealed type environment")
 
     def seal(self) -> None:
-        """Validate this environment once and freeze it as checked output."""
-        self.assert_closed()
+        """Freeze this environment as checked output.
+
+        Validates the environment first when self-validation is enabled; sealing
+        itself — the functional state that gates further mutation and memoization
+        (see :attr:`is_sealed`) — always happens, regardless of the flag.
+        """
+        if self_validation_enabled():
+            self.assert_closed()
         self._sealed = True
 
     # --- Type namespace queries ---

@@ -1,11 +1,16 @@
 """Toggle for AgL's optional self-validation.
 
 AgL carries invariant self-checks that re-verify artifacts the compiler itself
-just produced: the match compiler's matrix operation-boundary consistency,
-occurrence-ledger integrity, decision-DAG shape, semantic replay and artifact
-provenance, plus the structural validation of the lowered execution IR. None of
-these checks change a result — they only assert that a correct compiler stayed
-correct — so they are disabled during normal execution.
+just produced: the typechecker's checked-output closure boundary (no solver-local
+inference variable escapes into a checked side table, the module type
+environment, or the shared whole-program tables), its per-region and
+extern-provenance inference-close checks, the constructor-owner flexibility
+guard before a ``TypeTable`` lookup, and ``TypeTable.register``'s
+conflicting-registration check; the match compiler's matrix operation-boundary
+consistency, occurrence-ledger integrity, decision-DAG shape, semantic replay
+and artifact provenance; plus the structural validation of the lowered
+execution IR. None of these checks change a result — they only assert that a
+correct compiler stayed correct — so they are disabled during normal execution.
 
 Every call site guards its check with ``if self_validation_enabled():``, so that
 a disabled check costs one global read: neither the check nor any state recorded

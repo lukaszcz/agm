@@ -20,7 +20,7 @@ Some tests guard architectural properties rather than feature behavior:
 
 ## AgL Self-Validation
 
-AgL carries invariant self-checks that re-verify artifacts the compiler itself just produced: every compiled match site's matrix, occurrence ledger, decision DAG, semantic replay, and provenance; and the structural validation of the lowered IR (`validate_ir`). These re-check already-checked source, so they are defense-in-depth rather than production behavior and are disabled by default.
+AgL carries invariant self-checks that re-verify artifacts the compiler itself just produced: the typechecker's checked-output closure boundary (no solver-local inference variable escapes a checked module, program, or the shared whole-program tables) and its per-region inference-close checks; every compiled match site's matrix, occurrence ledger, decision DAG, semantic replay, and provenance; and the structural validation of the lowered IR (`validate_ir`). These re-check already-checked source, so they are defense-in-depth rather than production behavior and are disabled by default.
 
 One toggle (`agm.agl.self_validation`) gates all of them. `tests/conftest.py` turns it on for the whole suite, so every match site compiled and every program lowered anywhere in the tests doubles as an invariant oracle while production pays nothing. Tests that pin the production path take the `self_validation_disabled` fixture; `tests/test_agl_self_validation.py` holds the gating contract.
 

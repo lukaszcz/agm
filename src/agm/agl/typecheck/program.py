@@ -68,6 +68,7 @@ from agm.agl.modules.ids import ModuleId
 from agm.agl.scope.imports import ImportEnv
 from agm.agl.scope.program import ResolvedProgram
 from agm.agl.scope.symbols import ModuleResolution
+from agm.agl.self_validation import self_validation_enabled
 from agm.agl.semantics.analyses import compute_uninhabited, uninhabitable_message
 from agm.agl.semantics.type_table import (
     DeclKey,
@@ -170,13 +171,14 @@ def _assert_checked_module_closed(module: CheckedModule) -> None:
         node_types=module.node_types,
         contract_specs=module.contract_specs,
         call_sites=module.call_sites,
-        type_env=module.type_env,
         function_signatures=module.function_signatures,
         cast_specs=module.cast_specs,
         argument_bindings=module.argument_bindings,
         let_matched_types=module.let_matched_types,
+        explicit_builtin_targets=module.explicit_builtin_targets,
         owner=f"checked module {module.module_id.path_str()}",
     )
+    module.type_env.assert_closed()
 
 
 def assert_checked_program_closed(checked: CheckedProgram) -> None:
@@ -1028,5 +1030,6 @@ def check_program(
         ),
         capabilities=capabilities,
     )
-    assert_checked_program_closed(checked)
+    if self_validation_enabled():
+        assert_checked_program_closed(checked)
     return checked

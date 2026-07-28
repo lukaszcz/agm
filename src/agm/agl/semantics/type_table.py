@@ -50,6 +50,7 @@ from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Literal, assert_never, cast
 
 from agm.agl.modules.ids import PRELUDE_ID, STD_CORE_ID, ModuleId
+from agm.agl.self_validation import self_validation_enabled
 from agm.agl.semantics.types import (
     AgentType,
     ArrayType,
@@ -199,12 +200,14 @@ class TypeTable:
 
         Registering a *different* definition under an already-registered
         ``(module_id, scope_path, name)`` key is an internal invariant violation — every
-        declaration is built exactly once per module, so this raises
-        ``AssertionError`` rather than a user-facing diagnostic. Re-checking
-        the identical declaration again (e.g. the REPL re-checking a promoted
-        entry against a fresh environment, or the program pre-pass and the
-        per-module check both building the same module) is expected and is
-        silently accepted.
+        declaration is built exactly once per module, so, when self-validation is
+        enabled, this raises ``AssertionError`` rather than a user-facing
+        diagnostic. Re-checking the identical declaration again (e.g. the REPL
+        re-checking a promoted entry against a fresh environment, or the program
+        pre-pass and the per-module check both building the same module) is
+        expected and is silently accepted. With self-validation disabled (the
+        production path), a re-registration under an existing key is always
+        silently accepted, matching declaration reuse rather than re-verifying it.
         """
         if typedef.base is not None and len(typedef.base) == 2:
             typedef = replace(typedef, base=(typedef.base[0], (), typedef.base[1]))
@@ -215,7 +218,7 @@ class TypeTable:
             self._non_data_caps = None
             self._finite_closure = None
             return
-        if existing != typedef:
+        if self_validation_enabled() and existing != typedef:
             raise AssertionError(
                 f"conflicting TypeDef registration for {key!r}: "
                 f"{existing!r} is already registered, got {typedef!r}"

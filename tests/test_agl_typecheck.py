@@ -18,6 +18,7 @@ Tests deliberately do *not* pin internal implementation details.
 from __future__ import annotations
 
 from dataclasses import replace
+from pathlib import Path
 from typing import cast
 
 import pytest
@@ -114,6 +115,7 @@ from agm.agl.typecheck import (
     FunctionType,
     IntType,
     JsonType,
+    ParamSpec,
     PartialCallSpec,
     RecordType,
     TextType,
@@ -130,6 +132,7 @@ from agm.agl.typecheck.env import (
     GenericTypeDef,
     OutputContractSpec,
 )
+from agm.agl.typecheck.function_inference import resolve_function_header
 from tests._agl_helpers import all_node_ids
 
 # ---------------------------------------------------------------------------
@@ -7347,6 +7350,115 @@ class TestExecStructured:
         spec = r.contract_specs[decl.value.node_id]
         assert spec.structured_exec is False
         assert spec.codec_name == "json"
+
+
+# ---------------------------------------------------------------------------
+# Method header resolution
+# ---------------------------------------------------------------------------
+
+
+def _method_header(source: str) -> tuple[FuncDef, tuple[ParamSpec, ...]]:
+    """Resolve one classified method header through the shared function seam."""
+    resolved = resolve_module(parse_program(source), origin_path=Path("method.agl"))
+    function = next(item for item in resolved.program.body.items if isinstance(item, FuncDef))
+    owner = resolved.method_declarations[(ENTRY_ID, ("Point",), function.name)]
+    env = TypeEnvironment()
+    _TypeBuilder(env).collect(resolved.program)
+    with env.type_scope(owner):
+        signature, _ = resolve_function_header(
+            env, function, result_type=function.return_type, receiver_owner=owner
+        )
+    return function, signature.params
+
+
+class TestMethodHeaders:
+    def test_plain_owner_builds_positional_only_receiver(self) -> None:
+        checked = accept_type(
+            "record Point\n"
+            "  x: int\n"
+            "def Point::radius(self) -> int = self.x\n"
+            "let point = Point(x = 1)\n"
+            "Point::radius(point)"
+        )
+        signature = checked.type_env.get_function_signature("radius", scope_path=("Point",))
+        assert signature is not None
+        assert signature.params[0] == ParamSpec(
+            "self", RecordType("Point"), ParamKind.POSITIONAL_ONLY, False
+        )
+
+    def test_generic_owner_builds_receiver_from_leading_method_slot(self) -> None:
+        checked = accept_type(
+            "record Box[T]\n"
+            "  value: T\n"
+            "def Box::get[E](self: Box[E]) -> E = self.value\n"
+            "Box(value = 1)"
+        )
+        signature = checked.type_env.get_function_signature("get", scope_path=("Box",))
+        assert signature is not None
+        assert signature.params[0].type == RecordType("Box", (TypeVarType("E"),))
+        assert signature.params[0].kind is ParamKind.POSITIONAL_ONLY
+
+    @pytest.mark.parametrize(
+        "source",
+        (
+            "record Point\n  x: int\ndef Point::bad(self: int) -> int = self",
+            "record Box[T]\n  value: T\ndef Box::bad[T](self: Box[int]) -> int = self.value",
+            "record Box[T]\n  value: T\ndef Box::bad[T, U](self: Box[U]) -> int = 1",
+        ),
+    )
+    def test_receiver_annotation_must_be_exact(self, source: str) -> None:
+        error = reject_type(source)
+        assert "receiver" in str(error).lower() or "self" in str(error).lower()
+
+    def test_receiver_requires_every_owner_generic_slot(self) -> None:
+        error = reject_type("record Box[T]\n  value: T\ndef Box::size(self) -> int = 1")
+        assert "type parameter" in str(error).lower()
+
+    def test_annotated_receiver_default_is_rejected_at_its_header(self) -> None:
+        error = reject_type(
+            "record Point\n  x: int\ndef Point::bad(self: Point = Point(x = 1)) -> Point = self"
+        )
+        assert "receiver" in str(error).lower() and "default" in str(error).lower()
+        assert error.span is not None
+        assert error.span.start_line == 3
+
+    def test_repeating_wildcard_receiver_slots_remain_nonbinding(self) -> None:
+        checked = accept_type(
+            "enum Outcome[A, B]\n"
+            "  | value(v: A)\n"
+            "def Outcome::tag[_, _](self) -> int = 1\n"
+            "let outcome: Outcome[int, text] = Outcome::value(v = 1)\n"
+            "Outcome::tag(outcome)"
+        )
+        method = checked.type_env.type_table.lookup_method(
+            EnumType("Outcome", (IntType(), TextType())), "tag"
+        )
+        assert method is not None
+        assert method.receiver_type_param_arity == 2
+
+    def test_receiver_is_rejected_as_named_argument(self) -> None:
+        error = reject_type(
+            "record Point\n"
+            "  x: int\n"
+            "def Point::radius(self) -> int = self.x\n"
+            "let point = Point(x = 1)\n"
+            "Point::radius(self = point)"
+        )
+        assert "positional-only" in str(error).lower()
+
+    @pytest.mark.parametrize(
+        "prefix",
+        ("", "extern ", "builtin "),
+    )
+    def test_all_function_declaration_forms_resolve_a_receiver(self, prefix: str) -> None:
+        function, params = _method_header(
+            "record Point\n"
+            "  x: int\n"
+            f"{prefix}def Point::member(self) -> int" + (" = self.x" if not prefix else "")
+        )
+        assert function.params[0].name == "self"
+        assert params[0].kind is ParamKind.POSITIONAL_ONLY
+        assert params[0].type == RecordType("Point")
 
 
 # ---------------------------------------------------------------------------

@@ -392,6 +392,27 @@ def test_destructuring_let_binder_preserves_candidate_validation_provenance() ->
     assert any("candidate return type" in message.lower() for message, _ in error.related)
 
 
+def test_method_with_inferred_return_uses_receiver_header_type() -> None:
+    """Candidate inference retains the receiver's rigid generic slot in its body."""
+    checked = check_module(
+        resolve_module(
+            parse_program(
+                "record Box[T]\n"
+                "  value: T\n"
+                "def Box::get[E](self) = self.value\n"
+                "let box = Box(value = 1)\n"
+                "Box::get(box)"
+            )
+        ),
+        HostCapabilities(),
+    )
+
+    signature = checked.type_env.get_function_signature("get", scope_path=("Box",))
+    assert signature is not None
+    assert signature.result == TypeVarType("E")
+    assert signature.params[0].type == RecordType("Box", (TypeVarType("E"),))
+
+
 class TestFinalizationAndProvenance:
     def test_solved_query_rejects_nested_unresolved_solution(self) -> None:
         engine = InferenceEngine()

@@ -204,6 +204,7 @@ from agm.agl.typecheck.function_inference import (
     FunctionSignatureRecord,
     ModuleCandidateComponent,
     infer_module_component_candidates,
+    register_method_header,
     resolve_function_header,
     validate_required_after_defaulted,
 )
@@ -600,29 +601,48 @@ class _Checker:
 
     def _preregister_funcdef(self, node: FuncDef) -> None:
         """Resolve and register the signature of a top-level ``def``."""
-        self._validate_funcdef_header(node)
+        receiver_owner = self._method_owner_path(node)
+        self._validate_funcdef_header(node, is_method=receiver_owner is not None)
         if node.return_type is None:
             return
 
-        sig, func_type = resolve_function_header(self._env, node, result_type=node.return_type)
+        sig, func_type = resolve_function_header(
+            self._env,
+            node,
+            result_type=node.return_type,
+            receiver_owner=receiver_owner,
+        )
         if node.is_extern:
             self._validate_extern_signature(node, sig)
             self._env.register_extern_node_id(node.node_id)
-        self._register_funcdef_signature(node, sig, func_type)
+        self._register_funcdef_signature(node, sig, func_type, is_method=receiver_owner is not None)
+        register_method_header(self._env, node, sig, receiver_owner)
 
-    def _validate_funcdef_header(self, node: FuncDef) -> None:
-        """Validate declaration-level properties that do not need a return type."""
-        if node.name in _BUILTIN_TYPE_NAMES:
+    def _method_owner_path(self, node: FuncDef) -> tuple[str, ...] | None:
+        """Return scope's receiver classification for *node*, if it has one."""
+        return self._resolved.method_declarations.get(
+            (self._module_id, self._declaration_scope_path(node), node.name)
+        )
+
+    def _validate_funcdef_header(self, node: FuncDef, *, is_method: bool) -> None:
+        """Validate declaration-level properties that do not need a return type.
+
+        Scope-classified methods have their own member namespace and host
+        contract. Global builtin-name and signature rules therefore apply only
+        to ordinary declarations; all declaration forms still share the
+        remaining header validation.
+        """
+        if not is_method and node.name in _BUILTIN_TYPE_NAMES:
             raise AglTypeError(
                 f"'{node.name}' is a built-in type name and cannot be used as a function name.",
                 span=node.span,
             )
-        if node.name in _BUILTIN_FUNC_NAMES and not node.is_builtin:
+        if not is_method and node.name in _BUILTIN_FUNC_NAMES and not node.is_builtin:
             raise AglTypeError(
                 f"'{node.name}' is a built-in function name and cannot be redefined.",
                 span=node.span,
             )
-        if node.is_builtin and node.name not in _BUILTIN_FUNC_NAMES:
+        if not is_method and node.is_builtin and node.name not in _BUILTIN_FUNC_NAMES:
             raise AglTypeError(
                 f"Unknown builtin function '{node.name}'.",
                 span=node.span,
@@ -690,10 +710,10 @@ class _Checker:
             raise AglTypeError(banned_message, span=span)
 
     def _register_funcdef_signature(
-        self, node: FuncDef, sig: FunctionSignature, func_type: FunctionType
+        self, node: FuncDef, sig: FunctionSignature, func_type: FunctionType, *, is_method: bool
     ) -> None:
         """Register a resolved ``def`` signature in every function side table."""
-        if node.is_builtin:
+        if node.is_builtin and not is_method:
             expected_sigs = _builtin_function_signature_alternates(node.name)
             if not any(_signature_matches(sig, expected_sig) for expected_sig in expected_sigs):
                 raise AglTypeError(

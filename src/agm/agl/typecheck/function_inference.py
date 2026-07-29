@@ -15,9 +15,13 @@ from typing import TYPE_CHECKING
 
 from agm.agl.modules.ids import ModuleId
 from agm.agl.semantics.persistent import PersistentDict
+from agm.agl.semantics.type_table import MethodDef, NominalOwner
 from agm.agl.semantics.types import (
+    EnumType,
+    ExceptionType,
     FunctionType,
     InferenceVarType,
+    RecordType,
     Type,
     TypeVarType,
     contains_inference_var,
@@ -44,7 +48,12 @@ if TYPE_CHECKING:
     from agm.agl.capabilities import HostCapabilities
     from agm.agl.scope.symbols import BindingRef, ConstructorRef, ModuleResolution
 from agm.agl.syntax.spans import SourceSpan
-from agm.agl.syntax.types import TypeExpr, type_parameter_bindings
+from agm.agl.syntax.types import (
+    TYPE_PARAMETER_WILDCARD,
+    ReceiverType,
+    TypeExpr,
+    type_parameter_bindings,
+)
 from agm.agl.typecheck.env import AglTypeError, FunctionSignature, ParamSpec, TypeEnvironment
 
 
@@ -386,10 +395,19 @@ def _infer_function_component(
             capabilities=module.capabilities,
             module_id=module.module_id,
         )
-        checker._validate_funcdef_header(node)
+        receiver_owner = module.resolved.method_declarations.get(
+            (module.module_id, tuple(segment.name for segment in node.scope_path), node.name)
+        )
+        checker._validate_funcdef_header(node, is_method=receiver_owner is not None)
         result = engine.fresh(f"{node.name} result")
         with module.env.type_scope(tuple(segment.name for segment in node.scope_path)):
-            signature, function_type = resolve_function_header(module.env, node, result_type=result)
+            signature, function_type = resolve_function_header(
+                module.env,
+                node,
+                result_type=result,
+                receiver_owner=receiver_owner,
+            )
+        register_method_header(module.env, node, signature, receiver_owner)
         for env in discovery_envs:
             _register_signature(env, module, node, signature, function_type)
         provisional.append((module, node, result, signature))
@@ -475,6 +493,10 @@ def _infer_function_component(
         )
         for env in publication_envs:
             _register_signature(env, module, node, concrete_signature, function_type)
+        receiver_owner = module.resolved.method_declarations.get(
+            (module.module_id, tuple(segment.name for segment in node.scope_path), node.name)
+        )
+        register_method_header(module.env, node, concrete_signature, receiver_owner)
         records.append(
             FunctionSignatureRecord(
                 declaration_node_id=node.node_id,
@@ -498,14 +520,14 @@ def _close_generic_candidate_edges(
     provisional: list[tuple[CandidateModule, FuncDef, InferenceVarType, FunctionSignature]],
 ) -> None:
     """Validate uniform generic recursion and connect its delayed result evidence."""
-    functions = {node.node_id: (node, result) for _, node, result, _signature in provisional}
+    functions = {
+        node.node_id: (node, result, signature) for _, node, result, signature in provisional
+    }
     engine = session.engine
     for edge in session.generic_edges:
-        caller, _ = functions[edge.caller_declaration_id]
-        callee, _ = functions[edge.callee_declaration_id]
-        caller_vector = tuple(
-            TypeVarType(name) for name in type_parameter_bindings(caller.type_params)
-        )
+        caller, _, caller_signature = functions[edge.caller_declaration_id]
+        callee, _, _ = functions[edge.callee_declaration_id]
+        caller_vector = tuple(TypeVarType(name) for name in caller_signature.type_params)
         type_args = tuple(engine.zonk(arg) for arg in edge.type_args)
         if len(type_args) != len(caller_vector) or type_args != caller_vector:
             raise AglTypeError(
@@ -516,11 +538,11 @@ def _close_generic_candidate_edges(
             )
 
     for edge in session.generic_edges:
-        callee, callee_result = functions[edge.callee_declaration_id]
+        callee, callee_result, callee_signature = functions[edge.callee_declaration_id]
         result_template = engine.zonk(callee_result)
         substitutions = dict(
             zip(
-                type_parameter_bindings(callee.type_params),
+                callee_signature.type_params,
                 (engine.zonk(arg) for arg in edge.type_args),
                 strict=True,
             )
@@ -563,34 +585,144 @@ def validate_required_after_defaulted(params: Sequence[Param]) -> None:
             )
 
 
+def _method_owner(
+    env: TypeEnvironment, owner_path: tuple[str, ...], span: SourceSpan
+) -> tuple[NominalOwner, int]:
+    """Return a classified method's nominal owner and generic arity.
+
+    Scope has already established that ``owner_path`` belongs to a nominal
+    declaration. This helper only obtains that declaration's semantic handle;
+    it deliberately does not classify source declarations itself.
+    """
+    owner_name = "::".join(owner_path)
+    owner = env.get_type(owner_name)
+    if isinstance(owner, (RecordType, EnumType, ExceptionType)):
+        return owner, 0
+    generic = env.get_generic_type(owner_name)
+    assert generic is not None
+    assert isinstance(generic.template, (RecordType, EnumType))
+    return generic.template, len(generic.type_params)
+
+
+def _method_type_parameter_name(node: FuncDef, index: int) -> str:
+    """Return the private rigid name for one nonbinding method type slot."""
+    return f"__method_type_slot_{node.node_id}_{index}"
+
+
+def _receiver_type(
+    env: TypeEnvironment, node: FuncDef, owner_path: tuple[str, ...]
+) -> tuple[NominalOwner, int, Type]:
+    """Build the receiver type from a scope-classified method declaration."""
+    owner, arity = _method_owner(env, owner_path, node.span)
+    if len(node.type_params) < arity:
+        raise AglTypeError(
+            f"Method '{node.name}' declares {len(node.type_params)} type parameter(s), but its "
+            f"receiver requires {arity}.",
+            span=node.span,
+        )
+    if arity == 0:
+        return owner, arity, owner
+
+    receiver_args = tuple(
+        TypeVarType(name)
+        if name != TYPE_PARAMETER_WILDCARD
+        else TypeVarType(_method_type_parameter_name(node, index))
+        for index, name in enumerate(node.type_params[:arity])
+    )
+    generic = env.get_generic_type("::".join(owner_path))
+    assert generic is not None
+    receiver = env.instantiate_from_gdef("::".join(owner_path), generic, receiver_args, node.span)
+    return owner, arity, receiver
+
+
+def register_method_header(
+    env: TypeEnvironment,
+    node: FuncDef,
+    signature: FunctionSignature,
+    receiver_owner: tuple[str, ...] | None,
+) -> None:
+    """Publish one already-resolved classified method into the shared registry."""
+    if receiver_owner is None:
+        return
+    owner, arity = _method_owner(env, receiver_owner, node.span)
+    env.type_table.register_method(
+        owner,
+        MethodDef(
+            module_id=owner.module_id,
+            scope_path=receiver_owner,
+            name=node.name,
+            signature=FunctionType(
+                params=tuple(param.type for param in signature.params), result=signature.result
+            ),
+            receiver_type_param_arity=arity,
+        ),
+    )
+
+
 def resolve_function_header(
     env: TypeEnvironment,
     node: FuncDef,
     *,
     result_type: TypeExpr | Type,
+    receiver_owner: tuple[str, ...] | None = None,
 ) -> tuple[FunctionSignature, FunctionType]:
     """Resolve one function's parameter scheme and declared or supplied result."""
     validate_required_after_defaulted(node.params)
-    type_params = type_parameter_bindings(node.type_params)
-    type_vars = frozenset(type_params)
-    params = tuple(
-        ParamSpec(
-            name=param.name,
-            type=env.resolve_type_expr(param.type_expr, span=param.span, type_vars=type_vars),
-            kind=param.kind,
-            has_default=param.default is not None,
+    source_type_params = type_parameter_bindings(node.type_params)
+    type_vars = frozenset(source_type_params)
+    signature_type_params = source_type_params
+    receiver: Type | None = None
+    if receiver_owner is not None:
+        _owner, _arity, receiver = _receiver_type(env, node, receiver_owner)
+        signature_type_params = tuple(
+            name if name != TYPE_PARAMETER_WILDCARD else _method_type_parameter_name(node, index)
+            for index, name in enumerate(node.type_params)
         )
-        for param in node.params
-    )
+
+    params: list[ParamSpec] = []
+    for index, param in enumerate(node.params):
+        if index == 0 and receiver is not None:
+            if param.default is not None:
+                raise AglTypeError(
+                    f"Receiver 'self' for method '{node.name}' cannot have a default value.",
+                    span=param.span,
+                )
+            if not isinstance(param.type_expr, ReceiverType):
+                documented_receiver = env.resolve_type_expr(
+                    param.type_expr, span=param.span, type_vars=type_vars
+                )
+                if documented_receiver != receiver:
+                    raise AglTypeError(
+                        f"Receiver annotation on 'self' for method '{node.name}' must be exactly "
+                        "its enclosing type.",
+                        span=param.span,
+                    )
+            params.append(
+                ParamSpec(
+                    name=param.name,
+                    type=receiver,
+                    kind=ParamKind.POSITIONAL_ONLY,
+                    has_default=False,
+                )
+            )
+            continue
+        params.append(
+            ParamSpec(
+                name=param.name,
+                type=env.resolve_type_expr(param.type_expr, span=param.span, type_vars=type_vars),
+                kind=param.kind,
+                has_default=param.default is not None,
+            )
+        )
     resolved_result = (
         env.resolve_type_expr(result_type, span=node.span, type_vars=type_vars)
         if isinstance(result_type, TypeExpr)
         else result_type
     )
     signature = FunctionSignature(
-        params=params,
+        params=tuple(params),
         result=resolved_result,
-        type_params=type_params,
+        type_params=signature_type_params,
     )
     return signature, FunctionType(
         params=tuple(param.type for param in params), result=resolved_result

@@ -687,11 +687,16 @@ def _build_program_func_sig_table(
                 env.register_generic_type("::".join((*scope_path, g_name)), gdef)
 
         for item in _static_function_items(program.body.items):
-            # Defer invalid user shadowing declarations to the ordinary checker,
-            # which reports them at the declaration. A ``builtin def`` deliberately
-            # uses a builtin call name, so it must still receive program metadata.
-            if item.name in _BUILTIN_TYPE_NAMES or (
-                item.name in _BUILTIN_FUNC_NAMES and not item.is_builtin
+            receiver_owner = rmod.resolved.method_declarations.get(
+                (mid, tuple(segment.name for segment in item.scope_path), item.name)
+            )
+            # Defer invalid ordinary declarations to the checker. Scope-classified
+            # methods use member contracts rather than the global builtin table,
+            # so they still need program-header metadata even when their name
+            # matches a global builtin.
+            if receiver_owner is None and (
+                item.name in _BUILTIN_TYPE_NAMES
+                or (item.name in _BUILTIN_FUNC_NAMES and not item.is_builtin)
             ):
                 continue
             if item.return_type is None:
@@ -699,7 +704,10 @@ def _build_program_func_sig_table(
 
             with env.type_scope(tuple(segment.name for segment in item.scope_path)):
                 signature, function_type = resolve_function_header(
-                    env, item, result_type=item.return_type
+                    env,
+                    item,
+                    result_type=item.return_type,
+                    receiver_owner=receiver_owner,
                 )
             result[item.node_id] = FunctionSignatureRecord(
                 declaration_node_id=item.node_id,

@@ -3585,6 +3585,113 @@ def test_checked_modules_publish_only_their_own_function_signatures(tmp_path: Pa
 
 
 # ---------------------------------------------------------------------------
+# Method headers and registration
+# ---------------------------------------------------------------------------
+
+
+def test_cross_module_method_header_registers_on_the_shared_type_table(tmp_path: Path) -> None:
+    """Program header collection publishes a foreign type's method with its type."""
+    checked = _check_program(
+        tmp_path,
+        {
+            "shapes": ("record Point\n  x: int\ndef Point::radius(self) -> int = self.x\n"),
+            "entry": "import shapes\nshapes::Point(x = 1)",
+        },
+    )
+
+    shapes_id = ModuleId.from_path("shapes")
+    table = checked.modules[ENTRY_ID].type_env.type_table
+    method = table.lookup_method(RecordType("Point", module_id=shapes_id), "radius")
+    assert method is not None
+    assert method.module_id == shapes_id
+    assert method.scope_path == ("Point",)
+    assert method.signature == FunctionType(
+        params=(RecordType("Point", module_id=shapes_id),), result=IntType()
+    )
+
+
+def test_builtin_method_uses_member_validation_without_relaxing_global_builtins(
+    tmp_path: Path,
+) -> None:
+    """Scoped builtin methods use member contracts; root declarations retain global contracts."""
+    checked = _check_program(
+        tmp_path,
+        {
+            "entry": (
+                "record Point\n  x: int\nbuiltin def Point::host_radius(self) -> int\nPoint(x = 1)"
+            )
+        },
+    )
+
+    method = checked.modules[ENTRY_ID].type_env.type_table.lookup_method(
+        RecordType("Point"), "host_radius"
+    )
+    assert method is not None
+    assert method.signature == FunctionType(params=(RecordType("Point"),), result=IntType())
+
+    with pytest.raises(AglTypeError, match="invalid signature"):
+        _check_program(tmp_path, {"entry": "builtin def print(value: text) -> text\n()"})
+
+
+def test_mutually_recursive_method_headers_are_available_before_body_checking(
+    tmp_path: Path,
+) -> None:
+    """Methods retain ordinary forward-reference behavior through header collection."""
+    checked = _check_program(
+        tmp_path,
+        {
+            "entry": (
+                "record Counter\n"
+                "  value: int\n"
+                "def Counter::even(self, value: int) -> bool =\n"
+                "  if value == 0 => true else => Counter::odd(self, value - 1)\n"
+                "def Counter::odd(self, value: int) -> bool =\n"
+                "  if value == 0 => false else => Counter::even(self, value - 1)\n"
+                "Counter::even(Counter(value = 0), 2)"
+            )
+        },
+    )
+
+    table = checked.modules[ENTRY_ID].type_env.type_table
+    assert set(table.methods_for(RecordType("Counter"))) == {"even", "odd"}
+
+
+def test_import_scc_infers_mutually_recursive_method_returns_and_registers_final_signatures(
+    tmp_path: Path,
+) -> None:
+    """Method candidates across an import cycle replace provisional registry signatures."""
+    checked = _check_program(
+        tmp_path,
+        {
+            "a": (
+                "import b\n"
+                "record A()\n"
+                "def A::from_b(self, n: int) =\n"
+                "  if n == 0 => 1 else => b::B::from_a(b::B(), n - 1)\n"
+            ),
+            "b": (
+                "import a\n"
+                "record B()\n"
+                "def B::from_a(self, n: int) =\n"
+                "  if n == 0 => 2 else => a::A::from_b(a::A(), n - 1)\n"
+            ),
+            "entry": "import a\na::A::from_b(a::A(), 2)",
+        },
+    )
+
+    table = checked.modules[ENTRY_ID].type_env.type_table
+    a_method = table.lookup_method(RecordType("A", module_id=ModuleId.from_path("a")), "from_b")
+    b_method = table.lookup_method(RecordType("B", module_id=ModuleId.from_path("b")), "from_a")
+    assert a_method is not None and b_method is not None
+    assert a_method.signature == FunctionType(
+        params=(RecordType("A", module_id=ModuleId.from_path("a")), IntType()), result=IntType()
+    )
+    assert b_method.signature == FunctionType(
+        params=(RecordType("B", module_id=ModuleId.from_path("b")), IntType()), result=IntType()
+    )
+
+
+# ---------------------------------------------------------------------------
 # Named-only parameters in graph context
 # ---------------------------------------------------------------------------
 

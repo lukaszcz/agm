@@ -3721,3 +3721,182 @@ def test_route_qualified_generic_enum_owner_is_accepted_in_an_is_test(tmp_path: 
     )
 
     assert ENTRY_ID in checked.modules
+
+
+# ---------------------------------------------------------------------------
+# Method declaration collisions
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("source", "line"),
+    (
+        ('record Point\n  label: text\ndef Point::label(self) -> text = "point"\n()', 3),
+        ('def Point::label(self) -> text = "point"\nrecord Point\n  label: text\n()', 3),
+    ),
+)
+def test_method_and_record_field_cannot_share_a_name_in_either_source_order(
+    tmp_path: Path, source: str, line: int
+) -> None:
+    with pytest.raises(AglTypeError) as raised:
+        _check_program(tmp_path, {"entry": source})
+
+    assert raised.value.span is not None and raised.value.span.start_line == line
+    assert "label" in str(raised.value).lower()
+    assert "field" in str(raised.value).lower()
+
+
+@pytest.mark.parametrize(
+    ("source", "line"),
+    (
+        (
+            "exception Base extends Exception\n"
+            "  code: int\n"
+            "exception Middle extends Base()\n"
+            "exception Leaf extends Middle()\n"
+            "def Leaf::code(self) -> int = self.code\n"
+            "()",
+            5,
+        ),
+        (
+            "def Leaf::code(self) -> int = 1\n"
+            "exception Base extends Exception\n"
+            "  code: int\n"
+            "exception Middle extends Base()\n"
+            "exception Leaf extends Middle()\n"
+            "()",
+            1,
+        ),
+    ),
+)
+def test_method_cannot_share_a_name_with_an_inherited_exception_field(
+    tmp_path: Path, source: str, line: int
+) -> None:
+    with pytest.raises(AglTypeError) as raised:
+        _check_program(tmp_path, {"entry": source})
+
+    assert raised.value.span is not None and raised.value.span.start_line == line
+    assert "code" in str(raised.value).lower()
+    assert "field" in str(raised.value).lower()
+
+
+def test_exception_method_cannot_redeclare_an_unannotated_method_from_any_base(
+    tmp_path: Path,
+) -> None:
+    source = (
+        "exception Base extends Exception\n"
+        "  code: int\n"
+        'def Base::label(self) = "base"\n'
+        "exception Middle extends Base()\n"
+        "exception Leaf extends Middle()\n"
+        'def Leaf::label(self) -> text = "leaf"\n'
+        "()"
+    )
+
+    with pytest.raises(AglTypeError) as raised:
+        _check_program(tmp_path, {"entry": source})
+
+    assert raised.value.span is not None and raised.value.span.start_line == 6
+    assert "label" in str(raised.value).lower()
+    assert "method" in str(raised.value).lower()
+
+
+def test_descendant_exception_field_cannot_shadow_an_inherited_method(tmp_path: Path) -> None:
+    source = (
+        "exception Base extends Exception\n"
+        "  code: int\n"
+        'def Base::label(self) -> text = "base"\n'
+        "exception Middle extends Base()\n"
+        "exception Leaf extends Middle\n"
+        "  label: text\n"
+        "()"
+    )
+
+    with pytest.raises(AglTypeError) as raised:
+        _check_program(tmp_path, {"entry": source})
+
+    assert raised.value.span is not None and raised.value.span.start_line == 6
+    assert "label" in str(raised.value).lower()
+    assert "method" in str(raised.value).lower()
+
+
+@pytest.mark.parametrize(
+    ("source", "line"),
+    (
+        ('record Point\n  label: text\ndef Point::label(self) -> text = "point"\n()', 3),
+        (
+            "exception Base extends Exception\n"
+            "  code: int\n"
+            'def Base::label(self) -> text = "base"\n'
+            "exception Child extends Base\n"
+            "  label: text\n"
+            "()",
+            5,
+        ),
+    ),
+)
+def test_check_module_enforces_method_field_collisions(source: str, line: int) -> None:
+    with pytest.raises(AglTypeError) as raised:
+        _check(source)
+
+    assert raised.value.span is not None and raised.value.span.start_line == line
+    assert "label" in str(raised.value).lower()
+    assert "field" in str(raised.value).lower()
+
+
+def test_check_module_rejects_a_method_shadowing_a_builtin_exception_field() -> None:
+    with pytest.raises(AglTypeError) as raised:
+        _check(
+            "exception Local extends Exception\n"
+            "  code: int\n"
+            'def Local::message(self) -> text = "local"\n'
+            "()"
+        )
+
+    assert raised.value.span is not None and raised.value.span.start_line == 3
+    assert "message" in str(raised.value).lower()
+    assert "field" in str(raised.value).lower()
+
+
+def test_method_names_are_independent_between_unrelated_types(tmp_path: Path) -> None:
+    _check_program(
+        tmp_path,
+        {
+            "entry": (
+                "record WithField\n"
+                "  label: text\n"
+                "record First()\n"
+                'def First::label(self) -> text = "first"\n'
+                "record Second()\n"
+                'def Second::label(self) -> text = "second"\n'
+                "[First().label(), Second().label()]"
+            )
+        },
+    )
+
+
+def test_enum_method_name_matching_a_variant_is_a_duplicate_declaration(tmp_path: Path) -> None:
+    with pytest.raises(AglScopeError) as raised:
+        _check_program(
+            tmp_path,
+            {"entry": ("enum Signal\n  | ready\ndef Signal::ready(self) -> int = 1\n()")},
+        )
+
+    assert "already declared" in str(raised.value).lower()
+
+
+def test_plain_function_can_operate_on_an_imported_type(tmp_path: Path) -> None:
+    checked = _check_program(
+        tmp_path,
+        {
+            "shapes": "record Point\n  x: int\n",
+            "entry": (
+                "import shapes\n"
+                "def tag(point: shapes::Point) -> int = point.x\n"
+                "tag(shapes::Point(x = 1))"
+            ),
+        },
+    )
+
+    result = checked.modules[ENTRY_ID].resolved.program.body.items[-1]
+    assert checked.modules[ENTRY_ID].node_types[result.node_id] == IntType()

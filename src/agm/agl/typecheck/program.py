@@ -92,6 +92,7 @@ from agm.agl.syntax.spans import SourceSpan
 from agm.agl.syntax.types import type_parameter_bindings
 from agm.agl.typecheck.builder import _TypeBuilder
 from agm.agl.typecheck.checker import _check_prepared_module, prepare_module_headers
+from agm.agl.typecheck.declaration_validation import validate_method_declaration_collisions
 from agm.agl.typecheck.env import (
     AglTypeError,
     CheckedModule,
@@ -975,6 +976,11 @@ def check_program(
             module_id=mid,
             check_inhabitation=False,
         )
+
+    validate_method_declaration_collisions(
+        {module_id: module.resolved for module_id, module in resolved.modules.items()},
+        shared_type_table,
+    )
 
     # Candidate discovery follows the preserved reverse-topological import SCC
     # sequence. A cycle is one cross-module function graph; a dependency SCC's

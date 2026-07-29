@@ -4681,11 +4681,11 @@ class TestFieldAccess:
         result = checked.resolved.program.body.items[-1]
         assert checked.node_types[result.node_id] == IntType()
 
-    def test_field_wins_over_same_named_method(self) -> None:
+    def test_function_field_remains_callable_when_a_type_has_a_different_method(self) -> None:
         checked = accept_type(
             "record Holder\n"
             "  apply: (int) -> int\n"
-            'def Holder::apply(self) -> text = "method"\n'
+            'def Holder::describe(self) -> text = "method"\n'
             "let holder = Holder(apply = fn(value: int) -> int => value)\n"
             "holder.apply(2)"
         )

@@ -186,6 +186,7 @@ from agm.agl.typecheck.builtins import (
     PendingBuiltinObligation,
 )
 from agm.agl.typecheck.constructors import ConstructorChecker
+from agm.agl.typecheck.declaration_validation import validate_method_declaration_collisions
 from agm.agl.typecheck.env import (
     AglTypeError,
     ArgumentBindings,
@@ -4865,6 +4866,7 @@ def _check_prepared_module(
     module_id: ModuleId = ENTRY_ID,
     check_inhabitation: bool = True,
     prepare_headers: bool = True,
+    validate_declaration_collisions: bool = False,
     infer_candidates: bool = True,
     candidate_records: Mapping[int, FunctionSignatureRecord] | None = None,
 ) -> CheckedModule:
@@ -4877,7 +4879,9 @@ def _check_prepared_module(
 
     ``prepare_headers`` runs the type-table build and function-header
     pre-registration; the program driver disables it because Phase 3 already
-    seeded this environment before candidate inference.
+    seeded this environment before candidate inference. The standalone boundary
+    additionally requests declaration-collision validation once its shapes are
+    available.
     """
     if prepare_headers:
         prepare_module_headers(
@@ -4887,6 +4891,8 @@ def _check_prepared_module(
             module_id=module_id,
             check_inhabitation=check_inhabitation,
         )
+    if validate_declaration_collisions:
+        validate_method_declaration_collisions({module_id: resolved}, env.type_table)
     if infer_candidates:
         inferred_records = infer_module_component_candidates(
             ModuleCandidateComponent.singleton(resolved, env, capabilities, module_id)
@@ -4946,4 +4952,9 @@ def check_module(
     )
     if seed_env is not None:
         env.seed_from(seed_env)
-    return _check_prepared_module(resolved, capabilities, env=env)
+    return _check_prepared_module(
+        resolved,
+        capabilities,
+        env=env,
+        validate_declaration_collisions=True,
+    )

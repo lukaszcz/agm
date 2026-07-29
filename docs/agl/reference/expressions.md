@@ -2,7 +2,7 @@
 
 [← Index](index.md)
 
-This chapter covers literals, constructors, field access, record updates,
+This chapter covers literals, constructors, member access, record updates,
 operators, calls, and `case`/`if` expressions, together with the static typing
 rules and runtime semantics of each. Operator precedence is tabulated in
 [Lexical structure](lexical-structure.md).
@@ -297,19 +297,33 @@ Built-in exception types are constructed like records:
 raise Abort(message = "Cannot continue.")
 ```
 
-## Field access
+## Member access
 
-`expr.field` reads a field of a **record**, **exception**, or `ExecResult`
-value:
+`expr.member` projects either a field or a method. Fields belong to records,
+exceptions, and `ExecResult`; methods belong to records, enums, and exceptions.
+A field projection yields its field value. A method projection yields a bound
+function value whose receiver is the value on the left of the dot.
 
-<!-- agl-check: fragment -->
 ```agl
-let sev = issue.severity
-let code = res.exit_code
+record Meter
+  value: int
+
+def Meter::add(self, amount: int) -> int = self.value + amount
+
+let meter = Meter(value = 4)
+let value = meter.value
+let add = meter.add
+let plus = meter.add(?)
+print(value)
+print(add(3))
+print(plus(5))
 ```
 
-Field access is statically checked. It does not apply to enums (use pattern
-matching to extract variant payloads), dictionaries, or arrays.
+Thus `meter.add(3)` calls the method with `meter` as its receiver, while
+`meter.add` can be stored, passed to another function, or partially applied.
+A member access is statically checked. Dictionaries and arrays have no members;
+use indexing for those values. Enum payloads are still extracted by pattern
+matching rather than field access.
 
 ## Record update
 

@@ -48,6 +48,56 @@ def singleton[T](x: T) -> array[T] =
   single
 ```
 
+## Generic methods
+
+For a method on a generic type with `N` type parameters, the method's first
+`N` type parameters bind those receiver parameters in positional order. The
+names need not match the type declaration's names. A method must provide every
+receiver slot; `_` may occupy an unused slot and may repeat. Type parameters
+after those slots belong to the method itself.
+
+```agl
+record Box[T]
+  value: T
+
+enum Outcome[A, B]
+  | ok(value: A)
+  | err(error: B)
+
+def Box::get[E](self) -> E = self.value
+def Box::map[E, U](self, f: E -> U) -> Box[U] = Box(value = f(self.value))
+def Box::size[_](self) -> int = 1
+
+def Outcome::is_ok[_, _](self) -> bool = self is ok
+
+let box = Box(value = 7)
+let mapped = box.map::[text](fn(value: int) -> text => "v=%{value}")
+let outcome: Outcome[int, text] = ok(value = 1)
+print(box.get())
+print(box.size())
+print(mapped.value)
+print(outcome.is_ok())
+```
+
+The receiver fixes the leading method type parameters. In the example,
+`box.map` has its `E` fixed as `int`; inference and the `::[…]` suffix apply
+only to `U`, so `box.map::[text](...)` pins `U` to `text`. A bound generic
+method follows the same rule.
+
+A `def` in a type scope without a `self` receiver is not a method and declares
+its type parameters in the ordinary way; it does not inherit or capture the
+type's parameters:
+
+```agl
+record Box[T]
+  value: T
+
+def Box::build[U](value: U) -> Box[U] = Box(value = value)
+
+let box = Box::build("ready")
+print(box.value)
+```
+
 ## Type application
 
 A generic declaration is **used** by applying it to type arguments. The

@@ -19,6 +19,7 @@ type_params   ::= "[" name ("," name)* "]"
 param_list    ::= param_entry ("," param_entry)* ","?
 param_entry   ::= param | param_marker
 param         ::= field_name ":" type_expr ("=" or_expr)?
+                | "self" [":" type_expr]       (* first parameter of a method *)
 param_marker  ::= "/" | "*" | "@" NAME    (* @pos, @std, @named *)
 ```
 
@@ -147,13 +148,14 @@ three **zones** that determine how arguments at the call site are matched:
 
 | Zone | Binding | Notation in the list |
 |------|---------|---------------------|
-| **Positional-only** | Positional argument only; cannot be passed by name | Parameters before a `/` or `@std` marker, or after an `@pos` marker |
+| **Positional-only** | Positional argument only; cannot be passed by name | Parameters before a `/` or `@std` marker, or after an `@pos` marker; a method receiver `self` |
 | **Standard** | Positional or named | Parameters after a `/` or `@std` marker, or before `*`/`@named` |
 | **Named-only** | Named argument only (or bare-name shorthand) | Parameters after a `*` or `@named` marker |
 
-For `def`/`builtin def`/lambda, the **default zone is standard**: a
+For `def`/`extern def`/`builtin def`/lambda, the **default zone is standard**: a
 parameter list with no markers has all parameters in the standard zone
-(positional or named). Markers switch zones at the boundary they appear at:
+(positional or named). A method receiver `self` is the exception: it is always
+positional-only. Markers switch zones at the boundary they appear at:
 
 <!-- agl-check: fragment -->
 ```agl
@@ -185,6 +187,75 @@ def greet(name: text, greeting: text = "Hello") -> text =
 def with_named_default(x: int, *, tag: text = "ok") -> text =
   "%{tag}: %{x}"   # tag is named-only; its default is unconstrained
 ```
+
+## Methods
+
+A `def` in a record, enum, or exception scope is a **method** when its first
+parameter is `self`. The receiver is supplied by member access: `p.f(x)` is
+the same call as `Type::f(p, x)`. A method names its enclosing type explicitly
+in its annotations; there is no implicit receiver type name.
+
+```agl
+record Person
+  name: text
+  address: text
+
+def Person::with_address(self, address: text) -> Person =
+  Person(name = self.name, address = address)
+
+let person = Person(name = "Ada", address = "Main Street")
+let by_member = person.with_address("East Road")
+let by_path = Person::with_address(person, "East Road")
+print(by_member.address)
+print(by_path.address)
+```
+
+`self` must be the first parameter, before any zone marker. It has no default
+and cannot be supplied by name. Its annotation is optional; when written, it
+must be exactly the enclosing type with the method's receiver type parameters.
+For example, `self: Box[E]` is valid for a `Box` method whose leading type
+parameter is `E`, while `self: Box[int]` is not.
+
+On a generic receiver type, the first type parameters of a method bind the
+receiver type parameters in positional order. Their names are the method's
+choice. `_` may fill any unused receiver slot and may repeat; see
+[Generics](generics.md#generic-methods) for the complete rule.
+
+```agl
+record Box[T]
+  value: T
+
+def Box::get[E](self: Box[E]) -> E = self.value
+def Box::size[_](self) -> int = 1
+
+let box = Box(value = 7)
+print(box.get())
+print(box.size())
+```
+
+A method member used without a call is a **bound method**: a function value
+that has captured its receiver and has parameters only for the remaining
+method parameters. It can be stored, passed to another function, or partially
+applied like any other function value.
+
+```agl
+record Meter
+  value: int
+
+def Meter::add(self, amount: int) -> int = self.value + amount
+
+def apply(value: int, f: int -> int) -> int = f(value)
+
+let meter = Meter(value = 4)
+let add = meter.add
+let plus = meter.add(?)
+print(apply(3, add))
+print(plus(5))
+```
+
+The `self` spelling is special only in this receiver position. An annotated
+`self` elsewhere is an ordinary parameter. `def`, `extern def`, and `builtin
+def` may all declare methods.
 
 ### Scope and forward references
 

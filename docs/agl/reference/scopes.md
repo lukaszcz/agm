@@ -64,24 +64,38 @@ the module root. The leading `::` form makes an in-module path absolute, as in
 syntax; see [Lexical structure](lexical-structure.md#qualifier-chains).
 
 Types establish same-named scopes. Enum variants are members of the enum's
-scope, so `Review::Pass` is ordinary member access, and a scope can add members
-to a type:
+scope, so `Review::Pass` is an ordinary scoped member. A `def` whose first
+parameter is `self` is a method when its enclosing scope is a record, enum, or
+exception. It is called through a receiver value with `.`; a `def` in the same
+scope with an ordinary first parameter remains a scoped function and is called
+by its qualified path.
+
+A declaration-path method and a method written in a `scope Type` region declare
+members of the same type scope. The two spellings can be mixed when extending a
+type:
 
 ```agl
-open Review
+record Point
+  x: int
+  y: int
 
-enum Review
-  | Pass
-  | Fail
+def Point::shift(self, amount: int) -> Point =
+  Point(x = self.x + amount, y = self.y)
 
-def Review::label(review: Review) -> text =
-  case review of
-    | Pass => "pass"
-    | Fail => "fail"
+scope Point
+def total(self) -> int = self.x + self.y
+end Point
 
-let review: Review = Pass
-print(label(review))
+let point = Point(x = 2, y = 3)
+let shifted = point.shift(4)
+print(shifted.total())
 ```
+
+Methods may be declared only in the module that declares their receiver type.
+To add behavior to a type from another module, declare a plain function that
+takes the value as an ordinary parameter and call that function directly. A
+type alias may be used as its target type, but its scope cannot declare methods;
+methods are declared only on records, enums, and exceptions.
 
 The familiar bare-variant spelling remains available when it is unambiguous or
 selected by the expected enum type. Module-root record and exception

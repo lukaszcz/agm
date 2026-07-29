@@ -94,6 +94,7 @@ from agm.agl.syntax.types import (
     FuncT,
     IntT,
     JsonT,
+    ReceiverType,
     TextT,
     TypeExpr,
     UnitT,
@@ -723,6 +724,11 @@ class TestTypeEnvironment:
         env = TypeEnvironment()
         sp = mk_span()
         assert env.resolve_type_expr(AgentT(span=sp, node_id=1)) == AgentType()
+
+    def test_receiver_type_requires_method_header_resolution(self) -> None:
+        env = TypeEnvironment()
+        with pytest.raises(AglTypeError):
+            env.resolve_type_expr(ReceiverType(span=mk_span(), node_id=1))
 
     def test_resolve_array_type(self) -> None:
         env = TypeEnvironment()
@@ -8045,6 +8051,45 @@ class TestGenerics:
     def test_explicit_type_args_multi(self) -> None:
         r = accept_type('def const[A, B](a: A, b: B) -> A = a\nconst::[int, text](1, "x")')
         assert r.resolved.program is not None
+
+    def test_wildcard_type_params_are_repeatable_non_binding_metadata(self) -> None:
+        checked = accept_type("def ignored[_, _](value: int) -> int = value\nignored(1)")
+
+        assert checked.function_signatures["ignored"].type_params == ()
+        reject_type("def ignored[_, _](value: int) -> int = value\nignored::[int]")
+
+        mixed = accept_type("def id[_, T](value: T) -> T = value\nid::[int](1)")
+        assert mixed.function_signatures["id"].type_params == ("T",)
+
+    def test_wildcard_type_params_do_not_add_declaration_arity(self) -> None:
+        accept_type(
+            "record Box[_, T]\n"
+            "  value: T\n"
+            "enum Result[_, T]\n"
+            "  | ok(value: T)\n"
+            "type Items[_, T] = array[T]\n"
+            "let box: Box[int] = Box(value = 1)\n"
+            'let result: Result[text] = ok(value = "done")\n'
+            "let items: Items[int] = [box.value]\n"
+            "items[0]"
+        )
+        reject_type("record Box[_, T]\n  value: T\nlet box: Box[int, text] = Box(value = 1)")
+        reject_type(
+            "enum Result[_, T]\n  | ok(value: T)\nlet result: Result[int, text] = ok(value = 1)"
+        )
+        reject_type("type Items[_, T] = array[T]\nlet items: Items[int, text] = [1]")
+
+    @pytest.mark.parametrize(
+        "source",
+        (
+            "record Box[_]\n  value: _",
+            "enum Result[_]\n  | ok(value: _)",
+            "type Items[_] = array[_]",
+        ),
+        ids=("record", "enum", "alias"),
+    )
+    def test_wildcard_type_param_cannot_be_used_as_a_type_variable(self, source: str) -> None:
+        reject_type(source)
 
     def test_explicit_type_args_function_value(self) -> None:
         r = accept_type("def f[T](x: T) -> T = x\nf::[int]")

@@ -49,6 +49,7 @@ from agm.agl.syntax.types import (
     IntT,
     JsonT,
     NameT,
+    ReceiverType,
     TextT,
     TypeExpr,
     UnitT,
@@ -232,6 +233,7 @@ _ALL_TYPE_EXPRS = (
     DictT,
     UnitT,
     AgentT,
+    ReceiverType,
     FuncT,
     AppliedT,
 )
@@ -970,22 +972,32 @@ class AstBuilder(Transformer):
         return _resolve_params(entries, default_kind=syntax.ParamKind.STANDARD)
 
     def param_def(self, meta: Meta, args: _Args) -> syntax.Param:
-        """param_def: field_name COLON type_expr (EQ or_expr)?"""
+        """param_def: field_name (COLON type_expr)? (EQ or_expr)?"""
         name_tok = _find_name_token(args)
-        type_expr = _find_type_expr(args[1:])
-        # Default value: the or_expr after EQ, if present.
-        # After the type_expr, look for any Expr (skip Tokens and TypeExprs).
-        default: syntax.Expr | None = None
-        seen_type = False
-        for a in args[1:]:
-            if isinstance(a, _ALL_TYPE_EXPRS):
-                seen_type = True
-                continue
-            if seen_type and a is not None and not isinstance(a, Token):
-                default = cast(syntax.Expr, a)
-                break
+        name = str(name_tok)
+        type_expr = next((a for a in args[1:] if isinstance(a, _ALL_TYPE_EXPRS)), None)
+        default = next(
+            (
+                cast(syntax.Expr, a)
+                for a in args[1:]
+                if a is not None and not isinstance(a, (Token, _ALL_TYPE_EXPRS))
+            ),
+            None,
+        )
+        if type_expr is None:
+            if name != "self":
+                raise AglSyntaxError(
+                    f"Parameter {name!r} has no type annotation.",
+                    span=self._span_from_token(name_tok),
+                )
+            if default is not None:
+                raise AglSyntaxError(
+                    "A bare 'self' parameter cannot have a default value.",
+                    span=default.span,
+                )
+            type_expr = ReceiverType(span=self._span_from_meta(meta), node_id=self._next_id())
         return syntax.Param(
-            name=str(name_tok),
+            name=name,
             type_expr=type_expr,
             kind=syntax.ParamKind.STANDARD,
             default=default,
@@ -3006,6 +3018,24 @@ def _resolve_params(
         marker's zone.
       - Walk left-to-right: marker → set ``current``; param → assign ``current``.
     """
+    seen_parameter = False
+    for index, entry in enumerate(entries):
+        if not isinstance(entry, syntax.Param):
+            continue
+        if isinstance(entry.type_expr, ReceiverType):
+            if seen_parameter:
+                raise AglSyntaxError(
+                    f"Parameter {entry.name!r} has no type annotation.",
+                    span=entry.span,
+                )
+            if index != 0:
+                raise AglSyntaxError(
+                    "Parameter 'self' has no type annotation; a bare 'self' must be first "
+                    "and precede any zone marker.",
+                    span=entry.span,
+                )
+        seen_parameter = True
+
     markers = [e for e in entries if isinstance(e, _ParamMarker)]
     if not markers:
         # No marker: apply the per-context default to every param.
@@ -3599,6 +3629,7 @@ def _type_expr_spelling(t: TypeExpr) -> str:
         DecimalT: "decimal",
         UnitT: "unit",
         AgentT: "agent",
+        ReceiverType: "receiver",
     }
     spelling = _SPELLING.get(type(t))
     if spelling is not None:

@@ -27,6 +27,17 @@ BUILTIN_TYPE_NAMES: frozenset[str] = frozenset(
     {"text", "json", "bool", "int", "decimal", "unit", "array", "dict"}
 )
 
+# The type-parameter wildcard occupies a source-level slot without introducing
+# a type variable.  The AST retains every slot for later declaration-specific
+# interpretation (notably method receivers), while semantic binding sites use
+# ``type_parameter_bindings``.
+TYPE_PARAMETER_WILDCARD = "_"
+
+
+def type_parameter_bindings(type_params: tuple[str, ...]) -> tuple[str, ...]:
+    """Return the type parameters that introduce readable type variables."""
+    return tuple(param for param in type_params if param != TYPE_PARAMETER_WILDCARD)
+
 
 @dataclass(frozen=True, slots=True)
 class TextT:
@@ -121,6 +132,14 @@ class AgentT:
 
 
 @dataclass(frozen=True, slots=True)
+class ReceiverType:
+    """The implicit receiver type of an unannotated first ``self`` parameter."""
+
+    span: SourceSpan = field(compare=False)
+    node_id: int = field(compare=False)
+
+
+@dataclass(frozen=True, slots=True)
 class FuncT:
     """A function type ``(A, B) -> C`` — positional parameters only in the type.
 
@@ -158,6 +177,7 @@ TypeExpr = (
     | DictT
     | UnitT
     | AgentT
+    | ReceiverType
     | FuncT
     | AppliedT
 )

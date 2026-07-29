@@ -36,7 +36,9 @@ type Pair[A, B] = dict[text, json]
 ```
 
 A declaration may have several parameters (`def apply[A, B](…)`,
-`enum Outcome[T, E]`). Inside the body, a type parameter may be used anywhere
+`enum Outcome[T, E]`). `_` may occupy a repeatable positional wildcard slot in
+the list. It introduces no type variable, cannot be used as a type, and takes
+no type argument. Inside the body, a type parameter may be used anywhere
 a type is expected — including as a field type, a function parameter or result
 type, the element type of `array[T]`, or in a `let` annotation:
 

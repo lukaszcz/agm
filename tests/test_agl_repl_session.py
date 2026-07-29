@@ -2472,6 +2472,29 @@ class TestImports:
         assert r.kind == "expression"
         assert _int(r.value) == 7
 
+    def test_imported_wildcard_type_params_are_non_binding(self, tmp_path: Path) -> None:
+        (tmp_path / "generic.agl").write_text(
+            "record Box[_, T]\n"
+            "  value: T\n"
+            "enum Result[_, T]\n"
+            "  | ok(value: T)\n"
+            "type Items[_, T] = array[T]\n"
+        )
+        s = self._make_session_with_root(tmp_path)
+
+        result = s.eval_entry(
+            "import generic\n"
+            "let box: generic::Box[int] = generic::Box(value = 1)\n"
+            'let result: generic::Result[text] = generic::Result::ok(value = "done")\n'
+            "let items: generic::Items[int] = [box.value]\n"
+            "items[0]"
+        )
+        wrong_arity = s.eval_entry("let box: generic::Box[int, text] = generic::Box(value = 1)")
+
+        assert result.ok, result.diagnostics
+        assert _int(result.value) == 1
+        assert not wrong_arity.ok
+
     def test_import_persists_across_entries(self, tmp_path: Path) -> None:
         lib = tmp_path / "util.agl"
         lib.write_text("def double(x: int) -> int = x * 2\n")

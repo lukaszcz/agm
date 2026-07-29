@@ -44,7 +44,7 @@ if TYPE_CHECKING:
     from agm.agl.capabilities import HostCapabilities
     from agm.agl.scope.symbols import BindingRef, ConstructorRef, ModuleResolution
 from agm.agl.syntax.spans import SourceSpan
-from agm.agl.syntax.types import TypeExpr
+from agm.agl.syntax.types import TypeExpr, type_parameter_bindings
 from agm.agl.typecheck.env import AglTypeError, FunctionSignature, ParamSpec, TypeEnvironment
 
 
@@ -503,7 +503,9 @@ def _close_generic_candidate_edges(
     for edge in session.generic_edges:
         caller, _ = functions[edge.caller_declaration_id]
         callee, _ = functions[edge.callee_declaration_id]
-        caller_vector = tuple(TypeVarType(name) for name in caller.type_params)
+        caller_vector = tuple(
+            TypeVarType(name) for name in type_parameter_bindings(caller.type_params)
+        )
         type_args = tuple(engine.zonk(arg) for arg in edge.type_args)
         if len(type_args) != len(caller_vector) or type_args != caller_vector:
             raise AglTypeError(
@@ -517,7 +519,11 @@ def _close_generic_candidate_edges(
         callee, callee_result = functions[edge.callee_declaration_id]
         result_template = engine.zonk(callee_result)
         substitutions = dict(
-            zip(callee.type_params, (engine.zonk(arg) for arg in edge.type_args), strict=True)
+            zip(
+                type_parameter_bindings(callee.type_params),
+                (engine.zonk(arg) for arg in edge.type_args),
+                strict=True,
+            )
         )
         result = substitute(result_template, substitutions)
         try:
@@ -565,7 +571,8 @@ def resolve_function_header(
 ) -> tuple[FunctionSignature, FunctionType]:
     """Resolve one function's parameter scheme and declared or supplied result."""
     validate_required_after_defaulted(node.params)
-    type_vars = frozenset(node.type_params)
+    type_params = type_parameter_bindings(node.type_params)
+    type_vars = frozenset(type_params)
     params = tuple(
         ParamSpec(
             name=param.name,
@@ -583,7 +590,7 @@ def resolve_function_header(
     signature = FunctionSignature(
         params=params,
         result=resolved_result,
-        type_params=node.type_params,
+        type_params=type_params,
     )
     return signature, FunctionType(
         params=tuple(param.type for param in params), result=resolved_result

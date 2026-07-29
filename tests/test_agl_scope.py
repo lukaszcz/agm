@@ -2866,6 +2866,10 @@ class TestConstructorBindings:
         r = parse_and_resolve("def id[T](x: int) -> int = x\nid(1)\n")
         assert _ref(r, "id").kind == BinderKind.function_binding
 
+    def test_underscore_type_params_may_repeat(self) -> None:
+        r = parse_and_resolve("def ignored[_, _](self) -> int = 1\nignored()\n")
+        assert _ref(r, "ignored").kind == BinderKind.function_binding
+
     def test_multiple_type_params_unique_accepted(self) -> None:
         """Multiple unique type params in a record are accepted."""
         r = parse_and_resolve("record Pair[A, B]\n  value: int\n()\n")

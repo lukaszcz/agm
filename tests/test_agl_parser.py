@@ -88,6 +88,7 @@ from agm.agl.syntax import (
     Program,
     ProgramDecl,
     Raise,
+    ReceiverType,
     RecordDef,
     Return,
     ScopeRegion,
@@ -1370,6 +1371,53 @@ class TestFuncDef:
         assert p0.name == "x"
         assert isinstance(p0.type_expr, IntT)
         assert p0.default is None
+
+    def test_bare_self_builds_receiver_type(self) -> None:
+        fd = first(parse("def Point::x(self) -> int = 1"))
+        assert isinstance(fd, FuncDef)
+        assert isinstance(fd.params[0].type_expr, ReceiverType)
+        assert fd.params[0].kind is ParamKind.STANDARD
+
+    def test_annotated_self_remains_an_ordinary_parameter(self) -> None:
+        fd = first(parse("def Point::x(self: Point) -> int = 1"))
+        assert isinstance(fd, FuncDef)
+        assert isinstance(fd.params[0].type_expr, NameT)
+        assert fd.params[0].kind is ParamKind.STANDARD
+
+    def test_bare_self_has_the_same_ast_in_declaration_and_region_forms(self) -> None:
+        direct = first(parse("def Point::x(self) -> int = 1"))
+        region = first(parse("scope Point\ndef x(self) -> int = 1\nend Point"))
+        assert isinstance(direct, FuncDef)
+        assert isinstance(region, ScopeRegion)
+        scoped = region.items[0]
+        assert isinstance(scoped, FuncDef)
+        assert direct == scoped
+
+    @pytest.mark.parametrize(
+        "source",
+        (
+            "def f(value) -> int = 1",
+            "def f(value: int, self) -> int = value",
+            "def f(self = 1) -> int = 1",
+            "def f(@pos, self) -> int = 1",
+        ),
+        ids=("non-self", "not-first", "default", "after-zone-marker"),
+    )
+    def test_bare_parameter_forms_are_rejected(self, source: str) -> None:
+        with pytest.raises(AglSyntaxError):
+            parse(source)
+
+    @pytest.mark.parametrize(
+        "source",
+        (
+            "def f(self, self) -> int = 1",
+            "def f(value: int, self) -> int = value",
+        ),
+        ids=("duplicate", "later"),
+    )
+    def test_later_bare_self_reports_the_missing_annotation_error(self, source: str) -> None:
+        with pytest.raises(AglSyntaxError, match="self.*annotation"):
+            parse(source)
 
     def test_def_with_default(self) -> None:
         fd = first(parse("def summarize(doc: text, limit: int = 3) -> text = x"))
@@ -3148,6 +3196,11 @@ class TestGenerics:
         assert fn.name == "identity"
         assert fn.type_params == ("T",)
         assert len(fn.params) == 1
+
+    def test_underscore_type_params_may_repeat(self) -> None:
+        fn = first(parse("def ignored[_, _](self) -> int = 1"))
+        assert isinstance(fn, FuncDef)
+        assert fn.type_params == ("_", "_")
 
     def test_applied_type_in_annotation(self) -> None:
         """let x: Option[int] = y produces AppliedT in type_ann."""

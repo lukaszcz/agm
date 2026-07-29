@@ -165,7 +165,13 @@ from agm.agl.syntax.nodes import (
     pattern_binder_candidates,
 )
 from agm.agl.syntax.spans import SourceSpan
-from agm.agl.syntax.types import AppliedT, ImportMode, NameT
+from agm.agl.syntax.types import (
+    TYPE_PARAMETER_WILDCARD,
+    AppliedT,
+    ImportMode,
+    NameT,
+    type_parameter_bindings,
+)
 from agm.agl.syntax.visitor import walk
 
 # ---------------------------------------------------------------------------
@@ -711,9 +717,11 @@ class _Resolver:
     def _validate_type_params(
         self, decl: FuncDef | RecordDef | EnumDef | ExceptionDef | TypeAlias
     ) -> None:
-        """Raise AglScopeError if *decl* has duplicate type-parameter names."""
+        """Raise AglScopeError if *decl* repeats a binding type-parameter name."""
         seen: set[str] = set()
         for tp in decl.type_params:
+            if tp == TYPE_PARAMETER_WILDCARD:
+                continue
             if tp in seen:
                 raise AglScopeError(
                     f"Duplicate type parameter '{tp}' in '{decl.name}'.",
@@ -861,7 +869,7 @@ class _Resolver:
                     owner_name=item.name,
                     variant=None,
                     owner_decl_node_id=item.node_id,
-                    type_params=item.type_params,
+                    type_params=type_parameter_bindings(item.type_params),
                     owner_module_id=self._module_id,
                     owner_path=path,
                 )
@@ -875,7 +883,7 @@ class _Resolver:
                         owner_name=item.name,
                         variant=variant.name,
                         owner_decl_node_id=item.node_id,
-                        type_params=item.type_params,
+                        type_params=type_parameter_bindings(item.type_params),
                         owner_module_id=self._module_id,
                         can_match_bare_pattern=not variant.fields,
                         owner_path=path,
@@ -906,7 +914,7 @@ class _Resolver:
                         owner_name=item.name,
                         variant=None,
                         owner_decl_node_id=item.node_id,
-                        type_params=item.type_params,
+                        type_params=type_parameter_bindings(item.type_params),
                         owner_module_id=self._module_id,
                         owner_path=path,
                     )
@@ -2354,7 +2362,7 @@ class _Resolver:
             owner_name=path[-1],
             variant=variant,
             owner_decl_node_id=declaration.node_id,
-            type_params=declaration.type_params,
+            type_params=type_parameter_bindings(declaration.type_params),
             owner_module_id=self._module_id,
             owner_path=path[:-1],
         )

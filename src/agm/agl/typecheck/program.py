@@ -89,6 +89,7 @@ from agm.agl.syntax.nodes import (
     TypeAlias,
 )
 from agm.agl.syntax.spans import SourceSpan
+from agm.agl.syntax.types import type_parameter_bindings
 from agm.agl.typecheck.builder import _TypeBuilder
 from agm.agl.typecheck.checker import _check_prepared_module, prepare_module_headers
 from agm.agl.typecheck.env import (
@@ -305,15 +306,16 @@ def _resolve_body_for_one(
             break
         if isinstance(item, TypeAlias) and _decl_key(mid, item) == key:
             with cross_env.type_scope(key[1]):
-                if item.type_params:
+                type_params = type_parameter_bindings(item.type_params)
+                if type_params:
                     builder.validate_alias(item)
                     template = cross_env.resolve_type_expr(
                         item.type_expr,
                         span=item.span,
-                        type_vars=frozenset(item.type_params),
+                        type_vars=frozenset(type_params),
                     )
                     program_alias_table[key] = GenericAliasDef(
-                        type_params=item.type_params,
+                        type_params=type_params,
                         template=template,
                     )
                 else:
@@ -531,14 +533,15 @@ def _build_program_type_table(
             # An alias forced from elsewhere still names its target the way its
             # own scope region does, so resolution re-enters the declaring path.
             with env.type_scope(scope_path):
-                if item.type_params:
+                type_params = type_parameter_bindings(item.type_params)
+                if type_params:
                     template = env.resolve_type_expr(
                         item.type_expr,
                         span=item.span,
-                        type_vars=frozenset(item.type_params),
+                        type_vars=frozenset(type_params),
                     )
                     program_alias_table[key] = GenericAliasDef(
-                        type_params=item.type_params,
+                        type_params=type_params,
                         template=template,
                     )
                     return None

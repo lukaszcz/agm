@@ -195,6 +195,35 @@ def test_imported_generic_inside_generic_module_body_freshens_per_entry_occurren
     assert capsys.readouterr().out == "1\ntext\n"
 
 
+def test_imported_wildcard_type_params_do_not_bind_or_add_arity(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    (tmp_path / "generic.agl").write_text(
+        "record Box[_, T]\n"
+        "  value: T\n"
+        "enum Result[_, T]\n"
+        "  | ok(value: T)\n"
+        "type Items[_, T] = array[T]\n"
+    )
+
+    result = _run_program(
+        "import generic\n"
+        "let box: generic::Box[int] = generic::Box(value = 1)\n"
+        'let result: generic::Result[text] = generic::Result::ok(value = "done")\n'
+        "let items: generic::Items[int] = [box.value]\n"
+        "print items[0]\n",
+        roots_dirs=[tmp_path],
+    )
+    wrong_arity = _run_program(
+        "import generic\nlet box: generic::Box[int, text] = generic::Box(value = 1)\n",
+        roots_dirs=[tmp_path],
+    )
+
+    assert result.ok is True
+    assert capsys.readouterr().out == "1\n"
+    assert wrong_arity.ok is False
+
+
 def test_unannotated_import_cycle_recursion_runs_from_fixture(
     capsys: pytest.CaptureFixture[str],
 ) -> None:

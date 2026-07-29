@@ -119,6 +119,7 @@ from agm.agl.syntax.types import (
     IntT,
     JsonT,
     NameT,
+    ReceiverType,
     TextT,
     TypeExpr,
     UnitT,
@@ -140,6 +141,7 @@ __all__ = [
     "DictT",
     "UnitT",
     "AgentT",
+    "ReceiverType",
     "FuncT",
     "TypeExpr",
     # module system

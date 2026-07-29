@@ -1754,6 +1754,57 @@ class TestLambdaLowering:
         )
 
 
+class TestMethodLowering:
+    """Lower checker-selected methods without repeating member lookup."""
+
+    def test_direct_method_call_is_receiver_first_direct_call_without_closure(self) -> None:
+        source = """\
+record Meter(value: int)
+
+def make(value: int) -> Meter = Meter(value = value)
+def Meter::add(self, amount: int) -> int = self.value + amount
+
+let result = make(10).add(2)
+()
+"""
+        program = _lower(source)
+        result = _let_root_capture(program.modules[program.entry_module].initializers[-2])
+
+        assert isinstance(result.value, IrDirectCall)
+        assert len(result.value.arguments) == 2
+        assert isinstance(result.value.arguments[0], IrDirectCall)
+        assert isinstance(result.value.arguments[1], IrConstInt)
+        assert result.value.arguments[1].value == 2
+        assert not any(isinstance(argument, IrMakeClosure) for argument in result.value.arguments)
+
+    def test_method_value_captures_receiver_once_in_one_partial_closure(self) -> None:
+        source = """\
+record Meter(value: int)
+
+def make(value: int) -> Meter = Meter(value = value)
+def Meter::add(self, amount: int) -> int = self.value + amount
+
+let add = make(10).add
+()
+"""
+        program = _lower(source)
+        add = _let_root_capture(program.modules[program.entry_module].initializers[-2])
+
+        assert isinstance(add.value, IrBlock)
+        receiver_bind, closure = add.value.items
+        assert isinstance(receiver_bind, IrBind)
+        assert isinstance(receiver_bind.value, IrDirectCall)
+        assert isinstance(closure, IrMakeClosure)
+        assert closure.captures == (IrCapture(receiver_bind.symbol, by_cell=False),)
+
+        descriptor = program.functions[closure.function_id]
+        assert isinstance(descriptor.impl, IrFunctionBody)
+        assert isinstance(descriptor.impl.body, IrDirectCall)
+        receiver = descriptor.impl.body.arguments[0]
+        assert isinstance(receiver, IrLoad)
+        assert receiver.symbol == receiver_bind.symbol
+
+
 class TestIndirectCallLowering:
     """Golden tests: indirect call lowers to IrIndirectCall with coerced args."""
 

@@ -9,6 +9,43 @@ from agm.agl.semantics.values import DecimalValue, IntValue, RecordValue, TextVa
 from tests.agl.ir_harness import evaluate_ir, evaluate_ir_graph
 
 
+def test_bound_method_partial_captures_receiver_once() -> None:
+    source = """\
+record Meter(value: int)
+
+var builds = 0
+
+def make(value: int) -> Meter =
+  builds := builds + 1
+  Meter(value = value)
+
+def Meter::add(self, amount: int) -> int = self.value + amount
+
+let add = make(4).add(?)
+let first = add(3)
+let second = add(5)
+()
+"""
+    result = evaluate_ir(source)
+    assert result["builds"] == IntValue(1)
+    assert result["first"] == IntValue(7)
+    assert result["second"] == IntValue(9)
+
+
+def test_explicit_generic_bound_method_partial_uses_selected_specialization() -> None:
+    """An explicit generic method partial publishes its bound function type for lowering."""
+    source = """\
+record Box[T](value: T)
+
+def Box::replace[T, U](self, value: U) -> U = value
+
+let replace = Box(value = 1).replace::[decimal](?)
+let result = replace(1)
+()\n"""
+    result = evaluate_ir(source)
+    assert result["result"] == DecimalValue(decimal.Decimal("1"))
+
+
 def test_partial_call_captures_non_hole_argument_by_value() -> None:
     source = """
 var current = 1

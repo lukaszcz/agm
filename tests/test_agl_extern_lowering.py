@@ -173,6 +173,26 @@ class TestExternCalls:
         assert isinstance(call, IrDirectCall)
         assert call.function_id == desc.function_id
 
+    def test_method_call_lowers_to_the_extern_with_receiver_first(self) -> None:
+        executable = _lower_source(
+            "record Meter(value: int)\n"
+            "extern def Meter::add(self, amount: int) -> int\n"
+            "let result = Meter(value = 10).add(2)\n"
+            "()"
+        )
+        desc = _only_extern(executable)
+        result = next(
+            initializer
+            for initializer in executable.modules[executable.entry_module].initializers
+            if isinstance(initializer, IrBind)
+            and executable.symbols[initializer.symbol].public_name == "result"
+        )
+
+        assert isinstance(result.value, IrDirectCall)
+        assert result.value.function_id == desc.function_id
+        assert len(result.value.arguments) == 2
+        assert not any(isinstance(argument, IrMakeClosure) for argument in result.value.arguments)
+
     def test_first_class_reference_lowers_through_load_and_indirect_call(self) -> None:
         executable = _lower_source(
             "extern def f(x: int) -> int\nlet fn_ref = f\nlet result = fn_ref(5)\n()"

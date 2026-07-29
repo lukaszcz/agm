@@ -87,6 +87,19 @@ def test_generic_explicit_arg_coercion_uses_instantiated_param_type() -> None:
     assert ir["result"] == DecimalValue(decimal.Decimal("1"))
 
 
+def test_generic_direct_method_call_coerces_against_selected_specialization() -> None:
+    """A direct method call uses its concrete generic parameter type when lowered."""
+    source = """\
+record Box[T](value: T)
+
+def Box::replace[T, U](self, value: U) -> U = value
+
+let result: decimal = Box(value = 1).replace::[decimal](1)
+()\n"""
+    result = evaluate_ir(source)
+    assert result["result"] == DecimalValue(decimal.Decimal("1"))
+
+
 def test_provisional_generic_function_value_call_is_lowered_after_argument_inference() -> None:
     """A value call can solve a generic callee result from its own argument."""
     source = "def maker[T]() -> T -> T = fn(value: T) => value\nlet result = maker()(7)\n()"
@@ -145,6 +158,24 @@ def test_call_depth_guard_ir_only() -> None:
     assert exc.display_name == "RecursionError"
     assert exc.fields["message"] == TextValue("Maximum call depth (10) exceeded")
     assert exc.fields["limit"] == IntValue(10)
+
+
+def test_bound_method_can_be_called_later_and_passed_to_higher_order_function() -> None:
+    source = """\
+record Meter(value: int)
+
+def Meter::add(self, amount: int) -> int = self.value + amount
+def apply(value: int, f: (int) -> int) -> int = f(value)
+
+let meter = Meter(value = 4)
+let add = meter.add
+let later = add(3)
+let higher_order = apply(5, meter.add)
+()
+"""
+    result = evaluate_ir(source)
+    assert result["later"] == IntValue(7)
+    assert result["higher_order"] == IntValue(9)
 
 
 def test_multiple_calls() -> None:

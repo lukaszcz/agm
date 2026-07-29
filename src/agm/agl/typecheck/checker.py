@@ -2849,6 +2849,12 @@ class _Checker:
             if isinstance(node.callee, FieldAccess) and node.type_args
             else self._check_expr(node.callee, expected=None)
         )
+        # Explicit direct member calls bypass ``_check_expr`` for their callee
+        # so the Call can own ``::[T]``. Publish the selected bound-function
+        # type just as the ordinary expression path does: partial lowering and
+        # direct-call argument coercions both consume this specialization.
+        if isinstance(node.callee, FieldAccess) and node.type_args:
+            self._record_node_type(node.callee.node_id, callee_type)
         with self._frame_direct_candidate_use(exprs=(node.callee,)):
             if not isinstance(callee_type, FunctionType):
                 raise AglTypeError(

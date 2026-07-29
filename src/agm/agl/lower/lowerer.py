@@ -167,7 +167,7 @@ from agm.agl.matchcompile import (
 from agm.agl.modules.ids import ENTRY_ID, PRELUDE_ID, ModuleId
 from agm.agl.scope.symbols import BinderKind, BindingRef, BuiltinKind
 from agm.agl.self_validation import self_validation_enabled
-from agm.agl.semantics.type_table import TypeTable
+from agm.agl.semantics.type_table import MethodDef, TypeTable
 from agm.agl.semantics.types import (
     BUILTIN_EXCEPTIONS,
     BUILTIN_PRELUDE_TYPES,
@@ -352,6 +352,9 @@ class _LinkState:
     decl_to_sym: dict[int, SymbolId] = field(default_factory=dict)
     fn_node_to_sym: dict[int, SymbolId] = field(default_factory=dict)
     fn_node_to_id: dict[int, FunctionId] = field(default_factory=dict)
+    fn_decl_to_id: dict[tuple[ModuleId, tuple[str, ...], str], FunctionId] = field(
+        default_factory=dict
+    )
     symbols: dict[SymbolId, SymbolDescriptor] = field(default_factory=dict)
     functions: dict[FunctionId, FunctionDescriptor] = field(default_factory=dict)
     nominals: dict[NominalId, NominalDescriptor] = field(default_factory=dict)
@@ -546,6 +549,9 @@ class _Lowerer:
         )
         self._link.fn_node_to_sym[funcdef.node_id] = sym
         self._link.fn_node_to_id[funcdef.node_id] = fn_id
+        self._link.fn_decl_to_id[
+            (self._module_id, tuple(segment.name for segment in funcdef.scope_path), funcdef.name)
+        ] = fn_id
 
     # Binder kinds whose values live in evaluation frames and can therefore be
     # captured by a closure.  function_binding is resolved through the function
@@ -1184,9 +1190,12 @@ class _Lowerer:
                 )
 
             # ----------------------------------------------------------
-            # Field access → IrField
+            # Field access → IrField or a bound-method partial closure
             # ----------------------------------------------------------
             case FieldAccess(obj=obj_expr, field=field_name, span=span):
+                selection = self._checked.member_selection_for(node.node_id)
+                if selection is not None and selection.method is not None:
+                    return self._lower_bound_method(node, selection.method)
                 obj_type = self._node_type(obj_expr.node_id)
                 nominal, _display, mode = self._nominal_for_field_projection(obj_type)
                 return IrField(
@@ -1981,7 +1990,11 @@ class _Lowerer:
         assert typedef is not None, (
             f"compiler bug: no nominal declaration for field projection {nominal!r}"
         )
-        mode = IrFieldMode.UPPER_BOUND if typedef.abstract else IrFieldMode.EXACT
+        mode = (
+            IrFieldMode.UPPER_BOUND
+            if typedef.abstract or isinstance(typ, ExceptionType)
+            else IrFieldMode.EXACT
+        )
         return nominal, display_name, mode
 
     def _lower_nullary_constructor(
@@ -2110,6 +2123,10 @@ class _Lowerer:
         if builtin_kind is not None:
             return self._lower_builtin_call(builtin_kind, call_node, span)
 
+        method = self._checked.direct_method_for(nid)
+        if method is not None:
+            return self._lower_direct_method_call(call_node, method, span)
+
         # (a) VarRef callee resolving to a constructor.
         if isinstance(callee, VarRef):
             cref = self._checked.constructor_ref_for(callee.node_id)
@@ -2178,6 +2195,35 @@ class _Lowerer:
             function_id=fn_id,
             span=span,
             arguments=tuple(ir_args),
+        )
+
+    def _method_function_id(self, method: MethodDef) -> FunctionId:
+        """Return the linked function chosen by the checker's method selection."""
+        fn_id = self._link.fn_decl_to_id.get((method.module_id, method.scope_path, method.name))
+        assert fn_id is not None, (
+            f"compiler bug: no FunctionId for selected method "
+            f"{method.module_id!r}::{method.scope_path!r}::{method.name!r}"
+        )
+        return fn_id
+
+    def _lower_direct_method_call(
+        self, call_node: Call, method: MethodDef, span: SourceSpan
+    ) -> IrDirectCall:
+        """Lower a checker-selected member call without allocating a bound closure."""
+        assert isinstance(call_node.callee, FieldAccess)
+        bound_type = self._node_type(call_node.callee.node_id)
+        assert isinstance(bound_type, FunctionType)
+        arguments = (
+            self.lower_expr(call_node.callee.obj),
+            *(
+                self.lower_coerced(arg, param_type)
+                for arg, param_type in zip(call_node.args, bound_type.params, strict=True)
+            ),
+        )
+        return self._lower_direct_call_with_args(
+            function_id=self._method_function_id(method),
+            span=span,
+            arguments=arguments,
         )
 
     def _lower_indirect_call_with_args(
@@ -2489,6 +2535,63 @@ class _Lowerer:
         assert callee_ref is not None
         return callee_ref.name, None
 
+    def _make_partial_closure(
+        self,
+        partial_type: FunctionType,
+        span: SourceSpan,
+        captures: tuple[IrCapture, ...],
+        build_body: Callable[[tuple[SymbolId, ...]], IrExpr],
+    ) -> IrMakeClosure:
+        """Create the closure shared by ordinary and bound-method partial applications."""
+        fn_id = self._alloc_fn()
+        fn_sym = self._alloc_synthetic_sym(mutable=False, owner=fn_id)
+        params = tuple(
+            IrFunctionParam(
+                symbol=self._alloc_synthetic_sym(mutable=False, owner=fn_id),
+                default=None,
+            )
+            for _param_type in partial_type.params
+        )
+        body = build_body(tuple(param.symbol for param in params))
+        self._link.functions[fn_id] = FunctionDescriptor(
+            function_id=fn_id,
+            function_symbol=fn_sym,
+            module_id=self._module_id,
+            params=params,
+            impl=IrFunctionBody(body=body),
+            param_labels=tuple(repr(param_type) for param_type in partial_type.params),
+            result_label=repr(partial_type.result),
+        )
+        return IrMakeClosure(location=self._loc(span), function_id=fn_id, captures=captures)
+
+    def _lower_bound_method(self, node: FieldAccess, method: MethodDef) -> IrExpr:
+        """Lower a selected method member as a receiver-capturing partial closure."""
+        bound_type = self._node_type(node.node_id)
+        assert isinstance(bound_type, FunctionType)
+        loc = self._loc(node.span)
+        receiver_symbol = self._alloc_synthetic_sym(mutable=False)
+        receiver_capture = IrCapture(symbol=receiver_symbol, by_cell=False)
+
+        def build_body(param_symbols: tuple[SymbolId, ...]) -> IrExpr:
+            arguments = (
+                IrLoad(location=loc, symbol=receiver_symbol),
+                *(IrLoad(location=loc, symbol=symbol) for symbol in param_symbols),
+            )
+            return self._lower_direct_call_with_args(
+                function_id=self._method_function_id(method),
+                span=node.span,
+                arguments=arguments,
+            )
+
+        closure = self._make_partial_closure(bound_type, node.span, (receiver_capture,), build_body)
+        return IrBlock(
+            location=loc,
+            items=(
+                IrBind(location=loc, symbol=receiver_symbol, value=self.lower_expr(node.obj)),
+                closure,
+            ),
+        )
+
     def _lower_partial_call(
         self,
         call_node: Call,
@@ -2520,47 +2623,21 @@ class _Lowerer:
             items.append(IrBind(location=loc, symbol=sym, value=self.lower_expr(arg)))
             captures.append(IrCapture(symbol=sym, by_cell=False))
 
-        fn_id = self._alloc_fn()
-        fn_sym = self._alloc_synthetic_sym(mutable=False, owner=fn_id)
-        params = tuple(
-            IrFunctionParam(
-                symbol=self._alloc_synthetic_sym(mutable=False, owner=fn_id),
-                default=None,
-            )
-            for _param_type in partial_type.params
-        )
-        param_symbols = tuple(param.symbol for param in params)
-
-        if spec.callee_kind == "declared":
-            body = self._partial_declared_body(
-                call_node, span, spec, capture_symbols, param_symbols
-            )
-        elif spec.callee_kind == "value":
-            assert callee_symbol is not None
-            body = self._partial_value_body(
-                call_node, span, spec, callee_symbol, capture_symbols, param_symbols
-            )
-        else:
-            body = self._partial_constructor_body(
+        def build_body(param_symbols: tuple[SymbolId, ...]) -> IrExpr:
+            if spec.callee_kind == "declared":
+                return self._partial_declared_body(
+                    call_node, span, spec, capture_symbols, param_symbols
+                )
+            if spec.callee_kind == "value":
+                assert callee_symbol is not None
+                return self._partial_value_body(
+                    call_node, span, spec, callee_symbol, capture_symbols, param_symbols
+                )
+            return self._partial_constructor_body(
                 call_node, span, spec, capture_symbols, param_symbols
             )
 
-        self._link.functions[fn_id] = FunctionDescriptor(
-            function_id=fn_id,
-            function_symbol=fn_sym,
-            module_id=self._module_id,
-            params=params,
-            impl=IrFunctionBody(body=body),
-            param_labels=tuple(repr(param_type) for param_type in partial_type.params),
-            result_label=repr(partial_type.result),
-        )
-        items.append(
-            IrMakeClosure(
-                location=loc,
-                function_id=fn_id,
-                captures=tuple(captures),
-            )
-        )
+        items.append(self._make_partial_closure(partial_type, span, tuple(captures), build_body))
         return IrBlock(location=loc, items=tuple(items))
 
     # ------------------------------------------------------------------

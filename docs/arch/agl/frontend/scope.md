@@ -58,14 +58,14 @@ juxtaposition expressions.
 
 Agents must be declared in source; the pass retains every declaration and
 unused-agent warning by its scope path and member name, and binds it as a
-first-class value of agent type, including named-scope members. A first `self`
-parameter in a record, enum, or exception scope is classified as a method and
-published in `method_declarations`, keyed by its structured declaration identity
-with its nominal owner path. This happens after path collection, so declaration
-shorthand and scope regions classify identically; aliases and unowned bare
-receivers are rejected, while annotated `self` elsewhere remains an ordinary
-parameter. Scoped externs resolve their member names through the declaring
-module's companion, and collection rejects duplicate scoped companion symbols.
+first-class value of agent type, including named-scope members. A `def` whose
+first parameter is `self` in a record, enum, or exception scope is classified as
+a method and published in `method_declarations`, keyed by structured declaration
+identity with its nominal owner path. Classification follows path collection, so
+declaration shorthand and scope regions agree; aliases reject `self`, while an
+annotated `self` outside a type scope remains an ordinary parameter. Scoped
+externs resolve their member names through the declaring module's companion,
+and collection rejects duplicate scoped companion symbols.
 `let _ = value` and `var _ = value` still resolve their right-hand sides but
 register no binding, so `_` may be repeated. `_` never resolves as a readable
 identifier, even when another binding form uses that name in an enclosing scope.

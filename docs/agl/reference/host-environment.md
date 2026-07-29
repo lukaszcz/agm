@@ -137,27 +137,37 @@ Import `std/config` and read or write a setting through a qualified target
 
 ### Precedence
 
-A setting's effective value is resolved as:
+`agm exec` resolves initial values as:
 
 ```
 setting X:  source (std/config::X := e)  >  CLI --X  >  [<program>].X  >  [exec].X  >  engine default
 param   Y:  CLI --Y                       >  [<program>].Y  >  source default (param Y = e) >  required error
 ```
 
-The CLI flag and the config-file layers supply the setting's **initial** value;
-a source write to `std/config::X` overrides them from its program point onward. A
-program that never writes a setting keeps the value chosen by the CLI/config
+The CLI flag and config-file layers supply a setting's **initial** value; a
+source write to `std/config::X` overrides them from its program point onward.
+A program that never writes a setting keeps the value chosen by the CLI/config
 layers.
+
+`agm repl` resolves engine settings as source writes > CLI > `[exec]` > engine
+default. It has no per-param CLI options. Its params resolve as `[<program>].Y`
+> source default > required error, but only after `program NAME` selects the
+config table. That name applies to params declared after it in the same entry
+and, once the entry succeeds, to later entries; earlier params use only their
+source default or produce a required-param error.
 
 ### Config-file schema
 
 `[exec]` holds global engine defaults with kebab field names (`strict-json`,
-`max-iters`, `log-file`). A `[<program>]` top-level section — keyed by the
-`program name` declaration or the `.agl` file stem — overrides both engine
-settings and param values for that program. A file stem that matches a reserved
-host section name (e.g. `exec`, `loop`) is an error unless an explicit `program
-name` declaration is present. Inline `-c` programs with no `program` declaration
-have no config section.
+`max-iters`, `log-file`). For `agm exec`, a `[<program>]` top-level section is
+keyed by the `program name` declaration or the `.agl` file stem and overrides
+both engine settings and param values. A file stem that matches a reserved host
+section name (e.g. `exec`, `loop`) is an error unless an explicit `program name`
+declaration is present. Inline `-c` programs with no `program` declaration have
+no config section.
+
+For `agm repl`, `[<program>]` is selected only by `program NAME`, never by a
+file stem. It supplies param values, not REPL engine-setting overrides.
 
 ### Positional effect
 

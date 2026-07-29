@@ -371,6 +371,13 @@ record AgentRequest
 `None` when no such contract data applies. `previous_error` is `None` for
 `ask-request` because it constructs only the first-attempt request.
 
+## Members of nominal types
+
+A method is a member of a record, enum, or exception's nominal type. It is
+available on every value of that type wherever the value is used, so calling it
+does not require an import of the module that declared the type. See
+[Methods](functions.md#methods) for declaration and call syntax.
+
 ## Record types
 
 A `record` declares a nominal product type. The fields are written in an

@@ -186,7 +186,10 @@ publish a narrower surface does so with a facade — the implementation lives in
 one module, and another re-exports the selection it means to publish.
 
 `export` re-exports members without injecting them into the exporting module's
-local scope:
+local scope. A method travels with its receiver type: any module with a value
+of that type can call the method without importing the module that declared it.
+Import selections and facades cannot hide a method; they control access to
+qualified declarations, not member calls.
 
 <!-- agl-check: fragment -->
 ```agl

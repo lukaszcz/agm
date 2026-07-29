@@ -228,7 +228,8 @@ exception_body   ::= param_marker? NEWLINE INDENT block_entry (NEWLINE block_ent
 
 type_alias       ::= "type" decl_head type_params? "=" type_expr
 
-type_params      ::= "[" name ("," name)* "]"
+type_params      ::= "[" type_param ("," type_param)* "]"
+type_param       ::= name | "_"
 
 param_marker     ::= "/" | "*" | "@" NAME    (* NAME must be pos, std, or named *)
 
@@ -245,8 +246,9 @@ must be the first entry. In the indented block form, a marker may appear as the
 optional leading entry on the header line and/or on its own line between field
 definitions.
 
-A `type_params` list declares the declaration's type parameters; each is an
-ordinary name in scope as a type throughout the declaration's body. See
+A `type_params` list declares the declaration's type parameters; each named
+entry is an ordinary name in scope as a type throughout the declaration's body.
+`_` is an unused positional slot and introduces no type name. See
 [Generics](generics.md).
 
 The runner string of an `agent` declaration must be a literal string with no
@@ -299,8 +301,11 @@ extern_func_def  ::= "extern" NEWLINE? "def" decl_head type_params? "(" param_li
 func_body        ::= expr | suite
 param_list      ::= param_entry ("," param_entry)* ","?
 param_entry     ::= param | param_marker
-param           ::= field_name ":" type_expr ("=" or_expr)?
+param           ::= field_name [":" type_expr] ("=" or_expr)?
 ```
+
+A parameter annotation may be omitted only for `self` as the first parameter of
+a method; every other parameter requires an annotation.
 
 An inline `def` body after `=` is exactly one expression. It ends at the next
 block separator — a newline or `;` — which starts the next block item, so an

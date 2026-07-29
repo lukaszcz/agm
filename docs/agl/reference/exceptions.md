@@ -36,6 +36,33 @@ the inherited fields first, followed by fields declared on the subtype.
 `builtin exception` is the standard-library form for host-recognized exception
 types; the name, base, and fields must match the recognized shape exactly.
 
+### Methods
+
+An exception type may declare methods. A method declared on an exception is
+available on every subtype in its `extends` chain:
+
+```agl
+exception Problem extends Exception
+  code: int
+
+exception DetailedProblem extends Problem
+  detail: text
+
+def Problem::label(self) -> text = "problem %{self.code}"
+def DetailedProblem::detail_label(self) -> text = self.label() + ": %{self.detail}"
+
+let problem = DetailedProblem(message = "failed", code = 7, detail = "network")
+print(problem.label())
+print(problem.detail_label())
+```
+
+A method name is declared only once in an exception hierarchy. A subtype cannot
+use the name of a method declared by one of its base types, and a base type
+cannot use a name declared by one of its descendants.
+
+The built-in `Exception` type declares no methods. A wildcard `catch _ as e
+=>` binds `e` as `Exception`, so no method is available through that binding.
+
 ### Recursive exceptions
 
 An exception's fields may reference its own type, and may participate in

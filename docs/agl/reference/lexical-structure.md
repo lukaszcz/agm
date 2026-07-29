@@ -90,6 +90,11 @@ catch binders. This preserves existing uses such as `tagged(by: value)`.
 `with` (the record-update operator) is fully reserved: unlike `to`, `downto`,
 and `by`, it is not accepted as a field name.
 
+`self` is a **contextual identifier**, not a keyword. It is special only as the
+first parameter of a `def` in a record, enum, or exception scope, where it is
+the method receiver. Everywhere else it is an ordinary identifier, including
+as a field name or an annotated function parameter.
+
 **Contextual keywords** — `print`, `ask`, and `exec` are NOT reserved; they
 lex as plain `NAME` tokens and are given their built-in meaning during scope
 resolution. They may not be declared with `let`, `var`, or `param`, may not be

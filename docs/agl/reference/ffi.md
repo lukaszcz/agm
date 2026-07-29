@@ -40,6 +40,27 @@ An extern's declared name must be a **valid Python identifier and not a
 Python keyword** — this is a static error otherwise, since the companion is
 looked up by that exact name.
 
+### Methods
+
+An `extern def` whose first parameter is `self` in a record, enum, or exception
+scope is a method. Its companion function receives the receiver as its first
+positional argument, followed by the method's remaining arguments in declaration
+order:
+
+<!-- agl-check: fragment -->
+```agl
+# counters.agl
+record Counter(value: int)
+
+extern def Counter::increment(self, amount: int) -> int
+```
+
+```python
+# counters.py
+def increment(counter, amount):
+    return counter["value"] + amount
+```
+
 ## Placement
 
 `extern def` is only allowed in a **file-backed module** — a library module,

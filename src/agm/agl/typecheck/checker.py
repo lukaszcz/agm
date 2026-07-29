@@ -71,6 +71,7 @@ from agm.agl.scope.symbols import (
 )
 from agm.agl.self_validation import self_validation_enabled
 from agm.agl.semantics.type_table import (
+    MethodDef,
     TypeTable,
     cast_classification,
     comparable_types,
@@ -191,6 +192,7 @@ from agm.agl.typecheck.env import (
     CallSiteRecord,
     CheckedModule,
     FunctionSignature,
+    MemberSelection,
     OutputContractSpec,
     ParamSpec,
     PartialCallSpec,
@@ -580,6 +582,11 @@ class _Checker:
             ref.slot_id for ref in resolved.resolution.values() if ref.slot_id is not None
         )
         self._partial_calls: dict[int, PartialCallSpec] = {}
+        # Member lookup is checker-owned: lowering must use these selections
+        # rather than independently deciding whether a dot access was a field
+        # or a bound method.
+        self._member_selections: dict[int, MemberSelection] = {}
+        self._direct_method_calls: dict[int, MethodDef] = {}
         # Extern provenance for first-class function values.  A value can name
         # one or more externs (e.g. through a branch); when such a function
         # value is actually called, dry-run inventory records that call site.
@@ -1756,6 +1763,11 @@ class _Checker:
                 self._record_node_type(node.expr.node_id, typ)
                 return typ
 
+        if isinstance(node.expr, FieldAccess):
+            typ = self._check_field_access(node.expr, type_args=node.type_args)
+            self._record_node_type(node.expr.node_id, typ)
+            return typ
+
         if not isinstance(node.expr, VarRef):
             raise AglTypeError(
                 "Explicit type arguments can only be applied to a generic function value.",
@@ -1912,6 +1924,8 @@ class _Checker:
             ("pattern_constructor_refs", self._pattern_constructor_refs),
             ("pattern_constructor_owners", self._pattern_constructor_owners),
             ("partial_calls", self._partial_calls),
+            ("member_selections", self._member_selections),
+            ("direct_method_calls", self._direct_method_calls),
             ("contract_specs", self._contract_specs),
             ("cast_specs", self._cast_specs),
             ("explicit_builtin_targets", self._explicit_builtin_targets),
@@ -2017,6 +2031,16 @@ class _Checker:
     def _append_call_site(self, call_site: CallSiteRecord) -> None:
         """Append a call site produced while finalizing the active region."""
         self._call_sites.append(call_site)
+
+    def _record_member_selection(self, node_id: int, selection: MemberSelection) -> None:
+        """Publish the checker-selected field or method for one dot access."""
+        self._record_side_table_addition("member_selections", self._member_selections, node_id)
+        self._member_selections[node_id] = selection
+
+    def _record_direct_method_call(self, node_id: int, method: MethodDef) -> None:
+        """Publish a direct-callable selected method for lowering."""
+        self._record_side_table_addition("direct_method_calls", self._direct_method_calls, node_id)
+        self._direct_method_calls[node_id] = method
 
     def _record_partial_call(
         self,
@@ -2536,8 +2560,15 @@ class _Checker:
                     node, callee_ref, expected=expected, hole_indices=hole_indices
                 )
 
-        # Value call (lambda or higher-order).
-        return self._check_value_call(node, expected=expected, hole_indices=hole_indices)
+        # Value call (lambda or higher-order). A selected method still has a
+        # first-class bound-function type here; only publishing lets lowering
+        # replace a non-partial direct call with the receiver-first path later.
+        result = self._check_value_call(node, expected=expected, hole_indices=hole_indices)
+        if isinstance(node.callee, FieldAccess) and not hole_indices:
+            selection = self._member_selections.get(node.callee.node_id)
+            if selection is not None and selection.method is not None:
+                self._record_direct_method_call(node.node_id, selection.method)
+        return result
 
     # --- shared call-argument checker ---
 
@@ -2808,7 +2839,15 @@ class _Checker:
                 "they are only allowed at declared-function call sites.",
                 span=node.span,
             )
-        callee_type = self._check_expr(node.callee, expected=None)
+        # A direct member call carries its explicit type arguments on Call,
+        # whereas value-position syntax uses TypeApply. Both feed the same
+        # member-specialization path so only a selected generic method can
+        # consume the arguments.
+        callee_type = (
+            self._check_field_access(node.callee, type_args=node.type_args)
+            if isinstance(node.callee, FieldAccess) and node.type_args
+            else self._check_expr(node.callee, expected=None)
+        )
         with self._frame_direct_candidate_use(exprs=(node.callee,)):
             if not isinstance(callee_type, FunctionType):
                 raise AglTypeError(
@@ -3773,42 +3812,133 @@ class _Checker:
         rendered = module_qualifier.render()
         raise AglTypeError(f"'{rendered}::{enum_name}' is not a known enum type.", span=span)
 
-    # --- field access ---
+    # --- member access ---
 
-    def _check_field_access(self, node: FieldAccess, expected: Type | None = None) -> Type:
+    def _bound_method_type(
+        self,
+        method: MethodDef,
+        receiver: RecordType | EnumType | ExceptionType,
+        *,
+        type_args: tuple[TypeExpr, ...] | None,
+        expected: Type | None,
+        span: SourceSpan,
+    ) -> FunctionType:
+        """Specialize *method* for *receiver* and remove its receiver parameter."""
+        receiver_template = method.signature.params[0]
+        substitutions: dict[str, Type] = {}
+        if isinstance(receiver_template, (RecordType, EnumType)):
+            assert isinstance(receiver, type(receiver_template))
+            substitutions = {
+                template_arg.name: receiver_arg
+                for template_arg, receiver_arg in zip(
+                    receiver_template.type_args, receiver.type_args, strict=True
+                )
+                if isinstance(template_arg, TypeVarType)
+            }
+        specialized = substitute(method.signature, substitutions)
+        assert isinstance(specialized, FunctionType)
+        bound = FunctionType(params=specialized.params[1:], result=specialized.result)
+        own_type_params = method.type_params[method.receiver_type_param_arity :]
+        if type_args is not None:
+            if len(type_args) != len(own_type_params):
+                raise AglTypeError(
+                    f"Method '{method.name}' requires {len(own_type_params)} explicit type "
+                    f"argument(s), but {len(type_args)} were supplied.",
+                    span=span,
+                )
+            explicit = {
+                name: self._env.resolve_type_expr(
+                    type_arg, span=span, type_vars=self._current_type_vars
+                )
+                for name, type_arg in zip(own_type_params, type_args, strict=True)
+            }
+            specialized = substitute(bound, explicit)
+            assert isinstance(specialized, FunctionType)
+            return specialized
+        if not own_type_params:
+            return bound
+
+        engine = self._active_inference_engine()
+        instantiation = engine.instantiate(own_type_params, (bound,))
+        for name in own_type_params:
+            engine.require_solved(
+                instantiation.variables[name],
+                engine.origin(
+                    span,
+                    role=ConstraintRole.EXPECTED_RESULT,
+                    subject=method.name,
+                    type_param=name,
+                ),
+            )
+        concrete = instantiation.templates[0]
+        assert isinstance(concrete, FunctionType)
+        if expected is not None:
+            engine.complete_from_context(
+                concrete,
+                expected,
+                engine.origin(span, role=ConstraintRole.EXPECTED_RESULT, subject=method.name),
+            )
+        return concrete
+
+    def _check_field_access(
+        self,
+        node: FieldAccess,
+        expected: Type | None = None,
+        *,
+        type_args: tuple[TypeExpr, ...] | None = None,
+    ) -> Type:
         obj_type = self._check_expr(node.obj, expected=None)
         if self._candidate_session is not None and contains_inference_var(obj_type):
-            return self._active_inference_engine().fresh("field result")
+            return self._active_inference_engine().fresh("member result")
         try:
-            # Reject operations on bare type variables.
+            # AgL has no type-variable bounds, so neither a field nor a method
+            # can be selected from a bare type variable.
             if isinstance(obj_type, TypeVarType):
                 raise AglTypeError(
-                    f"a value of type variable '{obj_type.name}' has no fields.",
+                    f"a value of type variable '{obj_type.name}' has no fields or methods.",
                     span=node.span,
                 )
+
+            fields: Mapping[str, Type] | None = None
             if isinstance(obj_type, ExceptionType):
-                exc_fields = self._env.type_table.exception_fields(obj_type)
-                if node.field not in exc_fields:
+                fields = self._env.type_table.exception_fields(obj_type)
+            elif isinstance(obj_type, RecordType):
+                fields = self._env.type_table.record_fields(obj_type)
+
+            # Fields always win. Collision validation is deliberately a later
+            # declaration-time concern, but lookup preserves field behavior now.
+            if fields is not None and node.field in fields:
+                if type_args is not None:
                     raise AglTypeError(
-                        f"Exception type '{obj_type.name}' has no field '{node.field}'.",
+                        "Explicit type arguments can only be applied to a generic method.",
                         span=node.span,
                     )
-                return exc_fields[node.field]
-            if isinstance(obj_type, RecordType):
-                record_fields = self._env.type_table.record_fields(obj_type)
-                if node.field not in record_fields:
-                    raise AglTypeError(
-                        f"Record '{obj_type.name}' has no field '{node.field}'.",
-                        span=node.span,
+                self._record_member_selection(node.node_id, MemberSelection(kind="field"))
+                field_type = fields[node.field]
+                if isinstance(obj_type, RecordType):
+                    self._set_inferred_return_expr_provenance(
+                        node.node_id,
+                        self._provenance_for_field_result(obj_type, node.field, node.obj),
                     )
-                field_type = record_fields[node.field]
-                self._set_inferred_return_expr_provenance(
-                    node.node_id,
-                    self._provenance_for_field_result(obj_type, node.field, node.obj),
-                )
                 return field_type
+
+            if isinstance(obj_type, (RecordType, EnumType, ExceptionType)):
+                method = self._env.type_table.lookup_method(obj_type, node.field)
+                if method is not None:
+                    self._record_member_selection(
+                        node.node_id, MemberSelection(kind="method", method=method)
+                    )
+                    return self._bound_method_type(
+                        method, obj_type, type_args=type_args, expected=expected, span=node.span
+                    )
+                raise AglTypeError(
+                    f"{obj_type.kind.capitalize()} '{obj_type.name}' has no field or method "
+                    f"'{node.field}'.",
+                    span=node.span,
+                )
+
             raise AglTypeError(
-                f"Field access requires a record or exception value; got '{obj_type!r}'.",
+                f"Member access requires a record, enum, or exception value; got '{obj_type!r}'.",
                 span=node.span,
             )
         except AglTypeError as exc:
@@ -4688,6 +4818,8 @@ class _Checker:
             pattern_binding_refs=self._pattern_binding_refs,
             pattern_constructor_refs=self._pattern_constructor_refs,
             pattern_constructor_owners=self._pattern_constructor_owners,
+            member_selections=self._member_selections,
+            direct_method_calls=self._direct_method_calls,
             explicit_builtin_targets=self._explicit_builtin_targets,
         )
 

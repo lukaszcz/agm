@@ -4649,6 +4649,164 @@ class TestFieldAccess:
         err = reject_type("let x = 42\nx.field")
         assert "record" in str(err).lower() or "field" in str(err).lower()
 
+    def test_methods_are_members_of_record_enum_and_exception_values(self) -> None:
+        checked = accept_type(
+            "record Point\n"
+            "  x: int\n"
+            "def Point::radius(self) -> decimal = 1.0\n"
+            "enum Signal\n"
+            "  | ready\n"
+            "def Signal::code(self) -> int = 1\n"
+            "exception Problem extends Exception\n"
+            "  code: int\n"
+            "def Problem::status(self) -> int = self.code\n"
+            "let point = Point(x = 1)\n"
+            "let signal = Signal::ready()\n"
+            'let problem = Problem(message = "bad", code = 1)\n'
+            "[point.radius(), signal.code(), problem.status()]"
+        )
+        result = checked.resolved.program.body.items[-1]
+        assert checked.node_types[result.node_id] == ArrayType(DecimalType())
+
+    def test_exception_method_is_inherited_by_subtypes(self) -> None:
+        checked = accept_type(
+            "exception Base extends Exception\n"
+            "  code: int\n"
+            "def Base::status(self) -> int = self.code\n"
+            "exception Child extends Base\n"
+            "  detail: text\n"
+            'let child = Child(message = "bad", code = 1, detail = "more")\n'
+            "child.status()"
+        )
+        result = checked.resolved.program.body.items[-1]
+        assert checked.node_types[result.node_id] == IntType()
+
+    def test_field_wins_over_same_named_method(self) -> None:
+        checked = accept_type(
+            "record Holder\n"
+            "  apply: (int) -> int\n"
+            'def Holder::apply(self) -> text = "method"\n'
+            "let holder = Holder(apply = fn(value: int) -> int => value)\n"
+            "holder.apply(2)"
+        )
+        result = checked.resolved.program.body.items[-1]
+        assert checked.node_types[result.node_id] == IntType()
+
+    @pytest.mark.parametrize(
+        "source",
+        (
+            "record Point\n  x: int\nlet point = Point(x = 1)\npoint.missing",
+            "enum Signal\n  | ready\nlet signal = Signal::ready()\nsignal.missing",
+            "exception Problem extends Exception\n  code: int\n"
+            'let problem = Problem(message = "bad", code = 1)\nproblem.missing',
+        ),
+    )
+    def test_unknown_member_on_nominal_value_raises(self, source: str) -> None:
+        error = reject_type(source)
+        assert "field" in str(error).lower() and "method" in str(error).lower()
+
+    def test_member_access_on_bare_type_variable_still_raises(self) -> None:
+        error = reject_type("def get[T](value: T) -> int = value.member")
+        assert "type variable" in str(error).lower()
+
+    def test_direct_generic_method_call_applies_own_explicit_type_args(self) -> None:
+        checked = accept_type(
+            "record Box[T]\n"
+            "  value: T\n"
+            "def Box::map[T, U](self: Box[T], value: U) -> Box[U] = Box(value = value)\n"
+            "let box = Box(value = 1)\n"
+            "box.map::[decimal](1)"
+        )
+
+        result = checked.resolved.program.body.items[-1]
+        assert checked.node_types[result.node_id] == RecordType("Box", (DecimalType(),))
+
+    def test_generic_method_value_type_apply_specializes_own_type_args(self) -> None:
+        checked = accept_type(
+            "record Box[T]\n"
+            "  value: T\n"
+            "def Box::map[T, U](self: Box[T], value: U) -> Box[U] = Box(value = value)\n"
+            "let box = Box(value = 1)\n"
+            "let map = box.map::[decimal]\n"
+            "map(1)"
+        )
+
+        result = checked.resolved.program.body.items[-1]
+        assert checked.node_types[result.node_id] == RecordType("Box", (DecimalType(),))
+
+    def test_generic_method_value_infers_own_type_args_from_expected_type(self) -> None:
+        accept_type(
+            "record Box[T]\n"
+            "  value: T\n"
+            "def Box::map[T, U](self: Box[T], value: U) -> Box[U] = Box(value = value)\n"
+            "let box = Box(value = 1)\n"
+            "let map: decimal -> Box[decimal] = box.map\n"
+            "map(1)"
+        )
+
+    def test_direct_generic_method_call_rejects_conflicting_explicit_type_arg(self) -> None:
+        error = reject_type(
+            "record Box[T]\n"
+            "  value: T\n"
+            "def Box::map[T, U](self: Box[T], value: U) -> Box[U] = Box(value = value)\n"
+            "let box = Box(value = 1)\n"
+            'box.map::[decimal]("wrong")'
+        )
+
+        assert "mismatch" in str(error).lower() or "decimal" in str(error).lower()
+
+    def test_direct_generic_method_call_rejects_wrong_explicit_arity(self) -> None:
+        error = reject_type(
+            "record Box[T]\n"
+            "  value: T\n"
+            "def Box::map[T, U](self: Box[T], value: U) -> Box[U] = Box(value = value)\n"
+            "let box = Box(value = 1)\n"
+            "box.map::[int, text](1)"
+        )
+
+        assert "type argument" in str(error).lower()
+
+    @pytest.mark.parametrize(
+        "field_type, value",
+        (("int", "1"), ("(int) -> int", "fn(value: int) -> int => value")),
+        ids=("scalar", "function"),
+    )
+    def test_type_apply_on_field_is_rejected(self, field_type: str, value: str) -> None:
+        error = reject_type(
+            f"record Holder\n  field: {field_type}\n"
+            f"let holder = Holder(field = {value})\n"
+            "holder.field::[text]"
+        )
+
+        assert "type argument" in str(error).lower() or "generic" in str(error).lower()
+
+    def test_member_selection_and_direct_call_are_published(self) -> None:
+        checked = accept_type(
+            "record Point\n"
+            "  x: int\n"
+            "def Point::radius(self) -> int = self.x\n"
+            "let point = Point(x = 1)\n"
+            "let field = point.x\n"
+            "let method = point.radius\n"
+            "point.radius()"
+        )
+        field_binding, method_binding, method_call = checked.resolved.program.body.items[-3:]
+        assert isinstance(field_binding, LetDecl)
+        assert isinstance(method_binding, LetDecl)
+        assert isinstance(field_binding.value, FieldAccess)
+        assert isinstance(method_binding.value, FieldAccess)
+        assert isinstance(method_call, Call)
+        assert isinstance(method_call.callee, FieldAccess)
+
+        field_selection = checked.member_selection_for(field_binding.value.node_id)
+        method_selection = checked.member_selection_for(method_binding.value.node_id)
+        call_selection = checked.member_selection_for(method_call.callee.node_id)
+        assert field_selection is not None and field_selection.kind == "field"
+        assert method_selection is not None and method_selection.kind == "method"
+        assert method_selection.method is not None
+        assert call_selection is not None and call_selection.kind == "method"
+        assert checked.direct_method_for(method_call.node_id) == call_selection.method
+
 
 # ---------------------------------------------------------------------------
 # Is test

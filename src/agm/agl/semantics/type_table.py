@@ -106,6 +106,7 @@ class MethodDef:
     name: str
     signature: FunctionType
     receiver_type_param_arity: int
+    type_params: tuple[str, ...] = ()
 
 
 # ``ParamKind.value`` strings (``"positional_only"``/``"standard"``/

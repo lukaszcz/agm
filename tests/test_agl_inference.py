@@ -413,6 +413,44 @@ def test_method_with_inferred_return_uses_receiver_header_type() -> None:
     assert signature.params[0].type == RecordType("Box", (TypeVarType("E"),))
 
 
+def test_bound_generic_method_pins_receiver_and_inferrs_own_type_parameter() -> None:
+    """Only method parameters beyond the receiver are inferred at member access."""
+    checked = check_module(
+        resolve_module(
+            parse_program(
+                "record Box[T]\n"
+                "  value: T\n"
+                "def Box::map[T, U](self, f: (T) -> U) -> Box[U] = Box(value = f(self.value))\n"
+                "let box = Box(value = 1)\n"
+                'box.map(fn(value: int) -> text => "value")'
+            )
+        ),
+        HostCapabilities(),
+    )
+
+    result = checked.resolved.program.body.items[-1]
+    assert checked.node_types[result.node_id] == RecordType("Box", (TextType(),))
+
+
+def test_bound_generic_method_accepts_explicit_own_type_parameter() -> None:
+    """Explicit member instantiation supplies only parameters not pinned by the receiver."""
+    checked = check_module(
+        resolve_module(
+            parse_program(
+                "record Box[T]\n"
+                "  value: T\n"
+                "def Box::map[T, U](self, f: (T) -> U) -> Box[U] = Box(value = f(self.value))\n"
+                "let box = Box(value = 1)\n"
+                'box.map::[text](fn(value: int) -> text => "value")'
+            )
+        ),
+        HostCapabilities(),
+    )
+
+    result = checked.resolved.program.body.items[-1]
+    assert checked.node_types[result.node_id] == RecordType("Box", (TextType(),))
+
+
 class TestFinalizationAndProvenance:
     def test_solved_query_rejects_nested_unresolved_solution(self) -> None:
         engine = InferenceEngine()

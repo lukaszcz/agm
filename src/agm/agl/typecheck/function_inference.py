@@ -655,6 +655,7 @@ def register_method_header(
                 params=tuple(param.type for param in signature.params), result=signature.result
             ),
             receiver_type_param_arity=arity,
+            type_params=signature.type_params,
         ),
     )
 

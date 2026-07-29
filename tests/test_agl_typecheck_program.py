@@ -3610,24 +3610,20 @@ def test_cross_module_method_header_registers_on_the_shared_type_table(tmp_path:
     )
 
 
-def test_builtin_method_uses_member_validation_without_relaxing_global_builtins(
-    tmp_path: Path,
-) -> None:
-    """Scoped builtin methods use member contracts; root declarations retain global contracts."""
-    checked = _check_program(
-        tmp_path,
-        {
-            "entry": (
-                "record Point\n  x: int\nbuiltin def Point::host_radius(self) -> int\nPoint(x = 1)"
-            )
-        },
-    )
-
-    method = checked.modules[ENTRY_ID].type_env.type_table.lookup_method(
-        RecordType("Point"), "host_radius"
-    )
-    assert method is not None
-    assert method.signature == FunctionType(params=(RecordType("Point"),), result=IntType())
+def test_builtin_method_is_rejected_before_lowering(tmp_path: Path) -> None:
+    """A builtin method has no host dispatch contract and must fail statically."""
+    with pytest.raises(AglTypeError, match="Builtin methods are not supported"):
+        _check_program(
+            tmp_path,
+            {
+                "entry": (
+                    "record Point\n"
+                    "  x: int\n"
+                    "builtin def Point::host_radius(self) -> int\n"
+                    "Point(x = 1).host_radius()"
+                )
+            },
+        )
 
     with pytest.raises(AglTypeError, match="invalid signature"):
         _check_program(tmp_path, {"entry": "builtin def print(value: text) -> text\n()"})

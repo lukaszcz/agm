@@ -605,6 +605,7 @@ class TestMethodRegistry:
             module_id=_LIB_ID,
             scope_path=("Models", "Point"),
             name="shift",
+            decl_node_id=1,
             signature=FunctionType(params=(point, IntType()), result=point),
             receiver_type_param_arity=0,
         )
@@ -612,6 +613,7 @@ class TestMethodRegistry:
             module_id=ENTRY_ID,
             scope_path=("Color",),
             name="primary",
+            decl_node_id=2,
             signature=FunctionType(params=(color,), result=BoolType()),
             receiver_type_param_arity=0,
         )
@@ -619,6 +621,7 @@ class TestMethodRegistry:
             module_id=ENTRY_ID,
             scope_path=("Fault",),
             name="code",
+            decl_node_id=3,
             signature=FunctionType(params=(fault,), result=IntType()),
             receiver_type_param_arity=0,
         )
@@ -652,6 +655,7 @@ class TestMethodRegistry:
             module_id=ENTRY_ID,
             scope_path=("Root",),
             name="describe",
+            decl_node_id=1,
             signature=FunctionType(params=(root,), result=TextType()),
             receiver_type_param_arity=0,
         )
@@ -674,6 +678,7 @@ class TestMethodRegistry:
             module_id=ENTRY_ID,
             scope_path=("Base",),
             name="status",
+            decl_node_id=1,
             signature=FunctionType(params=(base,), result=IntType()),
             receiver_type_param_arity=0,
         )
@@ -712,6 +717,7 @@ class TestMethodRegistry:
             module_id=ENTRY_ID,
             scope_path=("Base",),
             name="message",
+            decl_node_id=1,
             signature=FunctionType(params=(base,), result=TextType()),
             receiver_type_param_arity=0,
         )
@@ -724,6 +730,7 @@ class TestMethodRegistry:
             module_id=ENTRY_ID,
             scope_path=("Base",),
             name="status",
+            decl_node_id=2,
             signature=FunctionType(params=(base,), result=IntType()),
             receiver_type_param_arity=0,
         )
@@ -748,6 +755,7 @@ class TestMethodRegistry:
                 module_id=ENTRY_ID,
                 scope_path=("Base",),
                 name="status",
+                decl_node_id=1,
                 signature=FunctionType(params=(base,), result=TextType()),
                 receiver_type_param_arity=0,
             ),
@@ -762,6 +770,7 @@ class TestMethodRegistry:
             module_id=ENTRY_ID,
             scope_path=("Base",),
             name="status",
+            decl_node_id=2,
             signature=FunctionType(params=(base,), result=IntType()),
             receiver_type_param_arity=0,
         )
@@ -776,6 +785,7 @@ class TestMethodRegistry:
             module_id=ENTRY_ID,
             scope_path=("Fault",),
             name="status",
+            decl_node_id=1,
             signature=FunctionType(params=(fault,), result=IntType()),
             receiver_type_param_arity=0,
         )
@@ -803,6 +813,7 @@ class TestMethodRegistry:
             module_id=ENTRY_ID,
             scope_path=("Box",),
             name="get",
+            decl_node_id=1,
             signature=FunctionType(params=(box,), result=TypeVarType("T")),
             receiver_type_param_arity=1,
         )

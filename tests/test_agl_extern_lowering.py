@@ -267,6 +267,27 @@ class TestDryRunInventory:
 
         assert [entry.callee for entry in executable.dry_run_inventory] == ["f"]
 
+    def test_direct_extern_method_is_included_in_dry_run_inventory(self) -> None:
+        executable = _lower_source(
+            "record Meter(value: int)\n"
+            "extern def Meter::add(self, amount: int) -> int\n"
+            "Meter(value = 40).add(2)"
+        )
+
+        assert [entry.callee for entry in executable.dry_run_inventory] == ["add"]
+        assert executable.dry_run_inventory[0].target_type_label == "int"
+
+    def test_bound_extern_method_is_included_in_dry_run_inventory(self) -> None:
+        executable = _lower_source(
+            "record Meter(value: int)\n"
+            "extern def Meter::add(self, amount: int) -> int\n"
+            "let add = Meter(value = 40).add\n"
+            "add(2)"
+        )
+
+        assert [entry.callee for entry in executable.dry_run_inventory] == ["add"]
+        assert executable.dry_run_inventory[0].target_type_label == "int"
+
     def test_pipeline_check_only_lists_the_extern_call_site(self, tmp_path: Path) -> None:
         root = tmp_path / "root"
         write_module_file(root, "lib/mod", "extern def f(x: int) -> int")

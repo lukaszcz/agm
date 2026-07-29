@@ -93,9 +93,10 @@ NominalOwner = RecordType | EnumType | ExceptionType
 class MethodDef:
     """Plain declaration data for one method owned by a nominal type.
 
-    ``module_id``/``scope_path``/``name`` identify the declared function, not
-    its owner: a root ``Point`` method ``Point::move`` has declaration scope
-    ``("Point",)`` while its owner key is ``(module_id, (), "Point")``.
+    ``module_id``/``scope_path``/``name`` and ``decl_node_id`` identify the
+    declared function, not its owner: a root ``Point`` method ``Point::move``
+    has declaration scope ``("Point",)`` while its owner key is
+    ``(module_id, (), "Point")``.
     ``signature`` is the method's ordinary function type, including its
     receiver as the first parameter. ``receiver_type_param_arity`` records how
     many leading method type parameters belong to the receiver type.
@@ -104,6 +105,7 @@ class MethodDef:
     module_id: ModuleId
     scope_path: tuple[str, ...]
     name: str
+    decl_node_id: int
     signature: FunctionType
     receiver_type_param_arity: int
     type_params: tuple[str, ...] = ()
@@ -291,6 +293,20 @@ class TypeTable:
             return
         methods[method.name] = method
         self._exception_methods_cache.clear()
+
+    def restore_methods_from(
+        self,
+        other: "TypeTable",
+        module_id: ModuleId,
+        name: str,
+        scope_path: tuple[str, ...] = (),
+    ) -> None:
+        """Restore one nominal owner's direct method map from *other*."""
+        key = (module_id, scope_path, name)
+        methods = other._methods.get(key)
+        if methods is not None:
+            self._methods[key] = dict(methods)
+            self._exception_methods_cache.clear()
 
     def methods_for(self, owner: NominalOwner) -> Mapping[str, MethodDef]:
         """Return methods available on *owner*, including exception bases.

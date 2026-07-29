@@ -691,10 +691,9 @@ def _build_program_func_sig_table(
             receiver_owner = rmod.resolved.method_declarations.get(
                 (mid, tuple(segment.name for segment in item.scope_path), item.name)
             )
-            # Defer invalid ordinary declarations to the checker. Scope-classified
-            # methods use member contracts rather than the global builtin table,
-            # so they still need program-header metadata even when their name
-            # matches a global builtin.
+            # Defer invalid declarations to the checker. Scope-classified methods
+            # have their own namespace, so they still need program-header metadata
+            # when their name matches a global builtin.
             if receiver_owner is None and (
                 item.name in _BUILTIN_TYPE_NAMES
                 or (item.name in _BUILTIN_FUNC_NAMES and not item.is_builtin)

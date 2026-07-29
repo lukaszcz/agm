@@ -617,6 +617,20 @@ class TestRedefinition:
         assert not use.ok
         assert any("does not take type arguments" in d.message for d in use.diagnostics)
 
+    def test_failed_record_redefinition_restores_previous_methods(self) -> None:
+        session = ReplSession()
+        assert session.eval_entry("record R(value: int)").ok
+        assert session.eval_entry("def R::get(self) -> int = self.value").ok
+
+        failed = session.eval_entry(
+            'let stop: int = raise Abort(message = "stop")\nrecord R(value: text)'
+        )
+
+        assert not failed.ok
+        result = session.eval_entry("R(value = 42).get()")
+        assert result.ok, result.diagnostics
+        assert result.value == IntValue(42)
+
 
 # ---------------------------------------------------------------------------
 # Recursive types across entries

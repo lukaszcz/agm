@@ -651,6 +651,7 @@ def register_method_header(
             module_id=owner.module_id,
             scope_path=receiver_owner,
             name=node.name,
+            decl_node_id=node.node_id,
             signature=FunctionType(
                 params=tuple(param.type for param in signature.params), result=signature.result
             ),

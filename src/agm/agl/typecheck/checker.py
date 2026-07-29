@@ -635,11 +635,13 @@ class _Checker:
     def _validate_funcdef_header(self, node: FuncDef, *, is_method: bool) -> None:
         """Validate declaration-level properties that do not need a return type.
 
-        Scope-classified methods have their own member namespace and host
-        contract. Global builtin-name and signature rules therefore apply only
-        to ordinary declarations; all declaration forms still share the
-        remaining header validation.
+        Scope-classified methods have their own member namespace. Global
+        builtin-name and signature rules therefore apply only to ordinary
+        declarations; builtin methods are rejected because they have no host
+        dispatch contract.
         """
+        if is_method and node.is_builtin:
+            raise AglTypeError("Builtin methods are not supported.", span=node.span)
         if not is_method and node.name in _BUILTIN_TYPE_NAMES:
             raise AglTypeError(
                 f"'{node.name}' is a built-in type name and cannot be used as a function name.",
@@ -3935,9 +3937,22 @@ class _Checker:
                     self._record_member_selection(
                         node.node_id, MemberSelection(kind="method", method=method)
                     )
-                    return self._bound_method_type(
+                    bound = self._bound_method_type(
                         method, obj_type, type_args=type_args, expected=expected, span=node.span
                     )
+                    if self._env.is_extern_node_id(method.decl_node_id):
+                        self._set_extern_expr_targets(
+                            node.node_id,
+                            (
+                                _ExternTarget(
+                                    name=method.name,
+                                    result_type=bound.result,
+                                    decl_node_id=method.decl_node_id,
+                                    module_id=method.module_id,
+                                ),
+                            ),
+                        )
+                    return bound
                 raise AglTypeError(
                     f"{obj_type.kind.capitalize()} '{obj_type.name}' has no field or method "
                     f"'{node.field}'.",

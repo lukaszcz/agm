@@ -2498,6 +2498,9 @@ class TypeEnvironment:
             typedef = other._type_table.get(other._module_id, declared_name, scope_path)
             if typedef is not None:
                 self._type_table.register(typedef)
+                self._type_table.restore_methods_from(
+                    other._type_table, other._module_id, declared_name, scope_path
+                )
             if name in other._types:
                 self._types[name] = other._types[name]
             if name in other._alias_targets:

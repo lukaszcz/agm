@@ -254,8 +254,9 @@ print(plus(5))
 ```
 
 The `self` spelling is special only in this receiver position. An annotated
-`self` elsewhere is an ordinary parameter. `def`, `extern def`, and `builtin
-def` may all declare methods.
+`self` elsewhere is an ordinary parameter. `def` and `extern def` may declare
+methods; `builtin def` is reserved for root host functions and cannot declare a
+method.
 
 ### Scope and forward references
 

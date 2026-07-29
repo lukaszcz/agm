@@ -170,6 +170,8 @@ from agm.agl.syntax.types import (
     AppliedT,
     ImportMode,
     NameT,
+    ReceiverType,
+    render_type_expr,
     type_parameter_bindings,
 )
 from agm.agl.syntax.visitor import walk
@@ -253,6 +255,7 @@ class _Resolver:
         repl_session_scope: ScopeNode | None = None,
         repl_session_scope_nodes: Mapping[ScopePath, ScopeNode] | None = None,
         repl_session_type_paths: frozenset[ScopePath] = frozenset(),
+        repl_session_type_aliases: Mapping[ScopePath, TypeAlias] | None = None,
         origin_path: Path | None = None,
         spaced_qualifiers: tuple[SpacedQualifier, ...] = (),
     ) -> None:
@@ -288,6 +291,9 @@ class _Resolver:
         # successful evaluation, so a failed entry cannot mutate session state.
         self._repl_session_scope_nodes = dict(repl_session_scope_nodes or {})
         self._repl_session_type_paths = repl_session_type_paths
+        # Retained aliases need their kind and source target for receiver
+        # classification; a path alone cannot distinguish them from nominals.
+        self._repl_session_type_aliases = dict(repl_session_type_aliases or {})
         # This module's canonical source file, or None for a module with no
         # backing file (inline `-c` sources, direct REPL entries). Drives the
         # `extern def` placement check — externs require a file-backed module.
@@ -344,6 +350,9 @@ class _Resolver:
         self._type_declarations: list[
             tuple[RecordDef | EnumDef | ExceptionDef | TypeAlias, ScopePath]
         ] = []
+        # Structured method identity -> nominal receiver owner path. This is
+        # scope's single receiver classification artifact for later passes.
+        self._method_declarations: dict[DeclarationKey, ScopePath] = {}
         self._scoped_constructor_candidates: dict[tuple[ScopePath, str], list[ConstructorRef]] = {}
         # Constructor candidates: name -> ordered list of ConstructorRef.
         self._constructor_candidates: dict[str, list[ConstructorRef]] = {}
@@ -435,6 +444,7 @@ class _Resolver:
         # establishes path-keyed membership before qualifier validation and the
         # legacy root worker build their compatibility tables.
         self._collect_declarations(program)
+        self._classify_method_declarations()
         self._validate_extern_backing()
 
         # Pre-pass 2: collect path-keyed agent declarations before body
@@ -492,6 +502,7 @@ class _Resolver:
             pattern_constructor_candidates=dict(self._pattern_constructor_candidates),
             pattern_slots=dict(self._pattern_slots),
             match_site_pattern_slots=dict(self._match_site_pattern_slots_by_node),
+            method_declarations=dict(self._method_declarations),
         )
 
     # ------------------------------------------------------------------
@@ -615,6 +626,40 @@ class _Resolver:
                     module_id=self._module_id,
                     scope_path=type_scope,
                 )
+
+    def _classify_method_declarations(self) -> None:
+        """Classify receiver parameters after every declaration path is complete."""
+        type_scopes: dict[ScopePath, RecordDef | EnumDef | ExceptionDef | TypeAlias] = dict(
+            self._repl_session_type_aliases
+        )
+        type_scopes.update(
+            {
+                path + (declaration.name,): declaration
+                for declaration, path in self._type_declarations
+            }
+        )
+        for key, declaration in self._declaration_items.items():
+            if not isinstance(declaration, FuncDef) or not declaration.params:
+                continue
+            receiver = declaration.params[0]
+            if receiver.name != "self":
+                continue
+            owner_path = key[1]
+            owner_declaration = type_scopes.get(owner_path)
+            if isinstance(owner_declaration, TypeAlias):
+                raise AglScopeError(
+                    f"'self' cannot declare a method in alias scope '{owner_declaration.name}', "
+                    f"which targets '{self._alias_target_name(owner_declaration)}'.",
+                    span=receiver.span,
+                )
+            if owner_path in self._type_paths:
+                self._method_declarations[key] = owner_path
+            elif isinstance(receiver.type_expr, ReceiverType):
+                raise AglScopeError("'self' requires an enclosing type scope.", span=receiver.span)
+
+    def _alias_target_name(self, alias: TypeAlias) -> str:
+        """Return the source-level alias target for a receiver diagnostic."""
+        return render_type_expr(alias.type_expr)
 
     def _build_scope_nodes(self, root: ScopeNode) -> dict[ScopePath, ScopeNode]:
         """Build named-scope layers and populate their declaration memberships."""
@@ -2826,6 +2871,13 @@ class _Resolver:
         inside its own body — non-self-recursive).  Then a child scope is
         opened for the params + body.
         """
+        # A bare receiver marker is meaningful only on a definition owned by
+        # a nominal type. Annotated ``self`` remains an ordinary lambda param.
+        if node.params and isinstance(node.params[0].type_expr, ReceiverType):
+            raise AglScopeError(
+                "'self' requires an enclosing type scope; lambdas cannot declare methods.",
+                span=node.params[0].span,
+            )
         # Defaults are resolved in the current (enclosing) scope.
         self._resolve_params_and_body(node)
 

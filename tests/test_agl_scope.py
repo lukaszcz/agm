@@ -11,6 +11,8 @@ deliberately do *not* pin internal implementation details.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from agm.agl.modules.ids import ENTRY_ID
@@ -66,9 +68,9 @@ from agm.agl.syntax.types import IntT
 # ---------------------------------------------------------------------------
 
 
-def parse_and_resolve(source: str) -> ModuleResolution:
+def parse_and_resolve(source: str, *, origin_path: Path | None = None) -> ModuleResolution:
     """Parse *source* and run the scope resolution pass."""
-    return resolve_module(parse_program(source))
+    return resolve_module(parse_program(source), origin_path=origin_path)
 
 
 def reject_scope(source: str) -> AglScopeError:
@@ -1223,6 +1225,109 @@ class TestFuncDefMutualRecursion:
 # ---------------------------------------------------------------------------
 # Lambda scoping: non-self-recursive
 # ---------------------------------------------------------------------------
+
+
+class TestMethodReceiverClassification:
+    @pytest.mark.parametrize(
+        ("declaration", "owner"),
+        (
+            ("record RecordOwner()", "RecordOwner"),
+            ("enum EnumOwner = value", "EnumOwner"),
+            ("exception ExceptionOwner()", "ExceptionOwner"),
+        ),
+    )
+    def test_receiver_in_each_nominal_type_scope_is_a_method(
+        self, declaration: str, owner: str
+    ) -> None:
+        resolved = parse_and_resolve(f"{declaration}\ndef {owner}::identity(self) -> int = 1\n()")
+
+        assert resolved.method_declarations == {
+            (ENTRY_ID, (owner,), "identity"): (owner,),
+        }
+
+    def test_shorthand_and_region_methods_have_identical_classification(self) -> None:
+        resolved = parse_and_resolve(
+            "record Point()\n"
+            "def Point::shorthand(self) -> int = 1\n"
+            "scope Point\n"
+            "def region(self) -> int = 2\n"
+            "end Point\n"
+            "()"
+        )
+
+        assert resolved.method_declarations == {
+            (ENTRY_ID, ("Point",), "shorthand"): ("Point",),
+            (ENTRY_ID, ("Point",), "region"): ("Point",),
+        }
+
+    @pytest.mark.parametrize(
+        "source",
+        (
+            "builtin def Point::builtin_host(self) -> int",
+            "extern def Point::extern_host(self) -> int",
+        ),
+        ids=("builtin", "extern"),
+    )
+    def test_bodyless_method_forms_are_classified(self, source: str) -> None:
+        resolved = parse_and_resolve(
+            f"record Point()\n{source}\n()", origin_path=Path("program.agl")
+        )
+        name = "builtin_host" if "builtin" in source else "extern_host"
+
+        assert resolved.method_declarations == {
+            (ENTRY_ID, ("Point",), name): ("Point",),
+        }
+
+    @pytest.mark.parametrize(
+        ("source", "alias", "target"),
+        (
+            ("type Count = int\ndef Count::value(self) -> int = 1", "Count", "int"),
+            (
+                "record Target()\ntype Alias = Target\ndef Alias::value(self) -> int = 1",
+                "Alias",
+                "Target",
+            ),
+        ),
+    )
+    def test_alias_scope_receiver_is_rejected_with_its_target(
+        self, source: str, alias: str, target: str
+    ) -> None:
+        err = reject_scope(source)
+
+        _, message = diag(err)
+        assert alias in message
+        assert target in message
+
+    def test_receiver_is_bound_in_method_body_and_nested_lambda(self) -> None:
+        resolved = parse_and_resolve(
+            "record Point()\n"
+            "def Point::identity(self) -> Point =\n"
+            "  let delayed = fn() => self\n"
+            "  delayed()\n"
+            "()"
+        )
+
+        assert _ref(resolved, "self").kind is BinderKind.param_binding
+
+    def test_unannotated_receiver_outside_a_type_scope_has_dedicated_diagnostic(self) -> None:
+        err = reject_scope("def helper(self) -> int = 1")
+
+        _, message = diag(err)
+        assert "self" in message
+        assert "type scope" in message
+
+    def test_annotated_self_outside_a_type_scope_is_an_ordinary_parameter(self) -> None:
+        resolved = parse_and_resolve("def helper(self: int) -> int = self\nhelper(1)")
+
+        assert resolved.method_declarations == {}
+        assert _ref(resolved, "self").kind is BinderKind.param_binding
+
+    def test_unannotated_self_in_a_lambda_is_rejected(self) -> None:
+        err = reject_scope("let helper = fn(self) -> int => 1")
+
+        _, message = diag(err)
+        assert "self" in message
+        assert "lambda" in message
 
 
 class TestLambdaScoping:
@@ -2867,7 +2972,7 @@ class TestConstructorBindings:
         assert _ref(r, "id").kind == BinderKind.function_binding
 
     def test_underscore_type_params_may_repeat(self) -> None:
-        r = parse_and_resolve("def ignored[_, _](self) -> int = 1\nignored()\n")
+        r = parse_and_resolve("def ignored[_, _](self: int) -> int = 1\nignored(1)\n")
         assert _ref(r, "ignored").kind == BinderKind.function_binding
 
     def test_multiple_type_params_unique_accepted(self) -> None:

@@ -181,3 +181,58 @@ TypeExpr = (
     | FuncT
     | AppliedT
 )
+
+
+def render_type_expr(type_expr: TypeExpr, *, parenthesize_function: bool = False) -> str:
+    """Render a canonical, source-level spelling of a syntactic type expression."""
+    if isinstance(type_expr, TextT):
+        return "text"
+    if isinstance(type_expr, JsonT):
+        return "json"
+    if isinstance(type_expr, BoolT):
+        return "bool"
+    if isinstance(type_expr, IntT):
+        return "int"
+    if isinstance(type_expr, DecimalT):
+        return "decimal"
+    if isinstance(type_expr, UnitT):
+        return "unit"
+    if isinstance(type_expr, AgentT):
+        return "agent"
+    if isinstance(type_expr, ReceiverType):
+        return "self"
+    if isinstance(type_expr, ArrayT):
+        return f"array[{render_type_expr(type_expr.elem)}]"
+    if isinstance(type_expr, DictT):
+        return f"dict[text, {render_type_expr(type_expr.value)}]"
+    if isinstance(type_expr, FuncT):
+        if not type_expr.params:
+            params = "()"
+        elif len(type_expr.params) == 1:
+            params = render_type_expr(type_expr.params[0], parenthesize_function=True)
+        else:
+            params = f"({', '.join(render_type_expr(param) for param in type_expr.params)})"
+        rendered = f"{params} -> {render_type_expr(type_expr.result)}"
+        return f"({rendered})" if parenthesize_function else rendered
+    if isinstance(type_expr, (NameT, AppliedT)):
+        qualifier = type_expr.qualifier
+        prefix = ""
+        if qualifier is not None:
+            anchor = "" if qualifier.anchor is None else qualifier.anchor.value
+            segments = "::".join(
+                segment.name
+                + (
+                    "[" + ", ".join(render_type_expr(arg) for arg in segment.type_args) + "]"
+                    if segment.type_args is not None
+                    else ""
+                )
+                for segment in qualifier.segments
+            )
+            prefix = f"{anchor}{segments}" if not segments else f"{anchor}{segments}::"
+        args = (
+            "[" + ", ".join(render_type_expr(arg) for arg in type_expr.args) + "]"
+            if isinstance(type_expr, AppliedT)
+            else ""
+        )
+        return f"{prefix}{type_expr.name}{args}"
+    raise AssertionError(f"unexpected type expression: {type_expr!r}")

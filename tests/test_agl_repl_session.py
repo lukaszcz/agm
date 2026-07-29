@@ -108,6 +108,18 @@ class TestPersistence:
 
         assert result.ok, result.diagnostics
 
+    def test_retained_alias_scope_rejects_a_method_with_its_structural_target(self) -> None:
+        session = ReplSession()
+        assert session.eval_entry("type Callback = (int) -> bool").ok
+
+        rejected = session.eval_entry("def Callback::bad(self) -> int = 1")
+
+        assert not rejected.ok
+        message = rejected.diagnostics[0].message
+        assert "alias scope" in message
+        assert "Callback" in message
+        assert "int -> bool" in message
+
     def test_scope_region_must_close_in_the_same_entry(self) -> None:
         s = ReplSession()
 

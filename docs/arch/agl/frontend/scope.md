@@ -58,7 +58,22 @@ juxtaposition expressions.
 
 Agents must be declared in source; the pass retains every declaration and
 unused-agent warning by its scope path and member name, and binds it as a
-first-class value of agent type, including named-scope members. Scoped externs resolve their member names through the declaring module's companion, and collection rejects duplicate scoped companion symbols. `let _ = value` and `var _ = value` still resolve their right-hand sides but register no binding, so `_` may be repeated. `_` never resolves as a readable identifier, even when another binding form uses that name in an enclosing scope. Register-backed `builtin var` declarations are admitted only in the canonical `std/config` module. The pass enforces lexical control-flow boundaries — `break`/`continue` must stay within a loop in the same function, `return` must appear inside a function body — and the extern (Python FFI) placement rule that externs are only allowed in file-backed modules.
+first-class value of agent type, including named-scope members. A first `self`
+parameter in a record, enum, or exception scope is classified as a method and
+published in `method_declarations`, keyed by its structured declaration identity
+with its nominal owner path. This happens after path collection, so declaration
+shorthand and scope regions classify identically; aliases and unowned bare
+receivers are rejected, while annotated `self` elsewhere remains an ordinary
+parameter. Scoped externs resolve their member names through the declaring
+module's companion, and collection rejects duplicate scoped companion symbols.
+`let _ = value` and `var _ = value` still resolve their right-hand sides but
+register no binding, so `_` may be repeated. `_` never resolves as a readable
+identifier, even when another binding form uses that name in an enclosing scope.
+Register-backed `builtin var` declarations are admitted only in the canonical
+`std/config` module. The pass enforces lexical control-flow boundaries —
+`break`/`continue` must stay within a loop in the same function, `return` must
+appear inside a function body — and the extern (Python FFI) placement rule that
+externs are only allowed in file-backed modules.
 
 Program resolution extends this pass across modules and preserves the loader's immutable,
 reverse-topological import-SCC sequence on `ResolvedProgram`. Typecheck consumes that exact sequence

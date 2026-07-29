@@ -8,6 +8,7 @@ Data model
   or enum variant).
 - ``PatternSlot`` — scope-created metadata for a shared branch binding whose
   final meaning is selected by type checking.
+- ``method_declarations`` — receiver-owning type paths keyed by structured method identities.
 - ``ScopeNode`` — a node in the scope tree (one per scope-introducing
   construct).  The root ``ScopeNode`` is always present; nested scopes form a
   tree for visibility analysis.
@@ -518,6 +519,11 @@ class ModuleResolution:
         Maps each owning case-branch or ``let`` declaration node id to the
         slot ids its pattern created, in creation (outer-to-inner) order. The
         checker selects exactly these after that match site is classified.
+    ``method_declarations``
+        Maps each method's structured declaration identity to the complete
+        scope path of its nominal receiver owner. This is scope's definitive
+        receiver classification; later passes consume it without re-deriving
+        whether a function is a method.
     """
 
     program: Program
@@ -542,6 +548,7 @@ class ModuleResolution:
     )
     pattern_slots: dict[int, PatternSlot] = field(default_factory=dict)
     match_site_pattern_slots: dict[int, tuple[int, ...]] = field(default_factory=dict)
+    method_declarations: dict[DeclarationKey, ScopePath] = field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------

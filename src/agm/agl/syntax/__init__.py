@@ -123,6 +123,7 @@ from agm.agl.syntax.types import (
     TextT,
     TypeExpr,
     UnitT,
+    render_type_expr,
 )
 from agm.agl.syntax.visitor import Visitor, walk
 
@@ -144,6 +145,7 @@ __all__ = [
     "ReceiverType",
     "FuncT",
     "TypeExpr",
+    "render_type_expr",
     # module system
     "ImportMode",
     "ImportItem",

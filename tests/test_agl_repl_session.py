@@ -34,7 +34,14 @@ from agm.agl.semantics.types import (
     TextType,
     Type,
 )
-from agm.agl.semantics.values import VOID_VALUE, ArrayValue, BoolValue, IntValue, UnitValue
+from agm.agl.semantics.values import (
+    VOID_VALUE,
+    ArrayValue,
+    BoolValue,
+    IntValue,
+    TextValue,
+    UnitValue,
+)
 
 # ---------------------------------------------------------------------------
 # Fake agents
@@ -107,6 +114,74 @@ class TestPersistence:
         result = s.eval_entry("let box: A::Box[int] = A::Box(value = 1)")
 
         assert result.ok, result.diagnostics
+
+    def test_method_declared_after_its_type_is_callable_in_a_later_entry(self) -> None:
+        session = ReplSession()
+        assert session.eval_entry("record Meter(value: int)").ok
+        assert session.eval_entry(
+            "def Meter::add(self, amount: int) -> int = self.value + amount"
+        ).ok
+
+        result = session.eval_entry("Meter(value = 40).add(2)")
+
+        assert result.ok, result.diagnostics
+        assert result.value == IntValue(42)
+
+    def test_later_method_cannot_collide_with_a_retained_owner_field(self) -> None:
+        session = ReplSession()
+        assert session.eval_entry("record Meter(value: int)").ok
+
+        rejected = session.eval_entry("def Meter::value(self) -> int = 0")
+
+        assert not rejected.ok
+        message = rejected.diagnostics[0].message.lower()
+        assert "value" in message
+        assert "field" in message
+        assert "method" in message
+
+    def test_bound_method_binding_persists_across_entries(self) -> None:
+        session = ReplSession()
+        assert session.eval_entry("record Meter(value: int)").ok
+        assert session.eval_entry(
+            "def Meter::add(self, amount: int) -> int = self.value + amount"
+        ).ok
+        assert session.eval_entry("let add = Meter(value = 40).add").ok
+
+        result = session.eval_entry("add(2)")
+
+        assert result.ok, result.diagnostics
+        assert result.value == IntValue(42)
+
+    def test_exception_method_declared_in_a_later_entry_is_callable(self) -> None:
+        session = ReplSession()
+        assert session.eval_entry("exception Fault extends Exception\n  code: int").ok
+        assert session.eval_entry('def Fault::label(self) -> text = "fault %{self.code}"').ok
+
+        result = session.eval_entry('Fault(message = "bad", code = 7).label()')
+
+        assert result.ok, result.diagnostics
+        assert result.value == TextValue("fault 7")
+
+    def test_generic_receiver_method_declared_in_a_later_entry_is_callable(self) -> None:
+        session = ReplSession()
+        assert session.eval_entry("record Box[T](value: T)").ok
+        assert session.eval_entry("def Box::get[T](self) -> T = self.value").ok
+
+        result = session.eval_entry("Box(value = 42).get()")
+
+        assert result.ok, result.diagnostics
+        assert result.value == IntValue(42)
+
+    def test_redeclaring_a_method_replaces_its_prior_member_entry(self) -> None:
+        session = ReplSession()
+        assert session.eval_entry("record Meter(value: int)").ok
+        assert session.eval_entry("def Meter::read(self) -> int = self.value").ok
+        assert session.eval_entry("def Meter::read(self) -> int = self.value + 1").ok
+
+        result = session.eval_entry("Meter(value = 41).read()")
+
+        assert result.ok, result.diagnostics
+        assert result.value == IntValue(42)
 
     def test_retained_alias_scope_rejects_a_method_with_its_structural_target(self) -> None:
         session = ReplSession()

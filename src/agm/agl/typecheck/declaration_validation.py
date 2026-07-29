@@ -44,9 +44,9 @@ def _static_function_items(items: tuple[object, ...]) -> Iterator[FuncDef]:
 
 
 def _member_declarations(
-    modules: Mapping[ModuleId, ModuleResolution],
+    modules: Mapping[ModuleId, ModuleResolution], type_table: TypeTable
 ) -> dict[DeclKey, dict[str, list[_MemberDeclaration]]]:
-    """Collect source fields and scope-classified methods by nominal owner."""
+    """Collect source and retained-owner fields plus scope-classified methods."""
     result: dict[DeclKey, dict[str, list[_MemberDeclaration]]] = {}
     owner_keys: dict[tuple[ModuleId, tuple[str, ...]], DeclKey] = {}
     for module_id, resolved in modules.items():
@@ -64,8 +64,15 @@ def _member_declarations(
             scope_path = tuple(segment.name for segment in function.scope_path)
             owner_path = resolved.method_declarations.get((module_id, scope_path, function.name))
             if owner_path is not None:
-                key = owner_keys[module_id, owner_path]
-                result.setdefault(key, {}).setdefault(function.name, []).append(
+                owner_key = owner_keys.get((module_id, owner_path))
+                if owner_key is None:
+                    typedef = type_table.get(module_id, owner_path[-1], owner_path[:-1])
+                    assert typedef is not None, "compiler bug: method owner is not registered"
+                    owner_key = (typedef.module_id, typedef.scope_path, typedef.name)
+                    owner_members = result.setdefault(owner_key, {})
+                    for field_name, _field_type in typedef.fields:
+                        owner_members.setdefault(field_name, [_MemberDeclaration("field", None)])
+                result.setdefault(owner_key, {}).setdefault(function.name, []).append(
                     _MemberDeclaration("method", function.span)
                 )
     return result
@@ -110,9 +117,15 @@ def _raise_collision(
 ) -> None:
     """Report the later direct declaration or the more-specific descendant."""
     if key == conflicting_key:
-        assert declared.span is not None and conflicting.span is not None
-        if declared.span.start_offset < conflicting.span.start_offset:
+        # A retained owner's TypeDef supplies fields without source spans. Its
+        # later-entry method is necessarily the declaration to diagnose.
+        if declared.span is None:
+            assert conflicting.span is not None
             declared, conflicting = conflicting, declared
+        else:
+            assert conflicting.span is not None
+            if declared.span.start_offset < conflicting.span.start_offset:
+                declared, conflicting = conflicting, declared
 
     related = (
         ()
@@ -138,7 +151,7 @@ def validate_method_declaration_collisions(
     against every ancestor, with the descendant declaration receiving the
     diagnostic.
     """
-    declarations = _member_declarations(modules)
+    declarations = _member_declarations(modules, type_table)
     for key, members in declarations.items():
         for name, same_named_members in members.items():
             if len(same_named_members) > 1:

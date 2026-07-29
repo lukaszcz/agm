@@ -1,0 +1,40 @@
+# Record methods include zero-argument members, builder-style members, and
+# the equivalent qualified call form.
+param mode: text
+param x: int
+
+record Person
+  name: text
+  address: text
+
+record Point
+  x: int
+  y: int
+
+def Person::address_line(self) -> text = self.name + ": " + self.address
+
+def Person::with_address(self, address: text) -> Person =
+  Person(name = self.name, address = address)
+
+def Point::total(self) -> int = self.x + self.y
+
+def Point::shifted(self, delta: int) -> Point =
+  Point(x = self.x + delta, y = self.y)
+
+let person = Person(name = "Ada", address = "Main Street")
+let point = Point(x = x, y = 2)
+
+if
+  | mode == "builder" =>
+      let dot = person.with_address("East Road")
+      let qualified = Person::with_address(person, "East Road")
+      print(dot.address_line())
+      print(qualified.address_line())
+  | mode == "point" =>
+      let dot = point.shifted(3)
+      let qualified = Point::shifted(point, 3)
+      print(dot.total())
+      print(qualified.total())
+  | else =>
+      print(person.address_line())
+      print(Person::address_line(person))

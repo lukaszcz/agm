@@ -1,0 +1,49 @@
+# Receiver type parameters bind positionally. The remaining method parameters
+# stay generic, can be inferred from arguments, or can be pinned explicitly.
+param mode: text
+param base: int
+
+record Box[T]
+  value: T
+
+enum Outcome[A, B]
+  | ok(value: A)
+  | err(error: B)
+
+def Box::get[T](self) -> T = self.value
+
+def Box::map[T, U](self, f: (T) -> U) -> Box[U] = Box(value = f(self.value))
+
+def Box::size[_](self) -> int = 1
+
+def Outcome::summary[A, B](self) -> text =
+  case self of
+    | ok(value) => "ok %{value}"
+    | err(error) => "err %{error}"
+
+def Outcome::is_ok[_, _](self) -> bool =
+  case self of
+    | ok(value) => true
+    | err(error) => false
+
+def Outcome::replace_error[A, B, E](self, replacement: E) -> Outcome[A, E] =
+  case self of
+    | ok(value) => ok(value = value)
+    | err(error) => err(error = replacement)
+
+if
+  | mode == "box" =>
+      let box = Box(value = base)
+      print(box.get())
+      print(box.size())
+  | mode == "map" =>
+      let box = Box(value = base)
+      let inferred = box.map(fn(value: int) -> text => "v=%{value}")
+      let explicit = box.map::[text](fn(value: int) -> text => "x=%{value}")
+      print(inferred.value)
+      print(explicit.value)
+  | else =>
+      let chosen: Outcome[int, text] = if base > 0 => ok(value = base) else => err(error = "missing")
+      let replaced = chosen.replace_error(404)
+      print(replaced.summary())
+      print(replaced.is_ok())

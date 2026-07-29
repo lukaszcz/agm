@@ -1,0 +1,31 @@
+# Enum methods share the enum scope with variants. Opening that scope supplies
+# bare variants whose resulting values can immediately use their methods.
+open Signal
+
+param mode: text
+param value: int
+
+enum Signal
+  | idle
+  | number(value: int)
+  | stopped(reason: text)
+
+def Signal::describe(self) -> text =
+  case self of
+    | idle => "idle"
+    | number(value) => "number %{value}"
+    | stopped(reason) => "stopped %{reason}"
+
+def Signal::is_terminal(self) -> bool =
+  case self of
+    | idle => false
+    | number(value) => false
+    | stopped(reason) => true
+
+let signal: Signal = if
+    | mode == "idle" => idle
+    | mode == "number" => number(value = value)
+    | else => stopped(reason = "halt")
+
+print(signal.describe())
+print(signal.is_terminal())

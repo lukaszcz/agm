@@ -1,0 +1,19 @@
+{
+  "scenarios": [
+    {
+      "name": "box_receiver_parameter_and_wildcard_slot",
+      "params": {"mode": "box", "base": 7},
+      "expect": {"stdout": "7\n1\n", "calls": {}}
+    },
+    {
+      "name": "receiver_pinned_inference_and_explicit_method_type_argument",
+      "params": {"mode": "map", "base": 9},
+      "expect": {"stdout": "v=9\nx=9\n", "calls": {}}
+    },
+    {
+      "name": "two_parameter_enum_receiver_and_extra_method_parameter",
+      "params": {"mode": "outcome", "base": -1},
+      "expect": {"stdout": "err 404\nfalse\n", "calls": {}}
+    }
+  ]
+}

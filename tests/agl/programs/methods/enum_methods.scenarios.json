@@ -1,0 +1,19 @@
+{
+  "scenarios": [
+    {
+      "name": "opened_scope_nullary_variant",
+      "params": {"mode": "idle", "value": 0},
+      "expect": {"stdout": "idle\nfalse\n", "calls": {}}
+    },
+    {
+      "name": "opened_scope_payload_variant",
+      "params": {"mode": "number", "value": 12},
+      "expect": {"stdout": "number 12\nfalse\n", "calls": {}}
+    },
+    {
+      "name": "opened_scope_terminal_variant",
+      "params": {"mode": "stopped", "value": 99},
+      "expect": {"stdout": "stopped halt\ntrue\n", "calls": {}}
+    }
+  ]
+}

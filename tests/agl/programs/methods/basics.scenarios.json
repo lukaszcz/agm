@@ -1,0 +1,19 @@
+{
+  "scenarios": [
+    {
+      "name": "builder_dot_and_qualified_calls_match",
+      "params": {"mode": "builder", "x": 1},
+      "expect": {"stdout": "Ada: East Road\nAda: East Road\n", "calls": {}}
+    },
+    {
+      "name": "point_builder_dot_and_qualified_calls_match",
+      "params": {"mode": "point", "x": 4},
+      "expect": {"stdout": "9\n9\n", "calls": {}}
+    },
+    {
+      "name": "zero_parameter_dot_and_qualified_calls_match",
+      "params": {"mode": "zero", "x": 10},
+      "expect": {"stdout": "Ada: Main Street\nAda: Main Street\n", "calls": {}}
+    }
+  ]
+}

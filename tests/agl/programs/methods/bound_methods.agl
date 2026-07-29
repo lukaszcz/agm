@@ -1,0 +1,36 @@
+# Bound methods are first-class function values. Creating one captures its
+# receiver once, while ordinary higher-order and partial-call machinery handles
+# the resulting function value.
+param mode: text
+param base: int
+
+record Meter
+  value: int
+
+var builds = 0
+
+def make_meter(seed: int) -> Meter =
+  builds := builds + 1
+  print "built %{builds}"
+  Meter(value = seed)
+
+def Meter::add(self, amount: int) -> int = self.value + amount
+
+def apply(value: int, f: (int) -> int) -> int = f(value)
+
+if
+  | mode == "stored" =>
+      let add = make_meter(base).add
+      print(add(1))
+      print(add(2))
+      print(builds)
+  | mode == "higher_order" =>
+      let meter = make_meter(base)
+      print(apply(base, meter.add))
+      print(apply(base, fn(value: int) -> int => value * 2))
+      print(builds)
+  | else =>
+      let add = make_meter(base).add(?)
+      print(add(3))
+      print(add(4))
+      print(builds)

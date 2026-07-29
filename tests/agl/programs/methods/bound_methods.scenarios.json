@@ -1,0 +1,19 @@
+{
+  "scenarios": [
+    {
+      "name": "stored_bound_method_captures_receiver_once",
+      "params": {"mode": "stored", "base": 10},
+      "expect": {"stdout": "built 1\n11\n12\n1\n", "calls": {}}
+    },
+    {
+      "name": "bound_method_flows_through_higher_order_call",
+      "params": {"mode": "higher_order", "base": 4},
+      "expect": {"stdout": "built 1\n8\n8\n1\n", "calls": {}}
+    },
+    {
+      "name": "partial_bound_method_captures_receiver_once",
+      "params": {"mode": "partial", "base": 5},
+      "expect": {"stdout": "built 1\n8\n9\n1\n", "calls": {}}
+    }
+  ]
+}

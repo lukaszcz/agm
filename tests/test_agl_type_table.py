@@ -26,6 +26,7 @@ from agm.agl.semantics.analyses import (
 )
 from agm.agl.semantics.type_table import (
     BUILTIN_PRELUDE_TYPE_DEFS,
+    MethodDef,
     TypeDef,
     TypeTable,
     cast_classification,
@@ -581,6 +582,235 @@ class TestExceptionAccessors:
         handle = ExceptionType(name="Color", module_id=ENTRY_ID)
         with pytest.raises(AssertionError):
             table.exception_def(handle)
+
+
+# ---------------------------------------------------------------------------
+# Method registry — declarations are plain semantic data keyed by their
+# nominal owner; exception owners inherit their base methods.
+# ---------------------------------------------------------------------------
+
+
+class TestMethodRegistry:
+    def test_registers_methods_for_record_enum_and_exception_owners(self) -> None:
+        table = TypeTable()
+        point = RecordType(name="Point", module_id=_LIB_ID, scope_path=("Models",))
+        color = EnumType(name="Color", module_id=ENTRY_ID)
+        fault = ExceptionType(name="Fault", module_id=ENTRY_ID)
+        table.register(
+            TypeDef(kind="record", name="Point", module_id=_LIB_ID, scope_path=("Models",))
+        )
+        table.register(TypeDef(kind="enum", name="Color", module_id=ENTRY_ID))
+        table.register(TypeDef(kind="exception", name="Fault", module_id=ENTRY_ID))
+        point_shift = MethodDef(
+            module_id=_LIB_ID,
+            scope_path=("Models", "Point"),
+            name="shift",
+            signature=FunctionType(params=(point, IntType()), result=point),
+            receiver_type_param_arity=0,
+        )
+        color_primary = MethodDef(
+            module_id=ENTRY_ID,
+            scope_path=("Color",),
+            name="primary",
+            signature=FunctionType(params=(color,), result=BoolType()),
+            receiver_type_param_arity=0,
+        )
+        fault_code = MethodDef(
+            module_id=ENTRY_ID,
+            scope_path=("Fault",),
+            name="code",
+            signature=FunctionType(params=(fault,), result=IntType()),
+            receiver_type_param_arity=0,
+        )
+
+        table.register_method(point, point_shift)
+        table.register_method(color, color_primary)
+        table.register_method(fault, fault_code)
+        table.register_method(point, point_shift)
+
+        assert table.lookup_method(point, "shift") == point_shift
+        assert table.lookup_method(color, "primary") == color_primary
+        assert table.lookup_method(fault, "code") == fault_code
+        assert table.methods_for(fault) is table.methods_for(fault)
+        assert point_shift.module_id == _LIB_ID
+        assert point_shift.scope_path == ("Models", "Point")
+        assert point_shift.name == "shift"
+        assert point_shift.signature == FunctionType(params=(point, IntType()), result=point)
+
+    def test_exception_lookup_inherits_a_method_from_a_three_level_base_chain(self) -> None:
+        table = TypeTable()
+        root = ExceptionType(name="Root", module_id=ENTRY_ID)
+        leaf = ExceptionType(name="Leaf", module_id=ENTRY_ID)
+        table.register(TypeDef(kind="exception", name="Root", module_id=ENTRY_ID))
+        table.register(
+            TypeDef(kind="exception", name="Mid", module_id=ENTRY_ID, base=(ENTRY_ID, "Root"))
+        )
+        table.register(
+            TypeDef(kind="exception", name="Leaf", module_id=ENTRY_ID, base=(ENTRY_ID, "Mid"))
+        )
+        describe = MethodDef(
+            module_id=ENTRY_ID,
+            scope_path=("Root",),
+            name="describe",
+            signature=FunctionType(params=(root,), result=TextType()),
+            receiver_type_param_arity=0,
+        )
+        table.register_method(root, describe)
+
+        assert table.lookup_method(leaf, "describe") == describe
+
+    def test_register_method_invalidates_cached_inherited_lookup_miss(self) -> None:
+        table = TypeTable()
+        base = ExceptionType(name="Base", module_id=ENTRY_ID)
+        child = ExceptionType(name="Child", module_id=ENTRY_ID)
+        table.register(TypeDef(kind="exception", name="Base", module_id=ENTRY_ID))
+        table.register(
+            TypeDef(kind="exception", name="Child", module_id=ENTRY_ID, base=(ENTRY_ID, "Base"))
+        )
+
+        assert table.lookup_method(child, "status") is None
+
+        status = MethodDef(
+            module_id=ENTRY_ID,
+            scope_path=("Base",),
+            name="status",
+            signature=FunctionType(params=(base,), result=IntType()),
+            receiver_type_param_arity=0,
+        )
+        table.register_method(base, status)
+
+        assert table.lookup_method(child, "status") == status
+
+    def test_exception_lookup_rejects_a_cyclic_base_chain(self) -> None:
+        table = TypeTable()
+        table.register(
+            TypeDef(kind="exception", name="A", module_id=ENTRY_ID, base=(ENTRY_ID, "B"))
+        )
+        table.register(
+            TypeDef(kind="exception", name="B", module_id=ENTRY_ID, base=(ENTRY_ID, "A"))
+        )
+
+        with pytest.raises(AssertionError, match="cyclic exception base chain"):
+            table.lookup_method(ExceptionType(name="A", module_id=ENTRY_ID), "missing")
+
+    def test_lookup_miss_returns_none_for_owner_with_no_methods(self) -> None:
+        table = TypeTable()
+        point = RecordType(name="Point", module_id=ENTRY_ID)
+        table.register(TypeDef(kind="record", name="Point", module_id=ENTRY_ID))
+
+        assert table.lookup_method(point, "missing") is None
+
+    def test_unregister_and_reregister_discards_stale_exception_methods_and_cache(self) -> None:
+        table = TypeTable()
+        base = ExceptionType(name="Base", module_id=ENTRY_ID)
+        child = ExceptionType(name="Child", module_id=ENTRY_ID)
+        table.register(TypeDef(kind="exception", name="Base", module_id=ENTRY_ID))
+        table.register(
+            TypeDef(kind="exception", name="Child", module_id=ENTRY_ID, base=(ENTRY_ID, "Base"))
+        )
+        old = MethodDef(
+            module_id=ENTRY_ID,
+            scope_path=("Base",),
+            name="message",
+            signature=FunctionType(params=(base,), result=TextType()),
+            receiver_type_param_arity=0,
+        )
+        table.register_method(base, old)
+        assert table.lookup_method(child, "message") == old
+
+        table.unregister(ENTRY_ID, "Base")
+        table.register(TypeDef(kind="exception", name="Base", module_id=ENTRY_ID))
+        replacement = MethodDef(
+            module_id=ENTRY_ID,
+            scope_path=("Base",),
+            name="status",
+            signature=FunctionType(params=(base,), result=IntType()),
+            receiver_type_param_arity=0,
+        )
+        table.register_method(base, replacement)
+
+        assert table.lookup_method(child, "message") is None
+        assert table.lookup_method(child, "status") == replacement
+
+    def test_merge_from_overwrites_method_entries_and_invalidates_exception_lookup_cache(
+        self,
+    ) -> None:
+        base = ExceptionType(name="Base", module_id=ENTRY_ID)
+        child = ExceptionType(name="Child", module_id=ENTRY_ID)
+        target = TypeTable()
+        target.register(TypeDef(kind="exception", name="Base", module_id=ENTRY_ID))
+        target.register(
+            TypeDef(kind="exception", name="Child", module_id=ENTRY_ID, base=(ENTRY_ID, "Base"))
+        )
+        target.register_method(
+            base,
+            MethodDef(
+                module_id=ENTRY_ID,
+                scope_path=("Base",),
+                name="status",
+                signature=FunctionType(params=(base,), result=TextType()),
+                receiver_type_param_arity=0,
+            ),
+        )
+        table_method = target.lookup_method(child, "status")
+        assert table_method is not None
+        assert table_method.signature.result == TextType()
+
+        source = TypeTable()
+        source.register(TypeDef(kind="exception", name="Base", module_id=ENTRY_ID))
+        replacement = MethodDef(
+            module_id=ENTRY_ID,
+            scope_path=("Base",),
+            name="status",
+            signature=FunctionType(params=(base,), result=IntType()),
+            receiver_type_param_arity=0,
+        )
+        source.register_method(base, replacement)
+        target.merge_from(source)
+
+        assert target.lookup_method(child, "status") == replacement
+
+    def test_merge_from_skips_identical_method_entries(self) -> None:
+        fault = ExceptionType(name="Fault", module_id=ENTRY_ID)
+        method = MethodDef(
+            module_id=ENTRY_ID,
+            scope_path=("Fault",),
+            name="status",
+            signature=FunctionType(params=(fault,), result=IntType()),
+            receiver_type_param_arity=0,
+        )
+        source = TypeTable()
+        source.register(TypeDef(kind="exception", name="Fault", module_id=ENTRY_ID))
+        source.register_method(fault, method)
+        target = TypeTable()
+        target.register(TypeDef(kind="exception", name="Fault", module_id=ENTRY_ID))
+        target.register_method(fault, method)
+        cached = target.methods_for(fault)
+
+        target.merge_from(source)
+
+        assert target.methods_for(fault) is cached
+
+    def test_generic_owner_records_receiver_type_parameter_arity(self) -> None:
+        table = TypeTable()
+        box = RecordType(
+            name="Box",
+            type_args=(TypeVarType("T"),),
+            module_id=ENTRY_ID,
+        )
+        table.register(TypeDef(kind="record", name="Box", module_id=ENTRY_ID, type_params=("T",)))
+        get = MethodDef(
+            module_id=ENTRY_ID,
+            scope_path=("Box",),
+            name="get",
+            signature=FunctionType(params=(box,), result=TypeVarType("T")),
+            receiver_type_param_arity=1,
+        )
+        table.register_method(box, get)
+
+        found = table.lookup_method(RecordType(name="Box", module_id=ENTRY_ID), "get")
+        assert found == get
+        assert found.receiver_type_param_arity == 1
 
 
 # ---------------------------------------------------------------------------

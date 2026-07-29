@@ -16,7 +16,9 @@ representation shared by records, enums, and exceptions.
 ``TypeTable.record_fields``/``enum_variants`` substitute a handle's
 ``type_args`` into those templates and memoize the result per handle;
 ``TypeTable.exception_fields`` has no ``type_args`` to substitute but instead
-flattens the ``extends`` base chain into one field mapping.
+flattens the ``extends`` base chain into one field mapping. The table also
+keeps plain ``MethodDef`` data keyed by nominal owner; exception method lookup
+uses the same base-chain flattening and cache discipline as exception fields.
 
 ``comparable_types``/``_reaches_non_data`` live here rather than in
 ``semantics.types`` because their record/enum/exception arms consult the
@@ -84,6 +86,27 @@ if TYPE_CHECKING:
 
 TypeDefKind = Literal["record", "enum", "exception"]
 DeclKey = tuple[ModuleId, tuple[str, ...], str]
+NominalOwner = RecordType | EnumType | ExceptionType
+
+
+@dataclass(frozen=True, slots=True)
+class MethodDef:
+    """Plain declaration data for one method owned by a nominal type.
+
+    ``module_id``/``scope_path``/``name`` identify the declared function, not
+    its owner: a root ``Point`` method ``Point::move`` has declaration scope
+    ``("Point",)`` while its owner key is ``(module_id, (), "Point")``.
+    ``signature`` is the method's ordinary function type, including its
+    receiver as the first parameter. ``receiver_type_param_arity`` records how
+    many leading method type parameters belong to the receiver type.
+    """
+
+    module_id: ModuleId
+    scope_path: tuple[str, ...]
+    name: str
+    signature: FunctionType
+    receiver_type_param_arity: int
+
 
 # ``ParamKind.value`` strings (``"positional_only"``/``"standard"``/
 # ``"named_only"``) — ``semantics`` may not import ``syntax.nodes`` (see
@@ -186,6 +209,12 @@ class TypeTable:
         # Memo for exception_field_kinds — same keying convention as
         # _exception_fields_cache above.
         self._exception_field_kinds_cache: dict[DeclKey, tuple[tuple[str, str], ...]] = {}
+        # Methods are independent plain declaration data, keyed by their
+        # nominal owner rather than by an import environment. Exception
+        # method maps flatten inherited entries and therefore need the same
+        # whole-cache invalidation as exception fields.
+        self._methods: dict[DeclKey, dict[str, MethodDef]] = {}
+        self._exception_methods_cache: dict[DeclKey, Mapping[str, MethodDef]] = {}
         # Whole-table non-data-reachability fixpoint (see
         # :meth:`nominal_reaches_non_data`), computed lazily on first use and
         # invalidated (set back to ``None``) whenever a declaration is added,
@@ -243,7 +272,60 @@ class TypeTable:
         """
         key = (module_id, scope_path, name)
         self._defs.pop(key, None)
+        self._methods.pop(key, None)
         self._invalidate_cache_for(key)
+
+    def register_method(self, owner: NominalOwner, method: MethodDef) -> None:
+        """Register *method* under its nominal *owner*.
+
+        Method declarations are deliberately data-only: scope classifies a
+        receiver and typecheck resolves its header before calling this table;
+        neither frontend package is imported here. A repeated registration of
+        the same declaration is a no-op, while a redeclaration replaces the
+        previous entry so REPL state cannot retain a stale method.
+        """
+        key = (owner.module_id, owner.scope_path, owner.name)
+        methods = self._methods.setdefault(key, {})
+        if methods.get(method.name) == method:
+            return
+        methods[method.name] = method
+        self._exception_methods_cache.clear()
+
+    def methods_for(self, owner: NominalOwner) -> Mapping[str, MethodDef]:
+        """Return methods available on *owner*, including exception bases.
+
+        Record and enum methods are their owner's direct entries. Exception
+        methods are base-first flattened mappings, cached per nominal owner;
+        the typecheck pass owns the later no-overriding diagnostic, so a direct
+        entry wins if invalid data reaches this low-level registry.
+        """
+        key = (owner.module_id, owner.scope_path, owner.name)
+        if not isinstance(owner, ExceptionType):
+            return self._methods.get(key, {})
+        cached = self._exception_methods_cache.get(key)
+        if cached is not None:
+            return cached
+        result = self._flatten_exception_methods(key, _visiting=frozenset())
+        self._exception_methods_cache[key] = result
+        return result
+
+    def lookup_method(self, owner: NominalOwner, name: str) -> MethodDef | None:
+        """Return the available method named *name*, or ``None`` on a miss."""
+        return self.methods_for(owner).get(name)
+
+    def _flatten_exception_methods(
+        self, key: DeclKey, *, _visiting: frozenset[DeclKey]
+    ) -> Mapping[str, MethodDef]:
+        if key in _visiting:
+            raise AssertionError(f"cyclic exception base chain detected at {key!r}")
+        typedef = self._require_exception_def(key, caller="methods_for")
+        methods: dict[str, MethodDef] = {}
+        if typedef.base is not None:
+            methods.update(
+                self._flatten_exception_methods(typedef.base, _visiting=_visiting | {key})
+            )
+        methods.update(self._methods.get(key, {}))
+        return methods
 
     def _invalidate_cache_for(self, key: DeclKey) -> None:
         self._record_fields_cache.pop(key, None)
@@ -254,6 +336,7 @@ class TypeTable:
         # maintain a reverse-inheritance index.
         self._exception_fields_cache.clear()
         self._exception_field_kinds_cache.clear()
+        self._exception_methods_cache.clear()
         # The non-data-reachability and finiteness fixpoints are whole-table
         # (any declaration's flag can in principle depend on any other's), so
         # a single changed key invalidates the whole cached result rather
@@ -817,7 +900,15 @@ class TypeTable:
             if self._defs.get(key) == typedef:
                 continue
             self._defs[key] = typedef
+            self._methods.pop(key, None)
             self._invalidate_cache_for(key)
+        for key, methods in other._methods.items():
+            target_methods = self._methods.setdefault(key, {})
+            for name, method in methods.items():
+                if target_methods.get(name) == method:
+                    continue
+                target_methods[name] = method
+                self._exception_methods_cache.clear()
 
 
 def decl_key_sort_key(key: DeclKey) -> tuple[tuple[str, ...], tuple[str, ...], str]:

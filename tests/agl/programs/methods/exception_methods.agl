@@ -1,0 +1,42 @@
+# Exception members follow the exception hierarchy. Calls in catches use the
+# caught exception's static type, and a scoped exception owns methods too.
+open Scoped
+
+param mode: text
+param code: int
+
+exception Problem extends Exception
+  code: int
+
+exception DetailedProblem extends Problem
+  detail: text
+
+scope Scoped
+exception Marker extends Exception
+  code: int
+end Scoped
+
+def Problem::label(self) -> text = "problem %{self.code}"
+
+def DetailedProblem::detail_label(self) -> text = self.label() + ": %{self.detail}"
+
+def Scoped::Marker::label(self) -> text = "scoped %{self.code}"
+
+if
+  | mode == "subtype" =>
+      let problem = DetailedProblem(message = "direct", code = code, detail = "extra")
+      print(problem.label())
+      print(problem.detail_label())
+  | mode == "caught" =>
+      try
+        raise DetailedProblem(message = "caught", code = code, detail = "handled")
+      catch DetailedProblem as problem =>
+        print(problem.label())
+        print(problem.detail_label())
+      catch Problem as problem =>
+        print(problem.label())
+  | else =>
+      try
+        raise Scoped::Marker(message = "scoped", code = code)
+      catch Marker as marker =>
+        print(marker.label())

@@ -1,0 +1,17 @@
+# Methods remain available with their nominal type: directly through the
+# declaring module, through a facade re-export, and in consumer without an
+# import of the declaring module.
+import origin
+import facade
+import consumer
+
+param mode: text
+param id: int
+
+if
+  | mode == "direct" =>
+      print(origin::make_parcel(id).label())
+  | mode == "transitive" =>
+      print(consumer::describe_forwarded(id))
+  | else =>
+      print(facade::make_parcel(id).label())

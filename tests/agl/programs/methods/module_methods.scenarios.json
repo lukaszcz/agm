@@ -1,0 +1,22 @@
+{
+  "scenarios": [
+    {
+      "name": "calls_method_after_importing_declaring_module",
+      "module_roots": ["program_modules/methods"],
+      "params": {"mode": "direct", "id": 3},
+      "expect": {"stdout": "parcel-3\n", "calls": {}}
+    },
+    {
+      "name": "calls_method_on_value_received_transitively",
+      "module_roots": ["program_modules/methods"],
+      "params": {"mode": "transitive", "id": 8},
+      "expect": {"stdout": "parcel-8\n", "calls": {}}
+    },
+    {
+      "name": "calls_method_through_facade_reexport",
+      "module_roots": ["program_modules/methods"],
+      "params": {"mode": "facade", "id": 21},
+      "expect": {"stdout": "parcel-21\n", "calls": {}}
+    }
+  ]
+}

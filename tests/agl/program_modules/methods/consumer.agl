@@ -1,0 +1,5 @@
+# This module intentionally never imports origin. It receives a Parcel from
+# relay and can still project the method declared with the nominal type.
+import relay
+
+def describe_forwarded(id: int) -> text = relay::forward(id).label()

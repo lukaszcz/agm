@@ -1,0 +1,4 @@
+# Relay forwards Parcel values without adding a dependency at the call site.
+import origin
+
+def forward(id: int) -> origin::Parcel = origin::make_parcel(id)

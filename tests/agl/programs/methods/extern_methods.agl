@@ -1,0 +1,10 @@
+# The extern method lives in a file-backed library module so its companion can
+# receive the Counter receiver as its first Python positional argument.
+import extern_counter
+
+param value: int
+param amount: int
+
+let counter = extern_counter::Counter(value = value)
+print(counter.increment(amount))
+print(counter.double())

@@ -1,0 +1,24 @@
+{
+  "scenarios": [
+    {
+      "name": "path_and_region_bound_record_methods_match",
+      "params": {"mode": "plain", "base": 5},
+      "expect": {"stdout": "7\n7\n", "calls": {}}
+    },
+    {
+      "name": "path_and_region_generic_methods_match",
+      "params": {"mode": "generic", "base": 11},
+      "expect": {"stdout": "11\n11\n1\n1\n12\n", "calls": {}}
+    },
+    {
+      "name": "path_and_region_enum_and_exception_methods_match",
+      "params": {"mode": "variants", "base": 4},
+      "expect": {"stdout": "ready 4\nready 4\nnotice 4\nnotice 4\n", "calls": {}}
+    },
+    {
+      "name": "multi_segment_and_nested_type_regions_match_paths",
+      "params": {"mode": "nested", "base": 16},
+      "expect": {"stdout": "16\n16\n16\n", "calls": {}}
+    }
+  ]
+}

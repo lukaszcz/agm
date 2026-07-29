@@ -1,0 +1,92 @@
+# Declaration paths and scope regions declare the same members. The paired
+# calls below cover records, generic receivers (including `_` slots), bound
+# values, enums, exceptions, multi-segment regions, and nested regions.
+param mode: text
+param base: int
+
+record Plain(value: int)
+
+def Plain::path_add(self, amount: int) -> int = self.value + amount
+
+scope Plain
+def region_add(self, amount: int) -> int = self.value + amount
+end Plain
+
+record Box[T](value: T)
+record Box::Entry[T](value: T)
+
+def Box::path_value[T](self) -> T = self.value
+def Box::path_size[_](self) -> int = 1
+
+def Box::Entry::make[T](value: T) -> Box::Entry[T] = Box::Entry(value = value)
+
+scope Box
+def region_value[T](self) -> T = self.value
+def region_size[_](self) -> int = 1
+end Box
+
+enum Signal
+  | ready(value: int)
+
+def Signal::path_text(self) -> text =
+  case self of
+    | ready(value) => "ready %{value}"
+
+scope Signal
+def region_text(self) -> text =
+  case self of
+    | ready(value) => "ready %{value}"
+end Signal
+
+exception Notice extends Exception
+  code: int
+
+def Notice::path_text(self) -> text = "notice %{self.code}"
+
+scope Notice
+def region_text(self) -> text = "notice %{self.code}"
+end Notice
+
+scope A
+record T(value: int)
+end A
+
+def A::T::path_value(self) -> int = self.value
+
+scope A::T
+def region_value(self) -> int = self.value
+end A::T
+
+scope A
+scope T
+def nested_value(self) -> int = self.value
+end T
+end A
+
+if
+  | mode == "plain" =>
+      let plain = Plain(value = base)
+      let path = plain.path_add
+      let region = plain.region_add
+      print(path(2))
+      print(region(2))
+  | mode == "generic" =>
+      let box = Box(value = base)
+      let entry = Box::Entry::make(base + 1)
+      print(box.path_value())
+      print(box.region_value())
+      print(box.path_size())
+      print(box.region_size())
+      print(entry.value)
+  | mode == "variants" =>
+      let signal = Signal::ready(value = base)
+      let notice = Notice(message = "notice", code = base)
+      print(signal.path_text())
+      print(signal.region_text())
+      print(notice.path_text())
+      print(notice.region_text())
+  | else =>
+      let value = A::T(value = base)
+      print(value.path_value())
+      print(value.region_value())
+      print(value.nested_value())

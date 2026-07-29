@@ -1,0 +1,19 @@
+{
+  "scenarios": [
+    {
+      "name": "inherited_method_on_subtype_receiver",
+      "params": {"mode": "subtype", "code": 7},
+      "expect": {"stdout": "problem 7\nproblem 7: extra\n", "calls": {}}
+    },
+    {
+      "name": "methods_on_caught_subtype",
+      "params": {"mode": "caught", "code": 12},
+      "expect": {"stdout": "problem 12\nproblem 12: handled\n", "calls": {}}
+    },
+    {
+      "name": "method_on_scoped_exception",
+      "params": {"mode": "scoped", "code": 99},
+      "expect": {"stdout": "scoped 99\n", "calls": {}}
+    }
+  ]
+}

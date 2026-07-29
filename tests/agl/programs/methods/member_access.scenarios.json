@@ -1,0 +1,19 @@
+{
+  "scenarios": [
+    {
+      "name": "function_field_and_method_are_distinct_members",
+      "params": {"base": 3},
+      "expect": {"stdout": "6\n5\n6\n", "calls": {}}
+    },
+    {
+      "name": "juxtaposition_preserves_function_field_call",
+      "params": {"base": 7},
+      "expect": {"stdout": "14\n9\n14\n", "calls": {}}
+    },
+    {
+      "name": "method_dispatch_does_not_shadow_function_field",
+      "params": {"base": 0},
+      "expect": {"stdout": "0\n2\n0\n", "calls": {}}
+    }
+  ]
+}

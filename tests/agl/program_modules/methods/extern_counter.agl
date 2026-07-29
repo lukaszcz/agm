@@ -1,0 +1,6 @@
+# The ordinary and extern declarations share Counter's method set.
+record Counter(value: int)
+
+extern def Counter::increment(self, amount: int) -> int
+
+def Counter::double(self) -> int = self.value * 2

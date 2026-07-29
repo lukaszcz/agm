@@ -1,0 +1,18 @@
+# A field that contains a function and a method are distinct members. Both
+# normal dot calls and the print juxtaposition form continue to call the field.
+param base: int
+
+record Query
+  f: (int) -> int
+  value: int
+
+def Query::m(self, amount: int) -> int = self.value + amount
+
+let query = Query(
+  f = fn(amount: int) -> int => amount * base,
+  value = base,
+)
+
+print(query.f(2))
+print(query.m(2))
+print query.f(2)

@@ -1,0 +1,22 @@
+{
+  "scenarios": [
+    {
+      "name": "extern_method_receives_record_receiver",
+      "module_roots": ["program_modules/methods"],
+      "params": {"value": 4, "amount": 3},
+      "expect": {"stdout": "7\n8\n", "calls": {}}
+    },
+    {
+      "name": "extern_and_source_methods_share_type",
+      "module_roots": ["program_modules/methods"],
+      "params": {"value": 10, "amount": -2},
+      "expect": {"stdout": "8\n20\n", "calls": {}}
+    },
+    {
+      "name": "extern_method_uses_first_positional_receiver",
+      "module_roots": ["program_modules/methods"],
+      "params": {"value": 0, "amount": 9},
+      "expect": {"stdout": "9\n0\n", "calls": {}}
+    }
+  ]
+}

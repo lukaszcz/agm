@@ -1,0 +1,4 @@
+record Point
+  label: text
+
+def Point::label(self) -> text = "point"

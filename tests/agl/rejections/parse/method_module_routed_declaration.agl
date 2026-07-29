@@ -1,0 +1,1 @@
+def m/shapes::Point::f(self) -> int = 1

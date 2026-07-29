@@ -1,0 +1,1 @@
+def value_member[T](value: T) -> int = value.missing

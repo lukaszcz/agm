@@ -1,0 +1,14 @@
+{
+  "scenarios": [
+    {
+      "name": "module_binding",
+      "params": {"mode": "local"},
+      "expect": {"stdout": "3\n", "calls": {}}
+    },
+    {
+      "name": "field_and_annotated_parameter",
+      "params": {"mode": "field"},
+      "expect": {"stdout": "5\n", "calls": {}}
+    }
+  ]
+}

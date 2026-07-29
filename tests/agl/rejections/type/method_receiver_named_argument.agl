@@ -1,0 +1,7 @@
+record Point
+  x: int
+
+def Point::radius(self) -> int = self.x
+
+let point = Point(x = 1)
+Point::radius(self = point)

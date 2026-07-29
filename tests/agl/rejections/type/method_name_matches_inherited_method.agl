@@ -1,0 +1,9 @@
+exception Base extends Exception
+  code: int
+
+exception Specific extends Base
+  detail: text
+
+def Base::label(self) -> text = "base"
+
+def Specific::label(self) -> text = "specific"

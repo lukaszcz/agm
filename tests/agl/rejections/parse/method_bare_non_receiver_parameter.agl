@@ -1,0 +1,4 @@
+record Point
+  x: int
+
+def Point::bad(self, value) -> int = self.x

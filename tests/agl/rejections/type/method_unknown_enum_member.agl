@@ -1,0 +1,5 @@
+enum Signal
+  | ready
+
+let signal = Signal::ready()
+signal.missing

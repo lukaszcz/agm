@@ -1,0 +1,4 @@
+record Box[T]
+  value: T
+
+def Box::bad[T](self: Box[int]) -> int = self.value

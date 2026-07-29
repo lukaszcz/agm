@@ -1,0 +1,5 @@
+record Point
+  x: int
+
+let point = Point(x = 1)
+point.missing

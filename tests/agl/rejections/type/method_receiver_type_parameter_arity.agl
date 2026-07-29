@@ -1,0 +1,4 @@
+record Box[T]
+  value: T
+
+def Box::size(self) -> int = 1

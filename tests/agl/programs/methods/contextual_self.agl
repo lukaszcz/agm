@@ -1,0 +1,15 @@
+# Outside a receiver position, self remains an ordinary identifier.
+param mode: text
+
+record Holder
+  self: int
+
+def helper(self: int) -> int = self + 1
+
+let self = 3
+
+if mode == "local" =>
+  print(self)
+else =>
+  let holder = Holder(self = 4)
+  print(helper(holder.self))

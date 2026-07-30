@@ -1,4 +1,4 @@
-Read @${REVIEW_FILE}. For each listed issue, check if the issue is valid — if so, understand the root cause and fix it.
+Read @${REVIEW_FILE}. For each listed issue, check if the issue is valid — if so, understand the root cause and fix it. Fix only still-valid issues, skip the rest, keep changes minimal, and validate.
 
 CRITICAL: Fix the root cause of all valid issues (LOW, MEDIUM, HIGH, CRITICAL). Commit after fixing each valid issue.
 

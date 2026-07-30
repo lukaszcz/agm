@@ -36,6 +36,7 @@ from agm.agl.typecheck import (
     RecordType,
     TextType,
     Type,
+    TypeEnvironment,
     TypeVarType,
     UnitType,
     assert_checked_program_closed,
@@ -59,13 +60,18 @@ _CAPS = HostCapabilities(
 )
 
 
-def _check(src: str) -> CheckedModule:
-    """Parse + resolve + check a single-module AgL program."""
+def _check(src: str, *, seed_env: TypeEnvironment | None = None) -> CheckedModule:
+    """Parse + resolve + check a single-module AgL program.
+
+    *seed_env* replays a prior entry's sealed environment first, the same way
+    an incremental REPL entry builds on earlier ones: declarations from *src*
+    land in a type table that already carries the seed's registered owners.
+    """
     from agm.agl.parser import parse_program
     from agm.agl.scope import resolve_module
 
     resolved = resolve_module(parse_program(src))
-    return check_module(resolved, _CAPS)
+    return check_module(resolved, _CAPS, seed_env=seed_env)
 
 
 def _check_graph(graph: ModuleGraph) -> CheckedProgram:
@@ -3899,6 +3905,76 @@ def test_inherited_method_collision_names_the_ancestor_that_declares_it(tmp_path
     assert "'Root'" in str(raised.value)
     assert "'Mid'" not in str(raised.value)
     assert [span.start_line for _text, span in raised.value.related] == [5]
+
+
+def test_base_declared_after_its_descendants_collides_with_the_nearest_matching_one() -> None:
+    """A base's own method, declared once its descendants are already retained.
+
+    Mirrors ``test_inherited_method_collision_names_the_ancestor_that_declares_it``
+    from the opposite end: 'Base' is checked in a later entry that seeds a prior
+    entry's environment, where 'Middle' and 'Leaf' (three levels deep) are already
+    registered but not redeclared here, so only the descendant scan — not the
+    ancestor scan — can find the collision. 'Middle' does not declare the
+    colliding name, so the walk must continue past it to the actual owner,
+    'Leaf', two levels down.
+    """
+    base_decl = "exception Base extends Exception\n  code: int\n"
+    earlier = _check(
+        base_decl
+        + "exception Middle extends Base()\n"
+        + "exception Leaf extends Middle()\n"
+        + 'def Leaf::label(self) -> text = "leaf"\n'
+        + "()"
+    )
+
+    with pytest.raises(AglTypeError) as raised:
+        _check(
+            base_decl + 'def Base::label(self) -> text = "base"\n()',
+            seed_env=earlier.type_env,
+        )
+
+    assert "'Leaf'" in str(raised.value)
+    assert "'Middle'" not in str(raised.value)
+    assert "label" in str(raised.value).lower()
+    assert "method" in str(raised.value).lower()
+
+
+def test_sibling_exception_branches_may_reuse_a_method_name() -> None:
+    """Two branches under a shared base are not each other's ancestor/descendant.
+
+    Reusing a method name across siblings is legal — 'BranchA' and 'BranchB'
+    never appear in each other's ancestor or descendant chain, only in the
+    shared 'Base''s descendant list, so declaring the same name on each is not
+    a collision.
+    """
+    _check(
+        "exception Base extends Exception\n"
+        "  code: int\n"
+        "exception BranchA extends Base()\n"
+        "exception BranchB extends Base()\n"
+        'def BranchA::label(self) -> text = "a"\n'
+        'def BranchB::label(self) -> text = "b"\n'
+        "()"
+    )
+
+
+def test_sibling_exception_branch_still_collides_with_the_shared_base() -> None:
+    """The same name is still rejected when the shared base itself declares it."""
+    with pytest.raises(AglTypeError) as raised:
+        _check(
+            "exception Base extends Exception\n"
+            "  code: int\n"
+            "exception BranchA extends Base()\n"
+            "exception BranchB extends Base()\n"
+            'def Base::label(self) -> text = "base"\n'
+            'def BranchA::label(self) -> text = "a"\n'
+            'def BranchB::label(self) -> text = "b"\n'
+            "()"
+        )
+
+    assert "'Base'" in str(raised.value)
+    assert "label" in str(raised.value).lower()
+    assert "method" in str(raised.value).lower()
 
 
 def test_descendant_exception_field_cannot_shadow_an_inherited_method(tmp_path: Path) -> None:

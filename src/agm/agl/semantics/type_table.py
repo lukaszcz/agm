@@ -377,37 +377,6 @@ class TypeTable:
         chain = self._exception_chain(typedef.base, caller="ancestor_defs")
         return tuple(base_def for _base_key, base_def in reversed(chain))
 
-    def descendant_defs(self, key: DeclKey) -> tuple[TypeDef, ...]:
-        """Return every registered exception that inherits from *key*, nearest first.
-
-        Empty for a non-exception declaration. The inverse of
-        :meth:`ancestor_defs`: a base declaration needs it to see the members
-        its descendants already occupy, including descendants retained from an
-        earlier REPL entry.
-        """
-        typedef = self.get(key[0], key[2], key[1])
-        assert typedef is not None, f"no TypeDef registered for {key!r}"
-        if typedef.kind != "exception":
-            return ()
-        found: list[tuple[int, TypeDef]] = []
-        for candidate in self._defs.values():
-            if candidate.kind != "exception":
-                continue
-            candidate_key = (candidate.module_id, candidate.scope_path, candidate.name)
-            ancestors = self.ancestor_defs(candidate_key)
-            depth = next(
-                (
-                    index
-                    for index, base in enumerate(ancestors)
-                    if (base.module_id, base.scope_path, base.name) == key
-                ),
-                None,
-            )
-            if depth is not None:
-                found.append((depth, candidate))
-        found.sort(key=_descendant_depth)
-        return tuple(candidate for _depth, candidate in found)
-
     def _flatten_exception_methods(self, key: DeclKey) -> Mapping[str, MethodDef]:
         methods: dict[str, MethodDef] = {}
         for chain_key, _typedef in self._exception_chain(key, caller="methods_for"):
@@ -976,11 +945,6 @@ class TypeTable:
         for key, methods in other._methods.items():
             for method in methods.values():
                 self._put_method(key, method)
-
-
-def _descendant_depth(entry: tuple[int, TypeDef]) -> int:
-    """Order a descendant search result by its distance from the queried base."""
-    return entry[0]
 
 
 def decl_key_sort_key(key: DeclKey) -> tuple[tuple[str, ...], tuple[str, ...], str]:

@@ -108,8 +108,45 @@ def _member_declarations(
     return index
 
 
+def _descendant_index(type_table: TypeTable) -> dict[DeclKey, tuple[DeclKey, ...]]:
+    """Map every registered exception to its descendants, nearest first.
+
+    The inverse of ``TypeTable.ancestor_defs``: a base declaration needs it to
+    see the members its descendants already occupy, including descendants
+    retained from an earlier REPL entry. Inverting the relation once per
+    validation pass keeps the whole pass linear in the registered exceptions;
+    asking each owner for its own descendants separately would rescan every
+    declaration and rewalk every base chain per owner.
+
+    A descendant's depth is its own index within its nearest-first ancestor
+    chain, and ``entries()`` yields declarations in registration order, so
+    descendants at equal depth keep a deterministic relative order.
+    """
+    found: dict[DeclKey, list[tuple[int, DeclKey]]] = {}
+    for typedef in type_table.entries():
+        if typedef.kind != "exception":
+            continue
+        candidate_key = (typedef.module_id, typedef.scope_path, typedef.name)
+        for depth, base in enumerate(type_table.ancestor_defs(candidate_key)):
+            base_key = (base.module_id, base.scope_path, base.name)
+            found.setdefault(base_key, []).append((depth, candidate_key))
+    result: dict[DeclKey, tuple[DeclKey, ...]] = {}
+    for base_key, entries in found.items():
+        entries.sort(key=_descendant_entry_depth)
+        result[base_key] = tuple(candidate for _depth, candidate in entries)
+    return result
+
+
+def _descendant_entry_depth(entry: tuple[int, DeclKey]) -> int:
+    """Order a ``_descendant_index`` entry by its distance from the queried base."""
+    return entry[0]
+
+
 def _relatives(
-    index: _MemberIndex, type_table: TypeTable, key: DeclKey
+    index: _MemberIndex,
+    type_table: TypeTable,
+    descendant_index: Mapping[DeclKey, tuple[DeclKey, ...]],
+    key: DeclKey,
 ) -> tuple[
     tuple[DeclKey, ...],
     tuple[DeclKey, ...],
@@ -125,9 +162,8 @@ def _relatives(
     )
     descendants = tuple(
         descendant_key
-        for descendant in type_table.descendant_defs(key)
-        if (descendant_key := (descendant.module_id, descendant.scope_path, descendant.name))
-        not in index.declared
+        for descendant_key in descendant_index.get(key, ())
+        if descendant_key not in index.declared
     )
     for relative in (*ancestors, *descendants):
         _index_registered_owner(index, type_table, relative)
@@ -189,8 +225,9 @@ def validate_method_declaration_collisions(
     declare, so a base declared after its descendants is rejected too.
     """
     index = _member_declarations(modules, type_table)
+    descendant_index = _descendant_index(type_table)
     for key in sorted(index.declared, key=_owner_sort_key):
-        ancestors, descendants = _relatives(index, type_table, key)
+        ancestors, descendants = _relatives(index, type_table, descendant_index, key)
         for name, same_named_members in index.members[key].items():
             if len(same_named_members) > 1:
                 _raise_collision(key, name, same_named_members[0], key, same_named_members[1])

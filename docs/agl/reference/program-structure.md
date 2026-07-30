@@ -45,8 +45,9 @@ any other declaration or expression. See [Modules](modules.md) and
 ### Named scope regions
 
 A named scope region is a module item containing nested regions, header `open`
-declarations, and static declarations. Its matching `scope`/`end` syntax,
-declaration paths, and visibility rules are described in [Named scopes](scopes.md).
+declarations, static declarations, and `let`/`var` bindings. Its matching
+`scope`/`end` syntax, declaration and binder paths, and visibility rules are
+described in [Named scopes](scopes.md).
 
 ### Declarations
 
@@ -81,6 +82,13 @@ region.
   may be **generic** (`def id[T](x: T) -> T = x`); see [Generics](generics.md).
   `builtin` introduces only the body-less `builtin def` form. Extern functions
   are file-backed-module only.
+- **Scoped `let`/`var` bindings** — a plain `let` or `var` is legal anywhere a
+  binder is. The scope-path-prefixed spelling (`let A::x = …`,
+  `var A::count = …`) declares a member of that scope instead, and the prefix
+  is legal only at the module root or inside a named scope region — the same
+  placement `def` and the type forms use. See
+  [Named scopes](scopes.md#binder-paths) for the complete spelling and
+  visibility rules.
 
 ### The block's value
 

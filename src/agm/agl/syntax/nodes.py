@@ -944,6 +944,10 @@ class ConstructorPattern:
     bound to the field with that name.  Positional must precede named (enforced
     by the transformer); the checker routes both through ``bind_arguments``.
     Partial patterns are allowed — unmentioned fields are wildcards.
+    ``has_argument_list`` records whether the source wrote an argument list
+    ``(...)`` after the name or qualifier chain — ``A::x`` and ``A::x()`` are
+    distinct nodes so a bare qualified pattern can be told apart from a
+    nullary qualified constructor pattern.
     """
 
     name: str
@@ -952,6 +956,7 @@ class ConstructorPattern:
     span: SourceSpan = dc_field(compare=False)
     node_id: int = dc_field(compare=False)
     qualifier: QualifierChain | None = None
+    has_argument_list: bool = False
 
 
 # Closed union of all pattern nodes.
@@ -1035,6 +1040,10 @@ class LetDecl:
     the AST itself makes no claim about later-stage execution support. ``node_id``
     identifies the let match site, not any individual binder; binder identities
     come from the pattern nodes.
+
+    ``scope_path`` is non-empty only for the ``let A::x = expr`` shorthand, which
+    the parser reinterprets from a root-position bare qualifier chain pattern;
+    ``pattern`` is then a plain ``VarPattern`` for the chain's member name.
     """
 
     pattern: Pattern
@@ -1042,6 +1051,7 @@ class LetDecl:
     value: Expr
     span: SourceSpan = dc_field(compare=False)
     node_id: int = dc_field(compare=False)
+    scope_path: tuple[ScopeSegment, ...] = ()
 
 
 def simple_let_pattern_name(pattern: Pattern) -> str | None:
@@ -1055,13 +1065,17 @@ def simple_let_pattern_name(pattern: Pattern) -> str | None:
 
 @dataclass(frozen=True, slots=True)
 class VarDecl:
-    """``var name [: type] = expr`` — mutable binding (scopes over continuation)."""
+    """``var [scope_path::]name [: type] = expr`` — mutable binding (scopes over continuation).
+
+    ``scope_path`` is non-empty for the ``var A::count = expr`` shorthand.
+    """
 
     name: str
     type_ann: TypeExpr | None
     value: Expr
     span: SourceSpan = dc_field(compare=False)
     node_id: int = dc_field(compare=False)
+    scope_path: tuple[ScopeSegment, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -1322,10 +1336,19 @@ Declaration = (
 # Item unions
 # ---------------------------------------------------------------------------
 
-# Scope-region items are static declarations or nested regions. The parser
-# enforces this restricted subset before it crosses the AST firewall.
+# Scope-region items are static declarations, value bindings, or nested regions.
+# The parser enforces this restricted subset before it crosses the AST firewall.
 ScopeItem = (
-    ScopeRegion | OpenDecl | FuncDef | RecordDef | EnumDef | ExceptionDef | TypeAlias | AgentDecl
+    ScopeRegion
+    | OpenDecl
+    | FuncDef
+    | RecordDef
+    | EnumDef
+    | ExceptionDef
+    | TypeAlias
+    | AgentDecl
+    | LetDecl
+    | VarDecl
 )
 
 # An item is anything that can appear in a block sequence:

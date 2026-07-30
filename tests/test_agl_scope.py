@@ -103,6 +103,7 @@ def _find_varref(program: object, name: str, occurrence: int = -1) -> VarRef:
         IsTest,
         ParamDecl,
         Raise,
+        ScopeRegion,
         UnaryNeg,
         UnaryNot,
     )
@@ -117,6 +118,9 @@ def _find_varref(program: object, name: str, occurrence: int = -1) -> VarRef:
         if isinstance(node, Program):
             walk(node.body)
         elif isinstance(node, Block):
+            for item in node.items:
+                walk(item)
+        elif isinstance(node, ScopeRegion):
             for item in node.items:
                 walk(item)
         elif isinstance(node, FuncDef):
@@ -423,6 +427,176 @@ class TestScopeRegions:
 
     def test_enum_member_spelling_can_be_claimed_in_its_enclosing_scope(self) -> None:
         parse_and_resolve("enum Point = origin\ndef origin() -> int = 0\n()")
+
+
+# ---------------------------------------------------------------------------
+# Scoped `let`/`var` bindings — members, not lexical bindings
+# ---------------------------------------------------------------------------
+
+
+class TestScopedBindings:
+    """A `let`/`var` with a scope path is a member of that path, not a local binding.
+
+    Region form (``scope A / let x = 1 / end A``) and root shorthand
+    (``let A::x = 1``) declare the same member and share every rule below.
+    """
+
+    def test_bare_visible_inside_its_own_region(self) -> None:
+        resolved = parse_and_resolve("scope A\nlet x = 1\ndef read() -> int = x\nend A\nA::read()")
+        assert _ref(resolved, "x").kind is BinderKind.let_binding
+        assert _ref(resolved, "x").scope_path == ("A",)
+
+    def test_bare_visible_from_a_nested_region_via_the_outward_walk(self) -> None:
+        resolved = parse_and_resolve(
+            "scope A\nlet x = 1\nscope B\ndef read() -> int = x\nend B\nend A\nA::B::read()"
+        )
+        assert _ref(resolved, "x").kind is BinderKind.let_binding
+
+    def test_double_colon_anchors_at_the_module_root_from_inside_a_region(self) -> None:
+        resolved = parse_and_resolve(
+            "let x = 1\nscope A\nlet x = 2\ndef read() -> int = ::x\nend A\nA::read()"
+        )
+        assert _ref(resolved, "x").scope_path == ()
+
+    def test_exact_path_reference_from_outside_the_region(self) -> None:
+        resolved = parse_and_resolve("scope A\nlet x = 1\nend A\nlet y = A::x\ny")
+        assert _ref(resolved, "x").scope_path == ("A",)
+        assert _ref(resolved, "x").kind is BinderKind.let_binding
+
+    def test_shorthand_rhs_sees_an_earlier_regions_member_bare(self) -> None:
+        """A root shorthand's RHS resolves in its own scope path's layer."""
+        resolved = parse_and_resolve(
+            "scope A\nlet base = 1\nend A\nvar A::next = base + 1\nA::next"
+        )
+        assert set(resolved.scope_nodes[("A",)].members) == {"base", "next"}
+        assert _ref(resolved, "base").scope_path == ("A",)
+
+    def test_region_sees_an_earlier_shorthands_member_bare(self) -> None:
+        resolved = parse_and_resolve(
+            "let A::base = 1\nscope A\ndef read() -> int = base\nend A\nA::read()"
+        )
+        assert set(resolved.scope_nodes[("A",)].members) == {"base", "read"}
+
+    def test_repeated_region_blocks_extend_the_same_scope(self) -> None:
+        resolved = parse_and_resolve("scope A\nlet x = 1\nend A\nscope A\nlet y = x\nend A\n()")
+        assert set(resolved.scope_nodes[("A",)].members) == {"x", "y"}
+
+    @pytest.mark.parametrize(
+        "source",
+        (
+            "scope A\ndef f() -> int = 0\nlet f = 1\nend A\n()",
+            "scope A\nlet x = 1\nlet x = 2\nend A\n()",
+            "scope A\nrecord R()\nlet R = 1\nend A\n()",
+            "scope A\nvar x = 1\nvar x = 2\nend A\n()",
+        ),
+        ids=("binding-vs-def", "binding-vs-binding", "binding-vs-type", "binding-vs-binding-var"),
+    )
+    def test_binding_duplicate_at_the_same_path_is_rejected(self, source: str) -> None:
+        err = reject_scope(source)
+        assert "already declared" in err.to_diagnostic().message
+
+    @pytest.mark.parametrize(
+        "source",
+        (
+            "scope A\nlet B = 1\nscope B\ndef q() -> int = 2\nend B\nend A\n()",
+            "scope A\nscope B\ndef q() -> int = 2\nend B\nlet B = 1\nend A\n()",
+            "scope A\ndef B() -> int = 1\nscope B\ndef q() -> int = 2\nend B\nend A\n()",
+            "scope A\nscope B\ndef q() -> int = 2\nend B\ndef B() -> int = 1\nend A\n()",
+            "let A::B = 1\nscope A\nscope B\ndef q() -> int = 2\nend B\nend A\n()",
+            "scope A\nscope B\ndef q() -> int = 2\nend B\nend A\nlet A::B = 1\n()",
+        ),
+        ids=(
+            "region-let-before-nested-scope",
+            "region-nested-scope-before-let",
+            "region-def-before-nested-scope",
+            "region-nested-scope-before-def",
+            "shorthand-let-before-nested-scope",
+            "nested-scope-before-shorthand-let",
+        ),
+    )
+    def test_binding_collides_with_a_nested_scope_layer(self, source: str) -> None:
+        """A member cannot claim a name already owned by a nested scope layer.
+
+        ``def B`` colliding with a sibling ``scope B`` is a pre-existing,
+        correctly-rejected case, included here to pin parity with the
+        ``let``/``var`` binding forms across both textual orders.
+        """
+        err = reject_scope(source)
+        assert "already declared" in err.to_diagnostic().message
+
+    def test_earlier_block_cannot_see_a_later_blocks_binding(self) -> None:
+        with pytest.raises(AglScopeError):
+            parse_and_resolve(
+                "scope A\ndef f() -> int = A::y\nend A\nscope A\nlet y = 1\nend A\nA::f()"
+            )
+
+    def test_reverse_order_of_repeated_blocks_succeeds(self) -> None:
+        resolved = parse_and_resolve(
+            "scope A\nlet y = 1\nend A\nscope A\ndef f() -> int = A::y\nend A\nA::f()"
+        )
+        assert set(resolved.scope_nodes[("A",)].members) == {"y", "f"}
+
+    def test_reference_textually_before_a_shorthand_binding_is_rejected(self) -> None:
+        with pytest.raises(AglScopeError):
+            parse_and_resolve("def f() -> int = A::x\nlet A::x = 1\nf()")
+
+    def test_destructuring_let_in_a_region_contributes_every_selected_binder(self) -> None:
+        resolved = parse_and_resolve(
+            "scope A\n"
+            "record Point\n"
+            "  x: int\n"
+            "  y: int\n"
+            "let Point(x, y) = Point(x = 1, y = 2)\n"
+            "end A\n"
+            "A::x\n"
+            "A::y\n"
+        )
+        members = resolved.scope_nodes[("A",)].members
+        assert members["x"].kind is BinderKind.pattern_slot
+        assert members["y"].kind is BinderKind.pattern_slot
+
+    @pytest.mark.parametrize("keyword", ("let", "var"))
+    def test_binder_path_in_a_nested_block_is_rejected(self, keyword: str) -> None:
+        with pytest.raises(AglScopeError):
+            parse_and_resolve(f"if true =>\n  {keyword} A::x = 1\n  x\n| else =>\n  0\n")
+
+    def test_multi_segment_scoped_let_and_var(self) -> None:
+        resolved = parse_and_resolve("let A::B::x = 1\nvar A::B::y = 2\nA::B::x\nA::B::y")
+        assert set(resolved.scope_nodes[("A", "B")].members) == {"x", "y"}
+        assert resolved.scope_nodes[("A", "B")].parent is resolved.scope_nodes[("A",)]
+
+
+class TestScopedBindingOpenPrecedence:
+    """`open` contributes a scope's members bare as of its own textual position.
+
+    A local ``open`` snapshots ``ScopeNode.members`` when it is walked. A
+    declaration (``def``/type/``agent``) is fully collected in the pre-pass, so
+    every ``open`` sees it regardless of order; a scoped binder is registered
+    only when the walk reaches it, so an ``open`` textually before the block
+    that declares a binding misses it, and textual precedence holds through
+    ``open`` with no dedicated check.
+    """
+
+    def test_open_before_the_binding_does_not_see_it(self) -> None:
+        with pytest.raises(AglScopeError):
+            parse_and_resolve(
+                "scope B\nopen A\ndef get() -> int = x\nend B\nscope A\nlet x = 1\nend A\nB::get()"
+            )
+
+    def test_open_after_the_binding_sees_it(self) -> None:
+        resolved = parse_and_resolve(
+            "scope A\nlet x = 1\nend A\nscope B\nopen A\ndef get() -> int = x\nend B\nB::get()"
+        )
+        assert _ref(resolved, "x").scope_path == ("A",)
+
+    def test_open_before_a_declaration_still_sees_it(self) -> None:
+        """Declarations stay order-independent even when opened before their block."""
+        resolved = parse_and_resolve(
+            "scope B\nopen A\ndef get() -> int = f()\nend B\n"
+            "scope A\ndef f() -> int = 0\nend A\n"
+            "B::get()"
+        )
+        assert _ref(resolved, "f").scope_path == ("A",)
 
 
 class TestOpenedScopeEnumOwners:

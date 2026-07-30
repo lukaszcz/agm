@@ -901,8 +901,7 @@ class TestScopeRegions:
         (
             "1",
             "1 + 2",
-            "let value = 1",
-            "var value = 1",
+            "value := 1",
             "infixl %%",
             "import package",
             "export package",
@@ -913,8 +912,7 @@ class TestScopeRegions:
         ids=(
             "expression",
             "infix-expression",
-            "let",
-            "var",
+            "assignment",
             "infix",
             "import",
             "export",
@@ -926,6 +924,15 @@ class TestScopeRegions:
     def test_region_rejects_non_declaration_items(self, item: str) -> None:
         with pytest.raises(AglSyntaxError, match="scope regions"):
             parse(f"scope Point\n{item}\nend Point")
+
+    @pytest.mark.parametrize("item", ("let value = 1", "var value = 1"))
+    def test_region_admits_let_and_var(self, item: str) -> None:
+        region = first(parse(f"scope Point\n{item}\nend Point"))
+
+        assert isinstance(region, ScopeRegion)
+        (member,) = region.items
+        assert isinstance(member, (LetDecl, VarDecl))
+        assert [segment.name for segment in member.scope_path] == ["Point"]
 
     def test_region_preserves_end_identifiers_in_declaration_suites(self) -> None:
         region = first(
@@ -2569,6 +2576,79 @@ class TestPatterns:
         assert isinstance(pat, ConstructorPattern)
         assert pat.qualifier is not None
         assert pat.qualifier.route_segments == ("Review",)
+
+    # -----------------------------------------------------------------
+    # Regression: pattern_atom split of the qualified alternative (has_argument_list)
+    # -----------------------------------------------------------------
+
+    @staticmethod
+    def _first_case_pattern(source: str) -> object:
+        expr = first(parse(source))
+        assert isinstance(expr, Case)
+        return expr.branches[0].pattern
+
+    def test_bare_qualified_pattern_has_no_argument_list(self) -> None:
+        pat = self._first_case_pattern("case r of | Review::Pass => ok")
+        assert isinstance(pat, ConstructorPattern)
+        assert pat.has_argument_list is False
+
+    def test_qualified_nullary_pattern_with_parens_has_an_argument_list(self) -> None:
+        pat = self._first_case_pattern("case r of | Review::Pass() => ok")
+        assert isinstance(pat, ConstructorPattern)
+        assert pat.has_argument_list is True
+
+    def test_bare_and_parenthesized_qualified_patterns_are_unequal(self) -> None:
+        bare = self._first_case_pattern("case r of | Review::Pass => ok")
+        parenthesized = self._first_case_pattern("case r of | Review::Pass() => ok")
+        assert bare != parenthesized
+
+    def test_unqualified_constructor_pattern_always_has_an_argument_list(self) -> None:
+        """Unqualified constructor patterns are only reachable through parens
+        (`pat_constructor` requires `LPAR ... RPAR`), so this is always True."""
+        pat = self._first_case_pattern("case r of | None() => ok")
+        assert isinstance(pat, ConstructorPattern)
+        assert pat.has_argument_list is True
+
+    def test_qualified_nullary_pattern_with_fields_has_an_argument_list(self) -> None:
+        pat = self._first_case_pattern("case r of | Issue::Fail(issues) => ok")
+        assert isinstance(pat, ConstructorPattern)
+        assert pat.has_argument_list is True
+        assert len(pat.positional) == 1
+
+    def test_bare_qualified_pattern_nested_in_a_field(self) -> None:
+        pat = self._first_case_pattern("case r of | Outer(inner = Review::Pass) => ok")
+        assert isinstance(pat, ConstructorPattern)
+        nested = pat.named[0].pattern
+        assert isinstance(nested, ConstructorPattern)
+        assert nested.qualifier is not None
+        assert nested.has_argument_list is False
+
+    def test_bare_qualified_pattern_under_an_as_binder(self) -> None:
+        pat = self._first_case_pattern("case r of | Review::Pass as p => p")
+        assert isinstance(pat, AsPattern)
+        assert isinstance(pat.pattern, ConstructorPattern)
+        assert pat.pattern.has_argument_list is False
+
+    def test_root_anchored_bare_qualified_pattern(self) -> None:
+        pat = self._first_case_pattern("case r of | ::Pass => ok")
+        assert isinstance(pat, ConstructorPattern)
+        assert pat.qualifier is not None
+        assert pat.qualifier.route_segments == ()
+        assert pat.has_argument_list is False
+
+    def test_type_applied_qualified_pattern_still_parses(self) -> None:
+        pat = self._first_case_pattern("case r of | Box[int]::Pass => ok")
+        assert isinstance(pat, ConstructorPattern)
+        assert pat.qualifier is not None
+        assert pat.qualifier.segments[0].type_args is not None
+        assert pat.has_argument_list is False
+
+    def test_module_route_qualified_pattern_still_parses(self) -> None:
+        pat = self._first_case_pattern("case r of | std/config::Pass => ok")
+        assert isinstance(pat, ConstructorPattern)
+        assert pat.qualifier is not None
+        assert pat.qualifier.route_segments == ("std", "config")
+        assert pat.has_argument_list is False
 
 
 # ---------------------------------------------------------------------------

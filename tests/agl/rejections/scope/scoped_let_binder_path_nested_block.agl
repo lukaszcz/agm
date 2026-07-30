@@ -1,0 +1,3 @@
+if true =>
+  let A::x = 1
+  x

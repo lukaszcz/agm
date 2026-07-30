@@ -988,6 +988,34 @@ class TestDeclarationOnly:
         with pytest.raises(AglScopeError):
             resolve_program(graph)
 
+    def test_scoped_let_in_non_entry_region_errors(self, tmp_path: Path) -> None:
+        """A scoped 'let' inside a region in a non-entry module is an error.
+
+        The library-module ban tests position, not scope path, so a binder
+        inside a region is rejected exactly like one at plain top level.
+        """
+        graph = _make_graph_from_files(
+            tmp_path,
+            {
+                "entry": "open import mylib\n()",
+                "mylib": "scope Team\nlet x = 1\nend Team",
+            },
+        )
+        with pytest.raises(AglScopeError):
+            resolve_program(graph)
+
+    def test_scoped_var_in_non_entry_region_errors(self, tmp_path: Path) -> None:
+        """A scoped 'var' inside a region in a non-entry module is an error."""
+        graph = _make_graph_from_files(
+            tmp_path,
+            {
+                "entry": "open import mylib\n()",
+                "mylib": "scope Team\nvar x = 1\nend Team",
+            },
+        )
+        with pytest.raises(AglScopeError):
+            resolve_program(graph)
+
     def test_bare_expr_in_non_entry_errors(self, tmp_path: Path) -> None:
         """A bare expression in a non-entry module is an error."""
         graph = _make_graph_from_files(

@@ -46,7 +46,7 @@ normal binding.  A bare ``VarRef("print")`` (not in call position) raises
 
 from __future__ import annotations
 
-from collections.abc import Collection, Iterable, Iterator, Mapping
+from collections.abc import Callable, Collection, Iterable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from functools import partial
@@ -529,6 +529,15 @@ class _Resolver:
             path = tuple(segment.name for segment in item.scope_path)
             self._ensure_scope_path(path, item.node_id, item.span)
             self._register_declaration(item, path)
+            return
+        if isinstance(item, (LetDecl, VarDecl)) and item.scope_path:
+            # A binder's scope layer is order-independent even though its
+            # membership is not: create the path here so a binder with no
+            # sibling declaration still gets a scope node, but leave the
+            # member itself to be registered during the body walk, which is
+            # what makes textual precedence fall out of the mechanism.
+            path = tuple(segment.name for segment in item.scope_path)
+            self._ensure_scope_path(path, item.node_id, item.span)
 
     def _ensure_scope_path(self, path: ScopePath, node_id: int, span: SourceSpan) -> None:
         """Create every scope layer in *path*, rejecting ordinary-name clashes."""
@@ -1368,13 +1377,38 @@ class _Resolver:
     def _define(self, name: str, ref: BindingRef) -> None:
         """Define *name* in the current scope; error on redeclaration.
 
-        A declaration may claim the bare spelling of a constructor declared in
-        another module (e.g. the prelude ``Retry``/``ExecResult`` names) or of a
-        same-module enum variant, since ``Owner::variant`` and a qualified
-        module path still reach those.  A same-module record, exception, or
-        alias constructor declares the bare name itself, so it collides.
+        A named scope's own body — reached while resolving a scope region or
+        the pushed layer of a root-position binder-path shorthand — is a
+        members layer, not a lexical bindings layer: a binder resolved there
+        is registered into ``members`` instead, so it becomes a member
+        reachable both bare (inside, via the outward walk) and by path
+        (outside). It is checked and recorded against the same
+        ``_scope_entity_kinds`` registry every other member at that path
+        uses (declarations in the pre-pass, nested scope layers via
+        ``_ensure_scope_path``), so one check governs collisions between a
+        binding and a ``def``, a type, or a nested scope at the same path,
+        regardless of textual order. This is the only reachable site:
+        parameters, pattern/catch binders, and loop variables always resolve
+        inside a fresh child scope with an empty path.
+
+        At the true root, a declaration may claim the bare spelling of a
+        constructor declared in another module (e.g. the prelude
+        ``Retry``/``ExecResult`` names) or of a same-module enum variant,
+        since ``Owner::variant`` and a qualified module path still reach
+        those.  A same-module record, exception, or alias constructor
+        declares the bare name itself, so it collides.
         """
         scope = self._current_scope()
+        if scope.scope_path:
+            key = (self._module_id, scope.scope_path, name)
+            if name in scope.members or self._scope_entity_kinds.get(key) is not None:
+                raise AglScopeError(
+                    f"Name '{name}' is already declared in this scope.",
+                    span=ref.decl_span,
+                )
+            self._scope_entity_kinds[key] = "ordinary"
+            scope.members[name] = replace(ref, scope_path=scope.scope_path)
+            return
         existing = scope.bindings.get(name)
         if existing is not None and (
             existing.kind is not BinderKind.constructor_binding
@@ -1802,7 +1836,34 @@ class _Resolver:
     # Binder handlers
     # ------------------------------------------------------------------
 
+    def _resolve_root_scoped_binder(
+        self, node: LetDecl | VarDecl, keyword: str, resolve_body: Callable[[], None]
+    ) -> None:
+        """Resolve a scoped ``let``/``var`` binder path, root-only like ``def``.
+
+        A path prefix is legal at the program root and inside a scope
+        region's own body — both keep ``_at_root`` set, since a region does
+        not open a fresh lexical block — and rejected inside a nested block.
+        Both spellings resolve *resolve_body* in the named layer their path
+        selects, so a region's bare contents and a root shorthand for the
+        same path compose identically.
+        """
+        if not self._at_root:
+            raise AglScopeError(
+                f"A scoped '{keyword}' binder path is only allowed at the program root, "
+                f"not inside a nested block.",
+                span=node.span,
+            )
+        with self._named_scope(tuple(segment.name for segment in node.scope_path)):
+            resolve_body()
+
     def _resolve_let(self, node: LetDecl) -> None:
+        if node.scope_path:
+            self._resolve_root_scoped_binder(node, "let", lambda: self._resolve_let_body(node))
+            return
+        self._resolve_let_body(node)
+
+    def _resolve_let_body(self, node: LetDecl) -> None:
         # A let initializer is non-recursive: no part of its pattern exists
         # until its RHS has resolved. A simple name is still a pattern binder;
         # only its slot handling differs from a broader pattern.
@@ -1826,6 +1887,12 @@ class _Resolver:
             self._bind_pattern_vars(node.pattern, self._current_scope(), _LET_PATTERN_POLICY)
 
     def _resolve_var(self, node: VarDecl) -> None:
+        if node.scope_path:
+            self._resolve_root_scoped_binder(node, "var", lambda: self._resolve_var_body(node))
+            return
+        self._resolve_var_body(node)
+
+    def _resolve_var_body(self, node: VarDecl) -> None:
         self._check_not_reserved(node.name, node.span)
         # Resolve RHS before defining the name (lambda non-recursion).
         self._resolve_expr(node.value)
@@ -1924,7 +1991,7 @@ class _Resolver:
         self._resolve_expr(node.value)
 
     def _resolve_param(self, node: ParamDecl) -> None:
-        if not self._at_root:
+        if not self._at_root or self._current_scope().scope_path:
             raise AglScopeError(
                 f"'param' declarations are only allowed at the program root, "
                 f"not inside a nested block (found 'param {node.name}' here).",

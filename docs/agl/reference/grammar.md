@@ -59,15 +59,17 @@ scope_item   ::= scope_region | open_decl
                | record_def | enum_def | exception_def | type_alias
                | func_def | extern_func_def
                | agent_decl
+               | let_decl | var_decl
 ```
 
 A scope region has a mandatory matching closer: `scope A::B` closes with
 `end A::B`. Regions may appear only as module-root items or as items of another
 scope region. They may nest, and a multi-segment header is equivalent to
 nested single-segment regions. Scope
-regions contain only nested regions, header `open` declarations, and static
-declarations; bindings, expressions, `builtin` declarations, infix declarations,
-imports, exports, `program`, and `param` declarations are not permitted. `scope` is contextual at item start before a
+regions contain nested regions, header `open` declarations, static
+declarations, and `let`/`var` bindings; bare expressions, `:=` assignments,
+`builtin` declarations, infix declarations, imports, exports, `program`, and
+`param` declarations are not permitted. `scope` is contextual at item start before a
 scope path, and `end` is contextual only for a complete closer at an open
 region's layout level; both remain ordinary names in expression positions.
 
@@ -346,7 +348,7 @@ previously declared user operator.
 
 ```ebnf
 let_decl       ::= "let" pattern type_ann? "=" expr
-var_decl       ::= "var" name type_ann? "=" expr
+var_decl       ::= "var" decl_head type_ann? "=" expr
 builtin_var_def ::= "builtin" NEWLINE? "var" name type_ann  (* body-less; std/config only *)
 assign_stmt ::= assign_target ":=" expr
 assign_target ::= qualifier_chain? name
@@ -357,6 +359,14 @@ A `builtin var` is a body-less, host-backed mutable binding with a mandatory
 type and no initializer; the `builtin` modifier may sit on the same line or the
 line directly above (like `builtin def`). It may be declared only at the root of
 `std/config`; entry modules and other library modules cannot declare one.
+
+`var`'s `decl_head` accepts the same optional scope-path prefix as the type
+declarations above (`var A::count = 0`). `let` needs no separate grammar for
+its own shorthand: a `pattern` that is exactly a bare qualifier chain
+spellable as a declaration head (no argument list, no `as` binder, and
+otherwise a plain, non-`::`-anchored name chain) declares a scoped binding
+instead of matching a pattern — see [Bindings and scope](bindings-and-scope.md)
+for the full disambiguation.
 
 Assignment has type `unit` and returns `void`. A bare (non-indexed) cross-module
 assignment target — written with a qualifier, or bare when an open import puts
@@ -438,7 +448,7 @@ try_body          ::= suite | (marked_item ";")* try_tail
 try_tail          ::= or_expr | inline_assign | try_letvar_decl | raise_expr
                     | return_expr | if_expr | case_expr | loop
 try_letvar_decl   ::= "let" pattern type_ann? "=" try_value
-                    | "var" name type_ann? "=" try_value
+                    | "var" decl_head type_ann? "=" try_value
 try_value         ::= or_expr | raise_expr | return_expr | if_expr | case_expr | loop
 catch_clause      ::= "catch" catch_pattern "=>" branch_body
 catch_pattern     ::= name ("as" name)?
@@ -460,7 +470,8 @@ pattern_atom   ::= "_"
                  | INT | DECIMAL | "true" | "false" | "null" | STRING
                  | name
                  | name "(" pattern_fields? ")"
-                 | qualifier_chain name ("(" pattern_fields? ")")?
+                 | qualifier_chain name
+                 | qualifier_chain name "(" pattern_fields? ")"
 pattern_fields ::= pattern_field ("," pattern_field)* ","?
 pattern_field  ::= pattern              (* positional sub-pattern *)
                  | field_name "=" pattern
@@ -475,7 +486,10 @@ A qualified variant pattern (`Option::some(value)`,
 `module::Option::some(value)`, or `/module::Option::some(value)`) names the
 owning enum and variant with `::`. A leading `/` is an anchored qualifier;
 without it, the qualifier is resolved as a suffix. The complete qualifier
-through `::` is byte-adjacent.
+through `::` is byte-adjacent. A qualified pattern's argument list is
+optional (`Option::none` and `Option::none()` are both nullary matches) except
+at the root of a `let` pattern, where writing it or not distinguishes a match
+from a scoped binding — see [Bindings and scope](bindings-and-scope.md).
 Unqualified constructor ownership is selected by the scrutinee's static nominal
 type, even when multiple enums share a variant name or a record constructor
 spelling collides with an enum variant; a qualifier is optional and must agree

@@ -1,0 +1,3 @@
+scope Point
+builtin def native() -> int
+end Point

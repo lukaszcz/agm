@@ -12,16 +12,21 @@ from agm.agl.parser import AglSyntaxError, parse_program
 from agm.agl.scope import AglScopeError, resolve_module
 from agm.agl.syntax import (
     AgentDecl,
+    AsPattern,
+    ConstructorPattern,
     EnumDef,
     ExceptionDef,
     ExportDecl,
     FuncDef,
     ImportDecl,
+    LetDecl,
     OpenDecl,
     RecordDef,
     ScopeRegion,
     ScopeSegment,
     TypeAlias,
+    VarDecl,
+    VarPattern,
 )
 from tests.agl.ir_harness import write_module_file
 
@@ -103,6 +108,133 @@ def test_nested_region_declarations_accumulate_the_enclosing_scope_path() -> Non
     (declaration,) = inner.items
     assert isinstance(declaration, FuncDef)
     assert [segment.name for segment in declaration.scope_path] == ["A", "B", "C"]
+
+
+# ---------------------------------------------------------------------------
+# `let`/`var` binder paths
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("source", "kind", "name", "path"),
+    (
+        ("let A::x = 1", LetDecl, "x", ["A"]),
+        ("var A::count = 0", VarDecl, "count", ["A"]),
+        ("let A::B::x = 1", LetDecl, "x", ["A", "B"]),
+        ("var A::B::c = 0", VarDecl, "c", ["A", "B"]),
+    ),
+)
+def test_let_and_var_accept_root_scope_path_shorthand(
+    source: str, kind: type[object], name: str, path: list[str]
+) -> None:
+    declaration = _declaration(source)
+
+    assert isinstance(declaration, kind)
+    assert [segment.name for segment in declaration.scope_path] == path
+    if isinstance(declaration, LetDecl):
+        assert isinstance(declaration.pattern, VarPattern)
+        assert declaration.pattern.name == name
+    else:
+        assert declaration.name == name
+
+
+@pytest.mark.parametrize(
+    ("source", "kind"),
+    (
+        ("let value = 1", LetDecl),
+        ("var value = 0", VarDecl),
+    ),
+)
+def test_let_and_var_are_admitted_inside_a_scope_region(source: str, kind: type[object]) -> None:
+    program = parse_program(f"scope Config\n{source}\nend Config")
+
+    (region,) = program.body.items
+    assert isinstance(region, ScopeRegion)
+    (member,) = region.items
+    assert isinstance(member, kind)
+    assert [segment.name for segment in member.scope_path] == ["Config"]
+
+
+def test_let_and_var_accumulate_scope_path_across_nested_regions() -> None:
+    program = parse_program("scope A\nscope B\nlet retries = 3\nvar attempts = 0\nend B\nend A")
+
+    (outer,) = program.body.items
+    assert isinstance(outer, ScopeRegion)
+    (inner,) = outer.items
+    assert isinstance(inner, ScopeRegion)
+    let_member, var_member = inner.items
+    assert isinstance(let_member, LetDecl)
+    assert isinstance(var_member, VarDecl)
+    assert [segment.name for segment in let_member.scope_path] == ["A", "B"]
+    assert [segment.name for segment in var_member.scope_path] == ["A", "B"]
+
+
+def test_let_binder_path_shorthand_combines_with_enclosing_region_path() -> None:
+    program = parse_program("scope Outer\nlet Inner::x = 1\nend Outer")
+
+    (region,) = program.body.items
+    assert isinstance(region, ScopeRegion)
+    (member,) = region.items
+    assert isinstance(member, LetDecl)
+    assert isinstance(member.pattern, VarPattern)
+    assert member.pattern.name == "x"
+    assert [segment.name for segment in member.scope_path] == ["Outer", "Inner"]
+
+
+@pytest.mark.parametrize(
+    ("source", "pattern_kind", "scope_path"),
+    (
+        # `let A::x = e` — a chain spellable as a declaration head reinterprets
+        # as a scoped binding.
+        ("let A::x = e", VarPattern, ("A",)),
+        # `let A::x() = e` — an explicit (empty) argument list forces a
+        # nullary qualified constructor pattern.
+        ("let A::x() = e", ConstructorPattern, ()),
+        # `let A::x(a, b) = e` — a constructor pattern with fields.
+        ("let A::x(a, b) = e", ConstructorPattern, ()),
+        # `let A::x as y = e` — an `as` binder always wraps a match pattern.
+        ("let A::x as y = e", AsPattern, ()),
+        # `let x = e` — an unqualified name is an ordinary root binding.
+        ("let x = e", VarPattern, ()),
+        # A `::`-anchored chain is not spellable as a declaration head, so it
+        # keeps its constructor-pattern meaning.
+        ("let ::x = e", ConstructorPattern, ()),
+        ("let ::A::x = e", ConstructorPattern, ()),
+        # A module-routed segment is not spellable as a declaration head
+        # either, so it too keeps its constructor-pattern meaning.
+        ("let std/config::retries = e", ConstructorPattern, ()),
+        ("let config::A/B::retries = e", ConstructorPattern, ()),
+        # A type-argument-applied segment likewise keeps its pattern meaning.
+        ("let Box[int]::v = e", ConstructorPattern, ()),
+    ),
+)
+def test_let_disambiguation_table(
+    source: str, pattern_kind: type[object], scope_path: tuple[str, ...]
+) -> None:
+    declaration = _declaration(source)
+
+    assert isinstance(declaration, LetDecl)
+    assert isinstance(declaration.pattern, pattern_kind)
+    assert [segment.name for segment in declaration.scope_path] == list(scope_path)
+
+
+def test_let_as_binder_is_never_reinterpreted_as_a_scoped_binding() -> None:
+    declaration = _declaration("let A::x as y = e")
+
+    assert isinstance(declaration, LetDecl)
+    assert isinstance(declaration.pattern, AsPattern)
+    assert declaration.pattern.name == "y"
+    assert declaration.scope_path == ()
+
+
+def test_var_binder_path_rejects_a_module_route_segment() -> None:
+    with pytest.raises(AglSyntaxError, match="'::'"):
+        parse_program("var std/config::retries = 0")
+
+
+def test_var_binder_path_rejects_a_type_applied_segment() -> None:
+    with pytest.raises(AglSyntaxError):
+        parse_program("var A[int]::x = 0")
 
 
 @pytest.mark.parametrize(

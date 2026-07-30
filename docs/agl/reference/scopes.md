@@ -44,11 +44,62 @@ def Text::display(value: text) -> text = "[%{normalize(value)}]"
 print(Text::display("ready"))
 ```
 
-A region contains only nested regions, `open` declarations, and static
-declarations: `def`, `extern def`, `record`, `enum`, `exception`, `type`, and,
-in an entry module, `agent`. Bindings, expressions, imports, exports,
-parameters, program declarations, infix declarations, and `builtin`
-declarations are not allowed there.
+A region contains nested regions, `open` declarations, static declarations
+(`def`, `extern def`, `record`, `enum`, `exception`, `type`, and, in an entry
+module, `agent`), and `let`/`var` bindings. Bare expressions, `:=`
+assignments, imports, exports, parameters, program declarations, infix
+declarations, and `builtin` declarations are not allowed there.
+
+## Binder paths
+
+A region admits `let` and `var` bindings alongside its static declarations:
+
+```agl
+scope Config
+let retries = 3
+var attempts = 0
+end Config
+```
+
+`let` and `var` also accept a scope-path prefix on a single-name binder at the
+module root, declaring a binding at that path directly — the same
+declaration-path shorthand available for `def` and the type forms:
+
+```agl
+let Config::retries = 3
+var Config::attempts = 0
+```
+
+A `let` pattern written as a plain qualifier chain — one or more `::`-separated
+name segments, not anchored at the module root — declares a scoped binding
+rather than matching a pattern: it is exactly the chain a declaration path
+could spell. Writing an argument list, even an empty one, an `as` binder, a
+module route, a type-argument-applied segment, or a `::` anchor keeps the
+pattern's ordinary match meaning:
+
+| Spelling | Meaning |
+|---|---|
+| `let A::x = e` | scoped binding `A::x` |
+| `let A::x() = e` | nullary constructor pattern, qualified |
+| `let A::x(a, b) = e` | constructor pattern with fields |
+| `let A::x as y = e` | constructor pattern bound to `y` |
+| `let x = e` | root binding |
+| `let ::x = e` | constructor pattern, anchored at the module root |
+
+The path prefix names a single binder, so it has no destructuring spelling.
+Written inside a region instead, a destructuring `let` binds every name its
+pattern selects as a member of that scope:
+
+```agl
+record Bounds(low: int, high: int)
+
+scope Config
+let Bounds(low, high) = Bounds(low = 0, high = 10)
+end Config
+
+print(Config::low)
+print(Config::high)
+```
 
 ## Names and visibility
 
@@ -56,6 +107,17 @@ A declaration belongs to its complete scope path. Members of the same scope are
 visible by their bare names within that scope; enclosing scopes are considered
 outward, then the module root and imported bare names. `::name` starts at the
 module root, so it bypasses a nearer scoped member.
+
+A static declaration (`def`, a type, an `agent`) is visible throughout its
+scope regardless of textual order, matching the module root, where a `def` may
+call another declared later in the same file. A `let` or `var` binding is
+different: it is visible only to references that follow it textually, in its
+own region or elsewhere in the module — exactly like a root-level `let`. This
+holds across separate blocks of the same scope: a member declared in an
+earlier `scope A` block cannot see a binding a later `scope A` block
+introduces, while the reverse order works. `open`ing a scope before one of its
+bindings is declared does not retroactively expose that binding; opening it
+afterward does.
 
 Outside a scope, qualify a member with its exact path. Scope paths never use
 suffix matching: `Outer::Inner::work` does not make `Inner::work` available at

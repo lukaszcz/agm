@@ -1126,6 +1126,7 @@ class TestBinders:
             "value",
             "span",
             "node_id",
+            "scope_path",
         )
 
     def test_let_decl_with_pattern_and_type_is_frozen_and_structurally_equal(self) -> None:
@@ -1155,6 +1156,34 @@ class TestBinders:
         val = IntLit(value=0, span=self._s(), node_id=2)
         node = VarDecl(name="count", type_ann=None, value=val, span=self._s(), node_id=1)
         assert node.name == "count"
+
+    def test_let_and_var_decl_scope_path_defaults_to_empty(self) -> None:
+        val = IntLit(value=0, span=self._s(), node_id=2)
+        pattern = VarPattern(name="x", span=self._s(), node_id=3)
+        let_node = LetDecl(pattern=pattern, type_ann=None, value=val, span=self._s(), node_id=1)
+        var_node = VarDecl(name="x", type_ann=None, value=val, span=self._s(), node_id=1)
+        assert let_node.scope_path == ()
+        assert var_node.scope_path == ()
+
+    def test_let_and_var_decl_scope_path_participates_in_equality(self) -> None:
+        val = IntLit(value=0, span=self._s(), node_id=2)
+        pattern = VarPattern(name="x", span=self._s(), node_id=3)
+        segment = ScopeSegment(name="A", span=self._s(), node_id=4)
+        plain_let = LetDecl(pattern=pattern, type_ann=None, value=val, span=self._s(), node_id=1)
+        scoped_let = LetDecl(
+            pattern=pattern,
+            type_ann=None,
+            value=val,
+            span=self._s(),
+            node_id=1,
+            scope_path=(segment,),
+        )
+        plain_var = VarDecl(name="x", type_ann=None, value=val, span=self._s(), node_id=1)
+        scoped_var = VarDecl(
+            name="x", type_ann=None, value=val, span=self._s(), node_id=1, scope_path=(segment,)
+        )
+        assert plain_let != scoped_let
+        assert plain_var != scoped_var
 
     def test_assign_stmt(self) -> None:
         val = IntLit(value=5, span=self._s(), node_id=2)
@@ -1407,6 +1436,33 @@ class TestPatterns:
         assert p.name == "None_"
         assert p.positional == ()
         assert p.named == ()
+
+    def test_constructor_pattern_has_argument_list_defaults_to_false(self) -> None:
+        p = ConstructorPattern(
+            qualifier=None, name="None_", positional=(), named=(), span=self._s(), node_id=1
+        )
+        assert p.has_argument_list is False
+
+    def test_constructor_pattern_has_argument_list_participates_in_equality(self) -> None:
+        bare = ConstructorPattern(
+            qualifier=None,
+            name="x",
+            positional=(),
+            named=(),
+            span=self._s(),
+            node_id=1,
+            has_argument_list=False,
+        )
+        with_parens = ConstructorPattern(
+            qualifier=None,
+            name="x",
+            positional=(),
+            named=(),
+            span=self._s(),
+            node_id=1,
+            has_argument_list=True,
+        )
+        assert bare != with_parens
 
     def test_constructor_pattern_with_fields(self) -> None:
         pf = PatternField(

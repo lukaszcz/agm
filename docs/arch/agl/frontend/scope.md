@@ -23,6 +23,12 @@ single name or a destructuring form. The `let` item's node identifies the match
 site, never a binder. A `var` binder has no pattern and is identified by its
 declaration node.
 
+A scoped `let`/`var` is a member of its scope path, registered into the same
+`ScopeNode` member map and duplicate check as static declarations — but during
+the body walk, not the collection pre-pass, which only creates the path's
+layer. That is what gives a binding textual precedence like a root-level
+`let`, and makes `open`'s bare contribution a walk-time snapshot.
+
 ## Import Environments
 
 `scope/imports.py` is the pure import-policy seam. Its contribution environment

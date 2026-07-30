@@ -533,7 +533,7 @@ def test_module_qualified_imported_enum_pattern_publishes_constructor_ref(
     checked = _check_program(
         tmp_path,
         {
-            "entry": f"{import_decl}\nlet {route}::Flag::on = {route}::Flag::on\n()",
+            "entry": f"{import_decl}\nlet {route}::Flag::on() = {route}::Flag::on\n()",
             "mylib": "enum Flag\n  | on\n  | off",
         },
     )

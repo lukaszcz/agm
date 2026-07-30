@@ -71,10 +71,23 @@ not a synthetic binder name. If a later initializer fails, previously completed
 pattern initializers (and completed function closures) remain available; the
 failing initializer contributes no binders.
 
+### Binder scope paths
+
+`let` and `var` also accept an optional scope-path prefix on a single-name
+binder at the module root (`let A::x = 1`, `var A::count = 0`), declaring a
+binding at that path rather than in the module root namespace. For `let`,
+the prefix is written as an ordinary qualifier chain at the pattern root: a
+plain chain spellable as a declaration path (no argument list, no `as`
+binder, no module route or type-argument-applied segment, not anchored at
+the module root) is read as a scoped binding path, while any other pattern
+shape keeps its constructor-pattern meaning. See
+[Named scopes](scopes.md#binder-paths) for the complete disambiguation and
+for declaring a binder inside a `scope` region.
+
 ## `var` — mutable binding
 
 ```ebnf
-var_decl ::= "var" name (":" type_expr)? "=" expr
+var_decl ::= "var" decl_head (":" type_expr)? "=" expr
 ```
 
 Identical to `let` except the binding is **mutable** — it may later be

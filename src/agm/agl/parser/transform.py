@@ -86,7 +86,15 @@ _SCOPED_DECLARATIONS = (
     syntax.ExceptionDef,
     syntax.TypeAlias,
     syntax.AgentDecl,
+    syntax.LetDecl,
+    syntax.VarDecl,
 )
+
+# Message for the decl_head module-route rejection. Also used for a `var`
+# binder path, which reuses `decl_head`; a `let` binder path never raises
+# this — a chain that fails the spellable-as-a-declaration-head test simply
+# keeps its constructor-pattern meaning instead.
+_MODULE_ROUTE_MESSAGE = "scope paths use '::' between name segments."
 
 
 def _prefix_scope_path(
@@ -295,6 +303,30 @@ def _is_builtin_scope_declaration(item: object) -> bool:
     )
 
 
+# Names for region items that remain disallowed, keyed by node type. A
+# single, obvious table so admitting a form later is a table edit rather
+# than hunting down a scattered isinstance branch.
+_REJECTED_SCOPE_ITEM_NAMES: tuple[tuple[type, str], ...] = (
+    (syntax.AssignStmt, "an assignment"),
+    (syntax.InfixDecl, "an 'infix' declaration"),
+    (syntax.ProgramDecl, "a 'program' declaration"),
+    (syntax.ParamDecl, "a 'param' declaration"),
+    (syntax.ImportDecl, "an 'import' declaration"),
+    (syntax.ExportDecl, "an 'export' declaration"),
+    (syntax.BuiltinVarDecl, "a 'builtin var' declaration"),
+)
+
+
+def _rejected_scope_item_form(item: object) -> str:
+    """Name the offending form of a disallowed scope-region item, for the diagnostic."""
+    for node_type, form in _REJECTED_SCOPE_ITEM_NAMES:
+        if isinstance(item, node_type):
+            return form
+    if _is_builtin_scope_declaration(item):
+        return "a 'builtin' declaration"
+    return "a bare expression"
+
+
 def _scope_item_error_span(item: object, fallback: SourceSpan) -> SourceSpan:
     """Return the offending scope item's span, or the region span as fallback."""
     if isinstance(item, _RawInfixChain):
@@ -308,8 +340,6 @@ def _scope_item_error_span(item: object, fallback: SourceSpan) -> SourceSpan:
             syntax.InfixDecl,
             syntax.ImportDecl,
             syntax.ExportDecl,
-            syntax.LetDecl,
-            syntax.VarDecl,
             syntax.AssignStmt,
             syntax.Expr,
         ),
@@ -484,7 +514,7 @@ class AstBuilder(Transformer):
             if arg.type == "MODQUAL":
                 if reject_module_routes and "/" in name:
                     raise AglSyntaxError(
-                        "scope paths use '::' between name segments.",
+                        _MODULE_ROUTE_MESSAGE,
                         span=self._span_from_token(arg),
                     )
                 token_span = self._span_from_token(arg)
@@ -530,6 +560,28 @@ class AstBuilder(Transformer):
         name, _span = path.segments[-1]
         return name, self._scope_segments(_ScopePath(path.segments[:-1]))
 
+    def _binder_scope_path(
+        self, qualifier: syntax.QualifierChain
+    ) -> tuple[syntax.ScopeSegment, ...] | None:
+        """Build a binder scope path from a bare qualifier chain, or decline.
+
+        A binder path is exactly what `decl_head` can spell: one or more
+        plain name segments, with the chain not anchored at the module root.
+        Returns ``None`` — rather than raising — for a chain that is
+        `::`-anchored, carries a module route, or applies type arguments to a
+        segment; the caller then keeps the pattern's constructor meaning.
+        """
+        if qualifier.anchor is syntax.QualifierAnchor.CURRENT_MODULE:
+            return None
+        segments: list[syntax.ScopeSegment] = []
+        for segment in qualifier.segments:
+            if segment.type_args is not None or segment.anchored or "/" in segment.name:
+                return None
+            segments.append(
+                syntax.ScopeSegment(name=segment.name, span=segment.span, node_id=self._next_id())
+            )
+        return tuple(segments)
+
     def scope_region(self, meta: Meta, args: _Args) -> syntax.ScopeRegion:
         """Build and normalize a scope region with a matching closer."""
         paths = [arg for arg in args if isinstance(arg, _ScopePath)]
@@ -543,16 +595,7 @@ class AstBuilder(Transformer):
                 span=closer_span,
             )
 
-        allowed_items = (
-            syntax.ScopeRegion,
-            syntax.OpenDecl,
-            syntax.FuncDef,
-            syntax.RecordDef,
-            syntax.EnumDef,
-            syntax.ExceptionDef,
-            syntax.TypeAlias,
-            syntax.AgentDecl,
-        )
+        allowed_items = (syntax.ScopeRegion, syntax.OpenDecl, *_SCOPED_DECLARATIONS)
         items = tuple(arg for arg in args if isinstance(arg, allowed_items))
         self._validate_open_placement(cast(tuple[syntax.Item, ...], items))
         disallowed = next(
@@ -570,7 +613,7 @@ class AstBuilder(Transformer):
         if disallowed is not None:
             span = _scope_item_error_span(disallowed, self._span_from_meta(meta))
             raise AglSyntaxError(
-                "scope regions may contain only functions, externs, types, and agents.",
+                f"scope regions cannot contain {_rejected_scope_item_form(disallowed)}.",
                 span=span,
             )
 
@@ -1030,29 +1073,52 @@ class AstBuilder(Transformer):
     # ------------------------------------------------------------------
 
     def let_decl(self, meta: Meta, args: _Args) -> syntax.LetDecl:
-        # Grammar: "let" pattern type_ann? EQ expr
+        """let_decl: "let" pattern type_ann? EQ expr
+
+        A pattern that is exactly a bare qualifier chain (``A::x``, built by
+        ``pat_qual_bare``: no argument list, no enclosing ``as`` binder) and
+        spellable as a declaration head reinterprets as a scoped binding: the
+        chain's qualifier segments become the scope path and its member name
+        becomes a plain ``VarPattern``. Every other pattern shape — including
+        a bare chain that is `::`-anchored, module-routed, or carries a
+        type-argument-applied segment — keeps its match meaning.
+        """
         pattern = next(a for a in args if isinstance(a, _PATTERN_NODE_TYPES))
         ann, value = _extract_ann_and_value(args)
         span = self._span_from_meta(meta)
+        scope_path: tuple[syntax.ScopeSegment, ...] = ()
+        if (
+            isinstance(pattern, syntax.ConstructorPattern)
+            and pattern.qualifier is not None
+            and not pattern.has_argument_list
+        ):
+            binder_path = self._binder_scope_path(pattern.qualifier)
+            if binder_path is not None:
+                scope_path = binder_path
+                pattern = syntax.VarPattern(
+                    name=pattern.qualifier.member, span=pattern.span, node_id=self._next_id()
+                )
         return syntax.LetDecl(
             pattern=pattern,
             type_ann=ann,
             value=value,
             span=span,
             node_id=self._next_id(),
+            scope_path=scope_path,
         )
 
     def var_decl(self, meta: Meta, args: _Args) -> syntax.VarDecl:
-        # Grammar: "var" name type_ann? EQ expr
-        name_tok = _find_name_token(args)
+        """var_decl: "var" decl_head type_ann? EQ expr"""
+        name, scope_path = self._declaration_head(args)
         ann, value = _extract_ann_and_value(args[1:])
         span = self._span_from_meta(meta)
         return syntax.VarDecl(
-            name=str(name_tok),
+            name=name,
             type_ann=ann,
             value=value,
             span=span,
             node_id=self._next_id(),
+            scope_path=scope_path,
         )
 
     def assign_stmt(self, meta: Meta, args: _Args) -> syntax.AssignStmt:
@@ -2292,6 +2358,7 @@ class AstBuilder(Transformer):
             named=named,
             span=self._span_from_meta(meta),
             node_id=self._next_id(),
+            has_argument_list=True,
         )
 
     def _literal_pattern(
@@ -2749,8 +2816,25 @@ class AstBuilder(Transformer):
             qualifier=qualifier,
         )
 
+    def pat_qual_bare(self, meta: Meta, args: _Args) -> syntax.ConstructorPattern:
+        """pat_qual_bare: qual_ref_chain — a qualified pattern written without parens.
+
+        Also the shape a root-position ``let`` pattern must have to be
+        reinterpreted as a scoped binding; see ``let_decl``.
+        """
+        qualifier = next(a for a in args if isinstance(a, syntax.QualifierChain))
+        return syntax.ConstructorPattern(
+            name=qualifier.member,
+            positional=(),
+            named=(),
+            span=self._span_from_meta(meta),
+            node_id=self._next_id(),
+            qualifier=qualifier,
+            has_argument_list=False,
+        )
+
     def pat_qual_constructor(self, meta: Meta, args: _Args) -> syntax.ConstructorPattern:
-        """pat_qual_constructor: qual_ref_chain (LPAR pattern_fields? RPAR)?"""
+        """pat_qual_constructor: qual_ref_chain LPAR pattern_fields? RPAR"""
         qualifier = next(a for a in args if isinstance(a, syntax.QualifierChain))
         positional: tuple[syntax.Pattern, ...] = ()
         named: tuple[syntax.PatternField, ...] = ()
@@ -2765,6 +2849,7 @@ class AstBuilder(Transformer):
             span=self._span_from_meta(meta),
             node_id=self._next_id(),
             qualifier=qualifier,
+            has_argument_list=True,
         )
 
     # ------------------------------------------------------------------

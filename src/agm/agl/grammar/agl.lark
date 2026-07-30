@@ -328,7 +328,7 @@ func_body: suite_expr | raw_return_expr | line_final_expr
 ?binder: let_decl | var_decl | assign_stmt
 
 let_decl: "let" pattern type_ann? EQ line_final_expr
-var_decl: "var" name type_ann? EQ line_final_expr
+var_decl: "var" decl_head type_ann? EQ line_final_expr
 assign_stmt: postfix ASSIGN line_final_expr
 
 // Type annotation: COLON followed by a type_expr.
@@ -510,7 +510,7 @@ try_body: suite_expr | (marked_item SEMICOLON)* try_tail
          | if_expr | case_expr | loop_expr
 
 ?try_letvar_decl: "let" pattern type_ann? EQ try_value -> let_decl
-                 | "var" name type_ann? EQ try_value -> var_decl
+                 | "var" decl_head type_ann? EQ try_value -> var_decl
 
 ?try_value: or_expr | raise_expr | return_expr | if_expr | case_expr | loop_expr
 
@@ -828,12 +828,14 @@ dict_entry: template COLON arg_expr     -> dict_entry_str
 // Pattern `as` binders wrap the complete preceding pattern and associate left.
 // Disambiguation of pattern_atom:
 //   name with value "_" → wildcard (handled in AstBuilder.pat_var_or_wild)
-//   qualifier chain + optional fields → qualified constructor pattern
+//   qualifier chain, no parens → bare qualified pattern (or a scoped `let` binder path)
+//   qualifier chain + parens → qualified constructor pattern
 //   name LPAR ... RPAR → unqualified constructor pattern with payload
 //   name (other) → a bare top-level constructor or field-directed nested pattern
 //   literal → literal pattern
 pattern: pattern_atom ("as" name)* -> pat_as
-pattern_atom: qual_ref_chain (LPAR pattern_fields? RPAR)? -> pat_qual_constructor
+pattern_atom: qual_ref_chain                            -> pat_qual_bare
+            | qual_ref_chain LPAR pattern_fields? RPAR  -> pat_qual_constructor
             | name LPAR pattern_fields? RPAR                     -> pat_constructor
             | name                                               -> pat_var_or_wild
             | INT                                                -> pat_lit_int

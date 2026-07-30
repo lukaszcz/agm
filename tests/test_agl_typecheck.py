@@ -7565,14 +7565,6 @@ class TestMethodHeaders:
         error = reject_type("record Box[T]\n  value: T\ndef Box::size(self) -> int = 1")
         assert "type parameter" in str(error).lower()
 
-    def test_annotated_receiver_default_is_rejected_at_its_header(self) -> None:
-        error = reject_type(
-            "record Point\n  x: int\ndef Point::bad(self: Point = Point(x = 1)) -> Point = self"
-        )
-        assert "receiver" in str(error).lower() and "default" in str(error).lower()
-        assert error.span is not None
-        assert error.span.start_line == 3
-
     def test_repeating_wildcard_receiver_slots_remain_nonbinding(self) -> None:
         checked = accept_type(
             "enum Outcome[A, B]\n"

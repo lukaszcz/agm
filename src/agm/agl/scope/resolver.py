@@ -651,6 +651,12 @@ class _Resolver:
                     span=receiver.span,
                 )
             if owner_path in self._type_paths:
+                if receiver.default is not None:
+                    raise AglScopeError(
+                        f"Receiver 'self' for method '{declaration.name}' "
+                        "cannot have a default value.",
+                        span=receiver.span,
+                    )
                 self._method_declarations[key] = owner_path
             elif receiver.type_expr is None:
                 raise AglScopeError("'self' requires an enclosing type scope.", span=receiver.span)

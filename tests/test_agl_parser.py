@@ -1397,10 +1397,9 @@ class TestFuncDef:
         (
             "def f(value) -> int = 1",
             "def f(value: int, self) -> int = value",
-            "def f(self = 1) -> int = 1",
             "def f(@pos, self) -> int = 1",
         ),
-        ids=("non-self", "not-first", "default", "after-zone-marker"),
+        ids=("non-self", "not-first", "after-zone-marker"),
     )
     def test_bare_parameter_forms_are_rejected(self, source: str) -> None:
         with pytest.raises(AglSyntaxError):

@@ -981,11 +981,6 @@ class AstBuilder(Transformer):
                     f"Parameter {name!r} has no type annotation.",
                     span=self._span_from_token(name_tok),
                 )
-            if default is not None:
-                raise AglSyntaxError(
-                    "A bare 'self' parameter cannot have a default value.",
-                    span=default.span,
-                )
         return syntax.Param(
             name=name,
             type_expr=type_expr,

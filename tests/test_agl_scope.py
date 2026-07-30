@@ -1316,6 +1316,21 @@ class TestMethodReceiverClassification:
         assert "self" in message
         assert "type scope" in message
 
+    @pytest.mark.parametrize(
+        "receiver",
+        ("self", "self: Point"),
+        ids=("bare", "annotated"),
+    )
+    def test_receiver_with_a_default_is_rejected(self, receiver: str) -> None:
+        err = reject_scope(
+            f"record Point\n  x: int\ndef Point::bad({receiver} = Point(x = 1)) -> Point = self"
+        )
+
+        line, message = diag(err)
+        assert "receiver" in message.lower()
+        assert "default" in message
+        assert line == 3
+
     def test_annotated_self_outside_a_type_scope_is_an_ordinary_parameter(self) -> None:
         resolved = parse_and_resolve("def helper(self: int) -> int = self\nhelper(1)")
 

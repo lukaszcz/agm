@@ -680,11 +680,6 @@ def resolve_function_header(
     params: list[ParamSpec] = []
     for index, param in enumerate(node.params):
         if index == 0 and receiver is not None:
-            if param.default is not None:
-                raise AglTypeError(
-                    f"Receiver 'self' for method '{node.name}' cannot have a default value.",
-                    span=param.span,
-                )
             if param.type_expr is not None:
                 documented_receiver = env.resolve_type_expr(
                     param.type_expr, span=param.span, type_vars=type_vars

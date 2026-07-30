@@ -195,9 +195,8 @@ def test_imported_generic_inside_generic_module_body_freshens_per_entry_occurren
     assert capsys.readouterr().out == "1\ntext\n"
 
 
-def test_imported_wildcard_type_params_do_not_bind_or_add_arity(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
+def test_imported_type_parameter_wildcard_is_rejected(tmp_path: Path) -> None:
+    """A non-method '_' type parameter is rejected even when declared in an imported module."""
     (tmp_path / "generic.agl").write_text(
         "record Box[_, T]\n"
         "  value: T\n"
@@ -214,14 +213,11 @@ def test_imported_wildcard_type_params_do_not_bind_or_add_arity(
         "print items[0]\n",
         roots_dirs=[tmp_path],
     )
-    wrong_arity = _run_program(
-        "import generic\nlet box: generic::Box[int, text] = generic::Box(value = 1)\n",
-        roots_dirs=[tmp_path],
-    )
 
-    assert result.ok is True
-    assert capsys.readouterr().out == "1\n"
-    assert wrong_arity.ok is False
+    assert result.ok is False
+    messages = " | ".join(d.message for d in result.diagnostics)
+    assert "only allowed in a method's receiver type parameters" in messages
+    assert "needs a name" in messages
 
 
 def test_unannotated_import_cycle_recursion_runs_from_fixture(

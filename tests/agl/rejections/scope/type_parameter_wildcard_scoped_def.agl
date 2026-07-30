@@ -1,0 +1,4 @@
+record Box[T]
+  value: T
+
+def Box::build[_](v: int) -> int = v

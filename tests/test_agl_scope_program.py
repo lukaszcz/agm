@@ -1577,6 +1577,39 @@ class TestTypeDeclarationsInModules:
 
 
 # ---------------------------------------------------------------------------
+# Test: method receiver naming a type imported from another module
+# ---------------------------------------------------------------------------
+
+
+class TestMethodOrphanRule:
+    def test_self_on_a_type_imported_from_another_module_names_the_rule(
+        self, tmp_path: Path
+    ) -> None:
+        """A method on an imported (not locally-declared) type reports the orphan rule.
+
+        'Point' is visible here via 'open import shapes', so the generic
+        "self requires an enclosing type scope" diagnostic would be
+        misleading (the user is told to do something they already did).
+        """
+        graph = _make_graph_from_files(
+            tmp_path,
+            {
+                "entry": (
+                    "open import shapes\n\n"
+                    "def Point::tag(self) -> int = self.x\n\n"
+                    "print(Point(x = 1).tag())"
+                ),
+                "shapes": "record Point\n  x: int",
+            },
+        )
+        with pytest.raises(AglScopeError, match="Point") as exc_info:
+            resolve_program(graph)
+
+        message = str(exc_info.value)
+        assert "module" in message.lower()
+
+
+# ---------------------------------------------------------------------------
 # Test: ::name self-reference in non-entry module
 # ---------------------------------------------------------------------------
 

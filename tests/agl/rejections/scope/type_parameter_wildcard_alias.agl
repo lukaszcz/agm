@@ -1,0 +1,1 @@
+type Items[_, T] = array[T]

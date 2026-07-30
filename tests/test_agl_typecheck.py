@@ -4686,6 +4686,18 @@ class TestFieldAccess:
         result = checked.resolved.program.body.items[-1]
         assert checked.node_types[result.node_id] == IntType()
 
+    def test_function_field_on_type_without_methods_is_callable_via_member_call_syntax(
+        self,
+    ) -> None:
+        checked = accept_type(
+            "record Adder\n"
+            "  op: (int, int) -> int\n"
+            "let adder = Adder(op = fn(x: int, y: int) -> int => x + y)\n"
+            "adder.op(2, 3)"
+        )
+        result = checked.resolved.program.body.items[-1]
+        assert checked.node_types[result.node_id] == IntType()
+
     @pytest.mark.parametrize(
         "source",
         (
@@ -8501,44 +8513,36 @@ class TestGenerics:
         r = accept_type('def const[A, B](a: A, b: B) -> A = a\nconst::[int, text](1, "x")')
         assert r.resolved.program is not None
 
-    def test_wildcard_type_params_are_repeatable_non_binding_metadata(self) -> None:
-        checked = accept_type("def ignored[_, _](value: int) -> int = value\nignored(1)")
-
-        assert checked.function_signatures["ignored"].type_params == ()
-        reject_type("def ignored[_, _](value: int) -> int = value\nignored::[int]")
-
-        mixed = accept_type("def id[_, T](value: T) -> T = value\nid::[int](1)")
-        assert mixed.function_signatures["id"].type_params == ("T",)
-
-    def test_wildcard_type_params_do_not_add_declaration_arity(self) -> None:
-        accept_type(
-            "record Box[_, T]\n"
-            "  value: T\n"
-            "enum Result[_, T]\n"
-            "  | ok(value: T)\n"
-            "type Items[_, T] = array[T]\n"
-            "let box: Box[int] = Box(value = 1)\n"
-            'let result: Result[text] = ok(value = "done")\n'
-            "let items: Items[int] = [box.value]\n"
-            "items[0]"
-        )
-        reject_type("record Box[_, T]\n  value: T\nlet box: Box[int, text] = Box(value = 1)")
-        reject_type(
-            "enum Result[_, T]\n  | ok(value: T)\nlet result: Result[int, text] = ok(value = 1)"
-        )
-        reject_type("type Items[_, T] = array[T]\nlet items: Items[int, text] = [1]")
-
     @pytest.mark.parametrize(
         "source",
         (
-            "record Box[_]\n  value: _",
-            "enum Result[_]\n  | ok(value: _)",
-            "type Items[_] = array[_]",
+            "record Box[_, T]\n  value: T",
+            "enum Result[_, T]\n  | ok(value: T)",
+            "type Items[_, T] = array[T]",
+            "def ignored[_, _](value: int) -> int = value",
+            "record Box[T]\n  value: T\ndef Box::build[_](value: int) -> int = value",
         ),
-        ids=("record", "enum", "alias"),
+        ids=("record", "enum", "alias", "function", "scoped_non_method"),
     )
-    def test_wildcard_type_param_cannot_be_used_as_a_type_variable(self, source: str) -> None:
-        reject_type(source)
+    def test_type_parameter_wildcard_is_rejected_outside_a_method_receiver(
+        self, source: str
+    ) -> None:
+        """Only a method's receiver prefix may spell a type-parameter slot ``_``.
+
+        Every other declaration must name each slot: a wildcard there would
+        silently drop the slot rather than let the receiver fill it. A ``def``
+        in a type scope without a ``self`` receiver is not a method, so it is
+        held to the same rule.
+        """
+        assert "receiver" in str(reject_any(source)).lower()
+
+    def test_method_receiver_wildcard_slot_is_filled_by_the_receiver(self) -> None:
+        checked = accept_type(
+            "record Box[T]\n  value: T\ndef Box::size[_](self) -> int = 1\nBox(value = 1).size()"
+        )
+
+        result = checked.resolved.program.body.items[-1]
+        assert checked.node_types[result.node_id] == IntType()
 
     def test_explicit_type_args_function_value(self) -> None:
         r = accept_type("def f[T](x: T) -> T = x\nf::[int]")

@@ -1,0 +1,2 @@
+enum Result[_, T]
+  | ok(value: T)

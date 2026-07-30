@@ -443,6 +443,7 @@ class _Resolver:
         self._collect_declarations(program)
         self._classify_method_declarations()
         self._validate_function_names()
+        self._validate_non_method_type_params()
         self._validate_extern_backing()
 
         # Pre-pass 2: collect path-keyed agent declarations before body
@@ -675,7 +676,32 @@ class _Resolver:
                     )
                 self._method_declarations[key] = owner_path
             elif receiver.type_expr is None:
+                if self._is_orphan_receiver(owner_path):
+                    raise AglScopeError(
+                        f"'self' cannot declare a method on '{owner_path[-1]}', which is "
+                        "declared in another module; methods must be declared in the module "
+                        "that declares their receiver type.",
+                        span=receiver.span,
+                    )
                 raise AglScopeError("'self' requires an enclosing type scope.", span=receiver.span)
+
+    def _is_orphan_receiver(self, owner_path: ScopePath) -> bool:
+        """Return whether *owner_path* names a type imported from another module.
+
+        Consults the import environment's bare (unqualified) contributions —
+        the same table that makes an opened or ``using``-imported type name
+        callable without qualification — together with the whole-program type
+        table, so a receiver on a type this module can see but does not
+        declare reports the "no orphans" rule instead of the generic
+        "no enclosing type scope" diagnostic.
+        """
+        if self._import_env is None:
+            return False
+        atom = _bare_atom(owner_path)
+        return any(
+            module != self._module_id and (module, name) in self._cross_module_type_scopes
+            for module, name in self._import_env.unqualified.get(atom, frozenset())
+        )
 
     def _build_scope_nodes(self, root: ScopeNode) -> dict[ScopePath, ScopeNode]:
         """Build named-scope layers and populate their declaration memberships."""
@@ -755,6 +781,33 @@ class _Resolver:
                 span=decl.span,
             )
 
+    def _validate_non_method_type_params(self) -> None:
+        """Reject a '_' type-parameter slot on a function that is not a method.
+
+        Runs after :meth:`_classify_method_declarations` so that a method's
+        key (present in ``self._method_declarations``) is exempt: a method's
+        receiver-prefix '_' slots are validated later, against the receiver's
+        arity, during type checking. Every other function declaration —
+        including a plain ``def`` inside a type scope that lacks a ``self``
+        receiver — may not use '_' at all.
+        """
+        for key, declaration in self._declaration_items.items():
+            if not isinstance(declaration, FuncDef) or key in self._method_declarations:
+                continue
+            self._reject_type_param_wildcard(declaration)
+
+    def _reject_type_param_wildcard(
+        self, decl: FuncDef | RecordDef | EnumDef | ExceptionDef | TypeAlias
+    ) -> None:
+        """Raise AglScopeError if *decl* uses '_' as a type-parameter slot."""
+        for index, tp in enumerate(decl.type_param_slots):
+            if tp == TYPE_PARAMETER_WILDCARD:
+                raise AglScopeError(
+                    "'_' is only allowed in a method's receiver type parameters; "
+                    f"type parameter {index} of '{decl.name}' needs a name.",
+                    span=decl.span,
+                )
+
     def _validate_extern_backing(self) -> None:
         """Reject extern declarations only after their module-wide collection."""
         if self._origin_path is not None:
@@ -792,7 +845,18 @@ class _Resolver:
     def _validate_type_params(
         self, decl: FuncDef | RecordDef | EnumDef | ExceptionDef | TypeAlias
     ) -> None:
-        """Raise AglScopeError if *decl* repeats a binding type-parameter name."""
+        """Raise AglScopeError if *decl* repeats a binding type-parameter name.
+
+        A type declaration (record/enum/exception/alias) can never carry a
+        receiver, so a '_' slot is rejected outright here. A function
+        declaration's '_' slot is validated later, by
+        :meth:`_validate_non_method_type_params`, once method classification
+        tells whether it is a method's receiver prefix — until then, '_' must
+        keep being skipped below so a method's repeated ``[_, _]`` receiver
+        prefix does not read as a duplicate type-parameter name.
+        """
+        if not isinstance(decl, FuncDef):
+            self._reject_type_param_wildcard(decl)
         seen: set[str] = set()
         for tp in decl.type_param_slots:
             if tp == TYPE_PARAMETER_WILDCARD:

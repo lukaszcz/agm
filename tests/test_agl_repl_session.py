@@ -2639,7 +2639,8 @@ class TestImports:
         assert r.kind == "expression"
         assert _int(r.value) == 7
 
-    def test_imported_wildcard_type_params_are_non_binding(self, tmp_path: Path) -> None:
+    def test_imported_type_parameter_wildcard_is_rejected(self, tmp_path: Path) -> None:
+        """A non-method '_' type parameter is rejected even from an imported module in the REPL."""
         (tmp_path / "generic.agl").write_text(
             "record Box[_, T]\n"
             "  value: T\n"
@@ -2656,11 +2657,11 @@ class TestImports:
             "let items: generic::Items[int] = [box.value]\n"
             "items[0]"
         )
-        wrong_arity = s.eval_entry("let box: generic::Box[int, text] = generic::Box(value = 1)")
 
-        assert result.ok, result.diagnostics
-        assert _int(result.value) == 1
-        assert not wrong_arity.ok
+        assert not result.ok
+        messages = " | ".join(d.message for d in result.diagnostics)
+        assert "only allowed in a method's receiver type parameters" in messages
+        assert "needs a name" in messages
 
     def test_import_persists_across_entries(self, tmp_path: Path) -> None:
         lib = tmp_path / "util.agl"

@@ -3005,9 +3005,23 @@ class TestConstructorBindings:
         r = parse_and_resolve("def id[T](x: int) -> int = x\nid(1)\n")
         assert _ref(r, "id").kind == BinderKind.function_binding
 
-    def test_underscore_type_params_may_repeat(self) -> None:
-        r = parse_and_resolve("def ignored[_, _](self: int) -> int = 1\nignored(1)\n")
-        assert _ref(r, "ignored").kind == BinderKind.function_binding
+    def test_method_receiver_wildcard_type_params_may_repeat(self) -> None:
+        """A method's receiver-prefix '_' type parameters resolve, including repeats."""
+        r = parse_and_resolve(
+            "record Pair[A, B]\n"
+            "  first: A\n"
+            "  second: B\n"
+            "def Pair::describe[_, _](self) -> int = 1\n"
+            "()\n"
+        )
+        assert [key for key in r.method_declarations if key[2] == "describe"]
+
+    def test_non_method_wildcard_type_param_rejected(self) -> None:
+        """A '_' type parameter on a function without a 'self' receiver is rejected."""
+        err = reject_scope("def ignored[_, _](x: int) -> int = 1\nignored(1)\n")
+        msg = err.to_diagnostic().message
+        assert "receiver" in msg
+        assert "needs a name" in msg
 
     def test_multiple_type_params_unique_accepted(self) -> None:
         """Multiple unique type params in a record are accepted."""

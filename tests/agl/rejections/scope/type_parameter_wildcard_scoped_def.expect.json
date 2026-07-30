@@ -1,0 +1,1 @@
+{"diagnostic": {"line": 4, "message_contains": ["only allowed in a method's receiver", "needs a name"]}}

@@ -3200,7 +3200,9 @@ class TestGenerics:
     def test_underscore_type_params_may_repeat(self) -> None:
         fn = first(parse("def ignored[_, _](self) -> int = 1"))
         assert isinstance(fn, FuncDef)
-        assert fn.type_params == ("_", "_")
+        # Both slots are retained; neither binds a readable type variable.
+        assert fn.type_param_slots == ("_", "_")
+        assert fn.type_params == ()
 
     def test_applied_type_in_annotation(self) -> None:
         """let x: Option[int] = y produces AppliedT in type_ann."""

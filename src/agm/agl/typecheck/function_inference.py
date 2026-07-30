@@ -52,7 +52,6 @@ from agm.agl.syntax.types import (
     TYPE_PARAMETER_WILDCARD,
     ReceiverType,
     TypeExpr,
-    type_parameter_bindings,
 )
 from agm.agl.typecheck.env import (
     AglTypeError,
@@ -615,10 +614,10 @@ def _method_type_parameter_name(node: FuncDef, index: int) -> str:
 def _receiver_type(env: TypeEnvironment, node: FuncDef, owner_path: tuple[str, ...]) -> Type:
     """Build the receiver type from a scope-classified method declaration."""
     owner, arity, generic = _method_owner(env, owner_path)
-    if len(node.type_params) < arity:
+    if len(node.type_param_slots) < arity:
         raise AglTypeError(
-            f"Method '{node.name}' declares {len(node.type_params)} type parameter(s), but its "
-            f"receiver requires {arity}.",
+            f"Method '{node.name}' declares {len(node.type_param_slots)} type parameter(s), "
+            f"but its receiver requires {arity}.",
             span=node.span,
         )
     if generic is None:
@@ -628,7 +627,7 @@ def _receiver_type(env: TypeEnvironment, node: FuncDef, owner_path: tuple[str, .
         TypeVarType(name)
         if name != TYPE_PARAMETER_WILDCARD
         else TypeVarType(_method_type_parameter_name(node, index))
-        for index, name in enumerate(node.type_params[:arity])
+        for index, name in enumerate(node.type_param_slots[:arity])
     )
     return env.instantiate_from_gdef("::".join(owner_path), generic, receiver_args, node.span)
 
@@ -668,7 +667,7 @@ def resolve_function_header(
 ) -> tuple[FunctionSignature, FunctionType]:
     """Resolve one function's parameter scheme and declared or supplied result."""
     validate_required_after_defaulted(node.params)
-    source_type_params = type_parameter_bindings(node.type_params)
+    source_type_params = node.type_params
     type_vars = frozenset(source_type_params)
     signature_type_params = source_type_params
     receiver: Type | None = None
@@ -676,7 +675,7 @@ def resolve_function_header(
         receiver = _receiver_type(env, node, receiver_owner)
         signature_type_params = tuple(
             name if name != TYPE_PARAMETER_WILDCARD else _method_type_parameter_name(node, index)
-            for index, name in enumerate(node.type_params)
+            for index, name in enumerate(node.type_param_slots)
         )
 
     params: list[ParamSpec] = []

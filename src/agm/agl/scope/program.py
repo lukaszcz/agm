@@ -70,7 +70,7 @@ from agm.agl.syntax.nodes import (
     TypeAlias,
 )
 from agm.agl.syntax.spans import SourceSpan
-from agm.agl.syntax.types import AppliedT, ImportMode, NameT, type_parameter_bindings
+from agm.agl.syntax.types import AppliedT, ImportMode, NameT
 
 
 def _mid_sort_key(m: ModuleId) -> tuple[str, ...]:
@@ -218,7 +218,7 @@ def _build_cross_module_constructor_candidates(
                     owner_name=decl.name,
                     variant=None,
                     owner_decl_node_id=decl.node_id,
-                    type_params=type_parameter_bindings(decl.type_params),
+                    type_params=decl.type_params,
                     owner_module_id=mid,
                     owner_path=owner_path,
                 )
@@ -233,7 +233,7 @@ def _build_cross_module_constructor_candidates(
                         owner_name=decl.name,
                         variant=variant.name,
                         owner_decl_node_id=decl.node_id,
-                        type_params=type_parameter_bindings(decl.type_params),
+                        type_params=decl.type_params,
                         owner_module_id=mid,
                         owner_path=owner_path,
                         can_match_bare_pattern=not variant.fields,
@@ -299,7 +299,7 @@ def _cross_module_constructor_refs(
                 owner_name=declaration.name,
                 variant=None,
                 owner_decl_node_id=declaration.node_id,
-                type_params=type_parameter_bindings(declaration.type_params),
+                type_params=declaration.type_params,
                 owner_module_id=module_id,
                 owner_path=path[:-1],
             )
@@ -311,7 +311,7 @@ def _cross_module_constructor_refs(
                     owner_name=declaration.name,
                     variant=variant.name,
                     owner_decl_node_id=declaration.node_id,
-                    type_params=type_parameter_bindings(declaration.type_params),
+                    type_params=declaration.type_params,
                     owner_module_id=module_id,
                     owner_path=path[:-1],
                     can_match_bare_pattern=not variant.fields,

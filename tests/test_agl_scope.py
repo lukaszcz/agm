@@ -2528,8 +2528,8 @@ class TestLambdaDuplicateParam:
 # ---------------------------------------------------------------------------
 
 
-# Helper: build a RecordDef with optional type_params
-def _make_record(name: str, *, type_params: tuple[str, ...] = (), line: int = 1) -> RecordDef:
+# Helper: build a RecordDef with optional type-parameter slots
+def _make_record(name: str, *, type_param_slots: tuple[str, ...] = (), line: int = 1) -> RecordDef:
     from agm.agl.syntax.nodes import Param, ParamKind
     from agm.agl.syntax.types import IntT as IntTNode
 
@@ -2543,7 +2543,9 @@ def _make_record(name: str, *, type_params: tuple[str, ...] = (), line: int = 1)
         span=sp,
         node_id=_nid(),
     )
-    return RecordDef(name=name, fields=(fd,), type_params=type_params, span=sp, node_id=_nid())
+    return RecordDef(
+        name=name, fields=(fd,), type_param_slots=type_param_slots, span=sp, node_id=_nid()
+    )
 
 
 # Helper: build an EnumDef with variants
@@ -2551,7 +2553,7 @@ def _make_enum(
     name: str,
     variant_names: tuple[str, ...],
     *,
-    type_params: tuple[str, ...] = (),
+    type_param_slots: tuple[str, ...] = (),
     line: int = 1,
 ) -> EnumDef:
     sp = _sp(line)
@@ -2561,7 +2563,7 @@ def _make_enum(
     return EnumDef(
         name=name,
         variants=tuple(variants),
-        type_params=type_params,
+        type_param_slots=type_param_slots,
         span=sp,
         node_id=_nid(),
     )

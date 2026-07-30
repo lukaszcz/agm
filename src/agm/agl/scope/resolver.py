@@ -172,7 +172,6 @@ from agm.agl.syntax.types import (
     NameT,
     ReceiverType,
     render_type_expr,
-    type_parameter_bindings,
 )
 from agm.agl.syntax.visitor import walk
 
@@ -760,7 +759,7 @@ class _Resolver:
     ) -> None:
         """Raise AglScopeError if *decl* repeats a binding type-parameter name."""
         seen: set[str] = set()
-        for tp in decl.type_params:
+        for tp in decl.type_param_slots:
             if tp == TYPE_PARAMETER_WILDCARD:
                 continue
             if tp in seen:
@@ -910,7 +909,7 @@ class _Resolver:
                     owner_name=item.name,
                     variant=None,
                     owner_decl_node_id=item.node_id,
-                    type_params=type_parameter_bindings(item.type_params),
+                    type_params=item.type_params,
                     owner_module_id=self._module_id,
                     owner_path=path,
                 )
@@ -924,7 +923,7 @@ class _Resolver:
                         owner_name=item.name,
                         variant=variant.name,
                         owner_decl_node_id=item.node_id,
-                        type_params=type_parameter_bindings(item.type_params),
+                        type_params=item.type_params,
                         owner_module_id=self._module_id,
                         can_match_bare_pattern=not variant.fields,
                         owner_path=path,
@@ -955,7 +954,7 @@ class _Resolver:
                         owner_name=item.name,
                         variant=None,
                         owner_decl_node_id=item.node_id,
-                        type_params=type_parameter_bindings(item.type_params),
+                        type_params=item.type_params,
                         owner_module_id=self._module_id,
                         owner_path=path,
                     )
@@ -2403,7 +2402,7 @@ class _Resolver:
             owner_name=path[-1],
             variant=variant,
             owner_decl_node_id=declaration.node_id,
-            type_params=type_parameter_bindings(declaration.type_params),
+            type_params=declaration.type_params,
             owner_module_id=self._module_id,
             owner_path=path[:-1],
         )

@@ -69,7 +69,6 @@ from agm.agl.syntax.nodes import (
     TypeAlias,
 )
 from agm.agl.syntax.spans import SourceSpan
-from agm.agl.syntax.types import type_parameter_bindings
 from agm.agl.typecheck.env import (
     AglTypeError,
     ConstructorSignature,
@@ -217,15 +216,13 @@ class _TypeBuilder:
             else:
                 self._register_name(item.name, item.span)
                 self._env.unregister_name(item.name)
-                self._env.register_alias(
-                    item.name, item.type_expr, type_params=type_parameter_bindings(item.type_params)
-                )
+                self._env.register_alias(item.name, item.type_expr, type_params=item.type_params)
 
     def _register_record_or_enum_handle(self, item: RecordDef | EnumDef, *, is_enum: bool) -> None:
         module_id = self._owning_module_id(item.is_builtin)
         declared_name = item.name.rsplit("::", maxsplit=1)[-1]
         scope_path = tuple(segment.name for segment in item.scope_path)
-        type_params = type_parameter_bindings(item.type_params)
+        type_params = item.type_params
         if type_params:
             type_args = tuple(TypeVarType(p) for p in type_params)
             template: RecordType | EnumType = (
@@ -297,7 +294,7 @@ class _TypeBuilder:
         self._declared[name] = span
 
     def _build_record(self, stmt: RecordDef) -> None:
-        if type_parameter_bindings(stmt.type_params):
+        if stmt.type_params:
             self._build_generic_record(stmt)
             return
         fields: dict[str, Type] = {}
@@ -325,7 +322,7 @@ class _TypeBuilder:
         self._env.register_constructor_field_kinds(stmt.name, None, field_kinds)
 
     def _build_enum(self, stmt: EnumDef) -> None:
-        if type_parameter_bindings(stmt.type_params):
+        if stmt.type_params:
             self._build_generic_enum(stmt)
             return
         variants: dict[str, dict[str, Type]] = {}
@@ -481,7 +478,7 @@ class _TypeBuilder:
         was already registered in phase 1 so that forward references to
         this generic type resolve regardless of declaration order.
         """
-        type_params = type_parameter_bindings(stmt.type_params)
+        type_params = stmt.type_params
         type_vars = frozenset(type_params)
         fields: dict[str, Type] = {}
         seen_fields: dict[str, SourceSpan] = {}
@@ -527,7 +524,7 @@ class _TypeBuilder:
         See :meth:`_build_generic_record` for why the ``GenericTypeDef``
         itself is not (re-)registered here.
         """
-        type_params = type_parameter_bindings(stmt.type_params)
+        type_params = stmt.type_params
         type_vars = frozenset(type_params)
         variants: dict[str, dict[str, Type]] = {}
         for vd in stmt.variants:
@@ -585,7 +582,7 @@ class _TypeBuilder:
         self._env.resolve_type_expr(
             stmt.type_expr,
             span=stmt.span,
-            type_vars=frozenset(type_parameter_bindings(stmt.type_params)),
+            type_vars=frozenset(stmt.type_params),
         )
 
     # ------------------------------------------------------------------

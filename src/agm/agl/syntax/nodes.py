@@ -36,7 +36,7 @@ from dataclasses import field as dc_field
 from typing import TypeGuard
 
 from agm.agl.syntax.spans import SourceSpan
-from agm.agl.syntax.types import ImportMode, TypeExpr
+from agm.agl.syntax.types import TYPE_PARAMETER_WILDCARD, ImportMode, TypeExpr
 
 # ---------------------------------------------------------------------------
 # Sentinel for the else-branch of If
@@ -445,8 +445,32 @@ class Param:
     node_id: int = dc_field(compare=False)
 
 
+# ---------------------------------------------------------------------------
+# Type-parameter slots — shared by every declaration that can be generic
+# ---------------------------------------------------------------------------
+
+
+class GenericDeclaration:
+    """A declaration carrying a source-level type-parameter slot list.
+
+    ``type_param_slots`` keeps every slot the source wrote, including the
+    ``_`` wildcard, which holds a position without introducing a type variable;
+    consumers that care about positions (notably a method receiver) read it.
+    Semantic binding sites read the derived ``type_params`` instead.
+    """
+
+    __slots__ = ()
+
+    type_param_slots: tuple[str, ...]
+
+    @property
+    def type_params(self) -> tuple[str, ...]:
+        """The slots that introduce readable type variables."""
+        return tuple(slot for slot in self.type_param_slots if slot != TYPE_PARAMETER_WILDCARD)
+
+
 @dataclass(frozen=True, slots=True)
-class FuncDef:
+class FuncDef(GenericDeclaration):
     """``def name(params) (-> RetType)? = body`` — a top-level function declaration.
 
     ``return_type`` is ``None`` when omitted and inferred from the body.
@@ -459,7 +483,7 @@ class FuncDef:
     body: Expr | None
     span: SourceSpan = dc_field(compare=False)
     node_id: int = dc_field(compare=False)
-    type_params: tuple[str, ...] = ()
+    type_param_slots: tuple[str, ...] = ()
     is_builtin: bool = False
     is_extern: bool = False
     scope_path: tuple[ScopeSegment, ...] = ()
@@ -1085,14 +1109,14 @@ Binder = LetDecl | VarDecl | AssignStmt
 
 
 @dataclass(frozen=True, slots=True)
-class RecordDef:
+class RecordDef(GenericDeclaration):
     """``record Name(fields)`` declaration."""
 
     name: str
     fields: tuple[Param, ...]
     span: SourceSpan = dc_field(compare=False)
     node_id: int = dc_field(compare=False)
-    type_params: tuple[str, ...] = ()
+    type_param_slots: tuple[str, ...] = ()
     is_builtin: bool = False
     scope_path: tuple[ScopeSegment, ...] = ()
 
@@ -1108,20 +1132,20 @@ class VariantDef:
 
 
 @dataclass(frozen=True, slots=True)
-class EnumDef:
+class EnumDef(GenericDeclaration):
     """``enum Name { variants }`` declaration."""
 
     name: str
     variants: tuple[VariantDef, ...]
     span: SourceSpan = dc_field(compare=False)
     node_id: int = dc_field(compare=False)
-    type_params: tuple[str, ...] = ()
+    type_param_slots: tuple[str, ...] = ()
     is_builtin: bool = False
     scope_path: tuple[ScopeSegment, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
-class ExceptionDef:
+class ExceptionDef(GenericDeclaration):
     """``exception Name [extends Base](fields...)`` declaration."""
 
     name: str
@@ -1129,20 +1153,20 @@ class ExceptionDef:
     base: str | None
     span: SourceSpan = dc_field(compare=False)
     node_id: int = dc_field(compare=False)
-    type_params: tuple[str, ...] = ()
+    type_param_slots: tuple[str, ...] = ()
     is_builtin: bool = False
     scope_path: tuple[ScopeSegment, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
-class TypeAlias:
+class TypeAlias(GenericDeclaration):
     """``type Name = TypeExpr`` declaration."""
 
     name: str
     type_expr: TypeExpr
     span: SourceSpan = dc_field(compare=False)
     node_id: int = dc_field(compare=False)
-    type_params: tuple[str, ...] = ()
+    type_param_slots: tuple[str, ...] = ()
     scope_path: tuple[ScopeSegment, ...] = ()
 
 

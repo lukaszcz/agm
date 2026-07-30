@@ -35,7 +35,6 @@ from agm.agl.syntax.nodes import (
     pattern_binder_candidates,
     simple_let_pattern_name,
 )
-from agm.agl.syntax.types import type_parameter_bindings
 from agm.util.text import normalize_newlines
 
 if TYPE_CHECKING:
@@ -255,7 +254,7 @@ def _declaration_dependencies(
         )
 
     type_parameters = (
-        frozenset(type_parameter_bindings(item.type_params))
+        frozenset(item.type_params)
         if isinstance(item, (EnumDef, ExceptionDef, FuncDef, RecordDef, TypeAlias))
         else frozenset()
     )

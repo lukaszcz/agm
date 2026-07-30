@@ -11,7 +11,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, NamedTuple
 
 from agm.agl.modules.ids import ModuleId
 from agm.agl.semantics.persistent import PersistentDict
@@ -399,6 +399,16 @@ def _seed_candidate_visible_bindings(
         )
 
 
+class _ProvisionalHeader(NamedTuple):
+    """One component member's header while its result type is still provisional."""
+
+    module: CandidateModule
+    node: FuncDef
+    result: InferenceVarType
+    signature: FunctionSignature
+    receiver: ResolvedReceiver | None
+
+
 def _infer_function_component(
     component: ModuleCandidateComponent,
     functions: tuple[_CandidateFunction, ...],
@@ -408,7 +418,7 @@ def _infer_function_component(
 
     engine = InferenceEngine()
     session = CandidateSession(engine, frozenset(node.node_id for _, node in functions))
-    provisional: list[tuple[CandidateModule, FuncDef, InferenceVarType, FunctionSignature]] = []
+    provisional: list[_ProvisionalHeader] = []
     discovery_envs = component.discovery_targets()
     publication_envs = component.publication_targets()
 
@@ -425,23 +435,23 @@ def _infer_function_component(
         checker._validate_funcdef_header(node, is_method=receiver_owner is not None)
         result = engine.fresh(f"{node.name} result")
         with module.env.type_scope(tuple(segment.name for segment in node.scope_path)):
-            signature, function_type = resolve_function_header(
+            signature, function_type, receiver = resolve_function_header(
                 module.env,
                 node,
                 result_type=result,
                 receiver_owner=receiver_owner,
             )
-        register_method_header(module.env, node, signature, receiver_owner)
+        register_method_header(module.env, node, signature, receiver)
         for env in discovery_envs:
             _register_signature(env, module, node, signature, function_type)
-        provisional.append((module, node, result, signature))
+        provisional.append(_ProvisionalHeader(module, node, result, signature, receiver))
 
     session.binding_snapshots = {
         module.module_id: module.env.snapshot_binding_types() for module in component.modules
     }
     try:
         _seed_candidate_visible_bindings(component, session)
-        for module, node, result, signature in provisional:
+        for module, node, result, signature, _receiver in provisional:
             module.env.restore_binding_types(
                 session.visible_binding_snapshots[(module.module_id, node.node_id)]
             )
@@ -482,7 +492,7 @@ def _infer_function_component(
 
     unresolved = [
         (module, node)
-        for module, node, result, _signature in provisional
+        for module, node, result, _signature, _receiver in provisional
         if not engine.is_solved(result) or contains_inference_var(engine.zonk(result))
     ]
     if len(unresolved) == 1:
@@ -505,7 +515,7 @@ def _infer_function_component(
         )
 
     records: list[FunctionSignatureRecord] = []
-    for module, node, result, signature in provisional:
+    for module, node, result, signature, receiver in provisional:
         concrete_result = engine.zonk(result)
         concrete_signature = FunctionSignature(
             params=signature.params,
@@ -517,8 +527,7 @@ def _infer_function_component(
         )
         for env in publication_envs:
             _register_signature(env, module, node, concrete_signature, function_type)
-        receiver_owner = module.resolved.receiver_owner_for(module.module_id, node)
-        register_method_header(module.env, node, concrete_signature, receiver_owner)
+        register_method_header(module.env, node, concrete_signature, receiver)
         records.append(
             FunctionSignatureRecord(
                 declaration_node_id=node.node_id,
@@ -539,11 +548,12 @@ def _infer_function_component(
 
 def _close_generic_candidate_edges(
     session: CandidateSession,
-    provisional: list[tuple[CandidateModule, FuncDef, InferenceVarType, FunctionSignature]],
+    provisional: list[_ProvisionalHeader],
 ) -> None:
     """Validate uniform generic recursion and connect its delayed result evidence."""
     functions = {
-        node.node_id: (node, result, signature) for _, node, result, signature in provisional
+        node.node_id: (node, result, signature)
+        for _, node, result, signature, _receiver in provisional
     }
     engine = session.engine
     for edge in session.generic_edges:
@@ -627,6 +637,21 @@ def _method_owner(
     return generic.template, len(generic.type_params), generic
 
 
+@dataclass(frozen=True, slots=True)
+class ResolvedReceiver:
+    """A classified method's owner, resolved once and reused by its registration.
+
+    ``scope_path`` is the owner's declaration path as scope classified it,
+    ``owner`` the nominal handle that path resolves to, and
+    ``type_param_arity`` how many leading method type parameters that owner
+    binds.
+    """
+
+    scope_path: tuple[str, ...]
+    owner: NominalOwner
+    type_param_arity: int
+
+
 def _method_type_parameter_name(node: FuncDef, index: int) -> str:
     """Return the private rigid name for one nonbinding receiver type slot."""
     return f"__method_type_slot_{node.node_id}_{index}"
@@ -650,9 +675,10 @@ def _method_signature_type_params(node: FuncDef, arity: int) -> tuple[str, ...]:
 
 def _receiver_type(
     env: TypeEnvironment, node: FuncDef, owner_path: tuple[str, ...]
-) -> tuple[Type, int]:
-    """Build the receiver type and its owner arity from a scope-classified method declaration."""
+) -> tuple[Type, ResolvedReceiver]:
+    """Build the receiver type and its resolved owner from a classified method declaration."""
     owner, arity, generic = _method_owner(env, owner_path)
+    resolved = ResolvedReceiver(scope_path=owner_path, owner=owner, type_param_arity=arity)
     if len(node.type_param_slots) < arity:
         raise AglTypeError(
             f"Method '{node.name}' declares {len(node.type_param_slots)} type parameter(s), "
@@ -667,14 +693,14 @@ def _receiver_type(
                 span=node.span,
             )
     if generic is None:
-        return owner, arity
+        return owner, resolved
 
     receiver_args = tuple(
         TypeVarType(name) for name in _method_signature_type_params(node, arity)[:arity]
     )
     return (
         env.instantiate_from_gdef("::".join(owner_path), generic, receiver_args, node.span),
-        arity,
+        resolved,
     )
 
 
@@ -682,23 +708,22 @@ def register_method_header(
     env: TypeEnvironment,
     node: FuncDef,
     signature: FunctionSignature,
-    receiver_owner: tuple[str, ...] | None,
+    receiver: ResolvedReceiver | None,
 ) -> None:
     """Publish one already-resolved classified method into the shared registry."""
-    if receiver_owner is None:
+    if receiver is None:
         return
-    owner, arity, _generic = _method_owner(env, receiver_owner)
     env.type_table.register_method(
-        owner,
+        receiver.owner,
         MethodDef(
-            module_id=owner.module_id,
-            scope_path=receiver_owner,
+            module_id=receiver.owner.module_id,
+            scope_path=receiver.scope_path,
             name=node.name,
             decl_node_id=node.node_id,
             signature=FunctionType(
                 params=tuple(param.type for param in signature.params), result=signature.result
             ),
-            receiver_type_param_arity=arity,
+            receiver_type_param_arity=receiver.type_param_arity,
             type_params=signature.type_params,
         ),
     )
@@ -710,16 +735,23 @@ def resolve_function_header(
     *,
     result_type: TypeExpr | Type,
     receiver_owner: tuple[str, ...] | None = None,
-) -> tuple[FunctionSignature, FunctionType]:
-    """Resolve one function's parameter scheme and declared or supplied result."""
+) -> tuple[FunctionSignature, FunctionType, ResolvedReceiver | None]:
+    """Resolve one function's parameter scheme and declared or supplied result.
+
+    A classified method's resolved owner is returned alongside its signature so
+    :func:`register_method_header` reuses it instead of resolving it again.
+    """
     validate_required_after_defaulted(node.params)
     source_type_params = node.type_params
     type_vars = frozenset(source_type_params)
     signature_type_params = source_type_params
     receiver: Type | None = None
+    resolved_receiver: ResolvedReceiver | None = None
     if receiver_owner is not None:
-        receiver, arity = _receiver_type(env, node, receiver_owner)
-        signature_type_params = _method_signature_type_params(node, arity)
+        receiver, resolved_receiver = _receiver_type(env, node, receiver_owner)
+        signature_type_params = _method_signature_type_params(
+            node, resolved_receiver.type_param_arity
+        )
 
     params: list[ParamSpec] = []
     for index, param in enumerate(node.params):
@@ -764,6 +796,8 @@ def resolve_function_header(
         result=resolved_result,
         type_params=signature_type_params,
     )
-    return signature, FunctionType(
-        params=tuple(param.type for param in params), result=resolved_result
+    return (
+        signature,
+        FunctionType(params=tuple(param.type for param in params), result=resolved_result),
+        resolved_receiver,
     )

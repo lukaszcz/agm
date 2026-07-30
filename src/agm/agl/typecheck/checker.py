@@ -612,7 +612,7 @@ class _Checker:
         if node.return_type is None:
             return
 
-        sig, func_type = resolve_function_header(
+        sig, func_type, receiver = resolve_function_header(
             self._env,
             node,
             result_type=node.return_type,
@@ -622,7 +622,7 @@ class _Checker:
             self._validate_extern_signature(node, sig)
             self._env.register_extern_node_id(node.node_id)
         self._register_funcdef_signature(node, sig, func_type, is_method=receiver_owner is not None)
-        register_method_header(self._env, node, sig, receiver_owner)
+        register_method_header(self._env, node, sig, receiver)
 
     def _validate_funcdef_header(self, node: FuncDef, *, is_method: bool) -> None:
         """Validate declaration-level properties that do not need a return type.

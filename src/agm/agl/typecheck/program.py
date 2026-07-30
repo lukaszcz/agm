@@ -680,7 +680,7 @@ def _build_program_func_sig_table(
                 continue
 
             with env.type_scope(tuple(segment.name for segment in item.scope_path)):
-                signature, function_type = resolve_function_header(
+                signature, function_type, _receiver = resolve_function_header(
                     env,
                     item,
                     result_type=item.return_type,

@@ -7694,7 +7694,7 @@ def _method_header(source: str) -> tuple[FuncDef, tuple[ParamSpec, ...]]:
     env = TypeEnvironment()
     _TypeBuilder(env).collect(resolved.program)
     with env.type_scope(owner):
-        signature, _ = resolve_function_header(
+        signature, _type, _receiver = resolve_function_header(
             env, function, result_type=function.return_type, receiver_owner=owner
         )
     return function, signature.params

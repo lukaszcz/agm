@@ -876,6 +876,12 @@ class TestReservedNames:
         _, msg = diag(err)
         assert "print" in msg
 
+    def test_reserve_print_def_still_rejected_beside_an_unrelated_type(self) -> None:
+        err = reject_scope("record Point\n  x: int\ndef print() -> int = 1\n()")
+        _, msg = diag(err)
+        assert "print" in msg
+        assert "built-in" in msg.lower()
+
     def test_reserve_ask_param(self) -> None:
         err = reject_scope("def f(ask: int) -> int = 1\nf(1)")
         _, msg = diag(err)
@@ -1243,6 +1249,17 @@ class TestMethodReceiverClassification:
 
         assert resolved.method_declarations == {
             (ENTRY_ID, (owner,), "identity"): (owner,),
+        }
+
+    def test_method_named_after_a_builtin_call_is_exempt_from_the_reserved_name_rule(
+        self,
+    ) -> None:
+        resolved = parse_and_resolve(
+            "record Point\n  x: int\ndef Point::print(self) -> int = self.x\n()"
+        )
+
+        assert resolved.method_declarations == {
+            (ENTRY_ID, ("Point",), "print"): ("Point",),
         }
 
     def test_shorthand_and_region_methods_have_identical_classification(self) -> None:

@@ -442,6 +442,7 @@ class _Resolver:
         # legacy root worker build their compatibility tables.
         self._collect_declarations(program)
         self._classify_method_declarations()
+        self._validate_function_names()
         self._validate_extern_backing()
 
         # Pre-pass 2: collect path-keyed agent declarations before body
@@ -581,7 +582,6 @@ class _Resolver:
         )
         self._declaration_items[key] = item
         if isinstance(item, FuncDef):
-            self._validate_function_decl(item)
             if item.is_extern and path:
                 prior = self._scoped_extern_symbols.get(item.name)
                 if prior is not None:
@@ -625,19 +625,28 @@ class _Resolver:
                 )
 
     def _classify_method_declarations(self) -> None:
-        """Classify receiver parameters after every declaration path is complete."""
-        alias_targets: dict[ScopePath, str] = {
+        """Classify receiver parameters after every declaration path is complete.
+
+        ``alias_targets`` maps each alias-owned type path to its target: a
+        rendered string, retained from a prior REPL entry, or this entry's own
+        ``TypeAlias`` declaration, rendered lazily only if a method is actually
+        rejected on that path. A path this entry redeclares as a nominal type
+        (record/enum/exception) is popped so a stale retained alias target
+        cannot reject a method on that redeclaration; a path this entry
+        redeclares as an alias always overrides whatever the retained state
+        held, in either direction.
+        """
+        alias_targets: dict[ScopePath, str | TypeAlias] = {
             path: target
             for path, target in self._repl_session_type_paths.items()
             if target is not None
         }
-        alias_targets.update(
-            {
-                path + (declaration.name,): render_type_expr(declaration.type_expr)
-                for declaration, path in self._type_declarations
-                if isinstance(declaration, TypeAlias)
-            }
-        )
+        for type_decl, path in self._type_declarations:
+            type_scope = path + (type_decl.name,)
+            if isinstance(type_decl, TypeAlias):
+                alias_targets[type_scope] = type_decl
+            else:
+                alias_targets.pop(type_scope, None)
         for key, declaration in self._declaration_items.items():
             if not isinstance(declaration, FuncDef) or not declaration.params:
                 continue
@@ -647,9 +656,14 @@ class _Resolver:
             owner_path = key[1]
             alias_target = alias_targets.get(owner_path)
             if alias_target is not None:
+                target_text = (
+                    alias_target
+                    if isinstance(alias_target, str)
+                    else render_type_expr(alias_target.type_expr)
+                )
                 raise AglScopeError(
                     f"'self' cannot declare a method in alias scope '{owner_path[-1]}', "
-                    f"which targets '{alias_target}'.",
+                    f"which targets '{target_text}'.",
                     span=receiver.span,
                 )
             if owner_path in self._type_paths:
@@ -718,6 +732,20 @@ class _Resolver:
         for item in self._root_declaration_items(FuncDef):
             assert isinstance(item, FuncDef)
             self._declared_functions[item.name] = item
+
+    def _validate_function_names(self) -> None:
+        """Reject a built-in call name reused as an ordinary function name.
+
+        Runs after :meth:`_classify_method_declarations` so that a method
+        (its key is in ``self._method_declarations``) is exempt: methods live
+        in their receiver type's own member namespace, distinct from the
+        namespace this rule protects. Iterates ``self._declaration_items`` in
+        declaration order for deterministic diagnostics.
+        """
+        for key, declaration in self._declaration_items.items():
+            if not isinstance(declaration, FuncDef) or key in self._method_declarations:
+                continue
+            self._validate_function_decl(declaration)
 
     def _validate_function_decl(self, decl: FuncDef) -> None:
         """Apply function declaration validation independently of its scope path."""

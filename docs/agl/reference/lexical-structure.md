@@ -99,7 +99,8 @@ as a field name or an annotated function parameter.
 lex as plain `NAME` tokens and are given their built-in meaning during scope
 resolution. They may not be declared with `let`, `var`, or `param`, may not be
 declared as agents or functions, and may not appear as pattern or catch
-binders — but they remain legal as field names. The distinct raw-tail spellings
+binders — but they remain legal as field and method names, which live in a
+type's own member namespace. The distinct raw-tail spellings
 `exec!` and `ask!` are reserved for their raw forms and cannot be used as names.
 
 **Type-annotation keywords** — `text`, `json`, `bool`, `int`, `decimal`,

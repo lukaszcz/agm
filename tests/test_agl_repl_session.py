@@ -220,6 +220,47 @@ class TestPersistence:
         assert "Callback" in message
         assert "int -> bool" in message
 
+    def test_retained_alias_redeclared_as_a_record_accepts_a_method_in_a_later_entry(
+        self,
+    ) -> None:
+        session = ReplSession()
+        assert session.eval_entry("type Alias = int").ok
+        assert session.eval_entry("record Alias\n  x: int\ndef Alias::m(self) -> int = self.x").ok
+
+        result = session.eval_entry("Alias(x = 1).m()")
+
+        assert result.ok, result.diagnostics
+        assert result.value == IntValue(1)
+
+    def test_retained_record_redeclared_as_an_alias_still_rejects_a_method(self) -> None:
+        session = ReplSession()
+        assert session.eval_entry("record Alias\n  x: int").ok
+
+        rejected = session.eval_entry("type Alias = int\ndef Alias::m(self) -> int = 1")
+
+        assert not rejected.ok
+        message = rejected.diagnostics[0].message
+        assert "alias scope" in message
+        assert "Alias" in message
+        assert "int" in message
+
+    def test_method_named_after_a_builtin_call_does_not_shadow_the_builtin(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        session = ReplSession()
+        assert session.eval_entry(
+            "record Point\n  x: int\n"
+            "def Point::print(self) -> int =\n"
+            '  print("x = %{self.x}")\n'
+            "  self.x"
+        ).ok
+
+        result = session.eval_entry("Point(x = 7).print()")
+
+        assert result.ok, result.diagnostics
+        assert result.value == IntValue(7)
+        assert capsys.readouterr().out.strip() == "x = 7"
+
     def test_scope_region_must_close_in_the_same_entry(self) -> None:
         s = ReplSession()
 

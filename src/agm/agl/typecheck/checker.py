@@ -1759,9 +1759,7 @@ class _Checker:
                 return typ
 
         if isinstance(node.expr, FieldAccess):
-            typ = self._check_field_access(node.expr, type_args=node.type_args)
-            self._record_node_type(node.expr.node_id, typ)
-            return typ
+            return self._check_specialized_field_access(node.expr, type_args=node.type_args)
 
         if not isinstance(node.expr, VarRef):
             raise AglTypeError(
@@ -2825,15 +2823,13 @@ class _Checker:
                 span=node.span,
             )
         # A direct member call carries its explicit type arguments on Call,
-        # whereas value-position syntax uses TypeApply. Both feed the same
-        # member-specialization path so only a selected generic method can
-        # consume the arguments. Such a callee bypasses ``_check_expr``, so its
-        # selected bound-function type is published here just as the ordinary
-        # expression path would: partial lowering and direct-call argument
-        # coercions both consume this specialization.
+        # whereas value-position syntax uses TypeApply; both route through
+        # ``_check_specialized_field_access`` (see its docstring for why the
+        # specialization must be published on the inner node here too).
         if isinstance(node.callee, FieldAccess) and node.type_args:
-            callee_type = self._check_field_access(node.callee, type_args=node.type_args)
-            self._record_node_type(node.callee.node_id, callee_type)
+            callee_type = self._check_specialized_field_access(
+                node.callee, type_args=node.type_args
+            )
         else:
             callee_type = self._check_expr(node.callee, expected=None)
         with self._frame_direct_candidate_use(exprs=(node.callee,)):
@@ -3826,12 +3822,23 @@ class _Checker:
                 )
                 if isinstance(template_arg, TypeVarType)
             }
-        specialized: Type = method.signature
-        if substitutions:
-            specialized = substitute(method.signature, substitutions)
+        own_type_params = method.type_params[method.receiver_type_param_arity :]
+        engine = self._active_inference_engine()
+        # Freshen the method's own type parameters in the same substitution pass
+        # that applies the receiver's type arguments, rather than as a later,
+        # separate pass over the already receiver-substituted signature. A
+        # later pass cannot distinguish a method's own type parameter from a
+        # same-spelled rigid variable the receiver substitution just
+        # introduced (e.g. a caller's own generic parameter reaching the
+        # receiver's type argument), and would rewrite both alike, capturing
+        # the caller's variable.
+        own_fresh: dict[str, InferenceVarType] = {
+            name: engine.fresh(name) for name in own_type_params
+        }
+        combined: dict[str, Type] = {**substitutions, **own_fresh}
+        specialized: Type = substitute(method.signature, combined) if combined else method.signature
         assert isinstance(specialized, FunctionType)
         bound = FunctionType(params=specialized.params[1:], result=specialized.result)
-        own_type_params = method.type_params[method.receiver_type_param_arity :]
         if type_args is not None:
             explicit = self._resolve_explicit_type_args(
                 owner_name=method.name,
@@ -3839,17 +3846,26 @@ class _Checker:
                 type_args=type_args,
                 span=span,
             )
-            specialized = substitute(bound, explicit)
-            assert isinstance(specialized, FunctionType)
-            return specialized
+            for name in own_type_params:
+                engine.unify(
+                    own_fresh[name],
+                    explicit[name],
+                    engine.origin(
+                        span,
+                        role=ConstraintRole.EXPLICIT_INSTANTIATION,
+                        subject=method.name,
+                        type_param=name,
+                    ),
+                )
+            concrete = engine.zonk(bound)
+            assert isinstance(concrete, FunctionType)
+            return concrete
         if not own_type_params:
             return bound
 
-        engine = self._active_inference_engine()
-        instantiation = engine.instantiate(own_type_params, (bound,))
         for name in own_type_params:
             engine.require_solved(
-                instantiation.variables[name],
+                own_fresh[name],
                 engine.origin(
                     span,
                     role=ConstraintRole.EXPECTED_RESULT,
@@ -3857,15 +3873,31 @@ class _Checker:
                     type_param=name,
                 ),
             )
-        concrete = instantiation.templates[0]
-        assert isinstance(concrete, FunctionType)
         if expected is not None:
             engine.complete_from_context(
-                concrete,
+                bound,
                 expected,
                 engine.origin(span, role=ConstraintRole.EXPECTED_RESULT, subject=method.name),
             )
-        return concrete
+        return bound
+
+    def _check_specialized_field_access(
+        self, field_access: FieldAccess, *, type_args: tuple[TypeExpr, ...]
+    ) -> Type:
+        """Check a member access carrying explicit type arguments and publish its type.
+
+        This is reached both from value-position ``expr::[T]`` (``TypeApply``) and from
+        a direct member call's typed-call syntax ``callee::[T](args)`` (``Call``), which
+        route their explicit type arguments through a ``TypeApply`` and a bare ``Call``
+        respectively rather than both wrapping a ``TypeApply`` node. Either way, the
+        specialized member's type must be recorded on the inner ``FieldAccess`` node
+        itself, not only returned to the immediate caller: partial lowering and
+        direct-call argument coercion both read the callee's type straight off that
+        node rather than off the outer node wrapping it.
+        """
+        typ = self._check_field_access(field_access, type_args=type_args)
+        self._record_node_type(field_access.node_id, typ)
+        return typ
 
     def _check_field_access(
         self,

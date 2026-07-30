@@ -1,0 +1,29 @@
+{
+  "scenarios": [
+    {
+      "name": "later_method_parameter_shares_callers_type_param_name_inferred",
+      "params": {"mode": "later_inferred", "base": 9},
+      "expect": {"stdout": "v=9\n", "calls": {}}
+    },
+    {
+      "name": "later_method_parameter_shares_callers_type_param_name_explicit",
+      "params": {"mode": "later_explicit", "base": 9},
+      "expect": {"stdout": "x=9\n", "calls": {}}
+    },
+    {
+      "name": "qualified_spelling_matches_member_spelling",
+      "params": {"mode": "qualified_spelling", "base": 9},
+      "expect": {"stdout": "q=9\n", "calls": {}}
+    },
+    {
+      "name": "receiver_parameter_shares_callers_type_param_name_inferred",
+      "params": {"mode": "receiver_inferred", "base": 3},
+      "expect": {"stdout": "ok 3\n", "calls": {}}
+    },
+    {
+      "name": "receiver_parameter_shares_callers_type_param_name_explicit",
+      "params": {"mode": "receiver_explicit", "base": 3},
+      "expect": {"stdout": "ok 3\n", "calls": {}}
+    }
+  ]
+}

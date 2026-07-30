@@ -4774,6 +4774,74 @@ class TestFieldAccess:
 
         assert "type argument" in str(error).lower() or "generic" in str(error).lower()
 
+    def test_generic_method_accepts_caller_type_param_sharing_own_type_param_name(self) -> None:
+        """A same-spelled method-own type parameter must not capture a caller's.
+
+        ``Box::map``'s own parameter is named ``U``;
+        ``convert``'s own type parameter is also named ``U`` and reaches the
+        receiver's type argument (``Box[U]``). The method call must still bind
+        ``convert``'s ``U`` to the lambda's declared result type (``text``), not
+        confuse it with ``map``'s own ``U``.
+        """
+        checked = accept_type(
+            "record Box[T]\n"
+            "  value: T\n"
+            "def Box::map[T, U](self, f: (T) -> U) -> Box[U] = Box(value = f(self.value))\n"
+            "def convert[U](b: Box[U], g: (U) -> text) -> Box[text] = b.map(g)\n"
+        )
+        convert_def = checked.resolved.program.body.items[-1]
+        result = cast(FuncDef, convert_def).body
+        assert checked.node_types[result.node_id] == RecordType("Box", (TextType(),))
+
+    def test_generic_method_renamed_caller_type_param_behaves_identically(self) -> None:
+        """Renaming the caller's own type parameter must change nothing.
+
+        Acceptance and the inferred result type must be identical for ``U`` and
+        ``Z``: the capture bug made acceptance depend on that arbitrary choice.
+        """
+        checked = accept_type(
+            "record Box[T]\n"
+            "  value: T\n"
+            "def Box::map[T, U](self, f: (T) -> U) -> Box[U] = Box(value = f(self.value))\n"
+            "def convert[Z](b: Box[Z], g: (Z) -> text) -> Box[text] = b.map(g)\n"
+        )
+        convert_def = checked.resolved.program.body.items[-1]
+        result = cast(FuncDef, convert_def).body
+        assert checked.node_types[result.node_id] == RecordType("Box", (TextType(),))
+
+    def test_generic_method_explicit_type_args_accept_caller_type_param_sharing_name(
+        self,
+    ) -> None:
+        """The explicit ``::[…]`` branch must not capture a caller's variable either."""
+        checked = accept_type(
+            "record Box[T]\n"
+            "  value: T\n"
+            "def Box::map[T, U](self, f: (T) -> U) -> Box[U] = Box(value = f(self.value))\n"
+            "def convert[U](b: Box[U], g: (U) -> text) -> Box[text] = b.map::[text](g)\n"
+        )
+        convert_def = checked.resolved.program.body.items[-1]
+        result = cast(FuncDef, convert_def).body
+        assert checked.node_types[result.node_id] == RecordType("Box", (TextType(),))
+
+    def test_generic_method_qualified_and_member_spellings_agree(self) -> None:
+        """``Box::map(b, g)`` and ``b.map(g)`` must specialize identically."""
+        checked = accept_type(
+            "record Box[T]\n"
+            "  value: T\n"
+            "def Box::map[T, U](self, f: (T) -> U) -> Box[U] = Box(value = f(self.value))\n"
+            "def convert_member[U](b: Box[U], g: (U) -> text) -> Box[text] = b.map(g)\n"
+            "def convert_qualified[U](b: Box[U], g: (U) -> text) -> Box[text] = "
+            "Box::map(b, g)\n"
+        )
+        member_def, qualified_def = checked.resolved.program.body.items[-2:]
+        member_result = cast(FuncDef, member_def).body
+        qualified_result = cast(FuncDef, qualified_def).body
+        assert checked.node_types[member_result.node_id] == RecordType("Box", (TextType(),))
+        assert (
+            checked.node_types[qualified_result.node_id]
+            == checked.node_types[member_result.node_id]
+        )
+
     def test_member_selection_and_direct_call_are_published(self) -> None:
         checked = accept_type(
             "record Point\n"

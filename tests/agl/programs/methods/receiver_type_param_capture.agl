@@ -1,0 +1,55 @@
+# A caller's own generic type parameter must never be captured merely
+# because it shares a spelling with a called generic method's own type
+# parameter, regardless of whether the collision reaches the method through
+# the receiver's type argument or through a later method parameter, and
+# regardless of whether the method's own type argument is inferred or
+# supplied explicitly.
+param mode: text
+param base: int
+
+record Box[T]
+  value: T
+
+enum Outcome[A, B]
+  | ok(value: A)
+  | err(error: B)
+
+def Box::map[T, U](self, f: (T) -> U) -> Box[U] = Box(value = f(self.value))
+
+def Box::stamp[T, U](self, tag: U) -> Outcome[T, U] = ok(value = self.value)
+
+def describe_outcome(result: Outcome[int, int]) -> text =
+  case result of
+    | ok(value) => "ok %{value}"
+    | err(error) => "err %{error}"
+
+# The shared name "U" types `g`, a later parameter of the method call
+# (`f`), reached only after the receiver substitution has already run.
+def via_later_parameter[U](b: Box[U], g: (U) -> text) -> Box[text] = b.map(g)
+
+def via_later_parameter_explicit[U](b: Box[U], g: (U) -> text) -> Box[text] = b.map::[text](g)
+
+def via_qualified_spelling[U](b: Box[U], g: (U) -> text) -> Box[text] = Box::map(b, g)
+
+# The shared name "U" reaches the method purely through the receiver's own
+# type argument; `tag` stays concretely typed.
+def via_receiver[U](box: Box[U], tag: int) -> Outcome[U, int] = box.stamp(tag)
+
+def via_receiver_explicit[U](box: Box[U], tag: int) -> Outcome[U, int] = box.stamp::[int](tag)
+
+if
+  | mode == "later_inferred" =>
+      let result = via_later_parameter(Box(value = base), fn(n: int) -> text => "v=%{n}")
+      print(result.value)
+  | mode == "later_explicit" =>
+      let result = via_later_parameter_explicit(Box(value = base), fn(n: int) -> text => "x=%{n}")
+      print(result.value)
+  | mode == "qualified_spelling" =>
+      let result = via_qualified_spelling(Box(value = base), fn(n: int) -> text => "q=%{n}")
+      print(result.value)
+  | mode == "receiver_inferred" =>
+      let result = via_receiver(Box(value = base), 404)
+      print(describe_outcome(result))
+  | else =>
+      let result = via_receiver_explicit(Box(value = base), 404)
+      print(describe_outcome(result))

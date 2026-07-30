@@ -634,7 +634,7 @@ class TestMethodRegistry:
         assert table.lookup_method(point, "shift") == point_shift
         assert table.lookup_method(color, "primary") == color_primary
         assert table.lookup_method(fault, "code") == fault_code
-        assert table.methods_for(fault) is table.methods_for(fault)
+        assert table.methods_for(fault) == table.methods_for(fault) == {"code": fault_code}
         assert point_shift.module_id == _LIB_ID
         assert point_shift.scope_path == ("Models", "Point")
         assert point_shift.name == "shift"
@@ -795,11 +795,12 @@ class TestMethodRegistry:
         target = TypeTable()
         target.register(TypeDef(kind="exception", name="Fault", module_id=ENTRY_ID))
         target.register_method(fault, method)
-        cached = target.methods_for(fault)
+        before = dict(target.methods_for(fault))
 
         target.merge_from(source)
 
-        assert target.methods_for(fault) is cached
+        assert dict(target.methods_for(fault)) == before == {"status": method}
+        assert target.lookup_method(fault, "status") == method
 
     def test_generic_owner_records_receiver_type_parameter_arity(self) -> None:
         table = TypeTable()

@@ -3688,6 +3688,85 @@ def test_import_scc_infers_mutually_recursive_method_returns_and_registers_final
 
 
 # ---------------------------------------------------------------------------
+# Member-call dependency edges in candidate inference
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "source",
+    (
+        "record Box\n"
+        "  n: int\n"
+        "def use(b: Box) = b.twice() + 1\n"
+        "def Box::twice(self) = self.n * 2\n"
+        "use(Box(n = 3))",
+        "record Box\n"
+        "  n: int\n"
+        "def Box::twice(self) = self.n * 2\n"
+        "def use(b: Box) = b.twice() + 1\n"
+        "use(Box(n = 3))",
+    ),
+)
+def test_unannotated_function_infers_result_through_a_member_call_in_either_source_order(
+    source: str,
+) -> None:
+    """A member call (``b.twice()``) must contribute a dependency edge.
+
+    Without that edge, the SCC pass could close ``use`` before ``twice``'s
+    candidate signature exists, since scope resolution alone (via ``VarRef``)
+    never sees a member call's callee. Declaration order must not matter.
+    """
+    checked = _check(source)
+
+    assert checked.function_signatures["use"].result == IntType()
+    method = checked.type_env.type_table.lookup_method(RecordType("Box"), "twice")
+    assert method is not None
+    assert method.signature.result == IntType()
+
+
+def test_unannotated_methods_are_mutually_recursive_through_member_calls() -> None:
+    """Two unannotated methods calling each other via ``.method()`` still close."""
+    checked = _check(
+        "record Counter\n"
+        "  n: int\n"
+        "def Counter::is_even(self) =\n"
+        "  if self.n == 0 => true else => Counter(n = self.n - 1).is_odd()\n"
+        "def Counter::is_odd(self) =\n"
+        "  if self.n == 0 => false else => Counter(n = self.n - 1).is_even()\n"
+        "Counter(n = 4).is_even()"
+    )
+
+    table = checked.type_env.type_table
+    even = table.lookup_method(RecordType("Counter"), "is_even")
+    odd = table.lookup_method(RecordType("Counter"), "is_odd")
+    assert even is not None and odd is not None
+    assert even.signature.result == BoolType()
+    assert odd.signature.result == BoolType()
+
+
+def test_unannotated_method_infers_result_through_a_forward_referenced_function() -> None:
+    """A method body calling a later unannotated free function must also see the edge."""
+    checked = _check(
+        "record Box\n"
+        "  n: int\n"
+        "def Box::describe(self) = helper(self.n)\n"
+        "def helper(n: int) = n + 1\n"
+        "Box(n = 3).describe()"
+    )
+
+    method = checked.type_env.type_table.lookup_method(RecordType("Box"), "describe")
+    assert method is not None
+    assert method.signature.result == IntType()
+    assert checked.function_signatures["helper"].result == IntType()
+
+
+def test_unannotated_method_with_no_concrete_return_evidence_is_still_rejected() -> None:
+    """Widening the SCC for member calls must not accept a genuinely undecidable method."""
+    with pytest.raises(AglTypeError):
+        _check('record Box\n  n: int\ndef Box::fail(self) = raise Abort(message = "boom")\n')
+
+
+# ---------------------------------------------------------------------------
 # Named-only parameters in graph context
 # ---------------------------------------------------------------------------
 

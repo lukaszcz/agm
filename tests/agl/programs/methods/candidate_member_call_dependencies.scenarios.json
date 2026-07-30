@@ -1,0 +1,24 @@
+{
+  "scenarios": [
+    {
+      "name": "member_call_on_a_forward_referenced_unannotated_method",
+      "params": {"mode": "forward_reference", "n": 3},
+      "expect": {"stdout": "7\n", "calls": {}}
+    },
+    {
+      "name": "mutually_recursive_unannotated_methods_report_true",
+      "params": {"mode": "mutual_recursion", "n": 4},
+      "expect": {"stdout": "true\n", "calls": {}}
+    },
+    {
+      "name": "mutually_recursive_unannotated_methods_report_false",
+      "params": {"mode": "mutual_recursion", "n": 5},
+      "expect": {"stdout": "false\n", "calls": {}}
+    },
+    {
+      "name": "unannotated_method_calls_a_forward_referenced_unannotated_function",
+      "params": {"mode": "describe", "n": 3},
+      "expect": {"stdout": "4\n", "calls": {}}
+    }
+  ]
+}

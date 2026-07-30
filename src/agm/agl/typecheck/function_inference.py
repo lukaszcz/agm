@@ -29,6 +29,7 @@ from agm.agl.semantics.types import (
 )
 from agm.agl.syntax.nodes import (
     AgentDecl,
+    FieldAccess,
     FuncDef,
     LetDecl,
     Param,
@@ -249,25 +250,46 @@ def _function_key(
     return (module.module_id.segments, *_declaration_key(node))
 
 
+def _candidate_methods_by_name(functions: dict[int, _CandidateFunction]) -> dict[str, list[int]]:
+    """Group this batch's candidate methods by declared name, once per batch.
+
+    Scope's ``receiver_owner_for`` is the definitive method classification;
+    a candidate belongs here only when scope already recognized it as a
+    method, never by re-deriving that from a ``self`` parameter.
+    """
+    by_name: dict[str, list[int]] = {}
+    for declaration_id, (module, node) in functions.items():
+        if module.resolved.receiver_owner_for(module.module_id, node) is not None:
+            by_name.setdefault(node.name, []).append(declaration_id)
+    return by_name
+
+
 def _function_dependencies(
     functions: dict[int, _CandidateFunction],
 ) -> dict[int, tuple[int, ...]]:
     """Collect body references to batch candidates by resolved declaration id."""
+    methods_by_name = _candidate_methods_by_name(functions)
     dependencies: dict[int, tuple[int, ...]] = {}
     for declaration_id, (module, node) in functions.items():
         assert node.body is not None
         referenced: set[int] = set()
 
         def visit(item: object) -> None:
-            if not isinstance(item, VarRef):
-                return
-            reference = module.resolved.resolution.get(item.node_id)
-            if reference is not None and reference.decl_node_id in functions:
-                referenced.add(reference.decl_node_id)
+            if isinstance(item, VarRef):
+                reference = module.resolved.resolution.get(item.node_id)
+                if reference is not None and reference.decl_node_id in functions:
+                    referenced.add(reference.decl_node_id)
+            elif isinstance(item, FieldAccess):
+                # A member call's target is only disambiguated from a field
+                # read later, by the checker; over-approximate here with an
+                # edge to every same-named candidate method so a missing edge
+                # never lets an SCC close out of order. Widening an SCC is
+                # safe; missing an edge is the bug this closes.
+                referenced.update(methods_by_name.get(item.field, ()))
 
         # Walking the whole body deliberately includes direct calls, function
-        # values, partial applications, and type applications. Defaults are
-        # checked only by authoritative validation.
+        # values, partial applications, type applications, and member calls.
+        # Defaults are checked only by authoritative validation.
         walk(node.body, visit)
 
         def dependency_key(node_id: int) -> tuple[tuple[str, ...], int, int]:

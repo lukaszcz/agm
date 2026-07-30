@@ -1,0 +1,36 @@
+# Unannotated candidate inference must add a dependency edge for a member
+# call (`receiver.method()`), not just a plain name reference. This covers a
+# forward-referenced unannotated method, unannotated methods mutually
+# recursive through member calls, and an unannotated method calling an
+# unannotated free function declared later. Declaration order must not
+# matter for any of these.
+param mode: text
+param n: int
+
+record Box
+  n: int
+
+record Counter
+  n: int
+
+def use_box(b: Box) = b.twice() + 1
+
+def Box::twice(self) = self.n * 2
+
+def Counter::is_even(self) =
+  if self.n == 0 => true else => Counter(n = self.n - 1).is_odd()
+
+def Counter::is_odd(self) =
+  if self.n == 0 => false else => Counter(n = self.n - 1).is_even()
+
+def Box::describe(self) = helper(self.n)
+
+def helper(m: int) = m + 1
+
+if
+  | mode == "forward_reference" =>
+      print(use_box(Box(n = n)))
+  | mode == "mutual_recursion" =>
+      print(Counter(n = n).is_even())
+  | else =>
+      print(Box(n = n).describe())

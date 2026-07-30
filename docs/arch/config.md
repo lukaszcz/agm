@@ -31,9 +31,9 @@ For AgL execution, four sources combine with a defined precedence:
   `source write (std/config::X := e) > CLI flag > [<program>].X > [exec].X > engine default`
   Their names, value kinds, and consuming side come from the pure shared catalog in `config/engine_keys.py`, also consumed by AgL semantics, deep IR validation, and the AgL evaluator/REPL.
 - **Param values** (`param NAME`):
-  `agm exec`: `CLI flag > [<program>].Y > source default (param Y = e) > required error`; `agm repl`: after `program NAME` establishes the active program, `[<program>].Y > source default (param Y = e) > required error`. A REPL param before that declaration cannot use program config.
+  `CLI flag > [<program>].Y > source default (param Y = e) > required error`
 
-`[exec]` holds global engine defaults with kebab field names (`strict-json`, `max-iters`, `log-file`). `[<program>]` is a **top-level** section keyed by the `program NAME` declaration or, for `agm exec`, the `.agl` file stem; it holds both engine-key overrides and param values for that specific program. The REPL loads its section only when `program NAME` establishes the active program, so the declaration must precede params that need config values. Inline `-c` programs with no `program` declaration have no config section. A file stem matching a reserved AGM section name (e.g. `loop`, `exec`) is a pre-execution error unless the source has an explicit `program NAME` declaration.
+`[exec]` holds global engine defaults with kebab field names (`strict-json`, `max-iters`, `log-file`). `[<program>]` is a **top-level** section keyed by the `program NAME` declaration or the `.agl` file stem; it holds both engine-key overrides and param values for that specific program. Inline `-c` programs with no `program` declaration have no config section. A file stem matching a reserved AGM section name (e.g. `loop`, `exec`) is a pre-execution error unless the source has an explicit `program NAME` declaration.
 
 ## Sandbox Configuration
 

@@ -30,18 +30,23 @@ runner = "agm run pi -p '@%{PROMPT_FILE}'"
 # [repl]
 # theme = "auto"    # syntax-highlighting theme: "dark", "light", or "auto" (detect from $COLORFGBG)
 
-# [<program>] — per-program settings (agm exec).
+# [<program>] — per-program settings.
 #
-# The table key is the name from the program's ``program NAME`` declaration, or
-# the .agl file stem when no ``program`` declaration is present.  CLI options
-# (e.g. ``--topic``) override config values; config values for params suppress the
-# default expression.  Inline ``-c`` programs with no ``program`` declaration have
-# no config table.  Engine-key overrides (e.g. ``timeout``) take precedence over
-# the global ``[exec]`` value (``[<program>].X > [exec].X > engine default``).
+# For ``agm exec``, the table key is the ``program NAME`` declaration, or the
+# .agl file stem when no declaration is present. CLI param options (e.g.
+# ``--topic``) override config values; config values for params suppress the
+# default expression. Inline ``-c`` programs with no declaration have no config
+# table. Engine-key overrides (e.g. ``timeout``) take precedence over ``[exec]``
+# (``[<program>].X > [exec].X > engine default``).
+#
+# In ``agm repl``, only ``program NAME`` selects this table; there is no file-stem
+# fallback or per-param CLI option. The name applies to params declared after it
+# in that entry and, after a successful entry, to later entries. This table does
+# not override REPL engine settings.
 #
 # [review-workflow]
-# timeout  = "60s"              # engine-key override: per-program timeout
-# log      = true               # engine-key override: enable trace logging
+# timeout  = "60s"              # engine-key override for agm exec
+# log      = true               # engine-key override for agm exec
 # topic    = "security"         # text param — verbatim string
 # verbose  = true               # bool param — native TOML bool
 # max-iter = 3                  # int param  — native TOML integer

@@ -378,6 +378,12 @@ available on every value of that type wherever the value is used, so calling it
 does not require an import of the module that declared the type. See
 [Methods](functions.md#methods) for declaration and call syntax.
 
+In the REPL, redeclaring a record, enum, or exception drops every method
+previously declared on it, even when the redeclaration repeats an identical
+shape; the methods must be declared again. A failed entry that would have
+redeclared the type changes nothing — the previous declaration and its
+methods remain in effect.
+
 ## Record types
 
 A `record` declares a nominal product type. The fields are written in an

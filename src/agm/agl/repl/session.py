@@ -191,9 +191,9 @@ class ReplSession:
         # Persistent session environment.
         self._session_scope: ScopeNode = ScopeNode(node_id=-1, parent=None)
         self._session_scope_nodes: dict[tuple[str, ...], ScopeNode] = {(): self._session_scope}
-        self._session_type_paths: frozenset[tuple[str, ...]] = frozenset()
-        # Alias declarations retain source targets for scope-only diagnostics.
-        self._session_type_aliases: dict[tuple[str, ...], TypeAlias] = {}
+        # Each retained type-owned path maps to its rendered alias target, or
+        # None for a nominal type.
+        self._session_type_paths: dict[tuple[str, ...], str | None] = {}
         self._type_env: TypeEnvironment = TypeEnvironment()
         # Ambient agents injected by the scope pass carry a synthetic decl_node_id
         # of -1 (no real AST declaration).  Pre-register AgentType() for this
@@ -718,6 +718,7 @@ class ReplSession:
             is_scoped_declaration,
             pattern_binder_candidates,
         )
+        from agm.agl.syntax.types import render_type_expr
         from agm.agl.typecheck.env import TypeEnvironment
 
         def declarations(items: tuple[object, ...]) -> list[object]:
@@ -885,17 +886,14 @@ class ReplSession:
                     and _is_promoted(ref.decl_node_id)
                 ):
                     session_node.members[name] = ref
-        self._session_type_paths |= frozenset(
-            (*path, name) for path, name in promoted_type_identities
-        )
-        for path, name in promoted_type_identities:
-            self._session_type_aliases.pop((*path, name), None)
-        self._session_type_aliases.update(
-            {
-                (*tuple(segment.name for segment in item.scope_path), item.name): item
-                for item in entry_type_items
-                if isinstance(item, TypeAlias) and item.node_id in promoted_declaration_ids
-            }
+        alias_targets = {
+            type_identity(item): render_type_expr(item.type_expr)
+            for item in entry_type_items
+            if isinstance(item, TypeAlias) and item.node_id in promoted_declaration_ids
+        }
+        self._session_type_paths.update(
+            ((*path, name), alias_targets.get((path, name)))
+            for path, name in promoted_type_identities
         )
 
         if not partial and not stale_binding_node_ids:
@@ -1297,8 +1295,7 @@ class ReplSession:
 
         self._session_scope = ScopeNode(node_id=-1, parent=None)
         self._session_scope_nodes = {(): self._session_scope}
-        self._session_type_paths = frozenset()
-        self._session_type_aliases = {}
+        self._session_type_paths = {}
         self._type_env = TypeEnvironment()
         # Re-seed the sentinel AgentType for ambient agents (see __init__).
         self._type_env.set_binding_type(-1, self._make_agent_type())

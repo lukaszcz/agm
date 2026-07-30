@@ -487,8 +487,7 @@ def resolve_program(
     entry_parent_scope: ScopeNode | None = None,
     entry_repl_session_scope: ScopeNode | None = None,
     entry_repl_session_scope_nodes: Mapping[ScopePath, ScopeNode] | None = None,
-    entry_repl_session_type_paths: frozenset[ScopePath] = frozenset(),
-    entry_repl_session_type_aliases: Mapping[ScopePath, TypeAlias] | None = None,
+    entry_repl_session_type_paths: Mapping[ScopePath, str | None] | None = None,
 ) -> ResolvedProgram:
     """Run the full scope-resolution pass over a :class:`~agm.agl.modules.loader.ModuleGraph`.
 
@@ -516,10 +515,9 @@ def resolve_program(
         Named scope layers promoted by prior REPL entries. They are copied into
         the entry's resolver so qualified members remain available.
     entry_repl_session_type_paths:
-        Type-owned scope paths among the retained layers.
-    entry_repl_session_type_aliases:
-        Retained alias declarations keyed by their type-owned scope paths.
-        Scope uses their kind and source target to reject method receivers.
+        Type-owned scope paths among the retained layers, each mapped to its
+        rendered alias target or to None for a nominal type. Scope needs the
+        distinction to reject a method receiver in an alias scope.
 
     Returns
     -------
@@ -638,8 +636,7 @@ def resolve_program(
             is_entry=is_entry,
             repl_session_scope=entry_repl_session_scope if is_entry else None,
             repl_session_scope_nodes=entry_repl_session_scope_nodes if is_entry else None,
-            repl_session_type_paths=entry_repl_session_type_paths if is_entry else frozenset(),
-            repl_session_type_aliases=entry_repl_session_type_aliases if is_entry else None,
+            repl_session_type_paths=entry_repl_session_type_paths if is_entry else None,
             origin_path=loaded.path,
             spaced_qualifiers=loaded.spaced_qualifiers,
         )

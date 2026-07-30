@@ -252,8 +252,7 @@ class _Resolver:
         is_entry: bool = True,
         repl_session_scope: ScopeNode | None = None,
         repl_session_scope_nodes: Mapping[ScopePath, ScopeNode] | None = None,
-        repl_session_type_paths: frozenset[ScopePath] = frozenset(),
-        repl_session_type_aliases: Mapping[ScopePath, TypeAlias] | None = None,
+        repl_session_type_paths: Mapping[ScopePath, str | None] | None = None,
         origin_path: Path | None = None,
         spaced_qualifiers: tuple[SpacedQualifier, ...] = (),
     ) -> None:
@@ -288,10 +287,10 @@ class _Resolver:
         # into this entry's fresh resolver image and committed only after a
         # successful evaluation, so a failed entry cannot mutate session state.
         self._repl_session_scope_nodes = dict(repl_session_scope_nodes or {})
-        self._repl_session_type_paths = repl_session_type_paths
-        # Retained aliases need their kind and source target for receiver
-        # classification; a path alone cannot distinguish them from nominals.
-        self._repl_session_type_aliases = dict(repl_session_type_aliases or {})
+        # Each retained type-owned path maps to its rendered alias target, or
+        # None for a nominal type: receiver classification cannot tell the two
+        # apart from a path alone.
+        self._repl_session_type_paths = dict(repl_session_type_paths or {})
         # This module's canonical source file, or None for a module with no
         # backing file (inline `-c` sources, direct REPL entries). Drives the
         # `extern def` placement check — externs require a file-backed module.
@@ -627,13 +626,16 @@ class _Resolver:
 
     def _classify_method_declarations(self) -> None:
         """Classify receiver parameters after every declaration path is complete."""
-        type_scopes: dict[ScopePath, RecordDef | EnumDef | ExceptionDef | TypeAlias] = dict(
-            self._repl_session_type_aliases
-        )
-        type_scopes.update(
+        alias_targets: dict[ScopePath, str] = {
+            path: target
+            for path, target in self._repl_session_type_paths.items()
+            if target is not None
+        }
+        alias_targets.update(
             {
-                path + (declaration.name,): declaration
+                path + (declaration.name,): render_type_expr(declaration.type_expr)
                 for declaration, path in self._type_declarations
+                if isinstance(declaration, TypeAlias)
             }
         )
         for key, declaration in self._declaration_items.items():
@@ -643,11 +645,11 @@ class _Resolver:
             if receiver.name != "self":
                 continue
             owner_path = key[1]
-            owner_declaration = type_scopes.get(owner_path)
-            if isinstance(owner_declaration, TypeAlias):
+            alias_target = alias_targets.get(owner_path)
+            if alias_target is not None:
                 raise AglScopeError(
-                    f"'self' cannot declare a method in alias scope '{owner_declaration.name}', "
-                    f"which targets '{render_type_expr(owner_declaration.type_expr)}'.",
+                    f"'self' cannot declare a method in alias scope '{owner_path[-1]}', "
+                    f"which targets '{alias_target}'.",
                     span=receiver.span,
                 )
             if owner_path in self._type_paths:

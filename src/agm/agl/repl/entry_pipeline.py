@@ -34,7 +34,7 @@ if TYPE_CHECKING:
     from agm.agl.semantics.types import Type
     from agm.agl.semantics.values import EnumValue, Frame, Value
     from agm.agl.syntax.advisories import SpacedQualifier
-    from agm.agl.syntax.nodes import ImportDecl, Item, OpenDecl, Program, ScopeRegion, TypeAlias
+    from agm.agl.syntax.nodes import ImportDecl, Item, OpenDecl, Program, ScopeRegion
     from agm.agl.typecheck.env import CheckedModule, TypeEnvironment
     from agm.agl.typecheck.program import CheckedProgram
 
@@ -54,8 +54,7 @@ class EntryPipelineCtx(Protocol):
     _ir_base_frame: Frame
     _session_scope: ScopeNode
     _session_scope_nodes: dict[tuple[str, ...], ScopeNode]
-    _session_type_paths: frozenset[tuple[str, ...]]
-    _session_type_aliases: dict[tuple[str, ...], TypeAlias]
+    _session_type_paths: dict[tuple[str, ...], str | None]
     _type_env: TypeEnvironment
     _ambient_constructor_candidates: dict[str, tuple[ConstructorRef, ...]]
     _ambient_type_names: frozenset[str]
@@ -204,7 +203,6 @@ class EntryPipeline:
                 entry_repl_session_scope=self._ctx._session_scope,
                 entry_repl_session_scope_nodes=self._ctx._session_scope_nodes,
                 entry_repl_session_type_paths=self._ctx._session_type_paths,
-                entry_repl_session_type_aliases=self._ctx._session_type_aliases,
             )
         except AglScopeError as exc:
             return self._ctx._fail([exc.to_diagnostic()], tab_warnings)
@@ -318,7 +316,6 @@ class EntryPipeline:
             entry_repl_session_scope=self._ctx._session_scope,
             entry_repl_session_scope_nodes=self._ctx._session_scope_nodes,
             entry_repl_session_type_paths=self._ctx._session_type_paths,
-            entry_repl_session_type_aliases=self._ctx._session_type_aliases,
         )
         return check_program(
             resolved_program, host_env.capabilities, entry_seed_env=self._ctx._type_env

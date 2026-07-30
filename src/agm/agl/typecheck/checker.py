@@ -2831,10 +2831,11 @@ class _Checker:
         that method's own type variables as a side effect (``_bound_method_type``),
         and checking it a second time would leave the first set of variables
         permanently unsolved. When the callee did not select a method (a plain
-        field holding a function value) or the method's declared signature is
-        not yet available (an unannotated method whose header is still being
-        inferred), this falls back to the value-call finish, reusing the callee
-        type already computed here instead of re-checking it.
+        field holding a function value), this falls back to the value-call
+        finish, reusing the callee type already computed here instead of
+        re-checking it. A selected method always has a registered signature:
+        header registration publishes the signature before the method, so
+        selection can never observe an unregistered one.
         """
         if node.type_args:
             callee_type = self._check_specialized_field_access(
@@ -2843,17 +2844,19 @@ class _Checker:
         else:
             callee_type = self._check_expr(field_access, expected=None)
         method = self._method_selections.get(field_access.node_id)
-        sig = (
-            self._env.get_function_signature_by_node_id(method.decl_node_id)
-            if method is not None
-            else None
-        )
-        if method is None or sig is None:
+        if method is None:
             return self._check_value_call(
                 node, expected=expected, hole_indices={}, callee_type=callee_type
             )
+        sig = self._env.get_function_signature_by_node_id(method.decl_node_id)
+        assert sig is not None, (
+            f"compiler bug: no registered signature for selected method {method.name!r}"
+        )
 
         assert isinstance(callee_type, FunctionType)
+        assert len(sig.params) == len(callee_type.params) + 1, (
+            f"compiler bug: method {method.name!r} signature arity does not match its bound type"
+        )
         params = tuple(
             ParamSpec(
                 name=sig.params[i + 1].name,

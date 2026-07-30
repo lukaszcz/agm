@@ -58,7 +58,6 @@ entry's :class:`~agm.agl.scope.symbols.ModuleResolution`.
 
 from __future__ import annotations
 
-from collections.abc import Iterator
 from dataclasses import dataclass, replace
 from typing import Generic, Mapping, TypeVar, cast
 
@@ -85,8 +84,9 @@ from agm.agl.syntax.nodes import (
     ParamKind,
     Program,
     RecordDef,
-    ScopeRegion,
     TypeAlias,
+    static_function_items,
+    static_type_items,
 )
 from agm.agl.syntax.spans import SourceSpan
 from agm.agl.syntax.types import type_parameter_bindings
@@ -199,29 +199,9 @@ def assert_checked_program_closed(checked: CheckedProgram) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _static_type_items(
-    items: tuple[object, ...],
-) -> Iterator[RecordDef | EnumDef | ExceptionDef | TypeAlias]:
-    """Yield type declarations while preserving their structured scope paths."""
-    for item in items:
-        if isinstance(item, ScopeRegion):
-            yield from _static_type_items(item.items)
-        elif isinstance(item, (RecordDef, EnumDef, ExceptionDef, TypeAlias)):
-            yield item
-
-
 def _decl_key(module_id: ModuleId, item: RecordDef | EnumDef | ExceptionDef | TypeAlias) -> DeclKey:
     """Return a declaration's structured nominal identity."""
     return (module_id, tuple(segment.name for segment in item.scope_path), item.name)
-
-
-def _static_function_items(items: tuple[object, ...]) -> Iterator[FuncDef]:
-    """Yield functions nested in named scope regions."""
-    for item in items:
-        if isinstance(item, ScopeRegion):
-            yield from _static_function_items(item.items)
-        elif isinstance(item, FuncDef):
-            yield item
 
 
 def _collect_shells_only(builder: _TypeBuilder, program: object) -> None:
@@ -279,7 +259,7 @@ def _resolve_body_for_one(
     assert isinstance(program, Program)
 
     display_name = "::".join((*key[1], key[2]))
-    for item in _static_type_items(program.body.items):
+    for item in static_type_items(program.body.items):
         if isinstance(item, RecordDef) and _decl_key(mid, item) == key:
             with cross_env.type_scope(key[1]):
                 builder.build_record(display_name)
@@ -358,7 +338,7 @@ def _collect_all_type_keys(
     for mid, rmod in resolved.modules.items():
         program = rmod.resolved.program
         assert isinstance(program, Program)
-        for item in _static_type_items(program.body.items):
+        for item in static_type_items(program.body.items):
             # Builtin/prelude shadowing is rejected in _collect_shells_only
             # (Step A of _build_program_type_table), which is called before this
             # function. Only non-builtin types reach this point.
@@ -382,7 +362,7 @@ def _find_type_decl_span(resolved: ResolvedProgram, key: DeclKey) -> SourceSpan 
         return None
     program = rmod.resolved.program
     assert isinstance(program, Program)
-    for item in _static_type_items(program.body.items):
+    for item in static_type_items(program.body.items):
         if isinstance(item, (RecordDef, EnumDef, ExceptionDef)) and _decl_key(mid, item) == key:
             return item.span
     return None
@@ -506,7 +486,7 @@ def _build_program_type_table(
     for mid, rmod in resolved.modules.items():
         program = rmod.resolved.program
         assert isinstance(program, Program)
-        for item in _static_type_items(program.body.items):
+        for item in static_type_items(program.body.items):
             if isinstance(item, TypeAlias):
                 alias_decls[_decl_key(mid, item)] = item
     program_alias_keys = frozenset(alias_decls)
@@ -687,10 +667,8 @@ def _build_program_func_sig_table(
             if g_mid == mid:
                 env.register_generic_type("::".join((*scope_path, g_name)), gdef)
 
-        for item in _static_function_items(program.body.items):
-            receiver_owner = rmod.resolved.method_declarations.get(
-                (mid, tuple(segment.name for segment in item.scope_path), item.name)
-            )
+        for item in static_function_items(program.body.items):
+            receiver_owner = rmod.resolved.receiver_owner_for(mid, item)
             # Defer invalid declarations to the checker. Scope-classified methods
             # have their own namespace, so they still need program-header metadata
             # when their name matches a global builtin.

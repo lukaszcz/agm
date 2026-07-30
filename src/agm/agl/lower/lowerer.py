@@ -352,9 +352,6 @@ class _LinkState:
     decl_to_sym: dict[int, SymbolId] = field(default_factory=dict)
     fn_node_to_sym: dict[int, SymbolId] = field(default_factory=dict)
     fn_node_to_id: dict[int, FunctionId] = field(default_factory=dict)
-    fn_decl_to_id: dict[tuple[ModuleId, tuple[str, ...], str], FunctionId] = field(
-        default_factory=dict
-    )
     symbols: dict[SymbolId, SymbolDescriptor] = field(default_factory=dict)
     functions: dict[FunctionId, FunctionDescriptor] = field(default_factory=dict)
     nominals: dict[NominalId, NominalDescriptor] = field(default_factory=dict)
@@ -549,9 +546,6 @@ class _Lowerer:
         )
         self._link.fn_node_to_sym[funcdef.node_id] = sym
         self._link.fn_node_to_id[funcdef.node_id] = fn_id
-        self._link.fn_decl_to_id[
-            (self._module_id, tuple(segment.name for segment in funcdef.scope_path), funcdef.name)
-        ] = fn_id
 
     # Binder kinds whose values live in evaluation frames and can therefore be
     # captured by a closure.  function_binding is resolved through the function
@@ -1193,9 +1187,9 @@ class _Lowerer:
             # Field access → IrField or a bound-method partial closure
             # ----------------------------------------------------------
             case FieldAccess(obj=obj_expr, field=field_name, span=span):
-                selection = self._checked.member_selection_for(node.node_id)
-                if selection is not None and selection.method is not None:
-                    return self._lower_bound_method(node, selection.method)
+                selected_method = self._checked.method_selection_for(node.node_id)
+                if selected_method is not None:
+                    return self._lower_bound_method(node, selected_method)
                 obj_type = self._node_type(obj_expr.node_id)
                 nominal, _display, mode = self._nominal_for_field_projection(obj_type)
                 return IrField(
@@ -2123,9 +2117,14 @@ class _Lowerer:
         if builtin_kind is not None:
             return self._lower_builtin_call(builtin_kind, call_node, span)
 
-        method = self._checked.direct_method_for(nid)
-        if method is not None:
-            return self._lower_direct_method_call(call_node, method, span)
+        # A call whose callee selected a method: call the method directly with a
+        # receiver-first argument list instead of allocating the bound closure
+        # the callee expression would otherwise lower to. A partial call has
+        # already returned above and keeps that closure.
+        if isinstance(callee, FieldAccess):
+            method = self._checked.method_selection_for(callee.node_id)
+            if method is not None:
+                return self._lower_direct_method_call(call_node, method, span)
 
         # (a) VarRef callee resolving to a constructor.
         if isinstance(callee, VarRef):
@@ -2199,7 +2198,7 @@ class _Lowerer:
 
     def _method_function_id(self, method: MethodDef) -> FunctionId:
         """Return the linked function chosen by the checker's method selection."""
-        fn_id = self._link.fn_decl_to_id.get((method.module_id, method.scope_path, method.name))
+        fn_id = self._link.fn_node_to_id.get(method.decl_node_id)
         assert fn_id is not None, (
             f"compiler bug: no FunctionId for selected method "
             f"{method.module_id!r}::{method.scope_path!r}::{method.name!r}"

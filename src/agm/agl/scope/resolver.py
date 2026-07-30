@@ -649,17 +649,13 @@ class _Resolver:
             if isinstance(owner_declaration, TypeAlias):
                 raise AglScopeError(
                     f"'self' cannot declare a method in alias scope '{owner_declaration.name}', "
-                    f"which targets '{self._alias_target_name(owner_declaration)}'.",
+                    f"which targets '{render_type_expr(owner_declaration.type_expr)}'.",
                     span=receiver.span,
                 )
             if owner_path in self._type_paths:
                 self._method_declarations[key] = owner_path
             elif isinstance(receiver.type_expr, ReceiverType):
                 raise AglScopeError("'self' requires an enclosing type scope.", span=receiver.span)
-
-    def _alias_target_name(self, alias: TypeAlias) -> str:
-        """Return the source-level alias target for a receiver diagnostic."""
-        return render_type_expr(alias.type_expr)
 
     def _build_scope_nodes(self, root: ScopeNode) -> dict[ScopePath, ScopeNode]:
         """Build named-scope layers and populate their declaration memberships."""

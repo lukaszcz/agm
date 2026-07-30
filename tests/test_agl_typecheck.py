@@ -4798,14 +4798,13 @@ class TestFieldAccess:
         assert isinstance(method_call, Call)
         assert isinstance(method_call.callee, FieldAccess)
 
-        field_selection = checked.member_selection_for(field_binding.value.node_id)
-        method_selection = checked.member_selection_for(method_binding.value.node_id)
-        call_selection = checked.member_selection_for(method_call.callee.node_id)
-        assert field_selection is not None and field_selection.kind == "field"
-        assert method_selection is not None and method_selection.kind == "method"
-        assert method_selection.method is not None
-        assert call_selection is not None and call_selection.kind == "method"
-        assert checked.direct_method_for(method_call.node_id) == call_selection.method
+        # A field access selects a method or nothing at all; the callee of an
+        # ordinary member call carries the selection lowering calls directly.
+        assert checked.method_selection_for(field_binding.value.node_id) is None
+        method_selection = checked.method_selection_for(method_binding.value.node_id)
+        call_selection = checked.method_selection_for(method_call.callee.node_id)
+        assert method_selection is not None and method_selection.name == "radius"
+        assert call_selection == method_selection
 
 
 # ---------------------------------------------------------------------------

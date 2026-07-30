@@ -550,6 +550,17 @@ class ModuleResolution:
     match_site_pattern_slots: dict[int, tuple[int, ...]] = field(default_factory=dict)
     method_declarations: dict[DeclarationKey, ScopePath] = field(default_factory=dict)
 
+    def receiver_owner_for(self, module_id: ModuleId, node: FuncDef) -> ScopePath | None:
+        """Return scope's receiver classification for *node*, if it has one.
+
+        Every consumer of ``method_declarations`` asks this one question of a
+        declaration node, so the structured key is assembled here rather than at
+        each call site.
+        """
+        return self.method_declarations.get(
+            (module_id, tuple(segment.name for segment in node.scope_path), node.name)
+        )
+
 
 # ---------------------------------------------------------------------------
 # AglScopeError — fatal scope error

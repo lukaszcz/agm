@@ -53,6 +53,7 @@ from agm.agl.syntax.types import (
     TextT,
     TypeExpr,
     UnitT,
+    render_type_expr,
 )
 from agm.raw_tail_catalog import RAW_TAIL_BUILTINS
 
@@ -975,15 +976,7 @@ class AstBuilder(Transformer):
         """param_def: field_name (COLON type_expr)? (EQ or_expr)?"""
         name_tok = _find_name_token(args)
         name = str(name_tok)
-        type_expr = next((a for a in args[1:] if isinstance(a, _ALL_TYPE_EXPRS)), None)
-        default = next(
-            (
-                cast(syntax.Expr, a)
-                for a in args[1:]
-                if a is not None and not isinstance(a, (Token, _ALL_TYPE_EXPRS))
-            ),
-            None,
-        )
+        type_expr, default = _extract_ann_and_optional_expr(args[1:])
         if type_expr is None:
             if name != "self":
                 raise AglSyntaxError(
@@ -1171,7 +1164,7 @@ class AstBuilder(Transformer):
                 key_type = type_args[0]
                 if not isinstance(key_type, TextT):
                     raise AglSyntaxError(
-                        f"dict keys are always text in AgL, got {_type_expr_spelling(key_type)!r}.",
+                        f"dict keys are always text in AgL, got {render_type_expr(key_type)!r}.",
                         span=key_type.span,
                     )
                 return DictT(value=type_args[1], span=span, node_id=nid)
@@ -3611,34 +3604,6 @@ def _extract_ann_and_optional_expr(
         elif _is_expr_obj(a):
             value = cast(syntax.Expr, a)
     return ann, value
-
-
-def _type_expr_spelling(t: TypeExpr) -> str:
-    """Return the source-level spelling of a primitive TypeExpr.
-
-    Used to produce user-facing error messages that cite the source token text
-    (e.g. ``'int'``) rather than an internal class name (e.g. ``'IntT'``).
-    Only primitive / simple types are handled; complex types fall back to the
-    class name (without the trailing ``T``).
-    """
-    _SPELLING: dict[type, str] = {
-        TextT: "text",
-        JsonT: "json",
-        BoolT: "bool",
-        IntT: "int",
-        DecimalT: "decimal",
-        UnitT: "unit",
-        AgentT: "agent",
-        ReceiverType: "receiver",
-    }
-    spelling = _SPELLING.get(type(t))
-    if spelling is not None:
-        return spelling
-    if isinstance(t, NameT):
-        return t.name
-    # Fallback for complex types (ArrayT, DictT, FuncT, AppliedT): strip trailing 'T'.
-    cls = type(t).__name__
-    return cls[:-1].lower() if cls.endswith("T") else cls.lower()
 
 
 def syntax_error_from_meta(meta: Meta, message: str) -> AglSyntaxError:

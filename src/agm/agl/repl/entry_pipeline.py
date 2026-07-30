@@ -347,8 +347,7 @@ class EntryPipeline:
             pattern_binding_refs=entry.pattern_binding_refs,
             pattern_constructor_refs=entry.pattern_constructor_refs,
             pattern_constructor_owners=entry.pattern_constructor_owners,
-            member_selections=entry.member_selections,
-            direct_method_calls=entry.direct_method_calls,
+            method_selections=entry.method_selections,
         )
 
     def _prepare_entry_program(

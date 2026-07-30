@@ -278,21 +278,27 @@ class TypeTable:
         self._methods.pop(key, None)
         self._invalidate_cache_for(key)
 
-    def register_method(self, owner: NominalOwner, method: MethodDef) -> None:
-        """Register *method* under its nominal *owner*.
+    def _put_method(self, key: DeclKey, method: MethodDef) -> None:
+        """Write *method* into *key*'s direct map, invalidating caches on change.
 
-        Method declarations are deliberately data-only: scope classifies a
-        receiver and typecheck resolves its header before calling this table;
-        neither frontend package is imported here. A repeated registration of
-        the same declaration is a no-op, while a redeclaration replaces the
-        previous entry so REPL state cannot retain a stale method.
+        A repeated registration of the same declaration is a no-op, while a
+        redeclaration replaces the previous entry so REPL state cannot retain a
+        stale method.
         """
-        key = (owner.module_id, owner.scope_path, owner.name)
         methods = self._methods.setdefault(key, {})
         if methods.get(method.name) == method:
             return
         methods[method.name] = method
         self._exception_methods_cache.clear()
+
+    def register_method(self, owner: NominalOwner, method: MethodDef) -> None:
+        """Register *method* under its nominal *owner*.
+
+        Method declarations are deliberately data-only: scope classifies a
+        receiver and typecheck resolves its header before calling this table;
+        neither frontend package is imported here.
+        """
+        self._put_method((owner.module_id, owner.scope_path, owner.name), method)
 
     def restore_methods_from(
         self,
@@ -322,7 +328,7 @@ class TypeTable:
         cached = self._exception_methods_cache.get(key)
         if cached is not None:
             return cached
-        result = self._flatten_exception_methods(key, _visiting=frozenset())
+        result = self._flatten_exception_methods(key)
         self._exception_methods_cache[key] = result
         return result
 
@@ -330,18 +336,43 @@ class TypeTable:
         """Return the available method named *name*, or ``None`` on a miss."""
         return self.methods_for(owner).get(name)
 
-    def _flatten_exception_methods(
-        self, key: DeclKey, *, _visiting: frozenset[DeclKey]
-    ) -> Mapping[str, MethodDef]:
-        if key in _visiting:
-            raise AssertionError(f"cyclic exception base chain detected at {key!r}")
-        typedef = self._require_exception_def(key, caller="methods_for")
+    def _exception_chain(self, key: DeclKey, *, caller: str) -> list[tuple[DeclKey, TypeDef]]:
+        """Return *key*'s base chain, base first, rejecting a cyclic base link.
+
+        Every flattened exception accessor inherits base-first declaration order
+        from this one walk, so ``caller`` only selects the ``KeyError``/
+        ``AssertionError`` label of the accessor that asked.
+        """
+        chain: list[tuple[DeclKey, TypeDef]] = []
+        visited: set[DeclKey] = set()
+        current: DeclKey | None = key
+        while current is not None:
+            if current in visited:
+                raise AssertionError(f"cyclic exception base chain detected at {current!r}")
+            visited.add(current)
+            typedef = self._require_exception_def(current, caller=caller)
+            chain.append((current, typedef))
+            current = typedef.base
+        chain.reverse()
+        return chain
+
+    def ancestor_defs(self, key: DeclKey) -> tuple[TypeDef, ...]:
+        """Return *key*'s exception ancestors, nearest first.
+
+        Empty for a hierarchy root and for any non-exception declaration, so a
+        caller checking inherited members needs no base-chain walk of its own.
+        """
+        typedef = self.get(key[0], key[2], key[1])
+        assert typedef is not None, f"no TypeDef registered for {key!r}"
+        if typedef.kind != "exception" or typedef.base is None:
+            return ()
+        chain = self._exception_chain(typedef.base, caller="ancestor_defs")
+        return tuple(base_def for _base_key, base_def in reversed(chain))
+
+    def _flatten_exception_methods(self, key: DeclKey) -> Mapping[str, MethodDef]:
         methods: dict[str, MethodDef] = {}
-        if typedef.base is not None:
-            methods.update(
-                self._flatten_exception_methods(typedef.base, _visiting=_visiting | {key})
-            )
-        methods.update(self._methods.get(key, {}))
+        for chain_key, _typedef in self._exception_chain(key, caller="methods_for"):
+            methods.update(self._methods.get(chain_key, {}))
         return methods
 
     def _invalidate_cache_for(self, key: DeclKey) -> None:
@@ -450,20 +481,14 @@ class TypeTable:
         cached = self._exception_fields_cache.get(key)
         if cached is not None:
             return cached
-        result = self._flatten_exception_fields(key, _visiting=frozenset())
+        result = self._flatten_exception_fields(key)
         self._exception_fields_cache[key] = result
         return result
 
-    def _flatten_exception_fields(
-        self, key: DeclKey, *, _visiting: frozenset[DeclKey]
-    ) -> Mapping[str, Type]:
-        if key in _visiting:
-            raise AssertionError(f"cyclic exception base chain detected at {key!r}")
-        typedef = self._require_exception_def(key, caller="exception_fields")
+    def _flatten_exception_fields(self, key: DeclKey) -> Mapping[str, Type]:
         fields: dict[str, Type] = {}
-        if typedef.base is not None:
-            fields.update(self._flatten_exception_fields(typedef.base, _visiting=_visiting | {key}))
-        fields.update(dict(typedef.fields))
+        for _chain_key, typedef in self._exception_chain(key, caller="exception_fields"):
+            fields.update(typedef.fields)
         return fields
 
     def exception_field_kinds(self, handle: ExceptionType) -> tuple[tuple[str, str], ...]:
@@ -489,27 +514,17 @@ class TypeTable:
         cached = self._exception_field_kinds_cache.get(key)
         if cached is not None:
             return cached
-        result = self._flatten_exception_field_kinds(key, _visiting=frozenset())
+        result = self._flatten_exception_field_kinds(key)
         self._exception_field_kinds_cache[key] = result
         return result
 
-    def _flatten_exception_field_kinds(
-        self, key: DeclKey, *, _visiting: frozenset[DeclKey]
-    ) -> tuple[tuple[str, str], ...]:
-        if key in _visiting:
-            raise AssertionError(f"cyclic exception base chain detected at {key!r}")
-        typedef = self._require_exception_def(key, caller="exception_field_kinds")
-        inherited: tuple[tuple[str, str], ...] = ()
-        if typedef.base is not None:
-            inherited = self._flatten_exception_field_kinds(
-                typedef.base, _visiting=_visiting | {key}
-            )
-        own = tuple(
+    def _flatten_exception_field_kinds(self, key: DeclKey) -> tuple[tuple[str, str], ...]:
+        return tuple(
             (fname, kind)
+            for _chain_key, typedef in self._exception_chain(key, caller="exception_field_kinds")
             for (fname, _ftype), kind in zip(typedef.fields, typedef.field_kinds, strict=True)
             if fname != "trace_id"
         )
-        return inherited + own
 
     def exception_def(self, handle: ExceptionType) -> TypeDef:
         """Return the registered ``TypeDef`` for *handle*.
@@ -773,7 +788,7 @@ class TypeTable:
             )
         return (
             f"type '{t!r}' cannot be used as {use}: it contains "
-            f"'{_qualified_decl_name(culprit)}', whose recursive instantiations never "
+            f"'{qualified_decl_name(culprit)}', whose recursive instantiations never "
             "close, so it has no finite JSON schema."
         )
 
@@ -798,7 +813,7 @@ class TypeTable:
         if culprit is not None:
             key, field_name, field_type = culprit
             return (
-                f"field '{field_name}' of '{_qualified_decl_name(key)}' has type "
+                f"field '{field_name}' of '{qualified_decl_name(key)}' has type "
                 f"'{field_type!r}', which has no JSON representation"
             )
         type_vars = sorted(free_type_vars(t))
@@ -920,12 +935,8 @@ class TypeTable:
             self._methods.pop(key, None)
             self._invalidate_cache_for(key)
         for key, methods in other._methods.items():
-            target_methods = self._methods.setdefault(key, {})
-            for name, method in methods.items():
-                if target_methods.get(name) == method:
-                    continue
-                target_methods[name] = method
-                self._exception_methods_cache.clear()
+            for method in methods.values():
+                self._put_method(key, method)
 
 
 def decl_key_sort_key(key: DeclKey) -> tuple[tuple[str, ...], tuple[str, ...], str]:
@@ -933,7 +944,7 @@ def decl_key_sort_key(key: DeclKey) -> tuple[tuple[str, ...], tuple[str, ...], s
     return (key[0].segments, key[1], key[2])
 
 
-def _qualified_decl_name(key: DeclKey) -> str:
+def qualified_decl_name(key: DeclKey) -> str:
     """Return *key*'s user-facing name, module-qualified unless it is the entry module.
 
     Bare names from an imported module can otherwise be ambiguous; the

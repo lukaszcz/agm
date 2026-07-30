@@ -193,7 +193,6 @@ from agm.agl.typecheck.env import (
     CallSiteRecord,
     CheckedModule,
     FunctionSignature,
-    MemberSelection,
     OutputContractSpec,
     ParamSpec,
     PartialCallSpec,
@@ -585,9 +584,8 @@ class _Checker:
         self._partial_calls: dict[int, PartialCallSpec] = {}
         # Member lookup is checker-owned: lowering must use these selections
         # rather than independently deciding whether a dot access was a field
-        # or a bound method.
-        self._member_selections: dict[int, MemberSelection] = {}
-        self._direct_method_calls: dict[int, MethodDef] = {}
+        # or a bound method.  A dot access absent here selected a field.
+        self._method_selections: dict[int, MethodDef] = {}
         # Extern provenance for first-class function values.  A value can name
         # one or more externs (e.g. through a branch); when such a function
         # value is actually called, dry-run inventory records that call site.
@@ -609,7 +607,7 @@ class _Checker:
 
     def _preregister_funcdef(self, node: FuncDef) -> None:
         """Resolve and register the signature of a top-level ``def``."""
-        receiver_owner = self._method_owner_path(node)
+        receiver_owner = self._resolved.receiver_owner_for(self._module_id, node)
         self._validate_funcdef_header(node, is_method=receiver_owner is not None)
         if node.return_type is None:
             return
@@ -625,12 +623,6 @@ class _Checker:
             self._env.register_extern_node_id(node.node_id)
         self._register_funcdef_signature(node, sig, func_type, is_method=receiver_owner is not None)
         register_method_header(self._env, node, sig, receiver_owner)
-
-    def _method_owner_path(self, node: FuncDef) -> tuple[str, ...] | None:
-        """Return scope's receiver classification for *node*, if it has one."""
-        return self._resolved.method_declarations.get(
-            (self._module_id, self._declaration_scope_path(node), node.name)
-        )
 
     def _validate_funcdef_header(self, node: FuncDef, *, is_method: bool) -> None:
         """Validate declaration-level properties that do not need a return type.
@@ -1927,8 +1919,7 @@ class _Checker:
             ("pattern_constructor_refs", self._pattern_constructor_refs),
             ("pattern_constructor_owners", self._pattern_constructor_owners),
             ("partial_calls", self._partial_calls),
-            ("member_selections", self._member_selections),
-            ("direct_method_calls", self._direct_method_calls),
+            ("method_selections", self._method_selections),
             ("contract_specs", self._contract_specs),
             ("cast_specs", self._cast_specs),
             ("explicit_builtin_targets", self._explicit_builtin_targets),
@@ -2035,15 +2026,10 @@ class _Checker:
         """Append a call site produced while finalizing the active region."""
         self._call_sites.append(call_site)
 
-    def _record_member_selection(self, node_id: int, selection: MemberSelection) -> None:
-        """Publish the checker-selected field or method for one dot access."""
-        self._record_side_table_addition("member_selections", self._member_selections, node_id)
-        self._member_selections[node_id] = selection
-
-    def _record_direct_method_call(self, node_id: int, method: MethodDef) -> None:
-        """Publish a direct-callable selected method for lowering."""
-        self._record_side_table_addition("direct_method_calls", self._direct_method_calls, node_id)
-        self._direct_method_calls[node_id] = method
+    def _record_method_selection(self, node_id: int, method: MethodDef) -> None:
+        """Publish the checker-selected method for one dot access."""
+        self._record_side_table_addition("method_selections", self._method_selections, node_id)
+        self._method_selections[node_id] = method
 
     def _record_partial_call(
         self,
@@ -2564,14 +2550,10 @@ class _Checker:
                 )
 
         # Value call (lambda or higher-order). A selected method still has a
-        # first-class bound-function type here; only publishing lets lowering
-        # replace a non-partial direct call with the receiver-first path later.
-        result = self._check_value_call(node, expected=expected, hole_indices=hole_indices)
-        if isinstance(node.callee, FieldAccess) and not hole_indices:
-            selection = self._member_selections.get(node.callee.node_id)
-            if selection is not None and selection.method is not None:
-                self._record_direct_method_call(node.node_id, selection.method)
-        return result
+        # first-class bound-function type here; the recorded method selection on
+        # the callee lets lowering replace a non-partial call with the
+        # receiver-first direct path later.
+        return self._check_value_call(node, expected=expected, hole_indices=hole_indices)
 
     # --- shared call-argument checker ---
 
@@ -2845,18 +2827,15 @@ class _Checker:
         # A direct member call carries its explicit type arguments on Call,
         # whereas value-position syntax uses TypeApply. Both feed the same
         # member-specialization path so only a selected generic method can
-        # consume the arguments.
-        callee_type = (
-            self._check_field_access(node.callee, type_args=node.type_args)
-            if isinstance(node.callee, FieldAccess) and node.type_args
-            else self._check_expr(node.callee, expected=None)
-        )
-        # Explicit direct member calls bypass ``_check_expr`` for their callee
-        # so the Call can own ``::[T]``. Publish the selected bound-function
-        # type just as the ordinary expression path does: partial lowering and
-        # direct-call argument coercions both consume this specialization.
+        # consume the arguments. Such a callee bypasses ``_check_expr``, so its
+        # selected bound-function type is published here just as the ordinary
+        # expression path would: partial lowering and direct-call argument
+        # coercions both consume this specialization.
         if isinstance(node.callee, FieldAccess) and node.type_args:
+            callee_type = self._check_field_access(node.callee, type_args=node.type_args)
             self._record_node_type(node.callee.node_id, callee_type)
+        else:
+            callee_type = self._check_expr(node.callee, expected=None)
         with self._frame_direct_candidate_use(exprs=(node.callee,)):
             if not isinstance(callee_type, FunctionType):
                 raise AglTypeError(
@@ -3844,23 +3823,19 @@ class _Checker:
                 )
                 if isinstance(template_arg, TypeVarType)
             }
-        specialized = substitute(method.signature, substitutions)
+        specialized: Type = method.signature
+        if substitutions:
+            specialized = substitute(method.signature, substitutions)
         assert isinstance(specialized, FunctionType)
         bound = FunctionType(params=specialized.params[1:], result=specialized.result)
         own_type_params = method.type_params[method.receiver_type_param_arity :]
         if type_args is not None:
-            if len(type_args) != len(own_type_params):
-                raise AglTypeError(
-                    f"Method '{method.name}' requires {len(own_type_params)} explicit type "
-                    f"argument(s), but {len(type_args)} were supplied.",
-                    span=span,
-                )
-            explicit = {
-                name: self._env.resolve_type_expr(
-                    type_arg, span=span, type_vars=self._current_type_vars
-                )
-                for name, type_arg in zip(own_type_params, type_args, strict=True)
-            }
+            explicit = self._resolve_explicit_type_args(
+                owner_name=method.name,
+                type_params=own_type_params,
+                type_args=type_args,
+                span=span,
+            )
             specialized = substitute(bound, explicit)
             assert isinstance(specialized, FunctionType)
             return specialized
@@ -3922,7 +3897,6 @@ class _Checker:
                         "Explicit type arguments can only be applied to a generic method.",
                         span=node.span,
                     )
-                self._record_member_selection(node.node_id, MemberSelection(kind="field"))
                 field_type = fields[node.field]
                 if isinstance(obj_type, RecordType):
                     self._set_inferred_return_expr_provenance(
@@ -3934,9 +3908,7 @@ class _Checker:
             if isinstance(obj_type, (RecordType, EnumType, ExceptionType)):
                 method = self._env.type_table.lookup_method(obj_type, node.field)
                 if method is not None:
-                    self._record_member_selection(
-                        node.node_id, MemberSelection(kind="method", method=method)
-                    )
+                    self._record_method_selection(node.node_id, method)
                     bound = self._bound_method_type(
                         method, obj_type, type_args=type_args, expected=expected, span=node.span
                     )
@@ -4840,8 +4812,7 @@ class _Checker:
             pattern_binding_refs=self._pattern_binding_refs,
             pattern_constructor_refs=self._pattern_constructor_refs,
             pattern_constructor_owners=self._pattern_constructor_owners,
-            member_selections=self._member_selections,
-            direct_method_calls=self._direct_method_calls,
+            method_selections=self._method_selections,
             explicit_builtin_targets=self._explicit_builtin_targets,
         )
 

@@ -554,16 +554,16 @@ class TestTypeExpressions:
             parse("let d: dict[int] = {}")
 
     def test_dict_non_text_key_complex_type_raises(self) -> None:
-        # dict key type must be text; a complex key triggers _type_expr_spelling fallback
-        # (ArrayT → "array", covering the cls[:-1].lower() branch).
+        # dict key type must be text; a complex key is rendered with its type
+        # arguments (array[int]).
         from agm.agl.parser.errors import AglSyntaxError
 
         with pytest.raises(AglSyntaxError, match="text"):
             parse("let d: dict[array[int], int] = {}")
 
     def test_dict_named_type_key_raises(self) -> None:
-        # dict key type must be text; a named type key triggers the NameT branch
-        # in _type_expr_spelling, which returns its name in the error message.
+        # dict key type must be text; a named type key is rendered by its name
+        # in the error message.
         from agm.agl.parser.errors import AglSyntaxError
 
         with pytest.raises(AglSyntaxError, match="Review"):

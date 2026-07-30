@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import decimal
 import enum
+from collections.abc import Iterator
 from dataclasses import dataclass
 from dataclasses import field as dc_field
 from typing import TypeGuard
@@ -1245,6 +1246,31 @@ def is_scoped_declaration(node: object) -> TypeGuard[ScopedDeclaration]:
     return isinstance(
         node, (FuncDef, RecordDef, EnumDef, ExceptionDef, TypeAlias, AgentDecl)
     ) and bool(node.scope_path)
+
+
+def static_type_items(
+    items: tuple[object, ...],
+) -> Iterator[RecordDef | EnumDef | ExceptionDef | TypeAlias]:
+    """Yield type declarations, descending into named scope regions.
+
+    Named scope regions are transparent to declaration collection: a scoped
+    declaration carries its own structured scope path, so passes that walk
+    static declarations see a region's members as siblings of its own items.
+    """
+    for item in items:
+        if isinstance(item, ScopeRegion):
+            yield from static_type_items(item.items)
+        elif isinstance(item, (RecordDef, EnumDef, ExceptionDef, TypeAlias)):
+            yield item
+
+
+def static_function_items(items: tuple[object, ...]) -> Iterator[FuncDef]:
+    """Yield function declarations, descending into named scope regions."""
+    for item in items:
+        if isinstance(item, ScopeRegion):
+            yield from static_function_items(item.items)
+        elif isinstance(item, FuncDef):
+            yield item
 
 
 # Closed union of declaration nodes.

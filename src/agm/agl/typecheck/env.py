@@ -321,14 +321,6 @@ class PartialCallSpec:
     callee_kind: Literal["declared", "constructor", "value"] = "declared"
 
 
-@dataclass(frozen=True, slots=True)
-class MemberSelection:
-    """Checker-selected meaning of one field-access expression."""
-
-    kind: Literal["field", "method"]
-    method: MethodDef | None = None
-
-
 # ---------------------------------------------------------------------------
 # Pattern-slot dereferencing — shared by the checker and its checked output
 # ---------------------------------------------------------------------------
@@ -424,10 +416,11 @@ class CheckedModule:
         constructor pattern because a source-spelling ``ConstructorRef`` can
         name a transparent alias; downstream passes compare this identity
         instead of re-running candidate selection.
-    ``member_selections`` / ``direct_method_calls``
-        The checked meaning of every field access and the method selected for
-        an ordinary direct member call. Lowering consumes these decisions
-        rather than repeating field or method lookup.
+    ``method_selections``
+        The method selected for each field access that named one; a field
+        access absent here selected a field. Lowering consumes these decisions
+        rather than repeating member lookup, and reads the selection on a
+        call's callee to choose the receiver-first direct call.
     ``explicit_builtin_targets``
         Maps a built-in call's ``Call.node_id`` → the resolved ``Type`` of its
         explicit ``::[T]`` type argument, for every built-in that accepts one
@@ -460,8 +453,7 @@ class CheckedModule:
     pattern_binding_refs: dict[int, BindingRef] = field(default_factory=dict)
     pattern_constructor_refs: dict[int, ConstructorRef] = field(default_factory=dict)
     pattern_constructor_owners: dict[int, NominalId] = field(default_factory=dict)
-    member_selections: dict[int, MemberSelection] = field(default_factory=dict)
-    direct_method_calls: dict[int, MethodDef] = field(default_factory=dict)
+    method_selections: dict[int, MethodDef] = field(default_factory=dict)
     explicit_builtin_targets: dict[int, Type] = field(default_factory=dict)
 
     def binding_for(self, node_id: int) -> BindingRef | None:
@@ -481,13 +473,9 @@ class CheckedModule:
             slot_constructor_refs=self.slot_constructor_refs,
         )
 
-    def member_selection_for(self, node_id: int) -> MemberSelection | None:
-        """Return the field or method selected for one member-access node."""
-        return self.member_selections.get(node_id)
-
-    def direct_method_for(self, node_id: int) -> MethodDef | None:
-        """Return the method selected for one direct member-call node."""
-        return self.direct_method_calls.get(node_id)
+    def method_selection_for(self, node_id: int) -> MethodDef | None:
+        """Return the method selected for one member-access node, if any."""
+        return self.method_selections.get(node_id)
 
     def pattern_binding_for(self, node_id: int) -> BindingRef | None:
         """Return the immutable binding selected for one pattern occurrence."""

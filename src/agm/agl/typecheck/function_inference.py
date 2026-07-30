@@ -606,12 +606,30 @@ def _method_owner(
 
 
 def _method_type_parameter_name(node: FuncDef, index: int) -> str:
-    """Return the private rigid name for one nonbinding method type slot."""
+    """Return the private rigid name for one nonbinding receiver type slot."""
     return f"__method_type_slot_{node.node_id}_{index}"
 
 
-def _receiver_type(env: TypeEnvironment, node: FuncDef, owner_path: tuple[str, ...]) -> Type:
-    """Build the receiver type from a scope-classified method declaration."""
+def _method_signature_type_params(node: FuncDef, arity: int) -> tuple[str, ...]:
+    """Rename each receiver-prefix wildcard slot to its private rigid name.
+
+    Only the first ``arity`` slots (the receiver prefix) may be the ``_``
+    wildcard; the caller must already have rejected a wildcard at or beyond
+    that prefix, since it would otherwise become an unnameable method type
+    parameter.
+    """
+    return tuple(
+        _method_type_parameter_name(node, index)
+        if index < arity and name == TYPE_PARAMETER_WILDCARD
+        else name
+        for index, name in enumerate(node.type_param_slots)
+    )
+
+
+def _receiver_type(
+    env: TypeEnvironment, node: FuncDef, owner_path: tuple[str, ...]
+) -> tuple[Type, int]:
+    """Build the receiver type and its owner arity from a scope-classified method declaration."""
     owner, arity, generic = _method_owner(env, owner_path)
     if len(node.type_param_slots) < arity:
         raise AglTypeError(
@@ -619,16 +637,23 @@ def _receiver_type(env: TypeEnvironment, node: FuncDef, owner_path: tuple[str, .
             f"but its receiver requires {arity}.",
             span=node.span,
         )
+    for index in range(arity, len(node.type_param_slots)):
+        if node.type_param_slots[index] == TYPE_PARAMETER_WILDCARD:
+            raise AglTypeError(
+                f"Method '{node.name}' type parameter {index} is its own, not a receiver "
+                "slot, so it needs a name; '_' may only fill an unused receiver slot.",
+                span=node.span,
+            )
     if generic is None:
-        return owner
+        return owner, arity
 
     receiver_args = tuple(
-        TypeVarType(name)
-        if name != TYPE_PARAMETER_WILDCARD
-        else TypeVarType(_method_type_parameter_name(node, index))
-        for index, name in enumerate(node.type_param_slots[:arity])
+        TypeVarType(name) for name in _method_signature_type_params(node, arity)[:arity]
     )
-    return env.instantiate_from_gdef("::".join(owner_path), generic, receiver_args, node.span)
+    return (
+        env.instantiate_from_gdef("::".join(owner_path), generic, receiver_args, node.span),
+        arity,
+    )
 
 
 def register_method_header(
@@ -671,11 +696,8 @@ def resolve_function_header(
     signature_type_params = source_type_params
     receiver: Type | None = None
     if receiver_owner is not None:
-        receiver = _receiver_type(env, node, receiver_owner)
-        signature_type_params = tuple(
-            name if name != TYPE_PARAMETER_WILDCARD else _method_type_parameter_name(node, index)
-            for index, name in enumerate(node.type_param_slots)
-        )
+        receiver, arity = _receiver_type(env, node, receiver_owner)
+        signature_type_params = _method_signature_type_params(node, arity)
 
     params: list[ParamSpec] = []
     for index, param in enumerate(node.params):

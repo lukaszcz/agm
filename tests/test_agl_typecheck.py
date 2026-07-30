@@ -7565,6 +7565,22 @@ class TestMethodHeaders:
         error = reject_type("record Box[T]\n  value: T\ndef Box::size(self) -> int = 1")
         assert "type parameter" in str(error).lower()
 
+    def test_method_own_type_parameter_wildcard_rejected_on_nongeneric_receiver(self) -> None:
+        error = reject_type(
+            "record Point\n  x: int\ndef Point::m[_](self) -> int = 1\nPoint(x = 1)"
+        )
+        message = str(error)
+        assert "m" in message
+        assert "__method_type_slot" not in message
+
+    def test_surplus_wildcard_rejected_on_generic_receiver(self) -> None:
+        error = reject_type(
+            "record Box[T]\n  value: T\ndef Box::m[T, _](self) -> int = 1\nBox(value = 1)"
+        )
+        message = str(error)
+        assert "m" in message
+        assert "__method_type_slot" not in message
+
     def test_repeating_wildcard_receiver_slots_remain_nonbinding(self) -> None:
         checked = accept_type(
             "enum Outcome[A, B]\n"

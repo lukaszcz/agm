@@ -1,0 +1,7 @@
+record Box[T]
+  value: T
+
+def Box::m[T, _](self) -> int = 1
+
+let box = Box(value = 1)
+print(box.m())

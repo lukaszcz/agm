@@ -1,0 +1,7 @@
+record Point
+  x: int
+
+def Point::m[_](self) -> int = 1
+
+let p = Point(x = 1)
+print(p.m())

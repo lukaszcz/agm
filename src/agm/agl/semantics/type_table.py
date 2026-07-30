@@ -336,6 +336,14 @@ class TypeTable:
         """Return the available method named *name*, or ``None`` on a miss."""
         return self.methods_for(owner).get(name)
 
+    def declared_methods(self, key: DeclKey) -> Mapping[str, MethodDef]:
+        """Return only the methods declared directly on *key*, never inherited ones.
+
+        Declaration-level rules attribute a member to the type that declares it,
+        which the inheritance-flattening :meth:`methods_for` cannot answer.
+        """
+        return self._methods.get(key, {})
+
     def _exception_chain(self, key: DeclKey, *, caller: str) -> list[tuple[DeclKey, TypeDef]]:
         """Return *key*'s base chain, base first, rejecting a cyclic base link.
 
@@ -368,6 +376,37 @@ class TypeTable:
             return ()
         chain = self._exception_chain(typedef.base, caller="ancestor_defs")
         return tuple(base_def for _base_key, base_def in reversed(chain))
+
+    def descendant_defs(self, key: DeclKey) -> tuple[TypeDef, ...]:
+        """Return every registered exception that inherits from *key*, nearest first.
+
+        Empty for a non-exception declaration. The inverse of
+        :meth:`ancestor_defs`: a base declaration needs it to see the members
+        its descendants already occupy, including descendants retained from an
+        earlier REPL entry.
+        """
+        typedef = self.get(key[0], key[2], key[1])
+        assert typedef is not None, f"no TypeDef registered for {key!r}"
+        if typedef.kind != "exception":
+            return ()
+        found: list[tuple[int, TypeDef]] = []
+        for candidate in self._defs.values():
+            if candidate.kind != "exception":
+                continue
+            candidate_key = (candidate.module_id, candidate.scope_path, candidate.name)
+            ancestors = self.ancestor_defs(candidate_key)
+            depth = next(
+                (
+                    index
+                    for index, base in enumerate(ancestors)
+                    if (base.module_id, base.scope_path, base.name) == key
+                ),
+                None,
+            )
+            if depth is not None:
+                found.append((depth, candidate))
+        found.sort(key=_descendant_depth)
+        return tuple(candidate for _depth, candidate in found)
 
     def _flatten_exception_methods(self, key: DeclKey) -> Mapping[str, MethodDef]:
         methods: dict[str, MethodDef] = {}
@@ -939,21 +978,29 @@ class TypeTable:
                 self._put_method(key, method)
 
 
+def _descendant_depth(entry: tuple[int, TypeDef]) -> int:
+    """Order a descendant search result by its distance from the queried base."""
+    return entry[0]
+
+
 def decl_key_sort_key(key: DeclKey) -> tuple[tuple[str, ...], tuple[str, ...], str]:
     """Deterministic sort key for a declaration key (module, scope path, then name)."""
     return (key[0].segments, key[1], key[2])
 
 
 def qualified_decl_name(key: DeclKey) -> str:
-    """Return *key*'s user-facing name, module-qualified unless it is the entry module.
+    """Return *key*'s user-facing name, module-qualified where a reader needs it.
 
     Bare names from an imported module can otherwise be ambiguous; the
-    ``module.path_str()::name`` convention matches ``RecordType``/``EnumType``'s
-    own ``__repr__``.
+    ``module::name`` convention matches ``RecordType``/``EnumType``'s own
+    ``__repr__``. Entry-module and prelude declarations are spelled bare
+    because that is how every reader writes them.
     """
     module, scope_path, name = key
     scoped = "::".join((*scope_path, name))
-    return scoped if module.is_entry else f"{module.path_str()}::{scoped}"
+    if module.is_entry or module.is_prelude:
+        return scoped
+    return f"{module.display()}::{scoped}"
 
 
 def _first_non_data_leaf(t: Type) -> Type | None:

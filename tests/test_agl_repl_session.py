@@ -139,6 +139,31 @@ class TestPersistence:
         assert "field" in message
         assert "method" in message
 
+    def test_later_base_method_cannot_collide_with_a_retained_descendant_member(self) -> None:
+        session = ReplSession()
+        assert session.eval_entry("exception Base extends Exception\n  code: int").ok
+        assert session.eval_entry("exception Child extends Base\n  detail: text").ok
+        assert session.eval_entry('def Child::label(self) -> text = "child"').ok
+
+        rejected = session.eval_entry('def Base::label(self) -> text = "base"')
+
+        assert not rejected.ok
+        message = rejected.diagnostics[0].message.lower()
+        assert "label" in message
+        assert "method" in message
+
+    def test_later_base_method_cannot_collide_with_a_retained_descendant_field(self) -> None:
+        session = ReplSession()
+        assert session.eval_entry("exception Base extends Exception\n  code: int").ok
+        assert session.eval_entry("exception Child extends Base\n  detail: text").ok
+
+        rejected = session.eval_entry('def Base::detail(self) -> text = "base"')
+
+        assert not rejected.ok
+        message = rejected.diagnostics[0].message.lower()
+        assert "detail" in message
+        assert "field" in message
+
     def test_bound_method_binding_persists_across_entries(self) -> None:
         session = ReplSession()
         assert session.eval_entry("record Meter(value: int)").ok

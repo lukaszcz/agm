@@ -152,10 +152,16 @@ class TestSentinelIds:
 
     def test_prelude_id_is_not_entry(self) -> None:
         assert not PRELUDE_ID.is_entry
+        assert PRELUDE_ID.is_prelude
 
     def test_non_entry_is_not_entry(self) -> None:
         mid = ModuleId.from_path("foo")
         assert not mid.is_entry
+        assert not mid.is_prelude
+
+    @pytest.mark.parametrize("sentinel", [ENTRY_ID, PRELUDE_ID])
+    def test_sentinel_display_hides_its_reserved_segment(self, sentinel: ModuleId) -> None:
+        assert "\x00" not in sentinel.display()
 
     def test_entry_id_not_equal_to_user_module(self) -> None:
         mid = ModuleId.from_path("main")

@@ -3795,6 +3795,31 @@ def test_exception_method_cannot_redeclare_an_unannotated_method_from_any_base(
     assert raised.value.span is not None and raised.value.span.start_line == 6
     assert "label" in str(raised.value).lower()
     assert "method" in str(raised.value).lower()
+    # The conflicting method belongs to 'Base', not to the nearest ancestor
+    # 'Middle', and its declaration is offered as a note.
+    assert "'Base'" in str(raised.value)
+    assert "'Middle'" not in str(raised.value)
+    assert [span.start_line for _text, span in raised.value.related] == [3]
+
+
+def test_inherited_method_collision_names_the_ancestor_that_declares_it(tmp_path: Path) -> None:
+    source = (
+        "exception Root extends Exception\n"
+        "  code: int\n"
+        "exception Mid extends Root()\n"
+        "exception Leaf extends Mid()\n"
+        'def Root::label(self) -> text = "root"\n'
+        'def Leaf::label(self) -> text = "leaf"\n'
+        "()"
+    )
+
+    with pytest.raises(AglTypeError) as raised:
+        _check_program(tmp_path, {"entry": source})
+
+    assert raised.value.span is not None and raised.value.span.start_line == 6
+    assert "'Root'" in str(raised.value)
+    assert "'Mid'" not in str(raised.value)
+    assert [span.start_line for _text, span in raised.value.related] == [5]
 
 
 def test_descendant_exception_field_cannot_shadow_an_inherited_method(tmp_path: Path) -> None:
@@ -3852,6 +3877,10 @@ def test_check_module_rejects_a_method_shadowing_a_builtin_exception_field() -> 
     assert raised.value.span is not None and raised.value.span.start_line == 3
     assert "message" in str(raised.value).lower()
     assert "field" in str(raised.value).lower()
+    # A built-in owner is named the way it is written in source, never through
+    # the reserved module sentinel, whose segment is not printable text.
+    assert "'Exception'" in str(raised.value)
+    assert "\x00" not in str(raised.value)
 
 
 def test_method_names_are_independent_between_unrelated_types(tmp_path: Path) -> None:

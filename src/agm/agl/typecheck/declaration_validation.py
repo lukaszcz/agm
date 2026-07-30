@@ -3,13 +3,12 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Literal
 
 from agm.agl.modules.ids import PRELUDE_ID, ModuleId
 from agm.agl.scope.symbols import ModuleResolution
 from agm.agl.semantics.type_table import DeclKey, TypeTable, qualified_decl_name
-from agm.agl.semantics.types import ExceptionType
 from agm.agl.syntax.nodes import (
     ExceptionDef,
     RecordDef,
@@ -29,11 +28,44 @@ class _MemberDeclaration:
     span: SourceSpan | None
 
 
+@dataclass(slots=True)
+class _MemberIndex:
+    """Every nominal member namespace this validation can reach.
+
+    ``members`` is the single source for the question "what does this owner
+    declare?": source declarations carry their spans, and an owner outside this
+    compile unit — an imported base, or a type retained from an earlier REPL
+    entry — contributes its registered fields and directly declared methods
+    without one. ``declared`` names the owners this compile unit contributes
+    to, which are exactly the owners whose members need checking.
+    """
+
+    members: dict[DeclKey, dict[str, list[_MemberDeclaration]]] = field(default_factory=dict)
+    declared: set[DeclKey] = field(default_factory=set)
+
+    def members_of(self, key: DeclKey) -> Mapping[str, list[_MemberDeclaration]]:
+        """Return *key*'s member namespace, empty for an owner never indexed."""
+        return self.members.get(key, {})
+
+
+def _index_registered_owner(index: _MemberIndex, type_table: TypeTable, key: DeclKey) -> None:
+    """Index an owner outside this compile unit from its registered declaration."""
+    if key in index.members:
+        return
+    typedef = type_table.get(key[0], key[2], key[1])
+    assert typedef is not None, "compiler bug: related owner is not registered"
+    members = index.members.setdefault(key, {})
+    for field_name, _field_type in typedef.fields:
+        members.setdefault(field_name, []).append(_MemberDeclaration("field", None))
+    for method_name in type_table.declared_methods(key):
+        members.setdefault(method_name, []).append(_MemberDeclaration("method", None))
+
+
 def _member_declarations(
     modules: Mapping[ModuleId, ModuleResolution], type_table: TypeTable
-) -> dict[DeclKey, dict[str, list[_MemberDeclaration]]]:
+) -> _MemberIndex:
     """Collect source and retained-owner fields plus scope-classified methods."""
-    result: dict[DeclKey, dict[str, list[_MemberDeclaration]]] = {}
+    index = _MemberIndex()
     owner_keys: dict[tuple[ModuleId, tuple[str, ...]], DeclKey] = {}
     for module_id, resolved in modules.items():
         for item in static_type_items(resolved.program.body.items):
@@ -42,11 +74,12 @@ def _member_declarations(
             scope_path = tuple(segment.name for segment in item.scope_path)
             key = (PRELUDE_ID if item.is_builtin else module_id, scope_path, item.name)
             owner_keys[module_id, (*scope_path, item.name)] = key
-            members = result.setdefault(key, {})
+            index.declared.add(key)
+            members = index.members.setdefault(key, {})
             if isinstance(item, (RecordDef, ExceptionDef)):
-                for field in item.fields:
-                    members.setdefault(field.name, []).append(
-                        _MemberDeclaration("field", field.span)
+                for source_field in item.fields:
+                    members.setdefault(source_field.name, []).append(
+                        _MemberDeclaration("field", source_field.span)
                     )
         for function in static_function_items(resolved.program.body.items):
             owner_path = resolved.receiver_owner_for(module_id, function)
@@ -55,51 +88,60 @@ def _member_declarations(
             owner_key = owner_keys.get((module_id, owner_path))
             if owner_key is None:
                 # A method on an owner retained from an earlier REPL entry: its
-                # fields come from the registered TypeDef, without source spans.
+                # members come from the registry, without source spans.
                 typedef = type_table.get(module_id, owner_path[-1], owner_path[:-1])
                 assert typedef is not None, "compiler bug: method owner is not registered"
                 owner_key = (typedef.module_id, typedef.scope_path, typedef.name)
                 owner_keys[module_id, owner_path] = owner_key
-                owner_members = result.setdefault(owner_key, {})
-                for field_name, _field_type in typedef.fields:
-                    owner_members.setdefault(field_name, [_MemberDeclaration("field", None)])
-            result.setdefault(owner_key, {}).setdefault(function.name, []).append(
-                _MemberDeclaration("method", function.span)
-            )
-    return result
+                _index_registered_owner(index, type_table, owner_key)
+            index.declared.add(owner_key)
+            same_named = index.members.setdefault(owner_key, {}).setdefault(function.name, [])
+            # This declaration supersedes its own earlier registration on a
+            # retained owner; the owner's fields stay, since only a
+            # redeclaration of the type itself can replace those.
+            same_named[:] = [
+                member
+                for member in same_named
+                if not (member.kind == "method" and member.span is None)
+            ]
+            same_named.append(_MemberDeclaration("method", function.span))
+    return index
 
 
-def _ancestors(type_table: TypeTable, key: DeclKey) -> tuple[tuple[DeclKey, frozenset[str]], ...]:
-    """Pair each of *key*'s exception ancestors with its own field names.
+def _relatives(
+    index: _MemberIndex, type_table: TypeTable, key: DeclKey
+) -> tuple[
+    tuple[DeclKey, ...],
+    tuple[DeclKey, ...],
+]:
+    """Return *key*'s indexed exception ancestors and unchecked descendants.
 
-    Empty for any owner that is not an exception descendant, so a record or enum
-    needs no per-member inheritance scan at all.
+    A descendant this compile unit also declares is skipped: its own ancestor
+    scan already covers the pair, so reporting it from both ends would make the
+    diagnostic depend on iteration order.
     """
-    return tuple(
-        (
-            (base.module_id, base.scope_path, base.name),
-            frozenset(field_name for field_name, _type in base.fields),
-        )
-        for base in type_table.ancestor_defs(key)
+    ancestors = tuple(
+        (base.module_id, base.scope_path, base.name) for base in type_table.ancestor_defs(key)
     )
+    descendants = tuple(
+        descendant_key
+        for descendant in type_table.descendant_defs(key)
+        if (descendant_key := (descendant.module_id, descendant.scope_path, descendant.name))
+        not in index.declared
+    )
+    for relative in (*ancestors, *descendants):
+        _index_registered_owner(index, type_table, relative)
+    return ancestors, descendants
 
 
-def _inherited_member(
-    type_table: TypeTable,
-    declarations: Mapping[DeclKey, Mapping[str, list[_MemberDeclaration]]],
-    ancestors: tuple[tuple[DeclKey, frozenset[str]], ...],
-    name: str,
+def _related_member(
+    index: _MemberIndex, related: tuple[DeclKey, ...], name: str
 ) -> tuple[DeclKey, _MemberDeclaration] | None:
-    """Find the nearest ancestor member named *name*."""
-    for base, base_fields in ancestors:
-        members = declarations.get(base, {}).get(name)
+    """Find the nearest related owner that already declares *name*."""
+    for relative in related:
+        members = index.members_of(relative).get(name)
         if members:
-            return base, members[0]
-        if name in base_fields:
-            return base, _MemberDeclaration("field", None)
-        base_handle = ExceptionType(name=base[2], module_id=base[0], scope_path=base[1])
-        if type_table.lookup_method(base_handle, name) is not None:
-            return base, _MemberDeclaration("method", None)
+            return relative, members[0]
     return None
 
 
@@ -112,8 +154,8 @@ def _raise_collision(
 ) -> None:
     """Report the later direct declaration or the more-specific descendant."""
     if key == conflicting_key:
-        # A retained owner's TypeDef supplies fields without source spans. Its
-        # later-entry method is necessarily the declaration to diagnose.
+        # A retained owner's registration supplies members without source
+        # spans. Its later-entry method is necessarily the one to diagnose.
         if declared.span is None:
             assert conflicting.span is not None
             declared, conflicting = conflicting, declared
@@ -142,19 +184,24 @@ def validate_method_declaration_collisions(
 
     The scope pass is the authoritative source for method declarations, so this
     validation is independent of whether a method needs candidate inference
-    before its header can be registered. Exception descendants are checked
-    against every ancestor, with the descendant declaration receiving the
-    diagnostic.
+    before its header can be registered. An exception is checked against every
+    ancestor and against every descendant this compile unit does not itself
+    declare, so a base declared after its descendants is rejected too.
     """
-    declarations = _member_declarations(modules, type_table)
-    for key, members in declarations.items():
-        ancestors = _ancestors(type_table, key)
-        for name, same_named_members in members.items():
+    index = _member_declarations(modules, type_table)
+    for key in sorted(index.declared, key=_owner_sort_key):
+        ancestors, descendants = _relatives(index, type_table, key)
+        for name, same_named_members in index.members[key].items():
             if len(same_named_members) > 1:
                 _raise_collision(key, name, same_named_members[0], key, same_named_members[1])
 
             member = same_named_members[0]
-            inherited = _inherited_member(type_table, declarations, ancestors, name)
-            if inherited is not None:
-                inherited_key, inherited_member = inherited
-                _raise_collision(key, name, member, inherited_key, inherited_member)
+            for related in (ancestors, descendants):
+                conflict = _related_member(index, related, name)
+                if conflict is not None:
+                    _raise_collision(key, name, member, *conflict)
+
+
+def _owner_sort_key(key: DeclKey) -> tuple[tuple[str, ...], tuple[str, ...], str]:
+    """Order owners deterministically so a program reports one stable collision."""
+    return (key[0].segments, key[1], key[2])

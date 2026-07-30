@@ -40,6 +40,11 @@ class ModuleId:
         """Return ``True`` if this is the distinguished entry-module sentinel."""
         return _ENTRY_SEGMENT in self.segments
 
+    @property
+    def is_prelude(self) -> bool:
+        """Return ``True`` if this is the distinguished prelude sentinel."""
+        return _PRELUDE_SEGMENT in self.segments
+
     # ------------------------------------------------------------------
     # String representations
     # ------------------------------------------------------------------
@@ -52,6 +57,8 @@ class ModuleId:
         """Return a user-facing module label that never exposes sentinel bytes."""
         if self.is_entry:
             return "<entry>"
+        if self.is_prelude:
+            return "<prelude>"
         return self.path_str()
 
     def synthetic_name_component(self) -> str:

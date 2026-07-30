@@ -114,7 +114,6 @@ from agm.agl.syntax.types import (
     IntT,
     JsonT,
     NameT,
-    ReceiverType,
     TextT,
     UnitT,
 )
@@ -169,7 +168,6 @@ class Visitor:
     def visit_DictT(self, node: DictT) -> None: ...
     def visit_UnitT(self, node: UnitT) -> None: ...
     def visit_AgentT(self, node: AgentT) -> None: ...
-    def visit_ReceiverType(self, node: ReceiverType) -> None: ...
     def visit_FuncT(self, node: FuncT) -> None: ...
     def visit_AppliedT(self, node: AppliedT) -> None: ...
 
@@ -283,7 +281,6 @@ _KNOWN_NODE_TYPES: frozenset[type] = frozenset(
         DictT,
         UnitT,
         AgentT,
-        ReceiverType,
         FuncT,
         AppliedT,
         # module system nodes
@@ -409,7 +406,7 @@ def walk(node: object, callback: Callable[[object], None]) -> None:
     elif isinstance(node, DictT):
         walk(node.value, callback)
 
-    elif isinstance(node, (UnitT, AgentT, ReceiverType)):
+    elif isinstance(node, (UnitT, AgentT)):
         pass  # leaves
 
     elif isinstance(node, FuncT):
@@ -630,7 +627,8 @@ def walk(node: object, callback: Callable[[object], None]) -> None:
             walk(update, callback)
 
     elif isinstance(node, Param):
-        walk(node.type_expr, callback)
+        if node.type_expr is not None:
+            walk(node.type_expr, callback)
         if node.default is not None:
             walk(node.default, callback)
 

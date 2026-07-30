@@ -469,6 +469,8 @@ class _TypeBuilder:
         (``collect_shells_only``), so resolution succeeds regardless of
         declaration order.
         """
+        # A field is always annotated: the grammar's ``field_def`` requires it.
+        assert fd.type_expr is not None
         return self._env.resolve_type_expr(fd.type_expr, span=fd.span, type_vars=type_vars)
 
     def _build_generic_record(self, stmt: RecordDef) -> None:

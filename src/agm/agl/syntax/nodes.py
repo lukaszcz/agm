@@ -435,10 +435,12 @@ class Param:
     parameter, and shared argument binding enforces it for calls and patterns.
     ``default`` is ``None`` for field params (records/variants/exceptions);
     only ``def``/``builtin def``/lambda params may carry a default expression.
+    ``type_expr`` is ``None`` when the source omitted the annotation, which the
+    builder permits only for a method's first ``self`` parameter.
     """
 
     name: str
-    type_expr: TypeExpr
+    type_expr: TypeExpr | None
     kind: ParamKind
     default: Expr | None
     span: SourceSpan = dc_field(compare=False)

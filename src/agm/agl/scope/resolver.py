@@ -170,7 +170,6 @@ from agm.agl.syntax.types import (
     AppliedT,
     ImportMode,
     NameT,
-    ReceiverType,
     render_type_expr,
 )
 from agm.agl.syntax.visitor import walk
@@ -653,7 +652,7 @@ class _Resolver:
                 )
             if owner_path in self._type_paths:
                 self._method_declarations[key] = owner_path
-            elif isinstance(receiver.type_expr, ReceiverType):
+            elif receiver.type_expr is None:
                 raise AglScopeError("'self' requires an enclosing type scope.", span=receiver.span)
 
     def _build_scope_nodes(self, root: ScopeNode) -> dict[ScopePath, ScopeNode]:
@@ -2868,7 +2867,7 @@ class _Resolver:
         """
         # A bare receiver marker is meaningful only on a definition owned by
         # a nominal type. Annotated ``self`` remains an ordinary lambda param.
-        if node.params and isinstance(node.params[0].type_expr, ReceiverType):
+        if node.params and node.params[0].type_expr is None:
             raise AglScopeError(
                 "'self' requires an enclosing type scope; lambdas cannot declare methods.",
                 span=node.params[0].span,

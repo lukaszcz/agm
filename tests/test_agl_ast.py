@@ -2,7 +2,7 @@
 
 Covers:
 - SourceSpan construction and import from diagnostics
-- TypeExpr hierarchy (including ReceiverType, UnitT, AgentT, FuncT)
+- TypeExpr hierarchy (including UnitT, AgentT, FuncT)
 - All AST node types: Program/Block, declarations (FuncDef), binders, expressions,
   patterns
 - Current nodes: UnitLit, Call, Param, FuncDef, Lambda, Block, If/IfBranch,
@@ -96,7 +96,6 @@ from agm.agl.syntax import (
     Program,
     ProgramDecl,
     Raise,
-    ReceiverType,
     RecordDef,
     Return,
     # spans
@@ -244,10 +243,6 @@ class TestTypeExprs:
         t = AgentT(span=self._s(), node_id=1)
         assert isinstance(t, AgentT)
 
-    def test_receiver_type(self) -> None:
-        t = ReceiverType(span=self._s(), node_id=1)
-        assert isinstance(t, ReceiverType)
-
     def test_func_t_no_params(self) -> None:
         result = IntT(span=self._s(), node_id=2)
         t = FuncT(params=(), result=result, span=self._s(), node_id=1)
@@ -328,7 +323,6 @@ class TestTypeExprs:
             DictT,
             UnitT,
             AgentT,
-            ReceiverType,
             FuncT,
             AppliedT,
         ):
@@ -1510,7 +1504,6 @@ class TestVisitorWalk:
         dict_t = DictT(value=int_t, span=s, node_id=107)
         unit_t = UnitT(span=s, node_id=108)
         agent_t = AgentT(span=s, node_id=109)
-        receiver_t = ReceiverType(span=s, node_id=110)
         func_t = FuncT(params=(int_t, text_t), result=bool_t, span=s, node_id=111)
         applied_t = AppliedT(name="Pair", args=(int_t, text_t), span=s, node_id=112)
 
@@ -1570,7 +1563,7 @@ class TestVisitorWalk:
         p_agent = Param(name="a", type_expr=agent_t, kind=_std, default=None, span=s, node_id=219)
         p_receiver = Param(
             name="self",
-            type_expr=receiver_t,
+            type_expr=None,
             kind=_std,
             default=None,
             span=s,
@@ -1908,7 +1901,6 @@ class TestVisitorWalk:
             DictT,
             UnitT,
             AgentT,
-            ReceiverType,
             FuncT,
             AppliedT,
         }
@@ -2455,20 +2447,6 @@ class TestVisitorWalk:
         visited: list[object] = []
         walk(node, visited.append)
         assert visited == [node]
-
-    def test_visitor_dispatches_receiver_type(self) -> None:
-        from agm.agl.syntax.visitor import Visitor
-
-        class CountReceivers(Visitor):
-            def __init__(self) -> None:
-                self.count = 0
-
-            def visit_ReceiverType(self, node: ReceiverType) -> None:
-                self.count += 1
-
-        visitor = CountReceivers()
-        visitor.dispatch(ReceiverType(span=span(), node_id=1))
-        assert visitor.count == 1
 
     def test_visitor_subclass_new_nodes(self) -> None:
         """Subclassing Visitor and overriding visit_Call should be called."""

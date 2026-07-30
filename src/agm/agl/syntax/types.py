@@ -127,14 +127,6 @@ class AgentT:
 
 
 @dataclass(frozen=True, slots=True)
-class ReceiverType:
-    """The implicit receiver type of an unannotated first ``self`` parameter."""
-
-    span: SourceSpan = field(compare=False)
-    node_id: int = field(compare=False)
-
-
-@dataclass(frozen=True, slots=True)
 class FuncT:
     """A function type ``(A, B) -> C`` — positional parameters only in the type.
 
@@ -172,7 +164,6 @@ TypeExpr = (
     | DictT
     | UnitT
     | AgentT
-    | ReceiverType
     | FuncT
     | AppliedT
 )
@@ -194,8 +185,6 @@ def render_type_expr(type_expr: TypeExpr, *, parenthesize_function: bool = False
         return "unit"
     if isinstance(type_expr, AgentT):
         return "agent"
-    if isinstance(type_expr, ReceiverType):
-        return "self"
     if isinstance(type_expr, ArrayT):
         return f"array[{render_type_expr(type_expr.elem)}]"
     if isinstance(type_expr, DictT):

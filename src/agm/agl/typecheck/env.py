@@ -1538,7 +1538,6 @@ class TypeEnvironment:
             IntT,
             JsonT,
             NameT,
-            ReceiverType,
             TextT,
             UnitT,
         )
@@ -1560,11 +1559,6 @@ class TypeEnvironment:
             return UnitType()
         if isinstance(type_expr, AgentT):
             return AgentType()
-        if isinstance(type_expr, ReceiverType):
-            raise AglTypeError(
-                "Receiver type requires method header resolution.",
-                span=span if span is not None else type_expr.span,
-            )
         if isinstance(type_expr, FuncT):
             params = tuple(
                 self.resolve_type_expr(p, _resolving=_resolving, type_vars=type_vars)

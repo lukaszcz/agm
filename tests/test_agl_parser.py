@@ -88,7 +88,6 @@ from agm.agl.syntax import (
     Program,
     ProgramDecl,
     Raise,
-    ReceiverType,
     RecordDef,
     Return,
     ScopeRegion,
@@ -1372,10 +1371,10 @@ class TestFuncDef:
         assert isinstance(p0.type_expr, IntT)
         assert p0.default is None
 
-    def test_bare_self_builds_receiver_type(self) -> None:
+    def test_bare_self_leaves_the_annotation_absent(self) -> None:
         fd = first(parse("def Point::x(self) -> int = 1"))
         assert isinstance(fd, FuncDef)
-        assert isinstance(fd.params[0].type_expr, ReceiverType)
+        assert fd.params[0].type_expr is None
         assert fd.params[0].kind is ParamKind.STANDARD
 
     def test_annotated_self_remains_an_ordinary_parameter(self) -> None:

@@ -49,7 +49,6 @@ from agm.agl.syntax.types import (
     IntT,
     JsonT,
     NameT,
-    ReceiverType,
     TextT,
     TypeExpr,
     UnitT,
@@ -234,7 +233,6 @@ _ALL_TYPE_EXPRS = (
     DictT,
     UnitT,
     AgentT,
-    ReceiverType,
     FuncT,
     AppliedT,
 )
@@ -988,7 +986,6 @@ class AstBuilder(Transformer):
                     "A bare 'self' parameter cannot have a default value.",
                     span=default.span,
                 )
-            type_expr = ReceiverType(span=self._span_from_meta(meta), node_id=self._next_id())
         return syntax.Param(
             name=name,
             type_expr=type_expr,
@@ -3015,7 +3012,7 @@ def _resolve_params(
     for index, entry in enumerate(entries):
         if not isinstance(entry, syntax.Param):
             continue
-        if isinstance(entry.type_expr, ReceiverType):
+        if entry.type_expr is None:
             if seen_parameter:
                 raise AglSyntaxError(
                     f"Parameter {entry.name!r} has no type annotation.",

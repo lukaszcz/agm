@@ -50,7 +50,6 @@ if TYPE_CHECKING:
 from agm.agl.syntax.spans import SourceSpan
 from agm.agl.syntax.types import (
     TYPE_PARAMETER_WILDCARD,
-    ReceiverType,
     TypeExpr,
 )
 from agm.agl.typecheck.env import (
@@ -686,7 +685,7 @@ def resolve_function_header(
                     f"Receiver 'self' for method '{node.name}' cannot have a default value.",
                     span=param.span,
                 )
-            if not isinstance(param.type_expr, ReceiverType):
+            if param.type_expr is not None:
                 documented_receiver = env.resolve_type_expr(
                     param.type_expr, span=param.span, type_vars=type_vars
                 )
@@ -705,6 +704,9 @@ def resolve_function_header(
                 )
             )
             continue
+        # Only a receiver may omit its annotation, and that param took the
+        # branch above.
+        assert param.type_expr is not None
         params.append(
             ParamSpec(
                 name=param.name,

@@ -95,7 +95,6 @@ from agm.agl.syntax.types import (
     FuncT,
     IntT,
     JsonT,
-    ReceiverType,
     TextT,
     TypeExpr,
     UnitT,
@@ -727,11 +726,6 @@ class TestTypeEnvironment:
         env = TypeEnvironment()
         sp = mk_span()
         assert env.resolve_type_expr(AgentT(span=sp, node_id=1)) == AgentType()
-
-    def test_receiver_type_requires_method_header_resolution(self) -> None:
-        env = TypeEnvironment()
-        with pytest.raises(AglTypeError):
-            env.resolve_type_expr(ReceiverType(span=mk_span(), node_id=1))
 
     def test_resolve_array_type(self) -> None:
         env = TypeEnvironment()

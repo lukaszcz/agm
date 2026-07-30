@@ -2925,6 +2925,9 @@ class _Checker:
         type_vars = self._current_type_vars
         param_types: list[Type] = []
         for p in node.params:
+            # A lambda has no receiver, so scope has already rejected a bare
+            # ``self`` among its params.
+            assert p.type_expr is not None
             pt = self._env.resolve_type_expr(p.type_expr, span=p.span, type_vars=type_vars)
             param_types.append(pt)
             self._env.set_binding_type(p.node_id, pt)

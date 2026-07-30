@@ -2547,10 +2547,20 @@ class _Checker:
                     node, callee_ref, expected=expected, hole_indices=hole_indices
                 )
 
-        # Value call (lambda or higher-order). A selected method still has a
-        # first-class bound-function type here; the recorded method selection on
-        # the callee lets lowering replace a non-partial call with the
-        # receiver-first direct path later.
+        # Member call (``p.f(...)``)? A non-partial call whose callee resolves to
+        # a method takes the declared-name path so named arguments and defaults
+        # work exactly as they do for the qualified ``Type::f(p, ...)`` spelling.
+        # A partial member call (``p.f(?)``) keeps the value-call path: it
+        # allocates a bound-method closure value, and ``_partial_declared_body``
+        # in the lowerer requires a ``VarRef`` callee for the declared-partial
+        # shape, so a partial member call cannot take this path.
+        if isinstance(node.callee, FieldAccess) and not hole_indices:
+            return self._check_member_call(node, node.callee, expected=expected)
+
+        # Value call (lambda or higher-order, or a partial member call). A
+        # selected method still has a first-class bound-function type here; the
+        # recorded method selection on the callee lets lowering replace a
+        # non-partial call with the receiver-first direct path later.
         return self._check_value_call(node, expected=expected, hole_indices=hole_indices)
 
     # --- shared call-argument checker ---
@@ -2808,13 +2818,99 @@ class _Checker:
         self._set_inferred_return_expr_provenance(node.node_id, provenance)
         return result_type
 
+    # --- member call (``p.f(...)``) ---
+
+    def _check_member_call(
+        self, node: Call, field_access: FieldAccess, *, expected: Type | None
+    ) -> Type:
+        """Check a non-partial member call, preferring the declared-name path.
+
+        The callee is checked exactly once here — via the same specialized-vs-
+        plain branching ``_check_value_call_head`` would otherwise perform —
+        because a ``FieldAccess`` callee that selects a generic method freshens
+        that method's own type variables as a side effect (``_bound_method_type``),
+        and checking it a second time would leave the first set of variables
+        permanently unsolved. When the callee did not select a method (a plain
+        field holding a function value) or the method's declared signature is
+        not yet available (an unannotated method whose header is still being
+        inferred), this falls back to the value-call finish, reusing the callee
+        type already computed here instead of re-checking it.
+        """
+        if node.type_args:
+            callee_type = self._check_specialized_field_access(
+                field_access, type_args=node.type_args
+            )
+        else:
+            callee_type = self._check_expr(field_access, expected=None)
+        method = self._method_selections.get(field_access.node_id)
+        sig = (
+            self._env.get_function_signature_by_node_id(method.decl_node_id)
+            if method is not None
+            else None
+        )
+        if method is None or sig is None:
+            return self._check_value_call(
+                node, expected=expected, hole_indices={}, callee_type=callee_type
+            )
+
+        assert isinstance(callee_type, FunctionType)
+        params = tuple(
+            ParamSpec(
+                name=sig.params[i + 1].name,
+                type=callee_type.params[i],
+                kind=sig.params[i + 1].kind,
+                has_default=sig.params[i + 1].has_default,
+            )
+            for i in range(len(callee_type.params))
+        )
+        binding = self._bind_call_args(params, node, method.name)
+        # ``bound.params``/``bound.result`` may still carry unsolved inference
+        # variables for the method's own generics (freshened by
+        # ``_bound_method_type`` when it could not resolve them from the
+        # receiver alone). ``_finish_declared_call``'s ordinary assignability
+        # check cannot solve those; only ``_constrain_argument`` unifies a
+        # flexible slot with its argument's type, exactly like the generic
+        # declared-call path does for a plain function.
+        for param, bound_expr in zip(params, binding):
+            if bound_expr is None or isinstance(bound_expr, Placeholder):
+                continue
+            self._constrain_argument(
+                param.type,
+                bound_expr,
+                role=ConstraintRole.FUNCTION_ARGUMENT,
+                subject=method.name,
+                error_subject=f"call to '{method.name}'",
+            )
+        result_type = self._finish_declared_call(
+            node, params, callee_type.result, binding, {}, check_args=False
+        )
+        if expected is not None:
+            engine = self._active_inference_engine()
+            engine.complete_from_context(
+                result_type,
+                expected,
+                engine.origin(node.span, role=ConstraintRole.EXPECTED_RESULT, subject=method.name),
+            )
+        if self._env.is_extern_node_id(method.decl_node_id):
+            self._register_extern_call_obligation(node, method.name, result_type)
+        return result_type
+
     # --- value call (lambda / higher-order) ---
 
-    def _check_value_call_head(self, node: Call) -> FunctionType:
+    def _check_value_call_head(
+        self, node: Call, *, callee_type: Type | None = None
+    ) -> FunctionType:
         """Validate a function-value call site and return the callee's function type.
 
         Rejects named arguments (accepted only at declared-function call sites),
         requires the callee to be a function value, and checks positional arity.
+
+        When *callee_type* is supplied, it is used as-is instead of re-checking
+        ``node.callee``: the member-call declared path (``_check_member_call``)
+        already checks a ``FieldAccess`` callee once while probing for a method
+        selection, and checking it again would freshen a generic method's own
+        type variables a second time, leaving the first, now-orphaned set
+        permanently unsolved.
         """
         if node.named_args:
             raise AglTypeError(
@@ -2822,16 +2918,17 @@ class _Checker:
                 "they are only allowed at declared-function call sites.",
                 span=node.span,
             )
-        # A direct member call carries its explicit type arguments on Call,
-        # whereas value-position syntax uses TypeApply; both route through
-        # ``_check_specialized_field_access`` (see its docstring for why the
-        # specialization must be published on the inner node here too).
-        if isinstance(node.callee, FieldAccess) and node.type_args:
-            callee_type = self._check_specialized_field_access(
-                node.callee, type_args=node.type_args
-            )
-        else:
-            callee_type = self._check_expr(node.callee, expected=None)
+        if callee_type is None:
+            # A direct member call carries its explicit type arguments on Call,
+            # whereas value-position syntax uses TypeApply; both route through
+            # ``_check_specialized_field_access`` (see its docstring for why the
+            # specialization must be published on the inner node here too).
+            if isinstance(node.callee, FieldAccess) and node.type_args:
+                callee_type = self._check_specialized_field_access(
+                    node.callee, type_args=node.type_args
+                )
+            else:
+                callee_type = self._check_expr(node.callee, expected=None)
         with self._frame_direct_candidate_use(exprs=(node.callee,)):
             if not isinstance(callee_type, FunctionType):
                 raise AglTypeError(
@@ -2852,8 +2949,9 @@ class _Checker:
         *,
         expected: Type | None,
         hole_indices: Mapping[int, int],
+        callee_type: Type | None = None,
     ) -> Type:
-        callee_type = self._check_value_call_head(node)
+        callee_type = self._check_value_call_head(node, callee_type=callee_type)
         binding: tuple[Expr | None, ...] = node.args
         if hole_indices:
             self._record_partial_call(node, binding, hole_indices, callee_kind="value")

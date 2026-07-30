@@ -4868,6 +4868,116 @@ class TestFieldAccess:
         assert method_selection is not None and method_selection.name == "radius"
         assert call_selection == method_selection
 
+    def test_member_call_omits_defaulted_parameter(self) -> None:
+        """A member call may omit a trailing defaulted parameter, like ``Type::f(p)``."""
+        checked = accept_type(
+            "record Point\n"
+            "  x: int\n"
+            'def Point::add(self, n: int = 5, label: text = "d") -> text = '
+            '"%{self.x + n}%{label}"\n'
+            "let p = Point(x = 1)\n"
+            "p.add()"
+        )
+        call = checked.resolved.program.body.items[-1]
+        assert checked.node_types[call.node_id] == TextType()
+
+    def test_member_call_named_argument(self) -> None:
+        """A member call accepts a named argument, like the qualified spelling does."""
+        checked = accept_type(
+            "record Point\n"
+            "  x: int\n"
+            'def Point::add(self, n: int = 5, label: text = "d") -> text = '
+            '"%{self.x + n}%{label}"\n'
+            "let p = Point(x = 1)\n"
+            "p.add(n = 2)"
+        )
+        call = checked.resolved.program.body.items[-1]
+        assert checked.node_types[call.node_id] == TextType()
+
+    def test_member_call_named_argument_skips_earlier_default(self) -> None:
+        """A named argument may bind a later parameter, leaving an earlier default in place."""
+        checked = accept_type(
+            "record Point\n"
+            "  x: int\n"
+            'def Point::add(self, n: int = 5, label: text = "d") -> text = '
+            '"%{self.x + n}%{label}"\n'
+            "let p = Point(x = 1)\n"
+            'p.add(label = "q")'
+        )
+        call = checked.resolved.program.body.items[-1]
+        assert isinstance(call, Call)
+        assert checked.node_types[call.node_id] == TextType()
+        binding = checked.argument_bindings.function_calls[call.node_id]
+        # n keeps its default (unbound); label is bound to the named argument.
+        assert binding[0] is None
+        assert binding[1] is not None
+
+    def test_member_call_named_only_zone_parameter(self) -> None:
+        """A named-only method parameter is reachable only by name from a member call."""
+        checked = accept_type(
+            "record Point\n"
+            "  x: int\n"
+            'def Point::describe(self, *, label: text = "d") -> text = "%{self.x}%{label}"\n'
+            "let p = Point(x = 1)\n"
+            'p.describe(label = "q")'
+        )
+        call = checked.resolved.program.body.items[-1]
+        assert checked.node_types[call.node_id] == TextType()
+
+    def test_member_call_named_only_zone_parameter_rejects_positional(self) -> None:
+        error = reject_type(
+            "record Point\n"
+            "  x: int\n"
+            'def Point::describe(self, *, label: text = "d") -> text = "%{self.x}%{label}"\n'
+            "let p = Point(x = 1)\n"
+            'p.describe("q")'
+        )
+        assert "named" in str(error).lower() or "positional" in str(error).lower()
+
+    def test_generic_method_defaults_and_named_args_with_receiver_specialization(self) -> None:
+        """Defaults/named args combine with receiver-type-argument substitution."""
+        checked = accept_type(
+            "record Box[T]\n"
+            "  value: T\n"
+            'def Box::describe[T](self, label: text = "v") -> text = "%{label}=%{self.value}"\n'
+            "let box = Box(value = 1)\n"
+            "let omitted = box.describe()\n"
+            'let named = box.describe(label = "n")\n'
+            "[omitted, named]"
+        )
+        result = checked.resolved.program.body.items[-1]
+        assert checked.node_types[result.node_id] == ArrayType(TextType())
+
+    def test_partial_member_call_still_typechecks(self) -> None:
+        """A partial member call (``p.f(?, ...)``) keeps its value-call, closure-producing shape.
+
+        Unlike the declared-name path, a value call (which a partial member call
+        still is) requires every parameter to be supplied — placeholder or not;
+        it does not support skipping a trailing default.
+        """
+        checked = accept_type(
+            "record Point\n"
+            "  x: int\n"
+            'def Point::add(self, n: int = 5, label: text = "d") -> text = '
+            '"%{self.x + n}%{label}"\n'
+            "let p = Point(x = 1)\n"
+            'let fill: (int) -> text = p.add(?, "x")\n'
+            "fill(2)"
+        )
+        result = checked.resolved.program.body.items[-1]
+        assert checked.node_types[result.node_id] == TextType()
+        fill_decl = checked.resolved.program.body.items[-2]
+        assert isinstance(fill_decl, LetDecl)
+        assert isinstance(fill_decl.value, Call)
+        assert checked.partial_calls[fill_decl.value.node_id] == PartialCallSpec(
+            argument_holes=(0, None), callee_kind="value"
+        )
+        # Placeholders still take the value-call path: the callee keeps its
+        # method selection (used by lowering to build the bound closure), but
+        # the call itself is never routed through the declared-name path.
+        assert isinstance(fill_decl.value.callee, FieldAccess)
+        assert checked.method_selection_for(fill_decl.value.callee.node_id) is not None
+
 
 # ---------------------------------------------------------------------------
 # Is test

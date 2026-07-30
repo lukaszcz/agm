@@ -1,0 +1,32 @@
+# A member call (`p.f(...)`) and its qualified spelling (`Type::f(p, ...)`) must
+# bind named arguments and apply parameter defaults identically.
+param mode: text
+
+record Point
+  x: int
+
+record Box[T]
+  value: T
+
+def Point::describe(self, n: int = 5, label: text = "d") -> text = "%{self.x + n}%{label}"
+
+def Box::describe[T](self, label: text = "v") -> text = "%{label}=%{self.value}"
+
+let point = Point(x = 1)
+let box = Box(value = 9)
+
+if
+  | mode == "all_args" =>
+      print(point.describe(2, "q"))
+      print(Point::describe(point, 2, "q"))
+  | mode == "omitted_default" =>
+      print(point.describe())
+      print(Point::describe(point))
+  | mode == "named_out_of_order" =>
+      print(point.describe(label = "z"))
+      print(Point::describe(point, label = "z"))
+  | else =>
+      print(box.describe())
+      print(Box::describe(box))
+      print(box.describe(label = "n"))
+      print(Box::describe(box, label = "n"))

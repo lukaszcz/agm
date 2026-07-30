@@ -2208,21 +2208,29 @@ class _Lowerer:
     def _lower_direct_method_call(
         self, call_node: Call, method: MethodDef, span: SourceSpan
     ) -> IrDirectCall:
-        """Lower a checker-selected member call without allocating a bound closure."""
+        """Lower a checker-selected member call without allocating a bound closure.
+
+        The checker bound the arguments against the method's declared
+        (non-receiver) parameters, so this mirrors ``_lower_direct_call`` and
+        never re-binds. ``UseDefault.param_index`` indexes the callee
+        *declaration*'s parameters, where the receiver occupies index 0, while
+        the recorded binding covers only the non-receiver parameters — hence
+        the shift by one onto the right declaration slot.
+        """
         assert isinstance(call_node.callee, FieldAccess)
-        bound_type = self._node_type(call_node.callee.node_id)
-        assert isinstance(bound_type, FunctionType)
-        arguments = (
-            self.lower_expr(call_node.callee.obj),
-            *(
-                self.lower_coerced(arg, param_type)
-                for arg, param_type in zip(call_node.args, bound_type.params, strict=True)
-            ),
-        )
+        receiver_arg = self.lower_expr(call_node.callee.obj)
+        binding = self._checked.argument_bindings.function_calls[call_node.node_id]
+        param_types = self._checked.argument_bindings.function_param_types[call_node.node_id]
+        ir_args: list[IrExpr | UseDefault] = [receiver_arg]
+        for index, (param_type, bound_expr) in enumerate(zip(param_types, binding)):
+            if bound_expr is None:
+                ir_args.append(UseDefault(param_index=index + 1))
+            else:
+                ir_args.append(self.lower_coerced(bound_expr, param_type))
         return self._lower_direct_call_with_args(
             function_id=self._method_function_id(method),
             span=span,
-            arguments=arguments,
+            arguments=tuple(ir_args),
         )
 
     def _lower_indirect_call_with_args(

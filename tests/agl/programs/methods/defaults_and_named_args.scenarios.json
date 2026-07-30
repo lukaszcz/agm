@@ -1,0 +1,24 @@
+{
+  "scenarios": [
+    {
+      "name": "all_arguments_supplied_dot_and_qualified_calls_match",
+      "params": {"mode": "all_args"},
+      "expect": {"stdout": "3q\n3q\n", "calls": {}}
+    },
+    {
+      "name": "omitted_default_dot_and_qualified_calls_match",
+      "params": {"mode": "omitted_default"},
+      "expect": {"stdout": "6d\n6d\n", "calls": {}}
+    },
+    {
+      "name": "named_argument_out_of_order_dot_and_qualified_calls_match",
+      "params": {"mode": "named_out_of_order"},
+      "expect": {"stdout": "6z\n6z\n", "calls": {}}
+    },
+    {
+      "name": "generic_method_defaults_and_named_args_dot_and_qualified_calls_match",
+      "params": {"mode": "generic"},
+      "expect": {"stdout": "v=9\nv=9\nn=9\nn=9\n", "calls": {}}
+    }
+  ]
+}

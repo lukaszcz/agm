@@ -1526,12 +1526,14 @@ class _Resolver:
           ``LetDecl``, ``VarDecl``, ``AssignStmt``, bare expressions, and
           entry-only constructs (``AgentDecl``, ``ParamDecl``, ``ProgramDecl``)
           are rejected with a scope error.
-        - Non-entry modules: ``ImportDecl`` and ``ExportDecl`` must precede all other
-          items *in the same items sequence* (header-only; ``seen_non_import_item`` tracks
-          this locally to this call). A region is one item of its enclosing sequence for
-          this purpose, so a library module's root-level header rule governs a region as a
-          whole, while its own header rule -- tracked by the recursive call this function
-          makes for the region's body -- governs the region's own items independently.
+        - Every module root and every region's own item sequence: ``ImportDecl``
+          and ``ExportDecl`` must precede all other items *in that same items
+          sequence* (header-only; ``seen_non_import_item`` tracks this locally
+          to this call, regardless of module kind). A region is one item of its
+          enclosing sequence for this purpose, so the enclosing sequence's
+          header rule governs a region as a whole, while its own header rule --
+          tracked by the recursive call this function makes for the region's
+          body -- governs the region's own items independently.
         """
         has_import_context = self._import_env is not None
         is_non_entry_root = has_import_context and not self._is_entry and self._at_root
@@ -1549,10 +1551,10 @@ class _Resolver:
                         "not inside a nested block.",
                         span=item.span,
                     )
-                if is_non_entry_root and seen_non_import_item:
+                if seen_non_import_item:
                     raise AglScopeError(
                         "Import and export declarations must appear before any other "
-                        "declarations in a library module.",
+                        "declarations in a module or scope region.",
                         span=item.span,
                     )
                 if isinstance(item, ImportDecl) and item.scope_path:
@@ -1565,12 +1567,10 @@ class _Resolver:
                         "infix declarations are only allowed at the program root.",
                         span=item.span,
                     )
-                if is_non_entry_root:
-                    seen_non_import_item = True
-                continue
-            # Non-entry enforcement: track that a non-import item has been seen.
-            if is_non_entry_root:
                 seen_non_import_item = True
+                continue
+            # Header enforcement: track that a non-import item has been seen.
+            seen_non_import_item = True
             # Named declarations switch to their declaration's lexical scope
             # in their own handlers. Every other item belongs to the current
             # layer, so validate its qualifier chains here.

@@ -1,0 +1,3 @@
+def helper() -> int = 1
+
+import std/config

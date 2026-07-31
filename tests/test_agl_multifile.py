@@ -355,8 +355,8 @@ class TestAgentValueCrossModule:
         )
 
         source = (
-            "agent mybot\n"
             "open import helper\n"
+            "agent mybot\n"
             'let result = ask_with_agent("test question", mybot)\n'
             "print result\n"
         )
@@ -383,8 +383,8 @@ class TestAgentValueCrossModule:
         lib_dir = MULTI_FILE_DIR
 
         source = (
-            "agent mybot\n"
             "open import utils/agent_helper\n"
+            "agent mybot\n"
             'let r = ask_with_agent("ping", mybot)\n'
             "print r\n"
         )

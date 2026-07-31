@@ -465,33 +465,26 @@ class AstBuilder(Transformer):
         self._validate_open_placement(block.items)
         return block
 
-    def _validate_open_placement(
-        self, items: tuple[syntax.Item, ...], *, check_import: bool = False
-    ) -> None:
+    def _validate_open_placement(self, items: tuple[syntax.Item, ...]) -> None:
         """Require scope opens to remain in the header portion of a block.
 
-        *check_import* additionally requires ``import``/``open import`` and
-        ``export`` to precede a region's other items, matching ``open``. It
-        is not applied at the module root: an entry module's import ordering
-        is governed there by the scope pass, not by this structural check.
-        Each block is validated by its own call -- built bottom-up, a
-        region's own items are checked by the call the region's own
-        transform makes, independently of the call the module root (or an
-        enclosing region) makes for its own items.
+        ``import``/``open import`` and ``export`` placement is not this
+        check's concern -- the scope pass owns that rule uniformly, for
+        every module root and every region. This check only enforces that
+        ``open`` declarations precede a block's other items, and it treats
+        ``import``/``export`` items as header items for that purpose (they
+        never themselves trip ``seen_non_header``), so an ``open`` may still
+        follow them. Each block is validated by its own call -- built
+        bottom-up, a region's own items are checked by the call the
+        region's own transform makes, independently of the call the module
+        root (or an enclosing region) makes for its own items.
         """
-        header_types = (
-            (syntax.OpenDecl, syntax.ImportDecl, syntax.ExportDecl)
-            if check_import
-            else (syntax.OpenDecl,)
-        )
         seen_non_header = False
         for item in items:
-            if isinstance(item, header_types):
+            if isinstance(item, syntax.OpenDecl):
                 if seen_non_header:
                     raise AglSyntaxError(
-                        "open, import, and export declarations must precede non-header items."
-                        if check_import
-                        else "open declarations must precede non-header items.",
+                        "open declarations must precede non-header items.",
                         span=item.span,
                     )
             elif not isinstance(item, (syntax.ImportDecl, syntax.ExportDecl)):
@@ -605,7 +598,7 @@ class AstBuilder(Transformer):
 
         allowed_items = (syntax.ScopeRegion, syntax.OpenDecl, *_SCOPED_DECLARATIONS)
         items = tuple(arg for arg in args if isinstance(arg, allowed_items))
-        self._validate_open_placement(cast(tuple[syntax.Item, ...], items), check_import=True)
+        self._validate_open_placement(cast(tuple[syntax.Item, ...], items))
         disallowed = next(
             (
                 arg

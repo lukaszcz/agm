@@ -25,7 +25,6 @@ from pathlib import Path
 
 import pytest
 
-from agm.agl.diagnostics import AglError
 from agm.agl.modules.ids import ENTRY_ID, STD_CONFIG_ID, ModuleId
 from agm.agl.parser import parse_program
 from agm.agl.scope import resolve_module
@@ -1253,6 +1252,18 @@ class TestHeaderOnlyImports:
         ref = result.modules[ENTRY_ID].resolved.resolution[var.node_id]
         assert ref.module_id == ModuleId.from_path("mylib")
 
+    def test_import_after_def_in_entry_errors(self, tmp_path: Path) -> None:
+        """An import after a def at the entry module's root is also an error."""
+        graph = _make_graph_from_files(
+            tmp_path,
+            {
+                "entry": "def helper() -> int = 1\nopen import mylib\n()",
+                "mylib": "def foo() -> int = 42",
+            },
+        )
+        with pytest.raises(AglScopeError, match="Import and export"):
+            resolve_program(graph)
+
 
 # ---------------------------------------------------------------------------
 # Test: import and export as region header items
@@ -1264,35 +1275,39 @@ class TestRegionImportExportHeaderPlacement:
 
     The rule applies uniformly regardless of module kind: a region's own
     items are checked independently of whether the module is a library
-    module or the entry module.
+    module or the entry module. The scope pass is the sole owner of this
+    rule, so the violation surfaces from `resolve_program`, not from graph
+    construction.
     """
 
     @pytest.mark.parametrize("item", ("import libB", "open import libB", "export libB"))
     def test_rejected_after_a_region_item_in_a_library_module(
         self, tmp_path: Path, item: str
     ) -> None:
-        with pytest.raises(AglError):
-            _make_graph_from_files(
-                tmp_path,
-                {
-                    "entry": "open import mylib\n()",
-                    "mylib": f"scope A\ndef local() -> int = 1\n{item}\nend A",
-                    "libB": "def bar() -> int = 2",
-                },
-            )
+        graph = _make_graph_from_files(
+            tmp_path,
+            {
+                "entry": "open import mylib\n()",
+                "mylib": f"scope A\ndef local() -> int = 1\n{item}\nend A",
+                "libB": "def bar() -> int = 2",
+            },
+        )
+        with pytest.raises(AglScopeError):
+            resolve_program(graph)
 
     @pytest.mark.parametrize("item", ("import libB", "open import libB", "export libB"))
     def test_rejected_after_a_region_item_in_the_entry_module(
         self, tmp_path: Path, item: str
     ) -> None:
-        with pytest.raises(AglError):
-            _make_graph_from_files(
-                tmp_path,
-                {
-                    "entry": f"scope A\ndef local() -> int = 1\n{item}\nend A",
-                    "libB": "def bar() -> int = 2",
-                },
-            )
+        graph = _make_graph_from_files(
+            tmp_path,
+            {
+                "entry": f"scope A\ndef local() -> int = 1\n{item}\nend A",
+                "libB": "def bar() -> int = 2",
+            },
+        )
+        with pytest.raises(AglScopeError):
+            resolve_program(graph)
 
 
 # ---------------------------------------------------------------------------

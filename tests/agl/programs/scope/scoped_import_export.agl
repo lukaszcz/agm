@@ -8,6 +8,8 @@
 # scoped `export` inside a facade module re-roots what it forwards, reachable
 # by its rooted path at run time.
 
+import facade
+
 scope App
 open import geom
 open import shading
@@ -22,8 +24,6 @@ scope Motion
 import vecmath using double as twice
 def doubled() -> int = twice(App::total())
 end Motion
-
-import facade
 
 print(App::total())
 print(App::describe())

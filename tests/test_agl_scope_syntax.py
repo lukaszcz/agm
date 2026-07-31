@@ -339,6 +339,12 @@ def test_open_import_is_admitted_at_the_start_of_a_scope_region() -> None:
     assert isinstance(region.items[0], ImportDecl)
 
 
+def test_open_after_a_non_header_region_item_is_rejected() -> None:
+    """The parser still owns placement of a bare ``open`` inside a region."""
+    with pytest.raises(AglSyntaxError):
+        parse_program("scope A\ndef value() -> int = 0\nopen B\nend A")
+
+
 @pytest.mark.parametrize(
     "source",
     (
@@ -347,9 +353,10 @@ def test_open_import_is_admitted_at_the_start_of_a_scope_region() -> None:
         "scope A\ndef value() -> int = 0\nexport lib\nend A",
     ),
 )
-def test_import_after_a_non_header_region_item_is_rejected(source: str) -> None:
-    with pytest.raises(AglSyntaxError):
-        parse_program(source)
+def test_import_after_a_non_header_region_item_is_rejected_by_the_scope_pass(source: str) -> None:
+    """The scope pass -- not the parser -- owns import/export placement."""
+    with pytest.raises(AglScopeError):
+        resolve_module(parse_program(source))
 
 
 def test_export_before_other_region_items_is_admitted() -> None:
@@ -361,9 +368,14 @@ def test_export_before_other_region_items_is_admitted() -> None:
     assert isinstance(region.items[0], ExportDecl)
 
 
-def test_import_placement_at_the_module_root_is_unaffected_by_the_region_header_rule() -> None:
-    """The region-only header check must not leak into ordinary root placement."""
+def test_the_parser_does_not_own_import_placement_at_the_module_root() -> None:
+    """The parser's ``open``-only rule leaves root import placement to the scope pass."""
     parse_program("def value() -> int = 0\nimport lib")
+
+
+def test_import_after_a_non_header_root_item_is_rejected_by_the_scope_pass() -> None:
+    with pytest.raises(AglScopeError):
+        resolve_module(parse_program("def value() -> int = 0\nimport lib"))
 
 
 @pytest.mark.parametrize(

@@ -250,10 +250,11 @@ rules.
 Imported modules are declaration-only: they may contain imports, exports,
 functions, type declarations, and infix declarations, but not executable
 top-level expressions, bindings, agents, parameters, or program declarations.
-Imports and exports appear before other declarations in a library module; a
-named scope region is one declaration for this rule, so an import or export
-inside a region does not need to precede the module's other root-level
-declarations — only a region's own header rule governs its own items.
+Imports and exports appear before other declarations at a module's root, in
+every module, entry or library; a named scope region is one declaration for
+this rule, so an import or export inside a region does not need to precede
+the module's other root-level declarations — only a region's own header rule
+governs its own items.
 
 Import cycles are valid. Functions and nominal types may refer to public
 declarations across an import cycle.

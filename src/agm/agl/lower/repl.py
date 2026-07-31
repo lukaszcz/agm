@@ -184,17 +184,13 @@ class LoweredReplEntry:
 
 
 def _item_declaration_ids(item: Item, checked: "CheckedModule") -> frozenset[int]:
-    """Return session-promotable declaration ids introduced by one source item.
+    """Return session-promotable declaration ids introduced by one leaf source item.
 
-    A scope region reports the declarations of its members, matching lowering's
-    decision to emit them under their region's source index.
+    Called only on the flattened, region-transparent sequence ``static_items``
+    produces — the same one lowering assigns source indices over — so a
+    region's own declaration ids come from its members individually, never
+    from the region node itself.
     """
-    if isinstance(item, ScopeRegion):
-        return frozenset(
-            declaration_id
-            for member in item.items
-            for declaration_id in _item_declaration_ids(cast(Item, member), checked)
-        )
     if isinstance(item, LetDecl):
         return frozenset(
             candidate.node_id
@@ -238,21 +234,14 @@ def _declaration_dependencies(
     entry_declaration_ids: frozenset[int],
     type_declaration_ids: Mapping[str, frozenset[int]],
 ) -> frozenset[int]:
-    """Return current-entry runtime and nominal dependencies of one source item."""
+    """Return current-entry runtime and nominal dependencies of one leaf source item.
+
+    Called only on the flattened, region-transparent sequence ``static_items``
+    produces, so *item* is never a ``ScopeRegion`` itself.
+    """
     from agm.agl.syntax.nodes import ElseSentinel, FuncDef
     from agm.agl.syntax.types import AppliedT, NameT
     from agm.agl.syntax.visitor import walk
-
-    if isinstance(item, ScopeRegion):
-        return frozenset().union(
-            *(
-                _declaration_dependencies(
-                    cast(Item, member), checked, entry_declaration_ids, type_declaration_ids
-                )
-                for member in item.items
-            ),
-            frozenset(),
-        )
 
     type_parameters = (
         frozenset(item.type_params)
@@ -315,25 +304,31 @@ def _promotion_plan(
     initializer_origins: tuple[InitializerOrigin, ...],
     decl_to_sym: Mapping[int, SymbolId],
 ) -> ReplPromotionPlan:
-    """Consume lowering's origins and add dependency-safe promotion metadata."""
-    items = checked.resolved.program.body.items
-    source_declaration_ids = tuple(_item_declaration_ids(item, checked) for item in items)
+    """Consume lowering's origins and add dependency-safe promotion metadata.
+
+    Walks the same flattened, region-transparent sequence lowering assigns
+    source indices over (``static_items``), so ``source_declaration_ids`` lines
+    up with ``InitializerOrigin.source_index`` member for member rather than
+    region for region.
+    """
+    leaf_items = tuple(static_items(checked.resolved.program.body.items))
+    source_declaration_ids = tuple(_item_declaration_ids(item, checked) for item in leaf_items)
     params = tuple(
         ParamOrigin(declaration_id=item.node_id, symbol=decl_to_sym[item.node_id])
-        for item in static_items(items)
+        for item in leaf_items
         if isinstance(item, ParamDecl)
     )
     entry_declaration_ids = frozenset().union(*source_declaration_ids, frozenset())
     # Same-named declarations at different scope paths share one entry here, so a
     # nominal reference depends on every declaration that could have produced it.
     type_declaration_ids: dict[str, frozenset[int]] = {}
-    for item in static_items(items):
+    for item in leaf_items:
         if isinstance(item, (EnumDef, ExceptionDef, RecordDef, TypeAlias)):
             type_declaration_ids[item.name] = type_declaration_ids.get(
                 item.name, frozenset()
             ) | frozenset({item.node_id})
     declaration_dependencies: dict[int, frozenset[int]] = {}
-    for item, declaration_ids in zip(items, source_declaration_ids, strict=True):
+    for item, declaration_ids in zip(leaf_items, source_declaration_ids, strict=True):
         if not declaration_ids:
             continue
         item_dependencies = _declaration_dependencies(

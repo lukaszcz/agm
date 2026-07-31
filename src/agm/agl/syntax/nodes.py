@@ -1224,18 +1224,27 @@ class ParamDecl:
     scope_path: tuple[ScopeSegment, ...] = ()
 
 
-def param_external_key(param: ParamDecl) -> str:
-    """Return *param*'s external key: the CLI flag and config-table spelling.
+def scoped_public_name(scope_path: tuple[ScopeSegment, ...], name: str) -> str:
+    """Return the full path spelling of a scoped binding's or param's public name.
 
-    A root param's key is its bare name; a scoped param's key is its full
-    path spelling (``"Deploy::region"``), matching how the language itself
-    addresses the member from outside its region. This is display text, not
-    an identity key — callers that need the param's scope path keep it
+    A root declaration's public name is its bare name; a scoped one's is its
+    full path spelling (``"Deploy::region"``), matching how the language
+    itself addresses the member from outside its scope. This is display
+    text, not an identity key — callers that need the scope path keep it
     structured rather than recovering it by splitting this spelling.
     """
     from agm.agl.modules.ids import spell_scope_path
 
-    return spell_scope_path((*(segment.name for segment in param.scope_path), param.name))
+    return spell_scope_path((*(segment.name for segment in scope_path), name))
+
+
+def param_external_key(param: ParamDecl) -> str:
+    """Return *param*'s external key: the CLI flag and config-table spelling.
+
+    Shares its spelling with the public name of a scoped ``let``/``var``
+    binding; see ``scoped_public_name``.
+    """
+    return scoped_public_name(param.scope_path, param.name)
 
 
 @dataclass(frozen=True, slots=True)

@@ -845,6 +845,21 @@ class TestEchoData:
         assert _int({name: value for name, _typ, value in s.bindings()}["total"]) == 5
 
     @pytest.mark.parametrize("binder", ("let", "var"))
+    def test_shorthand_scoped_binder_echoes_its_full_path_name(self, binder: str) -> None:
+        """A scoped binder's echo name distinguishes it from a same-named root binding.
+
+        Regression: naming previously reused the bare binder name for a
+        scoped ``let``/``var``, so ``A::total`` and a root ``total`` were
+        indistinguishable in the echo.
+        """
+        s = ReplSession()
+        r = s.eval_entry(f"{binder} A::total = 5")
+
+        assert r.kind == "binding"
+        assert r.name == "A::total"
+        assert r.value == IntValue(5)
+
+    @pytest.mark.parametrize("binder", ("let", "var"))
     def test_trailing_discard_binder_evaluates_and_echoes_nothing(self, binder: str) -> None:
         from agm.agl.repl.render import render_entry_result
 
@@ -2571,6 +2586,69 @@ class TestFuncDef:
         after = s.eval_entry("let z: decimal = 1 / 0\nscope B\nrecord Later()\nend B")
         assert not after.ok
         assert not s.eval_entry("B::Later()").ok
+
+    def test_runtime_failure_promotes_only_the_completed_binder_in_a_region(self) -> None:
+        """A region is not one promotable group: each binder completes on its own.
+
+        ``A::a``'s initializer runs and completes before ``A::b``'s raises, so
+        only ``a`` may be promoted — a failed sibling binder in the same region
+        must not be treated as completed merely because it shares the region.
+        """
+        s = ReplSession()
+        failed = s.eval_entry("scope A\nlet a = 1\nvar b = 1 / 0\nend A")
+        assert not failed.ok
+        assert s.eval_entry("A::a").value == IntValue(1)
+        assert not s.eval_entry("A::b").ok
+
+    def test_runtime_failure_after_region_form_scoped_let_gives_clean_diagnostic(self) -> None:
+        """A region-form ``let`` past a failing sibling initializer never ran.
+
+        Regression test: ``d``'s scope-member ref keys on its pattern binder
+        candidate node id, not the ``LetDecl`` node's own id; the promotion
+        plan's node-id set must be computed the same way, or ``d`` is treated
+        as unconditionally promoted and later lookup crashes the session
+        instead of diagnosing cleanly.
+        """
+        s = ReplSession()
+        failed = s.eval_entry("scope A\nlet a = 1\nvar c = 1 / 0\nlet d = 4\nend A")
+        assert not failed.ok
+        r = s.eval_entry("A::d")
+        assert not r.ok
+
+    def test_runtime_failure_after_scoped_let_in_nested_region_gives_clean_diagnostic(
+        self,
+    ) -> None:
+        """The region-form ``let`` fix also holds across nested regions."""
+        s = ReplSession()
+        failed = s.eval_entry(
+            "scope A\nlet a = 1\nscope B\nvar c = 1 / 0\nlet d = 4\nend B\nlet e = 5\nend A"
+        )
+        assert not failed.ok
+        assert not s.eval_entry("A::e").ok
+        assert not s.eval_entry("A::B::d").ok
+
+    def test_runtime_failure_after_scoped_let_in_repeated_region_gives_clean_diagnostic(
+        self,
+    ) -> None:
+        """The region-form ``let`` fix also holds when the same scope is reopened."""
+        s = ReplSession()
+        failed = s.eval_entry("scope A\nlet a = 1\nend A\nscope A\nvar b = 1 / 0\nlet c = 4\nend A")
+        assert not failed.ok
+        assert not s.eval_entry("A::c").ok
+
+    def test_runtime_failure_after_scoped_var_in_region_gives_clean_diagnostic(self) -> None:
+        """Control: a ``var`` past a failing sibling was already handled correctly."""
+        s = ReplSession()
+        failed = s.eval_entry("scope A\nlet a = 1\nvar c = 1 / 0\nvar d = 4\nend A")
+        assert not failed.ok
+        assert not s.eval_entry("A::d").ok
+
+    def test_runtime_failure_after_shorthand_scoped_let_gives_clean_diagnostic(self) -> None:
+        """Control: the declaration-path shorthand form was already handled correctly."""
+        s = ReplSession()
+        failed = s.eval_entry("let A::a = 1\nvar A::c = 1 / 0\nlet A::d = 4")
+        assert not failed.ok
+        assert not s.eval_entry("A::d").ok
 
 
 # ---------------------------------------------------------------------------

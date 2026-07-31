@@ -247,7 +247,7 @@ parse is traced alongside the raw output.
 A run ends in one of three ways:
 
 1. **Success** — all statements executed; the host can observe the final
-   root-scope bindings.
+   bindings, each scoped one under its full path spelling.
 2. **Pre-execution failure** — a static error, param-validation error, or
    host configuration error; nothing was executed.
 3. **Uncaught exception** — the program started and an exception reached the

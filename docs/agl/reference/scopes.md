@@ -104,6 +104,12 @@ print(Config::low)
 print(Config::high)
 ```
 
+A binding's initializer runs at its region's position in the module body: in
+item order, together with the rest of the module's initializers, wherever the
+region falls in the source text. A scope split across separate blocks resumes
+exactly where the earlier block left off; a region never defers, reorders, or
+repeats initialization.
+
 ## Parameters
 
 A region also admits `param` declarations, with no declaration-path

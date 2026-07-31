@@ -234,8 +234,9 @@ class RunResult:
         per the CLI contract).  ``None`` for pre-execution failures and for
         successful runs.
     ``bindings``
-        Root-scope bindings after a successful run (name → Value).  Empty for
-        failed runs.
+        Entry-module public bindings after a successful run (name → Value); a
+        scoped binding or agent appears under its full path spelling
+        (``A::x``).  Empty for failed runs.
     ``call_sites``
         Static call-site inventory populated when ``check_only=True``
         (``agm exec --dry-run``).  One entry per agent-call/exec site in
@@ -490,7 +491,7 @@ class PipelineDriver:
         )
 
         try:
-            root_bindings = interp.run()
+            entry_bindings = interp.run()
         except AglRaise as exc:
             # Uncaught AgL exception (exit code 2 per the CLI contract).
             # ONLY the AgL exception carrier is caught here: an unexpected Python
@@ -522,7 +523,7 @@ class PipelineDriver:
             diagnostics=[],
             error=None,
             warnings=list(warnings),
-            bindings=root_bindings,
+            bindings=entry_bindings,
             trace_path=trace.path,
         )
 

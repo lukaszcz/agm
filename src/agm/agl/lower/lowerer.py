@@ -253,6 +253,7 @@ from agm.agl.syntax.nodes import (
     VarRef,
     param_external_key,
     pattern_binder_candidates,
+    scoped_public_name,
     simple_let_pattern_name,
     static_items,
 )
@@ -2838,7 +2839,7 @@ class _Lowerer:
             )
             binder_symbols[node_id] = self._alloc_sym(
                 binding.decl_node_id,
-                name=name,
+                name=scoped_public_name(let.scope_path, name),
                 mutable=False,
                 public=top_level,
             )
@@ -3278,7 +3279,7 @@ class _Lowerer:
                     # surrounding sequence nodes on the evaluator's hot path.
                     return self._lower_named_binding(
                         decl_node_id=binding.decl_node_id,
-                        name=simple_name,
+                        name=scoped_public_name(let.scope_path, simple_name),
                         rhs=let.value,
                         span=let.span,
                         binding_type=matched_type,
@@ -3287,10 +3288,10 @@ class _Lowerer:
                     )
                 return self._lower_pattern_let(let, top_level=top_level)
 
-            case VarDecl(name=name, value=rhs, span=span, node_id=nid):
+            case VarDecl(name=name, value=rhs, span=span, node_id=nid, scope_path=scope_path):
                 return self._lower_named_binding(
                     decl_node_id=nid,
-                    name=name,
+                    name=scoped_public_name(scope_path, name),
                     rhs=rhs,
                     span=span,
                     binding_type=self._binding_type(nid),
@@ -3568,38 +3569,38 @@ class _Lowerer:
         This is the single walk that decides which items become initializers
         and in what order. Both single-module and multi-module entry points use
         it; it publishes the source item behind every emitted initializer for
-        REPL promotion. A scope region contributes its nested declarations under
-        the region's own source index, so promotion treats a region as one
-        declaration group. ``handles_only`` keeps a library module to the items
+        REPL promotion. A scope region is transparent here exactly as it is to
+        ``static_items``: each of its members gets its own source index, the
+        same as a root item, so a region is not one promotable declaration
+        group — a binder inside a region completes and promotes independently
+        of its siblings. ``handles_only`` keeps a library module to the items
         it must expose as runtime handles: functions and needed agents.
         """
         function_initializers: list[IrExpr] = []
         function_origins: list[InitializerOrigin] = []
         other_initializers: list[IrExpr] = []
         other_origins: list[InitializerOrigin] = []
-        for source_index, item in enumerate(body.items):
-            members = static_items((item,)) if isinstance(item, ScopeRegion) else (item,)
-            for member in members:
-                is_function = isinstance(member, FuncDef) and not member.is_builtin
-                if handles_only and not is_function and not isinstance(member, AgentDecl):
-                    continue
-                if (
-                    isinstance(member, AgentDecl)
-                    and member.scope_path
-                    and not eager_scoped_agents
-                    and not self._scoped_agent_is_referenced(member)
-                ):
-                    continue
-                ir = self.lower_item(member, top_level=top_level)
-                if ir is None:
-                    continue
-                origin = InitializerOrigin(source_index=source_index, is_function=is_function)
-                if is_function:
-                    function_initializers.append(ir)
-                    function_origins.append(origin)
-                else:
-                    other_initializers.append(ir)
-                    other_origins.append(origin)
+        for source_index, member in enumerate(static_items(body.items)):
+            is_function = isinstance(member, FuncDef) and not member.is_builtin
+            if handles_only and not is_function and not isinstance(member, AgentDecl):
+                continue
+            if (
+                isinstance(member, AgentDecl)
+                and member.scope_path
+                and not eager_scoped_agents
+                and not self._scoped_agent_is_referenced(member)
+            ):
+                continue
+            ir = self.lower_item(member, top_level=top_level)
+            if ir is None:
+                continue
+            origin = InitializerOrigin(source_index=source_index, is_function=is_function)
+            if is_function:
+                function_initializers.append(ir)
+                function_origins.append(origin)
+            else:
+                other_initializers.append(ir)
+                other_origins.append(origin)
 
         initializers = tuple((*function_initializers, *other_initializers))
         self._link.initializer_origins[self._module_id] = tuple((*function_origins, *other_origins))
@@ -3621,7 +3622,7 @@ class _Lowerer:
             ):
                 self._alloc_sym(
                     item.node_id,
-                    name=item.name,
+                    name=scoped_public_name(item.scope_path, item.name),
                     mutable=False,
                     public=True,
                     owner=self._module_id,

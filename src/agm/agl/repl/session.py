@@ -769,12 +769,28 @@ class ReplSession:
         entry_binding_node_ids = {ref.decl_node_id for ref in promotion_bindings.values()}
         promoted_binding_node_ids = entry_binding_node_ids & promoted_declaration_ids
 
+        # A region-form ``let``'s scope-member ref keys on its binder
+        # candidate node id (not the ``LetDecl`` node's own id), same as at
+        # the root. Only root binders feed ``promotion_bindings`` — a scoped
+        # one must not, since that also drives the root-only
+        # ``self._session_scope.bindings`` update below — so its candidate
+        # ids are collected separately and only fed into
+        # ``entry_declaration_node_ids``.
+        scoped_binder_node_ids = {
+            candidate.node_id
+            for item in static_items(program.body.items)
+            if isinstance(item, LetDecl)
+            for candidate in pattern_binder_candidates(item.pattern)
+        }
+
         # Declarations this entry introduces, at the root and in its scope
         # regions. Anything outside this set is retained session state, which a
         # partial entry never demotes.
-        entry_declaration_node_ids = {
-            item.node_id for item in entry_declarations if isinstance(item, named_declarations)
-        } | entry_binding_node_ids
+        entry_declaration_node_ids = (
+            {item.node_id for item in entry_declarations if isinstance(item, named_declarations)}
+            | entry_binding_node_ids
+            | scoped_binder_node_ids
+        )
 
         def _is_promoted(node_id: int) -> bool:
             return node_id not in entry_declaration_node_ids or node_id in promoted_declaration_ids
@@ -1076,6 +1092,7 @@ class ReplSession:
             TypeAlias,
             VarDecl,
             is_scoped_declaration,
+            scoped_public_name,
             simple_let_pattern_name,
         )
 
@@ -1087,13 +1104,17 @@ class ReplSession:
             return "expression", None
         if isinstance(last, LetDecl):
             name = simple_let_pattern_name(last.pattern)
+            if name is None:
+                return "binding", None
             if name == "_":
                 return "statement", None
-            return "binding", name
+            # A shorthand binder path names the member it declares, so the
+            # echo shows the member the way its scope makes it reachable.
+            return "binding", scoped_public_name(last.scope_path, name)
         if isinstance(last, VarDecl):
             if last.name == "_":
                 return "statement", None
-            return "binding", last.name
+            return "binding", scoped_public_name(last.scope_path, last.name)
         if isinstance(
             last,
             (
@@ -1110,8 +1131,7 @@ class ReplSession:
             # A shorthand declaration path names the member it declares, so the
             # echo shows the member the way its scope makes it reachable.
             if is_scoped_declaration(last):
-                path = tuple(segment.name for segment in last.scope_path)
-                return "declaration", spell_scope_path((*path, last.name))
+                return "declaration", scoped_public_name(last.scope_path, last.name)
             return "declaration", last.name
         if isinstance(last, ScopeRegion):
             return "declaration", spell_scope_path(_region_path(last))

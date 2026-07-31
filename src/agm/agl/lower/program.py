@@ -31,7 +31,7 @@ from agm.agl.matchcompile import MatchCompiledProgram
 from agm.agl.modules.ids import STD_CORE_ID, ModuleId
 from agm.agl.self_validation import self_validation_enabled
 from agm.agl.semantics.types import ExceptionType, RecordType
-from agm.agl.syntax.nodes import AgentDecl, FuncDef, static_items
+from agm.agl.syntax.nodes import AgentDecl, FuncDef, scoped_public_name, static_items
 from agm.util.text import normalize_newlines
 
 __all__ = ["lower_program"]
@@ -179,7 +179,7 @@ def lower_program(
             ):
                 lowerer._alloc_sym(
                     item.node_id,
-                    name=item.name,
+                    name=scoped_public_name(item.scope_path, item.name),
                     mutable=False,
                     public=mid.is_entry,
                     owner=mid,

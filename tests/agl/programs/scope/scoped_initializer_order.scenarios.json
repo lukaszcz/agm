@@ -1,0 +1,25 @@
+{
+  "scenarios": [
+    {
+      "name": "from_zero",
+      "params": {"start": 0},
+      "expect": {
+        "stdout": "1 2 3 4 5 6 7 8\n"
+      }
+    },
+    {
+      "name": "from_offset",
+      "params": {"start": 100},
+      "expect": {
+        "stdout": "101 102 103 104 105 106 107 108\n"
+      }
+    },
+    {
+      "name": "branch_taken_in_region",
+      "params": {"start": 0, "branch_in_region": true},
+      "expect": {
+        "stdout": "1 5 4 5 6 7 8 9\n"
+      }
+    }
+  ]
+}

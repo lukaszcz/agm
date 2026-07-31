@@ -3900,3 +3900,114 @@ print(ask("second", agent = B::bot))
 
         assert result.ok
         assert capsys.readouterr().out == "from A\nfrom B\n"
+
+    def test_same_named_scoped_agents_publish_distinct_full_path_names(self) -> None:
+        """A scoped ``agent`` publishes under its full path spelling, like ``let``/``var``.
+
+        ``RunResult.bindings`` is keyed by public name; two same-named scoped
+        agents at different paths must both survive there distinctly rather
+        than one silently overwriting the other.
+        """
+        from agm.agl.semantics.values import AgentValue
+
+        source = """\
+scope A
+agent bot
+end A
+scope B
+agent bot
+end B
+print(ask("first", agent = A::bot))
+print(ask("second", agent = B::bot))
+"""
+        runtime = PipelineDriver()
+        runtime.register_scoped_agent(("A",), "bot", lambda _request: "from A")
+        runtime.register_scoped_agent(("B",), "bot", lambda _request: "from B")
+
+        result = runtime.run(source)
+
+        assert result.ok, result.diagnostics
+        assert isinstance(result.bindings["A::bot"], AgentValue)
+        assert isinstance(result.bindings["B::bot"], AgentValue)
+        assert result.bindings["A::bot"] != result.bindings["B::bot"]
+
+    def test_scoped_agent_does_not_mask_a_same_named_root_binding(self) -> None:
+        """A scoped ``agent`` must not collide with a same-named root ``let``."""
+        from agm.agl.semantics.values import AgentValue, IntValue
+
+        source = """\
+let bot = 42
+scope A
+agent bot
+end A
+print(ask("hi", agent = A::bot))
+"""
+        runtime = PipelineDriver()
+        runtime.register_scoped_agent(("A",), "bot", lambda _request: "hi there")
+
+        result = runtime.run(source)
+
+        assert result.ok, result.diagnostics
+        assert result.bindings["bot"] == IntValue(42)
+        assert isinstance(result.bindings["A::bot"], AgentValue)
+
+
+class TestScopedBindingPublicName:
+    """A scoped ``let``/``var``'s public name is its full path spelling.
+
+    ``RunResult.bindings`` is keyed by ``SymbolDescriptor.public_name``, so a
+    root and a scoped binding sharing a bare name must not collide there.
+    """
+
+    def test_scoped_let_and_var_publish_full_path_names(self) -> None:
+        from agm.agl.semantics.values import IntValue
+
+        source = """\
+let x = 1
+var y = 2
+scope A
+let x = 10
+var y = 20
+end A
+"""
+        result = PipelineDriver().run(source)
+
+        assert result.ok, result.diagnostics
+        assert result.bindings["x"] == IntValue(1)
+        assert result.bindings["y"] == IntValue(2)
+        assert result.bindings["A::x"] == IntValue(10)
+        assert result.bindings["A::y"] == IntValue(20)
+
+    def test_shorthand_and_region_spellings_publish_the_same_name(self) -> None:
+        from agm.agl.semantics.values import IntValue
+
+        region_source = """\
+scope A
+let x = 1
+end A
+"""
+        shorthand_source = "let A::x = 1"
+
+        region_result = PipelineDriver().run(region_source)
+        shorthand_result = PipelineDriver().run(shorthand_source)
+
+        assert region_result.ok and shorthand_result.ok
+        assert region_result.bindings["A::x"] == IntValue(1)
+        assert shorthand_result.bindings["A::x"] == IntValue(1)
+
+    def test_destructured_binder_in_a_region_publishes_its_full_path_name(self) -> None:
+        from agm.agl.semantics.values import IntValue
+
+        source = """\
+record Point
+  x: int
+  y: int
+scope A
+let Point(x, y) = Point(x = 1, y = 2)
+end A
+"""
+        result = PipelineDriver().run(source)
+
+        assert result.ok, result.diagnostics
+        assert result.bindings["A::x"] == IntValue(1)
+        assert result.bindings["A::y"] == IntValue(2)

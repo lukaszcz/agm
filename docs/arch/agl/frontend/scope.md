@@ -42,6 +42,11 @@ a lookup. A cross-module `open`'s contribution is snapshotted eagerly, as before
 imported module's public members are complete before the walk starts, so
 there is nothing to defer.
 
+`ScopeNode.members` is written only through `register_member`/`clear_members`, each
+bumping a shared, process-wide member-write counter; `ScopeNode.local_open_target`
+memoizes a local `open`'s live selection keyed by that counter, so repeated bare
+lookups skip re-walking the scope tree until some write, anywhere, moves it.
+
 ## Import Environments
 
 `scope/imports.py` is the pure import-policy seam. Its contribution environment

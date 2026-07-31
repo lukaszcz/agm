@@ -894,7 +894,7 @@ class ReplSession:
                 scope_path=path,
             )
         for path, name in promoted_type_identities:
-            self._session_scope_nodes[(*path, name)].members.clear()
+            self._session_scope_nodes[(*path, name)].clear_members()
         for path, node in checked.resolved.scope_nodes.items():
             session_node = self._session_scope_nodes.get(path)
             if session_node is None:
@@ -907,7 +907,7 @@ class ReplSession:
                 ):
                     if ref.decl_node_id in entry_declaration_node_ids:
                         displaced_param_keys.add(resolved_public_name(path, name))
-                    session_node.members[name] = ref
+                    session_node.register_member(name, ref)
         alias_targets = {
             type_identity(item): render_type_expr(item.type_expr)
             for item in entry_type_items

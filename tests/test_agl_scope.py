@@ -743,6 +743,35 @@ class TestScopedBindingOpenPrecedence:
                 "scope A\nlet x = 1\nlet y = 2\nend A\nB::get()"
             )
 
+    def test_open_of_sibling_region_sees_a_member_added_in_a_later_reopening(self) -> None:
+        """``open A`` is recorded while region A is still empty (region B's
+        first block); region A only gains ``x`` afterward, and a reference
+        reaches it only once region B is reopened later still. The live
+        re-check must answer correctly at that later point, not from
+        whatever region A looked like when the ``open`` itself was walked."""
+        resolved = parse_and_resolve(
+            "scope B\nopen A\nend B\n"
+            "scope A\nvar x = 1\nend A\n"
+            "scope B\ndef get() -> int = x\nend B\n"
+            "B::get()"
+        )
+        assert _ref(resolved, "x").scope_path == ("A",)
+
+    def test_open_sees_a_member_registered_after_an_earlier_reference_resolved(self) -> None:
+        """The opened region gains a second member *between* two bare
+        references that both go through the same ``open``: the first
+        reference resolves against the region as it stands then, and the
+        second must still reach the member registered after it."""
+        resolved = parse_and_resolve(
+            "scope A\nvar x = 1\nend A\n"
+            "scope B\nopen A\ndef first() -> int = x\nend B\n"
+            "scope A\nvar y = 2\nend A\n"
+            "scope B\ndef second() -> int = y\nend B\n"
+            "B::first() + B::second()"
+        )
+        assert _ref(resolved, "x").scope_path == ("A",)
+        assert _ref(resolved, "y").scope_path == ("A",)
+
 
 class TestScopedConstructorCandidateUnion:
     """``_owned_scope_constructor_candidates`` unions every same-named candidate.

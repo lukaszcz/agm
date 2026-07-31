@@ -732,6 +732,20 @@ class TestScopedBindingRetention:
         assert result.ok, result.diagnostics
         assert result.value == IntValue(6)
 
+    def test_retained_open_sees_a_member_promoted_by_a_later_entry(self) -> None:
+        """An ``open`` recorded in one entry still resolves a member a later
+        entry's promotion adds to the opened path, live rather than from
+        whatever the path held when the ``open`` itself was promoted."""
+        s = ReplSession()
+        assert s.eval_entry("scope A\nvar x = 1\nend A").ok
+        assert s.eval_entry("open A").ok
+        assert s.eval_entry("scope A\nvar y = 2\nend A").ok
+
+        result = s.eval_entry("y")
+
+        assert result.ok, result.diagnostics
+        assert result.value == IntValue(2)
+
     def test_scoped_declarations_and_bindings_coexist_at_one_path(self) -> None:
         s = ReplSession()
         assert s.eval_entry("let A::x = 1").ok
@@ -969,6 +983,20 @@ class TestRedefinition:
 
         assert not use.ok
         assert any("does not take type arguments" in d.message for d in use.diagnostics)
+
+    def test_redeclaring_an_opened_enum_drops_its_stale_bare_variant(self) -> None:
+        """A local ``open`` recorded before the enum is redeclared must not
+        resurrect a variant the redeclaration's fresh member layer dropped."""
+        s = ReplSession()
+        assert s.eval_entry("enum Color\n  | Red\n  | Green").ok
+        assert s.eval_entry("open Color").ok
+        assert s.eval_entry("enum Color\n  | Blue").ok
+
+        stale = s.eval_entry("Red")
+        fresh = s.eval_entry("Blue")
+
+        assert not stale.ok
+        assert fresh.ok, fresh.diagnostics
 
     def test_failed_record_redefinition_restores_previous_methods(self) -> None:
         session = ReplSession()

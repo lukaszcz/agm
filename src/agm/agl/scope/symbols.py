@@ -451,6 +451,12 @@ class ScopeNode:
       ``open`` to precede its own scope's binders -- is reached exactly like
       one registered before it.
 
+    ``members`` is read freely but written only through :meth:`register_member`
+    and :meth:`clear_members`: both bump the shared member-write clock that
+    :meth:`local_open_target`'s memo is keyed by, so every write, anywhere,
+    is visible to every layer's memo as "something changed" -- the memo's
+    correctness depends on there being no other way to mutate ``members``.
+
     Membership is collected before resolution. Lookup walks the lexical binding
     parent chain; member-reference resolution is introduced separately.
     """
@@ -465,6 +471,10 @@ class ScopeNode:
         default_factory=dict
     )
     opened_local_scopes: set[LocalOpenSelection] = field(default_factory=set)
+    _local_open_memo_version: int = field(default=-1, repr=False, compare=False)
+    _local_open_memo: dict[LocalOpenSelection, dict[BareAtom, list[BindingRef]]] = field(
+        default_factory=dict, repr=False, compare=False
+    )
 
     def lookup(self, name: str) -> BindingRef | None:
         """Search lexical bindings and named-scope members outward."""
@@ -490,8 +500,89 @@ class ScopeNode:
         """Add *name* → *ref* to this scope's binding table."""
         self.bindings[name] = ref
 
+    def register_member(self, name: str, ref: BindingRef) -> None:
+        """Add *name* → *ref* to this scope's member layer.
+
+        The only legal way to add a member: bumps the shared member-write
+        clock so :meth:`local_open_target`'s memo -- on this node or any
+        other -- knows a write happened and recomputes on its next lookup.
+        """
+        self.members[name] = ref
+        _bump_member_version()
+
+    def clear_members(self) -> None:
+        """Discard this scope's entire member layer.
+
+        The only legal way to clear members: used when a redeclared type owns
+        a fresh member layer, so stale members from its prior definition must
+        not survive. Bumps the shared member-write clock like
+        :meth:`register_member`.
+        """
+        self.members.clear()
+        _bump_member_version()
+
+    def local_open_target(
+        self,
+        selection: LocalOpenSelection,
+        scope_nodes: Mapping[ScopePath, ScopeNode],
+    ) -> dict[BareAtom, list[BindingRef]]:
+        """Return *selection*'s currently selected members, memoized by the shared clock.
+
+        Recomputes ``apply_open_selection(selection.mode, selection.items,
+        local_scope_bindings(scope_nodes, selection.scope_path))`` exactly
+        once per version of the shared member-write clock: a cached result
+        answers every lookup made while nothing, anywhere, has written a
+        member, and one comparison against the current clock value is enough
+        to know the cache is still exact, never merely likely, correct. The
+        whole memo is cleared (rather than accumulating one entry per version
+        forever) whenever the clock has moved since it was last built here,
+        which bounds its size to one version's worth of entries -- a REPL
+        session's root node lives for the whole session, so an
+        ever-growing per-version accumulation would leak.
+        """
+        current_version = _member_version_clock.value
+        if self._local_open_memo_version != current_version:
+            self._local_open_memo.clear()
+            self._local_open_memo_version = current_version
+        cached = self._local_open_memo.get(selection)
+        if cached is None:
+            cached = apply_open_selection(
+                selection.mode,
+                selection.items,
+                local_scope_bindings(scope_nodes, selection.scope_path),
+            )
+            self._local_open_memo[selection] = cached
+        return cached
+
 
 _T = TypeVar("_T")
+
+
+# ---------------------------------------------------------------------------
+# Shared member-write clock -- backs the local-``open`` target memo
+# ---------------------------------------------------------------------------
+
+
+@dataclass(slots=True)
+class _MemberVersionClock:
+    """A monotonic counter bumped by every ``ScopeNode`` member write.
+
+    A one-field mutable holder, rather than a bare module-level int, so
+    bumping it is an attribute mutation (no ``global`` statement needed) and
+    every :class:`ScopeNode`, anywhere, observes the same clock. The value
+    itself is never interpreted -- only compared for equality against a
+    memo's stamped version -- so wraparound and magnitude are not a concern.
+    """
+
+    value: int = 0
+
+
+_member_version_clock = _MemberVersionClock()
+
+
+def _bump_member_version() -> None:
+    """Advance the shared member-write clock. Called only by the write door."""
+    _member_version_clock.value += 1
 
 
 def apply_open_selection(
@@ -549,11 +640,13 @@ def local_scope_bindings(
     """Materialize *scope_path*'s current member subtree, relative to itself.
 
     Every member declared anywhere under *scope_path*, keyed by its path
-    relative to it. Recomputed from *scope_nodes* on every call rather than
-    cached: mid-resolution, a member registered after the ``open`` that
-    targets *scope_path* becomes visible the moment the walk defines it;
-    once resolution has finished, the computation simply reads a completed
-    tree.
+    relative to it. Always recomputed from *scope_nodes*, never cached here:
+    mid-resolution, a member registered after the ``open`` that targets
+    *scope_path* becomes visible the moment the walk defines it. Repeated
+    lookups are cheap not because this function remembers anything, but
+    because :meth:`ScopeNode.local_open_target` memoizes its result behind
+    the shared member-write version: it recomputes this only when some
+    write, anywhere, has moved that version since the memo was last built.
     """
     members: dict[BareAtom, BindingRef] = {}
     for path, node in scope_nodes.items():
@@ -576,10 +669,12 @@ def _nearest_layer_contribution(
     The one definition of nearest-layer ``open`` precedence, shared by the
     value and constructor lookups so the two can never drift. Walks *scope*
     outward; at each layer a cross-module ``open``'s eager *snapshot* and
-    every recorded local ``open``'s live selection (reapplied against
-    *scope_nodes*'s current member set, then mapped through *project*) merge,
-    and the first layer with any candidate wins. A layer with no local
-    ``open`` needs no live pass, so its snapshot answers directly.
+    every recorded local ``open``'s live selection (its currently selected
+    members, from :meth:`ScopeNode.local_open_target` -- memoized behind the
+    shared member-write version so repeated lookups need not re-walk
+    *scope_nodes* -- mapped through *project*) merge, and the first layer with
+    any candidate wins. A layer with no local ``open`` needs no live pass, so
+    its snapshot answers directly.
     """
     layer: ScopeNode | None = scope
     while layer is not None:
@@ -590,8 +685,7 @@ def _nearest_layer_contribution(
         else:
             candidates: set[_T] = set() if stored is None else set(stored)
             for selection in layer.opened_local_scopes:
-                target = local_scope_bindings(scope_nodes, selection.scope_path)
-                selected = apply_open_selection(selection.mode, selection.items, target)
+                selected = layer.local_open_target(selection, scope_nodes)
                 for ref in selected.get(name, ()):
                     candidates.update(project(ref))
             if candidates:

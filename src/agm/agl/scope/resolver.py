@@ -783,18 +783,24 @@ class _Resolver:
             if not path:
                 continue
             retained = self._repl_session_scope_nodes.get(path)
-            nodes[path] = ScopeNode(
+            node = ScopeNode(
                 node_id=self._scope_node_ids[path],
                 parent=nodes[path[:-1]],
                 scope_path=path,
-                members={} if retained is None else dict(retained.members),
             )
+            if retained is not None:
+                # A retained member counts as a write like any other: the
+                # local-open memo's correctness depends on every non-empty
+                # member layer having bumped the shared clock when built.
+                for name, ref in retained.members.items():
+                    node.register_member(name, ref)
+            nodes[path] = node
         # A replacement type declaration owns a fresh member layer: stale enum
         # variants from its prior definition must not survive into this entry.
         for item, path in self._type_declarations:
-            nodes[path + (item.name,)].members.clear()
+            nodes[path + (item.name,)].clear_members()
         for (_module_id, path, name), declaration in self._declarations.items():
-            nodes[path].members[name] = declaration
+            nodes[path].register_member(name, declaration)
         return nodes
 
     def _root_declaration_items(
@@ -1483,7 +1489,7 @@ class _Resolver:
                     span=ref.decl_span,
                 )
             self._scope_entity_kinds[key] = "ordinary"
-            scope.members[name] = replace(ref, scope_path=scope.scope_path)
+            scope.register_member(name, replace(ref, scope_path=scope.scope_path))
             return
         existing = scope.bindings.get(name)
         if existing is not None and (

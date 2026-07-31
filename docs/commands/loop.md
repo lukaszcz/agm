@@ -32,6 +32,9 @@ Prompt preprocessing:
   - `TASKS_DIR` — the resolved tasks directory path
   - `TASK_FILE` — the selected task file path (selector mode; set in the runner process environment at runtime)
 
+In selector mode, dry-run does not choose a task or invoke either command. Its output marks
+`TASK_FILE` as unavailable and identifies the runner prompt as reprocessed after task selection.
+
 Prompt file path:
 
 - AGM passes the resolved prompt file path to the runner/selector command

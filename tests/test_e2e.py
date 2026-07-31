@@ -5472,9 +5472,14 @@ class TestLoop:
         assert "(preprocessed)" in result.stdout
         assert "dry-run: command [selector]:" in result.stdout
         assert (
-            "dry-run: agm loop-runner subsequent runner invocations depend on selector output"
+            "dry-run:   TASK_FILE: unavailable (the selector is not run in dry-run mode)"
             in result.stdout
         )
+        assert "(reprocessed after task selection)" in result.stdout
+        assert (
+            "dry-run: agm loop-runner would run after task selection; "
+            "no selector or runner is executed"
+        ) in result.stdout
         assert not Path(env["FAKE_SELECTOR_LOG"]).exists()
         assert not Path(env["FAKE_RUNNER_LOG"]).exists()
 

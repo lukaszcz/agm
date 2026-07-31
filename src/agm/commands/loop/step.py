@@ -288,15 +288,22 @@ def print_dry_run(runtime: LoopStepRuntime) -> None:
             runtime.select_invocation.effective_prompt_file,
         ),
     )
+    dry_run.print_detail("TASK_FILE", "unavailable (the selector is not run in dry-run mode)")
     if runtime.resolved_prompt is not None:
-        dry_run.print_detail("runner prompt", display_path(runtime.resolved_prompt.effective_file))
+        dry_run.print_detail(
+            "runner prompt",
+            f"{display_path(runtime.resolved_prompt.effective_file)} "
+            "(reprocessed after task selection)",
+        )
     elif runtime.implement_prompt_file is not None:
         dry_run.print_detail(
-            "runner prompt", f"{display_path(runtime.implement_prompt_file)} (default)"
+            "runner prompt",
+            f"{display_path(runtime.implement_prompt_file)} "
+            "(default) (reprocessed after task selection)",
         )
     dry_run.print_operation(
         "loop-runner",
-        "subsequent runner invocations depend on selector output",
+        "would run after task selection; no selector or runner is executed",
     )
 
 

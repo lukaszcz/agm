@@ -52,12 +52,14 @@ declarations, and `builtin` declarations are not allowed there.
 
 ## Binder paths
 
-A region admits `let` and `var` bindings alongside its static declarations:
+A region admits `let` and `var` bindings alongside its static declarations. A
+binding's type is inferred from its initializer, exactly as at the module
+root, and an explicit annotation is checked against it on either spelling:
 
 ```agl
 scope Config
 let retries = 3
-var attempts = 0
+var attempts: int = 0
 end Config
 ```
 
@@ -115,9 +117,19 @@ different: it is visible only to references that follow it textually, in its
 own region or elsewhere in the module — exactly like a root-level `let`. This
 holds across separate blocks of the same scope: a member declared in an
 earlier `scope A` block cannot see a binding a later `scope A` block
-introduces, while the reverse order works. `open`ing a scope before one of its
-bindings is declared does not retroactively expose that binding; opening it
-afterward does.
+introduces, while the reverse order works. The same textual rule governs a
+binding reached through `open` — plain, `using`, or `hiding` alike: a
+reference sees the binding once the reference itself follows the binding's
+own declaration, regardless of where the `open` appears — an `open` written
+before the scope that declares the binding still exposes it to a later
+reference, just not to an earlier one.
+
+A scoped `var` is assigned through its path (`A::count := 1`) or, inside its
+region or after an `open`, through its bare name. A scoped `let` is not
+assignable: `:=` on it is the same immutable-binder error a root-level `let`
+raises. Assigning to a path that names a `def`, a type, or an `agent` is
+likewise rejected as immutable, and a path with no such member is a focused
+error.
 
 Outside a scope, qualify a member with its exact path. Scope paths never use
 suffix matching: `Outer::Inner::work` does not make `Inner::work` available at

@@ -76,14 +76,18 @@ from agm.agl.scope.symbols import (
     BuiltinKind,
     ConstructorRef,
     DeclarationKey,
+    LocalOpenSelection,
     ModuleResolution,
     PatternSlot,
     ScopeNode,
     ScopePath,
     SlotCandidate,
     alias_denotes_constructible_type,
+    apply_open_selection,
     duplicate_binder_message,
     immutable_binder_phrase,
+    resolve_bare_constructor_contribution,
+    resolve_bare_contribution,
 )
 from agm.agl.semantics.engine_keys import RESERVED_PROGRAM_NAMES
 from agm.agl.semantics.type_table import BUILTIN_PRELUDE_TYPE_DEFS
@@ -1575,53 +1579,17 @@ class _Resolver:
     # ------------------------------------------------------------------
 
     def _resolve_open_decl(self, decl: OpenDecl) -> None:
-        """Contribute a selected scope subtree to the current region."""
-        target = self._open_target_members(decl)
-        selected: list[tuple[NameAtom, BindingRef, ConstructorRef | None]] = []
-        if decl.mode is ImportMode.ALL:
-            selected = [(atom, ref, constructor) for atom, (ref, constructor) in target.items()]
-        else:
-            selected_paths: set[ScopePath] = set()
-            for item in decl.items:
-                prefix = (*tuple(segment.name for segment in item.scope_path), item.name)
-                matches = [atom for atom in target if _bare_path(atom)[: len(prefix)] == prefix]
-                if not matches:
-                    raise AglScopeError(
-                        f"'{'::'.join(prefix)}' is not a public member of the opened scope.",
-                        span=item.span,
-                    )
-                selected_paths.add(prefix)
-            if decl.mode is ImportMode.USING:
-                for item in decl.items:
-                    prefix = (*tuple(segment.name for segment in item.scope_path), item.name)
-                    for atom, value in target.items():
-                        path = _bare_path(atom)
-                        if path[: len(prefix)] == prefix:
-                            exposed = _bare_atom(
-                                (item.rename, *path[len(prefix) :])
-                                if item.rename is not None
-                                else path
-                            )
-                            ref, constructor = value
-                            selected.append((exposed, ref, constructor))
-            else:
-                selected = [
-                    (atom, ref, constructor)
-                    for atom, (ref, constructor) in target.items()
-                    if not any(
-                        _bare_path(atom)[: len(prefix)] == prefix for prefix in selected_paths
-                    )
-                ]
+        """Contribute a selected scope subtree to the current region.
 
-        for atom, ref, constructor in selected:
-            self._current_scope().contribute_bare(atom, ref)
-            if constructor is not None:
-                self._current_scope().contribute_bare_constructor(atom, constructor)
-
-    def _open_target_members(
-        self, decl: OpenDecl
-    ) -> dict[NameAtom, tuple[BindingRef, ConstructorRef | None]]:
-        """Return the relative public subtree of an opened local or imported scope."""
+        A local open's target scope may still be gaining members -- header
+        placement forces the ``open`` to precede its own scope's binders --
+        so it is recorded on the current region, with its full using/hiding
+        /rename selection, and resolved live against ``_scope_nodes`` at
+        every later bare reference (``resolve_bare_contribution`` and
+        ``resolve_bare_constructor_contribution``). A cross-module open's
+        target is complete before the walk starts, so it is resolved once,
+        eagerly, exactly as before.
+        """
         requested_path = tuple(segment.name for segment in decl.scope_ref.scope_path)
         # An explicit module route (``open geo/shapes::Point``) names its target
         # unambiguously; a same-named local scope must not intercept it.
@@ -1629,19 +1597,35 @@ class _Resolver:
             None if decl.scope_ref.module_route else self._open_local_scope_path(requested_path)
         )
         if local_path is not None:
-            local_members: dict[NameAtom, tuple[BindingRef, ConstructorRef | None]] = {}
-            for path, node in self._scope_nodes.items():
-                if path[: len(local_path)] != local_path:
-                    continue
-                for name, ref in node.members.items():
-                    relative = (*path[len(local_path) :], name)
-                    atom = _bare_atom(relative)
-                    local_members[atom] = (
-                        ref,
-                        next(iter(self._scoped_constructor_candidates.get((path, name), ())), None),
-                    )
-            return local_members
+            self._current_scope().opened_local_scopes.add(
+                LocalOpenSelection(scope_path=local_path, mode=decl.mode, items=decl.items)
+            )
+            return
 
+        target = self._open_target_members(decl)
+        if decl.mode is not ImportMode.ALL:
+            for item in decl.items:
+                prefix = (*tuple(segment.name for segment in item.scope_path), item.name)
+                if not any(_bare_path(atom)[: len(prefix)] == prefix for atom in target):
+                    raise AglScopeError(
+                        f"'{'::'.join(prefix)}' is not a public member of the opened scope.",
+                        span=item.span,
+                    )
+        for atom, values in apply_open_selection(decl.mode, decl.items, target).items():
+            for ref, constructor in values:
+                self._current_scope().contribute_bare(atom, ref)
+                if constructor is not None:
+                    self._current_scope().contribute_bare_constructor(atom, constructor)
+
+    def _open_target_members(
+        self, decl: OpenDecl
+    ) -> dict[NameAtom, tuple[BindingRef, ConstructorRef | None]]:
+        """Return the relative public subtree of an opened imported scope.
+
+        Only ever called once a local scope target has been ruled out
+        (``_resolve_open_decl`` resolves and records a local target itself).
+        """
+        requested_path = tuple(segment.name for segment in decl.scope_ref.scope_path)
         route = decl.scope_ref.module_route
         scope_path = requested_path
         if not route and len(requested_path) > 1:
@@ -1966,21 +1950,39 @@ class _Resolver:
         self._resolve_expr(node.value)
 
     def _resolve_qualified_assign(self, node: AssignStmt, target: NameTarget) -> None:
-        """Resolve a qualified assignment target (``MODQUAL::name := expr``).
+        """Resolve a qualified assignment target (``PATH::name := expr``).
 
-        Only ``builtin var`` bindings are assignable across a module boundary
-        (they are the sole mutable exported bindings); assigning any other
-        cross-module binding is rejected as immutable.
+        A local scope path is consulted first, through the same per-path
+        member namespace ``_resolve_local_scope_member`` consults for a
+        qualified read -- including the same ambiguity guard
+        (``_check_local_scope_route_ambiguity``) when the leading qualifier
+        segment is also a module route -- so a scoped ``var`` is assignable
+        through its path while a scoped ``let`` -- or a ``def``, a type, or
+        an agent sharing its path -- reuses the immutable-binder diagnostic
+        below. Only when the qualifier does not name a local scope path is a
+        cross-module target attempted; only a ``builtin var`` binding is
+        assignable across a module boundary (the sole mutable exported
+        binding kind).
         """
         assert target.qualifier is not None
         qualifier = target.qualifier
-        if self._import_env is None or not qualifier.route_segments:
-            raise AglScopeError(
-                f"'{target.name}' is not declared; assignment requires an existing "
-                f"mutable binding.",
-                span=node.span,
-            )
-        ref = self._lookup_qualified_binding(qualifier, target.name, node.span)
+        local_path = self._validate_local_scope_chain(qualifier)
+        if local_path is not None:
+            ref = self._scope_nodes[local_path].members.get(target.name)
+            if ref is None:
+                raise AglScopeError(
+                    f"Unknown member '{target.name}' in scope path '{'::'.join(local_path)}'.",
+                    span=node.span,
+                )
+            self._check_local_scope_route_ambiguity(qualifier, target.name, local_path)
+        else:
+            if self._import_env is None or not qualifier.route_segments:
+                raise AglScopeError(
+                    f"'{target.name}' is not declared; assignment requires an existing "
+                    f"mutable binding.",
+                    span=node.span,
+                )
+            ref = self._lookup_qualified_binding(qualifier, target.name, node.span)
         if not ref.mutable:
             raise AglScopeError(
                 f"Cannot assign to '{target.name}': "
@@ -2166,7 +2168,7 @@ class _Resolver:
 
         # Standard lexical lookup (module mode or bare name in program context).
         ref = self._current_scope().lookup(node.name)
-        regional_candidates = self._current_scope().bare_constructor_candidates(node.name)
+        regional_candidates = self._regional_constructor_candidates(node.name)
         if ref is None or (
             ref.kind is BinderKind.constructor_binding and regional_candidates is not None
         ):
@@ -2309,6 +2311,31 @@ class _Resolver:
                 )
         return path
 
+    def _check_local_scope_route_ambiguity(
+        self, chain: QualifierChain, name: str, path: ScopePath
+    ) -> None:
+        """Raise if *chain* names both a local scope path and a module route.
+
+        Shared by qualified value resolution and qualified assignment so a
+        read and a write of the same spelling agree: a leading qualifier
+        segment that is genuinely both a local scope (or type name) and an
+        imported module route is ambiguous regardless of which direction the
+        reference goes.
+        """
+        relative_path = tuple(segment.name for segment in chain.segments)
+        if not (
+            chain.anchor is None
+            and self._import_env is not None
+            and qualifier_contributes(self._import_env, relative_path, name)
+        ):
+            return
+        local_kind = "a type name" if path in self._type_paths else "a local scope"
+        raise AglScopeError(
+            f"Qualifier '{relative_path[0]}' is both {local_kind} and a module route for "
+            f"'{name}'. {qualification_repair_guidance()}",
+            span=chain.span,
+        )
+
     def _resolve_local_scope_member(self, node: VarRef) -> bool:
         """Resolve a scoped member through ordered lexical scope layers.
 
@@ -2338,7 +2365,7 @@ class _Resolver:
                 qualifier_candidates(self._import_env, relative_path[:1], anchored=chain.anchored)
             )
             has_opened_member = (
-                self._current_scope().bare_candidates(_bare_atom((*relative_path, node.name)))
+                self._bare_contribution_candidates(_bare_atom((*relative_path, node.name)))
                 is not None
             )
             known_segment = any(relative_path[0] in scope_path for scope_path in self._scope_nodes)
@@ -2361,17 +2388,7 @@ class _Resolver:
             raise AglScopeError(
                 f"Unknown member '{node.name}' in scope path '{rendered}'.", span=node.span
             )
-        if (
-            chain.anchor is None
-            and self._import_env is not None
-            and qualifier_contributes(self._import_env, relative_path, node.name)
-        ):
-            local_kind = "a type name" if path in self._type_paths else "a local scope"
-            raise AglScopeError(
-                f"Qualifier '{relative_path[0]}' is both {local_kind} and a module route for "
-                f"'{node.name}'. {qualification_repair_guidance()}",
-                span=chain.span,
-            )
+        self._check_local_scope_route_ambiguity(chain, node.name, path)
         if ref.kind is BinderKind.constructor_binding:
             candidates = self._scoped_constructor_candidates.get((path, node.name), ())
             if len(candidates) == 1:
@@ -2399,7 +2416,7 @@ class _Resolver:
                 self._record_varref_binding(
                     node,
                     ref,
-                    candidates=self._current_scope().bare_constructor_candidates(atom),
+                    candidates=self._regional_constructor_candidates(atom),
                 )
                 return
         direct_error: AglScopeError | None = None
@@ -2586,7 +2603,7 @@ class _Resolver:
             return None
         if len(chain.segments) == 1 and not chain.anchored:
             bare_atom = _bare_atom((chain.segments[0].name, variant))
-            bare_candidates = self._current_scope().bare_constructor_candidates(bare_atom)
+            bare_candidates = self._regional_constructor_candidates(bare_atom)
             # Several opened scopes contributing the same owner fall through to
             # the shared lookup below, which owns the ambiguity diagnostic.
             if bare_candidates is not None and len(bare_candidates) == 1:
@@ -2642,13 +2659,22 @@ class _Resolver:
             )
         return replace(candidate, variant=variant)
 
+    def _bare_contribution_candidates(self, name: NameAtom) -> set[BindingRef] | None:
+        """Return the nearest region's bare contributions for *name*, live where needed."""
+        return resolve_bare_contribution(self._current_scope(), name, self._scope_nodes)
+
+    def _regional_constructor_candidates(self, name: NameAtom) -> set[ConstructorRef] | None:
+        """Return the nearest region's constructor candidates for *name*, live where needed."""
+        return resolve_bare_constructor_contribution(
+            self._current_scope(), name, self._scope_nodes, self._declaring_constructor_candidates
+        )
+
     def _lookup_bare_contribution(self, name: NameAtom, span: SourceSpan) -> BindingRef | None:
         """Resolve one region's bare contributions, deferring clashes to use sites."""
-        candidates = self._current_scope().bare_candidates(name)
-        if candidates is None:
+        resolved = self._bare_contribution_candidates(name)
+        if resolved is None:
             return None
         assert self._root_scope is not None
-        resolved = set(candidates)
         if name in self._root_scope.bare_contributions and self._import_env is not None:
             for module, source in self._import_env.unqualified.get(name, frozenset()):
                 constructor = self._cross_module_constructor_refs.get((module, source))
@@ -3107,9 +3133,7 @@ class _Resolver:
                 and not candidate.owner_path
             )
         if chain.anchor is None:
-            opened = self._current_scope().bare_constructor_candidates(
-                _bare_atom((*relative_path, node.name))
-            )
+            opened = self._regional_constructor_candidates(_bare_atom((*relative_path, node.name)))
             if opened:
                 return tuple(opened)
         local_path = self._validate_local_scope_chain(chain)
@@ -3167,12 +3191,47 @@ class _Resolver:
 
         A region's opened contributions take precedence over the module-wide
         candidate table, so a bare spelling inside a scope selects the same
-        constructor a qualified reference would.
+        constructor a qualified reference would. Absent an opened
+        contribution, the enclosing named scopes are searched outward -- a
+        nominal declared in the same scope (or an ancestor scope) as the bare
+        spelling is reachable exactly as a bare value reference already finds
+        it via ``ScopeNode.lookup``, ahead of the module-wide table used only
+        for a root-declared nominal.
         """
-        regional = self._current_scope().bare_constructor_candidates(name)
+        regional = self._regional_constructor_candidates(name)
         if regional is not None:
             return tuple(regional)
+        scope: ScopeNode | None = self._current_scope()
+        while scope is not None:
+            if scope.scope_path:
+                owned = self._owned_scope_constructor_candidates(scope.scope_path, name)
+                if owned:
+                    return owned
+            scope = scope.parent
         return tuple(self._constructor_candidates.get(name, ()))
+
+    def _owned_scope_constructor_candidates(
+        self, scope_path: ScopePath, name: str
+    ) -> tuple[ConstructorRef, ...]:
+        """Return the union of *name*'s candidates declared directly in *scope_path*.
+
+        Covers a record or exception constructor, registered at *scope_path*
+        itself, and an enum variant, registered one level deeper at the type
+        scope of an enum declared directly in *scope_path*. Every same-named
+        candidate is returned, in declaration order, rather than the first
+        non-empty bucket found: the checker's scrutinee-type selection
+        disambiguates candidates, exactly as it does for the module-root
+        candidate table, so stopping early here would hide a same-scope
+        candidate behind an unrelated same-named one, non-deterministically
+        (``_type_declarations`` is a plain list, not a hash-ordered set).
+        """
+        candidates = list(self._scoped_constructor_candidates.get((scope_path, name), ()))
+        for item, path in self._type_declarations:
+            if path == scope_path:
+                candidates.extend(
+                    self._scoped_constructor_candidates.get((path + (item.name,), name), ())
+                )
+        return tuple(candidates)
 
     def _bind_pattern_vars(
         self, pattern: Pattern, scope: ScopeNode, policy: _PatternResolutionPolicy

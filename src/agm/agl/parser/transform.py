@@ -1157,20 +1157,27 @@ class AstBuilder(Transformer):
         )
 
     def _assignment_qualifier(self, ref: syntax.VarRef) -> syntax.QualifierChain | None:
-        """Return a simple expression chain for a qualified assignment target."""
+        """Return a simple expression chain for a qualified assignment target.
+
+        A chain of any length is admitted here -- a module route (always one
+        segment) and a local scope path (any number of segments, for a
+        nested-region ``var``) are indistinguishable until resolution, which
+        owns the actual accept/reject decision. Only a type-argument-applied
+        segment is rejected on sight: no assignment target can carry one.
+        """
         chain = ref.qualifier
         if chain is None:
             return None
         if not chain.segments:
             assert chain.anchor is syntax.QualifierAnchor.CURRENT_MODULE
             return chain
-        if len(chain.segments) == 1 and chain.segments[0].type_args is None:
-            return chain
-        raise AglSyntaxError(
-            "a qualified assignment target must name a module member; type-qualified "
-            "constructor forms are not assignment targets.",
-            span=ref.span,
-        )
+        if any(segment.type_args is not None for segment in chain.segments):
+            raise AglSyntaxError(
+                "a qualified assignment target cannot apply type arguments to a qualifier "
+                "segment; type-qualified constructor forms are not assignment targets.",
+                span=ref.span,
+            )
+        return chain
 
     # ------------------------------------------------------------------
     # type_ann

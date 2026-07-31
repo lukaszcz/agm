@@ -34,7 +34,14 @@ from agm.agl.scope.imports import (
     resolve_qualified_member,
     try_resolve_qualified_member,
 )
-from agm.agl.scope.symbols import BindingRef, ConstructorRef, ModuleResolution, ScopeNode, ScopePath
+from agm.agl.scope.symbols import (
+    BindingRef,
+    ConstructorRef,
+    ModuleResolution,
+    ScopeNode,
+    ScopePath,
+    resolve_bare_contribution,
+)
 from agm.agl.self_validation import self_validation_enabled
 from agm.agl.semantics.persistent import PersistentDict
 from agm.agl.semantics.type_table import (
@@ -1321,7 +1328,9 @@ class TypeEnvironment:
     def _opened_type_key(self, name: NameAtom, span: SourceSpan | None) -> DeclKey | None:
         """Return the unique type declaration contributed to this type region."""
         scope = self._scope_nodes.get(self._type_scope)
-        candidates = () if scope is None else scope.bare_candidates(name) or ()
+        candidates = (
+            () if scope is None else resolve_bare_contribution(scope, name, self._scope_nodes) or ()
+        )
         keys = {
             (ref.module_id, ref.scope_path, ref.name)
             for ref in candidates

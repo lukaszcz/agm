@@ -1,0 +1,32 @@
+# Scoped let/var bindings: type annotations, qualified and bare assignment,
+# a bare reference reaching a var opened before its own scope declares it, a
+# scoped binding holding a function value, and visibility from a nested
+# region and a qualified path.
+open Config
+
+param increment: int
+
+scope Config
+let retries: int = 3
+var attempts: int = 0
+def bump() -> unit =
+  attempts := attempts + increment
+  ()
+def show() -> text = "%{retries}/%{attempts}"
+let handler = bump
+scope Nested
+def doubled() -> int = attempts * 2
+end Nested
+end Config
+
+var Config::extra: int = 1
+
+Config::bump()
+attempts := attempts + 1
+Config::extra := Config::extra + increment
+Config::handler()
+
+print(Config::show())
+print("%{Config::attempts}")
+print("%{Config::extra}")
+print("%{Config::Nested::doubled()}")

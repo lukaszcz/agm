@@ -2959,9 +2959,17 @@ class _Lowerer:
         ) -> tuple[IrBind, ...]:
             """Project demanded nominal fields into their occurrence symbols."""
             nominal = (
-                NominalId(constructor.enum_type.module_id, constructor.enum_type.name)
+                NominalId(
+                    constructor.enum_type.module_id,
+                    constructor.enum_type.name,
+                    constructor.enum_type.scope_path,
+                )
                 if isinstance(constructor, EnumConstructor)
-                else NominalId(constructor.record_type.module_id, constructor.record_type.name)
+                else NominalId(
+                    constructor.record_type.module_id,
+                    constructor.record_type.name,
+                    constructor.record_type.scope_path,
+                )
             )
             return tuple(
                 IrBind(

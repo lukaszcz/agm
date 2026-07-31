@@ -16,7 +16,7 @@ Resolution is namespace- and scope-directed, never capitalization-directed — a
 - A nominal type alias contributes its target's constructor, so an alias chain ending at an enum contributes none — an enum's variants are its constructors, not the enum type itself. Such an alias still occupies its name as a type binding, so a value-position use gets the "type name, not a value" diagnostic rather than an undefined-name error.
 - Scope records constructor candidates for bare pattern names independently of ordinary value bindings. Pattern slots are owned by match sites — a case branch or a `let` declaration — with metadata recording candidates, visible alternatives, and the requested resulting binder kind; `match_site_pattern_slots` groups each owner's slots so typechecking selects exactly the site it just classified. A case root bare name remains constructor-only, while a let root bare name always binds even when a constructor shares its spelling; nested bare names retain the field-directed policy. Candidate metadata retains whether a spelling can be a bare nullary enum pattern, allowing scope to reject definite duplicate binders eagerly while leaving genuine field-directed cases to typechecking. Typechecking selects each slot's final binder or constructor in checker-owned maps; consumers use the checked artifact's accessors for those meanings. No later pass rewrites scope's resolution tables. An `as`-pattern name always binds and `_` never binds.
 
-Assignment follows the same split. Scope resolves an unqualified `:=` target and rejects an undeclared name, but leaves assignability to typechecking, which alone knows which binding a pattern slot selected. A qualified target is settled in scope, since only `builtin var` is assignable across a module boundary and no qualified name is a pattern slot. An indexed target (`obj[index] := value`) has no binding of its own: scope resolves `obj` and `index` as ordinary expressions, since indexed assignment mutates whatever container `obj` evaluates to rather than rebinding a name — legal on any array/dict-typed expression, not only a bare name.
+Assignment follows the same split. Scope resolves an unqualified `:=` target and rejects an undeclared name, but leaves assignability to typechecking, which alone knows which binding a pattern slot selected. A qualified target is settled in scope, since no qualified name is a pattern slot: a local scope path is consulted first, through the same member-namespace resolver a qualified read uses, so a scoped `var` is assignable through its path and any other member of that path (a `let`, a `def`, a type, an agent) reuses the immutable-binder diagnostic; only when the qualifier is not a local path is a cross-module target attempted, and only `builtin var` is assignable across a module boundary. An indexed target (`obj[index] := value`) has no binding of its own: scope resolves `obj` and `index` as ordinary expressions, since indexed assignment mutates whatever container `obj` evaluates to rather than rebinding a name — legal on any array/dict-typed expression, not only a bare name.
 
 Every `let` binder is identified by its own pattern node, whether the pattern is a
 single name or a destructuring form. The `let` item's node identifies the match
@@ -27,18 +27,33 @@ A scoped `let`/`var` is a member of its scope path, registered into the same
 `ScopeNode` member map and duplicate check as static declarations — but during
 the body walk, not the collection pre-pass, which only creates the path's
 layer. That is what gives a binding textual precedence like a root-level
-`let`, and makes `open`'s bare contribution a walk-time snapshot.
+`let`, and makes a local `open`'s contribution of a binder, unlike a
+declaration's, potentially precede the member it names: header placement puts
+an `open` before the scope block it targets. A local `open` -- plain,
+`using`, or `hiding` alike -- is therefore never snapshotted: the region
+records the target path together with its selection (`LocalOpenSelection`),
+and `resolve_bare_contribution`/`resolve_bare_constructor_contribution`
+reapply that selection against the current `ScopeNode` tree at every bare
+lookup, so a reference reached after the binder's own registration finds it
+regardless of selection form, even though the `open` came first. A
+cross-module `open`'s contribution is snapshotted eagerly, as before: an
+imported module's public members are complete before the walk starts, so
+there is nothing to defer.
 
 ## Import Environments
 
 `scope/imports.py` is the pure import-policy seam. Its contribution environment
 merges every declaration for a module into its selected path atoms, bare injection, aliases,
 and plain-path routes. Scoped paths retain their structure through selection and re-exporting; policy expands scope-prefix selections and re-roots renamed subtrees. The selected set bounds both routes and bare injection: plain
-imports are qualified-only, while `using` and `open import` inject bare names. Scope `open`
-declarations use the same structured bare-contribution layers on their enclosing `ScopeNode`.
-Constructor contributions retain their owner path in a parallel region-local candidate layer, so a
-nearer opened enum variant wins without changing global bare-constructor candidates. Local or
-directly imported scope subtrees are selected there, and collisions remain deferred
+imports are qualified-only, while `using` and `open import` inject bare names. A cross-module
+`open` declaration uses the same eager structured bare-contribution layers on its enclosing
+`ScopeNode`, with its constructor contributions retaining their owner path in a parallel
+region-local candidate layer, so a nearer opened enum variant wins without changing global
+bare-constructor candidates. A local `open`'s selection (`apply_open_selection`, shared with the
+eager path) is applied live instead, against the scope tree; its constructor identity comes from
+the resolved binding's own structured `(scope path, name)` lookup, the same one an ordinary
+reference already uses, not a separate contribution layer. Local or directly imported scope
+subtrees are selected there either way, and collisions remain deferred
 to the use site. Value and type lookup both consume those layers, so selected and renamed
 type members follow the same region boundaries and provenance; they never alter export maps
 or import contributions. One shared suffix/anchored resolver serves value reads and writes,

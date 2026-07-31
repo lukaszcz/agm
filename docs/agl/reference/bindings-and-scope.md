@@ -111,7 +111,10 @@ assign_target ::= qualifier_chain? name
 A bare `:=` (no index) rebinds the nearest visible **mutable** binding, has
 type `unit`, and returns `void`. It never creates a binding. The expected
 type of the right-hand side is the declared type of the binding being
-updated:
+updated. `qualifier_chain? name` is the same qualifier syntax a read uses, so
+a scoped `var`'s path (`A::count := 1`) is a valid target exactly as a scoped
+read is; see [Named scopes](scopes.md#names-and-visibility) for a scoped
+`var`'s bare-name and path assignment forms and its immutability rule:
 
 <!-- agl-check: fragment -->
 ```agl

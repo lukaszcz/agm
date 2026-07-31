@@ -363,6 +363,7 @@ def normalize_pattern(
                     constructor_ref.owner_name,
                     subject_type.type_args,
                     constructor_ref.owner_module_id,
+                    constructor_ref.owner_path,
                 ),
                 name,
                 checked.type_env.type_table,

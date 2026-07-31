@@ -21,8 +21,9 @@ Data model
 from __future__ import annotations
 
 import enum
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
+from typing import TypeVar
 
 from agm.agl.diagnostics import AglError, Diagnostic
 from agm.agl.modules.ids import ENTRY_ID, ModuleId
@@ -32,13 +33,14 @@ from agm.agl.syntax.nodes import (
     EnumDef,
     ExceptionDef,
     FuncDef,
+    ImportItem,
     Program,
     QualifierChain,
     RecordDef,
     TypeAlias,
 )
 from agm.agl.syntax.spans import SourceSpan
-from agm.agl.syntax.types import AppliedT, NameT
+from agm.agl.syntax.types import AppliedT, ImportMode, NameT
 
 ScopePath = tuple[str, ...]
 BareAtom = str | ScopePath
@@ -379,6 +381,31 @@ class BindingRef:
 
 
 # ---------------------------------------------------------------------------
+# LocalOpenSelection — a local ``open``'s target and selection
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class LocalOpenSelection:
+    """A local ``open``'s target scope path and its using/hiding/rename selection.
+
+    Recorded on the ``ScopeNode`` that contains the ``open`` and consulted
+    live at every later bare reference, rather than snapshotted once at the
+    ``open`` itself: a local scope's target may still be gaining members --
+    header placement forces the ``open`` to precede its own scope's binders
+    -- so ``mode``/``items`` (mirroring ``OpenDecl``) are reapplied against
+    the target's current member set each time, via
+    :func:`apply_open_selection`. Set semantics on the field that holds these
+    (``ScopeNode.opened_local_scopes``) make a repeated identical ``open`` a
+    no-op rather than an accumulating duplicate.
+    """
+
+    scope_path: ScopePath
+    mode: ImportMode
+    items: tuple[ImportItem, ...]
+
+
+# ---------------------------------------------------------------------------
 # ScopeNode — one node in the lexical scope tree
 # ---------------------------------------------------------------------------
 
@@ -392,6 +419,17 @@ class ScopeNode:
     - ``bindings``: lexical value bindings introduced *directly* in this scope.
     - ``parent``: the enclosing scope (``None`` for the root scope).
     - ``node_id``: the ``node_id`` of the AST construct that opened this scope.
+    - ``bare_contributions``/``bare_constructor_contributions``: a cross-module
+      ``open``'s selection, snapshotted eagerly -- an imported module's public
+      members are complete before the walk starts, so there is nothing to
+      defer.
+    - ``opened_local_scopes``: every local ``open`` recorded here, target path
+      together with its full selection. A local scope's members are resolved
+      live against the scope tree (see :func:`resolve_bare_contribution` and
+      :func:`resolve_bare_constructor_contribution`), never snapshotted, so a
+      member registered after the ``open`` -- header placement requires the
+      ``open`` to precede its own scope's binders -- is reached exactly like
+      one registered before it.
 
     Membership is collected before resolution. Lookup walks the lexical binding
     parent chain; member-reference resolution is introduced separately.
@@ -406,6 +444,7 @@ class ScopeNode:
     bare_constructor_contributions: dict[BareAtom, set[ConstructorRef]] = field(
         default_factory=dict
     )
+    opened_local_scopes: set[LocalOpenSelection] = field(default_factory=set)
 
     def lookup(self, name: str) -> BindingRef | None:
         """Search lexical bindings and named-scope members outward."""
@@ -419,29 +458,9 @@ class ScopeNode:
             scope = scope.parent
         return None
 
-    def bare_candidates(self, name: BareAtom) -> set[BindingRef] | None:
-        """Return the nearest region's contributed bare candidates for *name*."""
-        scope: ScopeNode | None = self
-        while scope is not None:
-            candidates = scope.bare_contributions.get(name)
-            if candidates is not None:
-                return candidates
-            scope = scope.parent
-        return None
-
     def contribute_bare(self, name: BareAtom, ref: BindingRef) -> None:
         """Add one use-site-resolved bare contribution to this region."""
         self.bare_contributions.setdefault(name, set()).add(ref)
-
-    def bare_constructor_candidates(self, name: BareAtom) -> set[ConstructorRef] | None:
-        """Return the nearest region's contributed constructor candidates for *name*."""
-        scope: ScopeNode | None = self
-        while scope is not None:
-            candidates = scope.bare_constructor_contributions.get(name)
-            if candidates is not None:
-                return candidates
-            scope = scope.parent
-        return None
 
     def contribute_bare_constructor(self, name: BareAtom, ref: ConstructorRef) -> None:
         """Add one constructor candidate contributed bare to this region."""
@@ -450,6 +469,143 @@ class ScopeNode:
     def define(self, name: str, ref: BindingRef) -> None:
         """Add *name* → *ref* to this scope's binding table."""
         self.bindings[name] = ref
+
+
+_T = TypeVar("_T")
+
+
+def apply_open_selection(
+    mode: ImportMode, items: tuple[ImportItem, ...], target: Mapping[BareAtom, _T]
+) -> dict[BareAtom, list[_T]]:
+    """Apply one ``open``'s using/hiding/rename selection to *target*.
+
+    Defines wildcard, ``using`` (with optional rename), and ``hiding``
+    selection in exactly one place, shared by the eager cross-module ``open``
+    path -- whose *target* is a module's complete public member set -- and
+    the live local-``open`` path -- whose *target* is one scope's current
+    member set, materialized by :func:`local_scope_bindings`. Existence of a
+    ``using``/``hiding`` item is the caller's concern: the eager path
+    validates it against a complete target immediately, while the live path
+    simply omits an item nothing yet matches, leaving it to be resolved (or
+    not) by a later reference.
+
+    Each exposed atom maps to *every* value it draws from *target*, not just
+    the last: two ``using`` items renamed to the same exposed atom (or, for
+    ``ImportMode.ALL``, two members already colliding under *target*) is a
+    genuine ambiguity, deferred to the atom's first use rather than reported
+    here or silently resolved by overwrite.
+    """
+    if mode is ImportMode.ALL:
+        return {atom: [value] for atom, value in target.items()}
+
+    def relative_path(atom: BareAtom) -> ScopePath:
+        return (atom,) if isinstance(atom, str) else atom
+
+    selected_paths: set[ScopePath] = set()
+    for item in items:
+        prefix = (*tuple(segment.name for segment in item.scope_path), item.name)
+        if any(relative_path(atom)[: len(prefix)] == prefix for atom in target):
+            selected_paths.add(prefix)
+    if mode is ImportMode.USING:
+        result: dict[BareAtom, list[_T]] = {}
+        for item in items:
+            prefix = (*tuple(segment.name for segment in item.scope_path), item.name)
+            for atom, value in target.items():
+                path = relative_path(atom)
+                if path[: len(prefix)] != prefix:
+                    continue
+                exposed_path = (
+                    (item.rename, *path[len(prefix) :]) if item.rename is not None else path
+                )
+                exposed: BareAtom = exposed_path[0] if len(exposed_path) == 1 else exposed_path
+                result.setdefault(exposed, []).append(value)
+        return result
+    return {
+        atom: [value]
+        for atom, value in target.items()
+        if not any(relative_path(atom)[: len(prefix)] == prefix for prefix in selected_paths)
+    }
+
+
+def local_scope_bindings(
+    scope_nodes: Mapping[ScopePath, ScopeNode], scope_path: ScopePath
+) -> dict[BareAtom, BindingRef]:
+    """Materialize *scope_path*'s current member subtree, relative to itself.
+
+    Every member declared anywhere under *scope_path*, keyed by its path
+    relative to it. Recomputed from *scope_nodes* on every call rather than
+    cached: mid-resolution, a member registered after the ``open`` that
+    targets *scope_path* becomes visible the moment the walk defines it;
+    once resolution has finished, the computation simply reads a completed
+    tree.
+    """
+    members: dict[BareAtom, BindingRef] = {}
+    for path, node in scope_nodes.items():
+        if path[: len(scope_path)] != scope_path:
+            continue
+        for name, ref in node.members.items():
+            relative = (*path[len(scope_path) :], name)
+            atom: BareAtom = relative[0] if len(relative) == 1 else relative
+            members[atom] = ref
+    return members
+
+
+def resolve_bare_contribution(
+    scope: ScopeNode, name: BareAtom, scope_nodes: Mapping[ScopePath, ScopeNode]
+) -> set[BindingRef] | None:
+    """Return the nearest region's bare candidates for *name*, live where needed.
+
+    Walks *scope* outward. At each layer, a cross-module ``open``'s eager
+    ``bare_contributions`` snapshot and every recorded local ``open``'s live
+    selection (reapplied against *scope_nodes*'s current member set) merge;
+    the first layer with any candidate wins, matching nearest-layer
+    precedence. Shared by the resolver's own bare-reference resolution,
+    mid-walk, and by any later pass over a completed ``ModuleResolution``
+    (e.g. bare type-name resolution), so an ``open``'s contribution reads
+    identically wherever it is consulted.
+    """
+    layer: ScopeNode | None = scope
+    while layer is not None:
+        candidates = set(layer.bare_contributions.get(name, ()))
+        for selection in layer.opened_local_scopes:
+            target = local_scope_bindings(scope_nodes, selection.scope_path)
+            selected = apply_open_selection(selection.mode, selection.items, target)
+            candidates.update(selected.get(name, ()))
+        if candidates:
+            return candidates
+        layer = layer.parent
+    return None
+
+
+def resolve_bare_constructor_contribution(
+    scope: ScopeNode,
+    name: BareAtom,
+    scope_nodes: Mapping[ScopePath, ScopeNode],
+    declaring_candidates: Callable[[str, BindingRef], tuple[ConstructorRef, ...]],
+) -> set[ConstructorRef] | None:
+    """Return the nearest region's constructor candidates for *name*, live where needed.
+
+    Mirrors :func:`resolve_bare_contribution`: a cross-module ``open``'s
+    eager ``bare_constructor_contributions`` snapshot and each local
+    ``open``'s live selection merge at the same layer. A local candidate's
+    constructor identity comes from *declaring_candidates*, called on its
+    resolved binding -- the same structured lookup an ordinary reference
+    already uses -- rather than a separate constructor snapshot.
+    """
+    layer: ScopeNode | None = scope
+    while layer is not None:
+        candidates = set(layer.bare_constructor_contributions.get(name, ()))
+        for selection in layer.opened_local_scopes:
+            target = local_scope_bindings(scope_nodes, selection.scope_path)
+            selected = apply_open_selection(selection.mode, selection.items, target)
+            last_segment = name if isinstance(name, str) else name[-1]
+            for ref in selected.get(name, ()):
+                if ref.kind is BinderKind.constructor_binding:
+                    candidates.update(declaring_candidates(last_segment, ref))
+        if candidates:
+            return candidates
+        layer = layer.parent
+    return None
 
 
 # ---------------------------------------------------------------------------

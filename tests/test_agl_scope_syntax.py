@@ -10,6 +10,7 @@ from agm.agl import PipelineDriver
 from agm.agl.modules.roots import RootSet
 from agm.agl.parser import AglSyntaxError, parse_program
 from agm.agl.scope import AglScopeError, resolve_module
+from agm.agl.scope.symbols import resolve_bare_contribution
 from agm.agl.syntax import (
     AgentDecl,
     AsPattern,
@@ -339,7 +340,10 @@ def test_scope_pass_opens_local_scope_members() -> None:
         parse_program("open Point\nscope Point\ndef distance() -> int = 1\nend Point\ndistance()")
     )
 
-    assert len(resolved.root_scope.bare_candidates("distance") or ()) == 1
+    assert (
+        len(resolve_bare_contribution(resolved.root_scope, "distance", resolved.scope_nodes) or ())
+        == 1
+    )
 
 
 def test_opened_scope_members_clash_at_their_use_site() -> None:

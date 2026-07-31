@@ -300,6 +300,41 @@ def test_scoped_record_pattern_selects_its_scope_member() -> None:
     assert (selected.owner_path, selected.owner_name) == (("A",), "Point")
 
 
+def test_unqualified_pattern_selects_a_nominal_declared_in_the_same_scope() -> None:
+    """An unqualified pattern still selects its own scope's record.
+
+    The pattern-to-nominal ownership check must key on the structured scope
+    path, not just the bare spelling: ``Bounds(low, high)`` inside
+    ``scope Config`` selects ``Config::Bounds``, in both a ``case`` arm and a
+    destructuring ``let``, exactly as the qualified spelling would.
+    """
+    checked = accept(
+        "scope Config\n"
+        "record Bounds(low: int, high: int)\n"
+        "def pick(b: Bounds) -> int =\n"
+        "  case b of\n"
+        "  | Bounds(low, high) => low\n"
+        "def unpick(b: Bounds) -> int =\n"
+        "  let Bounds(low, high) = b\n"
+        "  high\n"
+        "end Config\n"
+        "()\n"
+    )
+    region = checked.resolved.program.body.items[0]
+    pick, unpick = (item for item in region.items if isinstance(item, FuncDef))
+    case = pick.body.items[0]
+    assert isinstance(case, Case)
+    case_pattern = case.branches[0].pattern
+    assert isinstance(case_pattern, ConstructorPattern)
+    let_decl = unpick.body.items[0]
+    assert isinstance(let_decl, LetDecl)
+    assert isinstance(let_decl.pattern, ConstructorPattern)
+    for pattern in (case_pattern, let_decl.pattern):
+        selected = checked.pattern_constructor_ref_for(pattern.node_id)
+        assert selected is not None
+        assert (selected.owner_path, selected.owner_name) == (("Config",), "Bounds")
+
+
 def test_scoped_record_pattern_rejects_a_same_named_root_record() -> None:
     reject(
         "record Point\n"
@@ -310,6 +345,28 @@ def test_scoped_record_pattern_rejects_a_same_named_root_record() -> None:
         "end A\n"
         "let p = Point(x = 1)\n"
         "case p of | A::Point(label) => 0 | _ => 1\n"
+    )
+
+
+def test_bare_pattern_in_a_region_is_shadowed_by_its_own_scoped_variant() -> None:
+    """A same-named scoped variant shadows a root nominal for a bare pattern.
+
+    Nearest-layer precedence is deliberate and deterministic: inside
+    ``scope A``, a bare ``Point`` pattern selects ``A``'s own ``E::Point``
+    variant candidate, never falling outward to the root ``Point`` record,
+    so matching it against a root-typed scrutinee is a genuine mismatch.
+    """
+    reject(
+        "record Point\n"
+        "  x: int\n"
+        "scope A\n"
+        "enum E\n"
+        "  | Point(label: text)\n"
+        "def from_root(p: Point) -> int =\n"
+        "  case p of\n"
+        "  | Point(x) => x\n"
+        "end A\n"
+        "A::from_root(Point(x = 1))\n"
     )
 
 

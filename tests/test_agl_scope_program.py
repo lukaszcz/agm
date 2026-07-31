@@ -542,6 +542,29 @@ class TestQualifiedAccess:
         with pytest.raises(AglScopeError, match="both a local scope and a module route"):
             resolve_program(graph)
 
+    def test_qualified_assign_to_local_scope_and_module_route_clash_requires_an_anchor(
+        self, tmp_path: Path
+    ) -> None:
+        """Assignment consults the same ambiguity guard a qualified read does.
+
+        Before the fix, ``_resolve_qualified_assign`` took the local scope
+        path unconditionally, so ``mylib::counter := 1`` silently wrote the
+        local ``var`` while a qualified read of the same spelling was
+        rejected as ambiguous -- read and write of one spelling disagreed.
+        """
+        graph = _make_graph_from_files(
+            tmp_path,
+            {
+                "entry": (
+                    "import mylib\nscope mylib\nvar counter = 0\nend mylib\nmylib::counter := 1"
+                ),
+                "mylib": "def counter() -> int = 2",
+            },
+        )
+
+        with pytest.raises(AglScopeError, match="both a local scope and a module route"):
+            resolve_program(graph)
+
     def test_nested_scope_and_complete_import_route_clash_requires_anchor(
         self, tmp_path: Path
     ) -> None:

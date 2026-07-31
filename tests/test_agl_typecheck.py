@@ -78,6 +78,7 @@ from agm.agl.syntax.nodes import (
     Program,
     Raise,
     Return,
+    ScopeRegion,
     StringLit,
     Try,
     TypeApply,
@@ -1334,6 +1335,80 @@ class TestAssignImmutability:
         """A slot resolving to an enclosing ``var`` stays assignable."""
         r = accept_type("var n = 0\nenum Flag\n  | on\ncase Flag::on of\n  | on =>\n    n := 2\n")
         assert r.resolved.program is not None
+
+
+class TestScopedBindingTypes:
+    """A scoped ``let``/``var``'s type is inferred from its initializer,
+    exactly as at the root, and checked against an explicit annotation on
+    either spelling. Visibility from inside the region, a nested region, a
+    qualified path outside, and after an ``open`` all resolve to the same
+    binding type via the node-id-keyed binding environment.
+    """
+
+    def test_type_inferred_from_initializer(self) -> None:
+        r = accept_type("scope Config\nlet retries = 3\nend Config\nConfig::retries")
+        region = r.resolved.program.body.items[0]
+        assert isinstance(region, ScopeRegion)
+        let_decl = next(item for item in region.items if isinstance(item, LetDecl))
+        assert r.type_env.get_binding_type(let_decl.pattern.node_id) == IntType()
+
+    def test_annotation_accepted_on_region_form(self) -> None:
+        r = accept_type("scope Config\nvar attempts: int = 0\nend Config\nConfig::attempts")
+        region = r.resolved.program.body.items[0]
+        assert isinstance(region, ScopeRegion)
+        var_decl = next(item for item in region.items if isinstance(item, VarDecl))
+        assert r.type_env.get_binding_type(var_decl.node_id) == IntType()
+
+    def test_annotation_accepted_on_shorthand_form(self) -> None:
+        r = accept_type("var Config::attempts: int = 0\nConfig::attempts")
+        var_decl = next(item for item in r.resolved.program.body.items if isinstance(item, VarDecl))
+        assert r.type_env.get_binding_type(var_decl.node_id) == IntType()
+
+    @pytest.mark.parametrize(
+        ("source", "line"),
+        (
+            ('scope Config\nvar attempts: int = "nope"\nend Config\n()', 2),
+            ('var Config::attempts: int = "nope"\n()', 1),
+        ),
+        ids=("region", "shorthand"),
+    )
+    def test_annotation_mismatch_reports_the_binders_span(self, source: str, line: int) -> None:
+        err = reject_type(source)
+        d = err.to_diagnostic()
+        assert d.line == line
+        assert "int" in d.message and "text" in d.message
+
+    def test_visible_from_nested_region_qualified_path_and_after_open(self) -> None:
+        r = accept_type(
+            "open Config\n"
+            "scope Config\n"
+            "let retries = 3\n"
+            "scope Inner\n"
+            "def read() -> int = retries\n"
+            "end Inner\n"
+            "end Config\n"
+            "let a = Config::retries\n"
+            "let b = retries\n"
+            "let c = Config::Inner::read()\n"
+            "()"
+        )
+        assert r.resolved.program is not None
+
+    def test_scoped_binding_holding_a_function_is_callable(self) -> None:
+        r = accept_type(
+            "scope Config\n"
+            "def helper() -> int = 5\n"
+            "let value_fn = helper\n"
+            "end Config\n"
+            "Config::value_fn()"
+        )
+        assert r.resolved.program is not None
+
+    def test_scoped_def_and_binding_cannot_share_a_name(self) -> None:
+        """Already enforced by the scope pass; pinned here so the collision is
+        confirmed not to reach typechecking as an unresolved-reference crash."""
+        with pytest.raises(AglScopeError):
+            parse_resolve_check("scope Config\ndef f() -> int = 0\nlet f = 1\nend Config\n()")
 
 
 class TestBlockTyping:

@@ -30,6 +30,7 @@ from agm.agl.syntax.nodes import (
     Block,
     BoolLit,
     Call,
+    Case,
     CaseBranch,
     CatchClause,
     ConstructorPattern,
@@ -50,6 +51,7 @@ from agm.agl.syntax.nodes import (
     PatternField,
     Program,
     RecordDef,
+    ScopeRegion,
     StringLit,
     Template,
     Try,
@@ -567,17 +569,23 @@ class TestScopedBindings:
 
 
 class TestScopedBindingOpenPrecedence:
-    """`open` contributes a scope's members bare as of its own textual position.
+    """A local ``open`` -- plain, ``using``, or ``hiding`` -- resolves live.
 
-    A local ``open`` snapshots ``ScopeNode.members`` when it is walked. A
-    declaration (``def``/type/``agent``) is fully collected in the pre-pass, so
-    every ``open`` sees it regardless of order; a scoped binder is registered
-    only when the walk reaches it, so an ``open`` textually before the block
-    that declares a binding misses it, and textual precedence holds through
-    ``open`` with no dedicated check.
+    A local ``open`` records its target scope path together with its full
+    selection (mode, items, renames) and resolves it against the scope tree
+    at every later bare reference, never through a snapshot taken when the
+    ``open`` itself is walked. A declaration (``def``/type/``agent``) is
+    fully collected in the pre-pass, so every ``open`` sees it regardless of
+    order; a scoped binder is registered only when the walk reaches it, so a
+    reference textually walked *after* the binder's own registration still
+    reaches it even though the ``open`` came first -- textual precedence
+    still governs a reference walked *before* the binder, with no dedicated
+    check, for every selection form alike.
     """
 
     def test_open_before_the_binding_does_not_see_it(self) -> None:
+        """The reference itself is walked before the binder registers, inside
+        the earlier ``scope B`` block, so even the live re-check finds nothing."""
         with pytest.raises(AglScopeError):
             parse_and_resolve(
                 "scope B\nopen A\ndef get() -> int = x\nend B\nscope A\nlet x = 1\nend A\nB::get()"
@@ -597,6 +605,218 @@ class TestScopedBindingOpenPrecedence:
             "B::get()"
         )
         assert _ref(resolved, "f").scope_path == ("A",)
+
+    def test_open_before_the_binding_sees_a_later_reference(self) -> None:
+        """Header placement forces ``open A`` before ``scope A`` at the module
+        root, so its own member snapshot cannot yet hold ``x``; the bare
+        reference below is walked after ``scope A`` registers it, so the live
+        re-check reaches it instead of falling through to an error."""
+        resolved = parse_and_resolve("open A\nscope A\nvar x = 1\nend A\nx := x + 1\nx")
+        assert _ref(resolved, "x").scope_path == ("A",)
+        assert _ref(resolved, "x").kind is BinderKind.var_binding
+
+    def test_open_using_before_the_binding_sees_a_later_reference(self) -> None:
+        """A filtered ``using`` open reaches a binder declared after it too.
+
+        Before the uniform mechanism, only the plain, unfiltered form was
+        recorded for live lookup, so ``using`` hard-errored at the ``open``
+        site for a member this same program's plain form already reaches.
+        """
+        resolved = parse_and_resolve("open A using x\nscope A\nvar x = 1\nend A\nx := x + 1\nx")
+        assert _ref(resolved, "x").scope_path == ("A",)
+        assert _ref(resolved, "x").kind is BinderKind.var_binding
+
+    def test_open_hiding_before_the_binding_sees_the_non_hidden_later_reference(self) -> None:
+        """A filtered ``hiding`` open reaches its non-hidden member too, live."""
+        resolved = parse_and_resolve(
+            "open A hiding y\nscope A\nvar x = 1\nvar y = 2\nend A\nx := x + 1\nx"
+        )
+        assert _ref(resolved, "x").scope_path == ("A",)
+        assert _ref(resolved, "x").kind is BinderKind.var_binding
+
+    def test_open_hiding_still_hides_a_member_declared_after_it(self) -> None:
+        """The hidden member stays unreachable bare even though it is
+        registered after the ``open``, live, exactly as the exposed sibling
+        member is reached live."""
+        with pytest.raises(AglScopeError):
+            parse_and_resolve("open A hiding y\nscope A\nvar x = 1\nvar y = 2\nend A\ny")
+
+    def test_open_using_before_the_binding_does_not_see_a_reference_before_it(self) -> None:
+        """D4 precedence holds for ``using`` too: a reference walked before
+        the binder registers still fails, even though the ``open`` textually
+        precedes both."""
+        with pytest.raises(AglScopeError):
+            parse_and_resolve(
+                "scope B\nopen A using x\ndef get() -> int = x\nend B\n"
+                "scope A\nlet x = 1\nend A\nB::get()"
+            )
+
+    def test_open_hiding_before_the_binding_does_not_see_a_reference_before_it(self) -> None:
+        """D4 precedence holds for ``hiding`` too."""
+        with pytest.raises(AglScopeError):
+            parse_and_resolve(
+                "scope B\nopen A hiding y\ndef get() -> int = x\nend B\n"
+                "scope A\nlet x = 1\nlet y = 2\nend A\nB::get()"
+            )
+
+
+class TestScopedConstructorCandidateUnion:
+    """``_owned_scope_constructor_candidates`` unions every same-named candidate.
+
+    A scope's own directly-declared constructor and every child enum's
+    variant sharing a name are all candidates, in declaration order, rather
+    than whichever the resolver happens to find first while scanning a set
+    -- ``_type_declarations`` is a plain list, so the result no longer
+    depends on ``PYTHONHASHSEED``.
+    """
+
+    def _pattern(self, resolved: ModuleResolution) -> ConstructorPattern:
+        region = resolved.program.body.items[0]
+        func = next(item for item in region.items if isinstance(item, FuncDef))
+        case = func.body.items[0]
+        assert isinstance(case, Case)
+        pattern = case.branches[0].pattern
+        assert isinstance(pattern, ConstructorPattern)
+        return pattern
+
+    def test_two_enums_sharing_a_variant_name_in_one_scope_union_deterministically(
+        self,
+    ) -> None:
+        resolved = parse_and_resolve(
+            "scope S\n"
+            "enum A\n"
+            "  | V(x: int)\n"
+            "enum B\n"
+            "  | V(y: text)\n"
+            "def f(a: A) -> int =\n"
+            "  case a of\n"
+            "  | V(x) => x\n"
+            "end S\n"
+            "S::f(S::A::V(x = 1))\n"
+        )
+        pattern = self._pattern(resolved)
+        candidates = resolved.pattern_constructor_candidates[pattern.node_id]
+        owners = {candidate.owner_name for candidate in candidates}
+        assert owners == {"A", "B"}
+
+    def test_scope_own_constructor_and_child_enum_variant_both_stay_candidates(self) -> None:
+        """A scope's own record and a child enum's variant sharing a name both survive."""
+        resolved = parse_and_resolve(
+            "scope Config\n"
+            "record V\n"
+            "  n: int\n"
+            "enum E\n"
+            "  | V(m: int)\n"
+            "def pick(x: V) -> int =\n"
+            "  case x of\n"
+            "  | V(n) => n\n"
+            "end Config\n"
+            "Config::pick(Config::V(n = 1))\n"
+        )
+        pattern = self._pattern(resolved)
+        candidates = resolved.pattern_constructor_candidates[pattern.node_id]
+        owners = {(candidate.owner_name, candidate.variant) for candidate in candidates}
+        assert owners == {("V", None), ("E", "V")}
+
+    def test_outward_walk_prefers_the_nearest_scope_layer(self) -> None:
+        """A nested scope's own same-named record shadows an ancestor's."""
+        resolved = parse_and_resolve(
+            "scope A\n"
+            "record Item\n"
+            "  label: text\n"
+            "scope B\n"
+            "record Item\n"
+            "  value: int\n"
+            "def pick(i: Item) -> int =\n"
+            "  case i of\n"
+            "  | Item(value) => value\n"
+            "end B\n"
+            "end A\n"
+            "A::B::pick(A::B::Item(value = 5))\n"
+        )
+        region_a = resolved.program.body.items[0]
+        region_b = next(item for item in region_a.items if isinstance(item, ScopeRegion))
+        func = next(item for item in region_b.items if isinstance(item, FuncDef))
+        case = func.body.items[0]
+        assert isinstance(case, Case)
+        pattern = case.branches[0].pattern
+        assert isinstance(pattern, ConstructorPattern)
+        candidates = resolved.pattern_constructor_candidates[pattern.node_id]
+        owners = {candidate.owner_path for candidate in candidates}
+        assert owners == {("A", "B")}
+
+
+class TestScopedAssignment:
+    """Qualified assignment to a scoped member.
+
+    ``A::count := e`` consults the same per-path member namespace a qualified
+    read consults, so a scoped ``var`` is assignable through its path while a
+    scoped ``let`` -- or a ``def``, a type, or an agent sharing its path --
+    reuses the immutable-binder diagnostic.
+    """
+
+    def _assign_ref(self, resolved: ModuleResolution) -> BindingRef:
+        assign = next(item for item in resolved.program.body.items if isinstance(item, AssignStmt))
+        return resolved.resolution[assign.node_id]
+
+    def test_qualified_assign_to_scoped_var_at_root(self) -> None:
+        resolved = parse_and_resolve("scope A\nvar count = 0\nend A\nA::count := 1\nA::count")
+        ref = self._assign_ref(resolved)
+        assert ref.mutable is True
+        assert ref.scope_path == ("A",)
+        assert ref.kind is BinderKind.var_binding
+
+    def test_qualified_assign_to_multi_segment_scoped_var(self) -> None:
+        resolved = parse_and_resolve(
+            "scope A\nscope B\nvar count = 0\nend B\nend A\nA::B::count := 1\nA::B::count"
+        )
+        ref = self._assign_ref(resolved)
+        assert ref.scope_path == ("A", "B")
+
+    def test_bare_assign_inside_own_region_resolves(self) -> None:
+        resolved = parse_and_resolve(
+            "scope A\n"
+            "var count = 0\n"
+            "def bump() -> unit =\n"
+            "  count := count + 1\n"
+            "  ()\n"
+            "end A\n"
+            "A::bump()"
+        )
+        assign = next(
+            item for item in resolved.program.body.items[0].items if isinstance(item, FuncDef)
+        ).body.items[0]
+        assert isinstance(assign, AssignStmt)
+        ref = resolved.resolution[assign.node_id]
+        assert ref.scope_path == ("A",)
+        assert ref.mutable is True
+
+    @pytest.mark.parametrize(
+        ("source", "phrase"),
+        (
+            ("scope A\nlet x = 1\nend A\nA::x := 2\n()", "declared with 'let'"),
+            ("scope A\ndef f() -> int = 1\nend A\nA::f := 2\n()", "function (def) binding"),
+            ("scope A\nrecord R(x: int)\nend A\nA::R := 2\n()", "constructor binding"),
+            (
+                'scope A\nagent helper = "h"\nend A\nA::helper := 2\n()',
+                "agent binding",
+            ),
+        ),
+        ids=("let", "def", "type", "agent"),
+    )
+    def test_qualified_assign_to_immutable_member_is_rejected(
+        self, source: str, phrase: str
+    ) -> None:
+        err = reject_scope(source)
+        msg = err.to_diagnostic().message
+        assert phrase in msg
+        assert "immutable" in msg
+
+    def test_qualified_assign_to_unknown_member_is_a_focused_error(self) -> None:
+        err = reject_scope("scope A\nvar count = 0\nend A\nA::missing := 2\n()")
+        _, msg = diag(err)
+        assert "missing" in msg
+        assert "A" in msg
 
 
 class TestOpenedScopeEnumOwners:

@@ -1,0 +1,3 @@
+scope Config
+var attempts: int = "nope"
+end Config

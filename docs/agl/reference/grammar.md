@@ -368,9 +368,11 @@ otherwise a plain, non-`::`-anchored name chain) declares a scoped binding
 instead of matching a pattern — see [Bindings and scope](bindings-and-scope.md)
 for the full disambiguation.
 
-Assignment has type `unit` and returns `void`. A bare (non-indexed) cross-module
-assignment target — written with a qualifier, or bare when an open import puts
-the name in scope — is valid only when it resolves to a `builtin var`;
+Assignment has type `unit` and returns `void`. `assign_target`'s qualifier
+accepts any number of segments: a local scope path (`A::B::count`) reaches a
+scoped `var` exactly as a qualified read does, while a bare (non-indexed)
+cross-module target — written with a qualifier, or bare when an open import
+puts the name in scope — is valid only when it resolves to a `builtin var`;
 type-qualified constructor forms are not assignment targets. An indexed
 assignment target's object expression is evaluated like any other read, so
 `assign_target` accepts any array- or dict-typed expression there — see

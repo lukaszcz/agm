@@ -1,0 +1,18 @@
+{
+  "scenarios": [
+    {
+      "name": "verbose_mode",
+      "params": {"mode": "verbose"},
+      "expect": {
+        "stdout": "101 102\n110 120\nloud\n105\n203\n3\n104 105\nloud\nmode: verbose\n"
+      }
+    },
+    {
+      "name": "quiet_mode",
+      "params": {"mode": "quiet"},
+      "expect": {
+        "stdout": "1 2\n10 20\nquiet\n5\n3\n3\n4 5\nquiet\nmode: quiet\n"
+      }
+    }
+  ]
+}

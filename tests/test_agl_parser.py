@@ -466,8 +466,11 @@ class TestBinders:
             parse(source)
 
     def test_type_qualified_assignment_target_rejected(self) -> None:
+        """A type-argument-applied qualifier segment names a generic constructor
+        path (``Option[Type]::some``), never a mutable binding, so it is
+        rejected on sight rather than deferred to resolution."""
         with pytest.raises(AglSyntaxError, match="assignment target"):
-            parse("std/config::NoSuchType::max-iters := 3")
+            parse("Option[int]::some::x := 3")
 
     def test_module_qualified_assignment_target_preserved(self) -> None:
         assignment = first(parse("std/config::max-iters := 3"))
@@ -475,6 +478,15 @@ class TestBinders:
         assert isinstance(assignment.target, NameTarget)
         assert assignment.target.qualifier is not None
         assert assignment.target.qualifier.route_segments == ("std", "config")
+
+    def test_multi_segment_qualified_assignment_target_preserved(self) -> None:
+        """A multi-segment qualifier -- a local scope path such as
+        ``A::B::count`` -- is preserved for resolution to judge."""
+        assignment = first(parse("A::B::count := 1"))
+        assert isinstance(assignment, AssignStmt)
+        assert isinstance(assignment.target, NameTarget)
+        assert assignment.target.qualifier is not None
+        assert assignment.target.qualifier.route_segments == ("A", "B")
 
     @pytest.mark.parametrize(
         "source",

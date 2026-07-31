@@ -1,0 +1,5 @@
+scope Config
+let retries = 3
+end Config
+
+Config::retries := 4

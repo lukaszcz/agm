@@ -2334,10 +2334,18 @@ class TypeEnvironment:
         fields: tuple[tuple[str, ParamKind], ...],
         *,
         scope_path: ScopePath = (),
+        module_id: ModuleId | None = None,
     ) -> None:
-        """Register ordered field kinds under structured owner identity."""
+        """Register ordered field kinds under structured owner identity.
+
+        *module_id* defaults to this environment's own module; a caller
+        registering a ``builtin`` declaration passes its re-homed owner
+        (``PRELUDE_ID``) instead, matching the owner every other piece of
+        that declaration's state (its ``TypeDef``, its handle) already uses.
+        """
         self._assert_mutable()
-        key = self._constructor_key(self._module_id, owner_name, scope_path, variant)
+        owner_module_id = self._module_id if module_id is None else module_id
+        key = self._constructor_key(owner_module_id, owner_name, scope_path, variant)
         self._constructor_field_kinds[key] = fields
 
     def get_constructor_field_kinds(

@@ -3180,11 +3180,17 @@ class _Lowerer:
         )
 
         contract_id = self._alloc_contract(contract_req)
+        result_nominal = (
+            NominalId(PRELUDE_ID, "ExecResult", scope_path=spec.target_type.scope_path)
+            if structured_exec and isinstance(spec.target_type, RecordType)
+            else None
+        )
         return IrExec(
             location=loc,
             command=command_ir,
             contract_id=contract_id,
             max_attempts=max_attempts,
+            result_nominal=result_nominal,
         )
 
     def _extract_max_attempts(self, call_node: "Call") -> int:

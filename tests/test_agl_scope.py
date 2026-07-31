@@ -1429,6 +1429,131 @@ class TestBuiltinVarPlacement:
         _, message = diag(err)
         assert "std/config" in message
 
+    def test_entry_module_scoped_declaration_still_rejected(self) -> None:
+        """The region relaxation lifts only the scope-path clause; the module
+        restriction stands, so a scoped ``builtin var`` outside ``std/config``
+        is rejected the same way as a root one."""
+        err = reject_scope("scope Region\nbuiltin var max-iters: int\nend Region\n()")
+        _, message = diag(err)
+        assert "std/config" in message
+
+    def test_scoped_declaration_inside_a_function_body_still_rejected(self) -> None:
+        err = reject_scope('def f() -> text =\n  builtin var runner: text\n  "x"\nf()')
+        _, message = diag(err)
+        assert "nested block" in message
+
+
+# ---------------------------------------------------------------------------
+# Scoped `builtin` declarations (def/record/enum/exception): member,
+# duplicate, and visibility rules, same as every other scoped declaration.
+# ---------------------------------------------------------------------------
+
+
+class TestScopedBuiltinDeclarations:
+    def test_builtin_def_bare_visible_inside_its_own_region(self) -> None:
+        resolved = parse_and_resolve(
+            "scope Host\nbuiltin def native() -> int\n"
+            "def read() -> int = native()\nend Host\nHost::read()"
+        )
+        assert _ref(resolved, "native").kind is BinderKind.function_binding
+        assert _ref(resolved, "native").scope_path == ("Host",)
+
+    def test_builtin_def_exact_path_reference_from_outside(self) -> None:
+        resolved = parse_and_resolve(
+            "scope Host\nbuiltin def native() -> int\nend Host\nHost::native()"
+        )
+        ref = resolved.resolution[
+            next(
+                item.callee.node_id
+                for item in (resolved.program.body.items[1],)
+                if isinstance(item, Call)
+            )
+        ]
+        assert ref.scope_path == ("Host",)
+
+    def test_builtin_def_visible_after_open(self) -> None:
+        resolved = parse_and_resolve(
+            "open Host\nscope Host\nbuiltin def native() -> int\nend Host\nnative()"
+        )
+        call = resolved.program.body.items[2]
+        assert isinstance(call, Call)
+        assert isinstance(call.callee, VarRef)
+        assert resolved.resolution[call.callee.node_id].scope_path == ("Host",)
+
+    @pytest.mark.parametrize(
+        "source",
+        (
+            "scope A\nbuiltin def print[T](value: T) -> unit\n"
+            "builtin def print[T](value: T) -> unit\nend A\n()",
+            "scope A\nbuiltin\nrecord ExecResult\n  x: int\nlet ExecResult = 1\nend A\n()",
+            "scope A\nbuiltin\nrecord ExecResult\n  x: int\n"
+            "builtin\nrecord ExecResult\n  y: int\nend A\n()",
+            "scope A\nbuiltin\nenum ParsePolicy =\n  | Abort\n"
+            "builtin\nenum ParsePolicy =\n  | Abort\nend A\n()",
+            "scope A\nbuiltin exception RangeError extends Exception()\n"
+            "builtin exception RangeError extends Exception()\nend A\n()",
+        ),
+        ids=(
+            "def-vs-def",
+            "record-vs-let",
+            "record-vs-record",
+            "enum-vs-enum",
+            "exception-vs-exception",
+        ),
+    )
+    def test_duplicate_at_the_same_path_is_rejected(self, source: str) -> None:
+        err = reject_scope(source)
+        assert "already declared" in err.to_diagnostic().message
+
+    def test_two_scoped_builtin_defs_at_different_paths_do_not_collide(self) -> None:
+        """Same builtin name, different scope paths: no duplicate-member error."""
+        resolved = parse_and_resolve(
+            "scope A\nbuiltin def print[T](value: T) -> unit\nend A\n"
+            "scope B\nbuiltin def print[T](value: T) -> unit\nend B\n"
+            "()"
+        )
+        assert set(resolved.scope_nodes[("A",)].members) == {"print"}
+        assert set(resolved.scope_nodes[("B",)].members) == {"print"}
+
+
+class TestScopedBuiltinUsedAsValueRejected:
+    """A scoped ``builtin def`` referenced as a value (not called) is a clean
+    scope error, matching the root-level guard for a bare unshadowed builtin
+    name. Regression coverage for the reference-classification paths a
+    scoped ``builtin def`` reaches (qualified chain, region-local lexical
+    lookup) that a root ``builtin def`` never does, and that previously had
+    no value-use guard at all."""
+
+    def test_qualified_reference_used_as_a_value_is_rejected(self) -> None:
+        err = reject_scope(
+            "scope H\nbuiltin def parse_json(value: text) -> json\nend H\n"
+            "let f = H::parse_json\nprint(f)"
+        )
+        assert "cannot be used as a value" in err.to_diagnostic().message
+
+    def test_bare_reference_inside_its_own_region_used_as_a_value_is_rejected(self) -> None:
+        err = reject_scope(
+            "scope H\nbuiltin def parse_json(value: text) -> json\n"
+            "let f = parse_json\nend H\nprint(H::f)"
+        )
+        assert "cannot be used as a value" in err.to_diagnostic().message
+
+    def test_qualified_reference_with_a_type_argument_used_as_a_value_is_rejected(self) -> None:
+        err = reject_scope(
+            "scope H\nbuiltin def parse_json(value: text) -> json\nend H\n"
+            "let f = H::parse_json[json]\nprint(f)"
+        )
+        assert "cannot be used as a value" in err.to_diagnostic().message
+
+    def test_qualified_call_to_a_scoped_builtin_def_is_unaffected(self) -> None:
+        """The value-use rejection must not reject the legitimate call form
+        it is easy to conflate it with: resolution must still succeed."""
+        resolved = parse_and_resolve(
+            'scope H\nbuiltin def parse_json(value: text) -> json\nend H\nprint(H::parse_json("1"))'
+        )
+        call_item = resolved.program.body.items[1]
+        assert isinstance(call_item, Call)
+
 
 # ---------------------------------------------------------------------------
 # Built-in call classification (builtin_calls side table)
@@ -1544,6 +1669,52 @@ class TestBuiltinCallClassification:
         assert isinstance(arg, VarRef)
         assert arg.node_id in r.resolution
         assert r.resolution[arg.node_id].name == "x"
+
+    def test_scoped_builtin_def_bare_call_inside_its_region_classified(self) -> None:
+        """A scoped ``builtin def print`` called bare, from within its own
+        region, still dispatches to the host implementation."""
+        r = parse_and_resolve(
+            "scope Host\nbuiltin def print[T](value: T) -> unit\n"
+            "def announce() -> unit = print(1)\nend Host\nHost::announce()"
+        )
+        region = r.program.body.items[0]
+        assert isinstance(region, ScopeRegion)
+        announce = next(
+            item for item in region.items if isinstance(item, FuncDef) and item.name == "announce"
+        )
+        assert isinstance(announce.body, Call)
+        assert r.builtin_calls[announce.body.node_id] == BuiltinKind.PRINT
+
+    def test_scoped_builtin_def_qualified_call_classified(self) -> None:
+        """A scoped ``builtin def print`` called through its full path still
+        dispatches to the host implementation."""
+        r = parse_and_resolve(
+            "scope Host\nbuiltin def print[T](value: T) -> unit\nend Host\nHost::print(1)"
+        )
+        call_item = r.program.body.items[1]
+        assert isinstance(call_item, Call)
+        assert r.builtin_calls[call_item.node_id] == BuiltinKind.PRINT
+
+    def test_qualified_call_to_an_undeclared_reserved_name_is_a_scope_error(self) -> None:
+        """Regression: a qualified call ending in a reserved name must resolve
+        the qualifier for real, not fall through to host dispatch just
+        because the tail name happens to be reserved."""
+        with pytest.raises(AglScopeError):
+            parse_and_resolve("scope Host\nend Host\nHost::print(1)")
+
+    def test_two_scoped_builtin_defs_at_different_paths_both_classified(self) -> None:
+        """Same-named builtin defs at different paths do not collide, and each
+        still dispatches to the host implementation via its own path."""
+        r = parse_and_resolve(
+            "scope A\nbuiltin def print[T](value: T) -> unit\nend A\n"
+            "scope B\nbuiltin def print[T](value: T) -> unit\nend B\n"
+            "A::print(1)\nB::print(2)"
+        )
+        a_call, b_call = r.program.body.items[2], r.program.body.items[3]
+        assert isinstance(a_call, Call)
+        assert isinstance(b_call, Call)
+        assert r.builtin_calls[a_call.node_id] == BuiltinKind.PRINT
+        assert r.builtin_calls[b_call.node_id] == BuiltinKind.PRINT
 
 
 # ---------------------------------------------------------------------------

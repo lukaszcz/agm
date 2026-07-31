@@ -86,6 +86,7 @@ from agm.agl.syntax.nodes import (
     RecordDef,
     TypeAlias,
     static_function_items,
+    static_items,
     static_type_items,
 )
 from agm.agl.syntax.spans import SourceSpan
@@ -719,7 +720,7 @@ def _build_program_builtin_var_table(
 
     result: dict[int, Type] = {}
     for _mid, loaded in resolved.modules.items():
-        for item in loaded.resolved.program.body.items:
+        for item in static_items(loaded.resolved.program.body.items):
             if isinstance(item, BuiltinVarDecl):
                 key_type = get_engine_key_type(item.name)
                 if key_type is not None:

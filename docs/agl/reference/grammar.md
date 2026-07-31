@@ -60,6 +60,9 @@ scope_item   ::= scope_region | open_decl
                | export_decl
                | record_def | enum_def | exception_def | type_alias
                | func_def | extern_func_def
+               | builtin_var_def
+               | builtin_modifier? record_def | builtin_modifier? enum_def
+               | builtin_modifier? exception_def | builtin_func_def
                | agent_decl
                | param_decl
                | let_decl | var_decl
@@ -70,9 +73,9 @@ A scope region has a mandatory matching closer: `scope A::B` closes with
 scope region. They may nest, and a multi-segment header is equivalent to
 nested single-segment regions. Scope
 regions contain nested regions, header `open` and `import` declarations,
-`export` declarations, static declarations, `param` declarations, and
-`let`/`var` bindings; bare expressions, `:=` assignments, `builtin`
-declarations, infix declarations, and `program` declarations are not
+`export` declarations, static declarations (including every `builtin` form),
+`param` declarations, and `let`/`var` bindings; bare expressions, `:=`
+assignments, infix declarations, and `program` declarations are not
 permitted. `scope` is contextual at item start before a scope path, and `end`
 is contextual only for a complete closer at an open region's layout level;
 both remain ordinary names in expression positions.
@@ -361,8 +364,9 @@ assign_target ::= qualifier_chain? name
 
 A `builtin var` is a body-less, host-backed mutable binding with a mandatory
 type and no initializer; the `builtin` modifier may sit on the same line or the
-line directly above (like `builtin def`). It may be declared only at the root of
-`std/config`; entry modules and other library modules cannot declare one.
+line directly above (like `builtin def`). It may be declared only at the root,
+or in a named scope region, of `std/config`; entry modules and other library
+modules cannot declare one.
 
 `var`'s `decl_head` accepts the same optional scope-path prefix as the type
 declarations above (`var A::count = 0`). `let` needs no separate grammar for

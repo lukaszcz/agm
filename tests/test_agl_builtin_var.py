@@ -171,6 +171,60 @@ class TestBuiltinVarGate:
 
 
 # ---------------------------------------------------------------------------
+# `builtin var` inside a named scope region
+# ---------------------------------------------------------------------------
+
+
+class TestScopedBuiltinVar:
+    def test_scoped_engine_setting_round_trips_through_its_full_path(self, tmp_path: Path) -> None:
+        """A ``builtin var`` declared inside a region in ``std/config`` is
+        written and read through its full ``std/config::Region::name`` path."""
+        result = _run_with_std_config(
+            "open import std/config\n"
+            "std/config::Region::max-iters := 3\n"
+            "let n = std/config::Region::max-iters\n"
+            "print n",
+            "scope Region\nbuiltin var max-iters: int\nend Region",
+            tmp_path,
+        )
+        assert result.ok, f"expected success but got: {result.error!r}"
+        assert result.bindings["n"] == IntValue(3)
+
+    def test_scoped_engine_setting_bare_after_open(self, tmp_path: Path) -> None:
+        result = _run_with_std_config(
+            "open import std/config\n"
+            "open std/config::Region\n"
+            "max-iters := 4\n"
+            "let n = max-iters\n"
+            "print n",
+            "scope Region\nbuiltin var max-iters: int\nend Region",
+            tmp_path,
+        )
+        assert result.ok, f"expected success but got: {result.error!r}"
+        assert result.bindings["n"] == IntValue(4)
+
+    def test_scoped_declaration_still_confined_to_std_config(self, tmp_path: Path) -> None:
+        """A scoped ``builtin var`` outside ``std/config`` is rejected, same as a root one."""
+        (tmp_path / "mylib.agl").write_text(
+            "scope Region\nbuiltin var max-iters: int\nend Region\n", encoding="utf-8"
+        )
+        result = _run_program(
+            "import mylib\nprint 1",
+            extra_roots=frozenset({tmp_path}),
+        )
+        assert not result.ok
+        assert result.diagnostics
+
+    def test_existing_std_config_behavior_is_unchanged(self) -> None:
+        """A root, unscoped ``builtin var`` still round-trips as before."""
+        result = _run_program(
+            "import std/config\nstd/config::max-iters := 3\nlet n = std/config::max-iters\nprint n"
+        )
+        assert result.ok, f"expected success but got: {result.error!r}"
+        assert result.bindings["n"] == IntValue(3)
+
+
+# ---------------------------------------------------------------------------
 # Qualified access via std/config
 # ---------------------------------------------------------------------------
 

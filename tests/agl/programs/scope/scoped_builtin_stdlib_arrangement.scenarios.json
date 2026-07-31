@@ -1,0 +1,20 @@
+{
+  "scenarios": [
+    {
+      "name": "success_path",
+      "params": {"code": 0},
+      "shell": [{"command": "echo host", "stdout": "host\n"}],
+      "expect": {
+        "stdout": "hi\nok\nretry 2\nhost\n"
+      }
+    },
+    {
+      "name": "raises_and_the_scoped_handler_catches_it",
+      "params": {"code": 3},
+      "shell": [{"command": "echo host", "stdout": "host\n"}],
+      "expect": {
+        "stdout": "hi\nbad code\nretry 2\nhost\n"
+      }
+    }
+  ]
+}

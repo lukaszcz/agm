@@ -58,6 +58,7 @@ from agm.agl.semantics.types import (
     RecordType,
     Type,
     TypeVarType,
+    reroot_type,
 )
 from agm.agl.syntax.nodes import (
     EnumDef,
@@ -191,17 +192,32 @@ class _TypeBuilder:
         """
         for item in self._static_type_items(program.body.items):
             if isinstance(item, RecordDef):
-                self._register_name(item.name, item.span, is_builtin=item.is_builtin)
+                self._register_name(
+                    item.name,
+                    item.span,
+                    is_builtin=item.is_builtin,
+                    expected_defs=BUILTIN_PRELUDE_TYPE_DEFS,
+                )
                 self._env.unregister_name(item.name)
                 self._register_record_or_enum_handle(item, is_enum=False)
                 self._record_defs[item.name] = item
             elif isinstance(item, EnumDef):
-                self._register_name(item.name, item.span, is_builtin=item.is_builtin)
+                self._register_name(
+                    item.name,
+                    item.span,
+                    is_builtin=item.is_builtin,
+                    expected_defs=BUILTIN_PRELUDE_TYPE_DEFS,
+                )
                 self._env.unregister_name(item.name)
                 self._register_record_or_enum_handle(item, is_enum=True)
                 self._enum_defs[item.name] = item
             elif isinstance(item, ExceptionDef):
-                self._register_name(item.name, item.span, is_builtin=item.is_builtin)
+                self._register_name(
+                    item.name,
+                    item.span,
+                    is_builtin=item.is_builtin,
+                    expected_defs=BUILTIN_EXCEPTION_TYPE_DEFS,
+                )
                 self._env.unregister_name(item.name)
                 module_id = self._owning_module_id(item.is_builtin)
                 self._env.register_type(
@@ -275,8 +291,33 @@ class _TypeBuilder:
         """Resolve and register the named exception's body. See :meth:`build_record`."""
         self._build_exception(self._exception_defs[name])
 
-    def _register_name(self, name: str, span: SourceSpan, *, is_builtin: bool = False) -> None:
-        if is_builtin and name not in _BUILTIN_NOMINAL_NAMES:
+    def _register_name(
+        self,
+        name: str,
+        span: SourceSpan,
+        *,
+        is_builtin: bool = False,
+        expected_defs: Mapping[str, TypeDef] | None = None,
+    ) -> None:
+        # `name` carries its scope path joined with "::" (see
+        # `_static_type_items`) when the declaration is scoped, so the
+        # whitelist check strips it back to the bare canonical name a scoped
+        # `builtin` declaration still has to spell — the whitelist itself
+        # names host-known canonical types, never a scope path.
+        bare_name = name.rsplit("::", maxsplit=1)[-1]
+        if is_builtin and bare_name not in _BUILTIN_NOMINAL_NAMES:
+            raise AglTypeError(
+                f"Unknown builtin type '{name}'.",
+                span=span,
+            )
+        # A record/enum declaration is only ever validated against
+        # BUILTIN_PRELUDE_TYPE_DEFS, an exception only against
+        # BUILTIN_EXCEPTION_TYPE_DEFS (see `_validate_builtin_shape`) — a
+        # kind-appropriate name (e.g. an exception name spelled as a
+        # `builtin record`) passes the whitelist above (their union) but has
+        # no entry in the kind-specific table `_validate_builtin_shape` would
+        # later assume is present, so that mismatch is caught here instead.
+        if is_builtin and expected_defs is not None and bare_name not in expected_defs:
             raise AglTypeError(
                 f"Unknown builtin type '{name}'.",
                 span=span,
@@ -317,9 +358,13 @@ class _TypeBuilder:
         )
         self._validate_builtin_shape(stmt, typedef, BUILTIN_PRELUDE_TYPE_DEFS)
         self._env.type_table.register(typedef)
-        # Register field kinds for this record constructor.
+        # Register field kinds for this record constructor, under the same
+        # owning module as the TypeDef just above (PRELUDE_ID for a builtin
+        # declaration, wherever it is declared).
         field_kinds = tuple((fd.name, fd.kind) for fd in stmt.fields)
-        self._env.register_constructor_field_kinds(stmt.name, None, field_kinds)
+        self._env.register_constructor_field_kinds(
+            stmt.name, None, field_kinds, module_id=module_id
+        )
 
     def _build_enum(self, stmt: EnumDef) -> None:
         if stmt.type_params:
@@ -348,10 +393,13 @@ class _TypeBuilder:
         )
         self._validate_builtin_shape(stmt, typedef, BUILTIN_PRELUDE_TYPE_DEFS)
         self._env.type_table.register(typedef)
-        # Register field kinds for each variant constructor.
+        # Register field kinds for each variant constructor, under the same
+        # owning module as the TypeDef just above.
         for vd in stmt.variants:
             vfield_kinds = tuple((fd.name, fd.kind) for fd in vd.fields)
-            self._env.register_constructor_field_kinds(stmt.name, vd.name, vfield_kinds)
+            self._env.register_constructor_field_kinds(
+                stmt.name, vd.name, vfield_kinds, module_id=module_id
+            )
 
     def _build_exception(self, stmt: ExceptionDef) -> None:
         """Resolve and register an exception's own ``TypeDef`` (no ordering).
@@ -451,15 +499,57 @@ class _TypeBuilder:
         typedef: TypeDef,
         expected_defs: Mapping[str, TypeDef],
     ) -> None:
+        """Check a ``builtin`` declaration's shape against its canonical definition.
+
+        The canonical definitions in *expected_defs* are host-known shapes
+        keyed by bare name, indifferent to where the declaration sits: a
+        scoped ``builtin`` declaration names the same host type as a root one
+        and must match the same shape, just at a different nominal path. The
+        comparison therefore re-roots *typedef* under its own scope path
+        (:meth:`_reroot_typedef`) before comparing — not just its own
+        top-level ``scope_path`` (the one field *expected* to differ), but
+        also every nominal reference embedded in its fields/variants/base
+        that resolves under that same path, so a scoped exception hierarchy
+        or a scoped record naming a sibling scoped builtin still compares
+        equal to the canonical (root) shape. *bare_name* is always present in
+        *expected_defs* here: ``_register_name`` already validated it against
+        this same kind-appropriate table during phase 1.
+        """
         if not stmt.is_builtin:
             return
-        expected = expected_defs.get(stmt.name)
-        assert expected is not None
-        if typedef != expected:
+        bare_name = stmt.name.rsplit("::", maxsplit=1)[-1]
+        expected = expected_defs[bare_name]
+        if self._reroot_typedef(typedef) != expected:
             raise AglTypeError(
                 f"Builtin type '{stmt.name}' has an invalid definition.",
                 span=stmt.span,
             )
+
+    @staticmethod
+    def _reroot_typedef(typedef: TypeDef) -> TypeDef:
+        """Re-root *typedef* onto its own scope path, for canonical comparison.
+
+        *typedef.scope_path* itself is dropped (the field a scoped ``builtin``
+        declaration is always expected to differ in), and that same path is
+        also stripped, via :func:`~agm.agl.semantics.types.reroot_type`, from
+        every nominal reference embedded in its fields, variant fields, and
+        (for an exception) its ``extends`` base key — each of those resolves
+        under the declaration's own scope path exactly when it names a
+        sibling member of the same region, matching how the canonical
+        (root, path ``()``) shape names its own siblings.
+        """
+        prefix = typedef.scope_path
+        if not prefix:
+            return typedef
+        fields = tuple((name, reroot_type(t, prefix)) for name, t in typedef.fields)
+        variants = tuple(
+            (vname, tuple((fname, reroot_type(ft, prefix)) for fname, ft in vfields))
+            for vname, vfields in typedef.variants
+        )
+        base = typedef.base
+        if base is not None and base[1][: len(prefix)] == prefix:
+            base = (base[0], base[1][len(prefix) :], base[2])
+        return replace(typedef, scope_path=(), fields=fields, variants=variants, base=base)
 
     def _resolve_field_type(self, fd: Param, type_vars: frozenset[str] = frozenset()) -> Type:
         """Resolve a field's TypeExpr to a semantic Type.
@@ -495,16 +585,17 @@ class _TypeBuilder:
         assert gdef is not None, f"compiler bug: generic record {stmt.name!r} not pre-registered"
         template = gdef.template
         assert isinstance(template, RecordType)
-        self._env.type_table.register(
-            TypeDef(
-                kind="record",
-                name=stmt.name.rsplit("::", maxsplit=1)[-1],
-                module_id=self._module_id,
-                scope_path=tuple(segment.name for segment in stmt.scope_path),
-                type_params=type_params,
-                fields=tuple(fields.items()),
-            )
+        module_id = self._owning_module_id(stmt.is_builtin)
+        typedef = TypeDef(
+            kind="record",
+            name=stmt.name.rsplit("::", maxsplit=1)[-1],
+            module_id=module_id,
+            scope_path=tuple(segment.name for segment in stmt.scope_path),
+            type_params=type_params,
+            fields=tuple(fields.items()),
         )
+        self._validate_builtin_shape(stmt, typedef, BUILTIN_PRELUDE_TYPE_DEFS)
+        self._env.type_table.register(typedef)
         field_names = tuple(fields.keys())
         field_templates = tuple(fields.values())
         sig = ConstructorSignature(
@@ -516,9 +607,12 @@ class _TypeBuilder:
             type_params=type_params,
         )
         self._env.register_constructor_signature(sig)
-        # Register field kinds for the generic record constructor.
+        # Register field kinds for the generic record constructor, under the
+        # same owning module as the TypeDef just above.
         generic_record_field_kinds = tuple((fd.name, fd.kind) for fd in stmt.fields)
-        self._env.register_constructor_field_kinds(stmt.name, None, generic_record_field_kinds)
+        self._env.register_constructor_field_kinds(
+            stmt.name, None, generic_record_field_kinds, module_id=module_id
+        )
 
     def _build_generic_enum(self, stmt: EnumDef) -> None:
         """Resolve a generic enum's variants and register its TypeDef + constructors.
@@ -545,19 +639,19 @@ class _TypeBuilder:
         assert gdef is not None, f"compiler bug: generic enum {stmt.name!r} not pre-registered"
         template = gdef.template
         assert isinstance(template, EnumType)
-        self._env.type_table.register(
-            TypeDef(
-                kind="enum",
-                name=stmt.name.rsplit("::", maxsplit=1)[-1],
-                module_id=self._module_id,
-                scope_path=tuple(segment.name for segment in stmt.scope_path),
-                type_params=type_params,
-                variants=tuple(
-                    (vname, tuple(vfields.items())) for vname, vfields in variants.items()
-                ),
-            )
+        module_id = self._owning_module_id(stmt.is_builtin)
+        typedef = TypeDef(
+            kind="enum",
+            name=stmt.name.rsplit("::", maxsplit=1)[-1],
+            module_id=module_id,
+            scope_path=tuple(segment.name for segment in stmt.scope_path),
+            type_params=type_params,
+            variants=tuple((vname, tuple(vfields.items())) for vname, vfields in variants.items()),
         )
-        # Register one ConstructorSignature and field kinds per variant.
+        self._validate_builtin_shape(stmt, typedef, BUILTIN_PRELUDE_TYPE_DEFS)
+        self._env.type_table.register(typedef)
+        # Register one ConstructorSignature and field kinds per variant, under
+        # the same owning module as the TypeDef just above.
         for vd in stmt.variants:
             vfields = variants[vd.name]
             field_names = tuple(vfields.keys())
@@ -573,7 +667,9 @@ class _TypeBuilder:
             self._env.register_constructor_signature(sig)
             # Register field kinds for this generic enum variant constructor.
             vfield_kinds = tuple((fd.name, fd.kind) for fd in vd.fields)
-            self._env.register_constructor_field_kinds(stmt.name, vd.name, vfield_kinds)
+            self._env.register_constructor_field_kinds(
+                stmt.name, vd.name, vfield_kinds, module_id=module_id
+            )
 
     def _validate_alias(self, stmt: TypeAlias) -> None:
         """Validate that the alias target resolves without cycles.

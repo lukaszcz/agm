@@ -102,6 +102,7 @@ from agm.agl.semantics.types import (
     contains_inference_var,
     free_type_vars,
     is_assignable,
+    reroot_type,
     substitute,
 )
 from agm.agl.syntax.nodes import (
@@ -370,6 +371,55 @@ def _builtin_function_signature_alternates(name: str) -> tuple[FunctionSignature
     return (expected,)
 
 
+def _rerooted_signature(sig: FunctionSignature, prefix: tuple[str, ...]) -> FunctionSignature:
+    """Return *sig* with *prefix* stripped from every embedded nominal's scope path.
+
+    A scoped ``builtin def``'s own parameter/result types that name a
+    same-scoped builtin type resolve under this declaration's own scope
+    path, while the canonical signature (:func:`_builtin_function_signature`)
+    is always written at scope path ``()``. Re-rooting *sig* onto that same
+    frame before :func:`_signature_matches` compares it lets a scoped
+    ``builtin def`` validate against, and dispatch with, the canonical
+    nominal — mirroring ``_TypeBuilder._reroot_typedef``.
+    """
+    if not prefix:
+        return sig
+    return FunctionSignature(
+        params=tuple(replace(p, type=reroot_type(p.type, prefix)) for p in sig.params),
+        result=reroot_type(sig.result, prefix),
+        type_params=sig.type_params,
+    )
+
+
+def _builtin_nominal_matches(actual: Type, expected: Type) -> bool:
+    """Compare one builtin signature type by nominal name and scope path.
+
+    ``module_id`` is deliberately excluded: the canonical *expected* type
+    literals (:func:`_builtin_function_signature`) are written without an
+    explicit ``module_id`` (defaulting to ``ENTRY_ID``) while a resolved
+    *actual* builtin nominal always carries ``PRELUDE_ID`` — a pre-existing
+    asymmetry this comparison already tolerated by ignoring ``module_id``
+    outright. ``scope_path`` is compared, though: the caller re-roots
+    *actual* onto the declaring ``builtin def``'s own scope path first (see
+    :func:`_rerooted_signature`), so a scoped nominal that resolves to a
+    sibling of the same region compares equal to the canonical (path ``()``)
+    shape, while a mismatched one is correctly rejected.
+    """
+    if isinstance(expected, RecordType):
+        return (
+            isinstance(actual, RecordType)
+            and actual.name == expected.name
+            and actual.scope_path == expected.scope_path
+        )
+    if isinstance(expected, EnumType):
+        return (
+            isinstance(actual, EnumType)
+            and actual.name == expected.name
+            and actual.scope_path == expected.scope_path
+        )
+    return actual == expected
+
+
 def _signature_matches(actual: FunctionSignature, expected: FunctionSignature) -> bool:
     if actual.type_params != expected.type_params:
         return False
@@ -378,17 +428,9 @@ def _signature_matches(actual: FunctionSignature, expected: FunctionSignature) -
     for ap, ep in zip(actual.params, expected.params):
         if ap.name != ep.name or ap.has_default != ep.has_default:
             return False
-        if isinstance(ep.type, RecordType):
-            if not isinstance(ap.type, RecordType) or ap.type.name != ep.type.name:
-                return False
-        elif isinstance(ep.type, EnumType):
-            if not isinstance(ap.type, EnumType) or ap.type.name != ep.type.name:
-                return False
-        elif ap.type != ep.type:
+        if not _builtin_nominal_matches(ap.type, ep.type):
             return False
-    if isinstance(expected.result, RecordType):
-        return isinstance(actual.result, RecordType) and actual.result.name == expected.result.name
-    return actual.result == expected.result
+    return _builtin_nominal_matches(actual.result, expected.result)
 
 
 def _is_index_like(node: object) -> TypeGuard[_IndexLike]:
@@ -703,8 +745,12 @@ class _Checker:
     ) -> None:
         """Register a resolved ``def`` signature in every function side table."""
         if node.is_builtin and not is_method:
+            own_path = tuple(segment.name for segment in node.scope_path)
+            rerooted_sig = _rerooted_signature(sig, own_path)
             expected_sigs = _builtin_function_signature_alternates(node.name)
-            if not any(_signature_matches(sig, expected_sig) for expected_sig in expected_sigs):
+            if not any(
+                _signature_matches(rerooted_sig, expected_sig) for expected_sig in expected_sigs
+            ):
                 raise AglTypeError(
                     f"Builtin function '{node.name}' has an invalid signature.",
                     span=node.span,
@@ -781,7 +827,8 @@ class _Checker:
         if isinstance(item, (RecordDef, EnumDef, ExceptionDef, TypeAlias)):
             return UnitType()
         if isinstance(item, BuiltinVarDecl):
-            self._check_builtin_var(item)
+            with self._env.type_scope(tuple(segment.name for segment in item.scope_path)):
+                self._check_builtin_var(item)
             return UnitType()
         if isinstance(item, AgentDecl):
             self._env.set_binding_type(item.node_id, AgentType())

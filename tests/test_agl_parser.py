@@ -918,7 +918,6 @@ class TestScopeRegions:
             "value := 1",
             "infixl %%",
             "program app",
-            "builtin def native() -> int",
         ),
         ids=(
             "expression",
@@ -926,12 +925,29 @@ class TestScopeRegions:
             "assignment",
             "infix",
             "program",
-            "builtin-declaration",
         ),
     )
     def test_region_rejects_non_declaration_items(self, item: str) -> None:
         with pytest.raises(AglSyntaxError, match="scope regions"):
             parse(f"scope Point\n{item}\nend Point")
+
+    @pytest.mark.parametrize(
+        "item",
+        (
+            "builtin def native() -> int",
+            "builtin\nrecord Payload\n  x: int",
+            "builtin\nenum Status\n  | ok",
+            "builtin\nexception Failure(message: text)",
+            "builtin var setting: int",
+        ),
+        ids=("def", "record", "enum", "exception", "var"),
+    )
+    def test_region_admits_builtin_forms(self, item: str) -> None:
+        region = first(parse(f"scope Point\n{item}\nend Point"))
+
+        assert isinstance(region, ScopeRegion)
+        (member,) = region.items
+        assert [segment.name for segment in member.scope_path] == ["Point"]
 
     @pytest.mark.parametrize("item", ("import package", "open import package", "export package"))
     def test_region_admits_import_and_export(self, item: str) -> None:

@@ -447,8 +447,11 @@ class EffectHandlers:
         # 3. Structured exec: return ExecResult regardless of exit code
         if contract.structured_exec:
             actual_exit_code = returncode if returncode is not None else 0
+            assert _node.result_nominal is not None, (
+                "compiler bug: structured exec lowered with no result_nominal"
+            )
             return RecordValue(
-                nominal=NominalId(PRELUDE_ID, "ExecResult"),
+                nominal=_node.result_nominal,
                 display_name="ExecResult",
                 fields={
                     "stdout": TextValue(stdout.rstrip("\n")),

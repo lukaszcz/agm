@@ -1288,11 +1288,13 @@ class _Resolver:
     def _resolve_builtin_var(self, node: BuiltinVarDecl) -> None:
         """Resolve a standard-library engine setting into a mutable register binding.
 
-        ``builtin var`` is reserved to the canonical ``std/config`` module.
-        The typecheck pass then validates that the name is a known engine key
-        with its canonical type.
+        ``builtin var`` is reserved to the canonical ``std/config`` module, but
+        is otherwise a member like any other: legal at the module root and
+        inside a named scope region (both keep ``_at_root`` set), rejected
+        only inside a nested block. The typecheck pass then validates that the
+        name is a known engine key with its canonical type.
         """
-        if not self._at_root or self._current_scope().scope_path:
+        if not self._at_root:
             raise AglScopeError(
                 f"'builtin var' declarations are only allowed at the module root, "
                 f"not inside a nested block (found 'builtin var {node.name}' here).",
@@ -2262,7 +2264,7 @@ class _Resolver:
                 (IntLit, DecimalLit, BoolLit, NullLit, StringLit, UnitLit, Placeholder),
             ), f"unhandled expr node: {type(expr)}"  # pragma: no cover
 
-    def _resolve_varref(self, node: VarRef) -> None:
+    def _resolve_varref(self, node: VarRef, *, is_call_target: bool = False) -> None:
         """Resolve a name reference.
 
         When a VarRef resolves to a constructor_binding, look up the candidate set:
@@ -2272,6 +2274,13 @@ class _Resolver:
         In program context (when ``_import_env`` is set), a bare reference uses
         lexical scope then open imports; a current-module chain uses the own
         root scope; and a module-route chain uses qualified cross-module access.
+
+        *is_call_target* is set only by :meth:`_resolve_call`, resolving its
+        own callee directly rather than through :meth:`_resolve_expr`: a
+        resolved binding that turns out to be a built-in function has a host
+        dispatch when it is the callee of a call (``_resolve_call`` classifies
+        it) but no value at all otherwise — a body-less declaration lowering
+        cannot give a symbol to (see :meth:`_reject_builtin_value_ref`).
         """
         if node.name == "_":
             raise AglScopeError("'_' is not defined.", span=node.span)
@@ -2285,12 +2294,19 @@ class _Resolver:
                 raise self._spaced_qualifier_repair(
                     self._spaced_qualifier_at(node.qualifier.span), node.qualifier.span
                 ) or AglScopeError(f"'{node.name}' is not defined in this module.", span=node.span)
+            self._reject_builtin_value_ref(node, ref, is_call_target=is_call_target)
             self._record_varref_binding(node, ref)
             return
         if self._resolve_local_scope_member(node):
+            self._reject_builtin_value_ref(
+                node, self._resolution.get(node.node_id), is_call_target=is_call_target
+            )
             return
         if node.qualifier is not None:
             self._resolve_qualified_chain(node)
+            self._reject_builtin_value_ref(
+                node, self._resolution.get(node.node_id), is_call_target=is_call_target
+            )
             return
         if node.name in _BUILTIN_CALL_NAMES and self._current_scope().lookup(node.name) is None:
             raise AglScopeError(
@@ -2317,7 +2333,31 @@ class _Resolver:
                     f"'{node.name}' is not defined.",
                     span=node.span,
                 )
+        self._reject_builtin_value_ref(node, ref, is_call_target=is_call_target)
         self._record_varref_binding(node, ref, candidates=regional_candidates)
+
+    def _reject_builtin_value_ref(
+        self, node: VarRef, ref: BindingRef | None, *, is_call_target: bool
+    ) -> None:
+        """Raise if *ref* is a scoped ``builtin def``'s binding used as a value.
+
+        Mirrors :meth:`_resolve_call`'s own resolved-binding classification:
+        once a reference resolves to a ``function_binding`` under a built-in
+        name, a call site turns it into a host-dispatch classification
+        (*is_call_target* is set), while every other value context has no
+        host dispatch to offer. A non-``builtin`` ``def`` can never reach here
+        under a built-in name — that is rejected at declaration
+        (``_validate_function_decl``) — so this is exactly the built-in case.
+        """
+        if (
+            not is_call_target
+            and ref is not None
+            and ref.kind is BinderKind.function_binding
+            and node.name in _BUILTIN_CALL_NAMES
+        ):
+            raise AglScopeError(
+                f"Built-in function '{node.name}' cannot be used as a value.", span=node.span
+            )
 
     def _record_varref_binding(
         self,
@@ -3028,24 +3068,35 @@ class _Resolver:
     def _resolve_call(self, node: Call) -> None:
         """Resolve a ``Call`` node.
 
-        If the callee is a bare ``VarRef`` whose name is a built-in, classify
-        the call in ``builtin_calls`` and skip normal callee resolution.  For
-        all other callees, resolve the callee expression normally (it must
-        resolve to a binding).
+        If the callee is a bare (unqualified) ``VarRef`` whose name is a
+        built-in and nothing local shadows it, classify the call in
+        ``builtin_calls`` and skip normal callee resolution — this is what
+        lets ``print(x)`` work with no import anywhere in the module. A
+        *qualified* callee (``A::print``) always resolves normally instead,
+        the same as any other qualified reference, so a path that does not
+        actually declare a builtin function under that name is a scope error
+        rather than a silently-accepted host dispatch. Either way, once the
+        callee resolves to a function binding under a built-in name — bare or
+        via its qualified path — the call is classified as that built-in: the
+        host implementation a name denotes does not depend on the scope path
+        through which it was reached.
         """
         callee = node.callee
         if (
             isinstance(callee, VarRef)
+            and callee.qualifier is None
             and callee.name in _BUILTIN_CALL_NAMES
             and self._current_scope().lookup(callee.name) is None
         ):
             self._builtin_calls[node.node_id] = _BUILTIN_CALL_NAMES[callee.name]
-        else:
-            self._resolve_expr(callee)
-            if isinstance(callee, VarRef) and callee.name in _BUILTIN_CALL_NAMES:
+        elif isinstance(callee, VarRef):
+            self._resolve_varref(callee, is_call_target=True)
+            if callee.name in _BUILTIN_CALL_NAMES:
                 ref = self._resolution.get(callee.node_id)
                 if ref is not None and ref.kind is BinderKind.function_binding:
                     self._builtin_calls[node.node_id] = _BUILTIN_CALL_NAMES[callee.name]
+        else:
+            self._resolve_expr(callee)
         # Resolve positional args.
         for arg in node.args:
             self._resolve_expr(arg)

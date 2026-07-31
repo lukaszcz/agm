@@ -1276,12 +1276,16 @@ class BuiltinVarDecl:
 
     ``name``      — the declared engine key (kebab-case, e.g. ``"max-iters"``).
     ``type_ann``  — the mandatory declared type (no value expression).
+
+    ``scope_path`` is non-empty when the declaration sits inside a named scope
+    region; it has no declaration-path shorthand of its own.
     """
 
     name: str
     type_ann: TypeExpr
     span: SourceSpan = dc_field(compare=False)
     node_id: int = dc_field(compare=False)
+    scope_path: tuple[ScopeSegment, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -1399,6 +1403,7 @@ ScopeItem = (
     | LetDecl
     | VarDecl
     | ParamDecl
+    | BuiltinVarDecl
 )
 
 # An item is anything that can appear in a block sequence:

@@ -14,11 +14,13 @@ from typing import Protocol
 
 from agm.agl.capabilities import HostCapabilities
 from agm.agl.diagnostics import Diagnostic
+from agm.agl.modules.ids import PRELUDE_ID
 from agm.agl.semantics.types import (
     AgentType,
     BoolType,
     FunctionType,
     JsonType,
+    RecordType,
     TextType,
     Type,
     UnitType,
@@ -624,8 +626,19 @@ class BuiltinCallChecker:
                 )
             spec = OutputContractSpec(target_type, "none", None, structured_exec=False)
         else:
-            exec_result_type = self._ctx._env.get_type("ExecResult")
-            is_structured = exec_result_type is not None and target_type == exec_result_type
+            # ``ExecResult`` is identified by its re-homed builtin identity
+            # (`module_id=PRELUDE_ID`, bare name — see `_TypeBuilder
+            # ._owning_module_id`), not by an environment lookup of the bare
+            # name: `self._ctx._env.get_type("ExecResult")` always answers
+            # with the ROOT canonical entry, so it would miss (and reject as
+            # an ordinary JSON-parsed exec target) a `builtin record
+            # ExecResult` declared inside a named scope region, whose
+            # resolved `target_type` carries that region's `scope_path`.
+            is_structured = (
+                isinstance(target_type, RecordType)
+                and target_type.module_id == PRELUDE_ID
+                and target_type.name == "ExecResult"
+            )
             if not is_structured:
                 spec = self._record_parsed_contract(obligation, use="an exec output type")
                 self._append_call_site(obligation, spec.codec_name, obligation.parse_policy)

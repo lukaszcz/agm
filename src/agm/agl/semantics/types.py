@@ -50,7 +50,7 @@ from __future__ import annotations
 
 import enum as _enum
 from collections.abc import Callable, Iterator, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from itertools import count
 from typing import assert_never
 
@@ -665,6 +665,32 @@ def transform_type(t: Type, transform: Callable[[Type], Type]) -> Type:
     """Recursively rebuild *t*, applying ``transform`` bottom-up to every node."""
     children = tuple(transform_type(child, transform) for child in type_children(t))
     return transform(replace_type_children(t, children))
+
+
+def reroot_type(t: Type, prefix: tuple[str, ...]) -> Type:
+    """Return *t* with *prefix* stripped from every nominal handle's scope path.
+
+    A declaration inside a named scope region resolves its own nominal
+    references (a record/enum field, an exception's base) under that same
+    region path. Comparing such a reference against a canonical shape defined
+    at scope path ``()`` therefore needs the two re-rooted onto the same
+    frame first: this strips *prefix* from a ``RecordType``/``EnumType``/
+    ``ExceptionType`` node's ``scope_path`` wherever it starts with *prefix*,
+    leaving every other node (including a nominal reference declared
+    elsewhere, whose ``scope_path`` does not start with *prefix*) unchanged.
+    Every caller already special-cases an empty *prefix* (nothing to strip),
+    so this is only ever called with a non-empty one.
+    """
+
+    def strip(node: Type) -> Type:
+        if (
+            isinstance(node, (RecordType, EnumType, ExceptionType))
+            and node.scope_path[: len(prefix)] == prefix
+        ):
+            return replace(node, scope_path=node.scope_path[len(prefix) :])
+        return node
+
+    return transform_type(t, strip)
 
 
 def _format_type(typ: Type, *, parenthesize_function: bool = False) -> str:

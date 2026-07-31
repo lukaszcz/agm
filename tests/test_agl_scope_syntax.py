@@ -14,6 +14,7 @@ from agm.agl.scope.symbols import resolve_bare_contribution
 from agm.agl.syntax import (
     AgentDecl,
     AsPattern,
+    BuiltinVarDecl,
     ConstructorPattern,
     EnumDef,
     ExceptionDef,
@@ -593,3 +594,59 @@ def test_production_pipeline_validates_path_atoms_against_public_content(
     assert not result.ok
     assert len(result.diagnostics) == 1
     assert "is not exported" in result.diagnostics[0].message
+
+
+# ---------------------------------------------------------------------------
+# `builtin` forms as region members
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("source", "kind"),
+    (
+        ("builtin def native() -> int", FuncDef),
+        ("builtin\nrecord Payload\n  x: int", RecordDef),
+        ("builtin\nenum Status\n  | ok", EnumDef),
+        ("builtin\nexception Failure(message: text)", ExceptionDef),
+        ("builtin var setting: int", BuiltinVarDecl),
+    ),
+    ids=("def", "record", "enum", "exception", "var"),
+)
+def test_builtin_forms_are_admitted_inside_a_scope_region(source: str, kind: type[object]) -> None:
+    program = parse_program(f"scope Host\n{source}\nend Host")
+
+    (region,) = program.body.items
+    assert isinstance(region, ScopeRegion)
+    (member,) = region.items
+    assert isinstance(member, kind)
+    assert [segment.name for segment in member.scope_path] == ["Host"]
+
+
+def test_builtin_forms_accumulate_scope_path_across_nested_regions() -> None:
+    program = parse_program(
+        "scope A\nscope B\nbuiltin def native() -> int\nbuiltin var setting: int\nend B\nend A"
+    )
+
+    (outer,) = program.body.items
+    assert isinstance(outer, ScopeRegion)
+    (inner,) = outer.items
+    assert isinstance(inner, ScopeRegion)
+    func_member, var_member = inner.items
+    assert isinstance(func_member, FuncDef)
+    assert isinstance(var_member, BuiltinVarDecl)
+    assert [segment.name for segment in func_member.scope_path] == ["A", "B"]
+    assert [segment.name for segment in var_member.scope_path] == ["A", "B"]
+
+
+@pytest.mark.parametrize(
+    "source",
+    (
+        "def f() -> int =\n  builtin def native() -> int\n  1\nf()",
+        "def f() -> int =\n  builtin var setting: int\n  1\nf()",
+    ),
+    ids=("def", "var"),
+)
+def test_builtin_forms_still_rejected_inside_a_function_body(source: str) -> None:
+    """``builtin`` gains the region only; the pre-existing nested-block ban stands."""
+    with pytest.raises(AglScopeError):
+        resolve_module(parse_program(source))

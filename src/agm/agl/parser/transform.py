@@ -91,6 +91,7 @@ _SCOPED_DECLARATIONS = (
     syntax.ParamDecl,
     syntax.ImportDecl,
     syntax.ExportDecl,
+    syntax.BuiltinVarDecl,
 )
 
 # Message for the decl_head module-route rejection. Also used for a `var`
@@ -298,14 +299,6 @@ def _is_stray_scope_end(item: syntax.Item) -> bool:
     )
 
 
-def _is_builtin_scope_declaration(item: object) -> bool:
-    """Whether *item* is a root-only builtin declaration."""
-    return (
-        isinstance(item, (syntax.FuncDef, syntax.RecordDef, syntax.EnumDef, syntax.ExceptionDef))
-        and item.is_builtin
-    )
-
-
 # Names for region items that remain disallowed, keyed by node type. A
 # single, obvious table so admitting a form later is a table edit rather
 # than hunting down a scattered isinstance branch.
@@ -313,7 +306,6 @@ _REJECTED_SCOPE_ITEM_NAMES: tuple[tuple[type, str], ...] = (
     (syntax.AssignStmt, "an assignment"),
     (syntax.InfixDecl, "an 'infix' declaration"),
     (syntax.ProgramDecl, "a 'program' declaration"),
-    (syntax.BuiltinVarDecl, "a 'builtin var' declaration"),
 )
 
 
@@ -322,27 +314,21 @@ def _rejected_scope_item_form(item: object) -> str:
     for node_type, form in _REJECTED_SCOPE_ITEM_NAMES:
         if isinstance(item, node_type):
             return form
-    if _is_builtin_scope_declaration(item):
-        return "a 'builtin' declaration"
     return "a bare expression"
 
 
-def _scope_item_error_span(item: object, fallback: SourceSpan) -> SourceSpan:
-    """Return the offending scope item's span, or the region span as fallback."""
+def _scope_item_error_span(item: object) -> SourceSpan:
+    """Return the offending scope item's span.
+
+    ``scope_item ::= scope_region | declaration | binder | expr``, and the
+    caller has already filtered out every admitted shape (``allowed_items``),
+    so a disallowed item is always one of: an unregrouped infix chain, a
+    ``program``/``infix`` declaration, an assignment, or a bare expression.
+    """
     if isinstance(item, _RawInfixChain):
         return item.span
-    if isinstance(
-        item,
-        (
-            syntax.ProgramDecl,
-            syntax.BuiltinVarDecl,
-            syntax.InfixDecl,
-            syntax.AssignStmt,
-            syntax.Expr,
-        ),
-    ):
-        return item.span
-    return fallback
+    assert isinstance(item, (syntax.ProgramDecl, syntax.InfixDecl, syntax.AssignStmt, syntax.Expr))
+    return item.span
 
 
 def _span_from_meta(meta: Meta) -> SourceSpan:
@@ -619,16 +605,12 @@ class AstBuilder(Transformer):
             (
                 arg
                 for arg in args
-                if arg is not None
-                and (
-                    not isinstance(arg, (Token, _ScopePath, allowed_items))
-                    or _is_builtin_scope_declaration(arg)
-                )
+                if arg is not None and not isinstance(arg, (Token, _ScopePath, allowed_items))
             ),
             None,
         )
         if disallowed is not None:
-            span = _scope_item_error_span(disallowed, self._span_from_meta(meta))
+            span = _scope_item_error_span(disallowed)
             raise AglSyntaxError(
                 f"scope regions cannot contain {_rejected_scope_item_form(disallowed)}.",
                 span=span,

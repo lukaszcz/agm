@@ -1457,6 +1457,187 @@ class TestScopedParamTypes:
             parse_resolve_check("scope Deploy\ndef f() -> int = 0\nparam f\nend Deploy\n()")
 
 
+_EXEC_RESULT_FIELDS = "  stdout: text\n  exit_code: int\n  stderr: text\n  timed_out: bool\n"
+
+
+class TestScopedBuiltinTypes:
+    """A scoped ``builtin`` record/enum/exception is a distinct nominal from a
+    same-named one at another path, following the same path-keyed identity
+    every other scoped type already has.
+    """
+
+    def test_scoped_builtin_record_is_a_distinct_nominal_per_path(self) -> None:
+        """Same-shaped ``builtin record ExecResult`` at two paths do not unify."""
+        err = reject_type(
+            f"scope A\nbuiltin record ExecResult\n{_EXEC_RESULT_FIELDS}end A\n"
+            f"scope B\nbuiltin record ExecResult\n{_EXEC_RESULT_FIELDS}end B\n"
+            "def use(value: A::ExecResult) -> int = value.exit_code\n"
+            'use(B::ExecResult(stdout = "a", exit_code = 1, stderr = "", timed_out = false))\n'
+        )
+        assert "A::ExecResult" in err.to_diagnostic().message
+        assert "B::ExecResult" in err.to_diagnostic().message
+
+    def test_scoped_builtin_record_constructs_and_passes_at_its_own_path(self) -> None:
+        r = accept_type(
+            f"scope A\nbuiltin record ExecResult\n{_EXEC_RESULT_FIELDS}end A\n"
+            "def use(value: A::ExecResult) -> int = value.exit_code\n"
+            'use(A::ExecResult(stdout = "a", exit_code = 1, stderr = "", timed_out = false))\n'
+        )
+        assert r.resolved.program is not None
+
+    def test_scoped_builtin_enum_variant_is_a_distinct_nominal_per_path(self) -> None:
+        err = reject_type(
+            "scope A\nbuiltin\nenum ParsePolicy =\n  | Abort\n  | Retry(n: int)\nend A\n"
+            "scope B\nbuiltin\nenum ParsePolicy =\n  | Abort\n  | Retry(n: int)\nend B\n"
+            "def use(value: A::ParsePolicy) -> int = 1\n"
+            "use(B::ParsePolicy::Abort)\n"
+        )
+        assert "A::ParsePolicy" in err.to_diagnostic().message
+        assert "B::ParsePolicy" in err.to_diagnostic().message
+
+    def test_scoped_builtin_enum_matches_at_its_own_path(self) -> None:
+        r = accept_type(
+            "scope A\nbuiltin\nenum ParsePolicy =\n  | Abort\n  | Retry(n: int)\nend A\n"
+            "def classify(value: A::ParsePolicy) -> text =\n"
+            "  case value of\n"
+            '    | A::ParsePolicy::Abort => "abort"\n'
+            '    | A::ParsePolicy::Retry(n) => "retry"\n'
+            "classify(A::ParsePolicy::Retry(n = 3))\n"
+        )
+        assert r.resolved.program is not None
+
+    def test_scoped_builtin_exception_is_a_distinct_nominal_per_path(self) -> None:
+        err = reject_type(
+            "scope A\nbuiltin exception RangeError extends Exception()\nend A\n"
+            "scope B\nbuiltin exception RangeError extends Exception()\nend B\n"
+            "def use(value: A::RangeError) -> text = value.message\n"
+            'use(B::RangeError(message = "boom"))\n'
+        )
+        assert "A::RangeError" in err.to_diagnostic().message
+        assert "B::RangeError" in err.to_diagnostic().message
+
+    def test_scoped_builtin_exception_raises_and_catches_at_its_own_path(self) -> None:
+        r = accept_type(
+            "scope A\n"
+            "builtin exception RangeError extends Exception()\n"
+            "def trigger() -> text =\n"
+            "  try\n"
+            '    raise RangeError(message = "boom")\n'
+            "  catch RangeError as e =>\n"
+            "    e.message\n"
+            "end A\n"
+            "A::trigger()\n"
+        )
+        assert r.resolved.program is not None
+
+    def test_scoped_builtin_record_unknown_bare_name_rejected(self) -> None:
+        """The canonical-name whitelist still applies to a scoped declaration."""
+        err = reject_type("scope A\nbuiltin\nrecord Bogus\n  x: int\nend A\n()")
+        assert "bogus" in err.to_diagnostic().message.lower()
+
+    def test_scoped_builtin_record_shape_mismatch_rejected(self) -> None:
+        """A scoped ``builtin`` declaration must still match the canonical shape."""
+        err = reject_type("scope A\nbuiltin\nrecord ExecResult\n  x: int\nend A\n()")
+        assert "ExecResult" in err.to_diagnostic().message
+
+    def test_root_generic_builtin_record_is_rejected_too(self) -> None:
+        """Regression: at the root, a generic ``builtin record`` was
+        previously silently ACCEPTED (the canonical prelude ``TypeDef``
+        masked the mismatch and the shape check never ran) rather than
+        crashing — a bug independent of scope regions, fixed alongside the
+        scoped case."""
+        err = reject_type("builtin record ExecResult[T]\n  x: T\n\nprint(1)")
+        assert "ExecResult" in err.to_diagnostic().message
+
+    def test_scoped_generic_builtin_record_is_rejected_with_a_proper_diagnostic(self) -> None:
+        """No canonical builtin type is generic, so this must be rejected as an
+        invalid shape, not crash re-homing a handle to a bare ``TypeDef`` that
+        never gets registered under its scoped key."""
+        err = reject_type("scope A\nbuiltin record ExecResult[T]\n  x: T\nend A\n()")
+        assert "ExecResult" in err.to_diagnostic().message
+
+    def test_scoped_generic_builtin_enum_is_rejected_with_a_proper_diagnostic(self) -> None:
+        err = reject_type(
+            "scope A\nbuiltin\nenum ParsePolicy[T] =\n  | Abort\n  | Retry(n: T)\nend A\n()"
+        )
+        assert "ParsePolicy" in err.to_diagnostic().message
+
+    def test_builtin_shape_check_reports_a_proper_diagnostic_for_a_cross_kind_name(self) -> None:
+        """``RangeError`` is a valid builtin name, but only as an exception —
+        declaring it as a record must report a clean diagnostic, not an
+        internal ``AssertionError`` with no message."""
+        err = reject_type("scope A\nbuiltin\nrecord RangeError\n  x: int\nend A\n()")
+        assert "RangeError" in err.to_diagnostic().message
+
+    def test_builtin_shape_check_reports_a_proper_diagnostic_at_the_root_too(self) -> None:
+        err = reject_type("builtin\nrecord RangeError\n  x: int\n\nprint(1)")
+        assert "RangeError" in err.to_diagnostic().message
+
+    def test_scoped_exception_hierarchy_with_a_scoped_base_typechecks(self) -> None:
+        """Both the root exception and its subclass are declared inside the
+        same region: the subclass's resolved ``extends`` key carries the
+        region's scope path, which must compare equal to the canonical
+        (path-``()``) hierarchy once re-rooted."""
+        r = accept_type(
+            "scope A\n"
+            "builtin\n"
+            "exception Exception\n"
+            "  *\n"
+            "  message: text\n"
+            "  trace_id: text\n"
+            "builtin exception Abort extends Exception()\n"
+            "end A\n"
+            "()\n"
+        )
+        assert r.resolved.program is not None
+
+    def test_scoped_builtin_record_field_naming_a_sibling_scoped_nominal_typechecks(self) -> None:
+        """A record field referencing another builtin type declared in the
+        same region resolves under that region's scope path too, and must
+        compare equal to the canonical shape once re-rooted."""
+        r = accept_type(
+            "scope A\n"
+            "builtin\n"
+            "record OutputContract\n"
+            "  target_type: text\n"
+            "  codec_name: text\n"
+            "  strict_json: json\n"
+            "  format_instructions: text\n"
+            "  json_schema: json\n"
+            "  structured_exec: bool\n"
+            "builtin\n"
+            "enum OutputContractOption =\n"
+            "  | None\n"
+            "  | Some(value: OutputContract)\n"
+            "end A\n"
+            "()\n"
+        )
+        assert r.resolved.program is not None
+
+    def test_scoped_builtin_def_signature_naming_a_scoped_sibling_type_typechecks(self) -> None:
+        """A ``builtin def``'s declared result type names a builtin type
+        declared in the same region: the resolved signature's result type
+        carries that region's scope path and must validate against the
+        canonical (path-``()``) signature once re-rooted."""
+        r = accept_type(
+            f"scope A\nbuiltin record ExecResult\n{_EXEC_RESULT_FIELDS}"
+            "builtin def exec(command: text) -> ExecResult\nend A\n()\n"
+        )
+        assert r.resolved.program is not None
+
+    def test_scoped_builtin_def_signature_naming_a_type_at_the_wrong_path_rejected(self) -> None:
+        """The re-rooted comparison must still discriminate a genuine
+        mismatch: a ``builtin def`` in one region naming a builtin type
+        declared in a DIFFERENT region does not re-root to the canonical
+        shape and must be rejected."""
+        err = reject_type(
+            f"scope A\nbuiltin record ExecResult\n{_EXEC_RESULT_FIELDS}end A\n"
+            "scope B\nbuiltin def exec(command: text) -> A::ExecResult\nend B\n"
+            "()\n"
+        )
+        assert "exec" in err.to_diagnostic().message
+
+
 class TestBlockTyping:
     def test_block_last_expr_is_block_type(self) -> None:
         r = accept_type("let x = 1\nx")

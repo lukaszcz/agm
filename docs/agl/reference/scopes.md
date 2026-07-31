@@ -46,9 +46,9 @@ print(Text::display("ready"))
 
 A region contains nested regions, header `open` and `import` declarations,
 `export` declarations, static declarations (`def`, `extern def`, `record`,
-`enum`, `exception`, `type`, and, in an entry module, `agent`), `param`
-declarations, and `let`/`var` bindings. Bare expressions, `:=` assignments,
-program declarations, infix declarations, and `builtin` declarations are not
+`enum`, `exception`, `type`, every `builtin` form, and, in an entry module,
+`agent`), `param` declarations, and `let`/`var` bindings. Bare expressions,
+`:=` assignments, program declarations, and infix declarations are not
 allowed there.
 
 ## Binder paths
@@ -140,6 +140,35 @@ complete semantics.
 Scoped bindings are never exported: library modules reject top-level `let`
 and `var` entirely, so a region's `let`/`var` members have no cross-module
 story.
+
+## Builtin declarations
+
+A region admits every `builtin` form — `builtin record`, `builtin enum`,
+`builtin exception`, `builtin def`, and `builtin var` — following the same
+member, duplicate, and visibility rules as every other member:
+
+```agl
+scope Host
+builtin record ExecResult
+  stdout: text
+  exit_code: int
+  stderr: text
+  timed_out: bool
+
+builtin def print[T](value: T) -> unit
+end Host
+
+let result = Host::ExecResult(stdout = "x", exit_code = 0, stderr = "", timed_out = false)
+Host::print(result.stdout)
+```
+
+A scoped `builtin record`/`enum`/`exception` is a nominal distinct from a
+same-named one at another path, exactly like an ordinary scoped type; a
+scoped `builtin def` dispatches to the same host implementation as a root
+one, reached bare inside its region or after `open`, and by its exact path
+outside. `builtin var` keeps its separate restriction to the canonical
+`std/config` module regardless of scoping — see
+[Program structure](program-structure.md#declarations).
 
 ## Names and visibility
 

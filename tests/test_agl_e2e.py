@@ -347,3 +347,48 @@ def test_static_rejection(program: Path) -> None:
         assert needle.lower() in joined.lower(), (
             f"no diagnostic mentions {needle!r}; diagnostics: {joined!r}"
         )
+
+
+def test_scoped_stdlib_arrangement_runs_end_to_end(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A whole stdlib module wrapped in a named scope region works end to end.
+
+    Wraps the real ``stdlib/std/core.agl`` verbatim in a ``scope Std ... end
+    Std`` region under a throwaway module root (never the installed/repo
+    stdlib — the standard ``module_roots`` scenario mechanism always adds
+    ``REPO_STDLIB_ROOT`` too, which would collide with this substitute
+    ``std/core``, so this test builds its own ``RootSet`` instead), then runs
+    a program against it through parsing, scope resolution, typechecking,
+    lowering, and evaluation. Exercises a scoped ``builtin def`` (``exec``)
+    dispatching to a scoped ``builtin record`` (``ExecResult``) at a real host
+    boundary, and a fully scoped exception hierarchy (``Exception``/
+    ``RangeError`` both declared inside the region) raised and left uncaught.
+    """
+    from agm.agl import PipelineDriver
+    from agm.agl.modules.roots import RootSet
+
+    core_source = (REPO_STDLIB_ROOT / "std" / "core.agl").read_text(encoding="utf-8")
+    scoped_stdlib_root = tmp_path / "scoped_stdlib"
+    (scoped_stdlib_root / "std").mkdir(parents=True)
+    (scoped_stdlib_root / "std" / "core.agl").write_text(
+        f"scope Std\n{core_source}end Std\n", encoding="utf-8"
+    )
+
+    program = (
+        'let r = Std::exec("echo hi")\nprint(r.stdout)\nraise Std::RangeError(message = "boom")\n'
+    )
+
+    shell = FakeShell([{"command": "echo hi", "stdout": "hi\n"}])
+    runtime = PipelineDriver()
+    with unittest.mock.patch("agm.core.process.run_capture_result", side_effect=shell):
+        result = runtime.run(program, roots=RootSet(roots=frozenset({scoped_stdlib_root})))
+    shell.assert_complete()
+
+    assert list(result.diagnostics) == [], (
+        f"unexpected static diagnostics: {' | '.join(d.message for d in result.diagnostics)}"
+    )
+    assert capsys.readouterr().out == "hi\n"
+    assert result.error is not None, "expected the uncaught scoped RangeError"
+    assert result.error.type_name == "Std::RangeError"
+    assert result.error.fields["message"] == "boom"

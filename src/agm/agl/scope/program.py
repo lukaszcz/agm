@@ -261,7 +261,9 @@ def _declaration_items(items: tuple[object, ...]) -> tuple[object, ...]:
     return tuple(result)
 
 
-def _item_atom(item: FuncDef | RecordDef | EnumDef | ExceptionDef | TypeAlias) -> NameAtom:
+def _item_atom(
+    item: FuncDef | RecordDef | EnumDef | ExceptionDef | TypeAlias | BuiltinVarDecl,
+) -> NameAtom:
     return _atom((*tuple(segment.name for segment in item.scope_path), item.name))
 
 
@@ -283,7 +285,8 @@ def _compute_local_exports(self_id: ModuleId, program: Program) -> dict[NameAtom
                     )
                     result[variant_atom] = (self_id, variant_atom)
         elif isinstance(item, BuiltinVarDecl):
-            result[item.name] = (self_id, item.name)
+            atom = _item_atom(item)
+            result[atom] = (self_id, atom)
     return result
 
 
@@ -598,7 +601,7 @@ def resolve_program(
                 )
                 decl_info[key] = (item.node_id, item.span, kind)
             elif isinstance(item, BuiltinVarDecl):
-                key = (mid, item.name)
+                key = (mid, _item_atom(item))
                 decl_info[key] = (item.node_id, item.span, BinderKind.builtin_var_binding)
 
     cross_module_constructor_refs = _cross_module_constructor_refs(all_public_types)

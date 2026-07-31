@@ -63,8 +63,10 @@ region.
   `enum`, and `type` declarations may be **generic**, declaring type parameters
   in a bracketed list after the name (`record Box[T]`, `enum Option[T]`,
   `type Pair[A, B] = …`); see [Generics](generics.md). `builtin` may prefix
-  `record`, `enum`, or `exception` for a host-recognized declaration; a type
-  alias does not accept it.
+  `record`, `enum`, or `exception` for a host-recognized declaration, at the
+  module root or in a named scope region; a type alias does not accept it. A
+  scoped `builtin` type is a nominal distinct from a same-named one at another
+  path, exactly like an ordinary scoped type.
 - **`param` declarations** — the program's host/config/CLI-supplied parameters.
   Entry-module only; they may also be members of a named scope region in an
   entry module, with no declaration-path shorthand. A scoped parameter's
@@ -83,15 +85,18 @@ region.
   named scope region in an entry module.
 - **`builtin var` declarations** — body-less engine-backed mutable bindings.
   They are reserved to the canonical standard-library `std/config` module;
-  entry programs and ordinary libraries cannot declare them.
-- **`builtin def`s and `infix` declarations** — root-only host and parser
-  declarations.
+  entry programs and ordinary libraries cannot declare them. A `builtin var`
+  may be a member of a named scope region inside `std/config`, read and
+  written through its full path, exactly like any other scoped member.
+- **`infix` declarations** — root-only parser declarations.
 - **Function declarations** — ordinary `def`s and body-less companion-backed
   `extern def`s. They may be declared at the root or in named scope regions.
   Root and same-scope `def`s may refer to declarations that appear later,
   enabling mutual recursion (see [Functions](functions.md)). An ordinary `def`
   may be **generic** (`def id[T](x: T) -> T = x`); see [Generics](generics.md).
-  `builtin` introduces only the body-less `builtin def` form. Extern functions
+  `builtin` introduces only the body-less `builtin def` form, legal at the
+  module root or in a named scope region; a scoped `builtin def` still
+  dispatches to the same host implementation as a root one. Extern functions
   are file-backed-module only.
 - **Scoped `let`/`var` bindings** — a plain `let` or `var` is legal anywhere a
   binder is. The scope-path-prefixed spelling (`let A::x = …`,

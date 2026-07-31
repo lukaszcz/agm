@@ -6,7 +6,7 @@ AGM runs real coding agents (claude, codex, and configurable runners) as subproc
 
 An agent invocation is a subprocess that receives a prompt and produces output. The runner module parses a configured runner command, validates the executable exists, attaches the prompt (either by appending a prompt-file reference or substituting a placeholder), and runs it with output capture. It tracks an *idle timeout* — if the process produces no output for a configured duration it is terminated — and returns a structured result carrying return code, captured streams, elapsed time, and timeout/spawn-error status.
 
-Prompts are resolved from inline text or a file and preprocessed to expand environment variables, writing a temporary prompt file when substitution changes the content. Completion is detected by inspecting the agent's final output for a completion marker.
+Prompts are resolved from inline text or a file and preprocessed to expand environment variables, writing a temporary prompt file when substitution changes the content. Normal runs clean these files up; dry runs retain them so the printed prompt path can be inspected. Completion is detected by inspecting the agent's final output for a completion marker.
 
 ## Runner Resolution
 

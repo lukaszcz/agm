@@ -271,6 +271,9 @@ def run_prepared_prompt(
 
 
 def cleanup_temp_files(temp_files: list[Path]) -> None:
+    """Remove temporary prompt files unless dry-run keeps them for inspection."""
+    if dry_run.enabled():
+        return
     for temp_file in temp_files:
         try:
             temp_file.unlink()

@@ -761,6 +761,29 @@ def test_prepare_revise_uses_default_loop_runner(
     assert prepared.command == ["loop-runner", "-p"]
 
 
+def test_review_once_dry_run_preserves_generated_prompt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    home = _setup_home(tmp_path)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("shutil.which", lambda _: "/bin/fake")
+    dry_run.set_enabled(True)
+    try:
+        review_mod.review_once(_review_args(no_review_file=True))
+    finally:
+        dry_run.set_enabled(False)
+
+    captured = capsys.readouterr()
+    prompt_file = Path(captured.out.rsplit("@", maxsplit=1)[1].strip())
+    try:
+        assert prompt_file.read_text(encoding="utf-8") == (
+            f"review {review_pass.DEFAULT_REVIEW_SCOPE} for {DEFAULT_REVIEW_ASPECTS}\n"
+        )
+    finally:
+        prompt_file.unlink(missing_ok=True)
+
+
 def test_review_once_dry_run_prints_configuration(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:

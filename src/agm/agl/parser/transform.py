@@ -116,7 +116,7 @@ def _prefix_scope_path(
 
 
 # ---------------------------------------------------------------------------
-# Transformer-internal marker sentinel (never leaks into the AST)
+# Transformer-internal markers and provenance (never leaks into the AST)
 # ---------------------------------------------------------------------------
 
 
@@ -381,6 +381,12 @@ class AstBuilder(Transformer):
         # in an earlier entry can be used in a later one. ``None`` for a standalone
         # whole-program parse.
         self._ambient_infix = ambient_infix
+        # Node ids of qualified patterns built by ``pat_qual_bare`` (no argument
+        # list in the source). Provenance for ``let_decl``'s scoped-binding
+        # reinterpretation only -- ``A::x`` and ``A::x()`` build structurally
+        # identical ConstructorPattern nodes, so this distinction never leaks
+        # into the AST itself.
+        self._bare_qualified_pattern_ids: set[int] = set()
 
     def _span_from_meta(self, meta: Meta) -> SourceSpan:
         """Build a SourceSpan from Lark tree Meta, stamped with self._source."""
@@ -1079,7 +1085,8 @@ class AstBuilder(Transformer):
         chain's qualifier segments become the scope path and its member name
         becomes a plain ``VarPattern``. Every other pattern shape — including
         a bare chain that is `::`-anchored, module-routed, or carries a
-        type-argument-applied segment — keeps its match meaning.
+        type-argument-applied segment, or a chain written with an argument
+        list (``A::x()``) — keeps its match meaning.
         """
         pattern = next(a for a in args if isinstance(a, _PATTERN_NODE_TYPES))
         ann, value = _extract_ann_and_value(args)
@@ -1088,7 +1095,7 @@ class AstBuilder(Transformer):
         if (
             isinstance(pattern, syntax.ConstructorPattern)
             and pattern.qualifier is not None
-            and not pattern.has_argument_list
+            and pattern.node_id in self._bare_qualified_pattern_ids
         ):
             binder_path = self._binder_scope_path(pattern.qualifier)
             if binder_path is not None:
@@ -2363,7 +2370,6 @@ class AstBuilder(Transformer):
             named=named,
             span=self._span_from_meta(meta),
             node_id=self._next_id(),
-            has_argument_list=True,
         )
 
     def _literal_pattern(
@@ -2828,14 +2834,15 @@ class AstBuilder(Transformer):
         reinterpreted as a scoped binding; see ``let_decl``.
         """
         qualifier = next(a for a in args if isinstance(a, syntax.QualifierChain))
+        node_id = self._next_id()
+        self._bare_qualified_pattern_ids.add(node_id)
         return syntax.ConstructorPattern(
             name=qualifier.member,
             positional=(),
             named=(),
             span=self._span_from_meta(meta),
-            node_id=self._next_id(),
+            node_id=node_id,
             qualifier=qualifier,
-            has_argument_list=False,
         )
 
     def pat_qual_constructor(self, meta: Meta, args: _Args) -> syntax.ConstructorPattern:
@@ -2854,7 +2861,6 @@ class AstBuilder(Transformer):
             span=self._span_from_meta(meta),
             node_id=self._next_id(),
             qualifier=qualifier,
-            has_argument_list=True,
         )
 
     # ------------------------------------------------------------------

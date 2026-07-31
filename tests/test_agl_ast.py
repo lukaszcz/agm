@@ -1437,33 +1437,6 @@ class TestPatterns:
         assert p.positional == ()
         assert p.named == ()
 
-    def test_constructor_pattern_has_argument_list_defaults_to_false(self) -> None:
-        p = ConstructorPattern(
-            qualifier=None, name="None_", positional=(), named=(), span=self._s(), node_id=1
-        )
-        assert p.has_argument_list is False
-
-    def test_constructor_pattern_has_argument_list_participates_in_equality(self) -> None:
-        bare = ConstructorPattern(
-            qualifier=None,
-            name="x",
-            positional=(),
-            named=(),
-            span=self._s(),
-            node_id=1,
-            has_argument_list=False,
-        )
-        with_parens = ConstructorPattern(
-            qualifier=None,
-            name="x",
-            positional=(),
-            named=(),
-            span=self._s(),
-            node_id=1,
-            has_argument_list=True,
-        )
-        assert bare != with_parens
-
     def test_constructor_pattern_with_fields(self) -> None:
         pf = PatternField(
             name="val",

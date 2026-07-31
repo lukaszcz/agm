@@ -2619,7 +2619,8 @@ class TestPatterns:
         assert pat.qualifier.route_segments == ("Review",)
 
     # -----------------------------------------------------------------
-    # Regression: pattern_atom split of the qualified alternative (has_argument_list)
+    # Qualified pattern parsing: constructor-match shape in `case`, and its
+    # `let`-only reinterpretation as a scoped binding.
     # -----------------------------------------------------------------
 
     @staticmethod
@@ -2628,33 +2629,35 @@ class TestPatterns:
         assert isinstance(expr, Case)
         return expr.branches[0].pattern
 
-    def test_bare_qualified_pattern_has_no_argument_list(self) -> None:
+    @staticmethod
+    def _let_decl(source: str) -> LetDecl:
+        decl = first(parse(source))
+        assert isinstance(decl, LetDecl)
+        return decl
+
+    def test_bare_qualified_pattern_in_a_case_branch(self) -> None:
         pat = self._first_case_pattern("case r of | Review::Pass => ok")
         assert isinstance(pat, ConstructorPattern)
-        assert pat.has_argument_list is False
+        assert pat.qualifier is not None
+        assert pat.qualifier.route_segments == ("Review",)
+        assert pat.positional == ()
+        assert pat.named == ()
 
-    def test_qualified_nullary_pattern_with_parens_has_an_argument_list(self) -> None:
+    def test_qualified_nullary_pattern_with_parens_in_a_case_branch(self) -> None:
         pat = self._first_case_pattern("case r of | Review::Pass() => ok")
         assert isinstance(pat, ConstructorPattern)
-        assert pat.has_argument_list is True
+        assert pat.qualifier is not None
+        assert pat.qualifier.route_segments == ("Review",)
+        assert pat.positional == ()
+        assert pat.named == ()
 
-    def test_bare_and_parenthesized_qualified_patterns_are_unequal(self) -> None:
-        bare = self._first_case_pattern("case r of | Review::Pass => ok")
-        parenthesized = self._first_case_pattern("case r of | Review::Pass() => ok")
-        assert bare != parenthesized
-
-    def test_unqualified_constructor_pattern_always_has_an_argument_list(self) -> None:
-        """Unqualified constructor patterns are only reachable through parens
-        (`pat_constructor` requires `LPAR ... RPAR`), so this is always True."""
-        pat = self._first_case_pattern("case r of | None() => ok")
-        assert isinstance(pat, ConstructorPattern)
-        assert pat.has_argument_list is True
-
-    def test_qualified_nullary_pattern_with_fields_has_an_argument_list(self) -> None:
+    def test_qualified_pattern_with_fields_in_a_case_branch(self) -> None:
         pat = self._first_case_pattern("case r of | Issue::Fail(issues) => ok")
         assert isinstance(pat, ConstructorPattern)
-        assert pat.has_argument_list is True
+        assert pat.qualifier is not None
         assert len(pat.positional) == 1
+        assert isinstance(pat.positional[0], VarPattern)
+        assert pat.positional[0].name == "issues"
 
     def test_bare_qualified_pattern_nested_in_a_field(self) -> None:
         pat = self._first_case_pattern("case r of | Outer(inner = Review::Pass) => ok")
@@ -2662,34 +2665,55 @@ class TestPatterns:
         nested = pat.named[0].pattern
         assert isinstance(nested, ConstructorPattern)
         assert nested.qualifier is not None
-        assert nested.has_argument_list is False
+        assert nested.positional == ()
+        assert nested.named == ()
 
     def test_bare_qualified_pattern_under_an_as_binder(self) -> None:
         pat = self._first_case_pattern("case r of | Review::Pass as p => p")
         assert isinstance(pat, AsPattern)
         assert isinstance(pat.pattern, ConstructorPattern)
-        assert pat.pattern.has_argument_list is False
+        assert pat.pattern.qualifier is not None
 
-    def test_root_anchored_bare_qualified_pattern(self) -> None:
-        pat = self._first_case_pattern("case r of | ::Pass => ok")
-        assert isinstance(pat, ConstructorPattern)
-        assert pat.qualifier is not None
-        assert pat.qualifier.route_segments == ()
-        assert pat.has_argument_list is False
+    def test_bare_qualified_let_pattern_is_a_scoped_binding(self) -> None:
+        let = self._let_decl("let A::x = 1")
+        assert [segment.name for segment in let.scope_path] == ["A"]
+        assert isinstance(let.pattern, VarPattern)
+        assert let.pattern.name == "x"
 
-    def test_type_applied_qualified_pattern_still_parses(self) -> None:
-        pat = self._first_case_pattern("case r of | Box[int]::Pass => ok")
-        assert isinstance(pat, ConstructorPattern)
-        assert pat.qualifier is not None
-        assert pat.qualifier.segments[0].type_args is not None
-        assert pat.has_argument_list is False
+    def test_qualified_let_pattern_with_parens_keeps_constructor_match_meaning(self) -> None:
+        let = self._let_decl("let A::x() = 1")
+        assert let.scope_path == ()
+        assert isinstance(let.pattern, ConstructorPattern)
+        assert let.pattern.qualifier is not None
+        assert let.pattern.qualifier.member == "x"
 
-    def test_module_route_qualified_pattern_still_parses(self) -> None:
-        pat = self._first_case_pattern("case r of | std/config::Pass => ok")
-        assert isinstance(pat, ConstructorPattern)
-        assert pat.qualifier is not None
-        assert pat.qualifier.route_segments == ("std", "config")
-        assert pat.has_argument_list is False
+    @pytest.mark.parametrize(
+        "source",
+        (
+            "let ::x = 1",
+            "let std/config::x = 1",
+            "let Box[int]::x = 1",
+        ),
+        ids=("root-anchored", "module-routed", "type-argument-applied"),
+    )
+    def test_let_pattern_not_spellable_as_a_declaration_head_keeps_constructor_match_meaning(
+        self, source: str
+    ) -> None:
+        let = self._let_decl(source)
+        assert let.scope_path == ()
+        assert isinstance(let.pattern, ConstructorPattern)
+
+    def test_deeper_qualified_let_pattern_is_a_scoped_binding_with_every_segment(self) -> None:
+        let = self._let_decl("let A::B::x = 1")
+        assert [segment.name for segment in let.scope_path] == ["A", "B"]
+        assert isinstance(let.pattern, VarPattern)
+        assert let.pattern.name == "x"
+
+    def test_let_bare_and_parenthesized_qualified_forms_differ_in_meaning(self) -> None:
+        bare = self._let_decl("let A::x = 1")
+        parenthesized = self._let_decl("let A::x() = 1")
+        assert bare.scope_path != parenthesized.scope_path
+        assert type(bare.pattern) is not type(parenthesized.pattern)
 
 
 # ---------------------------------------------------------------------------

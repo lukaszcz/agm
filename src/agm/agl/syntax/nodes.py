@@ -957,10 +957,6 @@ class ConstructorPattern:
     bound to the field with that name.  Positional must precede named (enforced
     by the transformer); the checker routes both through ``bind_arguments``.
     Partial patterns are allowed — unmentioned fields are wildcards.
-    ``has_argument_list`` records whether the source wrote an argument list
-    ``(...)`` after the name or qualifier chain — ``A::x`` and ``A::x()`` are
-    distinct nodes so a bare qualified pattern can be told apart from a
-    nullary qualified constructor pattern.
     """
 
     name: str
@@ -969,7 +965,6 @@ class ConstructorPattern:
     span: SourceSpan = dc_field(compare=False)
     node_id: int = dc_field(compare=False)
     qualifier: QualifierChain | None = None
-    has_argument_list: bool = False
 
 
 # Closed union of all pattern nodes.

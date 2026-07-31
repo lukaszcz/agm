@@ -1,0 +1,24 @@
+{
+  "scenarios": [
+    {
+      "name": "resolves_every_annotated_form",
+      "shell": [
+        {"command": "give-json", "stdout": "{\"v\": 7}"},
+        {"command": "give-r", "stdout": "{\"v\": 8}"}
+      ],
+      "expect": {
+        "stdout": "1\n2\n3\n1\n7\n8\n4\n5\n6\n"
+      }
+    },
+    {
+      "name": "resolves_with_different_exec_output",
+      "shell": [
+        {"command": "give-json", "stdout": "{\"v\": 20}"},
+        {"command": "give-r", "stdout": "{\"v\": 21}"}
+      ],
+      "expect": {
+        "stdout": "1\n2\n3\n1\n20\n21\n4\n5\n6\n"
+      }
+    }
+  ]
+}

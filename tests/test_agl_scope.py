@@ -719,9 +719,9 @@ class TestScopedBindingOpenPrecedence:
             parse_and_resolve("open A hiding y\nscope A\nvar x = 1\nvar y = 2\nend A\ny")
 
     def test_open_using_before_the_binding_does_not_see_a_reference_before_it(self) -> None:
-        """D4 precedence holds for ``using`` too: a reference walked before
-        the binder registers still fails, even though the ``open`` textually
-        precedes both."""
+        """Textual precedence holds for ``using`` too: a reference walked
+        before the binder registers still fails, even though the ``open``
+        textually precedes both."""
         with pytest.raises(AglScopeError):
             parse_and_resolve(
                 "scope B\nopen A using x\ndef get() -> int = x\nend B\n"
@@ -729,7 +729,7 @@ class TestScopedBindingOpenPrecedence:
             )
 
     def test_open_hiding_before_the_binding_does_not_see_a_reference_before_it(self) -> None:
-        """D4 precedence holds for ``hiding`` too."""
+        """Textual precedence holds for ``hiding`` too."""
         with pytest.raises(AglScopeError):
             parse_and_resolve(
                 "scope B\nopen A hiding y\ndef get() -> int = x\nend B\n"

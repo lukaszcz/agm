@@ -1404,6 +1404,84 @@ class TestScopedBindingTypes:
         )
         assert r.resolved.program is not None
 
+    def test_region_form_annotation_resolves_a_bare_sibling_record(self) -> None:
+        r = accept_type("scope A\nrecord R(v: int)\nlet x: R = R(v = 1)\nend A\nA::x.v")
+        assert r.resolved.program is not None
+
+    def test_region_form_var_annotation_resolves_a_bare_sibling_record(self) -> None:
+        r = accept_type("scope A\nrecord R(v: int)\nvar x: R = R(v = 1)\nend A\nA::x.v")
+        assert r.resolved.program is not None
+
+    def test_shorthand_form_annotation_resolves_a_bare_sibling_record(self) -> None:
+        r = accept_type("scope A\nrecord R(v: int)\nend A\nlet A::x: R = A::R(v = 1)\nA::x.v")
+        assert r.resolved.program is not None
+
+    def test_shorthand_form_var_annotation_resolves_a_bare_sibling_record(self) -> None:
+        r = accept_type("scope A\nrecord R(v: int)\nend A\nvar A::x: R = A::R(v = 1)\nA::x.v")
+        assert r.resolved.program is not None
+
+    def test_shorthand_pattern_binder_annotation_resolves_a_bare_sibling_record(self) -> None:
+        """The ``let A::r: R = A::R(v = 1)`` shorthand names both the binder and
+        its own type with the same bare sibling spelling."""
+        r = accept_type("scope A\nrecord R(v: int)\nend A\nlet A::r: R = A::R(v = 1)\nA::r.v")
+        assert r.resolved.program is not None
+
+    def test_region_form_annotation_resolves_a_generic_application(self) -> None:
+        r = accept_type(
+            "scope A\nrecord Box[T](value: T)\nlet b: Box[int] = Box(value = 1)\nend A\nA::b.value"
+        )
+        assert r.resolved.program is not None
+
+    def test_region_form_annotation_resolves_a_function_type(self) -> None:
+        r = accept_type(
+            "scope A\n"
+            "record R(v: int)\n"
+            "let f: (R) -> int = fn(r: R) -> int => r.v\n"
+            "end A\n"
+            "A::f(A::R(v = 1))"
+        )
+        assert r.resolved.program is not None
+
+    def test_region_form_cast_target_resolves_a_bare_sibling_record(self) -> None:
+        r = accept_type(
+            "scope A\n"
+            "record R(v: int)\n"
+            'let j: json = exec("ls", format = "json")\n'
+            "let r = j as R\n"
+            "end A\n"
+            "A::r.v"
+        )
+        assert r.resolved.program is not None
+
+    def test_region_form_exec_result_type_resolves_a_bare_sibling_record(self) -> None:
+        r = accept_type(
+            "scope A\n"
+            "record Out(value: int)\n"
+            'let o: Out = exec("run", format = "json")\n'
+            "end A\n"
+            "A::o.value"
+        )
+        assert r.resolved.program is not None
+
+    def test_region_form_annotation_resolves_a_bare_sibling_type_alias(self) -> None:
+        r = accept_type("scope A\ntype Alias = int\nlet x: Alias = 3\nend A\nA::x")
+        assert r.resolved.program is not None
+
+    def test_annotation_in_a_local_let_still_resolves_the_enclosing_defs_own_scope(self) -> None:
+        """A ``let`` local to a ``def`` body has no scope path of its own; its
+        annotation must still resolve against the enclosing ``def``'s scope,
+        not reset to the module root."""
+        r = accept_type(
+            "scope A\n"
+            "record R(v: int)\n"
+            "def f() -> int =\n"
+            "  let x: R = R(v = 1)\n"
+            "  x.v\n"
+            "end A\n"
+            "A::f()"
+        )
+        assert r.resolved.program is not None
+
     def test_scoped_def_and_binding_cannot_share_a_name(self) -> None:
         """Already enforced by the scope pass; pinned here so the collision is
         confirmed not to reach typechecking as an unresolved-reference crash."""

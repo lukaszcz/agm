@@ -827,14 +827,14 @@ class _Checker:
         if isinstance(item, (RecordDef, EnumDef, ExceptionDef, TypeAlias)):
             return UnitType()
         if isinstance(item, BuiltinVarDecl):
-            with self._env.type_scope(tuple(segment.name for segment in item.scope_path)):
+            with self._own_type_scope(item):
                 self._check_builtin_var(item)
             return UnitType()
         if isinstance(item, AgentDecl):
             self._env.set_binding_type(item.node_id, AgentType())
             return UnitType()
         if isinstance(item, ParamDecl):
-            with self._env.type_scope(tuple(segment.name for segment in item.scope_path)):
+            with self._own_type_scope(item):
                 self._check_param(item)
             return UnitType()
         if isinstance(item, ProgramDecl):
@@ -843,11 +843,31 @@ class _Checker:
             return UnitType()  # The program module-system pass processes imports/exports.
         # --- Binders ---
         if isinstance(item, (LetDecl, VarDecl)):
-            return self._check_binding(item)
+            with self._own_type_scope(item):
+                return self._check_binding(item)
         if isinstance(item, AssignStmt):
             return self._check_assign_stmt(item)
         # --- Expr ---
         return self._check_expr(item, expected=expected)
+
+    @contextmanager
+    def _own_type_scope(
+        self, item: LetDecl | VarDecl | ParamDecl | BuiltinVarDecl
+    ) -> Iterator[None]:
+        """Resolve *item*'s own type expressions in its declared scope path.
+
+        A scope-region member (either spelling — the region form or the
+        declaration-path shorthand) carries its full path on ``item.scope_path``
+        and resolves its type expressions there. A binder with no path of its
+        own — an ordinary ``let``/``var`` local to a block — keeps whatever
+        scope is already ambient (the enclosing ``def``'s, or the root's),
+        since it is not itself a scope member.
+        """
+        if not item.scope_path:
+            yield
+            return
+        with self._env.type_scope(tuple(segment.name for segment in item.scope_path)):
+            yield
 
     # ------------------------------------------------------------------
     # Declaration checkers

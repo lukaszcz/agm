@@ -1,0 +1,31 @@
+# A scoped `let`/`var` annotation resolves a bare sibling type declared in
+# the same region — nominal, generic application, function type, cast
+# target, exec result type, and a region-local `type` alias — on both the
+# region form and the declaration-path shorthand.
+scope A
+record R(v: int)
+record Box[T](value: T)
+type Alias = int
+
+let x: R = R(v = 1)
+var y: R = R(v = 2)
+let boxed: Box[int] = Box(value = 3)
+let f: (R) -> int = fn(r: R) -> int => r.v
+let parsed: json = exec("give-json", format = "json")
+let casted = parsed as R
+let fetched: R = exec("give-r", format = "json")
+let a: Alias = 4
+end A
+
+var A::z: R = A::R(v = 5)
+let A::w: R = A::R(v = 6)
+
+print(A::x.v)
+print(A::y.v)
+print(A::boxed.value)
+print(A::f(A::x))
+print(A::casted.v)
+print(A::fetched.v)
+print(A::a)
+print(A::z.v)
+print(A::w.v)

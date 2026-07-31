@@ -343,7 +343,17 @@ class _Resolver:
         self._declaration_items: dict[
             DeclarationKey, FuncDef | RecordDef | EnumDef | ExceptionDef | TypeAlias | AgentDecl
         ] = {}
-        self._scope_entity_kinds: dict[DeclarationKey, str] = {}
+        # Seeded with every retained scope path so a fresh entry's collision
+        # check (``_ensure_scope_path``, ``_register_declaration``, ``_define``)
+        # sees a session-retained named scope the same way it sees one
+        # declared earlier in this same entry: a member or declaration this
+        # entry tries to register at a retained scope's own path collides,
+        # cross-entry, exactly as it would within one entry.
+        self._scope_entity_kinds: dict[DeclarationKey, str] = {
+            (self._module_id, path[:-1], path[-1]): "scope"
+            for path in self._repl_session_scope_nodes
+            if path
+        }
         # Scoped externs are implemented by their member names in one module
         # companion, so distinct scope paths cannot share a Python symbol.
         self._scoped_extern_symbols: dict[str, FuncDef] = {}
@@ -1414,9 +1424,19 @@ class _Resolver:
         uses (declarations in the pre-pass, nested scope layers via
         ``_ensure_scope_path``), so one check governs collisions between a
         binding and a ``def``, a type, or a nested scope at the same path,
-        regardless of textual order. This is the only reachable site:
-        parameters, pattern/catch binders, and loop variables always resolve
-        inside a fresh child scope with an empty path.
+        regardless of textual order. ``_scope_entity_kinds`` is a fresh dict
+        per entry, so the check only ever sees THIS entry's own members: a
+        member the REPL session retained from a prior entry pre-populates
+        ``scope.members`` (for lookup) but leaves no ``_scope_entity_kinds``
+        trace, so redeclaring it is a replacement, matching how a redeclared
+        scoped ``def`` or type behaves across entries. A retained *scope's
+        own path*, unlike a retained member, is pre-seeded into the fresh
+        dict at construction, so a member or declaration this entry tries to
+        register there still collides — the cross-entry counterpart of
+        ``_ensure_scope_path``'s same-entry seeding. This is the only
+        reachable site: parameters, pattern/catch binders, and loop
+        variables always resolve inside a fresh child scope with an empty
+        path.
 
         At the true root, a declaration may claim the bare spelling of a
         constructor declared in another module (e.g. the prelude
@@ -1428,7 +1448,7 @@ class _Resolver:
         scope = self._current_scope()
         if scope.scope_path:
             key = (self._module_id, scope.scope_path, name)
-            if name in scope.members or self._scope_entity_kinds.get(key) is not None:
+            if self._scope_entity_kinds.get(key) is not None:
                 raise AglScopeError(
                     f"Name '{name}' is already declared in this scope.",
                     span=ref.decl_span,
@@ -2692,7 +2712,9 @@ class _Resolver:
                     f"'{variant}'. {qualification_repair_guidance()}",
                     span=chain.span,
                 )
-            self._constructor_refs[node_id] = self._constructor_for_type_path(local_path, variant)
+            self._constructor_refs[node_id] = self._constructor_for_type_path(
+                local_path, variant, chain.span
+            )
             return True
         try:
             owner = self._imported_chain_owner(chain, variant)
@@ -2727,7 +2749,9 @@ class _Resolver:
                 return True
         return False
 
-    def _constructor_for_type_path(self, path: ScopePath, variant: str) -> ConstructorRef:
+    def _constructor_for_type_path(
+        self, path: ScopePath, variant: str, span: SourceSpan
+    ) -> ConstructorRef:
         """Return the constructor-shaped chain result owned by local *path*.
 
         The owner's scope path stays in ``owner_path`` and never merges into
@@ -2749,7 +2773,16 @@ class _Resolver:
                 ),
                 None,
             )
-            assert retained is not None
+            if retained is None:
+                # A retained type path can go stale across REPL entries when a
+                # later entry's own declaration (not itself a type) claims the
+                # same path a prior entry's type left behind — the path is
+                # still in ``_type_paths``, but no constructor backs it any
+                # more. A clean diagnostic beats a crash for a condition
+                # reachable from ordinary REPL input.
+                raise AglScopeError(
+                    f"'{variant}' is not a member of '{'::'.join(path)}'.", span=span
+                )
             return retained
         assert isinstance(declaration, (RecordDef, EnumDef, ExceptionDef, TypeAlias))
         return ConstructorRef(
@@ -3313,7 +3346,7 @@ class _Resolver:
         local_path = self._validate_local_scope_chain(chain)
         if local_path is not None:
             if local_path in self._type_paths:
-                return (self._constructor_for_type_path(local_path, node.name),)
+                return (self._constructor_for_type_path(local_path, node.name, chain.span),)
             scoped = self._scoped_constructor_candidates.get((local_path, node.name), ())
             if scoped:
                 return tuple(scoped)

@@ -536,6 +536,282 @@ class TestPersistence:
 
 
 # ---------------------------------------------------------------------------
+# Scoped binding retention
+# ---------------------------------------------------------------------------
+
+
+class TestScopedBindingRetention:
+    """A scoped ``let``/``var``/``param`` retains across REPL entries.
+
+    Mirrors how scoped declarations (``def``, types) already retain by path
+    atom in ``TestPersistence`` above: a same-path binding declared later
+    replaces the retained one, region and shorthand spellings retain
+    identically, and a same-entry duplicate is still an error.
+    """
+
+    def test_region_form_binding_visible_bare_and_by_path_in_a_later_entry(self) -> None:
+        s = ReplSession()
+        assert s.eval_entry("scope A\nlet x = 1\nend A").ok
+
+        bare = s.eval_entry("scope A\ndef read() -> int = x\nend A")
+        by_path = s.eval_entry("A::x")
+
+        assert bare.ok, bare.diagnostics
+        assert by_path.ok, by_path.diagnostics
+        assert by_path.value == IntValue(1)
+        call = s.eval_entry("A::read()")
+        assert call.ok, call.diagnostics
+        assert call.value == IntValue(1)
+
+    def test_shorthand_form_binding_visible_bare_and_by_path_in_a_later_entry(self) -> None:
+        s = ReplSession()
+        assert s.eval_entry("let A::y = 2").ok
+
+        bare = s.eval_entry("scope A\ndef read() -> int = y\nend A")
+        by_path = s.eval_entry("A::y")
+
+        assert bare.ok, bare.diagnostics
+        assert by_path.ok, by_path.diagnostics
+        assert by_path.value == IntValue(2)
+        call = s.eval_entry("A::read()")
+        assert call.ok, call.diagnostics
+        assert call.value == IntValue(2)
+
+    def test_region_and_shorthand_forms_retain_identically(self) -> None:
+        region = ReplSession()
+        assert region.eval_entry("scope A\nlet x = 1\nend A").ok
+        region_result = region.eval_entry("A::x")
+
+        shorthand = ReplSession()
+        assert shorthand.eval_entry("let A::x = 1").ok
+        shorthand_result = shorthand.eval_entry("A::x")
+
+        assert region_result.ok, region_result.diagnostics
+        assert shorthand_result.ok, shorthand_result.diagnostics
+        assert region_result.value == shorthand_result.value == IntValue(1)
+
+    def test_redeclaring_a_retained_scoped_binding_replaces_it(self) -> None:
+        s = ReplSession()
+        assert s.eval_entry("let A::x = 1").ok
+
+        replaced = s.eval_entry("let A::x = 99")
+        result = s.eval_entry("A::x")
+
+        assert replaced.ok, replaced.diagnostics
+        assert result.ok, result.diagnostics
+        assert result.value == IntValue(99)
+
+    def test_same_entry_duplicate_scoped_binding_is_still_an_error(self) -> None:
+        s = ReplSession()
+
+        result = s.eval_entry("scope A\nlet z = 1\nlet z = 2\nend A")
+
+        assert not result.ok
+
+    def test_same_entry_duplicate_still_errors_after_a_prior_entry_retained_it(self) -> None:
+        s = ReplSession()
+        assert s.eval_entry("let A::x = 1").ok
+
+        result = s.eval_entry("scope A\nlet z = 2\nlet z = 3\nend A")
+
+        assert not result.ok
+
+    def test_shorthand_scoped_let_does_not_leak_into_the_bare_root_name(self) -> None:
+        """A shorthand ``let A::x`` must not promote as a root binding named ``x``."""
+        s = ReplSession()
+        assert s.eval_entry("let A::x = 2").ok
+
+        bare = s.eval_entry("x")
+
+        assert not bare.ok
+
+    def test_shorthand_scoped_let_does_not_replace_an_existing_root_binding(self) -> None:
+        s = ReplSession()
+        assert s.eval_entry("let x = 1").ok
+        assert s.eval_entry("let A::x = 2").ok
+
+        root = s.eval_entry("x")
+        scoped = s.eval_entry("A::x")
+
+        assert root.ok, root.diagnostics
+        assert scoped.ok, scoped.diagnostics
+        assert root.value == IntValue(1)
+        assert scoped.value == IntValue(2)
+
+    def test_region_form_redeclaration_across_entries_replaces_the_retained_member(self) -> None:
+        s = ReplSession()
+        assert s.eval_entry("scope A\nlet x = 1\nend A").ok
+
+        replaced = s.eval_entry("scope A\nlet x = 99\nend A")
+        result = s.eval_entry("A::x")
+
+        assert replaced.ok, replaced.diagnostics
+        assert result.ok, result.diagnostics
+        assert result.value == IntValue(99)
+
+    def test_cross_kind_replacement_from_binding_to_declaration(self) -> None:
+        s = ReplSession()
+        assert s.eval_entry("let A::x = 1").ok
+
+        replaced = s.eval_entry("def A::x() -> int = 2")
+        result = s.eval_entry("A::x()")
+
+        assert replaced.ok, replaced.diagnostics
+        assert result.ok, result.diagnostics
+        assert result.value == IntValue(2)
+
+    def test_cross_kind_replacement_from_declaration_to_binding(self) -> None:
+        s = ReplSession()
+        assert s.eval_entry("def A::x() -> int = 2").ok
+
+        replaced = s.eval_entry("let A::x = 1")
+        result = s.eval_entry("A::x")
+
+        assert replaced.ok, replaced.diagnostics
+        assert result.ok, result.diagnostics
+        assert result.value == IntValue(1)
+
+    def test_same_named_bindings_at_different_paths_coexist_and_stay_distinct(self) -> None:
+        s = ReplSession()
+        assert s.eval_entry("let A::x = 1").ok
+        assert s.eval_entry("let B::x = 2").ok
+
+        a = s.eval_entry("A::x")
+        b = s.eval_entry("B::x")
+
+        assert a.ok, a.diagnostics
+        assert b.ok, b.diagnostics
+        assert a.value == IntValue(1)
+        assert b.value == IntValue(2)
+
+    def test_redeclaring_one_path_does_not_disturb_a_same_named_sibling_path(self) -> None:
+        s = ReplSession()
+        assert s.eval_entry("let A::x = 1").ok
+        assert s.eval_entry("let B::x = 2").ok
+        assert s.eval_entry("let A::x = 100").ok
+
+        a = s.eval_entry("A::x")
+        b = s.eval_entry("B::x")
+
+        assert a.ok, a.diagnostics
+        assert b.ok, b.diagnostics
+        assert a.value == IntValue(100)
+        assert b.value == IntValue(2)
+
+    def test_retained_scoped_var_assignable_by_path_in_a_later_entry(self) -> None:
+        s = ReplSession()
+        assert s.eval_entry("scope A\nvar counter = 0\nend A").ok
+
+        assign = s.eval_entry("A::counter := A::counter + 1")
+        result = s.eval_entry("A::counter")
+
+        assert assign.ok, assign.diagnostics
+        assert result.ok, result.diagnostics
+        assert result.value == IntValue(1)
+
+    def test_retained_scoped_var_assignable_bare_after_open_in_a_later_entry(self) -> None:
+        s = ReplSession()
+        assert s.eval_entry("scope A\nvar counter = 0\nend A").ok
+        assert s.eval_entry("A::counter := 5").ok
+
+        assign = s.eval_entry("open A\ncounter := counter + 1")
+        result = s.eval_entry("A::counter")
+
+        assert assign.ok, assign.diagnostics
+        assert result.ok, result.diagnostics
+        assert result.value == IntValue(6)
+
+    def test_scoped_declarations_and_bindings_coexist_at_one_path(self) -> None:
+        s = ReplSession()
+        assert s.eval_entry("let A::x = 1").ok
+
+        added = s.eval_entry("scope A\ndef doubled() -> int = x * 2\nend A")
+        result = s.eval_entry("A::doubled()")
+
+        assert added.ok, added.diagnostics
+        assert result.ok, result.diagnostics
+        assert result.value == IntValue(2)
+
+    def test_reset_clears_retained_scoped_bindings(self) -> None:
+        s = ReplSession()
+        assert s.eval_entry("let A::x = 1").ok
+
+        s.reset()
+
+        after_reset = s.eval_entry("A::x")
+        redeclared = s.eval_entry("let A::x = 7")
+
+        assert not after_reset.ok
+        assert redeclared.ok, redeclared.diagnostics
+        assert redeclared.value == IntValue(7)
+
+    def test_echo_distinguishes_a_root_binding_from_a_scoped_one(self) -> None:
+        s = ReplSession()
+
+        root = s.eval_entry("let x = 10")
+        scoped = s.eval_entry("let A::x = 20")
+
+        assert root.ok, root.diagnostics
+        assert scoped.ok, scoped.diagnostics
+        assert root.name == "x"
+        assert scoped.name == "A::x"
+
+
+# ---------------------------------------------------------------------------
+# Cross-entry scope/member collisions
+# ---------------------------------------------------------------------------
+
+
+class TestCrossEntryScopeCollision:
+    """A member cannot claim a name owned by a retained nested scope layer.
+
+    Mirrors the same-entry rule (a binding, a ``def``, a type, and a nested
+    scope all collide at one path) across REPL entries: a name that a prior
+    entry established as a nested scope's own path is not free for a later
+    entry to claim as an ordinary member, for either the shorthand ``let`` or
+    the shorthand ``def`` spelling.
+    """
+
+    def test_shorthand_let_cannot_claim_a_retained_nested_scopes_path(self) -> None:
+        s = ReplSession()
+        assert s.eval_entry("scope A\nscope B\ndef q() -> int = 2\nend B\nend A").ok
+
+        result = s.eval_entry("let A::B = 1")
+
+        assert not result.ok
+        still_reachable = s.eval_entry("A::B::q()")
+        assert still_reachable.ok, still_reachable.diagnostics
+        assert still_reachable.value == IntValue(2)
+
+    def test_shorthand_def_cannot_claim_a_retained_nested_scopes_path(self) -> None:
+        s = ReplSession()
+        assert s.eval_entry("scope A\nscope B\ndef q() -> int = 2\nend B\nend A").ok
+
+        result = s.eval_entry("def A::B() -> int = 1")
+
+        assert not result.ok
+        still_reachable = s.eval_entry("A::B::q()")
+        assert still_reachable.ok, still_reachable.diagnostics
+        assert still_reachable.value == IntValue(2)
+
+    def test_stale_retained_type_path_reports_a_diagnostic_not_a_crash(self) -> None:
+        """A member reference into a since-invalidated retained type path fails cleanly.
+
+        A type declared at a path a scope previously occupied leaves that path
+        in the retained type table; a later reference through it into a name
+        the type does not own must be a normal diagnostic, not an internal
+        crash.
+        """
+        s = ReplSession()
+        assert s.eval_entry("scope A\nscope B\ndef q() -> int = 2\nend B\nend A").ok
+        assert s.eval_entry("record A::B()").ok
+
+        result = s.eval_entry("A::B::q()")
+
+        assert not result.ok
+
+
+# ---------------------------------------------------------------------------
 # Standard library
 # ---------------------------------------------------------------------------
 
@@ -3353,6 +3629,25 @@ class TestImports:
         assert s.eval_entry("scope A\nopen import mylib\nend A").ok
         r = s.eval_entry("add(1, 2)")
         assert not r.ok
+
+    def test_non_open_region_scoped_import_retains_its_qualifier_route_across_entries(
+        self, tmp_path: Path
+    ) -> None:
+        """A plain (non-``open``) region-scoped import also persists across entries.
+
+        A later entry extending the same region must still resolve the
+        qualifier the import established, without redeclaring it.
+        """
+        (tmp_path / "mylib.agl").write_text("def add(a: int, b: int) -> int = a + b\n")
+        s = self._make_session_with_root(tmp_path)
+
+        assert s.eval_entry(
+            "scope A\nimport mylib\ndef go() -> int = mylib::add(1, 2)\nend A\nA::go()"
+        ).ok
+        r = s.eval_entry("scope A\ndef go2() -> int = mylib::add(3, 4)\nend A\nA::go2()")
+
+        assert r.ok, r.diagnostics
+        assert _int(r.value) == 7
 
 
 # ---------------------------------------------------------------------------

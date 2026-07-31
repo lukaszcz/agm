@@ -718,7 +718,6 @@ class ReplSession:
             ScopeRegion,
             TypeAlias,
             VarDecl,
-            is_scoped_declaration,
             param_external_key,
             pattern_binder_candidates,
             static_items,
@@ -756,13 +755,13 @@ class ReplSession:
             item.name: entry_root.bindings[item.name]
             for item in program.body.items
             if isinstance(item, binding_items)
-            and not is_scoped_declaration(item)
+            and not item.scope_path
             and item.name in entry_root.bindings
         }
         promotion_bindings.update(
             (binding.name, binding)
             for item in program.body.items
-            if isinstance(item, LetDecl)
+            if isinstance(item, LetDecl) and not item.scope_path
             for candidate in pattern_binder_candidates(item.pattern)
             if (binding := checked.pattern_binding_for(candidate.node_id)) is not None
         )

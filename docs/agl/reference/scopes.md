@@ -296,3 +296,12 @@ An open neither exports its contributions nor makes another module's opens
 transitive. If several contributions provide the same bare name, the ambiguity
 is reported when that name is used. Import selection and cross-module reach
 are described in [Modules](modules.md).
+
+## REPL
+
+A scoped `let`/`var`/`param` persists across REPL entries by its full path,
+exactly like a scoped `def` or type: a later entry may extend an existing
+scope with a new member, and a same-path binding declared later replaces the
+earlier one rather than colliding with it. A duplicate at the same path
+within one entry is still an error. `:reset` clears every scoped binding
+along with the rest of the session.

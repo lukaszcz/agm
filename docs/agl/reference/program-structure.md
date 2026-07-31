@@ -17,7 +17,7 @@ module_item   ::= scope_region | item
 block         ::= item ((NEWLINE | ";") item)* (NEWLINE | ";")?
 item          ::= import_decl                     (* header position only *)
              | open_decl                          (* header position only *)
-             | export_decl                        (* root only *)
+             | export_decl                        (* header position only *)
              | builtin_modifier? record_def        (* root only *)
              | builtin_modifier? enum_def          (* root only *)
              | type_alias                          (* root only *)
@@ -38,16 +38,18 @@ builtin_modifier ::= "builtin" NEWLINE?
 
 ### Import declarations
 
-`import` and `open` declarations are **header-only**: they must appear before
-any other declaration or expression. See [Modules](modules.md) and
+`import`, `open`, and `export` declarations are **header-only**: they must
+appear before any other declaration or expression, at the module root or
+inside a named scope region. See [Modules](modules.md) and
 [Grammar](grammar.md#import-and-export-declarations) for their syntax.
 
 ### Named scope regions
 
 A named scope region is a module item containing nested regions, header `open`
-declarations, static declarations, `param` declarations, and `let`/`var`
-bindings. Its matching `scope`/`end` syntax, declaration and binder paths, and
-visibility rules are described in [Named scopes](scopes.md).
+and `import` declarations, `export` declarations, static declarations,
+`param` declarations, and `let`/`var` bindings. Its matching `scope`/`end`
+syntax, declaration and binder paths, and visibility rules are described in
+[Named scopes](scopes.md).
 
 ### Declarations
 
@@ -68,6 +70,12 @@ region.
   entry module, with no declaration-path shorthand. A scoped parameter's
   external key is its full path spelling; see
   [Named scopes](scopes.md#parameters).
+- **`import`/`export` declarations** — module-system declarations; root-only
+  or a member of a named scope region. A scoped import's bare contribution
+  narrows to its own region; its qualifier route stays module-wide. A scoped
+  export re-roots its forwarded atoms under the region's path. See
+  [Named scopes](scopes.md#import-and-export) and
+  [Modules](modules.md#import-and-export-inside-a-scope-region).
 - **`program` declaration** — the program name used for params config lookup.
   Entry-module only.
 - **`agent` declarations** — the names of the agents the program may call.

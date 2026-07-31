@@ -148,10 +148,23 @@ class ModuleContribution:
 
 @dataclass(frozen=True, slots=True)
 class ImportEnv:
-    """Pure contribution environment, including structured public paths."""
+    """Pure contribution environment, including structured public paths.
+
+    ``decl_bare`` holds, per region-scoped import declaration (keyed by its
+    ``node_id``), exactly the atoms *that declaration alone* contributes
+    bare. It is kept separate from ``unqualified`` -- the module-wide bare
+    table a root-position ``open import`` feeds -- so a scoped ``import``'s
+    bare names can be snapshotted onto its own region instead of leaking to
+    the whole module; the module-wide qualifier route it also establishes is
+    unaffected and still flows through ``contributions``. Each atom maps to
+    every origin it draws from a wildcard's expansion, exactly like
+    ``unqualified``: two modules exposing the same bare name is deferred to
+    the name's first use, not raised here.
+    """
 
     contributions: Mapping[ModuleId, ModuleContribution]
     unqualified: Mapping[NameAtom, frozenset[QName]]
+    decl_bare: Mapping[int, Mapping[NameAtom, frozenset[QName]]] = field(default_factory=dict)
     suffix_routes: Mapping[tuple[str, ...], tuple[ModuleId, ...]] = field(
         init=False, repr=False, compare=False
     )
@@ -169,8 +182,15 @@ class ImportEnv:
         unqualified: Mapping[NameAtom, frozenset[QName]] = MappingProxyType(
             {atom: self.unqualified[atom] for atom in sorted(self.unqualified, key=_path_sort_key)}
         )
+        decl_bare: Mapping[int, Mapping[NameAtom, frozenset[QName]]] = MappingProxyType(
+            {
+                node_id: MappingProxyType(dict(members))
+                for node_id, members in self.decl_bare.items()
+            }
+        )
         object.__setattr__(self, "contributions", contributions)
         object.__setattr__(self, "unqualified", unqualified)
+        object.__setattr__(self, "decl_bare", decl_bare)
         suffix: dict[tuple[str, ...], set[ModuleId]] = {}
         anchored: dict[tuple[str, ...], set[ModuleId]] = {}
         for module, contribution in contributions.items():
@@ -276,15 +296,15 @@ def _targets(target: ImportTarget) -> tuple[ModuleId, ...]:
     )
 
 
-def _add_member(
-    acc: _ContributionAccumulator, exposed: NameAtom, qname: QName, decl: ImportDecl
+def _merge_member(
+    members: dict[NameAtom, QName], exposed: NameAtom, qname: QName, decl: ImportDecl
 ) -> None:
-    existing = acc.members.get(exposed)
+    existing = members.get(exposed)
     if existing is not None and existing != qname:
         raise AglScopeError(
             f"conflicting origins for exposed name {_path_sort_key(exposed)!r}", span=decl.span
         )
-    acc.members[exposed] = qname
+    members[exposed] = qname
 
 
 def build_import_env(
@@ -292,9 +312,18 @@ def build_import_env(
     targets: Mapping[int, ImportTarget],
     exports: Mapping[ModuleId, Mapping[NameAtom, QName]],
 ) -> ImportEnv:
-    """Build contributions. Selection, hiding, and renaming operate on paths."""
+    """Build contributions. Selection, hiding, and renaming operate on paths.
+
+    A region-scoped declaration (``decl.scope_path``) still contributes its
+    members to the module-wide qualifier route like any other import, but its
+    bare names are kept out of the shared ``unqualified`` table and recorded
+    per declaration in ``decl_bare`` instead, so the scope pass can narrow
+    them to their own region rather than exposing them module-wide.
+    """
     accumulators: dict[ModuleId, _ContributionAccumulator] = {}
+    decl_bare: dict[int, dict[NameAtom, set[QName]]] = {}
     for decl in decls:
+        contributes_bare = decl.is_open or decl.mode is ImportMode.USING
         for module in _targets(targets[decl.node_id]):
             acc = accumulators.setdefault(
                 module, _ContributionAccumulator({}, set(), False, set(), False)
@@ -306,9 +335,13 @@ def build_import_env(
             acc.complete_public_set |= decl.mode is ImportMode.ALL
             for source in _selected_atoms(decl, module, exports.get(module, {})):
                 exposed = _exposed_atom(source, decl) if decl.mode is ImportMode.USING else source
-                _add_member(acc, exposed, exports[module][source], decl)
-                if decl.is_open or decl.mode is ImportMode.USING:
-                    acc.bare_names.add(exposed)
+                qname = exports[module][source]
+                _merge_member(acc.members, exposed, qname, decl)
+                if contributes_bare:
+                    if decl.scope_path:
+                        decl_bare.setdefault(decl.node_id, {}).setdefault(exposed, set()).add(qname)
+                    else:
+                        acc.bare_names.add(exposed)
 
     contributions: dict[ModuleId, ModuleContribution] = {}
     unqualified: dict[NameAtom, set[QName]] = {}
@@ -325,7 +358,12 @@ def build_import_env(
         for name in contribution.bare_names:
             unqualified.setdefault(name, set()).add(contribution.members[name])
     return ImportEnv(
-        contributions, {name: frozenset(qnames) for name, qnames in unqualified.items()}
+        contributions,
+        {name: frozenset(qnames) for name, qnames in unqualified.items()},
+        {
+            node_id: {atom: frozenset(qnames) for atom, qnames in members.items()}
+            for node_id, members in decl_bare.items()
+        },
     )
 
 

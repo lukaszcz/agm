@@ -77,6 +77,41 @@ exposes `P::…`, while `using Point::distance as d` exposes `d`. The original
 path is inaccessible through that import. `hiding` removes a path and its
 subtree from both channels, so it can also remove a qualification ambiguity.
 
+## Import and export inside a scope region
+
+`import` and `export` are also legal [named scope](scopes.md) region items.
+Only the *bare* contribution narrows to the region: `open import` or
+`import … using` inside `scope A` makes the selected names bare inside `A`
+only, not at the module root or in a sibling region. The qualifier route a
+scoped import establishes is unaffected and stays available module-wide, so a
+plain `import m` inside a region behaves exactly as it does at the root — the
+meaningful scoped forms are `open import m` and `import m using …`:
+
+<!-- agl-check: fragment -->
+```agl
+scope Vec
+open import geom/planar
+def norm(p: Point) -> float = mag(p)
+end Vec
+```
+
+`import` and `export` are both header items inside a region, exactly like
+`open`: they precede the region's other items. A scoped `export` re-roots
+every atom it forwards under the region's own scope path, exactly as a
+`using … as` rename re-roots a selected atom:
+
+<!-- agl-check: fragment -->
+```agl
+scope Geo
+export geom/planar using Point
+end Geo
+```
+
+publishes the atom `Geo::Point`, forwarding to `geom/planar`'s `Point`. An
+importer reaches it as `facade::Geo::Point`. Wildcard and `hiding` forms
+re-root every forwarded atom the same way, and a rename composes with the
+re-rooting.
+
 ## Opening scopes
 
 An `open` declaration makes a [named scope](scopes.md)'s selected members
@@ -215,7 +250,10 @@ rules.
 Imported modules are declaration-only: they may contain imports, exports,
 functions, type declarations, and infix declarations, but not executable
 top-level expressions, bindings, agents, parameters, or program declarations.
-Imports and exports appear before other declarations in a library module.
+Imports and exports appear before other declarations in a library module; a
+named scope region is one declaration for this rule, so an import or export
+inside a region does not need to precede the module's other root-level
+declarations — only a region's own header rule governs its own items.
 
 Import cycles are valid. Functions and nominal types may refer to public
 declarations across an import cycle.

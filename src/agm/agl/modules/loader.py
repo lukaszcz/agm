@@ -34,7 +34,7 @@ from agm.agl.modules.resolver import expand_wildcard, resolve_module
 from agm.agl.modules.roots import RootSet
 from agm.agl.parser.parser import parse_program_seeded
 from agm.agl.syntax.advisories import SpacedQualifier
-from agm.agl.syntax.nodes import ExportDecl, FuncDef, ImportDecl
+from agm.agl.syntax.nodes import ExportDecl, FuncDef, ImportDecl, static_items
 from agm.agl.syntax.spans import SourceId, SourceSpan
 from agm.agl.syntax.types import ImportMode
 from agm.core import fs
@@ -120,23 +120,25 @@ class ModuleGraph:
 
 
 def _extract_imports(program: syntax.Program) -> tuple[ImportDecl, ...]:
-    """Return the top-level ImportDecl nodes from *program*.
+    """Return the module's ImportDecl nodes, including region-nested ones.
 
-    Only nodes at the top level of ``program.body.items`` are included;
-    imports inside nested blocks are not valid and are ignored here
-    (the scope pass enforces the restriction).
+    Named scope regions are transparent to this walk, so a scoped ``import``
+    is discovered as a module-graph edge exactly like a root one. Imports
+    inside an ordinary nested block are not valid and are ignored here (the
+    scope pass enforces the restriction).
     """
-    return tuple(item for item in program.body.items if isinstance(item, ImportDecl))
+    return tuple(item for item in static_items(program.body.items) if isinstance(item, ImportDecl))
 
 
 def _extract_exports(program: syntax.Program) -> tuple[ExportDecl, ...]:
-    """Return the top-level ExportDecl nodes from *program*.
+    """Return the module's ExportDecl nodes, including region-nested ones.
 
-    Only nodes at the top level of ``program.body.items`` are included;
-    exports inside nested blocks are not valid and are ignored here (the scope
-    pass enforces the restriction).
+    Named scope regions are transparent to this walk, so a scoped ``export``
+    is discovered exactly like a root one. Exports inside an ordinary nested
+    block are not valid and are ignored here (the scope pass enforces the
+    restriction).
     """
-    return tuple(item for item in program.body.items if isinstance(item, ExportDecl))
+    return tuple(item for item in static_items(program.body.items) if isinstance(item, ExportDecl))
 
 
 def _companion_path_for(

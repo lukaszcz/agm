@@ -1,0 +1,32 @@
+# A scoped `open import` inside a region contributes its bare names only
+# within that region, alongside the region's own scoped members and
+# bindings; the qualifier route it also establishes stays module-wide, so
+# `geom::Point` still resolves outside the region. A sibling region imports
+# a different module under its own scoped, renamed `using` import, narrowed
+# to that region alone. A bare-exposed enum's variants are usable and
+# matchable inside the region too, not just the enum type name itself. A
+# scoped `export` inside a facade module re-roots what it forwards, reachable
+# by its rooted path at run time.
+
+scope App
+open import geom
+open import shading
+param scale: int
+let seed = Point(x = 1, y = 2)
+def total() -> int = sum2(seed) * scale
+def mood() -> Shade = if scale > 3 => Light else => Dark
+def describe() -> text = label(mood())
+end App
+
+scope Motion
+import vecmath using double as twice
+def doubled() -> int = twice(App::total())
+end Motion
+
+import facade
+
+print(App::total())
+print(App::describe())
+print(geom::Point(x = 3, y = 4).x)
+print(Motion::doubled())
+print(facade::Geo::greet())

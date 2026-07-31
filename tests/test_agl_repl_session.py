@@ -3237,6 +3237,45 @@ class TestImports:
         assert "unexpected loader failure" in r.diagnostics[0].message
         monkeypatch.setattr(loader_mod, "build_repl_graph", original_build)
 
+    def test_region_scoped_import_retains_its_qualifier_route_across_entries(
+        self, tmp_path: Path
+    ) -> None:
+        """A scoped import's module-wide qualifier route persists like the root spelling."""
+        (tmp_path / "mylib.agl").write_text("def add(a: int, b: int) -> int = a + b\n")
+        s = self._make_session_with_root(tmp_path)
+
+        assert s.eval_entry(
+            "scope A\nopen import mylib\ndef go() -> int = add(1, 2)\nend A\nA::go()"
+        ).ok
+        r = s.eval_entry("mylib::add(1, 2)")
+        assert r.ok, r.diagnostics
+        assert _int(r.value) == 3
+
+    def test_region_scoped_import_retains_its_bare_narrowing_across_entries(
+        self, tmp_path: Path
+    ) -> None:
+        """A later entry's same-named region still sees the earlier entry's scoped import."""
+        (tmp_path / "mylib.agl").write_text("def add(a: int, b: int) -> int = a + b\n")
+        s = self._make_session_with_root(tmp_path)
+
+        assert s.eval_entry(
+            "scope A\nopen import mylib\ndef go() -> int = add(1, 2)\nend A\nA::go()"
+        ).ok
+        r = s.eval_entry("scope A\ndef go2() -> int = add(3, 4)\nend A\nA::go2()")
+        assert r.ok, r.diagnostics
+        assert _int(r.value) == 7
+
+    def test_region_scoped_import_still_does_not_leak_bare_names_to_the_root(
+        self, tmp_path: Path
+    ) -> None:
+        """Retention must not widen a scoped import's bare reach beyond its own region."""
+        (tmp_path / "mylib.agl").write_text("def add(a: int, b: int) -> int = a + b\n")
+        s = self._make_session_with_root(tmp_path)
+
+        assert s.eval_entry("scope A\nopen import mylib\nend A").ok
+        r = s.eval_entry("add(1, 2)")
+        assert not r.ok
+
 
 # ---------------------------------------------------------------------------
 # extern def (Python FFI) in the REPL

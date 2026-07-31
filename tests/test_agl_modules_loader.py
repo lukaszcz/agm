@@ -200,6 +200,21 @@ class TestGraphBuild:
             for item in entry_mod.imports
         )
 
+    def test_imports_extracted_from_a_scope_region_are_graph_edges(self, tmp_path: Path) -> None:
+        """A scoped `import` is discovered exactly like a root one."""
+        root = tmp_path / "r"
+        root.mkdir()
+        _write_module(root, "libx")
+        entry = "scope A\nimport libx\nend A\n()"
+        graph = load_graph(entry, entry_path=None, roots=_roots(root))
+        entry_mod = graph.modules[ENTRY_ID]
+        assert any(
+            isinstance(item, ImportDecl) and item.module_path == ("libx",)
+            for item in entry_mod.imports
+        )
+        libx_id = ModuleId.from_path("libx")
+        assert libx_id in graph.modules
+
     def test_module_not_found_raises(self, tmp_path: Path) -> None:
         root = tmp_path / "r"
         root.mkdir()

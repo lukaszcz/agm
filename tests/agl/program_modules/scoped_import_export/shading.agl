@@ -1,0 +1,5 @@
+enum Shade
+  | Light
+  | Dark
+
+def label(s: Shade) -> text = case s of | Light => "light" | Dark => "dark"

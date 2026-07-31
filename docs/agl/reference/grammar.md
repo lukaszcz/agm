@@ -22,14 +22,14 @@ module_block ::= module_item ((NEWLINE | ";") module_item)* (NEWLINE | ";")?
 module_item   ::= scope_region | item
 block         ::= item ((NEWLINE | ";") item)* (NEWLINE | ";")?
 
-item       ::= import_decl                  (* header position only *)
+item       ::= import_decl                  (* header position only; scope_item also permits it *)
              | open_decl                    (* module-root or scope-region header only *)
              | builtin_var_def              (* root only; standard library only *)
              | builtin_modifier? record_def (* root only *)
              | builtin_modifier? enum_def   (* root only *)
              | type_alias                   (* root only *)
              | builtin_modifier? exception_def (* root only *)
-             | export_decl                  (* root only *)
+             | export_decl                  (* root only; scope_item also permits it *)
              | param_decl                   (* root only *)
              | program_decl                 (* root only *)
              | agent_decl                   (* entry module root; scope_item also permits it *)
@@ -56,6 +56,8 @@ scope_region ::= "scope" scope_path (NEWLINE | ";")
                  "end" scope_path
 scope_path   ::= NAME ("::" NAME)*
 scope_item   ::= scope_region | open_decl
+               | import_decl                  (* header position only *)
+               | export_decl
                | record_def | enum_def | exception_def | type_alias
                | func_def | extern_func_def
                | agent_decl
@@ -67,13 +69,13 @@ A scope region has a mandatory matching closer: `scope A::B` closes with
 `end A::B`. Regions may appear only as module-root items or as items of another
 scope region. They may nest, and a multi-segment header is equivalent to
 nested single-segment regions. Scope
-regions contain nested regions, header `open` declarations, static
-declarations, `param` declarations, and `let`/`var` bindings; bare
-expressions, `:=` assignments, `builtin` declarations, infix declarations,
-imports, exports, and `program` declarations are not permitted. `scope` is
-contextual at item start before a scope path, and `end` is contextual only
-for a complete closer at an open region's layout level; both remain ordinary
-names in expression positions.
+regions contain nested regions, header `open` and `import` declarations,
+`export` declarations, static declarations, `param` declarations, and
+`let`/`var` bindings; bare expressions, `:=` assignments, `builtin`
+declarations, infix declarations, and `program` declarations are not
+permitted. `scope` is contextual at item start before a scope path, and `end`
+is contextual only for a complete closer at an open region's layout level;
+both remain ordinary names in expression positions.
 
 `"builtin"` is a **declaration modifier** that behaves like a decorator: it may
 sit on the same line as the declaration it adorns (`builtin enum …`) or on the

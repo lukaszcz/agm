@@ -25,6 +25,7 @@ from pathlib import Path
 
 import pytest
 
+from agm.agl.diagnostics import AglError
 from agm.agl.modules.ids import ENTRY_ID, STD_CONFIG_ID, ModuleId
 from agm.agl.parser import parse_program
 from agm.agl.scope import resolve_module
@@ -66,6 +67,7 @@ def _find_varref(program: object, name: str) -> VarRef | None:
         ParamDecl,
         Program,
         Raise,
+        ScopeRegion,
         Template,
         Try,
         UnaryNeg,
@@ -81,6 +83,11 @@ def _find_varref(program: object, name: str) -> VarRef | None:
         if isinstance(node, Program):
             return walk(node.body)
         if isinstance(node, Block):
+            for item in node.items:
+                r = walk(item)
+                if r is not None:
+                    return r
+        if isinstance(node, ScopeRegion):
             for item in node.items:
                 r = walk(item)
                 if r is not None:
@@ -1201,6 +1208,33 @@ class TestHeaderOnlyImports:
         mylib_id = ModuleId.from_path("mylib")
         assert "foo" in result.modules[mylib_id].exports
 
+    def test_a_region_that_is_only_an_import_is_allowed_at_the_top_of_a_non_entry_module(
+        self, tmp_path: Path
+    ) -> None:
+        """A region's own header rule is independent of the module's root-level rule.
+
+        A library module's root-level items are a `def` and, after it, a
+        `scope` region whose *own* first item is an import -- the region's
+        header rule (tracked separately for the region's own item sequence)
+        must not be short-circuited by the module-root rule having already
+        seen the preceding `def`.
+        """
+        graph = _make_graph_from_files(
+            tmp_path,
+            {
+                "entry": "open import mylib\n()",
+                "mylib": (
+                    "def helper() -> int = 1\n"
+                    "scope A\nopen import libB\ndef foo() -> int = bar()\nend A"
+                ),
+                "libB": "def bar() -> int = 42",
+            },
+        )
+        result = resolve_program(graph)
+        assert ENTRY_ID in result.modules
+        mylib_id = ModuleId.from_path("mylib")
+        assert ("A", "foo") in result.modules[mylib_id].exports
+
     def test_import_in_entry_works(self, tmp_path: Path) -> None:
         """Entry module works fine with import followed by def."""
         graph = _make_graph_from_files(
@@ -1218,6 +1252,320 @@ class TestHeaderOnlyImports:
         assert var is not None
         ref = result.modules[ENTRY_ID].resolved.resolution[var.node_id]
         assert ref.module_id == ModuleId.from_path("mylib")
+
+
+# ---------------------------------------------------------------------------
+# Test: import and export as region header items
+# ---------------------------------------------------------------------------
+
+
+class TestRegionImportExportHeaderPlacement:
+    """`import` and `export` are region header items, exactly like `open`.
+
+    The rule applies uniformly regardless of module kind: a region's own
+    items are checked independently of whether the module is a library
+    module or the entry module.
+    """
+
+    @pytest.mark.parametrize("item", ("import libB", "open import libB", "export libB"))
+    def test_rejected_after_a_region_item_in_a_library_module(
+        self, tmp_path: Path, item: str
+    ) -> None:
+        with pytest.raises(AglError):
+            _make_graph_from_files(
+                tmp_path,
+                {
+                    "entry": "open import mylib\n()",
+                    "mylib": f"scope A\ndef local() -> int = 1\n{item}\nend A",
+                    "libB": "def bar() -> int = 2",
+                },
+            )
+
+    @pytest.mark.parametrize("item", ("import libB", "open import libB", "export libB"))
+    def test_rejected_after_a_region_item_in_the_entry_module(
+        self, tmp_path: Path, item: str
+    ) -> None:
+        with pytest.raises(AglError):
+            _make_graph_from_files(
+                tmp_path,
+                {
+                    "entry": f"scope A\ndef local() -> int = 1\n{item}\nend A",
+                    "libB": "def bar() -> int = 2",
+                },
+            )
+
+
+# ---------------------------------------------------------------------------
+# Test: scoped import bare narrowing
+# ---------------------------------------------------------------------------
+
+
+class TestScopedImportBareNarrowing:
+    """A scoped `open import`/`import … using` narrows its bare names to its own region."""
+
+    def test_wildcard_expanding_to_a_duplicate_name_is_accepted_when_unused(
+        self, tmp_path: Path
+    ) -> None:
+        """A region-scoped wildcard doesn't hard-error on a same-named export it never uses.
+
+        Matches the root spelling's clash-on-use policy: two modules
+        exposing the same bare name through one wildcard is only ever an
+        ambiguity at the name's first use, never at the import declaration.
+        """
+        graph = _make_graph_from_files(
+            tmp_path,
+            {
+                "entry": "scope A\nopen import pkg/*\nend A",
+                "pkg/one": "def alpha() -> int = 1",
+                "pkg/two": "def alpha() -> int = 2",
+            },
+        )
+        result = resolve_program(graph)
+        assert ENTRY_ID in result.modules
+
+    def test_wildcard_expanding_to_a_duplicate_name_is_ambiguous_at_use(
+        self, tmp_path: Path
+    ) -> None:
+        graph = _make_graph_from_files(
+            tmp_path,
+            {
+                "entry": (
+                    "scope A\nopen import pkg/*\ndef show() -> int = alpha()\nend A\nA::show()"
+                ),
+                "pkg/one": "def alpha() -> int = 1",
+                "pkg/two": "def alpha() -> int = 2",
+            },
+        )
+        with pytest.raises(AglScopeError):
+            resolve_program(graph)
+
+    def test_bare_name_resolves_inside_its_own_region(self, tmp_path: Path) -> None:
+        graph = _make_graph_from_files(
+            tmp_path,
+            {
+                "entry": (
+                    "scope A\nopen import mylib\ndef show() -> int = foo()\nend A\nA::show()"
+                ),
+                "mylib": "def foo() -> int = 1",
+            },
+        )
+        result = resolve_program(graph)
+        assert ENTRY_ID in result.modules
+
+    def test_bare_name_is_not_visible_at_the_module_root(self, tmp_path: Path) -> None:
+        graph = _make_graph_from_files(
+            tmp_path,
+            {
+                "entry": ("scope A\nopen import mylib\nend A\nfoo()"),
+                "mylib": "def foo() -> int = 1",
+            },
+        )
+        with pytest.raises(AglScopeError):
+            resolve_program(graph)
+
+    def test_bare_name_does_not_leak_to_a_sibling_region(self, tmp_path: Path) -> None:
+        graph = _make_graph_from_files(
+            tmp_path,
+            {
+                "entry": (
+                    "scope A\nopen import mylib\nend A\n"
+                    "scope B\ndef show() -> int = foo()\nend B\nB::show()"
+                ),
+                "mylib": "def foo() -> int = 1",
+            },
+        )
+        with pytest.raises(AglScopeError):
+            resolve_program(graph)
+
+    def test_qualifier_route_resolves_module_wide_regardless_of_nesting(
+        self, tmp_path: Path
+    ) -> None:
+        """A scoped import still makes the module's qualifier route available module-wide."""
+        graph = _make_graph_from_files(
+            tmp_path,
+            {
+                "entry": ("scope A\nimport mylib\nend A\nlet x = mylib::foo()"),
+                "mylib": "def foo() -> int = 1",
+            },
+        )
+        result = resolve_program(graph)
+        assert ENTRY_ID in result.modules
+
+    def test_plain_scoped_import_contributes_no_bare_names(self, tmp_path: Path) -> None:
+        """A plain scoped `import` (no `open`, no `using`) exposes no bare names."""
+        graph = _make_graph_from_files(
+            tmp_path,
+            {
+                "entry": ("scope A\nimport mylib\ndef show() -> int = foo()\nend A\nA::show()"),
+                "mylib": "def foo() -> int = 1",
+            },
+        )
+        with pytest.raises(AglScopeError):
+            resolve_program(graph)
+
+    def test_using_clause_narrows_a_renamed_bare_name(self, tmp_path: Path) -> None:
+        graph = _make_graph_from_files(
+            tmp_path,
+            {
+                "entry": (
+                    "scope A\nimport mylib using foo as f\ndef show() -> int = f()\nend A\n"
+                    "A::show()"
+                ),
+                "mylib": "def foo() -> int = 1",
+            },
+        )
+        result = resolve_program(graph)
+        assert ENTRY_ID in result.modules
+
+    def test_open_import_hiding_clause_narrows_the_remaining_names(self, tmp_path: Path) -> None:
+        graph = _make_graph_from_files(
+            tmp_path,
+            {
+                "entry": (
+                    "scope A\nopen import mylib hiding secret\n"
+                    "def show() -> int = foo()\nend A\nA::show()"
+                ),
+                "mylib": "def foo() -> int = 1\ndef secret() -> int = 2",
+            },
+        )
+        result = resolve_program(graph)
+        assert ENTRY_ID in result.modules
+
+    def test_scoped_import_colliding_with_a_scoped_member_prefers_the_member(
+        self, tmp_path: Path
+    ) -> None:
+        """A region's own member shadows a same-named bare import, like at the root."""
+        graph = _make_graph_from_files(
+            tmp_path,
+            {
+                "entry": (
+                    "scope A\nopen import mylib\n"
+                    "def foo() -> int = 2\ndef show() -> int = foo()\nend A\nA::show()"
+                ),
+                "mylib": "def foo() -> int = 1",
+            },
+        )
+        result = resolve_program(graph)
+        entry = result.modules[ENTRY_ID]
+        var = _find_varref(entry.resolved.program, "foo")
+        assert var is not None
+        ref = entry.resolved.resolution[var.node_id]
+        assert ref.module_id == ENTRY_ID
+        assert ref.scope_path == ("A",)
+
+    def test_open_import_narrows_a_bare_constructor_to_its_region(self, tmp_path: Path) -> None:
+        """A scoped `open import` also narrows a bare-exposed scoped type's constructor."""
+        graph = _make_graph_from_files(
+            tmp_path,
+            {
+                "entry": (
+                    "scope A\nopen import mylib\n"
+                    "def make() -> Geo::Point = Geo::Point(x = 1)\nend A\nA::make()"
+                ),
+                "mylib": "scope Geo\nrecord Point(x: int)\nend Geo",
+            },
+        )
+        result = resolve_program(graph)
+        assert ENTRY_ID in result.modules
+
+    def test_open_import_narrows_a_bare_enum_variant_reference_to_its_region(
+        self, tmp_path: Path
+    ) -> None:
+        """A scoped `open import` makes an imported enum's bare variants usable, too."""
+        graph = _make_graph_from_files(
+            tmp_path,
+            {
+                "entry": (
+                    "scope Vec\nopen import lib2\ndef pick() -> Color = Green\nend Vec\nVec::pick()"
+                ),
+                "lib2": "enum Color\n  | Red\n  | Green",
+            },
+        )
+        result = resolve_program(graph)
+        assert ENTRY_ID in result.modules
+
+    def test_open_import_narrows_a_bare_enum_variant_pattern_to_its_region(
+        self, tmp_path: Path
+    ) -> None:
+        """A scoped `open import` also makes an imported enum's variants matchable bare."""
+        graph = _make_graph_from_files(
+            tmp_path,
+            {
+                "entry": (
+                    "scope Vec\nopen import lib2\n"
+                    "def classify(c: Color) -> int = case c of | Red() => 0 | Green => 1\n"
+                    "def run() -> int = classify(Green)\n"
+                    "end Vec\nVec::run()"
+                ),
+                "lib2": "enum Color\n  | Red\n  | Green",
+            },
+        )
+        result = resolve_program(graph)
+        assert ENTRY_ID in result.modules
+
+    def test_enum_variant_expansion_yields_to_a_same_named_top_level_exception(
+        self, tmp_path: Path
+    ) -> None:
+        """A same-named top-level exception keeps its bare name; the variant is skipped.
+
+        Regression: expanding a bare-exposed enum into its variants must
+        check the *plain* atom a standalone exception would occupy, not the
+        variant's own owner-path-qualified key, or a same-named exception
+        and enum variant both contributed bare produce a spurious clash.
+        """
+        graph = _make_graph_from_files(
+            tmp_path,
+            {
+                "entry": ('scope A\nopen import lib4\nlet e = Red(msg = "boom")\nend A'),
+                "lib4": "enum Status\n  | Red\n  | Green\n\nexception Red\n  msg: text",
+            },
+        )
+        result = resolve_program(graph)
+        assert ENTRY_ID in result.modules
+
+    def test_open_after_a_region_scoped_open_import_resolves_the_unrouted_scope(
+        self, tmp_path: Path
+    ) -> None:
+        """`open <Scope>` reaches a scope bare-exposed by a region-scoped `open import`."""
+        graph = _make_graph_from_files(
+            tmp_path,
+            {
+                "entry": (
+                    "scope A\nopen import libg\nopen Geo\n"
+                    "def show() -> int = dist()\nend A\nA::show()"
+                ),
+                "libg": "scope Geo\ndef dist() -> int = 5\nend Geo",
+            },
+        )
+        result = resolve_program(graph)
+        assert ENTRY_ID in result.modules
+
+    def test_open_after_a_region_scoped_open_import_skips_unrelated_decl_bare_entries(
+        self, tmp_path: Path
+    ) -> None:
+        """The unrouted-`open` fallback skips entries that don't match, on two different axes.
+
+        A sibling region's own scoped import is out of reach entirely (its
+        own region isn't an ancestor of the resolving one); a reachable
+        scoped import that doesn't expose anything under the requested path
+        contributes no members. Both must be skipped without derailing the
+        entry that does resolve.
+        """
+        graph = _make_graph_from_files(
+            tmp_path,
+            {
+                "entry": (
+                    "scope A\nopen import libg\nopen import otherlib\nopen Geo\n"
+                    "def show() -> int = dist()\nend A\nA::show()\n"
+                    "scope B\nopen import thirdlib\nend B"
+                ),
+                "libg": "scope Geo\ndef dist() -> int = 5\nend Geo",
+                "otherlib": "def helper() -> int = 9",
+                "thirdlib": "def unused() -> int = 0",
+            },
+        )
+        result = resolve_program(graph)
+        assert ENTRY_ID in result.modules
 
 
 # ---------------------------------------------------------------------------
@@ -1670,6 +2018,65 @@ class TestMethodOrphanRule:
 
         message = str(exc_info.value)
         assert "module" in message.lower()
+
+    def test_self_on_a_region_scoped_open_imported_type_names_the_rule(
+        self, tmp_path: Path
+    ) -> None:
+        """The same orphan rule fires for a type reached through a scoped `open import`.
+
+        Withholding a scoped import's bare names from the module-wide table
+        must not degrade this to the generic "no enclosing type scope"
+        diagnostic just because the import narrows to its own region.
+        """
+        graph = _make_graph_from_files(
+            tmp_path,
+            {
+                "entry": (
+                    "scope A\nopen import shapes\n\ndef Point::tag(self) -> int = self.x\nend A"
+                ),
+                "shapes": "record Point\n  x: int",
+            },
+        )
+        with pytest.raises(AglScopeError, match="Point") as exc_info:
+            resolve_program(graph)
+
+        message = str(exc_info.value)
+        assert "module" in message.lower()
+
+    def test_self_with_no_enclosing_scope_at_all_reports_the_generic_rule(
+        self, tmp_path: Path
+    ) -> None:
+        """A bare `self` method with no owning scope at all reports the generic rule.
+
+        Regression: the orphan check derives the receiver's bare name from
+        the last segment of its owning scope path, which is empty here (a
+        plain module-root function); it must not index into that empty path.
+        """
+        graph = _make_graph_from_files(tmp_path, {"entry": "def helper(self) -> int = 1"})
+        with pytest.raises(AglScopeError, match="enclosing type scope"):
+            resolve_program(graph)
+
+    def test_orphan_check_ignores_a_scoped_import_from_an_unrelated_region(
+        self, tmp_path: Path
+    ) -> None:
+        """A scoped import declared in one region must not reach a `self` method in another.
+
+        Regression: the orphan check's decl_bare reachability walk must skip
+        a declaration whose own region isn't an ancestor of the receiver's
+        region, not just declarations that never import the type at all.
+        """
+        graph = _make_graph_from_files(
+            tmp_path,
+            {
+                "entry": (
+                    "scope A\nopen import shapes\nend A\n\n"
+                    "scope B\ndef Point::tag(self) -> int = self.x\nend B"
+                ),
+                "shapes": "record Point\n  x: int",
+            },
+        )
+        with pytest.raises(AglScopeError, match="enclosing type scope"):
+            resolve_program(graph)
 
 
 # ---------------------------------------------------------------------------
@@ -2231,6 +2638,93 @@ class TestExportDecl:
             )
             == 2
         )
+
+    def test_scoped_export_reroots_the_forwarded_atom(self, tmp_path: Path) -> None:
+        """A scoped `export` re-roots its forwarded atom under the region's own path."""
+        graph = _make_graph_from_files(
+            tmp_path,
+            {
+                "entry": "open import facade\n()",
+                "facade": "scope Geo\nexport lib using foo\nend Geo",
+                "lib": "def foo() -> int = 1\ndef bar() -> int = 2",
+            },
+        )
+        result = resolve_program(graph)
+        facade_id = ModuleId.from_path("facade")
+        lib_id = ModuleId.from_path("lib")
+        facade_exports = result.modules[facade_id].exports
+        assert facade_exports[("Geo", "foo")] == (lib_id, "foo")
+        assert "foo" not in facade_exports
+        assert ("Geo", "bar") not in facade_exports
+
+    def test_scoped_export_all_reroots_every_forwarded_atom(self, tmp_path: Path) -> None:
+        """export lib inside a region — every forwarded atom is re-rooted the same way."""
+        graph = _make_graph_from_files(
+            tmp_path,
+            {
+                "entry": "open import facade\n()",
+                "facade": "scope Geo\nexport lib\nend Geo",
+                "lib": "def foo() -> int = 1\ndef bar() -> int = 2",
+            },
+        )
+        result = resolve_program(graph)
+        facade_id = ModuleId.from_path("facade")
+        lib_id = ModuleId.from_path("lib")
+        facade_exports = result.modules[facade_id].exports
+        assert facade_exports[("Geo", "foo")] == (lib_id, "foo")
+        assert facade_exports[("Geo", "bar")] == (lib_id, "bar")
+
+    def test_scoped_export_hiding_reroots_the_remaining_atoms(self, tmp_path: Path) -> None:
+        graph = _make_graph_from_files(
+            tmp_path,
+            {
+                "entry": "open import facade\n()",
+                "facade": "scope Geo\nexport lib hiding secret\nend Geo",
+                "lib": "def foo() -> int = 1\ndef secret() -> int = 0",
+            },
+        )
+        result = resolve_program(graph)
+        facade_id = ModuleId.from_path("facade")
+        lib_id = ModuleId.from_path("lib")
+        facade_exports = result.modules[facade_id].exports
+        assert facade_exports[("Geo", "foo")] == (lib_id, "foo")
+        assert ("Geo", "secret") not in facade_exports
+
+    def test_scoped_export_rename_composes_with_rerooting(self, tmp_path: Path) -> None:
+        """A `using … as` rename applies before the atom is re-rooted under the region."""
+        graph = _make_graph_from_files(
+            tmp_path,
+            {
+                "entry": "open import facade\n()",
+                "facade": "scope Geo\nexport lib using foo as plus\nend Geo",
+                "lib": "def foo() -> int = 1",
+            },
+        )
+        result = resolve_program(graph)
+        facade_id = ModuleId.from_path("facade")
+        lib_id = ModuleId.from_path("lib")
+        facade_exports = result.modules[facade_id].exports
+        assert facade_exports[("Geo", "plus")] == (lib_id, "foo")
+        assert ("Geo", "foo") not in facade_exports
+
+    def test_an_importer_reaches_a_scoped_reexport_by_its_rerooted_path(
+        self, tmp_path: Path
+    ) -> None:
+        """A consumer of the re-exporting module reaches the atom via its re-rooted path."""
+        graph = _make_graph_from_files(
+            tmp_path,
+            {
+                "entry": "import facade\nlet x = facade::Geo::foo()",
+                "facade": "scope Geo\nexport lib using foo\nend Geo",
+                "lib": "def foo() -> int = 42",
+            },
+        )
+        result = resolve_program(graph)
+        entry = result.modules[ENTRY_ID]
+        ref_node = _find_varref(entry.resolved.program, "foo")
+        assert ref_node is not None
+        lib_id = ModuleId.from_path("lib")
+        assert entry.resolved.resolution[ref_node.node_id].module_id == lib_id
 
 
 @pytest.mark.parametrize(

@@ -1,0 +1,1 @@
+def greet() -> text = "hello from libf"

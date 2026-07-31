@@ -324,8 +324,6 @@ class _Resolver:
         self._declared_functions: dict[str, FuncDef] = {}
         # Program-declared agent identities referenced as a VarRef.
         self._referenced_agents: set[AgentKey] = set()
-        # Header-only tracking for imports in non-entry modules (program context).
-        self._seen_non_import_item: bool = False
         # Source-declared program name.
         self._program_name: str | None = None
         # Names of all root-level type declarations (RecordDef/EnumDef/TypeAlias).
@@ -333,6 +331,12 @@ class _Resolver:
         # Named declarations are keyed uniformly by module and scope path; the
         # root is simply the empty path.
         self._declarations: dict[DeclarationKey, BindingRef] = {}
+        # Every ImportDecl's own scope path, keyed by node_id -- lets a
+        # region-scoped import's decl_bare contribution be found from any
+        # position that can lexically reach it (its own region and every
+        # descendant region), independent of the decl's textual position
+        # relative to whatever consults it.
+        self._import_decl_scope_paths: dict[int, ScopePath] = {}
         # The declaration item accompanies its path-keyed binding so legacy
         # root-only tables can be derived from the same collection without
         # admitting scoped members.
@@ -529,6 +533,11 @@ class _Resolver:
             for child in item.items:
                 self._collect_item_declaration(child, path)
             return
+        if isinstance(item, ImportDecl):
+            self._import_decl_scope_paths[item.node_id] = tuple(
+                segment.name for segment in item.scope_path
+            )
+            return
         if isinstance(item, (FuncDef, RecordDef, EnumDef, ExceptionDef, TypeAlias, AgentDecl)):
             path = tuple(segment.name for segment in item.scope_path)
             self._ensure_scope_path(path, item.node_id, item.span)
@@ -701,19 +710,31 @@ class _Resolver:
     def _is_orphan_receiver(self, owner_path: ScopePath) -> bool:
         """Return whether *owner_path* names a type imported from another module.
 
-        Consults the import environment's bare (unqualified) contributions —
-        the same table that makes an opened or ``using``-imported type name
-        callable without qualification — together with the whole-program type
-        table, so a receiver on a type this module can see but does not
-        declare reports the "no orphans" rule instead of the generic
-        "no enclosing type scope" diagnostic.
+        Consults the import environment's bare contributions — the same
+        names that make an opened or ``using``-imported type name callable
+        without qualification — together with the whole-program type table,
+        so a receiver on a type this module can see but does not declare
+        reports the "no orphans" rule instead of the generic "no enclosing
+        type scope" diagnostic. *owner_path*'s last segment is the receiver's
+        own bare name; every segment before it is the region the receiver is
+        declared in, whose reach is exactly a scoped import declared there or
+        in one of its ancestors -- the same reach an ordinary bare reference
+        there already gets from ``resolve_bare_contribution`` -- unioned with
+        the module-wide root table.
         """
-        if self._import_env is None:
+        if self._import_env is None or not owner_path:
             return False
-        atom = _bare_atom(owner_path)
+        name = owner_path[-1]
+        region_path = owner_path[:-1]
+        candidates: set[QName] = set(self._import_env.unqualified.get(name, frozenset()))
+        for node_id, bare in self._import_env.decl_bare.items():
+            decl_scope_path = self._import_decl_scope_paths.get(node_id, ())
+            if region_path[: len(decl_scope_path)] != decl_scope_path:
+                continue
+            candidates.update(bare.get(name, frozenset()))
         return any(
-            module != self._module_id and (module, name) in self._cross_module_type_scopes
-            for module, name in self._import_env.unqualified.get(atom, frozenset())
+            module != self._module_id and (module, source) in self._cross_module_type_scopes
+            for module, source in candidates
         )
 
     def _build_scope_nodes(self, root: ScopeNode) -> dict[ScopePath, ScopeNode]:
@@ -1454,11 +1475,16 @@ class _Resolver:
           ``LetDecl``, ``VarDecl``, ``AssignStmt``, bare expressions, and
           entry-only constructs (``AgentDecl``, ``ParamDecl``, ``ProgramDecl``)
           are rejected with a scope error.
-        - Non-entry modules: ``ImportDecl`` and ``ExportDecl`` must precede all declarations
-          (header-only; ``_seen_non_import_item`` tracks this).
+        - Non-entry modules: ``ImportDecl`` and ``ExportDecl`` must precede all other
+          items *in the same items sequence* (header-only; ``seen_non_import_item`` tracks
+          this locally to this call). A region is one item of its enclosing sequence for
+          this purpose, so a library module's root-level header rule governs a region as a
+          whole, while its own header rule -- tracked by the recursive call this function
+          makes for the region's body -- governs the region's own items independently.
         """
         has_import_context = self._import_env is not None
         is_non_entry_root = has_import_context and not self._is_entry and self._at_root
+        seen_non_import_item = False
 
         for item in items:
             if isinstance(item, OpenDecl):
@@ -1472,12 +1498,14 @@ class _Resolver:
                         "not inside a nested block.",
                         span=item.span,
                     )
-                if is_non_entry_root and self._seen_non_import_item:
+                if is_non_entry_root and seen_non_import_item:
                     raise AglScopeError(
                         "Import and export declarations must appear before any other "
                         "declarations in a library module.",
                         span=item.span,
                     )
+                if isinstance(item, ImportDecl) and item.scope_path:
+                    self._contribute_regional_import_bare(item)
                 # The program module-system pass processes imports/exports; this pass skips them.
                 continue
             if isinstance(item, InfixDecl):
@@ -1487,11 +1515,11 @@ class _Resolver:
                         span=item.span,
                     )
                 if is_non_entry_root:
-                    self._seen_non_import_item = True
+                    seen_non_import_item = True
                 continue
             # Non-entry enforcement: track that a non-import item has been seen.
             if is_non_entry_root:
-                self._seen_non_import_item = True
+                seen_non_import_item = True
             # Named declarations switch to their declaration's lexical scope
             # in their own handlers. Every other item belongs to the current
             # layer, so validate its qualifier chains here.
@@ -1617,6 +1645,89 @@ class _Resolver:
                 if constructor is not None:
                     self._current_scope().contribute_bare_constructor(atom, constructor)
 
+    def _cross_module_member_ref(
+        self, atom: NameAtom, qname: QName, span: SourceSpan
+    ) -> tuple[BindingRef, ConstructorRef | None]:
+        """Build a bare/member ``BindingRef`` for one exposed atom's origin ``QName``.
+
+        Shared by every site that turns a (atom, origin) pair reached through
+        an import into a reference: promotes the ordinary cross-module
+        ``BindingRef`` to a constructor binding -- with the constructor's own
+        declaration id, kind, and owner path -- whenever *qname* names a
+        record, exception, enum variant, or generic-type constructor.
+        """
+        module, source = qname
+        constructor = self._cross_module_constructor_refs.get(qname)
+        ref = self._make_cross_module_ref(module, _bare_path(atom)[-1], source, span)
+        if constructor is not None:
+            ref = replace(
+                ref,
+                decl_node_id=constructor.owner_decl_node_id,
+                kind=BinderKind.constructor_binding,
+                scope_path=constructor.owner_path,
+            )
+        return ref, constructor
+
+    def _contribute_regional_import_bare(self, decl: ImportDecl) -> None:
+        """Contribute a region-scoped ``import``'s bare names to its own region only.
+
+        Mirrors the cross-module branch of ``_resolve_open_decl``: the
+        decl's own bare selection was computed once, module-wide, by
+        ``build_import_env`` and kept per declaration (``ImportEnv.decl_bare``)
+        instead of merged into the shared ``unqualified`` table, so it is
+        snapshotted here onto the current region's ``ScopeNode`` and narrows
+        to this region exactly like a cross-module ``open``'s selection does.
+        The qualifier route this import also establishes stays module-wide,
+        via ``self._import_env.contributions``, and needs no contribution here.
+
+        A wildcard candidate may draw one atom from several modules (e.g.
+        two sibling modules both exporting ``alpha``); every origin is
+        contributed, deferring an eventual clash to the atom's first use --
+        the same policy ``unqualified`` already applies at the module root --
+        rather than raising here.
+        """
+        assert self._import_env is not None
+        for atom, qnames in self._import_env.decl_bare.get(decl.node_id, {}).items():
+            for qname in qnames:
+                ref, constructor = self._cross_module_member_ref(atom, qname, decl.span)
+                self._current_scope().contribute_bare(atom, ref)
+                if constructor is not None:
+                    self._current_scope().contribute_bare_constructor(atom, constructor)
+                self._contribute_regional_enum_variants(qname, decl.span)
+
+    def _contribute_regional_enum_variants(self, qname: QName, span: SourceSpan) -> None:
+        """Expand a bare-exposed enum type into its own bare variants, region-scoped.
+
+        A bare enum *type* name alone does not make its variants callable or
+        matchable -- ``_build_cross_module_constructor_candidates`` performs
+        the same expansion module-wide, from a root-position bare exposure.
+        Mirroring it here covers the scoped case, whose bare exposure never
+        reaches that module-wide table. Only ever called from the program
+        context that also always supplies ``all_public_types``.
+        """
+        assert self._all_public_types is not None
+        declaration = self._all_public_types.get(qname)
+        if not isinstance(declaration, EnumDef):
+            return
+        module, source = qname
+        owner_path = _bare_path(source)
+        scope = self._current_scope()
+        for variant in declaration.variants:
+            # A same-named top-level exception already owns the bare name
+            # (checked by its own plain atom, not the variant's owner-path
+            # key); the exception's own bare contribution stands alone.
+            if isinstance(self._all_public_types.get((module, variant.name)), ExceptionDef):
+                continue
+            variant_qname = (module, _bare_atom((*owner_path, variant.name)))
+            ref, constructor = self._cross_module_member_ref(variant.name, variant_qname, span)
+            scope.contribute_bare(variant.name, ref)
+            # Every enum variant has a constructor: `_cross_module_constructor_refs`
+            # is built from the same `_all_public_types` table by iterating this
+            # same declaration's variants unconditionally (see
+            # `_cross_module_constructor_refs` in scope/program.py).
+            assert constructor is not None
+            scope.contribute_bare_constructor(variant.name, constructor)
+
     def _open_target_members(
         self, decl: OpenDecl
     ) -> dict[NameAtom, tuple[BindingRef, ConstructorRef | None]]:
@@ -1686,15 +1797,7 @@ class _Resolver:
             if path[: len(scope_path)] != scope_path or len(path) == len(scope_path):
                 continue
             atom = _bare_atom(path[len(scope_path) :])
-            constructor = self._cross_module_constructor_refs.get(qname)
-            ref = self._make_cross_module_ref(qname[0], _bare_path(atom)[-1], qname[1], span)
-            if constructor is not None:
-                ref = replace(
-                    ref,
-                    decl_node_id=constructor.owner_decl_node_id,
-                    kind=BinderKind.constructor_binding,
-                    scope_path=constructor.owner_path,
-                )
+            ref, constructor = self._cross_module_member_ref(atom, qname, span)
             members[atom] = (ref, constructor)
         return members, is_public_type_scope
 
@@ -1708,6 +1811,13 @@ class _Resolver:
         later ``open A`` names the source scope those bare members came from,
         not an individual member, so it is resolved against every
         contribution's bare-exposed names rather than a module route.
+
+        A region-scoped import's own bare selection lives in ``decl_bare``
+        instead (narrowed away from the module-wide ``bare_names`` snapshot
+        above), so every such declaration reachable from the current region
+        -- its own region and every descendant, exactly the reach
+        ``resolve_bare_contribution`` already grants an ordinary bare
+        reference -- is searched the same way.
         """
         assert self._import_env is not None
         matching: list[dict[NameAtom, tuple[BindingRef, ConstructorRef | None]]] = []
@@ -1715,6 +1825,17 @@ class _Resolver:
             entries = (
                 (exposed, contribution.members[exposed]) for exposed in contribution.bare_names
             )
+            members, _is_public_type_scope = self._scope_subtree_members(
+                entries, requested_path, span
+            )
+            if members:
+                matching.append(members)
+        current_path = self._current_scope().scope_path
+        for node_id, bare in self._import_env.decl_bare.items():
+            decl_scope_path = self._import_decl_scope_paths.get(node_id, ())
+            if current_path[: len(decl_scope_path)] != decl_scope_path:
+                continue
+            entries = ((atom, qname) for atom, qnames in bare.items() for qname in qnames)
             members, _is_public_type_scope = self._scope_subtree_members(
                 entries, requested_path, span
             )
@@ -2686,16 +2807,8 @@ class _Resolver:
             return None
         assert self._root_scope is not None
         if name in self._root_scope.bare_contributions and self._import_env is not None:
-            for module, source in self._import_env.unqualified.get(name, frozenset()):
-                constructor = self._cross_module_constructor_refs.get((module, source))
-                ref = self._make_cross_module_ref(module, _bare_path(name)[-1], source, span)
-                if constructor is not None:
-                    ref = replace(
-                        ref,
-                        decl_node_id=constructor.owner_decl_node_id,
-                        kind=BinderKind.constructor_binding,
-                        scope_path=constructor.owner_path,
-                    )
+            for qname in self._import_env.unqualified.get(name, frozenset()):
+                ref, _constructor = self._cross_module_member_ref(name, qname, span)
                 if not any(
                     (existing.module_id, existing.scope_path, existing.decl_node_id, existing.kind)
                     == (ref.module_id, ref.scope_path, ref.decl_node_id, ref.kind)

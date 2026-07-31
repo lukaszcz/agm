@@ -103,7 +103,12 @@ class ImportItem:
 
 @dataclass(frozen=True, slots=True)
 class ImportDecl:
-    """``[open] import MODPATH[/*] [as ALIAS] [using…|hiding…]`` declaration."""
+    """``[open] import MODPATH[/*] [as ALIAS] [using…|hiding…]`` declaration.
+
+    ``scope_path`` is non-empty when the declaration is a region item: the
+    region's own path, not to be confused with an ``ImportItem``'s
+    ``scope_path``, which selects a member inside the *imported* module.
+    """
 
     module_path: tuple[str, ...]
     wildcard: bool
@@ -113,6 +118,7 @@ class ImportDecl:
     items: tuple[ImportItem, ...]
     span: SourceSpan = dc_field(compare=False)
     node_id: int = dc_field(compare=False)
+    scope_path: tuple[ScopeSegment, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -128,7 +134,13 @@ class ExportItem:
 
 @dataclass(frozen=True, slots=True)
 class ExportDecl:
-    """``export MODPATH[/*] [using…|hiding…]`` declaration."""
+    """``export MODPATH[/*] [using…|hiding…]`` declaration.
+
+    ``scope_path`` is non-empty when the declaration is a region item: the
+    forwarded atoms are re-rooted under it. Not to be confused with an
+    ``ExportItem``'s ``scope_path``, which selects a member inside the
+    *forwarded* module.
+    """
 
     module_path: tuple[str, ...]
     wildcard: bool
@@ -136,6 +148,7 @@ class ExportDecl:
     items: tuple[ExportItem, ...]
     span: SourceSpan = dc_field(compare=False)
     node_id: int = dc_field(compare=False)
+    scope_path: tuple[ScopeSegment, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -1369,11 +1382,14 @@ Declaration = (
 # Item unions
 # ---------------------------------------------------------------------------
 
-# Scope-region items are static declarations, value bindings, or nested regions.
-# The parser enforces this restricted subset before it crosses the AST firewall.
+# Scope-region items are static declarations, value bindings, module-system
+# declarations, or nested regions. The parser enforces this restricted subset
+# before it crosses the AST firewall.
 ScopeItem = (
     ScopeRegion
     | OpenDecl
+    | ImportDecl
+    | ExportDecl
     | FuncDef
     | RecordDef
     | EnumDef

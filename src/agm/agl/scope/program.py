@@ -393,8 +393,11 @@ def _compute_reexport_additions(
 
     Returns a dict of ``exposed_name → origin_qname``.  This is called once
     per (module, export-decl, target-module) triple during the fixed-point.
+    A region-scoped ``decl`` re-roots every forwarded atom under its own
+    scope path, exactly as a ``using … as`` rename re-roots a selected atom.
     """
     result: dict[NameAtom, QName] = {}
+    region_prefix = tuple(segment.name for segment in decl.scope_path)
 
     def item_path(item: ExportItem) -> PathAtom:
         return (*tuple(segment.name for segment in item.scope_path), item.name)
@@ -435,11 +438,13 @@ def _compute_reexport_additions(
                     routed = (item.rename, *source_path[len(prefix) :])
                     exposed = routed[0] if len(routed) == 1 else routed
                     break
+        exposed_path = (exposed,) if isinstance(exposed, str) else exposed
+        rooted = _atom(region_prefix + exposed_path) if region_prefix else exposed
         origin = target_exports[source]
-        existing = result.get(exposed)
+        existing = result.get(rooted)
         if existing is not None and existing != origin:
-            _raise_reexport_conflict(exposed, existing, origin, decl)
-        result[exposed] = origin
+            _raise_reexport_conflict(rooted, existing, origin, decl)
+        result[rooted] = origin
     return result
 
 

@@ -49,7 +49,7 @@ class EntryPipelineCtx(Protocol):
 
     _loaded_lib_modules: dict[ModuleId, LoadedModule]
     _accumulated_imports: list[tuple[ImportDecl, ...]]
-    _accumulated_opens: list[tuple[OpenDecl | ScopeRegion, ...]]
+    _accumulated_opens: list[tuple[OpenDecl | ImportDecl | ScopeRegion, ...]]
     _link_image: LinkImage
     _ir_base_frame: Frame
     _session_scope: ScopeNode
@@ -352,7 +352,9 @@ class EntryPipeline:
         program: Program,
         next_start_id: int,
         roots: RootSet,
-    ) -> tuple[Program, int, tuple[ImportDecl, ...], tuple[OpenDecl | ScopeRegion, ...]]:
+    ) -> tuple[
+        Program, int, tuple[ImportDecl, ...], tuple[OpenDecl | ImportDecl | ScopeRegion, ...]
+    ]:
         """Expand current wildcards, then inject retained imports and scope opens.
 
         REPL replacement is finer grained than batch import merging: each
@@ -452,7 +454,7 @@ class EntryPipeline:
         new_next_id: int,
         new_modules: dict[ModuleId, LoadedModule],
         entry_imports: tuple[ImportDecl, ...],
-        entry_opens: tuple[OpenDecl | ScopeRegion, ...],
+        entry_opens: tuple[OpenDecl | ImportDecl | ScopeRegion, ...],
         param_values: dict[str, Value],
         entry_program_name: str | None,
         entry_active_config: dict[str, object],
@@ -715,15 +717,26 @@ class EntryPipeline:
         return expanded, next_start_id
 
     @staticmethod
-    def _retained_open_items(items: tuple[Item, ...]) -> tuple[OpenDecl | ScopeRegion, ...]:
-        """Extract scope opens, retaining their enclosing scope regions."""
+    def _retained_open_items(
+        items: tuple[Item, ...],
+    ) -> tuple[OpenDecl | ImportDecl | ScopeRegion, ...]:
+        """Extract scope opens and region-scoped imports, retaining their enclosing regions.
+
+        A region-scoped ``import``'s bare contribution is only meaningful
+        nested exactly where it was written -- unlike a root ``import``,
+        already retained by the flat, module-wide accumulation channel -- so
+        only a scoped one (``item.scope_path`` non-empty, which holds
+        precisely when it is a region's own item) is captured here.
+        """
         from dataclasses import replace
 
-        from agm.agl.syntax.nodes import OpenDecl, ScopeRegion
+        from agm.agl.syntax.nodes import ImportDecl, OpenDecl, ScopeRegion
 
-        retained: list[OpenDecl | ScopeRegion] = []
+        retained: list[OpenDecl | ImportDecl | ScopeRegion] = []
         for item in items:
             if isinstance(item, OpenDecl):
+                retained.append(item)
+            elif isinstance(item, ImportDecl) and item.scope_path:
                 retained.append(item)
             elif isinstance(item, ScopeRegion):
                 nested = EntryPipeline._retained_open_items(item.items)
@@ -731,7 +744,7 @@ class EntryPipeline:
                     retained.append(replace(item, items=nested))
         return tuple(retained)
 
-    def _retained_open_preamble(self) -> list[OpenDecl | ScopeRegion]:
+    def _retained_open_preamble(self) -> list[OpenDecl | ImportDecl | ScopeRegion]:
         """Return every successful entry's scope opens in entry order."""
         return [item for generation in self._ctx._accumulated_opens for item in generation]
 
@@ -746,7 +759,9 @@ class EntryPipeline:
         if entry_imports:
             self._ctx._accumulated_imports.append(entry_imports)
 
-    def _retain_open_declarations(self, entry_opens: tuple[OpenDecl | ScopeRegion, ...]) -> None:
+    def _retain_open_declarations(
+        self, entry_opens: tuple[OpenDecl | ImportDecl | ScopeRegion, ...]
+    ) -> None:
         """Retain successful scope opens for every later REPL entry."""
         if entry_opens:
             self._ctx._accumulated_opens.append(entry_opens)

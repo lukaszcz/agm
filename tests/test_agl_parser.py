@@ -63,10 +63,12 @@ from agm.agl.syntax import (
     Do,
     EnumDef,
     ExceptionDef,
+    ExportDecl,
     FieldAccess,
     FuncDef,
     If,
     IfBranch,
+    ImportDecl,
     IndexAccess,
     IndexTarget,
     InfixAssoc,
@@ -915,8 +917,6 @@ class TestScopeRegions:
             "1 + 2",
             "value := 1",
             "infixl %%",
-            "import package",
-            "export package",
             "program app",
             "builtin def native() -> int",
         ),
@@ -925,8 +925,6 @@ class TestScopeRegions:
             "infix-expression",
             "assignment",
             "infix",
-            "import",
-            "export",
             "program",
             "builtin-declaration",
         ),
@@ -934,6 +932,15 @@ class TestScopeRegions:
     def test_region_rejects_non_declaration_items(self, item: str) -> None:
         with pytest.raises(AglSyntaxError, match="scope regions"):
             parse(f"scope Point\n{item}\nend Point")
+
+    @pytest.mark.parametrize("item", ("import package", "open import package", "export package"))
+    def test_region_admits_import_and_export(self, item: str) -> None:
+        region = first(parse(f"scope Point\n{item}\nend Point"))
+
+        assert isinstance(region, ScopeRegion)
+        (member,) = region.items
+        assert isinstance(member, (ImportDecl, ExportDecl))
+        assert [segment.name for segment in member.scope_path] == ["Point"]
 
     @pytest.mark.parametrize("item", ("let value = 1", "var value = 1"))
     def test_region_admits_let_and_var(self, item: str) -> None:

@@ -290,6 +290,93 @@ def test_param_still_rejected_inside_a_function_body() -> None:
         resolve_module(parse_program("def f() =\n  param x\n  0\nf()"))
 
 
+# ---------------------------------------------------------------------------
+# `import`/`export` region membership (no declaration-path shorthand)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("source", "kind"),
+    (
+        ("import lib", ImportDecl),
+        ("open import lib", ImportDecl),
+        ("export lib", ExportDecl),
+    ),
+)
+def test_import_and_export_are_admitted_inside_a_scope_region(
+    source: str, kind: type[object]
+) -> None:
+    program = parse_program(f"scope Config\n{source}\nend Config")
+
+    (region,) = program.body.items
+    assert isinstance(region, ScopeRegion)
+    (member,) = region.items
+    assert isinstance(member, kind)
+    assert member.module_path == ("lib",)
+    assert [segment.name for segment in member.scope_path] == ["Config"]
+
+
+def test_import_and_export_accumulate_scope_path_across_nested_regions() -> None:
+    program = parse_program("scope A\nscope B\nimport lib\nexport lib\nend B\nend A")
+
+    (outer,) = program.body.items
+    assert isinstance(outer, ScopeRegion)
+    (inner,) = outer.items
+    assert isinstance(inner, ScopeRegion)
+    import_member, export_member = inner.items
+    assert isinstance(import_member, ImportDecl)
+    assert isinstance(export_member, ExportDecl)
+    assert [segment.name for segment in import_member.scope_path] == ["A", "B"]
+    assert [segment.name for segment in export_member.scope_path] == ["A", "B"]
+
+
+def test_open_import_is_admitted_at_the_start_of_a_scope_region() -> None:
+    program = parse_program("scope A\nopen import lib\ndef value() -> int = 0\nend A")
+
+    (region,) = program.body.items
+    assert isinstance(region, ScopeRegion)
+    assert isinstance(region.items[0], ImportDecl)
+
+
+@pytest.mark.parametrize(
+    "source",
+    (
+        "scope A\ndef value() -> int = 0\nimport lib\nend A",
+        "scope A\ndef value() -> int = 0\nopen import lib\nend A",
+        "scope A\ndef value() -> int = 0\nexport lib\nend A",
+    ),
+)
+def test_import_after_a_non_header_region_item_is_rejected(source: str) -> None:
+    with pytest.raises(AglSyntaxError):
+        parse_program(source)
+
+
+def test_export_before_other_region_items_is_admitted() -> None:
+    """Like `import`/`open`, `export` is confined to a region's header."""
+    program = parse_program("scope A\nexport lib\ndef value() -> int = 0\nend A")
+
+    (region,) = program.body.items
+    assert isinstance(region, ScopeRegion)
+    assert isinstance(region.items[0], ExportDecl)
+
+
+def test_import_placement_at_the_module_root_is_unaffected_by_the_region_header_rule() -> None:
+    """The region-only header check must not leak into ordinary root placement."""
+    parse_program("def value() -> int = 0\nimport lib")
+
+
+@pytest.mark.parametrize(
+    "source",
+    (
+        "def f() =\n  import lib\n  0\nf()",
+        "def f() =\n  export lib\n  0\nf()",
+    ),
+)
+def test_import_and_export_still_rejected_inside_a_function_body(source: str) -> None:
+    with pytest.raises(AglScopeError):
+        resolve_module(parse_program(source))
+
+
 @pytest.mark.parametrize(
     ("source", "module_route", "scope_path", "mode", "items"),
     (

@@ -1,0 +1,20 @@
+{
+  "scenarios": [
+    {
+      "name": "low_scale_dark_mood",
+      "module_roots": ["program_modules/scoped_import_export"],
+      "params": {"App::scale": 2},
+      "expect": {
+        "stdout": "6\ndark\n3\n12\nhello from libf\n"
+      }
+    },
+    {
+      "name": "high_scale_light_mood",
+      "module_roots": ["program_modules/scoped_import_export"],
+      "params": {"App::scale": 5},
+      "expect": {
+        "stdout": "15\nlight\n3\n30\nhello from libf\n"
+      }
+    }
+  ]
+}

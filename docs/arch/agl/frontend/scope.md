@@ -75,6 +75,18 @@ an advisory covers, the pass offers the tight spelling — but only when re-reso
 route actually contributes the intended member, preserving valid division and
 juxtaposition expressions.
 
+`import` and `export` are also legal region items (`import` header-only, like `open`).
+A region-scoped import still merges its selected members into the module-wide contribution
+for qualifier routing, but `build_import_env` keeps its bare selection out of the shared
+`unqualified` table and records it per declaration (`ImportEnv.decl_bare`) instead; the scope
+pass snapshots that per-declaration set onto the importing region's own `ScopeNode`, the same
+eager `contribute_bare` path a cross-module `open` already uses, so the narrowing rides existing
+machinery rather than a new one. A region-scoped export re-roots the atoms it forwards under the
+region's own scope path before they enter the module's export map (`scope/program.py`), mirroring
+how a `using … as` rename already re-roots a selected atom. The header-only ordering check for a
+non-entry module's imports and exports is local to each block-resolution call, so a region is one
+declaration for its enclosing block's ordering while its own items get an independent check.
+
 ## Static Guarantees
 
 Agents must be declared in source; the pass retains every declaration and

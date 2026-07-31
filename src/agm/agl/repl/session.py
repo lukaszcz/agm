@@ -244,7 +244,7 @@ class ReplSession:
         # generation replace earlier ones; the rest are prepended in program
         # context for reuse. Scope opens use the same entry retention model.
         self._accumulated_imports: list[tuple["ImportDecl", ...]] = []
-        self._accumulated_opens: list[tuple["OpenDecl | ScopeRegion", ...]] = []
+        self._accumulated_opens: list[tuple["OpenDecl | ImportDecl | ScopeRegion", ...]] = []
         # Resolved user infix fixity declared in prior promoted entries
         # (operator name → ``(priority, associativity)``). Passed to the parser
         # as ambient fixity so an ``infixl``/``infixr`` declaration made in one

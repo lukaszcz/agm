@@ -44,11 +44,12 @@ def Text::display(value: text) -> text = "[%{normalize(value)}]"
 print(Text::display("ready"))
 ```
 
-A region contains nested regions, `open` declarations, static declarations
-(`def`, `extern def`, `record`, `enum`, `exception`, `type`, and, in an entry
-module, `agent`), `param` declarations, and `let`/`var` bindings. Bare
-expressions, `:=` assignments, imports, exports, program declarations, infix
-declarations, and `builtin` declarations are not allowed there.
+A region contains nested regions, header `open` and `import` declarations,
+`export` declarations, static declarations (`def`, `extern def`, `record`,
+`enum`, `exception`, `type`, and, in an entry module, `agent`), `param`
+declarations, and `let`/`var` bindings. Bare expressions, `:=` assignments,
+program declarations, infix declarations, and `builtin` declarations are not
+allowed there.
 
 ## Binder paths
 
@@ -124,6 +125,21 @@ table entry use to supply a value — is its full path spelling
 (`Deploy::region`), which is what makes grouping related parameters under one
 scope useful. See [Host environment](host-environment.md#params) for how the
 host resolves an external param value.
+
+## Import and export
+
+A region also admits `import` and `export` declarations. Both are header
+items, like `open`: they must precede the region's other items. A scoped
+import's bare contribution —
+`open import` or `import … using` — narrows to its own region; its qualifier
+route stays available module-wide, like any other import. A scoped export
+re-roots every atom it forwards under the region's own path. See
+[Modules](modules.md#import-and-export-inside-a-scope-region) for the
+complete semantics.
+
+Scoped bindings are never exported: library modules reject top-level `let`
+and `var` entirely, so a region's `let`/`var` members have no cross-module
+story.
 
 ## Names and visibility
 

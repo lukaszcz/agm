@@ -31,7 +31,6 @@ from agm.agl.matchcompile import MatchCompiledProgram
 from agm.agl.modules.ids import STD_CORE_ID, ModuleId
 from agm.agl.self_validation import self_validation_enabled
 from agm.agl.semantics.types import ExceptionType, RecordType
-from agm.agl.syntax.nodes import AgentDecl, FuncDef, scoped_public_name, static_items
 from agm.util.text import normalize_newlines
 
 __all__ = ["lower_program"]
@@ -168,22 +167,11 @@ def lower_program(
             contract_payloads=contract_payloads,
         )
         module_lowerers[mid] = lowerer
-        body = cm.resolved.program.body
-        for item in static_items(body.items):
-            if isinstance(item, FuncDef) and not item.is_builtin:
-                lowerer._prealloc_funcdef(item)
-            elif isinstance(item, AgentDecl) and (
-                _eager_scoped_agents
-                or not item.scope_path
-                or lowerer._scoped_agent_is_referenced(item)
-            ):
-                lowerer._alloc_sym(
-                    item.node_id,
-                    name=scoped_public_name(item.scope_path, item.name),
-                    mutable=False,
-                    public=mid.is_entry,
-                    owner=mid,
-                )
+        lowerer.prealloc_static_symbols(
+            cm.resolved.program.body,
+            public=mid.is_entry,
+            eager_scoped_agents=_eager_scoped_agents,
+        )
 
     # Step 4: Phase 2 — lower bodies.
     # Library modules first, entry last, so the insertion order of

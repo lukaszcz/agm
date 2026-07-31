@@ -309,26 +309,25 @@ _REJECTED_SCOPE_ITEM_NAMES: tuple[tuple[type, str], ...] = (
 )
 
 
-def _rejected_scope_item_form(item: object) -> str:
-    """Name the offending form of a disallowed scope-region item, for the diagnostic."""
-    for node_type, form in _REJECTED_SCOPE_ITEM_NAMES:
-        if isinstance(item, node_type):
-            return form
-    return "a bare expression"
+# ``scope_item ::= scope_region | declaration | binder | expr``; once the
+# admitted shapes are filtered out, only these remain.
+_RejectedScopeItem: TypeAlias = (
+    _RawInfixChain | syntax.ProgramDecl | syntax.InfixDecl | syntax.AssignStmt | syntax.Expr
+)
 
 
-def _scope_item_error_span(item: object) -> SourceSpan:
-    """Return the offending scope item's span.
+def _rejected_scope_item(item: _RejectedScopeItem) -> tuple[str, SourceSpan]:
+    """Name and locate a disallowed scope-region item, for the diagnostic.
 
     ``scope_item ::= scope_region | declaration | binder | expr``, and the
     caller has already filtered out every admitted shape (``allowed_items``),
-    so a disallowed item is always one of: an unregrouped infix chain, a
-    ``program``/``infix`` declaration, an assignment, or a bare expression.
+    so a disallowed item is always one of the forms in this signature — each
+    of which carries its own span.
     """
-    if isinstance(item, _RawInfixChain):
-        return item.span
-    assert isinstance(item, (syntax.ProgramDecl, syntax.InfixDecl, syntax.AssignStmt, syntax.Expr))
-    return item.span
+    for node_type, form in _REJECTED_SCOPE_ITEM_NAMES:
+        if isinstance(item, node_type):
+            return form, item.span
+    return "a bare expression", item.span
 
 
 def _span_from_meta(meta: Meta) -> SourceSpan:
@@ -610,9 +609,9 @@ class AstBuilder(Transformer):
             None,
         )
         if disallowed is not None:
-            span = _scope_item_error_span(disallowed)
+            form, span = _rejected_scope_item(cast(_RejectedScopeItem, disallowed))
             raise AglSyntaxError(
-                f"scope regions cannot contain {_rejected_scope_item_form(disallowed)}.",
+                f"scope regions cannot contain {form}.",
                 span=span,
             )
 

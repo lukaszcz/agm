@@ -43,7 +43,7 @@ from __future__ import annotations
 from collections.abc import Iterator, Mapping
 from dataclasses import replace
 
-from agm.agl.modules.ids import ENTRY_ID, PRELUDE_ID, ModuleId
+from agm.agl.modules.ids import ENTRY_ID, PRELUDE_ID, ModuleId, spell_scope_path
 from agm.agl.semantics.analyses import compute_uninhabited, uninhabitable_message
 from agm.agl.semantics.type_table import (
     BUILTIN_EXCEPTION_TYPE_DEFS,
@@ -63,11 +63,12 @@ from agm.agl.semantics.types import (
 from agm.agl.syntax.nodes import (
     EnumDef,
     ExceptionDef,
+    Item,
     Param,
     Program,
     RecordDef,
-    ScopeRegion,
     TypeAlias,
+    static_type_items,
 )
 from agm.agl.syntax.spans import SourceSpan
 from agm.agl.typecheck.env import (
@@ -87,7 +88,17 @@ _BUILTIN_TYPE_NAMES: frozenset[str] = (
     | BUILTIN_EXCEPTION_NAMES
     | BUILTIN_PRELUDE_TYPE_NAMES
 )
-_BUILTIN_NOMINAL_NAMES: frozenset[str] = BUILTIN_EXCEPTION_NAMES | BUILTIN_PRELUDE_TYPE_NAMES
+
+
+def _bare_name(name: str) -> str:
+    """Strip the scope prefix off a joined declaration name.
+
+    A scoped declaration is keyed in the name tables under its full
+    ``A::B::name`` spelling (see ``_TypeBuilder._static_type_items``), while
+    a nominal handle's own ``name`` is always the last segment, with the path
+    carried separately. This is the one place that separator is undone.
+    """
+    return name.rsplit("::", maxsplit=1)[-1]
 
 
 # ---------------------------------------------------------------------------
@@ -125,20 +136,17 @@ class _TypeBuilder:
         """Module a declaration belongs to: the prelude if built-in, else this module."""
         return PRELUDE_ID if is_builtin else self._module_id
 
+    @staticmethod
     def _static_type_items(
-        self, items: tuple[object, ...]
+        items: tuple[Item, ...],
     ) -> Iterator[RecordDef | EnumDef | ExceptionDef | TypeAlias]:
         """Yield type declarations with their scope path included in their identity."""
-        for item in items:
-            if isinstance(item, ScopeRegion):
-                yield from self._static_type_items(item.items)
-            elif isinstance(item, (RecordDef, EnumDef, ExceptionDef, TypeAlias)):
-                if item.scope_path:
-                    path = tuple(segment.name for segment in item.scope_path)
-                    name = "::".join((*path, item.name))
-                    yield replace(item, name=name)
-                else:
-                    yield item
+        for item in static_type_items(items):
+            if item.scope_path:
+                path = tuple(segment.name for segment in item.scope_path)
+                yield replace(item, name=spell_scope_path((*path, item.name)))
+            else:
+                yield item
 
     def collect(self, program: Program, *, check_inhabitation: bool = True) -> None:
         """Scan *program* and populate ``self._env``.
@@ -223,7 +231,7 @@ class _TypeBuilder:
                 self._env.register_type(
                     item.name,
                     ExceptionType(
-                        name=item.name.rsplit("::", maxsplit=1)[-1],
+                        name=_bare_name(item.name),
                         module_id=module_id,
                         scope_path=tuple(segment.name for segment in item.scope_path),
                     ),
@@ -236,7 +244,7 @@ class _TypeBuilder:
 
     def _register_record_or_enum_handle(self, item: RecordDef | EnumDef, *, is_enum: bool) -> None:
         module_id = self._owning_module_id(item.is_builtin)
-        declared_name = item.name.rsplit("::", maxsplit=1)[-1]
+        declared_name = _bare_name(item.name)
         scope_path = tuple(segment.name for segment in item.scope_path)
         type_params = item.type_params
         if type_params:
@@ -300,23 +308,18 @@ class _TypeBuilder:
         expected_defs: Mapping[str, TypeDef] | None = None,
     ) -> None:
         # `name` carries its scope path joined with "::" (see
-        # `_static_type_items`) when the declaration is scoped, so the
-        # whitelist check strips it back to the bare canonical name a scoped
-        # `builtin` declaration still has to spell — the whitelist itself
-        # names host-known canonical types, never a scope path.
-        bare_name = name.rsplit("::", maxsplit=1)[-1]
-        if is_builtin and bare_name not in _BUILTIN_NOMINAL_NAMES:
-            raise AglTypeError(
-                f"Unknown builtin type '{name}'.",
-                span=span,
-            )
-        # A record/enum declaration is only ever validated against
-        # BUILTIN_PRELUDE_TYPE_DEFS, an exception only against
-        # BUILTIN_EXCEPTION_TYPE_DEFS (see `_validate_builtin_shape`) — a
-        # kind-appropriate name (e.g. an exception name spelled as a
-        # `builtin record`) passes the whitelist above (their union) but has
-        # no entry in the kind-specific table `_validate_builtin_shape` would
-        # later assume is present, so that mismatch is caught here instead.
+        # `_static_type_items`) when the declaration is scoped, so the check
+        # strips it back to the bare canonical name a scoped `builtin`
+        # declaration still has to spell — the host-known tables name
+        # canonical types, never a scope path.
+        #
+        # Every caller that can pass `is_builtin=True` passes the table for
+        # its own kind (records/enums against BUILTIN_PRELUDE_TYPE_DEFS,
+        # exceptions against BUILTIN_EXCEPTION_TYPE_DEFS), so this one check
+        # rejects both an entirely unknown name and a name declared under the
+        # wrong kind — the latter being exactly what `_validate_builtin_shape`
+        # would otherwise assume was present.
+        bare_name = _bare_name(name)
         if is_builtin and expected_defs is not None and bare_name not in expected_defs:
             raise AglTypeError(
                 f"Unknown builtin type '{name}'.",
@@ -351,7 +354,7 @@ class _TypeBuilder:
         module_id = self._owning_module_id(stmt.is_builtin)
         typedef = TypeDef(
             kind="record",
-            name=stmt.name.rsplit("::", maxsplit=1)[-1],
+            name=_bare_name(stmt.name),
             module_id=module_id,
             scope_path=tuple(segment.name for segment in stmt.scope_path),
             fields=tuple(fields.items()),
@@ -386,7 +389,7 @@ class _TypeBuilder:
         module_id = self._owning_module_id(stmt.is_builtin)
         typedef = TypeDef(
             kind="enum",
-            name=stmt.name.rsplit("::", maxsplit=1)[-1],
+            name=_bare_name(stmt.name),
             module_id=module_id,
             scope_path=tuple(segment.name for segment in stmt.scope_path),
             variants=tuple((vname, tuple(vfields.items())) for vname, vfields in variants.items()),
@@ -445,7 +448,7 @@ class _TypeBuilder:
         # ``TypeDef.base``, no build-ordering step needed).
         typedef = TypeDef(
             kind="exception",
-            name=stmt.name.rsplit("::", maxsplit=1)[-1],
+            name=_bare_name(stmt.name),
             module_id=module_id,
             scope_path=tuple(segment.name for segment in stmt.scope_path),
             fields=tuple(fields.items()),
@@ -476,7 +479,7 @@ class _TypeBuilder:
             module_id = self._owning_module_id(item.is_builtin)
             typedef = self._env.type_table.exception_def(
                 ExceptionType(
-                    name=item.name.rsplit("::", maxsplit=1)[-1],
+                    name=_bare_name(item.name),
                     module_id=module_id,
                     scope_path=tuple(segment.name for segment in item.scope_path),
                 )
@@ -517,7 +520,7 @@ class _TypeBuilder:
         """
         if not stmt.is_builtin:
             return
-        bare_name = stmt.name.rsplit("::", maxsplit=1)[-1]
+        bare_name = _bare_name(stmt.name)
         expected = expected_defs[bare_name]
         if self._reroot_typedef(typedef) != expected:
             raise AglTypeError(
@@ -588,7 +591,7 @@ class _TypeBuilder:
         module_id = self._owning_module_id(stmt.is_builtin)
         typedef = TypeDef(
             kind="record",
-            name=stmt.name.rsplit("::", maxsplit=1)[-1],
+            name=_bare_name(stmt.name),
             module_id=module_id,
             scope_path=tuple(segment.name for segment in stmt.scope_path),
             type_params=type_params,
@@ -642,7 +645,7 @@ class _TypeBuilder:
         module_id = self._owning_module_id(stmt.is_builtin)
         typedef = TypeDef(
             kind="enum",
-            name=stmt.name.rsplit("::", maxsplit=1)[-1],
+            name=_bare_name(stmt.name),
             module_id=module_id,
             scope_path=tuple(segment.name for segment in stmt.scope_path),
             type_params=type_params,
@@ -708,7 +711,7 @@ class _TypeBuilder:
                 continue
             module_id = self._owning_module_id(item.is_builtin)
             scope_path = tuple(segment.name for segment in item.scope_path)
-            declared_name = item.name.rsplit("::", maxsplit=1)[-1]
+            declared_name = _bare_name(item.name)
             key = (module_id, scope_path, declared_name)
             if key not in uninhabited:
                 continue

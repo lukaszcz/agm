@@ -21,7 +21,7 @@ Data model
 from __future__ import annotations
 
 import enum
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from typing import TypeVar
 
@@ -46,6 +46,26 @@ ScopePath = tuple[str, ...]
 BareAtom = str | ScopePath
 AgentKey = tuple[ScopePath, str]
 DeclarationKey = tuple[ModuleId, ScopePath, str]
+
+
+def to_bare_path(atom: BareAtom) -> ScopePath:
+    """Normalize a bare atom to its structured path."""
+    return (atom,) if isinstance(atom, str) else atom
+
+
+def to_bare_atom(path: ScopePath) -> BareAtom:
+    """Keep a single-segment path compact as a bare name, else structured.
+
+    The one definition of the root-atom-is-a-bare-string representation that
+    every scoped-name table shares; :func:`to_bare_path` is its inverse.
+    """
+    return path[0] if len(path) == 1 else path
+
+
+def import_item_path(item: ImportItem) -> ScopePath:
+    """The selection prefix an import item names: its scope path plus its name."""
+    return (*(segment.name for segment in item.scope_path), item.name)
+
 
 # ---------------------------------------------------------------------------
 # BuiltinKind — classification of a built-in Call node
@@ -498,32 +518,28 @@ def apply_open_selection(
     if mode is ImportMode.ALL:
         return {atom: [value] for atom, value in target.items()}
 
-    def relative_path(atom: BareAtom) -> ScopePath:
-        return (atom,) if isinstance(atom, str) else atom
-
     selected_paths: set[ScopePath] = set()
     for item in items:
-        prefix = (*tuple(segment.name for segment in item.scope_path), item.name)
-        if any(relative_path(atom)[: len(prefix)] == prefix for atom in target):
+        prefix = import_item_path(item)
+        if any(to_bare_path(atom)[: len(prefix)] == prefix for atom in target):
             selected_paths.add(prefix)
     if mode is ImportMode.USING:
         result: dict[BareAtom, list[_T]] = {}
         for item in items:
-            prefix = (*tuple(segment.name for segment in item.scope_path), item.name)
+            prefix = import_item_path(item)
             for atom, value in target.items():
-                path = relative_path(atom)
+                path = to_bare_path(atom)
                 if path[: len(prefix)] != prefix:
                     continue
                 exposed_path = (
                     (item.rename, *path[len(prefix) :]) if item.rename is not None else path
                 )
-                exposed: BareAtom = exposed_path[0] if len(exposed_path) == 1 else exposed_path
-                result.setdefault(exposed, []).append(value)
+                result.setdefault(to_bare_atom(exposed_path), []).append(value)
         return result
     return {
         atom: [value]
         for atom, value in target.items()
-        if not any(relative_path(atom)[: len(prefix)] == prefix for prefix in selected_paths)
+        if not any(to_bare_path(atom)[: len(prefix)] == prefix for prefix in selected_paths)
     }
 
 
@@ -544,10 +560,44 @@ def local_scope_bindings(
         if path[: len(scope_path)] != scope_path:
             continue
         for name, ref in node.members.items():
-            relative = (*path[len(scope_path) :], name)
-            atom: BareAtom = relative[0] if len(relative) == 1 else relative
-            members[atom] = ref
+            members[to_bare_atom((*path[len(scope_path) :], name))] = ref
     return members
+
+
+def _nearest_layer_contribution(
+    scope: ScopeNode,
+    name: BareAtom,
+    scope_nodes: Mapping[ScopePath, ScopeNode],
+    snapshot: Callable[[ScopeNode], Mapping[BareAtom, set[_T]]],
+    project: Callable[[BindingRef], Iterable[_T]],
+) -> set[_T] | None:
+    """Return the nearest enclosing region's contribution of *name*, live where needed.
+
+    The one definition of nearest-layer ``open`` precedence, shared by the
+    value and constructor lookups so the two can never drift. Walks *scope*
+    outward; at each layer a cross-module ``open``'s eager *snapshot* and
+    every recorded local ``open``'s live selection (reapplied against
+    *scope_nodes*'s current member set, then mapped through *project*) merge,
+    and the first layer with any candidate wins. A layer with no local
+    ``open`` needs no live pass, so its snapshot answers directly.
+    """
+    layer: ScopeNode | None = scope
+    while layer is not None:
+        stored = snapshot(layer).get(name)
+        if not layer.opened_local_scopes:
+            if stored:
+                return set(stored)
+        else:
+            candidates: set[_T] = set() if stored is None else set(stored)
+            for selection in layer.opened_local_scopes:
+                target = local_scope_bindings(scope_nodes, selection.scope_path)
+                selected = apply_open_selection(selection.mode, selection.items, target)
+                for ref in selected.get(name, ()):
+                    candidates.update(project(ref))
+            if candidates:
+                return candidates
+        layer = layer.parent
+    return None
 
 
 def resolve_bare_contribution(
@@ -555,26 +605,18 @@ def resolve_bare_contribution(
 ) -> set[BindingRef] | None:
     """Return the nearest region's bare candidates for *name*, live where needed.
 
-    Walks *scope* outward. At each layer, a cross-module ``open``'s eager
-    ``bare_contributions`` snapshot and every recorded local ``open``'s live
-    selection (reapplied against *scope_nodes*'s current member set) merge;
-    the first layer with any candidate wins, matching nearest-layer
-    precedence. Shared by the resolver's own bare-reference resolution,
-    mid-walk, and by any later pass over a completed ``ModuleResolution``
-    (e.g. bare type-name resolution), so an ``open``'s contribution reads
-    identically wherever it is consulted.
+    Shared by the resolver's own bare-reference resolution, mid-walk, and by
+    any later pass over a completed ``ModuleResolution`` (e.g. bare type-name
+    resolution), so an ``open``'s contribution reads identically wherever it
+    is consulted. A local ``open``'s member is its own candidate.
     """
-    layer: ScopeNode | None = scope
-    while layer is not None:
-        candidates = set(layer.bare_contributions.get(name, ()))
-        for selection in layer.opened_local_scopes:
-            target = local_scope_bindings(scope_nodes, selection.scope_path)
-            selected = apply_open_selection(selection.mode, selection.items, target)
-            candidates.update(selected.get(name, ()))
-        if candidates:
-            return candidates
-        layer = layer.parent
-    return None
+    return _nearest_layer_contribution(
+        scope,
+        name,
+        scope_nodes,
+        lambda layer: layer.bare_contributions,
+        lambda ref: (ref,),
+    )
 
 
 def resolve_bare_constructor_contribution(
@@ -585,27 +627,25 @@ def resolve_bare_constructor_contribution(
 ) -> set[ConstructorRef] | None:
     """Return the nearest region's constructor candidates for *name*, live where needed.
 
-    Mirrors :func:`resolve_bare_contribution`: a cross-module ``open``'s
-    eager ``bare_constructor_contributions`` snapshot and each local
-    ``open``'s live selection merge at the same layer. A local candidate's
-    constructor identity comes from *declaring_candidates*, called on its
-    resolved binding -- the same structured lookup an ordinary reference
-    already uses -- rather than a separate constructor snapshot.
+    Mirrors :func:`resolve_bare_contribution` under the same layer walk. A
+    local candidate's constructor identity comes from *declaring_candidates*,
+    called on its resolved binding -- the same structured lookup an ordinary
+    reference already uses -- rather than a separate constructor snapshot.
     """
-    layer: ScopeNode | None = scope
-    while layer is not None:
-        candidates = set(layer.bare_constructor_contributions.get(name, ()))
-        for selection in layer.opened_local_scopes:
-            target = local_scope_bindings(scope_nodes, selection.scope_path)
-            selected = apply_open_selection(selection.mode, selection.items, target)
-            last_segment = name if isinstance(name, str) else name[-1]
-            for ref in selected.get(name, ()):
-                if ref.kind is BinderKind.constructor_binding:
-                    candidates.update(declaring_candidates(last_segment, ref))
-        if candidates:
-            return candidates
-        layer = layer.parent
-    return None
+    last_segment = name if isinstance(name, str) else name[-1]
+
+    def project(ref: BindingRef) -> tuple[ConstructorRef, ...]:
+        if ref.kind is not BinderKind.constructor_binding:
+            return ()
+        return declaring_candidates(last_segment, ref)
+
+    return _nearest_layer_contribution(
+        scope,
+        name,
+        scope_nodes,
+        lambda layer: layer.bare_constructor_contributions,
+        project,
+    )
 
 
 # ---------------------------------------------------------------------------

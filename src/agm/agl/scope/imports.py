@@ -9,11 +9,13 @@ from typing import TypeAlias
 
 from agm.agl.modules.ids import ModuleId
 from agm.agl.scope.symbols import AglScopeError
+from agm.agl.scope.symbols import import_item_path as _item_path
+from agm.agl.scope.symbols import to_bare_atom as _atom
+from agm.agl.scope.symbols import to_bare_path as _path
 from agm.agl.syntax.nodes import (
     EnumDef,
     ExceptionDef,
     ImportDecl,
-    ImportItem,
     QualifierChain,
     RecordDef,
 )
@@ -53,18 +55,6 @@ PathAtom: TypeAlias = tuple[str, ...]
 # scoped members use a structured tuple.  All policy operations normalize it.
 NameAtom: TypeAlias = str | PathAtom
 QName: TypeAlias = tuple[ModuleId, NameAtom]
-
-
-def _path(atom: NameAtom) -> PathAtom:
-    return (atom,) if isinstance(atom, str) else atom
-
-
-def _atom(path: PathAtom) -> NameAtom:
-    return path[0] if len(path) == 1 else path
-
-
-def _item_path(item: ImportItem) -> PathAtom:
-    return (*tuple(segment.name for segment in item.scope_path), item.name)
 
 
 def _path_sort_key(atom: NameAtom) -> str:

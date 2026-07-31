@@ -716,7 +716,6 @@ class ReplSession:
             ParamDecl,
             ProgramDecl,
             RecordDef,
-            ScopeRegion,
             TypeAlias,
             VarDecl,
             param_external_key,
@@ -726,16 +725,7 @@ class ReplSession:
         from agm.agl.syntax.types import render_type_expr
         from agm.agl.typecheck.env import TypeEnvironment
 
-        def declarations(items: tuple[object, ...]) -> list[object]:
-            result: list[object] = []
-            for item in items:
-                if isinstance(item, ScopeRegion):
-                    result.extend(declarations(item.items))
-                else:
-                    result.append(item)
-            return result
-
-        entry_declarations = declarations(program.body.items)
+        entry_declarations = tuple(static_items(program.body.items))
         if self_validation_enabled():
             self._assert_checked_state_closed(checked)
         entry_root = checked.resolved.root_scope

@@ -46,7 +46,7 @@ normal binding.  A bare ``VarRef("print")`` (not in call position) raises
 
 from __future__ import annotations
 
-from collections.abc import Callable, Collection, Iterable, Iterator, Mapping
+from collections.abc import Collection, Iterable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from functools import partial
@@ -86,10 +86,13 @@ from agm.agl.scope.symbols import (
     apply_open_selection,
     duplicate_binder_message,
     immutable_binder_phrase,
+    import_item_path,
     local_scope_bindings,
     resolve_bare_constructor_contribution,
     resolve_bare_contribution,
 )
+from agm.agl.scope.symbols import to_bare_atom as _bare_atom
+from agm.agl.scope.symbols import to_bare_path as _bare_path
 from agm.agl.semantics.engine_keys import RESERVED_PROGRAM_NAMES
 from agm.agl.semantics.type_table import BUILTIN_PRELUDE_TYPE_DEFS
 from agm.agl.semantics.types import (
@@ -216,16 +219,6 @@ _RESERVED_NAMES: frozenset[str] = frozenset(_BUILTIN_CALL_NAMES)
 def _scope_path_sort_key(path: ScopePath) -> tuple[int, ScopePath]:
     """Order scope paths by depth, then lexical spelling."""
     return (len(path), path)
-
-
-def _bare_atom(path: ScopePath) -> NameAtom:
-    """Keep single bare names compact while retaining nested paths."""
-    return path[0] if len(path) == 1 else path
-
-
-def _bare_path(atom: NameAtom) -> ScopePath:
-    """Normalize a bare contribution atom to its structured path."""
-    return (atom,) if isinstance(atom, str) else atom
 
 
 # ---------------------------------------------------------------------------
@@ -377,6 +370,12 @@ class _Resolver:
         self._type_declarations: list[
             tuple[RecordDef | EnumDef | ExceptionDef | TypeAlias, ScopePath]
         ] = []
+        # The same declarations indexed by their declaring scope path, in
+        # declaration order, so a bare constructor lookup inside a region
+        # costs one dict hit instead of a scan of every type in the module.
+        self._type_declarations_by_path: dict[
+            ScopePath, list[RecordDef | EnumDef | ExceptionDef | TypeAlias]
+        ] = {}
         # Structured method identity -> nominal receiver owner path. This is
         # scope's single receiver classification artifact for later passes.
         self._method_declarations: dict[DeclarationKey, ScopePath] = {}
@@ -651,6 +650,7 @@ class _Resolver:
 
         type_item = cast(RecordDef | EnumDef | ExceptionDef | TypeAlias, item)
         self._type_declarations.append((type_item, path))
+        self._type_declarations_by_path.setdefault(path, []).append(type_item)
         type_scope = path + (item.name,)
         self._scope_paths.add(type_scope)
         self._scope_node_ids.setdefault(type_scope, item.node_id)
@@ -734,6 +734,22 @@ class _Resolver:
                     )
                 raise AglScopeError("'self' requires an enclosing type scope.", span=receiver.span)
 
+    def _reachable_decl_bare(
+        self, import_env: ImportEnv, path: ScopePath
+    ) -> Iterator[Mapping[NameAtom, frozenset[QName]]]:
+        """Yield each import declaration's bare contributions reaching *path*.
+
+        A region-scoped ``import`` contributes bare names to its own region
+        and everything nested inside it, so its declaration path must be a
+        prefix of *path*; a root import (empty path) reaches everywhere. The
+        one definition of that reach, shared by every consumer of
+        ``ImportEnv.decl_bare``.
+        """
+        for node_id, bare in import_env.decl_bare.items():
+            decl_scope_path = self._import_decl_scope_paths.get(node_id, ())
+            if path[: len(decl_scope_path)] == decl_scope_path:
+                yield bare
+
     def _is_orphan_receiver(self, owner_path: ScopePath) -> bool:
         """Return whether *owner_path* names a type imported from another module.
 
@@ -752,12 +768,8 @@ class _Resolver:
         if self._import_env is None or not owner_path:
             return False
         name = owner_path[-1]
-        region_path = owner_path[:-1]
         candidates: set[QName] = set(self._import_env.unqualified.get(name, frozenset()))
-        for node_id, bare in self._import_env.decl_bare.items():
-            decl_scope_path = self._import_decl_scope_paths.get(node_id, ())
-            if region_path[: len(decl_scope_path)] != decl_scope_path:
-                continue
+        for bare in self._reachable_decl_bare(self._import_env, owner_path[:-1]):
             candidates.update(bare.get(name, frozenset()))
         return any(
             module != self._module_id and (module, source) in self._cross_module_type_scopes
@@ -1685,7 +1697,7 @@ class _Resolver:
     ) -> None:
         """Reject filtered-open paths absent from a completed target subtree."""
         for item in items:
-            prefix = (*tuple(segment.name for segment in item.scope_path), item.name)
+            prefix = import_item_path(item)
             if not any(_bare_path(atom)[: len(prefix)] == prefix for atom in target):
                 raise AglScopeError(
                     f"'{'::'.join(prefix)}' is not a public member of the opened scope.",
@@ -1883,11 +1895,7 @@ class _Resolver:
             )
             if members:
                 matching.append(members)
-        current_path = self._current_scope().scope_path
-        for node_id, bare in self._import_env.decl_bare.items():
-            decl_scope_path = self._import_decl_scope_paths.get(node_id, ())
-            if current_path[: len(decl_scope_path)] != decl_scope_path:
-                continue
+        for bare in self._reachable_decl_bare(self._import_env, self._current_scope().scope_path):
             entries = ((atom, qname) for atom, qnames in bare.items() for qname in qnames)
             members, _is_public_type_scope = self._scope_subtree_members(
                 entries, requested_path, span
@@ -1994,18 +2002,20 @@ class _Resolver:
     # Binder handlers
     # ------------------------------------------------------------------
 
-    def _resolve_root_scoped_binder(
-        self, node: LetDecl | VarDecl, keyword: str, resolve_body: Callable[[], None]
-    ) -> None:
-        """Resolve a scoped ``let``/``var`` binder path, root-only like ``def``.
+    @contextmanager
+    def _binder_scope(self, node: LetDecl | VarDecl, keyword: str) -> Iterator[None]:
+        """Enter the named layer a scoped ``let``/``var`` binder path selects.
 
         A path prefix is legal at the program root and inside a scope
         region's own body — both keep ``_at_root`` set, since a region does
-        not open a fresh lexical block — and rejected inside a nested block.
-        Both spellings resolve *resolve_body* in the named layer their path
-        selects, so a region's bare contents and a root shorthand for the
-        same path compose identically.
+        not open a fresh lexical block — and rejected inside a nested block,
+        root-only like ``def``. An unprefixed binder resolves ambiently, so
+        a region's bare contents and a root shorthand for the same path
+        compose identically.
         """
+        if not node.scope_path:
+            yield
+            return
         if not self._at_root:
             raise AglScopeError(
                 f"A scoped '{keyword}' binder path is only allowed at the program root, "
@@ -2013,54 +2023,44 @@ class _Resolver:
                 span=node.span,
             )
         with self._named_scope(tuple(segment.name for segment in node.scope_path)):
-            resolve_body()
+            yield
 
     def _resolve_let(self, node: LetDecl) -> None:
-        if node.scope_path:
-            self._resolve_root_scoped_binder(node, "let", lambda: self._resolve_let_body(node))
-            return
-        self._resolve_let_body(node)
-
-    def _resolve_let_body(self, node: LetDecl) -> None:
-        # A let initializer is non-recursive: no part of its pattern exists
-        # until its RHS has resolved. A simple name is still a pattern binder;
-        # only its slot handling differs from a broader pattern.
-        self._resolve_expr(node.value)
-        if isinstance(node.pattern, VarPattern):
-            candidates = tuple(self._constructor_candidates.get(node.pattern.name, ()))
-            if candidates:
-                self._pattern_constructor_candidates[node.pattern.node_id] = candidates
-            self._check_not_reserved(node.pattern.name, node.span)
-            self._define_binder(
-                node,
-                decl_node_id=node.pattern.node_id,
-                name=node.pattern.name,
-                mutable=False,
-                kind=BinderKind.let_binding,
-            )
-            return
-        if isinstance(node.pattern, WildcardPattern):
-            return
-        with self._match_site_pattern_slots(node.node_id, _LET_PATTERN_POLICY):
-            self._bind_pattern_vars(node.pattern, self._current_scope(), _LET_PATTERN_POLICY)
+        with self._binder_scope(node, "let"):
+            # A let initializer is non-recursive: no part of its pattern exists
+            # until its RHS has resolved. A simple name is still a pattern
+            # binder; only its slot handling differs from a broader pattern.
+            self._resolve_expr(node.value)
+            if isinstance(node.pattern, VarPattern):
+                candidates = tuple(self._constructor_candidates.get(node.pattern.name, ()))
+                if candidates:
+                    self._pattern_constructor_candidates[node.pattern.node_id] = candidates
+                self._check_not_reserved(node.pattern.name, node.span)
+                self._define_binder(
+                    node,
+                    decl_node_id=node.pattern.node_id,
+                    name=node.pattern.name,
+                    mutable=False,
+                    kind=BinderKind.let_binding,
+                )
+                return
+            if isinstance(node.pattern, WildcardPattern):
+                return
+            with self._match_site_pattern_slots(node.node_id, _LET_PATTERN_POLICY):
+                self._bind_pattern_vars(node.pattern, self._current_scope(), _LET_PATTERN_POLICY)
 
     def _resolve_var(self, node: VarDecl) -> None:
-        if node.scope_path:
-            self._resolve_root_scoped_binder(node, "var", lambda: self._resolve_var_body(node))
-            return
-        self._resolve_var_body(node)
-
-    def _resolve_var_body(self, node: VarDecl) -> None:
-        self._check_not_reserved(node.name, node.span)
-        # Resolve RHS before defining the name (lambda non-recursion).
-        self._resolve_expr(node.value)
-        self._define_binder(
-            node,
-            decl_node_id=node.node_id,
-            name=node.name,
-            mutable=True,
-            kind=BinderKind.var_binding,
-        )
+        with self._binder_scope(node, "var"):
+            self._check_not_reserved(node.name, node.span)
+            # Resolve RHS before defining the name (lambda non-recursion).
+            self._resolve_expr(node.value)
+            self._define_binder(
+                node,
+                decl_node_id=node.node_id,
+                name=node.name,
+                mutable=True,
+                kind=BinderKind.var_binding,
+            )
 
     def _define_binder(
         self,
@@ -3461,14 +3461,13 @@ class _Resolver:
         disambiguates candidates, exactly as it does for the module-root
         candidate table, so stopping early here would hide a same-scope
         candidate behind an unrelated same-named one, non-deterministically
-        (``_type_declarations`` is a plain list, not a hash-ordered set).
+        (``_type_declarations_by_path`` preserves declaration order).
         """
         candidates = list(self._scoped_constructor_candidates.get((scope_path, name), ()))
-        for item, path in self._type_declarations:
-            if path == scope_path:
-                candidates.extend(
-                    self._scoped_constructor_candidates.get((path + (item.name,), name), ())
-                )
+        for item in self._type_declarations_by_path.get(scope_path, ()):
+            candidates.extend(
+                self._scoped_constructor_candidates.get((scope_path + (item.name,), name), ())
+            )
         return tuple(candidates)
 
     def _bind_pattern_vars(

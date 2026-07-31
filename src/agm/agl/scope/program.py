@@ -54,6 +54,7 @@ from agm.agl.scope.symbols import (
     ScopePath,
     alias_denotes_constructible_type,
 )
+from agm.agl.scope.symbols import to_bare_atom as _atom
 from agm.agl.syntax.nodes import (
     AgentDecl,
     BuiltinVarDecl,
@@ -66,8 +67,8 @@ from agm.agl.syntax.nodes import (
     Program,
     QualifierChain,
     RecordDef,
-    ScopeRegion,
     TypeAlias,
+    static_items,
 )
 from agm.agl.syntax.spans import SourceSpan
 from agm.agl.syntax.types import AppliedT, ImportMode, NameT
@@ -245,22 +246,6 @@ def _build_cross_module_constructor_candidates(
     )
 
 
-def _atom(path: PathAtom) -> NameAtom:
-    """Keep root atoms compatible while representing scoped atoms structurally."""
-    return path[0] if len(path) == 1 else path
-
-
-def _declaration_items(items: tuple[object, ...]) -> tuple[object, ...]:
-    """Flatten static scope regions into their normalized declaration members."""
-    result: list[object] = []
-    for item in items:
-        if isinstance(item, ScopeRegion):
-            result.extend(_declaration_items(item.items))
-        else:
-            result.append(item)
-    return tuple(result)
-
-
 def _item_atom(
     item: FuncDef | RecordDef | EnumDef | ExceptionDef | TypeAlias | BuiltinVarDecl,
 ) -> NameAtom:
@@ -270,7 +255,7 @@ def _item_atom(
 def _compute_local_exports(self_id: ModuleId, program: Program) -> dict[NameAtom, QName]:
     """Compute declaration paths, including members below named scopes."""
     result: dict[NameAtom, QName] = {}
-    for item in _declaration_items(program.body.items):
+    for item in static_items(program.body.items):
         if isinstance(item, (FuncDef, RecordDef, EnumDef, ExceptionDef, TypeAlias)):
             atom = _item_atom(item)
             result[atom] = (self_id, atom)
@@ -585,7 +570,7 @@ def resolve_program(
     decl_info: _DeclInfo = {}
 
     for mid, loaded in graph.modules.items():
-        for item in _declaration_items(loaded.program.body.items):
+        for item in static_items(loaded.program.body.items):
             if isinstance(item, FuncDef):
                 key = (mid, _item_atom(item))
                 all_public_funcs[key] = item

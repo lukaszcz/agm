@@ -3556,6 +3556,35 @@ class _Lowerer:
             ref.decl_node_id == agent.node_id for ref in self._checked.resolved.resolution.values()
         )
 
+    def prealloc_static_symbols(
+        self,
+        body: Block,
+        *,
+        public: bool,
+        eager_scoped_agents: bool = False,
+    ) -> None:
+        """Pre-allocate static function symbols and needed agent handles.
+
+        Phase 1 of lowering one module body, run before any body is lowered so
+        mutual recursion resolves. Both single-module and multi-module entry
+        points use it, exactly as they share :meth:`lower_initializers`; a
+        scope region is transparent here the same way. ``public`` marks the
+        allocated agent handles visible outside their module.
+        """
+        for item in static_items(body.items):
+            if isinstance(item, FuncDef) and not item.is_builtin:
+                self._prealloc_funcdef(item)
+            elif isinstance(item, AgentDecl) and (
+                eager_scoped_agents or not item.scope_path or self._scoped_agent_is_referenced(item)
+            ):
+                self._alloc_sym(
+                    item.node_id,
+                    name=scoped_public_name(item.scope_path, item.name),
+                    mutable=False,
+                    public=public,
+                    owner=self._module_id,
+                )
+
     def lower_initializers(
         self,
         body: Block,
@@ -3614,19 +3643,7 @@ class _Lowerer:
 
         # Phase 1: pre-allocate static function symbols and IDs for mutual
         # recursion, plus every needed agent handle before bodies are lowered.
-        for item in static_items(body.items):
-            if isinstance(item, FuncDef) and not item.is_builtin:
-                self._prealloc_funcdef(item)
-            elif isinstance(item, AgentDecl) and (
-                not item.scope_path or self._scoped_agent_is_referenced(item)
-            ):
-                self._alloc_sym(
-                    item.node_id,
-                    name=scoped_public_name(item.scope_path, item.name),
-                    mutable=False,
-                    public=True,
-                    owner=self._module_id,
-                )
+        self.prealloc_static_symbols(body, public=True)
 
         # Phase 2: lower all items
         initializers = self.lower_initializers(body, top_level=True)

@@ -703,7 +703,6 @@ class ReplSession:
         promoted_declaration_ids: frozenset[int],
     ) -> tuple[str, ...]:
         """Promote declarations whose IR initialization completed in this entry."""
-        from agm.agl.modules.ids import spell_scope_path
         from agm.agl.parser import resolve_infix_fixity
         from agm.agl.scope.symbols import ScopeNode
         from agm.agl.syntax.nodes import (
@@ -720,6 +719,7 @@ class ReplSession:
             VarDecl,
             param_external_key,
             pattern_binder_candidates,
+            resolved_public_name,
             static_items,
         )
         from agm.agl.syntax.types import render_type_expr
@@ -854,10 +854,18 @@ class ReplSession:
                 if crefs
             }
 
+        # External keys of params this entry's promotions displace (a `let` /
+        # `var` / `def` / `agent` binding that shares a param's public name
+        # takes over that name, so the param must stop being a declared
+        # param); populated by both the root-binding loop here and the
+        # scoped-member loop below, then applied to ``_declared_params`` in
+        # one pass.
+        displaced_param_keys: set[str] = set()
+
         for name, ref in promotion_bindings.items():
             if ref.decl_node_id not in promoted_binding_node_ids:
                 continue
-            self._declared_params.pop(name, None)
+            displaced_param_keys.add(resolved_public_name((), name))
             self._session_scope.bindings[name] = ref
         installed = (
             self._installed_report(
@@ -898,7 +906,7 @@ class ReplSession:
                     and _is_promoted(ref.decl_node_id)
                 ):
                     if ref.decl_node_id in entry_declaration_node_ids:
-                        self._declared_params.pop(spell_scope_path((*path, name)), None)
+                        displaced_param_keys.add(resolved_public_name(path, name))
                     session_node.members[name] = ref
         alias_targets = {
             type_identity(item): render_type_expr(item.type_expr)
@@ -964,6 +972,8 @@ class ReplSession:
             self._ambient_type_names |= frozenset(
                 name for path, name in promoted_type_identities if not path
             )
+        for key in displaced_param_keys:
+            self._declared_params.pop(key, None)
         for item in static_items(program.body.items):
             if isinstance(item, ParamDecl) and _is_promoted(item.node_id):
                 typ = checked.type_env.get_binding_type(item.node_id)

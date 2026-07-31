@@ -2009,6 +2009,53 @@ class TestParams:
         assert value.ok, value.diagnostics
         assert value.value == IntValue(2)
 
+    def test_let_binding_displaces_same_named_root_param_in_later_entry(self) -> None:
+        s = ReplSession()
+        assert s.eval_entry("param count: int = 1").ok
+
+        result = s.eval_entry("let count = 5")
+
+        assert result.ok, result.diagnostics
+        assert s.declared_params() == []
+        value = s.eval_entry("count")
+        assert value.ok, value.diagnostics
+        assert value.value == IntValue(5)
+
+    def test_let_binding_displaces_same_keyed_scoped_param_in_later_entry(self) -> None:
+        s = ReplSession()
+        assert s.eval_entry('scope Deploy\nparam region: text = "eu"\nend Deploy').ok
+
+        result = s.eval_entry('scope Deploy\nlet region = "us"\nend Deploy')
+
+        assert result.ok, result.diagnostics
+        assert s.declared_params() == []
+        value = s.eval_entry("Deploy::region")
+        assert value.ok, value.diagnostics
+        assert value.value == TextValue("us")
+
+    def test_single_entry_displaces_root_and_scoped_param_together(self) -> None:
+        s = ReplSession()
+        setup = s.eval_entry(
+            'param count: int = 1\nscope Deploy\nparam region: text = "eu"\nend Deploy'
+        )
+        assert setup.ok, setup.diagnostics
+        assert {name for name, _t, _v in s.declared_params()} == {"count", "Deploy::region"}
+
+        result = s.eval_entry('let count = 5\nscope Deploy\nlet region = "us"\nend Deploy')
+
+        assert result.ok, result.diagnostics
+        assert s.declared_params() == []
+
+    def test_undisplaced_param_remains_listed_after_sibling_displacement(self) -> None:
+        s = ReplSession()
+        setup = s.eval_entry("param count: int = 1\nparam other: int = 2")
+        assert setup.ok, setup.diagnostics
+
+        result = s.eval_entry("let count = 5")
+
+        assert result.ok, result.diagnostics
+        assert {name for name, _t, _v in s.declared_params()} == {"other"}
+
     def test_scoped_param_failing_default_does_not_corrupt_next_entry(self) -> None:
         # A scoped param whose default raises must not be promoted; the next
         # entry must degrade gracefully rather than crash on an unbound symbol.

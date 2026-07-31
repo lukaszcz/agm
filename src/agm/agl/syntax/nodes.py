@@ -1227,10 +1227,23 @@ def scoped_public_name(scope_path: tuple[ScopeSegment, ...], name: str) -> str:
     itself addresses the member from outside its scope. This is display
     text, not an identity key — callers that need the scope path keep it
     structured rather than recovering it by splitting this spelling.
+
+    Takes the syntactic scope path (``ScopeSegment`` nodes); see
+    ``resolved_public_name`` for the same spelling from an already-resolved
+    string path.
+    """
+    return resolved_public_name(tuple(segment.name for segment in scope_path), name)
+
+
+def resolved_public_name(scope_path: tuple[str, ...], name: str) -> str:
+    """Return the full path spelling of a scoped binding's or param's public name.
+
+    Takes an already-resolved scope path (plain names, as scope-node maps key
+    on); spells the same public name as ``scoped_public_name``.
     """
     from agm.agl.modules.ids import spell_scope_path
 
-    return spell_scope_path((*(segment.name for segment in scope_path), name))
+    return spell_scope_path((*scope_path, name))
 
 
 def param_external_key(param: ParamDecl) -> str:

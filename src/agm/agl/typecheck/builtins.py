@@ -626,14 +626,13 @@ class BuiltinCallChecker:
                 )
             spec = OutputContractSpec(target_type, "none", None, structured_exec=False)
         else:
-            # ``ExecResult`` is identified by its re-homed builtin identity
+            # ``ExecResult`` is identified by its canonical identity
             # (`module_id=PRELUDE_ID`, bare name — see `_TypeBuilder
-            # ._owning_module_id`), not by an environment lookup of the bare
-            # name: `self._ctx._env.get_type("ExecResult")` always answers
-            # with the ROOT canonical entry, so it would miss (and reject as
-            # an ordinary JSON-parsed exec target) a `builtin record
-            # ExecResult` declared inside a named scope region, whose
-            # resolved `target_type` carries that region's `scope_path`.
+            # ._owning_module_id`/`._owning_scope_path`), not by an
+            # environment lookup of the bare name: a `builtin record
+            # ExecResult` declared inside a named scope region resolves to
+            # this very same identity, so comparing against it directly
+            # recognizes both spellings uniformly.
             is_structured = (
                 isinstance(target_type, RecordType)
                 and target_type.module_id == PRELUDE_ID

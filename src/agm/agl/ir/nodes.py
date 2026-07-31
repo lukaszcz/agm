@@ -1111,22 +1111,12 @@ class IrAskRequest:
 
 @dataclass(frozen=True, slots=True)
 class IrExec:
-    """IR host-op: exec(command, ...) builtin call.
-
-    ``result_nominal`` is the ``NominalId`` the structured-exec ``ExecResult``
-    result must be tagged with — ``None`` unless the contract is structured
-    (``ContractRequest.structured_exec``). It is carried directly here rather
-    than through the contract, which stays typeless and is otherwise unused
-    for a structured exec (no parsing happens): a scoped ``builtin record
-    ExecResult`` resolves under its own region's scope path, so evaluation
-    cannot always fall back to the bare root identity.
-    """
+    """IR host-op: exec(command, ...) builtin call."""
 
     location: Location
     command: "IrExpr"
     contract_id: "ContractId"
     max_attempts: int
-    result_nominal: "NominalId | None" = None
 
 
 # ---------------------------------------------------------------------------

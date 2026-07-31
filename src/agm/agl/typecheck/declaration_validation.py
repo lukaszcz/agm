@@ -6,7 +6,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Literal
 
-from agm.agl.modules.ids import PRELUDE_ID, ModuleId
+from agm.agl.modules.ids import ModuleId
 from agm.agl.scope.symbols import ModuleResolution
 from agm.agl.semantics.type_table import DeclKey, TypeTable, qualified_decl_name
 from agm.agl.syntax.nodes import (
@@ -17,6 +17,7 @@ from agm.agl.syntax.nodes import (
     static_type_items,
 )
 from agm.agl.syntax.spans import SourceSpan
+from agm.agl.typecheck.builder import owning_module_id, owning_scope_path
 from agm.agl.typecheck.env import AglTypeError
 
 
@@ -71,12 +72,22 @@ def _member_declarations(
         for item in static_type_items(resolved.program.body.items):
             if isinstance(item, TypeAlias):
                 continue
-            scope_path = tuple(segment.name for segment in item.scope_path)
-            key = (PRELUDE_ID if item.is_builtin else module_id, scope_path, item.name)
-            owner_keys[module_id, (*scope_path, item.name)] = key
+            declared_path = tuple(segment.name for segment in item.scope_path)
+            key = (
+                owning_module_id(item.is_builtin, module_id),
+                owning_scope_path(item.is_builtin, item.scope_path),
+                item.name,
+            )
+            owner_keys[module_id, (*declared_path, item.name)] = key
+            # A `builtin` declaration's nominal identity is canonical, so one
+            # owner key can be reached from more than one declaration site
+            # across a compile unit. Each site names the same host-recognized
+            # shape again, so indexing its fields a second time would read as
+            # the owner colliding with itself.
+            first_declaration = key not in index.declared
             index.declared.add(key)
             members = index.members.setdefault(key, {})
-            if isinstance(item, (RecordDef, ExceptionDef)):
+            if isinstance(item, (RecordDef, ExceptionDef)) and first_declaration:
                 for source_field in item.fields:
                     members.setdefault(source_field.name, []).append(
                         _MemberDeclaration("field", source_field.span)

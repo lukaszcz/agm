@@ -670,16 +670,15 @@ def transform_type(t: Type, transform: Callable[[Type], Type]) -> Type:
 def reroot_type(t: Type, prefix: tuple[str, ...]) -> Type:
     """Return *t* with *prefix* stripped from every nominal handle's scope path.
 
-    A declaration inside a named scope region resolves its own nominal
-    references (a record/enum field, an exception's base) under that same
-    region path. Comparing such a reference against a canonical shape defined
-    at scope path ``()`` therefore needs the two re-rooted onto the same
-    frame first: this strips *prefix* from a ``RecordType``/``EnumType``/
-    ``ExceptionType`` node's ``scope_path`` wherever it starts with *prefix*,
-    leaving every other node (including a nominal reference declared
-    elsewhere, whose ``scope_path`` does not start with *prefix*) unchanged.
-    Every caller already special-cases an empty *prefix* (nothing to strip),
-    so this is only ever called with a non-empty one.
+    A declaration inside a named scope region names its own region's siblings
+    under that region's path. Reading such a reference on the canonical frame
+    — where the same sibling sits at scope path ``()`` — means stripping the
+    region's path first: this drops *prefix* from a ``RecordType``/
+    ``EnumType``/``ExceptionType`` node's ``scope_path`` wherever it starts
+    with *prefix*, leaving every other node (including a reference to a type
+    declared elsewhere, whose ``scope_path`` does not start with *prefix*)
+    unchanged. Every caller already special-cases an empty *prefix* (nothing
+    to strip), so this is only ever called with a non-empty one.
     """
 
     def strip(node: Type) -> Type:

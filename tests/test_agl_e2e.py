@@ -364,6 +364,9 @@ def test_scoped_stdlib_arrangement_runs_end_to_end(
     dispatching to a scoped ``builtin record`` (``ExecResult``) at a real host
     boundary, and a fully scoped exception hierarchy (``Exception``/
     ``RangeError`` both declared inside the region) raised and left uncaught.
+    The raised exception reports its canonical name: a ``builtin``
+    declaration denotes the one host type wherever it is written, so the
+    region it is declared in routes the name without becoming part of it.
     """
     from agm.agl import PipelineDriver
     from agm.agl.modules.roots import RootSet
@@ -390,5 +393,5 @@ def test_scoped_stdlib_arrangement_runs_end_to_end(
     )
     assert capsys.readouterr().out == "hi\n"
     assert result.error is not None, "expected the uncaught scoped RangeError"
-    assert result.error.type_name == "Std::RangeError"
+    assert result.error.type_name == "RangeError"
     assert result.error.fields["message"] == "boom"

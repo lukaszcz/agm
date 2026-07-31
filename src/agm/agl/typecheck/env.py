@@ -995,10 +995,11 @@ class TypeEnvironment:
     def _constructor_key(
         module_id: ModuleId, owner_name: str, scope_path: ScopePath, variant: str | None
     ) -> tuple[DeclKey, str | None]:
-        """Build a constructor key without using display spellings as identity."""
-        if "::" in owner_name:
-            *segments, owner_name = owner_name.split("::")
-            scope_path = tuple(segments)
+        """Build a constructor key from structured owner identity.
+
+        Every caller supplies the owner's bare name and its scope path
+        separately, so no display spelling is ever parsed back into identity.
+        """
         return ((module_id, scope_path, owner_name), variant)
 
     def register_constructor_signature(self, sig: ConstructorSignature) -> None:

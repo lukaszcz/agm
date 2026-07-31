@@ -1039,6 +1039,18 @@ class TestDeclarationOnly:
         with pytest.raises(AglScopeError):
             resolve_program(graph)
 
+    def test_scoped_param_in_non_entry_region_errors(self, tmp_path: Path) -> None:
+        """A scoped 'param' inside a region in a non-entry module is an error."""
+        graph = _make_graph_from_files(
+            tmp_path,
+            {
+                "entry": "open import mylib\n()",
+                "mylib": "scope Team\nparam x\nend Team",
+            },
+        )
+        with pytest.raises(AglScopeError, match="param"):
+            resolve_program(graph)
+
     def test_bare_expr_in_non_entry_errors(self, tmp_path: Path) -> None:
         """A bare expression in a non-entry module is an error."""
         graph = _make_graph_from_files(

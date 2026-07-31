@@ -1196,6 +1196,11 @@ class ParamDecl:
     source omits it.
 
     The ``default`` expression is optional; ``None`` when omitted.
+
+    ``scope_path`` is non-empty for a ``param`` declared as a member of a named
+    scope region; there is no declaration-path shorthand for ``param``, so this
+    is always the enclosing region's path, never a prefix parsed from the
+    declaration head itself.
     """
 
     name: str
@@ -1203,6 +1208,21 @@ class ParamDecl:
     default: Expr | None
     span: SourceSpan = dc_field(compare=False)
     node_id: int = dc_field(compare=False)
+    scope_path: tuple[ScopeSegment, ...] = ()
+
+
+def param_external_key(param: ParamDecl) -> str:
+    """Return *param*'s external key: the CLI flag and config-table spelling.
+
+    A root param's key is its bare name; a scoped param's key is its full
+    path spelling (``"Deploy::region"``), matching how the language itself
+    addresses the member from outside its region. This is display text, not
+    an identity key — callers that need the param's scope path keep it
+    structured rather than recovering it by splitting this spelling.
+    """
+    from agm.agl.modules.ids import spell_scope_path
+
+    return spell_scope_path((*(segment.name for segment in param.scope_path), param.name))
 
 
 @dataclass(frozen=True, slots=True)
@@ -1288,8 +1308,25 @@ def is_scoped_declaration(node: object) -> TypeGuard[ScopedDeclaration]:
     ) and bool(node.scope_path)
 
 
+def static_items(items: tuple[Item, ...]) -> Iterator[Item]:
+    """Yield block items, descending into named scope regions.
+
+    Named scope regions are transparent to whole-module item collection: a
+    region's own items are spliced into its parent's stream, in textual
+    order, so a caller that needs every item regardless of nesting depth —
+    e.g. discovering every ``param`` declaration for its external key — walks
+    one flat sequence. ``static_type_items`` and ``static_function_items``
+    are this walk narrowed to one item kind.
+    """
+    for item in items:
+        if isinstance(item, ScopeRegion):
+            yield from static_items(item.items)
+        else:
+            yield item
+
+
 def static_type_items(
-    items: tuple[object, ...],
+    items: tuple[Item, ...],
 ) -> Iterator[RecordDef | EnumDef | ExceptionDef | TypeAlias]:
     """Yield type declarations, descending into named scope regions.
 
@@ -1297,19 +1334,15 @@ def static_type_items(
     declaration carries its own structured scope path, so passes that walk
     static declarations see a region's members as siblings of its own items.
     """
-    for item in items:
-        if isinstance(item, ScopeRegion):
-            yield from static_type_items(item.items)
-        elif isinstance(item, (RecordDef, EnumDef, ExceptionDef, TypeAlias)):
+    for item in static_items(items):
+        if isinstance(item, (RecordDef, EnumDef, ExceptionDef, TypeAlias)):
             yield item
 
 
-def static_function_items(items: tuple[object, ...]) -> Iterator[FuncDef]:
+def static_function_items(items: tuple[Item, ...]) -> Iterator[FuncDef]:
     """Yield function declarations, descending into named scope regions."""
-    for item in items:
-        if isinstance(item, ScopeRegion):
-            yield from static_function_items(item.items)
-        elif isinstance(item, FuncDef):
+    for item in static_items(items):
+        if isinstance(item, FuncDef):
             yield item
 
 
@@ -1349,6 +1382,7 @@ ScopeItem = (
     | AgentDecl
     | LetDecl
     | VarDecl
+    | ParamDecl
 )
 
 # An item is anything that can appear in a block sequence:

@@ -1,0 +1,26 @@
+{
+  "scenarios": [
+    {
+      "name": "all_params_supplied",
+      "params": {
+        "increment": 5,
+        "Deploy::region": "us",
+        "Deploy::replicas": 3,
+        "Deploy::Retry::attempts": 2
+      },
+      "expect": {
+        "stdout": "us x 3\nus\n7\n"
+      }
+    },
+    {
+      "name": "optional_params_use_their_defaults",
+      "params": {
+        "increment": 1,
+        "Deploy::replicas": 4
+      },
+      "expect": {
+        "stdout": "eu x 4\neu\n2\n"
+      }
+    }
+  ]
+}

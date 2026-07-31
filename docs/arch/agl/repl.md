@@ -16,6 +16,8 @@ The REPL uses the program pipeline ([modules.md](agl/modules.md)) by default so 
 
 `param` declarations make a program parameterizable. The pipeline discovers the typed parameter inventory before execution, which `agm exec` uses to expose each parameter as a first-class CLI option and to load values from the `[<program>]` config section. For `agm exec`, precedence is CLI value > program-config value > default expression > error for a required param; external values are converted and type-checked before any evaluation, so a bad value fails before any agent or shell call runs. The REPL has no per-param CLI options. It loads `[<program>]` only when `program NAME` establishes the active program, so a param can use that config only after the declaration — in an earlier successful entry or earlier in the same entry. A param before it has only its source default or a required-param error.
 
+A param declared inside a named scope region has no external identity of its own: its external key — what the CLI flag and the config-table lookup match against — is its full path spelling (`Deploy::region`), computed the same way at parameter discovery and at lowering's `IrParam.public_name` so the two never drift.
+
 ## Agent Declaration and Reconciliation
 
 Agents must be declared in source; the host backs structured declaration paths

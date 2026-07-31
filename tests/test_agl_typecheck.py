@@ -1411,6 +1411,52 @@ class TestScopedBindingTypes:
             parse_resolve_check("scope Config\ndef f() -> int = 0\nlet f = 1\nend Config\n()")
 
 
+class TestScopedParamTypes:
+    """A scoped `param`'s type is annotated, defaulted, or inferred exactly as
+    a root `param`, keyed by node id like every other binding.
+    """
+
+    def test_annotation_and_default_combine(self) -> None:
+        r = accept_type('scope Deploy\nparam region: text = "eu"\nend Deploy\nDeploy::region')
+        region = r.resolved.program.body.items[0]
+        assert isinstance(region, ScopeRegion)
+        (param_decl,) = [item for item in region.items if isinstance(item, ParamDecl)]
+        assert r.type_env.get_binding_type(param_decl.node_id) == TextType()
+
+    def test_type_inferred_from_default_without_annotation(self) -> None:
+        r = accept_type("scope Deploy\nparam replicas = 3\nend Deploy\nDeploy::replicas")
+        region = r.resolved.program.body.items[0]
+        assert isinstance(region, ScopeRegion)
+        (param_decl,) = [item for item in region.items if isinstance(item, ParamDecl)]
+        assert r.type_env.get_binding_type(param_decl.node_id) == IntType()
+
+    def test_defaults_to_text_without_annotation_or_default(self) -> None:
+        r = accept_type("scope Deploy\nparam region\nend Deploy\nDeploy::region")
+        region = r.resolved.program.body.items[0]
+        assert isinstance(region, ScopeRegion)
+        (param_decl,) = [item for item in region.items if isinstance(item, ParamDecl)]
+        assert r.type_env.get_binding_type(param_decl.node_id) == TextType()
+
+    def test_annotation_mismatch_reports_the_params_span(self) -> None:
+        err = reject_type('scope Deploy\nparam region: int = "eu"\nend Deploy\n()')
+        d = err.to_diagnostic()
+        assert d.line == 2
+        assert "int" in d.message and "text" in d.message
+
+    def test_annotation_resolves_a_bare_sibling_type_declared_in_the_same_region(self) -> None:
+        r = accept_type(
+            "scope Deploy\nrecord Target(name: text)\nparam target: Target\nend Deploy\n"
+            "Deploy::target"
+        )
+        assert r.resolved.program is not None
+
+    def test_scoped_param_and_def_cannot_share_a_name(self) -> None:
+        """Already enforced by the scope pass; pinned here so the collision is
+        confirmed not to reach typechecking as an unresolved-reference crash."""
+        with pytest.raises(AglScopeError):
+            parse_resolve_check("scope Deploy\ndef f() -> int = 0\nparam f\nend Deploy\n()")
+
+
 class TestBlockTyping:
     def test_block_last_expr_is_block_type(self) -> None:
         r = accept_type("let x = 1\nx")

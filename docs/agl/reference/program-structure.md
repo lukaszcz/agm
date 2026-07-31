@@ -45,9 +45,9 @@ any other declaration or expression. See [Modules](modules.md) and
 ### Named scope regions
 
 A named scope region is a module item containing nested regions, header `open`
-declarations, static declarations, and `let`/`var` bindings. Its matching
-`scope`/`end` syntax, declaration and binder paths, and visibility rules are
-described in [Named scopes](scopes.md).
+declarations, static declarations, `param` declarations, and `let`/`var`
+bindings. Its matching `scope`/`end` syntax, declaration and binder paths, and
+visibility rules are described in [Named scopes](scopes.md).
 
 ### Declarations
 
@@ -64,7 +64,10 @@ region.
   `record`, `enum`, or `exception` for a host-recognized declaration; a type
   alias does not accept it.
 - **`param` declarations** — the program's host/config/CLI-supplied parameters.
-  Entry-module only.
+  Entry-module only; they may also be members of a named scope region in an
+  entry module, with no declaration-path shorthand. A scoped parameter's
+  external key is its full path spelling; see
+  [Named scopes](scopes.md#parameters).
 - **`program` declaration** — the program name used for params config lookup.
   Entry-module only.
 - **`agent` declarations** — the names of the agents the program may call.

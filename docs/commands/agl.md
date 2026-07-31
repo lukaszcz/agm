@@ -55,12 +55,14 @@ like any other static error.
 - `-c COMMAND`, `--command COMMAND`: Execute the AgL program given as `COMMAND`
   directly, instead of reading the program from `FILE`.
 - `--PARAM VALUE`: Provide a value for a `param` declaration. Each declared param
-  becomes a program-specific option; booleans use `--name` / `--no-name`. Values for
-  `text` params are taken verbatim; every other scalar or structured type
-  (`int`/`decimal`/`bool`/`json`/`array`/`dict`/`record`/`enum`) is parsed as exactly
-  one strict JSON value and validated against the declared type. Missing required
-  params or invalid values are reported before any agent runs. Run
-  `agm exec FILE --help` to show the discovered param options for that program.
+  becomes a program-specific option; booleans use `--name` / `--no-name`. A param
+  declared inside a named scope region uses its full path spelling, e.g.
+  `--Deploy::region`. Values for `text` params are taken verbatim; every other
+  scalar or structured type (`int`/`decimal`/`bool`/`json`/`array`/`dict`/`record`/
+  `enum`) is parsed as exactly one strict JSON value and validated against the
+  declared type. Missing required params or invalid values are reported before any
+  agent runs. Run `agm exec FILE --help` to show the discovered param options for
+  that program.
 - `-I DIR`, `--module-path DIR`: Add `DIR` as an additional module search root
   (repeatable), resolved relative to the invocation working directory. See
   [Module resolution](#module-resolution). This is also how e2e/fixture tests point
@@ -207,7 +209,15 @@ Precedence differs by kind:
 - **Engine settings** (`runner`, `log`, `strict-json`, `max-iters`, `log-file`, `timeout`):
   `source std/config::X write > CLI > [<program>].X > [exec].X > engine default`
 - **Param values** (`param NAME`):
-  `CLI > [<program>].NAME > source default > required error`
+  `CLI > [<program>].NAME > source default > required error`. `NAME` is a
+  scoped param's full path spelling (`Deploy::region`) when it is declared as
+  a member of a named scope region. That key must be quoted in TOML, since
+  `::` is not a legal bare key:
+
+  ```toml
+  [demo]
+  "Deploy::region" = "prod"
+  ```
 
 The CLI flags and the config-file layers supply the setting's **initial** value; a
 source `std/config::X := …` write overrides them from its program point onward. For

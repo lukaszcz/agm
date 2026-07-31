@@ -90,8 +90,18 @@ static error, not a runtime surprise.
 
 Program parameters are declared with `param`
 ([Bindings and scope](bindings-and-scope.md)) and may be supplied by the
-host as named external values at run start. Validation happens after type
-checking and **before any statement executes**:
+host as named external values at run start. A param declared as a member of a
+named scope region ([Named scopes](scopes.md#parameters)) is supplied under
+its full path spelling — `param Deploy::region` is named `Deploy::region` by
+the host, e.g. `--Deploy::region` on the CLI. In a config file the same key
+must be quoted, since `::` is not a legal bare TOML key:
+
+```toml
+[demo]
+"Deploy::region" = "prod"
+```
+
+Validation happens after type checking and **before any statement executes**:
 
 - a required param (no default) for which no external value is provided,
 - an external value supplied for a name that is not a declared param, and

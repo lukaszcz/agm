@@ -486,6 +486,8 @@ def walk(node: object, callback: Callable[[object], None]) -> None:
         walk(node.type_expr, callback)
 
     elif isinstance(node, ParamDecl):
+        for scope_segment in node.scope_path:
+            walk(scope_segment, callback)
         if node.annotation is not None:
             walk(node.annotation, callback)
         if node.default is not None:

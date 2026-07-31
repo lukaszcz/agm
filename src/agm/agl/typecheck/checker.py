@@ -174,6 +174,7 @@ from agm.agl.syntax.nodes import (
     WildcardPattern,
     pattern_binder_candidates,
     simple_let_pattern_name,
+    static_items,
 )
 from agm.agl.syntax.spans import SourceSpan
 from agm.agl.syntax.types import TypeExpr
@@ -215,20 +216,6 @@ from agm.agl.typecheck.inference import (
     InferenceEngine,
     InferenceError,
 )
-
-# ---------------------------------------------------------------------------
-# Static declaration traversal
-# ---------------------------------------------------------------------------
-
-
-def _static_items(items: tuple[Item, ...]) -> Iterator[Item]:
-    """Yield static declarations nested in named scope regions."""
-    for item in items:
-        if isinstance(item, ScopeRegion):
-            yield from _static_items(cast(tuple[Item, ...], item.items))
-        else:
-            yield item
-
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -742,7 +729,7 @@ class _Checker:
         """Type-check the entire program."""
         # Pre-pass: register static function signatures before any body is
         # checked, including members collected from named scope regions.
-        for item in _static_items(program.body.items):
+        for item in static_items(program.body.items):
             if isinstance(item, FuncDef):
                 with self._env.type_scope(self._declaration_scope_path(item)):
                     self._preregister_funcdef(item)
@@ -800,7 +787,8 @@ class _Checker:
             self._env.set_binding_type(item.node_id, AgentType())
             return UnitType()
         if isinstance(item, ParamDecl):
-            self._check_param(item)
+            with self._env.type_scope(tuple(segment.name for segment in item.scope_path)):
+                self._check_param(item)
             return UnitType()
         if isinstance(item, ProgramDecl):
             return UnitType()
@@ -4980,7 +4968,7 @@ def prepare_module_headers(
         capabilities=capabilities,
         module_id=module_id,
     )
-    for item in _static_items(resolved.program.body.items):
+    for item in static_items(resolved.program.body.items):
         if isinstance(item, FuncDef):
             with env.type_scope(header_checker._declaration_scope_path(item)):
                 header_checker._preregister_funcdef(item)

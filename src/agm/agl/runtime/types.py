@@ -102,7 +102,12 @@ class AgentDeclInfo:
 
 @dataclass(frozen=True, slots=True)
 class ParamDeclInfo:
-    """Static summary of one ``param`` declaration in a program."""
+    """Static summary of one ``param`` declaration in a program.
+
+    ``name`` is the param's external key: a root param's bare name, or a
+    scoped param's full ``::``-joined path spelling (e.g. ``"Deploy::region"``)
+    — the same string the CLI flag and config-table key use.
+    """
 
     name: str
     type: "AglType"

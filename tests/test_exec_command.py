@@ -1016,6 +1016,48 @@ class TestExecCommandExitCodes:
             exec_command.run(args)
         assert exc_info.value.code == 1
 
+    def test_scoped_param_cli_flag_uses_its_full_path_spelling(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """A scoped `param Deploy::region` is supplied as `--Deploy::region`."""
+        agl_file = tmp_path / "test.agl"
+        agl_file.write_text(
+            'scope Deploy\nparam region: text = "eu"\nend Deploy\nprint(Deploy::region)\n'
+        )
+
+        assert (
+            exec_command.run(_exec_args(agl_file, param_tokens=["--Deploy::region", "prod"]))
+            is None
+        )
+
+        assert capsys.readouterr().out == "prod\n"
+
+    def test_scoped_param_config_key_uses_its_full_path_spelling(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """A scoped `param Deploy::region` is supplied via `[demo]."Deploy::region"`."""
+        from agm.config.context import ConfigContext
+
+        home = tmp_path / "home"
+        (home / ".agm").mkdir(parents=True)
+        (home / ".agm" / "config.toml").write_text('[demo]\n"Deploy::region" = "prod"\n')
+        agl_file = tmp_path / "test.agl"
+        agl_file.write_text(
+            'program demo\nscope Deploy\nparam region: text = "eu"\nend Deploy\n'
+            "print(Deploy::region)\n"
+        )
+        monkeypatch.setattr(
+            exec_command,
+            "current_config_context",
+            lambda: ConfigContext(home=home, proj_dir=None, cwd=tmp_path),
+        )
+
+        assert exec_command.run(_exec_args(agl_file)) is None
+        assert capsys.readouterr().out == "prod\n"
+
     def test_param_flag_collision_exits_1(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:

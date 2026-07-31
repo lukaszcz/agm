@@ -240,9 +240,11 @@ A `def` inside a nested block is a static error. See
 param_decl ::= "param" name (":" type_expr)? ("=" expr)?
 ```
 
-`param` declarations are root-only. Each enters the root scope as an
-immutable binding. A param may declare a type, a default expression, both, or
-neither. Without an explicit type or default, the param defaults to `text`.
+`param` declarations are entry-module only, at the program root or as a member
+of a named scope region ([Named scopes](scopes.md#parameters) — no
+declaration-path shorthand). Each enters its scope as an immutable binding. A
+param may declare a type, a default expression, both, or neither. Without an
+explicit type or default, the param defaults to `text`.
 
 ```agl
 param spec                 # same as: param spec: text

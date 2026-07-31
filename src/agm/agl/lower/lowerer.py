@@ -251,8 +251,10 @@ from agm.agl.syntax.nodes import (
     UnitLit,
     VarDecl,
     VarRef,
+    param_external_key,
     pattern_binder_candidates,
     simple_let_pattern_name,
+    static_items,
 )
 from agm.agl.syntax.spans import SourceSpan
 from agm.agl.type_schema import (
@@ -377,15 +379,6 @@ _CMP_OP_MAP: dict[BinOp, CmpOp] = {
     BinOp.GT: CmpOp.GT,
     BinOp.GE: CmpOp.GE,
 }
-
-
-def _static_items(items: tuple[Item, ...]) -> Iterator[Item]:
-    """Yield static declarations nested in named scope regions."""
-    for item in items:
-        if isinstance(item, ScopeRegion):
-            yield from _static_items(cast(tuple[Item, ...], item.items))
-        else:
-            yield item
 
 
 class _Lowerer:
@@ -3365,10 +3358,16 @@ class _Lowerer:
         appends an ``IrParam`` to ``self._params``.  Does NOT emit an initializer
         into ``ir_items`` — params are installed by the evaluator's ``run()``
         from ``program.params + param_values`` BEFORE any module initializer runs.
+
+        A scoped param's public name — both the symbol's and the ``IrParam``'s —
+        is its full path spelling (``"Deploy::region"``), matching the external
+        key the CLI/config layer uses; a root param's path is empty, leaving its
+        bare name.
         """
+        public_name = param_external_key(param)
         sym = self._alloc_sym(
             param.node_id,
-            name=param.name,
+            name=public_name,
             mutable=False,
             public=True,
             owner=self._module_id,
@@ -3380,7 +3379,7 @@ class _Lowerer:
             default_ir = None
         ir_param = IrParam(
             symbol=sym,
-            public_name=param.name,
+            public_name=public_name,
             required=(param.default is None),
             default=default_ir,
             location=self._loc(param.span),
@@ -3573,7 +3572,7 @@ class _Lowerer:
         other_initializers: list[IrExpr] = []
         other_origins: list[InitializerOrigin] = []
         for source_index, item in enumerate(body.items):
-            members = _static_items((item,)) if isinstance(item, ScopeRegion) else (item,)
+            members = static_items((item,)) if isinstance(item, ScopeRegion) else (item,)
             for member in members:
                 is_function = isinstance(member, FuncDef) and not member.is_builtin
                 if handles_only and not is_function and not isinstance(member, AgentDecl):
@@ -3608,7 +3607,7 @@ class _Lowerer:
 
         # Phase 1: pre-allocate static function symbols and IDs for mutual
         # recursion, plus every needed agent handle before bodies are lowered.
-        for item in _static_items(body.items):
+        for item in static_items(body.items):
             if isinstance(item, FuncDef) and not item.is_builtin:
                 self._prealloc_funcdef(item)
             elif isinstance(item, AgentDecl) and (

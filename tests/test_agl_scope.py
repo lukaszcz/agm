@@ -568,6 +568,83 @@ class TestScopedBindings:
         assert resolved.scope_nodes[("A", "B")].parent is resolved.scope_nodes[("A",)]
 
 
+# ---------------------------------------------------------------------------
+# Scoped `param` -- a member of its path, region-form only (no shorthand)
+# ---------------------------------------------------------------------------
+
+
+class TestScopedParam:
+    """A `param` declared inside a scope region is a member of that path,
+    following the same member/duplicate rules as every other member.
+    """
+
+    def test_bare_visible_inside_its_own_region(self) -> None:
+        resolved = parse_and_resolve(
+            "scope Deploy\nparam region: text\ndef read() -> text = region\nend Deploy\n"
+            "Deploy::read()"
+        )
+        assert _ref(resolved, "region").kind is BinderKind.param_binding
+        assert _ref(resolved, "region").scope_path == ("Deploy",)
+
+    def test_bare_visible_from_a_nested_region_via_the_outward_walk(self) -> None:
+        resolved = parse_and_resolve(
+            "scope Deploy\nparam region: text\nscope Inner\n"
+            "def read() -> text = region\nend Inner\nend Deploy\nDeploy::Inner::read()"
+        )
+        assert _ref(resolved, "region").kind is BinderKind.param_binding
+
+    def test_exact_path_reference_from_outside_the_region(self) -> None:
+        resolved = parse_and_resolve("scope Deploy\nparam region: text\nend Deploy\nDeploy::region")
+        assert _ref(resolved, "region").scope_path == ("Deploy",)
+        assert _ref(resolved, "region").kind is BinderKind.param_binding
+
+    def test_visible_after_open(self) -> None:
+        resolved = parse_and_resolve(
+            "open Deploy\nscope Deploy\nparam region: text\nend Deploy\nregion"
+        )
+        assert _ref(resolved, "region").scope_path == ("Deploy",)
+
+    def test_repeated_region_blocks_extend_the_same_scope(self) -> None:
+        resolved = parse_and_resolve(
+            "scope Deploy\nparam region: text\nend Deploy\n"
+            "scope Deploy\nparam replicas: int\nend Deploy\n()"
+        )
+        assert set(resolved.scope_nodes[("Deploy",)].members) == {"region", "replicas"}
+
+    @pytest.mark.parametrize(
+        "source",
+        (
+            "scope A\nparam x\nparam x\nend A\n()",
+            "scope A\nlet x = 1\nparam x\nend A\n()",
+            "scope A\ndef x() -> int = 0\nparam x\nend A\n()",
+            "scope A\nrecord x()\nparam x\nend A\n()",
+            "scope A\nagent x\nparam x\nend A\n()",
+        ),
+        ids=("param-vs-param", "param-vs-let", "param-vs-def", "param-vs-type", "param-vs-agent"),
+    )
+    def test_duplicate_at_the_same_path_is_rejected(self, source: str) -> None:
+        err = reject_scope(source)
+        assert "already declared" in err.to_diagnostic().message
+
+    def test_earlier_block_cannot_see_a_later_blocks_param(self) -> None:
+        with pytest.raises(AglScopeError):
+            parse_and_resolve(
+                "scope A\ndef f() -> text = A::region\nend A\n"
+                "scope A\nparam region: text\nend A\nA::f()"
+            )
+
+    def test_reference_textually_before_the_param_is_rejected(self) -> None:
+        with pytest.raises(AglScopeError):
+            parse_and_resolve(
+                "def f() -> text = Deploy::region\n"
+                "scope Deploy\nparam region: text\nend Deploy\nf()"
+            )
+
+    def test_param_rejected_inside_a_function_body(self) -> None:
+        with pytest.raises(AglScopeError, match="param"):
+            parse_and_resolve("def f() =\n  param x\n  0\nf()")
+
+
 class TestScopedBindingOpenPrecedence:
     """A local ``open`` -- plain, ``using``, or ``hiding`` -- resolves live.
 

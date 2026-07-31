@@ -59,6 +59,7 @@ scope_item   ::= scope_region | open_decl
                | record_def | enum_def | exception_def | type_alias
                | func_def | extern_func_def
                | agent_decl
+               | param_decl
                | let_decl | var_decl
 ```
 
@@ -67,11 +68,12 @@ A scope region has a mandatory matching closer: `scope A::B` closes with
 scope region. They may nest, and a multi-segment header is equivalent to
 nested single-segment regions. Scope
 regions contain nested regions, header `open` declarations, static
-declarations, and `let`/`var` bindings; bare expressions, `:=` assignments,
-`builtin` declarations, infix declarations, imports, exports, `program`, and
-`param` declarations are not permitted. `scope` is contextual at item start before a
-scope path, and `end` is contextual only for a complete closer at an open
-region's layout level; both remain ordinary names in expression positions.
+declarations, `param` declarations, and `let`/`var` bindings; bare
+expressions, `:=` assignments, `builtin` declarations, infix declarations,
+imports, exports, and `program` declarations are not permitted. `scope` is
+contextual at item start before a scope path, and `end` is contextual only
+for a complete closer at an open region's layout level; both remain ordinary
+names in expression positions.
 
 `"builtin"` is a **declaration modifier** that behaves like a decorator: it may
 sit on the same line as the declaration it adorns (`builtin enum …`) or on the

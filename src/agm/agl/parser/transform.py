@@ -88,6 +88,7 @@ _SCOPED_DECLARATIONS = (
     syntax.AgentDecl,
     syntax.LetDecl,
     syntax.VarDecl,
+    syntax.ParamDecl,
 )
 
 # Message for the decl_head module-route rejection. Also used for a `var`
@@ -310,7 +311,6 @@ _REJECTED_SCOPE_ITEM_NAMES: tuple[tuple[type, str], ...] = (
     (syntax.AssignStmt, "an assignment"),
     (syntax.InfixDecl, "an 'infix' declaration"),
     (syntax.ProgramDecl, "a 'program' declaration"),
-    (syntax.ParamDecl, "a 'param' declaration"),
     (syntax.ImportDecl, "an 'import' declaration"),
     (syntax.ExportDecl, "an 'export' declaration"),
     (syntax.BuiltinVarDecl, "a 'builtin var' declaration"),
@@ -334,7 +334,6 @@ def _scope_item_error_span(item: object, fallback: SourceSpan) -> SourceSpan:
     if isinstance(
         item,
         (
-            syntax.ParamDecl,
             syntax.ProgramDecl,
             syntax.BuiltinVarDecl,
             syntax.InfixDecl,

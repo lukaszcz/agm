@@ -26,13 +26,12 @@ from agm.agl.lower.lowerer import (
     _contract_has_schema,
     _LinkState,
     _Lowerer,
-    _static_items,
 )
 from agm.agl.matchcompile import MatchCompiledProgram
 from agm.agl.modules.ids import STD_CORE_ID, ModuleId
 from agm.agl.self_validation import self_validation_enabled
 from agm.agl.semantics.types import ExceptionType, RecordType
-from agm.agl.syntax.nodes import AgentDecl, FuncDef
+from agm.agl.syntax.nodes import AgentDecl, FuncDef, static_items
 from agm.util.text import normalize_newlines
 
 __all__ = ["lower_program"]
@@ -170,7 +169,7 @@ def lower_program(
         )
         module_lowerers[mid] = lowerer
         body = cm.resolved.program.body
-        for item in _static_items(body.items):
+        for item in static_items(body.items):
             if isinstance(item, FuncDef) and not item.is_builtin:
                 lowerer._prealloc_funcdef(item)
             elif isinstance(item, AgentDecl) and (

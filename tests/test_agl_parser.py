@@ -918,7 +918,6 @@ class TestScopeRegions:
             "import package",
             "export package",
             "program app",
-            "param value",
             "builtin def native() -> int",
         ),
         ids=(
@@ -929,7 +928,6 @@ class TestScopeRegions:
             "import",
             "export",
             "program",
-            "param",
             "builtin-declaration",
         ),
     )
@@ -944,6 +942,14 @@ class TestScopeRegions:
         assert isinstance(region, ScopeRegion)
         (member,) = region.items
         assert isinstance(member, (LetDecl, VarDecl))
+        assert [segment.name for segment in member.scope_path] == ["Point"]
+
+    def test_region_admits_param(self) -> None:
+        region = first(parse("scope Point\nparam value\nend Point"))
+
+        assert isinstance(region, ScopeRegion)
+        (member,) = region.items
+        assert isinstance(member, ParamDecl)
         assert [segment.name for segment in member.scope_path] == ["Point"]
 
     def test_region_preserves_end_identifiers_in_declaration_suites(self) -> None:

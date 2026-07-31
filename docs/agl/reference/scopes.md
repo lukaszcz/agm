@@ -46,8 +46,8 @@ print(Text::display("ready"))
 
 A region contains nested regions, `open` declarations, static declarations
 (`def`, `extern def`, `record`, `enum`, `exception`, `type`, and, in an entry
-module, `agent`), and `let`/`var` bindings. Bare expressions, `:=`
-assignments, imports, exports, parameters, program declarations, infix
+module, `agent`), `param` declarations, and `let`/`var` bindings. Bare
+expressions, `:=` assignments, imports, exports, program declarations, infix
 declarations, and `builtin` declarations are not allowed there.
 
 ## Binder paths
@@ -103,6 +103,28 @@ print(Config::low)
 print(Config::high)
 ```
 
+## Parameters
+
+A region also admits `param` declarations, with no declaration-path
+shorthand — only the region form:
+
+```agl
+scope Deploy
+param region: text = "eu"
+param replicas: int
+end Deploy
+
+print("%{Deploy::region} x %{Deploy::replicas}")
+```
+
+A scoped parameter follows the same member and duplicate rules as every other
+member: visible bare inside its region, by its exact path from outside, and
+through `open`. Its **external key** — the name the CLI flag and the config
+table entry use to supply a value — is its full path spelling
+(`Deploy::region`), which is what makes grouping related parameters under one
+scope useful. See [Host environment](host-environment.md#params) for how the
+host resolves an external param value.
+
 ## Names and visibility
 
 A declaration belongs to its complete scope path. Members of the same scope are
@@ -112,17 +134,17 @@ module root, so it bypasses a nearer scoped member.
 
 A static declaration (`def`, a type, an `agent`) is visible throughout its
 scope regardless of textual order, matching the module root, where a `def` may
-call another declared later in the same file. A `let` or `var` binding is
-different: it is visible only to references that follow it textually, in its
-own region or elsewhere in the module — exactly like a root-level `let`. This
-holds across separate blocks of the same scope: a member declared in an
-earlier `scope A` block cannot see a binding a later `scope A` block
-introduces, while the reverse order works. The same textual rule governs a
-binding reached through `open` — plain, `using`, or `hiding` alike: a
-reference sees the binding once the reference itself follows the binding's
-own declaration, regardless of where the `open` appears — an `open` written
-before the scope that declares the binding still exposes it to a later
-reference, just not to an earlier one.
+call another declared later in the same file. A `let`, `var`, or `param`
+binding is different: it is visible only to references that follow it
+textually, in its own region or elsewhere in the module — exactly like a
+root-level `let` or `param`. This holds across separate blocks of the same
+scope: a member declared in an earlier `scope A` block cannot see a binding a
+later `scope A` block introduces, while the reverse order works. The same
+textual rule governs a binding reached through `open` — plain, `using`, or
+`hiding` alike: a reference sees the binding once the reference itself
+follows the binding's own declaration, regardless of where the `open`
+appears — an `open` written before the scope that declares the binding still
+exposes it to a later reference, just not to an earlier one.
 
 A scoped `var` is assigned through its path (`A::count := 1`) or, inside its
 region or after an `open`, through its bare name. A scoped `let` is not

@@ -1657,6 +1657,55 @@ class TestParams:
         assert r.ok
         assert s.program_name() == "demo"
 
+    def test_unset_scoped_param_reference_is_clean_error(self) -> None:
+        # A required scoped param must report the same clean diagnostic as a
+        # root param and leave the session alive for later entries, not crash
+        # with an unhandled IR error.
+        s = ReplSession()
+        r = s.eval_entry("scope A\nparam p: int\nend A\nprint(A::p)")
+        assert not r.ok
+        assert r.diagnostics
+        assert "A::p" in r.diagnostics[0].message
+        assert "Missing required param" in r.diagnostics[0].message
+        after = s.eval_entry('"still alive"')
+        assert after.ok
+        assert _text(after.value) == "still alive"
+
+    def test_program_name_loads_scoped_param_config(self) -> None:
+        # A config-file value for a scoped param must be applied by its full
+        # path spelling, exactly like a root param by its bare name.
+        s = ReplSession(
+            params_config_loader=lambda name: {"p": 42, "A::q": 77} if name == "demo" else {}
+        )
+        r = s.eval_entry("program demo\nparam p: int\nscope A\nparam q: int\nend A\n[p, A::q]")
+        assert r.ok
+        assert s.program_name() == "demo"
+        n1, t1, v1 = s.declared_params()[0]
+        n2, t2, v2 = s.declared_params()[1]
+        assert (n1, _int(v1)) == ("p", 42)
+        assert (n2, _int(v2)) == ("A::q", 77)
+
+    def test_declared_params_lists_scoped_param_by_full_path(self) -> None:
+        s = ReplSession()
+        s.eval_entry("scope A\nparam p: int = 5\nend A")
+        ins = s.declared_params()
+        assert len(ins) == 1
+        name, typ, val = ins[0]
+        assert name == "A::p"
+        assert isinstance(typ, IntType)
+        assert _int(val) == 5
+
+    def test_scoped_param_failing_default_does_not_corrupt_next_entry(self) -> None:
+        # A scoped param whose default raises must not be promoted; the next
+        # entry must degrade gracefully rather than crash on an unbound symbol.
+        s = ReplSession()
+        first = s.eval_entry('scope A\nparam p: int = "x" as int\nend A')
+        assert not first.ok
+        assert s.declared_params() == []
+        second = s.eval_entry("let q = A::p + 1")
+        assert not second.ok
+        assert second.diagnostics
+
 
 # ---------------------------------------------------------------------------
 # reset

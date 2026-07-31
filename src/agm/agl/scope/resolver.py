@@ -1993,7 +1993,17 @@ class _Resolver:
         self._resolve_expr(node.value)
 
     def _resolve_param(self, node: ParamDecl) -> None:
-        if not self._at_root or self._current_scope().scope_path:
+        """Resolve a ``param`` declaration, root or a region member alike.
+
+        A region does not clear ``_at_root`` (see ``_resolve_scope_region``),
+        so this single check admits both a root ``param`` and one declared
+        inside a scope region while still rejecting one nested in an ordinary
+        block. There is no declaration-path shorthand for ``param``, so unlike
+        ``let``/``var`` this needs no wrapper branching on ``node.scope_path``:
+        ``_define`` below already routes to the current scope's member layer
+        when a region pushed one.
+        """
+        if not self._at_root:
             raise AglScopeError(
                 f"'param' declarations are only allowed at the program root, "
                 f"not inside a nested block (found 'param {node.name}' here).",

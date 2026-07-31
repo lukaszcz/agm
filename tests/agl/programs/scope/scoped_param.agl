@@ -1,0 +1,19 @@
+# Scoped `param` declarations: region-form only, external key is the full
+# path, a default is used when a param is left unsupplied, nested regions
+# accumulate their path, and a scoped param is visible bare inside its own
+# region and after `open`.
+open Deploy
+
+param increment: int
+
+scope Deploy
+param region: text = "eu"
+param replicas: int
+scope Retry
+param attempts: int = 1
+end Retry
+end Deploy
+
+print("%{Deploy::region} x %{Deploy::replicas}")
+print("%{region}")
+print(Deploy::Retry::attempts + increment)

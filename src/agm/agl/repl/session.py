@@ -207,7 +207,9 @@ class ReplSession:
         self._next_node_id: int = 0
         self._program_name: str | None = None
         self._active_config: dict[str, object] = {}
-        self._declared_params: dict[str, Type] = {}
+        # Keyed by external key (full path spelling for a scoped param, bare
+        # name for a root param); value is (declared type, declaration node id).
+        self._declared_params: dict[str, tuple[Type, int]] = {}
         # Source log of successfully-promoted entries (for dump_source / :save).
         self._source_log: list[str] = []
         # Agents declared by source in prior promoted entries, keyed by their
@@ -593,7 +595,7 @@ class ReplSession:
     ) -> tuple[EntryResult | None, dict[str, Value], str | None, dict[str, object]]:
         """Validate and convert config-backed params without mutating session state."""
         from agm.agl.runtime.params import convert_param_value
-        from agm.agl.syntax.nodes import ParamDecl, ProgramDecl
+        from agm.agl.syntax.nodes import ParamDecl, ProgramDecl, param_external_key, static_items
 
         def reject(message: str, span: "SourceSpan") -> EntryResult:
             return self._fail([diagnostic_from_span(message, span)], warnings)
@@ -602,7 +604,7 @@ class ReplSession:
         entry_program_name: str | None = None
         effective_config = self._active_config
 
-        for item in program.body.items:
+        for item in static_items(program.body.items):
             if isinstance(item, ProgramDecl):
                 if self._program_name is not None and self._program_name != item.name:
                     return (
@@ -623,18 +625,19 @@ class ReplSession:
                         else {}
                     )
             elif isinstance(item, ParamDecl):
-                raw_config = effective_config.get(item.name)
+                external_name = param_external_key(item)
+                raw_config = effective_config.get(external_name)
                 if raw_config is not None:
                     declared_type = checked.type_env.get_binding_type(item.node_id)
                     assert declared_type is not None
                     try:
-                        param_values[item.name] = convert_param_value(
-                            item.name, raw_config, declared_type, checked.type_env.type_table
+                        param_values[external_name] = convert_param_value(
+                            external_name, raw_config, declared_type, checked.type_env.type_table
                         )
                     except (TypeError, ValueError) as exc:
                         return (
                             reject(
-                                f"Config value for param {item.name!r} is invalid: {exc}",
+                                f"Config value for param {external_name!r} is invalid: {exc}",
                                 item.span,
                             ),
                             {},
@@ -650,7 +653,7 @@ class ReplSession:
                     )
                     return (
                         reject(
-                            f"Missing required param {item.name!r}: provide it"
+                            f"Missing required param {external_name!r}: provide it"
                             f"{prog_hint} or a default expression.",
                             item.span,
                         ),
@@ -716,7 +719,9 @@ class ReplSession:
             TypeAlias,
             VarDecl,
             is_scoped_declaration,
+            param_external_key,
             pattern_binder_candidates,
+            static_items,
         )
         from agm.agl.syntax.types import render_type_expr
         from agm.agl.typecheck.env import TypeEnvironment
@@ -825,8 +830,8 @@ class ReplSession:
                 for name in stale_member_names:
                     node.members.pop(name, None)
             self._declared_params = {
-                name: typ
-                for name, typ in self._declared_params.items()
+                name: (typ, decl_node_id)
+                for name, (typ, decl_node_id) in self._declared_params.items()
                 if not self._type_mentions_entry_nominal(typ, promoted_type_identities)
             }
             self._ambient_constructor_candidates = {
@@ -950,11 +955,11 @@ class ReplSession:
             self._ambient_type_names |= frozenset(
                 name for path, name in promoted_type_identities if not path
             )
-        for item in program.body.items:
-            if isinstance(item, ParamDecl) and item.node_id in promoted_binding_node_ids:
+        for item in static_items(program.body.items):
+            if isinstance(item, ParamDecl) and _is_promoted(item.node_id):
                 typ = checked.type_env.get_binding_type(item.node_id)
                 assert typ is not None
-                self._declared_params[item.name] = typ
+                self._declared_params[param_external_key(item)] = (typ, item.node_id)
         if entry_program_name is not None and not partial:
             self._program_name = entry_program_name
             self._active_config = entry_active_config
@@ -1253,10 +1258,14 @@ class ReplSession:
         return names
 
     def declared_params(self) -> list[tuple[str, "Type", "Value"]]:
-        """Return declared params as (name, type, resolved value)."""
+        """Return declared params as (external key, type, resolved value).
+
+        A scoped param's key is its full path spelling, matching how it is
+        supplied from the CLI and config; a root param's key is its bare name.
+        """
         result: list[tuple[str, Type, Value]] = []
-        for name, typ in self._declared_params.items():
-            value = self._declaration_value(self._session_scope.bindings[name].decl_node_id)
+        for name, (typ, decl_node_id) in self._declared_params.items():
+            value = self._declaration_value(decl_node_id)
             assert value is not None
             result.append((name, typ, value))
         return result

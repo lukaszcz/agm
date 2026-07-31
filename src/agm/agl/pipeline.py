@@ -707,7 +707,7 @@ class PipelineDriver:
         lowering by :meth:`run_prepared`.
         """
         from agm.agl.modules.ids import ENTRY_ID
-        from agm.agl.syntax.nodes import ParamDecl
+        from agm.agl.syntax.nodes import ParamDecl, param_external_key, static_items
 
         if prepared.resolved is None:
             return ParamDiscovery(
@@ -766,15 +766,16 @@ class PipelineDriver:
             )
 
         infos: list[ParamDeclInfo] = []
-        for item in entry_cm.resolved.program.body.items:
+        for item in static_items(entry_cm.resolved.program.body.items):
             if isinstance(item, ParamDecl):
                 param_type = entry_cm.type_env.get_binding_type(item.node_id)
                 assert param_type is not None, (
                     f"Param {item.name!r} has no recorded binding type; checker invariant violated."
                 )
+                external_name = param_external_key(item)
                 infos.append(
                     ParamDeclInfo(
-                        name=item.name,
+                        name=external_name,
                         type=param_type,
                         has_default=item.default is not None,
                         line=item.span.start_line,

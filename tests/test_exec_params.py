@@ -37,6 +37,35 @@ class TestSourceDiscovery:
 
         assert [param.name for param in params] == ["selected"]
 
+    def test_scoped_param_discovers_under_its_full_path_spelling(self) -> None:
+        """A scoped param's external key is its full path, e.g. 'Deploy::region'."""
+        from agm.cli_support.exec_params import discover_params_from_source
+
+        params = discover_params_from_source(
+            'scope Deploy\nparam region: text = "eu"\nend Deploy\nDeploy::region'
+        )
+
+        assert [param.name for param in params] == ["Deploy::region"]
+
+    def test_nested_scoped_param_discovers_under_its_full_path_spelling(self) -> None:
+        from agm.cli_support.exec_params import discover_params_from_source
+
+        params = discover_params_from_source(
+            "scope A\nscope B\nparam x: int\nend B\nend A\nA::B::x"
+        )
+
+        assert [param.name for param in params] == ["A::B::x"]
+
+    def test_root_and_scoped_params_are_both_discovered(self) -> None:
+        from agm.cli_support.exec_params import discover_params_from_source
+
+        params = discover_params_from_source(
+            'param increment: int\nscope Deploy\nparam region: text = "eu"\nend Deploy\n'
+            "print(Deploy::region)\nincrement"
+        )
+
+        assert {param.name for param in params} == {"increment", "Deploy::region"}
+
 
 # ---------------------------------------------------------------------------
 # param_flag

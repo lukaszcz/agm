@@ -36,10 +36,10 @@ from agm.agl.syntax.nodes import (
     ParamDecl,
     ParamKind,
     Program,
-    ScopeRegion,
     VarDecl,
     VarRef,
     pattern_binding_node_ids,
+    static_items,
 )
 from agm.agl.syntax.visitor import walk
 from agm.agl.typecheck.inference import ConstraintRole, InferenceEngine, InferenceError
@@ -214,24 +214,13 @@ def _declaration_key(node: FuncDef) -> tuple[int, int]:
 _CandidateFunction = tuple[CandidateModule, FuncDef]
 
 
-def _static_items(items: tuple[object, ...]) -> tuple[object, ...]:
-    """Flatten named scope regions while retaining their declaration paths."""
-    result: list[object] = []
-    for item in items:
-        if isinstance(item, ScopeRegion):
-            result.extend(_static_items(item.items))
-        else:
-            result.append(item)
-    return tuple(result)
-
-
 def _candidate_functions(component: ModuleCandidateComponent) -> dict[int, _CandidateFunction]:
     """Return this import SCC's unannotated ordinary functions by declaration id."""
     functions: dict[int, _CandidateFunction] = {}
     for module in component.modules:
         program = module.resolved.program
         assert isinstance(program, Program)
-        for item in _static_items(program.body.items):
+        for item in static_items(program.body.items):
             if (
                 isinstance(item, FuncDef)
                 and item.return_type is None
@@ -378,7 +367,7 @@ def _seed_candidate_visible_bindings(
         # dependents — are typed by the authoritative pass once every signature
         # is concrete.
         tainted = set(session.provisional_declaration_ids)
-        for item in _static_items(program.body.items):
+        for item in static_items(program.body.items):
             if isinstance(item, FuncDef):
                 session.visible_binding_snapshots[(module.module_id, item.node_id)] = (
                     module.env.snapshot_binding_types()

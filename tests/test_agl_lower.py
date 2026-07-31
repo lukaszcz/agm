@@ -2436,6 +2436,24 @@ class TestHostOpLowering:
         assert required_map["x"] is True
         assert required_map["y"] is False
 
+    def test_scoped_param_public_name_is_its_full_path_spelling(self) -> None:
+        """A scoped param's IrParam.public_name is its full `::` path, the
+        external key CLI/config lookups use."""
+        source = 'scope Deploy\nparam region: text = "eu"\nend Deploy\nDeploy::region'
+        prog = _lower(source)
+        assert len(prog.params) == 1
+        p = prog.params[0]
+        assert p.public_name == "Deploy::region"
+
+    def test_scoped_param_symbol_public_name_matches_its_ir_param(self) -> None:
+        """The allocated symbol's own public_name matches the IrParam's, so
+        REPL echo/result collection stays keyed by the same external spelling."""
+        source = "scope A\nscope B\nparam x: int\nend B\nend A\nA::B::x"
+        prog = _lower(source)
+        (p,) = prog.params
+        assert p.public_name == "A::B::x"
+        assert prog.symbols[p.symbol].public_name == "A::B::x"
+
     def test_ask_lowers_to_ir_ask_m6b(self) -> None:
         """ask() now lowers to IrAsk."""
         from agm.agl.ir.nodes import IrAsk

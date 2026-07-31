@@ -11,7 +11,7 @@ from agm.agl.ir.contracts import ContractPayload
 from agm.agl.ir.ids import NominalId, SourceId, SymbolId
 from agm.agl.ir.program import ExecutableProgram, NominalDescriptor, SourceFile
 from agm.agl.ir.validate import validate_ir
-from agm.agl.lower.lowerer import InitializerOrigin, _LinkState, _Lowerer, _static_items
+from agm.agl.lower.lowerer import InitializerOrigin, _LinkState, _Lowerer
 from agm.agl.matchcompile import MatchCompiledModule, MatchCompiledProgram
 from agm.agl.modules.ids import ENTRY_ID, ModuleId
 from agm.agl.self_validation import self_validation_enabled
@@ -34,6 +34,7 @@ from agm.agl.syntax.nodes import (
     VarDecl,
     pattern_binder_candidates,
     simple_let_pattern_name,
+    static_items,
 )
 from agm.util.text import normalize_newlines
 
@@ -319,14 +320,14 @@ def _promotion_plan(
     source_declaration_ids = tuple(_item_declaration_ids(item, checked) for item in items)
     params = tuple(
         ParamOrigin(declaration_id=item.node_id, symbol=decl_to_sym[item.node_id])
-        for item in items
+        for item in static_items(items)
         if isinstance(item, ParamDecl)
     )
     entry_declaration_ids = frozenset().union(*source_declaration_ids, frozenset())
     # Same-named declarations at different scope paths share one entry here, so a
     # nominal reference depends on every declaration that could have produced it.
     type_declaration_ids: dict[str, frozenset[int]] = {}
-    for item in _static_items(items):
+    for item in static_items(items):
         if isinstance(item, (EnumDef, ExceptionDef, RecordDef, TypeAlias)):
             type_declaration_ids[item.name] = type_declaration_ids.get(
                 item.name, frozenset()

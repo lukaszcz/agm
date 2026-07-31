@@ -671,6 +671,17 @@ class TestScopedBindingRetention:
         assert result.ok, result.diagnostics
         assert result.value == IntValue(1)
 
+    def test_retained_member_cannot_be_reopened_as_a_nested_scope(self) -> None:
+        s = ReplSession()
+        assert s.eval_entry("scope A\nlet B = 1\nend A").ok
+
+        reopened = s.eval_entry("scope A::B\nlet x = 2\nend A::B")
+
+        assert not reopened.ok
+        original = s.eval_entry("A::B")
+        assert original.ok, original.diagnostics
+        assert original.value == IntValue(1)
+
     def test_same_named_bindings_at_different_paths_coexist_and_stay_distinct(self) -> None:
         s = ReplSession()
         assert s.eval_entry("let A::x = 1").ok
@@ -1985,6 +1996,18 @@ class TestParams:
         assert name == "A::p"
         assert isinstance(typ, IntType)
         assert _int(val) == 5
+
+    def test_scoped_param_metadata_is_removed_when_another_member_replaces_it(self) -> None:
+        s = ReplSession()
+        assert s.eval_entry("scope A\nparam x: int = 1\nend A").ok
+
+        replacement = s.eval_entry("scope A\nlet x = 2\nend A")
+
+        assert replacement.ok, replacement.diagnostics
+        assert s.declared_params() == []
+        value = s.eval_entry("A::x")
+        assert value.ok, value.diagnostics
+        assert value.value == IntValue(2)
 
     def test_scoped_param_failing_default_does_not_corrupt_next_entry(self) -> None:
         # A scoped param whose default raises must not be promoted; the next
@@ -3618,6 +3641,20 @@ class TestImports:
         r = s.eval_entry("scope A\ndef go2() -> int = add(3, 4)\nend A\nA::go2()")
         assert r.ok, r.diagnostics
         assert _int(r.value) == 7
+
+    def test_later_region_scoped_import_replaces_the_prior_selection(self, tmp_path: Path) -> None:
+        (tmp_path / "mylib.agl").write_text("def x() -> int = 1\ndef y() -> int = 2\n")
+        s = self._make_session_with_root(tmp_path)
+
+        assert s.eval_entry("scope A\nimport mylib using x\nend A").ok
+        replacement = s.eval_entry("scope A\nimport mylib using y\nend A")
+
+        assert replacement.ok, replacement.diagnostics
+        old_selection = s.eval_entry("scope A\ndef old() -> int = x()\nend A")
+        assert not old_selection.ok
+        new_selection = s.eval_entry("scope A\ndef new() -> int = y()\nend A\nA::new()")
+        assert new_selection.ok, new_selection.diagnostics
+        assert new_selection.value == IntValue(2)
 
     def test_region_scoped_import_still_does_not_leak_bare_names_to_the_root(
         self, tmp_path: Path

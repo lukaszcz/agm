@@ -10,7 +10,7 @@ by ``ReplSession`` via the narrow ``EntryPipelineCtx`` Protocol. Must NOT import
 from __future__ import annotations
 
 from collections.abc import Iterator, Mapping
-from typing import TYPE_CHECKING, Protocol
+from typing import TYPE_CHECKING, Protocol, cast
 
 from agm.agl.diagnostics import Diagnostic
 from agm.agl.repl.entry import EntryKind, EntryResult
@@ -364,8 +364,8 @@ class EntryPipeline:
 
         Retention keeps each entry's declarations as written, so a retained
         wildcard is re-expanded here against the current roots and picks up
-        modules added since. Returns the entry's own declarations unexpanded,
-        which is what :meth:`_replace_accumulated_imports` retains.
+        modules added since. Root and region-scoped imports share one
+        chronological replacement decision per resolved module identity.
         """
         from agm.agl.syntax.nodes import ImportDecl
 
@@ -374,10 +374,9 @@ class EntryPipeline:
         expanded, next_start_id, _expanded_imports = self._expand_entry_wildcards(
             program, next_start_id, roots
         )
-        import_preamble, next_start_id = self._retained_import_preamble(
-            entry_imports, roots, next_start_id
+        import_preamble, open_preamble, next_start_id = self._retained_preamble(
+            entry_imports, entry_opens, roots, next_start_id
         )
-        open_preamble = self._retained_open_preamble()
         preamble: list[Item] = [*import_preamble, *open_preamble]
         return (
             self._prepend_items(expanded, preamble),
@@ -634,8 +633,7 @@ class EntryPipeline:
         self._ctx._link_image.mark_linked(
             mid for mid in checked_program.modules if not mid.is_entry
         )
-        self._replace_accumulated_imports(entry_imports)
-        self._retain_open_declarations(entry_opens)
+        self._retain_import_context(entry_imports, entry_opens)
         marker = lowered.trailing_expression
         initializer_values = interp.module_initializer_values.get(lowered.program.entry_module)
         captured = (
@@ -661,32 +659,87 @@ class EntryPipeline:
             type_table=checked.type_env.type_table,
         )
 
-    def _retained_import_preamble(
+    def _retained_preamble(
         self,
         entry_imports: tuple[ImportDecl, ...],
+        entry_opens: tuple[OpenDecl | ImportDecl | ScopeRegion, ...],
         roots: RootSet,
         next_start_id: int,
-    ) -> tuple[list[ImportDecl], int]:
-        """Expand retained entries and keep the newest declarations per module.
+    ) -> tuple[list[ImportDecl], list[OpenDecl | ImportDecl | ScopeRegion], int]:
+        """Expand retained entries and keep the newest import generation per module.
 
         Retained wildcards are re-expanded against the current roots, so a
-        module added since the wildcard was written is imported now. Later
-        entries still replace earlier ones module by module: a module named by
-        this entry drops out entirely, and a module named by several retained
-        entries keeps only the newest one's declarations.
+        module added since the wildcard was written is imported now. Root and
+        region-scoped imports participate in the same chronological generations:
+        every declaration for a module in the newest entry that names it is
+        retained, while all older root or scoped declarations for that module
+        are removed. Scope ``open`` declarations are not imports and remain
+        cumulative.
         """
-        replaced = {tuple(decl.module_path) for decl in entry_imports}
-        newest: dict[tuple[str, ...], list[ImportDecl]] = {}
-        for generation in self._ctx._accumulated_imports:
-            expanded, next_start_id = self._expand_decls(generation, roots, next_start_id)
-            covered: dict[tuple[str, ...], list[ImportDecl]] = {}
-            for decl in expanded:
-                covered.setdefault(tuple(decl.module_path), []).append(decl)
-            newest.update(covered)
-        return (
-            [decl for path, decls in newest.items() if path not in replaced for decl in decls],
-            next_start_id,
+        generations: list[
+            tuple[
+                list[ImportDecl],
+                tuple[OpenDecl | ImportDecl | ScopeRegion, ...],
+                frozenset[tuple[str, ...]],
+            ]
+        ] = []
+        for retained_root_decls, scoped_items in zip(
+            self._ctx._accumulated_imports, self._ctx._accumulated_opens, strict=True
+        ):
+            expanded_root_decls, next_start_id = self._expand_decls(
+                retained_root_decls, roots, next_start_id
+            )
+            expanded_scoped, next_start_id = self._expand_retained_scoped_imports(
+                scoped_items, roots, next_start_id
+            )
+            all_decls = (*expanded_root_decls, *self._scoped_import_decls(expanded_scoped))
+            generations.append(
+                (
+                    expanded_root_decls,
+                    expanded_scoped,
+                    frozenset(tuple(decl.module_path) for decl in all_decls),
+                )
+            )
+
+        latest_generation: dict[tuple[str, ...], int] = {}
+        for index, (_root, _scoped, covered) in enumerate(generations):
+            latest_generation.update((path, index) for path in covered)
+        current_decls = (*entry_imports, *self._scoped_import_decls(entry_opens))
+        current_index = len(generations)
+        latest_generation.update(
+            (path, current_index) for path in self._module_paths(current_decls, roots)
         )
+
+        retained_root: list[ImportDecl] = []
+        retained_scoped: list[OpenDecl | ImportDecl | ScopeRegion] = []
+        for index, (root_decls, scoped_items, _covered) in enumerate(generations):
+            retained_root.extend(
+                decl for decl in root_decls if latest_generation[tuple(decl.module_path)] == index
+            )
+            retained_scoped.extend(
+                self._filter_retained_scoped_imports(
+                    scoped_items,
+                    index,
+                    latest_generation,
+                )
+            )
+        return retained_root, retained_scoped, next_start_id
+
+    @staticmethod
+    def _module_paths(decls: tuple[ImportDecl, ...], roots: RootSet) -> frozenset[tuple[str, ...]]:
+        """Return exact module identities named by raw import declarations."""
+        from agm.agl.modules.resolver import expand_wildcard
+
+        paths: set[tuple[str, ...]] = set()
+        for decl in decls:
+            if decl.wildcard:
+                paths.update(
+                    module.segments
+                    for module in expand_wildcard(tuple(decl.module_path), roots, span=decl.span)
+                )
+            else:
+                paths.add(tuple(decl.module_path))
+        return frozenset(paths)
 
     @staticmethod
     def _expand_decls(
@@ -744,27 +797,88 @@ class EntryPipeline:
                     retained.append(replace(item, items=nested))
         return tuple(retained)
 
-    def _retained_open_preamble(self) -> list[OpenDecl | ImportDecl | ScopeRegion]:
-        """Return every successful entry's scope opens in entry order."""
-        return [item for generation in self._ctx._accumulated_opens for item in generation]
+    @staticmethod
+    def _scoped_import_decls(
+        items: tuple[OpenDecl | ImportDecl | ScopeRegion, ...],
+    ) -> tuple[ImportDecl, ...]:
+        """Flatten the region-scoped imports retained inside *items*."""
+        from agm.agl.syntax.nodes import ImportDecl, ScopeRegion
 
-    def _replace_accumulated_imports(self, entry_imports: tuple[ImportDecl, ...]) -> None:
-        """Retain this entry's declarations as written, as the newest generation.
+        result: list[ImportDecl] = []
+        for item in items:
+            if isinstance(item, ImportDecl):
+                result.append(item)
+            elif isinstance(item, ScopeRegion):
+                result.extend(
+                    EntryPipeline._scoped_import_decls(
+                        cast("tuple[OpenDecl | ImportDecl | ScopeRegion, ...]", item.items)
+                    )
+                )
+        return tuple(result)
 
-        Declarations are kept unexpanded so a wildcard keeps tracking the module
-        set. Earlier generations stay: a wildcard among them may still name a
-        module this entry does not, and per-module precedence is applied when
-        the preamble is built.
-        """
-        if entry_imports:
-            self._ctx._accumulated_imports.append(entry_imports)
+    @staticmethod
+    def _expand_retained_scoped_imports(
+        items: tuple[OpenDecl | ImportDecl | ScopeRegion, ...],
+        roots: RootSet,
+        next_start_id: int,
+    ) -> tuple[tuple[OpenDecl | ImportDecl | ScopeRegion, ...], int]:
+        """Expand scoped wildcard imports while preserving their region wrappers."""
+        from dataclasses import replace
 
-    def _retain_open_declarations(
-        self, entry_opens: tuple[OpenDecl | ImportDecl | ScopeRegion, ...]
+        from agm.agl.syntax.nodes import ImportDecl, ScopeRegion
+
+        expanded_items: list[OpenDecl | ImportDecl | ScopeRegion] = []
+        for item in items:
+            if isinstance(item, ImportDecl):
+                expanded, next_start_id = EntryPipeline._expand_decls((item,), roots, next_start_id)
+                expanded_items.extend(expanded)
+            elif isinstance(item, ScopeRegion):
+                nested, next_start_id = EntryPipeline._expand_retained_scoped_imports(
+                    cast("tuple[OpenDecl | ImportDecl | ScopeRegion, ...]", item.items),
+                    roots,
+                    next_start_id,
+                )
+                expanded_items.append(replace(item, items=nested))
+            else:
+                expanded_items.append(item)
+        return tuple(expanded_items), next_start_id
+
+    @staticmethod
+    def _filter_retained_scoped_imports(
+        items: tuple[OpenDecl | ImportDecl | ScopeRegion, ...],
+        generation: int,
+        latest_generation: Mapping[tuple[str, ...], int],
+    ) -> tuple[OpenDecl | ImportDecl | ScopeRegion, ...]:
+        """Filter scoped imports by module while retaining cumulative scope opens."""
+        from dataclasses import replace
+
+        from agm.agl.syntax.nodes import ImportDecl, ScopeRegion
+
+        retained: list[OpenDecl | ImportDecl | ScopeRegion] = []
+        for item in items:
+            if isinstance(item, ImportDecl):
+                if latest_generation[tuple(item.module_path)] == generation:
+                    retained.append(item)
+            elif isinstance(item, ScopeRegion):
+                nested = EntryPipeline._filter_retained_scoped_imports(
+                    cast("tuple[OpenDecl | ImportDecl | ScopeRegion, ...]", item.items),
+                    generation,
+                    latest_generation,
+                )
+                if nested:
+                    retained.append(replace(item, items=nested))
+            else:
+                retained.append(item)
+        return tuple(retained)
+
+    def _retain_import_context(
+        self,
+        entry_imports: tuple[ImportDecl, ...],
+        entry_opens: tuple[OpenDecl | ImportDecl | ScopeRegion, ...],
     ) -> None:
-        """Retain successful scope opens for every later REPL entry."""
-        if entry_opens:
-            self._ctx._accumulated_opens.append(entry_opens)
+        """Retain one successful entry's aligned root/scoped import generation."""
+        self._ctx._accumulated_imports.append(entry_imports)
+        self._ctx._accumulated_opens.append(entry_opens)
 
     def _persist_interpreter_settings(self, interp: "IrInterpreter", trace: "TraceStore") -> None:
         """Persist completed setting writes and the live trace destination."""

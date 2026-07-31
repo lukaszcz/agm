@@ -86,6 +86,7 @@ from agm.agl.scope.symbols import (
     apply_open_selection,
     duplicate_binder_message,
     immutable_binder_phrase,
+    local_scope_bindings,
     resolve_bare_constructor_contribution,
     resolve_bare_contribution,
 )
@@ -129,6 +130,7 @@ from agm.agl.syntax.nodes import (
     FuncDef,
     If,
     ImportDecl,
+    ImportItem,
     IndexAccess,
     IndexTarget,
     InfixDecl,
@@ -291,6 +293,16 @@ class _Resolver:
         # into this entry's fresh resolver image and committed only after a
         # successful evaluation, so a failed entry cannot mutate session state.
         self._repl_session_scope_nodes = dict(repl_session_scope_nodes or {})
+        # A retained ordinary member may be replaced by a later member at the
+        # same path, but it cannot simultaneously become a namespace prefix.
+        # Type and named-scope members already own retained scope nodes and are
+        # therefore excluded from this ordinary-member set.
+        self._repl_session_ordinary_member_paths = {
+            (*path, name)
+            for path, node in self._repl_session_scope_nodes.items()
+            for name in node.members
+            if (*path, name) not in self._repl_session_scope_nodes
+        }
         # Each retained type-owned path maps to its rendered alias target, or
         # None for a nominal type: receiver classification cannot tell the two
         # apart from a path alone.
@@ -391,6 +403,10 @@ class _Resolver:
         self._active_match_site_node_id: int | None = None
         self._active_match_site_binder_kind: BinderKind | None = None
         self._next_pattern_slot_id: int = 0
+        # Filtered local opens are resolved live while binders are registered.
+        # Validate their selections once more against the completed scope tree
+        # so an item that was never referenced cannot silently remain unknown.
+        self._deferred_local_open_selections: list[LocalOpenSelection] = []
         # Loop-context flag: True when resolving inside a loop body (while_cond,
         # body, or until_cond). Reset to False across fn/def boundaries so that
         # `break`/`continue` cannot cross a function boundary into an outer loop.
@@ -492,6 +508,7 @@ class _Resolver:
 
         # Main walk: resolve all block items in order.
         self._resolve_block_items(program.body.items)
+        self._validate_deferred_local_open_selections()
 
         self._at_root = False
         self._pop_scope()
@@ -569,7 +586,7 @@ class _Resolver:
             scope_path = path[: index + 1]
             key = (self._module_id, parent_path, name)
             existing = self._scope_entity_kinds.get(key)
-            if existing == "ordinary":
+            if existing == "ordinary" or scope_path in self._repl_session_ordinary_member_paths:
                 raise AglScopeError(f"Name '{name}' is already declared in this scope.", span=span)
             self._scope_entity_kinds.setdefault(key, "scope")
             self._scope_paths.add(scope_path)
@@ -1647,25 +1664,39 @@ class _Resolver:
             None if decl.scope_ref.module_route else self._open_local_scope_path(requested_path)
         )
         if local_path is not None:
-            self._current_scope().opened_local_scopes.add(
-                LocalOpenSelection(scope_path=local_path, mode=decl.mode, items=decl.items)
-            )
+            selection = LocalOpenSelection(scope_path=local_path, mode=decl.mode, items=decl.items)
+            self._current_scope().opened_local_scopes.add(selection)
+            if decl.mode is not ImportMode.ALL:
+                self._deferred_local_open_selections.append(selection)
             return
 
         target = self._open_target_members(decl)
         if decl.mode is not ImportMode.ALL:
-            for item in decl.items:
-                prefix = (*tuple(segment.name for segment in item.scope_path), item.name)
-                if not any(_bare_path(atom)[: len(prefix)] == prefix for atom in target):
-                    raise AglScopeError(
-                        f"'{'::'.join(prefix)}' is not a public member of the opened scope.",
-                        span=item.span,
-                    )
+            self._validate_open_selection_items(decl.items, target)
         for atom, values in apply_open_selection(decl.mode, decl.items, target).items():
             for ref, constructor in values:
                 self._current_scope().contribute_bare(atom, ref)
                 if constructor is not None:
                     self._current_scope().contribute_bare_constructor(atom, constructor)
+
+    @staticmethod
+    def _validate_open_selection_items(
+        items: tuple[ImportItem, ...], target: Mapping[NameAtom, object]
+    ) -> None:
+        """Reject filtered-open paths absent from a completed target subtree."""
+        for item in items:
+            prefix = (*tuple(segment.name for segment in item.scope_path), item.name)
+            if not any(_bare_path(atom)[: len(prefix)] == prefix for atom in target):
+                raise AglScopeError(
+                    f"'{'::'.join(prefix)}' is not a public member of the opened scope.",
+                    span=item.span,
+                )
+
+    def _validate_deferred_local_open_selections(self) -> None:
+        """Validate every filtered local open against the final member tree."""
+        for selection in self._deferred_local_open_selections:
+            target = local_scope_bindings(self._scope_nodes, selection.scope_path)
+            self._validate_open_selection_items(selection.items, target)
 
     def _cross_module_member_ref(
         self, atom: NameAtom, qname: QName, span: SourceSpan

@@ -703,6 +703,7 @@ class ReplSession:
         promoted_declaration_ids: frozenset[int],
     ) -> tuple[str, ...]:
         """Promote declarations whose IR initialization completed in this entry."""
+        from agm.agl.modules.ids import spell_scope_path
         from agm.agl.parser import resolve_infix_fixity
         from agm.agl.scope.symbols import ScopeNode
         from agm.agl.syntax.nodes import (
@@ -866,6 +867,7 @@ class ReplSession:
         for name, ref in promotion_bindings.items():
             if ref.decl_node_id not in promoted_binding_node_ids:
                 continue
+            self._declared_params.pop(name, None)
             self._session_scope.bindings[name] = ref
         installed = (
             self._installed_report(
@@ -905,6 +907,8 @@ class ReplSession:
                     and ref.decl_node_id not in stale_binding_node_ids
                     and _is_promoted(ref.decl_node_id)
                 ):
+                    if ref.decl_node_id in entry_declaration_node_ids:
+                        self._declared_params.pop(spell_scope_path((*path, name)), None)
                     session_node.members[name] = ref
         alias_targets = {
             type_identity(item): render_type_expr(item.type_expr)

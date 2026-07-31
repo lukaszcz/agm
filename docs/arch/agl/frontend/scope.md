@@ -35,8 +35,10 @@ records the target path together with its selection (`LocalOpenSelection`),
 and `resolve_bare_contribution`/`resolve_bare_constructor_contribution`
 reapply that selection against the current `ScopeNode` tree at every bare
 lookup, so a reference reached after the binder's own registration finds it
-regardless of selection form, even though the `open` came first. A
-cross-module `open`'s contribution is snapshotted eagerly, as before: an
+regardless of selection form, even though the `open` came first. After the
+walk, filtered local selections are validated against the completed tree, so
+an unknown `using` or `hiding` path is rejected even when no reference forced
+a lookup. A cross-module `open`'s contribution is snapshotted eagerly, as before: an
 imported module's public members are complete before the walk starts, so
 there is nothing to defer.
 

@@ -718,6 +718,13 @@ class TestScopedBindingOpenPrecedence:
         with pytest.raises(AglScopeError):
             parse_and_resolve("open A hiding y\nscope A\nvar x = 1\nvar y = 2\nend A\ny")
 
+    @pytest.mark.parametrize("mode", ["using", "hiding"])
+    def test_filtered_open_rejects_a_member_missing_after_the_scope_is_complete(
+        self, mode: str
+    ) -> None:
+        with pytest.raises(AglScopeError):
+            parse_and_resolve(f"open A {mode} missing\nscope A\nlet x = 1\nend A\n()")
+
     def test_open_using_before_the_binding_does_not_see_a_reference_before_it(self) -> None:
         """Textual precedence holds for ``using`` too: a reference walked
         before the binder registers still fails, even though the ``open``

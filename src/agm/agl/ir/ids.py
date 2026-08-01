@@ -108,6 +108,18 @@ class NominalId:
     declared_name: str
     scope_path: tuple[str, ...] = ()
 
+    @property
+    def display_name(self) -> str:
+        """Return the source spelling for diagnostics and host-minted values.
+
+        The one shared "spell this nominal" helper: every host-minted value
+        (a raised built-in exception, a structured ``exec`` result, an
+        ``ask-request`` payload, ...) presents this instead of its bare
+        ``declared_name``, so a scoped declaration reports itself the same
+        way a source-constructed value already does.
+        """
+        return "::".join((*self.scope_path, self.declared_name))
+
 
 # ---------------------------------------------------------------------------
 # Source location

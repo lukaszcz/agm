@@ -1247,12 +1247,11 @@ class TestBuiltinNominalsTable:
     def test_declared_builtin_type_resolves_to_the_declaration_identity(self) -> None:
         """A program's own ``builtin`` declaration is reflected in its table.
 
-        Every ``builtin`` declaration is currently canonicalized to the same
-        prelude identity regardless of where it is written (see
-        ``typecheck.builder.owning_module_id``/``owning_scope_path``), so
-        this currently coincides with the shipped standard library's own
-        identity for ``RangeError`` — the declaration is still what drives
-        the table's answer, that identity is just what it resolves to today.
+        The declaration is at the root (empty scope path), so its identity
+        coincides with the shipped standard library's own identity for
+        ``RangeError`` — the declaration is still what drives the table's
+        answer, that identity is just what an unscoped declaration resolves
+        to.
         """
         from agm.agl.ir.ids import NominalId
         from agm.agl.modules.ids import PRELUDE_ID
@@ -1260,6 +1259,23 @@ class TestBuiltinNominalsTable:
         source = "builtin exception RangeError extends Exception()\n()\n"
         prog = _lower(source)
         assert prog.builtin_nominals.nominal("RangeError") == NominalId(PRELUDE_ID, "RangeError")
+
+    def test_scoped_declared_builtin_type_resolves_to_its_own_declared_path(self) -> None:
+        """A SCOPED ``builtin`` declaration's own path drives the table's answer.
+
+        A ``builtin`` declaration inside a named scope region is a distinct
+        nominal from a same-named one at another path (or at the root), so
+        the table answers with the declaration's own scope path here, not
+        the shipped standard library's root identity.
+        """
+        from agm.agl.ir.ids import NominalId
+        from agm.agl.modules.ids import PRELUDE_ID
+
+        source = "scope A\nbuiltin exception RangeError extends Exception()\nend A\n()\n"
+        prog = _lower(source)
+        assert prog.builtin_nominals.nominal("RangeError") == NominalId(
+            PRELUDE_ID, "RangeError", ("A",)
+        )
 
     def test_range_error_raised_at_runtime_carries_the_table_nominal(self) -> None:
         """A ``for`` loop with a non-positive step raises ``RangeError`` with the table's nominal.
@@ -1273,6 +1289,35 @@ class TestBuiltinNominalsTable:
         exc = evaluate_ir_raises("let step = 0\nfor i in 1 to 5 by step do\n  ()\ndone\n")
         assert exc.display_name == "RangeError"
         assert exc.nominal == NO_BUILTIN_DECLARATIONS.nominal("RangeError")
+
+    def test_scoped_range_error_raised_at_runtime_carries_the_scoped_nominal(self) -> None:
+        """A host-raised exception now carries its declaring region's own path.
+
+        Before per-path identity was restored, a scoped ``builtin
+        exception`` kept its declared path while the host minted a
+        path-free nominal, so a catch clause declared at that same path
+        could never match a host-raised instance. Here the ``for``-loop
+        step guard's host-raised ``RangeError`` — with the type declared
+        inside ``scope A`` and nothing declared at the root — carries the
+        exact scoped identity a same-region ``catch RangeError`` resolves
+        to, not the path-free one, and reports its declared spelling.
+        """
+        from agm.agl.ir.ids import NominalId
+        from agm.agl.modules.ids import PRELUDE_ID
+        from tests.agl.ir_harness import evaluate_ir_raises
+
+        source = (
+            "scope A\n"
+            "builtin exception RangeError extends Exception()\n"
+            "end A\n"
+            "let step = 0\n"
+            "for i in 1 to 5 by step do\n"
+            "  ()\n"
+            "done\n"
+        )
+        exc = evaluate_ir_raises(source)
+        assert exc.display_name == "A::RangeError"
+        assert exc.nominal == NominalId(PRELUDE_ID, "RangeError", ("A",))
 
     def test_max_iterations_exceeded_raised_at_runtime_carries_the_table_nominal(self) -> None:
         """A ``do[n]`` loop exhausted at its bound carries the table's nominal."""

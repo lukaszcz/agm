@@ -14,13 +14,11 @@ from typing import Protocol
 
 from agm.agl.capabilities import HostCapabilities
 from agm.agl.diagnostics import Diagnostic
-from agm.agl.modules.ids import PRELUDE_ID
 from agm.agl.semantics.types import (
     AgentType,
     BoolType,
     FunctionType,
     JsonType,
-    RecordType,
     TextType,
     Type,
     UnitType,
@@ -433,7 +431,6 @@ class BuiltinCallChecker:
         if not self._ctx._caps.supports_shell_exec:
             raise AglTypeError("The host does not support 'exec' (shell) calls.", span=node.span)
 
-        exec_result_type = self._ctx._env.get_type("ExecResult")
         target_type: Type
         # Explicit type argument overrides context.
         explicit = self._resolve_explicit_target(node, "exec")
@@ -442,8 +439,7 @@ class BuiltinCallChecker:
         elif expected is not None:
             target_type = expected
         else:
-            assert exec_result_type is not None
-            target_type = exec_result_type
+            target_type = self._exec_result_type()
         self._reject_type_var_target(target_type, node.span)
         named = {na.name: na for na in node.named_args}
         for arg_name, na in named.items():
@@ -471,6 +467,25 @@ class BuiltinCallChecker:
             )
         )
         return target_type
+
+    def _exec_result_type(self) -> Type:
+        """Return the ``ExecResult`` type this program's own declaration names.
+
+        ``exec``'s default (unannotated) target type, and the identity
+        ``_finalize_exec`` recognizes for a structured result, are both the
+        type a program's own ``builtin record ExecResult`` declaration
+        names — at whatever scope path it is written, so a scoped
+        declaration is recognized at its own path rather than the root. A
+        program loaded without the standard library declares no such
+        ``builtin`` of its own, so this falls back to the seeded canonical
+        (root) handle, which is always registered.
+        """
+        declared = self._ctx._env.type_table.builtin_declaration("ExecResult")
+        if declared is not None:
+            return declared.handle()
+        exec_result_type = self._ctx._env.get_type("ExecResult")
+        assert exec_result_type is not None
+        return exec_result_type
 
     # --- shared explicit-target resolver for --
 
@@ -626,18 +641,11 @@ class BuiltinCallChecker:
                 )
             spec = OutputContractSpec(target_type, "none", None, structured_exec=False)
         else:
-            # ``ExecResult`` is identified by its canonical identity
-            # (`module_id=PRELUDE_ID`, bare name — see `_TypeBuilder
-            # ._owning_module_id`/`._owning_scope_path`), not by an
-            # environment lookup of the bare name: a `builtin record
-            # ExecResult` declared inside a named scope region resolves to
-            # this very same identity, so comparing against it directly
-            # recognizes both spellings uniformly.
-            is_structured = (
-                isinstance(target_type, RecordType)
-                and target_type.module_id == PRELUDE_ID
-                and target_type.name == "ExecResult"
-            )
+            # ``ExecResult`` is identified as the type the program's own
+            # `builtin record ExecResult` declaration names (see
+            # `_exec_result_type`), so a scoped declaration is recognized at
+            # its own path rather than the root canonical one.
+            is_structured = target_type == self._exec_result_type()
             if not is_structured:
                 spec = self._record_parsed_contract(obligation, use="an exec output type")
                 self._append_call_site(obligation, spec.codec_name, obligation.parse_policy)

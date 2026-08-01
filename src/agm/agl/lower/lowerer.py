@@ -266,7 +266,7 @@ from agm.agl.type_schema import (
     build_param_decoder,
     derive_schema_and_decode,
 )
-from agm.agl.typecheck.builder import owning_module_id, owning_scope_path
+from agm.agl.typecheck.builder import owning_module_id
 from agm.agl.typecheck.env import (
     CheckedModule,
     FunctionSignature,
@@ -338,10 +338,10 @@ def builtin_nominals_from_declarations(
 
     Maps each ``builtin`` record/enum/exception declaration's bare name to its
     own nominal, derived exactly as the type builder registers it
-    (``typecheck.builder.owning_module_id``/``owning_scope_path``). A name
-    this compile unit does not declare is simply absent — the resulting
-    table then answers it with the shipped standard library's own identity
-    (see :meth:`~agm.agl.ir.builtin_nominals.BuiltinNominals.nominal`).
+    (``typecheck.builder.owning_module_id`` plus the declaration's own scope
+    path). A name this compile unit does not declare is simply absent — the
+    resulting table then answers it with the shipped standard library's own
+    identity (see :meth:`~agm.agl.ir.builtin_nominals.BuiltinNominals.nominal`).
     """
     declared: dict[str, NominalId] = {}
     for module_id, checked_module in modules.items():
@@ -352,7 +352,7 @@ def builtin_nominals_from_declarations(
             declared[name] = NominalId(
                 owning_module_id(item.is_builtin, module_id),
                 name,
-                owning_scope_path(item.is_builtin, item.scope_path),
+                tuple(segment.name for segment in item.scope_path),
             )
     return BuiltinNominals(declared=declared)
 
@@ -1498,6 +1498,7 @@ class _Lowerer:
                 step_value = IrConstInt(location=loc, value=1)
             pre_items.append(IrBind(location=loc, symbol=step_sym, value=step_value))
             # Step guard: if __step <= 0 => raise RangeError(...)
+            range_error_nominal = self._link.builtin_nominals.nominal("RangeError")
             pre_items.append(
                 IrIf(
                     location=loc,
@@ -1514,8 +1515,8 @@ class _Lowerer:
                                 location=loc,
                                 exc=IrMakeException(
                                     location=loc,
-                                    nominal=self._link.builtin_nominals.nominal("RangeError"),
-                                    display_name="RangeError",
+                                    nominal=range_error_nominal,
+                                    display_name=range_error_nominal.display_name,
                                     fields=(
                                         (
                                             "message",
@@ -1695,6 +1696,9 @@ class _Lowerer:
                 self._source_slice(until_cond_expr.span) if until_cond_expr is not None else "false"
             )
             # Inner if: if __count == 0 => IrBreak else => IrRaise(MaxIterationsExceeded)
+            max_iterations_exceeded_nominal = self._link.builtin_nominals.nominal(
+                "MaxIterationsExceeded"
+            )
             inner_if = IrIf(
                 location=loc,
                 branches=(
@@ -1714,10 +1718,8 @@ class _Lowerer:
                             location=loc,
                             exc=IrMakeException(
                                 location=loc,
-                                nominal=self._link.builtin_nominals.nominal(
-                                    "MaxIterationsExceeded"
-                                ),
-                                display_name="MaxIterationsExceeded",
+                                nominal=max_iterations_exceeded_nominal,
+                                display_name=max_iterations_exceeded_nominal.display_name,
                                 fields=(
                                     (
                                         "message",

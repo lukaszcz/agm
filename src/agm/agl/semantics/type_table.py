@@ -48,7 +48,7 @@ diagnostic (agent output target, cast target, parameter type).
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Literal, assert_never, cast
 
 from agm.agl.modules.ids import PRELUDE_ID, STD_CORE_ID, ModuleId
@@ -152,6 +152,13 @@ class TypeDef:
                    ``TypeEnvironment`` registry instead. See
                    :meth:`TypeTable.exception_field_kinds`, which flattens
                    this alongside the base chain.
+    ``is_builtin`` — ``True`` when this entry came from a source ``builtin``
+                   declaration, at whatever path it was written. It is
+                   metadata about the declaration, not part of its shape, so
+                   it is excluded from equality/hashing (``compare=False``):
+                   :meth:`_TypeBuilder._validate_builtin_shape` compares a
+                   ``builtin`` declaration's whole ``TypeDef`` against a
+                   seeded canonical literal, which never sets this flag.
     """
 
     kind: TypeDefKind
@@ -164,6 +171,7 @@ class TypeDef:
     abstract: bool = False
     base: DeclKey | None = None
     field_kinds: tuple[str, ...] = ()
+    is_builtin: bool = field(default=False, compare=False)
 
     def handle(self, type_args: tuple[Type, ...] = ()) -> RecordType | EnumType:
         """Return the ``RecordType``/``EnumType`` handle naming this ``TypeDef``.
@@ -560,6 +568,18 @@ class TypeTable:
     def entries(self) -> tuple[TypeDef, ...]:
         """Return all registered ``TypeDef``s (used for REPL and program table sharing)."""
         return tuple(self._defs.values())
+
+    def builtin_declaration(self, name: str) -> TypeDef | None:
+        """Return the registered ``builtin`` declaration named *name*, if any.
+
+        Returns ``None`` for a program that declares no ``builtin`` of that
+        name — the caller falls back to the seeded canonical shape, which is
+        not itself a declaration.
+        """
+        for typedef in self._defs.values():
+            if typedef.is_builtin and typedef.name == name:
+                return typedef
+        return None
 
     def nominal_reaches_non_data(self, handle: RecordType | EnumType | ExceptionType) -> bool:
         """Return ``True`` if a non-data type is reachable from *handle* (cycle-safe).

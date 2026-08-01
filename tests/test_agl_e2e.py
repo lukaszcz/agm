@@ -349,6 +349,23 @@ def test_static_rejection(program: Path) -> None:
         )
 
 
+def _scoped_stdlib_root(tmp_path: Path) -> Path:
+    """Build a throwaway module root with ``std/core.agl`` wrapped in ``scope Std``.
+
+    Never the installed/repo stdlib root — the standard ``module_roots``
+    scenario mechanism always adds ``REPO_STDLIB_ROOT`` too, which would
+    collide with this substitute ``std/core``, so callers build their own
+    ``RootSet`` from the returned root instead.
+    """
+    core_source = (REPO_STDLIB_ROOT / "std" / "core.agl").read_text(encoding="utf-8")
+    scoped_stdlib_root = tmp_path / "scoped_stdlib"
+    (scoped_stdlib_root / "std").mkdir(parents=True)
+    (scoped_stdlib_root / "std" / "core.agl").write_text(
+        f"scope Std\n{core_source}end Std\n", encoding="utf-8"
+    )
+    return scoped_stdlib_root
+
+
 def test_scoped_stdlib_arrangement_runs_end_to_end(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -364,19 +381,11 @@ def test_scoped_stdlib_arrangement_runs_end_to_end(
     dispatching to a scoped ``builtin record`` (``ExecResult``) at a real host
     boundary, and a fully scoped exception hierarchy (``Exception``/
     ``RangeError`` both declared inside the region) raised and left uncaught.
-    The raised exception reports its canonical name: a ``builtin``
-    declaration denotes the one host type wherever it is written, so the
-    region it is declared in routes the name without becoming part of it.
     """
     from agm.agl import PipelineDriver
     from agm.agl.modules.roots import RootSet
 
-    core_source = (REPO_STDLIB_ROOT / "std" / "core.agl").read_text(encoding="utf-8")
-    scoped_stdlib_root = tmp_path / "scoped_stdlib"
-    (scoped_stdlib_root / "std").mkdir(parents=True)
-    (scoped_stdlib_root / "std" / "core.agl").write_text(
-        f"scope Std\n{core_source}end Std\n", encoding="utf-8"
-    )
+    scoped_stdlib_root = _scoped_stdlib_root(tmp_path)
 
     program = (
         'let r = Std::exec("echo hi")\nprint(r.stdout)\nraise Std::RangeError(message = "boom")\n'
@@ -393,5 +402,131 @@ def test_scoped_stdlib_arrangement_runs_end_to_end(
     )
     assert capsys.readouterr().out == "hi\n"
     assert result.error is not None, "expected the uncaught scoped RangeError"
-    assert result.error.type_name == "RangeError"
+    assert result.error.type_name == "Std::RangeError"
     assert result.error.fields["message"] == "boom"
+
+
+def test_scoped_stdlib_arrangement_structured_exec_result_is_the_scoped_nominal(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A structured ``exec`` result is tagged with its own scoped nominal.
+
+    The result is annotated ``Std::ExecResult`` explicitly, so the static
+    target type is the scoped nominal by the annotation rather than by
+    ``exec``'s own default. The field access below then only succeeds if the
+    host-minted value carries that very same scoped nominal — an exact
+    nominal projection rejects any other identity.
+    """
+    from agm.agl import PipelineDriver
+    from agm.agl.modules.roots import RootSet
+
+    scoped_stdlib_root = _scoped_stdlib_root(tmp_path)
+
+    program = 'let r: Std::ExecResult = Std::exec("echo hi")\nprint(r.stdout)\n'
+
+    shell = FakeShell([{"command": "echo hi", "stdout": "hi\n"}])
+    runtime = PipelineDriver()
+    with unittest.mock.patch("agm.core.process.run_capture_result", side_effect=shell):
+        result = runtime.run(program, roots=RootSet(roots=frozenset({scoped_stdlib_root})))
+    shell.assert_complete()
+
+    assert list(result.diagnostics) == [], (
+        f"unexpected static diagnostics: {' | '.join(d.message for d in result.diagnostics)}"
+    )
+    assert result.error is None, f"unexpected error: {result.error}"
+    assert capsys.readouterr().out == "hi\n"
+
+
+def test_scoped_stdlib_arrangement_uncaught_host_raised_exec_error_reports_scoped_spelling(
+    tmp_path: Path,
+) -> None:
+    """An uncaught host-raised exception reports its declared, scoped spelling.
+
+    A failed (non-structured, ``text``-typed) ``Std::exec`` call raises
+    ``ExecError`` at the host boundary; left uncaught, it now reports
+    ``Std::ExecError`` — the outside-the-region half of the catchability fix
+    observable without a qualified ``catch`` (the grammar admits none)."""
+    from agm.agl import PipelineDriver
+    from agm.agl.modules.roots import RootSet
+
+    scoped_stdlib_root = _scoped_stdlib_root(tmp_path)
+
+    program = 'let out: text = Std::exec("false")\nprint(out)\n'
+
+    shell = FakeShell([{"command": "false", "returncode": 1}])
+    runtime = PipelineDriver()
+    with unittest.mock.patch("agm.core.process.run_capture_result", side_effect=shell):
+        result = runtime.run(program, roots=RootSet(roots=frozenset({scoped_stdlib_root})))
+    shell.assert_complete()
+
+    assert list(result.diagnostics) == [], (
+        f"unexpected static diagnostics: {' | '.join(d.message for d in result.diagnostics)}"
+    )
+    assert result.error is not None, "expected the uncaught scoped ExecError"
+    assert result.error.type_name == "Std::ExecError"
+
+
+def test_scoped_builtin_hierarchy_declared_in_the_entry_module_catches_a_host_raise(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A host-raised exception is catchable by its declared, scoped spelling.
+
+    ``catch`` accepts only an unqualified NAME (the grammar admits no
+    qualified ``A::B`` there), so the catching code lives inside the same
+    ``scope Host`` region that declares the hierarchy, where the bare name
+    resolves to the region's own declaration — the same arrangement
+    ``scoped_builtin_stdlib_arrangement.agl``'s own ``report``/``RangeError``
+    catch already uses. This program declares the whole exec/exception
+    surface itself and loads without the standard library (``default_stdlib
+    =False``), so its own ``scope Host`` module lowers normally (unlike the
+    real ``std/core`` module, which is excluded from per-module function
+    lowering). A failed (``text``-typed, non-structured) ``exec`` call
+    raises ``ExecError`` at the host boundary; before per-path identity was
+    restored the host would have minted a path-free nominal while the type
+    kept its declared path, so this bare ``catch`` could never match. Now
+    both sides agree, and the program handles it.
+    """
+    from agm.agl import PipelineDriver
+
+    program = (
+        "scope Host\n"
+        "builtin\n"
+        "exception Exception\n"
+        "  *\n"
+        "  message: text\n"
+        "  trace_id: text\n"
+        "builtin\n"
+        "exception ExecError extends Exception\n"
+        "  *\n"
+        "  command: text\n"
+        "  exit_code: int\n"
+        "  stdout: text\n"
+        "  stderr: text\n"
+        "  timed_out: bool\n"
+        "builtin record ExecResult\n"
+        "  stdout: text\n"
+        "  exit_code: int\n"
+        "  stderr: text\n"
+        "  timed_out: bool\n"
+        "builtin def exec(command: text) -> ExecResult\n"
+        "def run(cmd: text) -> text =\n"
+        "  try\n"
+        "    let out: text = exec(cmd)\n"
+        "    out\n"
+        "  catch ExecError as e =>\n"
+        '    "caught"\n'
+        "end Host\n"
+        'print(Host::run("false"))\n'
+    )
+
+    shell = FakeShell([{"command": "false", "returncode": 1}])
+    runtime = PipelineDriver()
+    with unittest.mock.patch("agm.core.process.run_capture_result", side_effect=shell):
+        result = runtime.run(program, default_stdlib=False)
+    shell.assert_complete()
+
+    assert list(result.diagnostics) == [], (
+        f"unexpected static diagnostics: {' | '.join(d.message for d in result.diagnostics)}"
+    )
+    assert result.error is None, f"expected the raised ExecError to be caught: {result.error}"
+    assert capsys.readouterr().out == "caught\n"

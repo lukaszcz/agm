@@ -67,7 +67,6 @@ from agm.agl.syntax.nodes import (
     Param,
     Program,
     RecordDef,
-    ScopeSegment,
     TypeAlias,
     static_type_items,
 )
@@ -110,19 +109,6 @@ def owning_module_id(is_builtin: bool, module_id: ModuleId) -> ModuleId:
     module that declares it.
     """
     return PRELUDE_ID if is_builtin else module_id
-
-
-def owning_scope_path(is_builtin: bool, scope_path: tuple[ScopeSegment, ...]) -> tuple[str, ...]:
-    """Scope path a declaration's nominal identity carries.
-
-    A ``builtin`` declaration's identity is canonical in both halves — the
-    shared prelude module (:func:`owning_module_id`) and the empty scope path
-    returned here — regardless of the named region it is declared in. The
-    declaration site is a name route only: a scoped ``builtin`` denotes the
-    very same nominal as a root declaration of the same name. A non-builtin
-    declaration keeps its own declaring region's path.
-    """
-    return () if is_builtin else tuple(segment.name for segment in scope_path)
 
 
 # ---------------------------------------------------------------------------
@@ -257,7 +243,7 @@ class _TypeBuilder:
                     ExceptionType(
                         name=_bare_name(item.name),
                         module_id=module_id,
-                        scope_path=owning_scope_path(item.is_builtin, item.scope_path),
+                        scope_path=tuple(segment.name for segment in item.scope_path),
                     ),
                 )
                 self._exception_defs[item.name] = item
@@ -269,7 +255,7 @@ class _TypeBuilder:
     def _register_record_or_enum_handle(self, item: RecordDef | EnumDef, *, is_enum: bool) -> None:
         module_id = self._owning_module_id(item.is_builtin)
         declared_name = _bare_name(item.name)
-        scope_path = owning_scope_path(item.is_builtin, item.scope_path)
+        scope_path = tuple(segment.name for segment in item.scope_path)
         type_params = item.type_params
         if type_params:
             type_args = tuple(TypeVarType(p) for p in type_params)
@@ -376,15 +362,15 @@ class _TypeBuilder:
             seen_fields[fd.name] = fd.span
             fields[fd.name] = self._resolve_field_type(fd)
         module_id = self._owning_module_id(stmt.is_builtin)
-        scope_path = owning_scope_path(stmt.is_builtin, stmt.scope_path)
+        scope_path = tuple(segment.name for segment in stmt.scope_path)
         typedef = TypeDef(
             kind="record",
             name=_bare_name(stmt.name),
             module_id=module_id,
             scope_path=scope_path,
             fields=tuple(fields.items()),
+            is_builtin=stmt.is_builtin,
         )
-        typedef = self._canonical_builtin_typedef(stmt, typedef)
         self._validate_builtin_shape(stmt, typedef, BUILTIN_PRELUDE_TYPE_DEFS)
         self._env.type_table.register(typedef)
         # Register field kinds for this record constructor, under the same
@@ -413,15 +399,15 @@ class _TypeBuilder:
                 vfields[fd.name] = self._resolve_field_type(fd)
             variants[vd.name] = vfields
         module_id = self._owning_module_id(stmt.is_builtin)
-        scope_path = owning_scope_path(stmt.is_builtin, stmt.scope_path)
+        scope_path = tuple(segment.name for segment in stmt.scope_path)
         typedef = TypeDef(
             kind="enum",
             name=_bare_name(stmt.name),
             module_id=module_id,
             scope_path=scope_path,
             variants=tuple((vname, tuple(vfields.items())) for vname, vfields in variants.items()),
+            is_builtin=stmt.is_builtin,
         )
-        typedef = self._canonical_builtin_typedef(stmt, typedef)
         self._validate_builtin_shape(stmt, typedef, BUILTIN_PRELUDE_TYPE_DEFS)
         self._env.type_table.register(typedef)
         # Register field kinds for each variant constructor, under the same
@@ -482,13 +468,13 @@ class _TypeBuilder:
             kind="exception",
             name=_bare_name(stmt.name),
             module_id=module_id,
-            scope_path=owning_scope_path(stmt.is_builtin, stmt.scope_path),
+            scope_path=tuple(segment.name for segment in stmt.scope_path),
             fields=tuple(fields.items()),
             abstract=stmt.base is None,
             base=base_key,
             field_kinds=tuple(fd.kind.value for fd in stmt.fields),
+            is_builtin=stmt.is_builtin,
         )
-        typedef = self._canonical_builtin_typedef(stmt, typedef)
         self._validate_builtin_shape(stmt, typedef, BUILTIN_EXCEPTION_TYPE_DEFS)
         self._env.type_table.register(typedef)
 
@@ -514,7 +500,7 @@ class _TypeBuilder:
                 ExceptionType(
                     name=_bare_name(item.name),
                     module_id=module_id,
-                    scope_path=owning_scope_path(item.is_builtin, item.scope_path),
+                    scope_path=tuple(segment.name for segment in item.scope_path),
                 )
             )
             assert typedef.base is not None
@@ -529,34 +515,6 @@ class _TypeBuilder:
                         span=fd.span,
                     )
 
-    @staticmethod
-    def _canonical_builtin_typedef(
-        stmt: RecordDef | EnumDef | ExceptionDef, typedef: TypeDef
-    ) -> TypeDef:
-        """Read a ``builtin`` declaration's shape on the canonical frame.
-
-        A ``builtin`` declaration names one host-known type, whose identity is
-        canonical wherever it is written (see :func:`owning_scope_path`) — and
-        so, therefore, is its shape. A declaration inside a named region
-        resolves its field and variant type expressions under that region's
-        path, so those are re-rooted here, by the declared path, onto the
-        canonical frame the host definition is written on: a reference naming
-        an ordinary sibling of the same region, as ``AgentRequest``'s
-        ``Option`` fields do, reads as the host's own. A reference to anything
-        else keeps its path and still fails the shape check. An ``extends``
-        base needs no such adjustment — a ``builtin`` exception always extends
-        another ``builtin`` one, whose identity is canonical already.
-        """
-        prefix = tuple(segment.name for segment in stmt.scope_path)
-        if not stmt.is_builtin or not prefix:
-            return typedef
-        fields = tuple((name, reroot_type(t, prefix)) for name, t in typedef.fields)
-        variants = tuple(
-            (vname, tuple((fname, reroot_type(ft, prefix)) for fname, ft in vfields))
-            for vname, vfields in typedef.variants
-        )
-        return replace(typedef, fields=fields, variants=variants)
-
     def _validate_builtin_shape(
         self,
         stmt: RecordDef | EnumDef | ExceptionDef,
@@ -566,24 +524,54 @@ class _TypeBuilder:
         """Check a ``builtin`` declaration's shape against its canonical definition.
 
         The canonical definitions in *expected_defs* are host-known shapes
-        keyed by bare name, indifferent to where the declaration sits: both
-        halves of a ``builtin`` declaration's identity are canonical (see
-        :func:`owning_module_id`/:func:`owning_scope_path`) and its shape is
-        already read on the canonical frame (see
-        :meth:`_canonical_builtin_typedef`), so *typedef* compares directly
-        against *expected*. *bare_name* is always present in *expected_defs*
-        here: ``_register_name`` already validated it against this same
-        kind-appropriate table during phase 1.
+        keyed by bare name, indifferent to where the declaration sits: a
+        scoped ``builtin`` declaration names the same host type as a root one
+        and must match the same shape, just at a different nominal path. The
+        comparison therefore re-roots *typedef* under its own scope path
+        (:meth:`_reroot_typedef`) before comparing — not just its own
+        top-level ``scope_path`` (the one field *expected* to differ), but
+        also every nominal reference embedded in its fields/variants/base
+        that resolves under that same path, so a scoped exception hierarchy
+        or a scoped record naming a sibling scoped builtin still compares
+        equal to the canonical (root) shape. *bare_name* is always present in
+        *expected_defs* here: ``_register_name`` already validated it against
+        this same kind-appropriate table during phase 1.
         """
         if not stmt.is_builtin:
             return
         bare_name = _bare_name(stmt.name)
         expected = expected_defs[bare_name]
-        if typedef != expected:
+        if self._reroot_typedef(typedef) != expected:
             raise AglTypeError(
                 f"Builtin type '{stmt.name}' has an invalid definition.",
                 span=stmt.span,
             )
+
+    @staticmethod
+    def _reroot_typedef(typedef: TypeDef) -> TypeDef:
+        """Re-root *typedef* onto its own scope path, for canonical comparison.
+
+        *typedef.scope_path* itself is dropped (the field a scoped ``builtin``
+        declaration is always expected to differ in), and that same path is
+        also stripped, via :func:`~agm.agl.semantics.types.reroot_type`, from
+        every nominal reference embedded in its fields, variant fields, and
+        (for an exception) its ``extends`` base key — each of those resolves
+        under the declaration's own scope path exactly when it names a
+        sibling member of the same region, matching how the canonical
+        (root, path ``()``) shape names its own siblings.
+        """
+        prefix = typedef.scope_path
+        if not prefix:
+            return typedef
+        fields = tuple((name, reroot_type(t, prefix)) for name, t in typedef.fields)
+        variants = tuple(
+            (vname, tuple((fname, reroot_type(ft, prefix)) for fname, ft in vfields))
+            for vname, vfields in typedef.variants
+        )
+        base = typedef.base
+        if base is not None and base[1][: len(prefix)] == prefix:
+            base = (base[0], base[1][len(prefix) :], base[2])
+        return replace(typedef, scope_path=(), fields=fields, variants=variants, base=base)
 
     def _resolve_field_type(self, fd: Param, type_vars: frozenset[str] = frozenset()) -> Type:
         """Resolve a field's TypeExpr to a semantic Type.
@@ -620,7 +608,7 @@ class _TypeBuilder:
         template = gdef.template
         assert isinstance(template, RecordType)
         module_id = self._owning_module_id(stmt.is_builtin)
-        scope_path = owning_scope_path(stmt.is_builtin, stmt.scope_path)
+        scope_path = tuple(segment.name for segment in stmt.scope_path)
         typedef = TypeDef(
             kind="record",
             name=_bare_name(stmt.name),
@@ -628,8 +616,8 @@ class _TypeBuilder:
             scope_path=scope_path,
             type_params=type_params,
             fields=tuple(fields.items()),
+            is_builtin=stmt.is_builtin,
         )
-        typedef = self._canonical_builtin_typedef(stmt, typedef)
         self._validate_builtin_shape(stmt, typedef, BUILTIN_PRELUDE_TYPE_DEFS)
         self._env.type_table.register(typedef)
         field_names = tuple(fields.keys())
@@ -680,7 +668,7 @@ class _TypeBuilder:
         template = gdef.template
         assert isinstance(template, EnumType)
         module_id = self._owning_module_id(stmt.is_builtin)
-        scope_path = owning_scope_path(stmt.is_builtin, stmt.scope_path)
+        scope_path = tuple(segment.name for segment in stmt.scope_path)
         typedef = TypeDef(
             kind="enum",
             name=_bare_name(stmt.name),
@@ -688,8 +676,8 @@ class _TypeBuilder:
             scope_path=scope_path,
             type_params=type_params,
             variants=tuple((vname, tuple(vfields.items())) for vname, vfields in variants.items()),
+            is_builtin=stmt.is_builtin,
         )
-        typedef = self._canonical_builtin_typedef(stmt, typedef)
         self._validate_builtin_shape(stmt, typedef, BUILTIN_PRELUDE_TYPE_DEFS)
         self._env.type_table.register(typedef)
         # Register one ConstructorSignature and field kinds per variant, under
@@ -753,7 +741,7 @@ class _TypeBuilder:
             if not isinstance(item, (RecordDef, EnumDef, ExceptionDef)):
                 continue
             module_id = self._owning_module_id(item.is_builtin)
-            scope_path = owning_scope_path(item.is_builtin, item.scope_path)
+            scope_path = tuple(segment.name for segment in item.scope_path)
             declared_name = _bare_name(item.name)
             key = (module_id, scope_path, declared_name)
             if key not in uninhabited:

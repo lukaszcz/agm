@@ -223,9 +223,10 @@ def _raise_agent_call_error(
         f" (exit {err.exit_code})" if err.exit_code is not None else ""
     )
 
+    agent_call_error_nominal = nominals.nominal("AgentCallError")
     exc_val = ExceptionValue(
-        nominal=nominals.nominal("AgentCallError"),
-        display_name="AgentCallError",
+        nominal=agent_call_error_nominal,
+        display_name=agent_call_error_nominal.display_name,
         fields={
             "message": TextValue(message),
             "trace_id": TextValue(new_trace_id()),

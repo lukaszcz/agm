@@ -1539,25 +1539,21 @@ _EXEC_RESULT_FIELDS = "  stdout: text\n  exit_code: int\n  stderr: text\n  timed
 
 
 class TestScopedBuiltinTypes:
-    """A ``builtin`` record/enum/exception declared at any scope path denotes
-    the one canonical nominal the host recognizes — the declaration site is
-    a name route only, never part of the type's identity — so the same
-    ``builtin`` name declared at two different paths, or at a path and the
-    root, always resolves to the very same type.
+    """A scoped ``builtin`` record/enum/exception is a distinct nominal from a
+    same-named one at another path, following the same path-keyed identity
+    every other scoped type already has.
     """
 
-    def test_scoped_builtin_record_at_two_paths_denotes_one_canonical_nominal(self) -> None:
-        """Two ``builtin record ExecResult`` declarations in different scope
-        regions both denote the canonical ``ExecResult``: declaring both is
-        accepted, and a value built at one path's constructor is accepted
-        where the other path's spelling is expected."""
-        r = accept_type(
+    def test_scoped_builtin_record_is_a_distinct_nominal_per_path(self) -> None:
+        """Same-shaped ``builtin record ExecResult`` at two paths do not unify."""
+        err = reject_type(
             f"scope A\nbuiltin record ExecResult\n{_EXEC_RESULT_FIELDS}end A\n"
             f"scope B\nbuiltin record ExecResult\n{_EXEC_RESULT_FIELDS}end B\n"
             "def use(value: A::ExecResult) -> int = value.exit_code\n"
             'use(B::ExecResult(stdout = "a", exit_code = 1, stderr = "", timed_out = false))\n'
         )
-        assert r.resolved.program is not None
+        assert "A::ExecResult" in err.to_diagnostic().message
+        assert "B::ExecResult" in err.to_diagnostic().message
 
     def test_scoped_builtin_record_constructs_and_passes_at_its_own_path(self) -> None:
         r = accept_type(
@@ -1567,18 +1563,15 @@ class TestScopedBuiltinTypes:
         )
         assert r.resolved.program is not None
 
-    def test_scoped_builtin_enum_variant_at_two_paths_denotes_one_canonical_nominal(
-        self,
-    ) -> None:
-        """Two ``builtin enum ParsePolicy`` declarations in different scope
-        regions both denote the canonical ``ParsePolicy``."""
-        r = accept_type(
+    def test_scoped_builtin_enum_variant_is_a_distinct_nominal_per_path(self) -> None:
+        err = reject_type(
             "scope A\nbuiltin\nenum ParsePolicy =\n  | Abort\n  | Retry(n: int)\nend A\n"
             "scope B\nbuiltin\nenum ParsePolicy =\n  | Abort\n  | Retry(n: int)\nend B\n"
             "def use(value: A::ParsePolicy) -> int = 1\n"
             "use(B::ParsePolicy::Abort)\n"
         )
-        assert r.resolved.program is not None
+        assert "A::ParsePolicy" in err.to_diagnostic().message
+        assert "B::ParsePolicy" in err.to_diagnostic().message
 
     def test_scoped_builtin_enum_matches_at_its_own_path(self) -> None:
         r = accept_type(
@@ -1591,47 +1584,15 @@ class TestScopedBuiltinTypes:
         )
         assert r.resolved.program is not None
 
-    def test_scoped_builtin_exception_at_two_paths_denotes_one_canonical_nominal(self) -> None:
-        """Two ``builtin exception RangeError`` declarations in different
-        scope regions both denote the canonical ``RangeError``."""
-        r = accept_type(
+    def test_scoped_builtin_exception_is_a_distinct_nominal_per_path(self) -> None:
+        err = reject_type(
             "scope A\nbuiltin exception RangeError extends Exception()\nend A\n"
             "scope B\nbuiltin exception RangeError extends Exception()\nend B\n"
             "def use(value: A::RangeError) -> text = value.message\n"
             'use(B::RangeError(message = "boom"))\n'
         )
-        assert r.resolved.program is not None
-
-    def test_scoped_and_root_builtin_record_declarations_denote_one_nominal(self) -> None:
-        """A ``builtin record`` redeclared inside a scope region denotes the
-        same canonical nominal as its root declaration in the same program:
-        both declarations are accepted, and a value built at either
-        spelling is accepted where the other is expected."""
-        r = accept_type(
-            f"builtin record ExecResult\n{_EXEC_RESULT_FIELDS}"
-            f"scope A\nbuiltin record ExecResult\n{_EXEC_RESULT_FIELDS}end A\n"
-            "def use(value: ExecResult) -> int = value.exit_code\n"
-            'use(A::ExecResult(stdout = "a", exit_code = 1, stderr = "", timed_out = false))\n'
-        )
-        assert r.resolved.program is not None
-
-    def test_scoped_and_root_builtin_enum_declarations_denote_one_nominal(self) -> None:
-        r = accept_type(
-            "builtin\nenum ParsePolicy =\n  | Abort\n  | Retry(n: int)\n"
-            "scope A\nbuiltin\nenum ParsePolicy =\n  | Abort\n  | Retry(n: int)\nend A\n"
-            "def use(value: ParsePolicy) -> int = 1\n"
-            "use(A::ParsePolicy::Abort)\n"
-        )
-        assert r.resolved.program is not None
-
-    def test_scoped_and_root_builtin_exception_declarations_denote_one_nominal(self) -> None:
-        r = accept_type(
-            "builtin exception RangeError extends Exception()\n"
-            "scope A\nbuiltin exception RangeError extends Exception()\nend A\n"
-            "def use(value: RangeError) -> text = value.message\n"
-            'use(A::RangeError(message = "boom"))\n'
-        )
-        assert r.resolved.program is not None
+        assert "A::RangeError" in err.to_diagnostic().message
+        assert "B::RangeError" in err.to_diagnostic().message
 
     def test_method_declared_on_a_scoped_builtin_receiver_is_callable_qualified(self) -> None:
         """A method's receiver may be a ``builtin`` type declared inside a
@@ -1723,9 +1684,9 @@ class TestScopedBuiltinTypes:
 
     def test_scoped_exception_hierarchy_with_a_scoped_base_typechecks(self) -> None:
         """Both the root exception and its subclass are declared inside the
-        same region: the subclass's resolved ``extends`` key already carries
-        the canonical (path-``()``) identity, matching the built-in
-        hierarchy directly."""
+        same region: the subclass's resolved ``extends`` key carries the
+        region's scope path, which must compare equal to the canonical
+        (path-``()``) hierarchy once re-rooted."""
         r = accept_type(
             "scope A\n"
             "builtin\n"
@@ -1741,8 +1702,8 @@ class TestScopedBuiltinTypes:
 
     def test_scoped_builtin_record_field_naming_a_sibling_scoped_nominal_typechecks(self) -> None:
         """A record field referencing another builtin type declared in the
-        same region resolves to that sibling's own canonical identity, so it
-        compares equal to the canonical shape with no adjustment."""
+        same region resolves under that region's scope path too, and must
+        compare equal to the canonical shape once re-rooted."""
         r = accept_type(
             "scope A\n"
             "builtin\n"
@@ -1764,28 +1725,26 @@ class TestScopedBuiltinTypes:
 
     def test_scoped_builtin_def_signature_naming_a_scoped_sibling_type_typechecks(self) -> None:
         """A ``builtin def``'s declared result type names a builtin type
-        declared in the same region: the resolved signature's result type is
-        already the canonical nominal, so it validates against the canonical
-        signature directly."""
+        declared in the same region: the resolved signature's result type
+        carries that region's scope path and must validate against the
+        canonical (path-``()``) signature once re-rooted."""
         r = accept_type(
             f"scope A\nbuiltin record ExecResult\n{_EXEC_RESULT_FIELDS}"
             "builtin def exec(command: text) -> ExecResult\nend A\n()\n"
         )
         assert r.resolved.program is not None
 
-    def test_scoped_builtin_def_signature_naming_a_type_at_a_different_path_typechecks(
-        self,
-    ) -> None:
-        """A ``builtin def`` in one region naming a builtin type declared in
-        a DIFFERENT region still typechecks: both spellings resolve to the
-        same canonical nominal, so the declaration site names it but never
-        owns it."""
-        r = accept_type(
+    def test_scoped_builtin_def_signature_naming_a_type_at_the_wrong_path_rejected(self) -> None:
+        """The re-rooted comparison must still discriminate a genuine
+        mismatch: a ``builtin def`` in one region naming a builtin type
+        declared in a DIFFERENT region does not re-root to the canonical
+        shape and must be rejected."""
+        err = reject_type(
             f"scope A\nbuiltin record ExecResult\n{_EXEC_RESULT_FIELDS}end A\n"
             "scope B\nbuiltin def exec(command: text) -> A::ExecResult\nend B\n"
             "()\n"
         )
-        assert r.resolved.program is not None
+        assert "exec" in err.to_diagnostic().message
 
 
 class TestBlockTyping:

@@ -340,9 +340,10 @@ class EffectHandlers:
                 JsonValue(cast(object, json.loads(contract.json_schema)))
             )
 
+        agent_request_nominal = self._ctx._program.builtin_nominals.nominal("AgentRequest")
         return RecordValue(
-            nominal=self._ctx._program.builtin_nominals.nominal("AgentRequest"),
-            display_name="AgentRequest",
+            nominal=agent_request_nominal,
+            display_name=agent_request_nominal.display_name,
             fields={
                 "agent": TextValue(agent_name),
                 "prompt": TextValue(prompt_text),
@@ -461,9 +462,10 @@ class EffectHandlers:
         # 3. Structured exec: return ExecResult regardless of exit code
         if contract.structured_exec:
             actual_exit_code = returncode if returncode is not None else 0
+            exec_result_nominal = self._ctx._program.builtin_nominals.nominal("ExecResult")
             return RecordValue(
-                nominal=self._ctx._program.builtin_nominals.nominal("ExecResult"),
-                display_name="ExecResult",
+                nominal=exec_result_nominal,
+                display_name=exec_result_nominal.display_name,
                 fields={
                     "stdout": TextValue(stdout.rstrip("\n")),
                     "exit_code": IntValue(actual_exit_code),

@@ -150,9 +150,17 @@ story.
 ## Builtin declarations
 
 A region admits every `builtin` form — `builtin record`, `builtin enum`,
-`builtin exception`, `builtin def`, and `builtin var` — following the same
-member, duplicate, and visibility rules as every other member:
+`builtin exception`, `builtin def`, and `builtin var` — as a member of the
+region, following the same visibility rules as every other member. A
+`builtin` declaration's bare name is different from an ordinary member's,
+though: it is one host identity shared across the whole program, so it must
+be declared exactly once, whatever its scope path or declaring module — see
+[Built-in functions](functions.md#built-in-functions). The example below
+therefore presumes a program started with `--no-stdlib`
+([Modules](modules.md#prelude)), since `ExecResult` and `print`
+are otherwise already declared by the automatically-opened `std/core`:
 
+<!-- agl-check: fragment -->
 ```agl
 scope Host
 builtin record ExecResult
@@ -168,8 +176,8 @@ let result = Host::ExecResult(stdout = "x", exit_code = 0, stderr = "", timed_ou
 Host::print(result.stdout)
 ```
 
-A scoped `builtin record`/`enum`/`exception` is a nominal distinct from a
-same-named one at another path, exactly like an ordinary scoped type; a
+A scoped `builtin record`/`enum`/`exception` carries its declared scope path
+as part of its nominal identity, exactly like an ordinary scoped type; a
 scoped `builtin def` dispatches to the same host implementation as a root
 one, reached bare inside its region or after `open`, and by its exact path
 outside. `builtin var` keeps its separate restriction to the canonical

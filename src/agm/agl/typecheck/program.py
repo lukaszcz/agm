@@ -92,7 +92,10 @@ from agm.agl.syntax.nodes import (
 from agm.agl.syntax.spans import SourceSpan
 from agm.agl.typecheck.builder import _TypeBuilder
 from agm.agl.typecheck.checker import _check_prepared_module, prepare_module_headers
-from agm.agl.typecheck.declaration_validation import validate_method_declaration_collisions
+from agm.agl.typecheck.declaration_validation import (
+    validate_builtin_declaration_uniqueness,
+    validate_method_declaration_collisions,
+)
 from agm.agl.typecheck.env import (
     AglTypeError,
     CheckedModule,
@@ -954,10 +957,9 @@ def check_program(
             check_inhabitation=False,
         )
 
-    validate_method_declaration_collisions(
-        {module_id: module.resolved for module_id, module in resolved.modules.items()},
-        shared_type_table,
-    )
+    program_modules = {module_id: module.resolved for module_id, module in resolved.modules.items()}
+    validate_builtin_declaration_uniqueness(program_modules)
+    validate_method_declaration_collisions(program_modules, shared_type_table)
 
     # Candidate discovery follows the preserved reverse-topological import SCC
     # sequence. A cycle is one cross-module function graph; a dependency SCC's

@@ -213,11 +213,15 @@ def evaluate_ir_raises_with_externs(
     raise AssertionError("IR extern program did not raise AglRaise")
 
 
-def make_graph_from_files(tmp_path: Path, modules: dict[str, str]) -> ModuleGraph:
+def make_graph_from_files(
+    tmp_path: Path, modules: dict[str, str], *, default_stdlib: bool = True
+) -> ModuleGraph:
     """Build a ModuleGraph via ``load_graph`` from a ``{name: source}`` dict.
 
     The key ``'entry'`` is used as the entry source; all other keys are written
-    as ``.agl`` module files under a temp root.
+    as ``.agl`` module files under a temp root. ``default_stdlib`` threads
+    through to ``load_graph`` for a caller that needs a program without the
+    shipped standard library.
     """
     root = tmp_path / "root"
     root.mkdir(parents=True, exist_ok=True)
@@ -226,7 +230,9 @@ def make_graph_from_files(tmp_path: Path, modules: dict[str, str]) -> ModuleGrap
         if module_path == "entry":
             continue
         write_module_file(root, module_path, source)
-    return load_graph(entry_source, entry_path=None, roots=_roots(root))
+    return load_graph(
+        entry_source, entry_path=None, roots=_roots(root), default_stdlib=default_stdlib
+    )
 
 
 def _checked(entry_source: str, modules: dict[str, str], tmp_path: Path) -> CheckedProgram:

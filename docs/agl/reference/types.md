@@ -203,8 +203,10 @@ recorded as a placeholder marker rather than raising — see
 ### Copying values
 
 Because binding is by reference, a program that wants an independent value
-must ask for one explicitly:
+must ask for one explicitly. `std/core` declares both host functions with
+this signature:
 
+<!-- agl-check: fragment -->
 ```agl
 builtin def copy[T](value: T) -> T
 builtin def shallow_copy[T](value: T) -> T
@@ -447,7 +449,11 @@ A record may be generic — `record Box[T]` then a field `value: T`
 
 `builtin record` is the body-equivalent form for host-recognized nominal record
 types in `std/core`. The name and full field shape must match a recognized
-built-in type exactly.
+built-in type exactly, and that bare name must be declared only once across
+the whole program, whatever its scope path or declaring module — a program
+loading the default standard library, as it does unless started with
+`--no-stdlib`, cannot redeclare a name `std/core` already provides (see
+[Built-in functions](functions.md#built-in-functions)).
 
 ## Enum types
 

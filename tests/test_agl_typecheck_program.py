@@ -79,9 +79,11 @@ def _check_graph(graph: ModuleGraph) -> CheckedProgram:
     return check_program(resolve_program(graph), _CAPS)
 
 
-def _check_program(tmp_path: Path, modules: dict[str, str]) -> CheckedProgram:
+def _check_program(
+    tmp_path: Path, modules: dict[str, str], *, default_stdlib: bool = True
+) -> CheckedProgram:
     """Build and typecheck a multi-module graph; returns CheckedProgram."""
-    return _check_graph(_make_graph_from_files(tmp_path, modules))
+    return _check_graph(_make_graph_from_files(tmp_path, modules, default_stdlib=default_stdlib))
 
 
 def _with_reversed_module_discovery_order(graph: ModuleGraph) -> ModuleGraph:
@@ -275,11 +277,18 @@ def test_program_signature_prepass_preserves_builtin_header_metadata(tmp_path: P
 
 
 def test_builtin_header_has_standalone_program_signature_parity(tmp_path: Path) -> None:
-    """The shared header resolver gives builtin declarations identical public signatures."""
+    """The shared header resolver gives builtin declarations identical public signatures.
+
+    Both sides check the same entry-only declaration of ``print``, so the
+    program-mode graph is built without the default standard library — its
+    own ``std/core`` declares ``print`` too, which would otherwise make the
+    entry module's declaration a duplicate rather than exercising the parity
+    this test is about.
+    """
     source = "builtin def print[T](value: T) -> unit\n()"
 
     standalone = _check(source)
-    program = _check_program(tmp_path, {"entry": source})
+    program = _check_program(tmp_path, {"entry": source}, default_stdlib=False)
 
     assert program.modules[ENTRY_ID].function_signatures == standalone.function_signatures
 
@@ -3825,6 +3834,30 @@ def test_route_qualified_generic_enum_owner_is_accepted_in_an_is_test(tmp_path: 
     )
 
     assert ENTRY_ID in checked.modules
+
+
+# ---------------------------------------------------------------------------
+# Builtin declaration uniqueness
+# ---------------------------------------------------------------------------
+
+
+def test_builtin_declared_in_two_modules_is_rejected(tmp_path: Path) -> None:
+    """A bare built-in name declared once in the entry module and once in an
+    imported module is a duplicate too — the program-wide case that a
+    single-module check could never see."""
+    with pytest.raises(AglTypeError) as raised:
+        _check_program(
+            tmp_path,
+            {
+                "lib": "builtin def print[T](value: T) -> unit\n",
+                "entry": "import lib\nbuiltin def print[T](value: T) -> unit\n()\n",
+            },
+            default_stdlib=False,
+        )
+
+    message = str(raised.value)
+    assert "lib::print" in message
+    assert "<entry>::print" in message
 
 
 # ---------------------------------------------------------------------------

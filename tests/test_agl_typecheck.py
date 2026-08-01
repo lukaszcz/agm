@@ -1539,39 +1539,24 @@ _EXEC_RESULT_FIELDS = "  stdout: text\n  exit_code: int\n  stderr: text\n  timed
 
 
 class TestScopedBuiltinTypes:
-    """A scoped ``builtin`` record/enum/exception is a distinct nominal from a
-    same-named one at another path, following the same path-keyed identity
-    every other scoped type already has.
+    """A scoped ``builtin`` record/enum/exception keeps its declared scope
+    path as part of its nominal identity, following the same path-keyed
+    identity every other scoped type already has.
     """
 
-    def test_scoped_builtin_record_is_a_distinct_nominal_per_path(self) -> None:
-        """Same-shaped ``builtin record ExecResult`` at two paths do not unify."""
-        err = reject_type(
-            f"scope A\nbuiltin record ExecResult\n{_EXEC_RESULT_FIELDS}end A\n"
-            f"scope B\nbuiltin record ExecResult\n{_EXEC_RESULT_FIELDS}end B\n"
-            "def use(value: A::ExecResult) -> int = value.exit_code\n"
-            'use(B::ExecResult(stdout = "a", exit_code = 1, stderr = "", timed_out = false))\n'
-        )
-        assert "A::ExecResult" in err.to_diagnostic().message
-        assert "B::ExecResult" in err.to_diagnostic().message
-
     def test_scoped_builtin_record_constructs_and_passes_at_its_own_path(self) -> None:
+        """A single scoped ``builtin record`` keeps its declared scope path
+        as part of its nominal identity, the same path-keyed identity every
+        other scoped type already has."""
         r = accept_type(
             f"scope A\nbuiltin record ExecResult\n{_EXEC_RESULT_FIELDS}end A\n"
             "def use(value: A::ExecResult) -> int = value.exit_code\n"
             'use(A::ExecResult(stdout = "a", exit_code = 1, stderr = "", timed_out = false))\n'
         )
         assert r.resolved.program is not None
-
-    def test_scoped_builtin_enum_variant_is_a_distinct_nominal_per_path(self) -> None:
-        err = reject_type(
-            "scope A\nbuiltin\nenum ParsePolicy =\n  | Abort\n  | Retry(n: int)\nend A\n"
-            "scope B\nbuiltin\nenum ParsePolicy =\n  | Abort\n  | Retry(n: int)\nend B\n"
-            "def use(value: A::ParsePolicy) -> int = 1\n"
-            "use(B::ParsePolicy::Abort)\n"
-        )
-        assert "A::ParsePolicy" in err.to_diagnostic().message
-        assert "B::ParsePolicy" in err.to_diagnostic().message
+        handle = r.type_env.get_type("A::ExecResult")
+        assert isinstance(handle, RecordType)
+        assert handle.scope_path == ("A",)
 
     def test_scoped_builtin_enum_matches_at_its_own_path(self) -> None:
         r = accept_type(
@@ -1583,16 +1568,9 @@ class TestScopedBuiltinTypes:
             "classify(A::ParsePolicy::Retry(n = 3))\n"
         )
         assert r.resolved.program is not None
-
-    def test_scoped_builtin_exception_is_a_distinct_nominal_per_path(self) -> None:
-        err = reject_type(
-            "scope A\nbuiltin exception RangeError extends Exception()\nend A\n"
-            "scope B\nbuiltin exception RangeError extends Exception()\nend B\n"
-            "def use(value: A::RangeError) -> text = value.message\n"
-            'use(B::RangeError(message = "boom"))\n'
-        )
-        assert "A::RangeError" in err.to_diagnostic().message
-        assert "B::RangeError" in err.to_diagnostic().message
+        handle = r.type_env.get_type("A::ParsePolicy")
+        assert isinstance(handle, EnumType)
+        assert handle.scope_path == ("A",)
 
     def test_method_declared_on_a_scoped_builtin_receiver_is_callable_qualified(self) -> None:
         """A method's receiver may be a ``builtin`` type declared inside a
@@ -1638,6 +1616,9 @@ class TestScopedBuiltinTypes:
             "A::trigger()\n"
         )
         assert r.resolved.program is not None
+        handle = r.type_env.get_type("A::RangeError")
+        assert isinstance(handle, ExceptionType)
+        assert handle.scope_path == ("A",)
 
     def test_scoped_builtin_record_unknown_bare_name_rejected(self) -> None:
         """The canonical-name whitelist still applies to a scoped declaration."""
@@ -1745,6 +1726,42 @@ class TestScopedBuiltinTypes:
             "()\n"
         )
         assert "exec" in err.to_diagnostic().message
+
+
+class TestBuiltinDeclarationUniqueness:
+    """A bare built-in name may be declared at most once in a program: a
+    ``builtin`` type and a non-method ``builtin def`` share one name space,
+    whatever scope path or module spells the declaration.
+    """
+
+    def test_two_scoped_builtin_records_with_the_same_name_are_rejected(self) -> None:
+        """Same-shaped ``builtin record ExecResult`` at two paths is a
+        duplicate declaration, naming both spellings in the diagnostic."""
+        err = reject_type(
+            f"scope A\nbuiltin record ExecResult\n{_EXEC_RESULT_FIELDS}end A\n"
+            f"scope B\nbuiltin record ExecResult\n{_EXEC_RESULT_FIELDS}end B\n"
+            "()\n"
+        )
+        message = err.to_diagnostic().message
+        assert "A::ExecResult" in message
+        assert "B::ExecResult" in message
+
+    def test_two_scoped_builtin_defs_with_the_same_name_are_rejected(self) -> None:
+        """A non-method ``builtin def`` shares the type name space: same
+        bare name at two paths is rejected, naming both spellings."""
+        err = reject_type(
+            "scope A\nbuiltin def print[T](value: T) -> unit\nend A\n"
+            "scope B\nbuiltin def print[T](value: T) -> unit\nend B\n"
+            "()\n"
+        )
+        message = err.to_diagnostic().message
+        assert "A::print" in message
+        assert "B::print" in message
+
+    def test_a_single_scoped_builtin_declaration_is_still_accepted(self) -> None:
+        """One declaration at a scope path is not a duplicate of anything."""
+        r = accept_type(f"scope A\nbuiltin record ExecResult\n{_EXEC_RESULT_FIELDS}end A\n()\n")
+        assert r.resolved.program is not None
 
 
 class TestBuiltinTypeModuleIdentity:

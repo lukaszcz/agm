@@ -128,6 +128,14 @@ match a recognized built-in exactly. This form is used by `std/core`; ordinary
 programs normally call those declarations through the default standard-library
 import instead of redeclaring them.
 
+A built-in's bare name — whether it names a `builtin def` or a `builtin
+record`/`enum`/`exception` — is one host identity shared across the whole
+program: it may be declared only once, whatever its scope path or declaring
+module, and never redeclared once another loaded module already provides it.
+A program loading the default standard library, as it does unless started
+with `--no-stdlib` (see [Modules](modules.md#prelude)), therefore
+cannot redeclare a name `std/core` already provides.
+
 `builtin` is a declaration modifier: it may precede `def` on the same line or
 on the line directly above it (the newline after the modifier is
 insignificant).

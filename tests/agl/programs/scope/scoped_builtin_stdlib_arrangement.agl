@@ -1,9 +1,11 @@
 # A scoped stdlib arrangement: every `builtin` form except `builtin var`
 # (confined to `std/config`, exercised separately) declared inside a named
 # scope region, exercised end to end through parsing, scope resolution,
-# typechecking, lowering, and IR evaluation. Includes a scoped `builtin def`
-# (`exec`) dispatching to a scoped `builtin record` (`ExecResult`) at a real
-# host boundary, and a scoped `builtin enum` (`ParsePolicy`) matched by case.
+# typechecking, lowering, and IR evaluation. Runs without the default
+# standard library, so it declares its own `Exception` root alongside every
+# other builtin name it uses. Includes a scoped `builtin def` (`exec`)
+# dispatching to a scoped `builtin record` (`ExecResult`) at a real host
+# boundary, and a scoped `builtin enum` (`ParsePolicy`) matched by case.
 scope Stdlib
 builtin record ExecResult
   stdout: text
@@ -15,6 +17,12 @@ builtin
 enum ParsePolicy =
   | Abort
   | Retry(n: int)
+
+builtin
+exception Exception
+  *
+  message: text
+  trace_id: text
 
 builtin exception RangeError extends Exception()
 
@@ -40,6 +48,6 @@ param code: int
 
 let r = Stdlib::ExecResult(stdout = "hi", exit_code = code, stderr = "", timed_out = false)
 Stdlib::print(r.stdout)
-print(Stdlib::report(r.exit_code))
-print(Stdlib::classify(Stdlib::ParsePolicy::Retry(n = 2)))
-print(Stdlib::exec("echo host").stdout)
+Stdlib::print(Stdlib::report(r.exit_code))
+Stdlib::print(Stdlib::classify(Stdlib::ParsePolicy::Retry(n = 2)))
+Stdlib::print(Stdlib::exec("echo host").stdout)

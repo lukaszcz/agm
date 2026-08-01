@@ -287,15 +287,23 @@ def test_single_module_lowerer_skips_builtin_function_definitions() -> None:
 
 
 def test_source_declared_builtin_function_call_is_classified() -> None:
-    _check('builtin def parse_json(value: text) -> json\nparse_json("{}")\n')
+    """A program's own ``parse_json`` declaration is a duplicate of
+    ``std/core``'s while the standard library is loaded, so this checks the
+    entry module's declaration alone, without it."""
+    _check('builtin def parse_json(value: text) -> json\nparse_json("{}")\n', default_stdlib=False)
 
 
 def test_copy_and_shallow_copy_source_declared_calls_are_classified() -> None:
+    """Runs without the standard library: ``copy``/``shallow_copy`` are
+    ``std/core``'s own built-in names too, so declaring them again while it
+    is loaded would be a duplicate rather than exercising this call-site
+    classification."""
     _check(
         "builtin def copy[T](value: T) -> T\n"
         "builtin def shallow_copy[T](value: T) -> T\n"
         "let _ = copy(1)\n"
-        "shallow_copy(1)\n"
+        "shallow_copy(1)\n",
+        default_stdlib=False,
     )
 
 

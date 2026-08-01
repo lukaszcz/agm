@@ -188,7 +188,10 @@ from agm.agl.typecheck.builtins import (
     PendingBuiltinObligation,
 )
 from agm.agl.typecheck.constructors import ConstructorChecker
-from agm.agl.typecheck.declaration_validation import validate_method_declaration_collisions
+from agm.agl.typecheck.declaration_validation import (
+    validate_builtin_declaration_uniqueness,
+    validate_method_declaration_collisions,
+)
 from agm.agl.typecheck.env import (
     AglTypeError,
     ArgumentBindings,
@@ -5077,6 +5080,7 @@ def _check_prepared_module(
             check_inhabitation=check_inhabitation,
         )
     if validate_declaration_collisions:
+        validate_builtin_declaration_uniqueness({module_id: resolved})
         validate_method_declaration_collisions({module_id: resolved}, env.type_table)
     if infer_candidates:
         inferred_records = infer_module_component_candidates(

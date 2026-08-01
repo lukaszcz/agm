@@ -1541,16 +1541,6 @@ class TestScopedBuiltinDeclarations:
         err = reject_scope(source)
         assert "already declared" in err.to_diagnostic().message
 
-    def test_two_scoped_builtin_defs_at_different_paths_do_not_collide(self) -> None:
-        """Same builtin name, different scope paths: no duplicate-member error."""
-        resolved = parse_and_resolve(
-            "scope A\nbuiltin def print[T](value: T) -> unit\nend A\n"
-            "scope B\nbuiltin def print[T](value: T) -> unit\nend B\n"
-            "()"
-        )
-        assert set(resolved.scope_nodes[("A",)].members) == {"print"}
-        assert set(resolved.scope_nodes[("B",)].members) == {"print"}
-
 
 class TestScopedBuiltinUsedAsValueRejected:
     """A scoped ``builtin def`` referenced as a value (not called) is a clean

@@ -65,8 +65,10 @@ region.
   `type Pair[A, B] = …`); see [Generics](generics.md). `builtin` may prefix
   `record`, `enum`, or `exception` for a host-recognized declaration, at the
   module root or in a named scope region; a type alias does not accept it. A
-  scoped `builtin` type is a nominal distinct from a same-named one at another
-  path, exactly like an ordinary scoped type.
+  scoped `builtin` type carries its declared scope path as part of its
+  nominal identity, exactly like an ordinary scoped type — but its bare name
+  is shared with the host across the whole program and may be declared only
+  once; see [Built-in functions](functions.md#built-in-functions).
 - **`param` declarations** — the program's host/config/CLI-supplied parameters.
   Entry-module only; they may also be members of a named scope region in an
   entry module, with no declaration-path shorthand. A scoped parameter's
@@ -96,7 +98,9 @@ region.
   may be **generic** (`def id[T](x: T) -> T = x`); see [Generics](generics.md).
   `builtin` introduces only the body-less `builtin def` form, legal at the
   module root or in a named scope region; a scoped `builtin def` still
-  dispatches to the same host implementation as a root one. Extern functions
+  dispatches to the same host implementation as a root one, and its bare
+  name is subject to the same whole-program uniqueness as a `builtin` type
+  (see [Built-in functions](functions.md#built-in-functions)). Extern functions
   are file-backed-module only.
 - **Scoped `let`/`var` bindings** — a plain `let` or `var` is legal anywhere a
   binder is. The scope-path-prefixed spelling (`let A::x = …`,

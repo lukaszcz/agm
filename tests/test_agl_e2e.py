@@ -132,6 +132,7 @@ def _run_program(
                 runtime.register_agent(name, agent)
 
     module_roots = scenario.get("module_roots", [])
+    default_stdlib = not scenario.get("no_stdlib", False)
     with unittest.mock.patch("agm.core.process.run_capture_result", side_effect=shell):
         if module_roots:
             from agm.agl.modules.roots import RootSet
@@ -144,7 +145,9 @@ def _run_program(
                     }
                 )
             )
-            prepared = PipelineDriver.prepare_program(source, entry_path=None, roots=roots)
+            prepared = PipelineDriver.prepare_program(
+                source, entry_path=None, roots=roots, default_stdlib=default_stdlib
+            )
             register_agents(prepared.declared_agents)
             result = runtime.run_prepared(prepared, param_values=scenario.get("params", {}))
         elif program.is_relative_to(EXTERNS_PROGRAMS_DIR):
@@ -157,12 +160,16 @@ def _run_program(
             from agm.agl.modules.roots import RootSet
 
             roots = RootSet(roots=frozenset({program.parent.resolve(), REPO_STDLIB_ROOT}))
-            prepared = PipelineDriver.prepare_program(source, entry_path=program, roots=roots)
+            prepared = PipelineDriver.prepare_program(
+                source, entry_path=program, roots=roots, default_stdlib=default_stdlib
+            )
             register_agents(prepared.declared_agents)
             result = runtime.run_prepared(prepared, param_values=scenario.get("params", {}))
         else:
-            register_agents(runtime.declared_agents(source))
-            result = runtime.run(source, param_values=scenario.get("params", {}))
+            register_agents(runtime.declared_agents(source, default_stdlib=default_stdlib))
+            result = runtime.run(
+                source, param_values=scenario.get("params", {}), default_stdlib=default_stdlib
+            )
     return result, agents, shell
 
 

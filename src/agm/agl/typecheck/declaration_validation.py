@@ -6,14 +6,17 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Literal
 
-from agm.agl.modules.ids import ModuleId
+from agm.agl.modules.ids import ModuleId, spell_declaration
 from agm.agl.scope.symbols import ModuleResolution
 from agm.agl.semantics.type_table import DeclKey, TypeTable, qualified_decl_name
 from agm.agl.syntax.nodes import (
+    EnumDef,
     ExceptionDef,
+    FuncDef,
     RecordDef,
     TypeAlias,
     static_function_items,
+    static_items,
     static_type_items,
 )
 from agm.agl.syntax.spans import SourceSpan
@@ -211,6 +214,74 @@ def _raise_collision(
         span=declared.span,
         related=related,
     )
+
+
+def _module_visit_order(module_id: ModuleId) -> tuple[bool, tuple[str, ...]]:
+    """Sort key placing the entry module after every other module.
+
+    A duplicate between a library declaration and the program's own is then
+    reported at the program's own, more actionable, declaration.
+    """
+    return (module_id.is_entry, module_id.segments)
+
+
+def _builtin_bare_declarations(
+    modules: Mapping[ModuleId, ModuleResolution],
+) -> list[tuple[ModuleId, tuple[str, ...], str, SourceSpan]]:
+    """List every builtin type and builtin def declaration, keyed by bare name.
+
+    A ``builtin`` type (record/enum/exception) and a ``builtin def`` share one
+    name space: the bare name is the host's own identity for the declaration,
+    regardless of the scope path or module that spells it. A ``builtin var``
+    is neither, and is excluded. Every ``builtin def`` reaching here declares
+    an ordinary function rather than a method — header validation rejects a
+    ``builtin`` method outright, before this runs.
+
+    Modules are visited in :func:`_module_visit_order`, and each module's
+    items in source order (named scope regions inlined), so a program with
+    several duplicate declarations always reports the same one.
+    """
+    found: list[tuple[ModuleId, tuple[str, ...], str, SourceSpan]] = []
+    for module_id in sorted(modules, key=_module_visit_order):
+        resolved = modules[module_id]
+        for item in static_items(resolved.program.body.items):
+            if not isinstance(item, (RecordDef, EnumDef, ExceptionDef, FuncDef)):
+                continue
+            if not item.is_builtin:
+                continue
+            path = tuple(segment.name for segment in item.scope_path)
+            found.append((module_id, path, item.name, item.span))
+    return found
+
+
+def validate_builtin_declaration_uniqueness(
+    modules: Mapping[ModuleId, ModuleResolution],
+) -> None:
+    """Reject a bare built-in name declared more than once in a program.
+
+    A ``builtin`` declaration marks what a declaration denotes at the host
+    boundary; naming it twice is a mistake, not an overload, since a
+    host-minted value can only carry one identity per name (see
+    ``ir/builtin_nominals.py``). This holds regardless of scope path or
+    declaring module, and regardless of whether the duplicate is a type
+    (``builtin record``/``enum``/``exception``) or a ``builtin def`` — the two
+    share one name space.
+    """
+    first_seen: dict[str, tuple[ModuleId, tuple[str, ...], SourceSpan]] = {}
+    for module_id, path, name, span in _builtin_bare_declarations(modules):
+        prior = first_seen.get(name)
+        if prior is None:
+            first_seen[name] = (module_id, path, span)
+            continue
+        prior_module_id, prior_path, prior_span = prior
+        first_spelling = spell_declaration(prior_module_id, (*prior_path, name))
+        duplicate_spelling = spell_declaration(module_id, (*path, name))
+        raise AglTypeError(
+            f"Builtin '{name}' is declared more than once: as '{first_spelling}' and as "
+            f"'{duplicate_spelling}'.",
+            span=span,
+            related=((f"'{first_spelling}' is declared here", prior_span),),
+        )
 
 
 def validate_method_declaration_collisions(

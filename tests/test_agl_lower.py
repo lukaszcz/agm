@@ -1127,7 +1127,7 @@ class TestNominalsEmpty:
         """
         from agm.agl.ir.ids import NominalId
         from agm.agl.ir.program import NominalKind
-        from agm.agl.modules.ids import PRELUDE_ID
+        from agm.agl.modules.ids import STD_CORE_ID
         from agm.agl.semantics.types import BUILTIN_EXCEPTIONS, BUILTIN_PRELUDE_TYPES
 
         prog = _lower("()")
@@ -1141,9 +1141,9 @@ class TestNominalsEmpty:
                 f"Built-in exception {builtin_name!r} missing from program.nominals"
             )
 
-        assert prog.nominals[NominalId(PRELUDE_ID, "ExecResult")].kind is NominalKind.RECORD
-        assert prog.nominals[NominalId(PRELUDE_ID, "ParsePolicy")].kind is NominalKind.ENUM
-        assert prog.nominals[NominalId(PRELUDE_ID, "Abort")].kind is NominalKind.EXCEPTION
+        assert prog.nominals[NominalId(STD_CORE_ID, "ExecResult")].kind is NominalKind.RECORD
+        assert prog.nominals[NominalId(STD_CORE_ID, "ParsePolicy")].kind is NominalKind.ENUM
+        assert prog.nominals[NominalId(STD_CORE_ID, "Abort")].kind is NominalKind.EXCEPTION
 
     def test_user_exception_nominal_stamped_with_declaring_module_id(self) -> None:
         """A user-declared exception's nominal is stamped with its real module_id.
@@ -1247,34 +1247,35 @@ class TestBuiltinNominalsTable:
     def test_declared_builtin_type_resolves_to_the_declaration_identity(self) -> None:
         """A program's own ``builtin`` declaration is reflected in its table.
 
-        The declaration is at the root (empty scope path), so its identity
-        coincides with the shipped standard library's own identity for
-        ``RangeError`` — the declaration is still what drives the table's
-        answer, that identity is just what an unscoped declaration resolves
-        to.
+        The declaration is at the root (empty scope path) of the entry
+        module — this ``_lower`` helper compiles standalone, with no standard
+        library loaded — so it carries the entry module's own identity, a
+        distinct nominal from the shipped standard library's own
+        ``RangeError``: the declaration is what drives the table's answer,
+        not a shared name.
         """
         from agm.agl.ir.ids import NominalId
-        from agm.agl.modules.ids import PRELUDE_ID
+        from agm.agl.modules.ids import ENTRY_ID
 
         source = "builtin exception RangeError extends Exception()\n()\n"
         prog = _lower(source)
-        assert prog.builtin_nominals.nominal("RangeError") == NominalId(PRELUDE_ID, "RangeError")
+        assert prog.builtin_nominals.nominal("RangeError") == NominalId(ENTRY_ID, "RangeError")
 
     def test_scoped_declared_builtin_type_resolves_to_its_own_declared_path(self) -> None:
         """A SCOPED ``builtin`` declaration's own path drives the table's answer.
 
         A ``builtin`` declaration inside a named scope region is a distinct
         nominal from a same-named one at another path (or at the root), so
-        the table answers with the declaration's own scope path here, not
-        the shipped standard library's root identity.
+        the table answers with the declaration's own module and scope path
+        here, not the shipped standard library's own root identity.
         """
         from agm.agl.ir.ids import NominalId
-        from agm.agl.modules.ids import PRELUDE_ID
+        from agm.agl.modules.ids import ENTRY_ID
 
         source = "scope A\nbuiltin exception RangeError extends Exception()\nend A\n()\n"
         prog = _lower(source)
         assert prog.builtin_nominals.nominal("RangeError") == NominalId(
-            PRELUDE_ID, "RangeError", ("A",)
+            ENTRY_ID, "RangeError", ("A",)
         )
 
     def test_range_error_raised_at_runtime_carries_the_table_nominal(self) -> None:
@@ -1299,11 +1300,13 @@ class TestBuiltinNominalsTable:
         could never match a host-raised instance. Here the ``for``-loop
         step guard's host-raised ``RangeError`` — with the type declared
         inside ``scope A`` and nothing declared at the root — carries the
-        exact scoped identity a same-region ``catch RangeError`` resolves
-        to, not the path-free one, and reports its declared spelling.
+        exact scoped identity (this ``evaluate_ir_raises`` harness compiles
+        standalone, with no standard library loaded, so that identity is the
+        entry module's own) a same-region ``catch RangeError`` resolves to,
+        not the path-free one, and reports its declared spelling.
         """
         from agm.agl.ir.ids import NominalId
-        from agm.agl.modules.ids import PRELUDE_ID
+        from agm.agl.modules.ids import ENTRY_ID
         from tests.agl.ir_harness import evaluate_ir_raises
 
         source = (
@@ -1317,7 +1320,7 @@ class TestBuiltinNominalsTable:
         )
         exc = evaluate_ir_raises(source)
         assert exc.display_name == "A::RangeError"
-        assert exc.nominal == NominalId(PRELUDE_ID, "RangeError", ("A",))
+        assert exc.nominal == NominalId(ENTRY_ID, "RangeError", ("A",))
 
     def test_max_iterations_exceeded_raised_at_runtime_carries_the_table_nominal(self) -> None:
         """A ``do[n]`` loop exhausted at its bound carries the table's nominal."""
@@ -1515,7 +1518,7 @@ class TestIrFieldLowering:
 
     def test_abstract_exception_field_access_uses_upper_bound_mode(self) -> None:
         """Field access on abstract Exception records a static upper bound."""
-        from agm.agl.modules.ids import PRELUDE_ID
+        from agm.agl.modules.ids import STD_CORE_ID
         from agm.agl.syntax.nodes import FieldAccess, UnitLit
         from agm.agl.syntax.spans import UNKNOWN_SOURCE, SourceSpan
 
@@ -1534,7 +1537,7 @@ class TestIrFieldLowering:
         unit_lit = UnitLit(span=span, node_id=fake_node_id + 1)
         field_access = FieldAccess(obj=unit_lit, field="message", span=span, node_id=fake_node_id)
 
-        checked.node_types[unit_lit.node_id] = ExceptionType("Exception", PRELUDE_ID)
+        checked.node_types[unit_lit.node_id] = ExceptionType("Exception", STD_CORE_ID)
         lowerer = _make_lowerer(checked, source)
         result = lowerer.lower_expr(field_access)
 
@@ -3735,7 +3738,7 @@ class TestRangeForDesugar:
 
     def test_step_guard_raises_range_error_ir(self) -> None:
         """The step guard IrMakeException has nominal RangeError, message+trace_id fields."""
-        from agm.agl.modules.ids import PRELUDE_ID as _PRELUDE_ID
+        from agm.agl.modules.ids import STD_CORE_ID
 
         source = "for i in 1 to 5 do\n  ()\ndone\n"
         node = _get_loop_ir(source)
@@ -3746,7 +3749,7 @@ class TestRangeForDesugar:
         assert isinstance(raise_node, IrRaise)
         exc = raise_node.exc
         assert isinstance(exc, IrMakeException)
-        assert exc.nominal.module_id == _PRELUDE_ID
+        assert exc.nominal.module_id == STD_CORE_ID
         assert exc.nominal.declared_name == "RangeError"
         assert exc.display_name == "RangeError"
         fields_dict = dict(exc.fields)

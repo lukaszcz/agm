@@ -337,6 +337,29 @@ def test_same_module_same_type_identity() -> None:
 
 
 # ---------------------------------------------------------------------------
+# 4b. The shipped standard library's own module owns its own declarations
+# ---------------------------------------------------------------------------
+
+
+def test_std_core_execresult_reports_std_core_as_its_owning_module(tmp_path: Path) -> None:
+    """In a normal program, the standard library's own ``ExecResult`` is owned by ``std/core``.
+
+    A ``builtin`` declaration belongs to the module that declares it, like
+    any other declaration — no re-homing onto a shared sentinel. Loading the
+    real standard library (the default) and reading its own checked module
+    directly shows ``ExecResult`` resolves to a handle owned by
+    ``std/core`` itself, not the entry module or any placeholder.
+    """
+    from agm.agl.modules.ids import STD_CORE_ID
+
+    cg = _check_program(tmp_path, {"entry": "()"})
+    std_core = cg.modules[STD_CORE_ID]
+    handle = std_core.type_env.get_type("ExecResult")
+    assert isinstance(handle, RecordType)
+    assert handle.module_id == STD_CORE_ID
+
+
+# ---------------------------------------------------------------------------
 # 5. Single-module check_program equivalent to check_module()
 # ---------------------------------------------------------------------------
 

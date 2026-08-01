@@ -434,13 +434,13 @@ def test_enum_value_eq() -> None:
 def test_exception_value_eq() -> None:
     """ExceptionValue equality considers nominal identity and fields.
 
-    display_name is excluded from eq. Built-in exceptions use PRELUDE_ID.
+    display_name is excluded from eq. Built-in exceptions use STD_CORE_ID.
     """
-    from agm.agl.modules.ids import PRELUDE_ID, ModuleId
+    from agm.agl.modules.ids import STD_CORE_ID, ModuleId
     from agm.agl.semantics.values import ExceptionValue, NominalId, TextValue
 
-    nom_err = NominalId(PRELUDE_ID, "Err")
-    nom_err2 = NominalId(PRELUDE_ID, "Err2")
+    nom_err = NominalId(STD_CORE_ID, "Err")
+    nom_err2 = NominalId(STD_CORE_ID, "Err2")
     nom_err_other = NominalId(ModuleId.from_path("mymod"), "Err")
 
     ex1 = ExceptionValue(nominal=nom_err, display_name="Err", fields={"message": TextValue("oops")})
@@ -464,17 +464,17 @@ def test_exception_value_eq() -> None:
     assert ex1 != ex4
 
 
-def test_builtin_exception_value_uses_prelude_id() -> None:
-    """Built-in exception values carry NominalId(PRELUDE_ID, name)."""
-    from agm.agl.modules.ids import PRELUDE_ID
+def test_builtin_exception_value_uses_std_core_id() -> None:
+    """Built-in exception values carry NominalId(STD_CORE_ID, name)."""
+    from agm.agl.modules.ids import STD_CORE_ID
     from agm.agl.semantics.values import ExceptionValue, NominalId, TextValue
 
     exc = ExceptionValue(
-        nominal=NominalId(PRELUDE_ID, "AgentParseError"),
+        nominal=NominalId(STD_CORE_ID, "AgentParseError"),
         display_name="AgentParseError",
         fields={"message": TextValue("fail"), "trace_id": TextValue("")},
     )
-    assert exc.nominal.module_id is PRELUDE_ID
+    assert exc.nominal.module_id is STD_CORE_ID
     assert exc.nominal.declared_name == "AgentParseError"
     assert exc.display_name == "AgentParseError"
 
@@ -537,7 +537,7 @@ def test_array_dict_record_enum_exception_are_genuinely_unhashable() -> None:
 
 def test_array_dict_record_enum_exception_hash_raises() -> None:
     """Every mutable-payload value type raises TypeError on hash() — never a stable hash."""
-    from agm.agl.modules.ids import PRELUDE_ID, ModuleId
+    from agm.agl.modules.ids import STD_CORE_ID, ModuleId
     from agm.agl.semantics.values import (
         ArrayValue,
         DictValue,
@@ -556,7 +556,7 @@ def test_array_dict_record_enum_exception_hash_raises() -> None:
         RecordValue(nominal=nom, display_name="Foo", fields={"x": IntValue(1)}),
         EnumValue(nominal=nom, display_name="Foo", variant="Bar", fields={}),
         ExceptionValue(
-            nominal=NominalId(PRELUDE_ID, "Err"),
+            nominal=NominalId(STD_CORE_ID, "Err"),
             display_name="Err",
             fields={"message": TextValue("oops")},
         ),

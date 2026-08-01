@@ -397,13 +397,15 @@ def _builtin_nominal_matches(actual: Type, expected: Type) -> bool:
     ``module_id`` is deliberately excluded: the canonical *expected* type
     literals (:func:`_builtin_function_signature`) are written without an
     explicit ``module_id`` (defaulting to ``ENTRY_ID``) while a resolved
-    *actual* builtin nominal always carries ``PRELUDE_ID`` — a pre-existing
-    asymmetry this comparison already tolerated by ignoring ``module_id``
-    outright. ``scope_path`` is compared, though: the caller re-roots
-    *actual* onto the declaring ``builtin def``'s own scope path first (see
-    :func:`_rerooted_signature`), so a scoped nominal that resolves to a
-    sibling of the same region compares equal to the canonical (path ``()``)
-    shape, while a mismatched one is correctly rejected.
+    *actual* builtin nominal now carries its declaring module — the shipped
+    standard library's own module for a name the program declares nothing
+    for, or the program's own module for a ``builtin def`` it declares
+    itself — a pre-existing asymmetry this comparison already tolerated by
+    ignoring ``module_id`` outright. ``scope_path`` is compared, though: the
+    caller re-roots *actual* onto the declaring ``builtin def``'s own scope
+    path first (see :func:`_rerooted_signature`), so a scoped nominal that
+    resolves to a sibling of the same region compares equal to the canonical
+    (path ``()``) shape, while a mismatched one is correctly rejected.
     """
     if isinstance(expected, RecordType):
         return (

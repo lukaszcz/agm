@@ -20,7 +20,7 @@ from typing import Literal, cast
 
 from agm.agl.diagnostics import AglError, Diagnostic
 from agm.agl.ir.ids import NominalId
-from agm.agl.modules.ids import ENTRY_ID, PRELUDE_ID, ModuleId, spell_declaration
+from agm.agl.modules.ids import ENTRY_ID, STD_CORE_ID, ModuleId, spell_declaration
 from agm.agl.scope.imports import (
     ImportEnv,
     NameAtom,
@@ -753,12 +753,12 @@ class TypeEnvironment:
             self._types[prelude_name] = prelude_type
             typedef = BUILTIN_PRELUDE_TYPE_DEFS[prelude_name]
             if typedef.kind == "record":
-                self._constructor_field_kinds[((PRELUDE_ID, (), prelude_name), None)] = tuple(
+                self._constructor_field_kinds[((STD_CORE_ID, (), prelude_name), None)] = tuple(
                     (fname, ParamKind.STANDARD) for fname, _ in typedef.fields
                 )
                 continue
             for variant, vfields in typedef.variants:
-                self._constructor_field_kinds[((PRELUDE_ID, (), prelude_name), variant)] = tuple(
+                self._constructor_field_kinds[((STD_CORE_ID, (), prelude_name), variant)] = tuple(
                     (fname, ParamKind.STANDARD) for fname, _ in vfields
                 )
         # Exception constructor field kinds are NOT pre-registered here: each
@@ -2340,9 +2340,11 @@ class TypeEnvironment:
         """Register ordered field kinds under structured owner identity.
 
         *module_id* defaults to this environment's own module; a caller
-        registering a ``builtin`` declaration passes its re-homed owner
-        (``PRELUDE_ID``) instead, matching the owner every other piece of
-        that declaration's state (its ``TypeDef``, its handle) already uses.
+        registering a ``builtin`` declaration passes its own declaring module
+        explicitly too, matching the owner every other piece of that
+        declaration's state (its ``TypeDef``, its handle) already uses — a
+        ``builtin`` declaration belongs to the module that declares it, like
+        every other declaration.
         """
         self._assert_mutable()
         owner_module_id = self._module_id if module_id is None else module_id

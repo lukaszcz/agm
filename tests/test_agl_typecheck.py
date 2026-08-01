@@ -1747,6 +1747,75 @@ class TestScopedBuiltinTypes:
         assert "exec" in err.to_diagnostic().message
 
 
+class TestBuiltinTypeModuleIdentity:
+    """A ``builtin`` declaration's nominal identity is its own declaring
+    module — the entry module, here, since these tests check a single
+    module with no standard library loaded (equivalent to
+    ``PipelineDriver.run(..., default_stdlib=False)``) — never a shared
+    sentinel. The shipped standard library's own declaration of a built-in
+    name is therefore a distinct nominal, not the same one re-homed.
+    """
+
+    def test_root_builtin_record_carries_the_entry_modules_own_identity(self) -> None:
+        """An entry-module ``builtin record ExecResult`` is not std/core's.
+
+        Written with no standard library loaded (single-module checking never
+        loads one), so this stays valid once a program-wide "declare a
+        built-in name once" rule lands: the entry module's own declaration is
+        the only ``ExecResult`` in scope here.
+        """
+        from agm.agl.modules.ids import ENTRY_ID, STD_CORE_ID
+
+        checked = accept_type(f"builtin record ExecResult\n{_EXEC_RESULT_FIELDS}()")
+        handle = checked.type_env.get_type("ExecResult")
+        assert isinstance(handle, RecordType)
+        assert handle.module_id == ENTRY_ID
+        assert handle.module_id != STD_CORE_ID
+
+    def test_root_builtin_exception_hierarchy_declared_without_the_stdlib_typechecks(self) -> None:
+        """A program without the standard library may declare its own root
+        (unscoped) ``builtin exception Exception`` hierarchy from scratch.
+
+        The subclass's ``extends Exception`` resolves to the entry module's
+        own root declaration, not the shipped standard library's; the
+        canonical-shape comparison must re-root that reference onto its own
+        declaring module before it matches the canonical (``std/core``)
+        shape, so this passes builtin shape validation.
+        """
+        r = accept_type(
+            "builtin\n"
+            "exception Exception\n"
+            "  *\n"
+            "  message: text\n"
+            "  trace_id: text\n"
+            "builtin exception RangeError extends Exception()\n"
+            "()\n"
+        )
+        assert r.resolved.program is not None
+
+    def test_shipped_stdlib_builtin_record_type_spells_bare_in_diagnostics(self) -> None:
+        """A type-mismatch diagnostic spells a built-in record type bare.
+
+        ``ExecResult``'s canonical (seeded) identity carries the shipped
+        standard library's own module (``std/core``); the message must still
+        read the bare name a program never declared anything of its own for,
+        not ``std/core::ExecResult``.
+        """
+        err = reject_type('let r: ExecResult = exec("ls")\nlet n: int = r\nn')
+        message = err.to_diagnostic().message
+        assert "ExecResult" in message
+        assert "std/core" not in message
+
+    def test_shipped_stdlib_builtin_exception_type_spells_bare_in_diagnostics(self) -> None:
+        """A type-mismatch diagnostic spells a built-in exception type bare."""
+        err = reject_type(
+            "def f() -> int =\n  try\n    1\n  catch RangeError as e =>\n    e\nf()\n"
+        )
+        message = err.to_diagnostic().message
+        assert "RangeError" in message
+        assert "std/core" not in message
+
+
 class TestBlockTyping:
     def test_block_last_expr_is_block_type(self) -> None:
         r = accept_type("let x = 1\nx")

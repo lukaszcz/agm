@@ -574,8 +574,9 @@ class IrMakeException:
     """IR exception construction: ``ExcName(field: expr, ...)``.
 
     ``nominal`` — the ``NominalId`` of the exception type (``module_id`` is
-        ``PRELUDE_ID`` for a built-in exception; a user-declared exception is
-        stamped with its declaring module's id).
+        the shipped standard library's own module for a built-in exception a
+        program declares nothing of its own for, or the declaring module's id
+        otherwise — a program-declared ``builtin exception`` included).
     ``display_name`` — user-facing exception type name.
     ``fields`` — declaration-order tuple of ``(field_name, slot)`` where
         ``slot`` is either a coerced ``IrExpr`` (explicitly provided by the

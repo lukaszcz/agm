@@ -54,7 +54,7 @@ from dataclasses import dataclass, field, replace
 from itertools import count
 from typing import assert_never
 
-from agm.agl.modules.ids import ENTRY_ID, PRELUDE_ID, STD_CORE_ID, ModuleId
+from agm.agl.modules.ids import ENTRY_ID, STD_CORE_ID, ModuleId
 
 # ---------------------------------------------------------------------------
 # Primitive types (singletons-by-construction; frozen dataclasses)
@@ -182,7 +182,7 @@ class RecordType:
         return "record"
 
     def __repr__(self) -> str:
-        prefix = "" if self.module_id.is_entry else f"{self.module_id.path_str()}::"
+        prefix = "" if spells_bare(self.module_id, self.name) else f"{self.module_id.path_str()}::"
         scoped_name = "::".join((*self.scope_path, self.name))
         if self.type_args:
             args_str = ", ".join(repr(a) for a in self.type_args)
@@ -213,7 +213,7 @@ class EnumType:
         return "enum"
 
     def __repr__(self) -> str:
-        prefix = "" if self.module_id.is_entry else f"{self.module_id.path_str()}::"
+        prefix = "" if spells_bare(self.module_id, self.name) else f"{self.module_id.path_str()}::"
         scoped_name = "::".join((*self.scope_path, self.name))
         if self.type_args:
             args_str = ", ".join(repr(a) for a in self.type_args)
@@ -232,7 +232,10 @@ class ExceptionType:
     up by handle in the shared ``TypeTable``
     (``semantics.type_table.TypeTable.exception_fields``/``exception_def``).
     ``module_id`` is the owning module (defaults to ``ENTRY_ID``, like
-    ``RecordType``/``EnumType``); built-in exceptions carry ``PRELUDE_ID``.
+    ``RecordType``/``EnumType``); a built-in exception's declaring module is
+    the shipped standard library's own module (``STD_CORE_ID``) unless a
+    program declares its own ``builtin exception`` of that name, in which
+    case it carries that program's module instead.
 
     The abstract ``Exception`` root is the ``TypeDef`` registered under name
     ``"Exception"`` with ``abstract=True`` and only ``message``/``trace_id``
@@ -248,11 +251,11 @@ class ExceptionType:
         return "exception"
 
     def __repr__(self) -> str:
-        # Built-in/prelude exceptions always render as the bare name (matching
+        # Built-in exceptions always render as the bare name (matching
         # today's user-visible diagnostics); a module-owned user exception
         # matches the record/enum qualification style.
         scoped_name = "::".join((*self.scope_path, self.name))
-        if self.module_id.is_entry or self.module_id == PRELUDE_ID:
+        if spells_bare(self.module_id, self.name):
             return scoped_name
         return f"{self.module_id.path_str()}::{scoped_name}"
 
@@ -667,8 +670,12 @@ def transform_type(t: Type, transform: Callable[[Type], Type]) -> Type:
     return transform(replace_type_children(t, children))
 
 
-def reroot_type(t: Type, prefix: tuple[str, ...]) -> Type:
-    """Return *t* with *prefix* stripped from every nominal handle's scope path.
+def reroot_type(
+    t: Type,
+    prefix: tuple[str, ...],
+    remap_module: tuple[ModuleId, ModuleId] | None = None,
+) -> Type:
+    """Return *t* re-rooted onto a canonical frame, for shape comparison.
 
     A declaration inside a named scope region resolves its own nominal
     references (a record/enum field, an exception's base) under that same
@@ -678,17 +685,32 @@ def reroot_type(t: Type, prefix: tuple[str, ...]) -> Type:
     ``ExceptionType`` node's ``scope_path`` wherever it starts with *prefix*,
     leaving every other node (including a nominal reference declared
     elsewhere, whose ``scope_path`` does not start with *prefix*) unchanged.
-    Every caller already special-cases an empty *prefix* (nothing to strip),
-    so this is only ever called with a non-empty one.
+
+    *remap_module*, when given as ``(from_module, to_module)``, additionally
+    rewrites a nominal handle's ``module_id`` from *from_module* to
+    *to_module* wherever it matches — a reference naming a sibling declared
+    in the same module as the declaration being re-rooted names *that*
+    declaration's own module, which must map onto the canonical shape's
+    module the same way; a reference to a type from any other module is left
+    alone, so a genuine cross-module mismatch is still rejected. The two
+    adjustments are independent: a handle already at scope path ``()`` still
+    needs its module remapped, and a handle outside *prefix* still needs
+    nothing stripped. Callers that only need the scope-path adjustment (an
+    empty *prefix* has nothing to strip) omit *remap_module*.
     """
 
     def strip(node: Type) -> Type:
-        if (
-            isinstance(node, (RecordType, EnumType, ExceptionType))
-            and node.scope_path[: len(prefix)] == prefix
-        ):
-            return replace(node, scope_path=node.scope_path[len(prefix) :])
-        return node
+        if not isinstance(node, (RecordType, EnumType, ExceptionType)):
+            return node
+        scope_path = node.scope_path
+        module_id = node.module_id
+        if scope_path[: len(prefix)] == prefix:
+            scope_path = scope_path[len(prefix) :]
+        if remap_module is not None and module_id == remap_module[0]:
+            module_id = remap_module[1]
+        if scope_path == node.scope_path and module_id == node.module_id:
+            return node
+        return replace(node, scope_path=scope_path, module_id=module_id)
 
     return transform_type(t, strip)
 
@@ -844,45 +866,48 @@ def contains_inference_var(t: Type) -> bool:
 # ---------------------------------------------------------------------------
 # Built-in exception types
 #
-# These are pure handles — ``module_id=PRELUDE_ID`` — carrying no field data
-# of their own; the shapes are the single source of truth defined once as
-# ``TypeDef`` literals in ``semantics.type_table.BUILTIN_EXCEPTION_TYPE_DEFS``
-# (registered into every fresh ``TypeTable`` by ``create_seeded_type_table``).
+# These are pure handles — ``module_id=STD_CORE_ID``, the shipped standard
+# library's own declaring module — carrying no field data of their own; the
+# shapes are the single source of truth defined once as ``TypeDef`` literals
+# in ``semantics.type_table.BUILTIN_EXCEPTION_TYPE_DEFS`` (registered into
+# every fresh ``TypeTable`` by ``create_seeded_type_table``). A program that
+# declares its own ``builtin exception`` of one of these names gets its own
+# distinct handle instead, carrying that program's module.
 # ---------------------------------------------------------------------------
 
 # Abstract base: the hierarchy root, catchable but not constructible.
-EXCEPTION_BASE = ExceptionType(name="Exception", module_id=PRELUDE_ID)
+EXCEPTION_BASE = ExceptionType(name="Exception", module_id=STD_CORE_ID)
 
 BUILTIN_EXCEPTIONS: dict[str, ExceptionType] = {
     "Exception": EXCEPTION_BASE,
-    "AgentCallError": ExceptionType(name="AgentCallError", module_id=PRELUDE_ID),
-    "AgentParseError": ExceptionType(name="AgentParseError", module_id=PRELUDE_ID),
-    "ExecError": ExceptionType(name="ExecError", module_id=PRELUDE_ID),
+    "AgentCallError": ExceptionType(name="AgentCallError", module_id=STD_CORE_ID),
+    "AgentParseError": ExceptionType(name="AgentParseError", module_id=STD_CORE_ID),
+    "ExecError": ExceptionType(name="ExecError", module_id=STD_CORE_ID),
     # Raised for every runtime failure crossing an extern (Python FFI) call:
     # the Python callable raising, a return-contract violation (including a
     # seal violation), or an argument-conversion failure.
-    "ExternError": ExceptionType(name="ExternError", module_id=PRELUDE_ID),
-    "MaxIterationsExceeded": ExceptionType(name="MaxIterationsExceeded", module_id=PRELUDE_ID),
-    "MatchError": ExceptionType(name="MatchError", module_id=PRELUDE_ID),
-    "IndexError": ExceptionType(name="IndexError", module_id=PRELUDE_ID),
-    "KeyError": ExceptionType(name="KeyError", module_id=PRELUDE_ID),
-    "TypeError": ExceptionType(name="TypeError", module_id=PRELUDE_ID),
-    "ArithmeticError": ExceptionType(name="ArithmeticError", module_id=PRELUDE_ID),
+    "ExternError": ExceptionType(name="ExternError", module_id=STD_CORE_ID),
+    "MaxIterationsExceeded": ExceptionType(name="MaxIterationsExceeded", module_id=STD_CORE_ID),
+    "MatchError": ExceptionType(name="MatchError", module_id=STD_CORE_ID),
+    "IndexError": ExceptionType(name="IndexError", module_id=STD_CORE_ID),
+    "KeyError": ExceptionType(name="KeyError", module_id=STD_CORE_ID),
+    "TypeError": ExceptionType(name="TypeError", module_id=STD_CORE_ID),
+    "ArithmeticError": ExceptionType(name="ArithmeticError", module_id=STD_CORE_ID),
     # Statically prevented by scope/typecheck (assignment to immutable bindings
     # and undeclared names), but still listed as catchable runtime
     # exceptions for any runtime paths that bypass the static passes.
-    "UndefinedVariableError": ExceptionType(name="UndefinedVariableError", module_id=PRELUDE_ID),
-    "ImmutableBindingError": ExceptionType(name="ImmutableBindingError", module_id=PRELUDE_ID),
-    "Abort": ExceptionType(name="Abort", module_id=PRELUDE_ID),
+    "UndefinedVariableError": ExceptionType(name="UndefinedVariableError", module_id=STD_CORE_ID),
+    "ImmutableBindingError": ExceptionType(name="ImmutableBindingError", module_id=STD_CORE_ID),
+    "Abort": ExceptionType(name="Abort", module_id=STD_CORE_ID),
     # AgL: RecursionError raised when the call-depth limit is exceeded.
-    "RecursionError": ExceptionType(name="RecursionError", module_id=PRELUDE_ID),
-    "CastError": ExceptionType(name="CastError", module_id=PRELUDE_ID),
-    "JsonParseError": ExceptionType(name="JsonParseError", module_id=PRELUDE_ID),
-    "RangeError": ExceptionType(name="RangeError", module_id=PRELUDE_ID),
+    "RecursionError": ExceptionType(name="RecursionError", module_id=STD_CORE_ID),
+    "CastError": ExceptionType(name="CastError", module_id=STD_CORE_ID),
+    "JsonParseError": ExceptionType(name="JsonParseError", module_id=STD_CORE_ID),
+    "RangeError": ExceptionType(name="RangeError", module_id=STD_CORE_ID),
     # Reference semantics makes cyclic array/dict values constructible; raised
     # by any walk that would otherwise recurse forever (print, render, `as
     # json`, extern encode) when it re-enters a container already on its path.
-    "CyclicValueError": ExceptionType(name="CyclicValueError", module_id=PRELUDE_ID),
+    "CyclicValueError": ExceptionType(name="CyclicValueError", module_id=STD_CORE_ID),
 }
 
 # Names of built-in exception types (cannot be redeclared as records/enums/aliases).
@@ -902,12 +927,12 @@ BUILTIN_EXCEPTION_NAMES: frozenset[str] = frozenset(BUILTIN_EXCEPTIONS)
 # These prelude constants are pure handles — their field/variant shapes are
 # defined once as explicit ``TypeDef`` literals in
 # ``semantics.type_table.BUILTIN_PRELUDE_TYPE_DEFS``.
-_EXEC_RESULT_TYPE = RecordType(name="ExecResult", module_id=PRELUDE_ID)
+_EXEC_RESULT_TYPE = RecordType(name="ExecResult", module_id=STD_CORE_ID)
 
 # ``ParsePolicy`` — controls ``ask``/``exec`` error handling.
 # ``Abort`` — abort on parse error (no fields).
 # ``Retry(n: int)`` — retry up to ``n`` times.
-_PARSE_POLICY_TYPE = EnumType(name="ParsePolicy", module_id=PRELUDE_ID)
+_PARSE_POLICY_TYPE = EnumType(name="ParsePolicy", module_id=STD_CORE_ID)
 
 _OPTION_TEXT_TYPE = EnumType(name="Option", type_args=(TextType(),), module_id=STD_CORE_ID)
 
@@ -917,16 +942,16 @@ OPTION_TEXT_TYPE: EnumType = _OPTION_TEXT_TYPE
 
 _OPTION_JSON_TYPE = EnumType(name="Option", type_args=(JsonType(),), module_id=STD_CORE_ID)
 
-_OUTPUT_CONTRACT_TYPE = RecordType(name="OutputContract", module_id=PRELUDE_ID)
+_OUTPUT_CONTRACT_TYPE = RecordType(name="OutputContract", module_id=STD_CORE_ID)
 
-_OUTPUT_CONTRACT_OPTION_TYPE = EnumType(name="OutputContractOption", module_id=PRELUDE_ID)
+_OUTPUT_CONTRACT_OPTION_TYPE = EnumType(name="OutputContractOption", module_id=STD_CORE_ID)
 
 # ``AgentRequest`` — the request that the corresponding ``ask`` call would
 # dispatch to its agent, surfaced as an AgL value by ``ask-request``.  This is
 # the first-attempt request: ``attempt`` is always ``0`` and there is no
 # retry context (no ``previous_invalid_output`` / ``validation_errors``),
 # because ``ask-request`` never invokes the agent.
-_AGENT_REQUEST_TYPE = RecordType(name="AgentRequest", module_id=PRELUDE_ID)
+_AGENT_REQUEST_TYPE = RecordType(name="AgentRequest", module_id=STD_CORE_ID)
 
 BUILTIN_PRELUDE_TYPES: dict[str, Type] = {
     "ExecResult": _EXEC_RESULT_TYPE,
@@ -938,6 +963,30 @@ BUILTIN_PRELUDE_TYPES: dict[str, Type] = {
 
 # Names of built-in prelude types (non-shadowable, like built-in exceptions).
 BUILTIN_PRELUDE_TYPE_NAMES: frozenset[str] = frozenset(BUILTIN_PRELUDE_TYPES)
+
+# Every bare name the host recognizes as a built-in exception or prelude
+# record/enum — used by ``spells_bare`` to recognize the shipped standard
+# library's own declaration of one of them, as opposed to an ordinary,
+# non-builtin declaration in the same module (e.g. ``Option``).
+_BUILTIN_HOST_NAMES: frozenset[str] = BUILTIN_EXCEPTION_NAMES | BUILTIN_PRELUDE_TYPE_NAMES
+
+
+def spells_bare(module_id: ModuleId, name: str) -> bool:
+    """Return whether a nominal owned by *module_id* named *name* spells bare.
+
+    True for the entry module — a program's own declarations never need a
+    qualifier — and for the shipped standard library's own declaration of one
+    of its built-in names, so a built-in exception or prelude record/enum
+    reads the same in diagnostics whether or not a program declares its own
+    ``builtin`` alias for it. Any other module — including an ordinary,
+    non-builtin declaration in the standard library itself, such as
+    ``Option`` — still qualifies, matching how a reader would write it.
+
+    Shared by ``RecordType``/``EnumType``/``ExceptionType.__repr__`` and
+    ``semantics.type_table.qualified_decl_name``.
+    """
+    return module_id.is_entry or (module_id == STD_CORE_ID and name in _BUILTIN_HOST_NAMES)
+
 
 # Legacy built-in types kept for compatibility with already-compiled tests and
 # internal APIs.  They remain available as nominal types, but their constructors

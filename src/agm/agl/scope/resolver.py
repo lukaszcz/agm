@@ -53,7 +53,7 @@ from functools import partial
 from typing import TYPE_CHECKING, cast
 
 from agm.agl.diagnostics import Diagnostic
-from agm.agl.modules.ids import ENTRY_ID, PRELUDE_ID, STD_CONFIG_ID, ModuleId, spell_declaration
+from agm.agl.modules.ids import ENTRY_ID, STD_CONFIG_ID, STD_CORE_ID, ModuleId, spell_declaration
 from agm.agl.scope.imports import (
     NameAtom,
     QName,
@@ -972,7 +972,7 @@ class _Resolver:
                 variant=None,
                 owner_decl_node_id=_BUILTIN_CONSTRUCTOR_NODE_ID,
                 type_params=(),
-                owner_module_id=PRELUDE_ID,
+                owner_module_id=STD_CORE_ID,
             )
             self._add_constructor_candidate(exc_name, cref)
 
@@ -993,7 +993,7 @@ class _Resolver:
                             variant=variant_name,
                             owner_decl_node_id=_BUILTIN_CONSTRUCTOR_NODE_ID,
                             type_params=(),
-                            owner_module_id=PRELUDE_ID,
+                            owner_module_id=STD_CORE_ID,
                             can_match_bare_pattern=not _vfields,
                         )
                         self._add_constructor_candidate(variant_name, cref)
@@ -1003,7 +1003,7 @@ class _Resolver:
                     variant=None,
                     owner_decl_node_id=_BUILTIN_CONSTRUCTOR_NODE_ID,
                     type_params=(),
-                    owner_module_id=PRELUDE_ID,
+                    owner_module_id=STD_CORE_ID,
                 )
                 self._add_constructor_candidate(type_name, cref)
 
@@ -2684,7 +2684,7 @@ class _Resolver:
             and len(chain.segments) == 1
             and not any(
                 candidate.owner_name == chain.segments[0].name
-                and candidate.owner_module_id in (self._module_id, PRELUDE_ID)
+                and candidate.owner_module_id == self._module_id
                 for candidates in self._constructor_candidates.values()
                 for candidate in candidates
             )
@@ -2776,7 +2776,7 @@ class _Resolver:
                     if candidate.owner_name == type_name
                     and (
                         chain.anchor is not QualifierAnchor.CURRENT_MODULE
-                        or candidate.owner_module_id in (self._module_id, PRELUDE_ID)
+                        or candidate.owner_module_id == self._module_id
                     )
                 ),
                 None,
@@ -3373,8 +3373,7 @@ class _Resolver:
             return tuple(
                 candidate
                 for candidate in self._constructor_candidates.get(node.name, ())
-                if candidate.owner_module_id in (self._module_id, PRELUDE_ID)
-                and not candidate.owner_path
+                if candidate.owner_module_id == self._module_id and not candidate.owner_path
             )
         if chain.anchor is None:
             opened = self._regional_constructor_candidates(_bare_atom((*relative_path, node.name)))

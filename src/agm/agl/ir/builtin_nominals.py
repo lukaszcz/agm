@@ -3,7 +3,7 @@
 Every host-minted value (a raised built-in exception, a structured ``exec``
 ``ExecResult``, an ``ask-request`` ``AgentRequest``, ...) needs a
 ``NominalId`` to stamp on the value it constructs. Rather than each minting
-site hardcoding ``NominalId(PRELUDE_ID, "SomeType")``, it reads the identity
+site hardcoding ``NominalId(STD_CORE_ID, "SomeType")``, it reads the identity
 from this table, keyed by the type's bare declared name.
 
 This module holds only the table's shape and lookup, so ``ir/program.py``
@@ -21,7 +21,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 
 from agm.agl.ir.ids import NominalId
-from agm.agl.modules.ids import PRELUDE_ID
+from agm.agl.modules.ids import STD_CORE_ID
 
 __all__ = ["NO_BUILTIN_DECLARATIONS", "BuiltinNominals"]
 
@@ -42,11 +42,11 @@ class BuiltinNominals:
         A name present in :attr:`declared` answers with its declaration's own
         identity. A name the program declares nothing for answers with the
         shipped standard library's own declaration of that name —
-        ``NominalId(PRELUDE_ID, name)`` — which is the correct identity for
+        ``NominalId(STD_CORE_ID, name)`` — which is the correct identity for
         it, not a placeholder for a missing lookup.
         """
         declared = self.declared.get(name)
-        return declared if declared is not None else NominalId(PRELUDE_ID, name)
+        return declared if declared is not None else NominalId(STD_CORE_ID, name)
 
 
 #: The table for a program with no ``builtin`` declarations of its own: every

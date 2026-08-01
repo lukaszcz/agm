@@ -23,7 +23,7 @@ import pytest
 from agm.agl import AglError, PipelineDriver, SourceSpan
 from agm.agl.diagnostics import Diagnostic, format_diagnostic, format_diagnostic_location
 from agm.agl.ir.ids import AgentId, NominalId
-from agm.agl.modules.ids import ENTRY_ID, PRELUDE_ID
+from agm.agl.modules.ids import ENTRY_ID, STD_CORE_ID
 from agm.agl.pipeline import RunResult
 from agm.agl.runtime import AgentRequest
 from agm.agl.runtime.contract import OutputContract
@@ -1593,7 +1593,7 @@ class TestRenderValue:
         from agm.agl.semantics.values import ExceptionValue, TextValue
 
         v = ExceptionValue(
-            nominal=NominalId(PRELUDE_ID, "CastError"),
+            nominal=NominalId(STD_CORE_ID, "CastError"),
             display_name="CastError",
             fields={
                 "message": TextValue('cannot parse "x" as int'),
@@ -2183,7 +2183,7 @@ class TestRuntimeErrorPaths:
         )
 
         exc_val = ExceptionValue(
-            nominal=NominalId(PRELUDE_ID, "AgentParseError"),
+            nominal=NominalId(STD_CORE_ID, "AgentParseError"),
             display_name="AgentParseError",
             fields={
                 "message": TextValue("failed"),

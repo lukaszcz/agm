@@ -412,10 +412,10 @@ def test_enum_bad_case_raises_agent_parse_error() -> None:
         VariantDecode,
     )
     from agm.agl.ir.ids import NominalId
-    from agm.agl.modules.ids import PRELUDE_ID
+    from agm.agl.modules.ids import STD_CORE_ID
     from agm.agl.runtime.codec import _parse_contract_output
 
-    nominal = NominalId(PRELUDE_ID, "Status")
+    nominal = NominalId(STD_CORE_ID, "Status")
     decode = EnumDecode(
         nominal=nominal,
         display_name="Status",
@@ -765,10 +765,10 @@ def test_parse_agent_output_required_field_error() -> None:
         ScalarKind,
     )
     from agm.agl.ir.ids import NominalId as IrNominalId
-    from agm.agl.modules.ids import PRELUDE_ID
+    from agm.agl.modules.ids import STD_CORE_ID
     from agm.agl.runtime.codec import _parse_contract_output
 
-    nom = IrNominalId(PRELUDE_ID, "Point")
+    nom = IrNominalId(STD_CORE_ID, "Point")
     schema = _json.dumps(
         {
             "type": "object",
@@ -803,10 +803,10 @@ def test_parse_agent_output_additional_properties_error() -> None:
     """parse_agent_output: extra field on record → unknown_field error."""
     from agm.agl.ir.contracts import ContractRequest, RecordDecode, ScalarDecode, ScalarKind
     from agm.agl.ir.ids import NominalId
-    from agm.agl.modules.ids import PRELUDE_ID
+    from agm.agl.modules.ids import STD_CORE_ID
     from agm.agl.runtime.codec import _parse_contract_output
 
-    nom = NominalId(PRELUDE_ID, "Point")
+    nom = NominalId(STD_CORE_ID, "Point")
     schema = _json.dumps(
         {
             "type": "object",
@@ -897,10 +897,10 @@ def test_enum_instance_not_dict_bad_case() -> None:
         VariantDecode,
     )
     from agm.agl.ir.ids import NominalId
-    from agm.agl.modules.ids import PRELUDE_ID
+    from agm.agl.modules.ids import STD_CORE_ID
     from agm.agl.runtime.codec import _parse_contract_output
 
-    nominal = NominalId(PRELUDE_ID, "Flag")
+    nominal = NominalId(STD_CORE_ID, "Flag")
     decode = EnumDecode(
         nominal=nominal,
         display_name="Flag",
@@ -948,9 +948,9 @@ def test_enum_no_case_tag_bad_case() -> None:
         VariantDecode,
     )
     from agm.agl.ir.ids import NominalId
-    from agm.agl.modules.ids import PRELUDE_ID
+    from agm.agl.modules.ids import STD_CORE_ID
 
-    nominal = NominalId(PRELUDE_ID, "Flag")
+    nominal = NominalId(STD_CORE_ID, "Flag")
     decode = EnumDecode(
         nominal=nominal,
         display_name="Flag",
@@ -1033,10 +1033,10 @@ def test_find_enum_decode_at_path_through_array() -> None:
         VariantDecode,
     )
     from agm.agl.ir.ids import NominalId
-    from agm.agl.modules.ids import PRELUDE_ID
+    from agm.agl.modules.ids import STD_CORE_ID
     from agm.agl.runtime.codec import _find_enum_decode_at_path
 
-    nominal = NominalId(PRELUDE_ID, "Status")
+    nominal = NominalId(STD_CORE_ID, "Status")
     enum_dec = EnumDecode(
         nominal=nominal,
         display_name="Status",
@@ -1068,10 +1068,10 @@ def test_find_enum_decode_at_path_through_dict() -> None:
         VariantDecode,
     )
     from agm.agl.ir.ids import NominalId
-    from agm.agl.modules.ids import PRELUDE_ID
+    from agm.agl.modules.ids import STD_CORE_ID
     from agm.agl.runtime.codec import _find_enum_decode_at_path
 
-    nominal = NominalId(PRELUDE_ID, "Status")
+    nominal = NominalId(STD_CORE_ID, "Status")
     enum_dec = EnumDecode(
         nominal=nominal,
         display_name="Status",
@@ -1103,16 +1103,16 @@ def test_find_enum_decode_at_path_through_record() -> None:
         VariantDecode,
     )
     from agm.agl.ir.ids import NominalId
-    from agm.agl.modules.ids import PRELUDE_ID
+    from agm.agl.modules.ids import STD_CORE_ID
     from agm.agl.runtime.codec import _find_enum_decode_at_path
 
-    nominal = NominalId(PRELUDE_ID, "Status")
+    nominal = NominalId(STD_CORE_ID, "Status")
     enum_dec = EnumDecode(
         nominal=nominal,
         display_name="Status",
         variants=(VariantDecode(name="Ok", fields=()),),
     )
-    rec_nominal = NominalId(PRELUDE_ID, "Wrapper")
+    rec_nominal = NominalId(STD_CORE_ID, "Wrapper")
     rec_dec = RecordDecode(
         nominal=rec_nominal,
         display_name="Wrapper",
@@ -1149,10 +1149,10 @@ def test_find_enum_decode_at_path_enum_at_top_navigated_into() -> None:
         VariantDecode,
     )
     from agm.agl.ir.ids import NominalId
-    from agm.agl.modules.ids import PRELUDE_ID
+    from agm.agl.modules.ids import STD_CORE_ID
     from agm.agl.runtime.codec import _find_enum_decode_at_path
 
-    nominal = NominalId(PRELUDE_ID, "Status")
+    nominal = NominalId(STD_CORE_ID, "Status")
     enum_dec = EnumDecode(
         nominal=nominal,
         display_name="Status",
@@ -1206,10 +1206,10 @@ def test_find_enum_decode_at_path_end_at_scalar() -> None:
         ScalarKind,
     )
     from agm.agl.ir.ids import NominalId
-    from agm.agl.modules.ids import PRELUDE_ID
+    from agm.agl.modules.ids import STD_CORE_ID
     from agm.agl.runtime.codec import _find_enum_decode_at_path
 
-    nom = NominalId(PRELUDE_ID, "Point")
+    nom = NominalId(STD_CORE_ID, "Point")
     rec_dec = RecordDecode(
         nominal=nom,
         display_name="Point",
@@ -1240,9 +1240,9 @@ def test_enum_known_case_with_additional_props_error() -> None:
         VariantDecode,
     )
     from agm.agl.ir.ids import NominalId
-    from agm.agl.modules.ids import PRELUDE_ID
+    from agm.agl.modules.ids import STD_CORE_ID
 
-    nominal = NominalId(PRELUDE_ID, "Status")
+    nominal = NominalId(STD_CORE_ID, "Status")
     decode = EnumDecode(
         nominal=nominal,
         display_name="Status",
@@ -2332,9 +2332,9 @@ def test_enum_required_field_loop_partial_coverage() -> None:
         VariantDecode,
     )
     from agm.agl.ir.ids import NominalId
-    from agm.agl.modules.ids import PRELUDE_ID
+    from agm.agl.modules.ids import STD_CORE_ID
 
-    nominal = NominalId(PRELUDE_ID, "Pair")
+    nominal = NominalId(STD_CORE_ID, "Pair")
     decode = EnumDecode(
         nominal=nominal,
         display_name="Pair",
@@ -2460,9 +2460,9 @@ def test_classify_enum_sub_error_type_only_fallback() -> None:
         VariantDecode,
     )
     from agm.agl.ir.ids import NominalId
-    from agm.agl.modules.ids import PRELUDE_ID
+    from agm.agl.modules.ids import STD_CORE_ID
 
-    nominal = NominalId(PRELUDE_ID, "Status")
+    nominal = NominalId(STD_CORE_ID, "Status")
     decode = EnumDecode(
         nominal=nominal,
         display_name="Status",
@@ -2512,10 +2512,10 @@ def test_classify_enum_failure_nullary_case_all_fields_present() -> None:
 
     from agm.agl.ir.contracts import EnumDecode, VariantDecode
     from agm.agl.ir.ids import NominalId
-    from agm.agl.modules.ids import PRELUDE_ID
+    from agm.agl.modules.ids import STD_CORE_ID
     from agm.agl.runtime.codec import _classify_enum_failure
 
-    nominal = NominalId(PRELUDE_ID, "Status")
+    nominal = NominalId(STD_CORE_ID, "Status")
     decode = EnumDecode(
         nominal=nominal,
         display_name="Status",
@@ -2541,10 +2541,10 @@ def test_classify_enum_failure_known_case_all_payload_present() -> None:
 
     from agm.agl.ir.contracts import EnumDecode, ScalarDecode, ScalarKind, VariantDecode
     from agm.agl.ir.ids import NominalId
-    from agm.agl.modules.ids import PRELUDE_ID
+    from agm.agl.modules.ids import STD_CORE_ID
     from agm.agl.runtime.codec import _classify_enum_failure
 
-    nominal = NominalId(PRELUDE_ID, "Status")
+    nominal = NominalId(STD_CORE_ID, "Status")
     decode = EnumDecode(
         nominal=nominal,
         display_name="Status",

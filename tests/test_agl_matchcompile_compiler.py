@@ -71,7 +71,7 @@ from agm.agl.matchcompile.normalize import (
     normalize_let,
     signature_for_type,
 )
-from agm.agl.modules.ids import ENTRY_ID, PRELUDE_ID
+from agm.agl.modules.ids import ENTRY_ID, STD_CORE_ID
 from agm.agl.parser import parse_program
 from agm.agl.scope import resolve_module
 from agm.agl.scope.program import resolve_program
@@ -1820,7 +1820,7 @@ def test_witness_renderer_covers_atomic_and_empty_complement_forms() -> None:
     empty_enum = EnumWitness(EnumType("Empty"), "empty", ())
     assert render_witness(empty_enum) == "empty"
     synthetic_qualified = EnumWitness(
-        EnumType("Empty", module_id=PRELUDE_ID),
+        EnumType("Empty", module_id=STD_CORE_ID),
         "empty",
         (),
         EnumWitnessQualification("Empty", None),
@@ -2219,7 +2219,7 @@ def test_strong_compiled_case_validator_rejects_internal_corruption() -> None:
             pair_compiled,
             expected_normalized=replace(
                 normalized,
-                case_context=replace(normalized.case_context, module_id=PRELUDE_ID),
+                case_context=replace(normalized.case_context, module_id=STD_CORE_ID),
             ),
         )
 

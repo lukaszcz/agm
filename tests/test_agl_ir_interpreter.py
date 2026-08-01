@@ -81,7 +81,7 @@ from agm.agl.ir import (
     VariantDescriptor,
 )
 from agm.agl.ir.ids import NominalId
-from agm.agl.modules.ids import ENTRY_ID, PRELUDE_ID
+from agm.agl.modules.ids import ENTRY_ID, STD_CORE_ID
 from agm.agl.semantics.values import (
     VOID_VALUE,
     ArrayValue,
@@ -982,8 +982,8 @@ class TestIrField:
 
     def _run_with_exception_field(self, field: str, mode: IrFieldMode) -> Value:
         """Project *field* from a concrete exception using *mode*."""
-        exception_nominal = NominalId(PRELUDE_ID, "Abort")
-        base_nominal = NominalId(PRELUDE_ID, "Exception")
+        exception_nominal = NominalId(STD_CORE_ID, "Abort")
+        base_nominal = NominalId(STD_CORE_ID, "Exception")
         rec_sym, rec_desc = _let_sym(0, "exc")
         out_sym, out_desc = _let_sym(1, "out")
         prog = _make_program(

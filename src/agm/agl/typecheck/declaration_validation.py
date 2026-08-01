@@ -17,7 +17,6 @@ from agm.agl.syntax.nodes import (
     static_type_items,
 )
 from agm.agl.syntax.spans import SourceSpan
-from agm.agl.typecheck.builder import owning_module_id
 from agm.agl.typecheck.env import AglTypeError
 
 
@@ -73,11 +72,7 @@ def _member_declarations(
             if isinstance(item, TypeAlias):
                 continue
             declared_path = tuple(segment.name for segment in item.scope_path)
-            key = (
-                owning_module_id(item.is_builtin, module_id),
-                declared_path,
-                item.name,
-            )
+            key = (module_id, declared_path, item.name)
             owner_keys[module_id, (*declared_path, item.name)] = key
             index.declared.add(key)
             members = index.members.setdefault(key, {})

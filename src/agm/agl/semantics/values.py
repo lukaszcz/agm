@@ -305,7 +305,10 @@ class ExceptionValue:
     """A built-in AgL exception value.
 
     ``nominal`` is the ``NominalId`` (module + scope path + declared name) — the identity
-    key.  Built-in exceptions use ``NominalId(PRELUDE_ID, name)``.
+    key.  A built-in exception a program declares nothing of its own for uses
+    ``NominalId(STD_CORE_ID, name)`` — the shipped standard library's own
+    identity; one the program redeclares as its own ``builtin exception``
+    uses that declaration's identity instead.
     ``display_name`` is the user-facing exception class name (e.g.
     ``"AgentParseError"``); it is excluded from equality.
     ``fields`` maps the exception's declared field names to their values.

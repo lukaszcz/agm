@@ -43,7 +43,7 @@ from __future__ import annotations
 from collections.abc import Iterator, Mapping
 from dataclasses import replace
 
-from agm.agl.modules.ids import ENTRY_ID, PRELUDE_ID, ModuleId, spell_scope_path
+from agm.agl.modules.ids import ENTRY_ID, STD_CORE_ID, ModuleId, spell_scope_path
 from agm.agl.semantics.analyses import compute_uninhabited, uninhabitable_message
 from agm.agl.semantics.type_table import (
     BUILTIN_EXCEPTION_TYPE_DEFS,
@@ -101,16 +101,6 @@ def _bare_name(name: str) -> str:
     return name.rsplit("::", maxsplit=1)[-1]
 
 
-def owning_module_id(is_builtin: bool, module_id: ModuleId) -> ModuleId:
-    """Module a declaration's nominal identity carries.
-
-    A ``builtin`` declaration names a host type, so it belongs to the shared
-    prelude wherever it is written; every other declaration belongs to the
-    module that declares it.
-    """
-    return PRELUDE_ID if is_builtin else module_id
-
-
 # ---------------------------------------------------------------------------
 # Pre-pass: collect and validate type declarations
 # ---------------------------------------------------------------------------
@@ -141,10 +131,6 @@ class _TypeBuilder:
         self._record_defs: dict[str, RecordDef] = {}
         self._enum_defs: dict[str, EnumDef] = {}
         self._exception_defs: dict[str, ExceptionDef] = {}
-
-    def _owning_module_id(self, is_builtin: bool) -> ModuleId:
-        """Module a declaration belongs to; see :func:`owning_module_id`."""
-        return owning_module_id(is_builtin, self._module_id)
 
     @staticmethod
     def _static_type_items(
@@ -237,7 +223,7 @@ class _TypeBuilder:
                     expected_defs=BUILTIN_EXCEPTION_TYPE_DEFS,
                 )
                 self._env.unregister_name(item.name)
-                module_id = self._owning_module_id(item.is_builtin)
+                module_id = self._module_id
                 self._env.register_type(
                     item.name,
                     ExceptionType(
@@ -253,7 +239,7 @@ class _TypeBuilder:
                 self._env.register_alias(item.name, item.type_expr, type_params=item.type_params)
 
     def _register_record_or_enum_handle(self, item: RecordDef | EnumDef, *, is_enum: bool) -> None:
-        module_id = self._owning_module_id(item.is_builtin)
+        module_id = self._module_id
         declared_name = _bare_name(item.name)
         scope_path = tuple(segment.name for segment in item.scope_path)
         type_params = item.type_params
@@ -361,7 +347,7 @@ class _TypeBuilder:
                 )
             seen_fields[fd.name] = fd.span
             fields[fd.name] = self._resolve_field_type(fd)
-        module_id = self._owning_module_id(stmt.is_builtin)
+        module_id = self._module_id
         scope_path = tuple(segment.name for segment in stmt.scope_path)
         typedef = TypeDef(
             kind="record",
@@ -374,8 +360,8 @@ class _TypeBuilder:
         self._validate_builtin_shape(stmt, typedef, BUILTIN_PRELUDE_TYPE_DEFS)
         self._env.type_table.register(typedef)
         # Register field kinds for this record constructor, under the same
-        # owning identity as the TypeDef just above (PRELUDE_ID/() for a
-        # builtin declaration, wherever it is declared).
+        # owning identity as the TypeDef just above (its declaring module,
+        # like every other declaration — including a builtin one).
         field_kinds = tuple((fd.name, fd.kind) for fd in stmt.fields)
         self._env.register_constructor_field_kinds(
             _bare_name(stmt.name), None, field_kinds, scope_path=scope_path, module_id=module_id
@@ -398,7 +384,7 @@ class _TypeBuilder:
                 seen_vfields[fd.name] = fd.span
                 vfields[fd.name] = self._resolve_field_type(fd)
             variants[vd.name] = vfields
-        module_id = self._owning_module_id(stmt.is_builtin)
+        module_id = self._module_id
         scope_path = tuple(segment.name for segment in stmt.scope_path)
         typedef = TypeDef(
             kind="enum",
@@ -456,7 +442,7 @@ class _TypeBuilder:
                 )
             seen_fields[fd.name] = fd.span
             fields[fd.name] = self._resolve_field_type(fd)
-        module_id = self._owning_module_id(stmt.is_builtin)
+        module_id = self._module_id
         # Own field kinds honor each field's declared @pos/@std/@named marker —
         # exactly like a record's fields — in declaration order, parallel to
         # ``fields`` above.  Stored as ``ParamKind.value`` strings (see
@@ -495,7 +481,7 @@ class _TypeBuilder:
         for item in self._exception_defs.values():
             if item.base is None:
                 continue
-            module_id = self._owning_module_id(item.is_builtin)
+            module_id = self._module_id
             typedef = self._env.type_table.exception_def(
                 ExceptionType(
                     name=_bare_name(item.name),
@@ -524,18 +510,23 @@ class _TypeBuilder:
         """Check a ``builtin`` declaration's shape against its canonical definition.
 
         The canonical definitions in *expected_defs* are host-known shapes
-        keyed by bare name, indifferent to where the declaration sits: a
-        scoped ``builtin`` declaration names the same host type as a root one
-        and must match the same shape, just at a different nominal path. The
-        comparison therefore re-roots *typedef* under its own scope path
-        (:meth:`_reroot_typedef`) before comparing — not just its own
-        top-level ``scope_path`` (the one field *expected* to differ), but
-        also every nominal reference embedded in its fields/variants/base
-        that resolves under that same path, so a scoped exception hierarchy
-        or a scoped record naming a sibling scoped builtin still compares
-        equal to the canonical (root) shape. *bare_name* is always present in
-        *expected_defs* here: ``_register_name`` already validated it against
-        this same kind-appropriate table during phase 1.
+        keyed by bare name and written on the shipped standard library's own
+        module (``STD_CORE_ID``), indifferent to where or in which module the
+        declaration sits: a scoped ``builtin`` declaration in any module names
+        the same host type as ``std/core``'s own root one and must match the
+        same shape, just at a different nominal path and (unless it IS
+        ``std/core``) a different declaring module. The comparison therefore
+        re-roots *typedef* onto that canonical frame (:meth:`_reroot_typedef`)
+        before comparing — not just its own top-level ``scope_path``/
+        ``module_id`` (the two fields *expected* to differ), but also every
+        nominal reference embedded in its fields/variants/base that resolves
+        under that same path or module, so a scoped exception hierarchy or a
+        scoped record naming a sibling scoped builtin — or a program without
+        the standard library declaring its own ``builtin exception
+        Exception`` root — still compares equal to the canonical shape.
+        *bare_name* is always present in *expected_defs* here:
+        ``_register_name`` already validated it against this same
+        kind-appropriate table during phase 1.
         """
         if not stmt.is_builtin:
             return
@@ -549,29 +540,51 @@ class _TypeBuilder:
 
     @staticmethod
     def _reroot_typedef(typedef: TypeDef) -> TypeDef:
-        """Re-root *typedef* onto its own scope path, for canonical comparison.
+        """Re-root *typedef* onto the canonical (``std/core``) frame, for comparison.
 
-        *typedef.scope_path* itself is dropped (the field a scoped ``builtin``
-        declaration is always expected to differ in), and that same path is
-        also stripped, via :func:`~agm.agl.semantics.types.reroot_type`, from
+        *typedef.scope_path* is dropped and *typedef.module_id* is mapped onto
+        ``STD_CORE_ID`` (the two fields a ``builtin`` declaration is always
+        expected to differ in from the canonical shape) — always, even when
+        the declared scope path is already empty, since a root-level
+        declaration outside ``std/core`` (e.g. one in the entry module, used
+        when a program loads without the standard library) still needs its
+        module mapped. The same scope-path stripping and module mapping is
+        also applied, via :func:`~agm.agl.semantics.types.reroot_type`, to
         every nominal reference embedded in its fields, variant fields, and
-        (for an exception) its ``extends`` base key — each of those resolves
-        under the declaration's own scope path exactly when it names a
-        sibling member of the same region, matching how the canonical
-        (root, path ``()``) shape names its own siblings.
+        (for an exception) its ``extends`` base key: each of those resolves
+        under the declaration's own scope path and module exactly when it
+        names a sibling member of the same region, matching how the canonical
+        shape names its own siblings; a reference naming a type from another
+        module is left alone, so a genuine mismatch is still rejected.
         """
         prefix = typedef.scope_path
-        if not prefix:
-            return typedef
-        fields = tuple((name, reroot_type(t, prefix)) for name, t in typedef.fields)
+        declaring_module = typedef.module_id
+        remap = (declaring_module, STD_CORE_ID)
+
+        def _reroot(t: Type) -> Type:
+            return reroot_type(t, prefix, remap_module=remap)
+
+        fields = tuple((name, _reroot(t)) for name, t in typedef.fields)
         variants = tuple(
-            (vname, tuple((fname, reroot_type(ft, prefix)) for fname, ft in vfields))
+            (vname, tuple((fname, _reroot(ft)) for fname, ft in vfields))
             for vname, vfields in typedef.variants
         )
         base = typedef.base
-        if base is not None and base[1][: len(prefix)] == prefix:
-            base = (base[0], base[1][len(prefix) :], base[2])
-        return replace(typedef, scope_path=(), fields=fields, variants=variants, base=base)
+        if base is not None:
+            base_module, base_path, base_name = base
+            if base_path[: len(prefix)] == prefix:
+                base_path = base_path[len(prefix) :]
+            if base_module == declaring_module:
+                base_module = STD_CORE_ID
+            base = (base_module, base_path, base_name)
+        return replace(
+            typedef,
+            scope_path=(),
+            module_id=STD_CORE_ID,
+            fields=fields,
+            variants=variants,
+            base=base,
+        )
 
     def _resolve_field_type(self, fd: Param, type_vars: frozenset[str] = frozenset()) -> Type:
         """Resolve a field's TypeExpr to a semantic Type.
@@ -607,7 +620,7 @@ class _TypeBuilder:
         assert gdef is not None, f"compiler bug: generic record {stmt.name!r} not pre-registered"
         template = gdef.template
         assert isinstance(template, RecordType)
-        module_id = self._owning_module_id(stmt.is_builtin)
+        module_id = self._module_id
         scope_path = tuple(segment.name for segment in stmt.scope_path)
         typedef = TypeDef(
             kind="record",
@@ -667,7 +680,7 @@ class _TypeBuilder:
         assert gdef is not None, f"compiler bug: generic enum {stmt.name!r} not pre-registered"
         template = gdef.template
         assert isinstance(template, EnumType)
-        module_id = self._owning_module_id(stmt.is_builtin)
+        module_id = self._module_id
         scope_path = tuple(segment.name for segment in stmt.scope_path)
         typedef = TypeDef(
             kind="enum",
@@ -740,7 +753,7 @@ class _TypeBuilder:
         for item in self._static_type_items(program.body.items):
             if not isinstance(item, (RecordDef, EnumDef, ExceptionDef)):
                 continue
-            module_id = self._owning_module_id(item.is_builtin)
+            module_id = self._module_id
             scope_path = tuple(segment.name for segment in item.scope_path)
             declared_name = _bare_name(item.name)
             key = (module_id, scope_path, declared_name)

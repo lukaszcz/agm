@@ -165,7 +165,7 @@ from agm.agl.matchcompile import (
     OccurrenceId,
     RecordConstructor,
 )
-from agm.agl.modules.ids import ENTRY_ID, PRELUDE_ID, ModuleId
+from agm.agl.modules.ids import ENTRY_ID, STD_CORE_ID, ModuleId
 from agm.agl.scope.symbols import BinderKind, BindingRef, BuiltinKind
 from agm.agl.self_validation import self_validation_enabled
 from agm.agl.semantics.type_table import MethodDef, TypeTable
@@ -266,7 +266,6 @@ from agm.agl.type_schema import (
     build_param_decoder,
     derive_schema_and_decode,
 )
-from agm.agl.typecheck.builder import owning_module_id
 from agm.agl.typecheck.env import (
     CheckedModule,
     FunctionSignature,
@@ -298,7 +297,7 @@ def _add_builtin_nominals(
     is seeded into every table by ``create_seeded_type_table``).
     """
     for name, typ in BUILTIN_PRELUDE_TYPES.items():
-        nominal = NominalId(PRELUDE_ID, name)
+        nominal = NominalId(STD_CORE_ID, name)
         if isinstance(typ, RecordType):
             nominals[nominal] = NominalDescriptor(
                 nominal=nominal,
@@ -321,7 +320,7 @@ def _add_builtin_nominals(
         )
 
     for exc_name, exc_type in BUILTIN_EXCEPTIONS.items():
-        nominal = NominalId(PRELUDE_ID, exc_name)
+        nominal = NominalId(STD_CORE_ID, exc_name)
         nominals[nominal] = NominalDescriptor(
             nominal=nominal,
             display_name=exc_name,
@@ -337,9 +336,9 @@ def builtin_nominals_from_declarations(
     """Return the built-in nominal table for every ``builtin`` declaration in *modules*.
 
     Maps each ``builtin`` record/enum/exception declaration's bare name to its
-    own nominal, derived exactly as the type builder registers it
-    (``typecheck.builder.owning_module_id`` plus the declaration's own scope
-    path). A name this compile unit does not declare is simply absent — the
+    own nominal, derived exactly as the type builder registers it: its
+    declaring module (like every other declaration) plus its own scope path.
+    A name this compile unit does not declare is simply absent — the
     resulting table then answers it with the shipped standard library's own
     identity (see :meth:`~agm.agl.ir.builtin_nominals.BuiltinNominals.nominal`).
     """
@@ -350,7 +349,7 @@ def builtin_nominals_from_declarations(
                 continue
             name = item.name.rsplit("::", maxsplit=1)[-1]
             declared[name] = NominalId(
-                owning_module_id(item.is_builtin, module_id),
+                module_id,
                 name,
                 tuple(segment.name for segment in item.scope_path),
             )
@@ -3492,7 +3491,8 @@ class _Lowerer:
         - All user-declared record/enum/exception nominals from the entry
           module's type env.
         - All built-in prelude record/enum and exception descriptors keyed by
-          NominalId(PRELUDE_ID, name).
+          NominalId(STD_CORE_ID, name) — the shipped standard library's own
+          identity for each built-in name.
 
         Field, variant, and exception-field names are resolved through the
         shared ``TypeTable`` rather than any embedded map on the handle.

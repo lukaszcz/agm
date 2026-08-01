@@ -47,7 +47,7 @@ from agm.agl.ir.program import (
     SymbolDescriptor,
 )
 from agm.agl.ir.validate import InvalidIrError, validate_ir
-from agm.agl.modules.ids import ENTRY_ID, PRELUDE_ID
+from agm.agl.modules.ids import ENTRY_ID, STD_CORE_ID
 from agm.agl.semantics.values import (
     ExceptionValue,
     IntValue,
@@ -732,7 +732,7 @@ def test_ir_try_handler_binding_stored_in_frame() -> None:
     loc = _DUMMY_LOC
     exc_sym = SymbolId(0)
     result_sym = SymbolId(1)
-    exc_nominal = NominalId(PRELUDE_ID, "Abort")
+    exc_nominal = NominalId(STD_CORE_ID, "Abort")
 
     exc_node = IrMakeException(
         location=loc,
@@ -786,7 +786,7 @@ def test_ir_try_handler_binding_stored_in_frame() -> None:
 def test_validate_ir_try_handler_nominal_missing() -> None:
     """Negative validate: IrTry handler with nominal missing from program.nominals."""
     loc = _DUMMY_LOC
-    missing_nominal = NominalId(PRELUDE_ID, "NonExistentError")
+    missing_nominal = NominalId(STD_CORE_ID, "NonExistentError")
     handler = IrCatchHandler(
         nominal=missing_nominal,
         display_name="NonExistentError",
@@ -806,7 +806,7 @@ def test_validate_ir_try_handler_nominal_missing() -> None:
 def test_validate_ir_try_handler_symbol_missing() -> None:
     """Negative validate: IrTry handler with symbol not in program.symbols."""
     loc = _DUMMY_LOC
-    exc_nominal = NominalId(PRELUDE_ID, "Abort")
+    exc_nominal = NominalId(STD_CORE_ID, "Abort")
     orphan_sym = SymbolId(999)
     handler = IrCatchHandler(
         nominal=exc_nominal,
@@ -856,7 +856,7 @@ def test_validate_ir_return_cheap_ok() -> None:
 def test_validate_ir_try_cheap_ok() -> None:
     """Validate IrTry without deep: location + body only, no nominal/symbol cross-ref."""
     loc = _DUMMY_LOC
-    exc_nominal = NominalId(PRELUDE_ID, "Abort")
+    exc_nominal = NominalId(STD_CORE_ID, "Abort")
     handler = IrCatchHandler(
         nominal=exc_nominal,
         display_name="Abort",

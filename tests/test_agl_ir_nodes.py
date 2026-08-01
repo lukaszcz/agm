@@ -65,7 +65,7 @@ from agm.agl.ir import (
     SymbolId,
     ToJson,
 )
-from agm.agl.modules.ids import PRELUDE_ID, ModuleId
+from agm.agl.modules.ids import STD_CORE_ID, ModuleId
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -190,10 +190,10 @@ class TestBuiltinNominals:
 
     def test_undeclared_name_answers_with_the_shipped_standard_library_identity(self) -> None:
         table = BuiltinNominals(declared={})
-        assert table.nominal("RangeError") == NominalId(PRELUDE_ID, "RangeError")
+        assert table.nominal("RangeError") == NominalId(STD_CORE_ID, "RangeError")
 
     def test_no_builtin_declarations_answers_every_name_with_the_shipped_identity(self) -> None:
-        assert NO_BUILTIN_DECLARATIONS.nominal("ExecResult") == NominalId(PRELUDE_ID, "ExecResult")
+        assert NO_BUILTIN_DECLARATIONS.nominal("ExecResult") == NominalId(STD_CORE_ID, "ExecResult")
 
     def test_frozen(self) -> None:
         table = BuiltinNominals(declared={})

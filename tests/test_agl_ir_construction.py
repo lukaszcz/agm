@@ -27,7 +27,7 @@ from agm.agl.ir.program import (
     VariantDescriptor,
 )
 from agm.agl.ir.validate import InvalidIrError
-from agm.agl.modules.ids import ENTRY_ID, PRELUDE_ID
+from agm.agl.modules.ids import ENTRY_ID, STD_CORE_ID
 from agm.agl.semantics.values import (
     BoolValue,
     ConstructorValue,
@@ -684,7 +684,7 @@ def test_nominals_table_contains_builtin_exception_fields() -> None:
     """program.nominals includes ArithmeticError with its declared fields in order."""
     source = "()"
     prog = _lower(source)
-    nominal_id = NominalId(PRELUDE_ID, "ArithmeticError")
+    nominal_id = NominalId(STD_CORE_ID, "ArithmeticError")
     assert nominal_id in prog.nominals
     desc = prog.nominals[nominal_id]
     assert desc.kind == NominalKind.EXCEPTION
@@ -706,7 +706,7 @@ def test_nominals_table_contains_builtin_exceptions() -> None:
         "AgentParseError",
     ]
     for name in builtin_names:
-        nominal_id = NominalId(PRELUDE_ID, name)
+        nominal_id = NominalId(STD_CORE_ID, name)
         assert nominal_id in prog.nominals, f"Expected built-in {name!r} in program.nominals"
         desc = prog.nominals[nominal_id]
         assert desc.kind == NominalKind.EXCEPTION
@@ -974,7 +974,7 @@ def test_validate_non_deep_accepts_unknown_nominal_in_ir_make_exception() -> Non
     loc = Location(source_id=sid, start_offset=0, end_offset=1, start_line=1, start_col=0)
     node = IrMakeException(
         location=loc,
-        nominal=NominalId(PRELUDE_ID, "Ghost"),
+        nominal=NominalId(STD_CORE_ID, "Ghost"),
         display_name="Ghost",
         fields=(("trace_id", AutoTraceField()),),
     )

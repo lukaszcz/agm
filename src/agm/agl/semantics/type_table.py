@@ -51,7 +51,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Literal, assert_never, cast
 
-from agm.agl.modules.ids import PRELUDE_ID, STD_CORE_ID, ModuleId
+from agm.agl.modules.ids import STD_CORE_ID, ModuleId
 from agm.agl.self_validation import self_validation_enabled
 from agm.agl.semantics.types import (
     AgentType,
@@ -76,6 +76,7 @@ from agm.agl.semantics.types import (
     free_type_vars,
     is_assignable,
     is_scalar_json_shaped,
+    spells_bare,
     substitute,
     type_children,
 )
@@ -977,12 +978,14 @@ def qualified_decl_name(key: DeclKey) -> str:
 
     Bare names from an imported module can otherwise be ambiguous; the
     ``module::name`` convention matches ``RecordType``/``EnumType``'s own
-    ``__repr__``. Entry-module and prelude declarations are spelled bare
+    ``__repr__``, and shares the same bare/qualified decision
+    (:func:`~agm.agl.semantics.types.spells_bare`): entry-module declarations
+    and the shipped standard library's own built-in names are spelled bare
     because that is how every reader writes them.
     """
     module, scope_path, name = key
     scoped = "::".join((*scope_path, name))
-    if module.is_entry or module.is_prelude:
+    if spells_bare(module, name):
         return scoped
     return f"{module.display()}::{scoped}"
 
@@ -1237,7 +1240,7 @@ BUILTIN_PRELUDE_TYPE_DEFS: Mapping[str, TypeDef] = {
     "ExecResult": TypeDef(
         kind="record",
         name="ExecResult",
-        module_id=PRELUDE_ID,
+        module_id=STD_CORE_ID,
         fields=(
             ("stdout", TextType()),
             ("exit_code", IntType()),
@@ -1248,7 +1251,7 @@ BUILTIN_PRELUDE_TYPE_DEFS: Mapping[str, TypeDef] = {
     "ParsePolicy": TypeDef(
         kind="enum",
         name="ParsePolicy",
-        module_id=PRELUDE_ID,
+        module_id=STD_CORE_ID,
         variants=(
             ("Abort", ()),
             ("Retry", (("n", IntType()),)),
@@ -1257,7 +1260,7 @@ BUILTIN_PRELUDE_TYPE_DEFS: Mapping[str, TypeDef] = {
     "OutputContract": TypeDef(
         kind="record",
         name="OutputContract",
-        module_id=PRELUDE_ID,
+        module_id=STD_CORE_ID,
         fields=(
             ("target_type", TextType()),
             ("codec_name", TextType()),
@@ -1270,16 +1273,16 @@ BUILTIN_PRELUDE_TYPE_DEFS: Mapping[str, TypeDef] = {
     "OutputContractOption": TypeDef(
         kind="enum",
         name="OutputContractOption",
-        module_id=PRELUDE_ID,
+        module_id=STD_CORE_ID,
         variants=(
             ("None", ()),
-            ("Some", (("value", RecordType(name="OutputContract", module_id=PRELUDE_ID)),)),
+            ("Some", (("value", RecordType(name="OutputContract", module_id=STD_CORE_ID)),)),
         ),
     ),
     "AgentRequest": TypeDef(
         kind="record",
         name="AgentRequest",
-        module_id=PRELUDE_ID,
+        module_id=STD_CORE_ID,
         fields=(
             ("agent", TextType()),
             ("prompt", TextType()),
@@ -1332,7 +1335,7 @@ OPTION_TYPE_DEF = TypeDef(
 # :meth:`TypeTable.exception_field_kinds`.
 # ---------------------------------------------------------------------------
 
-_EXCEPTION_ROOT_KEY: DeclKey = (PRELUDE_ID, (), "Exception")
+_EXCEPTION_ROOT_KEY: DeclKey = (STD_CORE_ID, (), "Exception")
 
 
 def _named_only(count: int) -> tuple[str, ...]:
@@ -1344,7 +1347,7 @@ BUILTIN_EXCEPTION_TYPE_DEFS: Mapping[str, TypeDef] = {
     "Exception": TypeDef(
         kind="exception",
         name="Exception",
-        module_id=PRELUDE_ID,
+        module_id=STD_CORE_ID,
         fields=(("message", TextType()), ("trace_id", TextType())),
         abstract=True,
         field_kinds=_named_only(2),
@@ -1352,7 +1355,7 @@ BUILTIN_EXCEPTION_TYPE_DEFS: Mapping[str, TypeDef] = {
     "AgentCallError": TypeDef(
         kind="exception",
         name="AgentCallError",
-        module_id=PRELUDE_ID,
+        module_id=STD_CORE_ID,
         fields=(("agent", TextType()), ("cause", TextType()), ("metadata", JsonType())),
         base=_EXCEPTION_ROOT_KEY,
         field_kinds=_named_only(3),
@@ -1360,7 +1363,7 @@ BUILTIN_EXCEPTION_TYPE_DEFS: Mapping[str, TypeDef] = {
     "AgentParseError": TypeDef(
         kind="exception",
         name="AgentParseError",
-        module_id=PRELUDE_ID,
+        module_id=STD_CORE_ID,
         fields=(
             ("agent", TextType()),
             ("target_type", TextType()),
@@ -1377,7 +1380,7 @@ BUILTIN_EXCEPTION_TYPE_DEFS: Mapping[str, TypeDef] = {
     "ExecError": TypeDef(
         kind="exception",
         name="ExecError",
-        module_id=PRELUDE_ID,
+        module_id=STD_CORE_ID,
         fields=(
             ("command", TextType()),
             ("exit_code", IntType()),
@@ -1393,7 +1396,7 @@ BUILTIN_EXCEPTION_TYPE_DEFS: Mapping[str, TypeDef] = {
     "ExternError": TypeDef(
         kind="exception",
         name="ExternError",
-        module_id=PRELUDE_ID,
+        module_id=STD_CORE_ID,
         fields=(("function", TextType()), ("python_type", TextType())),
         base=_EXCEPTION_ROOT_KEY,
         field_kinds=_named_only(2),
@@ -1401,7 +1404,7 @@ BUILTIN_EXCEPTION_TYPE_DEFS: Mapping[str, TypeDef] = {
     "MaxIterationsExceeded": TypeDef(
         kind="exception",
         name="MaxIterationsExceeded",
-        module_id=PRELUDE_ID,
+        module_id=STD_CORE_ID,
         fields=(
             ("limit", IntType()),
             ("condition", TextType()),
@@ -1414,7 +1417,7 @@ BUILTIN_EXCEPTION_TYPE_DEFS: Mapping[str, TypeDef] = {
     "MatchError": TypeDef(
         kind="exception",
         name="MatchError",
-        module_id=PRELUDE_ID,
+        module_id=STD_CORE_ID,
         fields=(("scrutinee_type", TextType()), ("scrutinee", JsonType())),
         base=_EXCEPTION_ROOT_KEY,
         field_kinds=_named_only(2),
@@ -1422,7 +1425,7 @@ BUILTIN_EXCEPTION_TYPE_DEFS: Mapping[str, TypeDef] = {
     "IndexError": TypeDef(
         kind="exception",
         name="IndexError",
-        module_id=PRELUDE_ID,
+        module_id=STD_CORE_ID,
         fields=(("index", IntType()), ("length", IntType())),
         base=_EXCEPTION_ROOT_KEY,
         field_kinds=_named_only(2),
@@ -1430,7 +1433,7 @@ BUILTIN_EXCEPTION_TYPE_DEFS: Mapping[str, TypeDef] = {
     "KeyError": TypeDef(
         kind="exception",
         name="KeyError",
-        module_id=PRELUDE_ID,
+        module_id=STD_CORE_ID,
         fields=(("key", TextType()),),
         base=_EXCEPTION_ROOT_KEY,
         field_kinds=_named_only(1),
@@ -1438,13 +1441,13 @@ BUILTIN_EXCEPTION_TYPE_DEFS: Mapping[str, TypeDef] = {
     "TypeError": TypeDef(
         kind="exception",
         name="TypeError",
-        module_id=PRELUDE_ID,
+        module_id=STD_CORE_ID,
         base=_EXCEPTION_ROOT_KEY,
     ),
     "ArithmeticError": TypeDef(
         kind="exception",
         name="ArithmeticError",
-        module_id=PRELUDE_ID,
+        module_id=STD_CORE_ID,
         fields=(("operation", TextType()),),
         base=_EXCEPTION_ROOT_KEY,
         field_kinds=_named_only(1),
@@ -1455,7 +1458,7 @@ BUILTIN_EXCEPTION_TYPE_DEFS: Mapping[str, TypeDef] = {
     "UndefinedVariableError": TypeDef(
         kind="exception",
         name="UndefinedVariableError",
-        module_id=PRELUDE_ID,
+        module_id=STD_CORE_ID,
         fields=(("name", TextType()),),
         base=_EXCEPTION_ROOT_KEY,
         field_kinds=_named_only(1),
@@ -1463,7 +1466,7 @@ BUILTIN_EXCEPTION_TYPE_DEFS: Mapping[str, TypeDef] = {
     "ImmutableBindingError": TypeDef(
         kind="exception",
         name="ImmutableBindingError",
-        module_id=PRELUDE_ID,
+        module_id=STD_CORE_ID,
         fields=(("name", TextType()), ("operation", TextType())),
         base=_EXCEPTION_ROOT_KEY,
         field_kinds=_named_only(2),
@@ -1471,14 +1474,14 @@ BUILTIN_EXCEPTION_TYPE_DEFS: Mapping[str, TypeDef] = {
     "Abort": TypeDef(
         kind="exception",
         name="Abort",
-        module_id=PRELUDE_ID,
+        module_id=STD_CORE_ID,
         base=_EXCEPTION_ROOT_KEY,
     ),
     # AgL: RecursionError raised when the call-depth limit is exceeded.
     "RecursionError": TypeDef(
         kind="exception",
         name="RecursionError",
-        module_id=PRELUDE_ID,
+        module_id=STD_CORE_ID,
         fields=(("limit", IntType()),),
         base=_EXCEPTION_ROOT_KEY,
         field_kinds=_named_only(1),
@@ -1486,7 +1489,7 @@ BUILTIN_EXCEPTION_TYPE_DEFS: Mapping[str, TypeDef] = {
     "CastError": TypeDef(
         kind="exception",
         name="CastError",
-        module_id=PRELUDE_ID,
+        module_id=STD_CORE_ID,
         fields=(
             ("source_type", TextType()),
             ("target_type", TextType()),
@@ -1498,7 +1501,7 @@ BUILTIN_EXCEPTION_TYPE_DEFS: Mapping[str, TypeDef] = {
     "JsonParseError": TypeDef(
         kind="exception",
         name="JsonParseError",
-        module_id=PRELUDE_ID,
+        module_id=STD_CORE_ID,
         fields=(("raw", TextType()),),
         base=_EXCEPTION_ROOT_KEY,
         field_kinds=_named_only(1),
@@ -1506,13 +1509,13 @@ BUILTIN_EXCEPTION_TYPE_DEFS: Mapping[str, TypeDef] = {
     "RangeError": TypeDef(
         kind="exception",
         name="RangeError",
-        module_id=PRELUDE_ID,
+        module_id=STD_CORE_ID,
         base=_EXCEPTION_ROOT_KEY,
     ),
     "CyclicValueError": TypeDef(
         kind="exception",
         name="CyclicValueError",
-        module_id=PRELUDE_ID,
+        module_id=STD_CORE_ID,
         base=_EXCEPTION_ROOT_KEY,
     ),
 }

@@ -739,8 +739,10 @@ def _emit_boundary_body(typ: Type, type_table: TypeTable, plan: "_SchemaPlan") -
             ),
         )
     if isinstance(typ, ExceptionType):
-        # Built-in exceptions resolve under PRELUDE_ID and user exceptions under
-        # their declaring module, exactly as the lowerer keys exception nominals
+        # Every exception resolves under its declaring module — the shipped
+        # standard library's own module for a built-in exception a program
+        # declares nothing of its own for, or the program's module otherwise —
+        # exactly as the lowerer keys exception nominals
         # (``NominalId(typ.module_id, typ.name)``).
         return BoundaryException(
             nominal=NominalId(typ.module_id, typ.name, typ.scope_path),

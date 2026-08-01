@@ -14,7 +14,7 @@ from pathlib import Path
 import pytest
 
 from agm.agl.capabilities import HostCapabilities
-from agm.agl.modules.ids import ENTRY_ID, PRELUDE_ID, STD_CORE_ID, ModuleId
+from agm.agl.modules.ids import ENTRY_ID, STD_CORE_ID, ModuleId
 from agm.agl.parser import parse_program
 from agm.agl.repl import ReplSession
 from agm.agl.scope import resolve_module
@@ -1299,14 +1299,14 @@ class TestBuiltinSeeding:
     def test_all_prelude_types_resolvable(self) -> None:
         table = create_seeded_type_table()
         for name, typ in BUILTIN_PRELUDE_TYPES.items():
-            typedef = table.get(PRELUDE_ID, name)
+            typedef = table.get(STD_CORE_ID, name)
             assert typedef is not None
             expected = BUILTIN_PRELUDE_TYPE_DEFS[name]
             if isinstance(typ, RecordType):
-                handle = RecordType(name=name, module_id=PRELUDE_ID)
+                handle = RecordType(name=name, module_id=STD_CORE_ID)
                 assert dict(table.record_fields(handle)) == dict(expected.fields)
             else:
-                handle = EnumType(name=name, module_id=PRELUDE_ID)
+                handle = EnumType(name=name, module_id=STD_CORE_ID)
                 result = table.enum_variants(handle)
                 assert {v: dict(f) for v, f in result.items()} == {
                     vname: dict(vfields) for vname, vfields in expected.variants
@@ -1933,7 +1933,7 @@ class TestCastClassification:
 
     def test_exception_to_json_total(self) -> None:
         table = create_seeded_type_table()
-        source = ExceptionType(name="Abort", module_id=PRELUDE_ID)
+        source = ExceptionType(name="Abort", module_id=STD_CORE_ID)
         assert cast_classification(source, JsonType(), table) == CastKind.TOTAL_JSON
 
     def test_array_of_record_to_json_total(self) -> None:

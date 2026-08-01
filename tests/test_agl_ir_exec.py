@@ -119,11 +119,13 @@ def test_t3_structured_exec() -> None:
     source = 'let r: ExecResult = exec("exit 1")\nr'
     commands = {"exit 1": _fail(1, stdout="", stderr="error msg")}
     ir = evaluate_ir_with_shell(source, commands)
+    from agm.agl.ir.builtin_nominals import NO_BUILTIN_DECLARATIONS
     from agm.agl.semantics.values import IntValue, RecordValue
 
     assert isinstance(ir["r"], RecordValue)
     assert ir["r"].display_name == "ExecResult"
     assert ir["r"].fields["exit_code"] == IntValue(1)
+    assert ir["r"].nominal == NO_BUILTIN_DECLARATIONS.nominal("ExecResult")
 
 
 # ---------------------------------------------------------------------------
@@ -137,6 +139,10 @@ def test_t4_nonzero_exit_text() -> None:
     commands = {"false": _fail(1)}
     ir_exc = evaluate_ir_raises_with_shell(source, commands)
     assert ir_exc.display_name == "ExecError"
+
+    from agm.agl.ir.builtin_nominals import NO_BUILTIN_DECLARATIONS
+
+    assert ir_exc.nominal == NO_BUILTIN_DECLARATIONS.nominal("ExecError")
 
 
 def test_t4a_full_pipeline_unit_exec_discards_successful_output() -> None:

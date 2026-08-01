@@ -15,6 +15,7 @@ permitted in this package.
 
 from __future__ import annotations
 
+from agm.agl.ir.builtin_nominals import NO_BUILTIN_DECLARATIONS, BuiltinNominals
 from agm.agl.ir.contracts import (
     ArrayDecode,
     BoundaryArray,
@@ -167,6 +168,7 @@ __all__ = [
     "BoundarySealVar",
     "BoundaryUnit",
     "BoundaryVariantShape",
+    "BuiltinNominals",
     "CmpOp",
     "Coercion",
     "CompareKind",
@@ -266,6 +268,7 @@ __all__ = [
     "NominalDescriptor",
     "NominalId",
     "NominalKind",
+    "NO_BUILTIN_DECLARATIONS",
     "NumericKind",
     "RecordDecode",
     "ScalarDecode",

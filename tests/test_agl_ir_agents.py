@@ -368,6 +368,12 @@ prompt_text
     assert ir["agent_name"] == TextValue("dummy")
     assert ir["prompt_text"] == TextValue("My prompt.")
 
+    from agm.agl.ir.builtin_nominals import NO_BUILTIN_DECLARATIONS
+
+    req = ir["req"]
+    assert isinstance(req, RecordValue)
+    assert req.nominal == NO_BUILTIN_DECLARATIONS.nominal("AgentRequest")
+
 
 # ---------------------------------------------------------------------------
 # retry with schema validation error (covers result.errors branch)

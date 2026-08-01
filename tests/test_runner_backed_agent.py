@@ -354,6 +354,26 @@ class TestAgentCallErrorSeam:
         exc_val = exc_info.value.exc
         assert exc_val.display_name == "AgentCallError"
 
+        from agm.agl.ir.builtin_nominals import NO_BUILTIN_DECLARATIONS
+
+        assert exc_val.nominal == NO_BUILTIN_DECLARATIONS.nominal("AgentCallError")
+
+    def test_dispatch_forwards_a_custom_nominals_table(self) -> None:
+        """A caller-supplied ``nominals`` table (not the default) is honored."""
+        from agm.agl.ir.builtin_nominals import BuiltinNominals
+        from agm.agl.ir.ids import NominalId
+        from agm.agl.modules.ids import ENTRY_ID
+        from agm.agl.runtime import AgentRequest
+        from agm.agl.semantics.exceptions import AglRaise
+
+        registry = self._make_registry_with_failing_agent(
+            cause="nonzero_exit", exit_code=1, stderr_tail="err", elapsed=0.1
+        )
+        custom = BuiltinNominals(declared={"AgentCallError": NominalId(ENTRY_ID, "AgentCallError")})
+        with pytest.raises(AglRaise) as exc_info:
+            registry.dispatch("tester", AgentRequest(agent="tester", prompt="q"), nominals=custom)
+        assert exc_info.value.exc.nominal == NominalId(ENTRY_ID, "AgentCallError")
+
     def test_spawn_failure_raises_agl_raise(self) -> None:
         from agm.agl.runtime import AgentRequest
         from agm.agl.semantics.exceptions import AglRaise

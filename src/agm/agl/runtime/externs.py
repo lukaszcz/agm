@@ -33,6 +33,7 @@ from types import MappingProxyType, ModuleType
 from typing import Protocol, assert_never, cast
 
 from agm.agl.diagnostics import AglError
+from agm.agl.ir.builtin_nominals import NO_BUILTIN_DECLARATIONS, BuiltinNominals
 from agm.agl.ir.contracts import (
     BoundaryArray,
     BoundaryDict,
@@ -850,6 +851,8 @@ class ExternRegistry:
         fn: ExternCallable,
         args: Sequence[Value],
         trace_id: str,
+        *,
+        nominals: BuiltinNominals = NO_BUILTIN_DECLARATIONS,
     ) -> Value:
         """Cross the boundary for one extern call: encode, call, decode.
 
@@ -867,6 +870,10 @@ class ExternRegistry:
         one (``SealedHandle.__repr__``, during *fn*), raises
         ``AglCyclicValue``; both are converted here into the catchable
         ``CyclicValueError`` rather than being folded into ``ExternError``.
+
+        *nominals* resolves the ``ExternError``/``CyclicValueError`` nominal;
+        it defaults to the shipped standard library's own identities for a
+        caller (e.g. a direct unit test) that invokes without a program.
         """
         seals: dict[str, object] = {var: object() for var in contract.type_params}
         vault = _HandleVault()
@@ -882,29 +889,38 @@ class ExternRegistry:
             ]
         except BoundaryViolation as exc:
             raise _extern_error(
-                function_name, f"argument conversion failed: {exc}", trace_id, python_type=""
+                function_name,
+                f"argument conversion failed: {exc}",
+                trace_id,
+                python_type="",
+                nominals=nominals,
             ) from exc
         except AglCyclicValue as exc:
-            raise cyclic_value_raise(trace_id) from exc
+            raise cyclic_value_raise(trace_id, nominals=nominals) from exc
 
         try:
             with decimal.localcontext():
                 result = fn(*encoded_args)
         except AglCyclicValue as exc:
-            raise cyclic_value_raise(trace_id) from exc
+            raise cyclic_value_raise(trace_id, nominals=nominals) from exc
         except Exception as exc:
             raise _extern_error(
                 function_name,
                 str(exc) or type(exc).__name__,
                 trace_id,
                 python_type=type(exc).__name__,
+                nominals=nominals,
             ) from exc
 
         try:
             return decode_boundary_value(contract.result, result, seals, defs, vault)
         except BoundaryViolation as exc:
             raise _extern_error(
-                function_name, f"return value violates contract: {exc}", trace_id, python_type=""
+                function_name,
+                f"return value violates contract: {exc}",
+                trace_id,
+                python_type="",
+                nominals=nominals,
             ) from exc
         except Exception as exc:
             raise _extern_error(
@@ -912,15 +928,24 @@ class ExternRegistry:
                 f"return value validation failed: {exc}",
                 trace_id,
                 python_type=type(exc).__name__,
+                nominals=nominals,
             ) from exc
 
 
-def _extern_error(function_name: str, message: str, trace_id: str, *, python_type: str) -> AglRaise:
+def _extern_error(
+    function_name: str,
+    message: str,
+    trace_id: str,
+    *,
+    python_type: str,
+    nominals: BuiltinNominals,
+) -> AglRaise:
     """Build the ``AglRaise(ExternError)`` carrier shared by every invoke failure."""
     return AglRaise(
         make_builtin_exception(
             "ExternError",
             message,
+            nominals=nominals,
             trace_id=trace_id,
             function=TextValue(function_name),
             python_type=TextValue(python_type),

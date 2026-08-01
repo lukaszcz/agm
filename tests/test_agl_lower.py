@@ -1224,6 +1224,67 @@ class TestNominalsEmpty:
 
 
 # ---------------------------------------------------------------------------
+# lower_module/lower_program: the program's built-in nominal table
+# ---------------------------------------------------------------------------
+
+
+class TestBuiltinNominalsTable:
+    """``ExecutableProgram.builtin_nominals`` — the host's per-program nominal table."""
+
+    def test_answers_for_every_builtin_name_with_the_shipped_identity(self) -> None:
+        """A program that declares no ``builtin`` types still answers for every name.
+
+        A trivial program declares no ``builtin`` types of its own, so every
+        built-in prelude/exception name resolves to the shipped standard
+        library's own identity.
+        """
+        from agm.agl.ir.builtin_nominals import NO_BUILTIN_DECLARATIONS
+
+        prog = _lower("()")
+        for name in ("ExecResult", "AgentRequest", "RangeError", "MaxIterationsExceeded"):
+            assert prog.builtin_nominals.nominal(name) == NO_BUILTIN_DECLARATIONS.nominal(name)
+
+    def test_declared_builtin_type_resolves_to_the_declaration_identity(self) -> None:
+        """A program's own ``builtin`` declaration is reflected in its table.
+
+        Every ``builtin`` declaration is currently canonicalized to the same
+        prelude identity regardless of where it is written (see
+        ``typecheck.builder.owning_module_id``/``owning_scope_path``), so
+        this currently coincides with the shipped standard library's own
+        identity for ``RangeError`` — the declaration is still what drives
+        the table's answer, that identity is just what it resolves to today.
+        """
+        from agm.agl.ir.ids import NominalId
+        from agm.agl.modules.ids import PRELUDE_ID
+
+        source = "builtin exception RangeError extends Exception()\n()\n"
+        prog = _lower(source)
+        assert prog.builtin_nominals.nominal("RangeError") == NominalId(PRELUDE_ID, "RangeError")
+
+    def test_range_error_raised_at_runtime_carries_the_table_nominal(self) -> None:
+        """A ``for`` loop with a non-positive step raises ``RangeError`` with the table's nominal.
+
+        Uses a variable (not a literal) step: a literal non-positive step is
+        rejected statically, before this runtime guard is ever reached.
+        """
+        from agm.agl.ir.builtin_nominals import NO_BUILTIN_DECLARATIONS
+        from tests.agl.ir_harness import evaluate_ir_raises
+
+        exc = evaluate_ir_raises("let step = 0\nfor i in 1 to 5 by step do\n  ()\ndone\n")
+        assert exc.display_name == "RangeError"
+        assert exc.nominal == NO_BUILTIN_DECLARATIONS.nominal("RangeError")
+
+    def test_max_iterations_exceeded_raised_at_runtime_carries_the_table_nominal(self) -> None:
+        """A ``do[n]`` loop exhausted at its bound carries the table's nominal."""
+        from agm.agl.ir.builtin_nominals import NO_BUILTIN_DECLARATIONS
+        from tests.agl.ir_harness import evaluate_ir_raises
+
+        exc = evaluate_ir_raises("var dummy = 0\ndo[3]\n  dummy := 1\nuntil false\n")
+        assert exc.display_name == "MaxIterationsExceeded"
+        assert exc.nominal == NO_BUILTIN_DECLARATIONS.nominal("MaxIterationsExceeded")
+
+
+# ---------------------------------------------------------------------------
 # lower_module: unsupported nodes raise a clear error
 # ---------------------------------------------------------------------------
 

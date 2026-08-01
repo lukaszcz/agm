@@ -18,17 +18,19 @@ values. The IR interpreter supplies the trace id.
 
 from __future__ import annotations
 
-from agm.agl.ir.ids import Location, NominalId
-from agm.agl.modules.ids import PRELUDE_ID
+from agm.agl.ir.builtin_nominals import BuiltinNominals
+from agm.agl.ir.ids import Location
 from agm.agl.semantics.values import ExceptionValue, TextValue, Value
 
 
 def make_builtin_exception(
-    type_name: str, message: str, *, trace_id: str = "", **extra: Value
+    type_name: str, message: str, *, nominals: BuiltinNominals, trace_id: str = "", **extra: Value
 ) -> ExceptionValue:
     """Create an ``ExceptionValue`` for a built-in exception type.
 
-    Built-in exceptions use ``NominalId(PRELUDE_ID, type_name)``.
+    The exception's nominal is ``nominals.nominal(type_name)`` — the caller's
+    built-in nominal table, so the value carries the identity that table
+    resolves for *type_name* rather than a hardcoded one.
     ``trace_id`` is minted by the *caller's* evaluator (per-evaluator identity).
     Extra keyword arguments become additional fields beyond ``message`` and
     ``trace_id``.
@@ -39,7 +41,7 @@ def make_builtin_exception(
     }
     fields.update(extra)
     return ExceptionValue(
-        nominal=NominalId(PRELUDE_ID, type_name),
+        nominal=nominals.nominal(type_name),
         display_name=type_name,
         fields=fields,
     )

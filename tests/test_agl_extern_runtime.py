@@ -815,6 +815,10 @@ class TestExternError:
         assert isinstance(trace_id, TextValue)
         assert trace_id.value
 
+        from agm.agl.ir.builtin_nominals import NO_BUILTIN_DECLARATIONS
+
+        assert exc.nominal == NO_BUILTIN_DECLARATIONS.nominal("ExternError")
+
     def test_wrong_return_type_yields_extern_error_with_empty_python_type(
         self, tmp_path: Path
     ) -> None:

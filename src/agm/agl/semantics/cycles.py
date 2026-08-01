@@ -18,6 +18,7 @@ module.
 
 from __future__ import annotations
 
+from agm.agl.ir.builtin_nominals import BuiltinNominals
 from agm.agl.semantics.exceptions import AglRaise, make_builtin_exception
 
 __all__ = [
@@ -70,17 +71,18 @@ def enter_container(container_id: int, active: "set[int] | None") -> "set[int]":
     return active
 
 
-def cyclic_value_raise(trace_id: str) -> AglRaise:
+def cyclic_value_raise(trace_id: str, *, nominals: BuiltinNominals) -> AglRaise:
     """Build the catchable ``AglRaise(CyclicValueError)`` for a detected cycle.
 
     Single shared constructor so every caller that converts an
     :class:`AglCyclicValue` sentinel produces byte-identical exception
-    fields.
+    fields. *nominals* is forwarded to :func:`make_builtin_exception`.
     """
     return AglRaise(
         make_builtin_exception(
             "CyclicValueError",
             CYCLE_MESSAGE,
             trace_id=trace_id,
+            nominals=nominals,
         )
     )

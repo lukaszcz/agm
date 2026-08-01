@@ -17,9 +17,11 @@ An `IrField` projection carries either exact nominal identity or a static upper-
 Host operations are dispatched by contract identity:
 
 - **Agents.** `ask` issues the call through the host agent runtime; the output is shaped by the contract's format metadata and the schema/decode descriptors compiled into it. A unit contract dispatches once and discards the response.
-- **Shell.** `exec` either returns a structured result or parses stdout into a target type, as selected during checking. A structured contract exposes a nonzero exit as data, while spawn failures and timeouts raise `ExecError`; a unit contract also raises for a nonzero exit and discards successful stdout without resolving a codec. The structured result's nominal identity is carried directly on `IrExec` (not derived from the typeless contract), so a scoped `builtin record ExecResult` is tagged with its own declaration's scope path rather than the root canonical one.
+- **Shell.** `exec` either returns a structured result or parses stdout into a target type, as selected during checking. A structured contract exposes a nonzero exit as data, while spawn failures and timeouts raise `ExecError`; a unit contract also raises for a nonzero exit and discards successful stdout without resolving a codec.
 - **Conversions.** Casts and `parse_json` execute pre-resolved typeless recipes and always parse strictly; agent and `exec` output parsing uses the configurable strict/lenient codec pipeline.
 - **Copying.** `copy` and `shallow_copy` dispatch to `semantics/copying.py`, the single shared implementation of both walks. `shallow_copy` rebuilds one container level only. `copy` recurses with an `id()`-keyed memo, so it preserves diamond sharing and is the one deep, structure-rebuilding walk in the language that terminates on a reference cycle instead of raising `CyclicValueError` — the memo resolves a re-entrant reference to the copy already under construction.
+
+A value the host mints — a raised built-in exception, a structured `ExecResult`, an `ask-request` `AgentRequest` — takes its nominal identity from one per-program table (`ir/builtin_nominals.py`), carried on `ExecutableProgram` and built during lowering from the program's own `builtin` declarations. No minting site constructs an identity of its own, so a program's declaration governs what its host-produced values are; a name the program declares nothing for answers with the shipped standard library's own identity for it.
 
 ## Extern (Python FFI) Dispatch
 

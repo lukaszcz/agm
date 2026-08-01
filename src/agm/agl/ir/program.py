@@ -19,6 +19,7 @@ from __future__ import annotations
 import enum
 from dataclasses import dataclass, field
 
+from agm.agl.ir.builtin_nominals import NO_BUILTIN_DECLARATIONS, BuiltinNominals
 from agm.agl.ir.contracts import ContractRequest, ExternContract, ParamDecoder
 from agm.agl.ir.ids import ContractId, FunctionId, Location, NominalId, SourceId, SymbolId
 from agm.agl.ir.nodes import IrExpr, IrFunctionParam
@@ -276,6 +277,13 @@ class ExecutableProgram:
       ``nominals``     — map from ``NominalId`` to ``NominalDescriptor``.
       ``sources``      — map from ``SourceId`` to ``SourceFile``.
       ``functions``    — ordinary functions and externs, keyed by ``FunctionId``.
+      ``builtin_nominals`` — bare built-in type name -> the ``NominalId`` a
+        host mints for it (see ``agm.agl.ir.builtin_nominals``), built during
+        lowering from the program's ``builtin`` declarations. Defaults to
+        ``NO_BUILTIN_DECLARATIONS`` (every name resolves to the shipped
+        standard library's own identity), which keeps the many direct
+        ``ExecutableProgram`` constructions in ``tests/`` working without
+        threading this table through every one of them.
 
     """
 
@@ -288,3 +296,4 @@ class ExecutableProgram:
     params: tuple[IrParam, ...] = ()
     contracts: dict["ContractId", "ContractRequest"] = field(default_factory=dict)
     dry_run_inventory: "tuple[DryRunEntry, ...]" = ()
+    builtin_nominals: BuiltinNominals = NO_BUILTIN_DECLARATIONS

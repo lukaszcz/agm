@@ -45,6 +45,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from pathlib import Path
 
+from agm.agl.ir.builtin_nominals import NO_BUILTIN_DECLARATIONS, BuiltinNominals
 from agm.agl.ir.ids import AgentId
 from agm.agl.runtime.request import AgentRequest, AgentResponse
 from agm.core.env import clone_env
@@ -151,7 +152,13 @@ class AgentRegistry:
         """Whether an exact structured registration backs an agent."""
         return agent_id in self._named
 
-    def dispatch(self, agent_id: AgentId | str, request: AgentRequest) -> AgentResponse:
+    def dispatch(
+        self,
+        agent_id: AgentId | str,
+        request: AgentRequest,
+        *,
+        nominals: BuiltinNominals = NO_BUILTIN_DECLARATIONS,
+    ) -> AgentResponse:
         """Dispatch a call to the appropriate agent callable.
 
         Resolution order:
@@ -167,6 +174,10 @@ class AgentRegistry:
         Transport failures are NOT eligible for ``on_parse_error`` retries: the
         ``AglRaise`` propagates directly to the interpreter's ``try/catch`` or
         the top-level ``PipelineDriver.run`` dispatcher.
+
+        *nominals* resolves the ``AgentCallError`` nominal; it defaults to the
+        shipped standard library's own identities for a caller (e.g. a direct
+        unit test) that dispatches without a program.
         """
         identity = agent_id if isinstance(agent_id, AgentId) else AgentId(agent_id)
         fn: AgentFn | None = self._named.get(identity)
@@ -181,7 +192,7 @@ class AgentRegistry:
             raw = fn(request)
         except AgentCallHostError as host_err:
             # Convert transport failure to a catchable AgL AgentCallError.
-            _raise_agent_call_error(identity.display_name, host_err)
+            _raise_agent_call_error(identity.display_name, host_err, nominals=nominals)
         if isinstance(raw, str):
             return AgentResponse(content=raw)
         return raw
@@ -192,15 +203,16 @@ class AgentRegistry:
 # ---------------------------------------------------------------------------
 
 
-def _raise_agent_call_error(agent_name: str, err: AgentCallHostError) -> None:
+def _raise_agent_call_error(
+    agent_name: str, err: AgentCallHostError, *, nominals: BuiltinNominals
+) -> None:
     """Convert ``AgentCallHostError`` to ``AglRaise(ExceptionValue("AgentCallError", ...))``."""
     # Imports are kept function-local to confine the exception-construction
     # dependencies to this single error path; all are leaf modules
     # (semantics, modules.ids, runtime.trace) so no import cycle is involved.
-    from agm.agl.modules.ids import PRELUDE_ID
     from agm.agl.runtime.trace import new_trace_id
     from agm.agl.semantics.exceptions import AglRaise
-    from agm.agl.semantics.values import ExceptionValue, JsonValue, NominalId, TextValue
+    from agm.agl.semantics.values import ExceptionValue, JsonValue, TextValue
 
     metadata: dict[str, object] = {
         "exit_code": err.exit_code,
@@ -212,7 +224,7 @@ def _raise_agent_call_error(agent_name: str, err: AgentCallHostError) -> None:
     )
 
     exc_val = ExceptionValue(
-        nominal=NominalId(PRELUDE_ID, "AgentCallError"),
+        nominal=nominals.nominal("AgentCallError"),
         display_name="AgentCallError",
         fields={
             "message": TextValue(message),

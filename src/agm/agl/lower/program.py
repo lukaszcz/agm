@@ -26,6 +26,7 @@ from agm.agl.lower.lowerer import (
     _contract_has_schema,
     _LinkState,
     _Lowerer,
+    builtin_nominals_from_declarations,
 )
 from agm.agl.matchcompile import MatchCompiledProgram
 from agm.agl.modules.ids import STD_CORE_ID, ModuleId
@@ -55,6 +56,9 @@ def lower_program(
     # the IR self-check over its own output below.
     checked = compiled.checked
     link = _link if _link is not None else _LinkState()
+    # Recomputed on every call (including a reused REPL link) so a newly
+    # checked module's ``builtin`` declarations are always reflected.
+    link.builtin_nominals = builtin_nominals_from_declarations(checked.modules)
 
     # Every per-module TypeEnvironment shares one TypeTable instance (built
     # during checking); pick the entry module's env to reach it.
@@ -229,6 +233,7 @@ def lower_program(
         params=tuple(entry_lowerer._params),
         contracts=dict(link.contracts),
         dry_run_inventory=dry_run_inventory,
+        builtin_nominals=link.builtin_nominals,
     )
     if self_validation_enabled():
         validate_ir(program, deep=True)

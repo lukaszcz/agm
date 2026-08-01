@@ -548,6 +548,7 @@ class IrInterpreter:
                     _make_exc_value(
                         "IndexError",
                         f"Array index {err.index} out of range for length {err.length}",
+                        nominals=self._program.builtin_nominals,
                         trace_id=self._trace.new_event_id(),
                         index=IntValue(err.index),
                         length=IntValue(err.length),
@@ -558,6 +559,7 @@ class IrInterpreter:
                     _make_exc_value(
                         "KeyError",
                         f"Dict key {err.key!r} is missing",
+                        nominals=self._program.builtin_nominals,
                         trace_id=self._trace.new_event_id(),
                         key=TextValue(err.key),
                     ),
@@ -572,7 +574,9 @@ class IrInterpreter:
         conversion so every ``render``/``as json``/coercion site that can
         reach a cyclic array or dict raises identical exception fields.
         """
-        return cyclic_value_raise(self._trace.new_event_id())
+        return cyclic_value_raise(
+            self._trace.new_event_id(), nominals=self._program.builtin_nominals
+        )
 
     def _render_or_raise(
         self, value: Value, *, pretty: bool = False, quote_strings: bool = False
@@ -597,6 +601,7 @@ class IrInterpreter:
                     _make_exc_value(
                         "CastError",
                         exc.message,
+                        nominals=self._program.builtin_nominals,
                         trace_id=self._trace.new_event_id(),
                         source_type=TextValue(exc.source_label),
                         target_type=TextValue(exc.target_label),
@@ -689,6 +694,7 @@ class IrInterpreter:
             _make_exc_value(
                 "RecursionError",
                 f"Maximum call depth ({self._max_call_depth}) exceeded",
+                nominals=self._program.builtin_nominals,
                 trace_id=self._trace.new_event_id(),
                 limit=IntValue(self._max_call_depth),
             )
@@ -1082,6 +1088,7 @@ class IrInterpreter:
                         _make_exc_value(
                             "ArithmeticError",
                             "Division by zero",
+                            nominals=self._program.builtin_nominals,
                             trace_id=self._trace.new_event_id(),
                             operation=TextValue("/"),
                         )
@@ -1374,6 +1381,7 @@ class IrInterpreter:
                             _make_exc_value(
                                 "MaxIterationsExceeded",
                                 f"Loop exhausted after {self._loop_limit} iterations",
+                                nominals=self._program.builtin_nominals,
                                 trace_id=self._trace.new_event_id(),
                                 limit=IntValue(self._loop_limit),
                                 condition=TextValue("loop limit"),
@@ -1514,6 +1522,7 @@ class IrInterpreter:
                         _make_exc_value(
                             "JsonParseError",
                             exc.message,
+                            nominals=self._program.builtin_nominals,
                             trace_id=self._trace.new_event_id(),
                             raw=TextValue(val.value),
                         ),
@@ -1640,6 +1649,7 @@ class IrInterpreter:
                     _make_exc_value(
                         "ValueError",
                         f"invalid runner: {exc}",
+                        nominals=self._program.builtin_nominals,
                         trace_id=self._trace.new_event_id(),
                     )
                 ) from exc
@@ -1675,6 +1685,7 @@ class IrInterpreter:
                     _make_exc_value(
                         "ValueError",
                         "invalid max-iters: expected a non-negative integer",
+                        nominals=self._program.builtin_nominals,
                         trace_id=self._trace.new_event_id(),
                     )
                 )
@@ -1695,6 +1706,7 @@ class IrInterpreter:
                         _make_exc_value(
                             "ValueError",
                             f"invalid timeout: {exc}",
+                            nominals=self._program.builtin_nominals,
                             trace_id=self._trace.new_event_id(),
                         )
                     ) from exc

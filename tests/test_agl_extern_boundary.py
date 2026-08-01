@@ -783,6 +783,25 @@ class TestInvoke:
         assert exc.fields["python_type"] == TextValue("ValueError")
         assert exc.fields["trace_id"] == TextValue("trace-3")
 
+        from agm.agl.ir.builtin_nominals import NO_BUILTIN_DECLARATIONS
+
+        assert exc.nominal == NO_BUILTIN_DECLARATIONS.nominal("ExternError")
+
+    def test_invoke_forwards_a_custom_nominals_table(self) -> None:
+        """A caller-supplied ``nominals`` table (not the default) is honored."""
+        from agm.agl.ir.builtin_nominals import BuiltinNominals
+
+        contract = build_contract("extern def f(x: int) -> int\n0")
+
+        def fn(x: int) -> int:
+            raise ValueError("boom")
+
+        registry = ExternRegistry()
+        custom = BuiltinNominals(declared={"ExternError": NominalId(ENTRY_ID, "ExternError")})
+        with pytest.raises(AglRaise) as excinfo:
+            registry.invoke("f", contract, fn, [IntValue(1)], "trace-custom", nominals=custom)
+        assert excinfo.value.exc.nominal == NominalId(ENTRY_ID, "ExternError")
+
     def test_return_contract_violation_has_empty_python_type(self) -> None:
         contract = build_contract("extern def f(x: int) -> int\n0")
 

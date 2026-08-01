@@ -20,7 +20,9 @@ import decimal
 import pytest
 
 from agm.agl.ir import (
+    NO_BUILTIN_DECLARATIONS,
     ArithOp,
+    BuiltinNominals,
     CmpOp,
     Coercion,
     CompareKind,
@@ -63,7 +65,7 @@ from agm.agl.ir import (
     SymbolId,
     ToJson,
 )
-from agm.agl.modules.ids import ModuleId
+from agm.agl.modules.ids import PRELUDE_ID, ModuleId
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -174,6 +176,29 @@ class TestNominalId:
         d = {NominalId(MOD_A, "Foo"): 1, NominalId(MOD_B, "Foo"): 2}
         assert d[NominalId(MOD_A, "Foo")] == 1
         assert d[NominalId(MOD_B, "Foo")] == 2
+
+
+# ---------------------------------------------------------------------------
+# builtin_nominals.py — BuiltinNominals
+# ---------------------------------------------------------------------------
+
+
+class TestBuiltinNominals:
+    def test_declared_name_answers_with_its_own_nominal(self) -> None:
+        table = BuiltinNominals(declared={"Foo": NominalId(MOD_A, "Foo")})
+        assert table.nominal("Foo") == NominalId(MOD_A, "Foo")
+
+    def test_undeclared_name_answers_with_the_shipped_standard_library_identity(self) -> None:
+        table = BuiltinNominals(declared={})
+        assert table.nominal("RangeError") == NominalId(PRELUDE_ID, "RangeError")
+
+    def test_no_builtin_declarations_answers_every_name_with_the_shipped_identity(self) -> None:
+        assert NO_BUILTIN_DECLARATIONS.nominal("ExecResult") == NominalId(PRELUDE_ID, "ExecResult")
+
+    def test_frozen(self) -> None:
+        table = BuiltinNominals(declared={})
+        with pytest.raises(dataclasses.FrozenInstanceError):
+            setattr(table, "declared", {})
 
 
 # ---------------------------------------------------------------------------

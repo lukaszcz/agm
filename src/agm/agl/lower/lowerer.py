@@ -36,6 +36,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import assert_never, cast
 
+from agm.agl.ir.builtin_nominals import NO_BUILTIN_DECLARATIONS, BuiltinNominals
 from agm.agl.ir.contracts import (
     ContractPayload,
     ContractRequest,
@@ -256,6 +257,7 @@ from agm.agl.syntax.nodes import (
     scoped_public_name,
     simple_let_pattern_name,
     static_items,
+    static_type_items,
 )
 from agm.agl.syntax.spans import SourceSpan
 from agm.agl.type_schema import (
@@ -264,6 +266,7 @@ from agm.agl.type_schema import (
     build_param_decoder,
     derive_schema_and_decode,
 )
+from agm.agl.typecheck.builder import owning_module_id, owning_scope_path
 from agm.agl.typecheck.env import (
     CheckedModule,
     FunctionSignature,
@@ -272,7 +275,7 @@ from agm.agl.typecheck.env import (
 )
 from agm.util.text import normalize_newlines
 
-__all__ = ["InitializerOrigin", "_LinkState", "lower_module"]
+__all__ = ["InitializerOrigin", "_LinkState", "builtin_nominals_from_declarations", "lower_module"]
 
 
 def _contract_has_schema(
@@ -328,6 +331,32 @@ def _add_builtin_nominals(
         )
 
 
+def builtin_nominals_from_declarations(
+    modules: Mapping[ModuleId, CheckedModule],
+) -> BuiltinNominals:
+    """Return the built-in nominal table for every ``builtin`` declaration in *modules*.
+
+    Maps each ``builtin`` record/enum/exception declaration's bare name to its
+    own nominal, derived exactly as the type builder registers it
+    (``typecheck.builder.owning_module_id``/``owning_scope_path``). A name
+    this compile unit does not declare is simply absent — the resulting
+    table then answers it with the shipped standard library's own identity
+    (see :meth:`~agm.agl.ir.builtin_nominals.BuiltinNominals.nominal`).
+    """
+    declared: dict[str, NominalId] = {}
+    for module_id, checked_module in modules.items():
+        for item in static_type_items(checked_module.resolved.program.body.items):
+            if isinstance(item, TypeAlias) or not item.is_builtin:
+                continue
+            name = item.name.rsplit("::", maxsplit=1)[-1]
+            declared[name] = NominalId(
+                owning_module_id(item.is_builtin, module_id),
+                name,
+                owning_scope_path(item.is_builtin, item.scope_path),
+            )
+    return BuiltinNominals(declared=declared)
+
+
 # ---------------------------------------------------------------------------
 # Internal lowerer state (one instance per lower_module call)
 # ---------------------------------------------------------------------------
@@ -358,6 +387,7 @@ class _LinkState:
     symbols: dict[SymbolId, SymbolDescriptor] = field(default_factory=dict)
     functions: dict[FunctionId, FunctionDescriptor] = field(default_factory=dict)
     nominals: dict[NominalId, NominalDescriptor] = field(default_factory=dict)
+    builtin_nominals: BuiltinNominals = NO_BUILTIN_DECLARATIONS
     sources: dict[SourceId, SourceFile] = field(default_factory=dict)
     contracts: dict[ContractId, ContractRequest] = field(default_factory=dict)
     let_value_symbols: dict[int, SymbolId] = field(default_factory=dict)
@@ -1484,7 +1514,7 @@ class _Lowerer:
                                 location=loc,
                                 exc=IrMakeException(
                                     location=loc,
-                                    nominal=NominalId(PRELUDE_ID, "RangeError"),
+                                    nominal=self._link.builtin_nominals.nominal("RangeError"),
                                     display_name="RangeError",
                                     fields=(
                                         (
@@ -1684,7 +1714,9 @@ class _Lowerer:
                             location=loc,
                             exc=IrMakeException(
                                 location=loc,
-                                nominal=NominalId(PRELUDE_ID, "MaxIterationsExceeded"),
+                                nominal=self._link.builtin_nominals.nominal(
+                                    "MaxIterationsExceeded"
+                                ),
                                 display_name="MaxIterationsExceeded",
                                 fields=(
                                     (
@@ -3672,6 +3704,7 @@ class _Lowerer:
             params=tuple(self._params),
             contracts=dict(self._link.contracts),
             dry_run_inventory=dry_run_inventory,
+            builtin_nominals=self._link.builtin_nominals,
         )
 
 
@@ -3699,7 +3732,7 @@ def lower_module(
     # ``compiled`` validated itself when it was constructed; lowering adds the IR
     # self-check over its own output below.
     checked = compiled.checked
-    link = _LinkState()
+    link = _LinkState(builtin_nominals=builtin_nominals_from_declarations({ENTRY_ID: checked}))
     source_id = SourceId(link.next_source)
     link.next_source += 1
     normalized = normalize_newlines(source_text)

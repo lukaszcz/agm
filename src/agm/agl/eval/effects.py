@@ -12,10 +12,10 @@ import json
 from collections.abc import Mapping, Sequence
 from typing import NoReturn, Protocol, cast
 
-from agm.agl.ir.ids import AgentId, ContractId, Location, NominalId
+from agm.agl.ir.ids import AgentId, ContractId, Location
 from agm.agl.ir.nodes import IrAsk, IrAskRequest, IrExec, IrExpr
 from agm.agl.ir.program import ExecutableProgram, ExternFunctionBody
-from agm.agl.modules.ids import PRELUDE_ID, ModuleId
+from agm.agl.modules.ids import ModuleId
 from agm.agl.runtime.agents import AgentRegistry
 from agm.agl.runtime.codec import ParseResult
 from agm.agl.runtime.contract import OutputContract
@@ -92,7 +92,9 @@ class EffectHandlers:
         try:
             return render_value(value)
         except AglCyclicValue as exc:
-            raise cyclic_value_raise(self._ctx._trace.new_event_id()) from exc
+            raise cyclic_value_raise(
+                self._ctx._trace.new_event_id(), nominals=self._ctx._program.builtin_nominals
+            ) from exc
 
     # ------------------------------------------------------------------
     # Extern (Python FFI) call helper
@@ -112,7 +114,14 @@ class EffectHandlers:
         """
         fn = self._ctx._extern_registry.resolve(module_id, extern.name)
         trace_id = self._ctx._trace.new_event_id()
-        return self._ctx._extern_registry.invoke(extern.name, extern.contract, fn, args, trace_id)
+        return self._ctx._extern_registry.invoke(
+            extern.name,
+            extern.contract,
+            fn,
+            args,
+            trace_id,
+            nominals=self._ctx._program.builtin_nominals,
+        )
 
     # ------------------------------------------------------------------
     # Agent call helpers
@@ -134,7 +143,9 @@ class EffectHandlers:
         from agm.agl.runtime.request import AgentCancelled
 
         try:
-            return self._ctx._registry.dispatch(agent_id, request)
+            return self._ctx._registry.dispatch(
+                agent_id, request, nominals=self._ctx._program.builtin_nominals
+            )
         except AgentCancelled as exc:
             exc.span = node.location
             raise
@@ -176,6 +187,7 @@ class EffectHandlers:
             _make_exc_value(
                 "AgentParseError",
                 message,
+                nominals=self._ctx._program.builtin_nominals,
                 trace_id=self._ctx._trace.new_event_id(),
                 raw=TextValue(last_raw or ""),
                 normalized_raw=TextValue(normalized_text),
@@ -329,7 +341,7 @@ class EffectHandlers:
             )
 
         return RecordValue(
-            nominal=NominalId(PRELUDE_ID, "AgentRequest"),
+            nominal=self._ctx._program.builtin_nominals.nominal("AgentRequest"),
             display_name="AgentRequest",
             fields={
                 "agent": TextValue(agent_name),
@@ -386,6 +398,7 @@ class EffectHandlers:
                 _make_exc_value(
                     "ExecError",
                     f"Failed to spawn shell: {spawn_error}",
+                    nominals=self._ctx._program.builtin_nominals,
                     trace_id=trace_id,
                     command=TextValue(cmd),
                     exit_code=IntValue(-1),
@@ -409,6 +422,7 @@ class EffectHandlers:
                 _make_exc_value(
                     "ExecError",
                     f"Shell command timed out (idle timeout exceeded): {cmd!r}",
+                    nominals=self._ctx._program.builtin_nominals,
                     trace_id=self._ctx._trace.new_event_id(),
                     command=TextValue(cmd),
                     exit_code=IntValue(exit_code),
@@ -448,7 +462,7 @@ class EffectHandlers:
         if contract.structured_exec:
             actual_exit_code = returncode if returncode is not None else 0
             return RecordValue(
-                nominal=NominalId(PRELUDE_ID, "ExecResult"),
+                nominal=self._ctx._program.builtin_nominals.nominal("ExecResult"),
                 display_name="ExecResult",
                 fields={
                     "stdout": TextValue(stdout.rstrip("\n")),
@@ -464,6 +478,7 @@ class EffectHandlers:
                 _make_exc_value(
                     "ExecError",
                     f"Shell command exited with code {returncode}: {cmd!r}",
+                    nominals=self._ctx._program.builtin_nominals,
                     trace_id=self._ctx._trace.new_event_id(),
                     command=TextValue(cmd),
                     exit_code=IntValue(returncode),
@@ -500,6 +515,7 @@ class EffectHandlers:
                         _make_exc_value(
                             "ExecError",
                             f"Shell command exited with code {rc2}: {cmd!r}",
+                            nominals=self._ctx._program.builtin_nominals,
                             trace_id=self._ctx._trace.new_event_id(),
                             command=TextValue(cmd),
                             exit_code=IntValue(rc2),

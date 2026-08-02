@@ -46,7 +46,7 @@ AgL has no separate statement category. Every construct — bindings, assignment
 
 ## Programs and Modules
 
-A **program** is the entry module together with its transitive imports. Unless the host disables it, every loaded entry and library module except `std/core` itself receives the automatic `std/core` open-import prelude. The production pipeline always loads that program and runs program-level scope, typecheck, match compilation, and lowering passes. A **module** is one compilation unit within the program; the corresponding module passes are workers used by those program passes and useful as white-box test seams. `ModuleGraph` remains the loader's data structure. Module loading and program passes are described in [modules.md](agl/modules.md).
+A **program** is the entry module together with its transitive imports. Unless the host disables it, every loaded entry and library module except `std/core` itself receives the automatic `std/core` open-import prelude. The production pipeline always loads that program and runs program-level scope, typecheck, match compilation, and lowering passes. A **module** is one unit within the program. Scope, typecheck, match compilation, and lowering run only as whole-program passes over the graph; their per-module steps are internal workers with no standalone entry point, so no caller — production or test — can run them in a configuration the program passes do not. `ModuleGraph` remains the loader's data structure. Module loading and program passes are described in [modules.md](agl/modules.md).
 
 ## Package Map
 

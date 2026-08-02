@@ -2361,11 +2361,6 @@ class _Resolver:
                 node, self._resolution.get(node.node_id), is_call_target=is_call_target
             )
             return
-        if node.name in _BUILTIN_CALL_NAMES and self._current_scope().lookup(node.name) is None:
-            raise AglScopeError(
-                f"Built-in function '{node.name}' cannot be used as a value.", span=node.span
-            )
-
         # Standard lexical lookup.
         ref = self._current_scope().lookup(node.name)
         regional_candidates = self._regional_constructor_candidates(node.name)
@@ -3103,28 +3098,18 @@ class _Resolver:
     def _resolve_call(self, node: Call) -> None:
         """Resolve a ``Call`` node.
 
-        If the callee is a bare (unqualified) ``VarRef`` whose name is a
-        built-in and nothing local shadows it, classify the call in
-        ``builtin_calls`` and skip normal callee resolution — this is what
-        lets ``print(x)`` work with no import anywhere in the module. A
-        *qualified* callee (``A::print``) always resolves normally instead,
-        the same as any other qualified reference, so a path that does not
-        actually declare a builtin function under that name is a scope error
-        rather than a silently-accepted host dispatch. Either way, once the
-        callee resolves to a function binding under a built-in name — bare or
-        via its qualified path — the call is classified as that built-in: the
-        host implementation a name denotes does not depend on the scope path
-        through which it was reached.
+        A callee under a built-in name is classified in ``builtin_calls``
+        only once it resolves to a ``builtin def`` declaration, through the
+        same resolution every other reference uses — lexical lookup, region
+        contributions, and the import environment alike. A bare ``print(x)``
+        is therefore reached through the standard library's own declaration,
+        exactly as ``A::print(x)`` is reached through that region's; a name
+        no declaration provides is an ordinary scope error. Which scope path
+        reached the declaration never changes the host implementation the
+        name denotes.
         """
         callee = node.callee
-        if (
-            isinstance(callee, VarRef)
-            and callee.qualifier is None
-            and callee.name in _BUILTIN_CALL_NAMES
-            and self._current_scope().lookup(callee.name) is None
-        ):
-            self._builtin_calls[node.node_id] = _BUILTIN_CALL_NAMES[callee.name]
-        elif isinstance(callee, VarRef):
+        if isinstance(callee, VarRef):
             self._resolve_varref(callee, is_call_target=True)
             if callee.name in _BUILTIN_CALL_NAMES:
                 ref = self._resolution.get(callee.node_id)

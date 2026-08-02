@@ -1664,7 +1664,7 @@ class TestScopedBuiltinTypes:
         masked the mismatch and the shape check never ran) rather than
         crashing — a bug independent of scope regions, fixed alongside the
         scoped case."""
-        err = reject_type("builtin record ExecResult[T]\n  x: T\n\nprint(1)", default_stdlib=False)
+        err = reject_type("builtin record ExecResult[T]\n  x: T\n\n()", default_stdlib=False)
         assert "ExecResult" in err.to_diagnostic().message
 
     def test_scoped_generic_builtin_record_is_rejected_with_a_proper_diagnostic(self) -> None:
@@ -1693,7 +1693,7 @@ class TestScopedBuiltinTypes:
         assert "RangeError" in err.to_diagnostic().message
 
     def test_builtin_shape_check_reports_a_proper_diagnostic_at_the_root_too(self) -> None:
-        err = reject_type("builtin\nrecord RangeError\n  x: int\n\nprint(1)", default_stdlib=False)
+        err = reject_type("builtin\nrecord RangeError\n  x: int\n\n()", default_stdlib=False)
         assert "RangeError" in err.to_diagnostic().message
 
     def test_scoped_exception_hierarchy_with_a_scoped_base_typechecks(self) -> None:

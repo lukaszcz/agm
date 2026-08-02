@@ -183,7 +183,7 @@ class TestScopedBuiltinVar:
             "open import std/config\n"
             "std/config::Region::max-iters := 3\n"
             "let n = std/config::Region::max-iters\n"
-            "print n",
+            "n",
             "scope Region\nbuiltin var max-iters: int\nend Region",
             tmp_path,
         )
@@ -192,11 +192,7 @@ class TestScopedBuiltinVar:
 
     def test_scoped_engine_setting_bare_after_open(self, tmp_path: Path) -> None:
         result = _run_with_std_config(
-            "open import std/config\n"
-            "open std/config::Region\n"
-            "max-iters := 4\n"
-            "let n = max-iters\n"
-            "print n",
+            "open import std/config\nopen std/config::Region\nmax-iters := 4\nlet n = max-iters\nn",
             "scope Region\nbuiltin var max-iters: int\nend Region",
             tmp_path,
         )

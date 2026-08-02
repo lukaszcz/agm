@@ -356,6 +356,22 @@ def test_static_rejection(program: Path) -> None:
         )
 
 
+def test_qualified_std_core_print_still_works(capsys: pytest.CaptureFixture[str]) -> None:
+    """A fully qualified ``std/core::print(...)`` call still runs, exactly as
+    the bare form does — a built-in call is classified once its callee
+    resolves to a ``builtin def``, and ``std/core::print`` reaches the same
+    declaration a bare ``print`` does, just by a qualified route."""
+    from agm.agl import PipelineDriver
+
+    result = PipelineDriver().run('std/core::print("hi")\n')
+
+    assert list(result.diagnostics) == [], (
+        f"unexpected static diagnostics: {' | '.join(d.message for d in result.diagnostics)}"
+    )
+    assert result.error is None, f"unexpected error: {result.error}"
+    assert capsys.readouterr().out == "hi\n"
+
+
 def _scoped_stdlib_root(tmp_path: Path) -> Path:
     """Build a throwaway module root with ``std/core.agl`` wrapped in ``scope Std``.
 
@@ -395,7 +411,8 @@ def test_scoped_stdlib_arrangement_runs_end_to_end(
     scoped_stdlib_root = _scoped_stdlib_root(tmp_path)
 
     program = (
-        'let r = Std::exec("echo hi")\nprint(r.stdout)\nraise Std::RangeError(message = "boom")\n'
+        'let r = Std::exec("echo hi")\nStd::print(r.stdout)\n'
+        'raise Std::RangeError(message = "boom")\n'
     )
 
     shell = FakeShell([{"command": "echo hi", "stdout": "hi\n"}])
@@ -429,7 +446,7 @@ def test_scoped_stdlib_arrangement_structured_exec_result_is_the_scoped_nominal(
 
     scoped_stdlib_root = _scoped_stdlib_root(tmp_path)
 
-    program = 'let r: Std::ExecResult = Std::exec("echo hi")\nprint(r.stdout)\n'
+    program = 'let r: Std::ExecResult = Std::exec("echo hi")\nStd::print(r.stdout)\n'
 
     shell = FakeShell([{"command": "echo hi", "stdout": "hi\n"}])
     runtime = PipelineDriver()
@@ -458,7 +475,7 @@ def test_scoped_stdlib_arrangement_uncaught_host_raised_exec_error_reports_scope
 
     scoped_stdlib_root = _scoped_stdlib_root(tmp_path)
 
-    program = 'let out: text = Std::exec("false")\nprint(out)\n'
+    program = 'let out: text = Std::exec("false")\nStd::print(out)\n'
 
     shell = FakeShell([{"command": "false", "returncode": 1}])
     runtime = PipelineDriver()
@@ -471,6 +488,37 @@ def test_scoped_stdlib_arrangement_uncaught_host_raised_exec_error_reports_scope
     )
     assert result.error is not None, "expected the uncaught scoped ExecError"
     assert result.error.type_name == "Std::ExecError"
+
+
+def test_scoped_stdlib_arrangement_bare_print_is_undefined_but_qualified_works(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """With the whole standard library wrapped in ``scope Std``, a bare
+    ``print`` call has no reachable declaration — only ``Std::print`` does.
+
+    A built-in call is classified only once its callee resolves to a
+    ``builtin def`` declaration, the same as any other reference; wrapping
+    the whole standard library in a named region takes the bare route away
+    from every name it declares, ``print`` included, leaving only the
+    region's own qualified path."""
+    from agm.agl import PipelineDriver
+    from agm.agl.modules.roots import RootSet
+
+    scoped_stdlib_root = _scoped_stdlib_root(tmp_path)
+    roots = RootSet(roots=frozenset({scoped_stdlib_root}))
+    runtime = PipelineDriver()
+
+    bare_result = runtime.run('print("hi")\n', roots=roots)
+    assert not bare_result.ok, "expected the bare 'print' call to be statically rejected"
+    assert bare_result.diagnostics, "expected at least one diagnostic"
+
+    qualified_result = runtime.run('Std::print("hi")\n', roots=roots)
+    assert list(qualified_result.diagnostics) == [], (
+        f"unexpected static diagnostics: "
+        f"{' | '.join(d.message for d in qualified_result.diagnostics)}"
+    )
+    assert qualified_result.error is None, f"unexpected error: {qualified_result.error}"
+    assert capsys.readouterr().out == "hi\n"
 
 
 def test_scoped_builtin_hierarchy_declared_in_the_entry_module_catches_a_host_raise(
@@ -523,6 +571,7 @@ def test_scoped_builtin_hierarchy_declared_in_the_entry_module_catches_a_host_ra
         "  catch ExecError as e =>\n"
         '    "caught"\n'
         "end Host\n"
+        "builtin def print[T](value: T) -> unit\n"
         'print(Host::run("false"))\n'
     )
 

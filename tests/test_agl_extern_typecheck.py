@@ -64,6 +64,27 @@ _CAPS = HostCapabilities(
 
 _TYPE_REJECTIONS_DIR = Path(__file__).resolve().parent / "agl" / "rejections" / "type"
 
+# ``check_extern``/``resolve_program_ast`` build a hand-crafted single-module
+# graph that never imports ``std/core`` (see
+# ``tests.agl.module_graph.resolve_and_check_program_ast``), so a bare
+# ``ask(...)`` call in one of these sources needs its own reachable
+# declaration: a bare built-in call is classified only once it resolves to a
+# ``builtin def``, exactly like any other reference.
+_ASK_BUILTIN_SOURCE = (
+    "builtin\n"
+    "enum ParsePolicy =\n"
+    "  | Abort\n"
+    "  | Retry(n: int)\n"
+    "\n"
+    "builtin def ask[T](\n"
+    "  prompt: text,\n"
+    "  agent: agent = null,\n"
+    '  format: text = "",\n'
+    "  strict_json: bool = false,\n"
+    "  on_parse_error: ParsePolicy = ParsePolicy::Abort,\n"
+    ") -> T\n"
+)
+
 
 def check_extern(source: str, capabilities: HostCapabilities | None = None) -> CheckedModule:
     """Parse + resolve (file-backed) + check *source*, returning the CheckedModule.
@@ -384,7 +405,7 @@ class TestExternCallSiteRecording:
 
     def test_generic_extern_and_builtin_inventory_preserves_source_order(self) -> None:
         cp = check_extern(
-            "extern def id[T](value: T) -> T\n"
+            _ASK_BUILTIN_SOURCE + "extern def id[T](value: T) -> T\n"
             "def choose[T](first: T, second: T) -> T = first\n"
             'let value: int = choose(ask("answer"), id(1))\n'
             "value"
@@ -405,7 +426,7 @@ class TestExternCallSiteRecording:
 
         resolved = resolve_program_ast(
             parse_program(
-                "extern def id[T](value: T) -> T\n"
+                _ASK_BUILTIN_SOURCE + "extern def id[T](value: T) -> T\n"
                 "extern def same[T](left: T, right: T) -> T\n"
                 "def choose[T](first: T, second: T) -> T = first\n"
                 'choose(id(same(?, fn(value: int) -> int => value)), ask("answer"))'
@@ -515,7 +536,7 @@ class TestExternCallSiteRecording:
             )
 
     def test_ask_exec_recording_unaffected_by_extern_presence(self) -> None:
-        cp = check_extern('extern def f(x: int) -> int\nask("hi")')
+        cp = check_extern(_ASK_BUILTIN_SOURCE + 'extern def f(x: int) -> int\nask("hi")')
         callees = [s.callee for s in cp.call_sites]
         assert callees == ["ask"]
 

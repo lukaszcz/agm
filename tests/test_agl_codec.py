@@ -42,6 +42,7 @@ from agm.agl.ir.contracts import (
 from agm.agl.ir.ids import NominalId
 from agm.agl.modules.ids import ENTRY_ID, ModuleId
 from agm.agl.modules.roots import RootSet
+from agm.agl.parser.parser import parse_program
 from agm.agl.runtime.agents import AgentFn, AgentRegistry
 from agm.agl.runtime.codec import JsonCodec, ParseResult, TextCodec
 from agm.agl.runtime.contract import OutputContract, materialize_contract, materialize_ir_contract
@@ -99,6 +100,38 @@ def _nid() -> int:
 
 def _sp() -> SourceSpan:
     return SourceSpan(1, 1, 1, 5, 0, 4)
+
+
+def _ask_builtin_items() -> tuple[Item, ...]:
+    """Real ``ParsePolicy``/``ask`` declarations, parsed once, for a bare ``ask(...)``.
+
+    ``_check_program_with_json`` builds a hand-crafted single-module program
+    that never imports ``std/core`` (see ``resolve_and_check_program_ast``),
+    so a bare ``ask(...)`` call needs its own reachable declaration in the
+    same program: a bare built-in call is classified only once it resolves to
+    a ``builtin def``, exactly like any other reference. Parsing the real
+    signatures (rather than hand-building the AST) keeps them trivially in
+    sync with ``std/core.agl`` and their canonical shape, which a ``builtin``
+    declaration is checked against. Node ids are seeded well above this
+    module's own ``_nid()`` counter to stay disjoint from every hand-built
+    node id in this file.
+    """
+    program = parse_program(
+        "builtin\n"
+        "enum ParsePolicy =\n"
+        "  | Abort\n"
+        "  | Retry(n: int)\n"
+        "\n"
+        "builtin def ask[T](\n"
+        "  prompt: text,\n"
+        "  agent: agent = null,\n"
+        '  format: text = "",\n'
+        "  strict_json: bool = false,\n"
+        "  on_parse_error: ParsePolicy = ParsePolicy::Abort,\n"
+        ") -> T\n",
+        start_id=500_000,
+    )
+    return program.body.items
 
 
 _ISSUE_TYPE, _ISSUE_TYPEDEF = record_type(
@@ -210,10 +243,14 @@ def _check_program_with_json(body: tuple[Item, ...]) -> CheckedModule:
     by this module's ``_let``/``_template``/... builders below, not parsed
     from source text, so there is no source string to hand to
     ``tests.agl.module_graph.resolve_and_check_entry`` (which only accepts
-    one).
+    one). That graph never imports ``std/core``, so ``_ask_builtin_items()``
+    is prepended to give this suite's bare ``ask(...)`` calls (built by
+    ``_ask_call``) a reachable declaration.
     """
     program = ast.Program(
-        body=ast.Block(items=_ensure_expr_tail(body), span=_sp(), node_id=_nid()),
+        body=ast.Block(
+            items=_ask_builtin_items() + _ensure_expr_tail(body), span=_sp(), node_id=_nid()
+        ),
         span=_sp(),
         node_id=_nid(),
     )

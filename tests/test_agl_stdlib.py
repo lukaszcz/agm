@@ -59,6 +59,20 @@ def test_no_stdlib_disables_default_open_import() -> None:
         resolve_program(graph)
 
 
+def test_no_stdlib_reports_bare_print_as_undefined() -> None:
+    """A bare built-in call has no reachable declaration once the standard
+    library is switched off — it is an ordinary undefined-name error, not a
+    silently-accepted host dispatch."""
+    graph = load_graph(
+        'print("hi")\n',
+        entry_path=None,
+        roots=_ROOTS,
+        default_stdlib=False,
+    )
+    with pytest.raises(AglScopeError, match="'print' is not defined"):
+        resolve_program(graph)
+
+
 def test_no_stdlib_still_allows_explicit_std_core_import() -> None:
     _check(
         "open import std/core\nlet x: Option[int] = Some(value = 1)\nx\n",
@@ -68,7 +82,7 @@ def test_no_stdlib_still_allows_explicit_std_core_import() -> None:
 
 def test_shipped_stdlib_modules_load_without_the_default_prelude() -> None:
     """A shipped module may not lean on the prelude the user is free to switch off."""
-    _check("import std/config\nprint(std/config::runner)\n", default_stdlib=False)
+    _check("import std/config\nstd/config::runner\n", default_stdlib=False)
 
 
 def test_unknown_builtin_function_is_rejected() -> None:

@@ -1655,7 +1655,9 @@ class TestBuiltinCallClassification:
         assert isinstance(let_node.value, Call)
         assert r.builtin_calls[let_node.value.node_id] == BuiltinKind.ASK_REQUEST
 
-    def test_ask_request_callee_not_in_resolution(self) -> None:
+    def test_ask_request_callee_resolves_to_its_builtin_declaration(self) -> None:
+        """A bare ``ask-request`` callee resolves like any other reference —
+        to std/core's own ``builtin def`` — before the call is classified."""
         r = parse_and_resolve('let x = ask-request::[text]("Q")\nx')
         let_node = r.program.body.items[0]
         assert isinstance(let_node, LetDecl)
@@ -1663,7 +1665,9 @@ class TestBuiltinCallClassification:
         assert isinstance(call, Call)
         callee = call.callee
         assert isinstance(callee, VarRef)
-        assert callee.node_id not in r.resolution
+        assert callee.node_id in r.resolution
+        assert r.resolution[callee.node_id].kind is BinderKind.function_binding
+        assert r.resolution[callee.node_id].name == "ask-request"
 
     def test_ask_request_reserved_as_value(self) -> None:
         # ``ask-request`` is a reserved contextual keyword: a bare reference
@@ -1695,15 +1699,18 @@ class TestBuiltinCallClassification:
         assert call.callee.node_id in r.resolution
         assert r.resolution[call.callee.node_id].name == "f"
 
-    def test_print_call_callee_not_in_resolution(self) -> None:
-        """The callee VarRef of a built-in call is NOT in the resolution table."""
+    def test_print_call_callee_resolves_to_its_builtin_declaration(self) -> None:
+        """The callee VarRef of a built-in call resolves like any other
+        reference — to std/core's own ``builtin def print`` — before the call
+        is classified in ``builtin_calls``."""
         r = parse_and_resolve("let x = 1\nprint x")
         call_item = r.program.body.items[1]
         assert isinstance(call_item, Call)
-        # Built-in callee VarRef should not be resolved as a binding
         callee = call_item.callee
         assert isinstance(callee, VarRef)
-        assert callee.node_id not in r.resolution
+        assert callee.node_id in r.resolution
+        assert r.resolution[callee.node_id].kind is BinderKind.function_binding
+        assert r.resolution[callee.node_id].name == "print"
 
     def test_print_positional_arg_resolved(self) -> None:
         """The argument to print IS resolved."""

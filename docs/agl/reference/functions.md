@@ -128,6 +128,12 @@ match a recognized built-in exactly. This form is used by `std/core`; ordinary
 programs normally call those declarations through the default standard-library
 import instead of redeclaring them.
 
+A call to a built-in name resolves exactly like a call to any other name: the
+callee must reach a `builtin def` declaration — bare through the standard
+library's default import or a program's own declaration, or qualified through
+its declaring path — and a name with no such declaration in scope is an
+ordinary undefined-name error, not a host dispatch.
+
 A built-in's bare name — whether it names a `builtin def` or a `builtin
 record`/`enum`/`exception` — is one host identity shared across the whole
 program: it may be declared only once, whatever its scope path or declaring

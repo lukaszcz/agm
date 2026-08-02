@@ -364,8 +364,21 @@ class EntryPipeline:
 
         Retention keeps each entry's declarations as written, so a retained
         wildcard is re-expanded here against the current roots and picks up
-        modules added since. Root and region-scoped imports share one
-        chronological replacement decision per resolved module identity.
+        modules added since. Root imports and region-scoped imports at the
+        same region path each keep their own chronological replacement
+        decision -- see ``_retained_preamble``.
+
+        The final item order is [retained root imports, this entry's own root
+        import/export decls, retained opens/regions, this entry's remaining
+        items]. This entry's own root header decls are hoisted ahead of the
+        retained opens/regions -- rather than left in their original,
+        already-header-legal position within the entry -- because a retained
+        region item would otherwise land before them, and the header rule
+        ("import and export declarations must appear before any other
+        declarations in a module or scope region") applies to the whole
+        concatenated root sequence the pipeline resolves, not just to what
+        the entry wrote. A root import/export is module-wide and
+        order-independent among headers, so hoisting it is semantics-preserving.
         """
         from agm.agl.syntax.nodes import ImportDecl
 
@@ -379,13 +392,38 @@ class EntryPipeline:
         import_preamble, open_preamble, next_start_id = self._retained_preamble(
             expanded_imports, entry_opens, roots, next_start_id
         )
-        preamble: list[Item] = [*import_preamble, *open_preamble]
+        entry_headers, entry_rest = self._partition_entry_root_headers(expanded.body.items)
+        preamble: list[Item] = [*import_preamble, *entry_headers, *open_preamble]
+        rest_program = (
+            expanded if not entry_headers else self._replace_body_items(expanded, entry_rest)
+        )
         return (
-            self._prepend_items(expanded, preamble),
+            self._prepend_items(rest_program, preamble),
             next_start_id,
             entry_imports,
             entry_opens,
         )
+
+    @staticmethod
+    def _partition_entry_root_headers(items: tuple[Item, ...]) -> tuple[list[Item], list[Item]]:
+        """Split *items* into this entry's own root header decls and everything else.
+
+        A root ``import``/``export`` (empty ``scope_path``) is the entry's
+        own header contribution, distinct from the *retained* root imports
+        already folded into ``import_preamble`` -- this partition finds the
+        current entry's, so ``_prepare_entry_program`` can hoist them ahead
+        of retained opens/regions.
+        """
+        from agm.agl.syntax.nodes import ExportDecl, ImportDecl
+
+        headers: list[Item] = []
+        rest: list[Item] = []
+        for item in items:
+            if isinstance(item, (ImportDecl, ExportDecl)) and not item.scope_path:
+                headers.append(item)
+            else:
+                rest.append(item)
+        return headers, rest
 
     @staticmethod
     def _expand_entry_wildcards(
@@ -427,13 +465,23 @@ class EntryPipeline:
     @staticmethod
     def _prepend_items(program: Program, preamble: list[Item]) -> Program:
         """Prepend retained header items to *program*'s body."""
-        from agm.agl.syntax.nodes import Block, Program
-
         if not preamble:
             return program
+        return EntryPipeline._replace_body_items(program, [*preamble, *program.body.items])
+
+    @staticmethod
+    def _replace_body_items(program: Program, items: list[Item]) -> Program:
+        """Rebuild *program* with its body's item sequence replaced by *items*.
+
+        Preserves the ``Program``/``Block`` node ids and spans exactly;
+        callers that reorder or filter a program's root items -- rather than
+        merely prepending, which is ``_prepend_items`` -- share this rebuild.
+        """
+        from agm.agl.syntax.nodes import Block, Program
+
         return Program(
             body=Block(
-                items=(*preamble, *program.body.items),
+                items=tuple(items),
                 span=program.body.span,
                 node_id=program.body.node_id,
             ),
@@ -671,17 +719,20 @@ class EntryPipeline:
         """Expand retained entries and keep the newest import generation per module.
 
         Retained wildcards are re-expanded against the current roots, so a
-        module added since the wildcard was written is imported now. Root and
-        region-scoped imports participate in the same chronological generations:
-        every declaration for a module in the newest entry that names it is
-        retained, while all older root or scoped declarations for that module
-        are removed. Scope ``open`` declarations are not imports and remain
-        cumulative.
+        module added since the wildcard was written is imported now. A root
+        import and a region-scoped import at some region path each own an
+        independent chronological generation per module: every declaration
+        for a module, at a given region path, in the newest entry that names
+        it there is retained, while older declarations for that same module
+        at that same region path are removed. An import at one region path
+        never replaces a declaration at a different one -- in particular a
+        region-scoped import never replaces a root import, or vice versa.
+        Scope ``open`` declarations are not imports and remain cumulative.
         """
         generations: list[
             tuple[list[ImportDecl], tuple[OpenDecl | ImportDecl | ScopeRegion, ...]]
         ] = []
-        latest_generation: dict[tuple[str, ...], int] = {}
+        latest_generation: dict[tuple[tuple[str, ...], tuple[str, ...]], int] = {}
         for retained_root_decls, scoped_items in zip(
             self._ctx._accumulated_imports, self._ctx._accumulated_opens, strict=True
         ):
@@ -694,21 +745,28 @@ class EntryPipeline:
             index = len(generations)
             generations.append((expanded_root_decls, expanded_scoped))
             for decl in (*expanded_root_decls, *self._scoped_import_decls(expanded_scoped)):
-                latest_generation[tuple(decl.module_path)] = index
+                latest_generation[self._generation_key(decl)] = index
 
         # *entry_imports* arrives already expanded; only the scoped ones still
-        # need their module identities resolved.
-        current_decls = (*entry_imports, *self._scoped_import_decls(entry_opens))
+        # need their module identities resolved. Wildcard expansion has one
+        # definition: the node ids minted here are discarded with the
+        # rebuilt declarations, since only each declaration's region path
+        # and module identity are wanted.
+        current_decls, _ = self._expand_decls(
+            (*entry_imports, *self._scoped_import_decls(entry_opens)), roots, 0
+        )
         current_index = len(generations)
         latest_generation.update(
-            (path, current_index) for path in self._module_paths(current_decls, roots)
+            (self._generation_key(decl), current_index) for decl in current_decls
         )
 
         retained_root: list[ImportDecl] = []
         retained_scoped: list[OpenDecl | ImportDecl | ScopeRegion] = []
         for index, (root_decls, scoped_items) in enumerate(generations):
             retained_root.extend(
-                decl for decl in root_decls if latest_generation[tuple(decl.module_path)] == index
+                decl
+                for decl in root_decls
+                if latest_generation[self._generation_key(decl)] == index
             )
             retained_scoped.extend(
                 self._filter_retained_scoped_imports(
@@ -720,15 +778,16 @@ class EntryPipeline:
         return retained_root, retained_scoped, next_start_id
 
     @staticmethod
-    def _module_paths(decls: tuple[ImportDecl, ...], roots: RootSet) -> frozenset[tuple[str, ...]]:
-        """Return exact module identities named by raw import declarations.
+    def _generation_key(decl: ImportDecl) -> tuple[tuple[str, ...], tuple[str, ...]]:
+        """Return *decl*'s replacement-generation key: its region path and module identity.
 
-        Wildcard expansion has one definition: the node ids minted here are
-        discarded with the rebuilt declarations, since only the identities
-        are wanted.
+        A root import (empty ``scope_path``) and a region-scoped import at
+        some region path each own an independent chronological replacement
+        decision per module -- keying only on module identity would let an
+        import at one region path replace an unrelated declaration at
+        another region path, or at the root.
         """
-        expanded, _ = EntryPipeline._expand_decls(decls, roots, 0)
-        return frozenset(tuple(decl.module_path) for decl in expanded)
+        return (tuple(segment.name for segment in decl.scope_path), tuple(decl.module_path))
 
     @staticmethod
     def _expand_decls(
@@ -851,12 +910,13 @@ class EntryPipeline:
     def _filter_retained_scoped_imports(
         items: tuple[OpenDecl | ImportDecl | ScopeRegion, ...],
         generation: int,
-        latest_generation: Mapping[tuple[str, ...], int],
+        latest_generation: Mapping[tuple[tuple[str, ...], tuple[str, ...]], int],
     ) -> tuple[OpenDecl | ImportDecl | ScopeRegion, ...]:
-        """Filter scoped imports by module while retaining cumulative scope opens."""
+        """Filter scoped imports by region path and module, keeping cumulative scope opens."""
 
         def keep_newest(decl: ImportDecl) -> tuple[ImportDecl, ...]:
-            return (decl,) if latest_generation[tuple(decl.module_path)] == generation else ()
+            key = EntryPipeline._generation_key(decl)
+            return (decl,) if latest_generation[key] == generation else ()
 
         return EntryPipeline._rewrite_scoped_imports(items, keep_newest)
 

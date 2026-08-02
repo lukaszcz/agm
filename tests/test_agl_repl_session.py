@@ -42,6 +42,7 @@ from agm.agl.semantics.values import (
     TextValue,
     UnitValue,
 )
+from tests._process_helpers import FakeShell
 
 # ---------------------------------------------------------------------------
 # Fake agents
@@ -940,6 +941,78 @@ class TestStdlib:
             assert result.ok, (name, result.diagnostics)
             assert result.value_type is not None
             assert result.value_type.name == name
+
+
+# ---------------------------------------------------------------------------
+# Builtin identity across REPL entries
+# ---------------------------------------------------------------------------
+
+_EXEC_RESULT_FIELDS = "  stdout: text\n  exit_code: int\n  stderr: text\n  timed_out: bool\n"
+
+
+class TestBuiltinIdentityAcrossEntries:
+    """A REPL session's shared ``TypeTable`` accumulates ``builtin`` declarations
+    across entries even though each entry re-checks only its own text. Both the
+    link image that mints host values and the bare-name scan that types an
+    unannotated ``exec()`` must track that accumulation instead of seeing only
+    the current entry (which loses an earlier entry's declaration) or the
+    first-ever entry (which keeps a stale one alive over a later redeclaration).
+    """
+
+    def test_host_minted_value_keeps_the_scoped_identity_declared_in_an_earlier_entry(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """A value minted for a ``builtin`` type declared in one entry keeps that
+        entry's own scoped identity when a LATER entry -- which re-checks only
+        its own text -- mints a value of that type; it must not fall back to the
+        shipped standard library's identity just because the later entry itself
+        declares nothing."""
+        s = ReplSession(default_stdlib=False)
+        declare = s.eval_entry(
+            "scope Stdlib\n"
+            f"builtin record ExecResult\n{_EXEC_RESULT_FIELDS}"
+            "builtin def print[T](value: T) -> unit\n"
+            "builtin def exec(command: text) -> ExecResult\n"
+            "end Stdlib\n"
+        )
+        assert declare.ok, declare.diagnostics
+
+        shell = FakeShell([{"command": "echo hey", "stdout": "hey"}])
+        with patch("agm.core.process.run_capture_result", side_effect=shell):
+            call = s.eval_entry('Stdlib::print(Stdlib::exec("echo hey"))')
+        shell.assert_complete()
+
+        assert call.ok, call.diagnostics
+        assert capsys.readouterr().out.strip() == (
+            'Stdlib::ExecResult(stdout = "hey", exit_code = 0, stderr = "", timed_out = false)'
+        )
+
+    def test_unannotated_exec_types_as_the_most_recently_declared_builtin(self) -> None:
+        """The bare-name scan behind a program's own ``ExecResult`` identity must
+        resolve to the LIVE (most recently registered) declaration, not the
+        oldest surviving one, when two entries each declare their own scoped
+        ``builtin record ExecResult``."""
+        s = ReplSession(default_stdlib=False)
+        first = s.eval_entry(
+            "scope A\n"
+            f"builtin record ExecResult\n{_EXEC_RESULT_FIELDS}"
+            "builtin def exec(command: text) -> ExecResult\n"
+            "end A\n"
+        )
+        second = s.eval_entry(
+            "scope B\n"
+            f"builtin record ExecResult\n{_EXEC_RESULT_FIELDS}"
+            "builtin def exec(command: text) -> ExecResult\n"
+            "end B\n"
+        )
+        assert first.ok, first.diagnostics
+        assert second.ok, second.diagnostics
+
+        result = s.eval_entry('B::exec("echo hi")', check_only=True)
+
+        assert result.ok, result.diagnostics
+        assert isinstance(result.value_type, RecordType)
+        assert result.value_type.scope_path == ("B",)
 
 
 # ---------------------------------------------------------------------------
@@ -3760,6 +3833,61 @@ class TestImports:
 
         assert r.ok, r.diagnostics
         assert _int(r.value) == 7
+
+    def test_root_import_after_retained_scope_region_is_not_rejected(self, tmp_path: Path) -> None:
+        """A retained region's preamble ordering must not gate a later root import.
+
+        Regression: the preamble used to place retained scope regions before
+        this entry's own root ``import``, which the header rule ("import and
+        export declarations must appear before any other declarations")
+        then rejected -- even though the entry's import is legitimately at
+        its own root.
+        """
+        (tmp_path / "mylib.agl").write_text("def add(a: int, b: int) -> int = a + b\n")
+        (tmp_path / "other.agl").write_text("def mul(a: int, b: int) -> int = a * b\n")
+        s = self._make_session_with_root(tmp_path)
+
+        assert s.eval_entry("scope A\nopen import mylib\nend A").ok
+
+        r = s.eval_entry("import other\nother::mul(2, 3)")
+
+        assert r.ok, r.diagnostics
+        assert _int(r.value) == 6
+
+    def test_root_import_after_retained_purely_local_scope_region_is_not_rejected(
+        self, tmp_path: Path
+    ) -> None:
+        """Same header-ordering regression, but the retained region has no import at all."""
+        (tmp_path / "other.agl").write_text("def val() -> int = 5\n")
+        s = self._make_session_with_root(tmp_path)
+
+        assert s.eval_entry("scope Src\ndef v() -> int = 1\nend Src\nscope T\nopen Src\nend T").ok
+
+        r = s.eval_entry("import other\nother::val()")
+
+        assert r.ok, r.diagnostics
+        assert _int(r.value) == 5
+
+    def test_root_open_import_survives_a_later_region_scoped_import_of_the_same_module(
+        self, tmp_path: Path
+    ) -> None:
+        """A region-scoped import must not revoke an earlier root import's bare names.
+
+        Regression: retention keyed the replacement decision on module identity
+        alone, so a region-scoped ``import mylib`` clobbered the generation
+        recorded for the earlier ROOT ``open import mylib``, silently removing
+        its bare names from later entries.
+        """
+        (tmp_path / "mylib.agl").write_text("def add(a: int, b: int) -> int = a + b\n")
+        s = self._make_session_with_root(tmp_path)
+
+        assert s.eval_entry("open import mylib\nadd(1, 2)").ok
+        assert s.eval_entry("scope A\nimport mylib\nend A").ok
+
+        r = s.eval_entry("add(1, 2)")
+
+        assert r.ok, r.diagnostics
+        assert _int(r.value) == 3
 
 
 # ---------------------------------------------------------------------------

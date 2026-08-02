@@ -570,16 +570,23 @@ class TypeTable:
         return tuple(self._defs.values())
 
     def builtin_declaration(self, name: str) -> TypeDef | None:
-        """Return the registered ``builtin`` declaration named *name*, if any.
+        """Return the live registered ``builtin`` declaration named *name*, if any.
 
         Returns ``None`` for a program that declares no ``builtin`` of that
         name — the caller falls back to the seeded canonical shape, which is
         not itself a declaration.
+
+        ``validate_builtin_declaration_uniqueness`` allows at most one such
+        declaration per compile unit, so only REPL accumulation — ``_defs``
+        outlives the entry that filled it — can leave several here. The last
+        one registered is the one the current source declares; ``_defs``
+        never moves an existing key, so a forward scan's last match is it.
         """
+        result: TypeDef | None = None
         for typedef in self._defs.values():
             if typedef.is_builtin and typedef.name == name:
-                return typedef
-        return None
+                result = typedef
+        return result
 
     def nominal_reaches_non_data(self, handle: RecordType | EnumType | ExceptionType) -> bool:
         """Return ``True`` if a non-data type is reachable from *handle* (cycle-safe).

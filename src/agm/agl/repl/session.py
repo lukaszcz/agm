@@ -595,7 +595,7 @@ class ReplSession:
     ) -> tuple[EntryResult | None, dict[str, Value], str | None, dict[str, object]]:
         """Validate and convert config-backed params without mutating session state."""
         from agm.agl.runtime.params import convert_param_value
-        from agm.agl.syntax.nodes import ParamDecl, ProgramDecl, param_external_key, static_items
+        from agm.agl.syntax.nodes import ParamDecl, ProgramDecl, scoped_public_name, static_items
 
         def reject(message: str, span: "SourceSpan") -> EntryResult:
             return self._fail([diagnostic_from_span(message, span)], warnings)
@@ -625,7 +625,7 @@ class ReplSession:
                         else {}
                     )
             elif isinstance(item, ParamDecl):
-                external_name = param_external_key(item)
+                external_name = scoped_public_name(item.scope_path, item.name)
                 raw_config = effective_config.get(external_name)
                 if raw_config is not None:
                     declared_type = checked.type_env.get_binding_type(item.node_id)
@@ -717,9 +717,9 @@ class ReplSession:
             RecordDef,
             TypeAlias,
             VarDecl,
-            param_external_key,
             pattern_binder_candidates,
             resolved_public_name,
+            scoped_public_name,
             static_items,
         )
         from agm.agl.syntax.types import render_type_expr
@@ -865,7 +865,7 @@ class ReplSession:
         for name, ref in promotion_bindings.items():
             if ref.decl_node_id not in promoted_binding_node_ids:
                 continue
-            displaced_param_keys.add(resolved_public_name((), name))
+            displaced_param_keys.add(name)
             self._session_scope.bindings[name] = ref
         installed = (
             self._installed_report(
@@ -978,7 +978,10 @@ class ReplSession:
             if isinstance(item, ParamDecl) and _is_promoted(item.node_id):
                 typ = checked.type_env.get_binding_type(item.node_id)
                 assert typ is not None
-                self._declared_params[param_external_key(item)] = (typ, item.node_id)
+                self._declared_params[scoped_public_name(item.scope_path, item.name)] = (
+                    typ,
+                    item.node_id,
+                )
         if entry_program_name is not None and not partial:
             self._program_name = entry_program_name
             self._active_config = entry_active_config

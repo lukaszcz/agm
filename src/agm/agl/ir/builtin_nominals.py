@@ -48,6 +48,24 @@ class BuiltinNominals:
         declared = self.declared.get(name)
         return declared if declared is not None else NominalId(STD_CORE_ID, name)
 
+    def accumulate(self, update: "BuiltinNominals") -> "BuiltinNominals":
+        """Return this table with *update*'s declarations folded in, *update* winning.
+
+        A REPL session lowers one compile unit (entry) at a time, but reuses
+        one link image across the whole session: an earlier entry's
+        ``builtin`` declaration must stay live for a later entry that does
+        not redeclare it, so the link image ACCUMULATES declarations across
+        calls rather than being replaced wholesale by each call's own
+        (necessarily partial) table. When the same name is declared again —
+        e.g. a later entry redeclares it at a different scope path — *update*
+        is the newer one and wins.
+        """
+        if not update.declared:
+            return self
+        merged = dict(self.declared)
+        merged.update(update.declared)
+        return BuiltinNominals(declared=types.MappingProxyType(merged))
+
 
 #: The table for a program with no ``builtin`` declarations of its own: every
 #: name resolves to the shipped standard library's own identity.

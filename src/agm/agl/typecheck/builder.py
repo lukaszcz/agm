@@ -45,7 +45,7 @@ from __future__ import annotations
 from collections.abc import Iterator, Mapping
 from dataclasses import replace
 
-from agm.agl.modules.ids import ENTRY_ID, STD_CORE_ID, ModuleId, spell_scope_path
+from agm.agl.modules.ids import ENTRY_ID, STD_CORE_ID, ModuleId
 from agm.agl.semantics.type_table import (
     BUILTIN_EXCEPTION_TYPE_DEFS,
     BUILTIN_PRELUDE_TYPE_DEFS,
@@ -69,6 +69,7 @@ from agm.agl.syntax.nodes import (
     Program,
     RecordDef,
     TypeAlias,
+    scoped_public_name,
     static_type_items,
 )
 from agm.agl.syntax.spans import SourceSpan
@@ -141,8 +142,7 @@ class _TypeBuilder:
         """Yield type declarations with their scope path included in their identity."""
         for item in static_type_items(items):
             if item.scope_path:
-                path = tuple(segment.name for segment in item.scope_path)
-                yield replace(item, name=spell_scope_path((*path, item.name)))
+                yield replace(item, name=scoped_public_name(item.scope_path, item.name))
             else:
                 yield item
 

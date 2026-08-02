@@ -90,7 +90,7 @@ region.
   entry programs and ordinary libraries cannot declare them. A `builtin var`
   may be a member of a named scope region inside `std/config`, read and
   written through its full path, exactly like any other scoped member.
-- **`infix` declarations** — root-only parser declarations.
+- **`infix` declarations** — root-only operator-fixity declarations.
 - **Function declarations** — ordinary `def`s and body-less companion-backed
   `extern def`s. They may be declared at the root or in named scope regions.
   Root and same-scope `def`s may refer to declarations that appear later,

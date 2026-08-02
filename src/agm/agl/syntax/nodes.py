@@ -1246,15 +1246,6 @@ def resolved_public_name(scope_path: tuple[str, ...], name: str) -> str:
     return spell_scope_path((*scope_path, name))
 
 
-def param_external_key(param: ParamDecl) -> str:
-    """Return *param*'s external key: the CLI flag and config-table spelling.
-
-    Shares its spelling with the public name of a scoped ``let``/``var``
-    binding; see ``scoped_public_name``.
-    """
-    return scoped_public_name(param.scope_path, param.name)
-
-
 @dataclass(frozen=True, slots=True)
 class ProgramDecl:
     """``program NAME`` declaration used for host config lookup."""

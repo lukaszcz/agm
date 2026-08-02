@@ -63,8 +63,23 @@ from agm.agl.scope.symbols import ConstructorRef, ScopeNode
 from agm.agl.syntax.nodes import ExportDecl, ImportDecl, Program, static_items
 from agm.agl.syntax.spans import SourceId
 from agm.agl.typecheck import CheckedModule
+from agm.agl.typecheck.checker import _check_prepared_module
 from agm.agl.typecheck.env import TypeEnvironment
 from agm.agl.typecheck.program import check_program
+
+# A general-purpose capability set (default agent, shell exec, json/text
+# codecs) for a test that does not care which capabilities back its checked
+# module. Used as :func:`check_resolved`'s default so most hand-built-AST
+# tests never need to construct one themselves.
+_DEFAULT_CAPABILITIES = HostCapabilities(
+    agent_names=frozenset(),
+    has_default_agent=True,
+    supports_shell_exec=True,
+    codec_kinds={
+        "text": frozenset({"text"}),
+        "json": frozenset({"json", "record", "enum", "array", "dict", "int", "decimal", "bool"}),
+    },
+)
 
 _REPO_STDLIB_ROOT = Path(__file__).resolve().parents[2] / "stdlib"
 
@@ -243,6 +258,46 @@ def resolve_and_check_entry(
     checked = checked_program.modules[graph.entry_id]
     stripped_resolved = _without_synthetic_import(checked.resolved, import_node_id)
     return dataclasses.replace(checked, resolved=stripped_resolved)
+
+
+def check_resolved(
+    resolved: ModuleResolution,
+    capabilities: HostCapabilities | None = None,
+    *,
+    seed_env: TypeEnvironment | None = None,
+) -> CheckedModule:
+    """Type-check an already-built ``ModuleResolution`` via ``check_program``'s
+    internal per-module entry point.
+
+    For a test that hand-builds (or ``dataclasses.replace``-mutates) a
+    ``ModuleResolution`` directly — because the property under test is a
+    defensive checker guard unreachable from real source, exercises
+    deliberately corrupted resolver output, or needs the intermediate
+    ``ModuleResolution`` object itself (asserting on it before checking, or
+    re-checking it more than once) — there is no source text to hand to
+    :func:`resolve_and_check_entry`. This calls ``_check_prepared_module``
+    (what ``check_program`` itself drives per module) directly: env setup,
+    then ``_check_prepared_module``. *capabilities* defaults to a
+    general-purpose capability set when omitted; *seed_env* seeds the
+    environment before checking, mirroring ``resolve_and_check_entry``'s
+    ``seed_env``.
+
+    ``check_program`` validates declaration collisions
+    (``validate_builtin_declaration_uniqueness`` /
+    ``validate_method_declaration_collisions``) once, over the whole program,
+    outside of any single module's ``_check_prepared_module`` call — this
+    per-module seam never runs that validation, exactly like production. A
+    test exercising either validator needs a real module graph and belongs
+    behind :func:`resolve_and_check_entry`, not this seam.
+    """
+    if capabilities is None:
+        capabilities = _DEFAULT_CAPABILITIES
+    env = TypeEnvironment(
+        local_scope_paths=frozenset(resolved.scope_nodes), scope_nodes=resolved.scope_nodes
+    )
+    if seed_env is not None:
+        env.seed_from(seed_env)
+    return _check_prepared_module(resolved, capabilities, env=env)
 
 
 def _single_module_graph(program: Program, *, origin_path: Path | None) -> ModuleGraph:

@@ -708,7 +708,7 @@ class PipelineDriver:
         lowering by :meth:`run_prepared`.
         """
         from agm.agl.modules.ids import ENTRY_ID
-        from agm.agl.syntax.nodes import ParamDecl, param_external_key, static_items
+        from agm.agl.syntax.nodes import ParamDecl, scoped_public_name, static_items
 
         if prepared.resolved is None:
             return ParamDiscovery(
@@ -773,7 +773,7 @@ class PipelineDriver:
                 assert param_type is not None, (
                     f"Param {item.name!r} has no recorded binding type; checker invariant violated."
                 )
-                external_name = param_external_key(item)
+                external_name = scoped_public_name(item.scope_path, item.name)
                 infos.append(
                     ParamDeclInfo(
                         name=external_name,

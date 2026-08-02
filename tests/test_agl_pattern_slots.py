@@ -23,36 +23,12 @@ from agm.agl.syntax import (
     pattern_binder_candidates,
     pattern_binding_node_ids,
 )
-from agm.agl.typecheck import AglTypeError, CheckedModule
-from agm.agl.typecheck.checker import _check_prepared_module
-from agm.agl.typecheck.env import TypeEnvironment
-from tests.agl.module_graph import resolve_and_check_entry, resolve_entry
+from agm.agl.typecheck import AglTypeError
+from tests.agl.module_graph import check_resolved, resolve_and_check_entry, resolve_entry
 
 
 def _resolve(source: str) -> ModuleResolution:
     return resolve_entry(source)
-
-
-def _check_resolved(resolved: ModuleResolution, capabilities: HostCapabilities) -> CheckedModule:
-    """Type-check an already-built ``ModuleResolution`` via check_program's
-    internal per-module entry point.
-
-    For tests that need the intermediate ``ModuleResolution`` object itself
-    (asserting on it before checking, or re-checking it more than once) there
-    is no source text to hand to ``resolve_and_check_entry``. This calls
-    ``_check_prepared_module`` (what ``check_program`` itself drives per
-    module) directly: env setup, then ``_check_prepared_module`` with
-    declaration-collision validation on.
-    """
-    env = TypeEnvironment(
-        local_scope_paths=frozenset(resolved.scope_nodes), scope_nodes=resolved.scope_nodes
-    )
-    return _check_prepared_module(
-        resolved,
-        capabilities,
-        env=env,
-        validate_declaration_collisions=True,
-    )
 
 
 def _run(source: str) -> tuple[bool, str, list[str]]:
@@ -452,9 +428,9 @@ def test_checking_leaves_scope_output_untouched_and_stays_repeatable() -> None:
     before_constructor_refs = dict(resolved.constructor_refs)
 
     with pytest.raises(AglTypeError) as first:
-        _check_resolved(resolved, HostCapabilities())
+        check_resolved(resolved, HostCapabilities())
     with pytest.raises(AglTypeError) as second:
-        _check_resolved(resolved, HostCapabilities())
+        check_resolved(resolved, HostCapabilities())
 
     assert str(first.value) == str(second.value)
     assert resolved.resolution == before_resolution

@@ -56,9 +56,16 @@ def lower_program(
     # the IR self-check over its own output below.
     checked = compiled.checked
     link = _link if _link is not None else _LinkState()
-    # Recomputed on every call (including a reused REPL link) so a newly
-    # checked module's ``builtin`` declarations are always reflected.
-    link.builtin_nominals = builtin_nominals_from_declarations(checked.modules)
+    # Folded into the link's accumulated table rather than replacing it
+    # outright: a reused REPL link persists across entries even though each
+    # call re-checks only the CURRENT compile unit's modules, so an earlier
+    # entry's ``builtin`` declaration must stay live for a later entry that
+    # does not redeclare it. The current compile unit's own declarations win
+    # on a name collision (e.g. a later entry redeclaring the same name at a
+    # different scope path).
+    link.builtin_nominals = link.builtin_nominals.accumulate(
+        builtin_nominals_from_declarations(checked.modules)
+    )
 
     # Every per-module TypeEnvironment shares one TypeTable instance (built
     # during checking); pick the entry module's env to reach it.

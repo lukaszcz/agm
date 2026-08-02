@@ -125,7 +125,6 @@ from agm.agl.typecheck import (
     assert_checked_module_closed,
 )
 from agm.agl.typecheck.builder import _TypeBuilder
-from agm.agl.typecheck.checker import _check_prepared_module
 from agm.agl.typecheck.env import (
     ConstructorSignature,
     GenericAliasDef,
@@ -134,7 +133,7 @@ from agm.agl.typecheck.env import (
 )
 from agm.agl.typecheck.function_inference import resolve_function_header
 from tests._agl_helpers import all_node_ids
-from tests.agl.module_graph import resolve_and_check_entry, resolve_entry
+from tests.agl.module_graph import check_resolved, resolve_and_check_entry, resolve_entry
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -207,38 +206,6 @@ def reject_type(
     with pytest.raises(AglTypeError) as exc_info:
         parse_resolve_check(source, capabilities, default_stdlib=default_stdlib)
     return exc_info.value
-
-
-def _check_resolved(
-    resolved: _ModuleResolution,
-    capabilities: HostCapabilities | None = None,
-    *,
-    seed_env: TypeEnvironment | None = None,
-) -> CheckedModule:
-    """Type-check an already-built ``ModuleResolution`` via check_program's
-    internal per-module entry point.
-
-    For tests that hand-build (or ``dataclasses.replace``-mutate) a
-    ``ModuleResolution`` directly — because the property under test is a
-    defensive checker guard unreachable from real source, or exercises
-    deliberately corrupted resolver output — there is no source text to hand
-    to ``resolve_and_check_entry``. This calls ``_check_prepared_module``
-    (what ``check_program`` itself drives per module) directly: env setup,
-    then ``_check_prepared_module`` with declaration-collision validation on.
-    """
-    if capabilities is None:
-        capabilities = default_capabilities()
-    env = TypeEnvironment(
-        local_scope_paths=frozenset(resolved.scope_nodes), scope_nodes=resolved.scope_nodes
-    )
-    if seed_env is not None:
-        env.seed_from(seed_env)
-    return _check_prepared_module(
-        resolved,
-        capabilities,
-        env=env,
-        validate_declaration_collisions=True,
-    )
 
 
 def reject_any(
@@ -4173,7 +4140,7 @@ class TestPartialDeclaredCalls:
             root_scope=ScopeNode(node_id=program.node_id),
         )
         with pytest.raises(AglTypeError, match="callee"):
-            _check_resolved(resolved)
+            check_resolved(resolved)
 
     def test_placeholder_on_non_function_value_call_uses_existing_callee_error(self) -> None:
         err = reject_type("let x = 1\nx(?)")
@@ -4191,7 +4158,7 @@ class TestPartialDeclaredCalls:
             root_scope=ScopeNode(node_id=program.node_id),
         )
         with pytest.raises(AssertionError, match="placeholder"):
-            _check_resolved(resolved)
+            check_resolved(resolved)
 
 
 class TestPartialConstructorAndValueCalls:
@@ -4812,7 +4779,7 @@ class TestRaise:
             root_scope=ScopeNode(node_id=prog.node_id),
         )
         with pytest.raises(AglTypeError, match="return"):
-            _check_resolved(resolved)
+            check_resolved(resolved)
 
 
 # ---------------------------------------------------------------------------
@@ -5865,7 +5832,7 @@ class TestConstructorRefDispatch:
             "    0\n"
             "  | packet(_) => 0"
         )
-        # Checked via _check_resolved (not resolve_and_check_entry) so this test
+        # Checked via check_resolved (not resolve_and_check_entry) so this test
         # can assert `resolved` itself — the exact object the failed check ran
         # against — is untouched by the failure.
         resolved = resolve_entry(source)
@@ -5878,7 +5845,7 @@ class TestConstructorRefDispatch:
         provisional_ref = resolved.resolution[assignment.node_id]
 
         with pytest.raises(AglTypeError):
-            _check_resolved(resolved)
+            check_resolved(resolved)
 
         assert resolved.resolution[assignment.node_id] == provisional_ref
         assert assignment.node_id not in resolved.constructor_refs
@@ -5968,7 +5935,7 @@ class TestConstructorRefDispatch:
 
     def test_bare_pattern_rejects_missing_or_stale_constructor_candidates(self) -> None:
         # The corrupted-candidate variants below are checked directly via
-        # _check_resolved (not resolve_and_check_entry), since each is a
+        # check_resolved (not resolve_and_check_entry), since each is a
         # deliberately mutated copy of `resolved` that checking must reject.
         resolved = resolve_entry(
             "enum Choice\n  | none\nlet value: Choice = none\ncase value of | none => 0",
@@ -5979,7 +5946,7 @@ class TestConstructorRefDispatch:
 
         missing_candidates = replace(resolved, pattern_constructor_candidates={})
         with pytest.raises(AglTypeError, match="does not belong"):
-            _check_resolved(missing_candidates)
+            check_resolved(missing_candidates)
 
         stale_pattern = replace(pattern, name="missing")
         stale_case = replace(
@@ -5995,7 +5962,7 @@ class TestConstructorRefDispatch:
         )
         stale_resolved = replace(resolved, program=stale_program)
         with pytest.raises(AglTypeError, match="does not belong"):
-            _check_resolved(stale_resolved)
+            check_resolved(stale_resolved)
 
         from agm.agl.scope.symbols import ConstructorRef
 
@@ -6010,7 +5977,7 @@ class TestConstructorRefDispatch:
             pattern_constructor_candidates={pattern.node_id: (stale_candidate,)},
         )
         with pytest.raises(AglTypeError, match="does not belong"):
-            _check_resolved(malformed_candidates)
+            check_resolved(malformed_candidates)
 
     def test_missing_field_still_errors(self) -> None:
         err = reject_type("record Box\n  value: int\nBox()")
@@ -7455,7 +7422,7 @@ class TestIndexTypechecking:
             builtin_calls={},
             root_scope=ScopeNode(node_id=program.node_id),
         )
-        return _check_resolved(resolved)
+        return check_resolved(resolved)
 
     def _binding(
         self, name: str, type_ann: TypeExpr, value: Expr, sp: SourceSpan, *, mutable: bool
@@ -7791,7 +7758,7 @@ class TestDefensiveGuards:
         block = Block(items=(), span=sp, node_id=_mk_node_id())
         prog = Program(body=block, span=sp, node_id=_mk_node_id())
         resolved = self._mk_resolved(prog)
-        result = _check_resolved(resolved)
+        result = check_resolved(resolved)
         assert result is not None
 
     def test_empty_case_branches_fallback(self) -> None:
@@ -7803,7 +7770,7 @@ class TestDefensiveGuards:
         block = Block(items=(case_node,), span=sp, node_id=_mk_node_id())
         prog = Program(body=block, span=sp, node_id=_mk_node_id())
         resolved = self._mk_resolved(prog)
-        result = _check_resolved(resolved)
+        result = check_resolved(resolved)
         assert result is not None
 
     def test_duplicate_constructor_arg_rejected(self) -> None:
@@ -7831,7 +7798,7 @@ class TestDefensiveGuards:
         prog = Program(body=block, span=sp, node_id=_mk_node_id())
         resolved = self._mk_resolved(prog, declared_functions={"print": fd})
         with pytest.raises(AglTypeError, match="built-in function"):
-            _check_resolved(resolved)
+            check_resolved(resolved)
 
     def test_alias_seen_guard_in_ensure_referenced(self) -> None:
         err = reject_type("record Wrapper\n  value: A\ntype A = B\ntype B = A\n()")
@@ -7856,7 +7823,7 @@ class TestDefensiveGuards:
         prog = Program(body=block, span=sp, node_id=_mk_node_id())
         resolved = self._mk_resolved(prog, resolution={ref_nid: binding_ref})
         with pytest.raises(AssertionError, match="checker invariant"):
-            _check_resolved(resolved)
+            check_resolved(resolved)
 
     def test_declared_call_sig_none_fallback(self) -> None:
         # A function binding without a registered signature now reports a user-facing
@@ -7892,7 +7859,7 @@ class TestDefensiveGuards:
             declared_functions={"h": fd},
         )
         with pytest.raises(AglTypeError, match="Cannot infer return type"):
-            _check_resolved(resolved)
+            check_resolved(resolved)
 
     def test_function_value_without_registered_type_reports_inference_error(self) -> None:
         sp = mk_span()
@@ -7925,7 +7892,7 @@ class TestDefensiveGuards:
         )
 
         with pytest.raises(AglTypeError, match="Cannot infer return type"):
-            _check_resolved(resolved)
+            check_resolved(resolved)
 
     def test_builtin_funcdef_without_return_type_rejected_defensively(self) -> None:
         sp = mk_span()
@@ -7943,7 +7910,7 @@ class TestDefensiveGuards:
         resolved = self._mk_resolved(prog, declared_functions={"print": fd})
 
         with pytest.raises(AglTypeError, match="must declare a return type"):
-            _check_resolved(resolved)
+            check_resolved(resolved)
 
     def test_duplicate_named_arg_in_declared_call(self) -> None:
         # Exercises line 970: duplicate named arg check in _check_declared_name_call.
@@ -7998,7 +7965,7 @@ class TestDefensiveGuards:
             declared_functions={"g": fd},
         )
         with pytest.raises(AglTypeError, match="Duplicate argument"):
-            _check_resolved(resolved)
+            check_resolved(resolved)
 
     def test_duplicate_named_arg_in_constructor_rejected(self) -> None:
         # Exercises the duplicate named arg path in
@@ -8051,7 +8018,48 @@ class TestDefensiveGuards:
             constructor_refs={callee_nid: ctor_ref},
         )
         with pytest.raises(AglTypeError, match="[Dd]uplicate"):
-            _check_resolved(resolved, seed_env=checked_base.type_env)
+            check_resolved(resolved, seed_env=checked_base.type_env)
+
+    def test_constructor_ref_with_unresolvable_owner_raises_type_error(self) -> None:
+        # Exercises the fallback-also-fails branch of
+        # ConstructorChecker.resolve_constructor_owner (typecheck/constructors.py):
+        # a ConstructorRef whose owner is absent from both the shared
+        # whole-program type table and the unqualified local registry. The
+        # scope resolver never emits such a ref from real source (it only
+        # creates a ConstructorRef for a name it already resolved to a
+        # constructor candidate), so this hand-builds one directly.
+        from agm.agl.scope.symbols import ConstructorRef
+
+        sp = mk_span()
+        callee_nid = _mk_node_id()
+        callee = VarRef(name="Ghost", span=sp, node_id=callee_nid)
+        call = Call(callee=callee, args=(), named_args=(), span=sp, node_id=_mk_node_id())
+        block = Block(items=(call,), span=sp, node_id=_mk_node_id())
+        prog_nid = _mk_node_id()
+        prog = Program(body=block, span=sp, node_id=prog_nid)
+        ctor_ref = ConstructorRef(
+            owner_name="Ghost",
+            variant="Ghost",
+            owner_decl_node_id=-1,
+            type_params=(),
+        )
+        binding_ref = BindingRef(
+            name="Ghost",
+            mutable=False,
+            decl_span=sp,
+            decl_node_id=-1,
+            kind=BinderKind.constructor_binding,
+        )
+        root = ScopeNode(node_id=prog_nid)
+        resolved = _ModuleResolution(
+            program=prog,
+            resolution={callee_nid: binding_ref},
+            builtin_calls={},
+            root_scope=root,
+            constructor_refs={callee_nid: ctor_ref},
+        )
+        with pytest.raises(AglTypeError, match="not a known constructible type"):
+            check_resolved(resolved)
 
     def test_type_arg_on_qualified_constructor_rejected(self) -> None:
         err = reject_type("enum Status\n  | Pass\n  | Fail\nStatus[int]::Pass()\n()")
@@ -10037,7 +10045,7 @@ class TestNonGenericConstructorsUnchanged:
         )
 
         with pytest.raises(AglTypeError):
-            _check_resolved(resolved)
+            check_resolved(resolved)
 
     def test_non_generic_type_arg_rejected(self) -> None:
         err = reject_type("record Point\n  x: int\n  y: int\nPoint::[int](x = 1, y = 2)")

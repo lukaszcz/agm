@@ -40,15 +40,18 @@ from agm.agl.typecheck import (
     TextType,
     check_program,
 )
-from agm.agl.typecheck.checker import _check_prepared_module
 from agm.agl.typecheck.env import (
     CallSiteRecord,
     OutputContractSpec,
     PartialCallSpec,
-    TypeEnvironment,
 )
 from tests.agl.ir_harness import make_graph_from_files, write_companion_file
-from tests.agl.module_graph import resolve_and_check_program_ast, resolve_entry, resolve_program_ast
+from tests.agl.module_graph import (
+    check_resolved,
+    resolve_and_check_program_ast,
+    resolve_entry,
+    resolve_program_ast,
+)
 
 _PATH = Path("/virtual/extern_typecheck.agl")
 
@@ -116,29 +119,6 @@ def check_extern_graph(tmp_path: Path, modules: dict[str, str]) -> CheckedProgra
     graph = make_graph_from_files(tmp_path, modules)
     resolved = resolve_program(graph)
     return check_program(resolved, _CAPS)
-
-
-def _check_resolved(resolved: ModuleResolution, capabilities: HostCapabilities) -> CheckedModule:
-    """Type-check an already-built ``ModuleResolution`` via check_program's
-    internal per-module entry point.
-
-    Mirrors ``tests/test_agl_typecheck.py``'s helper of the same name: for a
-    hand-built ``ModuleResolution`` exercising a defensive checker guard
-    unreachable from real source (the grammar always requires a return type
-    for ``extern def``), there is no source text to hand to
-    ``resolve_and_check_entry``. This calls ``_check_prepared_module`` (what
-    ``check_program`` itself drives per module) directly: env setup, then
-    ``_check_prepared_module`` with declaration-collision validation on.
-    """
-    env = TypeEnvironment(
-        local_scope_paths=frozenset(resolved.scope_nodes), scope_nodes=resolved.scope_nodes
-    )
-    return _check_prepared_module(
-        resolved,
-        capabilities,
-        env=env,
-        validate_declaration_collisions=True,
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -828,4 +808,4 @@ class TestExternDefensiveGuards:
             declared_functions={"f": fd},
         )
         with pytest.raises(AglTypeError, match="must declare a return type"):
-            _check_resolved(resolved, _CAPS)
+            check_resolved(resolved, _CAPS)

@@ -564,15 +564,27 @@ class ConstructorChecker:
     ) -> RecordType | EnumType | ExceptionType:
         """Resolve the owner type for a constructor ref.
 
-        The whole-program type pre-pass registers every module's own and
-        every built-in declaration into the shared program type table before
-        any body is checked, so a resolved ``ConstructorRef`` always finds
-        its owner there.
+        The whole-program type pre-pass registers every module's own
+        declarations into the shared program type table before any body is
+        checked, so a resolved ``ConstructorRef`` usually finds its owner
+        there. Falls back to the unqualified local registry for cross-module
+        types that are open-imported but not registered in the shared table
+        — including a host builtin (e.g. an exception like ``Abort``) whose
+        constructor candidate is ambiently seeded under ``std/core``'s module
+        id even when the standard library is not loaded, so the shared table
+        never gained an entry for it. Raises a proper diagnostic, rather than
+        returning ``None``, when neither lookup finds a constructible owner.
         """
         owner = self._ctx._env.resolve_constructible_type_by_module_id(
             ref.owner_module_id, ref.owner_name, scope_path=ref.owner_path
         )
-        assert owner is not None
+        if owner is None:
+            candidate = self._ctx._env.get_type(ref.owner_name)
+            if not isinstance(candidate, (RecordType, EnumType, ExceptionType)):
+                raise AglTypeError(
+                    f"'{ref.owner_name}' is not a known constructible type.", span=span
+                )
+            owner = candidate
         if ref.variant is None:
             return owner
         if not isinstance(owner, EnumType):

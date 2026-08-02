@@ -249,7 +249,6 @@ from agm.agl.syntax.nodes import (
     UnitLit,
     VarDecl,
     VarRef,
-    param_external_key,
     pattern_binder_candidates,
     scoped_public_name,
     simple_let_pattern_name,
@@ -344,10 +343,13 @@ def builtin_nominals_from_declarations(
         for item in static_type_items(checked_module.resolved.program.body.items):
             if isinstance(item, TypeAlias) or not item.is_builtin:
                 continue
-            name = item.name.rsplit("::", maxsplit=1)[-1]
-            declared[name] = NominalId(
+            # ``item.name`` is always bare here: ``static_type_items`` yields
+            # raw parser nodes (never the joined-name copies
+            # ``_TypeBuilder._static_type_items`` builds for its own internal
+            # name tables), so there is no "A::B::name" spelling to strip.
+            declared[item.name] = NominalId(
                 module_id,
-                name,
+                item.name,
                 tuple(segment.name for segment in item.scope_path),
             )
     return BuiltinNominals(declared=declared)
@@ -3395,7 +3397,7 @@ class _Lowerer:
         key the CLI/config layer uses; a root param's path is empty, leaving its
         bare name.
         """
-        public_name = param_external_key(param)
+        public_name = scoped_public_name(param.scope_path, param.name)
         sym = self._alloc_sym(
             param.node_id,
             name=public_name,

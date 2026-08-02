@@ -317,3 +317,15 @@ def test_builtin_named_value_call_is_not_classified_as_builtin() -> None:
 
 def test_source_defined_exception_extends_base_and_trace_id_is_optional() -> None:
     _check('raise Abort(message = "stop")\n')
+
+
+def test_builtin_exception_constructor_resolves_without_the_standard_library() -> None:
+    """``Abort`` is a host builtin identity available whether or not
+    ``std/core`` is loaded — the scope resolver seeds its constructor
+    candidate ambiently (module id ``std/core``) regardless. With the
+    standard library switched off, that candidate's owner has no entry in
+    the shared whole-program type table (built only from each module's own,
+    non-builtin declarations), so resolving it must fall back to the local
+    always-seeded builtin registry instead of assuming the whole-program
+    pre-pass always populated it."""
+    _check('raise Abort(message = "stop")\n', default_stdlib=False)

@@ -791,6 +791,49 @@ class TestScopedBindingOpenPrecedence:
         assert _ref(resolved, "x").scope_path == ("A",)
         assert _ref(resolved, "y").scope_path == ("A",)
 
+    def test_using_and_hiding_of_the_same_items_are_exact_complements(self) -> None:
+        """``using x, y`` and ``hiding x, y`` against the same three-member
+        scope select exactly complementary members: ``using`` reaches
+        ``x``/``y`` bare and leaves ``z`` unreachable, while ``hiding``
+        reaches ``z`` bare and leaves ``x``/``y`` unreachable. Both selection
+        forms share one implementation (``apply_open_selection``), so this
+        pins the two branches against each other for an identical item set."""
+        resolved_using = parse_and_resolve(
+            "open A using x, y\nscope A\nvar x = 1\nvar y = 2\nvar z = 3\nend A\n"
+            "x := x + 1\ny := y + 1\nx + y"
+        )
+        assert _ref(resolved_using, "x").scope_path == ("A",)
+        assert _ref(resolved_using, "y").scope_path == ("A",)
+        with pytest.raises(AglScopeError):
+            parse_and_resolve(
+                "open A using x, y\nscope A\nvar x = 1\nvar y = 2\nvar z = 3\nend A\nz"
+            )
+
+        resolved_hiding = parse_and_resolve(
+            "open A hiding x, y\nscope A\nvar x = 1\nvar y = 2\nvar z = 3\nend A\nz"
+        )
+        assert _ref(resolved_hiding, "z").scope_path == ("A",)
+        with pytest.raises(AglScopeError):
+            parse_and_resolve(
+                "open A hiding x, y\nscope A\nvar x = 1\nvar y = 2\nvar z = 3\nend A\nx"
+            )
+
+    def test_open_hiding_reaches_the_non_hidden_member_before_the_hidden_one_is_registered(
+        self,
+    ) -> None:
+        """A ``hiding`` open's exclusion set does not depend on whether the
+        excluded item currently matches anything in the target: the
+        non-hidden member resolves correctly through a live reference walked
+        while the hidden member has not yet been registered."""
+        resolved = parse_and_resolve(
+            "scope B\nopen A hiding y\nend B\n"
+            "scope A\nvar x = 1\nend A\n"
+            "scope B\ndef mid() -> int = x\nend B\n"
+            "scope A\nvar y = 2\nend A\n"
+            "B::mid()"
+        )
+        assert _ref(resolved, "x").scope_path == ("A",)
+
 
 class TestScopedConstructorCandidateUnion:
     """``_owned_scope_constructor_candidates`` unions every same-named candidate.

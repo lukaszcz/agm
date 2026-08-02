@@ -189,10 +189,6 @@ from agm.agl.typecheck.builtins import (
     PendingBuiltinObligation,
 )
 from agm.agl.typecheck.constructors import ConstructorChecker
-from agm.agl.typecheck.declaration_validation import (
-    validate_builtin_declaration_uniqueness,
-    validate_method_declaration_collisions,
-)
 from agm.agl.typecheck.env import (
     AglTypeError,
     ArgumentBindings,
@@ -5048,7 +5044,6 @@ def _check_prepared_module(
     env: TypeEnvironment,
     module_id: ModuleId = ENTRY_ID,
     prepare_headers: bool = True,
-    validate_declaration_collisions: bool = False,
     infer_candidates: bool = True,
     candidate_records: Mapping[int, FunctionSignatureRecord] | None = None,
 ) -> CheckedModule:
@@ -5072,9 +5067,6 @@ def _check_prepared_module(
             env=env,
             module_id=module_id,
         )
-    if validate_declaration_collisions:
-        validate_builtin_declaration_uniqueness({module_id: resolved})
-        validate_method_declaration_collisions({module_id: resolved}, env.type_table)
     if infer_candidates:
         inferred_records = infer_module_component_candidates(
             ModuleCandidateComponent.singleton(resolved, env, capabilities, module_id)

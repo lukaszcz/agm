@@ -40,19 +40,11 @@ from agm.agl.semantics.values import (
     RecordValue,
     TextValue,
 )
-from tests.agl.ir_harness import evaluate_ir, evaluate_ir_raises
+from tests.agl.ir_harness import evaluate_ir, evaluate_ir_raises, lower_ir
 
 
 def _lower(source: str):
-    from agm.agl.lower import lower_module
-    from agm.agl.parser import parse_program
-    from agm.agl.scope import resolve_module
-    from agm.agl.typecheck import check_module
-    from tests.agl.ir_harness import _compiled_checked, base_caps
-
-    prog = parse_program(source)
-    checked = check_module(resolve_module(prog), base_caps())
-    return lower_module(_compiled_checked(checked), source_text=source, source_label="<test>")
+    return lower_ir(source)
 
 
 # ---------------------------------------------------------------------------

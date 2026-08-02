@@ -11,52 +11,116 @@ from pathlib import Path
 
 from agm.agl.capabilities import HostCapabilities
 from agm.agl.eval.ir_interpreter import IrInterpreter
-from agm.agl.ir.ids import AgentId, SymbolId
-from agm.agl.ir.program import ExecutableProgram, ExternFunctionBody
-from agm.agl.lower import lower_module
+from agm.agl.ir.ids import AgentId, SourceId, SymbolId
+from agm.agl.ir.program import ExecutableProgram, ExternFunctionBody, SourceFile
+from agm.agl.ir.validate import validate_ir
+from agm.agl.lower.lowerer import _LinkState, _Lowerer, builtin_nominals_from_declarations
 from agm.agl.lower.program import lower_program
-from agm.agl.matchcompile import (
-    MatchCompiledModule,
-    MatchCompiledProgram,
-    compile_module_matches,
-    compile_program_matches,
-)
-from agm.agl.modules.ids import ModuleId
+from agm.agl.matchcompile import MatchCompiledModule, MatchCompiledProgram, compile_program_matches
+from agm.agl.matchcompile.stage import _compile_owner_sites
+from agm.agl.modules.ids import ENTRY_ID, ModuleId
 from agm.agl.modules.loader import ModuleGraph, load_graph
 from agm.agl.modules.roots import RootSet
-from agm.agl.parser import parse_program
 from agm.agl.runtime.agents import AgentFn, AgentRegistry
 from agm.agl.runtime.externs import ExternRegistry
 from agm.agl.runtime.request import AgentRequest, AgentResponse
-from agm.agl.scope import resolve_module
 from agm.agl.scope.program import resolve_program
+from agm.agl.self_validation import self_validation_enabled
 from agm.agl.semantics.exceptions import AglRaise
 from agm.agl.semantics.values import ExceptionValue, Value
-from agm.agl.typecheck import check_module
+from agm.agl.typecheck.env import CheckedModule
 from agm.agl.typecheck.program import CheckedProgram, check_program
 from agm.core.process import ProcessCaptureResult
+from agm.util.text import normalize_newlines
+from tests.agl.module_graph import build_module_graph as _build_module_graph
 
 _REPO_STDLIB_ROOT = Path(__file__).resolve().parents[2] / "stdlib"
 
 
-def _compiled_program(source: str, *, caps: HostCapabilities | None = None) -> MatchCompiledModule:
-    checked = check_module(resolve_module(parse_program(source)), caps or base_caps())
-    result = compile_module_matches(checked)
-    assert isinstance(result.compiled, MatchCompiledModule)
-    return result.compiled
+def _checked_program(
+    source: str,
+    *,
+    caps: HostCapabilities | None = None,
+    default_stdlib: bool = True,
+    origin_path: Path | None = None,
+) -> CheckedProgram:
+    """Resolve and check *source* through a real module graph.
+
+    Reuses :func:`tests.agl.module_graph._build_graph` (entry plus a
+    process-cached ``std/core`` unless *default_stdlib* is ``False``) so this
+    pays the same one-parse-per-process cost as the scope/typecheck unit
+    helpers, then runs the real whole-program passes -- the configuration
+    production always runs, and the only one under which the module
+    loader's own checks (e.g. an extern's missing companion file) fire.
+    """
+    graph, _import_node_id = _build_module_graph(
+        source, origin_path=origin_path, default_stdlib=default_stdlib
+    )
+    resolved_program = resolve_program(graph)
+    return check_program(resolved_program, caps or base_caps())
 
 
-def _compiled_checked(checked: object) -> MatchCompiledModule | MatchCompiledProgram:
-    from agm.agl.typecheck import CheckedModule
-
-    if isinstance(checked, CheckedModule):
-        result = compile_module_matches(checked)
-        assert isinstance(result.compiled, MatchCompiledModule)
-        return result.compiled
-    assert isinstance(checked, CheckedProgram)
+def _compiled_program(
+    source: str,
+    *,
+    caps: HostCapabilities | None = None,
+    default_stdlib: bool = True,
+    origin_path: Path | None = None,
+) -> MatchCompiledProgram:
+    checked = _checked_program(
+        source, caps=caps, default_stdlib=default_stdlib, origin_path=origin_path
+    )
     result = compile_program_matches(checked)
     assert isinstance(result.compiled, MatchCompiledProgram)
     return result.compiled
+
+
+def _compiled_checked(checked: CheckedProgram) -> MatchCompiledProgram:
+    result = compile_program_matches(checked)
+    assert isinstance(result.compiled, MatchCompiledProgram)
+    return result.compiled
+
+
+def compile_checked_module(checked: CheckedModule) -> MatchCompiledModule:
+    """Reimplement the deleted ``compile_module_matches`` for tests that need a
+    per-module compiled artifact from a hand-resolved or virtual-path
+    ``CheckedModule`` with no real module graph behind it (see
+    :func:`~tests.agl.module_graph.resolve_and_check_program_ast`).
+
+    Production only ever compiles a whole program
+    (:func:`~agm.agl.matchcompile.compile_program_matches`), so there is no
+    surviving public per-module entry point; this reuses the same
+    ``_compile_owner_sites`` building block that function calls once per
+    module. Callers that need a rejected (non-exhaustive/refutable) result
+    should call :func:`~agm.agl.matchcompile.stage._compile_owner_sites`
+    themselves instead -- this helper asserts every site compiled cleanly.
+    """
+    sites, issues = _compile_owner_sites(checked)
+    assert not issues
+    return MatchCompiledModule(checked=checked, sites=sites)
+
+
+def lower_compiled_module(
+    compiled: MatchCompiledModule, *, source_text: str, source_label: str
+) -> ExecutableProgram:
+    """Reimplement the deleted ``lower_module`` for the same seam as
+    :func:`compile_checked_module`: a per-module lowering, with no real
+    module graph, for a test that needs to isolate the lowerer's own shape
+    from ``lower_program``'s whole-program linking (or, forging a corrupt
+    artifact, from ``lower_program``'s own module set).
+    """
+    checked = compiled.checked
+    link = _LinkState(builtin_nominals=builtin_nominals_from_declarations({ENTRY_ID: checked}))
+    source_id = SourceId(link.next_source)
+    link.next_source += 1
+    link.sources[source_id] = SourceFile(
+        display_name=source_label, normalized_text=normalize_newlines(source_text)
+    )
+    lowerer = _Lowerer(checked, link, ENTRY_ID, source_id, source_text, compiled.sites)
+    program = lowerer.lower()
+    if self_validation_enabled():
+        validate_ir(program)
+    return program
 
 
 def _roots(*paths: Path) -> RootSet:
@@ -86,15 +150,38 @@ def _build_ir_param_values(
     return {by_name[name]: value for name, value in param_values.items()}
 
 
+def lower_ir(
+    source: str,
+    *,
+    caps: HostCapabilities | None = None,
+    default_stdlib: bool = True,
+    origin_path: Path | None = None,
+) -> ExecutableProgram:
+    """Resolve, check, compile, and lower *source* through the real
+    program-level pipeline (entry plus ``std/core`` unless *default_stdlib*
+    is ``False``), returning the linked ``ExecutableProgram`` without running
+    it.
+
+    Shared by every "golden lowering" test that inspects IR node shape
+    directly rather than executed values -- ``lower_program`` (not the
+    per-module ``lower_module``) is the pipeline production always runs, so
+    this is what a source-level IR test should lower through too.
+    """
+    compiled = _compiled_program(
+        source, caps=caps, default_stdlib=default_stdlib, origin_path=origin_path
+    )
+    return lower_program(compiled, _entry_source_text=source)
+
+
 def _run_ir(
     source: str,
     param_values: dict[str, Value] | None = None,
     *,
     caps: HostCapabilities | None = None,
     registry: AgentRegistry | None = None,
+    default_stdlib: bool = True,
 ) -> tuple[dict[str, Value], str]:
-    compiled = _compiled_program(source, caps=caps)
-    executable = lower_module(compiled, source_text=source, source_label="<ir-test>")
+    executable = lower_ir(source, caps=caps, default_stdlib=default_stdlib)
     params = _build_ir_param_values(executable, param_values) if param_values else None
     output = io.StringIO()
     with contextlib.redirect_stdout(output):
@@ -102,20 +189,35 @@ def _run_ir(
     return result, output.getvalue()
 
 
-def evaluate_ir(source: str, param_values: dict[str, Value] | None = None) -> dict[str, Value]:
-    result, _ = _run_ir(source, param_values)
+def evaluate_ir(
+    source: str,
+    param_values: dict[str, Value] | None = None,
+    *,
+    default_stdlib: bool = True,
+) -> dict[str, Value]:
+    result, _ = _run_ir(source, param_values, default_stdlib=default_stdlib)
     return result
 
 
-def evaluate_ir_output(source: str, param_values: dict[str, Value] | None = None) -> str:
+def evaluate_ir_output(
+    source: str,
+    param_values: dict[str, Value] | None = None,
+    *,
+    default_stdlib: bool = True,
+) -> str:
     """Run the program through the IR pipeline and return its captured stdout."""
-    _, output = _run_ir(source, param_values)
+    _, output = _run_ir(source, param_values, default_stdlib=default_stdlib)
     return output
 
 
-def evaluate_ir_raises(source: str, param_values: dict[str, Value] | None = None) -> ExceptionValue:
+def evaluate_ir_raises(
+    source: str,
+    param_values: dict[str, Value] | None = None,
+    *,
+    default_stdlib: bool = True,
+) -> ExceptionValue:
     try:
-        _run_ir(source, param_values)
+        _run_ir(source, param_values, default_stdlib=default_stdlib)
     except AglRaise as exc:
         return exc.exc
     raise AssertionError("IR pipeline did not raise AglRaise")
@@ -148,26 +250,23 @@ def _prepare_extern_program(
     *,
     caps: HostCapabilities | None = None,
 ) -> tuple[ExecutableProgram, ExternRegistry]:
-    """Resolve + check + lower a single-module extern-declaring *source*.
+    """Resolve + check + lower an extern-declaring *source* through a real module graph.
 
     Writes *source* and *companion_source* as real sibling files on disk (an
     extern def needs a resolvable origin path, and the registry needs a real
-    file to import), then builds an ``ExternRegistry`` populated the same way
-    the pipeline wires one before evaluation — one ``load_companion`` per
-    declaring module, mirroring ``pipeline._wire_extern_registry``.
+    file to import) and resolves *source* at that real path -- the entry's
+    real origin, so the module loader's own missing-companion check runs
+    exactly as it does in production -- then builds an ``ExternRegistry``
+    populated the same way the pipeline wires one before evaluation -- one
+    ``load_companion`` per declaring module, mirroring
+    ``pipeline._wire_extern_registry``.
     """
     entry_path = tmp_path / "entry.agl"
     entry_path.write_text(source)
     companion_path = tmp_path / "entry.py"
     companion_path.write_text(companion_source)
 
-    resolved = resolve_module(parse_program(source), origin_path=entry_path)
-    checked = check_module(resolved, caps or extern_caps())
-    executable = lower_module(
-        _compiled_checked(checked),
-        source_text=source,
-        source_label="<extern-ir-test>",
-    )
+    executable = lower_ir(source, caps=caps or extern_caps(), origin_path=entry_path)
     registry = ExternRegistry()
     loaded: set[ModuleId] = set()
     for desc in executable.functions.values():

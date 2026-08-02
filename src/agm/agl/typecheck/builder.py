@@ -1,4 +1,4 @@
-"""Standalone per-module type-table builder for the AgL type-checking pass.
+"""Per-module type-table builder for the AgL type-checking pass.
 
 ``_TypeBuilder`` collects ``record``/``enum``/``exception``/alias declarations
 and registers them into a ``TypeEnvironment``.  It was extracted from
@@ -29,13 +29,15 @@ Phase 2 (the loop in ``collect``)
 Recursive nominal types (records, enums, exceptions, including mutual and
 generic recursion) are legal. Because handles make forward references
 trivially resolve, nothing in phase 2 itself needs to reject a declaration
-that structurally contains itself; instead, once every body is resolved, an
-inhabitation check (:func:`~agm.agl.semantics.analyses.compute_uninhabited`)
-runs over the whole table and rejects any declaration that has no finite
-value (e.g. a record whose only field is itself, with no ``array``/``dict``
-or enum base-case escape). Recursive type ALIASES remain banned — an alias
-is transparent and has no nominal identity to anchor a cycle — by the
-existing alias-cycle check in ``typecheck/env.py``.
+that structurally contains itself; instead, an inhabitation check
+(:func:`~agm.agl.semantics.analyses.compute_uninhabited`) runs once,
+whole-program, over the shared table ahead of every module's body resolution
+(``typecheck/program.py::_build_program_type_table``), rejecting any
+declaration that has no finite value (e.g. a record whose only field is
+itself, with no ``array``/``dict`` or enum base-case escape). Recursive type
+ALIASES remain banned — an alias is transparent and has no nominal identity
+to anchor a cycle — by the existing alias-cycle check in
+``typecheck/env.py``.
 """
 
 from __future__ import annotations
@@ -44,7 +46,6 @@ from collections.abc import Iterator, Mapping
 from dataclasses import replace
 
 from agm.agl.modules.ids import ENTRY_ID, STD_CORE_ID, ModuleId, spell_scope_path
-from agm.agl.semantics.analyses import compute_uninhabited, uninhabitable_message
 from agm.agl.semantics.type_table import (
     BUILTIN_EXCEPTION_TYPE_DEFS,
     BUILTIN_PRELUDE_TYPE_DEFS,
@@ -114,9 +115,10 @@ class _TypeBuilder:
     - Duplicate type names (user vs user, or user shadowing a built-in).
     - Duplicate record and enum-variant fields.
     - Unknown type references inside field/variant definitions.
-    - An uninhabited record, enum, or exception declaration (see
-      :meth:`_check_inhabitation`).
     - Alias cycles.
+
+    Inhabitation (rejecting a record/enum/exception with no finite value) is
+    checked whole-program, not here — see :meth:`collect`.
 
     See the module docstring for the two-phase, order-free build strategy.
     """
@@ -144,25 +146,21 @@ class _TypeBuilder:
             else:
                 yield item
 
-    def collect(self, program: Program, *, check_inhabitation: bool = True) -> None:
+    def collect(self, program: Program) -> None:
         """Scan *program* and populate ``self._env``.
 
         Phase 1 registers every declaration's name and handle
         (:meth:`collect_shells_only`); phase 2 resolves each declaration's
         body, in source order, with no dependency ordering (see the module
-        docstring); an inhabitation pass (:meth:`_check_inhabitation`) then
-        rejects the first uninhabited declaration, in source order, unless
-        *check_inhabitation* is ``False``; a final post-pass
-        (:meth:`_finalize_exceptions`) validates own-vs-inherited exception
-        field duplication now that every exception's flattened field set is
-        buildable (an uninhabited ``extends`` cycle is always caught by the
-        inhabitation pass first).
+        docstring); a final post-pass (:meth:`_finalize_exceptions`)
+        validates own-vs-inherited exception field duplication now that every
+        exception's flattened field set is buildable.
 
-        *check_inhabitation* is ``False`` only for the program per-module
-        re-check (``typecheck/program.py``), whose whole-program pre-pass has
-        already run inhabitation over every module's declarations before any
-        module's body is individually re-checked; re-running it per module
-        would be redundant.
+        Inhabitation is checked once, whole-program, ahead of every module's
+        body resolution (:func:`~agm.agl.semantics.analyses.compute_uninhabited`
+        over the shared type table in
+        ``typecheck/program.py::_build_program_type_table``), so this pass
+        does not repeat it per module.
         """
         self.collect_shells_only(program)
 
@@ -178,8 +176,6 @@ class _TypeBuilder:
                 else:
                     self._validate_alias(item)
 
-        if check_inhabitation:
-            self._check_inhabitation(program)
         self._finalize_exceptions()
 
     def collect_shells_only(self, program: Program) -> None:
@@ -471,10 +467,9 @@ class _TypeBuilder:
         base's, however deep the ``extends`` chain) is registered — there is
         no build-ordering step in :meth:`_build_exception` (see the module
         docstring).  A cyclic ``extends`` chain has no independent evidence to
-        ever become inhabited (see :meth:`_check_inhabitation`), so it is
-        always rejected before this post-pass runs — either here (single-
-        module) or by the program pre-pass (``typecheck/program.py``) before
-        Phase 3 re-checks this module at all — and
+        ever become inhabited, so it is always rejected by the whole-program
+        inhabitation pre-pass (``typecheck/program.py``) before Phase 3
+        re-checks this module at all, and
         :meth:`~agm.agl.semantics.type_table.TypeTable.exception_fields` never
         hits its internal cycle guard here.
         """
@@ -728,42 +723,4 @@ class _TypeBuilder:
             stmt.type_expr,
             span=stmt.span,
             type_vars=frozenset(stmt.type_params),
-        )
-
-    # ------------------------------------------------------------------
-    # Inhabitation check
-    # ------------------------------------------------------------------
-
-    def _check_inhabitation(self, program: Program) -> None:
-        """Reject the first uninhabited record/enum/exception, in source order.
-
-        Runs :func:`~agm.agl.semantics.analyses.compute_uninhabited` over the
-        WHOLE shared table (this module's declarations plus anything already
-        seeded from a prior REPL entry or the builtin/prelude defs — all
-        trivially inhabited), then walks *program*'s own declarations in
-        source order reporting the first one whose key came back
-        uninhabited, at its declaration span. Reporting only THIS program's
-        own declarations (rather than any uninhabited key at all) keeps
-        error attribution local: a key from another module's table entry has
-        no span available here anyway.
-        """
-        uninhabited = compute_uninhabited(self._env.type_table)
-        if not uninhabited:
-            return
-        for item in self._static_type_items(program.body.items):
-            if not isinstance(item, (RecordDef, EnumDef, ExceptionDef)):
-                continue
-            module_id = self._module_id
-            scope_path = tuple(segment.name for segment in item.scope_path)
-            declared_name = _bare_name(item.name)
-            key = (module_id, scope_path, declared_name)
-            if key not in uninhabited:
-                continue
-            typedef = self._env.type_table.get(module_id, declared_name, scope_path)
-            assert typedef is not None
-            raise AglTypeError(uninhabitable_message(typedef.kind, item.name), span=item.span)
-        raise AssertionError(  # pragma: no cover
-            "compute_uninhabited reported a key not owned by this program's own "
-            "declarations — every uninhabited key in a single-module table is "
-            "expected to trace back to a declaration in the program being checked"
         )

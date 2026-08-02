@@ -31,7 +31,6 @@ from agm.agl.ir.contracts import (
     ScalarKind,
 )
 from agm.agl.parser import parse_program
-from agm.agl.scope import resolve_module
 from agm.agl.semantics.type_table import create_seeded_type_table
 from agm.agl.semantics.types import (
     AgentType,
@@ -41,8 +40,9 @@ from agm.agl.semantics.types import (
 )
 from agm.agl.syntax.nodes import ParamKind
 from agm.agl.type_schema import build_extern_contract
-from agm.agl.typecheck import ParamSpec, check_module
+from agm.agl.typecheck import ParamSpec
 from agm.agl.typecheck.env import AglTypeError, FunctionSignature
+from tests.agl.module_graph import resolve_and_check_program_ast
 
 _PATH = Path("/virtual/extern_contracts.agl")
 
@@ -58,9 +58,18 @@ _CAPS = HostCapabilities(
 
 
 def build_contract(source: str, fn_name: str = "f") -> ExternContract:
-    """Parse + resolve (file-backed) + check *source*, compiling ``fn_name``'s contract."""
-    resolved = resolve_module(parse_program(source), origin_path=_PATH)
-    cp = check_module(resolved, _CAPS)
+    """Parse + resolve (file-backed) + check *source*, compiling ``fn_name``'s contract.
+
+    Uses ``resolve_and_check_program_ast``'s hand-built single-module graph
+    rather than a real loaded one: *_PATH* is a virtual, non-existent file.
+    This module tests the checker-types-to-typeless contract compiler in
+    isolation (see the module docstring: "NO runtime walkers, lowering
+    integration, or registry are exercised here"), independent of whether a
+    companion ``.py`` file exists on disk -- the module loader's own
+    concern, covered separately by ``test_agl_extern_syntax.py`` and the
+    real-graph tests in ``test_agl_extern_lowering.py``/``test_agl_extern_runtime.py``.
+    """
+    cp = resolve_and_check_program_ast(parse_program(source), _CAPS, origin_path=_PATH)
     sig = cp.function_signatures[fn_name]
     return build_extern_contract(sig, cp.type_env.type_table)
 

@@ -32,8 +32,10 @@ Algorithm
    c. **Inhabitation** — once every body is resolved, the whole-program
       inhabitation fixpoint
       (:func:`~agm.agl.semantics.analyses.compute_uninhabited`) rejects the
-      first declaration (across the whole program) that has no finite value,
-      consistent with the single-module ``_TypeBuilder`` check.
+      first declaration (across the whole program) that has no finite value.
+      This is the only inhabitation check the pipeline runs; the per-module
+      ``_TypeBuilder`` pass that resolves each declaration's body never
+      repeats it.
 
 2. **Program function headers** — resolve parameter and explicit return
    annotations for top-level ``FuncDef`` declarations in every module,
@@ -48,12 +50,6 @@ Algorithm
    recheck each module body with its module-aware
    :class:`~agm.agl.typecheck.env.TypeEnvironment`. This pass alone publishes
    checked node types, calls, contracts, bindings, and warnings.
-
-Single-module equivalence
--------------------------
-A single-module (entry-only) program checked via :func:`check_program` is
-equivalent to calling :func:`~agm.agl.typecheck.checker.check` directly on the
-entry's :class:`~agm.agl.scope.symbols.ModuleResolution`.
 """
 
 from __future__ import annotations
@@ -356,8 +352,8 @@ def _find_type_decl_span(resolved: ResolvedProgram, key: DeclKey) -> SourceSpan 
     (see :func:`_build_program_type_table`): the resolved module ASTs are
     already in hand, so the span is a plain lookup rather than anything
     carried through the type table itself (a ``TypeDef`` has no span — it is
-    a pure semantic description, shared with standalone-module
-    building).
+    a pure semantic description, the same shape ``_TypeBuilder`` produces for
+    every module).
     """
     mid, _scope_path, _name = key
     rmod = resolved.modules.get(mid)
@@ -597,10 +593,9 @@ def _build_program_type_table(
 
     # Step C: every body is now resolved, so the inhabitation fixpoint can
     # run over the whole shared table (this program's declarations plus the
-    # builtin/prelude defs, all trivially inhabited). The authoritative
-    # per-module check in Phase 4 skips its own inhabitation pass
-    # (``check_inhabitation=False``) precisely because this whole-program check
-    # has already run.
+    # builtin/prelude defs, all trivially inhabited). This is the only
+    # inhabitation check the pipeline runs; Phase 4's per-module re-check
+    # never repeats it.
     uninhabited = compute_uninhabited(shared_type_table)
     if uninhabited:
         _raise_first_uninhabited(uninhabited, shared_type_table, resolved)
@@ -954,7 +949,6 @@ def check_program(
             capabilities,
             env=module_envs[mid],
             module_id=mid,
-            check_inhabitation=False,
         )
 
     program_modules = {module_id: module.resolved for module_id, module in resolved.modules.items()}
@@ -997,7 +991,6 @@ def check_program(
             capabilities,
             env=module_envs[mid],
             module_id=mid,
-            check_inhabitation=False,
             prepare_headers=False,
             infer_candidates=False,
             candidate_records=candidate_records,

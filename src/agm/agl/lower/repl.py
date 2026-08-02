@@ -8,13 +8,11 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, cast
 
 from agm.agl.ir.contracts import ContractPayload
-from agm.agl.ir.ids import NominalId, SourceId, SymbolId
-from agm.agl.ir.program import ExecutableProgram, NominalDescriptor, SourceFile
-from agm.agl.ir.validate import validate_ir
-from agm.agl.lower.lowerer import InitializerOrigin, _LinkState, _Lowerer
-from agm.agl.matchcompile import MatchCompiledModule, MatchCompiledProgram
-from agm.agl.modules.ids import ENTRY_ID, ModuleId
-from agm.agl.self_validation import self_validation_enabled
+from agm.agl.ir.ids import NominalId, SymbolId
+from agm.agl.ir.program import ExecutableProgram, NominalDescriptor
+from agm.agl.lower.lowerer import InitializerOrigin, _LinkState
+from agm.agl.matchcompile import MatchCompiledProgram
+from agm.agl.modules.ids import ModuleId
 from agm.agl.semantics.types import iter_nominal_types
 from agm.agl.syntax.nodes import (
     AgentDecl,
@@ -36,7 +34,6 @@ from agm.agl.syntax.nodes import (
     simple_let_pattern_name,
     static_items,
 )
-from agm.util.text import normalize_newlines
 
 if TYPE_CHECKING:
     from agm.agl.semantics.types import Type
@@ -47,7 +44,6 @@ __all__ = [
     "LoweredReplEntry",
     "ParamOrigin",
     "ReplPromotionPlan",
-    "lower_repl_entry",
     "lower_repl_program",
 ]
 
@@ -353,57 +349,6 @@ def _trailing_let_value_symbol(last: Item, link: _LinkState) -> SymbolId | None:
     if not isinstance(last, LetDecl) or simple_let_pattern_name(last.pattern) is not None:
         return None
     return link.let_value_symbols.get(last.node_id)
-
-
-def lower_repl_entry(
-    compiled_entry: MatchCompiledModule,
-    *,
-    image: LinkImage,
-    source_text: str,
-    source_label: str,
-    contract_payloads: Mapping[int, ContractPayload] | None = None,
-) -> LoweredReplEntry:
-    """Link one match-compiled REPL entry into ``image`` without resetting any IDs."""
-    # ``compiled_entry`` validated itself when it was constructed; lowering adds
-    # the IR self-check over its own output below.
-    checked_entry = compiled_entry.checked
-    link = image._state
-    source_id = SourceId(link.next_source)
-    link.next_source += 1
-    link.sources[source_id] = SourceFile(
-        display_name=source_label,
-        normalized_text=normalize_newlines(source_text),
-    )
-    lowerer = _Lowerer(
-        checked_entry,
-        link,
-        ENTRY_ID,
-        source_id,
-        source_text,
-        compiled_entry.sites,
-        contract_payloads=contract_payloads,
-    )
-    program = lowerer.lower()
-    items = checked_entry.resolved.program.body.items
-    last = items[-1]
-    trailing_expression = (
-        len(program.modules[ENTRY_ID].initializers) - 1
-        if not isinstance(last, (Binder, Declaration, ScopeRegion))
-        else None
-    )
-    trailing_let_value_symbol = _trailing_let_value_symbol(last, link)
-    if self_validation_enabled():
-        validate_ir(program)
-    return LoweredReplEntry(
-        program=program,
-        trailing_expression=trailing_expression,
-        trailing_let_value_symbol=trailing_let_value_symbol,
-        promotion_plan=_promotion_plan(
-            checked_entry,
-            link.initializer_origins[ENTRY_ID],
-            link.decl_to_sym,
-        ),
-    )
 
 
 def lower_repl_program(

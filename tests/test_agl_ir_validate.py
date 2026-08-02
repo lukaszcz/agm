@@ -77,7 +77,6 @@ from agm.agl.ir import (
 )
 from agm.agl.ir.validate import InvalidIrError, validate_ir
 from agm.agl.modules.ids import ModuleId
-from tests.agl.ir_harness import _compiled_checked
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -490,10 +489,7 @@ class TestValidProgram:
 
     def test_lowered_partial_application_program_passes_deep_validation(self) -> None:
         from agm.agl.capabilities import HostCapabilities
-        from agm.agl.lower import lower_module
-        from agm.agl.parser import parse_program
-        from agm.agl.scope import resolve_module
-        from agm.agl.typecheck import check_module
+        from tests.agl.ir_harness import lower_ir
 
         source = "def add(x: int, y: int) -> int = x + y\nlet add1 = add(1, ?)\nadd1(2)"
         capabilities = HostCapabilities(
@@ -502,12 +498,7 @@ class TestValidProgram:
             supports_shell_exec=True,
             codec_kinds={},
         )
-        checked = check_module(resolve_module(parse_program(source)), capabilities)
-        program = lower_module(
-            _compiled_checked(checked),
-            source_text=source,
-            source_label="<test>",
-        )
+        program = lower_ir(source, caps=capabilities)
 
         validate_ir(program, deep=True)
 

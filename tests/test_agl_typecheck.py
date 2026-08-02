@@ -223,12 +223,8 @@ def _check_resolved(
     defensive checker guard unreachable from real source, or exercises
     deliberately corrupted resolver output — there is no source text to hand
     to ``resolve_and_check_entry``. This calls ``_check_prepared_module``
-    (what ``check_program`` itself drives per module) rather than
-    ``check_module``, since ``check_module`` has no production caller and is
-    slated for deletion once every call site depending on it has one; this
-    helper's body mirrors ``check_module``'s own (env setup, then
-    ``_check_prepared_module`` with declaration-collision validation on) so
-    behavior is unchanged.
+    (what ``check_program`` itself drives per module) directly: env setup,
+    then ``_check_prepared_module`` with declaration-collision validation on.
     """
     if capabilities is None:
         capabilities = default_capabilities()
@@ -598,40 +594,6 @@ def test_missing_type_under_recognized_local_scope_is_focused(type_ref: str) -> 
     source = f"scope A\ndef member() -> int = 1\nend A\ndef use(value: {type_ref}) -> int = 1"
     err = reject_type(source)
     assert "Unknown scoped type 'A::Missing'" in str(err)
-
-
-def test_opened_local_scope_type_resolves() -> None:
-    # Checked via _check_resolved (not resolve_and_check_entry): resolution is
-    # real (through resolve_program), but check_program always threads a
-    # whole-program generic/alias table into its per-module environment, so
-    # the "no program-level table" branch _resolve_opened_applied_type falls
-    # back to is otherwise unreachable — only check_module's env (no program
-    # context) leaves that table unset, and check_module's callers are the
-    # only remaining thing exercising it.
-    resolved = resolve_entry(
-        "open Shapes\n"
-        "scope Shapes\n"
-        "record Point\n"
-        "  value: int\n"
-        "end Shapes\n"
-        "def identity(value: Point) -> Point = value"
-    )
-    _check_resolved(resolved)
-
-
-def test_opened_local_generic_type_resolves() -> None:
-    # See test_opened_local_scope_type_resolves: checked via _check_resolved
-    # for the same reason — this is the generic-alias-lookup branch of the
-    # same "no program-level table" fallback.
-    resolved = resolve_entry(
-        "open Shapes using Box as Container\n"
-        "scope Shapes\n"
-        "record Box[T]\n"
-        "  value: T\n"
-        "end Shapes\n"
-        "def identity(value: Container[int]) -> Container[int] = value"
-    )
-    _check_resolved(resolved)
 
 
 # ---------------------------------------------------------------------------
@@ -10621,32 +10583,9 @@ class TestGenericRecursiveTypes:
         assert "uninhabitable" in str(err).lower()
 
     def test_generic_argument_reference_via_parameterized_alias_is_uninhabitable(self) -> None:
-        # type AL[X] = Box[X] aliases the same unguarded wrapper recursion as Box[A].
-        # check_program's whole-program pre-pass inhabitation fixpoint rejects this
-        # on its own — see
-        # test_generic_argument_reference_via_parameterized_alias_is_uninhabitable_in_a_program
-        # below. But it does so ahead of Phase 3/4's per-module recheck, so by the
-        # time _TypeBuilder.collect() -> _check_inhabitation runs there, the whole
-        # program is already known inhabited and that loop's own branches (the
-        # inhabited-generic-record / type-alias / uninhabited-record source-order
-        # mix this program exercises) are unreachable through check_program. Only
-        # check_module's standalone contract — no whole-program pre-pass ahead of
-        # it — can still reach them, so this checks via _check_resolved (which
-        # mirrors check_module's own no-program-context environment) rather than
-        # resolve_and_check_entry.
-        resolved = resolve_entry(
-            "record Box[T]\n  value: T\ntype AL[X] = Box[X]\nrecord A\n  x: AL[A]\n()"
-        )
-        with pytest.raises(AglTypeError) as excinfo:
-            _check_resolved(resolved)
-        assert "uninhabitable" in str(excinfo.value).lower()
-
-    def test_generic_argument_reference_via_parameterized_alias_is_uninhabitable_in_a_program(
-        self,
-    ) -> None:
-        # Same program as the test above, but checked the real way (through
-        # resolve_and_check_entry -> check_program), establishing that the
-        # whole-program inhabitation pre-pass rejects this on its own.
+        # type AL[X] = Box[X] aliases the same unguarded wrapper recursion as
+        # Box[A]; the whole-program inhabitation pre-pass rejects it before
+        # any module's body is individually checked.
         err = reject_type(
             "record Box[T]\n  value: T\ntype AL[X] = Box[X]\nrecord A\n  x: AL[A]\n()"
         )
@@ -11310,7 +11249,7 @@ class TestSelfRefTypeInSingleModule:
         reject_type("def f() -> ::NoSuch = 1\nf()")
 
     def test_module_qualifier_in_single_module_rejected(self) -> None:
-        """'mylib::Point' in single-module (no graph) mode → type error."""
+        """'mylib::Point' with no 'mylib' import present → type error."""
         reject_type("def f() -> mylib::Point = 1\nf()")
 
 
@@ -11413,14 +11352,14 @@ class TestGenericNominalModuleId:
         from agm.agl.modules.ids import ENTRY_ID
         from agm.agl.typecheck.env import GenericTypeDef
 
-        # In single-module mode the module_id is ENTRY_ID; verify the template
+        # For the entry module the module_id is ENTRY_ID; verify the template
         # also has ENTRY_ID (consistency check: it's at least not wrong).
         cp = parse_resolve_check("record Box[T]\n  value: T\nlet x: Box[int] = Box(value = 1)\nx")
         gdef = cp.type_env.get_generic_type("Box")
         assert gdef is not None
         assert isinstance(gdef, GenericTypeDef)
         assert gdef.template.module_id == ENTRY_ID, (
-            f"Template module_id must be ENTRY_ID in single-module mode, "
+            f"Template module_id must be ENTRY_ID for the entry module, "
             f"got {gdef.template.module_id!r}."
         )
 

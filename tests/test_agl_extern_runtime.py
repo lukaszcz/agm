@@ -530,23 +530,31 @@ class TestEnumsRoundTrip:
 
 
 class TestOptionAsPlainEnum:
-    """`Option[T]` gets no special treatment at the boundary: it is an
-    ordinary two-variant generic enum, so a locally declared stand-in exercises
-    exactly the same walker code path as the real `std.core` one."""
+    """A generic two-variant enum gets no special treatment at the boundary:
+    a locally declared stand-in exercises exactly the same walker code path
+    as ``std.core``'s own ``Option[T]``.
 
-    _OPTION = "enum Option[T]\n  | None\n  | Some(value: T)\n"
+    Named ``Choice``/``Present``/``Absent`` (not ``Option``/``Some``/``None``)
+    since the standard library is in scope here (the real configuration) and
+    already declares ``Option[T]`` with those exact variant names; reusing
+    them would make the bare constructors ambiguous, which is incidental to
+    what this class tests (the generic-enum boundary walk, not name
+    resolution against the standard library).
+    """
+
+    _OPTION = "enum Choice[T]\n  | Absent\n  | Present(value: T)\n"
 
     def test_some_and_none_round_trip_as_tagged_dicts(self, tmp_path: Path) -> None:
         source = (
-            self._OPTION + "extern def echo(o: Option[int]) -> Option[int]\n"
-            "let some_r: Option[int] = echo(Some(value = 3))\n"
-            "let none_r: Option[int] = echo(None)\n"
+            self._OPTION + "extern def echo(o: Choice[int]) -> Choice[int]\n"
+            "let some_r: Choice[int] = echo(Present(value = 3))\n"
+            "let none_r: Choice[int] = echo(Absent)\n"
             "let a = case some_r of\n"
-            "  | Some(value) => value\n"
-            "  | None() => -1\n"
+            "  | Present(value) => value\n"
+            "  | Absent() => -1\n"
             "let b = case none_r of\n"
-            "  | Some(value) => value\n"
-            "  | None() => -1\n"
+            "  | Present(value) => value\n"
+            "  | Absent() => -1\n"
             "a\n"
         )
         companion = "def echo(o):\n    return o\n"
@@ -556,21 +564,21 @@ class TestOptionAsPlainEnum:
 
     def test_option_of_option_disambiguates_nesting_depth(self, tmp_path: Path) -> None:
         source = (
-            self._OPTION + "extern def check_module(o: Option[Option[int]]) -> bool\n"
-            "let some_some: Option[Option[int]] = Some(value = Some(value = 5))\n"
-            "let some_none: Option[Option[int]] = Some(value = None)\n"
+            self._OPTION + "extern def check_module(o: Choice[Choice[int]]) -> bool\n"
+            "let some_some: Choice[Choice[int]] = Present(value = Present(value = 5))\n"
+            "let some_none: Choice[Choice[int]] = Present(value = Absent)\n"
             "let r1 = check_module(some_some)\n"
             "let r2 = check_module(some_none)\n"
-            "let r3: bool = check_module(None)\n"
+            "let r3: bool = check_module(Absent)\n"
             "r1\n"
         )
         companion = (
             "def check_module(o):\n"
-            "    if o == {'$case': 'Some', 'value': {'$case': 'Some', 'value': 5}}:\n"
+            "    if o == {'$case': 'Present', 'value': {'$case': 'Present', 'value': 5}}:\n"
             "        return True\n"
-            "    if o == {'$case': 'Some', 'value': {'$case': 'None'}}:\n"
+            "    if o == {'$case': 'Present', 'value': {'$case': 'Absent'}}:\n"
             "        return True\n"
-            "    if o == {'$case': 'None'}:\n"
+            "    if o == {'$case': 'Absent'}:\n"
             "        return True\n"
             "    return False\n"
         )
@@ -581,17 +589,17 @@ class TestOptionAsPlainEnum:
 
     def test_option_of_json_disambiguates_none_from_some_of_json_null(self, tmp_path: Path) -> None:
         source = (
-            self._OPTION + "extern def check_module(o: Option[json]) -> bool\n"
-            "let some_null: Option[json] = Some(value = null)\n"
+            self._OPTION + "extern def check_module(o: Choice[json]) -> bool\n"
+            "let some_null: Choice[json] = Present(value = null)\n"
             "let r1 = check_module(some_null)\n"
-            "let r2: bool = check_module(None)\n"
+            "let r2: bool = check_module(Absent)\n"
             "r1\n"
         )
         companion = (
             "def check_module(o):\n"
-            "    if o == {'$case': 'Some', 'value': None}:\n"
+            "    if o == {'$case': 'Present', 'value': None}:\n"
             "        return True\n"
-            "    if o == {'$case': 'None'}:\n"
+            "    if o == {'$case': 'Absent'}:\n"
             "        return True\n"
             "    return False\n"
         )

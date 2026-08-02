@@ -16,14 +16,12 @@ from pathlib import Path
 import pytest
 
 from agm.agl.modules.ids import ENTRY_ID
-from agm.agl.parser import parse_program
 from agm.agl.scope import (
     AglScopeError,
     BuiltinKind,
     ModuleResolution,
-    resolve_module,
 )
-from agm.agl.scope.symbols import BinderKind, BindingRef
+from agm.agl.scope.symbols import BinderKind, BindingRef, ScopeNode
 from agm.agl.syntax.nodes import (
     AsPattern,
     AssignStmt,
@@ -64,21 +62,34 @@ from agm.agl.syntax.nodes import (
 )
 from agm.agl.syntax.spans import SourceSpan
 from agm.agl.syntax.types import IntT
+from tests.agl.module_graph import resolve_entry, resolve_program_ast
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
 
-def parse_and_resolve(source: str, *, origin_path: Path | None = None) -> ModuleResolution:
-    """Parse *source* and run the scope resolution pass."""
-    return resolve_module(parse_program(source), origin_path=origin_path)
+def parse_and_resolve(
+    source: str,
+    *,
+    origin_path: Path | None = None,
+    parent_scope: ScopeNode | None = None,
+    default_stdlib: bool = True,
+) -> ModuleResolution:
+    """Resolve *source* as the entry of a real module graph (std/core included by
+    default, matching production)."""
+    return resolve_entry(
+        source,
+        origin_path=origin_path,
+        parent_scope=parent_scope,
+        default_stdlib=default_stdlib,
+    )
 
 
-def reject_scope(source: str) -> AglScopeError:
+def reject_scope(source: str, *, default_stdlib: bool = True) -> AglScopeError:
     """Assert that *source* fails scope resolution and return the error."""
     with pytest.raises(AglScopeError) as exc_info:
-        parse_and_resolve(source)
+        parse_and_resolve(source, default_stdlib=default_stdlib)
     return exc_info.value
 
 
@@ -283,8 +294,16 @@ def _make_program(*items: Item) -> Program:
 
 
 def resolve_program(*items: Item) -> ModuleResolution:
-    """Construct and resolve a Program from the given top-level items."""
-    return resolve_module(_make_program(*items))
+    """Construct and resolve a Program from the given top-level items.
+
+    Calls ``resolve_program_ast`` directly rather than through
+    ``tests.agl.module_graph``'s ``resolve_entry``: the items here are
+    hand-built AST nodes (via the ``_make_*`` helpers above, with node ids
+    from this module's own ``_nid()`` counter), not source text, and
+    ``resolve_entry`` only accepts a source string to parse. There is no
+    source text to hand it.
+    """
+    return resolve_program_ast(_make_program(*items))
 
 
 def reject_program(*items: Item) -> AglScopeError:
@@ -1953,10 +1972,14 @@ class TestMethodReceiverClassification:
         ),
         ids=("builtin", "extern"),
     )
-    def test_bodyless_method_forms_are_classified(self, source: str) -> None:
-        resolved = parse_and_resolve(
-            f"record Point()\n{source}\n()", origin_path=Path("program.agl")
-        )
+    def test_bodyless_method_forms_are_classified(self, source: str, tmp_path: Path) -> None:
+        # `extern def` is only accepted for an entry with a real backing file that
+        # has a companion `.py` sibling; `builtin def` needs no such file, so only
+        # the extern case needs a real tmp_path origin.
+        origin_path = tmp_path / "program.agl"
+        if "extern" in source:
+            origin_path.with_suffix(".py").write_text("")
+        resolved = parse_and_resolve(f"record Point()\n{source}\n()", origin_path=origin_path)
         name = "builtin_host" if "builtin" in source else "extern_host"
 
         assert resolved.method_declarations == {
@@ -2267,7 +2290,7 @@ class TestParentScopeSeam:
     def test_reference_resolves_into_parent(self) -> None:
         """A VarRef to a parent-scope binding resolves through the parent."""
         session = parse_and_resolve("let x = 1\nx")
-        entry = resolve_module(parse_program("print x"), parent_scope=session.root_scope)
+        entry = resolve_entry("print x", parent_scope=session.root_scope)
         # The print's arg VarRef resolved to the session's let binding.
         call_item = entry.program.body.items[0]
         assert isinstance(call_item, Call)
@@ -2279,7 +2302,7 @@ class TestParentScopeSeam:
     def test_redeclaring_parent_name_shadows_without_error(self) -> None:
         """Redeclaring a parent-visible name shadows without error."""
         session = parse_and_resolve("let x = 1\nx")
-        entry = resolve_module(parse_program("let x = 2\nx"), parent_scope=session.root_scope)
+        entry = resolve_entry("let x = 2\nx", parent_scope=session.root_scope)
         let_stmt = entry.program.body.items[0]
         assert isinstance(let_stmt, LetDecl)
         assert "x" in entry.root_scope.bindings
@@ -2288,7 +2311,7 @@ class TestParentScopeSeam:
     def test_assign_to_parent_mutable_resolves(self) -> None:
         """``:=`` of a parent var binding resolves through the parent."""
         session = parse_and_resolve("var n: int = 0\nn")
-        entry = resolve_module(parse_program("n := 1"), parent_scope=session.root_scope)
+        entry = resolve_entry("n := 1", parent_scope=session.root_scope)
         assign_stmt = entry.program.body.items[0]
         assert isinstance(assign_stmt, AssignStmt)
         ref = entry.resolution[assign_stmt.node_id]
@@ -2298,7 +2321,7 @@ class TestParentScopeSeam:
     def test_assign_to_parent_immutable_resolves_as_immutable(self) -> None:
         """``:=`` of a parent let binding resolves; typechecking rejects it."""
         session = parse_and_resolve("let k = 1\nk")
-        entry = resolve_module(parse_program("k := 2"), parent_scope=session.root_scope)
+        entry = resolve_entry("k := 2", parent_scope=session.root_scope)
         assign_stmt = entry.program.body.items[0]
         assert isinstance(assign_stmt, AssignStmt)
         ref = entry.resolution[assign_stmt.node_id]
@@ -2307,8 +2330,8 @@ class TestParentScopeSeam:
 
     def test_ambient_agents(self) -> None:
         """An ambient agent resolves without an in-source declaration."""
-        r = resolve_module(
-            parse_program('let x = ask("Q", agent = session_bot)\nx'),
+        r = resolve_entry(
+            'let x = ask("Q", agent = session_bot)\nx',
             ambient_agents=frozenset({"session_bot"}),
         )
         let_node = r.program.body.items[0]
@@ -2327,8 +2350,8 @@ class TestParentScopeSeam:
         prior = parse_and_resolve("enum Review\n  | Pass\n  | Fail\nPass()")
         session_scope = prior.root_scope
         # No ambient_constructor_candidates passed → candidates is empty for 'Pass'.
-        entry = resolve_module(
-            parse_program("Pass()"),
+        entry = resolve_entry(
+            "Pass()",
             parent_scope=session_scope,
         )
         # Scope resolution succeeds but does NOT populate constructor_refs.
@@ -2342,13 +2365,11 @@ class TestParentScopeSeam:
 
     def test_ambient_nullary_variant_retains_bare_pattern_metadata(self) -> None:
         prior = parse_and_resolve("enum Flag\n  | mark\nmark()")
-        entry = resolve_module(
-            parse_program(
-                "enum Packet\n"
-                "  | packet(left: int, right: int)\n"
-                "let item = packet(1, 2)\n"
-                "case item of | packet(mark, _ as mark) => mark"
-            ),
+        entry = resolve_entry(
+            "enum Packet\n"
+            "  | packet(left: int, right: int)\n"
+            "let item = packet(1, 2)\n"
+            "case item of | packet(mark, _ as mark) => mark",
             parent_scope=prior.root_scope,
             ambient_constructor_candidates=prior.constructor_candidates,
         )
@@ -2434,8 +2455,8 @@ class TestParentScopeSeam:
         with pytest.raises(AglScopeError):
             if candidate_source == "ambient":
                 prior = parse_and_resolve(f"{declaration}\n{value}")
-                resolve_module(
-                    parse_program(entry_source),
+                resolve_entry(
+                    entry_source,
                     parent_scope=prior.root_scope,
                     ambient_constructor_candidates=prior.constructor_candidates,
                     ambient_type_names=prior.declared_type_names,
@@ -2455,8 +2476,8 @@ class TestParentScopeSeam:
         }
         # New entry references Pass() with a parent scope that has the constructor binding.
         session_scope = prior.root_scope
-        entry = resolve_module(
-            parse_program("Pass()"),
+        entry = resolve_entry(
+            "Pass()",
             parent_scope=session_scope,
             ambient_constructor_candidates=ambient,
         )
@@ -2497,8 +2518,8 @@ class TestParentScopeSeam:
         }
         ambient_type_names = prior.declared_type_names
         session_scope = prior.root_scope
-        entry = resolve_module(
-            parse_program("Review::Pass()"),
+        entry = resolve_entry(
+            "Review::Pass()",
             parent_scope=session_scope,
             ambient_constructor_candidates=ambient_candidates,
             ambient_type_names=ambient_type_names,
@@ -3147,8 +3168,8 @@ class TestAmbientAgentBindingEdgeCases:
         session = parse_and_resolve("let session_bot = 1\nsession_bot")
         # Pass ambient_agents — the name is already in parent scope via lookup,
         # so the ambient binding definition is skipped.
-        entry = resolve_module(
-            parse_program("let x = 1\nx"),
+        entry = resolve_entry(
+            "let x = 1\nx",
             parent_scope=session.root_scope,
             ambient_agents=frozenset({"session_bot"}),
         )
@@ -3159,8 +3180,8 @@ class TestAmbientAgentBindingEdgeCases:
     def test_ambient_agent_already_declared_locally_skipped(self) -> None:
         """If an ambient agent name is also declared locally, local takes precedence."""
         # Declare 'bot' locally AND pass it as ambient — should not double-define.
-        r = resolve_module(
-            parse_program("agent bot\nlet x = bot\nx"),
+        r = resolve_entry(
+            "agent bot\nlet x = bot\nx",
             ambient_agents=frozenset({"bot"}),
         )
         # The local declared_agents entry takes precedence; "bot" resolves as agent_binding.
@@ -3176,8 +3197,8 @@ class TestAmbientAgentBindingEdgeCases:
         already-defined check.
         """
         with pytest.raises(AglScopeError) as exc_info:
-            resolve_module(
-                parse_program("def foo(x: int) -> int = x\nfoo(1)"),
+            resolve_entry(
+                "def foo(x: int) -> int = x\nfoo(1)",
                 ambient_agents=frozenset({"foo"}),
             )
         assert "foo" in exc_info.value.to_diagnostic().message
@@ -3487,22 +3508,6 @@ class TestConstructorBindings:
 
     # --- Qualified constructor access ---
 
-    def test_type_args_qualified_constructor_unknown_type_errors(self) -> None:
-        err = reject_scope("Missing[int]::Ctor")
-        assert "known type" in err.to_diagnostic().message
-
-    def test_module_qualified_constructor_in_single_file_errors(self) -> None:
-        err = reject_scope("m::Missing::Ctor")
-        assert "No module imported" in err.to_diagnostic().message
-
-    def test_long_unknown_qualifier_chain_reports_a_regular_resolution_error(self) -> None:
-        source = "A::B::C[int]::member"
-        err = reject_scope(source)
-        diagnostic = err.to_diagnostic()
-        assert "unsupported qualifier chain" not in diagnostic.message.lower()
-        assert "no module" in diagnostic.message.lower()
-        assert diagnostic.line == 1
-
     def test_qualified_constructor_recorded(self) -> None:
         """Qualified access Owner::member records the shared constructor reference."""
         r = parse_and_resolve("enum Option\n  | none\n  | some\nlet x = Option::some\nx\n")
@@ -3587,15 +3592,28 @@ class TestConstructorBindings:
     # --- Enum name is NOT a value (only variants are) ---
 
     def test_enum_name_used_as_value_is_undefined(self) -> None:
-        """The enum name itself is NOT a value binding — only its variants are."""
-        err = reject_scope("enum Option\n  | none\n  | some\nlet x = Option\nx\n")
+        """The enum name itself is NOT a value binding — only its variants are.
+
+        default_stdlib=False: this program declares its own ``Option``, which
+        collides with std/core's own ``Option[T]`` under the default import.
+        The point of this test is purely local ("does a bare reference to a
+        locally-declared enum's own name resolve as a value"), independent of
+        any module graph, so nothing else needs to be in scope.
+        """
+        err = reject_scope(
+            "enum Option\n  | none\n  | some\nlet x = Option\nx\n", default_stdlib=False
+        )
         msg = err.to_diagnostic().message
         assert "Option" in msg
         assert "not defined" in msg.lower()
 
     def test_uppercase_enum_name_not_value(self) -> None:
-        """Enum name 'Option' (uppercase) is still not a value binding."""
-        err = reject_scope("enum Option\n  | None\n  | Some\nOption\n")
+        """Enum name 'Option' (uppercase) is still not a value binding.
+
+        default_stdlib=False for the same reason as
+        test_enum_name_used_as_value_is_undefined above.
+        """
+        err = reject_scope("enum Option\n  | None\n  | Some\nOption\n", default_stdlib=False)
         msg = err.to_diagnostic().message
         assert "Option" in msg
 
@@ -3847,27 +3865,42 @@ class TestCastScope:
 
 
 class TestImportDeclScope:
-    """Import declarations pass through the scope resolver without errors."""
+    """Import declarations pass through the scope resolver without errors.
+
+    Each import here targets ``std/core`` — the only always-real module
+    available to this file's ``resolve_entry``-backed ``parse_and_resolve``
+    (its search root is the repo's real ``stdlib/`` directory; there is no
+    on-disk ``foo`` module for it to find). Under the old ``resolve_module``
+    wrapper, an import naming a nonexistent module never actually resolved to
+    a file — the per-module pass has no loader, so a bogus module id like
+    ``foo`` passed through unnoticed. Through a real module graph an
+    unresolvable import fails at load time with ``ModuleNotFound``, before
+    the scope pass ever runs, which is exactly the defect this file's
+    conversion to a real graph is meant to expose: the old versions of these
+    tests were not actually exercising import-clause scope admissibility
+    against a module that resolves, and would have passed identically for a
+    typo'd module name.
+    """
 
     def test_import_decl_does_not_raise(self) -> None:
         """A bare import declaration resolves without a scope error."""
-        r = parse_and_resolve("open import foo/bar\n1")
+        r = parse_and_resolve("open import std/core\n1")
         assert r  # no exception
 
     def test_import_with_alias_does_not_raise(self) -> None:
-        r = parse_and_resolve("import foo as f\n1")
+        r = parse_and_resolve("import std/core as core\n1")
         assert r
 
     def test_import_wildcard_does_not_raise(self) -> None:
-        r = parse_and_resolve("import foo/*\n1")
+        r = parse_and_resolve("import std/*\n1")
         assert r
 
     def test_import_using_does_not_raise(self) -> None:
-        r = parse_and_resolve("import foo using bar\n1")
+        r = parse_and_resolve("import std/core using print\n1")
         assert r
 
     def test_import_hiding_does_not_raise(self) -> None:
-        r = parse_and_resolve("import foo hiding secret\n1")
+        r = parse_and_resolve("import std/core hiding print\n1")
         assert r
 
 

@@ -20,13 +20,9 @@ import decimal
 import pytest
 
 from agm.agl.eval.ir_interpreter import IrInterpreter
-from agm.agl.lower import lower_module
-from agm.agl.parser import parse_program
-from agm.agl.scope import resolve_module
 from agm.agl.semantics.exceptions import AglRaise
 from agm.agl.semantics.values import DecimalValue, IntValue, TextValue
-from agm.agl.typecheck import check_module
-from tests.agl.ir_harness import _compiled_checked, base_caps, evaluate_ir, evaluate_ir_raises
+from tests.agl.ir_harness import evaluate_ir, evaluate_ir_raises, lower_ir
 
 
 def test_top_level_call_can_reference_later_function() -> None:
@@ -285,11 +281,7 @@ def test_recursion_depth_via_indirect_call() -> None:
 def test_recursion_depth_custom_limit_indirect() -> None:
     """IR-side recursion depth guard at a custom low limit via indirect call."""
     source = "def inf(n: int) -> int = inf(n + 1)\nlet f: (int) -> int = inf\nlet r = f(0)\n()"
-    program = parse_program(source)
-    resolved = resolve_module(program)
-    caps = base_caps()
-    checked = check_module(resolved, caps)
-    executable = lower_module(_compiled_checked(checked), source_text=source, source_label="<test>")
+    executable = lower_ir(source)
     interp = IrInterpreter(executable, max_call_depth=5)
     with pytest.raises(AglRaise) as exc_info:
         interp.run()

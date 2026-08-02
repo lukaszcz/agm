@@ -146,17 +146,6 @@ def _rejected(
     return MatchCompilationResult(compiled=None, issues=issues)
 
 
-def compile_module_matches(checked: CheckedModule) -> MatchCompilationResult:
-    """Compile every match site in a checked module without raising source issues."""
-    sites, issues = _compile_owner_sites(checked)
-    sorted_issues = tuple(sorted(issues, key=issue_sort_key))
-    if sorted_issues:
-        return _rejected((sites,), sorted_issues)
-    return MatchCompilationResult(
-        compiled=MatchCompiledModule(checked=checked, sites=sites), issues=()
-    )
-
-
 def compile_program_matches(checked: CheckedProgram) -> MatchCompilationResult:
     """Compile every match site in every reachable checked module."""
     sites_by_module: dict[ModuleId, Mapping[int, CompiledMatchSite]] = {}
@@ -274,7 +263,6 @@ __all__ = [
     "MatchCompiledProgram",
     "MatchCompiledModule",
     "compile_program_matches",
-    "compile_module_matches",
     "diagnostic_from_match_issue",
     "diagnostics_from_match_issues",
     "validate_match_compiled_program",

@@ -26,7 +26,6 @@ import pytest
 from agm.agl.capabilities import HostCapabilities
 from agm.agl.diagnostics import Diagnostic
 from agm.agl.parser import parse_program
-from agm.agl.scope import resolve_module
 from agm.agl.scope.program import resolve_program
 from agm.agl.scope.symbols import AglScopeError, ModuleResolution, ScopeNode
 from agm.agl.semantics.types import CastSpec
@@ -39,11 +38,17 @@ from agm.agl.typecheck import (
     FunctionType,
     IntType,
     TextType,
-    check_module,
     check_program,
 )
-from agm.agl.typecheck.env import CallSiteRecord, OutputContractSpec, PartialCallSpec
+from agm.agl.typecheck.checker import _check_prepared_module
+from agm.agl.typecheck.env import (
+    CallSiteRecord,
+    OutputContractSpec,
+    PartialCallSpec,
+    TypeEnvironment,
+)
 from tests.agl.ir_harness import make_graph_from_files, write_companion_file
+from tests.agl.module_graph import resolve_and_check_program_ast, resolve_entry, resolve_program_ast
 
 _PATH = Path("/virtual/extern_typecheck.agl")
 
@@ -61,9 +66,21 @@ _TYPE_REJECTIONS_DIR = Path(__file__).resolve().parent / "agl" / "rejections" / 
 
 
 def check_extern(source: str, capabilities: HostCapabilities | None = None) -> CheckedModule:
-    """Parse + resolve (file-backed) + check *source*, returning the CheckedModule."""
-    resolved = resolve_module(parse_program(source), origin_path=_PATH)
-    return check_module(resolved, capabilities or _CAPS)
+    """Parse + resolve (file-backed) + check *source*, returning the CheckedModule.
+
+    Uses ``resolve_and_check_program_ast``'s hand-built single-module graph
+    rather than a real loaded one: *_PATH* is a virtual, non-existent file,
+    deliberately exercising the scope/typecheck layers' own rule that an
+    extern needs a file-backed origin -- independent of whether a companion
+    ``.py`` file actually exists on disk, which only the module loader (a
+    separate, already graph-tested concern; see ``check_extern_graph`` below
+    and ``test_agl_extern_syntax.py``) enforces. Building a real loaded graph
+    here would hit that loader check first and mask the one this class means
+    to test.
+    """
+    return resolve_and_check_program_ast(
+        parse_program(source), capabilities or _CAPS, origin_path=_PATH
+    )
 
 
 def reject_extern(source: str, capabilities: HostCapabilities | None = None) -> AglTypeError:
@@ -78,6 +95,29 @@ def check_extern_graph(tmp_path: Path, modules: dict[str, str]) -> CheckedProgra
     graph = make_graph_from_files(tmp_path, modules)
     resolved = resolve_program(graph)
     return check_program(resolved, _CAPS)
+
+
+def _check_resolved(resolved: ModuleResolution, capabilities: HostCapabilities) -> CheckedModule:
+    """Type-check an already-built ``ModuleResolution`` via check_program's
+    internal per-module entry point.
+
+    Mirrors ``tests/test_agl_typecheck.py``'s helper of the same name: for a
+    hand-built ``ModuleResolution`` exercising a defensive checker guard
+    unreachable from real source (the grammar always requires a return type
+    for ``extern def``), there is no source text to hand to
+    ``resolve_and_check_entry``. This calls ``_check_prepared_module`` (what
+    ``check_program`` itself drives per module) directly: env setup, then
+    ``_check_prepared_module`` with declaration-collision validation on.
+    """
+    env = TypeEnvironment(
+        local_scope_paths=frozenset(resolved.scope_nodes), scope_nodes=resolved.scope_nodes
+    )
+    return _check_prepared_module(
+        resolved,
+        capabilities,
+        env=env,
+        validate_declaration_collisions=True,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -353,12 +393,17 @@ class TestExternCallSiteRecording:
         assert [site.target_type for site in cp.call_sites] == [IntType(), IntType()]
 
     def test_failed_region_rolls_back_extern_inventory_before_checker_reuse(self) -> None:
+        # Direct resolve_program_ast bypass, not resolve_and_check_entry: see
+        # check_extern's docstring -- this builds a _Checker by hand from a
+        # virtual origin_path with no real companion file, which is exactly
+        # what a real module graph's loader would reject before this
+        # internal-state assertion ever ran.
         from agm.agl.syntax.nodes import Call
         from agm.agl.typecheck.builder import _TypeBuilder
         from agm.agl.typecheck.checker import _Checker
         from agm.agl.typecheck.env import TypeEnvironment
 
-        resolved = resolve_module(
+        resolved = resolve_program_ast(
             parse_program(
                 "extern def id[T](value: T) -> T\n"
                 "extern def same[T](left: T, right: T) -> T\n"
@@ -427,7 +472,7 @@ class TestExternCallSiteRecording:
         from agm.agl.typecheck.env import TypeEnvironment
         from agm.agl.typecheck.inference import InferenceEngine
 
-        checker = _Checker(TypeEnvironment(), resolve_module(parse_program("()")), _CAPS)
+        checker = _Checker(TypeEnvironment(), resolve_entry("()"), _CAPS)
         target = _ExternTarget("id", IntType(), 1, ENTRY_ID)
         checker._extern_expr_targets[10] = (target,)
         checker._extern_binding_targets[11] = (target,)
@@ -457,7 +502,7 @@ class TestExternCallSiteRecording:
         from agm.agl.typecheck.env import TypeEnvironment
         from agm.agl.typecheck.inference import InferenceEngine
 
-        checker = _Checker(TypeEnvironment(), resolve_module(parse_program("()")), _CAPS)
+        checker = _Checker(TypeEnvironment(), resolve_entry("()"), _CAPS)
         unresolved = InferenceEngine().fresh("target")
         with pytest.raises(AglTypeError, match="concrete target"):
             checker._finalize_extern_call_obligation(
@@ -762,4 +807,4 @@ class TestExternDefensiveGuards:
             declared_functions={"f": fd},
         )
         with pytest.raises(AglTypeError, match="must declare a return type"):
-            check_module(resolved, _CAPS)
+            _check_resolved(resolved, _CAPS)

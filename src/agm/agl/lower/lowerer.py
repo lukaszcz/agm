@@ -1,4 +1,4 @@
-"""Single-module lowerer for the AgL typeless execution IR.
+"""Per-module lowerer for the AgL typeless execution IR.
 
 Transforms a successful match-compiled program artifact into an
 ``ExecutableProgram`` for the supported node subset. Every implicit coercion is
@@ -144,7 +144,6 @@ from agm.agl.ir.program import (
     SymbolDescriptor,
     VariantDescriptor,
 )
-from agm.agl.ir.validate import validate_ir
 from agm.agl.lower.coercions import compile_coercion
 from agm.agl.lower.conversions import compile_recipe
 from agm.agl.matchcompile import (
@@ -160,14 +159,12 @@ from agm.agl.matchcompile import (
     FieldOccurrenceProvenance,
     LetSite,
     LiteralKind,
-    MatchCompiledModule,
     Occurrence,
     OccurrenceId,
     RecordConstructor,
 )
-from agm.agl.modules.ids import ENTRY_ID, STD_CORE_ID, ModuleId
+from agm.agl.modules.ids import STD_CORE_ID, ModuleId
 from agm.agl.scope.symbols import BinderKind, BindingRef, BuiltinKind
-from agm.agl.self_validation import self_validation_enabled
 from agm.agl.semantics.type_table import MethodDef, TypeTable
 from agm.agl.semantics.types import (
     BUILTIN_EXCEPTIONS,
@@ -274,7 +271,7 @@ from agm.agl.typecheck.env import (
 )
 from agm.util.text import normalize_newlines
 
-__all__ = ["InitializerOrigin", "_LinkState", "builtin_nominals_from_declarations", "lower_module"]
+__all__ = ["InitializerOrigin", "_LinkState", "builtin_nominals_from_declarations"]
 
 
 def _contract_has_schema(
@@ -357,7 +354,7 @@ def builtin_nominals_from_declarations(
 
 
 # ---------------------------------------------------------------------------
-# Internal lowerer state (one instance per lower_module call)
+# Internal lowerer state (one instance per module lowered)
 # ---------------------------------------------------------------------------
 
 
@@ -3594,10 +3591,10 @@ class _Lowerer:
         """Pre-allocate static function symbols and needed agent handles.
 
         Phase 1 of lowering one module body, run before any body is lowered so
-        mutual recursion resolves. Both single-module and multi-module entry
-        points use it, exactly as they share :meth:`lower_initializers`; a
-        scope region is transparent here the same way. ``public`` marks the
-        allocated agent handles visible outside their module.
+        mutual recursion resolves. Every module of a program shares this step,
+        exactly as they share :meth:`lower_initializers`; a scope region is
+        transparent here the same way. ``public`` marks the allocated agent
+        handles visible outside their module.
         """
         for item in static_items(body.items):
             if isinstance(item, FuncDef) and not item.is_builtin:
@@ -3624,9 +3621,9 @@ class _Lowerer:
         """Lower one module body and publish its initializer origins.
 
         This is the single walk that decides which items become initializers
-        and in what order. Both single-module and multi-module entry points use
-        it; it publishes the source item behind every emitted initializer for
-        REPL promotion. A scope region is transparent here exactly as it is to
+        and in what order, shared by every module of a program; it publishes
+        the source item behind every emitted initializer for REPL promotion.
+        A scope region is transparent here exactly as it is to
         ``static_items``: each of its members gets its own source index, the
         same as a root item, so a region is not one promotable declaration
         group — a binder inside a region completes and promotes independently
@@ -3708,47 +3705,3 @@ class _Lowerer:
             dry_run_inventory=dry_run_inventory,
             builtin_nominals=self._link.builtin_nominals,
         )
-
-
-# ---------------------------------------------------------------------------
-# Public entry point
-# ---------------------------------------------------------------------------
-
-
-def lower_module(
-    compiled: MatchCompiledModule,
-    *,
-    source_text: str,
-    source_label: str,
-    contract_payloads: Mapping[int, ContractPayload] | None = None,
-) -> ExecutableProgram:
-    """Lower a single-module match-compiled artifact to an ``ExecutableProgram``.
-
-    :param compiled: the statically match-compiled program to lower.
-    :param source_text: the normalised source text (used in the sources table).
-    :param source_label: human-readable label for the source (display_name).
-    :returns: the linked ``ExecutableProgram`` ready for evaluation.
-    :raises NotImplementedError: for unsupported AST nodes.
-    :raises AssertionError: for missing checker side-table entries (compiler bugs).
-    """
-    # ``compiled`` validated itself when it was constructed; lowering adds the IR
-    # self-check over its own output below.
-    checked = compiled.checked
-    link = _LinkState(builtin_nominals=builtin_nominals_from_declarations({ENTRY_ID: checked}))
-    source_id = SourceId(link.next_source)
-    link.next_source += 1
-    normalized = normalize_newlines(source_text)
-    link.sources[source_id] = SourceFile(display_name=source_label, normalized_text=normalized)
-    lowerer = _Lowerer(
-        checked,
-        link,
-        ENTRY_ID,
-        source_id,
-        source_text,
-        compiled.sites,
-        contract_payloads=contract_payloads,
-    )
-    program = lowerer.lower()
-    if self_validation_enabled():
-        validate_ir(program)
-    return program

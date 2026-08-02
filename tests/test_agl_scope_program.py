@@ -16,7 +16,6 @@ These tests drive multi-module AgL programs through ``resolve_program`` and asse
 - wildcard overlap (idempotent same module, clash different modules)
 - cross-file mutual recursion
 - ``BindingRef.module_id`` set correctly
-- single-module graph via ``resolve_program`` equals ``resolve_module()`` result
 """
 
 from __future__ import annotations
@@ -26,8 +25,6 @@ from pathlib import Path
 import pytest
 
 from agm.agl.modules.ids import ENTRY_ID, STD_CONFIG_ID, ModuleId
-from agm.agl.parser import parse_program
-from agm.agl.scope import resolve_module
 from agm.agl.scope.program import ResolvedModule, ResolvedProgram, resolve_program
 from agm.agl.scope.symbols import AglScopeError, BinderKind
 from agm.agl.semantics.values import IntValue
@@ -38,6 +35,7 @@ from tests.agl.ir_harness import (
 from tests.agl.ir_harness import (
     make_graph_from_files as _make_graph_from_files,
 )
+from tests.agl.module_graph import resolve_entry
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -1824,51 +1822,6 @@ class TestBindingRefModuleId:
 
 
 # ---------------------------------------------------------------------------
-# Test: single-module resolve_program == resolve_module()
-# ---------------------------------------------------------------------------
-
-
-class TestSingleModuleEquivalence:
-    def test_single_module_resolution_tables_match(self, tmp_path: Path) -> None:
-        """A single-module graph resolves identically via resolve_program and resolve_module()."""
-        source = "def foo() -> int = 1\nlet x = foo()\nx"
-        graph = _make_graph_from_files(tmp_path, {"entry": source})
-        program_result = resolve_program(graph)
-        from agm.agl.parser import parse_program
-
-        program = parse_program(source)
-        single_result = resolve_module(program)
-        # Both should resolve the same VarRef node_ids
-        entry_resolution = program_result.modules[ENTRY_ID].resolved.resolution
-        single_resolution = single_result.resolution
-        # The node_ids should match in count
-        assert len(entry_resolution) == len(single_resolution)
-        # And all resolved names/kinds should match (module_id may differ: ENTRY_ID vs local)
-        for node_id, single_ref in single_resolution.items():
-            assert node_id in entry_resolution
-            graph_ref = entry_resolution[node_id]
-            assert graph_ref.name == single_ref.name
-            assert graph_ref.kind == single_ref.kind
-
-    def test_single_module_module_id_is_entry_id(self, tmp_path: Path) -> None:
-        """In a single-module graph, all resolved BindingRefs have module_id == ENTRY_ID."""
-        source = "def foo() -> int = 1\nlet x = foo()\nx"
-        graph = _make_graph_from_files(tmp_path, {"entry": source})
-        result = resolve_program(graph)
-        for ref in result.modules[ENTRY_ID].resolved.resolution.values():
-            assert ref.module_id == ENTRY_ID
-
-    def test_existing_resolve_still_works(self) -> None:
-        """The per-module resolve_module() function still works unchanged after adding module_id."""
-        from agm.agl.parser import parse_program
-
-        program = parse_program("def foo() -> int = 1\nlet x = foo()\nx")
-        result = resolve_module(program)
-        for ref in result.resolution.values():
-            assert ref.module_id == ENTRY_ID
-
-
-# ---------------------------------------------------------------------------
 # Test: assign-stmt resolution with module_id
 # ---------------------------------------------------------------------------
 
@@ -1991,7 +1944,7 @@ class TestTypeDeclarationsInModules:
         ordinary session binding keeps its expression-position meaning rather
         than being silently replaced by the new entry's alias.
         """
-        prior_resolved = resolve_module(parse_program("let Palette = 42\nPalette"))
+        prior_resolved = resolve_entry("let Palette = 42\nPalette")
         session_scope = prior_resolved.root_scope
 
         graph = _make_graph_from_files(
@@ -2380,7 +2333,7 @@ class TestResolveGraphReplSeams:
         """entry_parent_scope: a name pre-bound in the parent scope is visible in entry."""
         # Build a prior session that binds "x" as a let binding.
         prior_source = "let x = 42\nx"
-        prior_resolved = resolve_module(parse_program(prior_source))
+        prior_resolved = resolve_entry(prior_source)
         session_scope = prior_resolved.root_scope
 
         # New entry references "x" — which is only in the parent scope.
@@ -2403,7 +2356,7 @@ class TestResolveGraphReplSeams:
         resolution, ``mylib`` would silently succeed.
         """
         prior_source = "let helper = 1\nhelper"
-        prior_resolved = resolve_module(parse_program(prior_source))
+        prior_resolved = resolve_entry(prior_source)
         session_scope = prior_resolved.root_scope
 
         # mylib references "helper", which exists ONLY in the entry's parent scope.

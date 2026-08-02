@@ -9,7 +9,7 @@ import pytest
 
 from agm.agl.modules.ids import ENTRY_ID
 from agm.agl.parser import parse_program
-from agm.agl.scope import AglScopeError, ModuleResolution, resolve_module
+from agm.agl.scope import AglScopeError, ModuleResolution
 from agm.agl.scope.program import resolve_program
 from agm.agl.syntax import (
     AssignStmt,
@@ -28,6 +28,7 @@ from agm.agl.syntax import (
 from agm.agl.syntax.nodes import ConstructorPattern
 from agm.agl.syntax.visitor import walk
 from tests.agl.ir_harness import make_graph_from_files
+from tests.agl.module_graph import resolve_entry
 
 
 def _ref(source: str) -> VarRef:
@@ -167,7 +168,7 @@ def test_qualified_is_tests_keep_segment_spans_and_type_arguments() -> None:
     ),
 )
 def test_long_qualifier_chains_are_not_rejected_by_legacy_shape_validation(source: str) -> None:
-    resolve_module(parse_program(source))
+    resolve_entry(source)
 
 
 @pytest.mark.parametrize(
@@ -181,7 +182,7 @@ def test_long_qualifier_chains_are_not_rejected_by_legacy_shape_validation(sourc
 )
 def test_nonleading_anchor_and_route_segments_report_route_errors(source: str) -> None:
     with pytest.raises(AglScopeError, match="Only the leading qualifier"):
-        resolve_module(parse_program(source))
+        resolve_entry(source)
 
 
 def test_current_module_qualified_assignment_remains_an_assignment_target() -> None:
@@ -197,9 +198,7 @@ def test_current_module_qualified_assignment_remains_an_assignment_target() -> N
 
 def test_non_expression_chain_routes_reject_only_invalid_nonleading_routes() -> None:
     with pytest.raises(AglScopeError, match="Only the leading qualifier"):
-        resolve_module(
-            parse_program("let value = 1\ncase value of | module::owner/name::member => 1")
-        )
+        resolve_entry("let value = 1\ncase value of | module::owner/name::member => 1")
 
 
 def test_long_qualified_expression_retains_all_segments() -> None:
@@ -210,11 +209,10 @@ def test_long_qualified_expression_retains_all_segments() -> None:
 
 
 def test_current_module_anchor_uses_root_binding_without_import_environment() -> None:
-    program = parse_program(
+    resolution = resolve_entry(
         "def root() -> int = 1\nscope Nested\ndef use(root: int) -> int = ::root()\nend Nested"
     )
-
-    resolution = resolve_module(program)
+    program = resolution.program
     nested = next(item for item in program.body.items if isinstance(item, ScopeRegion))
     nested_use = next(item for item in nested.items if isinstance(item, FuncDef))
     assert nested_use.name == "use"
@@ -224,7 +222,7 @@ def test_current_module_anchor_uses_root_binding_without_import_environment() ->
 
 
 def test_generic_constructor_ignores_unrelated_same_named_scope() -> None:
-    program = parse_program(
+    resolve_entry(
         "scope Other\n"
         "scope A\n"
         "def ignored() -> int = 0\n"
@@ -235,16 +233,14 @@ def test_generic_constructor_ignores_unrelated_same_named_scope() -> None:
         "A[int]::make(value = 1)"
     )
 
-    resolve_module(program)
-
 
 def test_current_module_anchored_type_constructor_uses_the_chain_constructor_ref() -> None:
-    program = parse_program("enum Option\n  | some\n::Option::some")
+    resolution = resolve_entry("enum Option\n  | some\n::Option::some")
+    program = resolution.program
     assert isinstance(program.body, Block)
     expr = program.body.items[-1]
     assert isinstance(expr, VarRef)
 
-    resolution = resolve_module(program)
     assert resolution.constructor_refs[expr.node_id].owner_name == "Option"
     assert resolution.constructor_refs[expr.node_id].variant == "some"
 
@@ -258,7 +254,7 @@ def test_current_module_unknown_constructor_owner_reports_its_segment(source: st
     assert expr.qualifier is not None
 
     with pytest.raises(AglScopeError) as exc_info:
-        resolve_module(program)
+        resolve_entry(source)
 
     assert exc_info.value.to_diagnostic().message == "'Unknown' is not defined in this module."
     assert exc_info.value.span == expr.qualifier.segments[0].span
@@ -289,17 +285,17 @@ def test_scoped_enum_members_and_nested_type_members_run_through_the_full_pipeli
 
 def test_current_module_anchored_multi_segment_chain_reports_its_unknown_path() -> None:
     with pytest.raises(AglScopeError, match="scope path"):
-        resolve_module(parse_program("::A::B::C"))
+        resolve_entry("::A::B::C")
 
 
 def test_module_anchored_constructor_chain_never_falls_back_to_a_local_type() -> None:
     with pytest.raises(AglScopeError, match="No module"):
-        resolve_module(parse_program("enum A | value\n/A::value"))
+        resolve_entry("enum A | value\n/A::value")
 
 
 def test_nonconstructible_scoped_type_falls_back_to_the_legacy_constructor_diagnostic() -> None:
     with pytest.raises(AglScopeError):
-        resolve_module(parse_program("type A::Count = int\nA::Count"))
+        resolve_entry("type A::Count = int\nA::Count")
 
 
 @pytest.mark.parametrize(
@@ -318,13 +314,25 @@ def test_type_arguments_on_a_plain_scope_are_rejected_in_every_chain_position(
     source: str,
 ) -> None:
     with pytest.raises(AglScopeError, match="Type arguments cannot be applied to scope"):
-        resolve_module(parse_program(source))
+        resolve_entry(source)
 
 
-@pytest.mark.parametrize("source", ("First::Second::Third::member", "Type[int]::Second::member"))
-def test_long_expression_qualifier_chain_reports_the_unresolved_name(source: str) -> None:
-    with pytest.raises(AglScopeError, match="not defined|No module"):
-        resolve_module(parse_program(source))
+@pytest.mark.parametrize(
+    ("source", "match"),
+    (
+        ("First::Second::Third::member", "not defined|No module"),
+        # Under a real import environment, a first segment carrying type
+        # arguments is classified as an attempted module route before any
+        # name lookup is attempted, so this reports the invalid route shape
+        # rather than an unresolved name.
+        ("Type[int]::Second::member", "Type arguments cannot be applied to module route"),
+    ),
+)
+def test_long_expression_qualifier_chain_reports_the_unresolved_name(
+    source: str, match: str
+) -> None:
+    with pytest.raises(AglScopeError, match=match):
+        resolve_entry(source)
 
 
 def test_imported_scoped_enum_owner_retains_its_scope_path_for_is_and_case(

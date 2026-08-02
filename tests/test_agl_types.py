@@ -20,8 +20,6 @@ import pytest
 
 from agm.agl.capabilities import HostCapabilities
 from agm.agl.modules.ids import ModuleId
-from agm.agl.parser import parse_program
-from agm.agl.scope import resolve_module
 from agm.agl.semantics.type_table import TypeTable, comparable_types
 from agm.agl.semantics.types import (
     AgentType,
@@ -52,8 +50,8 @@ from agm.agl.semantics.types import (
     match_type_template,
     substitute,
 )
-from agm.agl.typecheck.checker import check_module
 from agm.agl.typecheck.env import TypeEnvironment
+from tests.agl.module_graph import resolve_and_check_entry
 
 # Comparability tests below only exercise scalar/agent/unit/function/typevar
 # operands, whose comparable_types arms never consult the TypeTable; an empty
@@ -160,16 +158,12 @@ class TestFunctionType:
         assert f1 == f2
 
     def test_bound_method_removes_and_substitutes_its_receiver(self) -> None:
-        checked = check_module(
-            resolve_module(
-                parse_program(
-                    "record Box[T]\n"
-                    "  value: T\n"
-                    "def Box::get[T](self) -> T = self.value\n"
-                    "let box = Box(value = 1)\n"
-                    "box.get"
-                )
-            ),
+        checked = resolve_and_check_entry(
+            "record Box[T]\n"
+            "  value: T\n"
+            "def Box::get[T](self) -> T = self.value\n"
+            "let box = Box(value = 1)\n"
+            "box.get",
             HostCapabilities(),
         )
         member_access = checked.resolved.program.body.items[-1]

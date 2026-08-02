@@ -1,20 +1,21 @@
 """Real-module-graph test helpers for unit-level scope and typecheck tests.
 
-Production never calls the per-module ``resolve_module``/``check_module``
-entry points directly: it always builds a real
+AgL has no per-module ``resolve_module``/``check_module`` entry points:
+resolution and checking are always driven by a real
 :class:`~agm.agl.modules.loader.ModuleGraph` (entry plus the standard
-library) and runs :func:`~agm.agl.scope.program.resolve_program` /
-:func:`~agm.agl.typecheck.program.check_program` over it. Calling the
-per-module functions instead skips the whole-program pre-passes and the
-entry's real import environment, so it can hide defects that only surface
-under the configuration production actually runs.
+library), through :func:`~agm.agl.scope.program.resolve_program` /
+:func:`~agm.agl.typecheck.program.check_program`. This module gives unit-level
+scope/typecheck tests a cheap way to build that same real graph for one
+source string, so no test exercises a configuration production does not.
 
 :func:`resolve_entry` and :func:`resolve_and_check_entry` build a real
 ``ModuleGraph`` for a single entry source (using
 :func:`~agm.agl.modules.loader.build_repl_graph`, the same seam the REPL
 uses) and run the real program-level passes, returning the entry module's
-``ModuleResolution``/``CheckedModule`` — the same shapes the old per-module
-wrappers returned, so a call site conversion changes only the call.
+``ModuleResolution``/``CheckedModule``. :func:`resolve_program_ast` and
+:func:`resolve_and_check_program_ast` are the same seam for a caller that
+already has a parsed (possibly hand-built, or virtually-pathed) ``Program``
+AST rather than a source string.
 
 The standard library (``std/core.agl``) is parsed once per process and
 reused across calls via ``build_repl_graph``'s ``cached`` parameter, since
@@ -52,13 +53,15 @@ import dataclasses
 from pathlib import Path
 
 from agm.agl.capabilities import HostCapabilities
-from agm.agl.modules.ids import STD_CORE_ID, ModuleId
+from agm.agl.modules.ids import ENTRY_ID, STD_CORE_ID, ModuleId
 from agm.agl.modules.loader import LoadedModule, ModuleGraph, build_repl_graph
 from agm.agl.modules.roots import RootSet
 from agm.agl.parser.parser import parse_program_seeded
 from agm.agl.scope import ModuleResolution
 from agm.agl.scope.program import resolve_program
 from agm.agl.scope.symbols import ConstructorRef, ScopeNode
+from agm.agl.syntax.nodes import ExportDecl, ImportDecl, Program, static_items
+from agm.agl.syntax.spans import SourceId
 from agm.agl.typecheck import CheckedModule
 from agm.agl.typecheck.env import TypeEnvironment
 from agm.agl.typecheck.program import check_program
@@ -102,7 +105,7 @@ def _cached_std_core() -> tuple[dict[ModuleId, LoadedModule], int]:
     return _std_core_cache, _std_core_next_start_id
 
 
-def _build_graph(
+def build_module_graph(
     source: str,
     *,
     origin_path: Path | None,
@@ -185,7 +188,7 @@ def resolve_entry(
     for positional convenience over ``program.body.items`` — the synthetic
     import is already invisible there regardless of this flag.
     """
-    graph, import_node_id = _build_graph(
+    graph, import_node_id = build_module_graph(
         source, origin_path=origin_path, default_stdlib=default_stdlib
     )
     resolved_program = resolve_program(
@@ -226,7 +229,7 @@ def resolve_and_check_entry(
     :func:`resolve_entry`, including the *default_stdlib* default and when
     to flip it off.
     """
-    graph, import_node_id = _build_graph(
+    graph, import_node_id = build_module_graph(
         source, origin_path=origin_path, default_stdlib=default_stdlib
     )
     resolved_program = resolve_program(
@@ -240,3 +243,97 @@ def resolve_and_check_entry(
     checked = checked_program.modules[graph.entry_id]
     stripped_resolved = _without_synthetic_import(checked.resolved, import_node_id)
     return dataclasses.replace(checked, resolved=stripped_resolved)
+
+
+def _single_module_graph(program: Program, *, origin_path: Path | None) -> ModuleGraph:
+    """Build a real one-module :class:`ModuleGraph` directly from *program*.
+
+    Bypasses ``build_repl_graph``/``load_graph`` entirely, so it needs no
+    source text and never touches the filesystem. This is the seam for the
+    two cases the entry-source helpers above cannot reach:
+
+    - A hand-built ``Program`` AST (constructed directly by a test, not
+      parsed from source text), which those helpers cannot accept.
+    - A virtual, non-existent *origin_path*, isolating the scope resolver's
+      own file-backed-origin rule (only checks ``path is not None``) from
+      the module loader's separate companion-file check
+      (:class:`~agm.agl.modules.errors.MissingExternCompanion`, raised only
+      while loading a module's *real* file from disk) — passing the same
+      virtual path to ``resolve_entry``/``resolve_and_check_entry`` would
+      hit that loader check first.
+
+    The returned graph carries no import edges and no standard library: a
+    caller that needs either of those needs the entry-source helpers above
+    instead.
+    """
+    return ModuleGraph(
+        modules={
+            ENTRY_ID: LoadedModule(
+                module_id=ENTRY_ID,
+                program=program,
+                path=origin_path,
+                source=SourceId(0),
+                imports=tuple(
+                    item
+                    for item in static_items(program.body.items)
+                    if isinstance(item, ImportDecl)
+                ),
+                export_decls=tuple(
+                    item
+                    for item in static_items(program.body.items)
+                    if isinstance(item, ExportDecl)
+                ),
+                source_text="",
+                spaced_qualifiers=(),
+                companion_path=None,
+            )
+        },
+        entry_id=ENTRY_ID,
+        sccs=((ENTRY_ID,),),
+    )
+
+
+def resolve_program_ast(
+    program: Program,
+    *,
+    origin_path: Path | None = None,
+    parent_scope: ScopeNode | None = None,
+    ambient_agents: frozenset[str] = frozenset(),
+    ambient_constructor_candidates: dict[str, tuple[ConstructorRef, ...]] | None = None,
+    ambient_type_names: frozenset[str] = frozenset(),
+) -> ModuleResolution:
+    """Resolve an already-parsed *program* as the entry of a real, single-module graph.
+
+    See :func:`_single_module_graph` for when this (rather than
+    :func:`resolve_entry`) is the right seam. Parameters mirror
+    :func:`resolve_entry`'s; there is no *default_stdlib* here since this
+    seam never injects one.
+    """
+    graph = _single_module_graph(program, origin_path=origin_path)
+    resolved_program = resolve_program(
+        graph,
+        ambient_agents=ambient_agents,
+        entry_ambient_constructor_candidates=ambient_constructor_candidates,
+        entry_ambient_type_names=ambient_type_names,
+        entry_parent_scope=parent_scope,
+    )
+    return resolved_program.modules[graph.entry_id].resolved
+
+
+def resolve_and_check_program_ast(
+    program: Program,
+    capabilities: HostCapabilities,
+    *,
+    origin_path: Path | None = None,
+    ambient_agents: frozenset[str] = frozenset(),
+    seed_env: TypeEnvironment | None = None,
+) -> CheckedModule:
+    """Resolve and type-check an already-parsed *program* as a single-module graph.
+
+    See :func:`resolve_program_ast` and :func:`_single_module_graph` for when
+    this is the right seam over :func:`resolve_and_check_entry`.
+    """
+    graph = _single_module_graph(program, origin_path=origin_path)
+    resolved_program = resolve_program(graph, ambient_agents=ambient_agents)
+    checked_program = check_program(resolved_program, capabilities, entry_seed_env=seed_env)
+    return checked_program.modules[graph.entry_id]

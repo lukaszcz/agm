@@ -2,8 +2,6 @@
 
 Public API
 ----------
-- :func:`check_module` — per-module type pass:
-  ``ModuleResolution × HostCapabilities → CheckedModule``.
 - :func:`check_program` — whole-program type pass:
   ``ResolvedProgram × HostCapabilities → CheckedProgram``.
 - :class:`CheckedModule` — frozen dataclass with ``node_types``,
@@ -39,7 +37,6 @@ from agm.agl.semantics.types import (
     free_type_vars,
     substitute,
 )
-from agm.agl.typecheck.checker import check_module
 from agm.agl.typecheck.env import (
     AglTypeError,
     CallSiteRecord,
@@ -93,7 +90,6 @@ __all__ = [
     "UnitType",
     "assert_checked_program_closed",
     "assert_checked_module_closed",
-    "check_module",
     "contains_type_var",
     "free_type_vars",
     "substitute",

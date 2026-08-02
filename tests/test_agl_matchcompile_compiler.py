@@ -72,8 +72,6 @@ from agm.agl.matchcompile.normalize import (
     signature_for_type,
 )
 from agm.agl.modules.ids import ENTRY_ID, STD_CORE_ID
-from agm.agl.parser import parse_program
-from agm.agl.scope import resolve_module
 from agm.agl.scope.program import resolve_program
 from agm.agl.semantics.type_table import TypeTable
 from agm.agl.semantics.types import EnumType, IntType, Type, TypeTemplate
@@ -84,11 +82,11 @@ from agm.agl.typecheck import (
     CheckedModule,
     EnumOwnerForm,
     EnumOwnerFormKind,
-    check_module,
     check_program,
 )
 from tests.agl.ir_harness import make_graph_from_files
 from tests.agl.match_reference import reference_action
+from tests.agl.module_graph import resolve_and_check_entry
 
 _CAPS = HostCapabilities(
     agent_names=frozenset(),
@@ -102,7 +100,7 @@ _CAPS = HostCapabilities(
 
 
 def _compile(source: str) -> tuple[CheckedModule, Case, CompiledMatchSite]:
-    checked = check_module(resolve_module(parse_program(source)), _CAPS)
+    checked = resolve_and_check_entry(source, _CAPS)
     cases: list[Case] = []
 
     def collect(node: object) -> None:
@@ -116,7 +114,7 @@ def _compile(source: str) -> tuple[CheckedModule, Case, CompiledMatchSite]:
 
 
 def test_compiler_marks_a_refutable_let_with_its_decision_witness() -> None:
-    checked = check_module(resolve_module(parse_program("let true = false")), _CAPS)
+    checked = resolve_and_check_entry("let true = false", _CAPS)
     lets: list[LetDecl] = []
 
     def collect(node: object) -> None:
@@ -157,7 +155,7 @@ def test_issue_kind_is_selected_by_the_sealed_source_payload() -> None:
     assert isinstance(case_compiled.normalized.source, CaseSite)
     assert isinstance(case_compiled.issues[0], NonExhaustiveIssue)
 
-    checked = check_module(resolve_module(parse_program("let true = false")), _CAPS)
+    checked = resolve_and_check_entry("let true = false", _CAPS)
     lets: list[LetDecl] = []
 
     def collect(node: object) -> None:

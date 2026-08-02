@@ -1,9 +1,10 @@
 """Function-header resolution and disposable candidate return inference.
 
-Standalone and program checking share this seam. Candidate discovery builds
-function dependency SCCs within either a standalone module or one import SCC,
-closes each component before its dependents, and publishes only concrete
-signatures outside that import SCC.
+Whole-program checking and a lone module checked in isolation (the sanctioned
+test seam over ``_check_prepared_module``) share this seam. Candidate
+discovery builds function dependency SCCs within either one import SCC or a
+single isolated module, closes each component before its dependents, and
+publishes only concrete signatures outside that import SCC.
 """
 
 from __future__ import annotations
@@ -134,8 +135,8 @@ class ModuleCandidateComponent:
 
     ``modules`` is exactly one loader-provided import SCC. Provisional
     signatures are visible only within those modules; ``publication_envs``
-    receives the closed candidates for later program checking. Standalone
-    checking uses the synthetic singleton.
+    receives the closed candidates for later program checking. A lone module
+    checked in isolation uses the synthetic singleton.
     """
 
     modules: tuple[CandidateModule, ...]
@@ -149,7 +150,7 @@ class ModuleCandidateComponent:
         capabilities: "HostCapabilities",
         module_id: ModuleId,
     ) -> "ModuleCandidateComponent":
-        """Build the standalone checker's synthetic one-module component."""
+        """Build the synthetic component for one module checked in isolation."""
         return cls((CandidateModule(resolved, env, capabilities, module_id),), (env,))
 
     def discovery_targets(self) -> tuple[TypeEnvironment, ...]:

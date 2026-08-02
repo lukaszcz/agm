@@ -1,8 +1,9 @@
 """Type-checking pass for AgL.
 
-``check_module(resolved, capabilities)`` performs a bidirectional type pass over the
+``_Checker`` performs a bidirectional type pass over one module's
 ``ModuleResolution``, using the ``HostCapabilities`` to validate codec and
-renderer names, and returns a ``CheckedModule``.
+renderer names, and produces a ``CheckedModule``; ``check_program`` drives one
+``_Checker`` per module of a whole program (see ``typecheck/program.py``).
 
 Rules implemented
 -----------------
@@ -776,8 +777,8 @@ class _Checker:
             item.node_id, tuple(segment.name for segment in item.scope_path)
         )
 
-    def check_module(self, program: Program) -> None:
-        """Type-check the entire program."""
+    def check_body(self, program: Program) -> None:
+        """Type-check one module's declarations and top-level items."""
         # Pre-pass: register static function signatures before any body is
         # checked, including members collected from named scope regions.
         for item in static_items(program.body.items):
@@ -2797,9 +2798,10 @@ class _Checker:
         callee_ref: BindingRef,
         hole_indices: Mapping[int, int],
     ) -> Type:
-        # Use the node-id-keyed lookup populated by the function-signature pre-pass
-        # (program context) and by _preregister_funcdef (module mode).  Keying
-        # by the callee's globally-unique decl_node_id avoids the same-name collision
+        # Use the node-id-keyed lookup populated by the whole-program
+        # function-signature pre-pass and by this module's own
+        # _preregister_funcdef.  Keying by the callee's globally-unique
+        # decl_node_id avoids the same-name collision
         # where two modules define functions with identical names but different
         # signatures, which would cause the name-keyed table to return the wrong
         # signature for a qualified cross-module call.
@@ -5024,16 +5026,9 @@ def prepare_module_headers(
     *,
     env: TypeEnvironment,
     module_id: ModuleId,
-    check_inhabitation: bool,
 ) -> None:
-    """Build a module's type table and pre-register its function headers.
-
-    The standalone boundary and the program driver share this step so header
-    pre-registration stays identical across single-module and program checking.
-    """
-    _TypeBuilder(env, module_id=module_id).collect(
-        resolved.program, check_inhabitation=check_inhabitation
-    )
+    """Build a module's type table and pre-register its function headers."""
+    _TypeBuilder(env, module_id=module_id).collect(resolved.program)
     header_checker = _Checker(
         env=env,
         resolved=resolved,
@@ -5052,7 +5047,6 @@ def _check_prepared_module(
     *,
     env: TypeEnvironment,
     module_id: ModuleId = ENTRY_ID,
-    check_inhabitation: bool = True,
     prepare_headers: bool = True,
     validate_declaration_collisions: bool = False,
     infer_candidates: bool = True,
@@ -5060,16 +5054,16 @@ def _check_prepared_module(
 ) -> CheckedModule:
     """Check using a prepared environment and return only finalized annotations.
 
-    Both single-module and program callers enter here after preparing the
-    namespace appropriate to their mode.  ``_Checker`` owns expression-region
+    ``check_program``'s Phase 4 enters here after preparing each module's
+    environment; this is also the sanctioned white-box seam for a test that
+    drives ``_Checker`` against a hand-built or mutated ``ModuleResolution``
+    with no real module graph behind it. ``_Checker`` owns expression-region
     close/finalize validation, so this boundary never returns provisional
     inference state.
 
     ``prepare_headers`` runs the type-table build and function-header
     pre-registration; the program driver disables it because Phase 3 already
-    seeded this environment before candidate inference. The standalone boundary
-    additionally requests declaration-collision validation once its shapes are
-    available.
+    seeded this environment before candidate inference.
     """
     if prepare_headers:
         prepare_module_headers(
@@ -5077,7 +5071,6 @@ def _check_prepared_module(
             capabilities,
             env=env,
             module_id=module_id,
-            check_inhabitation=check_inhabitation,
         )
     if validate_declaration_collisions:
         validate_builtin_declaration_uniqueness({module_id: resolved})
@@ -5095,55 +5088,9 @@ def _check_prepared_module(
         module_id=module_id,
         candidate_records=candidate_records,
     )
-    checker.check_module(resolved.program)
+    checker.check_body(resolved.program)
     checked = checker.result()
     checked.type_env.seal()
     if self_validation_enabled():
         assert_checked_module_closed(checked)
     return checked
-
-
-# ---------------------------------------------------------------------------
-# Public entry point
-# ---------------------------------------------------------------------------
-
-
-def check_module(
-    resolved: ModuleResolution,
-    capabilities: HostCapabilities,
-    *,
-    seed_env: TypeEnvironment | None = None,
-) -> CheckedModule:
-    """Run the full type-checking pass.
-
-    Parameters
-    ----------
-    resolved:
-        Output of the scope resolution pass.
-    capabilities:
-        Immutable host capability catalog (agents, codecs, renderers).
-    seed_env:
-        When given, the working ``TypeEnvironment`` starts pre-populated with
-        the seed's user-declared types and prior binding types.
-
-    Returns
-    -------
-    CheckedModule
-        The annotated program with type side tables and contract specs.
-
-    Raises
-    ------
-    AglTypeError
-        On the first static type violation (first-error abort).
-    """
-    env = TypeEnvironment(
-        local_scope_paths=frozenset(resolved.scope_nodes), scope_nodes=resolved.scope_nodes
-    )
-    if seed_env is not None:
-        env.seed_from(seed_env)
-    return _check_prepared_module(
-        resolved,
-        capabilities,
-        env=env,
-        validate_declaration_collisions=True,
-    )

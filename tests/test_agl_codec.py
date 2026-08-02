@@ -46,7 +46,6 @@ from agm.agl.runtime.agents import AgentFn, AgentRegistry
 from agm.agl.runtime.codec import JsonCodec, ParseResult, TextCodec
 from agm.agl.runtime.contract import OutputContract, materialize_contract, materialize_ir_contract
 from agm.agl.runtime.request import AgentRequest
-from agm.agl.scope import resolve_module
 from agm.agl.semantics.exceptions import AglRaise
 from agm.agl.semantics.type_table import TypeDef, TypeTable
 from agm.agl.semantics.types import (
@@ -83,9 +82,9 @@ from agm.agl.syntax.nodes import (
 )
 from agm.agl.syntax.spans import SourceSpan
 from agm.agl.type_schema import build_decode_schema, derive_schema
-from agm.agl.typecheck import check_module
 from agm.agl.typecheck.env import CheckedModule, OutputContractSpec
 from tests._agl_helpers import ambient_agents_for, enum_type, record_type, type_table_for
+from tests.agl.module_graph import resolve_and_check_program_ast
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -204,13 +203,20 @@ def _ensure_expr_tail(body: tuple[Item, ...]) -> tuple[Item, ...]:
 
 
 def _check_program_with_json(body: tuple[Item, ...]) -> CheckedModule:
-    """Run *body* through real resolve + check with both text and json codecs."""
+    """Run *body* through real resolve + check with both text and json codecs.
+
+    Uses ``resolve_and_check_program_ast``'s hand-built single-module graph:
+    *body* is a hand-built tuple of AST ``Item`` nodes constructed directly
+    by this module's ``_let``/``_template``/... builders below, not parsed
+    from source text, so there is no source string to hand to
+    ``tests.agl.module_graph.resolve_and_check_entry`` (which only accepts
+    one).
+    """
     program = ast.Program(
         body=ast.Block(items=_ensure_expr_tail(body), span=_sp(), node_id=_nid()),
         span=_sp(),
         node_id=_nid(),
     )
-    resolved = resolve_module(program, ambient_agents=ambient_agents_for(program))
     caps = HostCapabilities(
         agent_names=frozenset(),
         has_default_agent=True,
@@ -221,7 +227,7 @@ def _check_program_with_json(body: tuple[Item, ...]) -> CheckedModule:
             ),
         },
     )
-    return check_module(resolved, caps)
+    return resolve_and_check_program_ast(program, caps, ambient_agents=ambient_agents_for(program))
 
 
 class _Bindings(dict[str, object]):
@@ -238,10 +244,9 @@ def _run_with_json_codec(
 ) -> _Bindings:
     """Build + resolve + check + execute *body* with JsonCodec registered."""
     from agm.agl.eval.ir_interpreter import IrInterpreter
-    from agm.agl.lower import lower_module
     from agm.agl.runtime.codec import JsonCodec, OutputCodec, TextCodec
     from agm.agl.runtime.params import _materialize_ir_contracts
-    from tests.agl.ir_harness import _compiled_checked
+    from tests.agl.ir_harness import compile_checked_module, lower_compiled_module
 
     checked = _check_program_with_json(body)
     text_codec = TextCodec()
@@ -256,8 +261,8 @@ def _run_with_json_codec(
         named={AgentId(name): agent for name, agent in (named or {}).items()},
         default_agent=default_agent,
     )
-    executable = lower_module(
-        _compiled_checked(checked),
+    executable = lower_compiled_module(
+        compile_checked_module(checked),
         source_text="<direct-ast>",
         source_label="<test>",
     )

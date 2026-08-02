@@ -15,9 +15,7 @@ import pytest
 
 from agm.agl.capabilities import HostCapabilities
 from agm.agl.modules.ids import ENTRY_ID, STD_CORE_ID, ModuleId
-from agm.agl.parser import parse_program
 from agm.agl.repl import ReplSession
-from agm.agl.scope import resolve_module
 from agm.agl.scope.program import resolve_program
 from agm.agl.semantics.analyses import (
     compute_finite_closure,
@@ -56,9 +54,10 @@ from agm.agl.semantics.types import (
     UnitType,
 )
 from agm.agl.syntax.nodes import LetDecl, ParamKind, VarDecl, simple_let_pattern_name
-from agm.agl.typecheck import AglTypeError, CheckedModule, check_module
+from agm.agl.typecheck import AglTypeError, CheckedModule
 from agm.agl.typecheck.program import check_program
 from tests.agl.ir_harness import evaluate_ir_output, make_graph_from_files
+from tests.agl.module_graph import resolve_and_check_entry
 
 _CAPS = HostCapabilities(
     agent_names=frozenset(),
@@ -74,8 +73,8 @@ _LIB_ID = ModuleId.from_path("lib")
 
 
 def _check(src: str) -> CheckedModule:
-    """Parse + resolve + check a single-module AgL program."""
-    return check_module(resolve_module(parse_program(src)), _CAPS)
+    """Resolve + check *src* as the entry of a real module graph."""
+    return resolve_and_check_entry(src, _CAPS)
 
 
 def test_scoped_generic_enum_does_not_claim_the_root_type_or_constructor_namespace() -> None:

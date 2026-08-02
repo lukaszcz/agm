@@ -5,12 +5,10 @@ from pathlib import Path
 import pytest
 
 from agm.agl.capabilities import HostCapabilities
-from agm.agl.lower import lower_module
 from agm.agl.modules.ids import ModuleId
 from agm.agl.modules.loader import load_graph
 from agm.agl.modules.roots import RootSet
-from agm.agl.parser import parse_program
-from agm.agl.scope import AglScopeError, resolve_module
+from agm.agl.scope import AglScopeError
 from agm.agl.scope.program import resolve_program
 from agm.agl.scope.symbols import BUILTIN_CALL_NAMES
 from agm.agl.semantics.types import (
@@ -27,7 +25,6 @@ from agm.agl.semantics.types import (
     TypeVarType,
 )
 from agm.agl.syntax.nodes import ParamKind
-from agm.agl.typecheck import check_module
 from agm.agl.typecheck.checker import (
     _builtin_function_signature,
     _builtin_function_signature_alternates,
@@ -272,18 +269,11 @@ def test_exception_extends_cycle_is_uninhabitable() -> None:
         _check("exception A extends B\n  a: int\nexception B extends A\n  b: int\n()\n")
 
 
-def test_single_module_exception_extends_cycle_is_uninhabitable() -> None:
-    source = "exception A extends B\n  a: int\nexception B extends A\n  b: int\n()\n"
-    with pytest.raises(AglTypeError, match="uninhabitable"):
-        check_module(resolve_module(parse_program(source)), _CAPS)
-
-
-def test_single_module_lowerer_skips_builtin_function_definitions() -> None:
-    from tests.agl.ir_harness import _compiled_checked
+def test_lowerer_skips_builtin_function_definitions() -> None:
+    from tests.agl.ir_harness import lower_ir
 
     source = "builtin def print[T](value: T) -> unit\n()\n"
-    checked = check_module(resolve_module(parse_program(source)), _CAPS)
-    lower_module(_compiled_checked(checked), source_text=source, source_label="<test>")
+    lower_ir(source, caps=_CAPS, default_stdlib=False)
 
 
 def test_source_declared_builtin_function_call_is_classified() -> None:

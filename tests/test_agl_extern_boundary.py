@@ -39,7 +39,6 @@ from agm.agl.runtime.externs import (
     encode_boundary_value,
 )
 from agm.agl.runtime.render import render_value
-from agm.agl.scope import resolve_module
 from agm.agl.semantics.exceptions import AglRaise
 from agm.agl.semantics.values import (
     AgentValue,
@@ -58,7 +57,7 @@ from agm.agl.semantics.values import (
     UnitValue,
 )
 from agm.agl.type_schema import build_extern_contract
-from agm.agl.typecheck import check_module
+from tests.agl.module_graph import resolve_and_check_program_ast
 
 _PATH = Path("/virtual/extern_boundary.agl")
 
@@ -78,9 +77,17 @@ _BAD_THING = "exception BadThing extends Exception\n  detail: text\n"
 
 
 def build_contract(source: str, fn_name: str = "f") -> ExternContract:
-    """Parse + resolve (file-backed) + check *source*, compiling ``fn_name``'s contract."""
-    resolved = resolve_module(parse_program(source), origin_path=_PATH)
-    cp = check_module(resolved, _CAPS)
+    """Parse + resolve (file-backed) + check *source*, compiling ``fn_name``'s contract.
+
+    Uses ``resolve_and_check_program_ast``'s hand-built single-module graph
+    rather than a real loaded one: *_PATH* is a virtual, non-existent file.
+    This module drives the boundary walkers directly against real Python
+    callables, "not files" (see the module docstring), independent of
+    whether a companion ``.py`` file exists on disk -- the module loader's
+    own concern, covered separately by ``test_agl_extern_syntax.py`` and the
+    real-graph tests in ``test_agl_extern_lowering.py``/``test_agl_extern_runtime.py``.
+    """
+    cp = resolve_and_check_program_ast(parse_program(source), _CAPS, origin_path=_PATH)
     sig = cp.function_signatures[fn_name]
     return build_extern_contract(sig, cp.type_env.type_table)
 

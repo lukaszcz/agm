@@ -46,8 +46,6 @@ from agm.agl.matchcompile.normalize import (
     signature_for_type,
 )
 from agm.agl.modules.ids import ENTRY_ID, ModuleId
-from agm.agl.parser import parse_program
-from agm.agl.scope import resolve_module
 from agm.agl.scope.program import resolve_program
 from agm.agl.semantics.type_table import TypeDef, TypeTable
 from agm.agl.semantics.types import (
@@ -73,9 +71,10 @@ from agm.agl.semantics.values import DecimalValue, EnumValue, TextValue
 from agm.agl.syntax.nodes import AsPattern, Case, ConstructorPattern, LetDecl, Pattern
 from agm.agl.syntax.spans import SourceSpan
 from agm.agl.syntax.visitor import walk
-from agm.agl.typecheck import CheckedModule, check_module, check_program
+from agm.agl.typecheck import CheckedModule, check_program
 from tests.agl.ir_harness import make_graph_from_files
 from tests.agl.match_reference import reference_action
+from tests.agl.module_graph import resolve_and_check_entry
 
 _CAPS = HostCapabilities(
     agent_names=frozenset(),
@@ -89,7 +88,7 @@ _CAPS = HostCapabilities(
 
 
 def _check(source: str) -> CheckedModule:
-    return check_module(resolve_module(parse_program(source)), _CAPS)
+    return resolve_and_check_entry(source, _CAPS)
 
 
 def _only_case(program: object) -> Case:

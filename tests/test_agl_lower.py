@@ -2,8 +2,8 @@
 
 Covers:
 - ``compile_coercion`` — every branch of the coercion compiler.
-- ``lower_module`` — lowering of supported nodes, including coercion
-  insertion, binding/assignment lowering, and validate_ir pass.
+- Lowering of supported nodes, including coercion insertion,
+  binding/assignment lowering, and validate_ir pass.
 
 Pipeline helper: reuses the ``parse_resolve_check`` pattern from
 ``tests/test_agl_typecheck.py`` to obtain a ``CheckedModule`` from source.
@@ -81,12 +81,16 @@ from agm.agl.ir.operations import (
 )
 from agm.agl.ir.program import ExecutableProgram, FunctionDescriptor, IrFunctionBody
 from agm.agl.ir.validate import validate_ir
-from agm.agl.lower import LinkImage, compile_coercion, lower_module, lower_repl_entry
+from agm.agl.lower import LinkImage, LoweredReplEntry, compile_coercion, lower_repl_program
 from agm.agl.lower.lowerer import InitializerOrigin, _Lowerer
 from agm.agl.lower.repl import ParamOrigin, ReplPromotionPlan
-from agm.agl.matchcompile import MatchCompiledModule, compile_module_matches
-from agm.agl.parser import parse_program, parse_program_seeded
-from agm.agl.scope import resolve_module
+from agm.agl.matchcompile import MatchCompiledProgram, compile_program_matches
+from agm.agl.modules.ids import ENTRY_ID
+from agm.agl.modules.loader import build_repl_graph
+from agm.agl.modules.roots import RootSet
+from agm.agl.parser import parse_program_seeded
+from agm.agl.scope.program import resolve_program
+from agm.agl.scope.symbols import ScopeNode
 from agm.agl.semantics.types import (
     ArrayType,
     BoolType,
@@ -101,9 +105,10 @@ from agm.agl.semantics.types import (
     UnitType,
 )
 from agm.agl.syntax.nodes import Case, FuncDef, ParamDecl, Placeholder
-from agm.agl.typecheck import check_module
 from agm.agl.typecheck.env import CheckedModule
-from tests.agl.ir_harness import _compiled_checked
+from agm.agl.typecheck.program import check_program
+from tests.agl.ir_harness import _compiled_checked, compile_checked_module, lower_compiled_module
+from tests.agl.module_graph import resolve_and_check_entry
 
 _REPO_STDLIB_ROOT = Path(__file__).resolve().parents[1] / "stdlib"
 _MIXED_ROOT_AND_SCOPED_DECLARATIONS = (
@@ -137,38 +142,75 @@ def _caps() -> HostCapabilities:
     )
 
 
-def _check(source: str) -> CheckedModule:
-    prog = parse_program(source)
-    resolved = resolve_module(prog)
-    return check_module(resolved, _caps())
+def _check(source: str, *, default_stdlib: bool = True) -> CheckedModule:
+    return resolve_and_check_entry(source, _caps(), default_stdlib=default_stdlib)
+
+
+def _repl_entry(
+    source: str,
+    *,
+    start_id: int = 0,
+    image: LinkImage | None = None,
+    parent_scope: ScopeNode | None = None,
+    seed_env: object = None,
+    default_stdlib: bool = False,
+) -> tuple[LoweredReplEntry, int, ScopeNode, CheckedModule]:
+    """Resolve, check, compile, and lower one REPL entry against *image*.
+
+    Mirrors the real REPL session's own pipeline (``build_repl_graph`` ->
+    ``resolve_program`` -> ``check_program`` -> ``compile_program_matches``
+    -> ``lower_repl_program``), seeding this entry's own node ids from
+    *start_id* rather than always restarting at 0 (unlike
+    ``resolve_and_check_entry``), so two chained calls sharing one *image*
+    keep disjoint node ids exactly as two real successive REPL entries do.
+    *parent_scope*/*seed_env* thread a prior entry's root scope/type
+    environment through, exactly as a real REPL session replays session
+    state into each new entry. Returns the lowered entry, the next free node
+    id, this entry's own root scope (to thread into a following entry's
+    *parent_scope*), and its ``CheckedModule`` (whose ``type_env`` threads
+    into a following entry's *seed_env*).
+    """
+    program, next_id = parse_program_seeded(source, start_id=start_id)
+    graph, next_id, _new_modules = build_repl_graph(
+        program,
+        next_id,
+        path=None,
+        cached={},
+        roots=RootSet(roots=frozenset()),
+        default_stdlib=default_stdlib,
+    )
+    resolved = resolve_program(graph, entry_parent_scope=parent_scope)
+    checked_program = check_program(resolved, _caps(), entry_seed_env=seed_env)
+    result = compile_program_matches(checked_program)
+    assert isinstance(result.compiled, MatchCompiledProgram)
+    entry = lower_repl_program(result.compiled, image=image or LinkImage(), source_text=source)
+    root_scope = resolved.modules[graph.entry_id].resolved.root_scope
+    return entry, next_id, root_scope, checked_program.modules[graph.entry_id]
 
 
 def test_lower_repl_entry_accumulates_tables_and_resolves_prior_symbols() -> None:
+    # This test chains two REPL entries through one growing node-id space and
+    # one shared root_scope -- the second entry's ids continue from the
+    # first's own next free id, so the two entries' node ids stay disjoint
+    # within the one LinkImage they share. resolve_and_check_entry always
+    # reseeds a fresh entry at id 0 (it builds one isolated real graph per
+    # call), so it cannot express this continuation without either colliding
+    # the second entry's ids with the first's or reimplementing the REPL
+    # session's own id-management machinery here -- which is exactly what
+    # _repl_entry above does, mirroring the real ReplSession pipeline.
     image = LinkImage()
-    first_program, next_id = parse_program_seeded("let x = 41\n()", start_id=0)
-    first_checked = check_module(resolve_module(first_program), _caps())
-
-    first = lower_repl_entry(
-        _compiled_checked(first_checked),
-        image=image,
-        source_text="let x = 41\n()",
-        source_label="<repl:1>",
+    first, next_id, first_root_scope, first_checked = _repl_entry(
+        "let x = 41\n()", start_id=0, image=image
     )
     first_symbols = set(first.program.symbols)
     first_sources = set(first.program.sources)
 
-    second_source = "let y = x + 1\ny"
-    second_program, _ = parse_program_seeded(second_source, start_id=next_id)
-    second_checked = check_module(
-        resolve_module(second_program, parent_scope=first_checked.resolved.root_scope),
-        _caps(),
-        seed_env=first_checked.type_env,
-    )
-    second = lower_repl_entry(
-        _compiled_checked(second_checked),
+    second, _next_id, _second_root_scope, _second_checked = _repl_entry(
+        "let y = x + 1\ny",
+        start_id=next_id,
         image=image,
-        source_text=second_source,
-        source_label="<repl:2>",
+        parent_scope=first_root_scope,
+        seed_env=first_checked.type_env,
     )
 
     assert first_symbols < set(second.program.symbols)
@@ -191,16 +233,13 @@ def test_lowering_records_each_entry_initializer_origin() -> None:
         "builtin def print[T](value: T) -> unit\n"
         "later()"
     )
-    program, _next_id = parse_program_seeded(source, start_id=0)
+    # A bare builtin name may be declared only once per program and
+    # std/core already declares `print`, so this entry's own `builtin def
+    # print` needs default_stdlib=False.
     image = LinkImage()
-    lowered = lower_repl_entry(
-        _compiled_checked(check_module(resolve_module(program), _caps())),
-        image=image,
-        source_text=source,
-        source_label="<repl:origins>",
-    )
+    lowered, _next_id, _root_scope, checked = _repl_entry(source, image=image)
 
-    items = program.body.items
+    items = checked.resolved.program.body.items
     initializers = lowered.program.modules[lowered.program.entry_module].initializers
     origins = image._state.initializer_origins[lowered.program.entry_module]
 
@@ -221,18 +260,12 @@ def test_lowering_records_each_entry_initializer_origin() -> None:
 
 def test_repl_promotion_plan_pairs_params_with_lowered_symbols() -> None:
     source = "param first: int = 1\nparam second: int = 2\n()"
-    program, _next_id = parse_program_seeded(source, start_id=0)
     image = LinkImage()
-    lowered = lower_repl_entry(
-        _compiled_checked(check_module(resolve_module(program), _caps())),
-        image=image,
-        source_text=source,
-        source_label="<repl:param-origins>",
-    )
+    lowered, _next_id, _root_scope, checked = _repl_entry(source, image=image)
 
     expected = tuple(
         (item.node_id, image._state.decl_to_sym[item.node_id])
-        for item in program.body.items
+        for item in checked.resolved.program.body.items
         if isinstance(item, ParamDecl)
     )
     assert (
@@ -253,36 +286,24 @@ def test_repl_promotion_excludes_uninstalled_params_before_dependency_closure() 
 
 
 def test_lower_repl_trailing_binder_has_no_expression_marker() -> None:
-    source = "let x = 41"
-    program, _next_id = parse_program_seeded(source, start_id=0)
-    entry = lower_repl_entry(
-        _compiled_checked(check_module(resolve_module(program), _caps())),
-        image=LinkImage(),
-        source_text=source,
-        source_label="<repl:1>",
-    )
+    entry, _next_id, _root_scope, _checked = _repl_entry("let x = 41")
 
     assert entry.trailing_expression is None
 
 
 def test_lower_repl_trailing_scope_region_has_no_expression_marker() -> None:
-    source = "scope Tools\ndef helper() -> int = 1\nend Tools"
-    program, _next_id = parse_program_seeded(source, start_id=0)
-    entry = lower_repl_entry(
-        _compiled_checked(check_module(resolve_module(program), _caps())),
-        image=LinkImage(),
-        source_text=source,
-        source_label="<repl:1>",
+    entry, _next_id, _root_scope, _checked = _repl_entry(
+        "scope Tools\ndef helper() -> int = 1\nend Tools"
     )
 
     assert entry.trailing_expression is None
 
 
-def _lower(source: str) -> ExecutableProgram:
+def _lower(source: str, *, default_stdlib: bool = True) -> ExecutableProgram:
     """Parse → check → lower the source; return ExecutableProgram."""
-    checked = _check(source)
-    return lower_module(
-        _compiled_checked(checked),
+    checked = _check(source, default_stdlib=default_stdlib)
+    return lower_compiled_module(
+        compile_checked_module(checked),
         source_text=source,
         source_label="<test>",
     )
@@ -326,7 +347,6 @@ def test_root_and_scoped_functions_with_same_name_do_not_collide_in_public_names
 
 def test_lowering_preserves_scoped_nominal_identity_for_generic_and_enum_types() -> None:
     from agm.agl.ir.ids import NominalId
-    from agm.agl.modules.ids import ENTRY_ID
 
     source = """
 record Token()
@@ -346,6 +366,24 @@ case flag of | Left::Flag::on => box.value
     assert NominalId(ENTRY_ID, "Token", ("Left",)) in program.nominals
     assert NominalId(ENTRY_ID, "Box", ("Left",)) in program.nominals
     assert NominalId(ENTRY_ID, "Flag", ("Left",)) in program.nominals
+
+
+def test_lowering_registers_a_generic_enum_nominal_with_enum_kind() -> None:
+    """A generic enum's own nominal registers with ``NominalKind.ENUM``.
+
+    The test above covers a generic *record* (``Box[T]``); this covers the
+    sibling ``else`` branch of the same generic-type loop in
+    ``_Lowerer._build_nominals`` for a generic *enum* -- ``all_generic_types()``
+    otherwise only ever yields a record in this file's other fixtures.
+    """
+    from agm.agl.ir.ids import NominalId
+    from agm.agl.ir.program import NominalKind
+
+    source = "enum Box[T]\n  | empty\n  | full(value: T)\nlet b: Box[int] = full(value = 1)\n()"
+    program = _lower(source)
+    nominal_id = NominalId(ENTRY_ID, "Box")
+    assert nominal_id in program.nominals
+    assert program.nominals[nominal_id].kind == NominalKind.ENUM
 
 
 def _let_root_capture(initializer: object) -> IrBind:
@@ -423,7 +461,6 @@ def _make_lowerer(checked: CheckedModule, source: str) -> "_Lowerer":
     from agm.agl.ir.ids import SourceId
     from agm.agl.ir.program import SourceFile
     from agm.agl.lower.lowerer import _LinkState, _Lowerer
-    from agm.agl.modules.ids import ENTRY_ID
     from agm.util.text import normalize_newlines
 
     link = _LinkState()
@@ -431,9 +468,7 @@ def _make_lowerer(checked: CheckedModule, source: str) -> "_Lowerer":
     link.next_source += 1
     normalized = normalize_newlines(source)
     link.sources[source_id] = SourceFile(display_name="<test>", normalized_text=normalized)
-    match_result = compile_module_matches(checked)
-    assert isinstance(match_result.compiled, MatchCompiledModule)
-    compiled = match_result.compiled
+    compiled = compile_checked_module(checked)
     return _Lowerer(compiled.checked, link, ENTRY_ID, source_id, source, compiled.sites)
 
 
@@ -584,7 +619,7 @@ class TestCompileCoercion:
 
 
 # ---------------------------------------------------------------------------
-# lower_module: basic sanity — validate_ir passes
+# lowering: basic sanity — validate_ir passes
 # ---------------------------------------------------------------------------
 
 
@@ -616,7 +651,7 @@ class TestLowerProgramValidateIr:
 
 
 # ---------------------------------------------------------------------------
-# lower_module: literal lowering
+# lowering: literal lowering
 # ---------------------------------------------------------------------------
 
 
@@ -674,7 +709,7 @@ class TestLiteralLowering:
 
 
 # ---------------------------------------------------------------------------
-# lower_module: array literal lowering
+# lowering: array literal lowering
 # ---------------------------------------------------------------------------
 
 
@@ -737,7 +772,7 @@ class TestArrayLitLowering:
 
 
 # ---------------------------------------------------------------------------
-# lower_module: dict literal lowering
+# lowering: dict literal lowering
 # ---------------------------------------------------------------------------
 
 
@@ -789,7 +824,7 @@ class TestDictLitLowering:
 
 
 # ---------------------------------------------------------------------------
-# lower_module: let / var binding lowering
+# lowering: let / var binding lowering
 # ---------------------------------------------------------------------------
 
 
@@ -943,7 +978,7 @@ class TestBindingLowering:
 
 
 # ---------------------------------------------------------------------------
-# lower_module: VarRef lowering (IrLoad)
+# lowering: VarRef lowering (IrLoad)
 # ---------------------------------------------------------------------------
 
 
@@ -964,7 +999,7 @@ class TestVarRefLowering:
 
 
 # ---------------------------------------------------------------------------
-# lower_module: AssignStmt lowering (simple name target only)
+# lowering: AssignStmt lowering (simple name target only)
 # ---------------------------------------------------------------------------
 
 
@@ -1004,7 +1039,7 @@ class TestAssignStmtLowering:
 
 
 # ---------------------------------------------------------------------------
-# lower_module: Block lowering
+# lowering: Block lowering
 #
 # A Block node appears as an expression only inside branches of control-flow
 # (if/case/do/try) and function bodies. We test the
@@ -1025,7 +1060,7 @@ class TestBlockLowering:
 
         src = "let _a: int = 1\n_a"
         checked = _check(src)
-        # Build a _Lowerer in the same state as lower_module would, but stop
+        # Build a _Lowerer in the same state full lowering would, but stop
         # before running the top-level body so we can call lower_expr manually.
         lowerer = _make_lowerer(checked, src)
 
@@ -1092,7 +1127,7 @@ class TestBlockLowering:
 
 
 # ---------------------------------------------------------------------------
-# lower_module: sources table
+# lowering: sources table
 # ---------------------------------------------------------------------------
 
 
@@ -1114,7 +1149,7 @@ class TestSourcesTable:
 
 
 # ---------------------------------------------------------------------------
-# lower_module: nominals table starts empty
+# lowering: nominals table starts empty
 # ---------------------------------------------------------------------------
 
 
@@ -1153,7 +1188,6 @@ class TestNominalsEmpty:
         """
         from agm.agl.ir.ids import NominalId
         from agm.agl.ir.program import NominalKind
-        from agm.agl.modules.ids import ENTRY_ID
 
         source = (
             "exception Boom extends Exception\n"
@@ -1180,7 +1214,6 @@ class TestNominalsEmpty:
         enum aliases.
         """
         from agm.agl.ir.ids import NominalId
-        from agm.agl.modules.ids import ENTRY_ID
 
         source = (
             "record Point\n"
@@ -1224,7 +1257,7 @@ class TestNominalsEmpty:
 
 
 # ---------------------------------------------------------------------------
-# lower_module/lower_program: the program's built-in nominal table
+# lowering: the program's built-in nominal table
 # ---------------------------------------------------------------------------
 
 
@@ -1248,17 +1281,17 @@ class TestBuiltinNominalsTable:
         """A program's own ``builtin`` declaration is reflected in its table.
 
         The declaration is at the root (empty scope path) of the entry
-        module — this ``_lower`` helper compiles standalone, with no standard
-        library loaded — so it carries the entry module's own identity, a
-        distinct nominal from the shipped standard library's own
-        ``RangeError``: the declaration is what drives the table's answer,
-        not a shared name.
+        module — a bare builtin name may be declared only once per program
+        and ``std/core`` already declares a root ``RangeError``, so this
+        compiles with ``default_stdlib=False`` — so it carries the entry
+        module's own identity, a distinct nominal from the shipped standard
+        library's own ``RangeError``: the declaration is what drives the
+        table's answer, not a shared name.
         """
         from agm.agl.ir.ids import NominalId
-        from agm.agl.modules.ids import ENTRY_ID
 
         source = "builtin exception RangeError extends Exception()\n()\n"
-        prog = _lower(source)
+        prog = _lower(source, default_stdlib=False)
         assert prog.builtin_nominals.nominal("RangeError") == NominalId(ENTRY_ID, "RangeError")
 
     def test_scoped_declared_builtin_type_resolves_to_its_own_declared_path(self) -> None:
@@ -1267,13 +1300,15 @@ class TestBuiltinNominalsTable:
         A ``builtin`` declaration inside a named scope region is a distinct
         nominal from a same-named one at another path (or at the root), so
         the table answers with the declaration's own module and scope path
-        here, not the shipped standard library's own root identity.
+        here, not the shipped standard library's own root identity. A bare
+        builtin name may be declared only once per program and ``std/core``
+        already declares a root ``RangeError``, so this compiles with
+        ``default_stdlib=False``.
         """
         from agm.agl.ir.ids import NominalId
-        from agm.agl.modules.ids import ENTRY_ID
 
         source = "scope A\nbuiltin exception RangeError extends Exception()\nend A\n()\n"
-        prog = _lower(source)
+        prog = _lower(source, default_stdlib=False)
         assert prog.builtin_nominals.nominal("RangeError") == NominalId(
             ENTRY_ID, "RangeError", ("A",)
         )
@@ -1300,13 +1335,14 @@ class TestBuiltinNominalsTable:
         could never match a host-raised instance. Here the ``for``-loop
         step guard's host-raised ``RangeError`` — with the type declared
         inside ``scope A`` and nothing declared at the root — carries the
-        exact scoped identity (this ``evaluate_ir_raises`` harness compiles
-        standalone, with no standard library loaded, so that identity is the
-        entry module's own) a same-region ``catch RangeError`` resolves to,
-        not the path-free one, and reports its declared spelling.
+        exact scoped identity a same-region ``catch RangeError`` resolves
+        to, not the path-free one, and reports its declared spelling. A bare
+        builtin name may be declared only once per program and ``std/core``
+        already declares a root ``RangeError``, so this compiles with
+        ``default_stdlib=False``: that is what makes "nothing declared at
+        the root" true here.
         """
         from agm.agl.ir.ids import NominalId
-        from agm.agl.modules.ids import ENTRY_ID
         from tests.agl.ir_harness import evaluate_ir_raises
 
         source = (
@@ -1318,7 +1354,7 @@ class TestBuiltinNominalsTable:
             "  ()\n"
             "done\n"
         )
-        exc = evaluate_ir_raises(source)
+        exc = evaluate_ir_raises(source, default_stdlib=False)
         assert exc.display_name == "A::RangeError"
         assert exc.nominal == NominalId(ENTRY_ID, "RangeError", ("A",))
 
@@ -1333,7 +1369,7 @@ class TestBuiltinNominalsTable:
 
 
 # ---------------------------------------------------------------------------
-# lower_module: unsupported nodes raise a clear error
+# lowering: unsupported nodes raise a clear error
 # ---------------------------------------------------------------------------
 
 
@@ -1420,7 +1456,7 @@ let c = Color::Red
 
 
 # ---------------------------------------------------------------------------
-# lower_module: Location fields are valid
+# lowering: Location fields are valid
 # ---------------------------------------------------------------------------
 
 
@@ -1443,7 +1479,7 @@ class TestLocationValidity:
 
 
 # ---------------------------------------------------------------------------
-# lower_module: validate_ir integration
+# lowering: validate_ir integration
 # ---------------------------------------------------------------------------
 
 
@@ -3180,7 +3216,6 @@ class TestIrMakeExceptionLowering:
 
 def _get_loop_ir(source: str) -> "IrLoop | IrSequence":
     """Lower *source* and return the top-level loop IR node (IrSequence or IrLoop)."""
-    from agm.agl.modules.ids import ENTRY_ID
 
     executable = _lower(source)
     # Find the loop/sequence node; skip IrBind for var declarations.

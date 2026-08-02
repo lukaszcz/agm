@@ -24,7 +24,6 @@ from agm.agl.matchcompile import (
     NonExhaustiveIssue,
     RedundantArmIssue,
     RefutableLetIssue,
-    compile_module_matches,
     compile_program_matches,
     diagnostic_from_match_issue,
     diagnostics_from_match_issues,
@@ -46,21 +45,20 @@ from agm.agl.matchcompile.model import (
 from agm.agl.matchcompile.normalize import MatchCompileInvariantError, normalize_case
 from agm.agl.modules.ids import ENTRY_ID
 from agm.agl.modules.roots import RootSet
-from agm.agl.parser import parse_program
 from agm.agl.pipeline import (
     PipelineDriver,
     PreparedProgram,
     _run_matchcompile_program,
 )
-from agm.agl.scope import resolve_module
 from agm.agl.scope.program import resolve_program
 from agm.agl.syntax.nodes import Case
 from agm.agl.syntax.visitor import walk
-from agm.agl.typecheck import EnumOwnerForm, check_module
+from agm.agl.typecheck import EnumOwnerForm
 from agm.agl.typecheck.env import CheckedModule
 from agm.agl.typecheck.program import CheckedProgram, check_program
 from tests.agl.ir_harness import base_caps, make_graph_from_files
 from tests.agl.match_reference import case_sites
+from tests.agl.module_graph import resolve_and_check_entry
 
 
 def test_matchcompile_public_exports_are_narrow_and_stable() -> None:
@@ -102,7 +100,6 @@ def test_matchcompile_public_exports_are_narrow_and_stable() -> None:
         "WildcardWitness",
         "WitnessField",
         "compile_program_matches",
-        "compile_module_matches",
         "diagnostic_from_match_issue",
         "diagnostics_from_match_issues",
         "render_witness",
@@ -116,11 +113,31 @@ def test_matchcompile_public_exports_are_narrow_and_stable() -> None:
 
 
 def _checked(source: str) -> CheckedModule:
-    return check_module(resolve_module(parse_program(source)), base_caps())
+    return resolve_and_check_entry(source, base_caps())
+
+
+def _compile_module_matches(checked: CheckedModule) -> MatchCompilationResult:
+    """Reimplements the deleted ``compile_module_matches`` for this file's tests.
+
+    This file drives match compilation at per-module granularity to test the
+    stage module's own artifact/diagnostic contracts (validation, corruption
+    rejection) directly — production only ever compiles a whole program
+    (:func:`~agm.agl.matchcompile.compile_program_matches`), so there is no
+    surviving public per-module entry point. Reuses the same
+    ``_compile_owner_sites``/``_rejected`` building blocks
+    ``compile_program_matches`` itself calls once per module.
+    """
+    sites, issues = stage_module._compile_owner_sites(checked)
+    sorted_issues = tuple(sorted(issues, key=issue_sort_key))
+    if sorted_issues:
+        return stage_module._rejected((sites,), sorted_issues)
+    return MatchCompilationResult(
+        compiled=MatchCompiledModule(checked=checked, sites=sites), issues=()
+    )
 
 
 def _compiled(source: str) -> MatchCompiledModule:
-    result = compile_module_matches(_checked(source))
+    result = _compile_module_matches(_checked(source))
     assert isinstance(result.compiled, MatchCompiledModule)
     return result.compiled
 
@@ -296,7 +313,7 @@ def test_compiles_nested_cases_and_lets_as_sealed_source_payloads() -> None:
         "      case inner of | false => 1 | true => 2\n"
         "  | false => 3\n"
     )
-    result = compile_module_matches(checked)
+    result = _compile_module_matches(checked)
     assert isinstance(result.compiled, MatchCompiledModule)
     compiled = result.compiled
 
@@ -328,7 +345,7 @@ def test_artifact_validation_skips_simple_lets_but_requires_destructuring_lets()
 
 def test_refutable_let_is_rejected_with_a_structured_missing_pattern_witness() -> None:
     checked = _checked("let true = false")
-    result = compile_module_matches(checked)
+    result = _compile_module_matches(checked)
 
     assert result.compiled is None
     assert len(result.issues) == 1
@@ -363,7 +380,7 @@ def test_source_issues_are_all_sorted_adapted_and_prevent_artifact() -> None:
     checked = _checked(
         "let _ = case true of\n  | true => 1\n  | true => 2\ncase false of\n  | false => 3\n"
     )
-    result = compile_module_matches(checked)
+    result = _compile_module_matches(checked)
 
     assert result.compiled is None
     assert len(result.issues) == 3
@@ -384,18 +401,18 @@ def test_program_match_compilation_orders_issues_by_source_location() -> None:
         "let _ = case true of\n  | true => 1\n  | true => 2\ncase false of\n  | false => 3\n"
     )
 
-    result = compile_module_matches(checked)
+    result = _compile_module_matches(checked)
 
     assert len(result.issues) > 1
     assert list(result.issues) == sorted(result.issues, key=issue_sort_key)
 
 
 def test_match_compilation_yields_an_artifact_or_issues_but_never_both(tmp_path: Path) -> None:
-    accepted = compile_module_matches(_checked("case true of | true => 1 | false => 2"))
+    accepted = _compile_module_matches(_checked("case true of | true => 1 | false => 2"))
     assert accepted.compiled is not None
     assert accepted.issues == ()
 
-    rejected = compile_module_matches(_checked("case true of | true => 1"))
+    rejected = _compile_module_matches(_checked("case true of | true => 1"))
     assert rejected.compiled is None
     assert rejected.issues != ()
 
@@ -437,7 +454,7 @@ def test_rejected_match_compilation_still_validates_the_cases_it_discards(
     monkeypatch.setattr(stage_module, "compile_match_site", corrupting_compile_case)
 
     with pytest.raises(MatchCompileInvariantError, match="reachable action ids"):
-        compile_module_matches(_checked("case true of | true => 1"))
+        _compile_module_matches(_checked("case true of | true => 1"))
 
 
 def test_graph_issues_are_aggregated_and_sorted_across_module_sources(tmp_path: Path) -> None:
@@ -712,7 +729,7 @@ def test_duplicate_source_case_ids_are_rejected_by_compilation_and_validation(
     with pytest.raises(MatchCompileInvariantError, match="duplicate"):
         stage_module._source_sites(checked.resolved.program)
     with pytest.raises(MatchCompileInvariantError, match="duplicate"):
-        compile_module_matches(checked)
+        _compile_module_matches(checked)
 
 
 def test_graph_compiles_imported_cases_and_rejects_wrong_module_provenance(

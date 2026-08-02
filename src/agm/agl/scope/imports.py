@@ -408,8 +408,8 @@ def resolve_alias_target(
     qualifier: QualifierChain | None,
     *,
     self_module_id: ModuleId | None,
-    import_env: ImportEnv | None,
-    all_public_types: Mapping[QName, RecordDef | EnumDef | ExceptionDef | TypeAliasDecl] | None,
+    import_env: ImportEnv,
+    all_public_types: Mapping[QName, RecordDef | EnumDef | ExceptionDef | TypeAliasDecl],
     scope_path: PathAtom = (),
 ) -> RecordDef | EnumDef | ExceptionDef | TypeAliasDecl | None:
     """Resolve one type-alias target reference through a module's import environment.
@@ -421,30 +421,26 @@ def resolve_alias_target(
     declaration.
 
     For an unqualified *name*, tries *self_module_id*'s own declaration under
-    *scope_path* first (when both *self_module_id* and *all_public_types* are
-    given — a caller that already checked richer local state passes
-    ``self_module_id=None`` to skip this step), then the
-    unqualified name exposed by *import_env*'s open imports. For a qualified
-    *name*, resolves through the ordinary qualified-member route.
+    *scope_path* first (when *self_module_id* is given — a caller that
+    already checked richer local state passes ``self_module_id=None`` to skip
+    this step), then the unqualified name exposed by *import_env*'s open
+    imports. For a qualified *name*, resolves through the ordinary
+    qualified-member route.
 
-    Returns ``None`` for anything it cannot resolve — no import environment or
-    public-types table, an ambiguous unqualified name, or an unknown route —
-    which the caller treats as "presumed constructible".
+    Returns ``None`` for anything it cannot resolve — an ambiguous
+    unqualified name or an unknown route — which the caller treats as
+    "presumed constructible".
     """
     if qualifier is None or not qualifier.segments:
-        if self_module_id is not None and all_public_types is not None:
+        if self_module_id is not None:
             local = all_public_types.get((self_module_id, _atom((*scope_path, name))))
             if local is not None:
                 return local
-        if import_env is None or all_public_types is None:
-            return None
         qnames = import_env.unqualified.get(name)
         if qnames is None or len(qnames) != 1:
             return None
         (qname,) = qnames
         return all_public_types.get(qname)
-    if import_env is None or all_public_types is None:
-        return None
     qualified = try_resolve_qualified_member(
         import_env,
         qualifier.route_segments,

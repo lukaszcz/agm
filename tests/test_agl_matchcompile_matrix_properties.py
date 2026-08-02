@@ -30,8 +30,6 @@ from agm.agl.matchcompile.model import (
     WildcardCell,
 )
 from agm.agl.matchcompile.normalize import normalize_case
-from agm.agl.parser import parse_program
-from agm.agl.scope import resolve_module
 from agm.agl.semantics.values import (
     BoolValue,
     DecimalValue,
@@ -44,12 +42,13 @@ from agm.agl.semantics.values import (
 )
 from agm.agl.syntax.nodes import Case
 from agm.agl.syntax.visitor import walk
-from agm.agl.typecheck import CheckedModule, check_module
+from agm.agl.typecheck import CheckedModule
 from tests.agl.match_reference import (
     canonical_cell_matches,
     matrix_action,
     reference_action,
 )
+from tests.agl.module_graph import resolve_and_check_entry
 
 _CAPS = HostCapabilities(
     agent_names=frozenset(),
@@ -65,7 +64,7 @@ _CAPS = HostCapabilities(
 def _matrix(
     source: str,
 ) -> tuple[CheckedModule, Case, PatternMatrix, OccurrenceAllocator]:
-    checked = check_module(resolve_module(parse_program(source)), _CAPS)
+    checked = resolve_and_check_entry(source, _CAPS)
     cases: list[Case] = []
 
     def collect(node: object) -> None:

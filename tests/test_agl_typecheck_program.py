@@ -40,10 +40,10 @@ from agm.agl.typecheck import (
     TypeVarType,
     UnitType,
     assert_checked_program_closed,
-    check_module,
     check_program,
 )
 from tests.agl.ir_harness import make_graph_from_files as _make_graph_from_files
+from tests.agl.module_graph import resolve_and_check_entry
 
 # ---------------------------------------------------------------------------
 # Shared helpers
@@ -60,18 +60,16 @@ _CAPS = HostCapabilities(
 )
 
 
-def _check(src: str, *, seed_env: TypeEnvironment | None = None) -> CheckedModule:
-    """Parse + resolve + check a single-module AgL program.
+def _check(
+    src: str, *, seed_env: TypeEnvironment | None = None, default_stdlib: bool = True
+) -> CheckedModule:
+    """Resolve + check *src* as the entry of a real module graph.
 
     *seed_env* replays a prior entry's sealed environment first, the same way
     an incremental REPL entry builds on earlier ones: declarations from *src*
     land in a type table that already carries the seed's registered owners.
     """
-    from agm.agl.parser import parse_program
-    from agm.agl.scope import resolve_module
-
-    resolved = resolve_module(parse_program(src))
-    return check_module(resolved, _CAPS, seed_env=seed_env)
+    return resolve_and_check_entry(src, _CAPS, seed_env=seed_env, default_stdlib=default_stdlib)
 
 
 def _check_graph(graph: ModuleGraph) -> CheckedProgram:
@@ -222,10 +220,13 @@ def test_candidate_inference_reads_preceding_top_level_binding(
 
 def test_candidate_inference_reads_a_preceding_destructuring_let_binder() -> None:
     """Candidate seeding tracks every selected binder node, not just the let site."""
+    # Named "Holder", not "Option": the standard library's own Option[T] is in
+    # scope, and a same-named top-level enum would make Option:: ambiguous
+    # instead of exercising the candidate-seeding path under test.
     checked = _check(
-        "enum Option[T]\n"
+        "enum Holder[T]\n"
         "  | some(value: T)\n"
-        "let some(value = value): Option[int] = some(value = 1)\n"
+        "let some(value = value): Holder[int] = some(value = 1)\n"
         "def capture() = value\n"
         "capture()"
     )
@@ -287,7 +288,7 @@ def test_builtin_header_has_standalone_program_signature_parity(tmp_path: Path) 
     """
     source = "builtin def print[T](value: T) -> unit\n()"
 
-    standalone = _check(source)
+    standalone = _check(source, default_stdlib=False)
     program = _check_program(tmp_path, {"entry": source}, default_stdlib=False)
 
     assert program.modules[ENTRY_ID].function_signatures == standalone.function_signatures
@@ -366,29 +367,6 @@ def test_std_core_execresult_reports_std_core_as_its_owning_module(tmp_path: Pat
     handle = std_core.type_env.get_type("ExecResult")
     assert isinstance(handle, RecordType)
     assert handle.module_id == STD_CORE_ID
-
-
-# ---------------------------------------------------------------------------
-# 5. Single-module check_program equivalent to check_module()
-# ---------------------------------------------------------------------------
-
-
-def test_single_module_equivalence(tmp_path: Path) -> None:
-    """check_program on a single-module graph gives the same type results as check_module()."""
-    source = "def foo() -> int = 1\nlet x = foo()\nx"
-    mg = _make_graph_from_files(tmp_path, {"entry": source})
-    rg = resolve_program(mg)
-    cg = check_program(rg, _CAPS)
-
-    assert isinstance(cg, CheckedProgram)
-    # The graph must have the entry module
-    assert ENTRY_ID in cg.modules
-
-    # node_types in graph-checked entry should equal single-module check
-    single = _check(source)
-    entry_checked = cg.modules[ENTRY_ID]
-    # Both should have the same number of typed expression nodes
-    assert len(entry_checked.node_types) == len(single.node_types)
 
 
 def test_program_warnings_follow_module_presentation_order(tmp_path: Path) -> None:
@@ -3339,10 +3317,11 @@ def test_d5_generic_def_as_value_single_module(tmp_path: Path) -> None:
     (globally unique, correct for cross-module) BEFORE falling back to
     get_function_signature (name-keyed).
 
-    This e2e test verifies  works in single-module mode: a generic function
-    used as a value must typecheck when an expected FunctionType annotation is given.
-    The fix's node-id lookup is used in single-module mode too (seeded by
-    _preregister_funcdef), so this verifies the new lookup path doesn't break anything.
+    This e2e test verifies the fix works for a single-module program: a
+    generic function used as a value must typecheck when an expected
+    FunctionType annotation is given. The fix's node-id lookup is used for a
+    single-module program too (seeded by _preregister_funcdef), so this
+    verifies the new lookup path doesn't break anything.
 
     Note: cross-module testing requires graph.py to handle generic function type
     params in _build_program_func_sig_table (out of scope for this fix set).

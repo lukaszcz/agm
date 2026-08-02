@@ -16,18 +16,43 @@ import pytest
 from agm.agl import PipelineDriver
 from agm.agl.capabilities import HostCapabilities
 from agm.agl.parser import parse_program
-from agm.agl.scope import resolve_module
+from agm.agl.scope import ModuleResolution
 from agm.agl.scope.symbols import AglScopeError, BinderKind
 from agm.agl.syntax import (
     ConstructorPattern,
     pattern_binder_candidates,
     pattern_binding_node_ids,
 )
-from agm.agl.typecheck import AglTypeError, check_module
+from agm.agl.typecheck import AglTypeError, CheckedModule
+from agm.agl.typecheck.checker import _check_prepared_module
+from agm.agl.typecheck.env import TypeEnvironment
+from tests.agl.module_graph import resolve_and_check_entry, resolve_entry
 
 
-def _resolve(source: str):
-    return resolve_module(parse_program(source))
+def _resolve(source: str) -> ModuleResolution:
+    return resolve_entry(source)
+
+
+def _check_resolved(resolved: ModuleResolution, capabilities: HostCapabilities) -> CheckedModule:
+    """Type-check an already-built ``ModuleResolution`` via check_program's
+    internal per-module entry point.
+
+    For tests that need the intermediate ``ModuleResolution`` object itself
+    (asserting on it before checking, or re-checking it more than once) there
+    is no source text to hand to ``resolve_and_check_entry``. This calls
+    ``_check_prepared_module`` (what ``check_program`` itself drives per
+    module) directly: env setup, then ``_check_prepared_module`` with
+    declaration-collision validation on.
+    """
+    env = TypeEnvironment(
+        local_scope_paths=frozenset(resolved.scope_nodes), scope_nodes=resolved.scope_nodes
+    )
+    return _check_prepared_module(
+        resolved,
+        capabilities,
+        env=env,
+        validate_declaration_collisions=True,
+    )
 
 
 def _run(source: str) -> tuple[bool, str, list[str]]:
@@ -153,7 +178,7 @@ def test_a_slot_selected_as_a_constructor_is_callable_in_the_branch_body() -> No
 
 
 def test_constructor_selected_slot_preserves_agent_usage() -> None:
-    resolved = _resolve(
+    checked = resolve_and_check_entry(
         "agent on\n"
         "enum Flag\n"
         "  | on\n"
@@ -161,17 +186,14 @@ def test_constructor_selected_slot_preserves_agent_usage() -> None:
         "  | packet(flag: Flag)\n"
         "let item = packet(Flag::on)\n"
         "case item of\n"
-        '  | packet(on) => ask("question", agent = on)\n'
-    )
-
-    checked = check_module(
-        resolved,
+        '  | packet(on) => ask("question", agent = on)\n',
         HostCapabilities(
             agent_names=frozenset({"on"}),
             has_default_agent=True,
             codec_kinds={"text": frozenset({"text"})},
         ),
     )
+    resolved = checked.resolved
 
     slot_reference = _slot_reference(resolved)
     binding = checked.binding_for(slot_reference)
@@ -197,17 +219,16 @@ def test_a_bare_nullary_variant_name_tests_the_variant() -> None:
 
 def test_top_level_let_nested_nullary_constructor_selects_its_slot() -> None:
     """A nested let pattern preserves its selected constructor in the continuation."""
-    resolved = _resolve(
+    checked = resolve_and_check_entry(
         "enum Flag\n"
         "  | on\n"
         "enum Packet\n"
         "  | packet(flag: Flag)\n"
         "let packet(on) = packet(on())\n"
-        "on\n"
+        "on\n",
+        HostCapabilities(),
     )
-    reference = _slot_reference(resolved)
-
-    checked = check_module(resolved, HostCapabilities())
+    reference = _slot_reference(checked.resolved)
 
     binding = checked.binding_for(reference)
     constructor = checked.constructor_ref_for(reference)
@@ -218,19 +239,18 @@ def test_top_level_let_nested_nullary_constructor_selects_its_slot() -> None:
 
 
 def test_top_level_let_rejects_an_ambiguous_constructor_slot_reference() -> None:
-    resolved = _resolve(
-        "enum First\n"
-        "  | on\n"
-        "enum Second\n"
-        "  | on\n"
-        "enum Pair\n"
-        "  | pair(first: First, second: Second)\n"
-        "let pair(on, on) = pair(First::on, Second::on)\n"
-        "on\n"
-    )
-
     with pytest.raises(AglTypeError):
-        check_module(resolved, HostCapabilities())
+        resolve_and_check_entry(
+            "enum First\n"
+            "  | on\n"
+            "enum Second\n"
+            "  | on\n"
+            "enum Pair\n"
+            "  | pair(first: First, second: Second)\n"
+            "let pair(on, on) = pair(First::on, Second::on)\n"
+            "on\n",
+            HostCapabilities(),
+        )
 
 
 @pytest.mark.parametrize(
@@ -267,23 +287,22 @@ def test_assigning_to_a_slot_selected_as_a_binder_is_rejected() -> None:
 
 
 def test_ambiguous_slot_assignment_is_diagnosed_at_the_target() -> None:
-    resolved = _resolve(
-        "enum Color\n"
-        "  | Red\n"
-        "  | Blue\n"
-        "enum Signal\n"
-        "  | Red\n"
-        "  | Green\n"
-        "enum Wrap\n"
-        "  | wrap(shade: Color)\n"
-        "let item = wrap(Color::Blue)\n"
-        "case item of\n"
-        "  | wrap(Red) =>\n"
-        "    Red := Color::Blue\n"
-    )
-
     with pytest.raises(AglTypeError) as exc_info:
-        check_module(resolved, HostCapabilities())
+        resolve_and_check_entry(
+            "enum Color\n"
+            "  | Red\n"
+            "  | Blue\n"
+            "enum Signal\n"
+            "  | Red\n"
+            "  | Green\n"
+            "enum Wrap\n"
+            "  | wrap(shade: Color)\n"
+            "let item = wrap(Color::Blue)\n"
+            "case item of\n"
+            "  | wrap(Red) =>\n"
+            "    Red := Color::Blue\n",
+            HostCapabilities(),
+        )
 
     diagnostic = exc_info.value.to_diagnostic()
     assert diagnostic.line == 12
@@ -299,17 +318,16 @@ def test_typecheck_diagnoses_duplicate_binders_that_could_have_been_variants(
     pattern: str,
 ) -> None:
     """A spelling that could name a nullary variant stays undecided until checking."""
-    resolved = _resolve(
-        "enum Flag\n"
-        "  | value\n"
-        "enum Packet\n"
-        "  | packet(value: int, other: int)\n"
-        "let item = packet(1, 2)\n"
-        f"case item of | {pattern} => value"
-    )
-
     with pytest.raises(AglTypeError):
-        check_module(resolved, HostCapabilities())
+        resolve_and_check_entry(
+            "enum Flag\n"
+            "  | value\n"
+            "enum Packet\n"
+            "  | packet(value: int, other: int)\n"
+            "let item = packet(1, 2)\n"
+            f"case item of | {pattern} => value",
+            HostCapabilities(),
+        )
 
 
 @pytest.mark.parametrize(
@@ -343,15 +361,14 @@ def test_scope_rejects_duplicate_binders_that_could_not_be_variants(
 
 
 def test_accessors_dereference_a_slot_selected_as_a_binder() -> None:
-    resolved = _resolve(
+    checked = resolve_and_check_entry(
         "enum Packet\n"
         "  | packet(value: int)\n"
         "let item = packet(1)\n"
-        "case item of | packet(value) => value"
+        "case item of | packet(value) => value",
+        HostCapabilities(),
     )
-    reference = _slot_reference(resolved)
-
-    checked = check_module(resolved, HostCapabilities())
+    reference = _slot_reference(checked.resolved)
 
     binding = checked.binding_for(reference)
     assert binding is not None
@@ -360,17 +377,16 @@ def test_accessors_dereference_a_slot_selected_as_a_binder() -> None:
 
 
 def test_accessors_dereference_a_slot_selected_as_a_constructor() -> None:
-    resolved = _resolve(
+    checked = resolve_and_check_entry(
         "enum Flag\n"
         "  | on\n"
         "enum Packet\n"
         "  | packet(flag: Flag)\n"
         "let item = packet(on())\n"
-        "case item of | packet(on) => on"
+        "case item of | packet(on) => on",
+        HostCapabilities(),
     )
-    reference = _slot_reference(resolved)
-
-    checked = check_module(resolved, HostCapabilities())
+    reference = _slot_reference(checked.resolved)
 
     binding = checked.binding_for(reference)
     assert binding is not None
@@ -379,7 +395,7 @@ def test_accessors_dereference_a_slot_selected_as_a_constructor() -> None:
 
 
 def test_accessors_dereference_a_nested_slot_to_the_enclosing_binding() -> None:
-    resolved = _resolve(
+    checked = resolve_and_check_entry(
         "enum Flag\n"
         "  | on\n"
         "enum Packet\n"
@@ -388,11 +404,10 @@ def test_accessors_dereference_a_nested_slot_to_the_enclosing_binding() -> None:
         "let item = packet(Flag::on)\n"
         "case item of\n"
         "  | packet(on) =>\n"
-        "    case item of | packet(on) => on"
+        "    case item of | packet(on) => on",
+        HostCapabilities(),
     )
-    reference = _slot_reference(resolved)
-
-    checked = check_module(resolved, HostCapabilities())
+    reference = _slot_reference(checked.resolved)
 
     binding = checked.binding_for(reference)
     assert binding is not None
@@ -401,8 +416,8 @@ def test_accessors_dereference_a_nested_slot_to_the_enclosing_binding() -> None:
 
 
 def test_accessors_pass_through_references_that_are_not_slots() -> None:
-    checked = check_module(
-        _resolve("enum Flag\n  | on\nlet value = 1\nlet _ = value\non"), HostCapabilities()
+    checked = resolve_and_check_entry(
+        "enum Flag\n  | on\nlet value = 1\nlet _ = value\non", HostCapabilities()
     )
     value_id, value = next(
         (node_id, ref)
@@ -437,9 +452,9 @@ def test_checking_leaves_scope_output_untouched_and_stays_repeatable() -> None:
     before_constructor_refs = dict(resolved.constructor_refs)
 
     with pytest.raises(AglTypeError) as first:
-        check_module(resolved, HostCapabilities())
+        _check_resolved(resolved, HostCapabilities())
     with pytest.raises(AglTypeError) as second:
-        check_module(resolved, HostCapabilities())
+        _check_resolved(resolved, HostCapabilities())
 
     assert str(first.value) == str(second.value)
     assert resolved.resolution == before_resolution

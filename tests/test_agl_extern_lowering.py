@@ -60,23 +60,23 @@ from agm.agl.ir.contracts import (
     ScalarKind,
 )
 from agm.agl.ir.validate import InvalidIrError, validate_ir
-from agm.agl.lower import lower_module
 from agm.agl.lower.program import lower_program
 from agm.agl.modules.ids import ModuleId
 from agm.agl.modules.roots import RootSet
 from agm.agl.parser import parse_program
 from agm.agl.pipeline import PipelineDriver
-from agm.agl.scope import resolve_module
 from agm.agl.scope.program import resolve_program
-from agm.agl.typecheck import check_module
 from agm.agl.typecheck.program import check_program
 from tests._agl_helpers import let_root_capture
 from tests.agl.ir_harness import (
     _compiled_checked,
+    compile_checked_module,
+    lower_compiled_module,
     make_graph_from_files,
     write_companion_file,
     write_module_file,
 )
+from tests.agl.module_graph import resolve_and_check_program_ast
 
 # ---------------------------------------------------------------------------
 # Full-pipeline helpers (parse -> resolve -> check -> lower)
@@ -101,11 +101,21 @@ def _roots(*paths: Path) -> RootSet:
 
 
 def _lower_source(source: str) -> ExecutableProgram:
-    """Parse + resolve (file-backed, so `extern def` is allowed) + check + lower."""
-    resolved = resolve_module(parse_program(source), origin_path=_PATH)
-    checked = check_module(resolved, _CAPS)
-    return lower_module(
-        _compiled_checked(checked),
+    """Parse + resolve (file-backed, so `extern def` is allowed) + check + lower.
+
+    Uses ``resolve_and_check_program_ast``'s hand-built single-module graph
+    rather than a real loaded one: *_PATH* is a virtual, non-existent file,
+    deliberately exercising the resolve/check/lower shape of an extern
+    declaration independent of whether a companion ``.py`` file exists on
+    disk -- that is the module loader's own concern, already covered by the
+    real-graph tests below (``TestGraphLowering``) and by
+    ``test_agl_extern_syntax.py``. Building a real loaded graph here would
+    hit the loader's missing-companion check first and mask the lowering
+    shape this helper means to test.
+    """
+    checked = resolve_and_check_program_ast(parse_program(source), _CAPS, origin_path=_PATH)
+    return lower_compiled_module(
+        compile_checked_module(checked),
         source_text=source,
         source_label="<extern-lowering-test>",
     )

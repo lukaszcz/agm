@@ -8,8 +8,6 @@ import pytest
 
 from agm.agl.capabilities import HostCapabilities
 from agm.agl.modules.ids import ModuleId
-from agm.agl.parser import parse_program
-from agm.agl.scope import resolve_module
 from agm.agl.semantics.types import (
     AgentType,
     ArrayType,
@@ -30,7 +28,6 @@ from agm.agl.semantics.types import (
     UnitType,
 )
 from agm.agl.syntax.spans import SourceId, SourceSpan
-from agm.agl.typecheck.checker import check_module
 from agm.agl.typecheck.env import AglTypeError
 from agm.agl.typecheck.inference import (
     ConstraintOrigin,
@@ -38,6 +35,7 @@ from agm.agl.typecheck.inference import (
     InferenceEngine,
     InferenceError,
 )
+from tests.agl.module_graph import resolve_and_check_entry
 
 
 def _span(line: int, source: str = "<test>") -> SourceSpan:
@@ -376,16 +374,19 @@ class TestContextCompletion:
 
 def test_destructuring_let_binder_preserves_candidate_validation_provenance() -> None:
     """A generic pattern field retains its initializer's candidate-return evidence."""
+    # Named "Holder", not "Option": the standard library's own Option[T] is in
+    # scope, and a same-named top-level enum would make Option:: ambiguous
+    # instead of exercising the candidate-return-type provenance under test.
     source = (
-        "enum Option[T]\n"
+        "enum Holder[T]\n"
         "  | some(value: T)\n"
         "def recurse(n: int) = if n == 0 => 0 else => recurse(n - 1)\n"
-        "let some(value = value) = Option::some(value = recurse(0))\n"
+        "let some(value = value) = Holder::some(value = recurse(0))\n"
         'value + "x"'
     )
 
     with pytest.raises(AglTypeError) as raised:
-        check_module(resolve_module(parse_program(source)), HostCapabilities())
+        resolve_and_check_entry(source, HostCapabilities())
 
     error = raised.value
     assert "inferred return type" in str(error).lower()
@@ -394,16 +395,12 @@ def test_destructuring_let_binder_preserves_candidate_validation_provenance() ->
 
 def test_method_with_inferred_return_uses_receiver_header_type() -> None:
     """Candidate inference retains the receiver's rigid generic slot in its body."""
-    checked = check_module(
-        resolve_module(
-            parse_program(
-                "record Box[T]\n"
-                "  value: T\n"
-                "def Box::get[E](self) = self.value\n"
-                "let box = Box(value = 1)\n"
-                "Box::get(box)"
-            )
-        ),
+    checked = resolve_and_check_entry(
+        "record Box[T]\n"
+        "  value: T\n"
+        "def Box::get[E](self) = self.value\n"
+        "let box = Box(value = 1)\n"
+        "Box::get(box)",
         HostCapabilities(),
     )
 
@@ -415,16 +412,12 @@ def test_method_with_inferred_return_uses_receiver_header_type() -> None:
 
 def test_bound_generic_method_pins_receiver_and_inferrs_own_type_parameter() -> None:
     """Only method parameters beyond the receiver are inferred at member access."""
-    checked = check_module(
-        resolve_module(
-            parse_program(
-                "record Box[T]\n"
-                "  value: T\n"
-                "def Box::map[T, U](self, f: (T) -> U) -> Box[U] = Box(value = f(self.value))\n"
-                "let box = Box(value = 1)\n"
-                'box.map(fn(value: int) -> text => "value")'
-            )
-        ),
+    checked = resolve_and_check_entry(
+        "record Box[T]\n"
+        "  value: T\n"
+        "def Box::map[T, U](self, f: (T) -> U) -> Box[U] = Box(value = f(self.value))\n"
+        "let box = Box(value = 1)\n"
+        'box.map(fn(value: int) -> text => "value")',
         HostCapabilities(),
     )
 
@@ -434,16 +427,12 @@ def test_bound_generic_method_pins_receiver_and_inferrs_own_type_parameter() -> 
 
 def test_bound_generic_method_accepts_explicit_own_type_parameter() -> None:
     """Explicit member instantiation supplies only parameters not pinned by the receiver."""
-    checked = check_module(
-        resolve_module(
-            parse_program(
-                "record Box[T]\n"
-                "  value: T\n"
-                "def Box::map[T, U](self, f: (T) -> U) -> Box[U] = Box(value = f(self.value))\n"
-                "let box = Box(value = 1)\n"
-                'box.map::[text](fn(value: int) -> text => "value")'
-            )
-        ),
+    checked = resolve_and_check_entry(
+        "record Box[T]\n"
+        "  value: T\n"
+        "def Box::map[T, U](self, f: (T) -> U) -> Box[U] = Box(value = f(self.value))\n"
+        "let box = Box(value = 1)\n"
+        'box.map::[text](fn(value: int) -> text => "value")',
         HostCapabilities(),
     )
 

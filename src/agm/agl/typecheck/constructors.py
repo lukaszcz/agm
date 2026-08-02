@@ -564,16 +564,15 @@ class ConstructorChecker:
     ) -> RecordType | EnumType | ExceptionType:
         """Resolve the owner type for a constructor ref.
 
-        Falls back to the unqualified import map for cross-module types that
-        are open-imported but not registered in the local environment.
+        The whole-program type pre-pass registers every module's own and
+        every built-in declaration into the shared program type table before
+        any body is checked, so a resolved ``ConstructorRef`` always finds
+        its owner there.
         """
         owner = self._ctx._env.resolve_constructible_type_by_module_id(
             ref.owner_module_id, ref.owner_name, scope_path=ref.owner_path
         )
-        if owner is None:
-            candidate = self._ctx._env.get_type(ref.owner_name)
-            assert isinstance(candidate, (RecordType, EnumType, ExceptionType))
-            owner = candidate
+        assert owner is not None
         if ref.variant is None:
             return owner
         if not isinstance(owner, EnumType):

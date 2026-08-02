@@ -550,7 +550,7 @@ def assert_checked_output_closed(
 
 
 def assert_checked_module_closed(checked: CheckedModule) -> None:
-    """Assert that a single-module checked program is safe to lower."""
+    """Assert that one module's checked output is safe to lower."""
     assert_checked_output_closed(
         node_types=checked.node_types,
         contract_specs=checked.contract_specs,
@@ -604,10 +604,12 @@ class TypeEnvironment:
     - ``module_id`` is the owning module of the current env.  ``::Name``
       (empty-segment qualifier) resolves against this module's own types.
 
-    These fields are ``None`` in the module path; the resolution logic
-    in ``resolve_type_expr`` and ``_resolve_name_type`` checks for ``None``
-    before entering the module-aware branches, so the existing path is
-    unchanged when these are absent.
+    Every environment the checker or match compiler actually queries carries
+    these fields. They are absent only on the transient, shell-collection-only
+    environments the whole-program type pre-pass builds in Step A
+    (``typecheck/program.py::_build_program_type_table``) to register every
+    module's declaration headers before any body is resolved; those
+    environments are never queried beyond that registration.
     """
 
     def __init__(
@@ -662,10 +664,10 @@ class TypeEnvironment:
         self._function_signatures_by_node_id: dict[int, FunctionSignature] = {}
         # Declaration node_ids of ``extern def``s, keyed by the same globally-unique
         # decl_node_id as ``_function_signatures_by_node_id``.  Populated by
-        # ``_preregister_funcdef`` (module mode) and by the program
-        # function-signature pre-pass seeding (program context, including imported
-        # externs).  Consulted by ``_check_declared_name_call`` to decide whether a
-        # declared-name call site is an extern call site to record.
+        # ``_preregister_funcdef`` (this module's own externs) and by the program
+        # function-signature pre-pass seeding (imported externs).  Consulted by
+        # ``_check_declared_name_call`` to decide whether a declared-name call
+        # site is an extern call site to record.
         self._extern_node_ids: set[int] = set()
         # Constructor field-kinds registry — ((module, scope path, owner), variant)
         # → ordered (field_name, ParamKind) pairs. Populated by _TypeBuilder
@@ -1064,17 +1066,19 @@ class TypeEnvironment:
         opened = self._resolve_opened_type(name, None)
         if opened is not None:
             return opened
-        # Program context: look up via open imports.
-        if self._import_env is not None and self._program_type_table is not None:
-            candidates = self._import_env.unqualified.get(name, frozenset())
-            type_candidates = [qn for qn in candidates if self._is_program_type_candidate(qn)]
-            if len(type_candidates) == 1:
-                try:
-                    return self._resolve_program_qname_as_bare_type(
-                        type_candidates[0], name, span=None
-                    )
-                except AglTypeError:
-                    return None
+        # Program context: look up via open imports. A bare ``TypeEnvironment``
+        # (no import environment / program type table -- e.g. one constructed
+        # directly by a unit test, independent of any module graph) has
+        # nothing further to search here.
+        if self._import_env is None or self._program_type_table is None:
+            return None
+        candidates = self._import_env.unqualified.get(name, frozenset())
+        type_candidates = [qn for qn in candidates if self._is_program_type_candidate(qn)]
+        if len(type_candidates) == 1:
+            try:
+                return self._resolve_program_qname_as_bare_type(type_candidates[0], name, span=None)
+            except AglTypeError:
+                return None
         return None
 
     @staticmethod
@@ -1370,32 +1374,38 @@ class TypeEnvironment:
         )
 
     def _resolve_opened_type(self, name: NameAtom, span: SourceSpan | None) -> Type | None:
-        """Resolve an opened relative type path through shared contributions."""
+        """Resolve an opened relative type path through shared contributions.
+
+        Only ever called against a fully-seeded program environment (never
+        the transient shell-collection env the type pre-pass uses), so the
+        program type table is always present once *key* resolves.
+        """
         key = self._opened_type_key(name, span)
         if key is None:
             return None
         module, path, source_name = key
-        if self._program_type_table is not None:
-            qname: QName = (module, source_name if not path else (*path, source_name))
-            generic = (self._program_generic_table or {}).get(key)
-            if generic is not None:
-                raise AglTypeError(
-                    f"Generic type '{_render_type_atom(name)}' requires "
-                    f"{len(generic.type_params)} type argument(s); "
-                    f"use '{_render_type_atom(name)}[...]' to apply it.",
-                    span=span,
-                )
-            return self._resolve_program_qname_as_bare_type(
-                qname, _render_type_atom(name), span=span
+        assert self._program_type_table is not None
+        qname: QName = (module, source_name if not path else (*path, source_name))
+        generic = (self._program_generic_table or {}).get(key)
+        if generic is not None:
+            raise AglTypeError(
+                f"Generic type '{_render_type_atom(name)}' requires "
+                f"{len(generic.type_params)} type argument(s); "
+                f"use '{_render_type_atom(name)}[...]' to apply it.",
+                span=span,
             )
-        return self._resolve_name_type(
-            "::".join((*path, source_name)), span=span, _resolving=frozenset(), lexical=False
-        )
+        return self._resolve_program_qname_as_bare_type(qname, _render_type_atom(name), span=span)
 
     def _resolve_opened_applied_type(
         self, name: NameAtom, args: tuple[Type, ...], span: SourceSpan | None
     ) -> Type | None:
-        """Resolve an opened relative generic path through shared contributions."""
+        """Resolve an opened relative generic path through shared contributions.
+
+        A same-module opened generic is always reachable through
+        ``program_generic_table`` (the whole-program type pre-pass registers
+        every module's own generics there before any module's body is
+        checked), so no separate local-table fallback is needed.
+        """
         key = self._opened_type_key(name, span)
         if key is None:
             return None
@@ -1406,11 +1416,6 @@ class TypeEnvironment:
         alias = self._program_alias_table.get(key)
         if alias is not None:
             return self.instantiate_alias(key[2], alias, args, span=span)
-        if key[0] == self._module_id:
-            local_name = "::".join((*key[1], key[2]))
-            generic = self._generic_types.get(local_name)
-            if generic is not None:
-                return self.instantiate_from_gdef(key[2], generic, args, span=span)
         raise AglTypeError(
             f"Type '{_render_type_atom(name)}' does not take type arguments.", span=span
         )
@@ -1867,9 +1872,9 @@ class TypeEnvironment:
     ) -> Type:
         """Resolve a module-qualified type reference ``QUALIFIER::Name``.
 
-        Called only in program context.  Falls back to the local type namespace
-        (prelude / built-ins) when the qualifier is empty (``::Name``
-        self-reference to the current module) and no program context exists.
+        Falls back to the local type namespace (prelude / built-ins) when the
+        qualifier is empty (``::Name`` self-reference to the current module)
+        and no program context exists.
         """
         rendered = qualifier.render()
         local_name = self._local_qualified_type_name(qualifier, name)
@@ -2061,12 +2066,12 @@ class TypeEnvironment:
             source_module_id, source_scope_path, source_name = self._qname_decl_key(qname)
             expected_qualifier = None
         else:
-            if (
-                self._import_env is None
-                or module_qualifier is None
-                or not module_qualifier.route_segments
-            ):
-                return None
+            # kind is EnumOwnerFormKind.QUALIFIED_IMPORT here (the only
+            # remaining kind): its one caller (_check_module_qualified_variant)
+            # chooses it exactly when module_qualifier has route segments, and
+            # only ever calls with a real import environment present.
+            assert self._import_env is not None
+            assert module_qualifier is not None and module_qualifier.route_segments
             # A qualified enum spelling must preserve the shared resolver's
             # verdict.  In particular, an unknown route or ambiguity is not a
             # statement that the subject is "not an enum".

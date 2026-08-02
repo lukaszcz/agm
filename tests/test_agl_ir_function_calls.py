@@ -19,13 +19,9 @@ import decimal
 import pytest
 
 from agm.agl.eval.ir_interpreter import IrInterpreter
-from agm.agl.lower import lower_module
-from agm.agl.parser import parse_program
-from agm.agl.scope import resolve_module
 from agm.agl.semantics.exceptions import AglRaise
 from agm.agl.semantics.values import BoolValue, DecimalValue, IntValue, TextValue
-from agm.agl.typecheck import check_module
-from tests.agl.ir_harness import _compiled_checked, base_caps, evaluate_ir
+from tests.agl.ir_harness import evaluate_ir, lower_ir
 
 # ---------------------------------------------------------------------------
 # Basic function call tests
@@ -146,11 +142,7 @@ def test_call_depth_guard_ir_only() -> None:
     from agm.agl.semantics.values import TextValue
 
     source = "def inf(n: int) -> int = inf(n + 1)\nlet result = inf(0)\n()"
-    program = parse_program(source)
-    resolved = resolve_module(program)
-    caps = base_caps()
-    checked = check_module(resolved, caps)
-    executable = lower_module(_compiled_checked(checked), source_text=source, source_label="<test>")
+    executable = lower_ir(source)
     interp = IrInterpreter(executable, max_call_depth=10)
     with pytest.raises(AglRaise) as exc_info:
         interp.run()

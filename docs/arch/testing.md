@@ -4,7 +4,7 @@ The test suite mirrors the architecture: the AgL pipeline is tested pass by pass
 
 ## Strategy
 
-- **AgL passes** are tested individually — lexer, parser, AST, scope, typecheck, match compilation, lowering, IR, and evaluator each have their own suites — plus end-to-end acceptance suites that run whole programs.
+- **AgL passes** are tested individually — lexer, parser, AST, scope, typecheck, match compilation, lowering, IR, and evaluator each have their own suites — plus end-to-end acceptance suites that run whole programs. Scope and typecheck have no per-module entry point (production always resolves and checks a whole program), so their unit suites build a real single-entry `ModuleGraph` through the shared helpers in `tests/agl/module_graph.py` (`resolve_entry`/`resolve_and_check_entry` for source text, `resolve_program_ast`/`resolve_and_check_program_ast` for an already-parsed `Program`) rather than resolving/checking a bare AST, so no unit test exercises a configuration production does not.
 - **Commands** are tested at the CLI boundary, exercising user workflows rather than internal call sequences.
 - **Domain and primitives** (project layout, git, config, process/env) have unit tests for their behavior and edge cases.
 

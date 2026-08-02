@@ -11,9 +11,9 @@ import pytest
 from agm.core.process import ProcessCaptureResult
 from tests._agl_helpers import let_root_capture
 from tests.agl.ir_harness import (
-    _compiled_checked,
     evaluate_ir_raises_with_shell,
     evaluate_ir_with_shell,
+    lower_ir,
     shell_caps,
 )
 
@@ -276,21 +276,9 @@ def test_t9_exec_inside_function() -> None:
 def test_t10_golden_lowering() -> None:
     """Lowering exec() produces an IrExec node and populates dry_run_inventory."""
     from agm.agl.ir.nodes import IrBind, IrExec, IrSequence
-    from agm.agl.lower import lower_module
-    from agm.agl.parser import parse_program
-    from agm.agl.scope import resolve_module
-    from agm.agl.typecheck import check_module
 
     source = 'let result = exec("echo hi")\nresult'
-    caps = shell_caps()
-    program = parse_program(source)
-    resolved = resolve_module(program)
-    checked = check_module(resolved, caps)
-    executable = lower_module(
-        _compiled_checked(checked),
-        source_text=source,
-        source_label="<test>",
-    )
+    executable = lower_ir(source, caps=shell_caps())
 
     # Check that the entry module initializers contain an IrExec node
     entry_mod = executable.modules[executable.entry_module]

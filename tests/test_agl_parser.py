@@ -1130,9 +1130,9 @@ class TestProgramDeclScopeSideTables:
     """Parse a 'program NAME' source and assert the side tables on ModuleResolution."""
 
     def _parse_and_resolve(self, source: str) -> object:
-        from agm.agl.scope import resolve_module
+        from tests.agl.module_graph import resolve_entry
 
-        return resolve_module(parse_program(source))
+        return resolve_entry(source)
 
     def test_program_name_set_in_resolved_program(self) -> None:
         """Parsing 'program myapp' sets program_name on ModuleResolution."""

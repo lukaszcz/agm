@@ -488,11 +488,10 @@ class TypeTable:
         Raises ``KeyError`` if no ``TypeDef`` is registered for the handle's
         ``(module_id, scope_path, name)``. Raises ``AssertionError`` if the registered
         def's ``kind`` is not ``"exception"``, or if the base chain contains
-        a cycle — an internal-invariant violation, since the inhabitation
-        check (single-module builder post-pass or program pre-pass) rejects
-        ``extends`` cycles as uninhabitable before this can fire in
-        production; this guard is for internal robustness, not a user
-        diagnostic.
+        a cycle — an internal-invariant violation, since the whole-program
+        inhabitation pre-pass rejects ``extends`` cycles as uninhabitable
+        before this can fire in production; this guard is for internal
+        robustness, not a user diagnostic.
         """
         key = (handle.module_id, handle.scope_path, handle.name)
         cached = self._exception_fields_cache.get(key)
@@ -1310,8 +1309,8 @@ BUILTIN_PRELUDE_TYPE_DEFS: Mapping[str, TypeDef] = {
 
 # Generic ``Option`` template under ``STD_CORE_ID`` (type parameter ``T``,
 # variants ``None``/``Some(value: T)``), matching the shape of the concrete
-# ``Option[text]``/``Option[json]`` prelude constants, so single-module runs
-# without the stdlib module graph can still resolve ``enum_variants`` on
+# ``Option[text]``/``Option[json]`` prelude constants, so a program loaded
+# without the standard library can still resolve ``enum_variants`` on
 # ``Option`` handles.
 OPTION_TYPE_DEF = TypeDef(
     kind="enum",

@@ -128,7 +128,7 @@ rebuilding the module graph. See [modules.md](agl/modules.md).
 
 ## Code Entry Points
 
-- `src/agm/agl/scope/` — `resolve_module`, `resolve_program`, their resolution side tables, and the pure import-policy models in `imports.py`.
+- `src/agm/agl/scope/` — `resolve_program`, its per-module resolution side tables, and the pure import-policy models in `imports.py`. The pass runs only as part of whole-program resolution; there is no per-module entry point.
 - Tests: `tests/test_agl_scope.py`, `tests/test_agl_scope_program.py`,
   `tests/test_agl_scope_imports.py`, `tests/test_agl_scope_contributions.py`,
   `tests/test_agl_namespace_wiring.py`, and `tests/test_agl_pattern_slots.py`.

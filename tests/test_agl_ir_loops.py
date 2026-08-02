@@ -77,14 +77,9 @@ _DUMMY_LOC = Location(
 
 def _lower(source: str) -> ExecutableProgram:
     """Parse → resolve → check → lower *source*; return the ExecutableProgram."""
-    from agm.agl.lower import lower_module
-    from agm.agl.parser import parse_program
-    from agm.agl.scope import resolve_module
-    from agm.agl.typecheck import check_module
-    from tests.agl.ir_harness import _compiled_checked, base_caps
+    from tests.agl.ir_harness import lower_ir
 
-    checked = check_module(resolve_module(parse_program(source)), base_caps())
-    return lower_module(_compiled_checked(checked), source_text=source, source_label="<test>")
+    return lower_ir(source)
 
 
 def _make_minimal_program(
@@ -753,28 +748,22 @@ def test_for_loop_non_iterable_bool_raises_type_error() -> None:
     """for x in bool do body done — non-iterable type is a typecheck error."""
     from agm.agl.typecheck.env import AglTypeError
     from tests.agl.ir_harness import base_caps
+    from tests.agl.module_graph import resolve_and_check_entry
 
     source = "for x in true do\n  ()\ndone\n"
     with pytest.raises(AglTypeError):
-        from agm.agl.parser import parse_program
-        from agm.agl.scope import resolve_module
-        from agm.agl.typecheck import check_module
-
-        check_module(resolve_module(parse_program(source)), base_caps())
+        resolve_and_check_entry(source, base_caps())
 
 
 def test_for_loop_int_collection_raises_type_error() -> None:
     """for x in int_expr do body done — int is not an iterable collection."""
     from agm.agl.typecheck.env import AglTypeError
     from tests.agl.ir_harness import base_caps
+    from tests.agl.module_graph import resolve_and_check_entry
 
     source = "for x in 42 do\n  ()\ndone\n"
     with pytest.raises(AglTypeError):
-        from agm.agl.parser import parse_program
-        from agm.agl.scope import resolve_module
-        from agm.agl.typecheck import check_module
-
-        check_module(resolve_module(parse_program(source)), base_caps())
+        resolve_and_check_entry(source, base_caps())
 
 
 # ---------------------------------------------------------------------------

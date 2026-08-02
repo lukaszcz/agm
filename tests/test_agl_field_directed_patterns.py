@@ -7,21 +7,21 @@ from pathlib import Path
 import pytest
 
 from agm.agl.capabilities import HostCapabilities
-from agm.agl.parser import parse_program
-from agm.agl.scope import AglScopeError, resolve_module
+from agm.agl.scope import AglScopeError
 from agm.agl.scope.program import resolve_program
-from agm.agl.typecheck import AglTypeError, check_module
+from agm.agl.typecheck import AglTypeError
 from agm.agl.typecheck.program import check_program
 from tests.agl.ir_harness import evaluate_ir, make_graph_from_files
+from tests.agl.module_graph import resolve_and_check_entry, resolve_entry
 
 
 def _check(source: str) -> None:
-    check_module(resolve_module(parse_program(source)), HostCapabilities())
+    resolve_and_check_entry(source, HostCapabilities())
 
 
 def _reject_scope(source: str) -> None:
     with pytest.raises(AglScopeError):
-        resolve_module(parse_program(source))
+        resolve_entry(source)
 
 
 def _reject_type(source: str) -> None:

@@ -19,12 +19,7 @@ from agm.agl.ir import (
     IrLoad,
     IrSequence,
 )
-from agm.agl.lower import lower_module
-from agm.agl.matchcompile import (
-    DecisionDecompose,
-    MatchCompiledModule,
-    compile_module_matches,
-)
+from agm.agl.matchcompile import DecisionDecompose
 from agm.agl.matchcompile.model import (
     DecisionBranch,
     DecisionFail,
@@ -33,16 +28,15 @@ from agm.agl.matchcompile.model import (
     OccurrenceId,
     PathDecomposition,
 )
-from agm.agl.parser import parse_program
-from agm.agl.scope import resolve_module
 from agm.agl.syntax.nodes import (
     ConstructorPattern,
     LiteralPattern,
     VarPattern,
     WildcardPattern,
 )
-from agm.agl.typecheck import check_module
+from tests.agl.ir_harness import compile_checked_module, lower_compiled_module
 from tests.agl.match_reference import case_sites
+from tests.agl.module_graph import resolve_and_check_entry
 
 
 def _lower(source: str) -> ExecutableProgram:
@@ -54,11 +48,10 @@ def _lower(source: str) -> ExecutableProgram:
             ),
         }
     )
-    checked = check_module(resolve_module(parse_program(source)), capabilities)
-    result = compile_module_matches(checked)
-    assert isinstance(result.compiled, MatchCompiledModule)
-    return lower_module(
-        result.compiled,
+    checked = resolve_and_check_entry(source, capabilities)
+    compiled = compile_checked_module(checked)
+    return lower_compiled_module(
+        compiled,
         source_text=source,
         source_label="<test>",
     )
@@ -104,16 +97,15 @@ def test_record_root_decomposition_projects_only_demanded_fields_without_a_switc
 def test_lowering_rejects_a_forged_failed_decision(self_validation_disabled: None) -> None:
     """A failed decision path cannot become executable IR."""
     source = "let value = 1\ncase value of | _ => 1\n"
-    checked = check_module(resolve_module(parse_program(source)), HostCapabilities())
-    result = compile_module_matches(checked)
-    assert isinstance(result.compiled, MatchCompiledModule)
-    case_id, compiled_case = next(iter(case_sites(result.compiled.sites).items()))
+    checked = resolve_and_check_entry(source, HostCapabilities())
+    compiled = compile_checked_module(checked)
+    case_id, compiled_case = next(iter(case_sites(compiled.sites).items()))
     forged = replace(
-        result.compiled,
-        sites={**result.compiled.sites, case_id: replace(compiled_case, root=DecisionFail())},
+        compiled,
+        sites={**compiled.sites, case_id: replace(compiled_case, root=DecisionFail())},
     )
     with pytest.raises(AssertionError):
-        lower_module(forged, source_text=source, source_label="<test>")
+        lower_compiled_module(forged, source_text=source, source_label="<test>")
 
 
 def test_lowering_rejects_a_forged_record_switch(self_validation_disabled: None) -> None:
@@ -122,16 +114,15 @@ def test_lowering_rejects_a_forged_record_switch(self_validation_disabled: None)
         "record Box\n  value: int\nlet value = Box(value = 1)\n"
         "case value of | Box(value = _) => 1\n"
     )
-    checked = check_module(resolve_module(parse_program(source)), HostCapabilities())
-    result = compile_module_matches(checked)
-    assert isinstance(result.compiled, MatchCompiledModule)
-    case_id, compiled_case = next(iter(case_sites(result.compiled.sites).items()))
+    checked = resolve_and_check_entry(source, HostCapabilities())
+    compiled = compile_checked_module(checked)
+    case_id, compiled_case = next(iter(case_sites(compiled.sites).items()))
     root = compiled_case.root
     assert isinstance(root, DecisionDecompose)
     forged = replace(
-        result.compiled,
+        compiled,
         sites={
-            **result.compiled.sites,
+            **compiled.sites,
             case_id: replace(
                 compiled_case,
                 root=DecisionSwitch(
@@ -143,7 +134,7 @@ def test_lowering_rejects_a_forged_record_switch(self_validation_disabled: None)
         },
     )
     with pytest.raises(AssertionError):
-        lower_module(forged, source_text=source, source_label="<test>")
+        lower_compiled_module(forged, source_text=source, source_label="<test>")
 
 
 def test_wildcard_case_still_binds_root_subject_before_leaf() -> None:

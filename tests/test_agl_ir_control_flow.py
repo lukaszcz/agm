@@ -56,7 +56,7 @@ from agm.agl.semantics.values import (
 )
 from agm.agl.typecheck import AglTypeError
 from tests._agl_helpers import let_root_capture
-from tests.agl.ir_harness import _compiled_checked, evaluate_ir, evaluate_ir_raises
+from tests.agl.ir_harness import evaluate_ir, evaluate_ir_raises, lower_ir
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -536,10 +536,6 @@ catch CastError =>
 def _lower(source: str) -> object:
     """Parse → check → lower; return ExecutableProgram."""
     from agm.agl.capabilities import HostCapabilities
-    from agm.agl.lower import lower_module
-    from agm.agl.parser import parse_program
-    from agm.agl.scope import resolve_module
-    from agm.agl.typecheck import check_module
 
     caps = HostCapabilities(
         agent_names=frozenset(),
@@ -552,14 +548,7 @@ def _lower(source: str) -> object:
             ),
         },
     )
-    prog = parse_program(source)
-    resolved = resolve_module(prog)
-    checked = check_module(resolved, caps)
-    return lower_module(
-        _compiled_checked(checked),
-        source_text=source,
-        source_label="<test>",
-    )
+    return lower_ir(source, caps=caps)
 
 
 def test_lower_if_no_else_shape() -> None:

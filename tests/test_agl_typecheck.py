@@ -26,7 +26,7 @@ import pytest
 from agm.agl.capabilities import HostCapabilities
 from agm.agl.modules.ids import ENTRY_ID, ModuleId
 from agm.agl.parser import parse_program
-from agm.agl.scope import AglScopeError, resolve_module
+from agm.agl.scope import AglScopeError
 from agm.agl.scope.symbols import BinderKind, BindingRef, ScopeNode
 from agm.agl.scope.symbols import ModuleResolution as _ModuleResolution
 from agm.agl.semantics.type_table import (
@@ -123,9 +123,9 @@ from agm.agl.typecheck import (
     TypeEnvironment,
     UnitType,
     assert_checked_module_closed,
-    check_module,
 )
 from agm.agl.typecheck.builder import _TypeBuilder
+from agm.agl.typecheck.checker import _check_prepared_module
 from agm.agl.typecheck.env import (
     ConstructorSignature,
     GenericAliasDef,
@@ -134,6 +134,7 @@ from agm.agl.typecheck.env import (
 )
 from agm.agl.typecheck.function_inference import resolve_function_header
 from tests._agl_helpers import all_node_ids
+from tests.agl.module_graph import resolve_and_check_entry, resolve_entry
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -185,28 +186,71 @@ def no_exec_caps() -> HostCapabilities:
     )
 
 
-def parse_resolve_check(source: str, capabilities: HostCapabilities | None = None) -> CheckedModule:
+def parse_resolve_check(
+    source: str, capabilities: HostCapabilities | None = None, *, default_stdlib: bool = True
+) -> CheckedModule:
     if capabilities is None:
         capabilities = default_capabilities()
-    prog = parse_program(source)
-    return check_module(resolve_module(prog), capabilities)
+    return resolve_and_check_entry(source, capabilities, default_stdlib=default_stdlib)
 
 
-def accept_type(source: str, capabilities: HostCapabilities | None = None) -> CheckedModule:
-    return parse_resolve_check(source, capabilities)
+def accept_type(
+    source: str, capabilities: HostCapabilities | None = None, *, default_stdlib: bool = True
+) -> CheckedModule:
+    return parse_resolve_check(source, capabilities, default_stdlib=default_stdlib)
 
 
-def reject_type(source: str, capabilities: HostCapabilities | None = None) -> AglTypeError:
+def reject_type(
+    source: str, capabilities: HostCapabilities | None = None, *, default_stdlib: bool = True
+) -> AglTypeError:
     """Assert that the source is rejected with an AglTypeError."""
     with pytest.raises(AglTypeError) as exc_info:
-        parse_resolve_check(source, capabilities)
+        parse_resolve_check(source, capabilities, default_stdlib=default_stdlib)
     return exc_info.value
 
 
-def reject_any(source: str, capabilities: HostCapabilities | None = None) -> Exception:
+def _check_resolved(
+    resolved: _ModuleResolution,
+    capabilities: HostCapabilities | None = None,
+    *,
+    seed_env: TypeEnvironment | None = None,
+) -> CheckedModule:
+    """Type-check an already-built ``ModuleResolution`` via check_program's
+    internal per-module entry point.
+
+    For tests that hand-build (or ``dataclasses.replace``-mutate) a
+    ``ModuleResolution`` directly — because the property under test is a
+    defensive checker guard unreachable from real source, or exercises
+    deliberately corrupted resolver output — there is no source text to hand
+    to ``resolve_and_check_entry``. This calls ``_check_prepared_module``
+    (what ``check_program`` itself drives per module) rather than
+    ``check_module``, since ``check_module`` has no production caller and is
+    slated for deletion once every call site depending on it has one; this
+    helper's body mirrors ``check_module``'s own (env setup, then
+    ``_check_prepared_module`` with declaration-collision validation on) so
+    behavior is unchanged.
+    """
+    if capabilities is None:
+        capabilities = default_capabilities()
+    env = TypeEnvironment(
+        local_scope_paths=frozenset(resolved.scope_nodes), scope_nodes=resolved.scope_nodes
+    )
+    if seed_env is not None:
+        env.seed_from(seed_env)
+    return _check_prepared_module(
+        resolved,
+        capabilities,
+        env=env,
+        validate_declaration_collisions=True,
+    )
+
+
+def reject_any(
+    source: str, capabilities: HostCapabilities | None = None, *, default_stdlib: bool = True
+) -> Exception:
     """Assert that the source is rejected with any kind of error."""
     with pytest.raises(Exception) as exc_info:
-        parse_resolve_check(source, capabilities)
+        parse_resolve_check(source, capabilities, default_stdlib=default_stdlib)
     return exc_info.value
 
 
@@ -546,17 +590,25 @@ class TestIsAssignable:
 
 
 @pytest.mark.parametrize("type_ref", ("A::Missing", "A::Missing[int]"))
-def test_missing_type_under_recognized_local_scope_is_focused_without_module_graph(
-    type_ref: str,
-) -> None:
+def test_missing_type_under_recognized_local_scope_is_focused(type_ref: str) -> None:
+    """A locally-scoped-region lookup miss reports the scoped name, not a
+    generic "unknown module" diagnostic — a property of local ``scope``
+    regions, independent of whether a module graph or the standard library is
+    in scope."""
     source = f"scope A\ndef member() -> int = 1\nend A\ndef use(value: {type_ref}) -> int = 1"
+    err = reject_type(source)
+    assert "Unknown scoped type 'A::Missing'" in str(err)
 
-    with pytest.raises(AglTypeError, match="Unknown scoped type 'A::Missing'"):
-        parse_resolve_check(source)
 
-
-def test_opened_local_scope_type_resolves_without_module_graph() -> None:
-    parse_resolve_check(
+def test_opened_local_scope_type_resolves() -> None:
+    # Checked via _check_resolved (not resolve_and_check_entry): resolution is
+    # real (through resolve_program), but check_program always threads a
+    # whole-program generic/alias table into its per-module environment, so
+    # the "no program-level table" branch _resolve_opened_applied_type falls
+    # back to is otherwise unreachable — only check_module's env (no program
+    # context) leaves that table unset, and check_module's callers are the
+    # only remaining thing exercising it.
+    resolved = resolve_entry(
         "open Shapes\n"
         "scope Shapes\n"
         "record Point\n"
@@ -564,10 +616,14 @@ def test_opened_local_scope_type_resolves_without_module_graph() -> None:
         "end Shapes\n"
         "def identity(value: Point) -> Point = value"
     )
+    _check_resolved(resolved)
 
 
-def test_opened_local_generic_type_resolves_without_module_graph() -> None:
-    parse_resolve_check(
+def test_opened_local_generic_type_resolves() -> None:
+    # See test_opened_local_scope_type_resolves: checked via _check_resolved
+    # for the same reason — this is the generic-alias-lookup branch of the
+    # same "no program-level table" fallback.
+    resolved = resolve_entry(
         "open Shapes using Box as Container\n"
         "scope Shapes\n"
         "record Box[T]\n"
@@ -575,6 +631,7 @@ def test_opened_local_generic_type_resolves_without_module_graph() -> None:
         "end Shapes\n"
         "def identity(value: Container[int]) -> Container[int] = value"
     )
+    _check_resolved(resolved)
 
 
 # ---------------------------------------------------------------------------
@@ -1551,7 +1608,8 @@ class TestScopedBuiltinTypes:
         r = accept_type(
             f"scope A\nbuiltin record ExecResult\n{_EXEC_RESULT_FIELDS}end A\n"
             "def use(value: A::ExecResult) -> int = value.exit_code\n"
-            'use(A::ExecResult(stdout = "a", exit_code = 1, stderr = "", timed_out = false))\n'
+            'use(A::ExecResult(stdout = "a", exit_code = 1, stderr = "", timed_out = false))\n',
+            default_stdlib=False,
         )
         assert r.resolved.program is not None
         handle = r.type_env.get_type("A::ExecResult")
@@ -1565,7 +1623,8 @@ class TestScopedBuiltinTypes:
             "  case value of\n"
             '    | A::ParsePolicy::Abort => "abort"\n'
             '    | A::ParsePolicy::Retry(n) => "retry"\n'
-            "classify(A::ParsePolicy::Retry(n = 3))\n"
+            "classify(A::ParsePolicy::Retry(n = 3))\n",
+            default_stdlib=False,
         )
         assert r.resolved.program is not None
         handle = r.type_env.get_type("A::ParsePolicy")
@@ -1582,7 +1641,8 @@ class TestScopedBuiltinTypes:
             f"scope A\nbuiltin record ExecResult\n{_EXEC_RESULT_FIELDS}end A\n"
             "def A::ExecResult::describe(self) -> text = self.stdout\n"
             'A::ExecResult(stdout = "a", exit_code = 1, stderr = "", timed_out = false)'
-            ".describe()"
+            ".describe()",
+            default_stdlib=False,
         )
         result = checked.resolved.program.body.items[-1]
         assert checked.node_types[result.node_id] == TextType()
@@ -1598,7 +1658,8 @@ class TestScopedBuiltinTypes:
             "def ExecResult::describe(self) -> text = self.stdout\n"
             "end A\n"
             'A::ExecResult(stdout = "a", exit_code = 1, stderr = "", timed_out = false)'
-            ".describe()"
+            ".describe()",
+            default_stdlib=False,
         )
         result = checked.resolved.program.body.items[-1]
         assert checked.node_types[result.node_id] == TextType()
@@ -1613,7 +1674,8 @@ class TestScopedBuiltinTypes:
             "  catch RangeError as e =>\n"
             "    e.message\n"
             "end A\n"
-            "A::trigger()\n"
+            "A::trigger()\n",
+            default_stdlib=False,
         )
         assert r.resolved.program is not None
         handle = r.type_env.get_type("A::RangeError")
@@ -1622,12 +1684,16 @@ class TestScopedBuiltinTypes:
 
     def test_scoped_builtin_record_unknown_bare_name_rejected(self) -> None:
         """The canonical-name whitelist still applies to a scoped declaration."""
-        err = reject_type("scope A\nbuiltin\nrecord Bogus\n  x: int\nend A\n()")
+        err = reject_type(
+            "scope A\nbuiltin\nrecord Bogus\n  x: int\nend A\n()", default_stdlib=False
+        )
         assert "bogus" in err.to_diagnostic().message.lower()
 
     def test_scoped_builtin_record_shape_mismatch_rejected(self) -> None:
         """A scoped ``builtin`` declaration must still match the canonical shape."""
-        err = reject_type("scope A\nbuiltin\nrecord ExecResult\n  x: int\nend A\n()")
+        err = reject_type(
+            "scope A\nbuiltin\nrecord ExecResult\n  x: int\nend A\n()", default_stdlib=False
+        )
         assert "ExecResult" in err.to_diagnostic().message
 
     def test_root_generic_builtin_record_is_rejected_too(self) -> None:
@@ -1636,19 +1702,22 @@ class TestScopedBuiltinTypes:
         masked the mismatch and the shape check never ran) rather than
         crashing — a bug independent of scope regions, fixed alongside the
         scoped case."""
-        err = reject_type("builtin record ExecResult[T]\n  x: T\n\nprint(1)")
+        err = reject_type("builtin record ExecResult[T]\n  x: T\n\nprint(1)", default_stdlib=False)
         assert "ExecResult" in err.to_diagnostic().message
 
     def test_scoped_generic_builtin_record_is_rejected_with_a_proper_diagnostic(self) -> None:
         """No canonical builtin type is generic, so this must be rejected as an
         invalid shape, not crash re-homing a handle to a bare ``TypeDef`` that
         never gets registered under its scoped key."""
-        err = reject_type("scope A\nbuiltin record ExecResult[T]\n  x: T\nend A\n()")
+        err = reject_type(
+            "scope A\nbuiltin record ExecResult[T]\n  x: T\nend A\n()", default_stdlib=False
+        )
         assert "ExecResult" in err.to_diagnostic().message
 
     def test_scoped_generic_builtin_enum_is_rejected_with_a_proper_diagnostic(self) -> None:
         err = reject_type(
-            "scope A\nbuiltin\nenum ParsePolicy[T] =\n  | Abort\n  | Retry(n: T)\nend A\n()"
+            "scope A\nbuiltin\nenum ParsePolicy[T] =\n  | Abort\n  | Retry(n: T)\nend A\n()",
+            default_stdlib=False,
         )
         assert "ParsePolicy" in err.to_diagnostic().message
 
@@ -1656,11 +1725,13 @@ class TestScopedBuiltinTypes:
         """``RangeError`` is a valid builtin name, but only as an exception —
         declaring it as a record must report a clean diagnostic, not an
         internal ``AssertionError`` with no message."""
-        err = reject_type("scope A\nbuiltin\nrecord RangeError\n  x: int\nend A\n()")
+        err = reject_type(
+            "scope A\nbuiltin\nrecord RangeError\n  x: int\nend A\n()", default_stdlib=False
+        )
         assert "RangeError" in err.to_diagnostic().message
 
     def test_builtin_shape_check_reports_a_proper_diagnostic_at_the_root_too(self) -> None:
-        err = reject_type("builtin\nrecord RangeError\n  x: int\n\nprint(1)")
+        err = reject_type("builtin\nrecord RangeError\n  x: int\n\nprint(1)", default_stdlib=False)
         assert "RangeError" in err.to_diagnostic().message
 
     def test_scoped_exception_hierarchy_with_a_scoped_base_typechecks(self) -> None:
@@ -1677,7 +1748,8 @@ class TestScopedBuiltinTypes:
             "  trace_id: text\n"
             "builtin exception Abort extends Exception()\n"
             "end A\n"
-            "()\n"
+            "()\n",
+            default_stdlib=False,
         )
         assert r.resolved.program is not None
 
@@ -1700,7 +1772,8 @@ class TestScopedBuiltinTypes:
             "  | None\n"
             "  | Some(value: OutputContract)\n"
             "end A\n"
-            "()\n"
+            "()\n",
+            default_stdlib=False,
         )
         assert r.resolved.program is not None
 
@@ -1711,7 +1784,8 @@ class TestScopedBuiltinTypes:
         canonical (path-``()``) signature once re-rooted."""
         r = accept_type(
             f"scope A\nbuiltin record ExecResult\n{_EXEC_RESULT_FIELDS}"
-            "builtin def exec(command: text) -> ExecResult\nend A\n()\n"
+            "builtin def exec(command: text) -> ExecResult\nend A\n()\n",
+            default_stdlib=False,
         )
         assert r.resolved.program is not None
 
@@ -1723,7 +1797,8 @@ class TestScopedBuiltinTypes:
         err = reject_type(
             f"scope A\nbuiltin record ExecResult\n{_EXEC_RESULT_FIELDS}end A\n"
             "scope B\nbuiltin def exec(command: text) -> A::ExecResult\nend B\n"
-            "()\n"
+            "()\n",
+            default_stdlib=False,
         )
         assert "exec" in err.to_diagnostic().message
 
@@ -1740,7 +1815,8 @@ class TestBuiltinDeclarationUniqueness:
         err = reject_type(
             f"scope A\nbuiltin record ExecResult\n{_EXEC_RESULT_FIELDS}end A\n"
             f"scope B\nbuiltin record ExecResult\n{_EXEC_RESULT_FIELDS}end B\n"
-            "()\n"
+            "()\n",
+            default_stdlib=False,
         )
         message = err.to_diagnostic().message
         assert "A::ExecResult" in message
@@ -1752,7 +1828,8 @@ class TestBuiltinDeclarationUniqueness:
         err = reject_type(
             "scope A\nbuiltin def print[T](value: T) -> unit\nend A\n"
             "scope B\nbuiltin def print[T](value: T) -> unit\nend B\n"
-            "()\n"
+            "()\n",
+            default_stdlib=False,
         )
         message = err.to_diagnostic().message
         assert "A::print" in message
@@ -1760,30 +1837,37 @@ class TestBuiltinDeclarationUniqueness:
 
     def test_a_single_scoped_builtin_declaration_is_still_accepted(self) -> None:
         """One declaration at a scope path is not a duplicate of anything."""
-        r = accept_type(f"scope A\nbuiltin record ExecResult\n{_EXEC_RESULT_FIELDS}end A\n()\n")
+        r = accept_type(
+            f"scope A\nbuiltin record ExecResult\n{_EXEC_RESULT_FIELDS}end A\n()\n",
+            default_stdlib=False,
+        )
         assert r.resolved.program is not None
 
 
 class TestBuiltinTypeModuleIdentity:
     """A ``builtin`` declaration's nominal identity is its own declaring
-    module — the entry module, here, since these tests check a single
-    module with no standard library loaded (equivalent to
-    ``PipelineDriver.run(..., default_stdlib=False)``) — never a shared
-    sentinel. The shipped standard library's own declaration of a built-in
-    name is therefore a distinct nominal, not the same one re-homed.
+    module — the entry module, here, since a bare built-in name may be
+    declared only once per program and ``std/core`` already declares every
+    built-in name, so the first two tests below run with
+    ``default_stdlib=False`` — never a shared sentinel. The shipped standard
+    library's own declaration of a built-in name is therefore a distinct
+    nominal, not the same one re-homed.
     """
 
     def test_root_builtin_record_carries_the_entry_modules_own_identity(self) -> None:
         """An entry-module ``builtin record ExecResult`` is not std/core's.
 
-        Written with no standard library loaded (single-module checking never
-        loads one), so this stays valid once a program-wide "declare a
+        Written with no standard library loaded (a bare built-in name may be
+        declared only once per program, and ``std/core`` already declares
+        this one), so this stays valid once a program-wide "declare a
         built-in name once" rule lands: the entry module's own declaration is
         the only ``ExecResult`` in scope here.
         """
         from agm.agl.modules.ids import ENTRY_ID, STD_CORE_ID
 
-        checked = accept_type(f"builtin record ExecResult\n{_EXEC_RESULT_FIELDS}()")
+        checked = accept_type(
+            f"builtin record ExecResult\n{_EXEC_RESULT_FIELDS}()", default_stdlib=False
+        )
         handle = checked.type_env.get_type("ExecResult")
         assert isinstance(handle, RecordType)
         assert handle.module_id == ENTRY_ID
@@ -1797,7 +1881,9 @@ class TestBuiltinTypeModuleIdentity:
         own root declaration, not the shipped standard library's; the
         canonical-shape comparison must re-root that reference onto its own
         declaring module before it matches the canonical (``std/core``)
-        shape, so this passes builtin shape validation.
+        shape, so this passes builtin shape validation. Uses
+        ``default_stdlib=False`` since a bare built-in name may be declared
+        only once per program and ``std/core`` already declares ``Exception``.
         """
         r = accept_type(
             "builtin\n"
@@ -1806,7 +1892,8 @@ class TestBuiltinTypeModuleIdentity:
             "  message: text\n"
             "  trace_id: text\n"
             "builtin exception RangeError extends Exception()\n"
-            "()\n"
+            "()\n",
+            default_stdlib=False,
         )
         assert r.resolved.program is not None
 
@@ -4124,7 +4211,7 @@ class TestPartialDeclaredCalls:
             root_scope=ScopeNode(node_id=program.node_id),
         )
         with pytest.raises(AglTypeError, match="callee"):
-            check_module(resolved, default_capabilities())
+            _check_resolved(resolved)
 
     def test_placeholder_on_non_function_value_call_uses_existing_callee_error(self) -> None:
         err = reject_type("let x = 1\nx(?)")
@@ -4142,7 +4229,7 @@ class TestPartialDeclaredCalls:
             root_scope=ScopeNode(node_id=program.node_id),
         )
         with pytest.raises(AssertionError, match="placeholder"):
-            check_module(resolved, default_capabilities())
+            _check_resolved(resolved)
 
 
 class TestPartialConstructorAndValueCalls:
@@ -4763,7 +4850,7 @@ class TestRaise:
             root_scope=ScopeNode(node_id=prog.node_id),
         )
         with pytest.raises(AglTypeError, match="return"):
-            check_module(resolved, default_capabilities())
+            _check_resolved(resolved)
 
 
 # ---------------------------------------------------------------------------
@@ -5751,7 +5838,8 @@ class TestConstructorRefDispatch:
             "    on\n"
             "  | packet(_) => 0"
         )
-        resolved = resolve_module(parse_program(source))
+        checked = resolve_and_check_entry(source, default_capabilities())
+        resolved = checked.resolved
         case = resolved.program.body.items[-1]
         assert isinstance(case, Case)
         pattern = case.branches[0].pattern
@@ -5765,7 +5853,6 @@ class TestConstructorRefDispatch:
         assert resolved.resolution[assignment.node_id].kind is BinderKind.pattern_slot
         assert resolved.resolution[assignment.node_id].decl_node_id == field_pattern.node_id
 
-        checked = check_module(resolved, default_capabilities())
         outer_var = resolved.program.body.items[2]
         assert isinstance(outer_var, VarDecl)
         assert checked.binding_for(assignment.node_id).decl_node_id == outer_var.node_id
@@ -5784,7 +5871,8 @@ class TestConstructorRefDispatch:
             "    on[0]\n"
             "  | packet(_) => 0"
         )
-        resolved = resolve_module(parse_program(source))
+        checked = resolve_and_check_entry(source, default_capabilities())
+        resolved = checked.resolved
         case = resolved.program.body.items[-1]
         assert isinstance(case, Case)
         body = case.branches[0].body
@@ -5795,7 +5883,6 @@ class TestConstructorRefDispatch:
         outer_var = resolved.program.body.items[2]
         assert isinstance(outer_var, VarDecl)
 
-        checked = check_module(resolved, default_capabilities())
         # The indexed target's object expression is checked like any ordinary
         # read, so the field-directed restoration is keyed by its own node --
         # once the checker determines `on` selected the constructor pattern
@@ -5816,7 +5903,10 @@ class TestConstructorRefDispatch:
             "    0\n"
             "  | packet(_) => 0"
         )
-        resolved = resolve_module(parse_program(source))
+        # Checked via _check_resolved (not resolve_and_check_entry) so this test
+        # can assert `resolved` itself — the exact object the failed check ran
+        # against — is untouched by the failure.
+        resolved = resolve_entry(source)
         case = resolved.program.body.items[-1]
         assert isinstance(case, Case)
         body = case.branches[0].body
@@ -5826,7 +5916,7 @@ class TestConstructorRefDispatch:
         provisional_ref = resolved.resolution[assignment.node_id]
 
         with pytest.raises(AglTypeError):
-            check_module(resolved, default_capabilities())
+            _check_resolved(resolved)
 
         assert resolved.resolution[assignment.node_id] == provisional_ref
         assert assignment.node_id not in resolved.constructor_refs
@@ -5842,10 +5932,8 @@ class TestConstructorRefDispatch:
             "    0\n"
             "  | packet(_) => 0"
         )
-        resolved = resolve_module(parse_program(source))
-
         with pytest.raises(AglTypeError) as excinfo:
-            check_module(resolved, default_capabilities())
+            resolve_and_check_entry(source, default_capabilities())
 
         # The rejection names the actual binder kind, matching the wording the
         # scope pass uses for assignments it rejects itself.
@@ -5854,7 +5942,7 @@ class TestConstructorRefDispatch:
     def test_checker_has_no_scope_repair_state(self) -> None:
         from agm.agl.typecheck.checker import _Checker
 
-        resolved = resolve_module(parse_program("enum Flag\n  | on\non"))
+        resolved = resolve_entry("enum Flag\n  | on\non")
         checker = _Checker(TypeEnvironment(), resolved, default_capabilities())
 
         assert checker._resolved is resolved
@@ -5885,8 +5973,8 @@ class TestConstructorRefDispatch:
             "      | packet(_) => 0\n"
             "  | packet(_) => 0"
         )
-        resolved = resolve_module(parse_program(source))
-        checked = check_module(resolved, default_capabilities())
+        checked = resolve_and_check_entry(source, default_capabilities())
+        resolved = checked.resolved
         outer_var = resolved.program.body.items[2]
         assert isinstance(outer_var, VarDecl)
 
@@ -5914,13 +6002,14 @@ class TestConstructorRefDispatch:
             "  | box(_) => 0"
         )
 
-        assert check_module(resolve_module(parse_program(source)), default_capabilities())
+        assert resolve_and_check_entry(source, default_capabilities())
 
     def test_bare_pattern_rejects_missing_or_stale_constructor_candidates(self) -> None:
-        resolved = resolve_module(
-            parse_program(
-                "enum Choice\n  | none\nlet value: Choice = none\ncase value of | none => 0"
-            )
+        # The corrupted-candidate variants below are checked directly via
+        # _check_resolved (not resolve_and_check_entry), since each is a
+        # deliberately mutated copy of `resolved` that checking must reject.
+        resolved = resolve_entry(
+            "enum Choice\n  | none\nlet value: Choice = none\ncase value of | none => 0",
         )
         case = resolved.program.body.items[-1]
         assert isinstance(case, Case)
@@ -5928,7 +6017,7 @@ class TestConstructorRefDispatch:
 
         missing_candidates = replace(resolved, pattern_constructor_candidates={})
         with pytest.raises(AglTypeError, match="does not belong"):
-            check_module(missing_candidates, default_capabilities())
+            _check_resolved(missing_candidates)
 
         stale_pattern = replace(pattern, name="missing")
         stale_case = replace(
@@ -5944,7 +6033,7 @@ class TestConstructorRefDispatch:
         )
         stale_resolved = replace(resolved, program=stale_program)
         with pytest.raises(AglTypeError, match="does not belong"):
-            check_module(stale_resolved, default_capabilities())
+            _check_resolved(stale_resolved)
 
         from agm.agl.scope.symbols import ConstructorRef
 
@@ -5959,7 +6048,7 @@ class TestConstructorRefDispatch:
             pattern_constructor_candidates={pattern.node_id: (stale_candidate,)},
         )
         with pytest.raises(AglTypeError, match="does not belong"):
-            check_module(malformed_candidates, default_capabilities())
+            _check_resolved(malformed_candidates)
 
     def test_missing_field_still_errors(self) -> None:
         err = reject_type("record Box\n  value: int\nBox()")
@@ -6018,12 +6107,14 @@ class TestConstructorRefDispatch:
 
     def test_single_field_variant_positional(self) -> None:
         # Single-field enum variant with no markers → STANDARD zone → positional works.
-        r = accept_type("enum Opt\n  | Some(value: int)\n  | None\nSome(42)")
+        # Named "Item"/"Payload" (not "Option"/"Some") so the bare constructor is
+        # unambiguous against std/core's own Option::Some.
+        r = accept_type("enum Item\n  | Payload(value: int)\n  | Empty\nPayload(42)")
         assert r.resolved.program is not None
 
     def test_single_field_variant_named_still_works(self) -> None:
         # Single-field variant: named arg still works even though zone is STANDARD.
-        r = accept_type("enum Opt\n  | Some(value: int)\nSome(value = 5)")
+        r = accept_type("enum Item\n  | Payload(value: int)\nPayload(value = 5)")
         assert r.resolved.program is not None
 
     def test_std_record_positional(self) -> None:
@@ -6568,7 +6659,7 @@ class TestTypeDeclarations:
 
     def test_enum_duplicate_variant_is_rejected_during_scope_collection(self) -> None:
         with pytest.raises(AglScopeError):
-            resolve_module(parse_program("enum E\n  | A\n  | A\nA()"))
+            resolve_entry("enum E\n  | A\n  | A\nA()")
 
     def test_alias_cycle_raises(self) -> None:
         err = reject_type("type A = B\ntype B = A\n1")
@@ -6669,10 +6760,10 @@ class TestParsePolicy:
 class TestSeedEnv:
     def test_seed_env_shares_types(self) -> None:
         r1 = accept_type("let x: int = 1\nx")
-        prog2 = parse_program("x")
-        r2 = check_module(
-            resolve_module(prog2, parent_scope=r1.resolved.root_scope),
+        r2 = resolve_and_check_entry(
+            "x",
             default_capabilities(),
+            parent_scope=r1.resolved.root_scope,
             seed_env=r1.type_env,
         )
         assert r2.resolved.program is not None
@@ -6680,35 +6771,30 @@ class TestSeedEnv:
     def test_seed_env_shares_function_signatures(self) -> None:
         r1 = accept_type("def f(x: int) -> int = x\nf(1)")
         assert "f" in r1.function_signatures
-        prog2 = parse_program("f(2)")
-        r2 = check_module(
-            resolve_module(prog2, parent_scope=r1.resolved.root_scope),
+        r2 = resolve_and_check_entry(
+            "f(2)",
             default_capabilities(),
+            parent_scope=r1.resolved.root_scope,
             seed_env=r1.type_env,
         )
         assert r2.resolved.program is not None
 
     def test_seed_env_recursive_type_declared_earlier_is_usable_later(self) -> None:
-        # Single-module "REPL" pattern (two check_module() calls chained via
-        # seed_env): a recursive type declared in the first entry is
+        # Single-module "REPL" pattern (two resolve_and_check_entry() calls
+        # chained via seed_env): a recursive type declared in the first entry is
         # constructed and pattern-matched in a later one, re-validating the
         # accumulated table cheaply (idempotently) each time.
         r1 = accept_type(
             "enum Tree\n  | Leaf\n  | Node(value: int, left: Tree, right: Tree)\n"
             "Node(value = 1, left = Leaf(), right = Leaf())"
         )
-        prog2 = parse_program(
+        r2 = resolve_and_check_entry(
             "case Node(value = 2, left = Leaf(), right = Leaf()) of\n"
             "  | Leaf() => 0\n"
-            "  | Node(value, left, right) => value"
-        )
-        r2 = check_module(
-            resolve_module(
-                prog2,
-                parent_scope=r1.resolved.root_scope,
-                ambient_constructor_candidates=r1.resolved.constructor_candidates,
-            ),
+            "  | Node(value, left, right) => value",
             default_capabilities(),
+            parent_scope=r1.resolved.root_scope,
+            ambient_constructor_candidates=r1.resolved.constructor_candidates,
             seed_env=r1.type_env,
         )
         assert r2.resolved.program is not None
@@ -6747,15 +6833,14 @@ def test_nullary_candidate_defers_duplicate_pattern_binder_until_typecheck_selec
         )
     else:
         prior = accept_type("enum Mark\n  | mark\nmark()")
-        resolved = resolve_module(
-            parse_program(
-                _nullary_duplicate_pattern_source("mark", "Mark", "mark()", bare_first=bare_first)
-            ),
+        checked = resolve_and_check_entry(
+            _nullary_duplicate_pattern_source("mark", "Mark", "mark()", bare_first=bare_first),
+            default_capabilities(),
             parent_scope=prior.resolved.root_scope,
             ambient_constructor_candidates=prior.resolved.constructor_candidates,
             ambient_type_names=prior.resolved.declared_type_names,
+            seed_env=prior.type_env,
         )
-        checked = check_module(resolved, default_capabilities(), seed_env=prior.type_env)
 
     case = checked.resolved.program.body.items[-1]
     assert isinstance(case, Case)
@@ -7154,8 +7239,14 @@ class TestMisc:
         assert r.resolved.program is not None
 
     def test_builtin_type_name_shadow_raises(self) -> None:
-        # ExecResult is a BUILTIN_PRELUDE_TYPE_NAMES — record shadows it
-        err = reject_type("record ExecResult\n  x: int\nExecResult(x = 1)")
+        # ExecResult is a BUILTIN_PRELUDE_TYPE_NAMES — a non-builtin record
+        # shadowing it is always rejected. With std/core in scope (the real
+        # configuration), std/core's own `builtin record ExecResult` makes the
+        # bare name ambiguous at scope-resolution time, before the type-level
+        # shadow check in _TypeBuilder ever runs — so this now raises
+        # AglScopeError, not AglTypeError; reject_any accepts either since
+        # both report the same underlying rejection.
+        err = reject_any("record ExecResult\n  x: int\nExecResult(x = 1)")
         assert "built-in" in str(err).lower() or "ExecResult" in str(err)
 
     def test_alias_to_record_field(self) -> None:
@@ -7402,7 +7493,7 @@ class TestIndexTypechecking:
             builtin_calls={},
             root_scope=ScopeNode(node_id=program.node_id),
         )
-        return check_module(resolved, default_capabilities())
+        return _check_resolved(resolved)
 
     def _binding(
         self, name: str, type_ann: TypeExpr, value: Expr, sp: SourceSpan, *, mutable: bool
@@ -7738,7 +7829,7 @@ class TestDefensiveGuards:
         block = Block(items=(), span=sp, node_id=_mk_node_id())
         prog = Program(body=block, span=sp, node_id=_mk_node_id())
         resolved = self._mk_resolved(prog)
-        result = check_module(resolved, default_capabilities())
+        result = _check_resolved(resolved)
         assert result is not None
 
     def test_empty_case_branches_fallback(self) -> None:
@@ -7750,7 +7841,7 @@ class TestDefensiveGuards:
         block = Block(items=(case_node,), span=sp, node_id=_mk_node_id())
         prog = Program(body=block, span=sp, node_id=_mk_node_id())
         resolved = self._mk_resolved(prog)
-        result = check_module(resolved, default_capabilities())
+        result = _check_resolved(resolved)
         assert result is not None
 
     def test_duplicate_constructor_arg_rejected(self) -> None:
@@ -7778,7 +7869,7 @@ class TestDefensiveGuards:
         prog = Program(body=block, span=sp, node_id=_mk_node_id())
         resolved = self._mk_resolved(prog, declared_functions={"print": fd})
         with pytest.raises(AglTypeError, match="built-in function"):
-            check_module(resolved, default_capabilities())
+            _check_resolved(resolved)
 
     def test_alias_seen_guard_in_ensure_referenced(self) -> None:
         err = reject_type("record Wrapper\n  value: A\ntype A = B\ntype B = A\n()")
@@ -7803,7 +7894,7 @@ class TestDefensiveGuards:
         prog = Program(body=block, span=sp, node_id=_mk_node_id())
         resolved = self._mk_resolved(prog, resolution={ref_nid: binding_ref})
         with pytest.raises(AssertionError, match="checker invariant"):
-            check_module(resolved, default_capabilities())
+            _check_resolved(resolved)
 
     def test_declared_call_sig_none_fallback(self) -> None:
         # A function binding without a registered signature now reports a user-facing
@@ -7839,7 +7930,7 @@ class TestDefensiveGuards:
             declared_functions={"h": fd},
         )
         with pytest.raises(AglTypeError, match="Cannot infer return type"):
-            check_module(resolved, default_capabilities())
+            _check_resolved(resolved)
 
     def test_function_value_without_registered_type_reports_inference_error(self) -> None:
         sp = mk_span()
@@ -7872,7 +7963,7 @@ class TestDefensiveGuards:
         )
 
         with pytest.raises(AglTypeError, match="Cannot infer return type"):
-            check_module(resolved, default_capabilities())
+            _check_resolved(resolved)
 
     def test_builtin_funcdef_without_return_type_rejected_defensively(self) -> None:
         sp = mk_span()
@@ -7890,7 +7981,7 @@ class TestDefensiveGuards:
         resolved = self._mk_resolved(prog, declared_functions={"print": fd})
 
         with pytest.raises(AglTypeError, match="must declare a return type"):
-            check_module(resolved, default_capabilities())
+            _check_resolved(resolved)
 
     def test_duplicate_named_arg_in_declared_call(self) -> None:
         # Exercises line 970: duplicate named arg check in _check_declared_name_call.
@@ -7945,7 +8036,7 @@ class TestDefensiveGuards:
             declared_functions={"g": fd},
         )
         with pytest.raises(AglTypeError, match="Duplicate argument"):
-            check_module(resolved, default_capabilities())
+            _check_resolved(resolved)
 
     def test_duplicate_named_arg_in_constructor_rejected(self) -> None:
         # Exercises the duplicate named arg path in
@@ -7956,9 +8047,7 @@ class TestDefensiveGuards:
         sp = mk_span()
         # Build a record type that has field 'x'.
         record_source = "record Box\n  x: int\nBox(x = 1)"
-        prog_base = parse_program(record_source)
-        res_base = resolve_module(prog_base)
-        checked_base = check_module(res_base, default_capabilities())
+        checked_base = resolve_and_check_entry(record_source, default_capabilities())
         box_type = checked_base.type_env.get_type("Box")
         assert box_type is not None
 
@@ -7975,7 +8064,7 @@ class TestDefensiveGuards:
         prog_nid = _mk_node_id()
         prog = Program(body=block, span=sp, node_id=prog_nid)
         # Register a ConstructorRef for 'Box' and the callee VarRef.
-        box_decl_node_id = prog_base.body.items[0].node_id
+        box_decl_node_id = checked_base.resolved.program.body.items[0].node_id
         ctor_ref = ConstructorRef(
             owner_name="Box",
             variant="Box",
@@ -8000,7 +8089,7 @@ class TestDefensiveGuards:
             constructor_refs={callee_nid: ctor_ref},
         )
         with pytest.raises(AglTypeError, match="[Dd]uplicate"):
-            check_module(resolved, default_capabilities(), seed_env=checked_base.type_env)
+            _check_resolved(resolved, seed_env=checked_base.type_env)
 
     def test_type_arg_on_qualified_constructor_rejected(self) -> None:
         err = reject_type("enum Status\n  | Pass\n  | Fail\nStatus[int]::Pass()\n()")
@@ -8195,9 +8284,11 @@ class TestExecStructured:
 # ---------------------------------------------------------------------------
 
 
-def _method_header(source: str) -> tuple[FuncDef, tuple[ParamSpec, ...]]:
+def _method_header(
+    source: str, *, origin_path: Path | None = None
+) -> tuple[FuncDef, tuple[ParamSpec, ...]]:
     """Resolve one classified method header through the shared function seam."""
-    resolved = resolve_module(parse_program(source), origin_path=Path("method.agl"))
+    resolved = resolve_entry(source, origin_path=origin_path or Path("method.agl"))
     function = next(item for item in resolved.program.body.items if isinstance(item, FuncDef))
     owner = resolved.method_declarations[(ENTRY_ID, ("Point",), function.name)]
     env = TypeEnvironment()
@@ -8296,11 +8387,20 @@ class TestMethodHeaders:
         "prefix",
         ("", "extern ", "builtin "),
     )
-    def test_all_function_declaration_forms_resolve_a_receiver(self, prefix: str) -> None:
+    def test_all_function_declaration_forms_resolve_a_receiver(
+        self, prefix: str, tmp_path: Path
+    ) -> None:
+        # An `extern def` is only accepted for an entry with a real backing file
+        # that has a companion `.py` sibling; the other forms need no such file.
+        origin_path = None
+        if prefix == "extern ":
+            origin_path = tmp_path / "method.agl"
+            origin_path.with_suffix(".py").write_text("")
         function, params = _method_header(
             "record Point\n"
             "  x: int\n"
-            f"{prefix}def Point::member(self) -> int" + (" = self.x" if not prefix else "")
+            f"{prefix}def Point::member(self) -> int" + (" = self.x" if not prefix else ""),
+            origin_path=origin_path,
         )
         assert function.params[0].name == "self"
         assert params[0].kind is ParamKind.POSITIONAL_ONLY
@@ -9299,9 +9399,7 @@ class TestGenerics:
         from agm.agl.typecheck.checker import _Checker, _InferenceRegion
         from agm.agl.typecheck.inference import InferenceEngine
 
-        checker = _Checker(
-            TypeEnvironment(), resolve_module(parse_program("()")), default_capabilities()
-        )
+        checker = _Checker(TypeEnvironment(), resolve_entry("()"), default_capabilities())
         engine = InferenceEngine()
         checker._inference_region = _InferenceRegion(engine, {}, {}, [])
         unresolved = engine.fresh("target")
@@ -9555,7 +9653,7 @@ class TestGenericTypeDecl:
 
     def test_generic_enum_duplicate_variant_is_rejected_during_scope_collection(self) -> None:
         with pytest.raises(AglScopeError):
-            resolve_module(parse_program("enum Bad[T]\n  | Foo\n  | Foo\nFoo()"))
+            resolve_entry("enum Bad[T]\n  | Foo\n  | Foo\nFoo()")
 
 
 class TestGenericConstructorInference:
@@ -9757,9 +9855,7 @@ class TestGenericConstructorInference:
         from agm.agl.typecheck.checker import _Checker, _InferenceRegion
         from agm.agl.typecheck.inference import InferenceEngine
 
-        checker = _Checker(
-            TypeEnvironment(), resolve_module(parse_program("()")), default_capabilities()
-        )
+        checker = _Checker(TypeEnvironment(), resolve_entry("()"), default_capabilities())
         concrete_owner = RecordType("Box", type_args=(IntType(),))
         assert checker._zonk_constructor_owner(concrete_owner) == concrete_owner
         engine = InferenceEngine()
@@ -9979,7 +10075,7 @@ class TestNonGenericConstructorsUnchanged:
         )
 
         with pytest.raises(AglTypeError):
-            check_module(resolved, default_capabilities())
+            _check_resolved(resolved)
 
     def test_non_generic_type_arg_rejected(self) -> None:
         err = reject_type("record Point\n  x: int\n  y: int\nPoint::[int](x = 1, y = 2)")
@@ -10526,6 +10622,31 @@ class TestGenericRecursiveTypes:
 
     def test_generic_argument_reference_via_parameterized_alias_is_uninhabitable(self) -> None:
         # type AL[X] = Box[X] aliases the same unguarded wrapper recursion as Box[A].
+        # check_program's whole-program pre-pass inhabitation fixpoint rejects this
+        # on its own — see
+        # test_generic_argument_reference_via_parameterized_alias_is_uninhabitable_in_a_program
+        # below. But it does so ahead of Phase 3/4's per-module recheck, so by the
+        # time _TypeBuilder.collect() -> _check_inhabitation runs there, the whole
+        # program is already known inhabited and that loop's own branches (the
+        # inhabited-generic-record / type-alias / uninhabited-record source-order
+        # mix this program exercises) are unreachable through check_program. Only
+        # check_module's standalone contract — no whole-program pre-pass ahead of
+        # it — can still reach them, so this checks via _check_resolved (which
+        # mirrors check_module's own no-program-context environment) rather than
+        # resolve_and_check_entry.
+        resolved = resolve_entry(
+            "record Box[T]\n  value: T\ntype AL[X] = Box[X]\nrecord A\n  x: AL[A]\n()"
+        )
+        with pytest.raises(AglTypeError) as excinfo:
+            _check_resolved(resolved)
+        assert "uninhabitable" in str(excinfo.value).lower()
+
+    def test_generic_argument_reference_via_parameterized_alias_is_uninhabitable_in_a_program(
+        self,
+    ) -> None:
+        # Same program as the test above, but checked the real way (through
+        # resolve_and_check_entry -> check_program), establishing that the
+        # whole-program inhabitation pre-pass rejects this on its own.
         err = reject_type(
             "record Box[T]\n  value: T\ntype AL[X] = Box[X]\nrecord A\n  x: AL[A]\n()"
         )
@@ -11144,27 +11265,34 @@ class TestCopyAndShallowCopyCall:
 
 
 class TestImportDeclTypecheck:
-    """Import declarations pass through the type-checker without errors."""
+    """Import declarations pass through the type-checker without errors.
+
+    Each import here targets ``std/core``/``std/config`` — real modules under
+    the configured roots — since a real module graph (unlike the old
+    per-module ``resolve_module``/``check_module`` bypass) resolves every
+    import against the module loader, which rejects a target that does not
+    exist on disk.
+    """
 
     def test_import_decl_does_not_raise(self) -> None:
         """A bare import declaration type-checks as unit."""
-        r = accept_type("open import foo/bar\n1")
+        r = accept_type("open import std/core\n1")
         assert r  # no exception
 
     def test_import_with_alias_does_not_raise(self) -> None:
-        r = accept_type("import foo as f\n1")
+        r = accept_type("import std/core as f\n1")
         assert r
 
     def test_import_wildcard_does_not_raise(self) -> None:
-        r = accept_type("import foo/*\n1")
+        r = accept_type("import std/*\n1")
         assert r
 
     def test_import_using_does_not_raise(self) -> None:
-        r = accept_type("import foo using bar\n1")
+        r = accept_type("import std/core using ExecResult\n1")
         assert r
 
     def test_import_hiding_does_not_raise(self) -> None:
-        r = accept_type("import foo hiding secret\n1")
+        r = accept_type("import std/core hiding ExecResult\n1")
         assert r
 
 

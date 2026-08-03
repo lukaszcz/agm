@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import TYPE_CHECKING, cast
 
+from agm.agl.ir.builtin_nominals import BuiltinNominals
 from agm.agl.ir.contracts import ContractPayload
 from agm.agl.ir.ids import NominalId, SymbolId
 from agm.agl.ir.program import ExecutableProgram, NominalDescriptor
@@ -73,6 +74,10 @@ class LinkImage:
         """Return a rollback snapshot of persistent nominal descriptors."""
         return dict(self._state.nominals)
 
+    def snapshot_builtin_nominals(self) -> BuiltinNominals:
+        """Return a rollback snapshot of host-minted built-in identities."""
+        return self._state.builtin_nominals
+
     def restore_nominals(
         self,
         snapshot: Mapping[NominalId, NominalDescriptor],
@@ -92,6 +97,23 @@ class LinkImage:
                 self._state.nominals.pop(nominal, None)
             else:
                 self._state.nominals[nominal] = previous
+
+    def restore_builtin_nominals(
+        self,
+        snapshot: BuiltinNominals,
+        names: Iterable[str],
+    ) -> None:
+        """Restore selected built-in identities from *snapshot*."""
+        restored_names = frozenset(names)
+        restored = {
+            name: nominal
+            for name, nominal in self._state.builtin_nominals.declared.items()
+            if name not in restored_names
+        }
+        restored.update(
+            (name, nominal) for name, nominal in snapshot.declared.items() if name in restored_names
+        )
+        self._state.builtin_nominals = BuiltinNominals(declared=MappingProxyType(restored))
 
 
 @dataclass(frozen=True, slots=True)

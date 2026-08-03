@@ -19,6 +19,7 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from agm.agl.eval.ir_interpreter import IrInterpreter
+    from agm.agl.ir.builtin_nominals import BuiltinNominals
     from agm.agl.ir.contracts import ContractPayload
     from agm.agl.ir.ids import NominalId, SymbolId
     from agm.agl.ir.program import NominalDescriptor
@@ -537,6 +538,7 @@ class EntryPipeline:
             return self._ctx._fail(extern_diagnostics, warnings)
 
         nominal_snapshot = self._ctx._link_image.snapshot_nominals()
+        builtin_nominal_snapshot = self._ctx._link_image.snapshot_builtin_nominals()
         lowered = lower_repl_program(
             compiled,
             image=self._ctx._link_image,
@@ -615,7 +617,12 @@ class EntryPipeline:
                 partial=True,
                 promoted_declaration_ids=promoted,
             )
-            self._restore_unpromoted_entry_nominals(orig_program, promoted, nominal_snapshot)
+            self._restore_unpromoted_entry_nominals(
+                orig_program,
+                promoted,
+                nominal_snapshot,
+                builtin_nominal_snapshot,
+            )
             kind, name = self._ctx._classify(orig_program)
             return EntryResult(
                 kind=kind,
@@ -648,7 +655,12 @@ class EntryPipeline:
                 partial=True,
                 promoted_declaration_ids=promoted,
             )
-            self._restore_unpromoted_entry_nominals(orig_program, promoted, nominal_snapshot)
+            self._restore_unpromoted_entry_nominals(
+                orig_program,
+                promoted,
+                nominal_snapshot,
+                builtin_nominal_snapshot,
+            )
             kind, name = self._ctx._classify(orig_program)
             return EntryResult(
                 kind=kind,
@@ -958,8 +970,9 @@ class EntryPipeline:
         program: Program,
         promoted_declaration_ids: frozenset[int],
         nominal_snapshot: Mapping["NominalId", "NominalDescriptor"],
+        builtin_nominal_snapshot: "BuiltinNominals",
     ) -> None:
-        """Rollback nominal descriptors whose declaration did not complete."""
+        """Rollback nominal metadata whose declaration did not complete."""
         from agm.agl.ir.ids import NominalId
         from agm.agl.modules.ids import ENTRY_ID
         from agm.agl.syntax.nodes import EnumDef, ExceptionDef, RecordDef, ScopeRegion
@@ -973,9 +986,17 @@ class EntryPipeline:
                 elif isinstance(item, (RecordDef, EnumDef, ExceptionDef)):
                     yield item
 
-        nominal_ids = tuple(
-            NominalId(ENTRY_ID, item.name, tuple(segment.name for segment in item.scope_path))
+        unpromoted = tuple(
+            item
             for item in type_declarations(program.body.items)
             if item.node_id not in promoted_declaration_ids
         )
+        nominal_ids = tuple(
+            NominalId(ENTRY_ID, item.name, tuple(segment.name for segment in item.scope_path))
+            for item in unpromoted
+        )
         self._ctx._link_image.restore_nominals(nominal_snapshot, nominal_ids)
+        self._ctx._link_image.restore_builtin_nominals(
+            builtin_nominal_snapshot,
+            (item.name for item in unpromoted if item.is_builtin),
+        )

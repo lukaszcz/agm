@@ -3390,6 +3390,45 @@ class TestImports:
         assert r3.ok, r3.diagnostics
         assert _int(r3.value) == 1
 
+    def test_runtime_failure_restores_unpromoted_builtin_nominal_identity(self) -> None:
+        s = ReplSession(default_stdlib=False)
+
+        failed = s.eval_entry(
+            "let z: decimal = 1 / 0\n"
+            "scope Failed\n"
+            "builtin exception RangeError extends Exception()\n"
+            "end Failed"
+        )
+        assert not failed.ok
+
+        caught = s.eval_entry(
+            "let step = 0\n"
+            "try\n"
+            "  for i in 1 to 5 by step do\n"
+            "    ()\n"
+            "  done\n"
+            "catch RangeError as error =>\n"
+            "  ()"
+        )
+
+        assert caught.ok, caught.diagnostics
+
+    def test_runtime_failure_restores_previous_builtin_nominal_identity(self) -> None:
+        s = ReplSession(default_stdlib=False)
+        declared = s.eval_entry("builtin exception RangeError extends Exception()")
+        assert declared.ok, declared.diagnostics
+        previous = s._link_image._state.builtin_nominals.nominal("RangeError")
+
+        failed = s.eval_entry(
+            "let z: decimal = 1 / 0\n"
+            "scope Failed\n"
+            "builtin exception RangeError extends Exception()\n"
+            "end Failed"
+        )
+
+        assert not failed.ok
+        assert s._link_image._state.builtin_nominals.nominal("RangeError") == previous
+
     def test_runtime_failure_does_not_mark_module_linked(self, tmp_path: Path) -> None:
         # Regression: when an entry imports a previously unseen
         # module and then raises at runtime, the module must NOT be marked as

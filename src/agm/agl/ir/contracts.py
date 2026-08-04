@@ -263,11 +263,12 @@ class BoundarySealVar:
 class BoundaryRef:
     """A reference to a recursive instantiation's schema in ``ExternContract.defs``.
 
-    A recursive record/enum instantiation is emitted once under a ``defs`` key
-    (the SAME key derived for that type's JSON ``$defs`` entry, since both come
-    from the shared recursion plan) and every occurrence of it — including
-    inside its own fields — becomes a ``BoundaryRef`` instead of being inlined,
-    so the boundary schema stays finite for recursive types.
+    A recursive record, enum, or exception instantiation is emitted once under
+    a ``defs`` key from the shared recursion plan. For records and enums, that
+    key matches the corresponding JSON Schema ``$defs`` key; exceptions have
+    no JSON Schema. Every occurrence — including inside its own fields —
+    becomes a ``BoundaryRef`` instead of being inlined, so the boundary schema
+    stays finite for recursive types.
     """
 
     key: str
@@ -288,15 +289,16 @@ BoundarySchema = (
 )
 
 
-def _reconcile_array_view_element_schema(
+def _reconcile_container_view_member_schema(
     existing: BoundarySchema, incoming: BoundarySchema
 ) -> BoundarySchema | None:
-    """Choose one shared array-view element schema, or reject an incompatible pair.
+    """Choose one shared container-view member schema, or reject an incompatible pair.
 
-    Equal schemas retain their representation. A direct type-variable seal is
-    less specific than a non-variable schema, so the latter represents both
-    aliases. Distinct variable schemas and distinct non-variable schemas have
-    no common representation.
+    Used for both array element schemas and dict value schemas. Equal schemas
+    retain their representation. A direct type-variable seal is less specific
+    than a non-variable schema, so the latter represents both aliases.
+    Distinct variable schemas and distinct non-variable schemas have no common
+    representation.
     """
     if existing == incoming:
         return existing

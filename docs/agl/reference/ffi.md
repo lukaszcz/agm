@@ -75,14 +75,15 @@ normally from any context, including an interactive session.
 A module that declares at least one `extern def` requires a companion Python
 file at the same path with a `.py` extension in place of `.agl` (`utils/nlp.agl`
 requires `utils/nlp.py`). The companion is imported — its top-level code runs
-— once per program run, **before any AgL expression evaluates**, so a missing
-file, a missing attribute, or a non-callable attribute is reported as a
-load-time diagnostic naming the module and the extern, never a mid-run
-surprise. In an interactive session the companion imports once per session,
-regardless of how many entries import or call it.
+— once per extern registry (normally once per program run), **before any AgL
+expression evaluates**, so a missing file is reported as a load-time diagnostic
+naming the module and expected companion path, while a missing or non-callable
+attribute names the module and extern; neither is a mid-run surprise. In an
+interactive session the companion imports once until `:reset`; its next use
+imports it again.
 
-The companion must define a **plain function with the extern's final declared
-member name**; there is no separate mapping clause. Thus `extern def
+The companion must provide a **callable attribute with the extern's final
+declared member name**; there is no separate mapping clause. Thus `extern def
 Tools::slug(...)` resolves `slug` in the companion. Two scoped externs in one
 module cannot use the same final member name. Arguments are always
 passed **positionally, in declaration order** — named arguments, zones, and
@@ -105,20 +106,8 @@ def greet(n, g):     # parameter names are the companion's own business
 
 ## Type mapping
 
-A value at a **concrete** parameter or return position is deep-copied
-crossing the boundary, so neither side can observe the other's later
-mutations: a companion that mutates a `list` it received for an `array[int]`
-parameter leaves the caller's AgL array untouched. `decimal` always crosses
-as Python's exact `decimal.Decimal` — **never** `float` — preserving AgL's
-exact-decimal guarantee end to end.
-
-A value at a **bare type-variable** position is different: it crosses as a
-sealed handle wrapping the AgL value itself, not a copy (see
-[Generics and sealed handles](#generics-and-sealed-handles) below). Passing an
-`array[T]` or `dict[text, T]` argument through unchanged, and returning the
-handle you received, yields the *same* array or dict object back — it stays
-aliased with the caller's own binding, exactly as the handle-equality rule
-below implies.
+`decimal` always crosses as Python's exact `decimal.Decimal` — **never**
+`float` — preserving AgL's exact-decimal guarantee end to end.
 
 | AgL type | Python value |
 |---|---|
@@ -127,14 +116,72 @@ below implies.
 | `bool` | `bool` |
 | `text` | `str` |
 | `unit` | `None` |
-| `json` | a JSON-shaped value: `dict` / `list` / `str` / `int` / `Decimal` / `bool` / `None` |
-| `array[T]` | a `list` of mapped `T` elements |
-| `dict[text, V]` | a `dict` of `str` keys to mapped `V` values |
-| a record | a `dict` of its mapped fields, keyed by field name |
-| an enum | `{"$case": <variant name>, ...mapped fields}` |
-| an exception | a `dict` of its mapped fields, keyed by field name |
+| `json` | an independent JSON-shaped value: `dict` / `list` / `str` / `int` / `Decimal` / `bool` / `None` |
+| `array[T]` | a live `MutableSequence` view of the caller's array, with mapped `T` elements |
+| `dict[text, V]` | a live `MutableMapping` view of the caller's dict, with `str` keys and mapped `V` values |
+| a record | an independent `dict` of its mapped fields, keyed by field name |
+| an enum | an independent `{"$case": <variant name>, ...mapped fields}` dict |
+| an exception | an independent `dict` of its mapped fields, keyed by field name |
 | a bare type variable | an opaque **sealed handle** (see below) |
 | a function or agent type | not allowed anywhere in an extern's signature — static error |
+
+### Container views
+
+An `array[T]` or `dict[text, V]` argument is a live view of the caller's
+container. Mutating the view mutates that caller's array or dict. Repeated
+array or dict occurrences of the same AgL container in one call — through two
+parameters, or through fields of records, enums, or exceptions — are the same
+Python view object when their boundary schemas are compatible. Equal schemas
+are compatible. A generic schema and its compatible concrete schema reconcile
+to the concrete representation, including through nested containers and fields
+of the same nominal shape. Once reconciled, their one shared view uses that
+concrete schema: it yields and accepts concrete Python values. Schemas that
+disagree on concrete structure, nominal shape, or distinct type-variable seals
+are incompatible, and encoding the later occurrence fails. In particular, a
+bare generic `T` occurrence crosses as a sealed handle, not a view; `array[T]`
+and `array[U]` (and likewise dicts) use
+distinct seals and cannot share a view. A record, enum, or exception mapping is
+independently built for each occurrence; its nested container fields use shared
+views only under these compatibility rules.
+
+Reading a nested `array` or `dict` from a view produces another live view.
+Reading a nested record, enum, or exception produces a plain Python `dict`;
+mutating that dict has no effect on the AgL nominal value. Reading `json`
+produces an independent copy. The same rule applies to fields of a nominal
+value: its outer Python dict is independent, while a nested array or dict
+field is live.
+
+Every write through a view is checked against its current element or value
+schema at the moment of the write, with the same strictness as an extern return
+value. At an unreconciled `array[T]` element position, the only accepted value
+is a sealed handle for that `T` received during the call in progress, so a
+companion can put back only values it received. The corresponding rule applies
+to an unreconciled `dict[text, T]` value position. The compatible
+generic/concrete alias case above instead uses its concrete schema, so the
+shared view accepts concrete values.
+
+Returning a received view returns the same AgL container. Returning a plain
+Python `list` or `dict` constructs a new AgL container instead. A view from
+another call, or a view whose element or value type does not match the return
+position, is rejected.
+
+A view is valid only while its companion call is running. A companion that
+retains one and accesses it after the call returns gets an error. Array-view
+iteration reads by index, so a mutation at a position not yet reached is
+observed. Dict-view iteration uses a snapshot of its keys.
+
+A view is not a `list` or `dict`: `isinstance(xs, list)` is `False`, while
+`isinstance(xs, MutableSequence)` is `True`; analogously, a dict view is a
+`MutableMapping`, not a `dict`. `list(xs)` and `dict(d)` make independent
+plain-Python snapshots. C-level fast paths that require built-in containers,
+such as `json.dumps`, need such a snapshot. This is a breaking caveat for
+existing companion code that uses `isinstance(x, list)`, `json.dumps(x)`, or
+`x.copy()` on a container argument.
+
+Records, enums, exceptions, and `json` cross as independent values: mutating
+the Python record/enum/exception dict or JSON value itself has no AgL effect.
+A nested array or dict obtained from one remains a live view under the rules
+above.
 
 `Option[T]` gets no special treatment: it is an ordinary two-variant generic
 enum, so `None`/`Some(value = ...)` cross as `{"$case": "None"}` and
@@ -170,16 +217,22 @@ Any mismatch raises `ExternError` ([Errors](#errors)).
 
 ## Generics and sealed handles
 
-An `extern def` may declare type parameters, just like a generic `def`. AgL
-enforces the same **strict parametricity** guarantee across the Python
-boundary that it enforces within the language itself
-([Generics](generics.md#strict-parametricity)): a companion cannot inspect,
-depend on, or fabricate a value at a type-variable position. Every value at a
-type-variable position — an argument or a nested element inside an `array[T]`
-or `dict[text, T]` — crosses as an **opaque sealed handle** instead of its
-underlying representation. A fresh seal is minted for every extern call and
-every type parameter of that call, so a handle is only ever valid for the
-call and the type variable it came from.
+An `extern def` may declare type parameters, just like a generic `def`. At
+the public FFI API, AgL applies the same **strict parametricity** rules that it
+uses within the language itself ([Generics](generics.md#strict-parametricity)):
+a companion cannot inspect, depend on, or fabricate a value at a type-variable
+position through that API. Every value at a type-variable position — an
+argument or a nested element inside an `array[T]` or `dict[text, T]` — crosses
+as an **opaque sealed handle** instead of its underlying representation. The
+container remains a live view; thus a view of `array[T]` or `dict[text, T]`
+yields sealed handles for its elements or values. A fresh seal is minted for
+every extern call and every type parameter of that call, so a handle is only
+ever valid for the call and the type variable it came from.
+
+This opacity and parametricity are public FFI API properties, not a sandbox or
+security guarantee against an arbitrary Python companion. A companion runs
+unsandboxed and in-process, and must be trusted; the rules here describe its
+supported FFI behavior and the boundary's ordinary validation.
 
 A companion may, with a handle it received:
 
@@ -207,9 +260,10 @@ A companion may **not**:
 - return a handle received at a **different type variable** of the same
   call — a handle for `T` returned where `U` is expected is rejected.
 
-Every one of these is enforced at every call: an implementation that tries to
-peek behind a handle fails the same way regardless of which concrete types the
-extern happens to be instantiated at.
+The boundary validates these rules at every call through the public FFI API:
+an implementation that tries to peek behind a handle through that API fails the
+same way regardless of which concrete types the extern happens to be
+instantiated at.
 
 <!-- agl-check: fragment -->
 ```agl
@@ -232,10 +286,19 @@ python_type: text    # the raising Python exception's class name; empty
                       # when the failure was a return-value mismatch
 ```
 
-`ExternError` is raised when the companion callable itself raises, or when its
-return value does not conform to the extern's declared return type (including
-an invalid, missing, or stale sealed handle at a type-variable position). It
-is catchable with `try`/`catch` like any other exception:
+`ExternError` is raised when the companion callable raises an ordinary Python
+`Exception` subclass, or when its return value does not conform to the
+extern's declared return type (including an invalid, missing, or stale sealed
+handle at a type-variable position). A Python `BaseException` subclass raised
+by the companion propagates instead. `ExternError` is catchable with
+`try`/`catch` like any other exception:
+
+A write through a live view that violates its declared element or value type
+raises Python's `BoundaryTypeError`, a `TypeError`, while the call is active.
+Accessing a retained view after its call has returned raises Python's
+`BoundaryViewRevoked`, a `RuntimeError`. A companion may catch either. If one
+escapes the companion, AgL raises `ExternError` and its `python_type` field
+names the escaping type (`BoundaryTypeError` or `BoundaryViewRevoked`).
 
 <!-- agl-check: fragment -->
 ```agl
@@ -250,10 +313,10 @@ file, a missing attribute, or a non-callable attribute — is a **load-time
 diagnostic**, not an `ExternError`: it is reported before the program runs at
 all, the same way a static type error is, never as a catchable exception.
 
-A cyclic argument is a narrower failure that surfaces as `CyclicValueError`
-([Exceptions](exceptions.md#cyclicvalueerror)) instead: encoding a value with
-a reference cycle at the boundary, or a companion `repr()`-ing a sealed
-handle wrapping one, is not folded into `ExternError`.
+A cyclic `array` or `dict` argument can cross the boundary as a live view.
+`CyclicValueError` ([Exceptions](exceptions.md#cyclicvalueerror)) arises if a
+companion `repr()`s a sealed handle or a view over a cyclic container; it is
+not folded into `ExternError`.
 
 ## Trust
 

@@ -239,7 +239,8 @@ class ExceptionType:
 
     The abstract ``Exception`` root is the ``TypeDef`` registered under name
     ``"Exception"`` with ``abstract=True`` and only ``message``/``trace_id``
-    fields — it is catchable as the hierarchy root but not constructible.
+    fields. It is not constructible; the source catch spelling ``Exception``
+    is the catch-all form.
     """
 
     name: str
@@ -251,9 +252,8 @@ class ExceptionType:
         return "exception"
 
     def __repr__(self) -> str:
-        # Built-in exceptions always render as the bare name (matching
-        # today's user-visible diagnostics); a module-owned user exception
-        # matches the record/enum qualification style.
+        # Built-in exceptions and entry-module exceptions render as bare
+        # names; other exceptions follow the record/enum qualification style.
         scoped_name = "::".join((*self.scope_path, self.name))
         if spells_bare(self.module_id, self.name):
             return scoped_name
@@ -285,8 +285,9 @@ class UnitType:
 class AgentType:
     """The opaque ``agent`` type.
 
-    Agent values are first-class capability handles.  They are not
-    JSON-shaped, not renderable, and have no equality operator.
+    Agent values are first-class capability handles. They are not
+    JSON-shaped, render only as opaque handles, and cannot be compared with
+    ``==`` or ``!=``.
     """
 
     @property
@@ -302,8 +303,9 @@ class FunctionType:
     """A first-class function value type.
 
     Positional only — named and optional argument information is erased from
-    the value type. Structural equality is derived from the
-    frozen ``params`` tuple and ``result`` field.
+    the value type. The semantic type descriptor compares structurally by its
+    frozen ``params`` tuple and ``result`` field; AgL function values cannot
+    be compared with ``==`` or ``!=``.
 
     ``params``  — positional parameter types, in declaration order.
     ``result``  — the function's return type.
@@ -735,7 +737,7 @@ def _format_function_type(typ: FunctionType) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Assignability helper (single coercion: int → decimal)
+# Assignability helpers
 # ---------------------------------------------------------------------------
 
 
@@ -767,8 +769,8 @@ def is_json_shaped(value_type: Type) -> bool:
     JSON-shaped types are the values that may inhabit a ``json`` slot:
     ``null``/``json``, ``bool``, ``int``, ``decimal``, ``text``, and
     ``array``/``dict`` whose element/value types are themselves JSON-shaped.
-    Records, enums, and exceptions are **not** JSON-shaped — to embed one in a
-    ``json`` value they must first be rendered to text (e.g. via a ``let`` binding).
+    Records, enums, and exceptions are **not** JSON-shaped — explicitly cast
+    one with ``as json`` to convert it to its structural JSON representation.
 
     AgL: ``UnitType``, ``AgentType``, and ``FunctionType`` are also NOT
     JSON-shaped; function and agent values render only as opaque handles.
@@ -799,7 +801,7 @@ def is_assignable(value_type: Type, target_type: Type) -> bool:
 
     Implicit coercions:
 
-    1. ``int → decimal`` widening is the only scalar coercion.
+    1. ``int → decimal`` widening.
     2. ``json`` accepts any *scalar* JSON-shaped value (rule 3): ``null``/
        ``json``, ``bool``, ``int``, ``decimal``, ``text``. An ``array`` or
        ``dict`` source — even one that is JSON-shaped — is rejected here: an
@@ -905,8 +907,9 @@ BUILTIN_EXCEPTIONS: dict[str, ExceptionType] = {
     "JsonParseError": ExceptionType(name="JsonParseError", module_id=STD_CORE_ID),
     "RangeError": ExceptionType(name="RangeError", module_id=STD_CORE_ID),
     # Reference semantics makes cyclic array/dict values constructible; raised
-    # by any walk that would otherwise recurse forever (print, render, `as
-    # json`, extern encode) when it re-enters a container already on its path.
+    # when rendering or JSON conversion re-enters a container already on its
+    # path. Extern array/dict arguments cross as lazy views; repr of a view or
+    # sealed handle that reaches a cycle raises this exception instead.
     "CyclicValueError": ExceptionType(name="CyclicValueError", module_id=STD_CORE_ID),
 }
 
@@ -1010,8 +1013,8 @@ class CastKind(_enum.Enum):
     """
 
     TOTAL_NOOP = "TOTAL_NOOP"  # source already assignable to target (no-op/widen)
-    TOTAL_RENDER = "TOTAL_RENDER"  # render data value to text
-    TOTAL_JSON = "TOTAL_JSON"  # canonicalize JSON-shaped value to json
+    TOTAL_RENDER = "TOTAL_RENDER"  # render data value to text; a cyclic walk can fail
+    TOTAL_JSON = "TOTAL_JSON"  # convert to json; a cyclic walk can fail
     FALLIBLE = "FALLIBLE"  # runtime-fallible conversion
     STATIC_ERROR = "STATIC_ERROR"  # statically impossible — raise AglTypeError
 

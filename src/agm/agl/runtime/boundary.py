@@ -2,11 +2,17 @@
 
 This eval-free runtime module converts AgL values to Python arguments and
 strictly converts Python return values back to AgL values. Arrays and dicts
-cross as per-call live views: a matching returned view preserves its original
-AgL container, while built-in containers decode to new ones. Nominal values
-are rebuilt and ``json`` values are deep-copied. Each
-:class:`BoundaryScope` carries one call's seals, recursive definitions,
-sealed-handle vault, and view memo; its views are revoked when the call ends.
+cross as per-call live views: repeated occurrences reuse a view only when
+their boundary schemas reconcile, and a matching returned view preserves its
+original AgL container; built-in containers decode to new ones. A bare
+type-variable occurrence is a sealed handle, while a generic container schema
+can reconcile with a compatible concrete schema; the shared view then uses the
+concrete schema and accepts concrete values. Distinct seals cannot share a
+view. Sealed-handle opacity is a public FFI API property, not a sandbox or
+security boundary for an unsandboxed Python companion. Nominal values are
+rebuilt and ``json`` values are deep-copied. Each :class:`BoundaryScope`
+carries one call's seals, recursive definitions, sealed-handle vault, and view
+memo; its views are revoked when the call ends.
 """
 
 from __future__ import annotations
@@ -53,7 +59,7 @@ from agm.agl.ir.contracts import (
     BoundaryUnit,
     BoundaryVariantShape,
     ScalarKind,
-    _reconcile_array_view_element_schema,
+    _reconcile_container_view_member_schema,
 )
 from agm.agl.runtime.render import render_value
 from agm.agl.runtime.serialize import value_to_json_obj
@@ -134,11 +140,12 @@ _HANDLE_FACTORY_KEY = object()
 class SealedHandle:
     """Opaque wrapper for an AgL value at a sealed type-variable position.
 
-    A Python companion may rearrange, count, and compare handles it receives,
-    but cannot inspect or forge them: handles expose no value/seal attributes,
-    and the public constructor rejects companion-created instances. Only the
-    boundary encoder can mint an instance whose private id resolves in its
-    call's boundary scope.
+    Through the public FFI API, a Python companion may rearrange, count, and
+    compare handles it receives, but cannot inspect or forge them: handles
+    expose no value/seal attributes, and the public constructor rejects
+    companion-created instances. Only the boundary encoder can mint an instance
+    whose private id resolves in its call's boundary scope. This API property
+    is not a sandbox or security boundary for arbitrary unsandboxed Python.
 
     ``__eq__``/``__hash__`` mirror the wrapped value's own equality and hash
     (never equal to a non-handle), so handles compose correctly in Python sets
@@ -322,7 +329,7 @@ _NO_DEFS: Mapping[str, BoundarySchema] = MappingProxyType({})
 
 
 class BoundaryScope:
-    """One extern call's boundary state: seals, defs, handle vault, view memo, live flag."""
+    """One call's seals, definitions, handle vault, compatible-view memo, and live flag."""
 
     def __init__(
         self,
@@ -337,7 +344,7 @@ class BoundaryScope:
         self.live = True
 
     def array_view(self, value: ArrayValue, element_schema: BoundarySchema) -> AglArrayView:
-        """Return this scope's live view for *value*, reconciling its element schema."""
+        """Return this scope's view for *value*, or reconcile a compatible element schema."""
         element_schema = _resolve_boundary_ref(element_schema, self)
         marker = id(value)
         cached = self._array_views.get(marker)
@@ -349,7 +356,7 @@ class BoundaryScope:
         return view
 
     def dict_view(self, value: DictValue, value_schema: BoundarySchema) -> AglDictView:
-        """Return this scope's live view for *value*, reconciling its value schema."""
+        """Return this scope's view for *value*, or reconcile a compatible value schema."""
         value_schema = _resolve_boundary_ref(value_schema, self)
         marker = id(value)
         cached = self._dict_views.get(marker)
@@ -720,12 +727,15 @@ def _reconcile_view_schema(
 ) -> BoundarySchema | None:
     """Choose one shared container-view schema, or reject incompatible aliases.
 
-    A type-variable seal is less specific than a concrete schema. Structural
-    schemas reconcile field-by-field, retaining nominal identity and shape, so
-    nested live views use the concrete representation while their enclosing
-    view remembers every schema through which it was encoded.
+    A direct type-variable seal is less specific than a concrete schema, so a
+    compatible generic/concrete pair selects the concrete representation: its
+    shared view encodes and accepts writes as concrete values. Distinct seals
+    do not reconcile. Structural schemas reconcile field by
+    field only when nominal identity and shape agree, so nested live views use
+    the concrete representation while their enclosing view remembers every
+    schema through which it was encoded.
     """
-    reconciled = _reconcile_array_view_element_schema(existing, incoming)
+    reconciled = _reconcile_container_view_member_schema(existing, incoming)
     if reconciled is not None:
         return reconciled
     if isinstance(existing, BoundaryArray) and isinstance(incoming, BoundaryArray):

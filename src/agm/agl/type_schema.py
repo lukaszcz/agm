@@ -168,10 +168,10 @@ def _require_finite_schema(typ: Type, type_table: TypeTable, action: str) -> Non
     Shared guard for :func:`derive_schema`, :func:`build_decode_schema`, and
     :func:`derive_schema_and_decode`: a type whose recursive instantiations
     never close has no finite schema/decode walk to derive at all. Callers
-    are expected to reject such types at the use site (agent output target,
-    cast target, parameter type — see ``typecheck/checker.py`` and
-    ``typecheck/builtins.py``), so reaching this guard is an
-    internal-invariant violation, not a normal user-facing error path.
+    are expected to reject such types at the use site (JSON-decoded agent
+    output target, fallible cast target, parameter type, extern signature — see
+    ``typecheck/checker.py`` and ``typecheck/builtins.py``), so reaching this
+    guard is an internal-invariant violation, not a normal user-facing error path.
     """
     if not type_table.has_finite_schema(typ):
         raise TypeError(

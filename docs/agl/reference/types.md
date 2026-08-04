@@ -151,10 +151,11 @@ an array or dict makes that container's mutability observable through every
 binding that reaches it.
 
 See [Bindings and Scope](bindings-and-scope.md) for the `:=` indexed-assignment
-rules, and [Foreign Function Interface](ffi.md) for how crossing the FFI
-boundary deep-copies a concrete-typed value but crosses a bare type-variable
-value as a sealed handle to the original. (FFI is not the only place a copy
-is made: an explicit `as json` cast of an array or dict builds an independent
+rules, and [Foreign Function Interface](ffi.md) for boundary behavior. Arrays
+and dicts cross the FFI as live views; immutable kinds cross as independent
+values, and a bare type-variable value crosses as a sealed handle. Use
+`copy` or `shallow_copy` before the call, or an explicit `as json` cast, when
+a boundary snapshot is needed. (`as json` builds an independent container
 snapshot — see [Casts and convertibility](#casts-and-convertibility) below —
 and `with` ([Expressions](expressions.md)) builds a shallow copy of a record.
 See [Copying values](#copying-values) below for `copy`/`shallow_copy`.)
@@ -178,17 +179,18 @@ field is fixed at construction — so a cycle is always closed through at
 least one array or dict, however many nominal layers it passes through.
 
 Rendering (`print`, `render`, string interpolation, REPL echo), `as text`,
-`as json`, and an `extern def` call all walk a value's containers and
-therefore raise the catchable `CyclicValueError`
-([Exceptions](exceptions.md#cyclicvalueerror)) if the walk re-enters a
-container already on its own path. `as?` never raises: it predicts whether
-the corresponding `as` would succeed, so `as? text` and `as? json` on a
-cyclic value evaluate to `false` instead. `copy` is the exception: it is the
-one deep, structure-rebuilding walk that traverses a cyclic value to
-completion instead of raising — see [Copying values](#copying-values) below.
-A **shared** (diamond) structure — the same array or dict reachable twice
-from different paths, but never from itself — is not a cycle and renders
-normally.
+and `as json` walk a value's containers and therefore raise the catchable
+`CyclicValueError` ([Exceptions](exceptions.md#cyclicvalueerror)) if the walk
+re-enters a container already on its own path. An `extern def` call can pass a
+cyclic array or dict as a live view; rendering that view or a sealed handle
+over the cyclic value in its companion raises `CyclicValueError`. `as?` never
+raises: it predicts whether the corresponding `as` would succeed, so `as?
+text` and `as? json` on a cyclic value evaluate to `false` instead. `copy` is
+the exception: it is the one deep, structure-rebuilding walk that traverses a
+cyclic value to completion instead of raising — see [Copying
+values](#copying-values) below. A **shared** (diamond) structure — the same
+array or dict reachable twice from different paths, but never from itself —
+is not a cycle and renders normally.
 
 Equality (`==`) is different: it never raises. Comparing two values assumes a
 pair already being compared is equal, so `==` on a cyclic array or dict
@@ -301,8 +303,8 @@ built-ins), not of function value types. The value type is purely positional.
 Function values have **opaque rendering, no JSON encoding, and no equality**.
 A function value can be rendered, interpolated, or printed as an opaque handle
 such as `<function: int -> int>`, but cannot be stored in a `json` slot or
-compared with `=`. These restrictions exist because function values are
-capability handles, not data.
+compared with `==` or `!=`. These restrictions exist because function values
+are capability handles, not data.
 
 See [Functions](functions.md) for the declaration and call syntax.
 
@@ -780,13 +782,15 @@ unary `-` and `* /`. See [Lexical structure](lexical-structure.md) and
 
 The table below defines every permitted and rejected source–target pair.
 **Static cast error** means the combination is rejected before the program
-runs; these are never runtime failures. **Total** conversions always succeed
-at runtime; **fallible** ones may raise `CastError`.
+runs. A **total** conversion has no conformance failure and therefore does not
+raise `CastError`; rendering or JSON conversion can still raise
+`CyclicValueError` when it walks a reference cycle. A **fallible** conversion
+may raise `CastError`.
 
 | Target type | Permitted source types | Outcome |
 | ----------- | ---------------------- | ------- |
-| `text` | any data type (`text`, `json`, `bool`, `int`, `decimal`, `array[E]`, `dict[text,V]`, record, enum, exception) | total — renders the value to its AgL-form text representation |
-| `json` | any type with a JSON representation — see [Convertibility to `json`](#convertibility-to-json) | total — canonicalizes the value to `json` |
+| `text` | any data type (`text`, `json`, `bool`, `int`, `decimal`, `array[E]`, `dict[text,V]`, record, enum, exception) | total for conformance — renders the value to its AgL-form text representation; a cyclic walk raises `CyclicValueError` |
+| `json` | any type with a JSON representation — see [Convertibility to `json`](#convertibility-to-json) | total for conformance — canonicalizes the value to `json`; a cyclic walk raises `CyclicValueError` |
 | `bool` | `bool` | total (no-op) |
 | `bool` | `text`, `json` | fallible — value must be a JSON boolean |
 | `int` | `int` | total (no-op) |
@@ -855,14 +859,16 @@ know whether the eventual instantiation of `T` will carry a non-data value.
 
 ### Total vs fallible casts
 
-A **total** cast is guaranteed to succeed at runtime; it never raises and has
-no runtime cost beyond the conversion itself. Redundant total casts (casting
-a value to its own type, or `int as decimal`) are accepted and are no-ops;
-no warning is emitted. Casting an array or dict to its own type (`xs as
-array[int]`) is a true no-op: it yields the *same* value, not a copy, so a
-mutation through the result is visible through `xs` and vice versa. This
-differs from `as json` on a container, which builds an independent snapshot
-(see [`array[T]` and `dict[text, T]`](#arrayt-and-dicttext-t) above).
+A **total** cast has no conformance failure, so it does not raise `CastError`.
+Rendering or JSON conversion still raises `CyclicValueError` when it walks a
+reference cycle; the corresponding `as?` expression yields `false` instead.
+Redundant casts to the same type are accepted with no warning and are no-ops;
+`int as decimal` is the accepted widening conversion. Casting an array or dict
+to its own type (`xs as array[int]`) is a true no-op: it yields the *same*
+value, not a copy, so a mutation through the result is visible through `xs`
+and vice versa. This differs from `as json` on a container, which builds an
+independent snapshot (see [`array[T]` and `dict[text, T]`](#arrayt-and-dicttext-t)
+above).
 
 A **fallible** cast may raise `CastError` if the value does not conform to
 the target type. The `as?` form lets you probe convertibility without

@@ -123,7 +123,7 @@ def command_with_prompt_target(command: list[str], target: Path) -> list[str]:
                 isinstance(segment, Hole) and segment.name == "PROMPT_FILE" for segment in segments
             )
             has_alias = "%%" in arg
-            updated = interp(arg.replace("%%", prompt_path), variables)
+            updated = interp(arg, variables).replace("%%", prompt_path)
         except InterpolationError as exc:
             print(
                 f"Error: cannot interpolate runner command element {arg!r}: {exc}.",

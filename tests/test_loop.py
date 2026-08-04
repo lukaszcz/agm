@@ -1246,14 +1246,22 @@ class TestCommandWithPromptTarget:
 
         assert result == ["runner", f"--input={target}", str(target)]
 
-    def test_applies_percent_percent_alias_before_prompt_file_interpolation(
-        self, tmp_path: Path
-    ) -> None:
+    def test_replaces_alias_and_prompt_file_hole_in_same_element(self, tmp_path: Path) -> None:
         target = tmp_path / "prompt.md"
 
         result = command_with_prompt_target(["runner", "%%:%{PROMPT_FILE}"], target)
 
         assert result == ["runner", f"{target}:{target}"]
+
+    def test_percent_percent_alias_inserts_target_without_reinterpolating_it(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        target = Path("/tmp/%{PROJECT}/prompt.md")
+        monkeypatch.setenv("PROJECT", "rewritten")
+
+        result = command_with_prompt_target(["runner", "--prompt=%%"], target)
+
+        assert result == ["runner", f"--prompt={target}"]
 
     def test_appends_at_target_when_no_placeholder(self) -> None:
         result = command_with_prompt_target(["runner"], Path("/tmp/prompt.md"))

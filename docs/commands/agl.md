@@ -160,7 +160,8 @@ do not start a runner.
 Runner command arguments for both `agm exec` and `agm repl` use strict `%{name}`
 interpolation from the process environment overlaid with `PROMPT_FILE`, which wins on
 conflicts. Names are AgL identifiers (for example, `%{log-file}`). `%%` is an alias for
-`%{PROMPT_FILE}`; `\%{` writes a literal `%{`; a bare `%`, `$VAR`, and `${VAR}` are
+`%{PROMPT_FILE}`; either inserts the prompt path verbatim without recursively interpolating it.
+`\%{` writes a literal `%{`; a bare `%`, `$VAR`, and `${VAR}` are
 literal text, and shell-style interpolation is unsupported. Unknown, invalid, or
 unterminated holes are errors. Command strings are shlex-split before interpolation, so
 quote or otherwise protect `\%{` so its backslash reaches the argv element. A prompt-file

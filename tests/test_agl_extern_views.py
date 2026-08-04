@@ -550,6 +550,57 @@ class TestViewIdentityAndLiveness:
 
         assert ExternRegistry().invoke("f", contract, fn, [value, value], "trace") is value
 
+    @pytest.mark.parametrize("left_first", [True, False])
+    def test_registry_reconciles_recursive_complementary_generic_aliases(
+        self, left_first: bool
+    ) -> None:
+        parameters = (
+            "left: array[Node[T, int]], right: array[Node[text, U]]"
+            if left_first
+            else "right: array[Node[text, U]], left: array[Node[T, int]]"
+        )
+        contract = build_contract(
+            "record Node[A, B]\n"
+            "  value: A\n"
+            "  count: B\n"
+            "  children: array[Node[A, B]]\n"
+            f"extern def f[T, U]({parameters}) -> int\n0"
+        )
+        node_schema = next(iter(dict(contract.defs).values()))
+        assert isinstance(node_schema, BoundaryRecord)
+        child = RecordValue(
+            node_schema.nominal,
+            "Node",
+            {"value": TextValue("child"), "count": IntValue(2), "children": ArrayValue([])},
+        )
+        value = ArrayValue(
+            [
+                RecordValue(
+                    node_schema.nominal,
+                    "Node",
+                    {
+                        "value": TextValue("root"),
+                        "count": IntValue(1),
+                        "children": ArrayValue([child]),
+                    },
+                )
+            ]
+        )
+
+        def fn(*args: object) -> object:
+            assert len(args) == 2
+            assert isinstance(args[0], AglArrayView)
+            assert args[0] is args[1]
+            received = args[0][0]
+            assert received["value"] == "root"
+            assert received["count"] == 1
+            nested = received["children"][0]
+            assert nested["value"] == "child"
+            assert nested["count"] == 2
+            return 0
+
+        assert ExternRegistry().invoke("f", contract, fn, [value, value], "trace") == IntValue(0)
+
     @pytest.mark.parametrize("int_first", [True, False])
     def test_registry_rejects_incompatible_recursive_aliases(self, int_first: bool) -> None:
         parameters = (

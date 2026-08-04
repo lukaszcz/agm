@@ -338,6 +338,8 @@ class BoundaryScope:
     ) -> None:
         self.seals = seals if seals is not None else MappingProxyType({})
         self.defs = defs if defs else _NO_DEFS
+        self._reconciled_defs: dict[str, BoundarySchema] = {}
+        self._next_reconciled_def = 0
         self._vault = _HandleVault()
         self._array_views: dict[int, AglArrayView] = {}
         self._dict_views: dict[int, AglDictView] = {}
@@ -372,6 +374,17 @@ class BoundaryScope:
         self.live = False
         self._array_views.clear()
         self._dict_views.clear()
+        self._reconciled_defs.clear()
+
+    def begin_reconciled_schema(self) -> BoundaryRef:
+        """Reserve a call-local reference for one recursively merged schema."""
+        key = f"\x00reconciled_{self._next_reconciled_def}"
+        self._next_reconciled_def += 1
+        return BoundaryRef(key)
+
+    def complete_reconciled_schema(self, ref: BoundaryRef, schema: BoundarySchema) -> None:
+        """Make a completed recursively merged schema available through *ref*."""
+        self._reconciled_defs[ref.key] = schema
 
 
 _IteratorItem = TypeVar("_IteratorItem")
@@ -724,7 +737,9 @@ def _resolve_boundary_ref(schema: BoundarySchema, scope: BoundaryScope) -> Bound
             raise BoundaryViolation(f"cyclic BoundaryRef chain at {key!r}")
         seen.add(key)
         try:
-            schema = scope.defs[key]
+            schema = (
+                scope._reconciled_defs[key] if key in scope._reconciled_defs else scope.defs[key]
+            )
         except KeyError as exc:
             raise BoundaryViolation(f"unknown BoundaryRef {key!r}") from exc
     return schema
@@ -734,22 +749,21 @@ def _reconcile_view_schema(
     existing: BoundarySchema,
     incoming: BoundarySchema,
     scope: BoundaryScope,
-    active: set[tuple[int, int]] | None = None,
+    active: dict[tuple[int, int], BoundaryRef] | None = None,
 ) -> BoundarySchema | None:
     """Choose one shared container-view schema, or reject incompatible aliases.
 
     References resolve through the current scope at every structural position.
-    A repeated recursive pair is incompatible unless an earlier specificity
-    check has already selected one finite schema representation.
+    A repeated recursive pair reuses a call-local reference to the enclosing
+    merged schema, preserving a finite recursive representation.
     """
     existing = _resolve_boundary_ref(existing, scope)
     incoming = _resolve_boundary_ref(incoming, scope)
     if active is None:
-        active = set()
+        active = {}
     marker = (id(existing), id(incoming))
-    if marker in active:
-        return None
-    active.add(marker)
+    if (recursive_ref := active.get(marker)) is not None:
+        return recursive_ref
     try:
         reconciled = _reconcile_container_view_member_schema(existing, incoming)
         if reconciled is not None:
@@ -760,44 +774,50 @@ def _reconcile_view_schema(
             return incoming
         if incoming_is_less_specific and not existing_is_less_specific:
             return existing
+        recursive_ref = scope.begin_reconciled_schema()
+        active[marker] = recursive_ref
         if isinstance(existing, BoundaryArray) and isinstance(incoming, BoundaryArray):
             element = _reconcile_view_schema(existing.element, incoming.element, scope, active)
-            return BoundaryArray(element) if element is not None else None
-        if isinstance(existing, BoundaryDict) and isinstance(incoming, BoundaryDict):
+            reconciled = BoundaryArray(element) if element is not None else None
+        elif isinstance(existing, BoundaryDict) and isinstance(incoming, BoundaryDict):
             value = _reconcile_view_schema(existing.value, incoming.value, scope, active)
-            return BoundaryDict(value) if value is not None else None
-        if isinstance(existing, BoundaryRecord) and isinstance(incoming, BoundaryRecord):
+            reconciled = BoundaryDict(value) if value is not None else None
+        elif isinstance(existing, BoundaryRecord) and isinstance(incoming, BoundaryRecord):
             fields = _reconcile_boundary_fields(existing.fields, incoming.fields, scope, active)
-            if (
-                existing.nominal != incoming.nominal
-                or existing.display_name != incoming.display_name
-                or fields is None
-            ):
-                return None
-            return BoundaryRecord(existing.nominal, existing.display_name, fields)
-        if isinstance(existing, BoundaryEnum) and isinstance(incoming, BoundaryEnum):
+            reconciled = (
+                BoundaryRecord(existing.nominal, existing.display_name, fields)
+                if existing.nominal == incoming.nominal
+                and existing.display_name == incoming.display_name
+                and fields is not None
+                else None
+            )
+        elif isinstance(existing, BoundaryEnum) and isinstance(incoming, BoundaryEnum):
             variants = _reconcile_boundary_variants(
                 existing.variants, incoming.variants, scope, active
             )
-            if (
-                existing.nominal != incoming.nominal
-                or existing.display_name != incoming.display_name
-                or variants is None
-            ):
-                return None
-            return BoundaryEnum(existing.nominal, existing.display_name, variants)
-        if isinstance(existing, BoundaryException) and isinstance(incoming, BoundaryException):
+            reconciled = (
+                BoundaryEnum(existing.nominal, existing.display_name, variants)
+                if existing.nominal == incoming.nominal
+                and existing.display_name == incoming.display_name
+                and variants is not None
+                else None
+            )
+        elif isinstance(existing, BoundaryException) and isinstance(incoming, BoundaryException):
             fields = _reconcile_boundary_fields(existing.fields, incoming.fields, scope, active)
-            if (
-                existing.nominal != incoming.nominal
-                or existing.display_name != incoming.display_name
-                or fields is None
-            ):
-                return None
-            return BoundaryException(existing.nominal, existing.display_name, fields)
-        return None
+            reconciled = (
+                BoundaryException(existing.nominal, existing.display_name, fields)
+                if existing.nominal == incoming.nominal
+                and existing.display_name == incoming.display_name
+                and fields is not None
+                else None
+            )
+        else:
+            reconciled = None
+        if reconciled is not None:
+            scope.complete_reconciled_schema(recursive_ref, reconciled)
+        return reconciled
     finally:
-        active.remove(marker)
+        active.pop(marker, None)
 
 
 def _view_schema_is_at_most_as_specific(
@@ -900,7 +920,7 @@ def _reconcile_boundary_fields(
     existing: tuple[tuple[str, BoundarySchema], ...],
     incoming: tuple[tuple[str, BoundarySchema], ...],
     scope: BoundaryScope,
-    active: set[tuple[int, int]],
+    active: dict[tuple[int, int], BoundaryRef],
 ) -> tuple[tuple[str, BoundarySchema], ...] | None:
     """Reconcile ordered nominal fields only when their names align exactly."""
     if len(existing) != len(incoming):
@@ -922,7 +942,7 @@ def _reconcile_boundary_variants(
     existing: tuple[BoundaryVariantShape, ...],
     incoming: tuple[BoundaryVariantShape, ...],
     scope: BoundaryScope,
-    active: set[tuple[int, int]],
+    active: dict[tuple[int, int], BoundaryRef],
 ) -> tuple[BoundaryVariantShape, ...] | None:
     """Reconcile ordered enum variants only when names and fields align exactly."""
     if len(existing) != len(incoming):

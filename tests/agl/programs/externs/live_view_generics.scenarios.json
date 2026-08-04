@@ -21,13 +21,13 @@
       "name": "reject_handle_from_another_type_variable_without_mutating_caller",
       "params": {"mode": "reject_other_type_variable"},
       "expect": {
-        "stdout": "TypeError\n[Label(value = \"one\"), Label(value = \"two\")]\n"
+        "stdout": "BoundaryTypeError\n[Label(value = \"one\"), Label(value = \"two\")]\n"
       }
     },
     {
       "name": "reject_plain_python_value_without_mutating_caller",
       "params": {"mode": "reject_plain_value"},
-      "expect": {"stdout": "TypeError\n[\"one\", \"two\"]\n"}
+      "expect": {"stdout": "BoundaryTypeError\n[\"one\", \"two\"]\n"}
     },
     {
       "name": "sorting_sealed_handles_surfaces_python_type_error",

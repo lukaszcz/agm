@@ -641,22 +641,17 @@ class TestExceptionsAsValues:
 
 
 # ---------------------------------------------------------------------------
-# Deep-copy isolation: a companion mutating what it receives never affects
-# the AgL value used again after the call.
+# Arrays arrive as mutable live views; JSON values are deep-copied across the boundary.
 # ---------------------------------------------------------------------------
 
 
 class TestDeepCopyIsolation:
-    def test_extern_receiving_an_array_can_mutate_and_return_its_own_copy(
+    def test_extern_receiving_an_array_mutates_callers_array_through_live_view(
         self, tmp_path: Path
     ) -> None:
-        """A companion receiving an ``array[int]`` gets an ordinary, mutable
-        Python ``list`` it can ``.append`` to and hand back as the result.
-
-        Unlike the json variant below, there is no AgL-side isolation signal
-        to check here: AgL arrays are immutable tuples, so an AgL binding
-        could never reflect a companion's mutation regardless of whether
-        encoding copies the array — asserting on it would be vacuous.
+        """A companion receives an ``array[int]`` as a mutable live view,
+        so its mutation is visible to the caller even when it returns a plain
+        snapshot rather than the view itself.
         """
         source = (
             "extern def touch(xs: array[int]) -> array[int]\n"
@@ -664,11 +659,11 @@ class TestDeepCopyIsolation:
             "let touched = touch(xs)\n"
             "touched\n"
         )
-        companion = "def touch(xs):\n    xs.append(99)\n    return xs\n"
+        companion = "def touch(xs):\n    xs.append(99)\n    return list(xs)\n"
         result, _ = evaluate_ir_with_externs(source, companion, tmp_path)
-        assert result["touched"] == ArrayValue(
-            [IntValue(1), IntValue(2), IntValue(3), IntValue(99)]
-        )
+        expected = ArrayValue([IntValue(1), IntValue(2), IntValue(3), IntValue(99)])
+        assert result["touched"] == expected
+        assert result["xs"] == expected
 
     def test_mutating_a_received_json_object_does_not_affect_the_agl_value_used_after_the_call(
         self, tmp_path: Path

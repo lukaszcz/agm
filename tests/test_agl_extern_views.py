@@ -6,17 +6,6 @@ from collections.abc import MutableMapping, MutableSequence
 from pathlib import Path
 
 import pytest
-from agm.agl.runtime.boundary import (
-    AglArrayView,
-    AglDictView,
-    BoundaryScope,
-    BoundaryTypeError,
-    BoundaryViewRevoked,
-    BoundaryViolation,
-    SealedHandle,
-    decode_boundary_value,
-    encode_boundary_value,
-)
 
 from agm.agl.capabilities import HostCapabilities
 from agm.agl.ir.contracts import (
@@ -29,6 +18,17 @@ from agm.agl.ir.contracts import (
 )
 from agm.agl.ir.ids import NominalId
 from agm.agl.parser import parse_program
+from agm.agl.runtime.boundary import (
+    AglArrayView,
+    AglDictView,
+    BoundaryScope,
+    BoundaryTypeError,
+    BoundaryViewRevoked,
+    BoundaryViolation,
+    SealedHandle,
+    decode_boundary_value,
+    encode_boundary_value,
+)
 from agm.agl.runtime.render import render_value
 from agm.agl.semantics.cycles import AglCyclicValue
 from agm.agl.semantics.values import (
@@ -93,7 +93,101 @@ def _dict_view(schema: BoundarySchema, value: DictValue, scope: BoundaryScope) -
     return encoded
 
 
+class _CustomIndex:
+    """An indexable object that is deliberately not an int."""
+
+    def __init__(self, value: int) -> None:
+        self._value = value
+
+    def __index__(self) -> int:
+        return self._value
+
+
 class TestViewIdentityAndLiveness:
+    @pytest.mark.parametrize("generic_first", [True, False])
+    def test_mixed_generic_and_concrete_array_aliases_use_the_concrete_view_schema(
+        self, generic_first: bool
+    ) -> None:
+        generic_schema = _array_schema("T", "[T]")
+        concrete_schema = _array_schema()
+        value = ArrayValue([IntValue(1)])
+        scope = BoundaryScope(seals={"T": object()})
+        schemas = (
+            (generic_schema, concrete_schema)
+            if generic_first
+            else (concrete_schema, generic_schema)
+        )
+
+        first = encode_boundary_value(schemas[0], value, scope)
+        second = encode_boundary_value(schemas[1], value, scope)
+
+        assert isinstance(first, AglArrayView)
+        assert first is second
+        assert list(first) == [1]
+        assert list(second) == [1]
+
+    @pytest.mark.parametrize("generic_first", [True, False])
+    def test_nested_mixed_generic_and_concrete_array_aliases_use_concrete_element_views(
+        self, generic_first: bool
+    ) -> None:
+        generic_schema = _array_schema("array[T]", "[T]")
+        concrete_schema = _array_schema("array[int]")
+        value = ArrayValue([ArrayValue([IntValue(1)])])
+        scope = BoundaryScope(seals={"T": object()})
+        schemas = (
+            (generic_schema, concrete_schema)
+            if generic_first
+            else (concrete_schema, generic_schema)
+        )
+
+        first = _array_view(schemas[0], value, scope)
+        second = _array_view(schemas[1], value, scope)
+
+        assert first is second
+        nested = first[0]
+        assert isinstance(nested, AglArrayView)
+        assert list(nested) == [1]
+
+    @pytest.mark.parametrize("int_first", [True, False])
+    def test_incompatible_nested_array_alias_schemas_are_rejected_regardless_of_order(
+        self, int_first: bool
+    ) -> None:
+        int_schema = _array_schema("array[int]")
+        text_schema = _array_schema("array[text]")
+        schemas = (int_schema, text_schema) if int_first else (text_schema, int_schema)
+        scope = BoundaryScope()
+        value = ArrayValue([ArrayValue([IntValue(1)])])
+
+        _array_view(schemas[0], value, scope)
+        with pytest.raises(BoundaryViolation):
+            _array_view(schemas[1], value, scope)
+
+    def test_equal_generic_array_schemas_keep_their_sealed_element_representation(self) -> None:
+        schema = _array_schema("T", "[T]")
+        value = ArrayValue([IntValue(1)])
+        scope = BoundaryScope(seals={"T": object()})
+
+        first = _array_view(schema, value, scope)
+        second = _array_view(schema, value, scope)
+
+        assert first is second
+        assert isinstance(first[0], SealedHandle)
+
+    @pytest.mark.parametrize("element_types", [("int", "text"), ("T", "U")])
+    def test_incompatible_array_alias_schemas_are_rejected_regardless_of_order(
+        self, element_types: tuple[str, str]
+    ) -> None:
+        type_params = "[T, U]" if element_types == ("T", "U") else ""
+        first_schema = _array_schema(element_types[0], type_params)
+        second_schema = _array_schema(element_types[1], type_params)
+
+        for left, right in ((first_schema, second_schema), (second_schema, first_schema)):
+            scope = BoundaryScope(seals={"T": object(), "U": object()})
+            value = ArrayValue([IntValue(1)])
+            encode_boundary_value(left, value, scope)
+            with pytest.raises(BoundaryViolation):
+                encode_boundary_value(right, value, scope)
+
     def test_array_views_are_memoized_per_scope_and_use_identity_equality(self) -> None:
         schema = _array_schema()
         value = ArrayValue([IntValue(1)])
@@ -236,6 +330,16 @@ class TestArrayViewSurface:
         with pytest.raises(IndexError):
             del view[4]
 
+    def test_custom_index_objects_work_for_reads_writes_and_deletes(self) -> None:
+        view = _array_view(
+            _array_schema(), ArrayValue([IntValue(1), IntValue(2), IntValue(3)]), BoundaryScope()
+        )
+
+        assert view[_CustomIndex(-1)] == 3
+        view[_CustomIndex(1)] = 20
+        del view[_CustomIndex(0)]
+        assert list(view) == [20, 3]
+
 
 class TestArrayViewElementIdentityAndIteration:
     def test_reordering_and_moving_sealed_elements_preserves_value_objects(self) -> None:
@@ -273,6 +377,32 @@ class TestArrayViewElementIdentityAndIteration:
         assert value.elements == [one, two, three]
         assert all(
             actual is expected for actual, expected in zip(value.elements, [one, two, three])
+        )
+
+    def test_extending_a_view_with_itself_preserves_value_identities(self) -> None:
+        first, second = IntValue(1), IntValue(2)
+        value = ArrayValue([first, second])
+        view = _array_view(_array_schema(), value, BoundaryScope())
+
+        view.extend(view)
+
+        assert list(view) == [1, 2, 1, 2]
+        assert all(
+            actual is expected
+            for actual, expected in zip(value.elements, [first, second, first, second])
+        )
+
+    def test_iadd_a_view_to_itself_preserves_value_identities(self) -> None:
+        first, second = IntValue(1), IntValue(2)
+        value = ArrayValue([first, second])
+        view = _array_view(_array_schema(), value, BoundaryScope())
+
+        view += view
+
+        assert list(view) == [1, 2, 1, 2]
+        assert all(
+            actual is expected
+            for actual, expected in zip(value.elements, [first, second, first, second])
         )
 
     def test_sorting_sealed_elements_raises_type_error(self) -> None:

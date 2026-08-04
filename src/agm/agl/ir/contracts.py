@@ -48,6 +48,7 @@ __all__ = [
     "ParamDecoder",
     "RecordDecode",
     "RefDecode",
+    "reconcile_array_view_element_schema",
     "ScalarDecode",
     "ScalarKind",
     "VariantDecode",
@@ -198,7 +199,7 @@ class BoundaryUnit:
 
 @dataclass(frozen=True, slots=True)
 class BoundaryArray:
-    """An ``array[T]`` crossing as a Python ``list``, recursing on elements."""
+    """An ``array[T]`` crossing as one live Python sequence view of its elements."""
 
     element: "BoundarySchema"
 
@@ -286,6 +287,27 @@ BoundarySchema = (
     | BoundarySealVar
     | BoundaryRef
 )
+
+
+def reconcile_array_view_element_schema(
+    existing: BoundarySchema, incoming: BoundarySchema
+) -> BoundarySchema | None:
+    """Choose one shared array-view element schema, or reject an incompatible pair.
+
+    Equal schemas retain their representation. A direct type-variable seal is
+    less specific than a non-variable schema, so the latter represents both
+    aliases. Distinct variable schemas and distinct non-variable schemas have
+    no common representation.
+    """
+    if existing == incoming:
+        return existing
+    if isinstance(existing, BoundarySealVar):
+        if isinstance(incoming, BoundarySealVar):
+            return None
+        return incoming
+    if isinstance(incoming, BoundarySealVar):
+        return existing
+    return None
 
 
 @dataclass(frozen=True, slots=True)

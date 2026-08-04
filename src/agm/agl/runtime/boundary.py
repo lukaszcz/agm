@@ -1,22 +1,23 @@
-"""Sealed handles and deep-copying walkers for the extern boundary.
+"""Sealed handles and walkers for the extern boundary.
 
 This eval-free runtime module converts AgL values to Python arguments and
-strictly converts Python return values back to AgL values. Containers and
-nominal values are rebuilt and ``json`` values are deep-copied, so neither
-side can observe the other's mutations. Each :class:`BoundaryScope` carries
-one call's seals, recursive definitions, and sealed-handle vault.
+strictly converts Python return values back to AgL values. Arrays cross as
+live views; nominal values are rebuilt and ``json`` values are deep-copied.
+Each :class:`BoundaryScope` carries one call's seals, recursive definitions,
+sealed-handle vault, and array-view memo.
 """
 
 from __future__ import annotations
 
 import copy
 import decimal
+import operator
 import weakref
-from collections.abc import Mapping
+from collections.abc import Iterable, Iterator, Mapping, MutableSequence
 from dataclasses import dataclass
 from decimal import Decimal
 from types import MappingProxyType
-from typing import assert_never, cast
+from typing import Callable, Protocol, Self, SupportsIndex, assert_never, cast, overload
 
 from agm.agl.ir.contracts import (
     BoundaryArray,
@@ -30,6 +31,7 @@ from agm.agl.ir.contracts import (
     BoundarySealVar,
     BoundaryUnit,
     ScalarKind,
+    reconcile_array_view_element_schema,
 )
 from agm.agl.runtime.render import render_value
 from agm.agl.runtime.serialize import value_to_json_obj
@@ -67,6 +69,20 @@ class BoundaryViolation(Exception):
     :meth:`ExternRegistry.invoke`, which reports it as ``ExternError`` with an
     empty ``python_type``.
     """
+
+
+class BoundaryTypeError(TypeError):
+    """A value written through a boundary view violates its element schema."""
+
+
+class BoundaryViewRevoked(RuntimeError):
+    """A boundary view was used after its scope ended."""
+
+
+class _SupportsLessThan(Protocol):
+    """A value that can be ordered by Python's less-than operator."""
+
+    def __lt__(self, other: object, /) -> bool: ...
 
 
 # ---------------------------------------------------------------------------
@@ -286,12 +302,208 @@ class BoundaryScope:
         self.seals = seals if seals is not None else MappingProxyType({})
         self.defs = defs if defs else _NO_DEFS
         self._vault = _HandleVault()
-        self._views: dict[int, object] = {}
+        self._array_views: dict[int, AglArrayView] = {}
         self.live = True
+
+    def array_view(self, value: ArrayValue, element_schema: BoundarySchema) -> AglArrayView:
+        """Return this scope's live view for *value*, reconciling its element schema."""
+        element_schema = _resolve_boundary_ref(element_schema, self)
+        marker = id(value)
+        cached = self._array_views.get(marker)
+        if cached is not None:
+            cached.reconcile_element_schema(element_schema)
+            return cached
+        view = AglArrayView(self, value, element_schema)
+        self._array_views[marker] = view
+        return view
 
     def revoke(self) -> None:
         """Mark the scope inactive for future boundary views."""
         self.live = False
+
+
+class AglArrayView(MutableSequence[object]):
+    """A live Python sequence view of an AgL array value."""
+
+    __slots__ = ("_scope", "_value", "_element_schema")
+
+    def __init__(
+        self, scope: BoundaryScope, value: ArrayValue, element_schema: BoundarySchema
+    ) -> None:
+        self._scope = scope
+        self._value = value
+        self._element_schema = _resolve_boundary_ref(element_schema, scope)
+
+    def __len__(self) -> int:
+        return len(self._value.elements)
+
+    @overload
+    def __getitem__(self, index: SupportsIndex) -> object: ...
+
+    @overload
+    def __getitem__(self, index: slice[int | None, int | None, int | None]) -> list[object]: ...
+
+    def __getitem__(
+        self, index: SupportsIndex | slice[int | None, int | None, int | None]
+    ) -> object | list[object]:
+        if isinstance(index, SupportsIndex):
+            return self._encode(self._value.elements[operator.index(index)])
+        return [self._encode(item) for item in self._value.elements[index]]
+
+    @overload
+    def __setitem__(self, index: SupportsIndex, value: object) -> None: ...
+
+    @overload
+    def __setitem__(
+        self,
+        index: slice[int | None, int | None, int | None],
+        value: Iterable[object],
+    ) -> None: ...
+
+    def __setitem__(
+        self,
+        index: SupportsIndex | slice[int | None, int | None, int | None],
+        value: object,
+    ) -> None:
+        if isinstance(index, SupportsIndex):
+            normalized_index = operator.index(index)
+            self._value.elements[normalized_index]
+            self._value.elements[normalized_index] = self._decode(value)
+            return
+        values = cast(Iterable[object], value)
+        self._value.elements[index] = [self._decode(item) for item in values]
+
+    @overload
+    def __delitem__(self, index: SupportsIndex) -> None: ...
+
+    @overload
+    def __delitem__(self, index: slice[int | None, int | None, int | None]) -> None: ...
+
+    def __delitem__(self, index: SupportsIndex | slice[int | None, int | None, int | None]) -> None:
+        if isinstance(index, SupportsIndex):
+            del self._value.elements[operator.index(index)]
+            return
+        del self._value.elements[index]
+
+    def insert(self, index: int, value: object) -> None:
+        self._value.elements.insert(index, self._decode(value))
+
+    def append(self, value: object) -> None:
+        self._value.elements.append(self._decode(value))
+
+    def clear(self) -> None:
+        self._value.elements.clear()
+
+    def extend(self, values: Iterable[object]) -> None:
+        if values is self:
+            self._value.elements.extend(self._value.elements.copy())
+            return
+        self._value.elements.extend(self._decode(item) for item in values)
+
+    def pop(self, index: int = -1) -> object:
+        return self._encode(self._value.elements.pop(index))
+
+    def remove(self, value: object) -> None:
+        for index, item in enumerate(self._value.elements):
+            if self._encode(item) == value:
+                del self._value.elements[index]
+                return
+        raise ValueError(f"{value!r} is not in list")
+
+    def reverse(self) -> None:
+        self._value.elements.reverse()
+
+    def __iadd__(self, values: Iterable[object]) -> Self:
+        self.extend(values)
+        return self
+
+    def sort(self, *, key: Callable[[object], object] | None = None, reverse: bool = False) -> None:
+        pairs = [(self._encode(value), value) for value in self._value.elements]
+        keys = [key(encoded) if key is not None else encoded for encoded, _ in pairs]
+        for index in range(1, len(pairs)):
+            pair = pairs[index]
+            sort_key = keys[index]
+            position = index
+            while position > 0 and _sorts_before(sort_key, keys[position - 1], reverse):
+                pairs[position] = pairs[position - 1]
+                keys[position] = keys[position - 1]
+                position -= 1
+            pairs[position] = pair
+            keys[position] = sort_key
+        self._value.elements[:] = [value for _, value in pairs]
+
+    def __iter__(self) -> Iterator[object]:
+        index = 0
+        while index < len(self._value.elements):
+            yield self[index]
+            index += 1
+
+    def __eq__(self, other: object) -> bool:
+        return self is other
+
+    def __hash__(self) -> int:
+        return object.__hash__(self)
+
+    def __repr__(self) -> str:
+        return render_value(self._value)
+
+    def reconcile_element_schema(self, element_schema: BoundarySchema) -> None:
+        """Adopt a compatible alias schema without changing this view's identity."""
+        reconciled = _reconcile_array_view_element_schema(self._element_schema, element_schema)
+        if reconciled is None:
+            raise BoundaryViolation("aliased array has incompatible element schemas")
+        self._element_schema = reconciled
+
+    def _encode(self, value: Value) -> object:
+        return _encode_boundary_value(self._element_schema, value, self._scope, None)
+
+    def _decode(self, value: object) -> Value:
+        return _decode_boundary_write(self._element_schema, value, self._scope)
+
+
+class AglDictView:
+    pass
+
+
+def _resolve_boundary_ref(schema: BoundarySchema, scope: BoundaryScope) -> BoundarySchema:
+    """Resolve the reference chain at a view element position."""
+    while isinstance(schema, BoundaryRef):
+        schema = scope.defs[schema.key]
+    return schema
+
+
+def _reconcile_array_view_element_schema(
+    existing: BoundarySchema, incoming: BoundarySchema
+) -> BoundarySchema | None:
+    """Choose a shared array-view element schema, if the aliases are compatible.
+
+    A type-variable seal is less specific than a concrete schema. Nested
+    arrays reconcile their element schemas recursively so aliases choose the
+    same concrete representation at every array-view boundary.
+    """
+    if existing == incoming:
+        return existing
+    if isinstance(existing, BoundaryArray) and isinstance(incoming, BoundaryArray):
+        element = _reconcile_array_view_element_schema(existing.element, incoming.element)
+        if element is None:
+            return None
+        return BoundaryArray(element)
+    return reconcile_array_view_element_schema(existing, incoming)
+
+
+def _sorts_before(left: object, right: object, reverse: bool) -> bool:
+    """Compare two encoded sort keys, preserving Python comparison behavior."""
+    if reverse:
+        return cast(_SupportsLessThan, right) < left
+    return cast(_SupportsLessThan, left) < right
+
+
+def _decode_boundary_write(schema: BoundarySchema, value: object, scope: BoundaryScope) -> Value:
+    """Decode a view write, exposing schema violations as ``TypeError``."""
+    try:
+        return _decode_boundary_value(schema, value, scope, set())
+    except BoundaryViolation as exc:
+        raise BoundaryTypeError(str(exc)) from exc
 
 
 # ---------------------------------------------------------------------------
@@ -325,14 +537,7 @@ def _encode_boundary_value(
         case BoundaryArray(element=elem_schema):
             if not isinstance(value, ArrayValue):
                 raise BoundaryViolation(f"expected an array value, got {_typename(value)}")
-            active = enter_container(id(value), active)
-            try:
-                return [
-                    _encode_boundary_value(elem_schema, item, scope, active)
-                    for item in value.elements
-                ]
-            finally:
-                active.discard(id(value))
+            return scope.array_view(value, elem_schema)
         case BoundaryDict(value=val_schema):
             if not isinstance(value, DictValue):
                 raise BoundaryViolation(f"expected a dict value, got {_typename(value)}")

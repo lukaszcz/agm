@@ -48,7 +48,6 @@ __all__ = [
     "ParamDecoder",
     "RecordDecode",
     "RefDecode",
-    "reconcile_array_view_element_schema",
     "ScalarDecode",
     "ScalarKind",
     "VariantDecode",
@@ -206,7 +205,7 @@ class BoundaryArray:
 
 @dataclass(frozen=True, slots=True)
 class BoundaryDict:
-    """A ``dict[text, V]`` crossing as a Python ``dict``, recursing on values."""
+    """A ``dict[text, V]`` crossing as one live Python mapping view of its values."""
 
     value: "BoundarySchema"
 
@@ -289,7 +288,7 @@ BoundarySchema = (
 )
 
 
-def reconcile_array_view_element_schema(
+def _reconcile_array_view_element_schema(
     existing: BoundarySchema, incoming: BoundarySchema
 ) -> BoundarySchema | None:
     """Choose one shared array-view element schema, or reject an incompatible pair.

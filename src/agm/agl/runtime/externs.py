@@ -2,7 +2,8 @@
 
 This eval-free runtime module owns the extern registry. It imports a
 companion module once, resolves declared callables, and invokes each through
-the boundary walkers in :mod:`agm.agl.runtime.boundary`.
+the boundary walkers in :mod:`agm.agl.runtime.boundary`, revoking each call's
+live container views after its result has crossed back into AgL.
 """
 
 from __future__ import annotations
@@ -190,21 +191,21 @@ class ExternRegistry:
         *,
         nominals: BuiltinNominals = NO_BUILTIN_DECLARATIONS,
     ) -> Value:
-        """Cross the boundary for one extern call: encode, call, decode.
+        """Cross the boundary for one extern call: encode, call, decode, revoke.
 
         Mints a fresh seal token per declared type variable for this call,
         encodes *args* positionally per *contract*, calls *fn*, and strictly
-        decodes its result.  All three runtime failure classes — *fn*
-        raising, a return-contract violation, and an argument-conversion
-        failure — become ``AglRaise(ExternError)`` here, the single
-        chokepoint mirroring ``AgentRegistry.dispatch``.  ``python_type`` is
-        the raising Python exception's class name, or empty for a contract
-        violation.
+        decodes its result. A matching result view preserves its received AgL
+        container before the scope is revoked. Argument and result contract
+        violations, and ordinary exceptions raised by *fn*, become catchable
+        ``ExternError`` values; ``python_type`` is empty for a contract
+        violation and otherwise names the Python exception class.
 
-        A companion repr'ing a sealed handle wrapping a cyclic array or dict
-        (``SealedHandle.__repr__``, during *fn*) raises ``AglCyclicValue``;
-        that is converted here into the catchable ``CyclicValueError`` rather
-        than being folded into ``ExternError``.
+        A companion repr'ing a sealed handle or view over a cyclic container
+        during *fn* raises ``AglCyclicValue``; that becomes the catchable
+        ``CyclicValueError`` rather than ``ExternError``. The scope is revoked
+        on every exit path, so companion-retained views cannot outlive the
+        call.
 
         *nominals* resolves the ``ExternError``/``CyclicValueError`` nominal;
         it defaults to the shipped standard library's own identities for a
@@ -216,53 +217,54 @@ class ExternRegistry:
         )
 
         try:
-            encoded_args = [
-                encode_boundary_value(param.schema, arg, scope)
-                for param, arg in zip(contract.params, args, strict=True)
-            ]
-        except BoundaryViolation as exc:
-            raise _extern_error(
-                function_name,
-                f"argument conversion failed: {exc}",
-                trace_id,
-                python_type="",
-                nominals=nominals,
-            ) from exc
-        except AglCyclicValue as exc:
-            raise cyclic_value_raise(trace_id, nominals=nominals) from exc
+            try:
+                encoded_args = [
+                    encode_boundary_value(param.schema, arg, scope)
+                    for param, arg in zip(contract.params, args, strict=True)
+                ]
+            except BoundaryViolation as exc:
+                raise _extern_error(
+                    function_name,
+                    f"argument conversion failed: {exc}",
+                    trace_id,
+                    python_type="",
+                    nominals=nominals,
+                ) from exc
 
-        try:
-            with decimal.localcontext():
-                result = fn(*encoded_args)
-        except AglCyclicValue as exc:
-            raise cyclic_value_raise(trace_id, nominals=nominals) from exc
-        except Exception as exc:
-            raise _extern_error(
-                function_name,
-                str(exc) or type(exc).__name__,
-                trace_id,
-                python_type=type(exc).__name__,
-                nominals=nominals,
-            ) from exc
+            try:
+                with decimal.localcontext():
+                    result = fn(*encoded_args)
+            except AglCyclicValue as exc:
+                raise cyclic_value_raise(trace_id, nominals=nominals) from exc
+            except Exception as exc:
+                raise _extern_error(
+                    function_name,
+                    str(exc) or type(exc).__name__,
+                    trace_id,
+                    python_type=type(exc).__name__,
+                    nominals=nominals,
+                ) from exc
 
-        try:
-            return decode_boundary_value(contract.result, result, scope)
-        except BoundaryViolation as exc:
-            raise _extern_error(
-                function_name,
-                f"return value violates contract: {exc}",
-                trace_id,
-                python_type="",
-                nominals=nominals,
-            ) from exc
-        except Exception as exc:
-            raise _extern_error(
-                function_name,
-                f"return value validation failed: {exc}",
-                trace_id,
-                python_type=type(exc).__name__,
-                nominals=nominals,
-            ) from exc
+            try:
+                return decode_boundary_value(contract.result, result, scope)
+            except BoundaryViolation as exc:
+                raise _extern_error(
+                    function_name,
+                    f"return value violates contract: {exc}",
+                    trace_id,
+                    python_type="",
+                    nominals=nominals,
+                ) from exc
+            except Exception as exc:
+                raise _extern_error(
+                    function_name,
+                    f"return value validation failed: {exc}",
+                    trace_id,
+                    python_type=type(exc).__name__,
+                    nominals=nominals,
+                ) from exc
+        finally:
+            scope.revoke()
 
 
 def _extern_error(

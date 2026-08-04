@@ -6,8 +6,7 @@ enum Review
 
 param mode
 
-agent reviewer
-
+let reviewer = AgentCommand("reviewer")
 try
   if
     | mode == "abort" =>

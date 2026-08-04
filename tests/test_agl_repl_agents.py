@@ -10,9 +10,12 @@ from __future__ import annotations
 
 import pytest
 
+from agm.agl.ir.ids import NominalId
+from agm.agl.modules.ids import STD_CORE_ID
 from agm.agl.repl.agentmode import AgentMode
 from agm.agl.repl.agents import AgentCancelled, ConfirmingAgent
 from agm.agl.runtime.request import AgentRequest, AgentResponse
+from agm.agl.semantics.values import EnumValue, TextValue
 
 
 class RecordingAgent:
@@ -38,8 +41,17 @@ class InterruptingAgent:
         raise KeyboardInterrupt
 
 
+def _agent(command: str) -> EnumValue:
+    return EnumValue(
+        nominal=NominalId(STD_CORE_ID, "Agent"),
+        display_name="Agent",
+        variant="AgentCommand",
+        fields={"command": TextValue(command)},
+    )
+
+
 def _request(agent: str = "ask", prompt: str = "hi") -> AgentRequest:
-    return AgentRequest(agent=agent, prompt=prompt)
+    return AgentRequest(agent=_agent(agent), prompt=prompt)
 
 
 class ScriptedConfirm:
@@ -69,7 +81,7 @@ class TestConfirmMode:
         assert result.content == "reply"
         assert len(underlying.requests) == 1
         # The callback was shown the callee and rendered prompt.
-        assert confirm.seen == [("writer", "draft it")]
+        assert confirm.seen == [('Agent::AgentCommand(command = "writer")', "draft it")]
 
     def test_no_raises_cancelled_and_does_not_dispatch(self) -> None:
         underlying = RecordingAgent()
@@ -80,7 +92,7 @@ class TestConfirmMode:
         with pytest.raises(AgentCancelled) as excinfo:
             wrapper(_request(agent="writer"))
 
-        assert excinfo.value.callee == "writer"
+        assert excinfo.value.callee == 'Agent::AgentCommand(command = "writer")'
         assert excinfo.value.reason == "declined"
         assert underlying.requests == []
 
@@ -123,7 +135,7 @@ class TestInterrupt:
         with pytest.raises(AgentCancelled) as excinfo:
             wrapper(_request(agent="slow"))
 
-        assert excinfo.value.callee == "slow"
+        assert excinfo.value.callee == 'Agent::AgentCommand(command = "slow")'
         assert excinfo.value.reason == "interrupted"
         assert underlying.calls == 1
 

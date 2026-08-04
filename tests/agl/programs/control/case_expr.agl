@@ -7,8 +7,7 @@ enum Grade
 
 param bonus: int
 
-agent grader
-
+let grader = AgentCommand("grader")
 let grade: Grade = ask("Grade the work.", agent = grader)
 
 let points: int = case grade of

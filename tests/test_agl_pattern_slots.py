@@ -153,29 +153,23 @@ def test_a_slot_selected_as_a_constructor_is_callable_in_the_branch_body() -> No
     assert out == "true\n"
 
 
-def test_constructor_selected_slot_preserves_agent_usage() -> None:
-    checked = resolve_and_check_entry(
-        "agent on\n"
-        "enum Flag\n"
-        "  | on\n"
-        "enum Packet\n"
-        "  | packet(flag: Flag)\n"
-        "let item = packet(Flag::on)\n"
-        "case item of\n"
-        '  | packet(on) => ask("question", agent = on)\n',
-        HostCapabilities(
-            agent_names=frozenset({"on"}),
-            has_default_agent=True,
-            codec_kinds={"text": frozenset({"text"})},
-        ),
-    )
-    resolved = checked.resolved
-
-    slot_reference = _slot_reference(resolved)
-    binding = checked.binding_for(slot_reference)
-    assert binding is not None
-    assert binding.kind is BinderKind.agent_binding
-    assert resolved.warnings == ()
+def test_constructor_selected_slot_preserves_legacy_agent_rejection() -> None:
+    """A matching legacy agent remains opaque rather than becoming ``Agent``."""
+    with pytest.raises(AglTypeError):
+        resolve_and_check_entry(
+            "agent on\n"
+            "enum Flag\n"
+            "  | on\n"
+            "enum Packet\n"
+            "  | packet(flag: Flag)\n"
+            "let item = packet(Flag::on)\n"
+            "case item of\n"
+            '  | packet(on) => ask("question", agent = on)\n',
+            HostCapabilities(
+                agent_names=frozenset({"on"}),
+                codec_kinds={"text": frozenset({"text"})},
+            ),
+        )
 
 
 def test_a_bare_nullary_variant_name_tests_the_variant() -> None:

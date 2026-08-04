@@ -1082,8 +1082,9 @@ class IrAgentHandle:
 class IrAsk:
     """IR host-op: ask(prompt, agent:, on_parse_error:) builtin call.
 
-    Evaluates ``agent`` (an AgentValue), ``prompt`` (text), dispatches to the
-    registry, parses the response via the contract, and returns the typed Value.
+    Evaluates ``agent`` (an ``Agent`` enum value), ``prompt`` (text), dispatches
+    through the value-driven agent runtime, parses the response via the contract,
+    and returns the typed Value.
 
     ``max_attempts``  — 1 for Abort/absent, 1+n for Retry(n).
     """

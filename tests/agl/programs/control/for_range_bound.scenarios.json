@@ -2,18 +2,32 @@
   "scenarios": [
     {
       "name": "bound_3_raises",
-      "params": {"bound": 3},
+      "params": {
+        "bound": 3
+      },
       "expect": {
         "stdout": "",
-        "raises": {"type": "MaxIterationsExceeded", "fields": {"limit": 3}}
+        "raises": {
+          "type": "MaxIterationsExceeded",
+          "fields": {
+            "limit": 3
+          }
+        }
       }
     },
     {
       "name": "bound_1_raises",
-      "params": {"bound": 1},
+      "params": {
+        "bound": 1
+      },
       "expect": {
         "stdout": "",
-        "raises": {"type": "MaxIterationsExceeded", "fields": {"limit": 1}}
+        "raises": {
+          "type": "MaxIterationsExceeded",
+          "fields": {
+            "limit": 1
+          }
+        }
       }
     }
   ]

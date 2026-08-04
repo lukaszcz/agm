@@ -34,7 +34,6 @@ from agm.agl.typecheck.program import CheckedProgram, check_program
 from tests.agl.ir_harness import write_companion_file, write_module_file
 
 _CAPS = HostCapabilities(
-    has_default_agent=True,
     supports_shell_exec=True,
     supports_extern=True,
     codec_kinds={

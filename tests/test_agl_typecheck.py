@@ -143,7 +143,6 @@ from tests.agl.module_graph import check_resolved, resolve_and_check_entry, reso
 def default_capabilities() -> HostCapabilities:
     return HostCapabilities(
         agent_names=frozenset(),
-        has_default_agent=True,
         supports_shell_exec=True,
         codec_kinds={
             "text": frozenset({"text"}),
@@ -157,7 +156,6 @@ def default_capabilities() -> HostCapabilities:
 def text_only_caps() -> HostCapabilities:
     return HostCapabilities(
         agent_names=frozenset(),
-        has_default_agent=True,
         codec_kinds={"text": frozenset({"text"})},
     )
 
@@ -165,7 +163,6 @@ def text_only_caps() -> HostCapabilities:
 def no_agent_caps() -> HostCapabilities:
     return HostCapabilities(
         agent_names=frozenset(),
-        has_default_agent=False,
         supports_shell_exec=True,
         codec_kinds={
             "text": frozenset({"text"}),
@@ -179,7 +176,6 @@ def no_agent_caps() -> HostCapabilities:
 def no_exec_caps() -> HostCapabilities:
     return HostCapabilities(
         agent_names=frozenset(),
-        has_default_agent=True,
         supports_shell_exec=False,
         codec_kinds={"text": frozenset({"text"})},
     )
@@ -2203,16 +2199,17 @@ class TestAsk:
         )
 
     def test_ask_with_explicit_agent(self) -> None:
-        r = accept_type('agent reviewer\nask("Q", agent = reviewer)')
+        r = accept_type('let reviewer = AgentCommand("reviewer")\nask("Q", agent = reviewer)')
         assert r.resolved.program is not None
 
-    def test_ask_no_default_agent_raises(self) -> None:
-        err = reject_type('ask("Q")', capabilities=no_agent_caps())
-        assert "agent" in str(err).lower() or "default" in str(err).lower()
+    def test_ask_default_agent_is_available_without_a_host_capability(self) -> None:
+        assert accept_type('ask("Q")', capabilities=no_agent_caps()).resolved.program is not None
 
-    def test_ask_non_text_no_default_agent_raises(self) -> None:
-        err = reject_type('let n: int = ask("Q")\nn', capabilities=no_agent_caps())
-        assert "agent" in str(err).lower() or "default" in str(err).lower()
+    def test_ask_uses_contextual_result_type_without_a_host_capability(self) -> None:
+        assert (
+            accept_type('let n: int = ask("Q")\nn', capabilities=no_agent_caps()).resolved.program
+            is not None
+        )
 
     def test_ask_no_prompt_raises(self) -> None:
         err = reject_type("ask()")
@@ -2220,6 +2217,11 @@ class TestAsk:
 
     def test_ask_wrong_agent_type(self) -> None:
         err = reject_type('let x = "not_agent"\nask("Q", agent = x)')
+        assert "agent" in str(err).lower()
+
+    def test_ask_rejects_legacy_agent_declaration(self) -> None:
+        """The vestigial opaque ``agent`` declaration is not an ``Agent`` value."""
+        err = reject_type('agent legacy = "runner"\nask("Q", agent = legacy)')
         assert "agent" in str(err).lower()
 
     def test_ask_with_json_codec(self) -> None:
@@ -2439,7 +2441,9 @@ class TestAskRequest:
         assert "function" in str(err).lower() or "agent" in str(err).lower()
 
     def test_with_explicit_agent(self) -> None:
-        r = accept_type('agent reviewer\nask-request::[text]("Q", agent = reviewer)')
+        r = accept_type(
+            'let reviewer = AgentCommand("reviewer")\nask-request::[text]("Q", agent = reviewer)'
+        )
         assert r.resolved.program is not None
 
     def test_wrong_agent_type_raises(self) -> None:
@@ -2702,8 +2706,11 @@ class TestRawTailTypingParity:
         )
 
     def test_ask_raw_payload_has_no_agent_slot(self) -> None:
-        reject_type("agent reviewer\nask! agent = reviewer", capabilities=no_agent_caps())
-        accept_type('agent reviewer\nask("prompt", agent = reviewer)', capabilities=no_agent_caps())
+        accept_type("ask! agent = reviewer", capabilities=no_agent_caps())
+        accept_type(
+            'let reviewer = AgentCommand("reviewer")\nask("prompt", agent = reviewer)',
+            capabilities=no_agent_caps(),
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -8170,7 +8177,7 @@ class TestAskUnknownArgs:
     def test_ask_valid_named_arg_combinations_still_accepted(self) -> None:
         # All four known named args together must be accepted.
         r = accept_type(
-            'agent a\nlet n: int = ask("Q", agent = a, format = "json",'
+            'let a = AgentCommand("a")\nlet n: int = ask("Q", agent = a, format = "json",'
             " strict_json = true, on_parse_error = Abort())\nn"
         )
         assert r.resolved.program is not None
@@ -10977,7 +10984,6 @@ class TestNoFiniteSchemaUseSites:
     def test_custom_structured_codec_growing_type_accepted(self) -> None:
         caps = HostCapabilities(
             agent_names=frozenset(),
-            has_default_agent=True,
             supports_shell_exec=True,
             codec_kinds={
                 "text": frozenset({"text"}),
@@ -10992,7 +10998,6 @@ class TestNoFiniteSchemaUseSites:
     def test_custom_structured_codec_non_json_shaped_type_accepted(self) -> None:
         caps = HostCapabilities(
             agent_names=frozenset(),
-            has_default_agent=True,
             supports_shell_exec=True,
             codec_kinds={
                 "text": frozenset({"text"}),

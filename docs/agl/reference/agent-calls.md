@@ -18,7 +18,7 @@ ask("Review %{artifact}", agent = reviewer, on_parse_error = Retry(n = 2))
 `ask` is a built-in function with the following declared-name signature:
 
 ```text
-ask(prompt: text, agent: agent = «default»,
+ask(prompt: text, agent: Agent = std/config::default-agent,
     format: text = «auto», strict_json: bool = «host default»,
     on_parse_error: ParsePolicy = Abort) -> T
 ```
@@ -76,57 +76,39 @@ outside a raw-tail line-final position.
 
 ## Agents as values
 
-Declared agents are **values** of the opaque type `agent`. An `agent`
-declaration introduces a name binding of type `agent` in its declaring scope:
+`Agent` is a built-in enum whose values describe the backend to invoke:
 
 ```agl
-agent reviewer
-agent planner = "claude -p \%{PROMPT_FILE}"
+let command = AgentCommand("claude -p")
+let reviewer = AgentClaude("sonnet", "medium")
+let local = AgentCodex("o3", "high")
+let pi = AgentPi("openai", "gpt", "low")
+
+let review: text = ask("Review this artifact", agent = reviewer)
 ```
 
-A runner hint may include the host prompt-file placeholder; write it as
-`\%{PROMPT_FILE}` so it is literal text in the template.
+Each variant builds its own argv at dispatch. `AgentCommand` accepts a shell-like
+command string; the provider variants carry their model and thinking settings.
+`Agent` values are ordinary enum data: they can be stored, passed to functions,
+rendered, inspected, and JSON-encoded like other enum values.
 
-Agent values may be stored, passed to functions, and held in arrays — they
-are ordinary value bindings:
-
-<!-- agl-check: fragment -->
-```agl
-let agents: array[agent] = [reviewer, planner]
-
-def call_first(agents: array[agent], prompt: text) -> text =
-  ask(prompt, agent = reviewer)
-```
-
-The `agent` type is **opaque**: no field access, no equality, no JSON encoding.
-Agent values can be rendered as opaque handles such as `<agent reviewer>`, but
-cannot be passed to `ask` except via the `agent` parameter.
-
-### Agent declarations
-
-```ebnf
-agent_decl ::= "agent" decl_head ("=" STRING)?
-```
-
-`agent` declarations are valid at the program root and in named scope
-regions of an entry module. Each declaration enters its declaring scope as
-an immutable binding of type `agent`; a qualified head declares its exact
-scope member, and a scoped agent is selected with its full
-scope path, such as `Tools::reviewer`. The optional `= "…"` string attaches a
-*runner hint* consumed by the host and has no language effect. The runner string must be a static literal — no
-`%{…}` interpolation.
-
-Declaring the same agent name twice in one declaration layer, or declaring
-`ask`, `exec`, `ask!`, or `exec!` as an agent name, is a static error. Agents
-at different scope paths remain distinct even when their final names match.
+The historical `agent NAME` declaration, optional runner hint, and per-name host
+registry remain parseable only as a compatibility surface during their removal
+transition. They do not select or override the command of an `Agent` enum value.
+New programs should bind `Agent...` constructors with `let` instead.
 
 ### The default agent
 
-When `agent` is omitted, `ask` uses the host's configured default agent.
-There is no surface name for the default agent — it is implicit. A call
-that omits `agent` requires the host to have a default agent configured; if
-none is configured, this is a static error (see
-[Host environment](host-environment.md)).
+When `agent` is omitted, `ask` evaluates the defaulted
+`std/config::default-agent` parameter. The standard library supplies a default;
+CLI and configuration seeds override it, and a source write takes effect from
+its program point onward:
+
+```agl
+import std/config
+std/config::default-agent := AgentClaude("sonnet", "medium")
+let answer: text = ask("Summarize")
+```
 
 ## Target types: types as contracts
 
@@ -244,8 +226,8 @@ other position, only its JSON Schema is unbounded. See
 
 ### `agent`
 
-Selects the agent. The value must have type `agent`. When omitted, the host
-default applies:
+Selects the agent. The value must have type `Agent`. When omitted, the
+defaulted `std/config::default-agent` value applies:
 
 <!-- agl-check: fragment -->
 ```agl
@@ -456,8 +438,7 @@ validation. `on_parse_error` on such a call draws a static warning.
 
 Each dispatch delivers to the host agent:
 
-- the agent name (the name declared in source, or `"ask"` for the default
-  agent);
+- the selected encoded `Agent` value;
 - the fully rendered prompt;
 - the output contract: target type, format instructions, and derived JSON
   Schema;
@@ -538,5 +519,5 @@ parse policy) but has no runtime effect since no call is made.
 
 The result is an `AgentRequest` record (see [Types](types.md)) with `attempt`
 set to `0`, `previous_error` set to `None`, and optional contract details
-represented with `Option[T]`. Because no call is made, `ask-request` works even
-when no default agent is configured.
+represented with `Option[T]`. Because no call is made, `ask-request` only constructs the selected
+`Agent` value and its contract.

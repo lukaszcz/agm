@@ -2,8 +2,7 @@
 # recursion, inference widening, bare return, and returning an agent call.
 param mode
 
-agent helper
-
+let helper = AgentCommand("helper")
 def guard(x: int) =
   if x < 0 =>
     return -1

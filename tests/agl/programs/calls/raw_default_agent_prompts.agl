@@ -3,7 +3,7 @@ record Review
   approved: bool
   summary: text
 
-agent reviewer
+let reviewer = AgentCommand("reviewer")
 param document: text
 
 let summary = ask! Summarize %{document} in one line.

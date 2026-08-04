@@ -112,6 +112,28 @@ def test_default_agent_write_does_not_reconfigure_host_services() -> None:
     assert trace_settings == [(False, None)]
 
 
+def test_exec_uses_stdlib_default_agent_when_no_host_seed(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    program = tmp_path / "program.agl"
+    program.write_text("import std/config\nprint std/config::default-agent\n")
+
+    assert (
+        exec_command.run(
+            ExecArgs(
+                file=str(program),
+                strict_json=None,
+                runner="ignored-runner",
+                no_log=True,
+                log_file=None,
+            )
+        )
+        is None
+    )
+
+    assert "AgentClaude" in capsys.readouterr().out
+
+
 def test_host_seed_overrides_initializer_until_source_write() -> None:
     result = _run(
         "import std/config\n"

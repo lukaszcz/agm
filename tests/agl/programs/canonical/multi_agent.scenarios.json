@@ -2,85 +2,203 @@
   "scenarios": [
     {
       "name": "both_pass_first_round",
-      "params": {"spec": "a tool"},
-      "agents": {
-        "impl": ["draft"],
-        "reviewer": ["{\"$case\": \"Pass\"}"],
-        "critic": ["{\"$case\": \"Pass\"}"]
+      "params": {
+        "spec": "a tool"
       },
-      "shell": [{"command": "printf 'final:%s' draft", "stdout": "final:draft"}],
+      "agents": {
+        "impl": [
+          "draft"
+        ],
+        "reviewer": [
+          "{\"$case\": \"Pass\"}"
+        ],
+        "critic": [
+          "{\"$case\": \"Pass\"}"
+        ]
+      },
+      "shell": [
+        {
+          "command": "printf 'final:%s' draft",
+          "stdout": "final:draft"
+        }
+      ],
       "expect": {
         "stdout": "final:draft\n",
-        "calls": {"impl": 1, "reviewer": 1, "critic": 1}
+        "calls": {
+          "impl": 1,
+          "reviewer": 1,
+          "critic": 1
+        }
       }
     },
     {
       "name": "correctness_fails_first_round",
-      "params": {"spec": "a tool"},
-      "agents": {
-        "impl": ["draft", "revised"],
-        "reviewer": ["{\"$case\": \"Fail\", \"issues\": [\"off by one\"]}", "{\"$case\": \"Pass\"}"],
-        "critic": ["{\"$case\": \"Pass\"}", "{\"$case\": \"Pass\"}"]
+      "params": {
+        "spec": "a tool"
       },
-      "shell": [{"command": "printf 'final:%s' revised", "stdout": "final:revised"}],
+      "agents": {
+        "impl": [
+          "draft",
+          "revised"
+        ],
+        "reviewer": [
+          "{\"$case\": \"Fail\", \"issues\": [\"off by one\"]}",
+          "{\"$case\": \"Pass\"}"
+        ],
+        "critic": [
+          "{\"$case\": \"Pass\"}",
+          "{\"$case\": \"Pass\"}"
+        ]
+      },
+      "shell": [
+        {
+          "command": "printf 'final:%s' revised",
+          "stdout": "final:revised"
+        }
+      ],
       "expect": {
         "stdout": "final:revised\n",
-        "calls": {"impl": 2, "reviewer": 2, "critic": 2},
+        "calls": {
+          "impl": 2,
+          "reviewer": 2,
+          "critic": 2
+        },
         "prompts": [
           {
-            "agent": "impl",
+            "agent": {
+              "$case": "AgentCommand",
+              "command": "impl"
+            },
             "call": 1,
-            "contains": ["Fix valid issues.", "Review::Fail(issues =", "off by one", "draft"]
+            "contains": [
+              "Fix valid issues.",
+              "Review::Fail(issues =",
+              "off by one",
+              "draft"
+            ]
           }
         ]
       }
     },
     {
       "name": "design_fails_first_round",
-      "params": {"spec": "a tool"},
-      "agents": {
-        "impl": ["draft", "revised"],
-        "reviewer": ["{\"$case\": \"Pass\"}", "{\"$case\": \"Pass\"}"],
-        "critic": ["{\"$case\": \"Fail\", \"issues\": [\"tangled layers\"]}", "{\"$case\": \"Pass\"}"]
+      "params": {
+        "spec": "a tool"
       },
-      "shell": [{"command": "printf 'final:%s' revised", "stdout": "final:revised"}],
+      "agents": {
+        "impl": [
+          "draft",
+          "revised"
+        ],
+        "reviewer": [
+          "{\"$case\": \"Pass\"}",
+          "{\"$case\": \"Pass\"}"
+        ],
+        "critic": [
+          "{\"$case\": \"Fail\", \"issues\": [\"tangled layers\"]}",
+          "{\"$case\": \"Pass\"}"
+        ]
+      },
+      "shell": [
+        {
+          "command": "printf 'final:%s' revised",
+          "stdout": "final:revised"
+        }
+      ],
       "expect": {
         "stdout": "final:revised\n",
-        "calls": {"impl": 2, "reviewer": 2, "critic": 2},
+        "calls": {
+          "impl": 2,
+          "reviewer": 2,
+          "critic": 2
+        },
         "prompts": [
-          {"agent": "impl", "call": 1, "contains": ["tangled layers"]}
+          {
+            "agent": {
+              "$case": "AgentCommand",
+              "command": "impl"
+            },
+            "call": 1,
+            "contains": [
+              "tangled layers"
+            ]
+          }
         ]
       }
     },
     {
       "name": "both_fail_then_both_pass",
-      "params": {"spec": "a tool"},
-      "agents": {
-        "impl": ["draft", "revised"],
-        "reviewer": ["{\"$case\": \"Fail\", \"issues\": [\"bug\"]}", "{\"$case\": \"Pass\"}"],
-        "critic": ["{\"$case\": \"Fail\", \"issues\": [\"style\"]}", "{\"$case\": \"Pass\"}"]
+      "params": {
+        "spec": "a tool"
       },
-      "shell": [{"command": "printf 'final:%s' revised", "stdout": "final:revised"}],
+      "agents": {
+        "impl": [
+          "draft",
+          "revised"
+        ],
+        "reviewer": [
+          "{\"$case\": \"Fail\", \"issues\": [\"bug\"]}",
+          "{\"$case\": \"Pass\"}"
+        ],
+        "critic": [
+          "{\"$case\": \"Fail\", \"issues\": [\"style\"]}",
+          "{\"$case\": \"Pass\"}"
+        ]
+      },
+      "shell": [
+        {
+          "command": "printf 'final:%s' revised",
+          "stdout": "final:revised"
+        }
+      ],
       "expect": {
         "stdout": "final:revised\n",
-        "calls": {"impl": 2, "reviewer": 2, "critic": 2}
+        "calls": {
+          "impl": 2,
+          "reviewer": 2,
+          "critic": 2
+        }
       }
     },
     {
       "name": "never_both_pass",
-      "params": {"spec": "a tool"},
+      "params": {
+        "spec": "a tool"
+      },
       "agents": {
-        "impl": {"responses": ["draft", "fix"], "repeat_last": true},
-        "reviewer": {"responses": ["{\"$case\": \"Pass\"}"], "repeat_last": true},
+        "impl": {
+          "responses": [
+            "draft",
+            "fix"
+          ],
+          "repeat_last": true
+        },
+        "reviewer": {
+          "responses": [
+            "{\"$case\": \"Pass\"}"
+          ],
+          "repeat_last": true
+        },
         "critic": {
-          "responses": ["{\"$case\": \"Fail\", \"issues\": [\"still tangled\"]}"],
+          "responses": [
+            "{\"$case\": \"Fail\", \"issues\": [\"still tangled\"]}"
+          ],
           "repeat_last": true
         }
       },
       "expect": {
         "stdout": "",
-        "calls": {"impl": 6, "reviewer": 5, "critic": 5},
-        "raises": {"type": "MaxIterationsExceeded", "fields": {"limit": 5}}
+        "calls": {
+          "impl": 6,
+          "reviewer": 5,
+          "critic": 5
+        },
+        "raises": {
+          "type": "MaxIterationsExceeded",
+          "fields": {
+            "limit": 5
+          }
+        }
       }
     }
   ]

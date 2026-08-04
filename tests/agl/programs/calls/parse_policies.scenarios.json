@@ -11,18 +11,33 @@
       },
       "expect": {
         "stdout": "first ok\nsecond ok\nthird ok\n",
-        "calls": {"reviewer": 3}
+        "calls": {
+          "reviewer": 3
+        }
       }
     },
     {
       "name": "default_policy_aborts_immediately",
-      "agents": {"reviewer": ["utter nonsense"]},
+      "agents": {
+        "reviewer": [
+          "utter nonsense"
+        ]
+      },
       "expect": {
         "stdout": "",
-        "calls": {"reviewer": 1},
+        "calls": {
+          "reviewer": 1
+        },
         "raises": {
           "type": "AgentParseError",
-          "fields": {"agent": "reviewer", "attempts": 1, "target_type": "Review"}
+          "fields": {
+            "agent": {
+              "$case": "AgentCommand",
+              "command": "reviewer"
+            },
+            "attempts": 1,
+            "target_type": "Review"
+          }
         }
       }
     },
@@ -39,39 +54,88 @@
       },
       "expect": {
         "stdout": "first ok\nsecond ok\nthird ok\n",
-        "calls": {"reviewer": 5},
+        "calls": {
+          "reviewer": 5
+        },
         "prompts": [
-          {"agent": "reviewer", "call": 1, "equals": "Second review."},
-          {"agent": "reviewer", "call": 2, "equals": "Second review."},
-          {"agent": "reviewer", "call": 3, "equals": "Second review."}
+          {
+            "agent": {
+              "$case": "AgentCommand",
+              "command": "reviewer"
+            },
+            "call": 1,
+            "equals": "Second review."
+          },
+          {
+            "agent": {
+              "$case": "AgentCommand",
+              "command": "reviewer"
+            },
+            "call": 2,
+            "equals": "Second review."
+          },
+          {
+            "agent": {
+              "$case": "AgentCommand",
+              "command": "reviewer"
+            },
+            "call": 3,
+            "equals": "Second review."
+          }
         ]
       }
     },
     {
       "name": "retries_exhausted",
       "agents": {
-        "reviewer": ["{\"$case\": \"Pass\"}", "bad 1", "bad 2", "bad 3"]
+        "reviewer": [
+          "{\"$case\": \"Pass\"}",
+          "bad 1",
+          "bad 2",
+          "bad 3"
+        ]
       },
       "expect": {
         "stdout": "first ok\n",
-        "calls": {"reviewer": 4},
+        "calls": {
+          "reviewer": 4
+        },
         "raises": {
           "type": "AgentParseError",
-          "fields": {"agent": "reviewer", "attempts": 3, "target_type": "Review"}
+          "fields": {
+            "agent": {
+              "$case": "AgentCommand",
+              "command": "reviewer"
+            },
+            "attempts": 3,
+            "target_type": "Review"
+          }
         }
       }
     },
     {
       "name": "explicit_abort_on_third_site",
       "agents": {
-        "reviewer": ["{\"$case\": \"Pass\"}", "{\"$case\": \"Pass\"}", "{\"oops\": true}"]
+        "reviewer": [
+          "{\"$case\": \"Pass\"}",
+          "{\"$case\": \"Pass\"}",
+          "{\"oops\": true}"
+        ]
       },
       "expect": {
         "stdout": "first ok\nsecond ok\n",
-        "calls": {"reviewer": 3},
+        "calls": {
+          "reviewer": 3
+        },
         "raises": {
           "type": "AgentParseError",
-          "fields": {"agent": "reviewer", "attempts": 1}
+          "fields": {
+            "agent": {
+              "$case": "AgentCommand",
+              "command": "reviewer"
+            },
+            "attempts": 1
+          }
         }
       }
     }

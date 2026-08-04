@@ -2,7 +2,10 @@
   "scenarios": [
     {
       "name": "no_trigger",
-      "params": {"trigger": false, "code": 0},
+      "params": {
+        "trigger": false,
+        "code": 0
+      },
       "expect": {
         "stdout": "no error\n",
         "calls": {}
@@ -10,7 +13,10 @@
     },
     {
       "name": "trigger_code_42",
-      "params": {"trigger": true, "code": 42},
+      "params": {
+        "trigger": true,
+        "code": 42
+      },
       "expect": {
         "stdout": "boom code 42\n",
         "calls": {}
@@ -18,7 +24,10 @@
     },
     {
       "name": "trigger_code_0",
-      "params": {"trigger": true, "code": 0},
+      "params": {
+        "trigger": true,
+        "code": 0
+      },
       "expect": {
         "stdout": "boom code 0\n",
         "calls": {}

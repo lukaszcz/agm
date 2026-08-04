@@ -12,11 +12,11 @@ import json
 from collections.abc import Mapping, Sequence
 from typing import NoReturn, Protocol, cast
 
-from agm.agl.ir.ids import AgentId, ContractId, Location
+from agm.agl.ir.ids import ContractId, Location
 from agm.agl.ir.nodes import IrAsk, IrAskRequest, IrExec, IrExpr
 from agm.agl.ir.program import ExecutableProgram, ExternFunctionBody
 from agm.agl.modules.ids import ModuleId
-from agm.agl.runtime.agents import AgentRegistry
+from agm.agl.runtime.agents import AgentFn, dispatch_agent_value
 from agm.agl.runtime.codec import ParseResult
 from agm.agl.runtime.contract import OutputContract
 from agm.agl.runtime.externs import ExternRegistry
@@ -30,8 +30,8 @@ from agm.agl.semantics.exceptions import AglRaise
 from agm.agl.semantics.exceptions import make_builtin_exception as _make_exc_value
 from agm.agl.semantics.values import (
     VOID_VALUE,
-    AgentValue,
     BoolValue,
+    EnumValue,
     IntValue,
     JsonValue,
     RecordValue,
@@ -49,7 +49,7 @@ class EffectCtx(Protocol):
 
     _program: ExecutableProgram
     _trace: TraceStore
-    _registry: AgentRegistry
+    _agent_dispatcher: AgentFn | None
     _strict_json: bool
     _shell_exec_timeout: float | None
     _host_contracts: Mapping[ContractId, OutputContract]
@@ -128,29 +128,31 @@ class EffectHandlers:
     # ------------------------------------------------------------------
 
     def _dispatch_agent(
-        self, agent_id: AgentId, request: AgentRequest, node: IrAsk
+        self, agent: EnumValue, request: AgentRequest, node: IrAsk
     ) -> AgentResponse:
         """Dispatch an agent call, annotating cancellation with the ask span.
 
         ``AgentCancelled`` (and a bare ``KeyboardInterrupt`` from an unwrapped
-        default agent) propagates out of ``AgentRegistry.dispatch`` without source
-        context. The REPL session reports this location with the cancellation;
-        initializer-completion tracking independently determines which prior
-        effects are promoted. A raw ``KeyboardInterrupt`` is normalized to
-        ``AgentCancelled(reason="interrupted")`` to match the
+        dispatcher) has no source context. The REPL session reports this location
+        with the cancellation; initializer-completion tracking independently
+        determines which prior effects are promoted. A raw ``KeyboardInterrupt``
+        is normalized to ``AgentCancelled(reason="interrupted")`` to match the
         ``ConfirmingAgent`` conversion and give the session a uniform carrier.
         """
         from agm.agl.runtime.request import AgentCancelled
 
         try:
-            return self._ctx._registry.dispatch(
-                agent_id, request, nominals=self._ctx._program.builtin_nominals
+            return dispatch_agent_value(
+                agent,
+                request,
+                self._ctx._agent_dispatcher,
+                nominals=self._ctx._program.builtin_nominals,
             )
         except AgentCancelled as exc:
             exc.span = node.location
             raise
         except KeyboardInterrupt as exc:
-            raise AgentCancelled(agent_id.display_name, "interrupted", span=node.location) from exc
+            raise AgentCancelled(render_value(agent), "interrupted", span=node.location) from exc
 
     @staticmethod
     def _classify_parse_errors(result: ParseResult) -> tuple[ReqValidationError, ...]:
@@ -172,6 +174,7 @@ class EffectHandlers:
         self,
         *,
         message: str,
+        agent: Value,
         agent_name: str,
         last_raw: str | None,
         last_normalized: str | None,
@@ -191,7 +194,7 @@ class EffectHandlers:
                 trace_id=self._ctx._trace.new_event_id(),
                 raw=TextValue(last_raw or ""),
                 normalized_raw=TextValue(normalized_text),
-                agent=TextValue(agent_name),
+                agent=agent,
                 attempts=IntValue(max_attempts),
                 target_type=TextValue(target_type_label),
                 expected_schema=JsonValue(
@@ -210,14 +213,15 @@ class EffectHandlers:
         contract_id: ContractId,
         max_attempts: int,
     ) -> Value:
-        """Handle IrAsk: dispatch agent and parse output."""
+        """Handle IrAsk: dispatch an Agent enum value and parse output."""
         agent_val = self._ctx._eval(agent_expr)
-        agent_id = (
-            agent_val.agent_id
-            if isinstance(agent_val, AgentValue) and agent_val.agent_id is not None
-            else AgentId(agent_val.name if isinstance(agent_val, AgentValue) else "ask")
-        )
-        agent_name = agent_id.display_name
+        if not isinstance(agent_val, EnumValue):
+            raise TypeError(
+                f"IrAsk agent must evaluate to an Agent enum value, got {type(agent_val).__name__}"
+            )
+        dispatch_agent = agent_val
+        request_agent = agent_val
+        agent_name = render_value(agent_val)
 
         prompt_text = self._text_of(self._ctx._eval(prompt_expr))
 
@@ -226,12 +230,11 @@ class EffectHandlers:
         # Unit-typed ask: dispatch once, no output parsing.
         if contract.is_unit:
             request = AgentRequest(
-                agent=agent_name,
+                agent=request_agent,
                 prompt=prompt_text,
-                agent_id=agent_id,
                 output_contract=None,
             )
-            self._dispatch_agent(agent_id, request, _node)
+            self._dispatch_agent(dispatch_agent, request, _node)
             return VOID_VALUE
 
         effective_strict = (
@@ -267,15 +270,14 @@ class EffectHandlers:
                 span=_node.location,
             )
             request = AgentRequest(
-                agent=agent_name,
+                agent=request_agent,
                 prompt=prompt_text,
-                agent_id=agent_id,
                 attempt=attempt,
                 previous_invalid_output=last_raw,
                 validation_errors=list(last_errors),
                 output_contract=output_contract,
             )
-            response = self._dispatch_agent(agent_id, request, _node)
+            response = self._dispatch_agent(dispatch_agent, request, _node)
             raw = response.content
 
             result = self._ctx._parse_host_output(
@@ -303,6 +305,7 @@ class EffectHandlers:
                 f"{contract.target_type_label} after {max_attempts} attempt(s). "
                 f"Last output: {last_raw!r}"
             ),
+            agent=request_agent,
             agent_name=agent_name,
             last_raw=last_raw,
             last_normalized=last_normalized,
@@ -320,13 +323,12 @@ class EffectHandlers:
         contract_id: ContractId,
     ) -> Value:
         """Handle IrAskRequest: build AgentRequest record without dispatching."""
-        agent_val = self._ctx._eval(agent_expr)
-        agent_id = (
-            agent_val.agent_id
-            if isinstance(agent_val, AgentValue) and agent_val.agent_id is not None
-            else AgentId(agent_val.name if isinstance(agent_val, AgentValue) else "ask")
-        )
-        agent_name = agent_id.display_name
+        request_agent = self._ctx._eval(agent_expr)
+        if not isinstance(request_agent, EnumValue):
+            raise TypeError(
+                "IrAskRequest agent must evaluate to an Agent enum value, "
+                f"got {type(request_agent).__name__}"
+            )
 
         prompt_text = self._text_of(self._ctx._eval(prompt_expr))
 
@@ -345,7 +347,7 @@ class EffectHandlers:
             nominal=agent_request_nominal,
             display_name=agent_request_nominal.display_name,
             fields={
-                "agent": TextValue(agent_name),
+                "agent": request_agent,
                 "prompt": TextValue(prompt_text),
                 "target_type": none_value()
                 if contract.is_unit
@@ -369,6 +371,33 @@ class EffectHandlers:
     # ------------------------------------------------------------------
     # Exec call helper
     # ------------------------------------------------------------------
+
+    def _raise_exec_parse_error(
+        self, *, command: str, last_raw: str | None, last_errors: tuple[ReqValidationError, ...]
+    ) -> NoReturn:
+        """Raise ``ExecError`` for a typed shell-output parse failure.
+
+        ``AgentParseError`` is reserved for failures produced by an ``Agent``
+        value. Shell execution has no agent value to carry, so representing it
+        as an agent parse failure would violate that exception's typed shape.
+        """
+        detail = "; ".join(error.message for error in last_errors)
+        message = (
+            f"exec output failed to parse: {detail}" if detail else "exec output failed to parse"
+        )
+        raise AglRaise(
+            _make_exc_value(
+                "ExecError",
+                message,
+                nominals=self._ctx._program.builtin_nominals,
+                trace_id=self._ctx._trace.new_event_id(),
+                command=TextValue(command),
+                exit_code=IntValue(0),
+                stdout=TextValue(last_raw or ""),
+                stderr=TextValue(detail),
+                timed_out=BoolValue(False),
+            )
+        )
 
     def _run_exec_shell(self, cmd: str, location: Location) -> tuple[str, str, int | None]:
         """Run *cmd* via the shell; raise ``ExecError`` on spawn failure or timeout.
@@ -505,7 +534,6 @@ class EffectHandlers:
         )
 
         last_raw: str | None = captured
-        last_normalized: str | None = None
         last_errors: tuple[ReqValidationError, ...] = ()
 
         for attempt in range(max_attempts):
@@ -543,19 +571,10 @@ class EffectHandlers:
             if result.ok and result.value is not None:
                 return result.value
 
-            last_normalized = result.normalized_raw
             last_errors = self._classify_parse_errors(result)
 
-        self._raise_agent_parse_error(
-            message=(
-                f"exec output failed to parse as {contract.target_type_label} "
-                f"after {max_attempts} attempt(s). Last output: {last_raw!r}"
-            ),
-            agent_name="exec",
+        self._raise_exec_parse_error(
+            command=cmd,
             last_raw=last_raw,
-            last_normalized=last_normalized,
             last_errors=last_errors,
-            max_attempts=max_attempts,
-            target_type_label=contract.target_type_label,
-            json_schema=contract.json_schema,
         )

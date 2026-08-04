@@ -10,10 +10,9 @@ enum Plan
 
 param spec
 
-agent impl
-agent reviewer
-agent planner
-
+let impl = AgentCommand("impl")
+let reviewer = AgentCommand("reviewer")
+let planner = AgentCommand("planner")
 var artifact: text = ask("Implement %{spec}", agent = impl)
 var status: text = "working"
 

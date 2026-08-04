@@ -2,14 +2,18 @@
   "scenarios": [
     {
       "name": "acyclic_value_tests_true",
-      "params": {"close_cycle": false},
+      "params": {
+        "close_cycle": false
+      },
       "expect": {
         "stdout": "true\ntrue\n"
       }
     },
     {
       "name": "cyclic_value_tests_false",
-      "params": {"close_cycle": true},
+      "params": {
+        "close_cycle": true
+      },
       "expect": {
         "stdout": "false\nfalse\n"
       }

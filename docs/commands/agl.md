@@ -89,12 +89,13 @@ like any other static error.
 - `--max-call-depth N`: Override the maximum recursion call depth (CLI >
   `[exec] max-call-depth` config; the canonical default is 256). Exceeding it
   raises `RecursionError`.
-- `--runner COMMAND`: Override the default agent runner command (backs `ask` and any
-  declared agent without its own command). See [runner precedence](#agents-and-runner-precedence).
+- `--runner COMMAND`: Retained compatibility setting. It does not override an
+  `Agent` value's builder command; select an agent with `--agent`,
+  `std/config::default-agent`, or an `ask(..., agent = Agent...)` argument.
 - `--agent AGL_LITERAL`: Seed `std/config::default-agent` with one constant `Agent`
   expression, for example `AgentClaude("sonnet", "medium")`. The literal is parsed and
   typechecked before execution; it overrides `[<program>]`/`[exec]` configuration. It
-  currently only seeds that engine setting and does not select the agent runner.
+  it selects the value used by `ask` calls that omit `agent`.
 - `--log` / `--log-file PATH` / `--no-log`: Control trace logging, which is **off by
   default**. `--log` enables it with an auto-generated timestamped path under
   `.agent-files/`; `--log-file PATH` writes a structured JSONL trace to `PATH`;
@@ -122,41 +123,23 @@ like any other static error.
   `retry[N]`; not applicable to extern calls). When no such call sites are present, no
   inventory is printed.
 
-### Agents and runner precedence
+### Agents
 
-Named agents must be **declared in the program source** with `agent NAME`,
-optionally carrying a runner hint as `agent NAME = "runner"`. Declarations are
-valid at the entry-module root or in named scope regions; scoped references use
-their full path (for example `Tools::reviewer`). Calling an undeclared name is
-a static binding error (exit 1). The contextual `ask` (default agent) and
-`exec` (shell) are built in and need no declaration.
+`ask` selects an ordinary typed `Agent` value. Pass one explicitly, or omit
+`agent` to read `std/config::default-agent` at that call:
 
-For each declared agent, `agm exec` resolves the command that runs it by the following
-precedence (highest to lowest):
+```agl
+let reviewer = AgentClaude("sonnet", "medium")
+let review: Review = ask("Review %{artifact}", agent = reviewer)
+let answer: text = ask("Summarize")
+```
 
-| Rung | Source |
-|------|--------|
-| 1 | `[exec.agents.<name>]` (config, root-agent only) — overrides that root declaration's source hint |
-| 2 | the source `agent NAME = "…"` runner string |
-| 3 | a source `std/config::runner := "…"` write (default runner for all agents) |
-| 4 | `--runner COMMAND` (CLI flag) |
-| 5 | `[exec] runner` (config) |
-| 6 | `[loop] runner` (config) |
-| 7 | `claude -p` (built-in default) |
-
-A `std/config::runner` write applies **positionally**: it rebuilds the default
-agent used by subsequent unnamed `ask` calls and by later-dispatched declared
-agents without their own command, from the write point onward.
-
-A `[exec.agents.<name>]` entry for a root name the program never declares is
-a host configuration error. Scoped agents use their own source hint or the
-default runner; their identity is their scope path and name, not a flattened
-configuration key. Because the default runner is always the floor (rung 7),
-every root or referenced scoped agent resolves under `agm exec` even with no
-config and no source hint. Unreferenced scoped declarations remain static and
-do not start a runner. Runner configuration runner strings support the `%%` /
-`%{PROMPT_FILE}` placeholders for the rendered prompt-file path. In a source
-`agent` hint, spell the latter as `\%{PROMPT_FILE}` so it remains literal text.
+`AgentCommand(command)`, `AgentClaude(model, thinking)`,
+`AgentCodex(model, thinking)`, and `AgentPi(provider, model, thinking)` each
+build their own argv. Consequently `--runner`, `[exec] runner`, source
+`std/config::runner` writes, and `[exec.agents]` do not select an `ask` runner.
+Those legacy configuration and declaration surfaces are still accepted during
+the transition but are vestigial; use an `Agent` value or `default-agent`.
 
 ### Configuration
 
@@ -165,18 +148,16 @@ source `std/config` writes can override:
 
 ```toml
 [exec]
-runner = "claude -p"        # default agent runner
-default-agent = 'AgentClaude("sonnet", "medium")' # typed Agent setting
+runner = "claude -p"        # legacy compatibility setting (does not select Agent values)
+default-agent = 'AgentClaude("sonnet", "medium")' # typed default Agent value
 strict-json = false         # lenient JSON recovery is the default
 max-iters = 5               # opt into a safety-valve cap for unbounded loops
 timeout = "30m"             # initial shell-exec and agent idle timeout
 log = false                 # trace logging off by default; set true to enable
 # log-file = "trace.jsonl" # explicit trace path (omit for auto timestamped path)
 
-[exec.agents]
-reviewer = "claude -p"      # root-agent runner command; requires
-                            # `agent reviewer` at the program root and
-                            # overrides that declaration's source hint
+# [exec.agents] is a legacy compatibility table. Its entries do not
+# override AgentCommand/AgentClaude/AgentCodex/AgentPi values.
 ```
 
 `[exec.<command>]` sub-tables provide per-command overrides of the base `[exec]`
@@ -233,8 +214,9 @@ example, `--no-log` sets the initial state to off, but a later
 
 Every setting takes effect **positionally**, like an ordinary `var` mutation:
 statements after the write see the new value, statements before it do not. Writing
-`runner`, `log`, or `log-file` reconfigures the live default agent and trace
-destination for subsequent calls. Assigning `Some(path)` to `log-file` enables
+`log` or `log-file` reconfigures the trace destination for subsequent calls.
+`runner` remains a readable legacy setting and does not reconfigure typed Agent
+dispatch. Assigning `Some(path)` to `log-file` enables
 logging; a later `log := false` disables it without clearing the path. Writing
 `strict-json`, `max-iters`, or `timeout` changes subsequent agent-output parsing,
 unbounded loops, or `exec` calls, respectively.
@@ -286,10 +268,10 @@ entry is parsed, statically checked (including pattern coverage), and evaluated 
 accumulates bindings, types, and declarations across entries, so earlier results stay
 available and agent calls fire exactly once.
 
-The REPL reuses the `[exec]` configuration (runner, per-agent commands,
-max-iters valve, call-depth limit, JSON strictness, timeout), so an interactive
-session evaluates entries with the same agent backing a batch `agm exec` run
-would use.
+The REPL reuses `[exec]` settings for `default-agent`, the max-iters valve,
+call-depth limit, JSON strictness, and timeout. Like `agm exec`, each typed
+`Agent` value selects its own backend command; legacy runner and per-agent
+settings do not select it.
 
 Like `agm exec`, the REPL automatically opens `std/core` throughout each loaded
 program, so standard-library names such as `Option`, `Some`, and `None` are available
@@ -405,7 +387,8 @@ Meta-commands begin with a leading `:` (which never collides with AgL syntax):
   qualified target (`std/config::max-iters := 3`). The write takes effect positionally,
   so subsequent entries in the session see the new value, including when a later
   expression in the writing entry fails; writing `runner`, `log`, or `log-file`
-  reconfigures the live default agent and trace destination. `:reset` clears
+  updates the retained legacy setting; `log` or `log-file` reconfigures the
+  trace destination. `:reset` clears
   the session, restoring the settings to the CLI/`[exec]` defaults set before the loop
   starts.
 
@@ -417,7 +400,7 @@ and never exit the process.
 | Code | Meaning |
 |------|---------|
 | `0` | The session ended normally (`:quit`/`:exit` or Ctrl-D) |
-| `1` | Pre-loop setup failure: an invalid `[exec]` configuration or `--runner` command, invalid `[exec] default-agent` or `--agent` AgL literal, or an unwritable `--log-file` — reported before the prompt appears |
+| `1` | Pre-loop setup failure: invalid `[exec] default-agent` or `--agent` AgL literal, or an unwritable `--log-file` — reported before the prompt appears |
 
 ### Examples
 

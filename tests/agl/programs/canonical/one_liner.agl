@@ -3,8 +3,8 @@ param spec
 enum Review
   | Pass
   | Fail(issues: array[text])
-agent impl
-agent reviewer
+let impl = AgentCommand("impl")
+let reviewer = AgentCommand("reviewer")
 var artifact: text = ask("Implement %{spec}", agent = impl)
 var review: Review = Pass
 do[5]

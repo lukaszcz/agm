@@ -2,8 +2,12 @@
   "scenarios": [
     {
       "name": "no_exception",
-      "module_roots": ["program_modules/modules/cross_module_exception"],
-      "params": {"mode": "none"},
+      "module_roots": [
+        "program_modules/modules/cross_module_exception"
+      ],
+      "params": {
+        "mode": "none"
+      },
       "expect": {
         "stdout": "ok\n",
         "calls": {}
@@ -11,8 +15,12 @@
     },
     {
       "name": "open_import_boom",
-      "module_roots": ["program_modules/modules/cross_module_exception"],
-      "params": {"mode": "boom"},
+      "module_roots": [
+        "program_modules/modules/cross_module_exception"
+      ],
+      "params": {
+        "mode": "boom"
+      },
       "expect": {
         "stdout": "boom 7 open imported\n",
         "calls": {}
@@ -20,8 +28,12 @@
     },
     {
       "name": "open_import_boom_detail",
-      "module_roots": ["program_modules/modules/cross_module_exception"],
-      "params": {"mode": "detail"},
+      "module_roots": [
+        "program_modules/modules/cross_module_exception"
+      ],
+      "params": {
+        "mode": "detail"
+      },
       "expect": {
         "stdout": "detail 3 info\n",
         "calls": {}
@@ -29,8 +41,12 @@
     },
     {
       "name": "qualified_form",
-      "module_roots": ["program_modules/modules/cross_module_exception"],
-      "params": {"mode": "qualified"},
+      "module_roots": [
+        "program_modules/modules/cross_module_exception"
+      ],
+      "params": {
+        "mode": "qualified"
+      },
       "expect": {
         "stdout": "boom 99 qualified\n",
         "calls": {}

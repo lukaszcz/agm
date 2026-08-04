@@ -24,10 +24,9 @@ The REPL uses the program pipeline ([modules.md](agl/modules.md)) by default so 
 
 A param declared inside a named scope region has no external identity of its own: its external key — what the CLI flag and the config-table lookup match against — is its full path spelling (`Deploy::region`), computed the same way at parameter discovery and at lowering's `IrParam.public_name` so the two never drift.
 
-## Agent Declaration and Reconciliation
+## Agent Values and Legacy Declarations
 
-Agents must be declared in source; the host backs structured declaration paths
-but never owns the agent set. The pipeline prepares a program once (lex, parse, scope) and reuses that prepared object for both parameter discovery and execution. Before execution it reconciles declared agents against the host's registrations: a registration with no matching declaration, or a root or referenced scoped declaration with no backing, is an error; every declared-but-uncalled agent is a warning. Unreferenced scoped handles remain deferred in whole-program lowering, while REPL promotion retains them for later entries. `agm exec` registers each declared name with a runner-backed factory, choosing the runner command by precedence across config, a source runner hint, CLI flags, and the built-in default floor (see [agents.md](agents.md)).
+Each `ask` evaluates an `Agent` enum value and dispatches the argv built from that value. The pipeline prepares a program once (lex, parse, scope) and reuses that prepared object for both parameter discovery and execution. The old `agent NAME` declarations and their per-name registry remain parseable during the transition, but reconciliation and per-name registration are bypassed: they neither require host backing nor select a value-driven call. `agm exec` and the REPL seed `std/config::default-agent`; source writes can replace it in program order.
 
 ## Engine Settings
 
@@ -42,6 +41,6 @@ The REPL console adds interactivity around the UI-free session: a confirmation w
 ## Code Entry Points
 
 - `src/agm/agl/repl/` — the incremental session, type-focused display helpers, the console, agent confirmation, and themes.
-- `src/agm/agl/pipeline.py` — program preparation, parameter discovery, agent reconciliation, and host-environment assembly shared by `exec` and the REPL.
+- `src/agm/agl/pipeline.py` — program preparation, parameter discovery, and host-environment assembly shared by `exec` and the REPL.
 - `src/agm/commands/exec.py` and `src/agm/commands/repl.py` — the hosting commands, including lazy `default-agent` literal seeding; `src/agm/cli_support/exec_params.py` — parameter discovery and option wiring for `agm exec`.
 - Tests: `tests/test_agl_repl_*.py`, `tests/test_agl_builtin_var.py`, `tests/test_agl_builtin_var_host.py`, `tests/test_exec_command.py`.

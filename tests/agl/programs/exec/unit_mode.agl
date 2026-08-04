@@ -1,5 +1,5 @@
 # Bare ask and exec calls adapt to unit in statement and loop-body positions.
-agent notifier
+let notifier = AgentCommand("notifier")
 param target: int
 param fail: bool
 

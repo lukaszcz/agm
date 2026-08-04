@@ -131,9 +131,10 @@ class TestGraphBuild:
         root = tmp_path / "r"
         root.mkdir()
         graph = load_graph("let x = 1", entry_path=None, roots=_roots(root))
-        assert len(graph.modules) == 2
+        assert len(graph.modules) == 3
         assert ENTRY_ID in graph.modules
         assert STD_CORE_ID in graph.modules
+        assert ModuleId.from_path("std/config") in graph.modules
         assert graph.modules[STD_CORE_ID].path == (_REPO_STDLIB_ROOT / "std" / "core.agl").resolve()
 
     def test_imported_module_appears_in_graph(self, tmp_path: Path) -> None:
@@ -252,7 +253,7 @@ class TestCycles:
         assert ModuleId.from_path("a") in graph.modules
         assert ModuleId.from_path("b") in graph.modules
         # Exactly 4 modules: std/core + entry + a + b
-        assert len(graph.modules) == 4
+        assert len(graph.modules) == 5
 
     def test_longer_cycle_terminates(self, tmp_path: Path) -> None:
         root = tmp_path / "r"
@@ -261,7 +262,7 @@ class TestCycles:
         _write_module(root, "y", "import z")
         _write_module(root, "z", "import x")
         graph = load_graph("import x", entry_path=None, roots=_roots(root))
-        assert len(graph.modules) == 5  # std/core + entry + x + y + z
+        assert len(graph.modules) == 6  # std/core + std/config + entry + x + y + z
 
     def test_cycle_nodes_linked_in_sccs(self, tmp_path: Path) -> None:
         root = tmp_path / "r"
@@ -679,7 +680,10 @@ class TestBuildReplGraph:
         )
         assert ENTRY_ID in graph.modules
         assert STD_CORE_ID in graph.modules
-        assert new_modules == {STD_CORE_ID: graph.modules[STD_CORE_ID]}
+        assert new_modules == {
+            STD_CORE_ID: graph.modules[STD_CORE_ID],
+            ModuleId.from_path("std/config"): graph.modules[ModuleId.from_path("std/config")],
+        }
 
     def test_import_loads_lib_module(self, tmp_path: Path) -> None:
         """A program with import declarations loads the referenced lib module."""

@@ -19,11 +19,14 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from agm.agent.defaults import DEFAULT_AGENT_RUNNER
+from agm.agl.ir.ids import NominalId
+from agm.agl.modules.ids import STD_CORE_ID
 from agm.agl.modules.roots import RootSet
 from agm.agl.pipeline import PipelineDriver, RunResult
 from agm.agl.runtime.agents import AgentFn
 from agm.agl.runtime.host_settings import HostSettingsPolicy
-from agm.agl.semantics.values import TextValue, Value
+from agm.agl.runtime.request import AgentRequest
+from agm.agl.semantics.values import EnumValue, TextValue, Value
 from agm.cli_support.args import ExecArgs
 from agm.commands import exec as exec_command
 from agm.config.context import ConfigContext
@@ -78,11 +81,12 @@ def _patch_runner(received_cmds: list[list[str]]) -> object:
     from agm.agent.runner import PreparedPromptRun
 
     def fake_prepare(
-        rendered_prompt: str, *, runner: str, temp_files: object, env: object
+        rendered_prompt: str, *, runner: str | list[str], temp_files: object, env: object
     ) -> object:
-        received_cmds.append(shlex.split(runner))
+        command = shlex.split(runner) if isinstance(runner, str) else runner
+        received_cmds.append(command)
         return PreparedPromptRun(
-            command=shlex.split(runner),
+            command=command,
             effective_file=Path("/tmp/p.md"),
             env={},
             temp_files=[],
@@ -91,12 +95,25 @@ def _patch_runner(received_cmds: list[list[str]]) -> object:
     return patch("agm.agent.runner.prepare_rendered_prompt_run", side_effect=fake_prepare)
 
 
+def _command_agent(command: str) -> EnumValue:
+    return EnumValue(
+        nominal=NominalId(STD_CORE_ID, "Agent"),
+        display_name="Agent",
+        variant="AgentCommand",
+        fields={"command": TextValue(command)},
+    )
+
+
 def _write_command_stdlib(root: Path, config: str) -> Path:
     """Create the minimal stdlib needed to exercise the real exec command."""
     stdlib_root = root / "stdlib"
     config_path = stdlib_root / "std" / "config.agl"
     config_path.parent.mkdir(parents=True)
-    config_path.write_text(config, encoding="utf-8")
+    config_path.write_text(
+        "import std/core using Agent\n"
+        'builtin var default-agent: Agent = AgentCommand("echo")\n' + config,
+        encoding="utf-8",
+    )
     (config_path.parent / "core.agl").write_text(
         (_STDLIB / "std" / "core.agl").read_text(encoding="utf-8"), encoding="utf-8"
     )
@@ -220,11 +237,13 @@ class TestCommandEngineSeeding:
 
 
 class TestRunnerReconfiguration:
-    def test_runner_write_reconfigures_default_agent(self, tmp_path: Path) -> None:
-        """A ``runner :=`` before an ``ask`` dispatches through the new command."""
+    def test_default_agent_write_reconfigures_ask(self, tmp_path: Path) -> None:
+        """A ``default-agent :=`` selects the following ``ask`` dispatch."""
         agl_file = tmp_path / "prog.agl"
         agl_file.write_text(
-            'open import std/config\nstd/config::runner := "codex-runner"\nask("hi")\n'
+            "open import std/config\n"
+            'std/config::default-agent := AgentCommand("codex-runner")\n'
+            'ask("hi")\n'
         )
 
         received: list[list[str]] = []
@@ -235,11 +254,10 @@ class TestRunnerReconfiguration:
         ):
             exec_command.run(_exec_args(agl_file))
 
-        # The runner write precedes the ask, so only the new command dispatches.
         assert received == [["codex-runner"]]
 
-    def test_no_runner_write_uses_default_runner(self, tmp_path: Path) -> None:
-        """Without a ``runner :=`` the default runner floor still dispatches (regression)."""
+    def test_no_default_agent_write_uses_the_stdlib_default_agent(self, tmp_path: Path) -> None:
+        """The stdlib initializer supplies the default AgentClaude value."""
         agl_file = tmp_path / "prog.agl"
         agl_file.write_text('ask("hi")\n')
 
@@ -251,19 +269,24 @@ class TestRunnerReconfiguration:
         ):
             exec_command.run(_exec_args(agl_file))
 
-        assert received == [["claude", "-p"]]
+        assert received == [["claude", "-p", "--model", "sonnet", "--effort", "medium"]]
 
-    def test_runner_write_updates_bare_agents_but_not_dedicated_agents(
+    def test_legacy_declaration_without_an_override_is_accepted(self, tmp_path: Path) -> None:
+        """Vestigial declarations do not require an exec-agent override."""
+        agl_file = tmp_path / "prog.agl"
+        agl_file.write_text("agent legacy\n()\n")
+        exec_command.run(_exec_args(agl_file))
+
+    def test_default_agent_write_does_not_change_explicit_agent_values(
         self, tmp_path: Path
     ) -> None:
         agl_file = tmp_path / "prog.agl"
         agl_file.write_text(
             "open import std/config\n"
-            'agent fixed = "fixed-runner"\n'
-            "agent inherited\n"
-            'std/config::runner := "new-runner"\n'
+            'let fixed = AgentCommand("fixed-runner")\n'
+            'std/config::default-agent := AgentCommand("new-runner")\n'
             'ask("one", agent = fixed)\n'
-            'ask("two", agent = inherited)\n'
+            'ask("two")\n'
         )
 
         received: list[list[str]] = []
@@ -460,51 +483,48 @@ def _run_program_with_policy(
 
 class TestReconfigureHooks:
     @pytest.mark.parametrize(
-        ("seed", "expected_runner"),
+        ("seed", "expected_command"),
         (
             (None, "declared-runner"),
-            ({"runner": TextValue("seeded-runner")}, "seeded-runner"),
+            ({"default-agent": _command_agent("seeded-runner")}, "seeded-runner"),
         ),
         ids=("declared-default", "host-seed"),
     )
-    def test_effective_runner_configures_ask_dispatch(
-        self, tmp_path: Path, seed: dict[str, Value] | None, expected_runner: str
+    def test_effective_default_agent_selects_ask_dispatch(
+        self, tmp_path: Path, seed: dict[str, Value] | None, expected_command: str
     ) -> None:
-        """An effective runner setting backs the first ``ask`` call."""
+        """The effective default-agent value selects the first dispatch."""
         config_path = tmp_path / "std" / "config.agl"
         config_path.parent.mkdir()
-        config_path.write_text('builtin var runner: text = "declared-runner"\n', encoding="utf-8")
+        config_path.write_text(
+            "import std/core using Agent\n"
+            'builtin var default-agent: Agent = AgentCommand("declared-runner")\n'
+            'builtin var runner: text = "declared-runner"\n',
+            encoding="utf-8",
+        )
         (config_path.parent / "core.agl").write_text(
             (_STDLIB / "std" / "core.agl").read_text(encoding="utf-8"), encoding="utf-8"
         )
-        configured: list[str] = []
         dispatched: list[str] = []
 
-        def build_runner(command: str) -> AgentFn:
-            configured.append(command)
+        def dispatch(request: AgentRequest) -> str:
+            command = request.agent.fields["command"]
+            assert isinstance(command, TextValue)
+            dispatched.append(command.value)
+            return "ok"
 
-            def agent(_: object) -> str:
-                dispatched.append(command)
-                return "ok"
-
-            return agent
-
-        policy = HostSettingsPolicy(
-            build_runner=build_runner, resolve_trace_path=lambda enabled, log_file: None
-        )
-        rt = PipelineDriver()
+        rt = PipelineDriver(value_agent=dispatch)
         prepared = rt.prepare_program(
             'import std/core using ask\nopen import std/config\nask("hi")\n',
             entry_path=None,
             roots=RootSet(roots=frozenset({tmp_path})),
             default_stdlib=False,
         )
-        result = rt.run_prepared(prepared, host_settings_policy=policy, builtin_host_settings=seed)
+        result = rt.run_prepared(prepared, builtin_host_settings=seed)
         assert isinstance(result, RunResult)
 
         assert result.ok, f"expected success but got: {result.error!r}"
-        assert configured == [expected_runner]
-        assert dispatched == [expected_runner]
+        assert dispatched == [expected_command]
 
     def test_hooks_fire_on_host_consumed_writes(self) -> None:
         recorder = _RecordingPolicy()

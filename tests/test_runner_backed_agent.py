@@ -25,11 +25,24 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from agm.agl.ir.ids import AgentId
+from agm.agl.ir.builtin_nominals import BuiltinNominals
+from agm.agl.ir.ids import AgentId, NominalId
+from agm.agl.modules.ids import STD_CORE_ID
+from agm.agl.runtime.agents import AgentRegistry
+from agm.agl.semantics.values import EnumValue, ExceptionValue, TextValue
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+def _command_agent(command: str) -> EnumValue:
+    return EnumValue(
+        nominal=NominalId(STD_CORE_ID, "Agent"),
+        display_name="Agent",
+        variant="AgentCommand",
+        fields={"command": TextValue(command)},
+    )
 
 
 def _make_process_result(
@@ -329,8 +342,8 @@ class TestAgentCallErrorSeam:
 
     def _make_registry_with_failing_agent(
         self, *, cause: str, exit_code: int | None, stderr_tail: str, elapsed: float
-    ) -> object:
-        from agm.agl.runtime.agents import AgentCallHostError, AgentRegistry
+    ) -> AgentRegistry:
+        from agm.agl.runtime.agents import AgentCallHostError
 
         def failing_agent(req: object) -> str:
             raise AgentCallHostError(
@@ -340,18 +353,29 @@ class TestAgentCallErrorSeam:
                 elapsed=elapsed,
             )
 
-        return AgentRegistry(named={AgentId("tester"): failing_agent}, default_agent=None)
+        return AgentRegistry(
+            named={AgentId("tester"): failing_agent}, default_agent=None, value_agent=failing_agent
+        )
 
-    def test_nonzero_exit_raises_agl_raise(self) -> None:
+    def _dispatch_failure(
+        self, registry: AgentRegistry, *, nominals: BuiltinNominals | None = None
+    ) -> ExceptionValue:
         from agm.agl.runtime import AgentRequest
         from agm.agl.semantics.exceptions import AglRaise
 
+        agent = _command_agent("tester")
+        with pytest.raises(AglRaise) as exc_info:
+            if nominals is None:
+                registry.dispatch(agent, AgentRequest(agent=agent, prompt="q"))
+            else:
+                registry.dispatch(agent, AgentRequest(agent=agent, prompt="q"), nominals=nominals)
+        return exc_info.value.exc
+
+    def test_nonzero_exit_raises_agl_raise(self) -> None:
         registry = self._make_registry_with_failing_agent(
             cause="nonzero_exit", exit_code=1, stderr_tail="err", elapsed=0.1
         )
-        with pytest.raises(AglRaise) as exc_info:
-            registry.dispatch("tester", AgentRequest(agent="tester", prompt="q"))
-        exc_val = exc_info.value.exc
+        exc_val = self._dispatch_failure(registry)
         assert exc_val.display_name == "AgentCallError"
 
         from agm.agl.ir.builtin_nominals import NO_BUILTIN_DECLARATIONS
@@ -363,67 +387,45 @@ class TestAgentCallErrorSeam:
         from agm.agl.ir.builtin_nominals import BuiltinNominals
         from agm.agl.ir.ids import NominalId
         from agm.agl.modules.ids import ENTRY_ID
-        from agm.agl.runtime import AgentRequest
-        from agm.agl.semantics.exceptions import AglRaise
 
         registry = self._make_registry_with_failing_agent(
             cause="nonzero_exit", exit_code=1, stderr_tail="err", elapsed=0.1
         )
         custom = BuiltinNominals(declared={"AgentCallError": NominalId(ENTRY_ID, "AgentCallError")})
-        with pytest.raises(AglRaise) as exc_info:
-            registry.dispatch("tester", AgentRequest(agent="tester", prompt="q"), nominals=custom)
-        assert exc_info.value.exc.nominal == NominalId(ENTRY_ID, "AgentCallError")
+        assert self._dispatch_failure(registry, nominals=custom).nominal == NominalId(
+            ENTRY_ID, "AgentCallError"
+        )
 
     def test_spawn_failure_raises_agl_raise(self) -> None:
-        from agm.agl.runtime import AgentRequest
-        from agm.agl.semantics.exceptions import AglRaise
-
         registry = self._make_registry_with_failing_agent(
             cause="spawn_failure", exit_code=None, stderr_tail="", elapsed=0.0
         )
-        with pytest.raises(AglRaise) as exc_info:
-            registry.dispatch("tester", AgentRequest(agent="tester", prompt="q"))
-        exc_val = exc_info.value.exc
+        exc_val = self._dispatch_failure(registry)
         assert exc_val.display_name == "AgentCallError"
 
     def test_timeout_raises_agl_raise(self) -> None:
-        from agm.agl.runtime import AgentRequest
-        from agm.agl.semantics.exceptions import AglRaise
-
         registry = self._make_registry_with_failing_agent(
             cause="timeout", exit_code=124, stderr_tail="", elapsed=30.0
         )
-        with pytest.raises(AglRaise) as exc_info:
-            registry.dispatch("tester", AgentRequest(agent="tester", prompt="q"))
-        exc_val = exc_info.value.exc
+        exc_val = self._dispatch_failure(registry)
         assert exc_val.display_name == "AgentCallError"
 
     def test_cause_field_preserved(self) -> None:
-        from agm.agl.runtime import AgentRequest
-        from agm.agl.semantics.exceptions import AglRaise
-        from agm.agl.semantics.values import TextValue
-
         registry = self._make_registry_with_failing_agent(
             cause="nonzero_exit", exit_code=2, stderr_tail="fail msg", elapsed=0.5
         )
-        with pytest.raises(AglRaise) as exc_info:
-            registry.dispatch("tester", AgentRequest(agent="tester", prompt="q"))
-        exc_val = exc_info.value.exc
+        exc_val = self._dispatch_failure(registry)
         cause = exc_val.fields.get("cause")
         assert isinstance(cause, TextValue)
         assert cause.value == "nonzero_exit"
 
     def test_metadata_exit_code_preserved(self) -> None:
-        from agm.agl.runtime import AgentRequest
-        from agm.agl.semantics.exceptions import AglRaise
         from agm.agl.semantics.values import JsonValue
 
         registry = self._make_registry_with_failing_agent(
             cause="nonzero_exit", exit_code=42, stderr_tail="some err", elapsed=1.0
         )
-        with pytest.raises(AglRaise) as exc_info:
-            registry.dispatch("tester", AgentRequest(agent="tester", prompt="q"))
-        exc_val = exc_info.value.exc
+        exc_val = self._dispatch_failure(registry)
         meta = exc_val.fields.get("metadata")
         assert isinstance(meta, JsonValue)
         raw = meta.raw
@@ -431,16 +433,12 @@ class TestAgentCallErrorSeam:
         assert raw.get("exit_code") == 42
 
     def test_metadata_stderr_tail_preserved(self) -> None:
-        from agm.agl.runtime import AgentRequest
-        from agm.agl.semantics.exceptions import AglRaise
         from agm.agl.semantics.values import JsonValue
 
         registry = self._make_registry_with_failing_agent(
             cause="nonzero_exit", exit_code=1, stderr_tail="the error msg", elapsed=0.0
         )
-        with pytest.raises(AglRaise) as exc_info:
-            registry.dispatch("tester", AgentRequest(agent="tester", prompt="q"))
-        exc_val = exc_info.value.exc
+        exc_val = self._dispatch_failure(registry)
         meta = exc_val.fields.get("metadata")
         assert isinstance(meta, JsonValue)
         raw = meta.raw
@@ -448,16 +446,12 @@ class TestAgentCallErrorSeam:
         assert "the error msg" in str(raw.get("stderr_tail", ""))
 
     def test_metadata_elapsed_preserved(self) -> None:
-        from agm.agl.runtime import AgentRequest
-        from agm.agl.semantics.exceptions import AglRaise
         from agm.agl.semantics.values import JsonValue
 
         registry = self._make_registry_with_failing_agent(
             cause="timeout", exit_code=124, stderr_tail="", elapsed=5.5
         )
-        with pytest.raises(AglRaise) as exc_info:
-            registry.dispatch("tester", AgentRequest(agent="tester", prompt="q"))
-        exc_val = exc_info.value.exc
+        exc_val = self._dispatch_failure(registry)
         meta = exc_val.fields.get("metadata")
         assert isinstance(meta, JsonValue)
         raw = meta.raw
@@ -466,35 +460,47 @@ class TestAgentCallErrorSeam:
         assert abs(float(raw.get("elapsed", 0)) - 5.5) < 0.01
 
     def test_agent_field_reflects_agent_name(self) -> None:
-        from agm.agl.runtime import AgentRequest
-        from agm.agl.semantics.exceptions import AglRaise
-        from agm.agl.semantics.values import TextValue
-
         registry = self._make_registry_with_failing_agent(
             cause="spawn_failure", exit_code=None, stderr_tail="", elapsed=0.0
         )
-        with pytest.raises(AglRaise) as exc_info:
-            registry.dispatch("tester", AgentRequest(agent="tester", prompt="q"))
-        exc_val = exc_info.value.exc
+        exc_val = self._dispatch_failure(registry)
         agent_field = exc_val.fields.get("agent")
-        assert isinstance(agent_field, TextValue)
-        assert agent_field.value == "tester"
+        assert isinstance(agent_field, EnumValue)
+        assert agent_field == _command_agent("tester")
 
     def test_agl_raise_carries_exception_base_fields(self) -> None:
-        from agm.agl.runtime import AgentRequest
-        from agm.agl.semantics.exceptions import AglRaise
-        from agm.agl.semantics.values import TextValue
-
         registry = self._make_registry_with_failing_agent(
             cause="nonzero_exit", exit_code=1, stderr_tail="", elapsed=0.0
         )
-        with pytest.raises(AglRaise) as exc_info:
-            registry.dispatch("tester", AgentRequest(agent="tester", prompt="q"))
-        exc_val = exc_info.value.exc
+        exc_val = self._dispatch_failure(registry)
         # Base Exception fields: message and trace_id must be present.
         assert "message" in exc_val.fields
         assert "trace_id" in exc_val.fields
         assert isinstance(exc_val.fields["message"], TextValue)
+
+    def test_command_values_fall_back_or_raise_without_a_dispatcher(self) -> None:
+        from agm.agl.runtime import AgentRequest
+        from agm.agl.semantics.exceptions import AglRaise
+
+        command = _command_agent("unknown")
+        request = AgentRequest(agent=command, prompt="q")
+        fallback = AgentRegistry(
+            named={"known": lambda _request: "known"}, default_agent=lambda _: "ok"
+        )
+        assert fallback.dispatch(command, request).content == "ok"
+
+        no_dispatcher = AgentRegistry(named={"known": lambda _request: "known"}, default_agent=None)
+        with pytest.raises(AglRaise) as exc_info:
+            no_dispatcher.dispatch(command, request)
+        assert exc_info.value.exc.fields["cause"] == TextValue("no_dispatcher")
+
+        claude = EnumValue(
+            nominal=NominalId(STD_CORE_ID, "Agent"),
+            display_name="Agent",
+            variant="AgentClaude",
+            fields={"model": TextValue(""), "thinking": TextValue("")},
+        )
+        assert fallback.dispatch(claude, AgentRequest(agent=claude, prompt="q")).content == "ok"
 
 
 # ---------------------------------------------------------------------------
@@ -524,15 +530,15 @@ class TestRunnerBackedAgentCommandResolution:
         def fake_prepare(
             rendered_prompt: str,
             *,
-            runner: str,
+            runner: str | list[str],
             temp_files: object,
             env: object,
         ) -> object:
-            received_cmds.append(shlex.split(runner))
+            received_cmds.append((shlex.split(runner) if isinstance(runner, str) else runner))
             from agm.agent.runner import PreparedPromptRun
 
             return PreparedPromptRun(
-                command=shlex.split(runner),
+                command=(shlex.split(runner) if isinstance(runner, str) else runner),
                 effective_file=Path("/tmp/p.md"),
                 env={},
                 temp_files=[],
@@ -554,10 +560,10 @@ class TestRunnerBackedAgentCommandResolution:
             ),
             patch("agm.agent.runner.cleanup_temp_files"),
         ):
-            factory_fn(AgentRequest(agent="anon_agent", prompt="hi"))
-        assert received_cmds[0] == ["my-runner", "--flag"]
+            factory_fn(AgentRequest(agent=_command_agent("anon_agent"), prompt="hi"))
+        assert received_cmds[0] == ["anon_agent"]
 
-    def test_per_agent_command_overrides_default(self) -> None:
+    def test_legacy_per_agent_command_does_not_override_agent_command_value(self) -> None:
         from agm.agl.runtime import AgentRequest
 
         received_cmds: list[list[str]] = []
@@ -565,15 +571,15 @@ class TestRunnerBackedAgentCommandResolution:
         def fake_prepare(
             rendered_prompt: str,
             *,
-            runner: str,
+            runner: str | list[str],
             temp_files: object,
             env: object,
         ) -> object:
-            received_cmds.append(shlex.split(runner))
+            received_cmds.append((shlex.split(runner) if isinstance(runner, str) else runner))
             from agm.agent.runner import PreparedPromptRun
 
             return PreparedPromptRun(
-                command=shlex.split(runner),
+                command=(shlex.split(runner) if isinstance(runner, str) else runner),
                 effective_file=Path("/tmp/p.md"),
                 env={},
                 temp_files=[],
@@ -598,8 +604,8 @@ class TestRunnerBackedAgentCommandResolution:
             ),
             patch("agm.agent.runner.cleanup_temp_files"),
         ):
-            factory_fn(AgentRequest(agent="reviewer", prompt="review it"))
-        assert received_cmds[0] == ["codex", "exec"]
+            factory_fn(AgentRequest(agent=_command_agent("reviewer"), prompt="review it"))
+        assert received_cmds[0] == ["reviewer"]
 
     def test_default_runner_used_when_not_in_per_agent_map(self) -> None:
         from agm.agl.runtime import AgentRequest
@@ -609,15 +615,15 @@ class TestRunnerBackedAgentCommandResolution:
         def fake_prepare(
             rendered_prompt: str,
             *,
-            runner: str,
+            runner: str | list[str],
             temp_files: object,
             env: object,
         ) -> object:
-            received_cmds.append(shlex.split(runner))
+            received_cmds.append((shlex.split(runner) if isinstance(runner, str) else runner))
             from agm.agent.runner import PreparedPromptRun
 
             return PreparedPromptRun(
-                command=shlex.split(runner),
+                command=(shlex.split(runner) if isinstance(runner, str) else runner),
                 effective_file=Path("/tmp/p.md"),
                 env={},
                 temp_files=[],
@@ -642,8 +648,83 @@ class TestRunnerBackedAgentCommandResolution:
             ),
             patch("agm.agent.runner.cleanup_temp_files"),
         ):
-            factory_fn(AgentRequest(agent="impl", prompt="implement it"))
-        assert received_cmds[0] == ["default-runner"]
+            factory_fn(AgentRequest(agent=_command_agent("impl"), prompt="implement it"))
+        assert received_cmds[0] == ["impl"]
+
+    def test_direct_agent_values_ignore_legacy_overrides(self) -> None:
+        from agm.agl.runtime import AgentRequest
+
+        received: list[list[str]] = []
+
+        def fake_prepare(
+            rendered_prompt: str, *, runner: str | list[str], temp_files: object, env: object
+        ) -> object:
+            command = (
+                (shlex.split(runner) if isinstance(runner, str) else runner)
+                if isinstance(runner, str)
+                else runner
+            )
+            received.append(command)
+            from agm.agent.runner import PreparedPromptRun
+
+            return PreparedPromptRun(
+                command=command,
+                effective_file=Path("/tmp/p.md"),
+                env={},
+                temp_files=[],
+            )
+
+        factory = self._make_factory_fn(
+            runner="legacy-default", per_agent={"reviewer": "codex exec"}
+        )
+        success = MagicMock(
+            returncode=0, stdout="ok", stderr="", elapsed=0.1, timed_out=False, spawn_error=None
+        )
+        with (
+            patch("agm.agent.runner.prepare_rendered_prompt_run", side_effect=fake_prepare),
+            patch("agm.agent.runner.run_prepared_prompt_result", return_value=success),
+            patch("agm.agent.runner.cleanup_temp_files"),
+        ):
+            factory(AgentRequest(agent=_command_agent("reviewer"), prompt="review"))
+            factory(AgentRequest(agent=_command_agent("direct --flag"), prompt="run"))
+            pi = EnumValue(
+                nominal=NominalId(STD_CORE_ID, "Agent"),
+                display_name="Agent",
+                variant="AgentPi",
+                fields={
+                    "provider": TextValue("openai"),
+                    "model": TextValue("gpt"),
+                    "thinking": TextValue("high"),
+                },
+            )
+            factory(AgentRequest(agent=pi, prompt="reason"))
+
+        assert received == [
+            ["reviewer"],
+            ["direct", "--flag"],
+            ["pi", "-p", "--provider", "openai", "--model", "gpt", "--thinking", "high"],
+        ]
+
+    def test_invalid_agent_value_maps_to_a_host_error(self) -> None:
+        from agm.agl.runtime import AgentRequest
+        from agm.agl.runtime.agents import AgentCallHostError, value_driven_agent_factory
+
+        invalid = EnumValue(
+            nominal=NominalId(STD_CORE_ID, "Agent"),
+            display_name="Agent",
+            variant="Unknown",
+            fields={},
+        )
+        factory = value_driven_agent_factory(idle_timeout=None)
+        with pytest.raises(AgentCallHostError, match="invalid_agent"):
+            factory(AgentRequest(agent=invalid, prompt="q"))
+        with (
+            patch("agm.agent.spec.decode", return_value=object()),
+            pytest.raises(AgentCallHostError, match="invalid_agent"),
+        ):
+            value_driven_agent_factory(idle_timeout=None)(
+                AgentRequest(agent=_command_agent("command"), prompt="q")
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -663,7 +744,7 @@ class TestRunnerBackedAgentFailureMapping:
         def fake_prepare(
             rendered_prompt: str,
             *,
-            runner: str,
+            runner: str | list[str],
             temp_files: object,
             env: object,
         ) -> object:
@@ -685,7 +766,7 @@ class TestRunnerBackedAgentFailureMapping:
             patch("agm.agent.runner.run_prepared_prompt_result", return_value=run_mock),
             patch("agm.agent.runner.cleanup_temp_files"),
         ):
-            factory_fn(AgentRequest(agent="ask", prompt="hi"))
+            factory_fn(AgentRequest(agent=_command_agent("ask"), prompt="hi"))
 
     def test_spawn_failure_raises_agent_call_host_error(self) -> None:
         from agm.agent.runner import PreparedPromptRun
@@ -693,7 +774,7 @@ class TestRunnerBackedAgentFailureMapping:
         from agm.agl.runtime.agents import AgentCallHostError, runner_backed_agent_factory
 
         def fake_prepare(
-            rendered_prompt: str, *, runner: str, temp_files: object, env: object
+            rendered_prompt: str, *, runner: str | list[str], temp_files: object, env: object
         ) -> object:
             return PreparedPromptRun(
                 command=["echo"], effective_file=Path("/tmp/p.md"), env={}, temp_files=[]
@@ -716,7 +797,7 @@ class TestRunnerBackedAgentFailureMapping:
             patch("agm.agent.runner.cleanup_temp_files"),
         ):
             with pytest.raises(AgentCallHostError) as exc_info:
-                factory_fn(AgentRequest(agent="ask", prompt="hi"))
+                factory_fn(AgentRequest(agent=_command_agent("ask"), prompt="hi"))
         assert exc_info.value.cause == "spawn_failure"
 
     def test_timeout_raises_agent_call_host_error(self) -> None:
@@ -725,7 +806,7 @@ class TestRunnerBackedAgentFailureMapping:
         from agm.agl.runtime.agents import AgentCallHostError, runner_backed_agent_factory
 
         def fake_prepare(
-            rendered_prompt: str, *, runner: str, temp_files: object, env: object
+            rendered_prompt: str, *, runner: str | list[str], temp_files: object, env: object
         ) -> object:
             return PreparedPromptRun(
                 command=["echo"], effective_file=Path("/tmp/p.md"), env={}, temp_files=[]
@@ -743,7 +824,7 @@ class TestRunnerBackedAgentFailureMapping:
             patch("agm.agent.runner.cleanup_temp_files"),
         ):
             with pytest.raises(AgentCallHostError) as exc_info:
-                factory_fn(AgentRequest(agent="ask", prompt="hi"))
+                factory_fn(AgentRequest(agent=_command_agent("ask"), prompt="hi"))
         assert exc_info.value.cause == "timeout"
 
     def test_nonzero_exit_raises_agent_call_host_error(self) -> None:
@@ -752,7 +833,7 @@ class TestRunnerBackedAgentFailureMapping:
         from agm.agl.runtime.agents import AgentCallHostError, runner_backed_agent_factory
 
         def fake_prepare(
-            rendered_prompt: str, *, runner: str, temp_files: object, env: object
+            rendered_prompt: str, *, runner: str | list[str], temp_files: object, env: object
         ) -> object:
             return PreparedPromptRun(
                 command=["echo"], effective_file=Path("/tmp/p.md"), env={}, temp_files=[]
@@ -775,7 +856,7 @@ class TestRunnerBackedAgentFailureMapping:
             patch("agm.agent.runner.cleanup_temp_files"),
         ):
             with pytest.raises(AgentCallHostError) as exc_info:
-                factory_fn(AgentRequest(agent="ask", prompt="hi"))
+                factory_fn(AgentRequest(agent=_command_agent("ask"), prompt="hi"))
         assert exc_info.value.cause == "nonzero_exit"
         assert exc_info.value.exit_code == 2
 
@@ -795,7 +876,7 @@ class TestStderrTail:
         from agm.agl.runtime.agents import AgentCallHostError, runner_backed_agent_factory
 
         def fake_prepare(
-            rendered_prompt: str, *, runner: str, temp_files: object, env: object
+            rendered_prompt: str, *, runner: str | list[str], temp_files: object, env: object
         ) -> object:
             return PreparedPromptRun(
                 command=["echo"], effective_file=Path("/tmp/p.md"), env={}, temp_files=[]
@@ -813,7 +894,7 @@ class TestStderrTail:
             patch("agm.agent.runner.cleanup_temp_files"),
         ):
             try:
-                factory_fn(AgentRequest(agent="ask", prompt="hi"))
+                factory_fn(AgentRequest(agent=_command_agent("ask"), prompt="hi"))
             except AgentCallHostError as e:
                 return e.stderr_tail
         return ""
@@ -847,7 +928,7 @@ class TestRetryFeedbackValidationErrors:
         written_prompts: list[str] = []
 
         def fake_prepare(
-            rendered_prompt: str, *, runner: str, temp_files: object, env: object
+            rendered_prompt: str, *, runner: str | list[str], temp_files: object, env: object
         ) -> object:
             written_prompts.append(rendered_prompt)
             return PreparedPromptRun(
@@ -861,7 +942,7 @@ class TestRetryFeedbackValidationErrors:
             returncode=0, stdout="ok", stderr="", elapsed=0.1, timed_out=False, spawn_error=None
         )
         req = AgentRequest(
-            agent="ask",
+            agent=_command_agent("ask"),
             prompt="Do X.",
             attempt=1,
             previous_invalid_output="bad",
@@ -919,7 +1000,7 @@ class TestRunnerMessageComposition:
         def fake_prepare(
             rendered_prompt: str,
             *,
-            runner: str,
+            runner: str | list[str],
             temp_files: list[Path],
             env: object,
         ) -> object:
@@ -942,7 +1023,7 @@ class TestRunnerMessageComposition:
         )
 
         req = AgentRequest(
-            agent="ask",
+            agent=_command_agent("ask"),
             prompt=prompt,
             attempt=attempt,
             previous_invalid_output=previous_invalid_output,
@@ -1133,17 +1214,16 @@ class TestAgentCallErrorViaRuntime:
 class TestPipelineDriverRunnerWiring:
     """PipelineDriver accepts runner_config to build runner-backed default + fallback."""
 
-    def test_runtime_declared_agent_falls_back_to_default(self) -> None:
-        """A declared agent with no dedicated registration is backed by the default agent."""
-        # We wire through the exec.py path; test at the PipelineDriver level
-        # by verifying a DECLARED agent name resolves via the default agent.
-        # The default-agent fallback fires only for declared names — calling an
-        # undeclared agent is a static scope error.
+    def test_runtime_agent_value_dispatches_through_default(self) -> None:
+        """An explicit Agent value dispatches through the default dispatcher."""
         from agm.agl import PipelineDriver
 
         rt = PipelineDriver(default_agent=lambda req: "ok")
-        result = rt.run('agent any_random_agent\nlet x = ask("hi", agent = any_random_agent)\nx')
-        assert result.ok is True  # default agent backs the declared name
+        result = rt.run(
+            'let any_random_agent = AgentCommand("any-random-agent")\n'
+            'let x = ask("hi", agent = any_random_agent)\nx'
+        )
+        assert result.ok is True
 
     def test_exec_config_runner_wires_through_to_runtime(self) -> None:
         """exec.py constructs runtime using runner from ExecConfig (not dead code)."""
@@ -1279,12 +1359,8 @@ class TestCliRunnerIntegration:
         # Print the agent response directly
         agl_file.write_text('let x = ask "Say something"\nprint x\n')
 
-        config_dir = tmp_path / ".agm"
-        config_dir.mkdir()
-        (config_dir / "config.toml").write_text('[exec]\nrunner = "fake-runner"\n')
-
         result = self._run_agm_exec(
-            [str(agl_file), "--no-log"],
+            ["--agent", 'AgentCommand("fake-runner")', str(agl_file), "--no-log"],
             env=env,
             cwd=tmp_path,
         )
@@ -1299,12 +1375,8 @@ class TestCliRunnerIntegration:
         agl_file = tmp_path / "prog.agl"
         agl_file.write_text('let x = ask "hi"\nprint x\n')
 
-        config_dir = tmp_path / ".agm"
-        config_dir.mkdir()
-        (config_dir / "config.toml").write_text('[exec]\nrunner = "fail-runner"\n')
-
         result = self._run_agm_exec(
-            [str(agl_file), "--no-log"],
+            ["--agent", 'AgentCommand("fail-runner")', str(agl_file), "--no-log"],
             env=env,
             cwd=tmp_path,
         )
@@ -1321,20 +1393,16 @@ class TestCliRunnerIntegration:
             'try\n  ask("hi")\n  ()\ncatch AgentCallError as e =>\n  print(e.cause)\n'
         )
 
-        config_dir = tmp_path / ".agm"
-        config_dir.mkdir()
-        (config_dir / "config.toml").write_text('[exec]\nrunner = "fail-runner"\n')
-
         result = self._run_agm_exec(
-            [str(agl_file), "--no-log"],
+            ["--agent", 'AgentCommand("fail-runner")', str(agl_file), "--no-log"],
             env=env,
             cwd=tmp_path,
         )
         assert result.returncode == 0, f"stderr: {result.stderr}"
         assert "nonzero_exit" in result.stdout
 
-    def test_runner_override_flag(self, tmp_path: Path) -> None:
-        """--runner flag overrides config runner."""
+    def test_agent_override_flag_selects_the_default_agent_value(self, tmp_path: Path) -> None:
+        """--agent selects the default Agent value."""
         env = self._base_env()
         _install_fake_runner(tmp_path / "bin", env)
 
@@ -1342,25 +1410,22 @@ class TestCliRunnerIntegration:
         agl_file.write_text('let x = ask "hi"\nprint x\n')
 
         result = self._run_agm_exec(
-            [str(agl_file), "--runner", "fake-runner", "--no-log"],
+            ["--agent", 'AgentCommand("fake-runner")', str(agl_file), "--no-log"],
             env=env,
             cwd=tmp_path,
         )
         assert result.returncode == 0, f"stderr: {result.stderr}"
         assert "runner-response" in result.stdout
 
-    def test_named_agent_uses_per_agent_runner(self, tmp_path: Path) -> None:
-        """Named agents can use per-agent runner commands from [exec.agents]."""
+    def test_explicit_agent_command_uses_its_own_runner(self, tmp_path: Path) -> None:
+        """An explicit AgentCommand dispatches its own runner."""
         env = self._base_env()
         _install_fake_runner(tmp_path / "bin", env)
 
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text('agent myagent\nlet x = ask("do this", agent = myagent)\nprint(x)\n')
-
-        config_dir = tmp_path / ".agm"
-        config_dir.mkdir()
-        (config_dir / "config.toml").write_text(
-            '[exec]\nrunner = "fake-runner"\n\n[exec.agents]\nmyagent = "fake-runner"\n'
+        agl_file.write_text(
+            'let myagent = AgentCommand("fake-runner")\n'
+            'let x = ask("do this", agent = myagent)\nprint(x)\n'
         )
 
         result = self._run_agm_exec(
@@ -1387,7 +1452,7 @@ class TestCliRunnerIntegration:
         agl_file.write_text('let x = ask "hi"\nprint x\n')
 
         result = self._run_agm_exec(
-            [str(agl_file), "--runner", "enoexec-runner", "--no-log"],
+            ["--agent", 'AgentCommand("enoexec-runner")', str(agl_file), "--no-log"],
             env=env,
             cwd=tmp_path,
         )

@@ -1,6 +1,6 @@
 # AgL Host Runtime and Pipeline
 
-The runtime package is the eval-free services layer: agents, codecs, parameter conversion, host-environment assembly, and rendering. It imports neither the evaluator nor the pipeline, which keeps the services reusable and the dependency graph acyclic. It builds on AGM's shared agent runner and core primitives rather than reimplementing them ([index.md](agl/index.md)).
+The runtime package is the eval-free services layer: value-driven agents, codecs, parameter conversion, host-environment assembly, and rendering. It imports neither the evaluator nor the pipeline, which keeps the services reusable and the dependency graph acyclic. It builds on AGM's shared agent runner and core primitives rather than reimplementing them ([index.md](agl/index.md)).
 
 ## Codecs
 
@@ -20,6 +20,7 @@ The pipeline sits on top: it drives the compile → lower → evaluate sequence 
 
 ## Code Entry Points
 
-- `src/agm/agl/runtime/` — agents, codecs, parameter conversion, host-environment types, the renderer, and the extern registry.
+- `src/agm/agl/runtime/agents.py` — decodes `Agent` enum values and runs their builder-produced argv through the shared prompt/process seam; it also retains the transitional registry for legacy declarations.
+- `src/agm/agl/runtime/` — codecs, parameter conversion, host-environment types, the renderer, and the extern registry.
 - `src/agm/agl/pipeline.py` — the orchestrator; `src/agm/agl/type_schema.py` — compile-time schema/format generation.
 - Tests: `tests/test_agl_runtime.py`, `tests/test_agl_codec.py`, `tests/test_agl_pipeline_*.py`.

@@ -23,6 +23,7 @@ For ``roots``, entries from *all* layers are accumulated (union).
 from __future__ import annotations
 
 import os
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -138,10 +139,23 @@ def resolve_lib_root(
     return agm_home_dir(home=default_home, env=env) / "lib"
 
 
-def _has_legacy_constructor_syntax(stdlib_root: Path) -> bool:
-    """Return whether *stdlib_root* is from before ``Type::Ctor`` syntax."""
+_LEGACY_AGENT_TYPE = re.compile(r"(?m)^\s*agent\s*:\s*(?:text|agent)\b")
+
+
+def _has_incompatible_stdlib_surface(stdlib_root: Path) -> bool:
+    """Return whether *stdlib_root* predates the current built-in contracts.
+
+    An installed standard library can survive a non-forced ``agm install``.
+    Its old ``agent: text`` fields remain syntactically valid, but conflict
+    with host-minted ``Agent`` enum values at execution. Prefer the checked-out
+    standard library when one is available rather than deferring that failure
+    until an ``ask`` raises an error.
+    """
     core = stdlib_root / "std" / "core.agl"
-    return core.is_file() and "ParsePolicy.Abort" in core.read_text(encoding="utf-8")
+    if not core.is_file():
+        return False
+    source = core.read_text(encoding="utf-8")
+    return "ParsePolicy.Abort" in source or _LEGACY_AGENT_TYPE.search(source) is not None
 
 
 def resolve_stdlib_root(*, home: Path, env: Mapping[str, str] | None = None) -> Path:
@@ -152,9 +166,9 @@ def resolve_stdlib_root(*, home: Path, env: Mapping[str, str] | None = None) -> 
     is expanded and a relative override is anchored to the current directory).
     Otherwise a user-writable home stdlib wins when present (honouring
     ``AGM_HOME``), then an installation-prefix stdlib, then the repository
-    ``stdlib/`` tree for source-checkout workflows.  A legacy installed stdlib
-    that still uses old constructor syntax is skipped when a source-checkout
-    stdlib is available.  If none exists yet, return the home destination so
+    ``stdlib/`` tree for source-checkout workflows. An installed stdlib with
+    legacy constructor syntax or text/opaque agent fields is skipped when a
+    source-checkout stdlib is available. If none exists yet, return the home destination so
     diagnostics mention the path that ``just install`` populates.
     """
     override = resolve_env(env).get("AGM_STDLIB")
@@ -164,7 +178,7 @@ def resolve_stdlib_root(*, home: Path, env: Mapping[str, str] | None = None) -> 
     repo_stdlib = Path(__file__).resolve().parents[3] / "stdlib"
     for candidate in reversed(candidates):
         if candidate.is_dir() and not (
-            repo_stdlib.is_dir() and _has_legacy_constructor_syntax(candidate)
+            repo_stdlib.is_dir() and _has_incompatible_stdlib_surface(candidate)
         ):
             return candidate
     if repo_stdlib.is_dir():

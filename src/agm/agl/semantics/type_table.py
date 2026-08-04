@@ -1304,7 +1304,7 @@ BUILTIN_PRELUDE_TYPE_DEFS: Mapping[str, TypeDef] = {
         name="AgentRequest",
         module_id=STD_CORE_ID,
         fields=(
-            ("agent", TextType()),
+            ("agent", EnumType(name="Agent", module_id=STD_CORE_ID)),
             ("prompt", TextType()),
             (
                 "target_type",
@@ -1376,7 +1376,11 @@ BUILTIN_EXCEPTION_TYPE_DEFS: Mapping[str, TypeDef] = {
         kind="exception",
         name="AgentCallError",
         module_id=STD_CORE_ID,
-        fields=(("agent", TextType()), ("cause", TextType()), ("metadata", JsonType())),
+        fields=(
+            ("agent", EnumType(name="Agent", module_id=STD_CORE_ID)),
+            ("cause", TextType()),
+            ("metadata", JsonType()),
+        ),
         base=_EXCEPTION_ROOT_KEY,
         field_kinds=_named_only(3),
     ),
@@ -1385,7 +1389,7 @@ BUILTIN_EXCEPTION_TYPE_DEFS: Mapping[str, TypeDef] = {
         name="AgentParseError",
         module_id=STD_CORE_ID,
         fields=(
-            ("agent", TextType()),
+            ("agent", EnumType(name="Agent", module_id=STD_CORE_ID)),
             ("target_type", TextType()),
             ("expected_schema", JsonType()),
             ("raw", TextType()),

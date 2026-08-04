@@ -9,8 +9,7 @@ record Issue
 
 param bump: int
 
-agent tracker
-
+let tracker = AgentCommand("tracker")
 def shifted(p: Point, dz: int) -> Point = p with z = p.z + dz
 
 let p = Point(1, 2, 3)

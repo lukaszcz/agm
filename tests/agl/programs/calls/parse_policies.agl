@@ -4,8 +4,7 @@ enum Review
   | Pass
   | Fail(issues: array[text])
 
-agent reviewer
-
+let reviewer = AgentCommand("reviewer")
 let strict_default: Review = ask("First review.", agent = reviewer)
 print "first ok"
 

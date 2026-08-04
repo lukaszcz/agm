@@ -119,17 +119,21 @@ def _run_program(
         kwargs["default_strict_json"] = runtime_cfg["default_strict_json"]
     if "ask" in agents:
         kwargs["default_agent"] = agents["ask"]
+
+    def dispatch_value_agent(request: Any) -> str:
+        agent_value = request.agent
+        if agent_value.variant == "AgentCommand":
+            name = agent_value.fields["command"].value
+        else:
+            name = "ask"
+        return agents[name](request)
+
+    if agents:
+        kwargs["value_agent"] = dispatch_value_agent
     runtime = PipelineDriver(**kwargs)
 
-    def register_agents(declarations: tuple[Any, ...]) -> None:
-        for name, agent in agents.items():
-            if name == "ask":
-                continue
-            matches = [declaration for declaration in declarations if declaration.name == name]
-            if len(matches) == 1:
-                runtime.register_scoped_agent(matches[0].scope_path, name, agent)
-            else:
-                runtime.register_agent(name, agent)
+    def register_agents(_declarations: tuple[Any, ...]) -> None:
+        """Legacy declarations are vestigial; typed values select dispatch."""
 
     module_roots = scenario.get("module_roots", [])
     default_stdlib = not scenario.get("no_stdlib", False)
@@ -284,7 +288,13 @@ def _assert_calls(agents: dict[str, ScriptedAgent], expect: dict[str, Any]) -> N
         actual = len(agent.prompts)
         assert actual == count, f"agent {name!r}: expected {count} calls, got {actual}"
     for spec in expect.get("prompts", []):
-        prompts = agents[spec["agent"]].prompts
+        agent_spec = spec["agent"]
+        if isinstance(agent_spec, dict):
+            name = agent_spec.get("command", "ask")
+        else:
+            name = agent_spec
+        assert isinstance(name, str)
+        prompts = agents[name].prompts
         call = spec["call"]
         assert call < len(prompts), (
             f"agent {spec['agent']!r} made only {len(prompts)} calls, no call {call}"
@@ -296,7 +306,7 @@ def _assert_calls(agents: dict[str, ScriptedAgent], expect: dict[str, Any]) -> N
             assert needle in prompt, f"{needle!r} not in prompt {prompt!r}"
         for needle in spec.get("not_contains", []):
             assert needle not in prompt, f"{needle!r} unexpectedly in prompt {prompt!r}"
-        schema = agents[spec["agent"]].schemas[call]
+        schema = agents[name].schemas[call]
         for needle in spec.get("schema_contains", []):
             assert _schema_contains(schema, needle), f"{needle!r} not in schema {schema!r}"
         _assert_schema_paths(schema, spec.get("schema_paths", []))
@@ -380,7 +390,12 @@ def _scoped_stdlib_root(tmp_path: Path) -> Path:
     collide with this substitute ``std/core``, so callers build their own
     ``RootSet`` from the returned root instead.
     """
-    core_source = (REPO_STDLIB_ROOT / "std" / "core.agl").read_text(encoding="utf-8")
+    core_source = (
+        (REPO_STDLIB_ROOT / "std" / "core.agl")
+        .read_text(encoding="utf-8")
+        .replace("import std/config\n\n", "")
+        .replace("std/config::default-agent", 'AgentClaude("sonnet", "medium")')
+    )
     scoped_stdlib_root = tmp_path / "scoped_stdlib"
     (scoped_stdlib_root / "std").mkdir(parents=True)
     (scoped_stdlib_root / "std" / "core.agl").write_text(

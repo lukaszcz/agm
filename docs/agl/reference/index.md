@@ -46,8 +46,8 @@ enum Review
   | Pass
   | Fail(issues: array[text])
 
-agent reviewer
-agent impl
+let reviewer = AgentCommand("reviewer")
+let impl = AgentCommand("impl")
 
 def review_and_fix(artifact: text) -> text =
   let r: Review = ask(

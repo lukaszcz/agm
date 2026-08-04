@@ -2,13 +2,21 @@
   "scenarios": [
     {
       "name": "true_branches_evaluate_terminal_binders",
-      "params": {"choose_true": true},
-      "expect": {"stdout": "function|if:true|case:true|grouped|try|\n"}
+      "params": {
+        "choose_true": true
+      },
+      "expect": {
+        "stdout": "function|if:true|case:true|grouped|try|\n"
+      }
     },
     {
       "name": "false_branches_evaluate_terminal_binders",
-      "params": {"choose_true": false},
-      "expect": {"stdout": "function|if:false|case:false|grouped|try|\n"}
+      "params": {
+        "choose_true": false
+      },
+      "expect": {
+        "stdout": "function|if:false|case:false|grouped|try|\n"
+      }
     }
   ]
 }

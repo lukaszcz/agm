@@ -242,15 +242,15 @@ def test_t7_retry_success() -> None:
 
 
 def test_t8_retry_exhaustion() -> None:
-    """exec() with Retry(n:2): all 3 attempts return bad JSON → AgentParseError.
+    """exec() with Retry(n:2): all 3 attempts return bad JSON → ExecError.
 
-    Routes through evaluate_ir_raises_with_shell; asserts the IR pipeline raises
-    AgentParseError.
+    Routes through evaluate_ir_raises_with_shell and keeps shell failures in
+    the ExecError family.
     """
     source = 'let n: int = exec("cmd", on_parse_error = Retry(n = 2))\nn'
     commands = {"cmd": _ok("not_a_number\n")}
     ir_exc = evaluate_ir_raises_with_shell(source, commands)
-    assert ir_exc.display_name == "AgentParseError"
+    assert ir_exc.display_name == "ExecError"
 
 
 # ---------------------------------------------------------------------------
@@ -305,8 +305,7 @@ def test_t10_golden_lowering() -> None:
 
 
 def test_t11_exec_empty_parse_failure_raises_agent_parse_error() -> None:
-    """IrInterpreter defensive fallback: if parse_agent_output returns ok=False
-    with neither errors nor error_msg, AgentParseError still raises."""
+    """IrInterpreter defensive fallback produces ExecError for empty parse failures."""
     import unittest.mock
 
     from agm.agl.eval.ir_interpreter import IrInterpreter
@@ -379,7 +378,7 @@ def test_t11_exec_empty_parse_failure_raises_agent_parse_error() -> None:
         ):
             with pytest.raises(AglRaise) as exc_info:
                 IrInterpreter(prog).run()
-    assert exc_info.value.exc.display_name == "AgentParseError"
+    assert exc_info.value.exc.display_name == "ExecError"
 
 
 # ---------------------------------------------------------------------------

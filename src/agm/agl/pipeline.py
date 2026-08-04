@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, TypeVar
 
 from agm.agl.diagnostics import AglError, Diagnostic
@@ -45,7 +45,6 @@ if TYPE_CHECKING:
     from agm.agl.matchcompile import MatchCompiledProgram
     from agm.agl.modules.ids import ModuleId
     from agm.agl.modules.roots import RootSet
-    from agm.agl.runtime.agents import AgentRegistry
     from agm.agl.runtime.codec import OutputCodec
     from agm.agl.runtime.externs import ExternRegistry
     from agm.agl.runtime.host_settings import HostSettingsPolicy
@@ -53,7 +52,6 @@ if TYPE_CHECKING:
     from agm.agl.scope.symbols import ModuleResolution
     from agm.agl.semantics.type_table import TypeTable
     from agm.agl.semantics.values import ExceptionValue, Value
-    from agm.agl.syntax.nodes import AgentDecl as AgentDeclNode
     from agm.agl.typecheck.env import OutputContractSpec
     from agm.agl.typecheck.program import CheckedProgram
 
@@ -297,6 +295,7 @@ class PipelineDriver:
         default_strict_json: bool = False,
         default_loop_limit: int | None = None,
         default_agent: AgentFn | None = None,
+        value_agent: AgentFn | None = None,
         shell_exec_timeout: float | None = None,
         default_call_depth_limit: int | None = None,
         extern_registry: "ExternRegistry | None" = None,
@@ -304,6 +303,7 @@ class PipelineDriver:
         self._default_strict_json = default_strict_json
         self._default_loop_limit = default_loop_limit
         self._default_agent = default_agent
+        self._value_agent = value_agent
         self._shell_exec_timeout = shell_exec_timeout
         self._default_call_depth_limit = (
             default_call_depth_limit
@@ -389,6 +389,7 @@ class PipelineDriver:
         self._host_env_cache = assemble_host_environment(
             agents=self._agents,
             default_agent=self._default_agent,
+            value_agent=self._value_agent,
             extra_codecs=self._extra_codecs,
             extern_registry=self._extern_registry,
         )
@@ -926,12 +927,6 @@ class PipelineDriver:
 
         host_env = self.host_environment()
         capabilities = host_env.capabilities
-        # A host-settings policy can build the default agent from the effective
-        # ``runner`` register before execution.  Advertise that pending service
-        # to the static ask checks; the interpreter performs the actual build
-        # after it has evaluated declared builtin-var defaults.
-        if host_settings_policy is not None and not capabilities.has_default_agent:
-            capabilities = replace(capabilities, has_default_agent=True)
         if compiled is not None:
             if self_validation_enabled():
                 _check_program_artifact_provenance(resolved, compiled.checked)
@@ -942,36 +937,6 @@ class PipelineDriver:
                 _check_program_artifact_provenance(resolved, checked)
             if checked.capabilities != capabilities:
                 checked = None
-
-        registry = host_env.registry
-
-        # Agent reconciliation against entry module's declared agents. Scoped
-        # declarations are retained for reporting, while lowering only needs a
-        # backing for those whose handle is referenced.
-        from agm.agl.scope.symbols import BinderKind
-
-        entry_resolution = resolved.modules[resolved.entry_id].resolved
-        referenced_agents = frozenset(
-            AgentId(ref.name, ref.scope_path)
-            for ref in entry_resolution.resolution.values()
-            if ref.kind is BinderKind.agent_binding
-        )
-        reconciliation_errors = _reconcile_agents(
-            registry,
-            resolved.entry_agents,
-            referenced_agents=referenced_agents,
-            default_agent_available=capabilities.has_default_agent,
-        )
-        if reconciliation_errors:
-            return (
-                RunResult(
-                    ok=False,
-                    diagnostics=reconciliation_errors,
-                    error=None,
-                    warnings=list(warnings),
-                ),
-                None,
-            )
 
         # Reuse a supplied match-compiled program rather than repeating its
         # typecheck and match-compilation passes.
@@ -1390,88 +1355,11 @@ def _wire_extern_registry(
     return diagnostics
 
 
-def _reconcile_agents(
-    registry: "AgentRegistry",
-    declared_agents: "Mapping[tuple[tuple[str, ...], str], AgentDeclNode]",
-    *,
-    referenced_agents: frozenset[AgentId] = frozenset(),
-    default_agent_available: bool | None = None,
-) -> list[Diagnostic]:
-    """Enforce the source↔host agent contract.
-
-    Returns error :class:`Diagnostic`s for BOTH contract violations (never
-    stopping at the first) so the user sees every mismatch at once:
-
-    - **Registered-but-undeclared** (decision 1): a name in
-      ``registry.agent_names`` that the source never declares.  Reported at
-      ``line=1`` (a registration has no source span).
-    - **Declared-but-unbacked** (decision 11): a root declaration, or a
-      referenced scoped declaration, with no dedicated registration AND no
-      default agent. Reported at the declaration's ``span.start_line``.
-      Unreferenced scoped declarations remain visible for warnings but their
-      runtime handles are deferred by lowering.
-
-    Order is deterministic: registered-but-undeclared first (sorted by name),
-    then declared-but-unbacked (sorted by display name). ``declared_agents``
-    maps structured declaration paths to their ``AgentDecl`` nodes (only the
-    declaration span is read).
-    """
-    errors: list[Diagnostic] = []
-
-    def agent_sort_key(agent_id: AgentId) -> tuple[tuple[str, ...], str]:
-        return (agent_id.scope_path, agent_id.declared_name)
-
-    declared_ids = {AgentId(name, scope_path) for scope_path, name in declared_agents}
-    unrecognized_ids = (agent_id for agent_id in registry.agent_ids if agent_id not in declared_ids)
-    for agent_id in sorted(unrecognized_ids, key=agent_sort_key):
-        name = agent_id.display_name
-        errors.append(
-            Diagnostic(
-                message=(
-                    f"Agent {name!r} is registered but never declared in the "
-                    f"program. Declare it with `agent {name}` or remove the "
-                    "registration."
-                ),
-                line=1,
-            )
-        )
-
-    if not (
-        registry.has_default_agent if default_agent_available is None else default_agent_available
-    ):
-        unbacked = sorted(
-            (
-                agent_id
-                for agent_id in declared_ids
-                if (not agent_id.scope_path or agent_id in referenced_agents)
-                and not registry.backs(agent_id)
-            ),
-            key=agent_sort_key,
-        )
-        for agent_id in unbacked:
-            name = agent_id.display_name
-            declaration = declared_agents[(agent_id.scope_path, agent_id.declared_name)]
-            errors.append(
-                Diagnostic(
-                    message=(
-                        f"Agent {name!r} is declared but has no backing: "
-                        "register it with register_agent or configure a "
-                        "default agent."
-                    ),
-                    line=declaration.span.start_line,
-                    column=declaration.span.start_col,
-                    end_line=declaration.span.end_line,
-                    end_column=declaration.span.end_col,
-                )
-            )
-
-    return errors
-
-
 def assemble_host_environment(
     *,
     agents: dict[AgentId, AgentFn],
     default_agent: AgentFn | None,
+    value_agent: AgentFn | None,
     extra_codecs: dict[str, "OutputCodec"],
     extern_registry: "ExternRegistry | None" = None,
 ) -> HostEnvironment:
@@ -1501,10 +1389,10 @@ def assemble_host_environment(
     registry = AgentRegistry(
         named=dict(agents),
         default_agent=default_agent,
+        value_agent=value_agent,
     )
     capabilities = HostCapabilities(
         agent_names=registry.agent_names,
-        has_default_agent=registry.has_default_agent,
         supports_shell_exec=True,
         supports_extern=True,
         codec_kinds={name: codec.supported_kinds for name, codec in all_codecs.items()},

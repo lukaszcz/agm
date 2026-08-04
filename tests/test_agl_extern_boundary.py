@@ -63,7 +63,6 @@ _PATH = Path("/virtual/extern_boundary.agl")
 
 _CAPS = HostCapabilities(
     agent_names=frozenset(),
-    has_default_agent=True,
     supports_shell_exec=True,
     codec_kinds={
         "text": frozenset({"text"}),

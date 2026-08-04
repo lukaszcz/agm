@@ -79,6 +79,7 @@ from agm.agl.semantics.type_table import (
     json_cast_hint,
 )
 from agm.agl.semantics.types import (
+    BUILTIN_PRELUDE_TYPES,
     AgentType,
     ArrayType,
     BoolType,
@@ -333,7 +334,7 @@ def _builtin_function_signature(name: str) -> FunctionSignature | None:
             return FunctionSignature(
                 params=(
                     _std_param("prompt", TextType()),
-                    _std_param("agent", AgentType(), has_default=True),
+                    _std_param("agent", BUILTIN_PRELUDE_TYPES["Agent"], has_default=True),
                     _std_param("format", TextType(), has_default=True),
                     _std_param("strict_json", BoolType(), has_default=True),
                     _std_param(
@@ -347,7 +348,10 @@ def _builtin_function_signature(name: str) -> FunctionSignature | None:
             )
         case "ask-request":
             return FunctionSignature(
-                params=(_std_param("prompt", TextType()),),
+                params=(
+                    _std_param("prompt", TextType()),
+                    _std_param("agent", BUILTIN_PRELUDE_TYPES["Agent"], has_default=True),
+                ),
                 result=RecordType(name="AgentRequest"),
             )
         case "exec":

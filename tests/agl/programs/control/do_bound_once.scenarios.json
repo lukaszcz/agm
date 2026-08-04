@@ -4,7 +4,12 @@
       "name": "bound_evaluated_once_at_entry",
       "expect": {
         "stdout": "",
-        "raises": {"type": "MaxIterationsExceeded", "fields": {"limit": 3}}
+        "raises": {
+          "type": "MaxIterationsExceeded",
+          "fields": {
+            "limit": 3
+          }
+        }
       }
     }
   ]

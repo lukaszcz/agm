@@ -2,21 +2,64 @@
   "scenarios": [
     {
       "name": "plain_name",
-      "params": {"who": "Ada"},
-      "agents": {"ask": ["r1", "r2", "r3", "r4"]},
+      "params": {
+        "who": "Ada"
+      },
+      "agents": {
+        "ask": [
+          "r1",
+          "r2",
+          "r3",
+          "r4"
+        ]
+      },
       "expect": {
         "stdout": "r1\nr2\nr3\nr4\n",
-        "calls": {"ask": 4},
+        "calls": {
+          "ask": 4
+        },
         "prompts": [
-          {"agent": "ask", "call": 0, "contains": ["Ada", "qty 7,", "sum 7."]},
-          {"agent": "ask", "call": 1, "contains": ["Ada"]},
           {
-            "agent": "ask",
-            "call": 2,
-            "contains": ["data: {\"kind\": \"demo\", \"tags\": [\"alpha\", \"beta\"]}"]
+            "agent": {
+              "$case": "AgentClaude",
+              "model": "sonnet",
+              "thinking": "medium"
+            },
+            "call": 0,
+            "contains": [
+              "Ada",
+              "qty 7,",
+              "sum 7."
+            ]
           },
           {
-            "agent": "ask",
+            "agent": {
+              "$case": "AgentClaude",
+              "model": "sonnet",
+              "thinking": "medium"
+            },
+            "call": 1,
+            "contains": [
+              "Ada"
+            ]
+          },
+          {
+            "agent": {
+              "$case": "AgentClaude",
+              "model": "sonnet",
+              "thinking": "medium"
+            },
+            "call": 2,
+            "contains": [
+              "data: {\"kind\": \"demo\", \"tags\": [\"alpha\", \"beta\"]}"
+            ]
+          },
+          {
+            "agent": {
+              "$case": "AgentClaude",
+              "model": "sonnet",
+              "thinking": "medium"
+            },
             "call": 3,
             "contains": [
               "Report for ",
@@ -30,16 +73,35 @@
     },
     {
       "name": "name_with_template_syntax_is_not_reinterpolated",
-      "params": {"who": "Eve %{exploit} ${exploit} \"quoted\""},
-      "agents": {"ask": ["w", "x", "y", "z"]},
+      "params": {
+        "who": "Eve %{exploit} ${exploit} \"quoted\""
+      },
+      "agents": {
+        "ask": [
+          "w",
+          "x",
+          "y",
+          "z"
+        ]
+      },
       "expect": {
         "stdout": "w\nx\ny\nz\n",
-        "calls": {"ask": 4},
+        "calls": {
+          "ask": 4
+        },
         "prompts": [
           {
-            "agent": "ask",
+            "agent": {
+              "$case": "AgentClaude",
+              "model": "sonnet",
+              "thinking": "medium"
+            },
             "call": 0,
-            "contains": ["Eve %{exploit} ${exploit} \"quoted\"", "qty 7,", "sum 7."]
+            "contains": [
+              "Eve %{exploit} ${exploit} \"quoted\"",
+              "qty 7,",
+              "sum 7."
+            ]
           }
         ]
       }

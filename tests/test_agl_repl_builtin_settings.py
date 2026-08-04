@@ -367,6 +367,7 @@ class TestLiveHostReconfiguration:
         config_path.parent.mkdir(parents=True)
         config_path.write_text(
             "open import std/core\n"
+            'builtin var default-agent: Agent = AgentCommand("declared-runner")\n'
             'builtin var runner: text = "declared-runner"\n'
             "builtin var strict-json: bool = true\n"
             "builtin var max-iters: int = 3\n"

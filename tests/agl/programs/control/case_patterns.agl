@@ -12,8 +12,7 @@ enum Wrapped
 param code: int
 param who
 
-agent picker
-
+let picker = AgentCommand("picker")
 let shape: Shape = ask("Pick a shape.", agent = picker)
 
 case shape of

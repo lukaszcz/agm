@@ -16,8 +16,7 @@ def echo[T](value: T) = value
 
 extern def increment(value: int) -> int
 
-agent reviewer = "reviewer"
-
+let reviewer = AgentCommand("reviewer")
 end Math
 
 print(Math::factorial(5))

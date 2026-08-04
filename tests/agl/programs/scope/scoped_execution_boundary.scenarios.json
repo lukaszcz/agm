@@ -10,25 +10,48 @@
       },
       "expect": {
         "stdout": "true\ncompleted\ntrue\n",
-        "calls": {"reviewer": 2},
+        "calls": {
+          "reviewer": 2
+        },
         "prompts": [
           {
-            "agent": "reviewer",
+            "agent": {
+              "$case": "AgentCommand",
+              "command": "reviewer"
+            },
             "call": 0,
             "schema_paths": [
-              {"path": ["$ref"], "equals": "#/$defs/Workflow_Task"},
               {
                 "path": [
-                  "$defs", "Workflow_Task", "properties", "children", "items", "$ref"
+                  "$ref"
+                ],
+                "equals": "#/$defs/Workflow_Task"
+              },
+              {
+                "path": [
+                  "$defs",
+                  "Workflow_Task",
+                  "properties",
+                  "children",
+                  "items",
+                  "$ref"
                 ],
                 "equals": "#/$defs/Workflow_Task"
               }
             ]
           },
           {
-            "agent": "reviewer",
+            "agent": {
+              "$case": "AgentCommand",
+              "command": "reviewer"
+            },
             "call": 1,
-            "schema_contains": ["oneOf", "$case", "waiting", "completed"]
+            "schema_contains": [
+              "oneOf",
+              "$case",
+              "waiting",
+              "completed"
+            ]
           }
         ]
       }
@@ -43,25 +66,48 @@
       },
       "expect": {
         "stdout": "false\nwaiting\nfalse\n",
-        "calls": {"reviewer": 2},
+        "calls": {
+          "reviewer": 2
+        },
         "prompts": [
           {
-            "agent": "reviewer",
+            "agent": {
+              "$case": "AgentCommand",
+              "command": "reviewer"
+            },
             "call": 0,
             "schema_paths": [
-              {"path": ["$ref"], "equals": "#/$defs/Workflow_Task"},
               {
                 "path": [
-                  "$defs", "Workflow_Task", "properties", "children", "items", "$ref"
+                  "$ref"
+                ],
+                "equals": "#/$defs/Workflow_Task"
+              },
+              {
+                "path": [
+                  "$defs",
+                  "Workflow_Task",
+                  "properties",
+                  "children",
+                  "items",
+                  "$ref"
                 ],
                 "equals": "#/$defs/Workflow_Task"
               }
             ]
           },
           {
-            "agent": "reviewer",
+            "agent": {
+              "$case": "AgentCommand",
+              "command": "reviewer"
+            },
             "call": 1,
-            "schema_contains": ["oneOf", "$case", "waiting", "completed"]
+            "schema_contains": [
+              "oneOf",
+              "$case",
+              "waiting",
+              "completed"
+            ]
           }
         ]
       }

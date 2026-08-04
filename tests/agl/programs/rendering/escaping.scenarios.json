@@ -2,14 +2,18 @@
   "scenarios": [
     {
       "name": "use_raw_variant",
-      "params": {"use_raw": true},
+      "params": {
+        "use_raw": true
+      },
       "expect": {
         "stdout": "Template(body = \"use ${x} and \\%{y} here\", tag = \"has \\\"quotes\\\"\")\nTemplate(body = \"line1\\nline2\", tag = \"ok\")\n[Snippet::Raw(src = \"${var} \\%{var}\"), Snippet::Wrapped(prefix = \">>\", src = \"a\\\"b\")]\ntag=has \"quotes\"\n{\"pct\\%\": 1.50}\nSnippet::Raw(src = \"plain ${x}\")\n"
       }
     },
     {
       "name": "use_wrapped_variant",
-      "params": {"use_raw": false},
+      "params": {
+        "use_raw": false
+      },
       "expect": {
         "stdout": "Template(body = \"use ${x} and \\%{y} here\", tag = \"has \\\"quotes\\\"\")\nTemplate(body = \"line1\\nline2\", tag = \"ok\")\n[Snippet::Raw(src = \"${var} \\%{var}\"), Snippet::Wrapped(prefix = \">>\", src = \"a\\\"b\")]\ntag=has \"quotes\"\n{\"pct\\%\": 1.50}\nSnippet::Wrapped(prefix = \"**\", src = \"bold ${x}\")\n"
       }

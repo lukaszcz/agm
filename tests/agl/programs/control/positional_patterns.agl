@@ -11,8 +11,7 @@ enum Box2
   | Dot
   | Rect(*, w: int, h: int)
 
-agent src
-
+let src = AgentCommand("src")
 param n: int
 
 # Positional sub-pattern: 'x' binds the standard 'value' field positionally.

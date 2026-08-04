@@ -259,6 +259,18 @@ class TestResolveStdlibRoot:
 
         assert resolve_stdlib_root(home=home, env={}) == stdlib
 
+    def test_current_home_stdlib_is_selected(self, tmp_path: Path) -> None:
+        home = tmp_path / "home"
+        stdlib = home / ".agm" / "stdlib"
+        core = stdlib / "std" / "core.agl"
+        core.parent.mkdir(parents=True)
+        core.write_text(
+            (Path(__file__).resolve().parents[1] / "stdlib" / "std" / "core.agl").read_text(),
+            encoding="utf-8",
+        )
+
+        assert resolve_stdlib_root(home=home, env={}) == stdlib
+
     def test_legacy_home_stdlib_uses_source_tree_fallback(self, tmp_path: Path) -> None:
         home = tmp_path / "home"
         stdlib = home / ".agm" / "stdlib" / "std"
@@ -270,6 +282,35 @@ class TestResolveStdlibRoot:
         assert result.name == "stdlib"
         assert result.is_dir()
         assert result != stdlib.parent
+
+    @pytest.mark.parametrize(
+        "old_agent_field",
+        (
+            "record AgentRequest\n  agent: Agent",
+            "exception AgentCallError extends Exception\n  *\n  agent: Agent",
+            "exception AgentParseError extends Exception\n  *\n  agent: Agent",
+        ),
+    )
+    def test_pre_pivot_agent_field_uses_source_tree_fallback(
+        self, tmp_path: Path, old_agent_field: str
+    ) -> None:
+        """A retained install with text-backed agent data cannot reach value dispatch."""
+        home = tmp_path / "home"
+        installed = home / ".agm" / "stdlib" / "std"
+        installed.mkdir(parents=True)
+        core = Path(__file__).resolve().parents[1] / "stdlib" / "std" / "core.agl"
+        installed_core = installed / "core.agl"
+        installed_core.write_text(
+            core.read_text(encoding="utf-8").replace(
+                old_agent_field, old_agent_field.removesuffix("Agent") + "text"
+            ),
+            encoding="utf-8",
+        )
+
+        result = resolve_stdlib_root(home=home, env={})
+
+        assert result != installed.parent
+        assert result.name == "stdlib"
 
     def test_missing_home_stdlib_returns_source_tree_fallback(self, tmp_path: Path) -> None:
         home = tmp_path / "home"

@@ -7,8 +7,7 @@ enum Coin
 param d: int
 param mode
 
-agent tosser
-
+let tosser = AgentCommand("tosser")
 try
   let q = 10 / d
   print q

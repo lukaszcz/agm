@@ -16,8 +16,7 @@ enum Wrapped
   | Empty
   | Holds(shape: Shape)
 
-agent picker
-
+let picker = AgentCommand("picker")
 let wrapped: Wrapped = ask("Pick a wrapped shape.", agent = picker)
 
 # Nested constructor patterns with '=' on the enum-typed field 'shape'; the

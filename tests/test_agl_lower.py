@@ -131,7 +131,6 @@ _MIXED_ROOT_AND_SCOPED_DECLARATIONS = (
 def _caps() -> HostCapabilities:
     return HostCapabilities(
         agent_names=frozenset(),
-        has_default_agent=True,
         supports_shell_exec=True,
         codec_kinds={
             "text": frozenset({"text"}),
@@ -2158,7 +2157,7 @@ class TestLowerGraph:
         - Both modules appear in ``program.modules`` with distinct entries.
         - Both modules' functions appear in ``program.functions`` with DISTINCT FunctionIds.
         - ``program.nominals`` contains types from both modules (one record per module).
-        - Exactly one ``SourceFile`` per module (2 sources total).
+        - Exactly one ``SourceFile`` per module (3 sources total, including std/core).
         - The library ``ExecutableModule.initializers`` contains ONLY function binds
           (IrBind wrapping IrMakeClosure).
         - The entry module is LAST in ``program.modules`` insertion order.
@@ -2211,7 +2210,7 @@ class TestLowerGraph:
         prog = lower_program(_compiled_checked(cg))
 
         # Both modules must appear
-        assert len(prog.modules) == 2
+        assert len(prog.modules) == 3
 
         # Entry module is LAST in insertion order
         module_ids = list(prog.modules.keys())
@@ -2219,8 +2218,8 @@ class TestLowerGraph:
             "Entry module must be last in program.modules insertion order"
         )
 
-        # Exactly one SourceFile per module
-        assert len(prog.sources) == 2
+        # Exactly one SourceFile per module, including the automatic std/core import.
+        assert len(prog.sources) == 3
 
         # Both modules' functions appear in program.functions with DISTINCT FunctionIds.
         # lib has make_point; entry has no user functions here, but they share one table.
@@ -2603,7 +2602,7 @@ class TestHostOpLowering:
         """ask() now lowers to IrAsk."""
         from agm.agl.ir.nodes import IrAsk
 
-        source = 'agent impl\nlet r: text = ask("prompt", agent = impl)\n()'
+        source = 'let impl = AgentCommand("impl")\nlet r: text = ask("prompt", agent = impl)\n()'
         prog = _lower(source)
         # The let site's private root captures the IrAsk result.
         inits = prog.modules[prog.entry_module].initializers
@@ -2659,7 +2658,10 @@ class TestHostOpLowering:
         """ask-request lowers to IrAskRequest + ContractRequest in program.contracts."""
         from agm.agl.ir.nodes import IrAskRequest
 
-        source = 'agent worker\nlet req = ask-request("my prompt", agent = worker)\n()'
+        source = (
+            'let worker = AgentCommand("worker")\n'
+            'let req = ask-request("my prompt", agent = worker)\n()'
+        )
         prog = _lower(source)
         inits = prog.modules[prog.entry_module].initializers
         # The let site's private root captures the IrAskRequest result.

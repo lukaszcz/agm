@@ -5,9 +5,8 @@ enum Turn
 
 param problem
 
-agent researcher
-agent critic
-
+let researcher = AgentCommand("researcher")
+let critic = AgentCommand("critic")
 var proposal: Turn = ask("Propose a solution for %{problem}.", agent = researcher, on_parse_error = Retry(n = 2))
 var final_answer: text = ""
 

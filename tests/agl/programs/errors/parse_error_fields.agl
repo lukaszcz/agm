@@ -4,9 +4,8 @@ record Spec
   name: text
   level: int
 
-agent builder
-agent critic
-
+let builder = AgentCommand("builder")
+let critic = AgentCommand("critic")
 try
   let s: Spec = ask("Build the spec.", agent = builder, on_parse_error = Retry(n = 1))
   print s.name

@@ -2,7 +2,9 @@
   "scenarios": [
     {
       "name": "caught_failure_exposes_fields",
-      "params": {"mode": "calm"},
+      "params": {
+        "mode": "calm"
+      },
       "shell": [
         {
           "command": "sh -c 'echo partial; echo oops >&2; exit 3'",
@@ -23,7 +25,9 @@
     },
     {
       "name": "uncaught_exec_error",
-      "params": {"mode": "uncaught"},
+      "params": {
+        "mode": "uncaught"
+      },
       "shell": [
         {
           "command": "sh -c 'echo partial; echo oops >&2; exit 3'",
@@ -31,14 +35,27 @@
           "stdout": "partial\n",
           "stderr": "oops\n"
         },
-        {"command": "false", "returncode": 1}
+        {
+          "command": "false",
+          "returncode": 1
+        }
       ],
       "expect": {
-        "stdout_contains": ["failed code 3\n", "timed false\n"],
-        "stdout_not_contains": ["skip", "tail"],
+        "stdout_contains": [
+          "failed code 3\n",
+          "timed false\n"
+        ],
+        "stdout_not_contains": [
+          "skip",
+          "tail"
+        ],
         "raises": {
           "type": "ExecError",
-          "fields": {"command": "false", "exit_code": 1, "timed_out": false}
+          "fields": {
+            "command": "false",
+            "exit_code": 1,
+            "timed_out": false
+          }
         }
       }
     }

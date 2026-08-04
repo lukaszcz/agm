@@ -30,7 +30,9 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Literal
 
+from agm.agl.runtime.render import render_value
 from agm.agl.runtime.request import AgentCancelled
+from agm.agl.semantics.values import EnumValue
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -75,9 +77,14 @@ class ConfirmingAgent:
 
     def __call__(self, request: "AgentRequest") -> "AgentResponse | str":
         if self._mode.mode == "confirm":
-            decision = self._confirm(request.agent, request.prompt)
+            agent_label = (
+                render_value(request.agent)
+                if isinstance(request.agent, EnumValue)
+                else request.agent
+            )
+            decision = self._confirm(agent_label, request.prompt)
             if decision == "no":
-                raise AgentCancelled(request.agent, "declined")
+                raise AgentCancelled(agent_label, "declined")
             if decision == "always":
                 self._mode.mode = "auto"
             # ``"yes"`` and ``"always"`` both fall through to dispatch.
@@ -88,4 +95,9 @@ class ConfirmingAgent:
         try:
             return self._underlying(request)
         except KeyboardInterrupt as exc:
-            raise AgentCancelled(request.agent, "interrupted") from exc
+            agent_label = (
+                render_value(request.agent)
+                if isinstance(request.agent, EnumValue)
+                else request.agent
+            )
+            raise AgentCancelled(agent_label, "interrupted") from exc

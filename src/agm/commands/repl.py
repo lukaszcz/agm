@@ -26,12 +26,11 @@ from __future__ import annotations
 
 import sys
 
-from agm.agent.config import default_agent_runner
-from agm.agent.runner import parse_command, split_command
+from agm.agent.runner import parse_command
 from agm.agl.repl import ReplSession
 from agm.agl.repl.agentmode import AgentMode
 from agm.agl.repl.agents import ConfirmingAgent
-from agm.agl.runtime.agents import AgentFn, runner_backed_agent_factory
+from agm.agl.runtime.agents import AgentFn, value_driven_agent_factory
 from agm.agl.runtime.host_settings import HostSettingsPolicy
 from agm.agl.runtime.params import build_engine_config_seeds, raw_option_str
 from agm.cli_support.args import ReplArgs
@@ -75,13 +74,6 @@ def run(args: ReplArgs) -> None:
         args.max_call_depth if args.max_call_depth is not None else config.max_call_depth
     )
 
-    # Resolve the runner command: CLI flag > [exec] config > shared default,
-    # exactly as ``agm exec`` does (the REPL shares the exec agent backing).
-    runner_cmd = args.runner or config.runner or default_agent_runner()
-    # Validate the resolved runner eagerly (malformed quoting / empty value
-    # surface here as a clean error before the loop starts).
-    split_command(runner_cmd, kind="runner")
-
     # Resolve the CLI > config logging decision ONCE: it both drives the trace
     # file prepared here and seeds the readable ``log``/``log-file`` registers
     # below, exactly as ``agm exec`` does.
@@ -103,11 +95,15 @@ def run(args: ReplArgs) -> None:
         else prepare_trace_log_from_decision(log_decision, command_name="repl")
     )
 
-    runner_agent = runner_backed_agent_factory(
-        default_runner_cmd=runner_cmd,
-        per_agent_cmds=config.agents,
-        idle_timeout=config.timeout,
-    )
+    configured_runner = args.runner if args.runner is not None else config.runner
+    if configured_runner is not None:
+        try:
+            parse_command(configured_runner, kind="runner")
+        except ValueError as exc:
+            print(f"Error: {exc}.", file=sys.stderr)
+            raise SystemExit(1) from exc
+
+    runner_agent = value_driven_agent_factory(idle_timeout=config.timeout)
 
     # ONE shared agent-mode holder: passed to BOTH the confirming wrapper and the
     # console, so ``:agent``/``always`` and the wrapper observe the same mode.
@@ -122,13 +118,10 @@ def run(args: ReplArgs) -> None:
     confirming_agent = ConfirmingAgent(runner_agent, agent_mode, confirm=confirm_agent_call)
 
     def _build_runner(command: str) -> AgentFn:
+        # The legacy runner setting does not select an Agent value's command,
+        # but malformed source writes must remain catchable and roll back.
         parse_command(command, kind="runner")
-        rebuilt = runner_backed_agent_factory(
-            default_runner_cmd=command,
-            per_agent_cmds=config.agents,
-            idle_timeout=config.timeout,
-        )
-        return ConfirmingAgent(rebuilt, agent_mode, confirm=confirm_agent_call)
+        return confirming_agent
 
     host_settings_policy = HostSettingsPolicy(
         build_runner=_build_runner,

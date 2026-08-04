@@ -24,7 +24,7 @@ scope Tools
 record Token()
 enum Signal
   | ready
-agent helper = "helper"
+let helper = AgentCommand("helper")
 def greeting() -> text = "hello"
 def retain(value: Tools::Token) -> Tools::Token = value
 end Tools

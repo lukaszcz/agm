@@ -810,7 +810,7 @@ enum Review
   | Pass
   | Fail(issues: array[text])
 
-agent reviewer
+let reviewer = AgentCommand("reviewer")
 
 def summarize_issues(issues: array[text]) -> text =
   "Issues found:\n%{issues}"

@@ -2,27 +2,35 @@
   "scenarios": [
     {
       "name": "success_path",
-      "params": {"fail": false},
+      "params": {
+        "fail": false
+      },
       "expect": {
         "stdout_contains": [
           "ok\nerr\n",
           "Outcome::ok(value = 5)",
           "point 1,2\n"
         ],
-        "stdout_not_contains": ["fault"],
+        "stdout_not_contains": [
+          "fault"
+        ],
         "calls": {}
       }
     },
     {
       "name": "failure_path",
-      "params": {"fail": true},
+      "params": {
+        "fail": true
+      },
       "expect": {
         "stdout_contains": [
           "ok\nerr\n",
           "Outcome::ok(value = 5)",
           "fault 404: missing\n"
         ],
-        "stdout_not_contains": ["point 1"],
+        "stdout_not_contains": [
+          "point 1"
+        ],
         "calls": {}
       }
     }

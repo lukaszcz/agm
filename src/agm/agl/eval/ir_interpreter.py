@@ -424,6 +424,9 @@ class IrInterpreter:
         self._registry: AgentRegistry = (
             registry if registry is not None else AgentRegistry(named={}, default_agent=None)
         )
+        # Ask dispatch is value-driven: effects receive this callable directly
+        # rather than resolving a named entry through the compatibility registry.
+        self._agent_dispatcher = self._registry.value_dispatcher
         # Bootstrap the setting fields so declared defaults can be evaluated by
         # the ordinary, typeless evaluator. Constant defaults cannot read a
         # setting or invoke a host operation, so this temporary state is never

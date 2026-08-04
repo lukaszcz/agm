@@ -7,8 +7,7 @@ enum Status
   | waiting
   | completed
 
-agent reviewer = "reviewer"
-
+let reviewer = AgentCommand("reviewer")
 def score(task: Task) -> bool = task.children[0].name == "ready"
 def label(status: Status) -> text =
   case status of

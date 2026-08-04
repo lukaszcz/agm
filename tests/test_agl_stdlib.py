@@ -15,7 +15,6 @@ from agm.agl.semantics.types import (
     BUILTIN_EXCEPTIONS,
     BUILTIN_PRELUDE_TYPES,
     COMPATIBILITY_PRELUDE_TYPE_NAMES,
-    AgentType,
     BoolType,
     EnumType,
     IntType,
@@ -107,7 +106,11 @@ def test_stdlib_ask_signature_is_context_inferred_with_optional_arguments() -> N
     assert ask_sig.result == TypeVarType("T")
     params = ask_sig.params
     assert params[0].name == "prompt" and params[0].type == TextType() and not params[0].has_default
-    assert params[1].name == "agent" and params[1].type == AgentType() and params[1].has_default
+    assert (
+        params[1].name == "agent"
+        and params[1].type == EnumType("Agent", module_id=ModuleId.from_path("std/core"))
+        and params[1].has_default
+    )
     assert params[2].name == "format" and params[2].type == TextType() and params[2].has_default
     assert (
         params[3].name == "strict_json" and params[3].type == BoolType() and params[3].has_default

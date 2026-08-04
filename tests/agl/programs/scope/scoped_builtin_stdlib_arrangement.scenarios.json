@@ -3,8 +3,15 @@
     {
       "name": "success_path",
       "no_stdlib": true,
-      "params": {"code": 0},
-      "shell": [{"command": "echo host", "stdout": "host\n"}],
+      "params": {
+        "code": 0
+      },
+      "shell": [
+        {
+          "command": "echo host",
+          "stdout": "host\n"
+        }
+      ],
       "expect": {
         "stdout": "hi\nok\nretry 2\nhost\n"
       }
@@ -12,8 +19,15 @@
     {
       "name": "raises_and_the_scoped_handler_catches_it",
       "no_stdlib": true,
-      "params": {"code": 3},
-      "shell": [{"command": "echo host", "stdout": "host\n"}],
+      "params": {
+        "code": 3
+      },
+      "shell": [
+        {
+          "command": "echo host",
+          "stdout": "host\n"
+        }
+      ],
       "expect": {
         "stdout": "hi\nbad code\nretry 2\nhost\n"
       }

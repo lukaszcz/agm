@@ -15,7 +15,7 @@ from typing import Protocol
 from agm.agl.capabilities import HostCapabilities
 from agm.agl.diagnostics import Diagnostic
 from agm.agl.semantics.types import (
-    AgentType,
+    BUILTIN_PRELUDE_TYPES,
     BoolType,
     FunctionType,
     JsonType,
@@ -338,9 +338,14 @@ class BuiltinCallChecker:
         self._ctx._assert_assignable_from(prompt_type, TextType(), node.args[0].span, node.args[0])
         if "agent" in named:
             agent_na = named["agent"]
-            agent_type = self._ctx._check_expr(agent_na.value, expected=AgentType())
+            agent_type = self._ctx._check_expr(
+                agent_na.value, expected=BUILTIN_PRELUDE_TYPES["Agent"]
+            )
             self._ctx._assert_assignable_from(
-                agent_type, AgentType(), agent_na.value.span, agent_na.value
+                agent_type,
+                BUILTIN_PRELUDE_TYPES["Agent"],
+                agent_na.value.span,
+                agent_na.value,
             )
         return named
 
@@ -352,7 +357,7 @@ class BuiltinCallChecker:
                 "Cannot infer a concrete target type for this built-in call.", span=obligation.span
             )
         self._reject_type_var_target(target_type, obligation.span)
-        if isinstance(target_type, (FunctionType, AgentType)):
+        if isinstance(target_type, FunctionType):
             raise AglTypeError(
                 "cannot parse agent or exec output into a function/agent value.",
                 span=obligation.span,
@@ -365,16 +370,6 @@ class BuiltinCallChecker:
     def _finalize_ask_like(self, obligation: PendingBuiltinObligation) -> None:
         target_type = obligation.target_type
         callee = obligation.kind.value
-        if (
-            obligation.kind is BuiltinObligationKind.ASK
-            and not obligation.has_agent_argument
-            and not self._ctx._caps.has_default_agent
-        ):
-            raise AglTypeError(
-                "No default agent is configured; the built-in 'ask' call cannot run. "
-                "Register a default agent, or run via `agm exec`, which provides one.",
-                span=obligation.span,
-            )
         if isinstance(target_type, UnitType):
             if obligation.has_parse_shaping_option:
                 option_name, offending_span = obligation.first_parse_option()

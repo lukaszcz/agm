@@ -2487,4 +2487,4 @@ class TestIrExec:
         with unittest.mock.patch("agm.core.process.run_capture_result", side_effect=fake_rcr):
             with pytest.raises(AglRaise) as exc_info:
                 IrInterpreter(prog).run()
-        assert exc_info.value.exc.display_name == "AgentParseError"
+        assert exc_info.value.exc.display_name == "ExecError"

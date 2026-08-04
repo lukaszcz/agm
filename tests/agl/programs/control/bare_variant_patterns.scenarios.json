@@ -2,7 +2,9 @@
   "scenarios": [
     {
       "name": "red_matches_first_variant",
-      "params": {"n": 0},
+      "params": {
+        "n": 0
+      },
       "expect": {
         "stdout": "red\n1\nempty\nfull:0\nwrapped-red\nstop\nflat\n",
         "calls": {}
@@ -10,7 +12,9 @@
     },
     {
       "name": "green_routes_middle_variant",
-      "params": {"n": 1},
+      "params": {
+        "n": 1
+      },
       "expect": {
         "stdout": "green\n0\nempty\nfull:1\nwrapped-green\nstop\nflat\n",
         "calls": {}
@@ -18,7 +22,9 @@
     },
     {
       "name": "blue_via_wildcard",
-      "params": {"n": 2},
+      "params": {
+        "n": 2
+      },
       "expect": {
         "stdout": "blue\n0\nempty\nfull:2\nwrapped-blue\nstop\nflat\n",
         "calls": {}

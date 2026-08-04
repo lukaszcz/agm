@@ -2,8 +2,7 @@
 # program-wide, so they may appear after their first use.
 param verdict: Status
 
-agent judge
-
+let judge = AgentCommand("judge")
 let initial: Status = verdict
 
 if initial is Status::Approved => print "approved input" else => print "not approved"

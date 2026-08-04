@@ -2,8 +2,12 @@
   "scenarios": [
     {
       "name": "strict_above_threshold",
-      "module_roots": ["program_modules/modules/bare_config_assign"],
-      "params": {"budget": 6},
+      "module_roots": [
+        "program_modules/modules/bare_config_assign"
+      ],
+      "params": {
+        "budget": 6
+      },
       "expect": {
         "stdout": "6\n12\ntrue\n4\n",
         "calls": {}
@@ -11,8 +15,12 @@
     },
     {
       "name": "lenient_at_threshold",
-      "module_roots": ["program_modules/modules/bare_config_assign"],
-      "params": {"budget": 4},
+      "module_roots": [
+        "program_modules/modules/bare_config_assign"
+      ],
+      "params": {
+        "budget": 4
+      },
       "expect": {
         "stdout": "4\n8\nfalse\n4\n",
         "calls": {}

@@ -39,7 +39,7 @@ if TYPE_CHECKING:
 def test_text_ask_basic() -> None:
     """Text-codec ask: passthrough, no JSON involved."""
     source = """\
-agent summarizer
+let summarizer = AgentCommand("summarizer")
 let summary: text = ask("Summarise it.", agent = summarizer)
 summary
 """
@@ -58,7 +58,7 @@ summary
 def test_json_int_ask() -> None:
     """JSON-int ask: agent returns a bare integer."""
     source = """\
-agent counter
+let counter = AgentCommand("counter")
 let n: int = ask("How many?", agent = counter)
 n
 """
@@ -81,7 +81,7 @@ record Point
   x: int
   y: int
 
-agent locator
+let locator = AgentCommand("locator")
 let pt: Point = ask("Find the point.", agent = locator)
 pt
 """
@@ -102,7 +102,7 @@ pt
 def test_json_array_ask() -> None:
     """JSON-array ask: agent returns a JSON array."""
     source = """\
-agent lister
+let lister = AgentCommand("lister")
 let items: array[text] = ask("List items.", agent = lister)
 items
 """
@@ -128,7 +128,7 @@ enum Status
   | Ok
   | Err(msg: text)
 
-agent checker
+let checker = AgentCommand("checker")
 let status: Status = ask("Check it.", agent = checker)
 status
 """
@@ -148,7 +148,7 @@ status
 def test_lenient_json_fence_stripping() -> None:
     """Lenient mode: agent wraps JSON in a markdown fence — still parsed."""
     source = """\
-agent answerer
+let answerer = AgentCommand("answerer")
 let n: int = ask("Give me a number.", agent = answerer)
 n
 """
@@ -168,7 +168,7 @@ n
 def test_retry_success_second_attempt() -> None:
     """Retry policy: first response is invalid JSON, second is valid."""
     source = """\
-agent parser
+let parser = AgentCommand("parser")
 let n: int = ask("Parse this.", agent = parser, on_parse_error = Retry(n = 1))
 n
 """
@@ -187,7 +187,7 @@ n
 def test_retry_exhausted_raises() -> None:
     """Retry policy: all attempts fail → AgentParseError raised."""
     source = """\
-agent parser
+let parser = AgentCommand("parser")
 let n: int = ask("Parse this.", agent = parser, on_parse_error = Retry(n = 1))
 n
 """
@@ -207,7 +207,7 @@ n
 def test_strict_json_mode() -> None:
     """strict_json: true — bare JSON without fences, no repair."""
     source = """\
-agent strict_agent
+let strict_agent = AgentCommand("strict_agent")
 let b: bool = ask("True or false?", agent = strict_agent, strict_json = true)
 b
 """
@@ -246,7 +246,7 @@ def test_unit_typed_ask() -> None:
 def test_ask_inside_function() -> None:
     """ask call site inside a function body — agent is captured in closure."""
     source = """\
-agent namer
+let namer = AgentCommand("namer")
 def get_name(prompt: text) -> text = ask(prompt, agent = namer)
 let name: text = get_name("What is the name?")
 name
@@ -266,8 +266,8 @@ name
 def test_multiple_agents() -> None:
     """Multiple named agents: each call is routed to the correct agent."""
     source = """\
-agent first
-agent second
+let first = AgentCommand("first")
+let second = AgentCommand("second")
 let a: text = ask("First.", agent = first)
 let b: text = ask("Second.", agent = second)
 b
@@ -291,7 +291,7 @@ b
 def test_schema_validation_failure_wrong_type() -> None:
     """Agent returns invalid JSON (fails schema validation) → AgentParseError."""
     source = """\
-agent validator
+let validator = AgentCommand("validator")
 let n: int = ask("Give int.", agent = validator)
 n
 """
@@ -312,7 +312,7 @@ n
 def test_strict_json_invalid_raises() -> None:
     """strict_json=true with fenced JSON: strict mode does not strip fences."""
     source = """\
-agent strict_agent
+let strict_agent = AgentCommand("strict_agent")
 let n: int = ask("Give int.", agent = strict_agent, strict_json = true)
 n
 """
@@ -354,9 +354,8 @@ result
 def test_ask_request_builds_record() -> None:
     """ask-request: no agent dispatch, returns an AgentRequest-shaped record."""
     source = """\
-agent dummy
+let dummy = AgentCommand("dummy")
 let req = ask-request("My prompt.", agent = dummy)
-let agent_name: text = req.agent
 let prompt_text: text = req.prompt
 prompt_text
 """
@@ -365,7 +364,6 @@ prompt_text
         source,
         scripts={"dummy": []},
     )
-    assert ir["agent_name"] == TextValue("dummy")
     assert ir["prompt_text"] == TextValue("My prompt.")
 
     from agm.agl.ir.builtin_nominals import NO_BUILTIN_DECLARATIONS
@@ -373,6 +371,8 @@ prompt_text
     req = ir["req"]
     assert isinstance(req, RecordValue)
     assert req.nominal == NO_BUILTIN_DECLARATIONS.nominal("AgentRequest")
+    assert isinstance(req.fields["agent"], EnumValue)
+    assert req.fields["agent"].variant == "AgentCommand"
 
 
 # ---------------------------------------------------------------------------
@@ -383,7 +383,7 @@ prompt_text
 def test_retry_with_schema_validation_error_then_success() -> None:
     """Retry: first response fails schema, second is valid."""
     source = """\
-agent fixer
+let fixer = AgentCommand("fixer")
 let n: int = ask("Give int.", agent = fixer, on_parse_error = Retry(n = 1))
 n
 """
@@ -481,7 +481,7 @@ enum Status
   | Ok
   | Err(msg: text)
 
-agent checker
+let checker = AgentCommand("checker")
 let s: Status = ask("Status?", agent = checker, on_parse_error = Retry(n = 1))
 s
 """
@@ -619,7 +619,7 @@ def test_validate_contract_request_json_missing_schema() -> None:
 def test_ask_request_typed_builds_record() -> None:
     """ask-request with explicit type argument builds AgentRequest record."""
     source = """\
-agent worker
+let worker = AgentCommand("worker")
 let req = ask-request::[int]("Give me a number.", agent = worker)
 let prompt_text: text = req.prompt
 prompt_text
@@ -1582,7 +1582,6 @@ def test_ir_ask_non_text_prompt_renders_to_string() -> None:
     )
     from agm.agl.modules.ids import ENTRY_ID
     from agm.agl.runtime.agents import AgentRegistry
-    from agm.agl.runtime.request import AgentRequest, AgentResponse
 
     src_id = SourceId(0)
     dummy_loc = Location(source_id=src_id, start_offset=0, end_offset=1, start_line=1, start_col=0)
@@ -1598,10 +1597,10 @@ def test_ir_ask_non_text_prompt_renders_to_string() -> None:
         format_instructions="",
         is_unit=False,
     )
-    # IrAsk with an int constant as the prompt (bypasses typechecker).
+    # A malformed hand-built IR operand cannot fall back to a legacy agent name.
     ask_node = IrAsk(
         location=dummy_loc,
-        # agent expr returns IntValue (not AgentValue) → falls back to "ask" name
+        # agent expr is intentionally not an Agent enum.
         agent=IrConstInt(location=dummy_loc, value=0),
         prompt=IrConstInt(location=dummy_loc, value=42),  # int prompt
         contract_id=cid,
@@ -1618,18 +1617,9 @@ def test_ir_ask_non_text_prompt_renders_to_string() -> None:
         contracts={cid: req},
     )
 
-    captured_prompts: list[str] = []
-
-    def _agent_fn(r: AgentRequest) -> AgentResponse:
-        captured_prompts.append(r.prompt)
-        return AgentResponse(content="99")
-
-    registry = AgentRegistry(named={AgentId("ask"): _agent_fn}, default_agent=None)
-    interp = IrInterpreter(prog, registry=registry)
-    bindings = interp.run()
-    # The prompt "42" (rendered IntValue) was sent.
-    assert captured_prompts == ["42"]
-    assert bindings["result"] == IntValue(99)
+    interp = IrInterpreter(prog, registry=AgentRegistry(named={}, default_agent=None))
+    with pytest.raises(TypeError, match="Agent enum"):
+        interp.run()
 
 
 def test_ir_ask_cyclic_prompt_raises_cyclic_value_error() -> None:
@@ -1654,7 +1644,6 @@ def test_ir_ask_cyclic_prompt_raises_cyclic_value_error() -> None:
     )
     from agm.agl.modules.ids import ENTRY_ID
     from agm.agl.runtime.agents import AgentRegistry
-    from agm.agl.semantics.exceptions import AglRaise
 
     src_id = SourceId(0)
     dummy_loc = Location(source_id=src_id, start_offset=0, end_offset=1, start_line=1, start_col=0)
@@ -1707,15 +1696,14 @@ def test_ir_ask_cyclic_prompt_raises_cyclic_value_error() -> None:
     )
     registry = AgentRegistry(named={}, default_agent=None)
     interp = IrInterpreter(prog, registry=registry)
-    with pytest.raises(AglRaise) as exc_info:
+    with pytest.raises(TypeError, match="Agent enum"):
         interp.run()
-    assert exc_info.value.exc.display_name == "CyclicValueError"
 
 
 def test_ir_ask_request_unit_contract() -> None:
     """IrAskRequest with is_unit contract -> AgentRequest.target_type is None."""
     source = """\
-agent a
+let a = AgentCommand("a")
 let req = ask-request("Do it.", agent = a)
 let prompt_text: text = req.prompt
 prompt_text
@@ -1776,12 +1764,9 @@ def test_ir_ask_request_non_text_prompt() -> None:
         sources={src_id: SourceFile(display_name="<test>", normalized_text="test")},
         contracts={cid: req},
     )
-    registry = AgentRegistry(named={}, default_agent=None)
-    interp = IrInterpreter(prog, registry=registry)
-    bindings = interp.run()
-    val = bindings["req"]
-    assert isinstance(val, RecordValue)
-    assert val.fields["prompt"] == TextValue("7")
+    interp = IrInterpreter(prog, registry=AgentRegistry(named={}, default_agent=None))
+    with pytest.raises(TypeError, match="Agent enum"):
+        interp.run()
 
 
 def test_ir_ask_request_cyclic_prompt_raises_cyclic_value_error() -> None:
@@ -1804,7 +1789,6 @@ def test_ir_ask_request_cyclic_prompt_raises_cyclic_value_error() -> None:
     )
     from agm.agl.modules.ids import ENTRY_ID
     from agm.agl.runtime.agents import AgentRegistry
-    from agm.agl.semantics.exceptions import AglRaise
 
     src_id = SourceId(0)
     dummy_loc = Location(source_id=src_id, start_offset=0, end_offset=1, start_line=1, start_col=0)
@@ -1854,9 +1838,8 @@ def test_ir_ask_request_cyclic_prompt_raises_cyclic_value_error() -> None:
     )
     registry = AgentRegistry(named={}, default_agent=None)
     interp = IrInterpreter(prog, registry=registry)
-    with pytest.raises(AglRaise) as exc_info:
+    with pytest.raises(TypeError, match="Agent enum"):
         interp.run()
-    assert exc_info.value.exc.display_name == "CyclicValueError"
 
 
 # ---------------------------------------------------------------------------
@@ -1867,7 +1850,7 @@ def test_ir_ask_request_cyclic_prompt_raises_cyclic_value_error() -> None:
 def test_lower_on_parse_error_abort_gives_one_attempt() -> None:
     """_extract_max_attempts: Abort policy → 1 attempt."""
     source = """\
-agent a
+let a = AgentCommand("a")
 let n: int = ask("?", agent = a, on_parse_error = Abort)
 n
 """
@@ -2012,7 +1995,7 @@ def test_validate_ir_ask_request_deep_valid_contract() -> None:
 def test_ir_ask_request_unit_typed() -> None:
     """IrAskRequest with is_unit=True contract -> target_type=None in record."""
     source = """\
-agent a
+let a = AgentCommand("a")
 let req = ask-request::[unit]("Do it.", agent = a)
 let target = req.target_type
 target
@@ -2037,7 +2020,6 @@ def test_ir_ask_no_errors_when_failed_covers_else_branch() -> None:
     # extract as ambiguous / no-json (empty errors, no error_msg).
     # Actually the only path where result.ok=False AND errors=() AND error_msg="" is
     # when AgentParseResult.failure("") is called. Let's mock parse_agent_output:
-    from unittest.mock import patch
 
     from agm.agl.eval.ir_interpreter import IrInterpreter
     from agm.agl.ir.contracts import ContractRequest, ScalarDecode, ScalarKind
@@ -2046,7 +2028,6 @@ def test_ir_ask_no_errors_when_failed_covers_else_branch() -> None:
     from agm.agl.ir.program import ExecutableModule, ExecutableProgram, SourceFile
     from agm.agl.modules.ids import ENTRY_ID
     from agm.agl.runtime.agents import AgentRegistry
-    from agm.agl.runtime.codec import ParseResult
     from agm.agl.runtime.request import AgentRequest, AgentResponse
 
     src_id = SourceId(0)
@@ -2084,19 +2065,15 @@ def test_ir_ask_no_errors_when_failed_covers_else_branch() -> None:
     registry = AgentRegistry(named={AgentId("ask"): _agent_fn}, default_agent=None)
     interp = IrInterpreter(prog, registry=registry)
 
-    # Patch _parse_contract_output to return failure with EMPTY errors AND EMPTY error_msg.
-    empty_failure = ParseResult(ok=False, value=None, error_msg="", errors=())
-    with patch("agm.agl.eval.ir_interpreter._parse_contract_output", return_value=empty_failure):
-        from agm.agl.semantics.exceptions import AglRaise
-
-        with pytest.raises(AglRaise):
-            interp.run()
+    # A text sentinel is malformed IR, not an implicit default-agent request.
+    with pytest.raises(TypeError, match="Agent enum"):
+        interp.run()
 
 
 def test_lower_on_parse_error_self_qualified_retry() -> None:
     """Self-qualified Retry parse policy produces the correct attempt count."""
     source = """\
-agent a
+let a = AgentCommand("a")
 let n: int = ask("?", agent = a, on_parse_error = ::Retry(n = 2))
 n
 """
@@ -2583,7 +2560,7 @@ enum Status
   | Ok
   | Err(msg: text)
 
-agent checker
+let checker = AgentCommand("checker")
 let status: Status = ask("Check.", agent = checker)
 status
 """
@@ -2620,7 +2597,7 @@ enum Status
   | Ok
   | Err(msg: text)
 
-agent checker
+let checker = AgentCommand("checker")
 let status: Status = ask("Check.", agent = checker)
 status
 """
@@ -2668,7 +2645,7 @@ enum Status
   | Ok
   | Err(msg: text)
 
-agent checker
+let checker = AgentCommand("checker")
 let status: Status = ask("Check.", agent = checker)
 status
 """

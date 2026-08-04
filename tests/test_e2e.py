@@ -7967,7 +7967,8 @@ class TestExecCommand:
         work.mkdir()
         program = work / "ask.agl"
         program.write_text(
-            'agent reviewer\nlet r = ask("ping", agent = reviewer)\nprint r\n',
+            'let reviewer = AgentCommand("claude -p")\n'
+            'let r = ask("ping", agent = reviewer)\nprint r\n',
             encoding="utf-8",
         )
         # Install a fake runner named ``claude`` (the built-in default) that
@@ -7998,8 +7999,8 @@ class TestExecCommand:
             "  | Fail(issues: array[Issue])\n"
             "enum Fix\n"
             "  | Complete(output: text)\n"
-            'agent impl = "impl-runner"\n'
-            'agent reviewer = "review-runner"\n'
+            'let impl = AgentCommand("impl-runner")\n'
+            'let reviewer = AgentCommand("review-runner")\n'
             'var artifact: text = ask("Implement %{task}", agent = impl)\n'
             "var review: Review = Pass\n"
             "do[3]\n"
@@ -8063,7 +8064,7 @@ class TestExecCommand:
         program.write_text(
             "enum Review\n"
             "  | Pass\n"
-            'agent reviewer = "review-runner"\n'
+            'let reviewer = AgentCommand("review-runner")\n'
             'let review: Review = ask("Review now", agent = reviewer, '
             "on_parse_error = Retry(n = 1))\n"
             "case review of\n"

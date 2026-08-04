@@ -126,6 +126,7 @@ class ReplSession:
         default_loop_limit: int | None = None,
         default_call_depth_limit: int | None = None,
         default_agent: "AgentFn | None" = None,
+        value_agent: "AgentFn | None" = None,
         shell_exec_timeout: float | None = None,
         trace_path: "Path | None" = None,
         params_config_loader: "Callable[[str], dict[str, object]] | None" = None,
@@ -195,14 +196,13 @@ class ReplSession:
             default_loop_limit=default_loop_limit,
             default_call_depth_limit=default_call_depth_limit,
             default_agent=default_agent,
+            value_agent=value_agent,
             shell_exec_timeout=shell_exec_timeout,
         )
         # Reuse the driver's resolved (default-applied) limit for the per-entry
         # interpreters this session builds directly, so the canonical default
         # lives in exactly one place.
         self._default_call_depth_limit = self._runtime.default_call_depth_limit
-        self._has_default_agent = default_agent is not None
-
         # Persistent session environment.
         self._session_scope: ScopeNode = ScopeNode(node_id=-1, parent=None)
         self._session_scope_nodes: dict[tuple[str, ...], ScopeNode] = {(): self._session_scope}
@@ -1392,14 +1392,10 @@ class ReplSession:
         return result
 
     def agents(self) -> list[str]:
-        """Return the names of available agents.
-
-        Registered named agents plus ``"ask"`` when a default agent is
-        configured.
-        """
-        host_env = self._runtime.host_environment()
-        names = sorted(host_env.registry.agent_names)
-        if self._has_default_agent:
+        """Return retained legacy registrations and default ``ask`` when available."""
+        registry = self._runtime.host_environment().registry
+        names = sorted(registry.agent_names)
+        if registry.has_default_agent:
             names.append("ask")
         return names
 

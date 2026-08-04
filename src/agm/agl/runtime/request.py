@@ -15,6 +15,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Literal
 
 from agm.agl.ir.ids import AgentId, Location
+from agm.agl.semantics.values import EnumValue
 
 if TYPE_CHECKING:
     from agm.agl.runtime.contract import OutputContract, TypelessOutputContract
@@ -95,9 +96,8 @@ class AgentRequest:
     """The request object passed to a host-registered agent callable.
 
     ``agent``
-        The agent name as it appears in the AgL source: ``"ask"`` for the
-        built-in default agent, or the registered name for named agents.
-        A scoped agent's name is rendered with its scope path.
+        The encoded ``Agent`` enum value selected by the call. It is retained
+        unchanged for dispatch, retry context, and catchable error values.
     ``prompt``
         The fully rendered user-authored prompt template.  Interpolated
         values have already been processed by the renderer pipeline.  The
@@ -116,20 +116,16 @@ class AgentRequest:
         Carries ``format_instructions`` and ``json_schema`` so agents can
         relay them to the underlying model.  ``None`` for ``unit`` calls,
         whose response is intentionally ignored.
-    ``agent_id``
-        The structured identity (declared name plus scope path) of the called
-        agent, or ``None`` when the caller supplied only a name.  Declared
-        last so the field order every other field already had is preserved
-        for positional construction.
     """
 
-    agent: str
+    agent: EnumValue
     prompt: str
     attempt: int = 0
     previous_invalid_output: str | None = None
     validation_errors: list[ValidationError] = field(default_factory=list)
     metadata: dict[str, object] = field(default_factory=dict)
     output_contract: "OutputContract | TypelessOutputContract | None" = None
+    # Compatibility identity for the deprecated named-agent registry.
     agent_id: AgentId | None = None
 
 

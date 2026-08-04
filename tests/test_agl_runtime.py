@@ -28,6 +28,7 @@ from agm.agl.pipeline import RunResult
 from agm.agl.runtime import AgentRequest
 from agm.agl.runtime.contract import OutputContract
 from agm.agl.semantics.types import Type
+from agm.agl.semantics.values import TextValue
 from agm.agl.typecheck import AglTypeError
 from tests._agl_helpers import type_table_for
 
@@ -124,16 +125,16 @@ class TestPipelineDriverConstructor:
 
 class TestRegisterAgent:
     def test_register_agent_accepted(self) -> None:
-        rt = PipelineDriver()
         prompts: list[str] = []
 
         def my_agent(request: AgentRequest) -> str:
             prompts.append(request.prompt)
             return "response"
 
-        rt.register_agent("my_agent", my_agent)
+        rt = PipelineDriver(value_agent=my_agent)
         result = rt.run(
-            'agent my_agent\nlet answer = ask("meaningful prompt", agent = my_agent)\nprint answer'
+            'let my_agent = AgentCommand("my_agent")\n'
+            'let answer = ask("meaningful prompt", agent = my_agent)\nprint answer'
         )
 
         assert result.ok
@@ -254,11 +255,11 @@ class TestRunBehavior:
 class TestFallbackAgent:
     """Default-agent backing behavior for capability checking."""
 
-    def test_no_default_agent_ask_call_static_error(self) -> None:
-        rt = PipelineDriver()  # no default_agent
+    def test_ask_without_a_dispatcher_raises_at_runtime(self) -> None:
+        rt = PipelineDriver()
         result = rt.run('let x = ask "hi"')
         assert result.ok is False
-        assert result.error is None  # static, not runtime
+        assert result.error is not None
 
     def test_with_default_agent_ask_call_succeeds(self) -> None:
         rt = PipelineDriver(default_agent=lambda req: "ok")
@@ -266,9 +267,8 @@ class TestFallbackAgent:
         assert result.ok is True
 
     def test_named_agent_registered_accepted(self) -> None:
-        rt = PipelineDriver()
-        rt.register_agent("impl", lambda req: "output")
-        result = rt.run('agent impl\nask("do it", agent = impl)')
+        rt = PipelineDriver(value_agent=lambda req: "output")
+        result = rt.run('let impl = AgentCommand("impl")\nask("do it", agent = impl)')
         assert result.ok is True
 
     def test_undeclared_named_agent_is_static_error(self) -> None:
@@ -279,10 +279,11 @@ class TestFallbackAgent:
         assert result.ok is False
         assert result.error is None
 
-    def test_default_agent_backs_declared_name(self) -> None:
+    def test_default_agent_dispatches_an_agent_value(self) -> None:
         rt = PipelineDriver(default_agent=lambda req: "ok")
-        # A default_agent backs any declared name without a dedicated registration.
-        result = rt.run('agent any_agent_name\nask("hi", agent = any_agent_name)')
+        result = rt.run(
+            'let any_agent_name = AgentCommand("any-agent-name")\nask("hi", agent = any_agent_name)'
+        )
         assert result.ok is True
 
     def test_declared_but_uncalled_agent_surfaces_warning(self) -> None:
@@ -395,7 +396,7 @@ class TestAgentRequest:
         rt.run('ask "Hello world"')
         assert received[0].prompt == "Hello world"
 
-    def test_request_agent_name_for_default(self) -> None:
+    def test_request_agent_value_for_default(self) -> None:
         received: list[AgentRequest] = []
 
         def agent(req: AgentRequest) -> str:
@@ -404,19 +405,19 @@ class TestAgentRequest:
 
         rt = PipelineDriver(default_agent=agent)
         rt.run('ask "Hi"')
-        assert received[0].agent == "ask"
+        assert received[0].agent.variant == "AgentClaude"
 
-    def test_request_agent_name_for_named(self) -> None:
+    def test_request_agent_value_for_named(self) -> None:
         received: list[AgentRequest] = []
 
         def reviewer(req: AgentRequest) -> str:
             received.append(req)
             return "ok"
 
-        rt = PipelineDriver()
-        rt.register_agent("reviewer", reviewer)
-        rt.run('agent reviewer\nask("Review this", agent = reviewer)')
-        assert received[0].agent == "reviewer"
+        rt = PipelineDriver(value_agent=reviewer)
+        rt.run('let reviewer = AgentCommand("reviewer")\nask("Review this", agent = reviewer)')
+        assert received[0].agent.variant == "AgentCommand"
+        assert received[0].agent.fields["command"] == TextValue("reviewer")
 
 
 class TestUncaughtAgentCallErrorSpan:
@@ -498,7 +499,7 @@ class TestUncaughtAgentCallErrorSpan:
                 cause="spawn_failure", exit_code=None, stderr_tail="boom", elapsed=0.0
             )
 
-        monkeypatch.setattr(exec_mod, "runner_backed_agent_factory", lambda **_: failing_agent)
+        monkeypatch.setattr(exec_mod, "value_driven_agent_factory", lambda **_: failing_agent)
         args = ExecArgs(
             file=str(agl_file),
             param_tokens=[],
@@ -820,12 +821,12 @@ class TestResetExternRegistry:
 class TestNoDefaultAgent:
     """an ``ask`` call needs a default (or fallback) agent."""
 
-    def test_ask_without_default_agent_is_static_error(self) -> None:
-        rt = PipelineDriver()  # no default agent configured
+    def test_ask_without_a_dispatcher_is_a_runtime_error(self) -> None:
+        rt = PipelineDriver()
         result = rt.run('ask "hi"')
         assert result.ok is False
-        assert result.error is None  # static (pre-execution), not an AgL exception
-        assert any("default agent" in d.message.lower() for d in result.diagnostics)
+        assert result.error is not None
+        assert result.error.type_name == "AgentCallError"
 
     def test_ask_with_default_agent_runs(self) -> None:
         def agent(request: object) -> str:
@@ -2703,81 +2704,40 @@ class TestDeclaredAgentsApi:
 # ---------------------------------------------------------------------------
 
 
-class TestAgentReconciliation:
-    """run() enforces the source↔host agent contract before execution."""
+class TestLegacyAgentRegistry:
+    """Legacy registrations are optional bridges for command-valued agents."""
 
-    def test_registered_but_undeclared_is_host_error(self) -> None:
-        calls: list[str] = []
-
-        def agent(req: AgentRequest) -> str:
-            calls.append(req.prompt)
-            return "ok"
-
-        rt = PipelineDriver()
-        rt.register_agent("ghost", agent)
-        # 'ghost' is registered but the source never declares it.
-        result = rt.run("let x = 1")
-        assert result.ok is False
-        assert result.error is None
-        msgs = " ".join(d.message for d in result.diagnostics)
-        assert "ghost" in msgs
-        assert "registered" in msgs.lower()
-        # Nothing executed.
-        assert calls == []
-
-    def test_registered_but_undeclared_diagnostic_line_is_one(self) -> None:
+    def test_registration_without_a_matching_value_does_not_fail(self) -> None:
         rt = PipelineDriver()
         rt.register_agent("ghost", lambda req: "ok")
-        result = rt.run("let x = 1")
-        assert result.diagnostics[0].line == 1
+        assert rt.run("let x = 1").ok
 
-    def test_declared_but_unbacked_is_host_error(self) -> None:
-        rt = PipelineDriver()  # no registration, no default agent
-        result = rt.run('agent orphan\nlet x = orphan "hi"')
-        assert result.ok is False
-        assert result.error is None
-        msgs = " ".join(d.message for d in result.diagnostics)
-        assert "orphan" in msgs
-        assert "backing" in msgs.lower()
+    def test_legacy_declaration_needs_no_host_backing(self) -> None:
+        assert PipelineDriver().run("agent orphan\n()").ok
 
-    def test_declared_but_unbacked_diagnostic_reports_declaration_line(self) -> None:
-        rt = PipelineDriver()
-        result = rt.run('let y = 1\nagent orphan\nlet x = orphan "hi"')
-        assert result.ok is False
-        # The declaration is on line 2.
-        assert result.diagnostics[0].line == 2
+    def test_legacy_agent_is_not_callable(self) -> None:
+        result = PipelineDriver().run('let y = 1\nagent orphan\nlet x = orphan "hi"')
+        assert not result.ok
+        assert result.diagnostics[0].line == 3
 
-    def test_declared_and_registered_runs(self) -> None:
+    def test_command_value_dispatches_through_a_matching_registration(self) -> None:
         calls: list[str] = []
 
         def agent(req: AgentRequest) -> str:
             calls.append(req.prompt)
             return "output"
 
-        rt = PipelineDriver()
-        rt.register_agent("impl", agent)
-        result = rt.run('agent impl\nask("do it", agent = impl)')
-        assert result.ok is True
+        rt = PipelineDriver(value_agent=agent)
+        result = rt.run('let impl = AgentCommand("impl")\nask("do it", agent = impl)')
+        assert result.ok
         assert calls == ["do it"]
 
-    def test_declared_with_default_agent_runs(self) -> None:
-        # No dedicated registration, but a default agent backs the declared name.
+    def test_command_value_uses_the_default_dispatcher(self) -> None:
         rt = PipelineDriver(default_agent=lambda req: "ok")
-        result = rt.run('agent any_name\nask("hi", agent = any_name)')
-        assert result.ok is True
+        result = rt.run('let any_name = AgentCommand("any-name")\nask("hi", agent = any_name)')
+        assert result.ok
 
-    def test_both_error_categories_reported_together(self) -> None:
-        rt = PipelineDriver()  # no default agent
-        rt.register_agent("ghost", lambda req: "ok")
-        # 'orphan' is declared but unbacked; 'ghost' is registered but undeclared.
-        result = rt.run('agent orphan\nlet x = orphan "hi"')
-        assert result.ok is False
-        msgs = " ".join(d.message for d in result.diagnostics)
-        assert "ghost" in msgs
-        assert "orphan" in msgs
-        assert len(result.diagnostics) == 2
-
-    def test_reconciliation_failure_skips_execution(self) -> None:
+    def test_unrelated_registration_does_not_skip_execution(self) -> None:
         calls: list[str] = []
 
         def agent(req: AgentRequest) -> str:
@@ -2786,7 +2746,7 @@ class TestAgentReconciliation:
 
         rt = PipelineDriver()
         rt.register_agent("ghost", agent)
-        rt.run('print "side effect?"')
+        assert rt.run('print "side effect?"').ok
         assert calls == []
 
 
@@ -3329,9 +3289,8 @@ class TestV2AskWithAgentValue:
             received.append(req.prompt)
             return "answer"
 
-        rt = PipelineDriver()
-        rt.register_agent("helper", agent)
-        result = rt.run('agent helper\nask("question", agent = helper)\n')
+        rt = PipelineDriver(value_agent=agent)
+        result = rt.run('let helper = AgentCommand("helper")\nask("question", agent = helper)\n')
         assert result.ok is True
         assert received == ["question"]
 
@@ -3488,17 +3447,15 @@ class TestRunPreparedProgram:
         assert result.ok is False
         assert "missing/module" in result.diagnostics[0].message
 
-    def test_graph_agents_are_entry_owned(self, tmp_path: pathlib.Path) -> None:
-        """Agents are entry-program-owned; a registered undeclared agent is an error."""
+    def test_graph_allows_unreferenced_legacy_registrations(self, tmp_path: pathlib.Path) -> None:
+        """A direct Agent value, not registry membership, selects dispatch."""
         from agm.agl.modules.roots import RootSet
 
         roots = RootSet(roots=frozenset({_STDLIB_ROOT}))
         prepared = PipelineDriver.prepare_program("let x = 1\nx", entry_path=None, roots=roots)
         rt = PipelineDriver()
-        rt.register_agent("reviewer", lambda req: "resp")  # type: ignore[arg-type]
-        result = rt.run_prepared(prepared)
-        assert result.ok is False
-        assert any("reviewer" in d.message for d in result.diagnostics)
+        rt.register_agent("reviewer", lambda req: "resp")
+        assert rt.run_prepared(prepared).ok
 
     def test_graph_check_only_returns_call_inventory(self, tmp_path: pathlib.Path) -> None:
         """check_only=True produces call_sites from the entry module."""
@@ -3883,79 +3840,68 @@ class TestRunPreparedDefensivePaths:
         assert result.ok
 
 
-class TestScopedAgentIdentity:
-    def test_same_named_scoped_agents_keep_distinct_backings(
+class TestScopedAgentValues:
+    def test_scoped_agent_values_keep_distinct_dispatches(
         self, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        """Scoped agent paths distinguish registrations, reconciliation, and dispatch."""
         source = """\
 scope A
-agent bot
+let bot = AgentCommand("a-bot")
 end A
 scope B
-agent bot
+let bot = AgentCommand("b-bot")
 end B
 print(ask("first", agent = A::bot))
 print(ask("second", agent = B::bot))
 """
-        runtime = PipelineDriver()
-        runtime.register_scoped_agent(("A",), "bot", lambda _request: "from A")
-        runtime.register_scoped_agent(("B",), "bot", lambda _request: "from B")
+
+        def dispatch(request: AgentRequest) -> str:
+            command = request.agent.fields["command"]
+            assert isinstance(command, TextValue)
+            return {"a-bot": "from A", "b-bot": "from B"}[command.value]
+
+        runtime = PipelineDriver(value_agent=dispatch)
 
         result = runtime.run(source)
 
         assert result.ok
         assert capsys.readouterr().out == "from A\nfrom B\n"
 
-    def test_same_named_scoped_agents_publish_distinct_full_path_names(self) -> None:
-        """A scoped ``agent`` publishes under its full path spelling, like ``let``/``var``.
-
-        ``RunResult.bindings`` is keyed by public name; two same-named scoped
-        agents at different paths must both survive there distinctly rather
-        than one silently overwriting the other.
-        """
-        from agm.agl.semantics.values import AgentValue
+    def test_scoped_agent_values_publish_distinct_full_path_names(self) -> None:
+        from agm.agl.semantics.values import EnumValue
 
         source = """\
 scope A
-agent bot
+let bot = AgentCommand("a-bot")
 end A
 scope B
-agent bot
+let bot = AgentCommand("b-bot")
 end B
-print(ask("first", agent = A::bot))
-print(ask("second", agent = B::bot))
 """
-        runtime = PipelineDriver()
-        runtime.register_scoped_agent(("A",), "bot", lambda _request: "from A")
-        runtime.register_scoped_agent(("B",), "bot", lambda _request: "from B")
-
-        result = runtime.run(source)
+        result = PipelineDriver().run(source)
 
         assert result.ok, result.diagnostics
-        assert isinstance(result.bindings["A::bot"], AgentValue)
-        assert isinstance(result.bindings["B::bot"], AgentValue)
+        assert isinstance(result.bindings["A::bot"], EnumValue)
+        assert isinstance(result.bindings["B::bot"], EnumValue)
         assert result.bindings["A::bot"] != result.bindings["B::bot"]
 
-    def test_scoped_agent_does_not_mask_a_same_named_root_binding(self) -> None:
-        """A scoped ``agent`` must not collide with a same-named root ``let``."""
-        from agm.agl.semantics.values import AgentValue, IntValue
+    def test_scoped_agent_value_does_not_mask_a_same_named_root_binding(self) -> None:
+        from agm.agl.semantics.values import EnumValue, IntValue
 
         source = """\
 let bot = 42
 scope A
-agent bot
+let bot = AgentCommand("a-bot")
 end A
 print(ask("hi", agent = A::bot))
 """
-        runtime = PipelineDriver()
-        runtime.register_scoped_agent(("A",), "bot", lambda _request: "hi there")
+        runtime = PipelineDriver(value_agent=lambda _request: "hi there")
 
         result = runtime.run(source)
 
         assert result.ok, result.diagnostics
         assert result.bindings["bot"] == IntValue(42)
-        assert isinstance(result.bindings["A::bot"], AgentValue)
+        assert isinstance(result.bindings["A::bot"], EnumValue)
 
 
 class TestScopedBindingPublicName:

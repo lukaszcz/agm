@@ -494,7 +494,6 @@ class TestValidProgram:
         source = "def add(x: int, y: int) -> int = x + y\nlet add1 = add(1, ?)\nadd1(2)"
         capabilities = HostCapabilities(
             agent_names=frozenset(),
-            has_default_agent=True,
             supports_shell_exec=True,
             codec_kinds={},
         )

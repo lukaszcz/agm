@@ -451,7 +451,6 @@ def _lower(source: str) -> "ExecutableProgram":
 
     caps = HostCapabilities(
         agent_names=frozenset(),
-        has_default_agent=True,
         supports_shell_exec=True,
         codec_kinds={
             "text": frozenset({"text"}),

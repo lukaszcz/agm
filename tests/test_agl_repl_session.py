@@ -75,6 +75,8 @@ def _literal_for_type(typ: Type) -> str:
         return "{}"
     if isinstance(typ, EnumType) and typ.name == "Option":
         return "None"
+    if isinstance(typ, EnumType) and typ.name == "Agent":
+        return 'AgentCommand("x")'
     raise AssertionError(f"no test literal for {typ!r}")
 
 
@@ -1905,12 +1907,13 @@ class TestExactlyOnce:
         assert vals == {"a": "first", "b": "second", "c": "third"}
         assert agent.calls == 3
 
-    def test_named_agent_dispatch(self) -> None:
-        # In AgL, named-agent calls use ask(prompt, agent: name) syntax.
+    def test_agent_value_dispatch(self) -> None:
         named = CountingAgent("named-reply")
-        s = ReplSession()
-        s.register_agent("reviewer", named)
-        r = s.eval_entry('agent reviewer\nlet out = ask("""review this""", agent = reviewer)')
+        s = ReplSession(default_agent=named)
+        r = s.eval_entry(
+            'let reviewer = AgentCommand("reviewer")\n'
+            'let out = ask("""review this""", agent = reviewer)'
+        )
         assert r.ok, r.diagnostics
         assert _text({name: value for name, _typ, value in s.bindings()}["out"]) == "named-reply"
         assert named.calls == 1
@@ -1922,16 +1925,11 @@ class TestExactlyOnce:
 
 
 class TestAgentDeclarations:
-    def test_registered_agent_callable_without_declaration(self) -> None:
-        # Host registration both DECLARES and BACKS an agent in the REPL: a
-        # source ``agent`` declaration is still needed for the agent to appear
-        # as a value in ask(agent: …) calls, but the host registration means
-        # the ask(prompt) default-agent path works without any source decl.
-        # For named agents, the source must declare them to use as a value.
-        # Test: registering and declaring an agent in the same entry works.
-        s = ReplSession()
-        s.register_agent("reviewer", CountingAgent("ok"))
-        r = s.eval_entry('agent reviewer\nask("""look""", agent = reviewer)')
+    def test_agent_value_dispatches_without_a_declaration(self) -> None:
+        s = ReplSession(default_agent=CountingAgent("ok"))
+        r = s.eval_entry(
+            'let reviewer = AgentCommand("reviewer")\nask("""look""", agent = reviewer)'
+        )
         assert r.ok
 
     def test_undeclared_unregistered_agent_call_errors(self) -> None:
@@ -1942,13 +1940,9 @@ class TestAgentDeclarations:
         assert not r.ok
         assert r.diagnostics
 
-    def test_cross_entry_source_declaration_resolves(self) -> None:
-        # An ``agent X`` declaration in one entry makes a later ask(agent: X)
-        # call resolve without re-declaring it (X is in the ambient set).
-        # The agent is also registered so the call has a backing when it dispatches.
-        s = ReplSession()
-        s.register_agent("helper", CountingAgent("done"))
-        r1 = s.eval_entry("agent helper")
+    def test_cross_entry_agent_value_resolves(self) -> None:
+        s = ReplSession(default_agent=CountingAgent("done"))
+        r1 = s.eval_entry('let helper = AgentCommand("helper")')
         assert r1.ok
         r2 = s.eval_entry('let out = ask("""go""", agent = helper)')
         assert r2.ok, r2.diagnostics
@@ -1956,10 +1950,9 @@ class TestAgentDeclarations:
 
     def test_scoped_declaration_retains_its_handle_across_entries(self) -> None:
         agent = CountingAgent("done")
-        s = ReplSession()
-        s.register_scoped_agent(("Tools",), "helper", agent)
+        s = ReplSession(default_agent=agent)
 
-        declared = s.eval_entry("scope Tools\nagent helper\nend Tools")
+        declared = s.eval_entry('scope Tools\nlet helper = AgentCommand("helper")\nend Tools')
         assert declared.ok, declared.diagnostics
         ref = s._session_scope_nodes[("Tools",)].members["helper"]
         handle = s._link_image.symbol_for_decl(ref.decl_node_id)
@@ -1971,6 +1964,12 @@ class TestAgentDeclarations:
         assert s._link_image.symbol_for_decl(ref.decl_node_id) == handle
         assert _text({name: value for name, _typ, value in s.bindings()}["out"]) == "done"
         assert agent.calls == 1
+
+    def test_scoped_legacy_registration_remains_parseable(self) -> None:
+        s = ReplSession()
+        s.register_scoped_agent(("Tools",), "legacy-helper", CountingAgent("done"))
+        result = s.eval_entry("scope Tools\nagent legacy-helper\nend Tools")
+        assert result.ok, result.diagnostics
 
     def test_failed_entry_declaration_does_not_persist(self) -> None:
         # A declaration in an entry that fails to promote must NOT leak into the
@@ -1992,13 +1991,9 @@ class TestAgentDeclarations:
         assert r.ok
         assert any("solo" in w.message for w in r.warnings)
 
-    def test_type_of_allows_registered_agent_call(self) -> None:
-        # The introspection (``type_of``) resolve path must also treat registered
-        # agents as ambient, so typing an ask(agent: …) expression does not raise
-        # a scope error.  The agent must be source-declared to appear as a value.
+    def test_type_of_allows_agent_value_call(self) -> None:
         s = ReplSession()
-        s.register_agent("reviewer", CountingAgent("x"))
-        s.eval_entry("agent reviewer")
+        s.eval_entry('let reviewer = AgentCommand("reviewer")')
         assert s.type_of('ask("""ask""", agent = reviewer)') == repr(TextType())
 
     def test_reset_clears_declared_agents(self) -> None:
@@ -3466,7 +3461,8 @@ class TestImports:
         )
         config = std_dir / "config.agl"
         config.write_text(
-            "import std/core using Option\n"
+            "import std/core using Option, Agent\n"
+            'builtin var default-agent: Agent = AgentCommand("runner")\n'
             'builtin var timeout: Option[text] = Some("not-a-timeout")\n',
             encoding="utf-8",
         )
@@ -3480,7 +3476,9 @@ class TestImports:
         assert next_node_id > 0
 
         config.write_text(
-            'import std/core using Option\nbuiltin var timeout: Option[text] = Some("2s")\n',
+            "import std/core using Option, Agent\n"
+            'builtin var default-agent: Agent = AgentCommand("runner")\n'
+            'builtin var timeout: Option[text] = Some("2s")\n',
             encoding="utf-8",
         )
         succeeded = session.eval_entry("import std/config\nlet fresh = 2")
@@ -3732,9 +3730,11 @@ class TestImports:
         lib.write_text("def add(a: int, b: int) -> int = a + b\n")
         s = self._make_session_with_root(tmp_path)
         # The custom-format ask produces a pre-lower contract materialization error.
-        s.register_agent("helper", CountingAgent("ok"))
         s.register_codec(BadCodec())
-        r = s.eval_entry('import mylib\nagent helper\nask("hi", agent = helper, format = "bad")')
+        r = s.eval_entry(
+            'import mylib\nlet helper = AgentCommand("helper")\n'
+            'ask("hi", agent = helper, format = "bad")'
+        )
         assert not r.ok
         assert any("Contract error" in d.message for d in r.diagnostics)
 

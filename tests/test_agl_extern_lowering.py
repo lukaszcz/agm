@@ -86,7 +86,6 @@ _PATH = Path("/virtual/extern_lowering.agl")
 
 _CAPS = HostCapabilities(
     agent_names=frozenset(),
-    has_default_agent=True,
     supports_shell_exec=True,
     supports_extern=True,
     codec_kinds={

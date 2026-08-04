@@ -5,10 +5,9 @@ enum Review
 
 param spec
 
-agent impl
-agent reviewer
-agent critic
-
+let impl = AgentCommand("impl")
+let reviewer = AgentCommand("reviewer")
+let critic = AgentCommand("critic")
 var artifact: text = ask("Implement %{spec}", agent = impl)
 
 # code and design declared as vars outside the loop so the until condition can see them.

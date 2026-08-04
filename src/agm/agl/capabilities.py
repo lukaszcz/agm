@@ -12,9 +12,6 @@ Design
   backings).  This is NOT the set of valid names: name validity is owned by the
   scope pass — an undeclared named agent is a scope binding error.  The runtime
   cross-checks ``agent_names`` against the source-declared set.
-- ``has_default_agent``: when ``True`` the host has a default agent that backs
-  the built-in ``ask`` keyword.  When ``False`` an ``ask`` call is a static
-  error.
 - ``codec_kinds``: mapping from codec name → frozenset of semantic type-kind
   strings the codec supports.  Built-in codecs: ``"text"`` (supports
   ``{"text"}``); ``"json"`` (supports
@@ -43,9 +40,6 @@ class HostCapabilities:
         or ``"exec"`` — those are built-ins handled separately).  This is the
         set of host-supplied backings, not the set of valid names: scope owns
         name validity (an undeclared named agent is a binding error).
-    has_default_agent:
-        When ``True``, a default agent backs the built-in ``ask`` keyword.
-        When ``False``, an ``ask`` call is a static error.
     supports_shell_exec:
         When ``True``, the host can execute ``exec`` (shell) calls.  When
         ``False``, any ``exec`` call site is a static error.  ``PipelineDriver``
@@ -63,7 +57,6 @@ class HostCapabilities:
     """
 
     agent_names: frozenset[str] = field(default_factory=frozenset)
-    has_default_agent: bool = False
     supports_shell_exec: bool = False
     supports_extern: bool = False
     codec_kinds: dict[str, frozenset[str]] = field(default_factory=dict)

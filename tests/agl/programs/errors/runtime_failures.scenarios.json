@@ -2,8 +2,15 @@
   "scenarios": [
     {
       "name": "all_failure_paths",
-      "params": {"d": 0, "mode": "diverge"},
-      "agents": {"tosser": ["{\"$case\": \"Tails\"}"]},
+      "params": {
+        "d": 0,
+        "mode": "diverge"
+      },
+      "agents": {
+        "tosser": [
+          "{\"$case\": \"Tails\"}"
+        ]
+      },
       "expect": {
         "stdout_contains": [
           "math failed: ",
@@ -11,26 +18,56 @@
           "exhausted at 2\n",
           "end\n"
         ],
-        "stdout_not_contains": ["heads", "loop done", "generic:", "anon"],
-        "calls": {"tosser": 1}
+        "stdout_not_contains": [
+          "heads",
+          "loop done",
+          "generic:",
+          "anon"
+        ],
+        "calls": {
+          "tosser": 1
+        }
       }
     },
     {
       "name": "all_success_paths",
-      "params": {"d": 5, "mode": "converge"},
-      "agents": {"tosser": ["{\"$case\": \"Heads\"}"]},
+      "params": {
+        "d": 5,
+        "mode": "converge"
+      },
+      "agents": {
+        "tosser": [
+          "{\"$case\": \"Heads\"}"
+        ]
+      },
       "expect": {
         "stdout": "2\nheads\nloop done 1\nend\n",
-        "calls": {"tosser": 1}
+        "calls": {
+          "tosser": 1
+        }
       }
     },
     {
       "name": "abort_caught_by_exception_base",
-      "params": {"d": 5, "mode": "boom"},
-      "agents": {"tosser": ["{\"$case\": \"Heads\"}"]},
+      "params": {
+        "d": 5,
+        "mode": "boom"
+      },
+      "agents": {
+        "tosser": [
+          "{\"$case\": \"Heads\"}"
+        ]
+      },
       "expect": {
-        "stdout_contains": ["generic: boom\n", "anon\n", "exhausted at 2\n", "end\n"],
-        "calls": {"tosser": 1}
+        "stdout_contains": [
+          "generic: boom\n",
+          "anon\n",
+          "exhausted at 2\n",
+          "end\n"
+        ],
+        "calls": {
+          "tosser": 1
+        }
       }
     }
   ]

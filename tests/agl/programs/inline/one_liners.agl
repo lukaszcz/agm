@@ -4,8 +4,7 @@ enum Status
   | Done
   | More
 
-agent stepper
-
+let stepper = AgentCommand("stepper")
 let a = "x"; let b = "y"; print(a + b)
 var n: int = 0
 var s: Status = More

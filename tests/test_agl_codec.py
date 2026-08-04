@@ -122,9 +122,16 @@ def _ask_builtin_items() -> tuple[Item, ...]:
         "  | Abort\n"
         "  | Retry(n: int)\n"
         "\n"
+        "builtin\n"
+        "enum Agent =\n"
+        "  | AgentCommand(command: text)\n"
+        "  | AgentClaude(model: text, thinking: text)\n"
+        "  | AgentCodex(model: text, thinking: text)\n"
+        "  | AgentPi(provider: text, model: text, thinking: text)\n"
+        "\n"
         "builtin def ask[T](\n"
         "  prompt: text,\n"
-        "  agent: agent = null,\n"
+        '  agent: Agent = AgentCommand(""),\n'
         '  format: text = "",\n'
         "  strict_json: bool = false,\n"
         "  on_parse_error: ParsePolicy = ParsePolicy::Abort,\n"
@@ -256,7 +263,6 @@ def _check_program_with_json(body: tuple[Item, ...]) -> CheckedModule:
     )
     caps = HostCapabilities(
         agent_names=frozenset(),
-        has_default_agent=True,
         codec_kinds={
             "text": frozenset({"text"}),
             "json": frozenset(
@@ -294,9 +300,19 @@ def _run_with_json_codec(
     }
     from agm.agl.ir.ids import AgentId
 
+    def dispatch(request: AgentRequest) -> str:
+        command = request.agent.fields.get("command")
+        if isinstance(command, TextValue):
+            agent = (named or {}).get(command.value, default_agent)
+        else:
+            agent = default_agent
+        assert agent is not None
+        return agent(request)
+
     registry = AgentRegistry(
         named={AgentId(name): agent for name, agent in (named or {}).items()},
         default_agent=default_agent,
+        value_agent=dispatch,
     )
     executable = lower_compiled_module(
         compile_checked_module(checked),
@@ -2128,8 +2144,10 @@ class TestPipelineDriverWireUp:
             )
         exc = exc_info.value.exc
         assert exc.display_name == "AgentParseError"
-        # In AgL the agent field reflects the built-in "ask" call site (default agent path).
-        assert exc.fields.get("agent") == TextValue("ask")
+        # AgentParseError preserves the default Agent enum value.
+        agent = exc.fields.get("agent")
+        assert isinstance(agent, EnumValue)
+        assert agent.variant == "AgentClaude"
 
     def test_agent_parse_error_has_target_type_field(self) -> None:
         let_n = _let("n", _ask_call("Num."), type_ann=_int_ty())

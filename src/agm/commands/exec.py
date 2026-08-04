@@ -53,12 +53,10 @@ import sys
 from pathlib import Path
 from typing import TYPE_CHECKING, TypeVar
 
-from agm.agent.config import default_agent_runner
-from agm.agent.runner import parse_command, split_command
 from agm.agl import PipelineDriver
 from agm.agl.diagnostics import format_diagnostic
 from agm.agl.modules.roots import assemble_roots
-from agm.agl.runtime.agents import AgentFn, runner_backed_agent_factory
+from agm.agl.runtime.agents import AgentFn, value_driven_agent_factory
 from agm.agl.runtime.host_settings import HostSettingsPolicy
 from agm.agl.runtime.params import build_engine_config_seeds, raw_option_str
 from agm.agl.semantics.engine_keys import (
@@ -228,8 +226,6 @@ def run(args: ExecArgs) -> None:
         print(f"Error: invalid exec configuration: {exc}", file=sys.stderr)
         raise SystemExit(1) from exc
 
-    base_runner_cmd = config.runner or default_agent_runner(merged=merged_config)
-
     # Resolve strict_json: CLI > config. A source ``std/config::strict-json :=
     # VALUE`` write is applied at runtime when it updates the live setting.
     strict_json = _first(args.strict_json, config.strict_json)
@@ -264,50 +260,10 @@ def run(args: ExecArgs) -> None:
     else:
         resolved_timeout = config.timeout
 
-    # ----------------------------------------------------------------
-    # Resolve declared agents and wire each one against a single runner-backed
-    # factory whose per-agent command map merges in precedence order (high →
-    # low):
-    #
-    #     [exec.agents.<name>]   (config, per-agent)
-    #     source `agent` runner hint
-    #     resolved default runner (runner_cmd, the floor)
-    #
-    # The source program OWNS the agent name set: every named agent must be
-    # declared.  One factory backs ``prompt`` (the default) and every declared
-    # name; it dispatches by ``request.agent`` against ``per_agent_cmds``,
-    # falling back to the default runner (the floor).  The agent idle-timeout is
-    # start-resolved from CLI > [exec] config > engine default and fixed for the
-    # lifetime of this factory.  A source ``std/config::timeout := e`` write
-    # updates ONLY the live shell-exec timeout from its program point onward.
-    # The runner command resolves CLI flag > [exec] config > shared loop default
-    # (the same default used by agm loop/review).
-    decls = prepared.declared_agents
-    from agm.agl.ir.ids import AgentId
-
-    source_hints = {
-        AgentId(declaration.name, declaration.scope_path): declaration.runner
-        for declaration in decls
-        if declaration.runner is not None
-    }
-    config_overrides = {AgentId(name): command for name, command in config.agents.items()}
-    per_agent_cmds = {**source_hints, **config_overrides}
-    runner_cmd = args.runner or config.runner or base_runner_cmd
-    # Validate the resolved runner command eagerly: malformed quoting (e.g.
-    # unclosed quote) and whitespace-only values are caught here via
-    # split_command, which handles the ValueError from shlex.split.  This
-    # honours the exit-1 = pre-execution contract.
-    split_command(runner_cmd, kind="runner")
-    for declaration in decls:
-        cmd = per_agent_cmds.get(AgentId(declaration.name, declaration.scope_path))
-        if cmd is not None:
-            split_command(cmd, kind="runner")
-
-    factory = runner_backed_agent_factory(
-        default_runner_cmd=runner_cmd,
-        per_agent_cmds=per_agent_cmds,
-        idle_timeout=resolved_timeout,
-    )
+    # Agent enum values own their invocation command.  The legacy declaration,
+    # runner, and [exec.agents] surfaces remain parseable during their removal
+    # transition, but they neither validate nor select value-driven dispatch.
+    factory = value_driven_agent_factory(idle_timeout=resolved_timeout)
 
     # ``prepare_program`` was already called above; the same ``PreparedProgram`` is
     # reused for discovery and the run, so the source is loaded and scoped only
@@ -320,14 +276,6 @@ def run(args: ExecArgs) -> None:
         shell_exec_timeout=resolved_timeout,
         default_call_depth_limit=resolved_call_depth_limit,
     )
-    # Register every declared agent so the registered set equals the declared
-    # set: reconciliation always passes; config-only agents the source never
-    # declares stay inert (NOT registered).
-    for declaration in decls:
-        agent_id = AgentId(declaration.name, declaration.scope_path)
-        if agent_id in per_agent_cmds:
-            runtime.register_scoped_agent(declaration.scope_path, declaration.name, factory)
-
     discovery = runtime.discover_params(prepared)
     for diag in discovery.warnings:
         print(format_diagnostic(diag, source_name=diagnostic_source_name), file=sys.stderr)
@@ -394,21 +342,10 @@ def run(args: ExecArgs) -> None:
     else:
         log_file = prepare_trace_log_from_decision(log_decision, command_name="exec")
 
-    # Host policy for reflecting host-consumed ``builtin var`` writes
-    # (``runner``, ``log``, ``log-file``) into the live services during the run.
-    # A source ``std/config::runner := ...`` rebuilds the default agent from the
-    # new command (source-authoritative); ``log``/``log-file`` writes repoint the
-    # trace store.  The mid-run trace repoint must NOT truncate an existing file
-    # and must reuse the trace path already prepared for this run rather than
-    # minting a second timestamped one, so it goes through
-    # ``LiveTracePathResolver`` rather than ``prepare_trace_log``.
-    def _build_runner(command: str) -> AgentFn:
-        parse_command(command, kind="runner")
-        return runner_backed_agent_factory(
-            default_runner_cmd=command,
-            per_agent_cmds=per_agent_cmds,
-            idle_timeout=resolved_timeout,
-        )
+    # ``runner`` is retained only as a transitional setting. Typed Agent values
+    # select their own builder command, so a write does not alter dispatch.
+    def _build_runner(_command: str) -> AgentFn:
+        return factory
 
     policy = HostSettingsPolicy(
         build_runner=_build_runner,

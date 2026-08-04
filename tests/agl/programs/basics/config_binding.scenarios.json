@@ -4,9 +4,13 @@
       "name": "source_value_readable",
       "params": {},
       "agents": {},
-      "module_roots": ["programs/basics"],
+      "module_roots": [
+        "programs/basics"
+      ],
       "expect": {
-        "stdout_contains": ["5\n"]
+        "stdout_contains": [
+          "5\n"
+        ]
       }
     }
   ]

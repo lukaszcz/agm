@@ -2,7 +2,9 @@
   "scenarios": [
     {
       "name": "both_calls_pass_first_try",
-      "params": {"topic": "docs"},
+      "params": {
+        "topic": "docs"
+      },
       "agents": {
         "reviewer": [
           "{\"$case\": \"Pass\"}",
@@ -11,31 +13,68 @@
       },
       "expect": {
         "stdout": "true\ntrue\n-1\n",
-        "calls": {"reviewer": 2},
+        "calls": {
+          "reviewer": 2
+        },
         "prompts": [
-          {"agent": "reviewer", "call": 0, "contains": ["Review this document:", "docs"]},
-          {"agent": "reviewer", "call": 1, "contains": ["Review this document:", "docs"]}
+          {
+            "agent": {
+              "$case": "AgentCommand",
+              "command": "reviewer"
+            },
+            "call": 0,
+            "contains": [
+              "Review this document:",
+              "docs"
+            ]
+          },
+          {
+            "agent": {
+              "$case": "AgentCommand",
+              "command": "reviewer"
+            },
+            "call": 1,
+            "contains": [
+              "Review this document:",
+              "docs"
+            ]
+          }
         ]
       }
     },
     {
       "name": "first_call_aborts_on_bad_response",
-      "params": {"topic": "chapter"},
+      "params": {
+        "topic": "chapter"
+      },
       "agents": {
-        "reviewer": ["not valid json at all"]
+        "reviewer": [
+          "not valid json at all"
+        ]
       },
       "expect": {
         "stdout": "",
-        "calls": {"reviewer": 1},
+        "calls": {
+          "reviewer": 1
+        },
         "raises": {
           "type": "AgentParseError",
-          "fields": {"agent": "reviewer", "attempts": 1, "target_type": "Verdict"}
+          "fields": {
+            "agent": {
+              "$case": "AgentCommand",
+              "command": "reviewer"
+            },
+            "attempts": 1,
+            "target_type": "Verdict"
+          }
         }
       }
     },
     {
       "name": "retry_call_recovers_after_two_bad_responses",
-      "params": {"topic": "spec"},
+      "params": {
+        "topic": "spec"
+      },
       "agents": {
         "reviewer": [
           "{\"$case\": \"Pass\"}",
@@ -46,7 +85,9 @@
       },
       "expect": {
         "stdout": "true\ntrue\n-1\n",
-        "calls": {"reviewer": 4}
+        "calls": {
+          "reviewer": 4
+        }
       }
     }
   ]

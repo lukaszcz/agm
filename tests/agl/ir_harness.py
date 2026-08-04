@@ -27,7 +27,7 @@ from agm.agl.runtime.request import AgentRequest, AgentResponse
 from agm.agl.scope.program import resolve_program
 from agm.agl.self_validation import self_validation_enabled
 from agm.agl.semantics.exceptions import AglRaise
-from agm.agl.semantics.values import ExceptionValue, Value
+from agm.agl.semantics.values import ExceptionValue, TextValue, Value
 from agm.agl.typecheck.env import CheckedModule
 from agm.agl.typecheck.program import CheckedProgram, check_program
 from agm.core.process import ProcessCaptureResult
@@ -368,7 +368,6 @@ def agent_caps(agent_names: frozenset[str], *, has_default: bool = False) -> Hos
     base = base_caps()
     return HostCapabilities(
         agent_names=agent_names,
-        has_default_agent=has_default,
         codec_kinds=base.codec_kinds,
     )
 
@@ -393,7 +392,16 @@ def _make_scripted_registry(
     default = (
         make_agent("__default__", default_responses) if default_responses is not None else None
     )
-    return AgentRegistry(named=named, default_agent=default)
+
+    def dispatch(request: AgentRequest) -> AgentResponse:
+        if request.agent.variant != "AgentCommand":
+            assert default is not None
+            return default(request)
+        command = request.agent.fields["command"]
+        assert isinstance(command, TextValue)
+        return named[AgentId(command.value)](request)
+
+    return AgentRegistry(named=named, default_agent=default, value_agent=dispatch)
 
 
 def evaluate_ir_with_agents(
@@ -433,7 +441,6 @@ def shell_caps(
     base = base_caps()
     return HostCapabilities(
         agent_names=agent_names,
-        has_default_agent=has_default,
         supports_shell_exec=True,
         codec_kinds=base.codec_kinds,
     )

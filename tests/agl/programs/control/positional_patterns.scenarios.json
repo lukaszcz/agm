@@ -2,7 +2,9 @@
   "scenarios": [
     {
       "name": "positional_some_rect_nested_some",
-      "params": {"n": 1},
+      "params": {
+        "n": 1
+      },
       "agents": {
         "src": [
           "{\"$case\": \"Some\", \"value\": 5}",
@@ -12,12 +14,16 @@
       },
       "expect": {
         "stdout": "5\n10\n12\n7\n3\n",
-        "calls": {"src": 3}
+        "calls": {
+          "src": 3
+        }
       }
     },
     {
       "name": "none_dot_none",
-      "params": {"n": 2},
+      "params": {
+        "n": 2
+      },
       "agents": {
         "src": [
           "{\"$case\": \"None\"}",
@@ -27,12 +33,16 @@
       },
       "expect": {
         "stdout": "0\n-1\n0\n-2\n0\n",
-        "calls": {"src": 3}
+        "calls": {
+          "src": 3
+        }
       }
     },
     {
       "name": "some_two_rect_nested_none",
-      "params": {"n": 3},
+      "params": {
+        "n": 3
+      },
       "agents": {
         "src": [
           "{\"$case\": \"Some\", \"value\": 2}",
@@ -42,7 +52,9 @@
       },
       "expect": {
         "stdout": "2\n4\n30\n-1\n5\n",
-        "calls": {"src": 3}
+        "calls": {
+          "src": 3
+        }
       }
     }
   ]

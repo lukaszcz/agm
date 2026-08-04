@@ -57,7 +57,6 @@ _PATH = Path("/virtual/extern_typecheck.agl")
 
 _CAPS = HostCapabilities(
     agent_names=frozenset(),
-    has_default_agent=True,
     supports_shell_exec=True,
     codec_kinds={
         "text": frozenset({"text"}),
@@ -79,9 +78,16 @@ _ASK_BUILTIN_SOURCE = (
     "  | Abort\n"
     "  | Retry(n: int)\n"
     "\n"
+    "builtin\n"
+    "enum Agent =\n"
+    "  | AgentCommand(command: text)\n"
+    "  | AgentClaude(model: text, thinking: text)\n"
+    "  | AgentCodex(model: text, thinking: text)\n"
+    "  | AgentPi(provider: text, model: text, thinking: text)\n"
+    "\n"
     "builtin def ask[T](\n"
     "  prompt: text,\n"
-    "  agent: agent = null,\n"
+    '  agent: Agent = AgentCommand(""),\n'
     '  format: text = "",\n'
     "  strict_json: bool = false,\n"
     "  on_parse_error: ParsePolicy = ParsePolicy::Abort,\n"

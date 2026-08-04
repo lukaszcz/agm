@@ -3110,13 +3110,11 @@ class _Lowerer:
         # 1. Evaluate the prompt (first positional arg).
         prompt_ir = self.lower_expr(call_node.args[0])
 
-        # 2. Evaluate the agent expression (named arg 'agent:', or default "ask").
+        # 2. Evaluate the explicit Agent value or load the ordinary defaulted parameter.
         if "agent" in named_map:
             agent_ir: IrExpr = self.lower_expr(named_map["agent"].value)
         else:
-            # No agent: named arg → the default agent name "ask" as a text constant.
-            # The evaluator will use this TextValue as the agent name.
-            agent_ir = IrConstText(location=loc, value="ask")
+            agent_ir = IrBuiltinLoad(location=loc, key="default-agent")
 
         # 3. Determine max_attempts from the on_parse_error named arg.
         max_attempts = self._extract_max_attempts(call_node)

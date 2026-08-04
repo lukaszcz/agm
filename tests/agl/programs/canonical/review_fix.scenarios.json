@@ -2,26 +2,60 @@
   "scenarios": [
     {
       "name": "pass_first_review",
-      "params": {"spec": "a CSV parser"},
+      "params": {
+        "spec": "a CSV parser"
+      },
       "agents": {
-        "impl": ["draft"],
-        "reviewer": ["{\"$case\": \"Pass\"}"],
+        "impl": [
+          "draft"
+        ],
+        "reviewer": [
+          "{\"$case\": \"Pass\"}"
+        ],
         "critic": []
       },
       "expect": {
         "stdout": "draft\n",
-        "calls": {"impl": 1, "reviewer": 1, "critic": 0},
+        "calls": {
+          "impl": 1,
+          "reviewer": 1,
+          "critic": 0
+        },
         "prompts": [
-          {"agent": "impl", "call": 0, "contains": ["a CSV parser"]},
-          {"agent": "reviewer", "call": 0, "contains": ["Review the artifact", "draft"]}
+          {
+            "agent": {
+              "$case": "AgentCommand",
+              "command": "impl"
+            },
+            "call": 0,
+            "contains": [
+              "a CSV parser"
+            ]
+          },
+          {
+            "agent": {
+              "$case": "AgentCommand",
+              "command": "reviewer"
+            },
+            "call": 0,
+            "contains": [
+              "Review the artifact",
+              "draft"
+            ]
+          }
         ]
       }
     },
     {
       "name": "fail_then_complete",
-      "params": {"spec": "a CSV parser"},
+      "params": {
+        "spec": "a CSV parser"
+      },
       "agents": {
-        "impl": ["draft", "{\"$case\": \"Complete\", \"output\": \"revised\"}"],
+        "impl": [
+          "draft",
+          "{\"$case\": \"Complete\", \"output\": \"revised\"}"
+        ],
         "reviewer": [
           "{\"$case\": \"Fail\", \"issues\": [{\"title\": \"No tests\", \"severity\": 3, \"description\": \"Failure paths untested.\"}]}",
           "{\"$case\": \"Pass\"}"
@@ -30,16 +64,42 @@
       },
       "expect": {
         "stdout": "revised\n",
-        "calls": {"impl": 2, "reviewer": 2, "critic": 0},
+        "calls": {
+          "impl": 2,
+          "reviewer": 2,
+          "critic": 0
+        },
         "prompts": [
-          {"agent": "impl", "call": 1, "contains": ["Fix valid issues.", "No tests", "draft"]},
-          {"agent": "reviewer", "call": 1, "contains": ["revised"]}
+          {
+            "agent": {
+              "$case": "AgentCommand",
+              "command": "impl"
+            },
+            "call": 1,
+            "contains": [
+              "Fix valid issues.",
+              "No tests",
+              "draft"
+            ]
+          },
+          {
+            "agent": {
+              "$case": "AgentCommand",
+              "command": "reviewer"
+            },
+            "call": 1,
+            "contains": [
+              "revised"
+            ]
+          }
         ]
       }
     },
     {
       "name": "changed_then_complete_then_pass",
-      "params": {"spec": "a CSV parser"},
+      "params": {
+        "spec": "a CSV parser"
+      },
       "agents": {
         "impl": [
           "draft",
@@ -55,61 +115,121 @@
       },
       "expect": {
         "stdout": "final\n",
-        "calls": {"impl": 3, "reviewer": 3, "critic": 0}
+        "calls": {
+          "impl": 3,
+          "reviewer": 3,
+          "critic": 0
+        }
       }
     },
     {
       "name": "blocked_fix_aborts_with_critic_report",
-      "params": {"spec": "a CSV parser"},
+      "params": {
+        "spec": "a CSV parser"
+      },
       "agents": {
-        "impl": ["draft", "{\"$case\": \"Blocked\", \"reason\": \"no repository access\"}"],
+        "impl": [
+          "draft",
+          "{\"$case\": \"Blocked\", \"reason\": \"no repository access\"}"
+        ],
         "reviewer": [
           "{\"$case\": \"Fail\", \"issues\": [{\"title\": \"X\", \"severity\": 5, \"description\": \"x\"}]}"
         ],
-        "critic": ["The fixer cannot reach the repository."]
+        "critic": [
+          "The fixer cannot reach the repository."
+        ]
       },
       "expect": {
         "stdout": "",
-        "calls": {"impl": 2, "reviewer": 1, "critic": 1},
+        "calls": {
+          "impl": 2,
+          "reviewer": 1,
+          "critic": 1
+        },
         "prompts": [
-          {"agent": "critic", "call": 0, "contains": ["Explain blocker:", "no repository access"]}
+          {
+            "agent": {
+              "$case": "AgentCommand",
+              "command": "critic"
+            },
+            "call": 0,
+            "contains": [
+              "Explain blocker:",
+              "no repository access"
+            ]
+          }
         ],
         "raises": {
           "type": "Abort",
-          "fields": {"message": "The fixer cannot reach the repository."}
+          "fields": {
+            "message": "The fixer cannot reach the repository."
+          }
         }
       }
     },
     {
       "name": "reviewer_retries_exhausted_diagnosed_and_rethrown",
-      "params": {"spec": "a CSV parser"},
+      "params": {
+        "spec": "a CSV parser"
+      },
       "agents": {
-        "impl": ["draft"],
-        "reviewer": ["nonsense one", "nonsense two", "nonsense three"],
-        "critic": ["The reviewer keeps replying in prose."]
+        "impl": [
+          "draft"
+        ],
+        "reviewer": [
+          "nonsense one",
+          "nonsense two",
+          "nonsense three"
+        ],
+        "critic": [
+          "The reviewer keeps replying in prose."
+        ]
       },
       "expect": {
         "stdout": "",
-        "calls": {"impl": 1, "reviewer": 3, "critic": 1},
+        "calls": {
+          "impl": 1,
+          "reviewer": 3,
+          "critic": 1
+        },
         "prompts": [
           {
-            "agent": "critic",
+            "agent": {
+              "$case": "AgentCommand",
+              "command": "critic"
+            },
             "call": 0,
-            "contains": ["reviewer", "nonsense three", "Validation errors:"]
+            "contains": [
+              "reviewer",
+              "nonsense three",
+              "Validation errors:"
+            ]
           }
         ],
         "raises": {
           "type": "AgentParseError",
-          "fields": {"agent": "reviewer", "attempts": 3, "target_type": "Review"}
+          "fields": {
+            "agent": {
+              "$case": "AgentCommand",
+              "command": "reviewer"
+            },
+            "attempts": 3,
+            "target_type": "Review"
+          }
         }
       }
     },
     {
       "name": "never_converges_summarized_and_rethrown",
-      "params": {"spec": "a CSV parser"},
+      "params": {
+        "spec": "a CSV parser"
+      },
       "agents": {
         "impl": {
-          "responses": ["draft", "{\"$case\": \"Complete\", \"output\": \"final\"}"],
+          "responses": [
+            "draft",
+            "{\"$case\": \"Complete\", \"output\": \"final\"}"
+          ],
           "repeat_last": true
         },
         "reviewer": {
@@ -118,15 +238,36 @@
           ],
           "repeat_last": true
         },
-        "critic": ["It never converged."]
+        "critic": [
+          "It never converged."
+        ]
       },
       "expect": {
         "stdout": "",
-        "calls": {"impl": 6, "reviewer": 5, "critic": 1},
+        "calls": {
+          "impl": 6,
+          "reviewer": 5,
+          "critic": 1
+        },
         "prompts": [
-          {"agent": "critic", "call": 0, "contains": ["did not converge", "final"]}
+          {
+            "agent": {
+              "$case": "AgentCommand",
+              "command": "critic"
+            },
+            "call": 0,
+            "contains": [
+              "did not converge",
+              "final"
+            ]
+          }
         ],
-        "raises": {"type": "MaxIterationsExceeded", "fields": {"limit": 5}}
+        "raises": {
+          "type": "MaxIterationsExceeded",
+          "fields": {
+            "limit": 5
+          }
+        }
       }
     }
   ]

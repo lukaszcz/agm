@@ -57,8 +57,9 @@ def test_program_run_rejects_checked_artifact_from_different_prepared_program(
     assert capsys.readouterr().out == ""
 
 
-def test_single_run_rechecks_checked_artifact_when_capabilities_change() -> None:
+def test_single_run_accepts_checked_ask_artifacts_across_dispatcher_changes() -> None:
     checking_runtime = PipelineDriver(default_agent=lambda _request: "result")
+    checking_runtime.register_agent("checker", lambda _request: "result")
     runtime = PipelineDriver()
     prepared = runtime.prepare_program('let value = ask "request"\nvalue')
     assert prepared.resolved is not None
@@ -67,13 +68,13 @@ def test_single_run_rechecks_checked_artifact_when_capabilities_change() -> None
 
     result = runtime.run_prepared(prepared, checked=checked, check_only=True)
 
-    assert not result.ok
+    assert result.ok
     assert result.error is None
-    assert result.diagnostics
 
 
-def test_program_run_rechecks_checked_artifact_when_capabilities_change() -> None:
+def test_program_run_accepts_checked_ask_artifacts_across_dispatcher_changes() -> None:
     checking_runtime = PipelineDriver(default_agent=lambda _request: "result")
+    checking_runtime.register_agent("checker", lambda _request: "result")
     runtime = PipelineDriver()
     prepared = _prepare_graph('let value = ask "request"\nvalue')
     assert prepared.resolved is not None
@@ -82,6 +83,5 @@ def test_program_run_rechecks_checked_artifact_when_capabilities_change() -> Non
 
     result = runtime.run_prepared(prepared, checked=checked, check_only=True)
 
-    assert not result.ok
+    assert result.ok
     assert result.error is None
-    assert result.diagnostics

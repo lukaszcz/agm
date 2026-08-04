@@ -2,7 +2,9 @@
   "scenarios": [
     {
       "name": "nested_constructors_preserve_outer_mutables",
-      "params": {"matched": true},
+      "params": {
+        "matched": true
+      },
       "expect": {
         "stdout": "read 4 alias true\nassign 9\nindexed 13\n",
         "calls": {}
@@ -10,7 +12,9 @@
     },
     {
       "name": "nonmatching_values_take_outer_fallbacks",
-      "params": {"matched": false},
+      "params": {
+        "matched": false
+      },
       "expect": {
         "stdout": "read outer miss\nassign outer miss\nindexed outer miss\n",
         "calls": {}

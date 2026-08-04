@@ -2,7 +2,9 @@
   "scenarios": [
     {
       "name": "empty_branch_selected",
-      "params": {"prefer_empty": true},
+      "params": {
+        "prefer_empty": true
+      },
       "expect": {
         "stdout": "[7]\n{\"answer\": 8}\n[]\n[]\n{}\n[Option::none, Option::some(value = 10)]\n[]\n",
         "calls": {}
@@ -10,7 +12,9 @@
     },
     {
       "name": "populated_branch_selected",
-      "params": {"prefer_empty": false},
+      "params": {
+        "prefer_empty": false
+      },
       "expect": {
         "stdout": "[7]\n{\"answer\": 8}\n[]\n[]\n{}\n[Option::none, Option::some(value = 10)]\n[11]\n",
         "calls": {}

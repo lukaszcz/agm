@@ -16,6 +16,7 @@ import pytest
 import agm.commands.exec as exec_command
 from agm.agl import PipelineDriver
 from agm.agl.runtime import AgentRequest, AgentResponse
+from agm.agl.runtime.agents import AgentFn
 from agm.cli_support.args import ExecArgs
 
 # ---------------------------------------------------------------------------
@@ -30,6 +31,11 @@ def _agent_returning(text: str):
         return AgentResponse(content=text)
 
     return agent
+
+
+def _agent_runtime(agent: AgentFn, *, strict_json: bool = False) -> PipelineDriver:
+    """Build a runtime with an explicit value dispatcher for test agents."""
+    return PipelineDriver(default_strict_json=strict_json, value_agent=agent)
 
 
 def _load_jsonl(path: Path) -> list[dict[str, object]]:
@@ -204,35 +210,34 @@ class TestExecCommandRecord:
 class TestAgentCallRecord:
     def test_agent_call_produces_attempt_record(self, tmp_path: Path) -> None:
         log_path = tmp_path / "trace.jsonl"
-        rt = PipelineDriver()
-        rt.register_agent("reviewer", _agent_returning("good"))
+        rt = _agent_runtime(_agent_returning("good"))
         rt.run(
-            'agent reviewer\nlet x: text = ask("check this", agent = reviewer)\nx',
+            'let reviewer = AgentCommand("reviewer")\n'
+            'let x: text = ask("check this", agent = reviewer)\n'
+            "x",
             log_file=log_path,
         )
         records = _load_jsonl(log_path)
         kinds = [r.get("kind") for r in records]
         assert "agent_call_attempt" in kinds
 
-    def test_agent_call_record_has_agent_name(self, tmp_path: Path) -> None:
+    def test_agent_call_record_has_rendered_agent_value(self, tmp_path: Path) -> None:
         log_path = tmp_path / "trace.jsonl"
-        rt = PipelineDriver()
-        rt.register_agent("critic", _agent_returning("ok"))
+        rt = _agent_runtime(_agent_returning("ok"))
         rt.run(
-            'agent critic\nlet x: text = ask("review", agent = critic)\nx',
+            'let critic = AgentCommand("critic")\nlet x: text = ask("review", agent = critic)\nx',
             log_file=log_path,
         )
         records = _load_jsonl(log_path)
         call_recs = [r for r in records if r.get("kind") == "agent_call_attempt"]
         assert call_recs
-        assert call_recs[0].get("agent") == "critic"
+        assert call_recs[0].get("agent") == 'Agent::AgentCommand(command = "critic")'
 
     def test_agent_call_record_has_attempt_number(self, tmp_path: Path) -> None:
         log_path = tmp_path / "trace.jsonl"
-        rt = PipelineDriver()
-        rt.register_agent("impl", _agent_returning("result"))
+        rt = _agent_runtime(_agent_returning("result"))
         rt.run(
-            'agent impl\nlet x: text = ask("do work", agent = impl)\nx',
+            'let impl = AgentCommand("impl")\nlet x: text = ask("do work", agent = impl)\nx',
             log_file=log_path,
         )
         records = _load_jsonl(log_path)
@@ -250,8 +255,6 @@ class TestRetryRecords:
     def test_retry_produces_multiple_attempt_records(self, tmp_path: Path) -> None:
         """With on_parse_error: retry[2], failed attempts appear in the trace."""
         log_path = tmp_path / "trace.jsonl"
-        rt = PipelineDriver(default_strict_json=True)
-
         call_count = 0
 
         def agent(request: AgentRequest) -> AgentResponse:
@@ -261,9 +264,9 @@ class TestRetryRecords:
                 return AgentResponse(content="not json")  # will fail to parse
             return AgentResponse(content="42")
 
-        rt.register_agent("impl", agent)
+        rt = _agent_runtime(agent, strict_json=True)
         rt.run(
-            "agent impl\n"
+            'let impl = AgentCommand("impl")\n'
             'let x: int = ask("get int", agent = impl, on_parse_error = Retry(n = 2))\nx',
             log_file=log_path,
         )
@@ -274,8 +277,6 @@ class TestRetryRecords:
     def test_retry_records_carry_attempt_index(self, tmp_path: Path) -> None:
         """Attempt indices should be 0, 1, 2 for three attempts."""
         log_path = tmp_path / "trace.jsonl"
-        rt = PipelineDriver(default_strict_json=True)
-
         call_count = 0
 
         def agent(request: AgentRequest) -> AgentResponse:
@@ -285,9 +286,9 @@ class TestRetryRecords:
                 return AgentResponse(content="not json")
             return AgentResponse(content="42")
 
-        rt.register_agent("impl", agent)
+        rt = _agent_runtime(agent, strict_json=True)
         rt.run(
-            "agent impl\n"
+            'let impl = AgentCommand("impl")\n'
             'let x: int = ask("get int", agent = impl, on_parse_error = Retry(n = 2))\nx',
             log_file=log_path,
         )
@@ -299,14 +300,13 @@ class TestRetryRecords:
     def test_parse_result_record_emitted_for_each_attempt(self, tmp_path: Path) -> None:
         """A parse_result record follows each agent_call_attempt."""
         log_path = tmp_path / "trace.jsonl"
-        rt = PipelineDriver(default_strict_json=True)
 
         def agent(request: AgentRequest) -> AgentResponse:
             return AgentResponse(content="not json at all")
 
-        rt.register_agent("impl", agent)
+        rt = _agent_runtime(agent, strict_json=True)
         src = (
-            "agent impl\n"
+            'let impl = AgentCommand("impl")\n'
             'let x: int = ask("get int", agent = impl, on_parse_error = Retry(n = 1))\nx'
         )
         try:
@@ -327,14 +327,14 @@ class TestRetryRecords:
 class TestExceptionRecord:
     def test_uncaught_exception_produces_exception_record(self, tmp_path: Path) -> None:
         log_path = tmp_path / "trace.jsonl"
-        rt = PipelineDriver(default_strict_json=True)
 
         def agent(request: AgentRequest) -> AgentResponse:
             return AgentResponse(content="not json")
 
-        rt.register_agent("impl", agent)
+        rt = _agent_runtime(agent, strict_json=True)
         result = rt.run(
-            'agent impl\nlet x: int = ask("get int", agent = impl)\nx', log_file=log_path
+            'let impl = AgentCommand("impl")\nlet x: int = ask("get int", agent = impl)\nx',
+            log_file=log_path,
         )
         assert not result.ok
         assert result.error is not None
@@ -345,14 +345,14 @@ class TestExceptionRecord:
 
     def test_exception_record_has_type_name(self, tmp_path: Path) -> None:
         log_path = tmp_path / "trace.jsonl"
-        rt = PipelineDriver(default_strict_json=True)
 
         def agent(request: AgentRequest) -> AgentResponse:
             return AgentResponse(content="not json")
 
-        rt.register_agent("impl", agent)
+        rt = _agent_runtime(agent, strict_json=True)
         result = rt.run(
-            'agent impl\nlet x: int = ask("get int", agent = impl)\nx', log_file=log_path
+            'let impl = AgentCommand("impl")\nlet x: int = ask("get int", agent = impl)\nx',
+            log_file=log_path,
         )
         assert not result.ok
 
@@ -362,14 +362,14 @@ class TestExceptionRecord:
 
     def test_exception_record_has_trace_id(self, tmp_path: Path) -> None:
         log_path = tmp_path / "trace.jsonl"
-        rt = PipelineDriver(default_strict_json=True)
 
         def agent(request: AgentRequest) -> AgentResponse:
             return AgentResponse(content="not json")
 
-        rt.register_agent("impl", agent)
+        rt = _agent_runtime(agent, strict_json=True)
         result = rt.run(
-            'agent impl\nlet x: int = ask("get int", agent = impl)\nx', log_file=log_path
+            'let impl = AgentCommand("impl")\nlet x: int = ask("get int", agent = impl)\nx',
+            log_file=log_path,
         )
         assert not result.ok
 
@@ -382,14 +382,14 @@ class TestExceptionRecord:
         """The trace_id in the exception record matches the .trace_id field on
         the uncaught AgL exception (RunResult.error.fields['trace_id'])."""
         log_path = tmp_path / "trace.jsonl"
-        rt = PipelineDriver(default_strict_json=True)
 
         def agent(request: AgentRequest) -> AgentResponse:
             return AgentResponse(content="not json")
 
-        rt.register_agent("impl", agent)
+        rt = _agent_runtime(agent, strict_json=True)
         result = rt.run(
-            'agent impl\nlet x: int = ask("get int", agent = impl)\nx', log_file=log_path
+            'let impl = AgentCommand("impl")\nlet x: int = ask("get int", agent = impl)\nx',
+            log_file=log_path,
         )
         assert not result.ok
         assert result.error is not None
@@ -409,15 +409,14 @@ class TestExceptionRecord:
         """An exception caught by try/catch is NOT written as an 'exception' record
         (it was handled in-language and did not escape the program)."""
         log_path = tmp_path / "trace.jsonl"
-        rt = PipelineDriver(default_strict_json=True)
 
         def agent(request: AgentRequest) -> AgentResponse:
             return AgentResponse(content="not json")
 
-        rt.register_agent("impl", agent)
+        rt = _agent_runtime(agent, strict_json=True)
         # The AgentParseError is caught and the result is a fallback string.
         result = rt.run(
-            "agent impl\n"
+            'let impl = AgentCommand("impl")\n'
             "try\n"
             '  let x: int = ask("get int", agent = impl)\n'
             "  x\n"
@@ -576,9 +575,10 @@ class TestNoLog:
         assert result.trace_path is None
 
     def test_no_log_with_agent_call_writes_nothing(self, tmp_path: Path) -> None:
-        rt = PipelineDriver()
-        rt.register_agent("a", _agent_returning("hello"))
-        result = rt.run('agent a\nlet x: text = ask("hi", agent = a)\nx', log_file=None)
+        rt = _agent_runtime(_agent_returning("hello"))
+        result = rt.run(
+            'let a = AgentCommand("a")\nlet x: text = ask("hi", agent = a)\nx', log_file=None
+        )
         assert result.ok
         jsonl_files = list(tmp_path.rglob("*.jsonl"))
         assert not jsonl_files
@@ -664,9 +664,11 @@ class TestSourceSpans:
 
     def test_agent_record_has_source_span(self, tmp_path: Path) -> None:
         log_path = tmp_path / "trace.jsonl"
-        rt = PipelineDriver()
-        rt.register_agent("impl", _agent_returning("hello"))
-        rt.run('agent impl\nlet x: text = ask("do work", agent = impl)\nx', log_file=log_path)
+        rt = _agent_runtime(_agent_returning("hello"))
+        rt.run(
+            'let impl = AgentCommand("impl")\nlet x: text = ask("do work", agent = impl)\nx',
+            log_file=log_path,
+        )
         records = _load_jsonl(log_path)
         call_recs = [r for r in records if r.get("kind") == "agent_call_attempt"]
         assert call_recs
@@ -907,9 +909,9 @@ class TestUnparseableFeedback:
                 return AgentResponse(content="totally not json #@!")
             return AgentResponse(content="42")
 
-        rt.register_agent("impl", agent)
+        rt = _agent_runtime(agent, strict_json=True)
         result = rt.run(
-            "agent impl\n"
+            'let impl = AgentCommand("impl")\n'
             'let x: int = ask("get int", agent = impl, on_parse_error = Retry(n = 1))\nx',
             log_file=log_path,
         )
@@ -928,14 +930,13 @@ class TestUnparseableFeedback:
     def test_parse_result_error_summary_non_empty_when_unparseable(self, tmp_path: Path) -> None:
         """parse_result trace record's error_summary is non-empty for unparseable output."""
         log_path = tmp_path / "trace.jsonl"
-        rt = PipelineDriver(default_strict_json=True)
 
         def agent(request: AgentRequest) -> AgentResponse:
             return AgentResponse(content="totally not json #@!")
 
-        rt.register_agent("impl", agent)
+        rt = _agent_runtime(agent, strict_json=True)
         rt.run(
-            "agent impl\n"
+            'let impl = AgentCommand("impl")\n'
             'let x: int = ask("get int", agent = impl, on_parse_error = Retry(n = 1))\nx',
             log_file=log_path,
         )
@@ -962,12 +963,14 @@ class TestUnparseableFeedback:
         def agent(request: AgentRequest) -> AgentResponse:
             return AgentResponse(content="42")
 
-        rt.register_agent("impl", agent)
+        rt = _agent_runtime(agent, strict_json=True)
         # Patch the IR output parser to return a failure with no details at all.
         bare_fail = ParseResult(ok=False, value=None, error_msg="", errors=())
         with patch("agm.agl.eval.ir_interpreter._parse_contract_output", return_value=bare_fail):
             result = rt.run(
-                'agent impl\nlet x: int = ask("q", agent = impl, on_parse_error = Abort())\nx'
+                'let impl = AgentCommand("impl")\n'
+                'let x: int = ask("q", agent = impl, on_parse_error = Abort())\n'
+                "x"
             )
         # The program raises AgentParseError; run returns ok=False.
         assert not result.ok

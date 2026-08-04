@@ -53,7 +53,7 @@ import dataclasses
 from pathlib import Path
 
 from agm.agl.capabilities import HostCapabilities
-from agm.agl.modules.ids import ENTRY_ID, STD_CORE_ID, ModuleId
+from agm.agl.modules.ids import ENTRY_ID, ModuleId
 from agm.agl.modules.loader import LoadedModule, ModuleGraph, build_repl_graph
 from agm.agl.modules.roots import RootSet
 from agm.agl.parser.parser import parse_program_seeded
@@ -73,7 +73,6 @@ from agm.agl.typecheck.program import check_program
 # tests never need to construct one themselves.
 _DEFAULT_CAPABILITIES = HostCapabilities(
     agent_names=frozenset(),
-    has_default_agent=True,
     supports_shell_exec=True,
     codec_kinds={
         "text": frozenset({"text"}),
@@ -115,7 +114,7 @@ def _cached_std_core() -> tuple[dict[ModuleId, LoadedModule], int]:
             cached={},
             roots=_roots(),
         )
-        _std_core_cache = {STD_CORE_ID: new_modules[STD_CORE_ID]}
+        _std_core_cache = new_modules
         _std_core_next_start_id = next_id
     return _std_core_cache, _std_core_next_start_id
 

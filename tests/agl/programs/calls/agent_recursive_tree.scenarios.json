@@ -9,18 +9,32 @@
       },
       "expect": {
         "stdout": "3\n",
-        "calls": {"builder": 1},
+        "calls": {
+          "builder": 1
+        },
         "prompts": [
           {
-            "agent": "builder", "call": 0,
-            "schema_contains": ["$defs", "$ref", "oneOf", "Leaf", "Node"]
+            "agent": {
+              "$case": "AgentCommand",
+              "command": "builder"
+            },
+            "call": 0,
+            "schema_contains": [
+              "$defs",
+              "$ref",
+              "oneOf",
+              "Leaf",
+              "Node"
+            ]
           }
         ]
       }
     },
     {
       "name": "strict_json_mode",
-      "runtime": {"default_strict_json": true},
+      "runtime": {
+        "default_strict_json": true
+      },
       "agents": {
         "builder": [
           "{\"$case\": \"Node\", \"value\": 5, \"left\": {\"$case\": \"Leaf\"}, \"right\": {\"$case\": \"Leaf\"}}"
@@ -28,7 +42,9 @@
       },
       "expect": {
         "stdout": "5\n",
-        "calls": {"builder": 1}
+        "calls": {
+          "builder": 1
+        }
       }
     },
     {
@@ -41,7 +57,9 @@
       },
       "expect": {
         "stdout": "3\n",
-        "calls": {"builder": 2}
+        "calls": {
+          "builder": 2
+        }
       }
     },
     {
@@ -53,12 +71,28 @@
         ]
       },
       "expect": {
-        "stdout_contains": ["$defs", "$ref", "schema: "],
-        "calls": {"builder": 2},
+        "stdout_contains": [
+          "$defs",
+          "$ref",
+          "schema: "
+        ],
+        "calls": {
+          "builder": 2
+        },
         "raises": {
           "type": "AgentParseError",
-          "fields": {"agent": "builder", "attempts": 2, "target_type": "Tree"},
-          "message_contains": ["Tree", "2 attempt"]
+          "fields": {
+            "agent": {
+              "$case": "AgentCommand",
+              "command": "builder"
+            },
+            "attempts": 2,
+            "target_type": "Tree"
+          },
+          "message_contains": [
+            "Tree",
+            "2 attempt"
+          ]
         }
       }
     }

@@ -51,7 +51,6 @@ from tests.agl.module_graph import resolve_and_check_entry
 
 _CAPS = HostCapabilities(
     agent_names=frozenset(),
-    has_default_agent=True,
     supports_shell_exec=True,
     codec_kinds={
         "text": frozenset({"text"}),
@@ -754,7 +753,6 @@ def test_agent_typed_arg_in_imported_function(tmp_path: Path) -> None:
     """An imported function accepting agent-typed arg can be called from entry."""
     caps_with_agent = HostCapabilities(
         agent_names=frozenset({"bot"}),
-        has_default_agent=True,
         supports_shell_exec=True,
         codec_kinds={
             "text": frozenset({"text"}),

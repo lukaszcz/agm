@@ -82,6 +82,19 @@ def split_command(command: str, *, kind: str) -> list[str]:
 def validate_command(command: list[str], *, kind: str) -> None:
     executable_template = command[0]
     try:
+        segments = split_template(executable_template)
+        has_prompt_file_target = "%%" in executable_template or any(
+            isinstance(segment, Hole) and segment.name == "PROMPT_FILE" for segment in segments
+        )
+        if has_prompt_file_target:
+            for segment in segments:
+                if (
+                    isinstance(segment, Hole)
+                    and segment.name != "PROMPT_FILE"
+                    and segment.name not in os.environ
+                ):
+                    raise InterpolationError("missing variable", segment.name, segment.offset)
+            return
         executable = interp(executable_template, os.environ)
     except InterpolationError as exc:
         print(

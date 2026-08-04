@@ -1182,6 +1182,23 @@ class TestValidateCommandNotFound:
         assert looked_up == ["fake-runner"]
         assert command == ["%{RUNNER_EXECUTABLE}", "--option=%{RUNNER_OPTION}"]
 
+    @pytest.mark.parametrize("placeholder", ["%{PROMPT_FILE}", "%%"])
+    def test_defers_prompt_file_executable_validation_and_uses_target_overlay(
+        self, monkeypatch: pytest.MonkeyPatch, placeholder: str
+    ) -> None:
+        monkeypatch.setenv("PROMPT_FILE", "wrong-executable")
+        monkeypatch.setattr(
+            "shutil.which",
+            lambda executable: pytest.fail(f"preflight checked {executable!r}"),
+        )
+
+        command = [placeholder]
+        validate_command(command, kind="runner")
+
+        assert command_with_prompt_target(command, Path("/tmp/correct-prompt-file")) == [
+            "/tmp/correct-prompt-file"
+        ]
+
     @pytest.mark.parametrize("executable", ["%{MISSING_RUNNER_EXECUTABLE}", "%{unterminated"])
     def test_invalid_executable_hole_exits_cleanly(
         self, executable: str, capsys: pytest.CaptureFixture[str]
@@ -1193,6 +1210,23 @@ class TestValidateCommandNotFound:
         error = capsys.readouterr().err
         assert "runner command executable" in error
         assert "Traceback" not in error
+
+    @pytest.mark.parametrize(
+        "executable, expected",
+        [
+            ("%{PROMPT_FILE}-%{MISSING_RUNNER_EXECUTABLE}", "MISSING_RUNNER_EXECUTABLE"),
+            ("%%-%{MISSING_RUNNER_EXECUTABLE}", "MISSING_RUNNER_EXECUTABLE"),
+            ("%%-%{unterminated", "unterminated"),
+        ],
+    )
+    def test_prompt_file_executable_still_rejects_ordinary_hole_errors(
+        self, executable: str, expected: str, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        with pytest.raises(SystemExit) as exc_info:
+            validate_command([executable], kind="runner")
+
+        assert exc_info.value.code == 1
+        assert expected in capsys.readouterr().err
 
 
 class TestCommandWithPromptTarget:

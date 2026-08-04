@@ -41,7 +41,7 @@ if TYPE_CHECKING:
     from agm.agl.runtime.types import HostEnvironment
     from agm.agl.scope.symbols import ConstructorRef, ScopeNode
     from agm.agl.semantics.types import Type
-    from agm.agl.semantics.values import EnumValue, Frame, Value
+    from agm.agl.semantics.values import BoolValue, EnumValue, Frame, Value
     from agm.agl.syntax.nodes import (
         ImportDecl,
         InfixAssoc,
@@ -122,6 +122,7 @@ class ReplSession:
         self,
         *,
         default_strict_json: bool = False,
+        strict_json_host_seeded: bool | None = None,
         default_loop_limit: int | None = None,
         default_call_depth_limit: int | None = None,
         default_agent: "AgentFn | None" = None,
@@ -149,17 +150,30 @@ class ReplSession:
         self._default_loop_limit = default_loop_limit
         self._default_stdlib = default_stdlib
         self._shell_exec_timeout = shell_exec_timeout
-        # Capture initial engine defaults for :reset to restore.
-        self._initial_loop_limit = default_loop_limit
-        self._initial_strict_json = default_strict_json
-        self._initial_shell_exec_timeout = shell_exec_timeout
         # The [exec] engine base for all six engine keys, provided by the host
         # command (commands/repl.py).  Supplies the runner/log/log-file base
         # values (the three host-consumed keys) for the session register seed.
         self._engine_base: dict[str, Value] = dict(engine_base) if engine_base is not None else {}
+        # Capture initial engine defaults and their host-seed presence for
+        # :reset to restore. A false strict-json value is still an explicit
+        # host control, so its presence cannot be derived from its value.
+        self._initial_loop_limit = default_loop_limit
+        self._initial_strict_json = default_strict_json
+        self._initial_strict_json_is_host_seed = (
+            "strict-json" in self._engine_base
+            if strict_json_host_seeded is None
+            else strict_json_host_seeded
+        )
+        self._initial_shell_exec_timeout = shell_exec_timeout
+        self._persisted_strict_json = self._build_initial_strict_json_setting()
+        # Effective declaration defaults learned when an entry loads ``std/config``.
+        # These survive :reset so a bare later entry still starts with the same
+        # setting values, while explicit host seeds in ``_engine_base`` retain
+        # precedence over them.
+        self._declared_engine_defaults: dict[str, Value] = {}
         # Persisted register values for the host-consumed engine settings
-        # (runner/log/log-file).  Seeded from the engine defaults overlaid with
-        # ``_engine_base``, threaded into every entry's interpreter, and read
+        # (runner/log/log-file). Seeded from explicit host values, threaded
+        # into every entry's interpreter, and read
         # back after a successful entry so a ``std/config::KEY := VALUE`` write
         # persists.
         self._persisted_host_settings: dict[str, Value] = self._build_host_settings_base()
@@ -536,34 +550,128 @@ class ReplSession:
         )
 
     def _build_host_settings_base(self) -> "dict[str, Value]":
-        """Seed the host-consumed register values for a fresh session.
+        """Return only host-provided seeds for host-consumed settings.
 
-        Starts from the engine defaults and overlays the session's
-        ``_engine_base`` values where present.  Unlike the runtime-live keys
-        (which persist through ``_update_engine_settings``), the host-consumed
-        keys carry no live interpreter field, so the session persists their
-        register values across entries in ``_persisted_host_settings``.
+        A missing key must stay absent until the interpreter has evaluated the
+        `builtin var` declaration's default; filling it with a host-side floor
+        here would incorrectly override that declared default.
         """
-        from agm.agl.runtime.params import build_engine_config_base
+        return {
+            key: self._engine_base[key]
+            for key in HOST_CONSUMED_ENGINE_KEYS
+            if key in self._engine_base
+        }
 
-        defaults = build_engine_config_base({})
-        return {key: self._engine_base.get(key, defaults[key]) for key in HOST_CONSUMED_ENGINE_KEYS}
+    def _build_initial_strict_json_setting(self) -> "BoolValue | None":
+        """Return the explicit strict-json host seed, if the host supplied one."""
+        from agm.agl.semantics.values import BoolValue
 
-    def _build_timeout_setting_base(self) -> "EnumValue":
-        """Seed the readable timeout register from host input or engine data."""
-        from agm.agl.runtime.params import build_engine_config_base
-        from agm.agl.semantics.values import EnumValue
+        if not self._initial_strict_json_is_host_seed:
+            return None
+        setting = self._engine_base.get("strict-json", BoolValue(self._initial_strict_json))
+        assert isinstance(setting, BoolValue)
+        return setting
+
+    def _build_timeout_setting_base(self) -> "EnumValue | None":
+        """Return a host timeout seed, leaving an absent key for its declaration."""
+        from agm.agl.runtime.option import some_value
+        from agm.agl.semantics.values import EnumValue, TextValue
         from agm.core.parse import format_timeout
 
-        raw = (
-            {}
-            if self._initial_shell_exec_timeout is None
-            else {"timeout": format_timeout(self._initial_shell_exec_timeout)}
-        )
-        defaults = build_engine_config_base(raw)
-        timeout = self._engine_base.get("timeout", defaults["timeout"])
-        assert isinstance(timeout, EnumValue)
+        if "timeout" in self._engine_base:
+            timeout = self._engine_base["timeout"]
+            assert isinstance(timeout, EnumValue)
+            return timeout
+        if self._initial_shell_exec_timeout is None:
+            return None
+        return some_value(TextValue(format_timeout(self._initial_shell_exec_timeout)))
+
+    def _record_declared_engine_defaults(
+        self, declared_keys: frozenset[str], effective_values: "Mapping[str, Value]"
+    ) -> None:
+        """Remember unseeded declared defaults before an entry can write them.
+
+        The REPL creates a fresh interpreter for each entry.  Its constructor
+        is the one place that evaluates a ``builtin var`` initializer, so the
+        entry pipeline gives us its initial effective values before evaluation.
+        Keeping them separately from mutable persisted settings lets :reset
+        discard source writes without replacing a declaration with a hard-coded
+        host fallback.
+        """
+        for key in declared_keys:
+            if not self._has_host_seed(key):
+                self._declared_engine_defaults.setdefault(key, effective_values[key])
+
+    def _has_host_seed(self, key: str) -> bool:
+        """Return whether *key* has an explicit host control over its declaration."""
+        if key in HOST_CONSUMED_ENGINE_KEYS:
+            return key in self._engine_base
+        return {
+            "strict-json": self._initial_strict_json_is_host_seed,
+            "max-iters": self._initial_loop_limit is not None,
+            "timeout": self._build_timeout_setting_base() is not None,
+        }[key]
+
+    def _build_reset_strict_json_setting(self) -> "BoolValue | None":
+        """Return the host seed or remembered declaration default for strict-json."""
+        from agm.agl.semantics.values import BoolValue
+
+        host_seed = self._build_initial_strict_json_setting()
+        if host_seed is not None:
+            return host_seed
+        declared_default = self._declared_engine_defaults.get("strict-json")
+        assert declared_default is None or isinstance(declared_default, BoolValue)
+        return declared_default
+
+    def _build_reset_host_settings_base(self) -> "dict[str, Value]":
+        """Return declared defaults overlaid by the immutable host seeds."""
+        return {
+            **{
+                key: self._declared_engine_defaults[key]
+                for key in HOST_CONSUMED_ENGINE_KEYS
+                if key in self._declared_engine_defaults
+            },
+            **self._build_host_settings_base(),
+        }
+
+    def _build_reset_timeout_setting_base(self) -> "EnumValue | None":
+        """Return the host timeout seed or the previously evaluated declaration default."""
+        from agm.agl.semantics.values import EnumValue
+
+        host_seed = self._build_timeout_setting_base()
+        if host_seed is not None:
+            return host_seed
+        timeout = self._declared_engine_defaults.get("timeout")
+        assert timeout is None or isinstance(timeout, EnumValue)
         return timeout
+
+    def _reset_live_engine_settings(self) -> tuple[bool, int | None, float | None]:
+        """Return the reset values for settings backed by interpreter fields."""
+        from agm.agl.semantics.values import BoolValue, IntValue, TextValue
+        from agm.core.parse import parse_timeout
+
+        strict_json = self._initial_strict_json
+        if not self._initial_strict_json_is_host_seed:
+            declared_strict = self._declared_engine_defaults.get("strict-json")
+            if declared_strict is not None:
+                assert isinstance(declared_strict, BoolValue)
+                strict_json = declared_strict.value
+
+        loop_limit = self._initial_loop_limit
+        if loop_limit is None:
+            declared_limit = self._declared_engine_defaults.get("max-iters")
+            if declared_limit is not None:
+                assert isinstance(declared_limit, IntValue)
+                loop_limit = declared_limit.value or None
+
+        shell_exec_timeout = self._initial_shell_exec_timeout
+        if shell_exec_timeout is None:
+            timeout = self._build_reset_timeout_setting_base()
+            if timeout is not None and timeout.variant == "Some":
+                timeout_value = timeout.fields["value"]
+                assert isinstance(timeout_value, TextValue)
+                shell_exec_timeout = parse_timeout(timeout_value.value)
+        return strict_json, loop_limit, shell_exec_timeout
 
     def _update_engine_settings(
         self,
@@ -579,6 +687,13 @@ class ReplSession:
         Agent/codec registrations on the driver are preserved.
         """
         self._default_strict_json = strict_json
+        if (
+            self._persisted_strict_json is not None
+            or "strict-json" in self._declared_engine_defaults
+        ):
+            from agm.agl.semantics.values import BoolValue
+
+            self._persisted_strict_json = BoolValue(strict_json)
         self._default_loop_limit = loop_limit
         self._shell_exec_timeout = shell_exec_timeout
         self._runtime.update_defaults(
@@ -689,6 +804,10 @@ class ReplSession:
             quote_strings=self._quote_strings_for_entry(program),
             type_table=checked.type_env.type_table,
         )
+
+    def _advance_node_ids(self, next_start_id: int) -> None:
+        """Consume node ids for an entry that failed after lowering began."""
+        self._next_node_id = next_start_id
 
     def _promote_ir_state(
         self,
@@ -1347,22 +1466,27 @@ class ReplSession:
         self._ambient_type_names = frozenset()
         # Re-seed the host-consumed registers so a prior ``std/config::runner``
         # (etc.) write does not bleed past :reset.
-        self._persisted_host_settings = self._build_host_settings_base()
-        self._persisted_timeout_setting = self._build_timeout_setting_base()
+        self._persisted_host_settings = self._build_reset_host_settings_base()
+        self._persisted_strict_json = self._build_reset_strict_json_setting()
+        self._persisted_timeout_setting = self._build_reset_timeout_setting_base()
         self._trace_path = self._initial_trace_path
         if self._host_settings_policy is not None:
+            from agm.agl.runtime.params import build_engine_config_base
             from agm.agl.semantics.values import TextValue
 
-            runner = self._persisted_host_settings["runner"]
+            runner = self._persisted_host_settings.get("runner")
+            if runner is None:
+                runner = build_engine_config_base({})["runner"]
             assert isinstance(runner, TextValue)
             registry = self._runtime.host_environment().registry
             registry.set_default_agent(self._host_settings_policy.build_runner(runner.value))
-        # Restore live engine settings to the session's initial defaults so that
-        # promoted ``std/config`` effects from prior entries do not bleed past :reset.
+        # Restore the initial host controls or, where none exist, the declared
+        # defaults evaluated when ``std/config`` was loaded before :reset.
+        strict_json, loop_limit, shell_exec_timeout = self._reset_live_engine_settings()
         self._update_engine_settings(
-            strict_json=self._initial_strict_json,
-            loop_limit=self._initial_loop_limit,
-            shell_exec_timeout=self._initial_shell_exec_timeout,
+            strict_json=strict_json,
+            loop_limit=loop_limit,
+            shell_exec_timeout=shell_exec_timeout,
         )
         # Clear module state.
         self._roots = None

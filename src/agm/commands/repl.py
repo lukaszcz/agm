@@ -33,8 +33,7 @@ from agm.agl.repl.agentmode import AgentMode
 from agm.agl.repl.agents import ConfirmingAgent
 from agm.agl.runtime.agents import AgentFn, runner_backed_agent_factory
 from agm.agl.runtime.host_settings import HostSettingsPolicy
-from agm.agl.runtime.params import build_engine_config_base, raw_option_str
-from agm.agl.semantics.values import Value
+from agm.agl.runtime.params import build_engine_config_seeds, raw_option_str
 from agm.cli_support.args import ReplArgs
 from agm.commands.exec import check_max_iters
 from agm.config.context import current_config_context
@@ -143,30 +142,39 @@ def run(args: ReplArgs) -> None:
     stdlib_root = resolve_stdlib_root(home=ctx.home)
     lib_root = resolve_lib_root(mod_roots_cfg, home=ctx.home)
 
-    # Build the [exec] engine base for all six engine keys.  The session seeds
-    # its host-consumed registers (runner, log, log-file) from these values; the
-    # remaining keys complete the dict for any consumer that reads all six.
-    #
-    # The raw timeout string is read from the TOML table via raw_option_str so
-    # the value holds the original written string (e.g. "30s") rather than a
-    # parsed float (e.g. "30.0").
+    # Seed only explicit CLI/config controls.  Agent and trace-service
+    # fallbacks remain absent so a ``builtin var`` initializer can provide the
+    # setting default.  The raw timeout preserves its configured spelling.
     exec_raw_table = toml_dict(merged_config.get("exec"))
-    raw_timeout_str = raw_option_str(exec_raw_table, {}, "timeout")
-    # An absent host limit leaves the valve off; the builtin register exposes
-    # that state as zero.
-    repl_base_raw: dict[str, object] = {
-        "strict-json": strict_json,
-        "runner": runner_cmd,
-        "log": log_decision.enabled,
-        "timeout": raw_timeout_str,
-        "log-file": log_decision.explicit_path,
-    }
-    if loop_limit is not None:
-        repl_base_raw["max-iters"] = loop_limit
-    engine_base: dict[str, Value] = build_engine_config_base(repl_base_raw)
+    seed_raw: dict[str, object] = {}
+    if args.runner is not None:
+        seed_raw["runner"] = args.runner
+    elif "runner" in exec_raw_table and config.runner is not None:
+        seed_raw["runner"] = config.runner
+    if args.strict_json is not None:
+        seed_raw["strict-json"] = args.strict_json
+    elif "strict-json" in exec_raw_table:
+        seed_raw["strict-json"] = strict_json
+    if args.max_iters is not None:
+        seed_raw["max-iters"] = args.max_iters
+    elif "max-iters" in exec_raw_table and loop_limit is not None:
+        seed_raw["max-iters"] = loop_limit
+    raw_timeout = raw_option_str(exec_raw_table, {}, "timeout")
+    if raw_timeout is not None:
+        seed_raw["timeout"] = raw_timeout
+    if args.no_log or args.log or args.log_file is not None:
+        seed_raw["log"] = log_decision.enabled
+    elif "log" in exec_raw_table or "log-file" in exec_raw_table:
+        seed_raw["log"] = log_decision.enabled
+    if args.log_file is not None:
+        seed_raw["log-file"] = args.log_file
+    elif "log-file" in exec_raw_table and config.log_file is not None:
+        seed_raw["log-file"] = config.log_file
+    engine_base = build_engine_config_seeds(seed_raw)
 
     session = ReplSession(
         default_strict_json=strict_json,
+        strict_json_host_seeded="strict-json" in engine_base,
         default_loop_limit=loop_limit,
         default_call_depth_limit=call_depth_limit,
         default_agent=confirming_agent,

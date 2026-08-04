@@ -8,11 +8,18 @@ through a qualified reference and assign it with ``:=``.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import cast
+
+import pytest
 
 from agm.agent.defaults import DEFAULT_AGENT_RUNNER
+from agm.agl.constant import is_constant_expression
 from agm.agl.modules.roots import RootSet
+from agm.agl.parser import parse_program
 from agm.agl.pipeline import PipelineDriver, RunResult
-from agm.agl.semantics.values import BoolValue, EnumValue, IntValue, TextValue
+from agm.agl.runtime.option import some_value
+from agm.agl.semantics.values import BoolValue, EnumValue, IntValue, TextValue, Value
+from agm.agl.syntax import BinaryOp, BuiltinVarDecl, Expr, VarRef, walk
 
 _STDLIB = Path(__file__).resolve().parent.parent / "stdlib"
 
@@ -32,6 +39,7 @@ def _run_program(
     extra_roots: frozenset[Path] = frozenset(),
     default_loop_limit: int | None = None,
     shell_exec_timeout: float | None = None,
+    builtin_host_settings: dict[str, Value] | None = None,
 ) -> RunResult:
     """Run *source* (with imports) through the program pipeline against the stdlib."""
     roots = RootSet(roots=frozenset({_STDLIB}) | extra_roots)
@@ -40,12 +48,18 @@ def _run_program(
         shell_exec_timeout=shell_exec_timeout,
     )
     prepared = rt.prepare_program(source, entry_path=None, roots=roots)
-    result = rt.run_prepared(prepared)
+    result = rt.run_prepared(prepared, builtin_host_settings=builtin_host_settings)
     assert isinstance(result, RunResult)
     return result
 
 
-def _run_with_std_config(source: str, std_config: str, root: Path) -> RunResult:
+def _run_with_std_config(
+    source: str,
+    std_config: str,
+    root: Path,
+    *,
+    builtin_host_settings: dict[str, TextValue] | None = None,
+) -> RunResult:
     """Run against a test ``std/config`` module without ordinary entry declarations."""
     config_path = root / "std" / "config.agl"
     config_path.parent.mkdir(parents=True)
@@ -57,7 +71,7 @@ def _run_with_std_config(source: str, std_config: str, root: Path) -> RunResult:
         roots=RootSet(roots=frozenset({root})),
         default_stdlib=False,
     )
-    result = rt.run_prepared(prepared)
+    result = rt.run_prepared(prepared, builtin_host_settings=builtin_host_settings)
     assert isinstance(result, RunResult)
     return result
 
@@ -126,6 +140,93 @@ class TestBuiltinVarRegisters:
 # ---------------------------------------------------------------------------
 # Placement + name-whitelist gate (mirrors the builtin-def gate)
 # ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("source", "expected"),
+    (
+        ("[1]", True),
+        ("[value]", False),
+        ('{"key": 1}', True),
+        ('{"key": value}', False),
+        ("Ctor", True),
+        ("value", False),
+        ("Ctor::[text]", True),
+        ("value::[text]", False),
+        ("Ctor(1, value=1)", True),
+        ("value()", False),
+        ("Ctor(value)", False),
+        ("Ctor(1, value=value)", False),
+    ),
+)
+def test_constant_expression_validation(source: str, expected: bool) -> None:
+    (item,) = parse_program(source).body.items
+    expression = cast(Expr, item)
+    constructor_node_ids: set[int] = set()
+
+    def collect_constructor_node_id(node: object) -> None:
+        if isinstance(node, VarRef) and node.name == "Ctor":
+            constructor_node_ids.add(node.node_id)
+
+    walk(expression, collect_constructor_node_id)
+
+    assert (
+        is_constant_expression(
+            expression,
+            is_constructor=lambda node_id: node_id in constructor_node_ids,
+        )
+        is expected
+    )
+
+
+class TestBuiltinVarDefaults:
+    def test_text_initializer_is_the_engine_default_without_a_host_seed(
+        self, tmp_path: Path
+    ) -> None:
+        result = _run_with_std_config(
+            "open import std/config\nlet value = std/config::runner\nvalue",
+            'builtin var runner: text = "declared"',
+            tmp_path,
+        )
+
+        assert result.ok, f"expected success but got: {result.error!r}"
+        assert result.bindings["value"] == TextValue("declared")
+
+    def test_host_seed_overrides_the_declared_default(self, tmp_path: Path) -> None:
+        result = _run_with_std_config(
+            "open import std/config\nlet value = std/config::runner\nvalue",
+            'builtin var runner: text = "declared"',
+            tmp_path,
+            builtin_host_settings={"runner": TextValue("seeded")},
+        )
+
+        assert result.ok, f"expected success but got: {result.error!r}"
+        assert result.bindings["value"] == TextValue("seeded")
+
+    def test_initializer_must_match_the_declared_type(self, tmp_path: Path) -> None:
+        result = _run_with_std_config(
+            "open import std/config\n()",
+            "builtin var runner: text = false",
+            tmp_path,
+        )
+
+        assert not result.ok
+        assert result.diagnostics
+
+    def test_initializer_must_be_constant(self, tmp_path: Path) -> None:
+        declaration_source = 'builtin var runner: text = "not " + "constant"'
+        (declaration,) = parse_program(declaration_source).body.items
+        assert isinstance(declaration, BuiltinVarDecl)
+        assert isinstance(declaration.default, BinaryOp)
+
+        result = _run_with_std_config(
+            "open import std/config\n()",
+            declaration_source,
+            tmp_path,
+        )
+
+        assert not result.ok
+        assert result.diagnostics
 
 
 class TestBuiltinVarGate:
@@ -321,6 +422,18 @@ class TestStdConfigQualified:
         bound = result.bindings["t"]
         assert isinstance(bound, EnumValue)
         assert bound.fields["value"] == TextValue("0.0001s")
+
+    def test_explicit_timeout_seed_overrides_shell_timeout(self) -> None:
+        result = _run_program(
+            "open import std/config\nlet t = std/config::timeout\nt\n",
+            shell_exec_timeout=2.0,
+            builtin_host_settings={"timeout": some_value(TextValue("45s"))},
+        )
+
+        assert result.ok, f"expected success but got: {result.error!r}"
+        bound = result.bindings["t"]
+        assert isinstance(bound, EnumValue)
+        assert bound.fields["value"] == TextValue("45s")
 
     def test_tiny_host_timeout_can_be_assigned_back(self) -> None:
         result = _run_program(

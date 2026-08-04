@@ -12,6 +12,7 @@ from __future__ import annotations
 import dataclasses
 from collections.abc import Mapping
 from pathlib import Path
+from shutil import copyfile
 from unittest.mock import patch
 
 import pytest
@@ -3452,6 +3453,41 @@ class TestImports:
 
         assert not failed.ok
         assert s._link_image._state.builtin_nominals.nominal("RangeError") == previous
+
+    def test_interpreter_initialization_failure_rolls_back_link_image(self, tmp_path: Path) -> None:
+        """A failed setting bootstrap leaves no linked declarations but consumes node ids."""
+        from agm.agl.lower import LinkImage
+
+        std_dir = tmp_path / "std"
+        std_dir.mkdir()
+        copyfile(
+            Path(__file__).resolve().parents[1] / "stdlib" / "std" / "core.agl",
+            std_dir / "core.agl",
+        )
+        config = std_dir / "config.agl"
+        config.write_text(
+            "import std/core using Option\n"
+            'builtin var timeout: Option[text] = Some("not-a-timeout")\n',
+            encoding="utf-8",
+        )
+        session = ReplSession(stdlib_root=tmp_path)
+
+        failed = session.eval_entry("import std/config\nlet stale = 1")
+
+        assert not failed.ok
+        assert session._link_image == LinkImage()
+        next_node_id = session._next_node_id
+        assert next_node_id > 0
+
+        config.write_text(
+            'import std/core using Option\nbuiltin var timeout: Option[text] = Some("2s")\n',
+            encoding="utf-8",
+        )
+        succeeded = session.eval_entry("import std/config\nlet fresh = 2")
+
+        assert succeeded.ok, succeeded.diagnostics
+        assert {name for name, _typ, _value in session.bindings()} == {"fresh"}
+        assert session._session_scope.bindings["fresh"].decl_node_id >= next_node_id
 
     def test_runtime_failure_does_not_mark_module_linked(self, tmp_path: Path) -> None:
         # Regression: when an entry imports a previously unseen

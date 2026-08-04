@@ -216,6 +216,59 @@ class TestReplRun:
         assert call["history_path"] == home / ".agm" / "repl_history"
         assert (home / ".agm").is_dir()
 
+    def test_exec_config_seeds_each_configured_engine_setting(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        fake_console: list[dict[str, object]],
+    ) -> None:
+        home = _isolated_home(monkeypatch, tmp_path)
+        agm_dir = home / ".agm"
+        agm_dir.mkdir()
+        (agm_dir / "config.toml").write_text(
+            "[exec]\n"
+            'runner = "configured-runner"\n'
+            "strict-json = true\n"
+            "max-iters = 3\n"
+            'timeout = "2s"\n'
+            "log = true\n"
+            'log-file = "configured.jsonl"\n'
+        )
+        monkeypatch.setattr(
+            repl_command, "prepare_trace_log_from_decision", lambda *args, **kwargs: None
+        )
+
+        repl_command.run(_args(runner=None))
+
+        session: ReplSession = fake_console[0]["session"]
+        assert set(session._engine_base) == {
+            "runner",
+            "strict-json",
+            "max-iters",
+            "timeout",
+            "log",
+            "log-file",
+        }
+
+    def test_cli_false_strict_json_and_blank_config_runner_seed_correctly(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        fake_console: list[dict[str, object]],
+    ) -> None:
+        from agm.agl.semantics.values import BoolValue
+
+        home = _isolated_home(monkeypatch, tmp_path)
+        agm_dir = home / ".agm"
+        agm_dir.mkdir()
+        (agm_dir / "config.toml").write_text('[exec]\nrunner = ""\n')
+
+        repl_command.run(_args(runner=None, strict_json=False))
+
+        session: ReplSession = fake_console[0]["session"]
+        assert "runner" not in session._engine_base
+        assert session._engine_base["strict-json"] == BoolValue(False)
+
     def test_history_path_uses_agm_home_override(
         self,
         monkeypatch: pytest.MonkeyPatch,
@@ -285,11 +338,11 @@ class TestReplRun:
         repl_command.run(args)
         session: ReplSession = fake_console[0]["session"]
         assert session._persisted_host_settings["log"] == BoolValue(expected_log)
-        log_file = session._persisted_host_settings["log-file"]
-        assert isinstance(log_file, EnumValue)
         if expected_file is None:
-            assert log_file.variant == "None"
+            assert "log-file" not in session._persisted_host_settings
         else:
+            log_file = session._persisted_host_settings["log-file"]
+            assert isinstance(log_file, EnumValue)
             assert log_file.fields["value"] == TextValue(expected_file)
 
     def test_dry_run_runs_console_in_check_only_mode(

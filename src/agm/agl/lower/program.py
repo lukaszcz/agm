@@ -32,6 +32,7 @@ from agm.agl.matchcompile import MatchCompiledProgram
 from agm.agl.modules.ids import STD_CORE_ID, ModuleId
 from agm.agl.self_validation import self_validation_enabled
 from agm.agl.semantics.types import ExceptionType, RecordType
+from agm.agl.syntax.nodes import BuiltinVarDecl, static_items
 from agm.util.text import normalize_newlines
 
 __all__ = ["lower_program"]
@@ -209,6 +210,15 @@ def lower_program(
             initializers=initializers,
         )
 
+    # Lower declared engine defaults separately from program initializers. They
+    # are constant expressions evaluated only while an interpreter is seeded.
+    builtin_setting_defaults = {
+        item.name: lowerer.lower_coerced(item.default, lowerer._node_type(item.default.node_id))
+        for mid, lowerer in module_lowerers.items()
+        for item in static_items(checked.modules[mid].resolved.program.body.items)
+        if isinstance(item, BuiltinVarDecl) and item.default is not None
+    }
+
     # Collect entry-module params (only the entry module contributes params).
     entry_lowerer = module_lowerers[checked.entry_id]
     payloads = contract_payloads if contract_payloads is not None else {}
@@ -241,6 +251,7 @@ def lower_program(
         contracts=dict(link.contracts),
         dry_run_inventory=dry_run_inventory,
         builtin_nominals=link.builtin_nominals,
+        builtin_setting_defaults=builtin_setting_defaults,
     )
     if self_validation_enabled():
         validate_ir(program, deep=True)

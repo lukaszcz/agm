@@ -678,14 +678,19 @@ class AstBuilder(Transformer):
         )
 
     def builtin_var_def(self, meta: Meta, args: _Args) -> syntax.BuiltinVarDecl:
-        """builtin_var_def: "builtin" _NEWLINE? "var" name type_ann"""
+        """builtin_var_def: "builtin" _NEWLINE? "var" name type_ann (EQ expr)?"""
         name_tok = _find_name_token(args)
         type_expr = _find_type_expr(args[1:])
+        default = cast(
+            syntax.Expr,
+            next((arg for arg in args if _is_expr_node(arg)), None),
+        )
         return syntax.BuiltinVarDecl(
             name=str(name_tok),
             type_ann=type_expr,
             span=self._span_from_meta(meta),
             node_id=self._next_id(),
+            default=default,
         )
 
     def _make_infix_decl(
@@ -3327,6 +3332,11 @@ def _rewrite_item(
         return replace(item, value=_rewrite_expr(item.value, table, builder))
     if isinstance(item, syntax.VarDecl):
         return replace(item, value=_rewrite_expr(item.value, table, builder))
+    if isinstance(item, syntax.BuiltinVarDecl):
+        return replace(
+            item,
+            default=(None if item.default is None else _rewrite_expr(item.default, table, builder)),
+        )
     if isinstance(item, syntax.AssignStmt):
         return replace(
             item,

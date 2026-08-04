@@ -356,17 +356,19 @@ previously declared user operator.
 ```ebnf
 let_decl       ::= "let" pattern type_ann? "=" expr
 var_decl       ::= "var" decl_head type_ann? "=" expr
-builtin_var_def ::= "builtin" NEWLINE? "var" name type_ann  (* body-less; std/config only *)
+builtin_var_def ::= "builtin" NEWLINE? "var" name type_ann ["=" expr]  (* std/config only *)
 assign_stmt ::= assign_target ":=" expr
 assign_target ::= qualifier_chain? name
                 | postfix "[" expr "]"
 ```
 
 A `builtin var` is a body-less, host-backed mutable binding with a mandatory
-type and no initializer; the `builtin` modifier may sit on the same line or the
-line directly above (like `builtin def`). It may be declared only at the root,
-or in a named scope region, of `std/config`; entry modules and other library
-modules cannot declare one.
+type and an optional constant initializer. The initializer must have the
+declared type and use only literals, literal containers, and constructors. It
+becomes the engine default only when the host supplies no initial value. The
+`builtin` modifier may sit on the same line or the line directly above (like
+`builtin def`). It may be declared only at the root, or in a named scope region,
+of `std/config`; entry modules and other library modules cannot declare one.
 
 `var`'s `decl_head` accepts the same optional scope-path prefix as the type
 declarations above (`var A::count = 0`). `let` needs no separate grammar for

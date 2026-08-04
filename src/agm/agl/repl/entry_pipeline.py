@@ -33,7 +33,7 @@ if TYPE_CHECKING:
     from agm.agl.runtime.types import HostEnvironment
     from agm.agl.scope.symbols import ConstructorRef, ScopeNode
     from agm.agl.semantics.types import Type
-    from agm.agl.semantics.values import EnumValue, Frame, Value
+    from agm.agl.semantics.values import BoolValue, EnumValue, Frame, Value
     from agm.agl.syntax.advisories import SpacedQualifier
     from agm.agl.syntax.nodes import ImportDecl, Item, OpenDecl, Program, ScopeRegion
     from agm.agl.typecheck.env import CheckedModule, TypeEnvironment
@@ -66,7 +66,8 @@ class EntryPipelineCtx(Protocol):
     _default_stdlib: bool
     _shell_exec_timeout: float | None
     _persisted_host_settings: dict[str, Value]
-    _persisted_timeout_setting: EnumValue
+    _persisted_strict_json: BoolValue | None
+    _persisted_timeout_setting: EnumValue | None
     _host_settings_policy: HostSettingsPolicy | None
 
     def _ensure_roots(self) -> RootSet: ...
@@ -83,6 +84,10 @@ class EntryPipelineCtx(Protocol):
         self, program: Program, checked: CheckedModule, warnings: list[Diagnostic]
     ) -> tuple[EntryResult | None, dict[str, Value], str | None, dict[str, object]]: ...
 
+    def _record_declared_engine_defaults(
+        self, declared_keys: frozenset[str], effective_values: Mapping[str, Value]
+    ) -> None: ...
+
     def _update_engine_settings(
         self,
         *,
@@ -90,6 +95,8 @@ class EntryPipelineCtx(Protocol):
         loop_limit: int | None,
         shell_exec_timeout: float | None,
     ) -> None: ...
+
+    def _advance_node_ids(self, next_start_id: int) -> None: ...
 
     def _promote_ir_state(
         self,
@@ -537,6 +544,7 @@ class EntryPipeline:
         if extern_diagnostics:
             return self._ctx._fail(extern_diagnostics, warnings)
 
+        link_snapshot = self._ctx._link_image.snapshot_state()
         nominal_snapshot = self._ctx._link_image.snapshot_nominals()
         builtin_nominal_snapshot = self._ctx._link_image.snapshot_builtin_nominals()
         lowered = lower_repl_program(
@@ -563,22 +571,74 @@ class EntryPipeline:
             )
         else:
             reconfigurer = None
-        interp = IrInterpreter(
-            lowered.program,
-            registry=host_env.registry,
-            strict_json=self._ctx._default_strict_json,
-            loop_limit=self._ctx._default_loop_limit,
-            max_call_depth=self._ctx._default_call_depth_limit,
-            shell_exec_timeout=self._ctx._shell_exec_timeout,
-            trace=trace,
-            param_values=ir_params,
-            host_contracts=host_contracts,
-            base_frame=self._ctx._ir_base_frame,
-            extern_registry=host_env.extern_registry,
-            host_reconfigurer=reconfigurer,
-            builtin_host_settings={
-                **self._ctx._persisted_host_settings,
-                "timeout": self._ctx._persisted_timeout_setting,
+        try:
+            interp = IrInterpreter(
+                lowered.program,
+                registry=host_env.registry,
+                strict_json=self._ctx._default_strict_json,
+                loop_limit=self._ctx._default_loop_limit,
+                max_call_depth=self._ctx._default_call_depth_limit,
+                shell_exec_timeout=(
+                    self._ctx._shell_exec_timeout
+                    if self._ctx._persisted_timeout_setting is None
+                    else None
+                ),
+                trace=trace,
+                param_values=ir_params,
+                host_contracts=host_contracts,
+                base_frame=self._ctx._ir_base_frame,
+                extern_registry=host_env.extern_registry,
+                host_reconfigurer=reconfigurer,
+                builtin_host_settings={
+                    **self._ctx._persisted_host_settings,
+                    **(
+                        {}
+                        if self._ctx._persisted_strict_json is None
+                        else {"strict-json": self._ctx._persisted_strict_json}
+                    ),
+                    **(
+                        {}
+                        if self._ctx._persisted_timeout_setting is None
+                        else {"timeout": self._ctx._persisted_timeout_setting}
+                    ),
+                },
+            )
+        except AglRaise as exc:
+            error = exception_value_to_run_error(exc.exc, span=exc.span)
+            trace.exception(
+                type_name=error.type_name,
+                message=str(error.fields.get("message", "")),
+                trace_id=str(error.fields.get("trace_id", "")),
+                span=exc.span,
+            )
+            trace.run_end(ok=False)
+            # Lowering allocates into the persistent image before interpreter
+            # construction can reject a declared setting default. Nothing has
+            # run, so discard that complete link delta, but still consume the
+            # parsed node-id range before a later entry is accepted.
+            self._ctx._link_image.restore_state(link_snapshot)
+            self._ctx._advance_node_ids(new_next_id)
+            kind, name = self._ctx._classify(orig_program)
+            return EntryResult(
+                kind=kind,
+                name=name,
+                value=None,
+                value_type=None,
+                diagnostics=[],
+                warnings=warnings,
+                error=error,
+                ok=False,
+                trace_path=self._ctx._trace_path,
+            )
+        from agm.agl.semantics.values import BoolValue, IntValue
+
+        self._ctx._record_declared_engine_defaults(
+            frozenset(lowered.program.builtin_setting_defaults),
+            {
+                **interp.builtin_host_settings,
+                "strict-json": BoolValue(interp.strict_json),
+                "max-iters": IntValue(interp.loop_limit or 0),
+                "timeout": interp.timeout_setting,
             },
         )
 

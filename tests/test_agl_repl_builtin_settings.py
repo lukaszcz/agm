@@ -170,6 +170,12 @@ class TestRuntimeLiveEffectCarryForward:
 class TestDefaultsAndSeeding:
     """A session that never writes ``std/config`` reads the engine defaults."""
 
+    def test_repl_reads_the_declared_default_without_a_host_seed(self) -> None:
+        s = _session()
+        _ok(s, "import std/config")
+
+        assert _read(s, "runner") == TextValue(DEFAULT_AGENT_RUNNER)
+
     def test_untouched_session_reads_engine_defaults(self) -> None:
         s = _session()
         _ok(s, "import std/config")
@@ -183,6 +189,41 @@ class TestDefaultsAndSeeding:
         timeout = _read(s, "timeout")
         assert isinstance(timeout, EnumValue)
         assert timeout.variant == "None"
+
+    def test_explicit_false_strict_json_seed_overrides_and_survives_reset(
+        self, tmp_path: Path
+    ) -> None:
+        from agm.agl.runtime.params import build_engine_config_seeds
+
+        stdlib_root = tmp_path / "stdlib"
+        config_path = stdlib_root / "std" / "config.agl"
+        config_path.parent.mkdir(parents=True)
+        config_path.write_text("builtin var strict-json: bool = true\n", encoding="utf-8")
+        (config_path.parent / "core.agl").write_text(
+            (_STDLIB_ROOT / "std" / "core.agl").read_text(encoding="utf-8"), encoding="utf-8"
+        )
+        unseeded = ReplSession(stdlib_root=stdlib_root, default_stdlib=False)
+        _ok(unseeded, "import std/config")
+        assert _read(unseeded, "strict-json") == BoolValue(True)
+
+        s = ReplSession(
+            stdlib_root=stdlib_root,
+            default_stdlib=False,
+            engine_base=build_engine_config_seeds({"strict-json": False}),
+        )
+
+        _ok(s, "import std/config")
+        assert _read(s, "strict-json") == BoolValue(False)
+        _ok(s, "let unrelated = 1")
+        assert _read(s, "strict-json") == BoolValue(False)
+
+        _ok(s, "std/config::strict-json := true")
+        assert _read(s, "strict-json") == BoolValue(True)
+
+        s.reset()
+
+        _ok(s, "import std/config")
+        assert _read(s, "strict-json") == BoolValue(False)
 
     def test_host_timeout_seed_round_trips_without_disabling_live_timeout(self) -> None:
         s = ReplSession(stdlib_root=_STDLIB_ROOT, shell_exec_timeout=0.0000001)
@@ -242,6 +283,32 @@ class TestPartialFailureDiscipline:
         assert _read(s, "max-iters") == IntValue(2)
 
 
+class TestInitialHostReconfigurationFailure:
+    def test_declared_runner_default_failure_returns_failed_entry(self, tmp_path: Path) -> None:
+        stdlib_root = tmp_path / "stdlib"
+        config_path = stdlib_root / "std" / "config.agl"
+        config_path.parent.mkdir(parents=True)
+        config_path.write_text('builtin var runner: text = "rejected-runner"\n', encoding="utf-8")
+        (config_path.parent / "core.agl").write_text(
+            (_STDLIB_ROOT / "std" / "core.agl").read_text(encoding="utf-8"), encoding="utf-8"
+        )
+        policy = HostSettingsPolicy(
+            build_runner=lambda command: (_ for _ in ()).throw(ValueError(command)),
+            resolve_trace_path=lambda enabled, log_file: None,
+        )
+        session = ReplSession(
+            stdlib_root=stdlib_root,
+            default_stdlib=False,
+            host_settings_policy=policy,
+        )
+
+        result = session.eval_entry("import std/config")
+
+        assert not result.ok
+        assert result.error is not None
+        assert result.error.type_name == "ValueError"
+
+
 class TestLiveHostReconfiguration:
     def test_runner_write_rebuilds_default_agent_for_later_entry(self) -> None:
         def old_agent(request: AgentRequest) -> AgentResponse:
@@ -267,6 +334,88 @@ class TestLiveHostReconfiguration:
         s.reset()
         result = _ok(s, 'ask("which")')
         assert result.value == TextValue(DEFAULT_AGENT_RUNNER)
+
+    def test_reset_restores_the_host_seeded_runner(self) -> None:
+        from agm.agl.runtime.params import build_engine_config_base
+
+        policy = HostSettingsPolicy(
+            build_runner=lambda command: lambda request: AgentResponse(content=command),
+            resolve_trace_path=lambda enabled, log_file: None,
+        )
+        s = ReplSession(
+            stdlib_root=_STDLIB_ROOT,
+            default_agent=lambda request: AgentResponse(content="old"),
+            default_strict_json=True,
+            default_loop_limit=2,
+            engine_base=build_engine_config_base({"runner": "configured"}),
+            host_settings_policy=policy,
+        )
+        _ok(s, "import std/config")
+        _ok(s, 'std/config::runner := "temporary"')
+
+        s.reset()
+
+        assert _ok(s, 'ask("which")').value == TextValue("configured")
+        assert s._default_strict_json
+        assert s._default_loop_limit == 2
+
+    def test_reset_restores_a_declared_runner_default_without_a_host_seed(
+        self, tmp_path: Path
+    ) -> None:
+        stdlib_root = tmp_path / "stdlib"
+        config_path = stdlib_root / "std" / "config.agl"
+        config_path.parent.mkdir(parents=True)
+        config_path.write_text(
+            "open import std/core\n"
+            'builtin var runner: text = "declared-runner"\n'
+            "builtin var strict-json: bool = true\n"
+            "builtin var max-iters: int = 3\n"
+            'builtin var timeout: Option[text] = Option[text]::Some("2s")\n',
+            encoding="utf-8",
+        )
+        (config_path.parent / "core.agl").write_text(
+            (_STDLIB_ROOT / "std" / "core.agl").read_text(encoding="utf-8"),
+            encoding="utf-8",
+        )
+        policy = HostSettingsPolicy(
+            build_runner=lambda command: lambda request: AgentResponse(content=command),
+            resolve_trace_path=lambda enabled, log_file: None,
+        )
+        s = ReplSession(
+            stdlib_root=stdlib_root,
+            default_agent=lambda request: AgentResponse(content="old"),
+            default_stdlib=False,
+            host_settings_policy=policy,
+        )
+        _ok(s, "open import std/core\nimport std/config\nstd/config::runner")
+        _ok(
+            s,
+            'std/config::runner := "temporary"\n'
+            "std/config::strict-json := false\n"
+            "std/config::max-iters := 0\n"
+            "std/config::timeout := Option[text]::None",
+        )
+
+        s.reset()
+
+        assert _ok(s, 'open import std/core\nask("which")').value == TextValue("declared-runner")
+        assert s._default_strict_json
+        assert s._default_loop_limit == 3
+        assert s._shell_exec_timeout == 2.0
+
+    def test_reset_without_a_declared_runner_uses_the_engine_default(self) -> None:
+        policy = HostSettingsPolicy(
+            build_runner=lambda command: lambda request: AgentResponse(content=command),
+            resolve_trace_path=lambda enabled, log_file: None,
+        )
+        s = _session(
+            default_agent=lambda request: AgentResponse(content="old"),
+            host_settings_policy=policy,
+        )
+
+        s.reset()
+
+        assert _ok(s, 'ask("which")').value == TextValue(DEFAULT_AGENT_RUNNER)
 
     def test_log_file_write_repoints_later_repl_entries(self, tmp_path: Path) -> None:
         trace_path = tmp_path / "trace.jsonl"
@@ -295,6 +444,7 @@ class TestLiveHostReconfiguration:
         )
         s = _session(host_settings_policy=policy, trace_path=trace_path)
         _ok(s, "import std/config")
+        _ok(s, "std/config::log := true")
         _ok(s, 'print "traced"')
         _ok(s, "std/config::log := false")
 

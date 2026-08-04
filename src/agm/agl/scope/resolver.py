@@ -1361,6 +1361,8 @@ class _Resolver:
             module_id=self._module_id,
         )
         self._define(node.name, ref)
+        if node.default is not None:
+            self._resolve_expr(node.default)
 
     # ------------------------------------------------------------------
     # Scope helpers

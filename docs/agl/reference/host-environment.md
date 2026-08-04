@@ -130,7 +130,10 @@ target — see [Generics](generics.md#the-finite-schema-boundary).
 ### Engine settings
 
 The standard-library module `std/config` exposes the following fixed engine
-settings as mutable bindings ([Bindings and scope](bindings-and-scope.md)):
+settings as mutable bindings ([Bindings and scope](bindings-and-scope.md)). Each
+`builtin var` declaration may supply its portable default with a constant
+initializer; the host uses that declared value only when it has no seed for the
+key:
 
 | Setting | AgL type | Portable default |
 | --- | -------- | ---------------- |
@@ -150,7 +153,7 @@ Import `std/config` and read or write a setting through a qualified target
 `agm exec` resolves initial values as:
 
 ```
-setting X:  source (std/config::X := e)  >  CLI --X  >  [<program>].X  >  [exec].X  >  engine default
+setting X:  source (std/config::X := e)  >  CLI --X  >  [<program>].X  >  [exec].X  >  declared default
 param   Y:  CLI --Y                       >  [<program>].Y  >  source default (param Y = e) >  required error
 ```
 
@@ -159,7 +162,7 @@ source write to `std/config::X` overrides them from its program point onward.
 A program that never writes a setting keeps the value chosen by the CLI/config
 layers.
 
-`agm repl` resolves engine settings as source writes > CLI > `[exec]` > engine
+`agm repl` resolves engine settings as source writes > CLI > `[exec]` > declared
 default. It has no per-param CLI options. Its params resolve as `[<program>].Y`
 > source default > required error, but only after `program NAME` selects the
 config table. That name applies to params declared after it in the same entry
@@ -181,11 +184,14 @@ file stem. It supplies param values, not REPL engine-setting overrides.
 
 ### Positional effect
 
-Every setting takes effect **positionally**: a write to `std/config::X` governs
-the statements that follow it, in program order, and does not affect statements
-before it. A completed write remains effective if a later expression fails.
-Writing `runner`, `log`, or `log-file` repoints the default agent and the trace
-destination used by subsequent calls. Assigning `Some(path)` to `log-file`
+The host applies each effective initial setting before execution. Thus a declared
+`runner`, `log`, or `log-file` default configures the default agent or trace
+service when no CLI/config seed is supplied. Every setting takes effect
+**positionally** thereafter: a write to `std/config::X` governs the statements
+that follow it, in program order, and does not affect statements before it. A
+completed write remains effective if a later expression fails. Writing `runner`,
+`log`, or `log-file` repoints the default agent and the trace destination used by
+subsequent calls. Assigning `Some(path)` to `log-file`
 enables logging; a later `log := false` disables it while retaining the path.
 Writing `strict-json`, `max-iters`, or `timeout` changes subsequent agent-output
 parsing, unbounded loops, or `exec` calls, respectively.

@@ -58,14 +58,8 @@ from agm.agl.diagnostics import format_diagnostic
 from agm.agl.modules.roots import assemble_roots
 from agm.agl.runtime.agents import AgentFn, runner_backed_agent_factory
 from agm.agl.runtime.host_settings import HostSettingsPolicy
-from agm.agl.runtime.params import convert_config_value, raw_option_str
-from agm.agl.semantics.engine_keys import (
-    ENGINE_KEY_NAMES,
-    RESERVED_PROGRAM_NAMES,
-    get_engine_key_type,
-)
-from agm.agl.semantics.types import Type
-from agm.agl.semantics.values import BoolValue, TextValue, Value
+from agm.agl.runtime.params import build_engine_config_seeds, raw_option_str
+from agm.agl.semantics.engine_keys import ENGINE_KEY_NAMES, RESERVED_PROGRAM_NAMES
 from agm.cli_support.args import ExecArgs
 from agm.cli_support.exec_params import (
     check_param_collisions,
@@ -86,7 +80,7 @@ from agm.core.log import (
     prepare_trace_log_from_decision,
     resolve_log_decision,
 )
-from agm.core.parse import format_timeout, parse_timeout
+from agm.core.parse import parse_timeout
 from agm.core.toml import toml_dict
 from agm.parser import exit_with_usage_error
 
@@ -108,22 +102,6 @@ def check_max_iters(max_iters: int | None) -> None:
     if max_iters is not None and max_iters <= 0:
         print("Error: --max-iters must be a positive integer", file=sys.stderr)
         raise SystemExit(1)
-
-
-def _project_option_text(
-    value: str | None, *, no_flag: bool, key_name: str, key_type: Type
-) -> Value | None:
-    """Project an Option[text] CLI flag pair to an EnumValue or None.
-
-    - *value* is set: ``some(value)`` via :func:`convert_config_value`.
-    - *no_flag* is ``True``: ``none`` via :func:`convert_config_value`.
-    - Both absent: returns ``None``.
-    """
-    if value is not None:
-        return convert_config_value(key_name, value, key_type)
-    if no_flag:
-        return convert_config_value(key_name, None, key_type)
-    return None
 
 
 def run(args: ExecArgs) -> None:
@@ -222,11 +200,6 @@ def run(args: ExecArgs) -> None:
     except ValueError as exc:
         print(f"Error: invalid exec configuration: {exc}", file=sys.stderr)
         raise SystemExit(1) from exc
-
-    # The log-file engine-key type is needed to seed the host-consumed
-    # ``log-file`` register from the resolved CLI/config layers.
-    _log_file_type = get_engine_key_type("log-file")
-    assert _log_file_type is not None  # always a valid engine key
 
     base_runner_cmd = config.runner or default_agent_runner(merged=merged_config)
 
@@ -415,34 +388,47 @@ def run(args: ExecArgs) -> None:
         resolve_trace_path=LiveTracePathResolver(command_name="exec", auto_path=log_file),
     )
 
-    # Seed the host-consumed registers from the resolved host layers so a program
-    # reading these settings before any write observes the effective start value.
-    # A later source ``:=`` overrides the seed from its program point onward.
-    # ``log`` reuses the decision that drove the trace file, so the register and
-    # the trace can never disagree.  ``log-file`` keeps its own projection: only
-    # the register honours ``--no-log-file``.
-    seed_log_file = _project_option_text(
-        args.log_file, no_flag=args.no_log_file, key_name="log-file", key_type=_log_file_type
-    )
-    if seed_log_file is None:
-        seed_log_file = convert_config_value("log-file", config.log_file, _log_file_type)
-    _timeout_type = get_engine_key_type("timeout")
-    assert _timeout_type is not None
+    # Seed only settings explicitly controlled by CLI/config.  The runner used
+    # to back agents and the false/none values used by host services are runtime
+    # fallbacks, not seeds: passing them here would suppress a declared
+    # ``builtin var`` initializer.  The shared decoder preserves explicit
+    # ``None`` values for Option settings such as --no-timeout.
     exec_raw_table = toml_dict(merged_config.get("exec"))
-    if args.timeout is not None:
-        timeout_seed_raw: object = args.timeout
-    elif args.no_timeout:
-        timeout_seed_raw = None
-    else:
-        timeout_seed_raw = raw_option_str(program_table, exec_raw_table, "timeout")
-        if timeout_seed_raw is None and resolved_timeout is not None:
-            timeout_seed_raw = format_timeout(resolved_timeout)
-    builtin_host_settings: dict[str, Value] = {
-        "runner": TextValue(runner_cmd),
-        "log": BoolValue(log_decision.enabled),
-        "log-file": seed_log_file,
-        "timeout": convert_config_value("timeout", timeout_seed_raw, _timeout_type),
+    config_engine_keys = {
+        key for key in ENGINE_KEY_NAMES if key in program_table or key in exec_raw_table
     }
+    seed_raw: dict[str, object] = {}
+    if args.runner is not None:
+        seed_raw["runner"] = args.runner
+    elif "runner" in config_engine_keys and config.runner is not None:
+        seed_raw["runner"] = config.runner
+    if args.strict_json is not None:
+        seed_raw["strict-json"] = args.strict_json
+    elif "strict-json" in config_engine_keys:
+        seed_raw["strict-json"] = config.strict_json
+    if args.max_iters is not None:
+        seed_raw["max-iters"] = args.max_iters
+    elif "max-iters" in config_engine_keys and config.default_loop_limit is not None:
+        seed_raw["max-iters"] = config.default_loop_limit
+    if args.timeout is not None:
+        seed_raw["timeout"] = args.timeout
+    elif args.no_timeout:
+        seed_raw["timeout"] = None
+    elif "timeout" in config_engine_keys:
+        raw_timeout = raw_option_str(program_table, exec_raw_table, "timeout")
+        if raw_timeout is not None:
+            seed_raw["timeout"] = raw_timeout
+    if args.no_log or args.log or args.log_file is not None:
+        seed_raw["log"] = log_decision.enabled
+    elif "log" in config_engine_keys or "log-file" in config_engine_keys:
+        seed_raw["log"] = log_decision.enabled
+    if args.log_file is not None:
+        seed_raw["log-file"] = args.log_file
+    elif args.no_log_file:
+        seed_raw["log-file"] = None
+    elif "log-file" in config_engine_keys and config.log_file is not None:
+        seed_raw["log-file"] = config.log_file
+    builtin_host_settings = build_engine_config_seeds(seed_raw)
 
     # Reuse the ``PreparedProgram`` from above — no second parse/scope of the source.
     # Pass the already-computed compiled from discovery and the program the

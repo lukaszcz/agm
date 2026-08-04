@@ -1279,11 +1279,13 @@ class BuiltinVarDecl:
     Mirrors ``builtin def`` / ``builtin record`` (a host-provided declaration with
     a signature but no body).  A ``builtin var`` names an engine setting whose
     value lives in an interpreter register: programs read it as an ordinary value
-    and assign it with ``:=``.  The declaration itself introduces no initializer
-    and lowers to nothing.
+    and assign it with ``:=``.  An optional constant initializer supplies the
+    engine default when the host has not seeded the key; the declaration itself
+    still introduces no program initializer.
 
     ``name``      — the declared engine key (kebab-case, e.g. ``"max-iters"``).
-    ``type_ann``  — the mandatory declared type (no value expression).
+    ``type_ann``  — the mandatory declared type.
+    ``default``   — an optional constant expression of that type.
 
     ``scope_path`` is non-empty when the declaration sits inside a named scope
     region; it has no declaration-path shorthand of its own.
@@ -1293,6 +1295,7 @@ class BuiltinVarDecl:
     type_ann: TypeExpr
     span: SourceSpan = dc_field(compare=False)
     node_id: int = dc_field(compare=False)
+    default: Expr | None = None
     scope_path: tuple[ScopeSegment, ...] = ()
 
 

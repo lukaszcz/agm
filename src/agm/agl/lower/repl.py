@@ -70,6 +70,31 @@ class LinkImage:
         """
         self._linked_modules.update(module_ids)
 
+    def snapshot_state(self) -> _LinkState:
+        """Return an independent rollback snapshot of incremental linker state."""
+        state = self._state
+        return _LinkState(
+            next_sym=state.next_sym,
+            next_fn=state.next_fn,
+            next_source=state.next_source,
+            next_contract=state.next_contract,
+            decl_to_sym=dict(state.decl_to_sym),
+            fn_node_to_sym=dict(state.fn_node_to_sym),
+            fn_node_to_id=dict(state.fn_node_to_id),
+            symbols=dict(state.symbols),
+            functions=dict(state.functions),
+            nominals=dict(state.nominals),
+            builtin_nominals=state.builtin_nominals,
+            sources=dict(state.sources),
+            contracts=dict(state.contracts),
+            let_value_symbols=dict(state.let_value_symbols),
+            initializer_origins=dict(state.initializer_origins),
+        )
+
+    def restore_state(self, snapshot: _LinkState) -> None:
+        """Restore a previously snapshotted incremental linker state."""
+        self._state = snapshot
+
     def snapshot_nominals(self) -> dict[NominalId, NominalDescriptor]:
         """Return a rollback snapshot of persistent nominal descriptors."""
         return dict(self._state.nominals)

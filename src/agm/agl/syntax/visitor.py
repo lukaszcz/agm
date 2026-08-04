@@ -512,6 +512,8 @@ def walk(node: object, callback: Callable[[object], None]) -> None:
 
     elif isinstance(node, BuiltinVarDecl):
         walk(node.type_ann, callback)
+        if node.default is not None:
+            walk(node.default, callback)
 
     elif isinstance(node, InfixDecl):
         pass  # leaf — operator metadata only

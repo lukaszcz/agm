@@ -424,39 +424,74 @@ class IrInterpreter:
         self._registry: AgentRegistry = (
             registry if registry is not None else AgentRegistry(named={}, default_agent=None)
         )
-        self._strict_json: bool = strict_json
-        # Global max-iters safety valve. ``None`` means the valve is off; a
-        # positive limit caps unguarded loops. The valve applies ONLY to unguarded loops
-        # (``IrLoop.guarded is False``) — ``for`` and ``do[n]`` loops carry
-        # their own bound and are never cut short by this safety net.
-        self._loop_limit = loop_limit
-        self._shell_exec_timeout: float | None = shell_exec_timeout
-        seeded_timeout = (
-            builtin_host_settings.get("timeout") if builtin_host_settings is not None else None
-        )
-        if seeded_timeout is not None:
-            assert isinstance(seeded_timeout, EnumValue)
-            self._timeout_setting = seeded_timeout
-        elif shell_exec_timeout is None:
-            self._timeout_setting = none_value()
-        else:
-            self._timeout_setting = some_value(TextValue(_format_timeout(shell_exec_timeout)))
-        # Registers for the HOST-CONSUMED ``builtin var`` engine settings
-        # (``runner``, ``log``, ``log-file``).  Unlike the three runtime-live
-        # keys (which reuse ``_strict_json`` / ``_loop_limit`` /
-        # ``_shell_exec_timeout``), these have no direct interpreter field; their
-        # values live here as AgL ``Value``s.  The registers start from the
-        # engine defaults — owned by the host runtime, not by the evaluator —
-        # and are overlaid with the host-supplied seed (resolved from the
-        # default → config-file → CLI layers) for the keys it provides.
-        # A ``host_reconfigurer`` (when present) reflects a write into the live
-        # host services — the agent registry's default agent and the trace store.
+        # Bootstrap the setting fields so declared defaults can be evaluated by
+        # the ordinary, typeless evaluator. Constant defaults cannot read a
+        # setting or invoke a host operation, so this temporary state is never
+        # observable by their evaluation.
+        self._strict_json = False
+        self._loop_limit: int | None = None
+        self._shell_exec_timeout: float | None = None
+        self._timeout_setting = none_value()
+        self._builtin_host_settings: dict[str, Value] = {}
         self._host_reconfigurer = host_reconfigurer
+
+        defaults = dict(_engine_default_settings())
+        defaults.update(
+            {
+                key: self._eval(value)
+                for key, value in self._program.builtin_setting_defaults.items()
+            }
+        )
         seed = builtin_host_settings if builtin_host_settings is not None else {}
-        defaults = _engine_default_settings()
-        self._builtin_host_settings: dict[str, Value] = {
+
+        # Runtime-live settings use an explicit host seed when present.  Their
+        # driver arguments remain compatibility fallbacks: an absent false/None
+        # must not suppress a declaration default.  Bootstrap through the same
+        # effect path as a source write so host-invalid declared values become
+        # normal AgL runtime errors.
+        strict_default = seed.get("strict-json", defaults["strict-json"])
+        assert isinstance(strict_default, BoolValue)
+        strict_setting = (
+            seed["strict-json"]
+            if "strict-json" in seed
+            else BoolValue(strict_json or strict_default.value)
+        )
+        assert isinstance(strict_setting, BoolValue)
+        self._apply_config_effect("strict-json", strict_setting)
+
+        max_iters_default = seed.get("max-iters", defaults["max-iters"])
+        assert isinstance(max_iters_default, IntValue)
+        max_iters_setting = (
+            seed["max-iters"]
+            if "max-iters" in seed
+            else IntValue(loop_limit if loop_limit is not None else max_iters_default.value)
+        )
+        assert isinstance(max_iters_setting, IntValue)
+        self._apply_config_effect("max-iters", max_iters_setting)
+
+        timeout_default = seed.get("timeout", defaults["timeout"])
+        assert isinstance(timeout_default, EnumValue)
+        timeout_setting = (
+            seed["timeout"]
+            if "timeout" in seed
+            else (
+                some_value(TextValue(_format_timeout(shell_exec_timeout)))
+                if shell_exec_timeout is not None
+                else timeout_default
+            )
+        )
+        assert isinstance(timeout_setting, EnumValue)
+        self._timeout_setting = timeout_setting
+        self._apply_config_effect("timeout", timeout_setting)
+
+        # Host-consumed registers use the host seed when one is provided and
+        # otherwise the ``builtin var`` declaration's default.
+        self._builtin_host_settings = {
             key: seed.get(key, defaults[key]) for key in HOST_CONSUMED_ENGINE_KEYS
         }
+        if self._host_reconfigurer is not None:
+            self._reconfigure_host_service("runner")
+            self._reconfigure_host_service("log")
         self._host_contracts: Mapping[ContractId, OutputContract] = (
             host_contracts if host_contracts is not None else {}
         )

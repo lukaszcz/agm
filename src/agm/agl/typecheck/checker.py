@@ -1095,6 +1095,20 @@ class _Checker:
                 span=node.span,
             )
         self._env.set_binding_type(node.node_id, key_type)
+        if node.default is not None:
+            from agm.agl.constant import is_constant_expression
+
+            default_type = self._check_boundary_expr(node.default, expected=key_type)
+            self._assert_assignable_from(default_type, key_type, node.default.span, node.default)
+            if not is_constant_expression(
+                node.default,
+                is_constructor=lambda node_id: self._constructor_ref_for(node_id) is not None,
+            ):
+                raise AglTypeError(
+                    "builtin var initializer must be a constant expression "
+                    "(constructors and literals only).",
+                    span=node.default.span,
+                )
 
     @staticmethod
     def _binder_result(value_type: Type) -> Type:

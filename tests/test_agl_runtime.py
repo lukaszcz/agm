@@ -1972,6 +1972,12 @@ class TestEngineRunnerDefault:
 
         assert build_engine_config_base({})["runner"] == TextValue(DEFAULT_AGENT_RUNNER)
 
+    def test_unknown_engine_seed_is_rejected(self) -> None:
+        from agm.agl.runtime.params import build_engine_config_seeds
+
+        with pytest.raises(ValueError, match="unknown engine key"):
+            build_engine_config_seeds({"unknown": True})
+
     def test_agent_floor_is_non_interactive(self) -> None:
         """The floor must not block on a terminal that is not there."""
         from agm.agent.config import default_agent_runner

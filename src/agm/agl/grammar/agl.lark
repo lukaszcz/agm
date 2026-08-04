@@ -284,10 +284,10 @@ builtin_func_def: "builtin" _NEWLINE? "def" decl_head type_params? LPAR param_li
 // the modifier sit on its own line above the declaration.
 extern_func_def: "extern" _NEWLINE? "def" decl_head type_params? LPAR param_list? RPAR THIN_ARROW type_expr
 
-// Host-implemented builtin mutable-setting declaration. Body-less: a name and a
-// mandatory type annotation, no `= expr`. `builtin` is a decorator-style
+// Host-implemented builtin mutable-setting declaration. Its optional constant
+// initializer supplies the engine default. `builtin` is a decorator-style
 // modifier (the `_NEWLINE?` lets it sit on its own line above the declaration).
-builtin_var_def: "builtin" _NEWLINE? "var" name type_ann
+builtin_var_def: "builtin" _NEWLINE? "var" name type_ann (EQ expr)?
 
 builtin_record_def: "builtin" _NEWLINE? record_def
 builtin_enum_def: "builtin" _NEWLINE? enum_def

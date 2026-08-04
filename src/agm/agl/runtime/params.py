@@ -21,6 +21,7 @@ if TYPE_CHECKING:
 
 __all__ = [
     "build_engine_config_base",
+    "build_engine_config_seeds",
     "convert_config_value",
     "convert_param_value",
     "raw_option_str",
@@ -70,6 +71,27 @@ _ENGINE_DEFAULTS: dict[str, object] = {
 }
 
 
+def build_engine_config_seeds(raw_values: "Mapping[str, object]") -> "dict[str, Value]":
+    """Decode only explicitly supplied host engine settings.
+
+    The returned mapping deliberately omits absent keys.  This preserves the
+    distinction between a host control and the runtime fallback, letting a
+    ``builtin var`` initializer supply the latter.  A present value of
+    ``None`` remains meaningful for ``Option`` settings such as ``timeout``.
+    """
+    from agm.agl.semantics.engine_keys import get_engine_key_type
+    from agm.agl.semantics.type_table import create_seeded_type_table
+
+    type_table = create_seeded_type_table()
+    result: dict[str, Value] = {}
+    for key_name, raw in raw_values.items():
+        key_type = get_engine_key_type(key_name)
+        if key_type is None:
+            raise ValueError(f"unknown engine key: {key_name!r}")
+        result[key_name] = convert_config_value(key_name, raw, key_type, type_table)
+    return result
+
+
 def build_engine_config_base(raw_values: "Mapping[str, object]") -> "dict[str, Value]":
     """Build the engine config base dict from raw host values.
 
@@ -87,17 +109,12 @@ def build_engine_config_base(raw_values: "Mapping[str, object]") -> "dict[str, V
     user-declared nominal type, so this builds its own fresh seeded
     ``TypeTable`` rather than requiring one from the caller.
     """
-    from agm.agl.semantics.engine_keys import get_engine_key_type
-    from agm.agl.semantics.type_table import create_seeded_type_table
-
-    type_table = create_seeded_type_table()
-    result: dict[str, Value] = {}
-    for key_name, default_raw in _ENGINE_DEFAULTS.items():
-        raw = raw_values.get(key_name, default_raw)
-        key_type = get_engine_key_type(key_name)
-        assert key_type is not None, f"unknown engine key: {key_name!r}"
-        result[key_name] = convert_config_value(key_name, raw, key_type, type_table)
-    return result
+    return build_engine_config_seeds(
+        {
+            key_name: raw_values.get(key_name, default_raw)
+            for key_name, default_raw in _ENGINE_DEFAULTS.items()
+        }
+    )
 
 
 def decode_param_value(decoder: "ParamDecoder", raw: object) -> "Value":

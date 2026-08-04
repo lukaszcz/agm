@@ -284,6 +284,9 @@ class ExecutableProgram:
         standard library's own identity), which keeps the many direct
         ``ExecutableProgram`` constructions in ``tests/`` working without
         threading this table through every one of them.
+      ``builtin_setting_defaults`` — engine key -> a checked, constant IR
+        expression declared by ``builtin var``. The evaluator uses it only
+        when the host did not seed that key.
 
     """
 
@@ -297,3 +300,4 @@ class ExecutableProgram:
     contracts: dict["ContractId", "ContractRequest"] = field(default_factory=dict)
     dry_run_inventory: "tuple[DryRunEntry, ...]" = ()
     builtin_nominals: BuiltinNominals = NO_BUILTIN_DECLARATIONS
+    builtin_setting_defaults: dict[str, IrExpr] = field(default_factory=dict)

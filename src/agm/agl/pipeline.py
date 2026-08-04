@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, TypeVar
 
 from agm.agl.diagnostics import AglError, Diagnostic
@@ -475,22 +475,21 @@ class PipelineDriver:
         else:
             reconfigurer = None
 
-        interp = IrInterpreter(
-            executable,
-            registry=registry,
-            strict_json=self._default_strict_json,
-            loop_limit=self._default_loop_limit,
-            shell_exec_timeout=self._shell_exec_timeout,
-            trace=trace,
-            max_call_depth=self._default_call_depth_limit,
-            param_values=ir_param_values,
-            host_contracts=host_contracts,
-            extern_registry=host_env.extern_registry,
-            host_reconfigurer=reconfigurer,
-            builtin_host_settings=builtin_host_settings,
-        )
-
         try:
+            interp = IrInterpreter(
+                executable,
+                registry=registry,
+                strict_json=self._default_strict_json,
+                loop_limit=self._default_loop_limit,
+                shell_exec_timeout=self._shell_exec_timeout,
+                trace=trace,
+                max_call_depth=self._default_call_depth_limit,
+                param_values=ir_param_values,
+                host_contracts=host_contracts,
+                extern_registry=host_env.extern_registry,
+                host_reconfigurer=reconfigurer,
+                builtin_host_settings=builtin_host_settings,
+            )
             entry_bindings = interp.run()
         except AglRaise as exc:
             # Uncaught AgL exception (exit code 2 per the CLI contract).
@@ -927,6 +926,12 @@ class PipelineDriver:
 
         host_env = self.host_environment()
         capabilities = host_env.capabilities
+        # A host-settings policy can build the default agent from the effective
+        # ``runner`` register before execution.  Advertise that pending service
+        # to the static ask checks; the interpreter performs the actual build
+        # after it has evaluated declared builtin-var defaults.
+        if host_settings_policy is not None and not capabilities.has_default_agent:
+            capabilities = replace(capabilities, has_default_agent=True)
         if compiled is not None:
             if self_validation_enabled():
                 _check_program_artifact_provenance(resolved, compiled.checked)
@@ -952,7 +957,10 @@ class PipelineDriver:
             if ref.kind is BinderKind.agent_binding
         )
         reconciliation_errors = _reconcile_agents(
-            registry, resolved.entry_agents, referenced_agents=referenced_agents
+            registry,
+            resolved.entry_agents,
+            referenced_agents=referenced_agents,
+            default_agent_available=capabilities.has_default_agent,
         )
         if reconciliation_errors:
             return (
@@ -1387,6 +1395,7 @@ def _reconcile_agents(
     declared_agents: "Mapping[tuple[tuple[str, ...], str], AgentDeclNode]",
     *,
     referenced_agents: frozenset[AgentId] = frozenset(),
+    default_agent_available: bool | None = None,
 ) -> list[Diagnostic]:
     """Enforce the source↔host agent contract.
 
@@ -1427,7 +1436,9 @@ def _reconcile_agents(
             )
         )
 
-    if not registry.has_default_agent:
+    if not (
+        registry.has_default_agent if default_agent_available is None else default_agent_available
+    ):
         unbacked = sorted(
             (
                 agent_id

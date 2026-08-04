@@ -14,6 +14,7 @@ from agm.agl.ir.contracts import (
     BoundaryEnum,
     BoundaryException,
     BoundaryRecord,
+    BoundaryRef,
     BoundaryScalar,
     BoundarySchema,
     BoundarySealVar,
@@ -498,6 +499,201 @@ class TestViewIdentityAndLiveness:
         encode_boundary_value(schemas[0], value, scope)
         with pytest.raises(BoundaryViolation):
             encode_boundary_value(schemas[1], value, scope)
+
+    @pytest.mark.parametrize("generic_first", [True, False])
+    def test_registry_reconciles_recursive_generic_and_concrete_aliases(
+        self, generic_first: bool
+    ) -> None:
+        parameters = (
+            "generic: array[Node[T]], concrete: array[Node[int]]"
+            if generic_first
+            else "concrete: array[Node[int]], generic: array[Node[T]]"
+        )
+        contract = build_contract(
+            "record Node[T]\n"
+            "  value: T\n"
+            "  children: array[Node[T]]\n"
+            f"extern def f[T]({parameters}) -> array[Node[T]]\n0"
+        )
+        generic_schema = contract.params[0 if generic_first else 1].schema
+        assert isinstance(generic_schema, BoundaryArray)
+        assert isinstance(generic_schema.element, BoundaryRef)
+        node_schema = dict(contract.defs)[generic_schema.element.key]
+        assert isinstance(node_schema, BoundaryRecord)
+        child = RecordValue(
+            node_schema.nominal,
+            "Node",
+            {"value": IntValue(2), "children": ArrayValue([])},
+        )
+        node = RecordValue(
+            node_schema.nominal,
+            "Node",
+            {"value": IntValue(1), "children": ArrayValue([child])},
+        )
+        value = ArrayValue([node])
+
+        def fn(*args: object) -> object:
+            assert len(args) == 2
+            assert isinstance(args[0], AglArrayView)
+            assert args[0] is args[1]
+            received = args[0][0]
+            assert isinstance(received, dict)
+            assert received["value"] == 1
+            children = received["children"]
+            assert isinstance(children, AglArrayView)
+            child = children[0]
+            assert isinstance(child, dict)
+            assert child["value"] == 2
+            assert isinstance(child["children"], AglArrayView)
+            assert list(child["children"]) == []
+            return args[0]
+
+        assert ExternRegistry().invoke("f", contract, fn, [value, value], "trace") is value
+
+    @pytest.mark.parametrize("int_first", [True, False])
+    def test_registry_rejects_incompatible_recursive_aliases(self, int_first: bool) -> None:
+        parameters = (
+            "left: array[Node[int]], right: array[Node[text]]"
+            if int_first
+            else "right: array[Node[text]], left: array[Node[int]]"
+        )
+        contract = build_contract(
+            "record Node[T]\n"
+            "  children: array[Node[T]]\n"
+            "  value: T\n"
+            f"extern def f({parameters}) -> int\n0"
+        )
+        node_schema = next(iter(dict(contract.defs).values()))
+        assert isinstance(node_schema, BoundaryRecord)
+        value = ArrayValue(
+            [
+                RecordValue(
+                    node_schema.nominal,
+                    "Node",
+                    {"value": IntValue(1), "children": ArrayValue([])},
+                )
+            ]
+        )
+
+        def fn(*_args: object) -> object:
+            return 0
+
+        with pytest.raises(AglRaise):
+            ExternRegistry().invoke("f", contract, fn, [value, value], "trace")
+
+    def test_hybrid_nominal_aliases_reconcile_field_by_field(self) -> None:
+        record_contract = build_contract(
+            "record Pair\n  first: int\n  second: int\nextern def f(xs: array[Pair]) -> int\n0"
+        )
+        enum_contract = build_contract(
+            "enum Choice\n  | item(first: int, second: int)\n"
+            "extern def f(xs: array[Choice]) -> int\n0"
+        )
+        exception_contract = build_contract(
+            "exception Oops extends Exception\n  first: int\n  second: int\n"
+            "extern def f(xs: array[Oops]) -> int\n0"
+        )
+        record_schema = record_contract.params[0].schema
+        enum_schema = enum_contract.params[0].schema
+        exception_schema = exception_contract.params[0].schema
+        assert isinstance(record_schema, BoundaryArray)
+        assert isinstance(enum_schema, BoundaryArray)
+        assert isinstance(exception_schema, BoundaryArray)
+        assert isinstance(record_schema.element, BoundaryRecord)
+        assert isinstance(enum_schema.element, BoundaryEnum)
+        assert isinstance(exception_schema.element, BoundaryException)
+
+        def hybrid_fields(
+            fields: tuple[tuple[str, BoundarySchema], ...], generic: bool
+        ) -> tuple[tuple[str, BoundarySchema], ...]:
+            return tuple(
+                (
+                    name,
+                    BoundarySealVar("T")
+                    if generic and name == "first"
+                    else BoundarySealVar("U")
+                    if not generic and name == "second"
+                    else BoundaryScalar(ScalarKind.TEXT)
+                    if not generic and name == "first"
+                    else BoundaryScalar(ScalarKind.INT),
+                )
+                if name in {"first", "second"}
+                else (name, schema)
+                for name, schema in fields
+            )
+
+        record_aliases = (
+            BoundaryArray(
+                BoundaryRecord(
+                    record_schema.element.nominal,
+                    record_schema.element.display_name,
+                    hybrid_fields(record_schema.element.fields, True),
+                )
+            ),
+            BoundaryArray(
+                BoundaryRecord(
+                    record_schema.element.nominal,
+                    record_schema.element.display_name,
+                    hybrid_fields(record_schema.element.fields, False),
+                )
+            ),
+        )
+        enum_aliases = (
+            BoundaryArray(
+                BoundaryEnum(
+                    enum_schema.element.nominal,
+                    enum_schema.element.display_name,
+                    tuple(
+                        BoundaryVariantShape(variant.name, hybrid_fields(variant.fields, True))
+                        for variant in enum_schema.element.variants
+                    ),
+                )
+            ),
+            BoundaryArray(
+                BoundaryEnum(
+                    enum_schema.element.nominal,
+                    enum_schema.element.display_name,
+                    tuple(
+                        BoundaryVariantShape(variant.name, hybrid_fields(variant.fields, False))
+                        for variant in enum_schema.element.variants
+                    ),
+                )
+            ),
+        )
+        exception_aliases = (
+            BoundaryArray(
+                BoundaryException(
+                    exception_schema.element.nominal,
+                    exception_schema.element.display_name,
+                    hybrid_fields(exception_schema.element.fields, True),
+                )
+            ),
+            BoundaryArray(
+                BoundaryException(
+                    exception_schema.element.nominal,
+                    exception_schema.element.display_name,
+                    hybrid_fields(exception_schema.element.fields, False),
+                )
+            ),
+        )
+
+        for first_schema, second_schema in (record_aliases, enum_aliases, exception_aliases):
+            scope = BoundaryScope(seals={"T": object(), "U": object()})
+            value = ArrayValue([])
+            first = encode_boundary_value(first_schema, value, scope)
+            assert first is encode_boundary_value(second_schema, value, scope)
+
+    def test_view_schema_ref_resolution_rejects_missing_and_cyclic_chains(self) -> None:
+        schema = BoundaryArray(BoundaryRef("loop"))
+
+        with pytest.raises(BoundaryViolation):
+            encode_boundary_value(schema, ArrayValue([]), BoundaryScope())
+        with pytest.raises(BoundaryViolation):
+            encode_boundary_value(
+                schema,
+                ArrayValue([]),
+                BoundaryScope(defs={"loop": BoundaryRef("loop")}),
+            )
 
     def test_structurally_conflicting_nominal_shapes_are_rejected(self) -> None:
         record_contract = build_contract(

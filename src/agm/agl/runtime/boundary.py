@@ -567,7 +567,7 @@ class AglArrayView(MutableSequence[object]):
     def _reconcile_element_schema(self, element_schema: BoundarySchema) -> None:
         """Record and adopt a compatible encoding schema without changing view identity."""
         _check_view_live(self._scope)
-        reconciled = _reconcile_view_schema(self._element_schema, element_schema)
+        reconciled = _reconcile_view_schema(self._element_schema, element_schema, self._scope)
         if reconciled is None:
             raise BoundaryViolation("aliased array has incompatible element schemas")
         self._encoded_element_schemas.add(element_schema)
@@ -577,7 +577,7 @@ class AglArrayView(MutableSequence[object]):
         """Return whether this view may cross back at the requested schema."""
         _check_view_live(self._scope)
         return _view_schema_accepts_decode(
-            self._element_schema, element_schema, self._encoded_element_schemas
+            self._element_schema, element_schema, self._encoded_element_schemas, self._scope
         )
 
     def _encode(self, value: Value) -> object:
@@ -688,7 +688,7 @@ class AglDictView(MutableMapping[str, object]):
     def _reconcile_value_schema(self, value_schema: BoundarySchema) -> None:
         """Record and adopt a compatible encoding schema without changing view identity."""
         _check_view_live(self._scope)
-        reconciled = _reconcile_view_schema(self._value_schema, value_schema)
+        reconciled = _reconcile_view_schema(self._value_schema, value_schema, self._scope)
         if reconciled is None:
             raise BoundaryViolation("aliased dict has incompatible value schemas")
         self._encoded_value_schemas.add(value_schema)
@@ -698,7 +698,7 @@ class AglDictView(MutableMapping[str, object]):
         """Return whether this view may cross back at the requested schema."""
         _check_view_live(self._scope)
         return _view_schema_accepts_decode(
-            self._value_schema, value_schema, self._encoded_value_schemas
+            self._value_schema, value_schema, self._encoded_value_schemas, self._scope
         )
 
     def _encode(self, value: Value) -> object:
@@ -716,67 +716,191 @@ class AglDictView(MutableMapping[str, object]):
 
 
 def _resolve_boundary_ref(schema: BoundarySchema, scope: BoundaryScope) -> BoundarySchema:
-    """Resolve the reference chain at a view element position."""
+    """Resolve a finite ``BoundaryRef`` chain through this call's definitions."""
+    seen: set[str] = set()
     while isinstance(schema, BoundaryRef):
-        schema = scope.defs[schema.key]
+        key = schema.key
+        if key in seen:
+            raise BoundaryViolation(f"cyclic BoundaryRef chain at {key!r}")
+        seen.add(key)
+        try:
+            schema = scope.defs[key]
+        except KeyError as exc:
+            raise BoundaryViolation(f"unknown BoundaryRef {key!r}") from exc
     return schema
 
 
 def _reconcile_view_schema(
-    existing: BoundarySchema, incoming: BoundarySchema
+    existing: BoundarySchema,
+    incoming: BoundarySchema,
+    scope: BoundaryScope,
+    active: set[tuple[int, int]] | None = None,
 ) -> BoundarySchema | None:
     """Choose one shared container-view schema, or reject incompatible aliases.
 
-    A direct type-variable seal is less specific than a concrete schema, so a
-    compatible generic/concrete pair selects the concrete representation: its
-    shared view encodes and accepts writes as concrete values. Distinct seals
-    do not reconcile. Structural schemas reconcile field by
-    field only when nominal identity and shape agree, so nested live views use
-    the concrete representation while their enclosing view remembers every
-    schema through which it was encoded.
+    References resolve through the current scope at every structural position.
+    A repeated recursive pair is incompatible unless an earlier specificity
+    check has already selected one finite schema representation.
     """
-    reconciled = _reconcile_container_view_member_schema(existing, incoming)
-    if reconciled is not None:
-        return reconciled
-    if isinstance(existing, BoundaryArray) and isinstance(incoming, BoundaryArray):
-        element = _reconcile_view_schema(existing.element, incoming.element)
-        return BoundaryArray(element) if element is not None else None
-    if isinstance(existing, BoundaryDict) and isinstance(incoming, BoundaryDict):
-        value = _reconcile_view_schema(existing.value, incoming.value)
-        return BoundaryDict(value) if value is not None else None
-    if isinstance(existing, BoundaryRecord) and isinstance(incoming, BoundaryRecord):
-        fields = _reconcile_boundary_fields(existing.fields, incoming.fields)
-        if (
-            existing.nominal != incoming.nominal
-            or existing.display_name != incoming.display_name
-            or fields is None
-        ):
-            return None
-        return BoundaryRecord(existing.nominal, existing.display_name, fields)
-    if isinstance(existing, BoundaryEnum) and isinstance(incoming, BoundaryEnum):
-        variants = _reconcile_boundary_variants(existing.variants, incoming.variants)
-        if (
-            existing.nominal != incoming.nominal
-            or existing.display_name != incoming.display_name
-            or variants is None
-        ):
-            return None
-        return BoundaryEnum(existing.nominal, existing.display_name, variants)
-    if isinstance(existing, BoundaryException) and isinstance(incoming, BoundaryException):
-        fields = _reconcile_boundary_fields(existing.fields, incoming.fields)
-        if (
-            existing.nominal != incoming.nominal
-            or existing.display_name != incoming.display_name
-            or fields is None
-        ):
-            return None
-        return BoundaryException(existing.nominal, existing.display_name, fields)
-    return None
+    existing = _resolve_boundary_ref(existing, scope)
+    incoming = _resolve_boundary_ref(incoming, scope)
+    if active is None:
+        active = set()
+    marker = (id(existing), id(incoming))
+    if marker in active:
+        return None
+    active.add(marker)
+    try:
+        reconciled = _reconcile_container_view_member_schema(existing, incoming)
+        if reconciled is not None:
+            return reconciled
+        existing_is_less_specific = _view_schema_is_at_most_as_specific(existing, incoming, scope)
+        incoming_is_less_specific = _view_schema_is_at_most_as_specific(incoming, existing, scope)
+        if existing_is_less_specific and not incoming_is_less_specific:
+            return incoming
+        if incoming_is_less_specific and not existing_is_less_specific:
+            return existing
+        if isinstance(existing, BoundaryArray) and isinstance(incoming, BoundaryArray):
+            element = _reconcile_view_schema(existing.element, incoming.element, scope, active)
+            return BoundaryArray(element) if element is not None else None
+        if isinstance(existing, BoundaryDict) and isinstance(incoming, BoundaryDict):
+            value = _reconcile_view_schema(existing.value, incoming.value, scope, active)
+            return BoundaryDict(value) if value is not None else None
+        if isinstance(existing, BoundaryRecord) and isinstance(incoming, BoundaryRecord):
+            fields = _reconcile_boundary_fields(existing.fields, incoming.fields, scope, active)
+            if (
+                existing.nominal != incoming.nominal
+                or existing.display_name != incoming.display_name
+                or fields is None
+            ):
+                return None
+            return BoundaryRecord(existing.nominal, existing.display_name, fields)
+        if isinstance(existing, BoundaryEnum) and isinstance(incoming, BoundaryEnum):
+            variants = _reconcile_boundary_variants(
+                existing.variants, incoming.variants, scope, active
+            )
+            if (
+                existing.nominal != incoming.nominal
+                or existing.display_name != incoming.display_name
+                or variants is None
+            ):
+                return None
+            return BoundaryEnum(existing.nominal, existing.display_name, variants)
+        if isinstance(existing, BoundaryException) and isinstance(incoming, BoundaryException):
+            fields = _reconcile_boundary_fields(existing.fields, incoming.fields, scope, active)
+            if (
+                existing.nominal != incoming.nominal
+                or existing.display_name != incoming.display_name
+                or fields is None
+            ):
+                return None
+            return BoundaryException(existing.nominal, existing.display_name, fields)
+        return None
+    finally:
+        active.remove(marker)
+
+
+def _view_schema_is_at_most_as_specific(
+    existing: BoundarySchema,
+    incoming: BoundarySchema,
+    scope: BoundaryScope,
+    active: set[tuple[int, int]] | None = None,
+) -> bool:
+    """Return whether *existing* can be represented by *incoming*.
+
+    The relation is coinductive for recursive definitions: revisiting a pair
+    is provisionally compatible while its enclosing structural comparison
+    determines whether an actual generic/concrete difference exists.
+    """
+    existing = _resolve_boundary_ref(existing, scope)
+    incoming = _resolve_boundary_ref(incoming, scope)
+    if existing == incoming:
+        return True
+    if active is None:
+        active = set()
+    marker = (id(existing), id(incoming))
+    if marker in active:
+        return True
+    active.add(marker)
+    try:
+        if isinstance(existing, BoundarySealVar):
+            return not isinstance(incoming, BoundarySealVar)
+        if isinstance(incoming, BoundarySealVar):
+            return False
+        if isinstance(existing, BoundaryArray) and isinstance(incoming, BoundaryArray):
+            return _view_schema_is_at_most_as_specific(
+                existing.element, incoming.element, scope, active
+            )
+        if isinstance(existing, BoundaryDict) and isinstance(incoming, BoundaryDict):
+            return _view_schema_is_at_most_as_specific(
+                existing.value, incoming.value, scope, active
+            )
+        if isinstance(existing, BoundaryRecord) and isinstance(incoming, BoundaryRecord):
+            return (
+                existing.nominal == incoming.nominal
+                and existing.display_name == incoming.display_name
+                and _boundary_fields_are_at_most_as_specific(
+                    existing.fields, incoming.fields, scope, active
+                )
+            )
+        if isinstance(existing, BoundaryEnum) and isinstance(incoming, BoundaryEnum):
+            return (
+                existing.nominal == incoming.nominal
+                and existing.display_name == incoming.display_name
+                and _boundary_variants_are_at_most_as_specific(
+                    existing.variants, incoming.variants, scope, active
+                )
+            )
+        if isinstance(existing, BoundaryException) and isinstance(incoming, BoundaryException):
+            return (
+                existing.nominal == incoming.nominal
+                and existing.display_name == incoming.display_name
+                and _boundary_fields_are_at_most_as_specific(
+                    existing.fields, incoming.fields, scope, active
+                )
+            )
+        return False
+    finally:
+        active.remove(marker)
+
+
+def _boundary_fields_are_at_most_as_specific(
+    existing: tuple[tuple[str, BoundarySchema], ...],
+    incoming: tuple[tuple[str, BoundarySchema], ...],
+    scope: BoundaryScope,
+    active: set[tuple[int, int]],
+) -> bool:
+    """Compare matching nominal fields under the schema specificity relation."""
+    return len(existing) == len(incoming) and all(
+        existing_name == incoming_name
+        and _view_schema_is_at_most_as_specific(existing_schema, incoming_schema, scope, active)
+        for (existing_name, existing_schema), (incoming_name, incoming_schema) in zip(
+            existing, incoming, strict=True
+        )
+    )
+
+
+def _boundary_variants_are_at_most_as_specific(
+    existing: tuple[BoundaryVariantShape, ...],
+    incoming: tuple[BoundaryVariantShape, ...],
+    scope: BoundaryScope,
+    active: set[tuple[int, int]],
+) -> bool:
+    """Compare matching enum variants under the schema specificity relation."""
+    return len(existing) == len(incoming) and all(
+        existing_variant.name == incoming_variant.name
+        and _boundary_fields_are_at_most_as_specific(
+            existing_variant.fields, incoming_variant.fields, scope, active
+        )
+        for existing_variant, incoming_variant in zip(existing, incoming, strict=True)
+    )
 
 
 def _reconcile_boundary_fields(
     existing: tuple[tuple[str, BoundarySchema], ...],
     incoming: tuple[tuple[str, BoundarySchema], ...],
+    scope: BoundaryScope,
+    active: set[tuple[int, int]],
 ) -> tuple[tuple[str, BoundarySchema], ...] | None:
     """Reconcile ordered nominal fields only when their names align exactly."""
     if len(existing) != len(incoming):
@@ -787,7 +911,7 @@ def _reconcile_boundary_fields(
     ):
         if existing_name != incoming_name:
             return None
-        schema = _reconcile_view_schema(existing_schema, incoming_schema)
+        schema = _reconcile_view_schema(existing_schema, incoming_schema, scope, active)
         if schema is None:
             return None
         fields.append((existing_name, schema))
@@ -797,6 +921,8 @@ def _reconcile_boundary_fields(
 def _reconcile_boundary_variants(
     existing: tuple[BoundaryVariantShape, ...],
     incoming: tuple[BoundaryVariantShape, ...],
+    scope: BoundaryScope,
+    active: set[tuple[int, int]],
 ) -> tuple[BoundaryVariantShape, ...] | None:
     """Reconcile ordered enum variants only when names and fields align exactly."""
     if len(existing) != len(incoming):
@@ -805,7 +931,9 @@ def _reconcile_boundary_variants(
     for existing_variant, incoming_variant in zip(existing, incoming, strict=True):
         if existing_variant.name != incoming_variant.name:
             return None
-        fields = _reconcile_boundary_fields(existing_variant.fields, incoming_variant.fields)
+        fields = _reconcile_boundary_fields(
+            existing_variant.fields, incoming_variant.fields, scope, active
+        )
         if fields is None:
             return None
         variants.append(BoundaryVariantShape(existing_variant.name, fields))
@@ -816,6 +944,7 @@ def _view_schema_accepts_decode(
     view_schema: BoundarySchema,
     requested_schema: BoundarySchema,
     encoded_schemas: set[BoundarySchema],
+    scope: BoundaryScope,
 ) -> bool:
     """Return whether an encoded view can safely return at *requested_schema*.
 
@@ -828,7 +957,7 @@ def _view_schema_accepts_decode(
         return True
     return (
         requested_schema in encoded_schemas
-        and _reconcile_view_schema(requested_schema, view_schema) == view_schema
+        and _reconcile_view_schema(requested_schema, view_schema, scope) == view_schema
     )
 
 

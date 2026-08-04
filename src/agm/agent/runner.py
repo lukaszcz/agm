@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import shlex
 import shutil
 import sys
@@ -15,6 +16,7 @@ from agm.core import dry_run
 from agm.core.fs import is_file
 from agm.core.path import display_path
 from agm.core.process import ProcessCaptureResult, run_capture, run_capture_result
+from agm.util.interp import Hole, InterpolationError, interp, split_template
 
 # Shell convention: exit code 127 means the command could not be found or
 # executed.  Treated as a fatal runner-configuration error (see
@@ -88,22 +90,30 @@ def validate_command(command: list[str], *, kind: str) -> None:
 
 def command_with_prompt_target(command: list[str], target: Path) -> list[str]:
     prompt_path = str(target)
-    # Separate from AgL's trigger in ``agm.agl.lexer.scanner``.
-    placeholders = ("%%", "%{PROMPT_FILE}")
+    variables = {**os.environ, "PROMPT_FILE": prompt_path}
     replaced_command: list[str] = []
     replaced = False
 
     for arg in command:
-        updated = arg
-        for placeholder in placeholders:
-            if placeholder in updated:
-                updated = updated.replace(placeholder, prompt_path)
-                replaced = True
+        try:
+            segments = split_template(arg)
+            has_prompt_file_hole = any(
+                isinstance(segment, Hole) and segment.name == "PROMPT_FILE" for segment in segments
+            )
+            has_alias = "%%" in arg
+            updated = interp(arg.replace("%%", prompt_path), variables)
+        except InterpolationError as exc:
+            print(
+                f"Error: cannot interpolate runner command element {arg!r}: {exc}.",
+                file=sys.stderr,
+            )
+            raise SystemExit(1) from exc
+        replaced = replaced or has_alias or has_prompt_file_hole
         replaced_command.append(updated)
 
     if replaced:
         return replaced_command
-    return [*command, f"@{target}"]
+    return [*replaced_command, f"@{target}"]
 
 
 def prepare_prompt_from_source(

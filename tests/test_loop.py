@@ -1169,25 +1169,75 @@ class TestValidateCommandNotFound:
 
 class TestCommandWithPromptTarget:
     def test_replaces_percent_percent_placeholder(self) -> None:
-
         result = command_with_prompt_target(["runner", "%%"], Path("/tmp/prompt.md"))
         assert result == ["runner", "/tmp/prompt.md"]
 
-    def test_replaces_prompt_file_placeholder(self) -> None:
+    def test_replaces_prompt_file_placeholder_in_multiple_elements(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        target = tmp_path / "prompt.md"
+        monkeypatch.setenv("PROMPT_FILE", "wrong-path")
 
-        result = command_with_prompt_target(["runner", "%{PROMPT_FILE}"], Path("/tmp/prompt.md"))
-        assert result == ["runner", "/tmp/prompt.md"]
+        result = command_with_prompt_target(
+            ["runner", "--input=%{PROMPT_FILE}", "%{PROMPT_FILE}"], target
+        )
+
+        assert result == ["runner", f"--input={target}", str(target)]
+
+    def test_applies_percent_percent_alias_before_prompt_file_interpolation(
+        self, tmp_path: Path
+    ) -> None:
+        target = tmp_path / "prompt.md"
+
+        result = command_with_prompt_target(["runner", "%%:%{PROMPT_FILE}"], target)
+
+        assert result == ["runner", f"{target}:{target}"]
 
     def test_appends_at_target_when_no_placeholder(self) -> None:
-
         result = command_with_prompt_target(["runner"], Path("/tmp/prompt.md"))
         assert result == ["runner", "@/tmp/prompt.md"]
 
-    def test_replaced_true_returns_modified_command(self, tmp_path: Path) -> None:
+    def test_expands_other_environment_variables(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("RUNNER_OPTION", "from-environment")
 
-        target = tmp_path / "prompt.md"
-        result = command_with_prompt_target(["runner", "--input", "%%", "--flag"], target)
-        assert result == ["runner", "--input", str(target), "--flag"]
+        result = command_with_prompt_target(
+            ["runner", "--option=%{RUNNER_OPTION}", "%{PROMPT_FILE}"], Path("/tmp/prompt.md")
+        )
+
+        assert result == ["runner", "--option=from-environment", "/tmp/prompt.md"]
+
+    def test_escaped_prompt_file_hole_remains_literal_and_appends_fallback(self) -> None:
+        result = command_with_prompt_target(["runner", r"\%{PROMPT_FILE}"], Path("/tmp/prompt.md"))
+
+        assert result == ["runner", "%{PROMPT_FILE}", "@/tmp/prompt.md"]
+
+    def test_unknown_hole_exits_with_runner_element_and_variable(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        with pytest.raises(SystemExit) as exc_info:
+            command_with_prompt_target(
+                ["runner", "%{UNKNOWN_RUNNER_VALUE}"], Path("/tmp/prompt.md")
+            )
+
+        assert exc_info.value.code == 1
+        error = capsys.readouterr().err
+        assert "runner command element" in error
+        assert "UNKNOWN_RUNNER_VALUE" in error
+
+    @pytest.mark.parametrize("element", ["%{unterminated", "%{not valid}"])
+    def test_malformed_hole_exits_with_runner_element(
+        self, element: str, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        with pytest.raises(SystemExit) as exc_info:
+            command_with_prompt_target(["runner", element], Path("/tmp/prompt.md"))
+
+        assert exc_info.value.code == 1
+        assert "runner command element" in capsys.readouterr().err
+
+    def test_bare_percent_is_unchanged_and_appends_fallback(self) -> None:
+        result = command_with_prompt_target(["runner", "--format=%s"], Path("/tmp/prompt.md"))
+
+        assert result == ["runner", "--format=%s", "@/tmp/prompt.md"]
 
 
 class TestSelectorResultEdgeCases:

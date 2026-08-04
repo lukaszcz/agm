@@ -21,6 +21,7 @@ from agm.core.toml import (
     toml_dict,
 )
 from agm.project.layout import project_config_dir
+from agm.util.interp import Hole, InterpolationError, interp_lenient, split_template
 
 
 class ConfigCommandNotFound(ValueError):
@@ -32,8 +33,8 @@ class ConfigCommandNotFound(ValueError):
         super().__init__(f"{section_name} subcommand {command_name!r} is not defined in config")
 
 
-# Known path-like fields per config section.  Values for these fields are
-# expanded (env vars, ~) and resolved against the config file's directory
+# Known path-like fields per config section. Values interpolate ``%{name}``
+# environment variables, expand ``~``, and resolve against the config file's directory
 # before merging, so that relative paths are always interpreted relative to
 # the config file that defines them.  When the config-dir-resolved path does
 # not exist, cwd is used as a fallback.
@@ -241,6 +242,15 @@ class RefineConfig:
     save_review: bool
 
 
+def _has_unresolved_interpolation(value: str) -> bool:
+    """Return whether a path value retains a malformed or unavailable interpolation hole."""
+    try:
+        segments = split_template(value)
+    except InterpolationError:
+        return True
+    return any(isinstance(segment, Hole) and segment.name not in os.environ for segment in segments)
+
+
 def _resolve_section_paths(
     section: TomlDict,
     fields: list[str],
@@ -254,8 +264,12 @@ def _resolve_section_paths(
         value = resolved.get(field)
         if not isinstance(value, str) or not value.strip():
             continue
-        expanded = os.path.expanduser(os.path.expandvars(value))
+        has_unresolved_interpolation = _has_unresolved_interpolation(value)
+        expanded = os.path.expanduser(interp_lenient(value, os.environ))
         if expanded in sentinels.get(field, set()):
+            resolved[field] = expanded
+            continue
+        if has_unresolved_interpolation:
             resolved[field] = expanded
             continue
         path = Path(expanded)
@@ -291,12 +305,13 @@ def _resolve_config_file_paths(config: TomlDict, config_dir: Path, cwd: Path) ->
                 cwd,
                 sentinels=_CONFIG_PATH_SENTINELS.get(section_name, {}),
             )
-    # Resolve log-file in any top-level section that contains that key.
-    # AGM's own sections don't carry a top-level log-file key (exec's is already
-    # handled above and is idempotent on the now-absolute value), so they are
-    # naturally skipped.  For program sections the path is anchored to the
-    # config-file directory, matching [exec].log-file behaviour.
+    # Resolve log-file in program sections. Known AGM sections were completely
+    # resolved above, including their nested command tables; processing them a
+    # second time could reinterpret an escaped interpolation marker. Program
+    # sections use the same config-file-relative rules as [exec].log-file.
     for section_name, section in resolved.items():
+        if section_name in _CONFIG_PATH_FIELDS:
+            continue
         if isinstance(section, dict) and "log-file" in section:
             resolved[section_name] = _resolve_section_paths(
                 toml_dict(section), ["log-file"], config_dir, cwd, sentinels={}

@@ -14,14 +14,19 @@ from tempfile import NamedTemporaryFile
 
 from agm.agent.prompt import (
     expand_prompt_env_vars,
-    interp_or_exit,
     preprocess_prompt_file,
     require_prompt_file,
-    split_or_exit,
 )
 from agm.core import dry_run
 from agm.core.process import ProcessCaptureResult, run_capture, run_capture_result
-from agm.util.interp import Hole, Literal, Segment
+from agm.util.interp import (
+    Hole,
+    InterpolationError,
+    Literal,
+    Segment,
+    interp_segments,
+    split_template,
+)
 
 # Shell convention: exit code 127 means the command could not be found or
 # executed.  Treated as a fatal runner-configuration error (see
@@ -98,7 +103,7 @@ def _split_command_element(text: str, *, what: str) -> list[Segment]:
     ``%%`` from being rewritten.
     """
     segments: list[Segment] = []
-    for segment in split_or_exit(text, what=what):
+    for segment in split_template(text):
         if isinstance(segment, Hole):
             segments.append(segment)
             continue
@@ -118,10 +123,14 @@ def _targets_prompt_file(segments: list[Segment]) -> bool:
 
 def validate_command(command: list[str], *, kind: str) -> None:
     what = f"{kind} command executable {command[0]!r}"
-    segments = _split_command_element(command[0], what=what)
-    # The prompt file does not exist yet; binding a placeholder still validates
-    # every other hole strictly, but leaves the executable unresolvable.
-    executable = interp_or_exit(segments, ChainMap({PROMPT_FILE_VAR: ""}, os.environ), what=what)
+    try:
+        segments = _split_command_element(command[0], what=what)
+        # The prompt file does not exist yet; binding a placeholder still validates
+        # every other hole strictly, but leaves the executable unresolvable.
+        executable = command_with_prompt_target([command[0]], Path(""))[0]
+    except InterpolationError as exc:
+        print(f"Error: cannot interpolate {what}: {exc}.", file=sys.stderr)
+        raise SystemExit(1) from exc
     if _targets_prompt_file(segments):
         return
     if shutil.which(executable) is None:
@@ -141,11 +150,20 @@ def command_with_prompt_target(command: list[str], target: Path) -> list[str]:
         what = f"runner command element {arg!r}"
         segments = _split_command_element(arg, what=what)
         targeted = targeted or _targets_prompt_file(segments)
-        interpolated.append(interp_or_exit(segments, variables, what=what))
+        interpolated.append(interp_segments(segments, variables))
 
     if targeted:
         return interpolated
     return [*interpolated, f"@{target}"]
+
+
+def command_with_prompt_target_or_exit(command: list[str], target: Path) -> list[str]:
+    """Attach a prompt target, reporting interpolation failures as CLI errors."""
+    try:
+        return command_with_prompt_target(command, target)
+    except InterpolationError as exc:
+        print(f"Error: cannot interpolate runner command: {exc}.", file=sys.stderr)
+        raise SystemExit(1) from exc
 
 
 def prepare_prompt_from_source(
@@ -248,7 +266,7 @@ def run_prompt_command(
             stderr_callback(chunk)
 
     returncode, stdout, stderr = run_capture(
-        command_with_prompt_target(command, target),
+        command_with_prompt_target_or_exit(command, target),
         env=env,
         stdout_callback=handle_stdout,
         stderr_callback=handle_stderr,
@@ -292,7 +310,7 @@ def run_prepared_prompt(
     if dry_run.enabled():
         dry_run.print_labeled_command(
             "agent",
-            command_with_prompt_target(prepared.command, prepared.effective_file),
+            command_with_prompt_target_or_exit(prepared.command, prepared.effective_file),
         )
         return ""
     return run_prompt_command(

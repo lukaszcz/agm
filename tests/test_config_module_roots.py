@@ -229,6 +229,26 @@ class TestResolveLibRoot:
         # Must NOT be treated as a path relative to the origin directory.
         assert result != origin / "~/mylib"
 
+    def test_interpolates_lib_root_and_extra_roots_leniently(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        home = tmp_path / "home"
+        config_dir = home / ".agm"
+        config_dir.mkdir(parents=True)
+        (config_dir / "config.toml").write_text(
+            '[modules]\nlib_root = "%{PROJ}/lib"\nroots = ["%{PROJ}/a", "plain/b", "%{MISSING}"]\n'
+        )
+        monkeypatch.setenv("PROJ", str(tmp_path / "project"))
+
+        config = load_module_roots(home=home, proj_dir=None, cwd=tmp_path)
+
+        assert resolve_lib_root(config) == tmp_path / "project" / "lib"
+        assert [raw for raw, _ in config.extra] == [
+            str(tmp_path / "project" / "a"),
+            "plain/b",
+            "%{MISSING}",
+        ]
+
     def test_absolute_lib_root_returned_as_is(self, tmp_path: Path) -> None:
         abs_path = tmp_path / "absolute" / "lib"
         cfg = ModuleRootsConfig(lib_root=(str(abs_path), tmp_path / "config"), extra=())

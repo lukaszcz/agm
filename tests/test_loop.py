@@ -1290,28 +1290,33 @@ class TestCommandWithPromptTarget:
 
         assert result == ["runner", "%{PROMPT_FILE}", "@/tmp/prompt.md"]
 
-    def test_unknown_hole_exits_with_runner_element_and_variable(
-        self, capsys: pytest.CaptureFixture[str]
-    ) -> None:
-        with pytest.raises(SystemExit) as exc_info:
+    def test_unknown_hole_raises_with_runner_element_and_variable(self) -> None:
+        from agm.util.interp import InterpolationError
+
+        with pytest.raises(InterpolationError) as exc_info:
             command_with_prompt_target(
                 ["runner", "%{UNKNOWN_RUNNER_VALUE}"], Path("/tmp/prompt.md")
             )
 
+        assert exc_info.value.text == "UNKNOWN_RUNNER_VALUE"
+
+    def test_exiting_wrapper_reports_unknown_hole(self, capsys: pytest.CaptureFixture[str]) -> None:
+        from agm.agent.runner import command_with_prompt_target_or_exit
+
+        with pytest.raises(SystemExit) as exc_info:
+            command_with_prompt_target_or_exit(
+                ["runner", "%{UNKNOWN_RUNNER_VALUE}"], Path("/tmp/prompt.md")
+            )
+
         assert exc_info.value.code == 1
-        error = capsys.readouterr().err
-        assert "runner command element" in error
-        assert "UNKNOWN_RUNNER_VALUE" in error
+        assert "UNKNOWN_RUNNER_VALUE" in capsys.readouterr().err
 
     @pytest.mark.parametrize("element", ["%{unterminated", "%{not valid}"])
-    def test_malformed_hole_exits_with_runner_element(
-        self, element: str, capsys: pytest.CaptureFixture[str]
-    ) -> None:
-        with pytest.raises(SystemExit) as exc_info:
-            command_with_prompt_target(["runner", element], Path("/tmp/prompt.md"))
+    def test_malformed_hole_raises_with_runner_element(self, element: str) -> None:
+        from agm.util.interp import InterpolationError
 
-        assert exc_info.value.code == 1
-        assert "runner command element" in capsys.readouterr().err
+        with pytest.raises(InterpolationError):
+            command_with_prompt_target(["runner", element], Path("/tmp/prompt.md"))
 
     def test_bare_percent_is_unchanged_and_appends_fallback(self) -> None:
         result = command_with_prompt_target(["runner", "--format=%s"], Path("/tmp/prompt.md"))

@@ -87,7 +87,7 @@ from agm.agl.lexer.tokens import (
 )
 from agm.agl.semantics.text_literal import ESCAPE_DECODE, INTERP_OPEN, INTERP_TRIGGER
 from agm.raw_tail_catalog import RAW_TAIL_BUILTINS
-from agm.util.interp import IDENT_STOP, is_identifier_start
+from agm.util.ident import IDENT_STOP, is_identifier_start
 from agm.util.text import normalize_newlines
 
 # ---------------------------------------------------------------------------
@@ -95,7 +95,7 @@ from agm.util.text import normalize_newlines
 # ---------------------------------------------------------------------------
 
 # ``IDENT_STOP`` (the characters that terminate an identifier scan) lives in
-# ``agm.util.interp`` so that AgL identifiers and the ``%{name}`` holes AGM
+# ``agm.util.ident`` so that AgL identifiers and the ``%{name}`` holes AGM
 # interpolates at runtime cannot drift apart.  The scan itself is greedy:
 # an identifier starts with a letter or ``_`` and continues until one of those
 # structural delimiters.  ``=`` and ``@`` are stop characters so that ``a=b``

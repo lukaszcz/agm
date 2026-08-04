@@ -7,7 +7,9 @@ fragments and `%{…}` interpolation holes. A template evaluates to `text`.
 The lexical forms — single- and triple-quoted strings, escapes, and the
 triple-quoted dedent rule — are specified in
 [Lexical structure](lexical-structure.md). This chapter specifies what
-interpolation *means*.
+interpolation *means*. AgL text literals have their own full lexical escape
+table, including `\n`, `\t`, `\"`, and `\%`; the shared `%{name}` runtime
+interpolation form instead uses only `\%{` to write a literal hole marker.
 
 ## Interpolation
 

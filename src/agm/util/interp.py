@@ -6,8 +6,9 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from typing import Final, TypeAlias
 
+from agm.util.ident import is_identifier
+
 __all__ = [
-    "IDENT_STOP",
     "INTERP_OPEN",
     "INTERP_TRIGGER",
     "Hole",
@@ -17,41 +18,11 @@ __all__ = [
     "interp",
     "interp_preserving",
     "interp_segments",
-    "is_identifier_start",
-    "is_interp_name",
     "split_template",
 ]
 
 INTERP_TRIGGER: Final[str] = "%"
 INTERP_OPEN: Final[str] = f"{INTERP_TRIGGER}{{"
-
-# Characters that terminate an identifier scan. An identifier starts with a
-# (Unicode) letter or ``_`` and then greedily consumes every character that is
-# not in this set. The stop set retains structural punctuators and operators as
-# standalone delimiters, while allowing names such as ``ask-prompt``, ``ask?``,
-# ``do-it-now!``, ``a+b``, and ``foo\"bar``.
-IDENT_STOP: Final[frozenset[str]] = frozenset(
-    {
-        " ",
-        "\t",
-        "\n",
-        "\r",
-        "(",
-        ")",
-        "[",
-        "]",
-        "{",
-        "}",
-        ":",
-        ",",
-        ".",
-        "|",
-        ";",
-        "/",
-        "@",
-        "=",
-    }
-)
 
 
 @dataclass(frozen=True, slots=True)
@@ -84,20 +55,6 @@ class InterpolationError(ValueError):
         self.text = text
         self.offset = offset
         super().__init__(f"{kind} {text!r} at offset {offset}")
-
-
-def is_identifier_start(character: str) -> bool:
-    """Return whether *character* may start an AgL identifier."""
-    return character.isalpha() or character == "_"
-
-
-def is_interp_name(name: str) -> bool:
-    """Return whether *name* is a complete AgL identifier."""
-    return (
-        bool(name)
-        and is_identifier_start(name[0])
-        and not any(character in IDENT_STOP for character in name)
-    )
 
 
 def _scan(text: str, *, lenient: bool) -> tuple[list[Segment], bool]:
@@ -149,7 +106,7 @@ def _scan(text: str, *, lenient: bool) -> tuple[list[Segment], bool]:
                 add_literal(text[position:])
                 break
             name = text[trigger + len(INTERP_OPEN) : end]
-            if is_interp_name(name):
+            if is_identifier(name):
                 add_literal(text[position:trigger])
                 flush_literal()
                 segments.append(Hole(name, trigger))

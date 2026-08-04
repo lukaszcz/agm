@@ -7,6 +7,8 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 
+from agm.util.interp import interp_preserving
+
 
 @dataclass(frozen=True, slots=True)
 class RootSet:
@@ -89,7 +91,8 @@ def assemble_roots(
 
     # 4. Configured roots — relative paths resolve against their origin dir
     for raw, origin_dir in configured:
-        raw_path = Path(os.path.expanduser(raw))
+        interpolated, _ = interp_preserving(raw, os.environ)
+        raw_path = Path(os.path.expanduser(interpolated))
         if raw_path.is_absolute():
             _add(raw_path)
         else:

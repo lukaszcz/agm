@@ -17,7 +17,7 @@ from agm.agent.loop import (
 from agm.agent.runner import (
     append_extra_prompt,
     cleanup_temp_files,
-    command_with_prompt_target,
+    command_with_prompt_target_or_exit,
     run_prompt_command,
 )
 from agm.cli_support.args import LoopSelectArgs
@@ -77,7 +77,9 @@ def run(args: LoopSelectArgs) -> None:
             )
             dry_run.print_labeled_command(
                 invocation.command_kind,
-                command_with_prompt_target(invocation.command, invocation.effective_prompt_file),
+                command_with_prompt_target_or_exit(
+                    invocation.command, invocation.effective_prompt_file
+                ),
             )
             return
 

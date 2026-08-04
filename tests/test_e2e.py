@@ -8256,11 +8256,9 @@ class TestReviewCommand:
     def test_interpolates_runner_executable_from_environment(
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:
-        fake_runner = tmp_path / "bin" / "reviewer"
-        fake_runner.parent.mkdir(parents=True)
-        fake_runner.write_text("#!/bin/bash\nprintf 'review body\\n'\n")
-        fake_runner.chmod(fake_runner.stat().st_mode | stat.S_IEXEC)
-        env["PATH"] = f"{fake_runner.parent}:{env['PATH']}"
+        _install_fake_loop_command(
+            tmp_path / "bin", env, command_name="reviewer", script="printf 'review body\\n'\n"
+        )
         env["REVIEW_RUNNER"] = "reviewer"
 
         work = tmp_path / "work"
@@ -8538,26 +8536,26 @@ class TestRefineCommand:
     ) -> None:
         state_file = tmp_path / "refine-state"
         prompt_log = tmp_path / "prompts.log"
-        fake_runner = tmp_path / "bin" / "runner"
-        fake_runner.parent.mkdir(parents=True)
-        fake_runner.write_text(
-            "#!/bin/bash\n"
-            'count=$(cat "$STATE_FILE" 2>/dev/null || printf 0)\n'
-            'count=$((count + 1)); printf "%s" "$count" > "$STATE_FILE"\n'
-            'prompt_file="${1#@}"\n'
-            'prompt=$(cat "$prompt_file")\n'
-            'printf "%s\\n---\\n" "$prompt" >> "$PROMPT_LOG"\n'
-            'if [[ "$prompt" == revise-file=@* ]]; then\n'
-            '  review_file="${prompt#revise-file=@}"\n'
-            '  printf "review contents: " >> "$PROMPT_LOG"\n'
-            '  cat "$review_file" >> "$PROMPT_LOG"\n'
-            '  printf "\\n---\\n" >> "$PROMPT_LOG"\n'
-            "fi\n"
-            'if [[ "$count" -eq 1 ]]; then printf "review finding\\n"; '
-            'else printf "COMPLETE\\n"; fi\n'
+        _install_fake_loop_command(
+            tmp_path / "bin",
+            env,
+            command_name="runner",
+            script=(
+                'count=$(cat "$STATE_FILE" 2>/dev/null || printf 0)\n'
+                'count=$((count + 1)); printf "%s" "$count" > "$STATE_FILE"\n'
+                'prompt_file="${1#@}"\n'
+                'prompt=$(cat "$prompt_file")\n'
+                'printf "%s\\n---\\n" "$prompt" >> "$PROMPT_LOG"\n'
+                'if [[ "$prompt" == revise-file=@* ]]; then\n'
+                '  review_file="${prompt#revise-file=@}"\n'
+                '  printf "review contents: " >> "$PROMPT_LOG"\n'
+                '  cat "$review_file" >> "$PROMPT_LOG"\n'
+                '  printf "\\n---\\n" >> "$PROMPT_LOG"\n'
+                "fi\n"
+                'if [[ "$count" -eq 1 ]]; then printf "review finding\\n"; '
+                'else printf "COMPLETE\\n"; fi\n'
+            ),
         )
-        fake_runner.chmod(fake_runner.stat().st_mode | stat.S_IEXEC)
-        env["PATH"] = f"{fake_runner.parent}:{env['PATH']}"
         env["STATE_FILE"] = str(state_file)
         env["PROMPT_LOG"] = str(prompt_log)
 

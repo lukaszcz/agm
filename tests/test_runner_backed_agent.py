@@ -719,6 +719,19 @@ class TestRunnerBackedAgentFailureMapping:
                 factory_fn(AgentRequest(agent="ask", prompt="hi"))
         assert exc_info.value.cause == "spawn_failure"
 
+    def test_bad_runner_interpolation_raises_agent_call_host_error(self) -> None:
+        from agm.agl.runtime import AgentRequest
+        from agm.agl.runtime.agents import AgentCallHostError, runner_backed_agent_factory
+
+        factory_fn = runner_backed_agent_factory(
+            default_runner_cmd="runner --flag=%{TYPO}", per_agent_cmds={}, idle_timeout=None
+        )
+
+        with pytest.raises(AgentCallHostError) as exc_info:
+            factory_fn(AgentRequest(agent="ask", prompt="hi"))
+
+        assert exc_info.value.cause == "spawn_failure"
+
     def test_timeout_raises_agent_call_host_error(self) -> None:
         from agm.agent.runner import PreparedPromptRun
         from agm.agl.runtime import AgentRequest

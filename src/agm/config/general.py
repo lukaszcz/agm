@@ -242,6 +242,52 @@ class RefineConfig:
     save_review: bool
 
 
+def _interpolate_and_expand_section_paths(
+    section: TomlDict,
+    fields: list[str],
+) -> tuple[TomlDict, set[str]]:
+    resolved = dict(section)
+    unresolved_fields: set[str] = set()
+    for field in fields:
+        value = resolved.get(field)
+        if not isinstance(value, str) or not value.strip():
+            continue
+        interpolated, unresolved = interp_preserving(value, os.environ)
+        resolved[field] = os.path.expanduser(interpolated)
+        if unresolved:
+            unresolved_fields.add(field)
+    return resolved, unresolved_fields
+
+
+def _anchor_section_paths(
+    section: TomlDict,
+    fields: list[str],
+    config_dir: Path,
+    cwd: Path,
+    *,
+    sentinels: dict[str, set[str]],
+    unresolved_fields: set[str],
+) -> TomlDict:
+    resolved = dict(section)
+    for field in fields:
+        value = resolved.get(field)
+        if not isinstance(value, str) or not value.strip():
+            continue
+        # Values with unresolved holes are not usable paths, so leave them
+        # unanchored. Interpolation has already run exactly once above.
+        if field in unresolved_fields or value in sentinels.get(field, set()):
+            continue
+        path = Path(value)
+        if path.is_absolute():
+            continue
+        config_resolved = (config_dir / path).resolve()
+        if config_resolved.exists():
+            resolved[field] = str(config_resolved)
+        else:
+            resolved[field] = str((cwd / path).resolve())
+    return resolved
+
+
 def _resolve_section_paths(
     section: TomlDict,
     fields: list[str],
@@ -250,44 +296,28 @@ def _resolve_section_paths(
     *,
     sentinels: dict[str, set[str]],
 ) -> TomlDict:
-    resolved = dict(section)
-    for field in fields:
-        value = resolved.get(field)
-        if not isinstance(value, str) or not value.strip():
-            continue
-        # A value that still carries interpolation syntax is not a usable path,
-        # so it is left as written rather than anchored to a directory.
-        interpolated, unresolved = interp_preserving(value, os.environ)
-        expanded = os.path.expanduser(interpolated)
-        if unresolved or expanded in sentinels.get(field, set()):
-            resolved[field] = expanded
-            continue
-        path = Path(expanded)
-        if path.is_absolute():
-            resolved[field] = expanded
-            continue
-        config_resolved = (config_dir / path).resolve()
-        if config_resolved.exists():
-            resolved[field] = str(config_resolved)
-        else:
-            resolved[field] = str((cwd / path).resolve())
+    expanded, unresolved_fields = _interpolate_and_expand_section_paths(section, fields)
+    resolved = _anchor_section_paths(
+        expanded,
+        fields,
+        config_dir,
+        cwd,
+        sentinels=sentinels,
+        unresolved_fields=unresolved_fields,
+    )
     for key, value in resolved.items():
         if isinstance(value, dict) and key not in fields:
             resolved[key] = _resolve_section_paths(
-                toml_dict(value),
-                fields,
-                config_dir,
-                cwd,
-                sentinels=sentinels,
+                toml_dict(value), fields, config_dir, cwd, sentinels=sentinels
             )
     return resolved
 
 
 def _resolve_config_file_paths(config: TomlDict, config_dir: Path, cwd: Path) -> TomlDict:
     resolved = dict(config)
-    for section_name, fields in _CONFIG_PATH_FIELDS.items():
-        section = resolved.get(section_name)
+    for section_name, section in resolved.items():
         if isinstance(section, dict):
+            fields = _CONFIG_PATH_FIELDS.get(section_name, ["log-file"])
             resolved[section_name] = _resolve_section_paths(
                 toml_dict(section),
                 fields,
@@ -295,16 +325,23 @@ def _resolve_config_file_paths(config: TomlDict, config_dir: Path, cwd: Path) ->
                 cwd,
                 sentinels=_CONFIG_PATH_SENTINELS.get(section_name, {}),
             )
-    # Resolve log-file in program sections. Known AGM sections were completely
-    # resolved above, including their nested command tables; processing them a
-    # second time could reinterpret an escaped interpolation marker. Program
-    # sections use the same config-file-relative rules as [exec].log-file.
+    # Program sections and known sections both carry log files. Anchoring is
+    # idempotent, so this shared sweep needs no section-name skip-list.
     for section_name, section in resolved.items():
-        if section_name in _CONFIG_PATH_FIELDS:
-            continue
         if isinstance(section, dict) and "log-file" in section:
-            resolved[section_name] = _resolve_section_paths(
-                toml_dict(section), ["log-file"], config_dir, cwd, sentinels={}
+            log_file = section["log-file"]
+            unresolved_fields = (
+                {"log-file"}
+                if isinstance(log_file, str) and interp_preserving(log_file, os.environ)[1]
+                else set()
+            )
+            resolved[section_name] = _anchor_section_paths(
+                toml_dict(section),
+                ["log-file"],
+                config_dir,
+                cwd,
+                sentinels={},
+                unresolved_fields=unresolved_fields,
             )
     return resolved
 

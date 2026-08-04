@@ -25,7 +25,7 @@ Prompt options:
 
 ## Prompt interpolation
 
-Before AGM passes a prompt to a runner or selector, it expands `%{name}` holes. A name is an AgL identifier, so names such as `%{log-file}` work. `\%{` writes a literal `%{`, and a bare `%` is literal. `$VAR` and `${VAR}` are plain literal text; the old shell-style interpolation syntax is not supported.
+Before AGM passes prompt or command text to a runner or selector, it expands `%{name}` holes. A name is an AgL identifier, so names such as `%{log-file}` work. Its only escape is `\%{`, which writes a literal `%{`; a bare `%` is literal. `$VAR` and `${VAR}` are plain literal text; the old shell-style interpolation syntax is not supported.
 
 Expansion is strict: an unknown variable, invalid hole name, or unterminated `%{` is an error, not passthrough. Variables come from the full process environment, overlaid with AGM's variables (which win on conflicts):
 

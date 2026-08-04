@@ -9,30 +9,8 @@ from agm.util.interp import (
     interp,
     interp_preserving,
     interp_segments,
-    is_interp_name,
     split_template,
 )
-
-
-@pytest.mark.parametrize(
-    ("name", "expected"),
-    [
-        ("name", True),
-        ("_name", True),
-        ("log-file", True),
-        ("ask?", True),
-        ("a+b", True),
-        ("do-it!", True),
-        ("é2", True),
-        ("", False),
-        ("1x", False),
-        ("a b", False),
-        ("a/b", False),
-        ("a=b", False),
-    ],
-)
-def test_interp_name_matches_agl_identifier_grammar(name: str, expected: bool) -> None:
-    assert is_interp_name(name) is expected
 
 
 @pytest.mark.parametrize(

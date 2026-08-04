@@ -29,7 +29,7 @@ from agm.agent.prompt import preprocess_prompt_file, prompt_source_label, requir
 from agm.agent.runner import (
     append_extra_prompt,
     cleanup_temp_files,
-    command_with_prompt_target,
+    command_with_prompt_target_or_exit,
     prepare_prompt_from_source,
     run_prompt_command,
     validate_command,
@@ -256,7 +256,7 @@ def print_dry_run(runtime: LoopStepRuntime) -> None:
     if runtime.bootstrap_prompt is not None:
         _print_dry_run_command(
             "bootstrap",
-            command_with_prompt_target(
+            command_with_prompt_target_or_exit(
                 runtime.resolved_runner_command,
                 runtime.bootstrap_prompt.effective_file,
             ),
@@ -266,7 +266,7 @@ def print_dry_run(runtime: LoopStepRuntime) -> None:
         assert runtime.loop_prompt is not None
         _print_dry_run_command(
             "runner",
-            command_with_prompt_target(
+            command_with_prompt_target_or_exit(
                 runtime.resolved_runner_command,
                 runtime.loop_prompt.effective_file,
             ),
@@ -283,7 +283,7 @@ def print_dry_run(runtime: LoopStepRuntime) -> None:
 
     _print_dry_run_command(
         "selector",
-        command_with_prompt_target(
+        command_with_prompt_target_or_exit(
             runtime.select_invocation.command,
             runtime.select_invocation.effective_prompt_file,
         ),

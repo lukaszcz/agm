@@ -12,6 +12,7 @@ from agm.config.general import (
     _optional_bool,
     _unique_paths,
     load_loop_config,
+    load_merged_config,
     load_refine_config,
     load_review_config,
     load_revise_config,
@@ -748,3 +749,23 @@ def test_load_refine_config_max_steps_unlimited(tmp_path: Path) -> None:
 
     assert refine.max_steps is None
     assert refine.no_max_steps is False
+
+
+def test_config_path_interpolation_runs_once_before_repeated_log_file_anchoring(
+    tmp_path: Path,
+) -> None:
+    home = tmp_path / "home"
+    config_dir = home / ".agm"
+    config_dir.mkdir(parents=True)
+    (config_dir / "%{PROMPT_DIR}").mkdir()
+    (config_dir / "%{PROMPT_DIR}" / "prompt.md").write_text("prompt")
+    (config_dir / "config.toml").write_text(
+        'version = 1\n[loop]\nprompt_file = "\\\\%{PROMPT_DIR}/prompt.md"\n'
+        '[program]\nlog-file = "program.log"\n',
+        encoding="utf-8",
+    )
+
+    merged = load_merged_config(home=home, proj_dir=None, cwd=tmp_path)
+
+    assert merged["loop"]["prompt_file"] == str(config_dir / "%{PROMPT_DIR}" / "prompt.md")
+    assert merged["program"]["log-file"] == str(tmp_path / "program.log")

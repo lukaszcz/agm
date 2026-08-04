@@ -1,5 +1,11 @@
 def count(xs: list[object]) -> int:
-    """Count the elements of `xs` (never reached for the cyclic argument)."""
+    """Count the outer elements of `xs` without rendering them."""
+    return len(xs)
+
+
+def show(xs: list[object]) -> int:
+    """Render the view before counting its outer elements."""
+    repr(xs)
     return len(xs)
 
 

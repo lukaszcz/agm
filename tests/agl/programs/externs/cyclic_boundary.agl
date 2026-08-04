@@ -1,19 +1,18 @@
-# A cyclic array crossing the Python FFI boundary. `count` walks its
-# `array[Node]` argument structurally at encode time and raises the catchable
-# `CyclicValueError` on a cyclic argument instead of recursing forever.
-# `identity` seals its argument opaquely (no walk at encode time), but the
-# companion `repr()`s the sealed handle -- a sealed-handle round trip -- which
-# still detects the cycle and raises the same catchable exception, converted
-# at the enclosing extern call rather than folded into `ExternError`. `mode`
-# selects how `xs` is built: "cycle" closes a genuine reference cycle through
-# it, "acyclic" leaves it as an ordinary nested array that both externs
-# process and return normally, and "diamond" makes the same inner `Node`
-# reachable twice through `xs` without `xs` ever reaching back to itself.
+# A cyclic array crosses the Python FFI boundary as a lazy live view. `count`
+# can inspect the outer array without walking into its cyclic `Node`, while
+# `show` detects the cycle when its companion renders that view. `identity`
+# seals its argument opaquely, and rendering that sealed handle likewise
+# detects the cycle. Both rendering failures are catchable `CyclicValueError`
+# values rather than `ExternError`. `mode` selects how `xs` is built: "cycle"
+# closes a genuine reference cycle through it, "acyclic" leaves it as an
+# ordinary nested array, and "diamond" makes the same inner `Node` reachable
+# twice through `xs` without `xs` ever reaching back to itself.
 param mode: text
 
 record Node(children: array[Node])
 
 extern def count(xs: array[Node]) -> int
+extern def show(xs: array[Node]) -> int
 extern def identity[T](x: T) -> T
 
 let leaf = Node(children = [])
@@ -31,6 +30,12 @@ try
   print "count: %{c}"
 catch CyclicValueError as e =>
   print "count caught: %{e.message}"
+
+try
+  let s = show(xs)
+  print "show: %{s}"
+catch CyclicValueError as e =>
+  print "show caught: %{e.message}"
 
 try
   let r = identity(xs)

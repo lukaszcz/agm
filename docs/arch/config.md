@@ -27,13 +27,13 @@ Configuration is organized into sections consumed by specific features — for e
 
 For AgL execution, four sources combine with a defined precedence:
 
-- **Engine settings** (`runner`, `log`, `strict-json`, `max-iters`, `log-file`, `timeout`) — the `std/config` `builtin var` bindings:
+- **Engine settings** (`runner`, `default-agent`, `log`, `strict-json`, `max-iters`, `log-file`, `timeout`) — the `std/config` `builtin var` bindings:
   `source write (std/config::X := e) > CLI flag > [<program>].X > [exec].X > engine default`
   Their names, value kinds, and consuming side come from the pure shared catalog in `config/engine_keys.py`, also consumed by AgL semantics, deep IR validation, and the AgL evaluator/REPL.
 - **Param values** (`param NAME`):
   `agm exec`: `CLI flag > [<program>].Y > source default (param Y = e) > required error`; `agm repl`: after `program NAME` establishes the active program, `[<program>].Y > source default (param Y = e) > required error`. A REPL param before that declaration cannot use program config.
 
-`[exec]` holds global engine defaults with kebab field names (`strict-json`, `max-iters`, `log-file`). `[<program>]` is a **top-level** section keyed by the `program NAME` declaration or, for `agm exec`, the `.agl` file stem; it holds both engine-key overrides and param values for that specific program. The REPL loads its section only when `program NAME` establishes the active program, so the declaration must precede params that need config values. Inline `-c` programs with no `program` declaration have no config section. A file stem matching a reserved AGM section name (e.g. `loop`, `exec`) is a pre-execution error unless the source has an explicit `program NAME` declaration.
+`[exec]` holds global engine defaults with kebab field names (`default-agent`, `strict-json`, `max-iters`, `log-file`). `default-agent` is a quoted AgL `Agent` literal; it remains raw configuration data until `exec` or `repl` lazily parse and typecheck it. `[<program>]` is a **top-level** section keyed by the `program NAME` declaration or, for `agm exec`, the `.agl` file stem; it holds both engine-key overrides and param values for that specific program. The REPL loads its section only when `program NAME` establishes the active program, so the declaration must precede params that need config values. Inline `-c` programs with no `program` declaration have no config section. A file stem matching a reserved AGM section name (e.g. `loop`, `exec`) is a pre-execution error unless the source has an explicit `program NAME` declaration.
 
 ## Sandbox Configuration
 
@@ -45,7 +45,7 @@ Sandbox settings for `agm run` follow their own discovery and merge chain across
 - `src/agm/config/general.py` loads and merges the layered config and exposes the per-feature config readers.
 - `src/agm/config/command_config.py` resolves per-command override sections.
 - `src/agm/config/sections.py` is the pure data-leaf source of truth for reserved structural config-section names (shared with the AgL reserved-program-name guard).
-- `src/agm/config/engine_keys.py` is the pure data-leaf catalog of engine keys: each key's name, value kind, and consuming side (runtime-live — backed by a live interpreter field — versus host-consumed — reflected back into a live host service). Shared with the AgL engine-key type registry that maps each kind to an AgL type, and with the evaluator/REPL, which route a write by its consuming side.
+- `src/agm/config/engine_keys.py` is the pure data-leaf catalog of engine keys: each key's name, value kind, and consuming side (runtime-live — backed by a live interpreter field — versus host-consumed registers). Shared with the AgL engine-key type registry that maps each kind to an AgL type, and with the evaluator/REPL, which route a write by its consuming side. `default-agent` is a register-only `Agent` value; unlike runner/log settings, writing it does not reconfigure a host service.
 - `src/agm/config/module_roots.py` resolves AgL module search roots from the `[modules]` config.
 - `src/agm/config/sandbox/` discovers and merges SRT sandbox settings.
 - `config/` (repository root) holds the default config templates installed into `~/.agm/`.

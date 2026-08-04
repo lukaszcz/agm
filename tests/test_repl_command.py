@@ -86,6 +86,10 @@ class TestReplArgsParsing:
         assert invoke(runner, ["repl", "--runner", "claude -p"]).exit_code == 0
         assert getattr(recorded_runs[0], "runner") == "claude -p"
 
+    def test_agent_flag(self, runner: CliRunner, recorded_runs: list[object]) -> None:
+        assert invoke(runner, ["repl", "--agent", 'AgentCommand("echo agent")']).exit_code == 0
+        assert getattr(recorded_runs[0], "agent") == 'AgentCommand("echo agent")'
+
     def test_confirm_agents_flag(self, runner: CliRunner, recorded_runs: list[object]) -> None:
         assert invoke(runner, ["repl", "--confirm-agents"]).exit_code == 0
         assert getattr(recorded_runs[0], "confirm_agents") is True
@@ -176,6 +180,7 @@ def _args(
     log: bool = False,
     log_file: str | None = None,
     max_iters: int | None = None,
+    agent: str | None = None,
 ) -> ReplArgs:
     """Build ``ReplArgs`` with sensible defaults, overriding named fields."""
     return ReplArgs(
@@ -187,6 +192,7 @@ def _args(
         log=log,
         log_file=log_file,
         max_iters=max_iters,
+        agent=agent,
     )
 
 
@@ -215,6 +221,30 @@ class TestReplRun:
         assert call["check_only"] is False  # not a dry-run by default
         assert call["history_path"] == home / ".agm" / "repl_history"
         assert (home / ".agm").is_dir()
+
+    def test_cli_agent_seeds_and_repl_write_persists(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        fake_console: list[dict[str, object]],
+    ) -> None:
+        from agm.agl.semantics.values import EnumValue, TextValue
+
+        _isolated_home(monkeypatch, tmp_path)
+        repl_command.run(_args(agent='AgentCommand("configured")'))
+        session: ReplSession = fake_console[0]["session"]
+        seeded = session._engine_base["default-agent"]
+        assert isinstance(seeded, EnumValue)
+        assert seeded.variant == "AgentCommand"
+        assert seeded.fields["command"] == TextValue("configured")
+
+        assert session.eval_entry("import std/config").ok
+        assert session.eval_entry('std/config::default-agent := AgentClaude("haiku", "low")').ok
+        result = session.eval_entry("std/config::default-agent")
+        assert result.ok
+        assert isinstance(result.value, EnumValue)
+        assert result.value.variant == "AgentClaude"
+        assert result.value.fields["model"] == TextValue("haiku")
 
     def test_exec_config_seeds_each_configured_engine_setting(
         self,
@@ -385,6 +415,43 @@ class TestReplRun:
         )
         repl_command.run(args)
         assert fake_console[0]["echo"] is False
+
+    def test_invalid_agent_literal_exits_1(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        fake_console: list[dict[str, object]],
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        _isolated_home(monkeypatch, tmp_path)
+
+        with pytest.raises(SystemExit) as exc_info:
+            repl_command.run(_args(agent="true"))
+
+        assert exc_info.value.code == 1
+        assert "default-agent" in capsys.readouterr().err
+        assert fake_console == []
+
+    def test_invalid_default_agent_config_literal_exits_1(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        fake_console: list[dict[str, object]],
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        home = _isolated_home(monkeypatch, tmp_path)
+        config_dir = home / ".agm"
+        config_dir.mkdir()
+        (config_dir / "config.toml").write_text('[exec]\ndefault-agent = "not an agent"\n')
+
+        with pytest.raises(SystemExit) as exc_info:
+            repl_command.run(_args(runner=None))
+
+        assert exc_info.value.code == 1
+        error = capsys.readouterr().err
+        assert "default-agent" in error
+        assert "not an agent" in error
+        assert fake_console == []
 
     def test_invalid_runner_exits_1(
         self,

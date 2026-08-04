@@ -2,8 +2,8 @@
 
 | Command | Description |
 |---------|-------------|
-| `agm exec [--strict-json\|--no-strict-json] [--max-iters N] [--max-call-depth N] [--runner COMMAND] [--timeout DURATION\|--no-timeout] [--dry-run] [--log\|--log-file PATH\|--no-log] [--no-log-file] [--no-stdlib] [-I DIR]... (FILE \| -c COMMAND) [--PARAM VALUE]...` | Execute an AgL workflow program |
-| `agm repl [--strict-json\|--no-strict-json] [--max-iters N] [--max-call-depth N] [--runner COMMAND] [--confirm-agents] [--quiet] [--dry-run] [--no-stdlib] [--log\|--log-file PATH\|--no-log]` | Start an interactive AgL REPL |
+| `agm exec [--strict-json\|--no-strict-json] [--max-iters N] [--max-call-depth N] [--runner COMMAND] [--agent AGL_LITERAL] [--timeout DURATION\|--no-timeout] [--dry-run] [--log\|--log-file PATH\|--no-log] [--no-log-file] [--no-stdlib] [-I DIR]... (FILE \| -c COMMAND) [--PARAM VALUE]...` | Execute an AgL workflow program |
+| `agm repl [--strict-json\|--no-strict-json] [--max-iters N] [--max-call-depth N] [--runner COMMAND] [--agent AGL_LITERAL] [--confirm-agents] [--quiet] [--dry-run] [--no-stdlib] [--log\|--log-file PATH\|--no-log]` | Start an interactive AgL REPL |
 
 AGM runs AgL (Agent Language) workflow programs two ways: `agm exec` runs a whole
 program from a fresh environment, and `agm repl` evaluates entries interactively in a
@@ -14,7 +14,7 @@ documented in the [AgL language reference](../agl/reference/index.md).
 
 ```text
 agm exec [--strict-json|--no-strict-json]
-         [--max-iters N] [--max-call-depth N] [--runner COMMAND]
+         [--max-iters N] [--max-call-depth N] [--runner COMMAND] [--agent AGL_LITERAL]
          [--timeout DURATION|--no-timeout] [--dry-run]
          [--log|--log-file PATH|--no-log] [--no-log-file]
          [--no-stdlib]
@@ -91,6 +91,10 @@ like any other static error.
   raises `RecursionError`.
 - `--runner COMMAND`: Override the default agent runner command (backs `ask` and any
   declared agent without its own command). See [runner precedence](#agents-and-runner-precedence).
+- `--agent AGL_LITERAL`: Seed `std/config::default-agent` with one constant `Agent`
+  expression, for example `AgentClaude("sonnet", "medium")`. The literal is parsed and
+  typechecked before execution; it overrides `[<program>]`/`[exec]` configuration. It
+  currently only seeds that engine setting and does not select the agent runner.
 - `--log` / `--log-file PATH` / `--no-log`: Control trace logging, which is **off by
   default**. `--log` enables it with an auto-generated timestamped path under
   `.agent-files/`; `--log-file PATH` writes a structured JSONL trace to `PATH`;
@@ -162,6 +166,7 @@ source `std/config` writes can override:
 ```toml
 [exec]
 runner = "claude -p"        # default agent runner
+default-agent = 'AgentClaude("sonnet", "medium")' # typed Agent setting
 strict-json = false         # lenient JSON recovery is the default
 max-iters = 5               # opt into a safety-valve cap for unbounded loops
 timeout = "30m"             # initial shell-exec and agent idle timeout
@@ -192,6 +197,7 @@ std/config::log-file := Some("trace.log")  # explicit trace path
 std/config::strict-json := true     # require bare JSON from agents
 std/config::max-iters := 10         # host safety valve cap for unbounded loops
 std/config::runner := "claude -p"   # default agent runner
+std/config::default-agent := AgentClaude("sonnet", "medium")
 std/config::timeout := Some("30s")  # shell-exec idle timeout
 
 param spec
@@ -206,7 +212,7 @@ value.
 
 Precedence differs by kind:
 
-- **Engine settings** (`runner`, `log`, `strict-json`, `max-iters`, `log-file`, `timeout`):
+- **Engine settings** (`runner`, `default-agent`, `log`, `strict-json`, `max-iters`, `log-file`, `timeout`):
   `source std/config::X write > CLI > [<program>].X > [exec].X > engine default`
 - **Param values** (`param NAME`):
   `CLI > [<program>].NAME > source default > required error`. `NAME` is a
@@ -270,7 +276,7 @@ disable tracing entirely.
 
 ```text
 agm repl [--strict-json|--no-strict-json]
-         [--max-iters N] [--max-call-depth N] [--runner COMMAND] [--confirm-agents]
+         [--max-iters N] [--max-call-depth N] [--runner COMMAND] [--agent AGL_LITERAL] [--confirm-agents]
          [--quiet] [--dry-run] [--no-stdlib] [--log|--log-file PATH|--no-log]
 ```
 
@@ -363,7 +369,7 @@ Meta-commands begin with a leading `:` (which never collides with AgL syntax):
 
 - `--strict-json` / `--no-strict-json`: Set JSON-codec strictness for agent output
   (lenient recovery is the default), as for `agm exec`.
-- `--max-iters N`, `--max-call-depth N`, `--runner COMMAND`: As for `agm exec`.
+- `--max-iters N`, `--max-call-depth N`, `--runner COMMAND`, `--agent AGL_LITERAL`: As for `agm exec`.
 - `--confirm-agents`: Start in confirm mode, asking before each agent call (the default
   is auto; see [Agent-call confirmation](#agent-call-confirmation)).
 - `--quiet`: Suppress the automatic echoing of entry results.
@@ -411,7 +417,7 @@ and never exit the process.
 | Code | Meaning |
 |------|---------|
 | `0` | The session ended normally (`:quit`/`:exit` or Ctrl-D) |
-| `1` | Pre-loop setup failure: an invalid `[exec]` configuration or `--runner` command, or an unwritable `--log-file` — reported before the prompt appears |
+| `1` | Pre-loop setup failure: an invalid `[exec]` configuration or `--runner` command, invalid `[exec] default-agent` or `--agent` AgL literal, or an unwritable `--log-file` — reported before the prompt appears |
 
 ### Examples
 

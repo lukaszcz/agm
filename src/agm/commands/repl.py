@@ -1,8 +1,8 @@
 """Implementation of the ``agm repl`` command.
 
 Launches an interactive read-eval-print loop for the AgL workflow language.
-The REPL shares ``agm exec``'s ``[exec]`` configuration (runner / agents /
-timeout), so an interactive session evaluates entries with the same agent
+The REPL shares ``agm exec``'s ``[exec]`` configuration (runner / default-agent /
+agents / timeout), so an interactive session evaluates entries with the same agent
 backing a batch ``agm exec`` run would use.
 
 The command itself is thin: it resolves configuration the same way ``exec``
@@ -35,7 +35,7 @@ from agm.agl.runtime.agents import AgentFn, runner_backed_agent_factory
 from agm.agl.runtime.host_settings import HostSettingsPolicy
 from agm.agl.runtime.params import build_engine_config_seeds, raw_option_str
 from agm.cli_support.args import ReplArgs
-from agm.commands.exec import check_max_iters
+from agm.commands.exec import check_max_iters, parse_default_agent_literal
 from agm.config.context import current_config_context
 from agm.config.general import (
     agm_home_dir,
@@ -171,6 +171,16 @@ def run(args: ReplArgs) -> None:
     elif "log-file" in exec_raw_table and config.log_file is not None:
         seed_raw["log-file"] = config.log_file
     engine_base = build_engine_config_seeds(seed_raw)
+    default_agent_literal = args.agent if args.agent is not None else config.default_agent
+    if default_agent_literal is not None:
+        default_agent_source = "--agent" if args.agent is not None else "[exec] configuration"
+        try:
+            engine_base["default-agent"] = parse_default_agent_literal(
+                default_agent_literal, source=default_agent_source
+            )
+        except ValueError as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            raise SystemExit(1) from exc
 
     session = ReplSession(
         default_strict_json=strict_json,

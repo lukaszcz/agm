@@ -228,6 +228,8 @@ class ExecArgs:
     timeout: str | None = None
     no_timeout: bool = False
     no_log_file: bool = False
+    # An AgL ``Agent`` literal used to seed std/config::default-agent.
+    agent: str | None = None
 
 
 @dataclass(slots=True)
@@ -243,3 +245,5 @@ class ReplArgs:
     # Optional recursion call-depth override (None = no override).
     max_call_depth: int | None = None
     no_stdlib: bool = False
+    # An AgL ``Agent`` literal used to seed std/config::default-agent.
+    agent: str | None = None

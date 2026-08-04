@@ -561,6 +561,8 @@ class ExecConfig:
     agents: dict[str, str]
     log: bool
     log_file: str | None
+    # Raw TOML value: only exec/repl may parse it as an AgL Agent literal.
+    default_agent: object | None = None
     default_loop_limit: int | None = None
     # Optional recursion call-depth override (None = use the canonical default).
     max_call_depth: int | None = None
@@ -640,6 +642,10 @@ def exec_config_from_merged(
 
     resolved_log = _optional_bool(effective, "log")
     resolved_log_file = _optional_str(effective, "log-file")
+    # Agent values use AgL literal syntax. Keep every explicitly supplied TOML
+    # value raw so exec/repl can diagnose an empty or non-string value at their
+    # AgL host boundary; other commands stay free of AgL imports.
+    resolved_default_agent = effective.get("default-agent")
 
     return ExecConfig(
         runner=resolved_runner,
@@ -650,6 +656,7 @@ def exec_config_from_merged(
         agents=resolved_agents,
         log=resolved_log,
         log_file=resolved_log_file,
+        default_agent=resolved_default_agent,
     )
 
 

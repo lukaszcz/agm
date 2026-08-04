@@ -1,10 +1,11 @@
-"""Live host-service reconfiguration for host-consumed ``builtin var`` settings.
+"""Live reconfiguration for reconfigurable host-consumed ``builtin var`` settings.
 
-The host-consumed engine settings (``runner``, ``log``, ``log-file``) are backed
-by live host services — the agent registry's default agent and the trace store.
-When a program writes one of these settings (via ``std/config::runner := ...`` or
-the equivalent bare form), the interpreter reflects the change into those live
-services through a :class:`HostSettingsReconfigurer`.
+Of the four host-consumed engine settings, ``runner``, ``log``, and ``log-file``
+are backed by live host services — the agent registry's default agent and the
+trace store. When a program writes one of these settings (via
+``std/config::runner := ...``), the interpreter reflects the change into those
+live services through a :class:`HostSettingsReconfigurer`. ``default-agent`` is
+host-consumed but register-only, with no reconfiguration effect.
 
 The concrete reconfiguration steps (how to build a default agent from a runner
 command, how to resolve a trace path from the logging decision) are host policy,
@@ -41,7 +42,7 @@ class HostSettingsPolicy:
 
 
 class HostSettingsReconfigurer:
-    """Applies host-consumed ``builtin var`` writes to the live host services."""
+    """Applies reconfigurable host-consumed writes to live host services."""
 
     def __init__(
         self,

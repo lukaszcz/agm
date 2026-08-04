@@ -547,7 +547,7 @@ class IrInterpreter:
 
     @property
     def builtin_host_settings(self) -> dict[str, Value]:
-        """Current host-consumed register values (``runner``/``log``/``log-file``).
+        """Current host-consumed register values, including ``default-agent``.
 
         A snapshot copy of the register that backs the host-consumed ``builtin
         var`` engine settings, reflecting any writes made during the run.  Hosts
@@ -1626,7 +1626,7 @@ class IrInterpreter:
     def _load_builtin_setting(self, key: str) -> Value:
         """Return the current value of the ``builtin var`` engine setting *key*.
 
-        The three runtime-live keys read the live interpreter fields; the three
+        The three runtime-live keys read the live interpreter fields; the four
         host-consumed keys read their register in ``_builtin_host_settings``.
         """
         if key == "strict-json":
@@ -1642,8 +1642,9 @@ class IrInterpreter:
 
         The three runtime-live keys route through ``_apply_config_effect`` so the
         live effect (loop cap, strict-json mode, shell timeout) takes hold from
-        the write onward; the host-consumed keys update their register and, when
-        a host reconfigurer is present, reconfigure the live host service.
+        the write onward; the host-consumed keys update their register.
+        ``runner``, ``log``, and ``log-file`` additionally reconfigure live host
+        services when a host reconfigurer is present; ``default-agent`` does not.
         """
         if key in RUNTIME_LIVE_ENGINE_KEYS:
             self._apply_config_effect(key, value)
@@ -1658,7 +1659,7 @@ class IrInterpreter:
             assert isinstance(value, EnumValue)
             if value.variant == "Some":
                 self._builtin_host_settings["log"] = BoolValue(True)
-        if self._host_reconfigurer is None:
+        if self._host_reconfigurer is None or key == "default-agent":
             return
         try:
             self._reconfigure_host_service(key)
@@ -1671,7 +1672,8 @@ class IrInterpreter:
 
         ``runner`` rebuilds the default agent; ``log``/``log-file`` recompute the
         trace destination from the current register pair (either write repoints
-        the same trace store).  Requires ``self._host_reconfigurer`` to be set.
+        the same trace store). ``default-agent`` is a register-only setting and
+        deliberately has no host reconfiguration. Requires a live reconfigurer.
         """
         assert self._host_reconfigurer is not None
         if key == "runner":

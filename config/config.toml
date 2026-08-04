@@ -15,6 +15,7 @@ runner = "agm run pi -p '@%{PROMPT_FILE}'"
 #
 # [exec]
 # runner = "claude -p"          # default agent runner (falls back to [loop] runner)
+# default-agent = 'AgentClaude("sonnet", "medium")' # typed AgL Agent literal
 # strict-json = false           # require bare JSON from agents (default: lenient recovery)
 # max-iters = 5                 # safety-valve cap for otherwise unbounded loops
 # max-call-depth = 256          # recursion call-depth limit (default: 256)

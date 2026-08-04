@@ -71,10 +71,25 @@ _ENGINE_DEFAULTS: dict[str, object] = {
 }
 
 
-def build_engine_config_seeds(raw_values: "Mapping[str, object]") -> "dict[str, Value]":
-    """Decode only explicitly supplied host engine settings.
+def _default_agent_value() -> "Value":
+    """Return the fallback ``AgentClaude`` value for incomplete stdlib test roots."""
+    from agm.agl.ir.ids import NominalId
+    from agm.agl.modules.ids import STD_CORE_ID
+    from agm.agl.semantics.values import EnumValue, TextValue
 
-    The returned mapping deliberately omits absent keys.  This preserves the
+    return EnumValue(
+        nominal=NominalId(STD_CORE_ID, "Agent"),
+        display_name="Agent",
+        variant="AgentClaude",
+        fields={"model": TextValue("sonnet"), "thinking": TextValue("medium")},
+    )
+
+
+def build_engine_config_seeds(raw_values: "Mapping[str, object]") -> "dict[str, Value]":
+    """Decode explicitly supplied scalar or ``Option`` host engine settings.
+
+    Callers seed ``default-agent`` separately as a typed ``Agent`` value. The
+    returned mapping deliberately omits absent keys. This preserves the
     distinction between a host control and the runtime fallback, letting a
     ``builtin var`` initializer supply the latter.  A present value of
     ``None`` remains meaningful for ``Option`` settings such as ``timeout``.
@@ -93,9 +108,11 @@ def build_engine_config_seeds(raw_values: "Mapping[str, object]") -> "dict[str, 
 
 
 def build_engine_config_base(raw_values: "Mapping[str, object]") -> "dict[str, Value]":
-    """Build the engine config base dict from raw host values.
+    """Build the engine config base dict from raw scalar or ``Option`` host values.
 
-    Decodes each of the six engine keys via :func:`convert_config_value`.
+    Decodes the six scalar/``Option[text]`` engine keys via
+    :func:`convert_config_value` and materializes the typed ``default-agent``
+    fallback separately.
     Keys absent from *raw_values* fall back to the engine defaults
     (``false``/``false``/``0``/:data:`~agm.agent.defaults.DEFAULT_AGENT_RUNNER`/
     ``none``/``none``), where zero represents the disabled ``max-iters`` safety
@@ -105,16 +122,18 @@ def build_engine_config_base(raw_values: "Mapping[str, object]") -> "dict[str, V
     layering (CLI/program/exec config).  This helper performs only the
     decoding step, keeping the layering logic in the callers.
 
-    Engine keys are always built-in scalar or ``Option[text]`` types, never a
-    user-declared nominal type, so this builds its own fresh seeded
-    ``TypeTable`` rather than requiring one from the caller.
+    All engine-key types are built in: six are scalar or ``Option[text]`` and
+    ``default-agent`` is the built-in ``Agent`` nominal type. This builds its
+    own fresh seeded ``TypeTable`` rather than requiring one from the caller.
     """
-    return build_engine_config_seeds(
+    decoded = build_engine_config_seeds(
         {
             key_name: raw_values.get(key_name, default_raw)
             for key_name, default_raw in _ENGINE_DEFAULTS.items()
         }
     )
+    decoded["default-agent"] = _default_agent_value()
+    return decoded
 
 
 def decode_param_value(decoder: "ParamDecoder", raw: object) -> "Value":
@@ -246,8 +265,10 @@ def convert_param_value(
 def convert_config_value(
     name: str, raw: object, key_type: "AglType", type_table: "TypeTable | None" = None
 ) -> "Value":
-    """Convert a raw host config value to the declared engine-key AgL type.
+    """Convert a raw scalar or ``Option`` host engine value to its AgL type.
 
+    ``default-agent`` is an ``Agent`` value, not a scalar or ``Option`` setting;
+    callers parse its typed AgL literal separately rather than using this helper.
     For ``Option[T]`` engine keys (``timeout``, ``log-file``) the raw value is
     projected into the Option enum: a present *raw* becomes ``some(value)`` with
     its inner ``T`` decoded via :func:`convert_param_value`, and ``None`` becomes
@@ -255,9 +276,9 @@ def convert_config_value(
     *type_table* is threaded through to both; the Option unwrap itself reads
     ``key_type.type_args`` directly and never needs variant shapes from it.
 
-    Engine keys are always built-in scalar or ``Option[text]`` types, never a
-    user-declared nominal type, so *type_table* defaults to a fresh seeded
-    ``TypeTable`` when the caller has none in hand (e.g. CLI-flag config
+    The settings accepted here are built-in scalar or ``Option[text]`` types,
+    never user-declared nominal types, so *type_table* defaults to a fresh
+    seeded ``TypeTable`` when the caller has none in hand (e.g. CLI-flag config
     projection); callers that already hold the session/program table (the
     REPL) pass it explicitly.
     """

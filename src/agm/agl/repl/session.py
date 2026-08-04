@@ -150,9 +150,10 @@ class ReplSession:
         self._default_loop_limit = default_loop_limit
         self._default_stdlib = default_stdlib
         self._shell_exec_timeout = shell_exec_timeout
-        # The [exec] engine base for all six engine keys, provided by the host
-        # command (commands/repl.py).  Supplies the runner/log/log-file base
-        # values (the three host-consumed keys) for the session register seed.
+        # The [exec] engine base for all seven engine keys, provided by the host
+        # command (commands/repl.py). Supplies the runner/default-agent/log/
+        # log-file base values (the four host-consumed keys) for the session
+        # register seed.
         self._engine_base: dict[str, Value] = dict(engine_base) if engine_base is not None else {}
         # Capture initial engine defaults and their host-seed presence for
         # :reset to restore. A false strict-json value is still an explicit
@@ -171,9 +172,9 @@ class ReplSession:
         # setting values, while explicit host seeds in ``_engine_base`` retain
         # precedence over them.
         self._declared_engine_defaults: dict[str, Value] = {}
-        # Persisted register values for the host-consumed engine settings
-        # (runner/log/log-file). Seeded from explicit host values, threaded
-        # into every entry's interpreter, and read
+        # Persisted register values for the four host-consumed engine settings
+        # (runner/default-agent/log/log-file). Seeded from explicit host values,
+        # threaded into every entry's interpreter, and read
         # back after a successful entry so a ``std/config::KEY := VALUE`` write
         # persists.
         self._persisted_host_settings: dict[str, Value] = self._build_host_settings_base()

@@ -147,6 +147,17 @@ class TestExecArgsParsing:
         args = recorded_runs[0]
         assert getattr(args, "runner") == "claude -p"
 
+    def test_exec_agent_flag(
+        self, runner: CliRunner, tmp_path: Path, recorded_runs: list[object]
+    ) -> None:
+        agl_file = tmp_path / "test.agl"
+        agl_file.write_text("let x = 1\n")
+
+        result = invoke(runner, ["exec", "--agent", 'AgentCommand("echo agent")', str(agl_file)])
+        assert result.exit_code == 0
+
+        assert getattr(recorded_runs[0], "agent") == 'AgentCommand("echo agent")'
+
     def test_exec_log_file_flag(
         self, runner: CliRunner, tmp_path: Path, recorded_runs: list[object]
     ) -> None:

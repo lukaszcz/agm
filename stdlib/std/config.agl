@@ -1,6 +1,7 @@
 import std/core using Option
 
 builtin var runner: text = "claude -p"
+builtin var default-agent: Agent = AgentClaude("sonnet", "medium")
 builtin var log: bool = false
 builtin var log-file: Option[text] = Option[text]::None
 builtin var strict-json: bool = false

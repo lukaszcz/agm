@@ -1057,6 +1057,12 @@ def exec_cmd(
         "--runner",
         help="Override the default agent runner command.",
     ),
+    agent: str | None = typer.Option(
+        None,
+        "--agent",
+        metavar="AGL_LITERAL",
+        help="Seed std/config::default-agent from an AgL Agent literal.",
+    ),
     log_file: str | None = typer.Option(
         None,
         "--log-file",
@@ -1180,6 +1186,7 @@ def exec_cmd(
             max_iters=max_iters,
             max_call_depth=max_call_depth,
             runner=runner,
+            agent=agent,
             no_log=no_log,
             log_file=log_file,
             log=log,
@@ -1213,6 +1220,12 @@ def repl_cmd(
         None,
         "--runner",
         help="Override the default agent runner command.",
+    ),
+    agent: str | None = typer.Option(
+        None,
+        "--agent",
+        metavar="AGL_LITERAL",
+        help="Seed std/config::default-agent from an AgL Agent literal.",
     ),
     confirm_agents: bool = typer.Option(
         False,
@@ -1268,6 +1281,7 @@ def repl_cmd(
             max_iters=max_iters,
             max_call_depth=max_call_depth,
             runner=runner,
+            agent=agent,
             confirm_agents=confirm_agents,
             quiet=quiet,
             no_log=no_log,

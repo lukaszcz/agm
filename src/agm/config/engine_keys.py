@@ -24,6 +24,7 @@ class EngineKeyKind(Enum):
     INT = "int"
     TEXT = "text"
     OPTION_TEXT = "option_text"
+    AGENT = "agent"
 
 
 class EngineKeyConsumer(Enum):
@@ -34,9 +35,10 @@ class EngineKeyConsumer(Enum):
         cap, the strict-json mode, the shell timeout), so a write takes effect
         inside the evaluator itself.
     ``HOST_CONSUMED``
-        The key has no interpreter field; its value lives in a register and a
-        write is reflected back into a live host service (the agent runner, the
-        trace destination) by the host.
+        The key has no interpreter field; its value lives in a register. The
+        host reflects writes to reconfigurable service keys (``runner``,
+        ``log``, and ``log-file``) into live services, while ``default-agent``
+        remains register-only.
     """
 
     RUNTIME_LIVE = "runtime_live"
@@ -59,6 +61,7 @@ ENGINE_KEYS: tuple[EngineKeySpec, ...] = (
     EngineKeySpec("strict-json", EngineKeyKind.BOOL, EngineKeyConsumer.RUNTIME_LIVE),
     EngineKeySpec("max-iters", EngineKeyKind.INT, EngineKeyConsumer.RUNTIME_LIVE),
     EngineKeySpec("runner", EngineKeyKind.TEXT, EngineKeyConsumer.HOST_CONSUMED),
+    EngineKeySpec("default-agent", EngineKeyKind.AGENT, EngineKeyConsumer.HOST_CONSUMED),
     EngineKeySpec("log-file", EngineKeyKind.OPTION_TEXT, EngineKeyConsumer.HOST_CONSUMED),
     EngineKeySpec("timeout", EngineKeyKind.OPTION_TEXT, EngineKeyConsumer.RUNTIME_LIVE),
 )
@@ -80,5 +83,6 @@ def engine_keys_for(consumer: EngineKeyConsumer) -> frozenset[str]:
 # Keys whose write applies a live effect inside the AgL evaluator.
 RUNTIME_LIVE_ENGINE_KEYS: frozenset[str] = engine_keys_for(EngineKeyConsumer.RUNTIME_LIVE)
 
-# Keys backed by a register and reflected into a live host service on write.
+# Keys backed by a host-owned register. Only runner/log/log-file writes
+# reconfigure a live host service; default-agent remains register-only.
 HOST_CONSUMED_ENGINE_KEYS: frozenset[str] = engine_keys_for(EngineKeyConsumer.HOST_CONSUMED)

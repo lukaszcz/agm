@@ -27,14 +27,16 @@ Flag notes:
       ``--log-file PATH`` writes to PATH; ``--no-log`` disables it.  At most one
       of these three flags may be given (mutually exclusive).  ``[exec] log =
       true`` in config also enables logging; CLI flags override config.
-    - ``--runner COMMAND`` overrides the default agent runner command from config.
-      When set, it is used as the default runner for all unnamed agents.
+    - ``--runner COMMAND`` overrides the default agent runner command from config;
+      when set, it is used for all unnamed agents. ``--agent AGL_LITERAL`` only
+      seeds ``std/config::default-agent`` from one typed constant Agent expression;
+      it does not select a runner yet.
     - Every loaded entry and library module opens ``std/core`` by default
       (except ``std/core`` itself). ``--no-stdlib`` disables that automatic
       opening throughout the loaded program. Ordinary imports are qualified by
       default; ``open import`` and ``using`` make selected names bare.
     - A program reads and writes the engine settings (``strict-json``,
-      ``max-iters``, ``runner``, ``timeout``, ``log``, ``log-file``) through the
+      ``max-iters``, ``runner``, ``default-agent``, ``timeout``, ``log``, ``log-file``) through the
       ``std/config`` module; a ``std/config::KEY := VALUE`` write takes effect
       from its program point onward and overrides the CLI flag, which overrides
       the config-file layer.  ``--max-call-depth`` remains a host/runtime
@@ -49,7 +51,7 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
-from typing import TypeVar
+from typing import TYPE_CHECKING, TypeVar
 
 from agm.agent.config import default_agent_runner
 from agm.agent.runner import parse_command, split_command
@@ -59,7 +61,11 @@ from agm.agl.modules.roots import assemble_roots
 from agm.agl.runtime.agents import AgentFn, runner_backed_agent_factory
 from agm.agl.runtime.host_settings import HostSettingsPolicy
 from agm.agl.runtime.params import build_engine_config_seeds, raw_option_str
-from agm.agl.semantics.engine_keys import ENGINE_KEY_NAMES, RESERVED_PROGRAM_NAMES
+from agm.agl.semantics.engine_keys import (
+    ENGINE_KEY_NAMES,
+    RESERVED_PROGRAM_NAMES,
+    get_engine_key_type,
+)
 from agm.cli_support.args import ExecArgs
 from agm.cli_support.exec_params import (
     check_param_collisions,
@@ -84,12 +90,33 @@ from agm.core.parse import parse_timeout
 from agm.core.toml import toml_dict
 from agm.parser import exit_with_usage_error
 
+if TYPE_CHECKING:
+    from agm.agl.semantics.values import Value
+
 _T = TypeVar("_T")
 
 
 def _first(*values: _T | None) -> _T | None:
     """Return the first non-None value, or None if all are None."""
     return next((v for v in values if v is not None), None)
+
+
+def parse_default_agent_literal(literal: object, *, source: str) -> Value:
+    """Parse a host-supplied ``Agent`` literal into a typed AgL value."""
+    if not isinstance(literal, str) or not literal.strip():
+        raise ValueError(
+            f"invalid default-agent literal from {source}: "
+            f"expected a non-empty AgL Agent literal, got {literal!r}"
+        )
+
+    from agm.agl.constant import ConstantExpressionError, parse_constant
+
+    expected_type = get_engine_key_type("default-agent")
+    assert expected_type is not None
+    try:
+        return parse_constant(literal, expected_type)
+    except ConstantExpressionError as exc:
+        raise ValueError(f"invalid default-agent literal from {source}: {exc}") from exc
 
 
 def check_max_iters(max_iters: int | None) -> None:
@@ -429,6 +456,16 @@ def run(args: ExecArgs) -> None:
     elif "log-file" in config_engine_keys and config.log_file is not None:
         seed_raw["log-file"] = config.log_file
     builtin_host_settings = build_engine_config_seeds(seed_raw)
+    default_agent_literal = _first(args.agent, config.default_agent)
+    if default_agent_literal is not None:
+        default_agent_source = "--agent" if args.agent is not None else "[exec] configuration"
+        try:
+            builtin_host_settings["default-agent"] = parse_default_agent_literal(
+                default_agent_literal, source=default_agent_source
+            )
+        except ValueError as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            raise SystemExit(1) from exc
 
     # Reuse the ``PreparedProgram`` from above — no second parse/scope of the source.
     # Pass the already-computed compiled from discovery and the program the

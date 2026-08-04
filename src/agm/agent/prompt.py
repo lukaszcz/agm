@@ -2,28 +2,28 @@
 
 from __future__ import annotations
 
-import re
+import sys
 from collections.abc import Mapping
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 
 from agm.core.path import display_path
-
-_PROMPT_ENV_VAR_PATTERN = re.compile(
-    r"\$(?P<simple>[A-Za-z_][A-Za-z0-9_]*)|\$\{(?P<braced>[A-Za-z_][A-Za-z0-9_]*)\}"
-)
+from agm.util.interp import InterpolationError, interp
 
 
-def expand_prompt_env_vars(content: str, *, env: Mapping[str, str]) -> str:
-    def replace(match: re.Match[str]) -> str:
-        name = match.group("simple") or match.group("braced")
-        assert name is not None
-        value = env.get(name)
-        if value is None:
-            return match.group(0)
-        return value
-
-    return _PROMPT_ENV_VAR_PATTERN.sub(replace, content)
+def expand_prompt_env_vars(
+    content: str,
+    *,
+    env: Mapping[str, str],
+    source: Path | None = None,
+) -> str:
+    """Expand named holes in a prompt, reporting prompt-specific CLI errors."""
+    try:
+        return interp(content, env)
+    except InterpolationError as exc:
+        prompt_source = "inline prompt" if source is None else display_path(source)
+        print(f"Error: cannot interpolate {prompt_source}: {exc}", file=sys.stderr)
+        raise SystemExit(1) from exc
 
 
 def preprocess_prompt_file(
@@ -33,7 +33,7 @@ def preprocess_prompt_file(
     env: Mapping[str, str],
 ) -> Path:
     original = prompt_file.read_text(encoding="utf-8")
-    expanded = expand_prompt_env_vars(original, env=env)
+    expanded = expand_prompt_env_vars(original, env=env, source=prompt_file)
     if expanded == original:
         return prompt_file
     with NamedTemporaryFile("w", encoding="utf-8", delete=False) as handle:

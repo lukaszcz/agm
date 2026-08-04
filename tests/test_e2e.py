@@ -4387,7 +4387,7 @@ class TestLoop:
         prompt_dir = home / ".agm" / "prompts"
         prompt_dir.mkdir(parents=True)
         prompt_dir.joinpath("select.md").write_text("select task\n")
-        prompt_dir.joinpath("implement.md").write_text("implement @${TASK_FILE}\n")
+        prompt_dir.joinpath("implement.md").write_text("implement @%{TASK_FILE}\n")
 
         work = tmp_path / "work"
         work.mkdir()
@@ -4537,7 +4537,7 @@ class TestLoop:
             f"-p @{prompt_file}",
         ]
 
-    def test_preprocesses_loop_and_progress_prompts_with_env_vars(
+    def test_loop_rejects_missing_prompt_variable(
         self, tmp_path: Path, env: dict[str, str]
     ) -> None:
         env["FAKE_RUNNER_LOG"] = str(tmp_path / "runner.log")
@@ -4573,21 +4573,23 @@ class TestLoop:
         prompt_dir = home / ".agm" / "prompts"
         prompt_dir.mkdir(parents=True)
         selector_prompt = prompt_dir / "select.md"
-        selector_prompt.write_text("progress $PROMPT_VALUE ${MISSING}\n")
+        selector_prompt.write_text("progress %{MISSING}\n")
         loop_prompt = prompt_dir / "loop.md"
-        loop_prompt.write_text("loop $PROMPT_VALUE ${MISSING}\n")
+        loop_prompt.write_text("loop %{PROMPT_VALUE}\n")
 
         work = tmp_path / "work"
         work.mkdir()
 
-        result = run_agm(
-            ["loop", "run", "--no-selector", "--runner", "runner"], env=env, cwd=str(work)
+        result = _run_agm_raw(
+            ["loop", "run", "--no-selector", "--runner", "runner"],
+            env=env,
+            cwd=str(work),
+            check=False,
         )
 
-        assert result.returncode == 0
-        assert Path(env["FAKE_RUNNER_LOG"]).read_text() == (
-            "---\nprogress expanded ${MISSING}\n---\nloop expanded ${MISSING}\n"
-        )
+        assert result.returncode == 1
+        assert "select.md" in result.stderr
+        assert "MISSING" in result.stderr
 
     def test_preprocesses_loop_prompts_with_resolved_tasks_dir(
         self, tmp_path: Path, env: dict[str, str]
@@ -4629,9 +4631,9 @@ class TestLoop:
         tasks_dir = work / "custom" / "tasks"
 
         selector_prompt = prompt_dir / "select.md"
-        selector_prompt.write_text(f"progress $TASKS_DIR\nliteral {tasks_dir}\n")
+        selector_prompt.write_text(f"progress %{{TASKS_DIR}}\nliteral {tasks_dir}\n")
         loop_prompt = prompt_dir / "loop.md"
-        loop_prompt.write_text(f"loop $TASKS_DIR\nliteral {tasks_dir}\n")
+        loop_prompt.write_text(f"loop %{{TASKS_DIR}}\nliteral {tasks_dir}\n")
 
         result = run_agm(
             [
@@ -4928,7 +4930,7 @@ class TestLoop:
         selector_prompt = prompt_dir / "select.md"
         selector_prompt.write_text("update progress\n")
         implement_prompt = prompt_dir / "implement.md"
-        implement_prompt.write_text("implement @${TASK_FILE}\n")
+        implement_prompt.write_text("implement @%{TASK_FILE}\n")
 
         work = tmp_path / "work"
         tasks_dir = work / ".agent-files" / "tasks"
@@ -5060,7 +5062,7 @@ class TestLoop:
         selector_prompt = prompt_dir / "select.md"
         selector_prompt.write_text("update progress\n")
         implement_prompt = prompt_dir / "implement.md"
-        implement_prompt.write_text("implement @${TASK_FILE}\n")
+        implement_prompt.write_text("implement @%{TASK_FILE}\n")
 
         work = tmp_path / "work"
         tasks_dir = work / ".agent-files" / "tasks"
@@ -5141,9 +5143,9 @@ class TestLoop:
         (tasks_dir / "PROGRESS.md").write_text("started\n")
 
         selector_prompt = prompt_dir / "select.md"
-        selector_prompt.write_text(f"update $TASKS_DIR\nliteral {tasks_dir}\n")
+        selector_prompt.write_text(f"update %{{TASKS_DIR}}\nliteral {tasks_dir}\n")
         implement_prompt = prompt_dir / "implement.md"
-        implement_prompt.write_text("implement @${TASK_FILE}\n")
+        implement_prompt.write_text("implement @%{TASK_FILE}\n")
 
         result = run_agm(
             [
@@ -5219,7 +5221,7 @@ class TestLoop:
         selector_prompt = prompt_dir / "select.md"
         selector_prompt.write_text("update progress\n")
         implement_prompt = prompt_dir / "implement.md"
-        implement_prompt.write_text("implement @${TASK_FILE}\n")
+        implement_prompt.write_text("implement @%{TASK_FILE}\n")
 
         work = tmp_path / "work"
         tasks_dir = work / ".agent-files" / "tasks"
@@ -5287,7 +5289,7 @@ class TestLoop:
         selector_prompt = prompt_dir / "select.md"
         selector_prompt.write_text("update progress\n")
         implement_prompt = prompt_dir / "implement.md"
-        implement_prompt.write_text("implement @${TASK_FILE}\n")
+        implement_prompt.write_text("implement @%{TASK_FILE}\n")
 
         work = tmp_path / "work"
         work.mkdir()
@@ -5362,7 +5364,7 @@ class TestLoop:
         selector_prompt = prompt_dir / "select.md"
         selector_prompt.write_text("update progress\n")
         implement_prompt = prompt_dir / "implement.md"
-        implement_prompt.write_text("implement @${TASK_FILE}\n")
+        implement_prompt.write_text("implement @%{TASK_FILE}\n")
 
         work = tmp_path / "work"
         tasks_dir = work / ".agent-files" / "tasks"
@@ -5451,9 +5453,9 @@ class TestLoop:
         prompt_dir = home / ".agm" / "prompts"
         prompt_dir.mkdir(parents=True)
         selector_prompt = prompt_dir / "select.md"
-        selector_prompt.write_text("pick $TASK_LABEL\n")
+        selector_prompt.write_text("pick %{TASK_LABEL}\n")
         implement_prompt = prompt_dir / "implement.md"
-        implement_prompt.write_text("implement @${TASK_FILE}\n")
+        implement_prompt.write_text("implement @%{TASK_FILE}\n")
 
         work = tmp_path / "work"
         work.mkdir()
@@ -5498,9 +5500,9 @@ class TestLoop:
         prompt_dir = home / ".agm" / "prompts"
         prompt_dir.mkdir(parents=True)
         bootstrap_prompt = prompt_dir / "select.md"
-        bootstrap_prompt.write_text("progress $PROMPT_VALUE\n")
+        bootstrap_prompt.write_text("progress %{PROMPT_VALUE}\n")
         loop_prompt = prompt_dir / "loop.md"
-        loop_prompt.write_text("loop $PROMPT_VALUE\n")
+        loop_prompt.write_text("loop %{PROMPT_VALUE}\n")
 
         work = tmp_path / "work"
         work.mkdir()
@@ -5770,7 +5772,7 @@ class TestLoop:
         selector_prompt = prompt_dir / "select.md"
         selector_prompt.write_text("update progress\n")
         implement_prompt = prompt_dir / "implement.md"
-        implement_prompt.write_text("implement @${TASK_FILE}\n")
+        implement_prompt.write_text("implement @%{TASK_FILE}\n")
 
         work = tmp_path / "work"
         tasks_dir = work / ".agent-files" / "tasks"
@@ -5880,7 +5882,7 @@ class TestLoop:
         prompt_dir = home / ".agm" / "prompts"
         prompt_dir.mkdir(parents=True)
         selector_prompt = prompt_dir / "select.md"
-        selector_prompt.write_text("update $TASKS_DIR\n")
+        selector_prompt.write_text("update %{TASKS_DIR}\n")
 
         work = tmp_path / "work"
         work.mkdir()
@@ -5922,7 +5924,7 @@ class TestLoop:
         prompt_dir = home / ".agm" / "prompts"
         prompt_dir.mkdir(parents=True)
         selector_prompt = prompt_dir / "select.md"
-        selector_prompt.write_text("update $TASK_LABEL\n")
+        selector_prompt.write_text("update %{TASK_LABEL}\n")
 
         work = tmp_path / "work"
         work.mkdir()
@@ -6048,7 +6050,7 @@ class TestLoop:
         selector_prompt = prompt_dir / "select.md"
         selector_prompt.write_text("update progress\n")
         implement_prompt = prompt_dir / "implement.md"
-        implement_prompt.write_text("implement @${TASK_FILE}\n")
+        implement_prompt.write_text("implement @%{TASK_FILE}\n")
 
         work = tmp_path / "work"
         tasks_dir = work / ".agent-files" / "tasks"
@@ -6114,7 +6116,7 @@ class TestLoop:
         selector_prompt = prompt_dir / "select.md"
         selector_prompt.write_text("update progress\n")
         implement_prompt = prompt_dir / "implement.md"
-        implement_prompt.write_text("implement @${TASK_FILE}\n")
+        implement_prompt.write_text("implement @%{TASK_FILE}\n")
 
         work = tmp_path / "work"
         work.mkdir()
@@ -8386,7 +8388,7 @@ class TestReviseCommand:
 
         assert result.returncode == 0
         # The revise prompt file is forwarded to the runner; the default
-        # revise.md prompt references the review file via $REVIEW_FILE.
+        # revise.md prompt references the review file via %{REVIEW_FILE}.
         assert "revise prompt" in result.stdout
 
     def test_missing_prompt_file_errors_cleanly(self, tmp_path: Path, env: dict[str, str]) -> None:
@@ -8501,6 +8503,74 @@ class TestRefineCommand:
         # The refine log captures every step's output.
         log_file = next((work / ".agent-files").glob("refine-*.log"))
         assert "COMPLETE" in log_file.read_text()
+
+    def test_refine_expands_review_and_revise_prompt_context(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        state_file = tmp_path / "refine-state"
+        prompt_log = tmp_path / "prompts.log"
+        fake_runner = tmp_path / "bin" / "runner"
+        fake_runner.parent.mkdir(parents=True)
+        fake_runner.write_text(
+            "#!/bin/bash\n"
+            'count=$(cat "$STATE_FILE" 2>/dev/null || printf 0)\n'
+            'count=$((count + 1)); printf "%s" "$count" > "$STATE_FILE"\n'
+            'prompt_file="${1#@}"\n'
+            'prompt=$(cat "$prompt_file")\n'
+            'printf "%s\\n---\\n" "$prompt" >> "$PROMPT_LOG"\n'
+            'if [[ "$prompt" == revise-file=@* ]]; then\n'
+            '  review_file="${prompt#revise-file=@}"\n'
+            '  printf "review contents: " >> "$PROMPT_LOG"\n'
+            '  cat "$review_file" >> "$PROMPT_LOG"\n'
+            '  printf "\\n---\\n" >> "$PROMPT_LOG"\n'
+            "fi\n"
+            'if [[ "$count" -eq 1 ]]; then printf "review finding\\n"; '
+            'else printf "COMPLETE\\n"; fi\n'
+        )
+        fake_runner.chmod(fake_runner.stat().st_mode | stat.S_IEXEC)
+        env["PATH"] = f"{fake_runner.parent}:{env['PATH']}"
+        env["STATE_FILE"] = str(state_file)
+        env["PROMPT_LOG"] = str(prompt_log)
+
+        home = Path(env["HOME"])
+        prompt_dir = home / ".agm" / "prompts"
+        prompt_dir.mkdir(parents=True)
+        (prompt_dir / "review.md").write_text(
+            "review-scope=%{REVIEW_SCOPE}\nreview-aspects=%{REVIEW_ASPECTS}\n",
+            encoding="utf-8",
+        )
+        (prompt_dir / "revise.md").write_text("revise-file=@%{REVIEW_FILE}\n", encoding="utf-8")
+
+        work = tmp_path / "work"
+        work.mkdir()
+
+        result = run_agm(
+            [
+                "refine",
+                "--runner",
+                "runner",
+                "--scope",
+                "worktree changes",
+                "--aspects",
+                "correctness, security",
+                "--no-max-steps",
+            ],
+            env=env,
+            cwd=str(work),
+        )
+
+        assert result.returncode == 0
+        prompts = prompt_log.read_text(encoding="utf-8")
+        assert re.fullmatch(
+            r"review-scope=worktree changes\n"
+            r"review-aspects=correctness, security\n"
+            r"---\n"
+            r"revise-file=@/.+\.md\n"
+            r"---\n"
+            r"review contents: review finding\n\n"
+            r"---\n",
+            prompts,
+        )
 
     def test_refine_runs_multiple_steps_until_complete(
         self, tmp_path: Path, env: dict[str, str]

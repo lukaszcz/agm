@@ -143,7 +143,7 @@ def test_prepare_select_invocation_prefers_selector_when_configured(
     prompt_dir = home / ".agm" / "prompts"
     prompt_dir.mkdir(parents=True)
     prompt_path = prompt_dir / "select.md"
-    prompt_path.write_text("update $TASKS_DIR\n", encoding="utf-8")
+    prompt_path.write_text("update %{TASKS_DIR}\n", encoding="utf-8")
 
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setattr("shutil.which", lambda _: "/bin/fake")
@@ -580,10 +580,12 @@ class TestPreparePromptFromSource:
         temp_files: list[Path] = []
         env = {"MY_VAR": "hello"}
 
-        resolved = prepare_prompt_from_source("greet $MY_VAR world", temp_files=temp_files, env=env)
+        resolved = prepare_prompt_from_source(
+            "greet %{MY_VAR} world", temp_files=temp_files, env=env
+        )
 
         assert isinstance(resolved.source, str)
-        assert resolved.source == "greet $MY_VAR world"
+        assert resolved.source == "greet %{MY_VAR} world"
         assert resolved.effective_file.read_text(encoding="utf-8") == "greet hello world"
         assert resolved.effective_file in temp_files
         # Clean up
@@ -602,7 +604,7 @@ class TestPreparePromptFromSource:
 
     def test_file_path_processes_existing_file(self, tmp_path: Path) -> None:
         prompt_path = tmp_path / "custom-prompt.md"
-        prompt_path.write_text("task: $TASK_VAR", encoding="utf-8")
+        prompt_path.write_text("task: %{TASK_VAR}", encoding="utf-8")
 
         temp_files: list[Path] = []
         env = {"TASK_VAR": "testing"}
@@ -631,7 +633,7 @@ class TestPreparePromptFromSource:
         env = loop_env(Path("/tmp/tasks"))
 
         resolved = prepare_prompt_from_source(
-            "look in $TASKS_DIR for tasks", temp_files=temp_files, env=env
+            "look in %{TASKS_DIR} for tasks", temp_files=temp_files, env=env
         )
 
         assert isinstance(resolved.source, str)
@@ -640,7 +642,7 @@ class TestPreparePromptFromSource:
 
     def test_file_path_expands_tasks_dir_from_loop_env(self, tmp_path: Path) -> None:
         prompt_path = tmp_path / "custom-prompt.md"
-        prompt_path.write_text("dir=$TASKS_DIR", encoding="utf-8")
+        prompt_path.write_text("dir=%{TASKS_DIR}", encoding="utf-8")
 
         temp_files: list[Path] = []
         env = loop_env(Path("/tmp/tasks"))
@@ -974,7 +976,7 @@ class TestPrepareProgressInvocationSelectorPrompt:
             tasks_dir=None,
             prompt=None,
             prompt_file=None,
-            selector_prompt="custom selector $TASKS_DIR",
+            selector_prompt="custom selector %{TASKS_DIR}",
             selector_prompt_file=None,
             extra_prompt=None,
             extra_prompt_file=None,
@@ -1001,7 +1003,7 @@ class TestPrepareProgressInvocationSelectorPrompt:
         default_prompt.write_text("default update\n", encoding="utf-8")
 
         custom_prompt = tmp_path / "custom-selector.md"
-        custom_prompt.write_text("select task from $TASKS_DIR\n", encoding="utf-8")
+        custom_prompt.write_text("select task from %{TASKS_DIR}\n", encoding="utf-8")
 
         monkeypatch.setenv("HOME", str(home))
         monkeypatch.setattr("shutil.which", lambda _: "/bin/fake")
@@ -1040,7 +1042,7 @@ class TestPrepareProgressInvocationSelectorPrompt:
         prompt_dir = home / ".agm" / "prompts"
         prompt_dir.mkdir(parents=True)
         default_prompt = prompt_dir / "select.md"
-        default_prompt.write_text("default update $TASKS_DIR\n", encoding="utf-8")
+        default_prompt.write_text("default update %{TASKS_DIR}\n", encoding="utf-8")
 
         monkeypatch.setenv("HOME", str(home))
         monkeypatch.setattr("shutil.which", lambda _: "/bin/fake")
@@ -1953,7 +1955,7 @@ class TestAppendExtraPrompt:
 
         temp_files: list[Path] = []
         result = append_extra_prompt(
-            prompt, "See $TASKS_DIR", temp_files=temp_files, env={"TASKS_DIR": "/tasks"}
+            prompt, "See %{TASKS_DIR}", temp_files=temp_files, env={"TASKS_DIR": "/tasks"}
         )
 
         assert result.read_text(encoding="utf-8") == "Original" + chr(10) + "See /tasks"
@@ -1966,7 +1968,7 @@ class TestAppendExtraPrompt:
         prompt.write_text("Original", encoding="utf-8")
 
         extra_file = tmp_path / "extra.md"
-        extra_file.write_text("See $TASKS_DIR", encoding="utf-8")
+        extra_file.write_text("See %{TASKS_DIR}", encoding="utf-8")
 
         temp_files: list[Path] = []
         result = append_extra_prompt(
@@ -2436,7 +2438,7 @@ class TestLoopRunIntegration:
         for task_file in task_files:
             task_file.write_text("task\n", encoding="utf-8")
         prompt = tmp_path / "prompt.md"
-        prompt.write_text("Implement $TASK_FILE\n", encoding="utf-8")
+        prompt.write_text("Implement %{TASK_FILE}\n", encoding="utf-8")
 
         original_prepare = prepare_prompt_from_source
         prepared_sources: list[str | Path] = []

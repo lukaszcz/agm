@@ -153,7 +153,9 @@ def append_extra_prompt(
                 file=sys.stderr,
             )
             raise SystemExit(1)
-        extra_content = expand_prompt_env_vars(extra_path.read_text(encoding="utf-8"), env=env)
+        extra_content = expand_prompt_env_vars(
+            extra_path.read_text(encoding="utf-8"), env=env, source=extra_path
+        )
     combined = original_content + "\n" + extra_content
     with NamedTemporaryFile("w", encoding="utf-8", delete=False, suffix=".md") as handle:
         handle.write(combined)
@@ -291,7 +293,7 @@ def prepare_rendered_prompt_run(
 
     - Does **not** call ``expand_prompt_env_vars``: AgL interpolation has
       already produced the final text and interpolated values may legitimately
-      contain ``$NAME``/``${NAME}`` syntax.
+      contain ``$NAME``, ``${NAME}``, or ``%{name}`` syntax.
     - Does **not** call ``validate_command``: that helper prints to stderr and
       raises ``SystemExit``, bypassing the ``AgentCallError`` structured path.
       Executable-not-found is instead represented in the ``PromptRunResult``

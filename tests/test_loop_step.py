@@ -663,7 +663,7 @@ class TestPrepareRuntime:
         task_file.parent.mkdir(parents=True)
         task_file.write_text("task\n", encoding="utf-8")
         prompt = tmp_path / "prompt.md"
-        prompt.write_text("Implement $TASK_FILE\n", encoding="utf-8")
+        prompt.write_text("Implement %{TASK_FILE}\n", encoding="utf-8")
 
         original_prepare = prepare_prompt_from_source
         prepared_sources: list[str | Path] = []
@@ -709,8 +709,11 @@ class TestPrepareRuntime:
         assert targets[0].read_text(encoding="utf-8") == f"Implement {task_file}\n"
         cleanup_runtime(runtime)
 
-    def test_non_selector_mode_prepares_prompt_once_without_task_file(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    def test_non_selector_mode_rejects_task_file_hole(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
     ) -> None:
         home = self._setup_home_with_prompts(tmp_path, ["select.md"])
         monkeypatch.setenv("HOME", str(home))
@@ -721,7 +724,7 @@ class TestPrepareRuntime:
         tasks_dir.mkdir(parents=True)
         (tasks_dir / "PROGRESS.md").write_text("progress\n", encoding="utf-8")
         prompt = tmp_path / "prompt.md"
-        prompt.write_text("Implement $TASK_FILE\n", encoding="utf-8")
+        prompt.write_text("Implement %{TASK_FILE}\n", encoding="utf-8")
 
         original_prepare = prepare_prompt_from_source
         prepared_sources: list[str | Path] = []
@@ -733,37 +736,22 @@ class TestPrepareRuntime:
                 prepared_sources.append(source)
             return original_prepare(source, temp_files=temp_files, env=env)
 
-        runner_envs: list[dict[str, str]] = []
-
-        def fake_run_command(
-            command: list[str],
-            target: Path,
-            *,
-            env: dict[str, str],
-            stdout_callback: object = None,
-            stderr_callback: object = None,
-            idle_timeout: float | None = None,
-        ) -> str:
-            runner_envs.append(env)
-            assert target.read_text(encoding="utf-8") == "Implement $TASK_FILE\n"
-            return "COMPLETE\n"
-
         monkeypatch.setattr("agm.commands.loop.step.prepare_prompt_from_source", track_prepare)
-        monkeypatch.setattr("agm.commands.loop.step.run_prompt_command", fake_run_command)
 
-        runtime = prepare_runtime(
-            _make_loop_args(
-                no_log=True,
-                no_selector=True,
-                runner="fake-runner",
-                prompt_file=str(prompt),
+        with pytest.raises(SystemExit):
+            prepare_runtime(
+                _make_loop_args(
+                    no_log=True,
+                    no_selector=True,
+                    runner="fake-runner",
+                    prompt_file=str(prompt),
+                )
             )
-        )
-        execute_single_step(runtime, step_number=1)
 
         assert prepared_sources == [prompt]
-        assert "TASK_FILE" not in runner_envs[0]
-        cleanup_runtime(runtime)
+        error = capsys.readouterr().err
+        assert "prompt.md" in error
+        assert "TASK_FILE" in error
 
     def test_selector_mode_dry_run_does_not_prepare_runner_prompt(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
@@ -774,7 +762,7 @@ class TestPrepareRuntime:
         monkeypatch.chdir(tmp_path)
 
         prompt = tmp_path / "prompt.md"
-        prompt.write_text("Implement $TASK_FILE\n", encoding="utf-8")
+        prompt.write_text("Implement %{TASK_FILE}\n", encoding="utf-8")
         prepared_sources: list[str | Path] = []
         original_prepare = prepare_prompt_from_source
 
@@ -1014,7 +1002,7 @@ class TestExecuteSingleStep:
         task_file.write_text("do task\n", encoding="utf-8")
 
         implement_file = tmp_path / "implement.md"
-        implement_file.write_text("implement @${TASK_FILE}\n", encoding="utf-8")
+        implement_file.write_text("implement @%{TASK_FILE}\n", encoding="utf-8")
 
         invocation = PreparedSelectInvocation(
             source_prompt_file=prompt_file,
@@ -1073,7 +1061,7 @@ class TestExecuteSingleStep:
         task_file.write_text("do task\n", encoding="utf-8")
 
         implement_file = tmp_path / "implement.md"
-        implement_file.write_text("Implement the task at ${TASK_FILE}.\n", encoding="utf-8")
+        implement_file.write_text("Implement the task at %{TASK_FILE}.\n", encoding="utf-8")
 
         invocation = PreparedSelectInvocation(
             source_prompt_file=prompt_file,
@@ -1118,7 +1106,7 @@ class TestExecuteSingleStep:
         runner_target = all_targets[1]
         expanded_content = runner_target.read_text(encoding="utf-8")
         assert str(task_file) in expanded_content
-        assert "${TASK_FILE}" not in expanded_content
+        assert "%{TASK_FILE}" not in expanded_content
         # TASK_FILE is in runner env
         assert all_envs[1]["TASK_FILE"] == str(task_file)
 
@@ -1133,7 +1121,7 @@ class TestExecuteSingleStep:
         prompt_file.write_text("select\n", encoding="utf-8")
 
         custom_prompt = tmp_path / "custom-prompt.md"
-        custom_prompt.write_text("Do $TASK_FILE with $TASKS_DIR\n", encoding="utf-8")
+        custom_prompt.write_text("Do %{TASK_FILE} with %{TASKS_DIR}\n", encoding="utf-8")
 
         invocation = PreparedSelectInvocation(
             source_prompt_file=prompt_file,
@@ -1243,7 +1231,7 @@ class TestExecuteSingleStep:
         task_file.write_text("do task\n", encoding="utf-8")
 
         implement_file = tmp_path / "implement.md"
-        implement_file.write_text("implement @${TASK_FILE}\n", encoding="utf-8")
+        implement_file.write_text("implement @%{TASK_FILE}\n", encoding="utf-8")
 
         invocation = PreparedSelectInvocation(
             source_prompt_file=prompt_file,
@@ -1856,7 +1844,7 @@ def _dry_run_selector_inline_prompt(tmp_path: Path) -> LoopStepRuntime:
     return _make_runtime(
         tmp_path,
         select_invocation=_make_selector_invocation(tmp_path),
-        prompt_source="custom $TASK_FILE",
+        prompt_source="custom %{TASK_FILE}",
         loop_prompt=None,
         runner_command=["runner"],
         env={},
@@ -2109,7 +2097,7 @@ class TestExecuteSingleStepExpandsTaskFileInPrompt:
     def test_task_file_expanded_in_prompt_file(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """When a prompt file contains ${TASK_FILE}, it is expanded after task selection."""
+        """When a prompt file contains %{TASK_FILE}, it is expanded after task selection."""
         select_prompt = tmp_path / "select.md"
         select_prompt.write_text("select\n", encoding="utf-8")
         invocation = PreparedSelectInvocation(
@@ -2121,9 +2109,9 @@ class TestExecuteSingleStepExpandsTaskFileInPrompt:
             selector_command=["fake-selector"],
         )
 
-        # Prompt file with ${TASK_FILE} placeholder
+        # Prompt file with %{TASK_FILE} placeholder
         prompt_file_path = tmp_path / "loop.md"
-        prompt_file_path.write_text("Work on ${TASK_FILE}\n", encoding="utf-8")
+        prompt_file_path.write_text("Work on %{TASK_FILE}\n", encoding="utf-8")
 
         runtime = _make_runtime(
             tmp_path,
@@ -2160,16 +2148,16 @@ class TestExecuteSingleStepExpandsTaskFileInPrompt:
         result = execute_single_step(runtime, step_number=1)
         assert result is False
         # The runner target should be a new file with TASK_FILE expanded,
-        # not the original prompt file that still has ${TASK_FILE}
+        # not the original prompt file that still has %{TASK_FILE}
         runner_target = run_targets[-1]
         content = runner_target.read_text(encoding="utf-8")
-        assert "${TASK_FILE}" not in content
+        assert "%{TASK_FILE}" not in content
         assert str(task_file) in content
 
     def test_task_file_expanded_in_inline_prompt(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """When inline prompt text contains ${TASK_FILE}, it is expanded after task selection."""
+        """When inline prompt text contains %{TASK_FILE}, it is expanded after task selection."""
         select_prompt = tmp_path / "select.md"
         select_prompt.write_text("select\n", encoding="utf-8")
         invocation = PreparedSelectInvocation(
@@ -2181,8 +2169,8 @@ class TestExecuteSingleStepExpandsTaskFileInPrompt:
             selector_command=["fake-selector"],
         )
 
-        # Inline prompt text with ${TASK_FILE} placeholder
-        inline_text = "Work on ${TASK_FILE}\n"
+        # Inline prompt text with %{TASK_FILE} placeholder
+        inline_text = "Work on %{TASK_FILE}\n"
         from agm.agent.loop import loop_env
 
         env_no_task = loop_env(tmp_path / "tasks")
@@ -2223,7 +2211,7 @@ class TestExecuteSingleStepExpandsTaskFileInPrompt:
         # The runner target content should have TASK_FILE expanded
         runner_target = run_targets[-1]
         content = runner_target.read_text(encoding="utf-8")
-        assert "${TASK_FILE}" not in content
+        assert "%{TASK_FILE}" not in content
         assert str(task_file) in content
 
 
@@ -2291,7 +2279,7 @@ class TestPrepareRuntimeExtraPromptSource:
         prompt_dir = home / ".agm" / "prompts"
         prompt_dir.mkdir(parents=True)
         (prompt_dir / "loop.md").write_text("# loop1", encoding="utf-8")
-        (prompt_dir / "select.md").write_text("select $TASKS_DIR1", encoding="utf-8")
+        (prompt_dir / "select.md").write_text("select %{TASKS_DIR}1", encoding="utf-8")
         (prompt_dir / "implement.md").write_text("# implement1", encoding="utf-8")
         monkeypatch.setenv("HOME", str(home))
         monkeypatch.setattr("shutil.which", lambda _: "/bin/fake")
@@ -2327,7 +2315,7 @@ class TestExecuteSingleStepWithExtraPrompt:
         prompt_file.write_text("select1", encoding="utf-8")
 
         implement_file = tmp_path / "implement.md"
-        implement_file.write_text("implement @${TASK_FILE}1", encoding="utf-8")
+        implement_file.write_text("implement @%{TASK_FILE}1", encoding="utf-8")
 
         invocation = PreparedSelectInvocation(
             source_prompt_file=prompt_file,
@@ -2382,7 +2370,7 @@ class TestExecuteSingleStepWithExtraPrompt:
         prompt_file.write_text("select1", encoding="utf-8")
 
         custom_prompt = tmp_path / "custom-prompt.md"
-        custom_prompt.write_text("Do $TASK_FILE stuff", encoding="utf-8")
+        custom_prompt.write_text("Do %{TASK_FILE} stuff", encoding="utf-8")
 
         invocation = PreparedSelectInvocation(
             source_prompt_file=prompt_file,

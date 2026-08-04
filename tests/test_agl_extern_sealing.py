@@ -17,8 +17,9 @@ programs:
 - an extern called from inside another generic AgL function, at a rigid type
   variable.
 
-`tests/test_agl_extern_boundary.py` covers `SealedHandle` and the
-encode/decode walkers directly with hand-built contracts; this suite never
+`tests/test_agl_extern_boundary.py` covers
+`agm.agl.runtime.boundary.SealedHandle` and the encode/decode walkers directly
+with hand-built contracts; this suite never
 calls those directly, only through `extern def` calls evaluated end to end.
 """
 
@@ -101,7 +102,7 @@ class TestParametricUtilitiesAtSeveralInstantiations:
             'let r = merge(["a"], ["b", "c"])\n'
             "r\n"
         )
-        companion = "def merge(a, b):\n    return a + b\n"
+        companion = "def merge(a, b):\n    return list(a) + list(b)\n"
         result, _ = evaluate_ir_with_externs(source, companion, tmp_path)
         assert result["r"] == ArrayValue([TextValue("a"), TextValue("b"), TextValue("c")])
 
@@ -308,11 +309,13 @@ class TestSealingViolations:
         source = "extern def forge[T]() -> T\nlet _ = forge::[int]()\n()\n"
         companion = (
             "from agm.agl.ir.contracts import BoundarySealVar\n"
-            "from agm.agl.runtime.externs import encode_boundary_value\n"
+            "from agm.agl.runtime.boundary import BoundaryScope, encode_boundary_value\n"
             "from agm.agl.semantics.values import IntValue\n"
             "def forge():\n"
             "    schema = BoundarySealVar('T')\n"
-            "    return encode_boundary_value(schema, IntValue(999), {'T': object()})\n"
+            "    return encode_boundary_value(\n"
+            "        schema, IntValue(999), BoundaryScope(seals={'T': object()})\n"
+            "    )\n"
         )
         exc = evaluate_ir_raises_with_externs(source, companion, tmp_path)
         assert exc.display_name == "ExternError"

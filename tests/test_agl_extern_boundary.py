@@ -5,7 +5,7 @@ directly, with ``ExternContract``s compiled from real checked signatures
 (``build_extern_contract``) and real Python callables (plain functions, not
 files — companion loading/resolution is covered separately in
 ``tests/test_agl_extern_loading.py``).  Covers: the full type-mapping
-matrix in both directions, deep-copy independence, sealed-handle mechanics,
+matrix in both directions, live container aliasing, JSON copy independence, sealed-handle mechanics,
 and the three ``invoke`` failure classes.
 """
 
@@ -18,6 +18,15 @@ from decimal import Decimal
 from pathlib import Path
 
 import pytest
+from agm.agl.runtime.boundary import (
+    AglArrayView,
+    AglDictView,
+    BoundaryScope,
+    BoundaryViolation,
+    SealedHandle,
+    decode_boundary_value,
+    encode_boundary_value,
+)
 
 from agm.agl.capabilities import HostCapabilities
 from agm.agl.eval._decimal import AGL_DECIMAL_CONTEXT
@@ -31,13 +40,7 @@ from agm.agl.ir.contracts import (
 from agm.agl.ir.ids import FunctionId, NominalId
 from agm.agl.modules.ids import ENTRY_ID
 from agm.agl.parser import parse_program
-from agm.agl.runtime.externs import (
-    BoundaryViolation,
-    ExternRegistry,
-    SealedHandle,
-    decode_boundary_value,
-    encode_boundary_value,
-)
+from agm.agl.runtime.externs import ExternRegistry
 from agm.agl.runtime.render import render_value
 from agm.agl.semantics.exceptions import AglRaise
 from agm.agl.semantics.values import (
@@ -55,6 +58,7 @@ from agm.agl.semantics.values import (
     RecordValue,
     TextValue,
     UnitValue,
+    Value,
 )
 from agm.agl.type_schema import build_extern_contract
 from tests.agl.module_graph import resolve_and_check_program_ast
@@ -74,6 +78,9 @@ _CAPS = HostCapabilities(
 _BOX = "record Box\n  value: int\n  label: text\n"
 _SHAPE = "enum Shape\n  | circle(radius: decimal)\n  | rect(width: int, height: int)\n"
 _BAD_THING = "exception BadThing extends Exception\n  detail: text\n"
+_BOX_WITH_ARRAY = "record BoxWithArray\n  items: array[int]\n"
+_SHAPE_WITH_DICT = "enum ShapeWithDict\n  | tagged(values: dict[text, int])\n"
+_BAD_THING_WITH_ARRAY = "exception BadThingWithArray extends Exception\n  items: array[int]\n"
 
 
 def build_contract(source: str, fn_name: str = "f") -> ExternContract:
@@ -98,11 +105,10 @@ def _nominal(schema: BoundarySchema) -> NominalId:
     return schema.nominal
 
 
-def _sealed_handle(value: object, seal: object) -> SealedHandle:
+def _sealed_handle(value: Value, scope: BoundaryScope) -> SealedHandle:
     """Mint a test handle through the real encoder, not the public constructor."""
-    assert isinstance(value, (BoolValue, DecimalValue, IntValue, IrClosureValue, TextValue))
     contract = build_contract("extern def identity[T](x: T) -> T\n0", fn_name="identity")
-    encoded = encode_boundary_value(contract.params[0].schema, value, {"T": seal})
+    encoded = encode_boundary_value(contract.params[0].schema, value, scope)
     assert isinstance(encoded, SealedHandle)
     return encoded
 
@@ -115,63 +121,90 @@ def _sealed_handle(value: object, seal: object) -> SealedHandle:
 class TestEncodeScalarsAndContainers:
     def test_int(self) -> None:
         contract = build_contract("extern def f(x: int) -> int\n0")
-        assert encode_boundary_value(contract.params[0].schema, IntValue(3), {}) == 3
+        assert encode_boundary_value(contract.params[0].schema, IntValue(3), BoundaryScope()) == 3
 
     def test_decimal_never_becomes_float(self) -> None:
         contract = build_contract("extern def f(x: decimal) -> decimal\n0")
-        result = encode_boundary_value(contract.params[0].schema, DecimalValue(Decimal("1.5")), {})
+        result = encode_boundary_value(
+            contract.params[0].schema, DecimalValue(Decimal("1.5")), BoundaryScope()
+        )
         assert result == Decimal("1.5")
         assert isinstance(result, Decimal)
 
     def test_bool(self) -> None:
         contract = build_contract("extern def f(x: bool) -> bool\n0")
-        assert encode_boundary_value(contract.params[0].schema, BoolValue(True), {}) is True
+        assert (
+            encode_boundary_value(contract.params[0].schema, BoolValue(True), BoundaryScope())
+            is True
+        )
 
     def test_text(self) -> None:
         contract = build_contract("extern def f(x: text) -> text\n0")
-        assert encode_boundary_value(contract.params[0].schema, TextValue("hi"), {}) == "hi"
+        assert (
+            encode_boundary_value(contract.params[0].schema, TextValue("hi"), BoundaryScope())
+            == "hi"
+        )
 
     def test_unit(self) -> None:
         contract = build_contract("extern def f(x: unit) -> unit\n0")
-        assert encode_boundary_value(contract.params[0].schema, UnitValue(), {}) is None
+        assert (
+            encode_boundary_value(contract.params[0].schema, UnitValue(), BoundaryScope()) is None
+        )
 
     def test_json_scalar(self) -> None:
         contract = build_contract("extern def f(x: json) -> json\n0")
-        result = encode_boundary_value(contract.params[0].schema, JsonValue(Decimal("2.5")), {})
+        result = encode_boundary_value(
+            contract.params[0].schema, JsonValue(Decimal("2.5")), BoundaryScope()
+        )
         assert result == Decimal("2.5")
 
     def test_array(self) -> None:
         contract = build_contract("extern def f(x: array[int]) -> array[int]\n0")
         value = ArrayValue([IntValue(1), IntValue(2)])
-        assert encode_boundary_value(contract.params[0].schema, value, {}) == [1, 2]
+        encoded = encode_boundary_value(contract.params[0].schema, value, BoundaryScope())
+        assert isinstance(encoded, AglArrayView)
+        assert list(encoded) == [1, 2]
 
     def test_dict(self) -> None:
         contract = build_contract("extern def f(x: dict[text, int]) -> dict[text, int]\n0")
         value = DictValue(entries={"a": IntValue(1), "b": IntValue(2)})
-        assert encode_boundary_value(contract.params[0].schema, value, {}) == {"a": 1, "b": 2}
+        encoded = encode_boundary_value(contract.params[0].schema, value, BoundaryScope())
+        assert isinstance(encoded, AglDictView)
+        assert dict(encoded) == {"a": 1, "b": 2}
 
 
 class TestEncodeNominals:
-    def test_record(self) -> None:
-        contract = build_contract(_BOX + "extern def f(b: Box) -> Box\n0")
+    def test_record_with_nested_array(self) -> None:
+        contract = build_contract(
+            _BOX_WITH_ARRAY + "extern def f(b: BoxWithArray) -> BoxWithArray\n0"
+        )
         value = RecordValue(
             nominal=_nominal(contract.result),
-            display_name="Box",
-            fields={"value": IntValue(1), "label": TextValue("x")},
+            display_name="BoxWithArray",
+            fields={"items": ArrayValue([IntValue(1), IntValue(2)])},
         )
-        result = encode_boundary_value(contract.params[0].schema, value, {})
-        assert result == {"value": 1, "label": "x"}
+        result = encode_boundary_value(contract.params[0].schema, value, BoundaryScope())
+        assert isinstance(result, dict)
+        items = result["items"]
+        assert isinstance(items, AglArrayView)
+        assert list(items) == [1, 2]
 
-    def test_enum_variant_with_fields(self) -> None:
-        contract = build_contract(_SHAPE + "extern def f(s: Shape) -> Shape\n0")
+    def test_enum_variant_with_nested_dict(self) -> None:
+        contract = build_contract(
+            _SHAPE_WITH_DICT + "extern def f(s: ShapeWithDict) -> ShapeWithDict\n0"
+        )
         value = EnumValue(
             nominal=_nominal(contract.result),
-            display_name="Shape",
-            variant="rect",
-            fields={"width": IntValue(3), "height": IntValue(4)},
+            display_name="ShapeWithDict",
+            variant="tagged",
+            fields={"values": DictValue(entries={"width": IntValue(3), "height": IntValue(4)})},
         )
-        result = encode_boundary_value(contract.params[0].schema, value, {})
-        assert result == {"$case": "rect", "width": 3, "height": 4}
+        result = encode_boundary_value(contract.params[0].schema, value, BoundaryScope())
+        assert isinstance(result, dict)
+        assert result["$case"] == "tagged"
+        values = result["values"]
+        assert isinstance(values, AglDictView)
+        assert dict(values) == {"width": 3, "height": 4}
 
     def test_enum_variant_with_no_fields(self) -> None:
         contract = build_contract(_SHAPE + "extern def f(s: Shape) -> Shape\n0")
@@ -181,39 +214,52 @@ class TestEncodeNominals:
             variant="circle",
             fields={"radius": DecimalValue(Decimal(2))},
         )
-        result = encode_boundary_value(contract.params[0].schema, value, {})
+        result = encode_boundary_value(contract.params[0].schema, value, BoundaryScope())
         assert result == {"$case": "circle", "radius": Decimal(2)}
 
-    def test_exception(self) -> None:
-        contract = build_contract(_BAD_THING + "extern def f(x: int) -> BadThing\n0")
+    def test_exception_with_nested_array(self) -> None:
+        contract = build_contract(
+            _BAD_THING_WITH_ARRAY + "extern def f(x: int) -> BadThingWithArray\n0"
+        )
         value = ExceptionValue(
             nominal=_nominal(contract.result),
-            display_name="BadThing",
-            fields={"message": TextValue("m"), "trace_id": TextValue(""), "detail": TextValue("d")},
+            display_name="BadThingWithArray",
+            fields={
+                "message": TextValue("m"),
+                "trace_id": TextValue(""),
+                "items": ArrayValue([IntValue(1), IntValue(2)]),
+            },
         )
-        result = encode_boundary_value(contract.result, value, {})
-        assert result == {"message": "m", "trace_id": "", "detail": "d"}
+        result = encode_boundary_value(contract.result, value, BoundaryScope())
+        assert isinstance(result, dict)
+        assert result["message"] == "m"
+        assert result["trace_id"] == ""
+        items = result["items"]
+        assert isinstance(items, AglArrayView)
+        assert list(items) == [1, 2]
 
 
 # ---------------------------------------------------------------------------
-# Encode direction — deep-copy independence
+# Encode direction — container aliasing and JSON copy independence
 # ---------------------------------------------------------------------------
 
 
-class TestEncodeDeepCopy:
-    def test_mutating_encoded_array_does_not_affect_agl_value(self) -> None:
+class TestEncodeAliasingAndJsonCopy:
+    def test_encoded_array_and_agl_value_observe_each_others_mutations(self) -> None:
         contract = build_contract("extern def f(x: array[int]) -> array[int]\n0")
         original = ArrayValue([IntValue(1), IntValue(2)])
-        encoded = encode_boundary_value(contract.params[0].schema, original, {})
-        assert isinstance(encoded, list)
+        encoded = encode_boundary_value(contract.params[0].schema, original, BoundaryScope())
+        assert isinstance(encoded, AglArrayView)
         encoded.append(99)
-        assert original.elements == [IntValue(1), IntValue(2)]
+        assert original.elements == [IntValue(1), IntValue(2), IntValue(99)]
+        original.elements[0] = IntValue(3)
+        assert encoded[0] == 3
 
     def test_mutating_encoded_json_does_not_affect_agl_value(self) -> None:
         contract = build_contract("extern def f(x: json) -> json\n0")
         inner: dict[str, object] = {"a": [1, 2]}
         original = JsonValue(inner)
-        encoded = encode_boundary_value(contract.params[0].schema, original, {})
+        encoded = encode_boundary_value(contract.params[0].schema, original, BoundaryScope())
         assert isinstance(encoded, dict)
         assert isinstance(encoded["a"], list)
         encoded["a"].append(3)
@@ -225,9 +271,11 @@ class TestEncodeDeepCopy:
         contract = build_contract("extern def f(x: array[json]) -> array[json]\n0")
         inner_list: list[object] = [1, 2]
         original = ArrayValue([JsonValue(inner_list)])
-        encoded = encode_boundary_value(contract.params[0].schema, original, {})
-        assert isinstance(encoded, list)
-        encoded[0].append(999)
+        encoded = encode_boundary_value(contract.params[0].schema, original, BoundaryScope())
+        assert isinstance(encoded, AglArrayView)
+        nested_json = encoded[0]
+        assert isinstance(nested_json, list)
+        nested_json.append(999)
         assert inner_list == [1, 2]
 
 
@@ -240,57 +288,57 @@ class TestEncodeShapeMismatch:
     def test_int_scalar_mismatch(self) -> None:
         contract = build_contract("extern def f(x: int) -> int\n0")
         with pytest.raises(BoundaryViolation):
-            encode_boundary_value(contract.params[0].schema, TextValue("nope"), {})
+            encode_boundary_value(contract.params[0].schema, TextValue("nope"), BoundaryScope())
 
     def test_text_scalar_mismatch(self) -> None:
         contract = build_contract("extern def f(x: text) -> text\n0")
         with pytest.raises(BoundaryViolation):
-            encode_boundary_value(contract.params[0].schema, IntValue(1), {})
+            encode_boundary_value(contract.params[0].schema, IntValue(1), BoundaryScope())
 
     def test_decimal_scalar_mismatch(self) -> None:
         contract = build_contract("extern def f(x: decimal) -> decimal\n0")
         with pytest.raises(BoundaryViolation):
-            encode_boundary_value(contract.params[0].schema, IntValue(1), {})
+            encode_boundary_value(contract.params[0].schema, IntValue(1), BoundaryScope())
 
     def test_bool_scalar_mismatch(self) -> None:
         contract = build_contract("extern def f(x: bool) -> bool\n0")
         with pytest.raises(BoundaryViolation):
-            encode_boundary_value(contract.params[0].schema, IntValue(1), {})
+            encode_boundary_value(contract.params[0].schema, IntValue(1), BoundaryScope())
 
     def test_json_scalar_mismatch(self) -> None:
         contract = build_contract("extern def f(x: json) -> json\n0")
         with pytest.raises(BoundaryViolation):
-            encode_boundary_value(contract.params[0].schema, IntValue(1), {})
+            encode_boundary_value(contract.params[0].schema, IntValue(1), BoundaryScope())
 
     def test_unit_mismatch(self) -> None:
         contract = build_contract("extern def f(x: unit) -> unit\n0")
         with pytest.raises(BoundaryViolation):
-            encode_boundary_value(contract.params[0].schema, IntValue(1), {})
+            encode_boundary_value(contract.params[0].schema, IntValue(1), BoundaryScope())
 
     def test_array_mismatch(self) -> None:
         contract = build_contract("extern def f(x: array[int]) -> array[int]\n0")
         with pytest.raises(BoundaryViolation):
-            encode_boundary_value(contract.params[0].schema, IntValue(1), {})
+            encode_boundary_value(contract.params[0].schema, IntValue(1), BoundaryScope())
 
     def test_dict_mismatch(self) -> None:
         contract = build_contract("extern def f(x: dict[text, int]) -> dict[text, int]\n0")
         with pytest.raises(BoundaryViolation):
-            encode_boundary_value(contract.params[0].schema, IntValue(1), {})
+            encode_boundary_value(contract.params[0].schema, IntValue(1), BoundaryScope())
 
     def test_record_mismatch(self) -> None:
         contract = build_contract(_BOX + "extern def f(b: Box) -> Box\n0")
         with pytest.raises(BoundaryViolation):
-            encode_boundary_value(contract.params[0].schema, IntValue(1), {})
+            encode_boundary_value(contract.params[0].schema, IntValue(1), BoundaryScope())
 
     def test_enum_mismatch(self) -> None:
         contract = build_contract(_SHAPE + "extern def f(s: Shape) -> Shape\n0")
         with pytest.raises(BoundaryViolation):
-            encode_boundary_value(contract.params[0].schema, IntValue(1), {})
+            encode_boundary_value(contract.params[0].schema, IntValue(1), BoundaryScope())
 
     def test_exception_mismatch(self) -> None:
         contract = build_contract(_BAD_THING + "extern def f(x: int) -> BadThing\n0")
         with pytest.raises(BoundaryViolation):
-            encode_boundary_value(contract.result, IntValue(1), {})
+            encode_boundary_value(contract.result, IntValue(1), BoundaryScope())
 
     def test_enum_unknown_variant_rejected(self) -> None:
         contract = build_contract(_SHAPE + "extern def f(s: Shape) -> Shape\n0")
@@ -301,7 +349,7 @@ class TestEncodeShapeMismatch:
             fields={},
         )
         with pytest.raises(BoundaryViolation):
-            encode_boundary_value(contract.params[0].schema, value, {})
+            encode_boundary_value(contract.params[0].schema, value, BoundaryScope())
 
 
 # ---------------------------------------------------------------------------
@@ -312,109 +360,122 @@ class TestEncodeShapeMismatch:
 class TestDecodeScalars:
     def test_int_accepts_int(self) -> None:
         contract = build_contract("extern def f(x: int) -> int\n0")
-        assert decode_boundary_value(contract.result, 5, {}) == IntValue(5)
+        assert decode_boundary_value(contract.result, 5, BoundaryScope()) == IntValue(5)
 
     def test_decimal_accepts_int_exactly(self) -> None:
         contract = build_contract("extern def f(x: int) -> decimal\n0")
-        assert decode_boundary_value(contract.result, 7, {}) == DecimalValue(Decimal(7))
+        assert decode_boundary_value(contract.result, 7, BoundaryScope()) == DecimalValue(
+            Decimal(7)
+        )
 
     def test_decimal_accepts_decimal(self) -> None:
         contract = build_contract("extern def f(x: int) -> decimal\n0")
-        assert decode_boundary_value(contract.result, Decimal("1.25"), {}) == DecimalValue(
-            Decimal("1.25")
-        )
+        assert decode_boundary_value(
+            contract.result, Decimal("1.25"), BoundaryScope()
+        ) == DecimalValue(Decimal("1.25"))
 
     def test_decimal_rejects_non_finite_decimal(self) -> None:
         contract = build_contract("extern def f(x: int) -> decimal\n0")
         for raw in (Decimal("NaN"), Decimal("Infinity"), Decimal("-Infinity")):
             with pytest.raises(BoundaryViolation):
-                decode_boundary_value(contract.result, raw, {})
+                decode_boundary_value(contract.result, raw, BoundaryScope())
 
     def test_bool_rejected_where_int_declared(self) -> None:
         contract = build_contract("extern def f(x: int) -> int\n0")
         with pytest.raises(BoundaryViolation):
-            decode_boundary_value(contract.result, True, {})
+            decode_boundary_value(contract.result, True, BoundaryScope())
 
     def test_bool_rejected_where_decimal_declared(self) -> None:
         contract = build_contract("extern def f(x: int) -> decimal\n0")
         with pytest.raises(BoundaryViolation):
-            decode_boundary_value(contract.result, True, {})
+            decode_boundary_value(contract.result, True, BoundaryScope())
 
     def test_bool_accepted_where_bool_declared(self) -> None:
         contract = build_contract("extern def f(x: int) -> bool\n0")
-        assert decode_boundary_value(contract.result, True, {}) == BoolValue(True)
+        assert decode_boundary_value(contract.result, True, BoundaryScope()) == BoolValue(True)
 
     def test_bool_rejects_non_bool(self) -> None:
         contract = build_contract("extern def f(x: int) -> bool\n0")
         with pytest.raises(BoundaryViolation):
-            decode_boundary_value(contract.result, 1, {})
+            decode_boundary_value(contract.result, 1, BoundaryScope())
 
     def test_float_rejected_at_int(self) -> None:
         contract = build_contract("extern def f(x: int) -> int\n0")
         with pytest.raises(BoundaryViolation):
-            decode_boundary_value(contract.result, 1.5, {})
+            decode_boundary_value(contract.result, 1.5, BoundaryScope())
 
     def test_float_rejected_at_decimal(self) -> None:
         contract = build_contract("extern def f(x: int) -> decimal\n0")
         with pytest.raises(BoundaryViolation):
-            decode_boundary_value(contract.result, 1.5, {})
+            decode_boundary_value(contract.result, 1.5, BoundaryScope())
 
     def test_float_rejected_in_json(self) -> None:
         contract = build_contract("extern def f(x: int) -> json\n0")
         with pytest.raises(BoundaryViolation):
-            decode_boundary_value(contract.result, 1.5, {})
+            decode_boundary_value(contract.result, 1.5, BoundaryScope())
 
     def test_float_rejected_nested_in_json(self) -> None:
         contract = build_contract("extern def f(x: int) -> json\n0")
         with pytest.raises(BoundaryViolation):
-            decode_boundary_value(contract.result, {"a": [1.5]}, {})
+            decode_boundary_value(contract.result, {"a": [1.5]}, BoundaryScope())
 
     def test_text_wrong_type_rejected(self) -> None:
         contract = build_contract("extern def f(x: int) -> text\n0")
         with pytest.raises(BoundaryViolation):
-            decode_boundary_value(contract.result, 1, {})
+            decode_boundary_value(contract.result, 1, BoundaryScope())
 
 
 class TestDecodeContainers:
     def test_array(self) -> None:
         contract = build_contract("extern def f(x: int) -> array[int]\n0")
-        assert decode_boundary_value(contract.result, [1, 2], {}) == ArrayValue(
+        assert decode_boundary_value(contract.result, [1, 2], BoundaryScope()) == ArrayValue(
             [IntValue(1), IntValue(2)]
         )
 
     def test_array_wrong_type_rejected(self) -> None:
         contract = build_contract("extern def f(x: int) -> array[int]\n0")
         with pytest.raises(BoundaryViolation):
-            decode_boundary_value(contract.result, "not a list", {})
+            decode_boundary_value(contract.result, "not a list", BoundaryScope())
 
-    def test_cyclic_array_rejected(self) -> None:
+    def test_cyclic_array_crosses_lazily(self) -> None:
+        contract = build_contract("extern def f(x: array[array[int]]) -> int\n0")
+        value = ArrayValue([])
+        value.elements.append(value)
+
+        encoded = encode_boundary_value(contract.params[0].schema, value, BoundaryScope())
+
+        assert isinstance(encoded, AglArrayView)
+
+    def test_cyclic_python_array_return_rejected(self) -> None:
         contract = build_contract("extern def f(x: int) -> array[array[int]]\n0")
         value: list[object] = []
         value.append(value)
         with pytest.raises(BoundaryViolation):
-            decode_boundary_value(contract.result, value, {})
+            decode_boundary_value(contract.result, value, BoundaryScope())
 
     def test_dict(self) -> None:
         contract = build_contract("extern def f(x: int) -> dict[text, int]\n0")
-        assert decode_boundary_value(contract.result, {"a": 1}, {}) == DictValue(
+        assert decode_boundary_value(contract.result, {"a": 1}, BoundaryScope()) == DictValue(
             entries={"a": IntValue(1)}
         )
 
     def test_dict_non_string_key_rejected(self) -> None:
         contract = build_contract("extern def f(x: int) -> dict[text, int]\n0")
         with pytest.raises(BoundaryViolation):
-            decode_boundary_value(contract.result, {1: 1}, {})
+            decode_boundary_value(contract.result, {1: 1}, BoundaryScope())
 
     def test_dict_wrong_type_rejected(self) -> None:
         contract = build_contract("extern def f(x: int) -> dict[text, int]\n0")
         with pytest.raises(BoundaryViolation):
-            decode_boundary_value(contract.result, [1], {})
+            decode_boundary_value(contract.result, [1], BoundaryScope())
 
 
 class TestDecodeNominals:
     def test_record_happy_path(self) -> None:
         contract = build_contract(_BOX + "extern def f(x: int) -> Box\n0")
-        result = decode_boundary_value(contract.result, {"value": 1, "label": "hi"}, {})
+        result = decode_boundary_value(
+            contract.result, {"value": 1, "label": "hi"}, BoundaryScope()
+        )
         assert result == RecordValue(
             nominal=_nominal(contract.result),
             display_name="Box",
@@ -424,32 +485,34 @@ class TestDecodeNominals:
     def test_record_wrong_type_rejected(self) -> None:
         contract = build_contract(_BOX + "extern def f(x: int) -> Box\n0")
         with pytest.raises(BoundaryViolation):
-            decode_boundary_value(contract.result, "nope", {})
+            decode_boundary_value(contract.result, "nope", BoundaryScope())
 
     def test_record_non_string_key_rejected(self) -> None:
         contract = build_contract(_BOX + "extern def f(x: int) -> Box\n0")
         with pytest.raises(BoundaryViolation):
-            decode_boundary_value(contract.result, {1: "x", "label": "y"}, {})
+            decode_boundary_value(contract.result, {1: "x", "label": "y"}, BoundaryScope())
 
     def test_record_missing_field_rejected(self) -> None:
         contract = build_contract(_BOX + "extern def f(x: int) -> Box\n0")
         with pytest.raises(BoundaryViolation):
-            decode_boundary_value(contract.result, {"value": 1}, {})
+            decode_boundary_value(contract.result, {"value": 1}, BoundaryScope())
 
     def test_record_extra_field_rejected(self) -> None:
         contract = build_contract(_BOX + "extern def f(x: int) -> Box\n0")
         with pytest.raises(BoundaryViolation):
-            decode_boundary_value(contract.result, {"value": 1, "label": "x", "extra": 1}, {})
+            decode_boundary_value(
+                contract.result, {"value": 1, "label": "x", "extra": 1}, BoundaryScope()
+            )
 
     def test_record_misnamed_field_rejected(self) -> None:
         contract = build_contract(_BOX + "extern def f(x: int) -> Box\n0")
         with pytest.raises(BoundaryViolation):
-            decode_boundary_value(contract.result, {"value": 1, "lbl": "x"}, {})
+            decode_boundary_value(contract.result, {"value": 1, "lbl": "x"}, BoundaryScope())
 
     def test_enum_happy_path(self) -> None:
         contract = build_contract(_SHAPE + "extern def f(x: int) -> Shape\n0")
         result = decode_boundary_value(
-            contract.result, {"$case": "rect", "width": 3, "height": 4}, {}
+            contract.result, {"$case": "rect", "width": 3, "height": 4}, BoundaryScope()
         )
         assert result == EnumValue(
             nominal=_nominal(contract.result),
@@ -461,34 +524,36 @@ class TestDecodeNominals:
     def test_enum_missing_case_rejected(self) -> None:
         contract = build_contract(_SHAPE + "extern def f(x: int) -> Shape\n0")
         with pytest.raises(BoundaryViolation):
-            decode_boundary_value(contract.result, {"width": 3, "height": 4}, {})
+            decode_boundary_value(contract.result, {"width": 3, "height": 4}, BoundaryScope())
 
     def test_enum_unknown_variant_rejected(self) -> None:
         contract = build_contract(_SHAPE + "extern def f(x: int) -> Shape\n0")
         with pytest.raises(BoundaryViolation):
-            decode_boundary_value(contract.result, {"$case": "triangle"}, {})
+            decode_boundary_value(contract.result, {"$case": "triangle"}, BoundaryScope())
 
     def test_enum_missing_field_rejected(self) -> None:
         contract = build_contract(_SHAPE + "extern def f(x: int) -> Shape\n0")
         with pytest.raises(BoundaryViolation):
-            decode_boundary_value(contract.result, {"$case": "rect", "width": 3}, {})
+            decode_boundary_value(contract.result, {"$case": "rect", "width": 3}, BoundaryScope())
 
     def test_enum_extra_field_rejected(self) -> None:
         contract = build_contract(_SHAPE + "extern def f(x: int) -> Shape\n0")
         with pytest.raises(BoundaryViolation):
             decode_boundary_value(
-                contract.result, {"$case": "rect", "width": 3, "height": 4, "extra": 1}, {}
+                contract.result,
+                {"$case": "rect", "width": 3, "height": 4, "extra": 1},
+                BoundaryScope(),
             )
 
     def test_enum_wrong_type_rejected(self) -> None:
         contract = build_contract(_SHAPE + "extern def f(x: int) -> Shape\n0")
         with pytest.raises(BoundaryViolation):
-            decode_boundary_value(contract.result, "nope", {})
+            decode_boundary_value(contract.result, "nope", BoundaryScope())
 
     def test_exception_happy_path(self) -> None:
         contract = build_contract(_BAD_THING + "extern def f(x: int) -> BadThing\n0")
         result = decode_boundary_value(
-            contract.result, {"message": "m", "trace_id": "t", "detail": "d"}, {}
+            contract.result, {"message": "m", "trace_id": "t", "detail": "d"}, BoundaryScope()
         )
         assert result == ExceptionValue(
             nominal=_nominal(contract.result),
@@ -504,31 +569,33 @@ class TestDecodeNominals:
         contract = build_contract(_BAD_THING + "extern def f(x: int) -> BadThing\n0")
         with pytest.raises(BoundaryViolation):
             decode_boundary_value(
-                contract.result, {"message": "m", "trace_id": "t", "info": "d"}, {}
+                contract.result,
+                {"message": "m", "trace_id": "t", "info": "d"},
+                BoundaryScope(),
             )
 
     def test_exception_wrong_type_rejected(self) -> None:
         contract = build_contract(_BAD_THING + "extern def f(x: int) -> BadThing\n0")
         with pytest.raises(BoundaryViolation):
-            decode_boundary_value(contract.result, 1, {})
+            decode_boundary_value(contract.result, 1, BoundaryScope())
 
 
 class TestDecodeUnit:
     def test_unit_requires_none(self) -> None:
         contract = build_contract("extern def f(x: int) -> unit\n0")
-        assert decode_boundary_value(contract.result, None, {}) == UnitValue()
+        assert decode_boundary_value(contract.result, None, BoundaryScope()) == UnitValue()
 
     def test_unit_rejects_non_none(self) -> None:
         contract = build_contract("extern def f(x: int) -> unit\n0")
         with pytest.raises(BoundaryViolation):
-            decode_boundary_value(contract.result, 0, {})
+            decode_boundary_value(contract.result, 0, BoundaryScope())
 
 
 class TestDecodeJson:
     def test_accepts_decimal_and_nested_shapes(self) -> None:
         contract = build_contract("extern def f(x: int) -> json\n0")
         obj: dict[str, object] = {"a": [1, Decimal("2.5"), None, True, "s"]}
-        result = decode_boundary_value(contract.result, obj, {})
+        result = decode_boundary_value(contract.result, obj, BoundaryScope())
         assert isinstance(result, JsonValue)
         assert result.raw == obj
 
@@ -536,7 +603,7 @@ class TestDecodeJson:
         contract = build_contract("extern def f(x: int) -> json\n0")
         for raw in (Decimal("NaN"), Decimal("Infinity"), Decimal("-Infinity")):
             with pytest.raises(BoundaryViolation):
-                decode_boundary_value(contract.result, {"bad": [raw]}, {})
+                decode_boundary_value(contract.result, {"bad": [raw]}, BoundaryScope())
 
     def test_rejects_arbitrary_object(self) -> None:
         contract = build_contract("extern def f(x: int) -> json\n0")
@@ -545,21 +612,21 @@ class TestDecodeJson:
             pass
 
         with pytest.raises(BoundaryViolation):
-            decode_boundary_value(contract.result, Opaque(), {})
+            decode_boundary_value(contract.result, Opaque(), BoundaryScope())
 
     def test_rejects_cyclic_json_list(self) -> None:
         contract = build_contract("extern def f(x: int) -> json\n0")
         value: list[object] = []
         value.append(value)
         with pytest.raises(BoundaryViolation):
-            decode_boundary_value(contract.result, value, {})
+            decode_boundary_value(contract.result, value, BoundaryScope())
 
     def test_rejects_cyclic_json_dict(self) -> None:
         contract = build_contract("extern def f(x: int) -> json\n0")
         value: dict[str, object] = {}
         value["self"] = value
         with pytest.raises(BoundaryViolation):
-            decode_boundary_value(contract.result, value, {})
+            decode_boundary_value(contract.result, value, BoundaryScope())
 
     def test_json_deepcopy_failure_is_boundary_violation(self) -> None:
         contract = build_contract("extern def f(x: int) -> json\n0")
@@ -569,13 +636,13 @@ class TestDecodeJson:
                 raise RuntimeError("copy failed")
 
         with pytest.raises(BoundaryViolation):
-            decode_boundary_value(contract.result, BadStr("x"), {})
+            decode_boundary_value(contract.result, BadStr("x"), BoundaryScope())
 
     def test_rejects_sealed_handle(self) -> None:
         contract = build_contract("extern def f(x: int) -> json\n0")
-        handle = _sealed_handle(IntValue(1), object())
+        handle = _sealed_handle(IntValue(1), BoundaryScope(seals={"T": object()}))
         with pytest.raises(BoundaryViolation):
-            decode_boundary_value(contract.result, handle, {})
+            decode_boundary_value(contract.result, handle, BoundaryScope())
 
 
 # ---------------------------------------------------------------------------
@@ -588,26 +655,26 @@ class TestSealing:
         contract = build_contract(
             "extern def reverse[T](xs: array[T]) -> array[T]\n0", fn_name="reverse"
         )
-        seals = {"T": object()}
+        scope = BoundaryScope(seals={"T": object()})
         value = ArrayValue([IntValue(1)])
-        encoded = encode_boundary_value(contract.params[0].schema, value, seals)
+        encoded = encode_boundary_value(contract.params[0].schema, value, scope)
         assert isinstance(encoded[0], SealedHandle)
 
     def test_decode_accepts_this_calls_handle(self) -> None:
         contract = build_contract("extern def identity[T](x: T) -> T\n0", fn_name="identity")
-        seals = {"T": object()}
-        handle = _sealed_handle(IntValue(5), seals["T"])
-        assert decode_boundary_value(contract.result, handle, seals) == IntValue(5)
+        scope = BoundaryScope(seals={"T": object()})
+        handle = _sealed_handle(IntValue(5), scope)
+        assert decode_boundary_value(contract.result, handle, scope) == IntValue(5)
 
     def test_handle_does_not_expose_mutable_value_payload(self) -> None:
         contract = build_contract("extern def identity[T](x: T) -> T\n0", fn_name="identity")
-        seals = {"T": object()}
+        scope = BoundaryScope(seals={"T": object()})
         original = DictValue(entries={"a": IntValue(1)})
-        encoded = encode_boundary_value(contract.params[0].schema, original, seals)
+        encoded = encode_boundary_value(contract.params[0].schema, original, scope)
         assert isinstance(encoded, SealedHandle)
 
         assert not hasattr(encoded, "_SealedHandle__eq_key")
-        assert decode_boundary_value(contract.result, encoded, seals) == original
+        assert decode_boundary_value(contract.result, encoded, scope) == original
 
     def test_handle_equality_keys_cover_all_sealable_value_shapes(self) -> None:
         contract = build_contract("extern def identity[T](x: T) -> T\n0", fn_name="identity")
@@ -625,8 +692,12 @@ class TestSealing:
         )
 
         for value in values:
-            left = encode_boundary_value(contract.params[0].schema, value, {"T": object()})
-            right = encode_boundary_value(contract.params[0].schema, value, {"T": object()})
+            left = encode_boundary_value(
+                contract.params[0].schema, value, BoundaryScope(seals={"T": object()})
+            )
+            right = encode_boundary_value(
+                contract.params[0].schema, value, BoundaryScope(seals={"T": object()})
+            )
             assert isinstance(left, SealedHandle)
             assert isinstance(right, SealedHandle)
             assert left == right
@@ -634,102 +705,112 @@ class TestSealing:
 
     def test_decode_rejects_stale_handle_from_a_different_call(self) -> None:
         contract = build_contract("extern def identity[T](x: T) -> T\n0", fn_name="identity")
-        stale_seals = {"T": object()}
-        this_calls_seals = {"T": object()}
-        handle = _sealed_handle(IntValue(5), stale_seals["T"])
+        stale_scope = BoundaryScope(seals={"T": object()})
+        this_call_scope = BoundaryScope(seals={"T": object()})
+        handle = _sealed_handle(IntValue(5), stale_scope)
         with pytest.raises(BoundaryViolation):
-            decode_boundary_value(contract.result, handle, this_calls_seals)
+            decode_boundary_value(contract.result, handle, this_call_scope)
+
+    def test_decode_rejects_handle_with_fresh_implicit_scope(self) -> None:
+        contract = build_contract("extern def identity[T](x: T) -> T\n0", fn_name="identity")
+        handle = _sealed_handle(IntValue(5), BoundaryScope(seals={"T": object()}))
+        with pytest.raises(BoundaryViolation):
+            decode_boundary_value(contract.result, handle)
 
     def test_decode_rejects_cross_variable_handle(self) -> None:
         contract = build_contract("extern def pair[A, B](a: A, b: B) -> A\n0", fn_name="pair")
-        seals = {"A": object(), "B": object()}
-        encoded = encode_boundary_value(contract.params[1].schema, IntValue(1), seals)
+        scope = BoundaryScope(seals={"A": object(), "B": object()})
+        encoded = encode_boundary_value(contract.params[1].schema, IntValue(1), scope)
         assert isinstance(encoded, SealedHandle)
         with pytest.raises(BoundaryViolation):
-            decode_boundary_value(contract.result, encoded, seals)
+            decode_boundary_value(contract.result, encoded, scope)
 
     def test_decode_rejects_raw_forged_value(self) -> None:
         contract = build_contract("extern def identity[T](x: T) -> T\n0", fn_name="identity")
-        seals = {"T": object()}
+        scope = BoundaryScope(seals={"T": object()})
         with pytest.raises(BoundaryViolation):
-            decode_boundary_value(contract.result, 5, seals)
+            decode_boundary_value(contract.result, 5, scope)
 
     def test_decode_rejects_uninitialized_handle_instance(self) -> None:
         contract = build_contract("extern def identity[T](x: T) -> T\n0", fn_name="identity")
         forged = object.__new__(SealedHandle)
         with pytest.raises(BoundaryViolation):
-            decode_boundary_value(contract.result, forged, {"T": object()})
+            decode_boundary_value(contract.result, forged, BoundaryScope(seals={"T": object()}))
 
     def test_uninitialized_handle_special_methods_are_defensive(self) -> None:
         forged = object.__new__(SealedHandle)
-        assert forged != _sealed_handle(IntValue(1), object())
+        assert forged != _sealed_handle(IntValue(1), BoundaryScope(seals={"T": object()}))
         with pytest.raises(TypeError):
             hash(forged)
         assert repr(forged) == "<sealed handle>"
 
     def test_decode_rejects_handle_with_forged_public_shape(self) -> None:
-        from agm.agl.runtime import externs as externs_mod
+        from agm.agl.runtime import boundary as boundary_mod
 
         contract = build_contract("extern def identity[T](x: T) -> T\n0", fn_name="identity")
         forged = object.__new__(SealedHandle)
         # Give the forged instance the public shape of a real handle (so it
         # hashes and reprs like one), yet it was never minted into any vault.
-        externs_mod._HANDLE_STATE[id(forged)] = externs_mod._HandleState(IntValue(1))
+        boundary_mod._HANDLE_STATE[id(forged)] = boundary_mod._HandleState(IntValue(1))
         try:
-            assert hash(forged) == hash(_sealed_handle(IntValue(1), object()))
+            assert hash(forged) == hash(
+                _sealed_handle(IntValue(1), BoundaryScope(seals={"T": object()}))
+            )
             with pytest.raises(BoundaryViolation):
-                decode_boundary_value(contract.result, forged, {"T": object()})
+                decode_boundary_value(contract.result, forged, BoundaryScope(seals={"T": object()}))
         finally:
-            externs_mod._HANDLE_STATE.pop(id(forged), None)
+            boundary_mod._HANDLE_STATE.pop(id(forged), None)
 
     def test_public_constructor_cannot_forge_handle(self) -> None:
         with pytest.raises(TypeError):
             SealedHandle(IntValue(1), object())
 
     def test_handle_exposes_no_value_or_seal_attributes(self) -> None:
-        h = _sealed_handle(IntValue(1), object())
+        h = _sealed_handle(IntValue(1), BoundaryScope(seals={"T": object()}))
         assert not hasattr(h, "_value")
         assert not hasattr(h, "_seal")
 
     def test_handle_equality_and_hash_delegate_to_wrapped_value(self) -> None:
-        h1 = _sealed_handle(IntValue(1), object())
-        h2 = _sealed_handle(IntValue(1), object())
+        h1 = _sealed_handle(IntValue(1), BoundaryScope(seals={"T": object()}))
+        h2 = _sealed_handle(IntValue(1), BoundaryScope(seals={"T": object()}))
         assert h1 == h2
         assert hash(h1) == hash(h2)
-        assert h1 != _sealed_handle(IntValue(2), object())
+        assert h1 != _sealed_handle(IntValue(2), BoundaryScope(seals={"T": object()}))
 
     def test_handle_never_equals_a_non_handle(self) -> None:
-        h = _sealed_handle(IntValue(1), object())
+        h = _sealed_handle(IntValue(1), BoundaryScope(seals={"T": object()}))
         assert (h == 1) is False
         assert h != 1
 
     def test_handles_work_in_sets_and_dicts(self) -> None:
-        h1 = _sealed_handle(TextValue("a"), object())
-        h2 = _sealed_handle(TextValue("a"), object())
+        h1 = _sealed_handle(TextValue("a"), BoundaryScope(seals={"T": object()}))
+        h2 = _sealed_handle(TextValue("a"), BoundaryScope(seals={"T": object()}))
         assert h2 in {h1}
         mapping = {h1: "found"}
         assert mapping[h2] == "found"
 
     def test_handle_repr_shows_rendered_value(self) -> None:
-        h = _sealed_handle(TextValue("hi"), object())
+        h = _sealed_handle(TextValue("hi"), BoundaryScope(seals={"T": object()}))
         assert repr(h) == render_value(TextValue("hi"))
 
-    def test_handle_hash_and_repr_are_stable_across_repeated_access(self) -> None:
-        # Exercises the lazy key/repr caches: the second access returns the
-        # value derived on the first without recomputing it.
-        h = _sealed_handle(TextValue("hi"), object())
-        assert hash(h) == hash(h)
-        assert repr(h) == repr(h) == render_value(TextValue("hi"))
+    def test_handle_repr_reflects_mutations_to_the_wrapped_value(self) -> None:
+        original = ArrayValue([IntValue(1), IntValue(2)])
+        h = _sealed_handle(original, BoundaryScope(seals={"T": object()}))
+        assert repr(h) == "[1, 2]"
+
+        original.elements[0] = IntValue(99)
+
+        assert repr(h) == "[99, 2]"
 
     def test_identity_equality_values_seal_and_hash_without_error(self) -> None:
         closure = IrClosureValue(function_id=FunctionId(0), captures=())
-        h1 = _sealed_handle(closure, object())
-        h2 = _sealed_handle(closure, object())
+        h1 = _sealed_handle(closure, BoundaryScope(seals={"T": object()}))
+        h2 = _sealed_handle(closure, BoundaryScope(seals={"T": object()}))
         assert h1 == h2
         assert hash(h1) == hash(h2)
 
         other_closure = IrClosureValue(function_id=FunctionId(0), captures=())
-        h3 = _sealed_handle(other_closure, object())
+        h3 = _sealed_handle(other_closure, BoundaryScope(seals={"T": object()}))
         assert h1 != h3  # distinct closure identity, even with identical fields
 
 
@@ -844,7 +925,7 @@ class TestInvoke:
     ) -> None:
         contract = build_contract("extern def f() -> int\n0")
 
-        def boom(*args: object, **kwargs: object) -> object:
+        def boom(schema: BoundarySchema, obj: object, scope: BoundaryScope | None = None) -> Value:
             raise RuntimeError("decode exploded")
 
         monkeypatch.setattr("agm.agl.runtime.externs.decode_boundary_value", boom)

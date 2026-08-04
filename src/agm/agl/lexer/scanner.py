@@ -87,62 +87,18 @@ from agm.agl.lexer.tokens import (
 )
 from agm.agl.semantics.text_literal import ESCAPE_DECODE, INTERP_OPEN, INTERP_TRIGGER
 from agm.raw_tail_catalog import RAW_TAIL_BUILTINS
+from agm.util.interp import IDENT_STOP as _IDENT_STOP
+from agm.util.interp import is_identifier_start
 from agm.util.text import normalize_newlines
 
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
 
-# Characters that terminate an identifier scan.  An identifier starts with
-# a (Unicode) letter or ``_`` and then greedily consumes every character that
-# is NOT in this set.  Whitespace and the structural punctuators/operators
-# that must remain standalone delimiters (brackets, field access ``.``,
-# separators ``,`` ``;``, type/arg ``:``, ``|``, ``/``, and ``@``) are listed
-# here.
-# Everything else — including ``-``, ``?``, ``!``, ``<``, ``>``, ``=``,
-# the string quotes ``"`` and ``'``, the arithmetic operators ``+`` and ``*``,
-# and arbitrary Unicode letters/digits — is an identifier-continuation
-# character, so names like ``ask-prompt``, ``ask?``, ``do-it-now!``, ``a+b``
-# and ``foo"bar`` scan as a single token.  Operator tokens (``->``, ``=>``,
-# ``::``, ``!=``, ``<=``, ``>=``, ``==``, field access ``.``, etc.) still lex as
-# operators whenever they appear as standalone, whitespace-delimited tokens:
-# spaces (or another stop character) break the identifier before the
-# operator's first character.  A leading ``"`` or ``'`` (or one after
-# whitespace) still starts a string template because the identifier-start
-# predicate requires a letter or ``_``.
-_IDENT_STOP: frozenset[str] = frozenset(
-    {
-        # whitespace
-        " ",
-        "\t",
-        "\n",
-        "\r",
-        # structural punctuators / operators that stay standalone delimiters.
-        # String quotes (" and ') and the operator characters + * are NOT stop
-        # characters: they may appear inside an identifier (e.g. ``foo"bar``,
-        # ``a+b``, ``n*x``).  A leading " or ' (or one after whitespace) still
-        # starts a string template because the identifier-start predicate requires
-        # a letter or _.
-        # @ is a stop character so that @pos/@std/@named lex as two tokens (AT NAME)
-        # rather than gluing into the preceding identifier.
-        # = is a stop character so that ``a=b`` lexes as NAME EQ NAME, not a single
-        # identifier — required for no-space named-arg syntax (``f(x=1)``).
-        "(",
-        ")",
-        "[",
-        "]",
-        "{",
-        "}",
-        ":",
-        ",",
-        ".",
-        "|",
-        ";",
-        "/",
-        "@",
-        "=",
-    }
-)
+# Identifier surface rules live in ``agm.util.interp`` so runtime
+# interpolation and AgL lexing cannot drift. The scanner retains the greedy
+# scan: identifiers continue until one of the shared structural delimiters.
+# ``_IDENT_STOP`` is the scanner-local compatibility name for that shared set.
 
 _TAB_LEN = 4
 
@@ -1113,13 +1069,13 @@ class _Scanner:
 
         # Identifiers and keywords: start with a (Unicode) letter or ``_``,
         # then greedily consume every character that is not whitespace and not
-        # an operator/punctuator delimiter (see ``_IDENT_STOP``).  This admits
+        # an operator/punctuator delimiter (see ``_IDENT_STOP``). This admits
         # arbitrary Unicode letters/digits as well as the symbol characters
         # ``-``, ``?``, ``!``, so names like ``ask-prompt`` or ``do-it-now!``
         # scan as a single token.  Operator tokens (``->``, ``=>``, ``!=``,
         # ``<=``, ``>=``, field access ``.``, etc.) still lex as operators
         # when they appear as standalone reserved spellings.
-        if ch.isalpha() or ch == "_":
+        if is_identifier_start(ch):
             while not self._at_end() and self._peek() not in _IDENT_STOP:
                 self._advance()
             word = self._src[start_pos : self._pos]
@@ -1153,7 +1109,7 @@ class _Scanner:
         # language defines numeric literals as ``[0-9]+`` / ``[0-9]+.[0-9]+``, so
         # the scan is restricted to the ASCII range.  Non-ASCII digits therefore
         # fall through to the ``Unexpected character`` path (or, when they follow
-        # a letter, become part of a greedy identifier — see _IDENT_STOP).
+        # a letter, become part of a greedy identifier — see ``_IDENT_STOP``).
         if _is_ascii_digit(ch):
             while not self._at_end() and _is_ascii_digit(self._peek()):
                 self._advance()

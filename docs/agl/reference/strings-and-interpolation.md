@@ -22,6 +22,29 @@ regardless of whether the template appears in an `ask` prompt, a `print`
 argument, an `exec` command, or any other position. A percent sign not
 followed by `{` is literal; `\%` produces a literal percent sign.
 
+## Runtime interpolation
+
+`std/text` provides `interp`, which interpolates a template from an explicit
+`dict[text, text]` at runtime:
+
+```agl
+import std/text
+
+let vars = {"name": "Ada"}
+print std/text::interp("Hello, \%{name}!", vars)  # Hello, Ada!
+```
+
+Runtime holes are **name-only**: `%{name}` names a single AgL identifier and
+looks it up in the dictionary. In contrast, a string-literal `%{expr}` hole
+is a compile-time template hole containing an arbitrary expression. The two
+forms share the same interpolation engine for their runtime splicing step.
+Use `\%{` in a runtime template for a literal `%{`; because a normal AgL
+string is itself a compile-time template, write `\\\%{` in source to pass that
+escape to `interp`.
+
+A missing dictionary key, an invalid runtime name, or an unterminated runtime
+hole raises a catchable `ExternError` from `std/text::interp`.
+
 ## Uniform rendering rules
 
 | Value type | Rendered as |

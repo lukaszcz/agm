@@ -298,20 +298,12 @@ _HELP_TEXTS: dict[str, str] = {
                    [--review-file FILE|auto|none|--no-review-file]
 
         Run the review prompt with REVIEW_SCOPE and REVIEW_ASPECTS available
-        during prompt preprocessing. Prompt holes use ``%{name}``, with AgL
-        identifier names; ``\\%{`` and a bare ``%`` are literal. Unknown,
-        invalid, or unterminated holes are errors. Variables are the full
-        process environment overlaid with REVIEW_SCOPE and REVIEW_ASPECTS,
-        which win on conflicts; ``$VAR`` and ``${VAR}`` are literal text.
-        The default prompt is review.md. Runner command arguments use strict
-        ``%{name}`` interpolation from the process environment overlaid with
-        ``PROMPT_FILE``, which wins on conflicts. Names are AgL identifiers
-        (for example, ``%{log-file}``). ``%%`` aliases ``%{PROMPT_FILE}``;
-        ``\\%{`` writes a literal ``%{``; a bare ``%``, ``$VAR``, and
-        ``${VAR}`` are literal text, and shell-style interpolation is
-        unsupported. Unknown, invalid, or unterminated holes are errors.
-        Command strings are shlex-split before interpolation, so quote or
-        otherwise protect ``\\%{`` so its backslash reaches the argv element.
+        during prompt preprocessing. Prompt holes use strict ``%{name}``
+        interpolation from the process environment overlaid with REVIEW_SCOPE
+        and REVIEW_ASPECTS, which win on conflicts. Runner command arguments
+        interpolate the same way, with ``%{PROMPT_FILE}`` (alias ``%%``) bound
+        to the prepared prompt file; see ``agm help loop`` for the full
+        interpolation rules. The default prompt is review.md.
         Review output is also saved to .agent-files/review-YYYYMMDD-HHMMSS-microseconds.md
         by default. Use --review-file FILE to choose a path, --review-file none
         or --no-review-file to disable saving, and --review-file auto to use
@@ -332,20 +324,12 @@ _HELP_TEXTS: dict[str, str] = {
                    REVIEW_FILE
 
         Run the revision prompt with REVIEW_FILE available during prompt
-        preprocessing. Prompt holes use ``%{name}``, with AgL identifier
-        names; ``\\%{`` and a bare ``%`` are literal. Unknown, invalid, or
-        unterminated holes are errors. Variables are the full process
-        environment overlaid with REVIEW_FILE, which wins on conflicts;
-        ``$VAR`` and ``${VAR}`` are literal text. The default prompt is
-        revise.md. Runner command arguments use strict ``%{name}``
-        interpolation from the process environment overlaid with
-        ``PROMPT_FILE``, which wins on conflicts. Names are AgL identifiers
-        (for example, ``%{log-file}``). ``%%`` aliases ``%{PROMPT_FILE}``;
-        ``\\%{`` writes a literal ``%{``; a bare ``%``, ``$VAR``, and
-        ``${VAR}`` are literal text, and shell-style interpolation is
-        unsupported. Unknown, invalid, or unterminated holes are errors.
-        Command strings are shlex-split before interpolation, so quote or
-        otherwise protect ``\\%{`` so its backslash reaches the argv element.
+        preprocessing. Prompt holes use strict ``%{name}`` interpolation from
+        the process environment overlaid with REVIEW_FILE, which wins on
+        conflicts. Runner command arguments interpolate the same way, with
+        ``%{PROMPT_FILE}`` (alias ``%%``) bound to the prepared prompt file;
+        see ``agm help loop`` for the full interpolation rules. The default
+        prompt is revise.md.
         When COMMAND is provided before REVIEW_FILE, config from
         [revise.COMMAND] is merged over [revise].
 
@@ -369,20 +353,12 @@ _HELP_TEXTS: dict[str, str] = {
         Run review/revise cycles until revise returns COMPLETE, or until the
         maximum number of revision attempts is reached. Review prompts receive
         REVIEW_SCOPE and REVIEW_ASPECTS; revise prompts receive REVIEW_FILE.
-        Prompt holes use strict ``%{name}`` interpolation from the full process
-        environment overlaid with those values, which win on conflicts. Names
-        are AgL identifiers; ``\\%{`` and a bare ``%`` are literal, while an
-        unknown, invalid, or unterminated hole is an error. ``$VAR`` and
-        ``${VAR}`` are literal text. Runner, reviewer, and reviser command
-        arguments use strict ``%{name}`` interpolation from the process
-        environment overlaid with ``PROMPT_FILE``, which wins on conflicts.
-        Names are AgL identifiers (for example, ``%{log-file}``). ``%%``
-        aliases ``%{PROMPT_FILE}``; ``\\%{`` writes a literal ``%{``; a bare
-        ``%``, ``$VAR``, and ``${VAR}`` are literal text, and shell-style
-        interpolation is unsupported. Unknown, invalid, or unterminated holes
-        are errors. Command strings are shlex-split before interpolation, so
-        quote or otherwise protect ``\\%{`` so its backslash reaches the argv
-        element. A CONTINUE response
+        Prompt holes use strict ``%{name}`` interpolation from the process
+        environment overlaid with those values, which win on conflicts. Runner,
+        reviewer, and reviser command arguments interpolate the same way, with
+        ``%{PROMPT_FILE}`` (alias ``%%``) bound to the prepared prompt file;
+        see ``agm help loop`` for the full interpolation rules. A CONTINUE
+        response
         starts a fresh review; any other response retries revise with the same
         review file. The default maximum is 12.
         Review output is saved to the default timestamped review path by
@@ -582,15 +558,10 @@ _HELP_TEXTS: dict[str, str] = {
           --max-iters N         Cap unbounded loops; off by default (CLI > config).
           --max-call-depth N    Override the maximum recursion call depth
                                 (CLI > config).
-          --runner COMMAND      Override the default agent runner command. Arguments use strict
-                                ``%{name}`` interpolation from the process environment overlaid
-                                with ``PROMPT_FILE``. Names are AgL identifiers (for example,
-                                ``%{log-file}``). ``%%`` aliases ``%{PROMPT_FILE}``; ``\\%{``
-                                writes a literal ``%{``; a bare ``%``, ``$VAR``, and ``${VAR}``
-                                are literal text, and shell-style interpolation is unsupported.
-                                Unknown, invalid, or unterminated holes are errors. Commands are
-                                shlex-split before interpolation, so quote or otherwise protect
-                                ``\\%{`` so its backslash reaches the argv element.
+          --runner COMMAND      Override the default agent runner command. Arguments use
+                                strict ``%{name}`` interpolation with ``%{PROMPT_FILE}``
+                                (alias ``%%``) bound to the prepared prompt file; see
+                                ``agm help loop`` for the full interpolation rules.
           --timeout DURATION    Override initial shell-exec and agent idle timeouts;
                                 seed std/config::timeout to some(DURATION). Mutually
                                 exclusive with --no-timeout.
@@ -656,15 +627,10 @@ _HELP_TEXTS: dict[str, str] = {
                                 (source writes > CLI > config).
           --max-call-depth N    Override the maximum recursion call depth
                                 (CLI > config; source pragmas are not applied in the REPL).
-          --runner COMMAND      Override the default agent runner command. Arguments use strict
-                                ``%{name}`` interpolation from the process environment overlaid
-                                with ``PROMPT_FILE``. Names are AgL identifiers (for example,
-                                ``%{log-file}``). ``%%`` aliases ``%{PROMPT_FILE}``; ``\\%{``
-                                writes a literal ``%{``; a bare ``%``, ``$VAR``, and ``${VAR}``
-                                are literal text, and shell-style interpolation is unsupported.
-                                Unknown, invalid, or unterminated holes are errors. Commands are
-                                shlex-split before interpolation, so quote or otherwise protect
-                                ``\\%{`` so its backslash reaches the argv element.
+          --runner COMMAND      Override the default agent runner command. Arguments use
+                                strict ``%{name}`` interpolation with ``%{PROMPT_FILE}``
+                                (alias ``%%``) bound to the prepared prompt file; see
+                                ``agm help loop`` for the full interpolation rules.
           --confirm-agents     Confirm each agent call before dispatching it
                                 (default: fire agent calls without confirming).
           --quiet               Suppress automatic echoing of entry results.

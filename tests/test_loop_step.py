@@ -39,6 +39,27 @@ from agm.core.log import (
 # ---------------------------------------------------------------------------
 
 
+def _track_prepared_sources(
+    monkeypatch: pytest.MonkeyPatch, *, only: Path | None = None
+) -> list[str | Path]:
+    """Record prompt sources passed to ``prepare_prompt_from_source``.
+
+    Preparation still happens for real; *only* narrows recording to one source.
+    """
+    original_prepare = prepare_prompt_from_source
+    prepared_sources: list[str | Path] = []
+
+    def track_prepare(
+        source: str | Path, *, temp_files: list[Path], env: dict[str, str]
+    ) -> ResolvedPrompt:
+        if only is None or source == only:
+            prepared_sources.append(source)
+        return original_prepare(source, temp_files=temp_files, env=env)
+
+    monkeypatch.setattr("agm.commands.loop.step.prepare_prompt_from_source", track_prepare)
+    return prepared_sources
+
+
 def _make_loop_args(
     *,
     no_log: bool = True,
@@ -685,16 +706,7 @@ class TestPrepareRuntime:
         prompt = tmp_path / "prompt.md"
         prompt.write_text("Implement %{TASK_FILE}\n", encoding="utf-8")
 
-        original_prepare = prepare_prompt_from_source
-        prepared_sources: list[str | Path] = []
-
-        def track_prepare(
-            source: str | Path, *, temp_files: list[Path], env: dict[str, str]
-        ) -> ResolvedPrompt:
-            if source == prompt:
-                prepared_sources.append(source)
-            return original_prepare(source, temp_files=temp_files, env=env)
-
+        prepared_sources = _track_prepared_sources(monkeypatch, only=prompt)
         targets: list[Path] = []
 
         def fake_run_command(
@@ -711,7 +723,6 @@ class TestPrepareRuntime:
             targets.append(target)
             return "runner output\n"
 
-        monkeypatch.setattr("agm.commands.loop.step.prepare_prompt_from_source", track_prepare)
         monkeypatch.setattr("agm.commands.loop.step.run_prompt_command", fake_run_command)
 
         runtime = prepare_runtime(
@@ -746,17 +757,7 @@ class TestPrepareRuntime:
         prompt = tmp_path / "prompt.md"
         prompt.write_text("Implement %{TASK_FILE}\n", encoding="utf-8")
 
-        original_prepare = prepare_prompt_from_source
-        prepared_sources: list[str | Path] = []
-
-        def track_prepare(
-            source: str | Path, *, temp_files: list[Path], env: dict[str, str]
-        ) -> ResolvedPrompt:
-            if source == prompt:
-                prepared_sources.append(source)
-            return original_prepare(source, temp_files=temp_files, env=env)
-
-        monkeypatch.setattr("agm.commands.loop.step.prepare_prompt_from_source", track_prepare)
+        prepared_sources = _track_prepared_sources(monkeypatch, only=prompt)
 
         with pytest.raises(SystemExit):
             prepare_runtime(
@@ -783,16 +784,7 @@ class TestPrepareRuntime:
 
         prompt = tmp_path / "prompt.md"
         prompt.write_text("Implement %{TASK_FILE}\n", encoding="utf-8")
-        prepared_sources: list[str | Path] = []
-        original_prepare = prepare_prompt_from_source
-
-        def track_prepare(
-            source: str | Path, *, temp_files: list[Path], env: dict[str, str]
-        ) -> ResolvedPrompt:
-            prepared_sources.append(source)
-            return original_prepare(source, temp_files=temp_files, env=env)
-
-        monkeypatch.setattr("agm.commands.loop.step.prepare_prompt_from_source", track_prepare)
+        prepared_sources = _track_prepared_sources(monkeypatch)
         monkeypatch.setattr("agm.commands.loop.step.dry_run.enabled", lambda: True)
 
         runtime = prepare_runtime(

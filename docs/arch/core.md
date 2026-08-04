@@ -30,4 +30,4 @@ Dry-run is a global, cross-cutting mode set from the `--dry-run` CLI flag. The p
 - `src/agm/core/toml.py` and `src/agm/core/dotenv.py` — round-trip TOML and dotenv read/write helpers.
 - `src/agm/core/dry_run.py` — global dry-run state and planned-command printing.
 - `src/agm/core/log.py` — logging setup, including JSON trace logs used by AgL execution.
-- `src/agm/util/graph.py` — generic Tarjan SCC, Kahn toposort, and nearest-hit BFS; `src/agm/util/text.py` — newline normalization; `src/agm/util/interp.py` — `%{name}` interpolation parsing and assembly. All are pure and `agm`-import-free.
+- `src/agm/util/graph.py` — generic Tarjan SCC, Kahn toposort, and nearest-hit BFS; `src/agm/util/text.py` — newline normalization; `src/agm/util/interp.py` — `%{name}` interpolation: the shared identifier grammar, template splitting into literal/hole segments, and strict, lenient, and unresolved-reporting rendering. All are pure and `agm`-import-free.

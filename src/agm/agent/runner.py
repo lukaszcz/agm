@@ -6,22 +6,32 @@ import os
 import shlex
 import shutil
 import sys
+from collections import ChainMap
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 
-from agm.agent.prompt import expand_prompt_env_vars, preprocess_prompt_file
+from agm.agent.prompt import (
+    expand_prompt_env_vars,
+    interp_or_exit,
+    preprocess_prompt_file,
+    require_prompt_file,
+    split_or_exit,
+)
 from agm.core import dry_run
-from agm.core.fs import is_file
-from agm.core.path import display_path
 from agm.core.process import ProcessCaptureResult, run_capture, run_capture_result
-from agm.util.interp import Hole, InterpolationError, interp, split_template
+from agm.util.interp import Hole, Literal, Segment
 
 # Shell convention: exit code 127 means the command could not be found or
 # executed.  Treated as a fatal runner-configuration error (see
 # :func:`run_prompt_command`) so the loop does not retry a missing runner.
 _RUNNER_NOT_FOUND_EXIT = 127
+
+# The variable a runner command uses to name the prepared prompt file, and its
+# shorthand alias.
+PROMPT_FILE_VAR = "PROMPT_FILE"
+PROMPT_FILE_ALIAS = "%%"
 
 
 @dataclass(slots=True)
@@ -79,29 +89,41 @@ def split_command(command: str, *, kind: str) -> list[str]:
         raise SystemExit(1) from exc
 
 
+def _split_command_element(text: str, *, what: str) -> list[Segment]:
+    """Split a command element, expanding the ``%%`` alias into a real hole.
+
+    Resolving the alias during the split rather than substituting it into the
+    rendered output keeps it subject to the same variable lookup as
+    ``%{PROMPT_FILE}``, and keeps an interpolated value that happens to contain
+    ``%%`` from being rewritten.
+    """
+    segments: list[Segment] = []
+    for segment in split_or_exit(text, what=what):
+        if isinstance(segment, Hole):
+            segments.append(segment)
+            continue
+        for index, part in enumerate(segment.text.split(PROMPT_FILE_ALIAS)):
+            if index:
+                segments.append(Hole(PROMPT_FILE_VAR))
+            if part:
+                segments.append(Literal(part))
+    return segments
+
+
+def _targets_prompt_file(segments: list[Segment]) -> bool:
+    return any(
+        isinstance(segment, Hole) and segment.name == PROMPT_FILE_VAR for segment in segments
+    )
+
+
 def validate_command(command: list[str], *, kind: str) -> None:
-    executable_template = command[0]
-    try:
-        segments = split_template(executable_template)
-        has_prompt_file_target = "%%" in executable_template or any(
-            isinstance(segment, Hole) and segment.name == "PROMPT_FILE" for segment in segments
-        )
-        if has_prompt_file_target:
-            for segment in segments:
-                if (
-                    isinstance(segment, Hole)
-                    and segment.name != "PROMPT_FILE"
-                    and segment.name not in os.environ
-                ):
-                    raise InterpolationError("missing variable", segment.name, segment.offset)
-            return
-        executable = interp(executable_template, os.environ)
-    except InterpolationError as exc:
-        print(
-            f"Error: cannot interpolate {kind} command executable {executable_template!r}: {exc}.",
-            file=sys.stderr,
-        )
-        raise SystemExit(1) from exc
+    what = f"{kind} command executable {command[0]!r}"
+    segments = _split_command_element(command[0], what=what)
+    # The prompt file does not exist yet; binding a placeholder still validates
+    # every other hole strictly, but leaves the executable unresolvable.
+    executable = interp_or_exit(segments, ChainMap({PROMPT_FILE_VAR: ""}, os.environ), what=what)
+    if _targets_prompt_file(segments):
+        return
     if shutil.which(executable) is None:
         print(
             f"Error: {kind} command {executable} is not installed or not in PATH.",
@@ -111,31 +133,19 @@ def validate_command(command: list[str], *, kind: str) -> None:
 
 
 def command_with_prompt_target(command: list[str], target: Path) -> list[str]:
-    prompt_path = str(target)
-    variables = {**os.environ, "PROMPT_FILE": prompt_path}
-    replaced_command: list[str] = []
-    replaced = False
+    variables = ChainMap({PROMPT_FILE_VAR: str(target)}, os.environ)
+    interpolated: list[str] = []
+    targeted = False
 
     for arg in command:
-        try:
-            segments = split_template(arg)
-            has_prompt_file_hole = any(
-                isinstance(segment, Hole) and segment.name == "PROMPT_FILE" for segment in segments
-            )
-            has_alias = "%%" in arg
-            updated = interp(arg, variables).replace("%%", prompt_path)
-        except InterpolationError as exc:
-            print(
-                f"Error: cannot interpolate runner command element {arg!r}: {exc}.",
-                file=sys.stderr,
-            )
-            raise SystemExit(1) from exc
-        replaced = replaced or has_alias or has_prompt_file_hole
-        replaced_command.append(updated)
+        what = f"runner command element {arg!r}"
+        segments = _split_command_element(arg, what=what)
+        targeted = targeted or _targets_prompt_file(segments)
+        interpolated.append(interp_or_exit(segments, variables, what=what))
 
-    if replaced:
-        return replaced_command
-    return [*replaced_command, f"@{target}"]
+    if targeted:
+        return interpolated
+    return [*interpolated, f"@{target}"]
 
 
 def prepare_prompt_from_source(
@@ -155,12 +165,7 @@ def prepare_prompt_from_source(
         return ResolvedPrompt(source=source, effective_file=temp_path)
 
     source_path = source
-    if not is_file(source_path):
-        print(
-            f"Error: prompt file not found: {display_path(source_path)}",
-            file=sys.stderr,
-        )
-        raise SystemExit(1)
+    require_prompt_file(source_path)
     effective = preprocess_prompt_file(source_path, temp_files=temp_files, env=env)
     return ResolvedPrompt(source=source_path, effective_file=effective)
 
@@ -179,12 +184,7 @@ def append_extra_prompt(
         extra_content = expand_prompt_env_vars(extra_source, env=env)
     else:
         extra_path = extra_source
-        if not is_file(extra_path):
-            print(
-                f"Error: extra prompt file not found: {display_path(extra_path)}",
-                file=sys.stderr,
-            )
-            raise SystemExit(1)
+        require_prompt_file(extra_path, label="extra prompt")
         extra_content = expand_prompt_env_vars(
             extra_path.read_text(encoding="utf-8"), env=env, source=extra_path
         )

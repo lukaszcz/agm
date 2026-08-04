@@ -21,7 +21,7 @@ from agm.core.toml import (
     toml_dict,
 )
 from agm.project.layout import project_config_dir
-from agm.util.interp import Hole, InterpolationError, interp_lenient, split_template
+from agm.util.interp import interp_preserving
 
 
 class ConfigCommandNotFound(ValueError):
@@ -242,15 +242,6 @@ class RefineConfig:
     save_review: bool
 
 
-def _has_unresolved_interpolation(value: str) -> bool:
-    """Return whether a path value retains a malformed or unavailable interpolation hole."""
-    try:
-        segments = split_template(value)
-    except InterpolationError:
-        return True
-    return any(isinstance(segment, Hole) and segment.name not in os.environ for segment in segments)
-
-
 def _resolve_section_paths(
     section: TomlDict,
     fields: list[str],
@@ -264,12 +255,11 @@ def _resolve_section_paths(
         value = resolved.get(field)
         if not isinstance(value, str) or not value.strip():
             continue
-        has_unresolved_interpolation = _has_unresolved_interpolation(value)
-        expanded = os.path.expanduser(interp_lenient(value, os.environ))
-        if expanded in sentinels.get(field, set()):
-            resolved[field] = expanded
-            continue
-        if has_unresolved_interpolation:
+        # A value that still carries interpolation syntax is not a usable path,
+        # so it is left as written rather than anchored to a directory.
+        interpolated, unresolved = interp_preserving(value, os.environ)
+        expanded = os.path.expanduser(interpolated)
+        if unresolved or expanded in sentinels.get(field, set()):
             resolved[field] = expanded
             continue
         path = Path(expanded)

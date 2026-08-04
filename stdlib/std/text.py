@@ -1,8 +1,9 @@
-"""Runtime interpolation companion for ``std/text``."""
+"""Runtime interpolation companion for ``std/text``.
 
-from agm.util.interp import interp as _interp
+Externs resolve by attribute name, so re-exporting the shared implementation is
+enough — no forwarding wrapper is needed.
+"""
 
+from agm.util.interp import interp
 
-def interp(template: str, vars: dict[str, str]) -> str:
-    """Interpolate named runtime holes from ``vars``."""
-    return _interp(template, vars)
+__all__ = ["interp"]

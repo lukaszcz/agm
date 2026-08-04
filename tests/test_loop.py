@@ -1263,6 +1263,15 @@ class TestCommandWithPromptTarget:
 
         assert result == ["runner", f"--prompt={target}"]
 
+    def test_alias_inside_an_interpolated_value_is_not_treated_as_a_placeholder(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("DISCOUNT", "50%% off")
+
+        result = command_with_prompt_target(["runner", "--label=%{DISCOUNT}"], Path("/tmp/p.md"))
+
+        assert result == ["runner", "--label=50%% off", "@/tmp/p.md"]
+
     def test_appends_at_target_when_no_placeholder(self) -> None:
         result = command_with_prompt_target(["runner"], Path("/tmp/prompt.md"))
         assert result == ["runner", "@/tmp/prompt.md"]

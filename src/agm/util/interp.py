@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from typing import Final, TypeAlias
 
@@ -14,9 +14,9 @@ __all__ = [
     "InterpolationError",
     "Literal",
     "Segment",
-    "assemble",
     "interp",
-    "interp_lenient",
+    "interp_preserving",
+    "interp_segments",
     "is_identifier_start",
     "is_interp_name",
     "split_template",
@@ -100,14 +100,26 @@ def is_interp_name(name: str) -> bool:
     )
 
 
-def split_template(text: str, *, lenient: bool = False) -> list[Segment]:
-    """Split *text* into literal and named-hole segments.
+def _scan(text: str, *, lenient: bool) -> tuple[list[Segment], bool]:
+    """Split *text* into segments, and report whether any hole was malformed.
 
-    In lenient mode malformed and unterminated holes remain literal text.
+    In lenient mode malformed and unterminated holes remain literal text and
+    set the flag; in strict mode they raise instead, so the flag is always
+    ``False``.
     """
+    # Every construct the scan recognises — a ``%{`` hole and its ``\%{``
+    # escape — contains the trigger, so text without one is wholly literal.
+    if INTERP_TRIGGER not in text:
+        return ([Literal(text)] if text else []), False
+
+    malformed_hole = False
     segments: list[Segment] = []
     literal: list[str] = []
     position = 0
+
+    def add_literal(part: str) -> None:
+        if part:
+            literal.append(part)
 
     def flush_literal() -> None:
         if literal:
@@ -115,66 +127,89 @@ def split_template(text: str, *, lenient: bool = False) -> list[Segment]:
             literal.clear()
 
     while position < len(text):
-        if text.startswith(f"\\{INTERP_OPEN}", position):
-            literal.append(INTERP_OPEN)
-            position += len(INTERP_OPEN) + 1
-        elif text.startswith(INTERP_OPEN, position):
-            end = text.find("}", position + len(INTERP_OPEN))
-            if end == -1:
-                malformed = text[position:]
-                if not lenient:
-                    raise InterpolationError("unterminated hole", malformed, position)
-                literal.append(malformed)
-                position = len(text)
-            else:
-                name = text[position + len(INTERP_OPEN) : end]
-                if is_interp_name(name):
-                    flush_literal()
-                    segments.append(Hole(name, position))
-                elif not lenient:
-                    raise InterpolationError("invalid hole name", name, position)
-                else:
-                    literal.append(text[position : end + 1])
-                position = end + 1
+        # Jump straight to the next trigger; everything before it is literal.
+        trigger = text.find(INTERP_TRIGGER, position)
+        if trigger == -1:
+            add_literal(text[position:])
+            break
+        if not text.startswith(INTERP_OPEN, trigger):
+            add_literal(text[position : trigger + 1])
+            position = trigger + 1
+        elif trigger > position and text[trigger - 1] == "\\":
+            # The backslash is still unconsumed, so this ``%{`` is escaped.
+            add_literal(text[position : trigger - 1])
+            add_literal(INTERP_OPEN)
+            position = trigger + len(INTERP_OPEN)
         else:
-            literal.append(text[position])
-            position += 1
+            end = text.find("}", trigger + len(INTERP_OPEN))
+            if end == -1:
+                if not lenient:
+                    raise InterpolationError("unterminated hole", text[trigger:], trigger)
+                malformed_hole = True
+                add_literal(text[position:])
+                break
+            name = text[trigger + len(INTERP_OPEN) : end]
+            if is_interp_name(name):
+                add_literal(text[position:trigger])
+                flush_literal()
+                segments.append(Hole(name, trigger))
+            elif not lenient:
+                raise InterpolationError("invalid hole name", name, trigger)
+            else:
+                malformed_hole = True
+                add_literal(text[position : end + 1])
+            position = end + 1
 
     flush_literal()
-    return segments
+    return segments, malformed_hole
 
 
-def assemble(segments: Iterable[Segment], resolve: Callable[[str], str]) -> str:
-    """Assemble *segments*, resolving each named hole in order."""
+def split_template(text: str, *, lenient: bool = False) -> list[Segment]:
+    """Split *text* into literal and named-hole segments.
+
+    In lenient mode malformed and unterminated holes remain literal text.
+    """
+    return _scan(text, lenient=lenient)[0]
+
+
+def interp_segments(
+    segments: Iterable[Segment],
+    variables: Mapping[str, str],
+    *,
+    lenient: bool = False,
+) -> str:
+    """Render *segments*, resolving each named hole from *variables*.
+
+    A hole with no matching variable raises, or is preserved verbatim in
+    lenient mode.
+    """
     parts: list[str] = []
     for segment in segments:
         if isinstance(segment, Literal):
             parts.append(segment.text)
+        elif segment.name in variables:
+            parts.append(variables[segment.name])
+        elif lenient:
+            parts.append(f"{INTERP_OPEN}{segment.name}}}")
         else:
-            parts.append(resolve(segment.name))
+            raise InterpolationError("missing variable", segment.name, segment.offset)
     return "".join(parts)
 
 
 def interp(template: str, variables: Mapping[str, str]) -> str:
     """Strictly interpolate named holes in *template* from *variables*."""
-    segments = split_template(template)
-    offsets = iter(segment.offset for segment in segments if isinstance(segment, Hole))
-
-    def resolve(name: str) -> str:
-        offset = next(offsets)
-        if name in variables:
-            return variables[name]
-        raise InterpolationError("missing variable", name, offset)
-
-    return assemble(segments, resolve)
+    return interp_segments(split_template(template), variables)
 
 
-def interp_lenient(template: str, variables: Mapping[str, str]) -> str:
-    """Interpolate known named holes and preserve all other input verbatim."""
+def interp_preserving(template: str, variables: Mapping[str, str]) -> tuple[str, bool]:
+    """Interpolate leniently, reporting whether anything stayed unresolved.
 
-    def resolve(name: str) -> str:
-        if name in variables:
-            return variables[name]
-        return f"{INTERP_OPEN}{name}}}"
-
-    return assemble(split_template(template, lenient=True), resolve)
+    The flag is set when a hole names an unavailable variable or is malformed —
+    that is, whenever the result still carries interpolation syntax that this
+    mapping could not fill in.
+    """
+    segments, malformed_hole = _scan(template, lenient=True)
+    unresolved = malformed_hole or any(
+        isinstance(segment, Hole) and segment.name not in variables for segment in segments
+    )
+    return interp_segments(segments, variables, lenient=True), unresolved

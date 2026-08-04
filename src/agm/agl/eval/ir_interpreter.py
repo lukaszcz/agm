@@ -165,7 +165,6 @@ from agm.agl.semantics.values import (
 from agm.config.engine_keys import HOST_CONSUMED_ENGINE_KEYS, RUNTIME_LIVE_ENGINE_KEYS
 from agm.core.parse import format_timeout as _format_timeout
 from agm.core.parse import parse_timeout as _parse_timeout
-from agm.util.interp import Hole, Literal, assemble
 
 if TYPE_CHECKING:
     from agm.agl.runtime.contract import OutputContract
@@ -1197,21 +1196,18 @@ class IrInterpreter:
                     raise self._index_failure(e)
 
             case IrRenderTemplate(segments=segs):
-                template_segments: list[Literal | Hole] = []
-                rendered_values: dict[str, str] = {}
+                # The lexer has already applied the shared ``%{...}`` surface
+                # rules, so splicing here is plain concatenation.
+                parts: list[str] = []
                 for seg in segs:
                     match seg:
                         case IrTemplateText(text=text):
-                            template_segments.append(Literal(text))
+                            parts.append(text)
                         case IrTemplateValue(value=value_expr):
-                            rendered_key = str(len(rendered_values))
-                            rendered_values[rendered_key] = self._render_or_raise(
-                                self._eval(value_expr)
-                            )
-                            template_segments.append(Hole(rendered_key))
+                            parts.append(self._render_or_raise(self._eval(value_expr)))
                         case _ as unreachable_seg:  # pragma: no cover
                             assert_never(unreachable_seg)
-                return TextValue(assemble(template_segments, rendered_values.__getitem__))
+                return TextValue("".join(parts))
 
             case IrMakeRecord(nominal=nominal, display_name=display_name, fields=fields):
                 record_fields: dict[str, Value] = {

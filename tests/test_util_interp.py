@@ -6,9 +6,9 @@ from agm.util.interp import (
     Hole,
     InterpolationError,
     Literal,
-    assemble,
     interp,
-    interp_lenient,
+    interp_preserving,
+    interp_segments,
     is_interp_name,
     split_template,
 )
@@ -68,22 +68,38 @@ def test_interp_replaces_holes_and_preserves_literal_text(
     assert interp(template, variables) == expected
 
 
-def test_split_template_and_assemble_are_independent_of_mappings() -> None:
+@pytest.mark.parametrize(
+    ("template", "expected"),
+    [
+        (
+            "before %{first}%{second} after",
+            [Literal("before "), Hole("first"), Hole("second"), Literal(" after")],
+        ),
+        ("no holes here", [Literal("no holes here")]),
+        ("100% literal", [Literal("100% literal")]),
+        ("", []),
+        ("%{only}", [Hole("only")]),
+        (r"\%{escaped} %{hole}", [Literal("%{escaped} "), Hole("hole")]),
+    ],
+)
+def test_split_template_separates_literals_from_holes(
+    template: str, expected: list[Literal | Hole]
+) -> None:
+    assert split_template(template) == expected
+
+
+def test_split_template_records_the_offset_of_each_hole() -> None:
+    segments = split_template("ab %{first} cd %{second}")
+
+    holes = [segment for segment in segments if isinstance(segment, Hole)]
+    assert [(hole.name, hole.offset) for hole in holes] == [("first", 3), ("second", 15)]
+
+
+def test_split_segments_can_be_rendered_against_different_mappings() -> None:
     segments = split_template("before %{first}%{second} after")
 
-    assert segments == [Literal("before "), Hole("first"), Hole("second"), Literal(" after")]
-    assert assemble(segments, lambda name: name.upper()) == "before FIRSTSECOND after"
-
-
-def test_assemble_resolves_each_hole_in_order() -> None:
-    calls: list[str] = []
-
-    def resolve(name: str) -> str:
-        calls.append(name)
-        return str(len(calls))
-
-    assert assemble([Hole("one"), Literal("/"), Hole("two"), Hole("one")], resolve) == "1/23"
-    assert calls == ["one", "two", "one"]
+    assert interp_segments(segments, {"first": "A", "second": "B"}) == "before AB after"
+    assert interp_segments(segments, {"first": "x", "second": "y"}) == "before xy after"
 
 
 @pytest.mark.parametrize(
@@ -131,13 +147,13 @@ def test_interp_reports_a_missing_variable_with_its_name_and_offset() -> None:
     ],
 )
 def test_lenient_interpolation_preserves_malformed_holes_verbatim(template: str) -> None:
-    assert interp_lenient(template, {}) == template
+    assert interp_preserving(template, {})[0] == template
 
 
 def test_lenient_interpolation_mixes_resolved_unresolved_and_malformed_holes() -> None:
     template = r"%{known} %{unknown} %{bad name} \%{escaped} %{unfinished"
 
-    assert interp_lenient(template, {"known": "value"}) == (
+    assert interp_preserving(template, {"known": "value"})[0] == (
         "value %{unknown} %{bad name} %{escaped} %{unfinished"
     )
 
@@ -145,9 +161,30 @@ def test_lenient_interpolation_mixes_resolved_unresolved_and_malformed_holes() -
 def test_lenient_interpolation_has_the_same_escape_and_bare_percent_behavior() -> None:
     template = r"a \%{name} is 100% done; keep \% too"
 
-    assert interp_lenient(template, {"name": "Ada"}) == interp(template, {"name": "Ada"})
-    assert interp_lenient(template, {"name": "Ada"}) == r"a %{name} is 100% done; keep \% too"
+    assert interp_preserving(template, {"name": "Ada"})[0] == interp(template, {"name": "Ada"})
+    assert interp_preserving(template, {"name": "Ada"})[0] == r"a %{name} is 100% done; keep \% too"
 
 
 def test_lenient_interpolation_leaves_missing_variables_verbatim() -> None:
-    assert interp_lenient("%{known}/%{unknown}", {"known": "value"}) == "value/%{unknown}"
+    assert interp_preserving("%{known}/%{unknown}", {"known": "value"})[0] == "value/%{unknown}"
+
+
+@pytest.mark.parametrize(
+    ("template", "expected_text", "expected_unresolved"),
+    [
+        ("%{known}/prompt.md", "value/prompt.md", False),
+        ("plain/prompt.md", "plain/prompt.md", False),
+        (r"\%{known}/prompt.md", "%{known}/prompt.md", False),
+        ("%{unknown}/prompt.md", "%{unknown}/prompt.md", True),
+        ("%{bad name}/prompt.md", "%{bad name}/prompt.md", True),
+        ("%{unterminated", "%{unterminated", True),
+        ("%{known}/%{unknown}", "value/%{unknown}", True),
+    ],
+)
+def test_interp_preserving_reports_whether_anything_stayed_unresolved(
+    template: str, expected_text: str, expected_unresolved: bool
+) -> None:
+    text, unresolved = interp_preserving(template, {"known": "value"})
+
+    assert text == expected_text
+    assert unresolved is expected_unresolved

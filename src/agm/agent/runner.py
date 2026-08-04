@@ -281,7 +281,7 @@ def cleanup_temp_files(temp_files: list[Path]) -> None:
 def prepare_rendered_prompt_run(
     rendered_prompt: str,
     *,
-    runner: str,
+    runner: str | list[str],
     temp_files: list[Path],
     env: dict[str, str],
 ) -> PreparedPromptRun:
@@ -296,8 +296,12 @@ def prepare_rendered_prompt_run(
       raises ``SystemExit``, bypassing the ``AgentCallError`` structured path.
       Executable-not-found is instead represented in the ``PromptRunResult``
       returned by ``run_prepared_prompt_result``.
+    - Accepts an already-tokenized argv from an agent command builder, avoiding
+      a string round-trip before the prepared invocation is run.
     """
-    command = split_command(runner, kind="exec-runner")
+    command = (
+        runner.copy() if isinstance(runner, list) else split_command(runner, kind="exec-runner")
+    )
     with NamedTemporaryFile("w", encoding="utf-8", delete=False, suffix=".md") as handle:
         handle.write(rendered_prompt)
         temp_path = Path(handle.name)

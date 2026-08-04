@@ -6,7 +6,7 @@ AGM runs real coding agents (claude, codex, and configurable runners) as subproc
 
 An agent invocation is a subprocess that receives a prompt and produces output. The runner module parses a configured runner command, validates the executable exists, attaches the prompt (either by appending a prompt-file reference or substituting a placeholder), and runs it with output capture. It tracks an *idle timeout* — if the process produces no output for a configured duration it is terminated — and returns a structured result carrying return code, captured streams, elapsed time, and timeout/spawn-error status.
 
-Prompts are resolved from inline text or a file and preprocessed to expand environment variables, writing a temporary prompt file when substitution changes the content. Completion is detected by inspecting the agent's final output for a completion marker.
+Prompts are resolved from inline text or a file and preprocessed to expand environment variables, writing a temporary prompt file when substitution changes the content. Completion is detected by inspecting the agent's final output for a completion marker. Typed AgL `Agent` enum values decode into immutable host specs; pure per-kind builders produce argv for Claude, Codex, Pi, or a verbatim custom command. The prepared-prompt seam accepts those argv directly, retaining the shared prompt-file and process-result behavior.
 
 ## Runner Resolution
 
@@ -28,7 +28,8 @@ These share prompt-preprocessing that merges scope, aspects, and other context i
 
 ## Code Entry Points
 
-- `src/agm/agent/runner.py` — runner command parsing, prompt attachment, subprocess execution with idle timeout, the run-result structure.
+- `src/agm/agent/spec.py` — decoded AgL agent specs and pure backend argv builders.
+- `src/agm/agent/runner.py` — runner command parsing, prompt attachment, prepared argv handling, subprocess execution with idle timeout, the run-result structure.
 - `src/agm/agent/prompt.py`, `prompt_source.py`, `response.py`, `output.py` — prompt preparation, source resolution, completion detection, and output formatting.
 - `src/agm/agent/loop.py`, `config.py` — runner/selector/timeout resolution and the default runner.
 - `src/agm/agent/review/` — the review, revise, and refine workflow implementations and their prompt preprocessing.

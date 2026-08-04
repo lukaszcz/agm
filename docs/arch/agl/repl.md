@@ -26,7 +26,7 @@ A param declared inside a named scope region has no external identity of its own
 
 ## Agent Values
 
-Each `ask` evaluates an `Agent` enum value and dispatches the argv built from that value. The pipeline prepares a program once (lex, parse, scope) and reuses that prepared object for both parameter discovery and execution. `agm exec` and the REPL seed `std/config::default-agent`; source writes can replace it in program order.
+Each `ask` evaluates an `Agent` enum value and dispatches the argv built from that value. The direct form receives that value through its `agent` parameter; the call-only `Agent::ask` and `Agent::ask-request` methods receive it as their selected receiver. The pipeline prepares a program once (lex, parse, scope) and reuses that prepared object for both parameter discovery and execution. `agm exec` and the REPL seed `std/config::default-agent`; source writes can replace it in program order.
 
 ## Engine Settings
 

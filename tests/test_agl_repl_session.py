@@ -119,6 +119,17 @@ class TestPersistence:
 
         assert result.ok, result.diagnostics
 
+    def test_builtin_agent_method_is_callable_across_entries(self) -> None:
+        agent = CountingAgent("42")
+        session = ReplSession(agent_dispatcher=agent)
+        assert session.eval_entry('let worker = AgentCommand("worker")').ok
+
+        result = session.eval_entry('worker.ask::[int]("How many?")')
+
+        assert result.ok, result.diagnostics
+        assert result.value == IntValue(42)
+        assert agent.calls == 1
+
     def test_method_declared_after_its_type_is_callable_in_a_later_entry(self) -> None:
         session = ReplSession()
         assert session.eval_entry("record Meter(value: int)").ok

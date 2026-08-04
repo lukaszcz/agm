@@ -3565,9 +3565,9 @@ def test_cross_module_method_header_registers_on_the_shared_type_table(tmp_path:
     )
 
 
-def test_builtin_method_is_rejected_before_lowering(tmp_path: Path) -> None:
-    """A builtin method has no host dispatch contract and must fail statically."""
-    with pytest.raises(AglTypeError, match="Builtin methods are not supported"):
+def test_only_recognized_builtin_methods_are_admitted_before_lowering(tmp_path: Path) -> None:
+    """Builtin methods use the same host-signature validation as root builtins."""
+    with pytest.raises(AglTypeError, match="invalid signature"):
         _check_program(
             tmp_path,
             {
@@ -3758,10 +3758,12 @@ def test_route_qualified_generic_enum_owner_is_accepted_in_an_is_test(tmp_path: 
 # ---------------------------------------------------------------------------
 
 
-def test_builtin_declared_in_two_modules_is_rejected(tmp_path: Path) -> None:
-    """A bare built-in name declared once in the entry module and once in an
-    imported module is a duplicate too — the program-wide case that a
-    single-module check could never see."""
+def test_root_builtin_declared_in_two_modules_is_rejected(tmp_path: Path) -> None:
+    """A root built-in declared in an entry and imported module is duplicated.
+
+    The complete scoped name is the host identity, and both declarations use
+    the root path — the program-wide case a single-module check cannot see.
+    """
     with pytest.raises(AglTypeError) as raised:
         _check_program(
             tmp_path,

@@ -3,14 +3,16 @@
 [← Index](index.md)
 
 An agent call is the heart of AgL: an expression that sends a rendered
-prompt to a host-provided agent and yields a **typed** result. All
-agent invocations use the built-in `ask` function:
+prompt to a host-provided agent and yields a **typed** result. Invoke the
+built-in `ask` function directly, or select it as a method on the `Agent`
+value that should receive the request:
 
 <!-- agl-check: fragment -->
 ```agl
 ask "Summarize %{topic}"
 ask("Review this artifact:\n%{artifact}", agent = reviewer)
 ask("Review %{artifact}", agent = reviewer, on_parse_error = Retry(n = 2))
+reviewer.ask::[Review]("Review %{artifact}", on_parse_error = Retry(n = 2))
 ```
 
 ## `ask` — the agent call function
@@ -25,6 +27,20 @@ ask(prompt: text, agent: Agent = std/config::default-agent,
 
 where `T` is the **target type** — determined from the calling context (see
 below). All parameters after `prompt` are optional and passed by name.
+
+An `Agent` value also provides the call-only method form:
+
+```text
+Agent::ask(self, prompt: text, format: text = «auto»,
+           strict_json: bool = «host default»,
+           on_parse_error: ParsePolicy = Abort) -> T
+```
+
+`reviewer.ask(...)` is equivalent to `ask(..., agent = reviewer)`: its receiver
+supplies the agent, so the method form has no `agent` named argument. It supports
+contextual and explicit `::[T]` target types, named parse options, and defaults
+just like the direct form. Built-in methods are call-only; `let f = reviewer.ask`
+and `let f = reviewer.ask::[text]` are static errors.
 
 `ask` is a **contextual keyword**: it cannot be declared with `let`, `var`,
 or `param`; it may not be bound as a function value (`let f = ask` is a static error, because `ask`'s type is
@@ -84,6 +100,7 @@ let local = AgentCodex("o3", "high")
 let pi = AgentPi("openai", "gpt", "low")
 
 let review: text = ask("Review this artifact", agent = reviewer)
+let same_review: text = reviewer.ask("Review this artifact")
 ```
 
 Each variant builds its own argv at dispatch. `AgentCommand` accepts a shell-like
@@ -445,7 +462,9 @@ See [Host environment](host-environment.md).
 
 `ask-request` is the side-effect-free twin of `ask`: it builds the
 `AgentRequest` that the corresponding `ask` call would dispatch to its agent
-on its first attempt, **without invoking the agent**. It never dispatches,
+on its first attempt, **without invoking the agent**. `agent.ask-request(...)`
+uses its receiver as that request's agent and has no `agent` named argument.
+It never dispatches,
 never retries, never parses, and emits no trace events — it only assembles the
 request value.
 
@@ -453,6 +472,7 @@ request value.
 ```agl
 let r = ask-request("Summarize %{topic}")
 let r = ask-request::[Review]("Review %{artifact}", agent = reviewer)
+let same_r = reviewer.ask-request::[Review]("Review %{artifact}")
 ```
 
 ### Target type
@@ -504,10 +524,12 @@ so `Review>` would otherwise scan as one token.
 
 ### Arguments
 
-`ask-request` accepts the same named arguments as `ask` (`agent`, `format`,
-`strict_json`, `on_parse_error`). `agent` labels the request's `agent` field
-but never dispatches; `on_parse_error` is accepted (it shapes the contract's
-parse policy) but has no runtime effect since no call is made.
+Direct `ask-request` accepts the same named arguments as `ask` (`agent`,
+`format`, `strict_json`, `on_parse_error`). `agent` labels the request's
+`agent` field but never dispatches; `on_parse_error` is accepted (it shapes
+the contract's parse policy) but has no runtime effect since no call is made.
+The `Agent::ask-request(self, prompt)` method has only its receiver and prompt;
+its receiver supplies the request agent.
 
 ### Result
 

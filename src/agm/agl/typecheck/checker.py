@@ -307,12 +307,47 @@ _IndexLike = IndexAccess | IndexTarget
 
 
 def _std_param(name: str, typ: Type, has_default: bool = False) -> ParamSpec:
-    """Create a ``ParamSpec`` with ``STANDARD`` kind (used for all built-in params)."""
+    """Create a standard ``ParamSpec`` for an ordinary built-in parameter."""
     return ParamSpec(name=name, type=typ, kind=ParamKind.STANDARD, has_default=has_default)
 
 
-def _builtin_function_signature(name: str) -> FunctionSignature | None:
+def _self_param() -> ParamSpec:
+    """Create the positional-only receiver shared by builtin Agent methods."""
+    return ParamSpec(
+        name="self",
+        type=BUILTIN_PRELUDE_TYPES["Agent"],
+        kind=ParamKind.POSITIONAL_ONLY,
+        has_default=False,
+    )
+
+
+def _builtin_function_signature(name: str, *, is_method: bool = False) -> FunctionSignature | None:
     t = TypeVarType("T")
+    if is_method:
+        match name:
+            case "ask":
+                return FunctionSignature(
+                    params=(
+                        _self_param(),
+                        _std_param("prompt", TextType()),
+                        _std_param("format", TextType(), has_default=True),
+                        _std_param("strict_json", BoolType(), has_default=True),
+                        _std_param(
+                            "on_parse_error",
+                            EnumType(name="ParsePolicy"),
+                            has_default=True,
+                        ),
+                    ),
+                    result=t,
+                    type_params=("T",),
+                )
+            case "ask-request":
+                return FunctionSignature(
+                    params=(_self_param(), _std_param("prompt", TextType())),
+                    result=RecordType(name="AgentRequest"),
+                )
+            case _:
+                return None
     match name:
         case "print":
             return FunctionSignature(
@@ -361,8 +396,10 @@ def _builtin_function_signature(name: str) -> FunctionSignature | None:
             return None
 
 
-def _builtin_function_signature_alternates(name: str) -> tuple[FunctionSignature, ...]:
-    expected = _builtin_function_signature(name)
+def _builtin_function_signature_alternates(
+    name: str, *, is_method: bool = False
+) -> tuple[FunctionSignature, ...]:
+    expected = _builtin_function_signature(name, is_method=is_method)
     if expected is None:
         return ()
     if name == "ask":
@@ -430,7 +467,7 @@ def _signature_matches(actual: FunctionSignature, expected: FunctionSignature) -
     if len(actual.params) != len(expected.params):
         return False
     for ap, ep in zip(actual.params, expected.params):
-        if ap.name != ep.name or ap.has_default != ep.has_default:
+        if ap.name != ep.name or ap.kind != ep.kind or ap.has_default != ep.has_default:
             return False
         if not _builtin_nominal_matches(ap.type, ep.type):
             return False
@@ -661,8 +698,6 @@ class _Checker:
         declarations; builtin methods are rejected because they have no host
         dispatch contract.
         """
-        if is_method and node.is_builtin:
-            raise AglTypeError("Builtin methods are not supported.", span=node.span)
         if not is_method and node.name in _BUILTIN_TYPE_NAMES:
             raise AglTypeError(
                 f"'{node.name}' is a built-in type name and cannot be used as a function name.",
@@ -744,10 +779,14 @@ class _Checker:
         self, node: FuncDef, sig: FunctionSignature, func_type: FunctionType, *, is_method: bool
     ) -> None:
         """Register a resolved ``def`` signature in every function side table."""
-        if node.is_builtin and not is_method:
+        if node.is_builtin:
             own_path = tuple(segment.name for segment in node.scope_path)
-            rerooted_sig = _rerooted_signature(sig, own_path)
-            expected_sigs = _builtin_function_signature_alternates(node.name)
+            # A method's final scope segment names its receiver. Its receiver
+            # and sibling types live in the enclosing scope, so remove that
+            # shared prefix before comparing with the root canonical contract.
+            reroot_prefix = own_path[:-1] if is_method else own_path
+            rerooted_sig = _rerooted_signature(sig, reroot_prefix)
+            expected_sigs = _builtin_function_signature_alternates(node.name, is_method=is_method)
             if not any(
                 _signature_matches(rerooted_sig, expected_sig) for expected_sig in expected_sigs
             ):
@@ -1494,7 +1533,9 @@ class _Checker:
         if isinstance(expr, IsTest):
             return self._check_is_test(expr)
         if isinstance(expr, FieldAccess):
-            return self._check_field_access(expr, expected=expected)
+            field_type = self._check_field_access(expr, expected=expected)
+            self._reject_builtin_method_value(expr)
+            return field_type
         if isinstance(expr, RecordUpdate):
             return self._check_record_update(expr, expected=expected)
         if _is_index_like(expr):
@@ -1824,7 +1865,9 @@ class _Checker:
                 return typ
 
         if isinstance(node.expr, FieldAccess):
-            return self._check_specialized_field_access(node.expr, type_args=node.type_args)
+            typ = self._check_specialized_field_access(node.expr, type_args=node.type_args)
+            self._reject_builtin_method_value(node.expr)
+            return typ
 
         if not isinstance(node.expr, VarRef):
             raise AglTypeError(
@@ -2536,7 +2579,7 @@ class _Checker:
         hole_indices: Mapping[int, int],
     ) -> Type:
         # Built-in?
-        if node.node_id in self._resolved.builtin_calls:
+        if isinstance(node.callee, VarRef) and node.node_id in self._resolved.builtin_calls:
             kind = self._resolved.builtin_calls[node.node_id]
             if hole_indices:
                 builtin_name = next(
@@ -2908,8 +2951,15 @@ class _Checker:
                 field_access, type_args=node.type_args
             )
         else:
-            callee_type = self._check_expr(field_access, expected=None)
+            callee_type = self._check_field_access(field_access, expected=None)
+            self._record_node_type(field_access.node_id, callee_type)
         method = self._method_selections.get(field_access.node_id)
+        if method is not None and method.is_builtin:
+            # Header validation admits only ``ask`` and ``ask-request`` as
+            # builtin methods (the two entries in the canonical table above).
+            if method.name == "ask":
+                return self._builtins.check_ask(node, expected=expected, receiver=True)
+            return self._builtins.check_ask_request(node, receiver=True)
         if method is None:
             return self._check_value_call(
                 node, expected=expected, hole_indices={}, callee_type=callee_type
@@ -4066,6 +4116,14 @@ class _Checker:
         self._record_node_type(field_access.node_id, typ)
         return typ
 
+    def _reject_builtin_method_value(self, node: FieldAccess) -> None:
+        """Reject a selected host method outside direct call position."""
+        method = self._method_selections.get(node.node_id)
+        if method is not None and method.is_builtin:
+            raise AglTypeError(
+                f"Built-in function '{method.name}' cannot be used as a value.", span=node.span
+            )
+
     def _check_field_access(
         self,
         node: FieldAccess,
@@ -4111,6 +4169,12 @@ class _Checker:
                 method = self._env.type_table.lookup_method(obj_type, node.field)
                 if method is not None:
                     self._record_method_selection(node.node_id, method)
+                    if method.is_builtin:
+                        # Host methods are call-only and their dispatch-specific
+                        # checker owns explicit type arguments and result typing.
+                        # Do not freshen the declared generic result merely to
+                        # discover the selected method.
+                        return FunctionType(params=(), result=method.signature.result)
                     bound = self._bound_method_type(
                         method, obj_type, type_args=type_args, expected=expected, span=node.span
                     )

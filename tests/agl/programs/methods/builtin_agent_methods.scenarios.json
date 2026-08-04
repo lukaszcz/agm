@@ -1,0 +1,32 @@
+{
+  "scenarios": [
+    {
+      "name": "typed_postfix_call_uses_receiver_and_named_options",
+      "params": {"mode": "typed"},
+      "agents": {"typed": ["42"]},
+      "expect": {
+        "stdout": "42\n",
+        "calls": {"typed": 1},
+        "prompts": [{"agent": "typed", "call": 0, "equals": "How many?"}]
+      }
+    },
+    {
+      "name": "defaulted_method_call_uses_receiver",
+      "params": {"mode": "defaulted"},
+      "agents": {"typed": ["done"]},
+      "expect": {
+        "stdout": "done\n",
+        "calls": {"typed": 1},
+        "prompts": [{"agent": "typed", "call": 0, "equals": "Use the defaults."}]
+      }
+    },
+    {
+      "name": "typed_ask_request_uses_receiver_without_dispatch",
+      "params": {"mode": "request"},
+      "expect": {
+        "stdout_contains": ["AgentCommand", "request"],
+        "calls": {}
+      }
+    }
+  ]
+}

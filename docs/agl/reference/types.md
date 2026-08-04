@@ -342,7 +342,9 @@ corrective retries after the initial attempt.
 `AgentCommand(command)`, `AgentClaude(model, thinking)`,
 `AgentCodex(model, thinking)`, and `AgentPi(provider, model, thinking)`.
 Like every enum, `Agent` values have fields, equality, rendering, and JSON
-casts; see [Agent calls](agent-calls.md) for dispatch behavior.
+casts. Its standard-core `ask` and `ask-request` members are call-only builtin
+methods, so `agent.ask(...)` and `agent.ask-request(...)` select that agent
+for the operation; see [Agent calls](agent-calls.md) for dispatch behavior.
 
 ### `AgentRequest`
 
@@ -442,11 +444,10 @@ A record may be generic — `record Box[T]` then a field `value: T`
 
 `builtin record` is the body-equivalent form for host-recognized nominal record
 types in `std/core`. The name and full field shape must match a recognized
-built-in type exactly, and that bare name must be declared only once across
-the whole program, whatever its scope path or declaring module — a program
-loading the default standard library, as it does unless started with
-`--no-stdlib`, cannot redeclare a name `std/core` already provides (see
-[Built-in functions](functions.md#built-in-functions)).
+built-in type exactly, and that complete scoped name may be declared only once
+across the whole program. A program loading the default standard library, as
+it does unless started with `--no-stdlib`, cannot redeclare a `std/core` type
+at the same path (see [Built-in functions](functions.md#built-in-functions)).
 
 ## Enum types
 

@@ -31,6 +31,42 @@ if TYPE_CHECKING:
 
 
 # ---------------------------------------------------------------------------
+# builtin Agent methods
+# ---------------------------------------------------------------------------
+
+
+def test_agent_ask_method_accepts_type_args_and_named_defaults() -> None:
+    """Agent::ask is a normal selected builtin method with the receiver as agent."""
+    source = """\
+let worker = AgentCommand("worker")
+let answer: int = worker.ask::[int]("How many?", strict_json = true)
+answer
+"""
+    ir = evaluate_ir_with_agents(source, scripts={"worker": ["42"]})
+
+    assert ir["answer"] == IntValue(42)
+
+
+def test_agent_ask_request_method_uses_its_receiver() -> None:
+    """Agent::ask-request constructs a request without dispatching."""
+    source = """\
+let worker = AgentCommand("worker")
+let request = worker.ask-request("Draft it.")
+request
+"""
+    ir = evaluate_ir_with_agents(source, scripts={"worker": []})
+
+    request = ir["request"]
+    assert isinstance(request, RecordValue)
+    assert request.fields["agent"] == EnumValue(
+        nominal=request.fields["agent"].nominal,
+        display_name="Agent",
+        variant="AgentCommand",
+        fields={"command": TextValue("worker")},
+    )
+
+
+# ---------------------------------------------------------------------------
 # simple text ask
 # ---------------------------------------------------------------------------
 

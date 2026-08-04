@@ -152,15 +152,15 @@ story.
 A region admits every `builtin` form — `builtin record`, `builtin enum`,
 `builtin exception`, `builtin def`, and `builtin var` — as a member of the
 region, following the same visibility rules as every other member. A
-`builtin` declaration's bare name is different from an ordinary member's,
-though: it is one host identity shared across the whole program, so it must
-be declared exactly once, whatever its scope path or declaring module — see
-[Built-in functions](functions.md#built-in-functions). The example below
-therefore presumes a program started with `--no-stdlib`
-([Modules](modules.md#prelude)), since `ExecResult` and `print`
-are otherwise already declared by the automatically-opened `std/core`:
+`builtin` declaration's complete scoped name is different from an ordinary
+member's, though: it is one host identity shared across the whole program at
+that exact path, so it must be declared only once there — see [Built-in
+functions](functions.md#built-in-functions). This allows a receiver method
+such as `Agent::ask` to coexist with root `ask`. The example below therefore
+presumes a program started with `--no-stdlib` ([Modules](modules.md#prelude)),
+since `ExecResult` and `print` are otherwise already declared at those paths
+by the automatically-opened `std/core`:
 
-<!-- agl-check: fragment -->
 ```agl
 scope Host
 builtin record ExecResult
@@ -180,7 +180,9 @@ A scoped `builtin record`/`enum`/`exception` carries its declared scope path
 as part of its nominal identity, exactly like an ordinary scoped type; a
 scoped `builtin def` dispatches to the same host implementation as a root
 one, reached bare inside its region or after `open`, and by its exact path
-outside. `builtin var` keeps its separate restriction to the canonical
+outside. A `builtin def` with first parameter `self` in a type scope is a
+builtin method: `Agent::ask` and `Agent::ask-request` use ordinary method
+selection and their receiver supplies the agent. `builtin var` keeps its separate restriction to the canonical
 `std/config` module regardless of scoping — see
 [Program structure](program-structure.md#declarations).
 

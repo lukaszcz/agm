@@ -156,8 +156,16 @@ builtin def ask[T](
   strict_json: bool = false,
   on_parse_error: ParsePolicy = ParsePolicy::Abort,
 ) -> T
+builtin def Agent::ask[T](
+  self,
+  prompt: text,
+  format: text = "",
+  strict_json: bool = false,
+  on_parse_error: ParsePolicy = ParsePolicy::Abort,
+) -> T
 builtin def ask-request(
   prompt: text,
   agent: Agent = std/config::default-agent,
 ) -> AgentRequest
+builtin def Agent::ask-request(self, prompt: text) -> AgentRequest
 builtin def exec(command: text) -> ExecResult

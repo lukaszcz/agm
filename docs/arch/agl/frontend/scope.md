@@ -100,9 +100,11 @@ items get an independent check.
 A `def` whose
 first parameter is `self` in a record, enum, or exception scope is classified as
 a method and published in `method_declarations`, keyed by structured declaration
-identity with its nominal owner path. Classification follows path collection, so
-declaration shorthand and scope regions agree; aliases reject `self`, while an
-annotated `self` outside a type scope remains an ordinary parameter. The pass
+identity with its nominal owner path. This applies equally to a `builtin def`;
+typecheck later accepts only a method signature with a host dispatch contract.
+Classification follows path collection, so declaration shorthand and scope regions
+agree; aliases reject `self`, while an annotated `self` outside a type scope remains
+an ordinary parameter. The pass
 owns every rule about a classified receiver, including that it carries no
 default value; the parser keeps only the token-order rules. Scoped
 externs resolve their member names through the declaring module's companion,

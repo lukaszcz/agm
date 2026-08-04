@@ -1633,6 +1633,45 @@ class TestScopedBuiltinTypes:
         )
         assert r.resolved.program is not None
 
+    @pytest.mark.parametrize("method", ("ask", "ask-request"))
+    def test_builtin_agent_method_with_explicit_type_args_cannot_be_a_value(
+        self, method: str
+    ) -> None:
+        err = reject_type(
+            f'let worker = AgentCommand("worker")\nlet f = worker.{method}::[text]\nf\n'
+        )
+        assert "built-in" in err.to_diagnostic().message.lower()
+        assert "value" in err.to_diagnostic().message.lower()
+
+    def test_scoped_builtin_agent_method_reroots_its_receiver_and_sibling_types(self) -> None:
+        """A scoped Agent method validates after removing its enclosing scope.
+
+        The receiver belongs to ``A::Agent`` while ``ParsePolicy`` is its
+        sibling at ``A``.  Both must reroot to the canonical host signature.
+        """
+        r = accept_type(
+            "scope A\n"
+            "builtin enum Agent\n"
+            "  | AgentCommand(command: text)\n"
+            "  | AgentClaude(model: text, thinking: text)\n"
+            "  | AgentCodex(model: text, thinking: text)\n"
+            "  | AgentPi(provider: text, model: text, thinking: text)\n"
+            "builtin enum ParsePolicy\n"
+            "  | Abort\n"
+            "  | Retry(n: int)\n"
+            "builtin def Agent::ask[T](\n"
+            "  self,\n"
+            "  prompt: text,\n"
+            '  format: text = "",\n'
+            "  strict_json: bool = false,\n"
+            "  on_parse_error: ParsePolicy = ParsePolicy::Abort,\n"
+            ") -> T\n"
+            "end A\n"
+            "()\n",
+            default_stdlib=False,
+        )
+        assert r.resolved.program is not None
+
     def test_scoped_builtin_def_signature_naming_a_type_at_the_wrong_path_rejected(self) -> None:
         """The re-rooted comparison must still discriminate a genuine
         mismatch: a ``builtin def`` in one region naming a builtin type
@@ -1648,64 +1687,55 @@ class TestScopedBuiltinTypes:
 
 
 class TestBuiltinDeclarationUniqueness:
-    """A bare built-in name may be declared at most once in a program: a
-    ``builtin`` type and a non-method ``builtin def`` share one name space,
-    whatever scope path or module spells the declaration.
+    """A builtin declaration is unique at its complete scoped name.
+
+    This lets a root builtin and a builtin method under a receiver type coexist,
+    while duplicate declarations at one scope path remain invalid.
     """
 
-    def test_two_scoped_builtin_records_with_the_same_name_are_rejected(self) -> None:
-        """Same-shaped ``builtin record ExecResult`` at two paths is a
-        duplicate declaration, naming both spellings in the diagnostic."""
-        err = reject_type(
+    def test_same_builtin_type_at_distinct_scoped_names_is_accepted(self) -> None:
+        r = accept_type(
             f"scope A\nbuiltin record ExecResult\n{_EXEC_RESULT_FIELDS}end A\n"
             f"scope B\nbuiltin record ExecResult\n{_EXEC_RESULT_FIELDS}end B\n"
             "()\n",
             default_stdlib=False,
         )
-        message = err.to_diagnostic().message
-        assert "A::ExecResult" in message
-        assert "B::ExecResult" in message
+        assert r.resolved.program is not None
 
-    def test_two_scoped_builtin_defs_with_the_same_name_are_rejected(self) -> None:
-        """A non-method ``builtin def`` shares the type name space: same
-        bare name at two paths is rejected, naming both spellings."""
-        err = reject_type(
+    def test_same_builtin_function_at_distinct_scoped_names_is_accepted(self) -> None:
+        r = accept_type(
             "scope A\nbuiltin def print[T](value: T) -> unit\nend A\n"
             "scope B\nbuiltin def print[T](value: T) -> unit\nend B\n"
             "()\n",
             default_stdlib=False,
         )
-        message = err.to_diagnostic().message
-        assert "A::print" in message
-        assert "B::print" in message
-
-    def test_a_single_scoped_builtin_declaration_is_still_accepted(self) -> None:
-        """One declaration at a scope path is not a duplicate of anything."""
-        r = accept_type(
-            f"scope A\nbuiltin record ExecResult\n{_EXEC_RESULT_FIELDS}end A\n()\n",
-            default_stdlib=False,
-        )
         assert r.resolved.program is not None
+
+    def test_same_scoped_builtin_declaration_is_rejected(self) -> None:
+        with pytest.raises(AglScopeError, match="already declared"):
+            parse_resolve_check(
+                f"scope A\nbuiltin record ExecResult\n{_EXEC_RESULT_FIELDS}end A\n"
+                f"scope A\nbuiltin record ExecResult\n{_EXEC_RESULT_FIELDS}end A\n"
+                "()\n",
+                default_stdlib=False,
+            )
 
 
 class TestBuiltinTypeModuleIdentity:
-    """A ``builtin`` declaration's nominal identity is its own declaring
-    module — the entry module, here, since a bare built-in name may be
-    declared only once per program and ``std/core`` already declares every
-    built-in name, so the first two tests below run with
-    ``default_stdlib=False`` — never a shared sentinel. The shipped standard
-    library's own declaration of a built-in name is therefore a distinct
-    nominal, not the same one re-homed.
+    """A ``builtin`` declaration's nominal identity is its declaring module.
+
+    These root declarations use names already provided at the root by
+    ``std/core``, so they run with ``default_stdlib=False``. The shipped
+    standard library's declaration remains a distinct nominal rather than a
+    re-homed shared sentinel.
     """
 
     def test_root_builtin_record_carries_the_entry_modules_own_identity(self) -> None:
         """An entry-module ``builtin record ExecResult`` is not std/core's.
 
-        Written with no standard library loaded (a bare built-in name may be
-        declared only once per program, and ``std/core`` already declares
-        this one), so this stays valid once a program-wide "declare a
-        built-in name once" rule lands: the entry module's own declaration is
-        the only ``ExecResult`` in scope here.
+        Written with no standard library loaded because ``std/core`` already
+        declares this root name. The entry module's declaration is therefore
+        the only root ``ExecResult`` in scope here.
         """
         from agm.agl.modules.ids import ENTRY_ID, STD_CORE_ID
 
@@ -1725,9 +1755,9 @@ class TestBuiltinTypeModuleIdentity:
         own root declaration, not the shipped standard library's; the
         canonical-shape comparison must re-root that reference onto its own
         declaring module before it matches the canonical (``std/core``)
-        shape, so this passes builtin shape validation. Uses
-        ``default_stdlib=False`` since a bare built-in name may be declared
-        only once per program and ``std/core`` already declares ``Exception``.
+        shape, so this passes builtin shape validation. It uses
+        ``default_stdlib=False`` because ``std/core`` already declares root
+        ``Exception``.
         """
         r = accept_type(
             "builtin\n"

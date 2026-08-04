@@ -1,0 +1,21 @@
+# Builtin Agent methods are call-only methods that select their receiver as the
+# agent. The branches cover typed and defaulted ask calls plus ask-request.
+param mode: text
+
+let agents = [AgentCommand("typed"), AgentCommand("request")]
+
+if
+  | mode == "typed" =>
+      let count: int = agents[0].ask::[int](
+        "How many?",
+        format = "json",
+        strict_json = true,
+        on_parse_error = Abort,
+      )
+      print(count)
+  | mode == "defaulted" =>
+      let response = agents[0].ask("Use the defaults.")
+      print(response)
+  | else =>
+      let request = agents[1].ask-request::[int]("Prepare a count.")
+      print(request.agent)

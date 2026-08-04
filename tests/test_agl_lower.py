@@ -25,6 +25,7 @@ from agm.agl.ir.ids import SymbolId
 from agm.agl.ir.nodes import (
     AutoTraceField,
     IrArith,
+    IrAsk,
     IrAssign,
     IrBind,
     IrBlock,
@@ -46,6 +47,7 @@ from agm.agl.ir.nodes import (
     IrField,
     IrFieldMode,
     IrIf,
+    IrIndex,
     IrIndirectCall,
     IrIterHasNext,
     IrIterInit,
@@ -1894,6 +1896,22 @@ let add = make(10).add
         receiver = descriptor.impl.body.arguments[0]
         assert isinstance(receiver, IrLoad)
         assert receiver.symbol == receiver_bind.symbol
+
+
+class TestBuiltinMethodLowering:
+    """Selected builtin methods reuse the builtin lowering path."""
+
+    def test_agent_method_call_lowers_to_ask_with_receiver_operand(self) -> None:
+        source = """\
+let agents = [AgentCommand("worker")]
+let result: text = agents[0].ask("Summarize")
+()\
+"""
+        program = _lower(source)
+        result = _let_root_capture(program.modules[program.entry_module].initializers[-2])
+
+        assert isinstance(result.value, IrAsk)
+        assert isinstance(result.value.agent, IrIndex)
 
 
 class TestIndirectCallLowering:

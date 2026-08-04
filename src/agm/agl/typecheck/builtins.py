@@ -243,7 +243,7 @@ class BuiltinCallChecker:
 
     # --- ask ---
 
-    def check_ask(self, node: Call, *, expected: Type | None) -> Type:
+    def check_ask(self, node: Call, *, expected: Type | None, receiver: bool = False) -> Type:
         # Target type: explicit type argument overrides context.
         explicit = self._resolve_explicit_target(node, "ask")
         target_type: Type = (
@@ -255,12 +255,13 @@ class BuiltinCallChecker:
             target_type=target_type,
             result_type=target_type,
             kind=BuiltinObligationKind.ASK,
+            receiver=receiver,
         )
         return target_type
 
     # --- ask-request ---
 
-    def check_ask_request(self, node: Call) -> Type:
+    def check_ask_request(self, node: Call, *, receiver: bool = False) -> Type:
         """Type-check ``ask-request(prompt, ...)`` — the side-effect-free twin of ``ask``.
 
         Like ``ask`` it builds an output contract from a target type and the
@@ -292,6 +293,7 @@ class BuiltinCallChecker:
             target_type=target_type,
             result_type=agent_request_type,
             kind=BuiltinObligationKind.ASK_REQUEST,
+            receiver=receiver,
         )
         return agent_request_type
 
@@ -302,10 +304,11 @@ class BuiltinCallChecker:
         target_type: Type,
         result_type: Type,
         kind: BuiltinObligationKind,
+        receiver: bool,
     ) -> None:
         """Check target-independent syntax, then queue contract materialization."""
         callee = kind.value
-        named = self._validate_ask_like_arguments(node, callee)
+        named = self._validate_ask_like_arguments(node, callee, receiver=receiver)
         format_name, strict_json, parse_policy = self._parse_options(named)
         self._ctx._register_builtin_obligation(
             PendingBuiltinObligation(
@@ -322,11 +325,18 @@ class BuiltinCallChecker:
             )
         )
 
-    def _validate_ask_like_arguments(self, node: Call, callee: str) -> dict[str, NamedArg]:
+    def _validate_ask_like_arguments(
+        self, node: Call, callee: str, *, receiver: bool
+    ) -> dict[str, NamedArg]:
         """Check syntax and value arguments that do not need the target type."""
         named = {na.name: na for na in node.named_args}
+        allowed_named = (
+            frozenset()
+            if receiver and callee == BuiltinObligationKind.ASK_REQUEST.value
+            else self._ASK_ALLOWED_NAMED_ARGS - ({"agent"} if receiver else set())
+        )
         for arg_name, na in named.items():
-            if arg_name not in self._ASK_ALLOWED_NAMED_ARGS:
+            if arg_name not in allowed_named:
                 raise AglTypeError(f"{callee}: unknown argument '{arg_name}'.", span=na.span)
         if not node.args:
             raise AglTypeError(f"{callee}() requires a prompt argument.", span=node.span)

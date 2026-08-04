@@ -714,6 +714,7 @@ def register_method_header(
             ),
             receiver_type_param_arity=receiver.type_param_arity,
             type_params=signature.type_params,
+            is_builtin=node.is_builtin,
         ),
     )
 

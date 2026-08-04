@@ -109,6 +109,7 @@ class MethodDef:
     signature: FunctionType
     receiver_type_param_arity: int
     type_params: tuple[str, ...] = ()
+    is_builtin: bool = False
 
 
 # ``ParamKind.value`` strings (``"positional_only"``/``"standard"``/
@@ -575,11 +576,13 @@ class TypeTable:
         name — the caller falls back to the seeded canonical shape, which is
         not itself a declaration.
 
-        ``validate_builtin_declaration_uniqueness`` allows at most one such
-        declaration per compile unit, so only REPL accumulation — ``_defs``
-        outlives the entry that filled it — can leave several here. The last
-        one registered is the one the current source declares; ``_defs``
-        never moves an existing key, so a forward scan's last match is it.
+        Builtin declarations are unique by complete scoped name, so a compile
+        unit may contain several paths with this bare name. This legacy
+        bare-name lookup is used only by host contracts that have one matching
+        builtin type; the last registered declaration is the current contract
+        declaration. REPL accumulation can likewise retain older paths;
+        ``_defs`` never moves an existing key, so a forward scan's last match
+        is the newest one.
         """
         result: TypeDef | None = None
         for typedef in self._defs.values():

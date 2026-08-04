@@ -2941,6 +2941,14 @@ class _Resolver:
                 ref = self._resolution.get(callee.node_id)
                 if ref is not None and ref.kind is BinderKind.function_binding:
                     self._builtin_calls[node.node_id] = _BUILTIN_CALL_NAMES[callee.name]
+        elif isinstance(callee, FieldAccess):
+            self._resolve_field_access(callee)
+            # Member selection is type-directed, so scope cannot yet know
+            # whether this spelling names a builtin method or an ordinary
+            # method with the same name. Record the possible host route; the
+            # checker confirms it only after selecting the method declaration.
+            if callee.field in _BUILTIN_CALL_NAMES:
+                self._builtin_calls[node.node_id] = _BUILTIN_CALL_NAMES[callee.field]
         else:
             self._resolve_expr(callee)
         # Resolve positional args.

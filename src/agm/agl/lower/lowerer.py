@@ -2044,6 +2044,8 @@ class _Lowerer:
         kind: BuiltinKind,
         call_node: "Call",
         span: "SourceSpan",
+        *,
+        agent: IrExpr | None = None,
     ) -> IrExpr:
         """Lower a builtin call node by dispatching on ``BuiltinKind``.
 
@@ -2107,10 +2109,12 @@ class _Lowerer:
                 return IrCopyValue(location=loc, kind=copy_kind, value=arg_ir)
 
             case BuiltinKind.ASK:
-                return self._lower_ask_call(call_node, span, structured_exec=False)
+                return self._lower_ask_call(call_node, span, structured_exec=False, agent=agent)
 
             case BuiltinKind.ASK_REQUEST:
-                return self._lower_ask_call(call_node, span, structured_exec=False, is_request=True)
+                return self._lower_ask_call(
+                    call_node, span, structured_exec=False, is_request=True, agent=agent
+                )
 
             case BuiltinKind.EXEC:
                 return self._lower_exec_call(call_node, span)
@@ -2137,7 +2141,17 @@ class _Lowerer:
         # Check for builtin calls first
         builtin_kind = self._checked.resolved.builtin_calls.get(nid)
         if builtin_kind is not None:
-            return self._lower_builtin_call(builtin_kind, call_node, span)
+            if isinstance(callee, FieldAccess):
+                method = self._checked.method_selection_for(callee.node_id)
+                if method is not None and method.is_builtin:
+                    return self._lower_builtin_call(
+                        builtin_kind,
+                        call_node,
+                        span,
+                        agent=self.lower_expr(callee.obj),
+                    )
+            else:
+                return self._lower_builtin_call(builtin_kind, call_node, span)
 
         # A call whose callee selected a method: call the method directly with a
         # receiver-first argument list instead of allocating the bound closure
@@ -3098,6 +3112,7 @@ class _Lowerer:
         *,
         structured_exec: bool,
         is_request: bool = False,
+        agent: IrExpr | None = None,
     ) -> IrExpr:
         """Lower an ask() or ask-request() builtin call to IrAsk/IrAskRequest."""
         loc = self._loc(span)
@@ -3107,8 +3122,10 @@ class _Lowerer:
         prompt_ir = self.lower_expr(call_node.args[0])
 
         # 2. Evaluate the explicit Agent value or load the ordinary defaulted parameter.
-        if "agent" in named_map:
-            agent_ir: IrExpr = self.lower_expr(named_map["agent"].value)
+        if agent is not None:
+            agent_ir = agent
+        elif "agent" in named_map:
+            agent_ir = self.lower_expr(named_map["agent"].value)
         else:
             agent_ir = IrBuiltinLoad(location=loc, key="default-agent")
 

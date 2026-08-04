@@ -28,6 +28,10 @@ eval "$(agm config env)"
 config directory, updates dependency configuration entries, and commits any generated
 changes to the config repository's git history with a `chore: update config` commit message.
 
+## Path-valued settings
+
+General-config path-valued `config.toml` fields, such as prompt and log-file paths, expand `%{VAR}` from the process environment and support a leading `~`. This interpolation is deliberately lenient: unresolved or malformed holes remain verbatim. One config file serves every command, so an irrelevant broken path must not stop it loading; any resulting failure follows the consuming command's normal path semantics. Independently loaded `[modules] lib_root` and `roots` settings do not interpolate `%{VAR}`.
+
 When the config directory is a git repository, AGM automatically commits changes it makes to
 the config directory. In addition to `agm config update`, this covers `agm init`,
 `agm open`, `agm close`, `agm dep new`, `agm dep switch`, and `agm worktree new`, each of

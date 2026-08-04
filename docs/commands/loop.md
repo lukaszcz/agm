@@ -18,25 +18,25 @@ Loop config is loaded from merged `config.toml` files:
 
 Prompt options:
 
-- `--prompt TEXT` / `--prompt-file PATH`: override the default runner prompt (task file in selector mode, `loop.md` in no-selector mode). Mutually exclusive.
+- `--prompt TEXT` / `--prompt-file PATH`: override the default runner prompt (`prompts/implement.md`, preprocessed after task selection with `%{TASK_FILE}`, in selector mode; `loop.md` in no-selector mode). Mutually exclusive.
 - `--selector-prompt TEXT` / `--selector-prompt-file PATH`: override the default `select.md` selector prompt. Mutually exclusive.
 - `--extra-prompt TEXT` / `--extra-prompt-file PATH`: append extra content to the runner prompt, after the primary prompt. Mutually exclusive.
 - `--extra-selector-prompt TEXT` / `--extra-selector-prompt-file PATH`: append extra content to the selector prompt, after the primary selector prompt. Mutually exclusive.
 
-Prompt preprocessing:
+## Prompt interpolation
 
-- before a prompt file is passed to the runner or selector, AGM expands environment variable references in the prompt content using `$VAR` or `${VAR}` syntax
-- unrecognized variables are left unchanged
-- when expansions modify the content, AGM writes the expanded text to a temporary file; otherwise the original file path is used
-- beyond the process environment, AGM provides:
-  - `TASKS_DIR` — the resolved tasks directory path
-  - `TASK_FILE` — the selected task file path (selector mode; set in the runner process environment at runtime)
+Before AGM passes a prompt to a runner or selector, it expands `%{name}` holes. A name is an AgL identifier, so names such as `%{log-file}` work. `\%{` writes a literal `%{`, and a bare `%` is literal. `$VAR` and `${VAR}` are plain literal text; the old shell-style interpolation syntax is not supported.
 
-Prompt file path:
+Expansion is strict: an unknown variable, invalid hole name, or unterminated `%{` is an error, not passthrough. Variables come from the full process environment, overlaid with AGM's variables (which win on conflicts):
 
-- AGM passes the resolved prompt file path to the runner/selector command
-- by default it is appended as `@<path>` to the command
-- use `%%` or `%{PROMPT_FILE}` in the command to insert the path at a specific position — when either placeholder is present, it is replaced with the path and no `@<path>` suffix is appended
+- `TASKS_DIR` — the resolved tasks directory, in every loop prompt.
+- `TASK_FILE` — the selected task path, only when expanding the runner prompt after selection in selector mode. Selector and no-selector prompts do not receive it.
+
+When expansion changes a file's content, AGM writes a temporary prompt file; otherwise it reuses the original file.
+
+## Prompt file path
+
+AGM passes the resolved prompt file path to the runner or selector command. By default it appends `@<path>`. Use `%%` or `%{PROMPT_FILE}` in either command to place the path at a specific position; either prevents the suffix. Command arguments use strict `%{name}` interpolation from the process environment overlaid with `PROMPT_FILE`, which wins on conflicts. Names are AgL identifiers (for example, `%{log-file}`). `%%` is an alias for `%{PROMPT_FILE}`; `\%{` writes a literal `%{`; a bare `%`, `$VAR`, and `${VAR}` are literal text, and shell-style interpolation is unsupported. Unknown, invalid, or unterminated holes are errors. Command strings are shlex-split before interpolation, so quote or otherwise protect `\%{` so its backslash reaches the argv element.
 
 Timeout:
 
@@ -49,7 +49,7 @@ Selector mode (default):
 
 - AGM runs the selector with `@select.md`
 - if the selector returns `COMPLETE` after whitespace is removed, AGM stops
-- otherwise the selector output is treated as the next task path and AGM runs the runner with that task file
+- otherwise the selector output is treated as the next task path; AGM preprocesses `prompts/implement.md` with `%{TASK_FILE}` set to that path, then runs the runner with the resulting prompt
 - when no explicit selector command is configured, the runner command is used for the progress update
 
 No-selector mode (`--no-selector` / `no_selector = true`):

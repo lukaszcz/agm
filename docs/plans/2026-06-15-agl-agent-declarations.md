@@ -13,9 +13,9 @@ in config.
 This plan inverts ownership of the agent name set: **the source program declares
 which agents exist**, an undeclared agent name is a **static binding error**, and
 the host (config / library registration) only supplies *backings* for
-already-declared names. A declaration may optionally carry a runner-command hint,
-resolved exactly like config runner strings (`%%` / `%{PROMPT_FILE}`
-placeholders), which config can override.
+already-declared names. A declaration may optionally carry a runner-command hint;
+to pass the runtime `%{PROMPT_FILE}` placeholder through an AgL source string,
+write `\%{PROMPT_FILE}`. Config can override the hint.
 
 ## Decisions
 
@@ -31,9 +31,10 @@ placeholders), which config can override.
    never reserved as agent declarations. `prompt` resolves to the default agent;
    `exec` to shell execution, exactly as today.
 
-3. **A declaration may optionally specify a runner string** that resolves like a
-   config runner command (supports `%%` and `%{PROMPT_FILE}` placeholders;
-   substituted with the rendered prompt-file path by the host). Bare declaration
+3. **A declaration may optionally specify a runner string.** To pass the host
+   prompt-file placeholder through that AgL source string, write
+   `\%{PROMPT_FILE}`; the host then substitutes the rendered prompt-file path.
+   A raw `%{PROMPT_FILE}` is AgL interpolation and is rejected. Bare declaration
    ⇒ no source backing.
 
 4. **Config overrides source.** When both a config `[exec.agents.<name>]` entry
@@ -57,10 +58,12 @@ placeholders), which config can override.
    minimal grammar change that satisfies the requirement.)*
 
 6. **Runner string is a static string literal.** It is parsed as an AgL string
-   but must contain **no `${…}` interpolation holes** — interpolation in a runner
+   but must contain **no `%{…}` interpolation holes** — interpolation in a runner
    declaration is a static error. It is an opaque host hint: scope/typecheck do
-   not interpret it; only the `exec` host consumes it (placeholder substitution,
-   no env-var expansion — matching today's `[exec.agents]` behavior).
+   not interpret it; only the `exec` host consumes it. Escape a runtime
+   placeholder as `\%{PROMPT_FILE}` in source; configured `[exec.agents]` runner
+   commands strictly expand `%{name}` from the process environment overlaid with
+   `PROMPT_FILE`, and unavailable or malformed holes fail.
 
 7. **Root-level only.** Like `input`, `agent` declarations must appear at program
    root (not nested in `if`/`do`/`try`). Declaring one inside a block is a static
@@ -230,8 +233,9 @@ class PipelineDriver:
 - Net effect: no implicit fallback for unknown names; `exec` still "just works"
   for any declared agent, with or without config, because the default runner is
   the floor.
-- `command_with_prompt_target` already substitutes `%%` / `%{PROMPT_FILE}`, so
-  source runner hints get identical placeholder handling for free.
+- `command_with_prompt_target` substitutes `%%` / `%{PROMPT_FILE}`. A source
+  runner hint reaches it with that runtime placeholder only when the AgL source
+  spells it `\%{PROMPT_FILE}`.
 
 ### 10. Config & templates
 
@@ -264,8 +268,9 @@ for the binding-error behavior. 100% coverage of `src/` must hold.
 1. **Lexer** (`tests/test_agl_lexer.py`): `agent` tokenizes as a keyword; cannot
    be used as an identifier.
 2. **Parser** (`tests/test_agl_parser.py`): `agent reviewer` → `AgentDecl(name,
-   runner=None)`; `agent impl = "claude -p %{PROMPT_FILE}"` → runner set;
-   interpolation hole in runner string → rejected.
+   runner=None)`; `agent impl = "claude -p \%{PROMPT_FILE}"` → runner set with
+   a literal runtime placeholder; an unescaped interpolation hole in a runner
+   string → rejected.
 3. **Scope** (`tests/test_agl_scope.py`): undeclared agent call → `AglScopeError`;
    duplicate `agent` → error; `agent prompt`/`agent exec` → error; non-root
    declaration → error; declared-but-unused → warning; `prompt`/`exec` calls need
@@ -277,8 +282,8 @@ for the binding-error behavior. 100% coverage of `src/` must hold.
    declared + registered → runs; `declared_agents()` API returns names + hints.
 6. **Exec command** (`tests/test_exec_command.py`): precedence — config beats
    source hint beats default runner; bare declaration uses default runner;
-   `%{PROMPT_FILE}` substitution in a source hint; undeclared call exits with the
-   pre-execution code (1).
+   `%{PROMPT_FILE}` substitution from an escaped source hint; undeclared call
+   exits with the pre-execution code (1).
 7. **E2E** (`tests/agl/`):
    - New `rejections/scope/undeclared_agent.agl` + `.expect.json`,
      `agent_redeclared.agl`, `agent_reserved_name.agl`, `agent_not_root.agl`.
@@ -300,7 +305,7 @@ for the binding-error behavior. 100% coverage of `src/` must hold.
 ## Risks & mitigations
 
 - **Portability concern.** Embedding a host runner string (`claude -p`,
-  `%{PROMPT_FILE}`) in otherwise host-independent source couples the program to a
+  `\%{PROMPT_FILE}` in AgL source) in otherwise host-independent source couples the program to a
   host. *Mitigation:* the runner string is an **optional opaque hint** that
   non-`exec` hosts ignore (they back via `register_agent`); config always
   overrides it; core semantics (declaration + binding) stay host-independent.

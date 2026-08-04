@@ -19,7 +19,7 @@ General configuration merges across scopes, from least to most specific:
 3. the project's config directory
 4. the workspace-local `.agm/config.toml`
 
-Later layers override earlier ones; table-valued sections merge by key rather than wholesale replacement. Path-valued settings resolve relative to the config file that defined them, with a sensible fallback to the invocation directory. They interpolate `%{VAR}` from the environment and expand `~`; unavailable or malformed holes remain verbatim so unrelated config sections cannot prevent loading.
+Later layers override earlier ones; table-valued sections merge by key rather than wholesale replacement. General-config path-valued settings resolve relative to the config file that defined them, with a sensible fallback to the invocation directory. They interpolate `%{VAR}` from the environment and expand `~`. Unresolved or malformed holes remain verbatim: one config file serves every command, so an irrelevant section must not prevent loading; any resulting failure follows the consuming command's normal path semantics. The independently loaded `[modules]` root settings do not interpolate `%{VAR}`.
 
 ## Sections and Per-Command Overrides
 

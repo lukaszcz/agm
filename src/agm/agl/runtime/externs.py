@@ -201,11 +201,10 @@ class ExternRegistry:
         the raising Python exception's class name, or empty for a contract
         violation.
 
-        A cyclic argument is a separate, narrower failure: encoding a cyclic
-        array/dict argument, or a companion repr'ing a sealed handle wrapping
-        one (``SealedHandle.__repr__``, during *fn*), raises
-        ``AglCyclicValue``; both are converted here into the catchable
-        ``CyclicValueError`` rather than being folded into ``ExternError``.
+        A companion repr'ing a sealed handle wrapping a cyclic array or dict
+        (``SealedHandle.__repr__``, during *fn*) raises ``AglCyclicValue``;
+        that is converted here into the catchable ``CyclicValueError`` rather
+        than being folded into ``ExternError``.
 
         *nominals* resolves the ``ExternError``/``CyclicValueError`` nominal;
         it defaults to the shipped standard library's own identities for a

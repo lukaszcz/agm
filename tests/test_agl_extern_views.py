@@ -127,6 +127,116 @@ class TestViewIdentityAndLiveness:
         assert list(second) == [1]
 
     @pytest.mark.parametrize("generic_first", [True, False])
+    def test_mixed_generic_and_concrete_dict_aliases_use_the_concrete_view_schema(
+        self, generic_first: bool
+    ) -> None:
+        generic_schema = _dict_schema("T", "[T]")
+        concrete_schema = _dict_schema()
+        value = DictValue({"item": IntValue(1)})
+        scope = BoundaryScope(seals={"T": object()})
+        schemas = (
+            (generic_schema, concrete_schema)
+            if generic_first
+            else (concrete_schema, generic_schema)
+        )
+
+        first = encode_boundary_value(schemas[0], value, scope)
+        second = encode_boundary_value(schemas[1], value, scope)
+
+        assert isinstance(first, AglDictView)
+        assert first is second
+        assert dict(first) == {"item": 1}
+        assert dict(second) == {"item": 1}
+
+    @pytest.mark.parametrize("generic_first", [True, False])
+    def test_nested_mixed_generic_and_concrete_dict_aliases_use_concrete_value_views(
+        self, generic_first: bool
+    ) -> None:
+        generic_schema = _dict_schema("array[T]", "[T]")
+        concrete_schema = _dict_schema("array[int]")
+        value = DictValue({"items": ArrayValue([IntValue(1)])})
+        scope = BoundaryScope(seals={"T": object()})
+        schemas = (
+            (generic_schema, concrete_schema)
+            if generic_first
+            else (concrete_schema, generic_schema)
+        )
+
+        first = _dict_view(schemas[0], value, scope)
+        second = _dict_view(schemas[1], value, scope)
+
+        assert first is second
+        nested = first["items"]
+        assert isinstance(nested, AglArrayView)
+        assert list(nested) == [1]
+
+    @pytest.mark.parametrize("generic_first", [True, False])
+    def test_nested_dict_generic_and_concrete_aliases_use_concrete_value_views(
+        self, generic_first: bool
+    ) -> None:
+        generic_schema = _dict_schema("dict[text, T]", "[T]")
+        concrete_schema = _dict_schema("dict[text, int]")
+        schemas = (
+            (generic_schema, concrete_schema)
+            if generic_first
+            else (concrete_schema, generic_schema)
+        )
+        scope = BoundaryScope(seals={"T": object()})
+        value = DictValue({"items": DictValue({"item": IntValue(1)})})
+
+        first = encode_boundary_value(schemas[0], value, scope)
+        second = encode_boundary_value(schemas[1], value, scope)
+
+        assert isinstance(first, AglDictView)
+        assert first is second
+        nested = first["items"]
+        assert isinstance(nested, AglDictView)
+        assert dict(nested) == {"item": 1}
+
+    @pytest.mark.parametrize("int_first", [True, False])
+    def test_incompatible_nested_dict_value_schemas_are_rejected_regardless_of_order(
+        self, int_first: bool
+    ) -> None:
+        int_schema = _dict_schema("dict[text, int]")
+        text_schema = _dict_schema("dict[text, text]")
+        schemas = (int_schema, text_schema) if int_first else (text_schema, int_schema)
+        scope = BoundaryScope()
+        value = DictValue({"items": DictValue({"item": IntValue(1)})})
+
+        encode_boundary_value(schemas[0], value, scope)
+        with pytest.raises(BoundaryViolation):
+            encode_boundary_value(schemas[1], value, scope)
+
+    @pytest.mark.parametrize("int_first", [True, False])
+    def test_incompatible_nested_dict_alias_schemas_are_rejected_regardless_of_order(
+        self, int_first: bool
+    ) -> None:
+        int_schema = _dict_schema("array[int]")
+        text_schema = _dict_schema("array[text]")
+        schemas = (int_schema, text_schema) if int_first else (text_schema, int_schema)
+        scope = BoundaryScope()
+        value = DictValue({"items": ArrayValue([IntValue(1)])})
+
+        _dict_view(schemas[0], value, scope)
+        with pytest.raises(BoundaryViolation):
+            _dict_view(schemas[1], value, scope)
+
+    @pytest.mark.parametrize("value_types", [("int", "text"), ("T", "U")])
+    def test_incompatible_dict_alias_schemas_are_rejected_regardless_of_order(
+        self, value_types: tuple[str, str]
+    ) -> None:
+        type_params = "[T, U]" if value_types == ("T", "U") else ""
+        first_schema = _dict_schema(value_types[0], type_params)
+        second_schema = _dict_schema(value_types[1], type_params)
+
+        for left, right in ((first_schema, second_schema), (second_schema, first_schema)):
+            scope = BoundaryScope(seals={"T": object(), "U": object()})
+            value = DictValue({"item": IntValue(1)})
+            encode_boundary_value(left, value, scope)
+            with pytest.raises(BoundaryViolation):
+                encode_boundary_value(right, value, scope)
+
+    @pytest.mark.parametrize("generic_first", [True, False])
     def test_nested_mixed_generic_and_concrete_array_aliases_use_concrete_element_views(
         self, generic_first: bool
     ) -> None:
@@ -462,6 +572,16 @@ class TestDictViewSurface:
         assert dict(view) == {}
         with pytest.raises(KeyError):
             view.popitem()
+
+    def test_pop_existing_key_with_default_returns_the_value_and_removes_the_key(self) -> None:
+        default = object()
+        view = _dict_view(_dict_schema(), DictValue({"a": IntValue(1)}), BoundaryScope())
+
+        result = view.pop("a", default)
+
+        assert result == 1
+        assert result is not default
+        assert dict(view) == {}
 
     def test_iteration_uses_a_key_snapshot(self) -> None:
         view = _dict_view(

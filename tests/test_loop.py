@@ -2422,6 +2422,80 @@ class TestLoopRunIntegration:
         assert task_file_env is not None
         assert Path(task_file_env).resolve() == task_file.resolve()
 
+    def test_selector_mode_prepares_explicit_prompt_for_each_selected_task(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        home = _setup_home_with_prompts(tmp_path, ["select.md"])
+        monkeypatch.setenv("HOME", str(home))
+        monkeypatch.setattr("shutil.which", _which_always_found)
+        monkeypatch.chdir(tmp_path)
+
+        tasks_dir = tmp_path / ".agent-files" / "tasks"
+        tasks_dir.mkdir(parents=True)
+        task_files = [tasks_dir / "task-1.md", tasks_dir / "task-2.md"]
+        for task_file in task_files:
+            task_file.write_text("task\n", encoding="utf-8")
+        prompt = tmp_path / "prompt.md"
+        prompt.write_text("Implement $TASK_FILE\n", encoding="utf-8")
+
+        original_prepare = prepare_prompt_from_source
+        prepared_sources: list[str | Path] = []
+
+        def track_prepare(
+            source: str | Path, *, temp_files: list[Path], env: dict[str, str]
+        ) -> Any:
+            if source == prompt:
+                prepared_sources.append(source)
+            return original_prepare(source, temp_files=temp_files, env=env)
+
+        selector_outputs = iter(["task-1.md\n", "task-2.md\n", "COMPLETE\n"])
+        runner_prompts: list[str] = []
+
+        def fake_run_command(
+            command: list[str],
+            target: Path,
+            *,
+            env: dict[str, str],
+            stdout_callback: object = None,
+            stderr_callback: object = None,
+            idle_timeout: float | None = None,
+        ) -> str:
+            if command == ["fake-selector"]:
+                return next(selector_outputs)
+            runner_prompts.append(target.read_text(encoding="utf-8"))
+            return "runner output\n"
+
+        monkeypatch.setattr("agm.commands.loop.step.prepare_prompt_from_source", track_prepare)
+        monkeypatch.setattr("agm.commands.loop.step.run_prompt_command", fake_run_command)
+
+        loop_run(
+            LoopArgs(
+                command_name=None,
+                runner="fake-runner",
+                runner_args=[],
+                selector="fake-selector",
+                no_selector=False,
+                tasks_dir=None,
+                no_log=True,
+                log_file=None,
+                prompt=None,
+                prompt_file=str(prompt),
+                selector_prompt=None,
+                selector_prompt_file=None,
+                extra_prompt=None,
+                extra_prompt_file=None,
+                extra_selector_prompt=None,
+                extra_selector_prompt_file=None,
+                timeout=None,
+            )
+        )
+
+        assert prepared_sources == [prompt, prompt]
+        assert runner_prompts == [
+            f"Implement {task_files[0]}\n",
+            f"Implement {task_files[1]}\n",
+        ]
+
     def test_runner_exit_127_aborts_loop_via_real_run_prompt_command(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:

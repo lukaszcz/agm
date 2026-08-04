@@ -5,7 +5,7 @@ while checker types are still available, and that the evaluator executes
 WITHOUT any checker ``Type``.  It defines the cast/conversion descriptors
 (``ConversionRecipe`` and the ``DecodeSchema`` union) and the extern boundary
 contract (``BoundarySchema`` and ``ExternContract``).  The boundary walkers
-that consume the contract at runtime live in ``runtime.externs``
+that consume the contract at runtime live in ``runtime.boundary``
 (``encode_boundary_value`` / ``decode_boundary_value``).
 
 Dependency rule: ``agm.agl.ir`` imports
@@ -179,7 +179,7 @@ class ParamDecoder:
 # Boundary schema — typeless shape of one value crossing the extern (Python
 # FFI) boundary.  One schema serves both directions: encoding an outbound
 # argument and strictly decoding an inbound return value walk the same
-# nodes; the ``runtime.externs`` walker owns the direction.  Recursive
+# nodes; the ``runtime.boundary`` walker owns the direction. Recursive
 # instantiations are shared via ``BoundaryRef`` into ``ExternContract.defs``.
 # ---------------------------------------------------------------------------
 

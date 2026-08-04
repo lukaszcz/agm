@@ -148,7 +148,8 @@ class ExternFunctionBody:
     """``extern def`` implementation: crosses into a companion Python module.
 
     ``name``     — the extern's declared name (identical in AgL and Python;
-                   ``runtime.externs.ExternRegistry`` resolves it positionally).
+                   ``runtime.externs.ExternRegistry`` resolves it positionally
+                   through the ``runtime.boundary`` walkers).
     ``contract`` — the compiled boundary contract (per-parameter encode recipe +
                    strict return decode), built from the checked signature at
                    lowering.

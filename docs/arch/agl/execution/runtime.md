@@ -20,6 +20,6 @@ The pipeline sits on top: it drives the compile → lower → evaluate sequence 
 
 ## Code Entry Points
 
-- `src/agm/agl/runtime/` — agents, codecs, parameter conversion, host-environment types, the renderer, and the extern registry.
+- `src/agm/agl/runtime/` — agents, codecs, parameter conversion, host-environment types, the renderer, and the extern registry/boundary walkers.
 - `src/agm/agl/pipeline.py` — the orchestrator; `src/agm/agl/type_schema.py` — compile-time schema/format generation.
 - Tests: `tests/test_agl_runtime.py`, `tests/test_agl_codec.py`, `tests/test_agl_pipeline_*.py`.

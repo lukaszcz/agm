@@ -1052,11 +1052,6 @@ def exec_cmd(
         "--max-call-depth",
         help="Override the maximum recursion call depth (CLI > config).",
     ),
-    runner: str | None = typer.Option(
-        None,
-        "--runner",
-        help="Override the default agent runner command.",
-    ),
     agent: str | None = typer.Option(
         None,
         "--agent",
@@ -1185,7 +1180,6 @@ def exec_cmd(
             strict_json=strict_json,
             max_iters=max_iters,
             max_call_depth=max_call_depth,
-            runner=runner,
             agent=agent,
             no_log=no_log,
             log_file=log_file,
@@ -1215,11 +1209,6 @@ def repl_cmd(
         None,
         "--max-call-depth",
         help="Override the maximum recursion call depth (CLI > config).",
-    ),
-    runner: str | None = typer.Option(
-        None,
-        "--runner",
-        help="Override the default agent runner command.",
     ),
     agent: str | None = typer.Option(
         None,
@@ -1280,7 +1269,6 @@ def repl_cmd(
             strict_json=strict_json,
             max_iters=max_iters,
             max_call_depth=max_call_depth,
-            runner=runner,
             agent=agent,
             confirm_agents=confirm_agents,
             quiet=quiet,

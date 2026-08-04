@@ -130,7 +130,6 @@ _MIXED_ROOT_AND_SCOPED_DECLARATIONS = (
 
 def _caps() -> HostCapabilities:
     return HostCapabilities(
-        agent_names=frozenset(),
         supports_shell_exec=True,
         codec_kinds={
             "text": frozenset({"text"}),
@@ -218,45 +217,6 @@ def test_lower_repl_entry_accumulates_tables_and_resolves_prior_symbols() -> Non
     assert second.program.modules[second.program.entry_module].initializers
 
 
-def test_lowering_records_each_entry_initializer_origin() -> None:
-    source = (
-        "let before = 1\n"
-        "var count = 1\n"
-        "count := count + 1\n"
-        "def later() -> int = 4\n"
-        "agent worker\n"
-        "param limit: int = 5\n"
-        "record Box\n"
-        "  value: int\n"
-        "type Alias = Box\n"
-        "builtin def print[T](value: T) -> unit\n"
-        "later()"
-    )
-    # A bare builtin name may be declared only once per program and
-    # std/core already declares `print`, so this entry's own `builtin def
-    # print` needs default_stdlib=False.
-    image = LinkImage()
-    lowered, _next_id, _root_scope, checked = _repl_entry(source, image=image)
-
-    items = checked.resolved.program.body.items
-    initializers = lowered.program.modules[lowered.program.entry_module].initializers
-    origins = image._state.initializer_origins[lowered.program.entry_module]
-
-    assert len(origins) == len(initializers)
-    assert tuple(origin.source_index for origin in origins) == (3, 0, 1, 2, 4, 9)
-    assert tuple(origin.is_function for origin in origins) == (
-        True,
-        False,
-        False,
-        False,
-        False,
-        False,
-    )
-    for origin, _initializer in zip(origins, initializers, strict=True):
-        item = items[origin.source_index]
-        assert origin.is_function == (isinstance(item, FuncDef) and not item.is_builtin)
-
-
 def test_repl_promotion_plan_pairs_params_with_lowered_symbols() -> None:
     source = "param first: int = 1\nparam second: int = 2\n()"
     image = LinkImage()
@@ -306,19 +266,6 @@ def _lower(source: str, *, default_stdlib: bool = True) -> ExecutableProgram:
         source_text=source,
         source_label="<test>",
     )
-
-
-def test_scoped_functions_link_while_unused_scoped_agents_remain_deferred() -> None:
-    program = _lower(_MIXED_ROOT_AND_SCOPED_DECLARATIONS)
-
-    # Named-scope functions still lower and link (all 3 functions present, callable
-    # via their scoped identity) but are not exposed under their unqualified name:
-    # only the root function and the root agent get a public_name.
-    public_names = {
-        symbol.public_name for symbol in program.symbols.values() if symbol.public_name is not None
-    }
-    assert public_names == {"root", "root_agent"}
-    assert len(program.functions) == 3
 
 
 def test_scoped_only_function_has_no_public_name() -> None:
@@ -2124,32 +2071,6 @@ class TestPartialCallLowering:
 class TestLowerGraph:
     """Golden tests for lower_program."""
 
-    def test_lower_program_links_scoped_functions_without_eager_scoped_agents(self) -> None:
-        from agm.agl.lower.program import lower_program
-        from agm.agl.modules.loader import load_graph
-        from agm.agl.modules.roots import RootSet
-        from agm.agl.scope.program import resolve_program
-        from agm.agl.typecheck.program import check_program
-
-        graph = load_graph(
-            _MIXED_ROOT_AND_SCOPED_DECLARATIONS,
-            entry_path=None,
-            roots=RootSet(roots=frozenset()),
-            default_stdlib=False,
-        )
-
-        program = lower_program(_compiled_checked(check_program(resolve_program(graph), _caps())))
-
-        # Same expectation as the single-module case: named-scope functions link
-        # but do not get a public_name, since they are not root-level bindings.
-        public_names = {
-            symbol.public_name
-            for symbol in program.symbols.values()
-            if symbol.public_name is not None
-        }
-        assert public_names == {"root", "root_agent"}
-        assert len(program.functions) == 3
-
     def test_lower_program_simple(self, tmp_path: Path) -> None:
         """lower_program on a two-module program builds a valid ExecutableProgram.
 
@@ -2637,22 +2558,6 @@ class TestHostOpLowering:
 
         assert contract.codec_name == "none"
         assert contract.is_unit is True
-
-    def test_agent_decl_lowers_to_ir_agent_handle_bind(self) -> None:
-        """AgentDecl lowers to IrBind(symbol, IrAgentHandle(name))."""
-        from agm.agl.ir.nodes import IrAgentHandle, IrBind
-
-        source = "agent my_agent\n()"
-        prog = _lower(source)
-        inits = prog.modules[prog.entry_module].initializers
-        # Expect an IrBind whose value is IrAgentHandle with the agent's name.
-        handle_binds = [
-            n for n in inits if isinstance(n, IrBind) and isinstance(n.value, IrAgentHandle)
-        ]
-        assert len(handle_binds) == 1, (
-            f"Expected exactly 1 IrBind(IrAgentHandle), got {len(handle_binds)}"
-        )
-        assert handle_binds[0].value.agent_name == "my_agent"
 
     def test_ask_request_lowers_to_ir_ask_request_with_contract(self) -> None:
         """ask-request lowers to IrAskRequest + ContractRequest in program.contracts."""

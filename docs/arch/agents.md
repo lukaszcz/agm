@@ -10,7 +10,7 @@ Prompts are resolved from inline text or a file and preprocessed to expand envir
 
 ## Runner Resolution
 
-Which runner (and which selector, for loops) is used is resolved by precedence: explicit CLI arguments override per-command config, which overrides the base config section, which falls back to a built-in default runner. The default runner is always the floor, so a runner is always available. The same precedence resolves timeouts.
+Loop runner and selector resolution uses explicit CLI arguments, per-command config, base config, then the loop's built-in runner floor. Review and revise resolve their runner independently from their own CLI/config values and their review-workflow default; they never read `[loop]`. The same command-local precedence resolves timeouts.
 
 ## Loop
 
@@ -31,6 +31,6 @@ These share prompt-preprocessing that merges scope, aspects, and other context i
 - `src/agm/agent/spec.py` — decoded AgL agent specs and pure backend argv builders.
 - `src/agm/agent/runner.py` — runner command parsing, prompt attachment, prepared argv handling, subprocess execution with idle timeout, the run-result structure.
 - `src/agm/agent/prompt.py`, `prompt_source.py`, `response.py`, `output.py` — prompt preparation, source resolution, completion detection, and output formatting.
-- `src/agm/agent/loop.py`, `config.py` — runner/selector/timeout resolution and the default runner.
-- `src/agm/agent/review/` — the review, revise, and refine workflow implementations and their prompt preprocessing.
+- `src/agm/agent/loop.py` — loop runner/selector/timeout resolution and the loop default runner.
+- `src/agm/agent/review/` — the review, revise, and refine workflow implementations, their independent default runner, and prompt preprocessing.
 - `src/agm/commands/loop/`, `review.py`, `revise.py`, `refine.py` — the commands that drive these workflows.

@@ -12,7 +12,6 @@ from agm.agl.parser import AglSyntaxError, parse_program
 from agm.agl.scope import AglScopeError
 from agm.agl.scope.symbols import resolve_bare_contribution
 from agm.agl.syntax import (
-    AgentDecl,
     AsPattern,
     BuiltinVarDecl,
     ConstructorPattern,
@@ -27,72 +26,16 @@ from agm.agl.syntax import (
     RecordDef,
     ScopeRegion,
     ScopeSegment,
-    TypeAlias,
     VarDecl,
     VarPattern,
 )
 from tests.agl.ir_harness import write_module_file
-from tests.agl.module_graph import resolve_entry, resolve_program_ast
+from tests.agl.module_graph import resolve_entry
 
 
 def _declaration(source: str) -> object:
     (declaration,) = parse_program(source).body.items
     return declaration
-
-
-@pytest.mark.parametrize(
-    ("source", "kind"),
-    (
-        ("def A::B::value() -> int = 0", FuncDef),
-        ("extern def A::B::value() -> int", FuncDef),
-        ("record A::B::Point(x: int)", RecordDef),
-        ("enum A::B::Result = ok", EnumDef),
-        ("exception A::B::Failure(message: text)", ExceptionDef),
-        ("type A::B::Count = int", TypeAlias),
-        ('agent A::B::reviewer = "runner"', AgentDecl),
-    ),
-)
-def test_name_headed_declarations_accept_scope_path_shorthand(
-    source: str, kind: type[object]
-) -> None:
-    declaration = _declaration(source)
-
-    assert isinstance(declaration, kind)
-    assert declaration.name in {"value", "Point", "Result", "Failure", "Count", "reviewer"}
-    assert [segment.name for segment in declaration.scope_path] == ["A", "B"]
-    # Uses resolve_program_ast's hand-built single-module graph: the `extern
-    # def` case here only needs a non-`None` origin path to clear the
-    # "file-backed module" placement check this test is exercising uniformly
-    # across declaration kinds; a real loaded module graph would additionally
-    # demand a real companion `.py` next to that path (MissingExternCompanion),
-    # which is unrelated to what this test checks (scope-path shorthand
-    # resolves for every declaration kind).
-    resolve_program_ast(parse_program(source), origin_path=Path("module.agl"))
-
-
-@pytest.mark.parametrize(
-    ("source", "kind", "name"),
-    (
-        ("def Inner::value() -> int = 0", FuncDef, "value"),
-        ("extern def Inner::value() -> int", FuncDef, "value"),
-        ("record Inner::Point(x: int)", RecordDef, "Point"),
-        ("enum Inner::Result = ok", EnumDef, "Result"),
-        ("exception Inner::Failure(message: text)", ExceptionDef, "Failure"),
-        ("type Inner::Count = int", TypeAlias, "Count"),
-        ('agent Inner::reviewer = "runner"', AgentDecl, "reviewer"),
-    ),
-)
-def test_scope_region_declarations_accumulate_shorthand_scope_paths(
-    source: str, kind: type[object], name: str
-) -> None:
-    program = parse_program(f"scope Outer\n{source}\nend Outer")
-
-    (region,) = program.body.items
-    assert isinstance(region, ScopeRegion)
-    (declaration,) = region.items
-    assert isinstance(declaration, kind)
-    assert declaration.name == name
-    assert [segment.name for segment in declaration.scope_path] == ["Outer", "Inner"]
 
 
 def test_region_and_shorthand_declarations_have_the_same_scope_path() -> None:

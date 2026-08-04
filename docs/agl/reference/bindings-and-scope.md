@@ -2,8 +2,8 @@
 
 [← Index](index.md)
 
-AgL has two value binders (`let` and `var`), destructive assignment, a param declaration, an
-agent declaration, and a function declaration (`def`). There is no bare
+AgL has two value binders (`let` and `var`), destructive assignment, a param declaration, and a
+function declaration (`def`). There is no bare
 assignment: `x = e` as an item is a syntax error — use `let`/`var` to bind or
 `:=` to reassign. The equality operator is `==`
 ([Expressions](expressions.md)).
@@ -262,8 +262,8 @@ the runtime after CLI/config resolution.
 Every program param must have a JSON-wire-serializable type, even when it has a
 default and the host does not supply a value. Supported param types are `text`,
 `int`, `decimal`, `bool`, `json`, arrays, dictionaries, records, and enums.
-Runtime-only types such as `unit`, `agent`, and function types cannot be used as
-program param types.
+Runtime-only types such as `unit` and function types cannot be used as program
+param types. `Agent` is ordinary enum data and is valid wherever an enum is.
 
 ## `builtin var` — engine-setting bindings
 
@@ -286,7 +286,7 @@ program's engine settings:
 open import std/config
 
 std/config::max-iters := 10           # write a setting (qualified target)
-runner := "claude -p"                 # the open import also allows a bare target
+default-agent := AgentClaude("sonnet", "medium") # open import allows a bare target
 let cap = std/config::max-iters       # read a setting
 ```
 
@@ -302,46 +302,19 @@ See [Host environment](host-environment.md) for the settings table, their types
 and defaults, and how a source write combines with the host's CLI and config-file
 layers.
 
-## `agent` — declared agents
+## Agent values
 
-```ebnf
-agent_decl ::= "agent" decl_head ("=" STRING)?
-```
-
-`agent` declarations are **entry-module only** — they are a static error
-inside an imported library module (see [Modules](modules.md)). They are valid
-at the module root and in named scope regions. Each declaration enters its
-declaration layer as an **immutable binding of type `agent`**. A qualified
-head declares that member in its exact scope path. Agent values may be stored in bindings, passed to `def` parameters,
-and held in `array[agent]`:
+`Agent` is a standard-library enum. Construct an agent with an enum constructor
+and store it in ordinary bindings, arrays, or function parameters. The word
+`agent` is an ordinary identifier and may also be used as a record field name.
 
 ```agl
-agent reviewer
-agent impl = "claude -p \%{PROMPT_FILE}"
+let reviewer = AgentClaude("sonnet", "medium")
+let impl = AgentCommand("claude -p")
+let agents: array[Agent] = [reviewer, impl]
 
-let agents: array[agent] = [reviewer, impl]
+let r: text = ask("Review the artifact", agent = reviewer)
 ```
-
-A declared agent is a first-class value. It is passed to `ask` via the
-`agent` parameter:
-
-<!-- agl-check: fragment -->
-```agl
-let r: Review = ask("Review %{artifact}", agent = reviewer)
-```
-
-Rules:
-
-1. `agent` declarations are valid at the entry module root and in its named
-   scope regions, never in an ordinary block.
-2. Agent names and variable names share the same value namespace — both are
-   looked up by the same name resolution. An `agent impl` declaration and a
-   `let impl` declaration cannot coexist in the same declaration layer.
-3. Declaring the same agent name twice in one declaration layer is a static
-   error; agents in different scope paths are distinct.
-4. `ask` and `exec` cannot be declared as agents.
-5. An unused declared agent produces a non-fatal **warning**.
-6. The runner hint must be a static string literal with no interpolation.
 
 ## Names, namespaces, and constructors
 

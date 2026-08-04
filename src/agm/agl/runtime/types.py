@@ -1,8 +1,4 @@
-"""Runtime layer plain service dataclasses.
-
-Host-environment bundle (``HostEnvironment``) and static call/agent/param
-declaration summaries (``CallSiteInfo``, ``AgentDeclInfo``, ``ParamDeclInfo``).
-"""
+"""Runtime layer plain service dataclasses."""
 
 from __future__ import annotations
 
@@ -11,13 +7,12 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from agm.agl.capabilities import HostCapabilities
-    from agm.agl.runtime.agents import AgentRegistry
+    from agm.agl.runtime.agents import AgentFn
     from agm.agl.runtime.codec import OutputCodec
     from agm.agl.runtime.externs import ExternRegistry
     from agm.agl.semantics.types import Type as AglType
 
 __all__ = [
-    "AgentDeclInfo",
     "CallSiteInfo",
     "HostEnvironment",
     "ParamDeclInfo",
@@ -28,15 +23,14 @@ __all__ = [
 class HostEnvironment:
     """Assembled host-runtime environment shared by ``run`` and the REPL session.
 
-    Bundles the three pieces that both the whole-program runner
-    (``PipelineDriver.run``) and the incremental ``ReplSession`` need to build
-    identically from a set of agent/codec registrations:
+    Bundles the services that both the whole-program runner
+    (``PipelineDriver.run``) and the incremental ``ReplSession`` use:
 
-    ``registry``
-        The ``AgentRegistry`` (named agents + optional default agent).
+    ``agent_dispatcher``
+        The value-driven host dispatcher for ``Agent`` enum values.
     ``capabilities``
-        The ``HostCapabilities`` static catalog derived from the registry and
-        codecs — consumed by the type checker.
+        The ``HostCapabilities`` static catalog derived from codecs — consumed
+        by the type checker.
     ``codecs``
         The merged ``name → OutputCodec`` table (built-ins + host extras),
         used for contract materialization.
@@ -46,7 +40,7 @@ class HostEnvironment:
         from a program's loaded modules before evaluation.
     """
 
-    registry: "AgentRegistry"
+    agent_dispatcher: "AgentFn | None"
     capabilities: "HostCapabilities"
     codecs: dict[str, "OutputCodec"]
     extern_registry: "ExternRegistry"
@@ -56,8 +50,7 @@ class HostEnvironment:
 class CallSiteInfo:
     """Static summary of one agent-call or exec site (--dry-run inventory).
 
-    ``callee``        Agent or executor name (``"ask"``, ``"exec"``, or a
-                      registered agent name).
+    ``callee``        Agent or executor name (``"ask"`` or ``"exec"``).
     ``target_type``   The target type name (e.g. ``"text"``, ``"Review"``).
     ``codec_name``    Selected codec, or ``"none"`` for a ``unit`` target.
     ``has_schema``    ``True`` when the contract carries a JSON Schema.
@@ -73,31 +66,6 @@ class CallSiteInfo:
     parse_policy: str
     line: int
     col: int
-
-
-@dataclass(frozen=True, slots=True)
-class AgentDeclInfo:
-    """Static summary of one ``agent`` declaration in a program.
-
-    ``name``
-        The declared agent name.
-    ``runner``
-        The optional static runner-command hint (a literal string with NO
-        interpolation), or ``None`` for a bare ``agent NAME`` declaration.
-    ``line``
-        1-based source line of the declaration (``span.start_line``).
-    ``col``
-        1-based source column of the declaration (``span.start_col``).
-    ``scope_path``
-        The structured scope path; empty for a root declaration. This trailing
-        default preserves the original four positional constructor fields.
-    """
-
-    name: str
-    runner: str | None
-    line: int
-    col: int
-    scope_path: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)

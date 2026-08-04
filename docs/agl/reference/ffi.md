@@ -134,7 +134,7 @@ below implies.
 | an enum | `{"$case": <variant name>, ...mapped fields}` |
 | an exception | a `dict` of its mapped fields, keyed by field name |
 | a bare type variable | an opaque **sealed handle** (see below) |
-| a function or agent type | not allowed anywhere in an extern's signature — static error |
+| a function type | not allowed anywhere in an extern's signature — static error |
 
 `Option[T]` gets no special treatment: it is an ordinary two-variant generic
 enum, so `None`/`Some(value = ...)` cross as `{"$case": "None"}` and

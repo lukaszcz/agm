@@ -266,7 +266,9 @@ class TestMultiline:
 
     def test_raw_tail_ask_block_continues_and_uses_mocked_default_agent(self) -> None:
         agent = _CountingAgent("mocked reply")
-        output = drive("ask!\r  summarize this\r\r\x04", session=ReplSession(default_agent=agent))
+        output = drive(
+            "ask!\r  summarize this\r\r\x04", session=ReplSession(agent_dispatcher=agent)
+        )
 
         assert agent.calls == 1
         assert agent.prompts == ["summarize this"]
@@ -615,8 +617,16 @@ class TestCompleter:
     def test_deduplicates_builtin_default_agent_name(self) -> None:
         # A configured default agent is also named ``ask``; completion should
         # keep the builtin-first candidate once, not offer a duplicate.
-        completer = AglCompleter(ReplSession(default_agent=_CountingAgent()))
+        completer = AglCompleter(ReplSession(agent_dispatcher=_CountingAgent()))
         assert _completions(completer, "as").count("ask") == 1
+
+    def test_deduplicates_a_name_from_multiple_completion_sources(self) -> None:
+        class SessionWithBuiltinNamedBinding:
+            def bindings(self) -> list[tuple[str, object, object]]:
+                return [("print", object(), object())]
+
+        completer = AglCompleter(SessionWithBuiltinNamedBinding())
+        assert _completions(completer, "pr").count("print") == 1
 
     def test_no_completion_after_interpolation_opener(self) -> None:
         # Regression: when completions were offered with an empty word after
@@ -703,7 +713,7 @@ class TestDryRun:
         # An entry with an agent call type-checks and echoes its type, but the fake agent
         # is never invoked and no binding is persisted.
         agent = _CountingAgent("should-not-be-used")
-        session = ReplSession(default_agent=agent)
+        session = ReplSession(agent_dispatcher=agent)
         output = drive(
             'let g: text = ask """say something"""\r\x04',
             session=session,
@@ -841,7 +851,7 @@ def _confirming_session(*answers: str, reply: str = "agent-reply") -> tuple[Repl
     mode = AgentMode(mode="confirm")
     underlying = _CountingAgent(reply)
     wrapper = ConfirmingAgent(underlying, mode, confirm=confirm)
-    session = ReplSession(default_agent=wrapper)
+    session = ReplSession(agent_dispatcher=wrapper)
     return session, underlying
 
 

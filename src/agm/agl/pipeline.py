@@ -20,12 +20,8 @@ from typing import TYPE_CHECKING, TypeVar
 
 from agm.agl.diagnostics import AglError, Diagnostic
 from agm.agl.eval.ir_interpreter import IrInterpreter
-from agm.agl.ir.ids import AgentId
 from agm.agl.runtime.agents import AgentFn
 from agm.agl.runtime.params import _materialize_ir_contracts, _prepare_ir_params
-from agm.agl.runtime.types import (
-    AgentDeclInfo as AgentDeclInfo,
-)
 from agm.agl.runtime.types import (
     CallSiteInfo as CallSiteInfo,
 )
@@ -34,7 +30,6 @@ from agm.agl.runtime.types import (
     ParamDeclInfo,
 )
 from agm.agl.self_validation import self_validation_enabled
-from agm.raw_tail_catalog import RAW_TAIL_NAMES
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -56,9 +51,6 @@ if TYPE_CHECKING:
     from agm.agl.typecheck.program import CheckedProgram
 
 _ResultT = TypeVar("_ResultT")
-
-# Reserved agent names: cannot be registered by callers.
-_RESERVED_AGENT_NAMES: frozenset[str] = frozenset({"ask", "exec", "ask-request"}) | RAW_TAIL_NAMES
 
 
 class ArtifactProvenanceError(Exception):
@@ -133,27 +125,6 @@ class PreparedProgram:
     companion_paths: "dict[ModuleId, Path | None]" = field(default_factory=dict)
 
     @property
-    def declared_agents(self) -> tuple[AgentDeclInfo, ...]:
-        """Agent declarations from the entry module, sorted by line/col.
-
-        Empty when load or scope failed (``resolved is None``).
-        """
-        if self.resolved is None:
-            return ()
-        infos = [
-            AgentDeclInfo(
-                name=decl.name,
-                scope_path=scope_path,
-                runner=decl.runner,
-                line=decl.span.start_line,
-                col=decl.span.start_col,
-            )
-            for (scope_path, _name), decl in self.resolved.entry_agents.items()
-        ]
-        infos.sort(key=lambda info: (info.line, info.col))
-        return tuple(infos)
-
-    @property
     def program_name(self) -> str | None:
         """The declared program name from the entry module, or ``None``."""
         from agm.agl.modules.ids import ENTRY_ID
@@ -221,7 +192,7 @@ class RunResult:
         SEPARATE channel and NEVER appear here; on a successful run this list is
         empty.
     ``warnings``
-        Advisory warning-severity diagnostics (e.g. an unused declared agent)
+        Advisory warning-severity diagnostics (e.g. an unused binding)
         surfaced on EVERY path — success, static failure, param-validation
         failure, and uncaught exception.  Same ``Diagnostic`` type as
         ``diagnostics`` but with ``.severity == "warning"``.  Reported to the
@@ -270,10 +241,8 @@ class PipelineDriver:
         loops at that many iterations, raising ``MaxIterationsExceeded``. Self-bounded
         loops (``for``, ``do[n]``) are never affected by this valve.  Resolved
         by the caller as ``--max-iters`` > ``[exec] max-iters``.
-    default_agent : callable or None
-        The callable used for the built-in ``ask`` agent.  ``None`` means
-        no default agent is configured (only explicitly registered agents will
-        be available).
+    agent_dispatcher : callable or None
+        The callable used to dispatch a typed ``Agent`` value for ``ask``.
     shell_exec_timeout : float or None
         Idle timeout (in seconds) applied to every ``exec`` shell call. ``None``
         means no timeout (the shell command may run indefinitely). This is the
@@ -294,23 +263,20 @@ class PipelineDriver:
         *,
         default_strict_json: bool = False,
         default_loop_limit: int | None = None,
-        default_agent: AgentFn | None = None,
-        value_agent: AgentFn | None = None,
+        agent_dispatcher: AgentFn | None = None,
         shell_exec_timeout: float | None = None,
         default_call_depth_limit: int | None = None,
         extern_registry: "ExternRegistry | None" = None,
     ) -> None:
         self._default_strict_json = default_strict_json
         self._default_loop_limit = default_loop_limit
-        self._default_agent = default_agent
-        self._value_agent = value_agent
+        self._agent_dispatcher = agent_dispatcher
         self._shell_exec_timeout = shell_exec_timeout
         self._default_call_depth_limit = (
             default_call_depth_limit
             if default_call_depth_limit is not None
             else IrInterpreter.DEFAULT_MAX_CALL_DEPTH
         )
-        self._agents: dict[AgentId, AgentFn] = {}
         self._extern_registry = extern_registry
         # Extra codecs registered by the host (beyond the built-ins).
         self._extra_codecs: dict[str, "OutputCodec"] = {}
@@ -318,29 +284,6 @@ class PipelineDriver:
         # REPL's per-entry ``host_environment()`` calls reuse one bundle.  Any
         # ``register_*`` invalidates it.
         self._host_env_cache: HostEnvironment | None = None
-
-    def register_agent(self, name: str, fn: AgentFn) -> None:
-        """Register a root-level named agent callable.
-
-        Raises ``ValueError`` if ``name`` is reserved or already registered.
-        """
-        self.register_scoped_agent((), name, fn)
-
-    def register_scoped_agent(self, scope_path: tuple[str, ...], name: str, fn: AgentFn) -> None:
-        """Register a callable for the agent declared at *scope_path* and *name*."""
-        if name in _RESERVED_AGENT_NAMES:
-            raise ValueError(
-                f"Cannot register agent with reserved name {name!r}. "
-                f"Reserved names: {sorted(_RESERVED_AGENT_NAMES)}"
-            )
-        agent_id = AgentId(name, scope_path)
-        if agent_id in self._agents:
-            raise ValueError(
-                f"An agent named {agent_id.display_name!r} is already registered. "
-                "Duplicate registrations are not allowed."
-            )
-        self._agents[agent_id] = fn
-        self._host_env_cache = None
 
     def register_codec(self, codec: "OutputCodec") -> None:
         """Register a custom output codec.
@@ -375,21 +318,14 @@ class PipelineDriver:
     def host_environment(self) -> HostEnvironment:
         """Assemble the shared host environment from this runtime's registrations.
 
-        Returns the ``AgentRegistry``, derived ``HostCapabilities``, and merged
-        codec/renderer tables — the same bundle ``run`` builds internally.  An
-        embedding host (e.g. ``ReplSession``) calls this to wire identical
-        agent/codec/renderer backing without re-running the assembly itself.
-
-        The bundle is invariant between registrations, so it is assembled once
-        and cached; a ``register_*`` call invalidates the cache.  This spares the
-        REPL re-assembling the whole environment on every entry / introspection.
+        Returns the value dispatcher, derived ``HostCapabilities``, and merged
+        codec tables. The bundle is invariant between codec registrations, so it
+        is assembled once and cached.
         """
         if self._host_env_cache is not None:
             return self._host_env_cache
         self._host_env_cache = assemble_host_environment(
-            agents=self._agents,
-            default_agent=self._default_agent,
-            value_agent=self._value_agent,
+            agent_dispatcher=self._agent_dispatcher,
             extra_codecs=self._extra_codecs,
             extern_registry=self._extern_registry,
         )
@@ -416,8 +352,6 @@ class PipelineDriver:
         ``AglRaise`` to a failing ``RunResult``.  All return paths carry
         *warnings*.
         """
-        registry = host_env.registry
-
         ir_param_values, param_errors = _prepare_ir_params(executable, param_values)
         if param_errors:
             return RunResult(ok=False, diagnostics=param_errors, error=None, warnings=warnings)
@@ -471,7 +405,7 @@ class PipelineDriver:
             from agm.agl.runtime.host_settings import HostSettingsReconfigurer
 
             reconfigurer: HostSettingsReconfigurer | None = HostSettingsReconfigurer(
-                registry=registry, trace=trace, policy=host_settings_policy
+                trace=trace, policy=host_settings_policy
             )
         else:
             reconfigurer = None
@@ -479,7 +413,7 @@ class PipelineDriver:
         try:
             interp = IrInterpreter(
                 executable,
-                registry=registry,
+                agent_dispatcher=host_env.agent_dispatcher,
                 strict_json=self._default_strict_json,
                 loop_limit=self._default_loop_limit,
                 shell_exec_timeout=self._shell_exec_timeout,
@@ -661,19 +595,6 @@ class PipelineDriver:
             entry_source, entry_path, roots, resolved, (), all_warnings, companion_paths
         )
 
-    @staticmethod
-    def declared_agents(
-        source: str,
-        *,
-        entry_path: "Path | None" = None,
-        roots: "RootSet | None" = None,
-        default_stdlib: bool = True,
-    ) -> tuple[AgentDeclInfo, ...]:
-        """Return entry-module agent declarations without raising."""
-        return PipelineDriver.prepare_program(
-            source, entry_path=entry_path, roots=roots, default_stdlib=default_stdlib
-        ).declared_agents
-
     def run(
         self,
         source: str,
@@ -834,8 +755,7 @@ class PipelineDriver:
         """Execute an already loaded and scoped program without reloading.
 
         Resumes the pipeline at type checking: ``check_program`` → match
-        compilation → ``lower_program`` → ``IrInterpreter``. Agents are
-        entry-program-owned.
+        compilation → ``lower_program`` → ``IrInterpreter``.
 
         When *prepared* carries a load/scope failure (``resolved is
         None``), its diagnostics are surfaced unchanged and nothing executes.
@@ -1068,8 +988,7 @@ class PipelineDriver:
 
         Called by ``ReplSession`` after a successful entry, to carry that entry's
         engine settings — which a ``std/config`` write may have changed mid-entry
-        — into the entries that follow.  Agent/codec registrations and the
-        call-depth limit are preserved: only the three eval-consumed settings are
+        — into the entries that follow. Only the three eval-consumed settings are
         updated.
         """
         self._default_strict_json = strict_json
@@ -1082,10 +1001,9 @@ class PipelineDriver:
         Called by ``ReplSession.reset()`` so a session's extern state is
         discarded like every other session-scoped binding: after a reset, a
         library module's companion resolves and imports again as though the
-        session were new. Agent/codec registrations and the rest of the
-        assembled host environment are left untouched — only the extern
-        registry is replaced. A no-op before the environment has ever been
-        assembled (nothing cached yet to replace).
+        session were new. The rest of the assembled host environment is left
+        untouched — only the extern registry is replaced. It is a no-op before
+        the environment has ever been assembled.
         """
         if self._host_env_cache is not None:
             from dataclasses import replace
@@ -1357,22 +1275,17 @@ def _wire_extern_registry(
 
 def assemble_host_environment(
     *,
-    agents: dict[AgentId, AgentFn],
-    default_agent: AgentFn | None,
-    value_agent: AgentFn | None,
+    agent_dispatcher: AgentFn | None,
     extra_codecs: dict[str, "OutputCodec"],
     extern_registry: "ExternRegistry | None" = None,
 ) -> HostEnvironment:
     """Assemble the shared host runtime environment from registrations.
 
-    Builds the merged codec table, the ``AgentRegistry``, and the derived
-    ``HostCapabilities`` exactly as ``PipelineDriver.run`` does inline.
-    Used by BOTH ``run`` and ``ReplSession`` so the two share identical
-    agent/codec wiring (CARRY-IN 1: codec_kinds are derived from the actual
-    registries, not from duplicated constants).
+    Builds the merged codec table and the derived ``HostCapabilities`` exactly
+    as ``PipelineDriver.run`` does inline. Used by both ``run`` and
+    ``ReplSession`` so codec capabilities have one source of truth.
     """
     from agm.agl.capabilities import HostCapabilities
-    from agm.agl.runtime.agents import AgentRegistry
     from agm.agl.runtime.codec import JsonCodec, TextCodec
     from agm.agl.runtime.externs import ExternRegistry
 
@@ -1386,19 +1299,13 @@ def assemble_host_environment(
         **extra_codecs,
     }
 
-    registry = AgentRegistry(
-        named=dict(agents),
-        default_agent=default_agent,
-        value_agent=value_agent,
-    )
     capabilities = HostCapabilities(
-        agent_names=registry.agent_names,
         supports_shell_exec=True,
         supports_extern=True,
         codec_kinds={name: codec.supported_kinds for name, codec in all_codecs.items()},
     )
     return HostEnvironment(
-        registry=registry,
+        agent_dispatcher=agent_dispatcher,
         capabilities=capabilities,
         codecs=all_codecs,
         extern_registry=extern_registry if extern_registry is not None else ExternRegistry(),

@@ -31,14 +31,13 @@ if TYPE_CHECKING:
     from collections.abc import Callable, Iterable
     from pathlib import Path
 
-    from agm.agl.ir.ids import AgentId, SymbolId
+    from agm.agl.ir.ids import SymbolId
     from agm.agl.modules.ids import ModuleId
     from agm.agl.modules.loader import LoadedModule
     from agm.agl.modules.roots import RootSet
     from agm.agl.runtime.agents import AgentFn
     from agm.agl.runtime.codec import OutputCodec
     from agm.agl.runtime.host_settings import HostSettingsPolicy
-    from agm.agl.runtime.types import HostEnvironment
     from agm.agl.scope.symbols import ConstructorRef, ScopeNode
     from agm.agl.semantics.types import Type
     from agm.agl.semantics.values import BoolValue, EnumValue, Frame, Value
@@ -110,9 +109,7 @@ class ReplSession:
     """Persistent incremental AgL evaluation session (UI-free core).
 
     Constructor parameters mirror ``PipelineDriver`` so a host can wire the same
-    agent backing.  Registration (``register_agent``/``register_codec``) is
-    delegated to an internal ``PipelineDriver`` so the reserved-name / duplicate
-    validation and host-environment assembly are shared rather than duplicated.
+    value-driven agent dispatcher and codec backing.
 
     Each entry is incrementally linked and executed against a persistent IR base
     frame. Completed effects survive a later runtime failure in the same entry.
@@ -125,8 +122,7 @@ class ReplSession:
         strict_json_host_seeded: bool | None = None,
         default_loop_limit: int | None = None,
         default_call_depth_limit: int | None = None,
-        default_agent: "AgentFn | None" = None,
-        value_agent: "AgentFn | None" = None,
+        agent_dispatcher: "AgentFn | None" = None,
         shell_exec_timeout: float | None = None,
         trace_path: "Path | None" = None,
         params_config_loader: "Callable[[str], dict[str, object]] | None" = None,
@@ -195,8 +191,7 @@ class ReplSession:
             default_strict_json=default_strict_json,
             default_loop_limit=default_loop_limit,
             default_call_depth_limit=default_call_depth_limit,
-            default_agent=default_agent,
-            value_agent=value_agent,
+            agent_dispatcher=agent_dispatcher,
             shell_exec_timeout=shell_exec_timeout,
         )
         # Reuse the driver's resolved (default-applied) limit for the per-entry
@@ -210,12 +205,6 @@ class ReplSession:
         # None for a nominal type.
         self._session_type_paths: dict[tuple[str, ...], str | None] = {}
         self._type_env: TypeEnvironment = TypeEnvironment()
-        # Ambient agents injected by the scope pass carry a synthetic decl_node_id
-        # of -1 (no real AST declaration).  Pre-register AgentType() for this
-        # sentinel so the checker can resolve their binding type when they appear
-        # as call callees or in expressions.  This is seeded into every entry's
-        # fresh TypeEnvironment via seed_from, so it is always available.
-        self._type_env.set_binding_type(-1, self._make_agent_type())
         self._type_env.seal()
         self._link_image = LinkImage()
         self._ir_base_frame: Frame = {}
@@ -227,11 +216,6 @@ class ReplSession:
         self._declared_params: dict[str, tuple[Type, int]] = {}
         # Source log of successfully-promoted entries (for dump_source / :save).
         self._source_log: list[str] = []
-        # Agents declared by source in prior promoted entries, keyed by their
-        # complete structured identity. Root declarations become ambient names;
-        # scoped declarations remain available through retained scope members.
-        # Declarations from a failed/rolled-back entry never land here.
-        self._declared_agents: set[AgentId] = set()
         # Constructor candidates from prior promoted entries, keyed by constructor
         # name → ordered tuple of ConstructorRef.  Passed to resolve() as ambient
         # so that subsequent entries can reference constructors from prior entries.
@@ -268,13 +252,6 @@ class ReplSession:
         self._entry_pipeline = EntryPipeline(self)
 
     @staticmethod
-    def _make_agent_type() -> "Type":
-        """Return an ``AgentType`` instance (deferred import, used at init and reset)."""
-        from agm.agl.semantics.types import AgentType
-
-        return AgentType()
-
-    @staticmethod
     def _type_mentions_entry_nominal(
         typ: "Type", identities: frozenset[tuple[tuple[str, ...], str]]
     ) -> bool:
@@ -292,18 +269,6 @@ class ReplSession:
         from agm.agl.typecheck.env import assert_checked_module_closed
 
         assert_checked_module_closed(checked)
-
-    # ------------------------------------------------------------------
-    # Registration (delegated to the internal runtime — shared validation)
-    # ------------------------------------------------------------------
-
-    def register_agent(self, name: str, fn: "AgentFn") -> None:
-        """Register a root agent (shares ``PipelineDriver`` validation)."""
-        self._runtime.register_agent(name, fn)
-
-    def register_scoped_agent(self, scope_path: tuple[str, ...], name: str, fn: "AgentFn") -> None:
-        """Register an agent for one exact named-scope path."""
-        self._runtime.register_scoped_agent(scope_path, name, fn)
 
     def register_codec(self, codec: "OutputCodec") -> None:
         """Register a custom output codec (shares ``PipelineDriver`` validation)."""
@@ -523,18 +488,6 @@ class ReplSession:
             next_start_id=next_start_id,
             check_only=check_only,
             spaced_qualifiers=spaced_qualifiers,
-        )
-
-    def _ambient_agents(self, host_env: "HostEnvironment") -> frozenset[str]:
-        """Agent names valid WITHOUT an in-entry ``agent`` declaration.
-
-        In the REPL, host registration both declares and backs an agent, so the
-        authoritative set of host-registered names (``capabilities.agent_names``,
-        which excludes the ``ask``/``exec`` built-ins) is ambient, unioned with
-        agents declared by ``agent X`` statements in prior promoted entries.
-        """
-        return host_env.capabilities.agent_names | frozenset(
-            agent_id.declared_name for agent_id in self._declared_agents if not agent_id.scope_path
         )
 
     def _fail(self, diagnostics: list[Diagnostic], warnings: list[Diagnostic]) -> EntryResult:
@@ -826,7 +779,6 @@ class ReplSession:
         from agm.agl.parser import resolve_infix_fixity
         from agm.agl.scope.symbols import ScopeNode
         from agm.agl.syntax.nodes import (
-            AgentDecl,
             EnumDef,
             ExceptionDef,
             FuncDef,
@@ -850,7 +802,6 @@ class ReplSession:
             self._assert_checked_state_closed(checked)
         entry_root = checked.resolved.root_scope
         named_declarations = (
-            AgentDecl,
             EnumDef,
             ExceptionDef,
             FuncDef,
@@ -861,7 +812,7 @@ class ReplSession:
             TypeAlias,
             VarDecl,
         )
-        binding_items = (AgentDecl, FuncDef, ParamDecl, VarDecl)
+        binding_items = (FuncDef, ParamDecl, VarDecl)
         promotion_bindings = {
             item.name: entry_root.bindings[item.name]
             for item in program.body.items
@@ -1067,13 +1018,6 @@ class ReplSession:
             new_type_env.seal()
             self._type_env = new_type_env
 
-        from agm.agl.ir.ids import AgentId
-
-        self._declared_agents.update(
-            AgentId(name, scope_path)
-            for (scope_path, name), declaration in checked.resolved.declared_agents.items()
-            if _is_promoted(declaration.node_id)
-        )
         if promoted_type_identities:
             promoted_candidates: dict[str, tuple[ConstructorRef, ...]] = {}
             for (_path, cname), crefs in checked.resolved.constructor_candidates_by_path.items():
@@ -1134,7 +1078,6 @@ class ReplSession:
         names are never listed separately, only the enum's own declared name.
         """
         from agm.agl.syntax.nodes import (
-            AgentDecl,
             EnumDef,
             ExceptionDef,
             FuncDef,
@@ -1146,7 +1089,7 @@ class ReplSession:
             pattern_binder_candidates,
         )
 
-        binding_items = (AgentDecl, FuncDef, ParamDecl, VarDecl)
+        binding_items = (FuncDef, ParamDecl, VarDecl)
         type_items = (RecordDef, EnumDef, ExceptionDef, TypeAlias)
         installed: list[str] = []
         for item in program.body.items:
@@ -1203,7 +1146,6 @@ class ReplSession:
         """Classify the entry by its last item; return (kind, name)."""
         from agm.agl.modules.ids import spell_scope_path
         from agm.agl.syntax.nodes import (
-            AgentDecl,
             AssignStmt,
             Binder,
             Declaration,
@@ -1251,7 +1193,6 @@ class ReplSession:
                 ParamDecl,
                 ProgramDecl,
                 FuncDef,
-                AgentDecl,
             ),
         ):
             # A shorthand declaration path names the member it declares, so the
@@ -1391,14 +1332,6 @@ class ReplSession:
             result.append((name, typ, value))
         return result
 
-    def agents(self) -> list[str]:
-        """Return retained legacy registrations and default ``ask`` when available."""
-        registry = self._runtime.host_environment().registry
-        names = sorted(registry.agent_names)
-        if registry.has_default_agent:
-            names.append("ask")
-        return names
-
     def declared_params(self) -> list[tuple[str, "Type", "Value"]]:
         """Return declared params as (external key, type, resolved value).
 
@@ -1448,8 +1381,6 @@ class ReplSession:
         self._session_scope_nodes = {(): self._session_scope}
         self._session_type_paths = {}
         self._type_env = TypeEnvironment()
-        # Re-seed the sentinel AgentType for ambient agents (see __init__).
-        self._type_env.set_binding_type(-1, self._make_agent_type())
         self._type_env.seal()
         self._link_image = LinkImage()
         self._ir_base_frame = {}
@@ -1458,7 +1389,6 @@ class ReplSession:
         self._active_config = {}
         self._declared_params = {}
         self._source_log = []
-        self._declared_agents = set()
         self._ambient_constructor_candidates = {}
         self._ambient_type_names = frozenset()
         # Re-seed the host-consumed registers so a prior ``std/config::runner``
@@ -1467,16 +1397,6 @@ class ReplSession:
         self._persisted_strict_json = self._build_reset_strict_json_setting()
         self._persisted_timeout_setting = self._build_reset_timeout_setting_base()
         self._trace_path = self._initial_trace_path
-        if self._host_settings_policy is not None:
-            from agm.agl.runtime.params import build_engine_config_base
-            from agm.agl.semantics.values import TextValue
-
-            runner = self._persisted_host_settings.get("runner")
-            if runner is None:
-                runner = build_engine_config_base({})["runner"]
-            assert isinstance(runner, TextValue)
-            registry = self._runtime.host_environment().registry
-            registry.set_default_agent(self._host_settings_policy.build_runner(runner.value))
         # Restore the initial host controls or, where none exist, the declared
         # defaults evaluated when ``std/config`` was loaded before :reset.
         strict_json, loop_limit, shell_exec_timeout = self._reset_live_engine_settings()

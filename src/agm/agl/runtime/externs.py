@@ -54,7 +54,6 @@ from agm.agl.runtime.serialize import value_to_json_obj
 from agm.agl.semantics.cycles import AglCyclicValue, cyclic_value_raise, enter_container
 from agm.agl.semantics.exceptions import AglRaise, make_builtin_exception
 from agm.agl.semantics.values import (
-    AgentValue,
     ArrayValue,
     BoolValue,
     ConstructorValue,
@@ -291,8 +290,6 @@ def _sealed_value_eq_key(value: Value) -> object:
         )
     if isinstance(value, UnitValue):
         return ("unit",)
-    if isinstance(value, AgentValue):
-        return ("agent", value.name)
     if isinstance(value, ConstructorValue):
         return ("constructor", value.nominal, value.variant)
     if isinstance(value, (IrClosureValue, IteratorValue)):
@@ -755,7 +752,7 @@ class ExternRegistry:
     a different companion module, cached callables for that module id are
     discarded.  :meth:`invoke` is the single chokepoint that turns every runtime
     failure crossing the boundary into a catchable ``ExternError``, mirroring
-    ``AgentRegistry.dispatch``.
+    the agent value dispatcher.
     """
 
     def __init__(self) -> None:
@@ -861,7 +858,7 @@ class ExternRegistry:
         decodes its result.  All three runtime failure classes — *fn*
         raising, a return-contract violation, and an argument-conversion
         failure — become ``AglRaise(ExternError)`` here, the single
-        chokepoint mirroring ``AgentRegistry.dispatch``.  ``python_type`` is
+        chokepoint. ``python_type`` is
         the raising Python exception's class name, or empty for a contract
         violation.
 

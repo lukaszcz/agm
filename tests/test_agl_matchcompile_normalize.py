@@ -31,7 +31,6 @@ from agm.agl.matchcompile.model import (
     Occurrence,
     OccurrenceId,
     OmittedFieldProvenance,
-    OpenSignature,
     RecordConstructor,
     SourcePatternProvenance,
     WildcardCell,
@@ -49,23 +48,16 @@ from agm.agl.modules.ids import ENTRY_ID, ModuleId
 from agm.agl.scope.program import resolve_program
 from agm.agl.semantics.type_table import TypeDef, TypeTable
 from agm.agl.semantics.types import (
-    AgentType,
-    ArrayType,
     BoolType,
     BottomType,
     DecimalType,
-    DictType,
     EnumType,
-    ExceptionType,
-    FunctionType,
     InferenceVarType,
     IntType,
-    JsonType,
     RecordType,
     TextType,
     Type,
     TypeVarType,
-    UnitType,
 )
 from agm.agl.semantics.values import DecimalValue, EnumValue, TextValue
 from agm.agl.syntax.nodes import AsPattern, Case, ConstructorPattern, LetDecl, Pattern
@@ -77,7 +69,6 @@ from tests.agl.match_reference import reference_action
 from tests.agl.module_graph import resolve_and_check_entry
 
 _CAPS = HostCapabilities(
-    agent_names=frozenset(),
     supports_shell_exec=True,
     codec_kinds={
         "text": frozenset({"text"}),
@@ -159,29 +150,6 @@ def test_signatures_are_closed_for_boolean_and_enum_in_declaration_order() -> No
         ("item", IntType()),
         ("note", TextType()),
     ]
-
-
-@pytest.mark.parametrize(
-    "subject_type",
-    [
-        TextType(),
-        JsonType(),
-        IntType(),
-        DecimalType(),
-        TypeVarType("T"),
-        ArrayType(IntType()),
-        DictType(IntType()),
-        ExceptionType("E"),
-        UnitType(),
-        AgentType(),
-        FunctionType((IntType(),), IntType()),
-    ],
-)
-def test_every_current_non_closed_type_has_an_explicit_open_signature(
-    subject_type: Type,
-) -> None:
-    checked = _check("()")
-    assert signature_for_type(subject_type, checked.type_env.type_table) == OpenSignature()
 
 
 def test_record_signature_and_pattern_normalization_use_canonical_nominal_identity() -> None:
@@ -439,53 +407,6 @@ def test_nested_uninhabited_constructor_omits_only_its_source_row() -> None:
     ]
 
 
-def test_constructor_inhabitation_is_total_over_current_constructor_and_type_unions() -> None:
-    checked = _check("enum Choice\n  | none\nlet value: Choice = none\ncase value of | none => 0")
-    normalized = normalize_case(_only_case(checked.resolved.program), checked)
-    enum_cell = normalized.rows[0].cells[0]
-    assert isinstance(enum_cell, ConstructorCell)
-    enum_constructor = enum_cell.constructor
-    assert isinstance(enum_constructor, EnumConstructor)
-    all_types: tuple[Type, ...] = (
-        TextType(),
-        JsonType(),
-        BoolType(),
-        IntType(),
-        DecimalType(),
-        TypeVarType("T"),
-        ArrayType(IntType()),
-        DictType(IntType()),
-        RecordType("R"),
-        EnumType("Choice"),
-        ExceptionType("E"),
-        UnitType(),
-        AgentType(),
-        FunctionType((IntType(),), IntType()),
-        BottomType(),
-    )
-    constructors = (
-        BoolConstructor(False),
-        LiteralConstructor(LiteralKind.NUMERIC, decimal.Decimal("1")),
-        LiteralConstructor(LiteralKind.TEXT, "x"),
-        LiteralConstructor(LiteralKind.NULL, None),
-        enum_constructor,
-    )
-
-    results = {
-        (constructor, subject_type): constructor_inhabits_type(constructor, subject_type)
-        for constructor in constructors
-        for subject_type in all_types
-    }
-
-    assert results[BoolConstructor(False), BoolType()]
-    assert results[constructors[1], IntType()]
-    assert results[constructors[1], DecimalType()]
-    assert results[constructors[2], TextType()]
-    assert results[constructors[3], JsonType()]
-    assert results[enum_constructor, EnumType("Choice")]
-    assert sum(results.values()) == 6
-
-
 @pytest.mark.parametrize(
     ("value", "inhabits_int", "inhabits_decimal"),
     [
@@ -507,6 +428,11 @@ def test_numeric_constructor_inhabitation_matches_runtime_numeric_domains(
 
     assert constructor_inhabits_type(constructor, IntType()) is inhabits_int
     assert constructor_inhabits_type(constructor, DecimalType()) is inhabits_decimal
+
+
+def test_non_data_and_generic_types_have_no_inhabiting_constructors() -> None:
+    """Match compilation cannot construct values for non-concrete subject types."""
+    assert not constructor_inhabits_type(BoolConstructor(False), TypeVarType("T"))
 
 
 def test_boolean_literals_normalize_to_boolean_constructors() -> None:

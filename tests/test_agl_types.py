@@ -22,7 +22,6 @@ from agm.agl.capabilities import HostCapabilities
 from agm.agl.modules.ids import ModuleId
 from agm.agl.semantics.type_table import TypeTable, comparable_types
 from agm.agl.semantics.types import (
-    AgentType,
     ArrayType,
     BoolType,
     BottomType,
@@ -82,22 +81,6 @@ class TestUnitType:
 # ---------------------------------------------------------------------------
 # AgentType
 # ---------------------------------------------------------------------------
-
-
-class TestAgentType:
-    def test_kind(self) -> None:
-        assert AgentType().kind == "agent"
-
-    def test_repr(self) -> None:
-        assert repr(AgentType()) == "agent"
-
-    def test_equality(self) -> None:
-        assert AgentType() == AgentType()
-
-    def test_frozen(self) -> None:
-        a = AgentType()
-        with pytest.raises(Exception):
-            setattr(a, "kind", "x")
 
 
 # ---------------------------------------------------------------------------
@@ -179,9 +162,6 @@ class TestIsJsonShaped:
     def test_unit_not_json_shaped(self) -> None:
         assert is_json_shaped(UnitType()) is False
 
-    def test_agent_not_json_shaped(self) -> None:
-        assert is_json_shaped(AgentType()) is False
-
     def test_function_not_json_shaped(self) -> None:
         f = FunctionType(params=(IntType(),), result=TextType())
         assert is_json_shaped(f) is False
@@ -240,9 +220,6 @@ class TestIsAssignable:
     def test_unit_to_unit(self) -> None:
         assert is_assignable(UnitType(), UnitType()) is True
 
-    def test_agent_to_agent(self) -> None:
-        assert is_assignable(AgentType(), AgentType()) is True
-
     def test_function_to_same_function(self) -> None:
         f = FunctionType(params=(IntType(),), result=TextType())
         assert is_assignable(f, f) is True
@@ -253,20 +230,12 @@ class TestIsAssignable:
         assert is_assignable(f1, f2) is True
 
     # Negative cases — no widening, no variance.
-    def test_unit_not_assignable_to_agent(self) -> None:
-        assert is_assignable(UnitType(), AgentType()) is False
-
-    def test_agent_not_assignable_to_unit(self) -> None:
-        assert is_assignable(AgentType(), UnitType()) is False
 
     def test_unit_not_assignable_to_int(self) -> None:
         assert is_assignable(UnitType(), IntType()) is False
 
     def test_int_not_assignable_to_unit(self) -> None:
         assert is_assignable(IntType(), UnitType()) is False
-
-    def test_agent_not_assignable_to_int(self) -> None:
-        assert is_assignable(AgentType(), IntType()) is False
 
     def test_function_param_mismatch_not_assignable(self) -> None:
         f1 = FunctionType(params=(IntType(),), result=TextType())
@@ -304,8 +273,6 @@ class TestIsAssignable:
 
 class TestComparableTypes:
     # New types: never comparable (even with themselves).
-    def test_agent_vs_agent_not_comparable(self) -> None:
-        assert comparable_types(AgentType(), AgentType(), _EMPTY_TABLE) is False
 
     def test_unit_vs_unit_not_comparable(self) -> None:
         assert comparable_types(UnitType(), UnitType(), _EMPTY_TABLE) is False
@@ -318,12 +285,6 @@ class TestComparableTypes:
         f1 = FunctionType(params=(IntType(),), result=IntType())
         f2 = FunctionType(params=(IntType(),), result=IntType())
         assert comparable_types(f1, f2, _EMPTY_TABLE) is False
-
-    def test_agent_vs_int_not_comparable(self) -> None:
-        assert comparable_types(AgentType(), IntType(), _EMPTY_TABLE) is False
-
-    def test_int_vs_agent_not_comparable(self) -> None:
-        assert comparable_types(IntType(), AgentType(), _EMPTY_TABLE) is False
 
     def test_unit_vs_text_not_comparable(self) -> None:
         assert comparable_types(UnitType(), TextType(), _EMPTY_TABLE) is False

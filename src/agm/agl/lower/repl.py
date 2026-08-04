@@ -16,7 +16,6 @@ from agm.agl.matchcompile import MatchCompiledProgram
 from agm.agl.modules.ids import ModuleId
 from agm.agl.semantics.types import iter_nominal_types
 from agm.agl.syntax.nodes import (
-    AgentDecl,
     Binder,
     Declaration,
     EnumDef,
@@ -243,7 +242,6 @@ def _item_declaration_ids(item: Item, checked: "CheckedModule") -> frozenset[int
     if isinstance(
         item,
         (
-            AgentDecl,
             EnumDef,
             ExceptionDef,
             FuncDef,
@@ -419,7 +417,6 @@ def lower_repl_program(
         _already_linked=frozenset(image._linked_modules),
         _entry_source_text=source_text,
         contract_payloads=contract_payloads,
-        _eager_scoped_agents=True,
     )
     checked = compiled.checked
     entry = checked.modules[checked.entry_id].resolved.program

@@ -44,7 +44,6 @@ from agm.agl.ir.contracts import ContractRequest, ConversionFailureMode
 from agm.agl.ir.ids import ContractId, FunctionId, Location, NominalId, SymbolId
 from agm.agl.ir.nodes import (
     AutoTraceField,
-    IrAgentHandle,
     IrAnd,
     IrArith,
     IrAsk,
@@ -128,7 +127,7 @@ from agm.agl.ir.program import (
 )
 from agm.agl.ir.validate import InvalidIrError
 from agm.agl.modules.ids import ModuleId
-from agm.agl.runtime.agents import AgentRegistry
+from agm.agl.runtime.agents import AgentFn
 from agm.agl.runtime.codec import ParseResult, _parse_contract_output
 from agm.agl.runtime.convert import StrictJsonParseError, parse_json_strict
 from agm.agl.runtime.externs import ExternRegistry
@@ -144,7 +143,6 @@ from agm.agl.semantics.exceptions import make_builtin_exception as _make_exc_val
 from agm.agl.semantics.values import (
     UNIT_VALUE,
     VOID_VALUE,
-    AgentValue,
     ArrayValue,
     BoolValue,
     Cell,
@@ -400,7 +398,7 @@ class IrInterpreter:
         trace: TraceStore | None = None,
         max_call_depth: int = DEFAULT_MAX_CALL_DEPTH,
         param_values: Mapping[SymbolId, Value] | None = None,
-        registry: AgentRegistry | None = None,
+        agent_dispatcher: AgentFn | None = None,
         strict_json: bool = False,
         loop_limit: int | None = None,
         shell_exec_timeout: float | None = None,
@@ -421,12 +419,7 @@ class IrInterpreter:
         self._param_values: Mapping[SymbolId, Value] = (
             param_values if param_values is not None else {}
         )
-        self._registry: AgentRegistry = (
-            registry if registry is not None else AgentRegistry(named={}, default_agent=None)
-        )
-        # Ask dispatch is value-driven: effects receive this callable directly
-        # rather than resolving a named entry through the compatibility registry.
-        self._agent_dispatcher = self._registry.value_dispatcher
+        self._agent_dispatcher = agent_dispatcher
         # Bootstrap the setting fields so declared defaults can be evaluated by
         # the ordinary, typeless evaluator. Constant defaults cannot read a
         # setting or invoke a host operation, so this temporary state is never
@@ -493,7 +486,6 @@ class IrInterpreter:
             key: seed.get(key, defaults[key]) for key in HOST_CONSUMED_ENGINE_KEYS
         }
         if self._host_reconfigurer is not None:
-            self._reconfigure_host_service("runner")
             self._reconfigure_host_service("log")
         self._host_contracts: Mapping[ContractId, OutputContract] = (
             host_contracts if host_contracts is not None else {}
@@ -1574,9 +1566,6 @@ class IrInterpreter:
                     deep_copy_value(value) if kind is CopyKind.DEEP else shallow_copy_value(value)
                 )
 
-            case IrAgentHandle(agent_id=agent_id):
-                return AgentValue(name=agent_id.display_name, agent_id=agent_id)
-
             case IrAsk(
                 agent=agent_expr,
                 prompt=prompt_expr,
@@ -1646,8 +1635,8 @@ class IrInterpreter:
         The three runtime-live keys route through ``_apply_config_effect`` so the
         live effect (loop cap, strict-json mode, shell timeout) takes hold from
         the write onward; the host-consumed keys update their register.
-        ``runner``, ``log``, and ``log-file`` additionally reconfigure live host
-        services when a host reconfigurer is present; ``default-agent`` does not.
+        ``log`` and ``log-file`` additionally reconfigure the live trace service
+        when a host reconfigurer is present; ``default-agent`` does not.
         """
         if key in RUNTIME_LIVE_ENGINE_KEYS:
             self._apply_config_effect(key, value)
@@ -1673,37 +1662,20 @@ class IrInterpreter:
     def _reconfigure_host_service(self, key: str) -> None:
         """Reflect a host-consumed register write into the live host service.
 
-        ``runner`` rebuilds the default agent; ``log``/``log-file`` recompute the
-        trace destination from the current register pair (either write repoints
-        the same trace store). ``default-agent`` is a register-only setting and
-        deliberately has no host reconfiguration. Requires a live reconfigurer.
+        ``log``/``log-file`` recompute the trace destination from the current
+        register pair (either write repoints the same trace store).
         """
         assert self._host_reconfigurer is not None
-        if key == "runner":
-            runner = self._builtin_host_settings["runner"]
-            assert isinstance(runner, TextValue)
-            try:
-                self._host_reconfigurer.reconfigure_runner(runner.value)
-            except ValueError as exc:
-                raise AglRaise(
-                    _make_exc_value(
-                        "ValueError",
-                        f"invalid runner: {exc}",
-                        nominals=self._program.builtin_nominals,
-                        trace_id=self._trace.new_event_id(),
-                    )
-                ) from exc
-        else:
-            log = self._builtin_host_settings["log"]
-            assert isinstance(log, BoolValue)
-            log_file_reg = self._builtin_host_settings["log-file"]
-            assert isinstance(log_file_reg, EnumValue)
-            log_file: str | None = None
-            if log_file_reg.variant == "Some":
-                payload = log_file_reg.fields["value"]
-                assert isinstance(payload, TextValue)
-                log_file = payload.value
-            self._host_reconfigurer.reconfigure_trace(enabled=log.value, log_file=log_file)
+        log = self._builtin_host_settings["log"]
+        assert isinstance(log, BoolValue)
+        log_file_reg = self._builtin_host_settings["log-file"]
+        assert isinstance(log_file_reg, EnumValue)
+        log_file: str | None = None
+        if log_file_reg.variant == "Some":
+            payload = log_file_reg.fields["value"]
+            assert isinstance(payload, TextValue)
+            log_file = payload.value
+        self._host_reconfigurer.reconfigure_trace(enabled=log.value, log_file=log_file)
 
     # ------------------------------------------------------------------
     # Engine-setting effect

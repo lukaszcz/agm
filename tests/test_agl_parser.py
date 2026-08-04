@@ -43,7 +43,6 @@ from agm.agl.parser import (
 )
 from agm.agl.parser.errors import syntax_error_from_lark
 from agm.agl.syntax import (
-    AgentDecl,
     ArrayLit,
     AsPattern,
     AssignStmt,
@@ -109,7 +108,6 @@ from agm.agl.syntax import (
 )
 from agm.agl.syntax.nodes import ELSE
 from agm.agl.syntax.types import (
-    AgentT,
     AppliedT,
     ArrayT,
     BoolT,
@@ -593,11 +591,6 @@ class TestTypeExpressions:
         assert isinstance(let, LetDecl)
         assert isinstance(let.type_ann, UnitT)
 
-    def test_agent_type(self) -> None:
-        let = first(parse("let a: agent = rev"))
-        assert isinstance(let, LetDecl)
-        assert isinstance(let.type_ann, AgentT)
-
     def test_func_type_one_param(self) -> None:
         let = first(parse("let f: (int) -> text = classify"))
         assert isinstance(let, LetDecl)
@@ -755,17 +748,6 @@ class TestDeclarations:
         inp = first(parse("param count: int"))
         assert isinstance(inp, ParamDecl)
         assert isinstance(inp.annotation, IntT)
-
-    def test_agent_decl_bare(self) -> None:
-        ag = first(parse("agent reviewer"))
-        assert isinstance(ag, AgentDecl)
-        assert ag.name == "reviewer"
-        assert ag.runner is None
-
-    def test_agent_decl_with_runner(self) -> None:
-        ag = first(parse('agent planner = "claude -p \\%{PROMPT_FILE}"'))
-        assert isinstance(ag, AgentDecl)
-        assert ag.runner == "claude -p %{PROMPT_FILE}"
 
     def test_exception_def_simple(self) -> None:
         exc = first(parse("exception MyErr(msg: text)"))
@@ -1086,12 +1068,6 @@ class TestParseTypeExpr:
 
         result = parse_type_expr("unit")
         assert isinstance(result, UnitT)
-
-    def test_agent_type(self) -> None:
-        from agm.agl.syntax.types import AgentT
-
-        result = parse_type_expr("agent")
-        assert isinstance(result, AgentT)
 
     def test_qualified_named_type(self) -> None:
         from agm.agl.syntax.types import AppliedT
@@ -1877,11 +1853,6 @@ class TestTypedCalls:
         call = first(parse('ask-request::[text]("p")'))
         assert isinstance(call, Call)
         assert isinstance(call.type_args[0], TextT)
-
-    def test_typed_call_agent_type(self) -> None:
-        call = first(parse('ask-request::[agent]("p")'))
-        assert isinstance(call, Call)
-        assert isinstance(call.type_args[0], AgentT)
 
     def test_typed_call_generic_type(self) -> None:
         call = first(parse('ask-request::[array[Review]]("p")'))
@@ -2739,10 +2710,6 @@ class TestTemplates:
         interps = [s for s in t.segments if isinstance(s, InterpSegment)]
         assert len(interps) == 2
 
-    def test_interpolated_agent_runner_raises(self) -> None:
-        with pytest.raises(AglSyntaxError, match="literal string"):
-            parse('agent reviewer = "runner %{x}"')
-
     def test_pattern_interpolated_string_raises(self) -> None:
         with pytest.raises(AglSyntaxError, match="interpolation"):
             parse('case x of | "%{y}" => ok')
@@ -2913,26 +2880,6 @@ class TestFullPrograms:
         assert isinstance(body, Block)
         assert len(body.items) == 3
 
-    def test_agent_and_ask_program(self) -> None:
-        src = (
-            "agent reviewer\n"
-            "agent planner\n"
-            'let s = ask "Hello?"\n'
-            'let r = ask("Review", agent = reviewer)\n'
-            "print r"
-        )
-        prog = parse(src)
-        assert len(items(prog)) == 5
-        assert isinstance(items(prog)[0], AgentDecl)
-        assert isinstance(items(prog)[2], LetDecl)
-        # 4th item: ask with named arg
-        let_r = items(prog)[3]
-        assert isinstance(let_r, LetDecl)
-        call = let_r.value
-        assert isinstance(call, Call)
-        assert len(call.named_args) == 1
-        assert call.named_args[0].name == "agent"
-
     def test_factorial_recursion(self) -> None:
         src = "def fact(n: int) -> int =\n  if n <= 1 => 1\n  | else => n"
         prog = parse(src)
@@ -2949,14 +2896,6 @@ class TestFullPrograms:
         src = 'let res = exec "ls -la"\nprint(res.stdout)\nif res.exit_code != 0 => print(x)'
         prog = parse(src)
         assert len(items(prog)) == 3
-
-    def test_agent_as_type_field(self) -> None:
-        """agent as field name in a record."""
-        prog = parse("record AgentRef\n  agent: agent")
-        rec = first(prog)
-        assert isinstance(rec, RecordDef)
-        assert rec.fields[0].name == "agent"
-        assert isinstance(rec.fields[0].type_expr, AgentT)
 
 
 # ---------------------------------------------------------------------------
@@ -4425,38 +4364,6 @@ print exec! true
             exc_info.value.span.end_line,
             exc_info.value.span.end_col,
         ) == expected_span
-
-    @pytest.mark.parametrize(
-        "source",
-        (
-            "let exec! = 1",
-            "var ask! = 1",
-            "param exec!",
-            "def ask!() -> int = 1",
-            "agent ask!",
-            "record exec! value: int",
-            "record R\n  exec!: int",
-            "enum ask! = Variant",
-            "enum E = ask!",
-            "exception exec! value: int",
-            "exception X\n  ask!: int",
-            "type ask! = int",
-            "program exec!",
-            "for exec! in [] do 1 done",
-            "case x of value as ask! => 1",
-            "case x of ask! => 1",
-            "::ask!",
-            "let x = ::ask!",
-            "module::exec!",
-            "Type[int]::exec!",
-            "module::Type[int]::ask!",
-            "value.ask!",
-        ),
-    )
-    def test_reserved_raw_name_has_a_frontend_diagnostic(self, source: str) -> None:
-        with pytest.raises(AglSyntaxError) as exc_info:
-            parse(source)
-        assert_raw_tail_name_span(exc_info.value, source)
 
     @pytest.mark.parametrize(
         "source",

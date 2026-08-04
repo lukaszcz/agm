@@ -4,10 +4,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from agm.agent.config import default_agent_runner
 from agm.agent.io import StreamCallback, write_stderr, write_stdout
 from agm.agent.prompt_source import PromptSourceOptions
-from agm.agent.review.prompt_pass import prepare_prompt_pass
+from agm.agent.review.prompt_pass import DEFAULT_REVIEW_WORKFLOW_RUNNER, prepare_prompt_pass
 from agm.agent.runner import (
     PreparedPromptRun,
     cleanup_temp_files,
@@ -58,7 +57,7 @@ def prepare_revise(args: ReviseArgs, *, temp_files: list[Path] | None = None) ->
     _exit_if_lone_revise_command_name(args)
     context = current_config_context()
     config = _revise_config(args.command_name, require_command=args.require_command_config)
-    runner = args.runner or config.runner or default_agent_runner()
+    runner = args.runner or config.runner or DEFAULT_REVIEW_WORKFLOW_RUNNER
     env = clone_env()
     review_file = path_from_cli(args.review_file, cwd=context.cwd)
     env["REVIEW_FILE"] = str(review_file)

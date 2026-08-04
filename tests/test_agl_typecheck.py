@@ -47,7 +47,6 @@ from agm.agl.semantics.types import (
     is_json_shaped,
 )
 from agm.agl.syntax.nodes import (
-    AgentDecl,
     ArrayLit,
     AsPattern,
     AssignStmt,
@@ -89,7 +88,6 @@ from agm.agl.syntax.nodes import (
 )
 from agm.agl.syntax.spans import SourceSpan
 from agm.agl.syntax.types import (
-    AgentT,
     ArrayT,
     BoolT,
     DictT,
@@ -101,7 +99,6 @@ from agm.agl.syntax.types import (
     UnitT,
 )
 from agm.agl.typecheck import (
-    AgentType,
     AglTypeError,
     ArrayType,
     BoolType,
@@ -142,7 +139,6 @@ from tests.agl.module_graph import check_resolved, resolve_and_check_entry, reso
 
 def default_capabilities() -> HostCapabilities:
     return HostCapabilities(
-        agent_names=frozenset(),
         supports_shell_exec=True,
         codec_kinds={
             "text": frozenset({"text"}),
@@ -155,14 +151,12 @@ def default_capabilities() -> HostCapabilities:
 
 def text_only_caps() -> HostCapabilities:
     return HostCapabilities(
-        agent_names=frozenset(),
         codec_kinds={"text": frozenset({"text"})},
     )
 
 
 def no_agent_caps() -> HostCapabilities:
     return HostCapabilities(
-        agent_names=frozenset(),
         supports_shell_exec=True,
         codec_kinds={
             "text": frozenset({"text"}),
@@ -175,7 +169,6 @@ def no_agent_caps() -> HostCapabilities:
 
 def no_exec_caps() -> HostCapabilities:
     return HostCapabilities(
-        agent_names=frozenset(),
         supports_shell_exec=False,
         codec_kinds={"text": frozenset({"text"})},
     )
@@ -274,10 +267,6 @@ class TestBottomType:
     def test_kind(self) -> None:
         assert BottomType().kind == "bottom"
 
-    def test_is_assignable_to_any(self) -> None:
-        for t in (TextType(), IntType(), BoolType(), UnitType(), AgentType(), JsonType()):
-            assert is_assignable(BottomType(), t)
-
     def test_not_json_shaped(self) -> None:
         assert not is_json_shaped(BottomType())
 
@@ -316,9 +305,6 @@ class TestIsJsonShaped:
     def test_dict_of_json_shaped(self) -> None:
         assert is_json_shaped(DictType(value=TextType()))
 
-    def test_dict_of_non_json(self) -> None:
-        assert not is_json_shaped(DictType(value=AgentType()))
-
     def test_record_not_json_shaped(self) -> None:
         rt = RecordType(name="R")
         assert not is_json_shaped(rt)
@@ -332,9 +318,6 @@ class TestIsJsonShaped:
 
     def test_unit_not_json_shaped(self) -> None:
         assert not is_json_shaped(UnitType())
-
-    def test_agent_not_json_shaped(self) -> None:
-        assert not is_json_shaped(AgentType())
 
     def test_function_not_json_shaped(self) -> None:
         assert not is_json_shaped(FunctionType(params=(IntType(),), result=IntType()))
@@ -373,9 +356,6 @@ class TestComparableTypes:
         assert comparable_types(IntType(), DecimalType(), _EMPTY_TABLE)
         assert comparable_types(DecimalType(), IntType(), _EMPTY_TABLE)
 
-    def test_agent_not_comparable(self) -> None:
-        assert not comparable_types(AgentType(), AgentType(), _EMPTY_TABLE)
-
     def test_function_not_comparable(self) -> None:
         ft = FunctionType(params=(), result=IntType())
         assert not comparable_types(ft, ft, _EMPTY_TABLE)
@@ -398,11 +378,6 @@ class TestComparableTypes:
         ft = FunctionType(params=(), result=IntType())
         assert not comparable_types(ArrayType(elem=ft), ArrayType(elem=ft), _EMPTY_TABLE)
 
-    def test_array_of_agent_not_comparable(self) -> None:
-        assert not comparable_types(
-            ArrayType(elem=AgentType()), ArrayType(elem=AgentType()), _EMPTY_TABLE
-        )
-
     def test_array_of_unit_not_comparable(self) -> None:
         assert not comparable_types(
             ArrayType(elem=UnitType()), ArrayType(elem=UnitType()), _EMPTY_TABLE
@@ -411,13 +386,6 @@ class TestComparableTypes:
     def test_dict_of_function_not_comparable(self) -> None:
         ft = FunctionType(params=(IntType(),), result=TextType())
         assert not comparable_types(DictType(value=ft), DictType(value=ft), _EMPTY_TABLE)
-
-    def test_record_with_agent_field_not_comparable(self) -> None:
-        rt = RecordType(name="R")
-        typedef = TypeDef(
-            kind="record", name="R", module_id=rt.module_id, fields=(("a", AgentType()),)
-        )
-        assert not comparable_types(rt, rt, _table_for(typedef))
 
     def test_record_with_function_field_not_comparable(self) -> None:
         ft = FunctionType(params=(), result=IntType())
@@ -440,44 +408,6 @@ class TestComparableTypes:
             kind="exception", name="E", module_id=et.module_id, fields=(("handler", ft),)
         )
         assert not comparable_types(et, et, _table_for(typedef))
-
-    def test_exception_base_with_non_comparable_descendant_not_comparable(self) -> None:
-        base = ExceptionType(name="Base")
-        child = ExceptionType(name="Child")
-        table = _table_for(
-            TypeDef(kind="exception", name="Base", module_id=base.module_id),
-            TypeDef(
-                kind="exception",
-                name="Child",
-                module_id=child.module_id,
-                base=(base.module_id, base.name),
-                fields=(("assignee", AgentType()),),
-            ),
-        )
-        assert not comparable_types(base, base, table)
-
-    def test_exception_sibling_of_non_comparable_descendant_remains_comparable(self) -> None:
-        base = ExceptionType(name="Base")
-        bad = ExceptionType(name="Bad")
-        good = ExceptionType(name="Good")
-        table = _table_for(
-            TypeDef(kind="exception", name="Base", module_id=base.module_id),
-            TypeDef(
-                kind="exception",
-                name="Bad",
-                module_id=bad.module_id,
-                base=(base.module_id, base.name),
-                fields=(("assignee", AgentType()),),
-            ),
-            TypeDef(
-                kind="exception",
-                name="Good",
-                module_id=good.module_id,
-                base=(base.module_id, base.name),
-                fields=(("code", IntType()),),
-            ),
-        )
-        assert comparable_types(good, good, table)
 
     def test_record_with_only_scalars_comparable(self) -> None:
         rt = RecordType(name="R")
@@ -515,12 +445,6 @@ class TestIsAssignable:
         assert is_assignable(BoolType(), JsonType())
         assert is_assignable(DecimalType(), JsonType())
         assert is_assignable(JsonType(), JsonType())
-
-    def test_json_rejects_non_shaped(self) -> None:
-        rt = RecordType(name="R")
-        assert not is_assignable(rt, JsonType())
-        assert not is_assignable(UnitType(), JsonType())
-        assert not is_assignable(AgentType(), JsonType())
 
     def test_json_rejects_json_shaped_container(self) -> None:
         """An array/dict source is not implicitly absorbed into json — even one
@@ -704,11 +628,6 @@ class TestTypeEnvironment:
         env = TypeEnvironment()
         sp = mk_span()
         assert env.resolve_type_expr(UnitT(span=sp, node_id=1)) == UnitType()
-
-    def test_resolve_type_expr_agent(self) -> None:
-        env = TypeEnvironment()
-        sp = mk_span()
-        assert env.resolve_type_expr(AgentT(span=sp, node_id=1)) == AgentType()
 
     def test_resolve_array_type(self) -> None:
         env = TypeEnvironment()
@@ -1893,11 +1812,6 @@ class TestBlockTyping:
         r = accept_type("param n: int\nn")
         assert r.resolved.program is not None
 
-    @pytest.mark.parametrize("annotation", ["unit", "agent", "(int) -> int"])
-    def test_param_rejects_non_wire_serializable_annotation(self, annotation: str) -> None:
-        err = reject_type(f"param x: {annotation}\nx")
-        assert "JSON" in str(err)
-
     def test_param_defaults_to_text(self) -> None:
         r = accept_type("param x\nx")
         prog = r.resolved.program
@@ -1935,13 +1849,6 @@ class TestUnitPropagation:
         let_decl = r.resolved.program.body.items[0]
         assert isinstance(let_decl, LetDecl)
         assert r.type_env.get_binding_type(let_decl.pattern.node_id) == UnitType()
-
-    def test_agent_decl_yields_agent_type(self) -> None:
-        r = accept_type("agent reviewer\nreviewer")
-        prog = r.resolved.program
-        agent_decl = prog.body.items[0]
-        assert isinstance(agent_decl, AgentDecl)
-        assert r.type_env.get_binding_type(agent_decl.node_id) == AgentType()
 
     def test_assign_is_valid_block_item(self) -> None:
         r = accept_type("var x = 1\nx := 2\n()")
@@ -2035,9 +1942,6 @@ class TestPrint:
 
     def test_print_function_accepted(self) -> None:
         accept_type("let f = fn(x: int) -> int => x\nprint(f)")
-
-    def test_print_agent_accepted(self) -> None:
-        accept_type("agent a\nprint(a)")
 
     def test_print_wrong_arg_count(self) -> None:
         err = reject_type("print(1, 2)")
@@ -2217,11 +2121,6 @@ class TestAsk:
 
     def test_ask_wrong_agent_type(self) -> None:
         err = reject_type('let x = "not_agent"\nask("Q", agent = x)')
-        assert "agent" in str(err).lower()
-
-    def test_ask_rejects_legacy_agent_declaration(self) -> None:
-        """The vestigial opaque ``agent`` declaration is not an ``Agent`` value."""
-        err = reject_type('agent legacy = "runner"\nask("Q", agent = legacy)')
         assert "agent" in str(err).lower()
 
     def test_ask_with_json_codec(self) -> None:
@@ -3973,21 +3872,6 @@ class TestFuncDef:
     @pytest.mark.parametrize(
         "source",
         [
-            "def f() = render(return 1)\nf",
-            'def f() = render("x", pretty = (return 1))\nf',
-            "def f() = ask(return 1)\nf",
-            'agent a\ndef f() = ask("x", agent = (return 1))\nf',
-        ],
-    )
-    def test_return_in_builtin_runtime_argument_does_not_make_call_bottom(
-        self, source: str
-    ) -> None:
-        err = reject_type(source)
-        assert "infer" in str(err).lower() or "mismatch" in str(err).lower()
-
-    @pytest.mark.parametrize(
-        "source",
-        [
             "def f() -> int =\n  for i in (return 1) to 3 do () done\nf",
             "def f() -> int =\n  for i in 1 to (return 1) do () done\nf",
             "def f() -> int =\n  for i in 1 to 3 by (return 1) do () done\nf",
@@ -4806,9 +4690,6 @@ class TestTemplate:
     def test_interpolated_function_accepted(self) -> None:
         accept_type('let f = fn(x: int) -> int => x\n"%{f}"')
 
-    def test_interpolated_agent_accepted(self) -> None:
-        accept_type('agent a\n"%{a}"')
-
     def test_interpolated_int_is_ok(self) -> None:
         r = accept_type('let n = 1\n"n is %{n}"')
         assert r.resolved.program is not None
@@ -4992,54 +4873,15 @@ class TestBinaryOps:
         )
         assert "equality" in str(err).lower()
 
-    def test_eq_array_of_agent_raises(self) -> None:
-        err = reject_type(
-            "agent reviewer\n"
-            "let as1: array[agent] = [reviewer]\n"
-            "let as2: array[agent] = [reviewer]\n"
-            "let r = (as1 == as2)\nr"
-        )
-        assert "equality" in str(err).lower()
-
     def test_eq_array_of_unit_raises(self) -> None:
         err = reject_type(
             "let us1: array[unit] = [()]\nlet us2: array[unit] = [()]\nlet r = (us1 == us2)\nr"
         )
         assert "equality" in str(err).lower()
 
-    def test_eq_record_with_agent_field_raises(self) -> None:
-        err = reject_type(
-            "agent reviewer\n"
-            "record Task\n  name: text\n  assignee: agent\n"
-            'let t1 = Task(name = "a", assignee = reviewer)\n'
-            'let t2 = Task(name = "b", assignee = reviewer)\n'
-            "let result = (t1 == t2)\nresult"
-        )
-        assert "equality" in str(err).lower()
-
-    def test_eq_wildcard_catch_binding_rejects_non_comparable_descendant(self) -> None:
-        err = reject_type(
-            "agent reviewer\n"
-            "exception Bad extends Exception\n  assignee: agent\n"
-            'try\n  raise Bad(message = "x", assignee = reviewer)\ncatch _ as e => e == e'
-        )
-        assert "equality" in str(err).lower()
-
-    def test_eq_base_catch_binding_rejects_non_comparable_descendant(self) -> None:
-        err = reject_type(
-            "agent reviewer\n"
-            "exception Bad extends Exception\n  assignee: agent\n"
-            'try\n  raise Bad(message = "x", assignee = reviewer)\ncatch Exception as e => e == e'
-        )
-        assert "equality" in str(err).lower()
-
     # Regression: bare function/agent/unit still rejected.
     def test_eq_bare_fn_raises(self) -> None:
         err = reject_type("def f(n: int) -> int = n\nlet r = (f == f)\nr")
-        assert "equality" in str(err).lower()
-
-    def test_eq_bare_agent_raises(self) -> None:
-        err = reject_type("agent reviewer\nlet r = (reviewer == reviewer)\nr")
         assert "equality" in str(err).lower()
 
     def test_eq_bare_unit_raises(self) -> None:
@@ -6325,12 +6167,6 @@ class TestJsonCastHintDirectionality:
         err = reject_type("let j: json = 1\nlet ys: array[int] = [1, 2]\nj in ys")
         assert "as json" not in str(err).lower()
 
-    def test_value_without_json_representation_not_hinted(self) -> None:
-        # An `as json` cast does not accept an agent either, so naming it
-        # would send the user down a dead end.
-        err = reject_type("agent a\nlet j: json = a\nj")
-        assert "as json" not in str(err).lower()
-
     def test_in_operator_array_value_against_json_target_still_hinted(self) -> None:
         # The reverse direction at the same call site: an array value against
         # a json element target is exactly the case an explicit `as json`
@@ -6846,9 +6682,6 @@ class TestTypeReprAndKind:
     def test_unit_repr(self) -> None:
         assert repr(UnitType()) == "unit"
 
-    def test_agent_repr(self) -> None:
-        assert repr(AgentType()) == "agent"
-
     def test_bottom_repr(self) -> None:
         assert repr(BottomType()) == "bottom"
 
@@ -6898,9 +6731,6 @@ class TestTypeReprAndKind:
 
     def test_unit_kind(self) -> None:
         assert UnitType().kind == "unit"
-
-    def test_agent_kind(self) -> None:
-        assert AgentType().kind == "agent"
 
     def test_bottom_kind(self) -> None:
         assert BottomType().kind == "bottom"
@@ -7158,12 +6988,6 @@ class TestMisc:
         assert isinstance(call, Call)
         spec = r.contract_specs[call.node_id]
         assert spec.structured_exec is True
-
-    def test_agent_decl_is_agent_type(self) -> None:
-        r = accept_type("agent a\na")
-        decl = r.resolved.program.body.items[0]
-        assert isinstance(decl, AgentDecl)
-        assert r.type_env.get_binding_type(decl.node_id) == AgentType()
 
     def test_builtin_prelude_type_names_coverage(self) -> None:
         assert len(BUILTIN_PRELUDE_TYPE_NAMES) > 0
@@ -8188,11 +8012,6 @@ class TestExecUnknownArgs:
         err = reject_type('exec("ls", bogus = 1)')
         assert "exec" in str(err).lower() or "unknown" in str(err).lower()
         assert "bogus" in str(err)
-
-    def test_exec_agent_named_arg_rejected(self) -> None:
-        # exec has no 'agent:' argument.
-        err = reject_type('agent a\nexec("ls", agent = a)')
-        assert "exec" in str(err).lower() or "unknown" in str(err).lower()
 
     def test_exec_extra_positional_rejected(self) -> None:
         err = reject_type('exec("ls", "extra")')
@@ -10854,11 +10673,6 @@ class TestCast:
         err = reject_type("1 as bool")
         assert "cannot cast" in str(err).lower() or "int" in str(err).lower()
 
-    def test_agent_as_text_rejected(self) -> None:
-        """agent value as text is a static error."""
-        err = reject_type("agent myAgent\nmyAgent as text")
-        assert "cannot cast" in str(err).lower() or "agent" in str(err).lower()
-
     def test_record_as_json_accepted(self) -> None:
         """record as json is now TOTAL_JSON (explicit nominal→json cast)."""
         from agm.agl.semantics.types import CastKind
@@ -10961,6 +10775,12 @@ _TREE_SRC = "enum Tree\n  | Leaf\n  | Node(value: int, left: Tree, right: Tree)\
 _PHANTOM_GROWING_TYPE_SRC = "record R[T]\n  children: array[R[array[T]]]\n"
 
 
+class TestParameterWireTypes:
+    def test_agent_parameter_is_rejected_as_not_json_serializable(self) -> None:
+        err = reject_type("param value: unit\nvalue")
+        assert "json-serializable" in str(err).lower()
+
+
 class TestNoFiniteSchemaUseSites:
     def test_ask_growing_type_rejected(self) -> None:
         err = reject_type(_GROWING_TYPE_SRC + 'ask::[Perfect[int]]("Q")')
@@ -10983,7 +10803,6 @@ class TestNoFiniteSchemaUseSites:
 
     def test_custom_structured_codec_growing_type_accepted(self) -> None:
         caps = HostCapabilities(
-            agent_names=frozenset(),
             supports_shell_exec=True,
             codec_kinds={
                 "text": frozenset({"text"}),
@@ -10993,18 +10812,6 @@ class TestNoFiniteSchemaUseSites:
         checked = accept_type(
             _GROWING_TYPE_SRC + 'ask::[Perfect[int]]("Q", format = "custom")', caps
         )
-        assert checked.resolved.program is not None
-
-    def test_custom_structured_codec_non_json_shaped_type_accepted(self) -> None:
-        caps = HostCapabilities(
-            agent_names=frozenset(),
-            supports_shell_exec=True,
-            codec_kinds={
-                "text": frozenset({"text"}),
-                "custom": frozenset({"record", "enum", "array", "dict"}),
-            },
-        )
-        checked = accept_type('record Box\n  a: agent\nask::[Box]("Q", format = "custom")', caps)
         assert checked.resolved.program is not None
 
     def test_cast_growing_type_target_rejected(self) -> None:
@@ -11068,12 +10875,6 @@ class TestNoFiniteSchemaUseSites:
         err = reject_type('record Holder\n  f: int -> text\nask::[Holder]("Q")')
         msg = str(err).lower()
         assert "agent output type" in msg
-        assert "json-serializable" in msg
-
-    def test_exec_record_with_nested_agent_field_rejected(self) -> None:
-        err = reject_type('record Holder\n  a: agent\nexec::[Holder]("cmd")')
-        msg = str(err).lower()
-        assert "exec output type" in msg
         assert "json-serializable" in msg
 
     def test_cast_record_with_nested_function_field_rejected(self) -> None:
@@ -11494,3 +11295,24 @@ class TestLambdaRequiredAfterDefaulted:
         """Named-only params are order-free: fn(*, x: int = 0, y: int) -> int => y is ok."""
         r = accept_type("fn(*, x: int = 0, y: int) -> int => y")
         assert r.resolved.program is not None
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "record agent()\nagent()",
+        "enum agent\n  | value\nvalue",
+        "type agent = int\nlet value: agent = 1\nvalue",
+        "def agent() -> int = 1\nagent()",
+    ],
+)
+def test_agent_is_an_ordinary_declaration_name(source: str) -> None:
+    """`agent` is legal for records, enums, aliases, and functions."""
+    checked = accept_type(source)
+    assert checked.resolved.program is not None
+
+
+def test_agent_enum_is_a_json_serializable_param_type() -> None:
+    """Agent values are ordinary enum data at the JSON parameter boundary."""
+    checked = accept_type("param selected: Agent\nselected")
+    assert checked.resolved.program is not None

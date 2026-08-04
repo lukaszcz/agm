@@ -55,7 +55,6 @@ from agm.agl.semantics.types import (
     BUILTIN_EXCEPTIONS,
     BUILTIN_PRELUDE_TYPE_NAMES,
     BUILTIN_PRELUDE_TYPES,
-    AgentType,
     ArrayType,
     BoolType,
     CastSpec,
@@ -1543,7 +1542,6 @@ class TypeEnvironment:
             instead of being looked up in the type namespace.
         """
         from agm.agl.syntax.types import (
-            AgentT,
             AppliedT,
             ArrayT,
             BoolT,
@@ -1572,8 +1570,6 @@ class TypeEnvironment:
             return DecimalType()
         if isinstance(type_expr, UnitT):
             return UnitType()
-        if isinstance(type_expr, AgentT):
-            return AgentType()
         if isinstance(type_expr, FuncT):
             params = tuple(
                 self.resolve_type_expr(p, _resolving=_resolving, type_vars=type_vars)

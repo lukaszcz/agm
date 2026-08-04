@@ -143,3 +143,37 @@ def test_command_builder_appends_prompt_file_without_placeholder() -> None:
 def test_command_builder_rejects_an_empty_command() -> None:
     with pytest.raises(ValueError):
         build_command(AgentCommand(""))
+
+
+def test_parse_command_rejects_malformed_shell_words() -> None:
+    from agm.agent.runner import parse_command
+
+    with pytest.raises(ValueError):
+        parse_command('runner "unterminated', kind="agent")
+
+
+@pytest.mark.parametrize("spawn_error,timed_out", [("not found", False), (None, True)])
+def test_prepared_runner_maps_process_capture_result(
+    monkeypatch: pytest.MonkeyPatch, spawn_error: str | None, timed_out: bool
+) -> None:
+    from agm.agent.runner import PreparedPromptRun, run_prepared_prompt_result
+    from agm.core.process import ProcessCaptureResult
+
+    capture = ProcessCaptureResult(
+        returncode=None,
+        stdout="out",
+        stderr="err",
+        elapsed=1.0,
+        timed_out=timed_out,
+        spawn_error=spawn_error,
+        spawn_errno=None,
+    )
+    monkeypatch.setattr("agm.agent.runner.run_capture_result", lambda *args, **kwargs: capture)
+    prepared = PreparedPromptRun(
+        command=["runner"], effective_file=Path("prompt.md"), env={}, temp_files=[]
+    )
+
+    result = run_prepared_prompt_result(prepared, idle_timeout=None)
+
+    assert result.spawn_error == spawn_error
+    assert result.timed_out is timed_out

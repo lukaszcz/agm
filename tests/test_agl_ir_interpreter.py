@@ -39,6 +39,7 @@ from agm.agl.ir import (
     IrAssign,
     IrBind,
     IrBlock,
+    IrBuiltinStore,
     IrCapture,
     IrCoerce,
     IrConstBool,
@@ -2210,6 +2211,28 @@ class TestIrExec:
             with pytest.raises(AglRaise) as exc_info:
                 IrInterpreter(prog).run()
         assert exc_info.value.exc.display_name == "ExecError"
+
+    def test_host_setting_write_rolls_back_when_live_reconfiguration_fails(self) -> None:
+        """A failed host callback leaves the setting register at its prior value."""
+
+        class Reconfigurer:
+            def __init__(self) -> None:
+                self.calls = 0
+
+            def reconfigure_trace(self, *, enabled: bool, log_file: str | None) -> None:
+                del enabled, log_file
+                self.calls += 1
+                if self.calls > 1:
+                    raise RuntimeError("trace service unavailable")
+
+        reconfigurer = Reconfigurer()
+        program = _make_program((IrBuiltinStore(_LOC, "log", IrConstBool(_LOC, True)),))
+        interpreter = IrInterpreter(program, host_reconfigurer=reconfigurer)
+
+        with pytest.raises(RuntimeError, match="trace service unavailable"):
+            interpreter.run()
+
+        assert interpreter.builtin_host_settings["log"] == BoolValue(False)
 
     def test_ir_exec_spawn_error_records_exec_trace(self, tmp_path: pathlib.Path) -> None:
         """A shell spawn failure still records the attempted exec command."""

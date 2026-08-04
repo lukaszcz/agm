@@ -12,14 +12,15 @@ from typing import cast
 
 import pytest
 
-from agm.agent.defaults import DEFAULT_AGENT_RUNNER
 from agm.agl.constant import is_constant_expression
+from agm.agl.ir.ids import NominalId
+from agm.agl.modules.ids import STD_CORE_ID
 from agm.agl.modules.roots import RootSet
 from agm.agl.parser import parse_program
 from agm.agl.pipeline import PipelineDriver, RunResult
 from agm.agl.runtime.option import some_value
 from agm.agl.semantics.values import BoolValue, EnumValue, IntValue, TextValue, Value
-from agm.agl.syntax import BinaryOp, BuiltinVarDecl, Expr, VarRef, walk
+from agm.agl.syntax import BuiltinVarDecl, Call, Expr, VarRef, walk
 
 _STDLIB = Path(__file__).resolve().parent.parent / "stdlib"
 
@@ -58,7 +59,7 @@ def _run_with_std_config(
     std_config: str,
     root: Path,
     *,
-    builtin_host_settings: dict[str, TextValue] | None = None,
+    builtin_host_settings: dict[str, Value] | None = None,
 ) -> RunResult:
     """Run against a test ``std/config`` module without ordinary entry declarations."""
     config_path = root / "std" / "config.agl"
@@ -109,18 +110,6 @@ class TestBuiltinVarRegisters:
         )
         assert result.ok
         assert result.bindings["b"] == BoolValue(True)
-
-    def test_runner_default_reads_the_shared_agent_floor(self) -> None:
-        result = _run_program("open import std/config\nlet r = std/config::runner\nprint r")
-        assert result.ok
-        assert result.bindings["r"] == TextValue(DEFAULT_AGENT_RUNNER)
-
-    def test_runner_write_then_read(self) -> None:
-        result = _run_program(
-            'import std/config\nstd/config::runner := "codex"\nlet r = std/config::runner\nprint r'
-        )
-        assert result.ok
-        assert result.bindings["r"] == TextValue("codex")
 
     def test_log_default_reads_false(self) -> None:
         result = _run_program("open import std/config\nlet l = std/config::log\nprint l")
@@ -180,33 +169,43 @@ def test_constant_expression_validation(source: str, expected: bool) -> None:
 
 
 class TestBuiltinVarDefaults:
-    def test_text_initializer_is_the_engine_default_without_a_host_seed(
-        self, tmp_path: Path
-    ) -> None:
+    def test_initializer_is_the_engine_default_without_a_host_seed(self, tmp_path: Path) -> None:
         result = _run_with_std_config(
-            "open import std/config\nlet value = std/config::runner\nvalue",
-            'builtin var runner: text = "declared"',
+            "open import std/config\nlet value = std/config::default-agent\nvalue",
+            'builtin var default-agent: Agent = AgentCommand("declared")',
             tmp_path,
         )
 
         assert result.ok, f"expected success but got: {result.error!r}"
-        assert result.bindings["value"] == TextValue("declared")
+        value = result.bindings["value"]
+        assert isinstance(value, EnumValue)
+        assert value.variant == "AgentCommand"
+        assert value.fields["command"] == TextValue("declared")
 
     def test_host_seed_overrides_the_declared_default(self, tmp_path: Path) -> None:
         result = _run_with_std_config(
-            "open import std/config\nlet value = std/config::runner\nvalue",
-            'builtin var runner: text = "declared"',
+            "open import std/config\nlet value = std/config::default-agent\nvalue",
+            'builtin var default-agent: Agent = AgentCommand("declared")',
             tmp_path,
-            builtin_host_settings={"runner": TextValue("seeded")},
+            builtin_host_settings={
+                "default-agent": EnumValue(
+                    nominal=NominalId(STD_CORE_ID, "Agent"),
+                    display_name="Agent",
+                    variant="AgentCommand",
+                    fields={"command": TextValue("seeded")},
+                )
+            },
         )
 
         assert result.ok, f"expected success but got: {result.error!r}"
-        assert result.bindings["value"] == TextValue("seeded")
+        value = result.bindings["value"]
+        assert isinstance(value, EnumValue)
+        assert value.fields["command"] == TextValue("seeded")
 
     def test_initializer_must_match_the_declared_type(self, tmp_path: Path) -> None:
         result = _run_with_std_config(
             "open import std/config\n()",
-            "builtin var runner: text = false",
+            "builtin var default-agent: Agent = false",
             tmp_path,
         )
 
@@ -214,10 +213,10 @@ class TestBuiltinVarDefaults:
         assert result.diagnostics
 
     def test_initializer_must_be_constant(self, tmp_path: Path) -> None:
-        declaration_source = 'builtin var runner: text = "not " + "constant"'
+        declaration_source = 'builtin var default-agent: Agent = AgentCommand("not " + "constant")'
         (declaration,) = parse_program(declaration_source).body.items
         assert isinstance(declaration, BuiltinVarDecl)
-        assert isinstance(declaration.default, BinaryOp)
+        assert isinstance(declaration.default, Call)
 
         result = _run_with_std_config(
             "open import std/config\n()",
@@ -344,11 +343,6 @@ class TestStdConfigQualified:
         assert result.ok
         assert result.bindings["b"] == BoolValue(True)
 
-    def test_qualified_runner_default(self) -> None:
-        result = _run_program("open import std/config\nlet r = std/config::runner\nprint r")
-        assert result.ok
-        assert result.bindings["r"] == TextValue(DEFAULT_AGENT_RUNNER)
-
     def test_max_iters_zero_disables_valve(self) -> None:
         result = _run_program(
             "open import std/config\n"
@@ -375,6 +369,18 @@ class TestStdConfigQualified:
         assert isinstance(bound, EnumValue)
         assert bound.variant == "Some"
         assert bound.fields["value"] == TextValue("x")
+
+    def test_clearing_log_file_does_not_enable_logging(self) -> None:
+        result = _run_program(
+            "open import std/config\n"
+            "std/config::log := false\n"
+            "std/config::log-file := None\n"
+            "let enabled = std/config::log\n"
+            "enabled"
+        )
+
+        assert result.ok, f"expected success but got: {result.error!r}"
+        assert result.bindings["enabled"] == BoolValue(False)
 
     def test_timeout_default_reads_none(self) -> None:
         result = _run_program("open import std/config\nlet t = std/config::timeout\nprint t")

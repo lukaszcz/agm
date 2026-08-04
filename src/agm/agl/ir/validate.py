@@ -69,7 +69,6 @@ from agm.agl.ir.contracts import (
 from agm.agl.ir.ids import ContractId, FunctionId, Location, NominalId, SourceId, SymbolId
 from agm.agl.ir.nodes import (
     AutoTraceField,
-    IrAgentHandle,
     IrAnd,
     IrArith,
     IrAsk,
@@ -1090,9 +1089,6 @@ def _validate_expr_node(node: IrExpr, ctx: _Context) -> None:
         case IrCopyValue(value=val):
             _validate_location(node.location, ctx)
             _validate_expr(val, ctx)
-
-        case IrAgentHandle():
-            _validate_location(node.location, ctx)
 
         case IrAsk(agent=agent_expr, prompt=prompt_expr, contract_id=contract_id):
             _validate_location(node.location, ctx)

@@ -21,29 +21,6 @@ import pytest
 # ---------------------------------------------------------------------------
 
 
-def test_leaf_tags_importable_from_values_module() -> None:
-    """All leaf value tags are importable directly from agm.agl.semantics.values."""
-    import agm.agl.semantics.values as vals
-
-    # Verify all expected names exist on the module.
-    expected = [
-        "TextValue",
-        "IntValue",
-        "DecimalValue",
-        "BoolValue",
-        "JsonValue",
-        "UnitValue",
-        "UNIT_VALUE",
-        "VOID_VALUE",
-        "AgentValue",
-        "Value",
-        "_json_eq",
-        "_json_hash",
-    ]
-    for name in expected:
-        assert hasattr(vals, name), f"agm.agl.semantics.values missing {name!r}"
-
-
 def test_values_module_has_correct_name() -> None:
     """The module's __name__ is as expected."""
     import agm.agl.semantics.values as vals
@@ -114,23 +91,6 @@ def test_void_unit_equals_printable_unit() -> None:
     assert UnitValue(printable_in_repl=True) == UnitValue(printable_in_repl=False)
     assert UNIT_VALUE.printable_in_repl is True
     assert VOID_VALUE.printable_in_repl is False
-
-
-def test_primitive_values_constructible() -> None:
-    """Primitive value tags can be constructed and hold their payload."""
-    from agm.agl.semantics.values import (
-        AgentValue,
-        BoolValue,
-        DecimalValue,
-        IntValue,
-        TextValue,
-    )
-
-    assert TextValue("hello").value == "hello"
-    assert IntValue(42).value == 42
-    assert DecimalValue(decimal.Decimal("3.14")).value == decimal.Decimal("3.14")
-    assert BoolValue(True).value is True
-    assert AgentValue("gpt4").name == "gpt4"
 
 
 # ---------------------------------------------------------------------------
@@ -598,31 +558,6 @@ def test_semantics_values_includes_frame_model() -> None:
 # ---------------------------------------------------------------------------
 # Unified value module exports all expected names
 # ---------------------------------------------------------------------------
-
-
-def test_semantics_values_exports_all_leaf_tags() -> None:
-    """agm.agl.semantics.values exports all leaf primitive value tags."""
-    from agm.agl.semantics.values import (
-        UNIT_VALUE,
-        VOID_VALUE,
-        AgentValue,
-        BoolValue,
-        DecimalValue,
-        IntValue,
-        JsonValue,
-        TextValue,
-        UnitValue,
-    )
-
-    assert TextValue is not None
-    assert IntValue is not None
-    assert DecimalValue is not None
-    assert BoolValue is not None
-    assert JsonValue is not None
-    assert UnitValue is not None
-    assert UNIT_VALUE is not None
-    assert VOID_VALUE is not None
-    assert AgentValue is not None
 
 
 def test_broad_value_includes_ir_callable_forms() -> None:

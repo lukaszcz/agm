@@ -12,7 +12,7 @@ All value display — string interpolation, `print`, `render`, `as text`, and RE
 
 Rendering and JSON serialization (`runtime/render.py`, `runtime/serialize.py`) both recurse through arrays/dicts/nominal fields and so both thread the shared cycle guard from `semantics/cycles.py`, lazily allocated so an acyclic value never pays for it; a detected cycle surfaces as a Python-level sentinel that each caller (the interpreter, casts, agent/exec prompt rendering, the extern encoder, trace logging, error reporting, the REPL echo) converts into the catchable `CyclicValueError`, or — for trace logging and in-flight error reporting, which must never turn a working run into a failing one — degrades to a marker in place of the value.
 
-A second sentinel, `AglNonDataValue` (`runtime/serialize.py`), covers the other way JSON serialization can fail: a value kind with no JSON representation at all (`unit`, agent, constructor, function, iterator). Unlike the cycle sentinel it has no catchable-exception form, because every evaluator route into serialization is statically gated by `is_json_convertible` — it can only arrive via the two ungated reporters, trace logging and in-flight error reporting, which degrade it to a marker exactly as they do a cycle. A record or exception field may legitimately hold such a value even though casting its type to `json` is a static error.
+A second sentinel, `AglNonDataValue` (`runtime/serialize.py`), covers the other way JSON serialization can fail: a value kind with no JSON representation at all (`unit`, constructor, function, iterator). Unlike the cycle sentinel it has no catchable-exception form, because every evaluator route into serialization is statically gated by `is_json_convertible` — it can only arrive via the two ungated reporters, trace logging and in-flight error reporting, which degrade it to a marker exactly as they do a cycle. A record or exception field may legitimately hold such a value even though casting its type to `json` is a static error.
 
 ## Pipeline Orchestrator
 
@@ -20,7 +20,7 @@ The pipeline sits on top: it drives the compile → lower → evaluate sequence 
 
 ## Code Entry Points
 
-- `src/agm/agl/runtime/agents.py` — decodes `Agent` enum values and runs their builder-produced argv through the shared prompt/process seam; it also retains the transitional registry for legacy declarations.
+- `src/agm/agl/runtime/agents.py` — decodes `Agent` enum values and runs their builder-produced argv through the shared prompt/process seam.
 - `src/agm/agl/runtime/` — codecs, parameter conversion, host-environment types, the renderer, and the extern registry.
 - `src/agm/agl/pipeline.py` — the orchestrator; `src/agm/agl/type_schema.py` — compile-time schema/format generation.
 - Tests: `tests/test_agl_runtime.py`, `tests/test_agl_codec.py`, `tests/test_agl_pipeline_*.py`.

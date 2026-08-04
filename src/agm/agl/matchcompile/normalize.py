@@ -10,7 +10,6 @@ from typing import Never, NoReturn, assert_never
 from agm.agl.modules.ids import ENTRY_ID, ModuleId
 from agm.agl.semantics.type_table import TypeDef, TypeTable
 from agm.agl.semantics.types import (
-    AgentType,
     ArrayType,
     BoolType,
     BottomType,
@@ -201,7 +200,6 @@ def constructor_inhabits_type(constructor: Constructor, subject_type: Type) -> b
             | DictType()
             | ExceptionType()
             | UnitType()
-            | AgentType()
             | FunctionType()
             | BottomType()
         ):
@@ -296,7 +294,6 @@ def signature_for_type(subject_type: Type, table: TypeTable) -> Signature:
             | DictType()
             | ExceptionType()
             | UnitType()
-            | AgentType()
             | FunctionType()
         ):
             return OpenSignature()

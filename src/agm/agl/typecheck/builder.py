@@ -86,7 +86,7 @@ from agm.agl.typecheck.env import (
 
 # Built-in type names that the user may not shadow with a record/enum/alias.
 _BUILTIN_TYPE_NAMES: frozenset[str] = (
-    frozenset({"text", "json", "bool", "int", "decimal", "unit", "agent"})
+    frozenset({"text", "json", "bool", "int", "decimal", "unit"})
     | BUILTIN_EXCEPTION_NAMES
     | BUILTIN_PRELUDE_TYPE_NAMES
 )

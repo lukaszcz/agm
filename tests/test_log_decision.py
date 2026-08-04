@@ -437,7 +437,6 @@ def _exec_args(
         command=command,
         param_tokens=[],
         strict_json=None,
-        runner=None,
         log=log,
         no_log=no_log,
         log_file=log_file,

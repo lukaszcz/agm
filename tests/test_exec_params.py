@@ -159,14 +159,6 @@ class TestCheckParamCollisions:
         params = (_make_param("verbose", BoolType()),)
         assert check_param_collisions(params) == []
 
-    def test_runner_collision(self) -> None:
-        from agm.cli_support.exec_params import check_param_collisions
-
-        params = (_make_param("runner"),)
-        errors = check_param_collisions(params)
-        assert len(errors) == 1
-        assert "runner" in errors[0]
-
     def test_verbatim_collision_dry_run(self) -> None:
         from agm.cli_support.exec_params import check_param_collisions
 
@@ -188,14 +180,14 @@ class TestCheckParamCollisions:
         from agm.cli_support.exec_params import check_param_collisions
 
         # Both use kebab engine key names (verbatim match).
-        params = (_make_param("runner"), _make_param("max-iters"))
+        params = (_make_param("max-iters"), _make_param("strict-json"))
         errors = check_param_collisions(params)
         assert len(errors) == 2
 
     def test_line_number_in_error(self) -> None:
         from agm.cli_support.exec_params import check_param_collisions
 
-        params = (_make_param("runner", line=7),)
+        params = (_make_param("max-iters", line=7),)
         errors = check_param_collisions(params)
         assert "7" in errors[0]
 

@@ -33,7 +33,7 @@ def _make_runtime(
     from agm.agl import PipelineDriver
 
     return PipelineDriver(
-        default_agent=default_agent,
+        agent_dispatcher=default_agent,
     )
 
 
@@ -62,7 +62,7 @@ def _run_program(
             assert isinstance(command, TextValue)
             return agents[command.value](request)
 
-        rt = PipelineDriver(default_agent=default_agent, value_agent=dispatch)
+        rt = PipelineDriver(agent_dispatcher=dispatch)
     else:
         rt = _make_runtime(default_agent=default_agent)
     return rt.run_prepared(prepared, param_values=param_values)
@@ -373,7 +373,6 @@ class TestAgentValueCrossModule:
             source,
             roots_dirs=[lib_dir],
             default_agent=scripted_agent,
-            agents={"mybot": scripted_agent},
         )
         assert result.ok is True
         captured = capsys.readouterr()
@@ -399,7 +398,6 @@ class TestAgentValueCrossModule:
             source,
             roots_dirs=[lib_dir],
             default_agent=scripted_agent,
-            agents={"mybot": scripted_agent},
         )
         assert result.ok is True
         captured = capsys.readouterr()

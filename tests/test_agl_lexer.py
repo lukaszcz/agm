@@ -74,15 +74,11 @@ class TestKeywordsAndIdentifiers:
         assert "return" in types
         assert "as" in types
 
-    def test_agent_is_reserved_keyword(self) -> None:
-        # `agent` is a reserved keyword — its token type is the literal string.
-        result = tok("agent")
-        assert result == [("agent", "agent")]
+    def test_agent_is_an_ordinary_identifier(self) -> None:
+        assert tok("agent") == [("NAME", "agent")]
 
-    def test_agent_not_var_name(self) -> None:
-        # `agent` cannot be used as an identifier/variable name.
-        types = [t for t, _ in tok("agent")]
-        assert "NAME" not in types
+    def test_agent_lexes_like_other_names(self) -> None:
+        assert tok("agent agent_name") == [("NAME", "agent"), ("NAME", "agent_name")]
 
     def test_agent_prefix_identifier(self) -> None:
         # "agentic" starts with "agent" but is a plain identifier.
@@ -2566,10 +2562,8 @@ class TestCaseNeutralNames:
         assert tok("config") == [("NAME", "config")]
         assert ("NAME", "config") in tok("let config = 1")
 
-    def test_agent_is_keyword_not_name(self) -> None:
-        result = tok("agent")
-        types = [t for t, _ in result]
-        assert "NAME" not in types
+    def test_agent_is_case_neutral_name(self) -> None:
+        assert tok("agent") == [("NAME", "agent")]
 
 
 # ---------------------------------------------------------------------------

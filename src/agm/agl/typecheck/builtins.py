@@ -267,7 +267,7 @@ class BuiltinCallChecker:
         parse-shaping named args (``format`` / ``strict_json`` /
         ``on_parse_error``), and accepts an ``agent:`` named arg. But it never
         dispatches to the agent: it yields the ``AgentRequest`` record that the
-        corresponding ``ask`` call would pass to ``AgentRegistry.dispatch`` on
+        corresponding ``ask`` call would pass to the value dispatcher on
         its first attempt.
 
         The target type is taken from the explicit type argument

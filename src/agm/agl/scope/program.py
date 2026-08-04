@@ -17,7 +17,7 @@ Design
 - **Declaration-only enforcement**: non-entry modules may only contain
   declarations (``def``, ``record``, ``enum``, ``type``, ``infixl``/``infixr``,
   ``import``).
-- **Entry-only enforcement**: ``agent``, ``param``, ``program`` only in entry.
+- **Entry-only enforcement**: ``param`` and ``program`` only in entry.
 - **Header-only imports** (non-entry): imports must appear before any
   declaration.
 - **``::name`` self-reference**: resolved to the current module's own scope.
@@ -45,7 +45,6 @@ from agm.agl.scope.imports import (
 )
 from agm.agl.scope.resolver import _Resolver
 from agm.agl.scope.symbols import (
-    AgentKey,
     AglScopeError,
     BinderKind,
     ConstructorRef,
@@ -56,7 +55,6 @@ from agm.agl.scope.symbols import (
 )
 from agm.agl.scope.symbols import to_bare_atom as _atom
 from agm.agl.syntax.nodes import (
-    AgentDecl,
     BuiltinVarDecl,
     EnumDef,
     ExceptionDef,
@@ -91,7 +89,7 @@ class ResolvedModule:
         The :class:`~agm.agl.modules.ids.ModuleId` of this module.
     ``resolved``
         The per-module scope resolution output (resolution tables, declared
-        agents, functions, etc.).
+        functions and related resolution data).
     ``import_env``
         The import environment computed from this module's import declarations.
     ``exports``
@@ -124,9 +122,6 @@ class ResolvedProgram:
     ``all_public_types``
         Whole-program pre-pass table mapping ``(ModuleId, name)`` to the
         type declaration node (``RecordDef | EnumDef | TypeAlias``).
-    ``entry_agents``
-        Agent declarations from the entry module
-        (``(scope_path, name)`` → ``AgentDecl``).
     ``import_sccs``
         Loader-computed import strongly-connected components, retained in their
         deterministic reverse-topological order for downstream program passes.
@@ -138,7 +133,6 @@ class ResolvedProgram:
     entry_id: ModuleId
     all_public_funcs: dict[QName, FuncDef]
     all_public_types: dict[QName, RecordDef | EnumDef | ExceptionDef | TypeAlias]
-    entry_agents: dict[AgentKey, AgentDecl]
     import_sccs: tuple[tuple[ModuleId, ...], ...]
     warnings: tuple[Diagnostic, ...]
 
@@ -474,7 +468,6 @@ _DeclInfo = dict[QName, tuple[int, SourceSpan, BinderKind]]
 def resolve_program(
     graph: ModuleGraph,
     *,
-    ambient_agents: frozenset[str] = frozenset(),
     entry_ambient_constructor_candidates: dict[str, tuple[ConstructorRef, ...]] | None = None,
     entry_ambient_type_names: frozenset[str] = frozenset(),
     entry_parent_scope: ScopeNode | None = None,
@@ -488,9 +481,6 @@ def resolve_program(
     ----------
     graph:
         A loaded module graph from :func:`~agm.agl.modules.loader.load_graph`.
-    ambient_agents:
-        Agent names the host already backs (passed through to the entry
-        resolver; non-entry modules never declare agents).
     entry_ambient_constructor_candidates:
         Constructor candidates from prior REPL entries.  These are merged with
         open-imported constructor candidates for the entry module.
@@ -601,7 +591,6 @@ def resolve_program(
     # ------------------------------------------------------------------
     resolved_modules: dict[ModuleId, ResolvedModule] = {}
     all_warnings: list[Diagnostic] = []
-    entry_agents: dict[AgentKey, AgentDecl] = {}
 
     for mid, loaded in graph.modules.items():
         is_entry = mid.is_entry
@@ -636,7 +625,6 @@ def resolve_program(
         resolved = resolver.run(
             loaded.program,
             parent_scope=entry_parent_scope if is_entry else None,
-            ambient_agents=ambient_agents if is_entry else frozenset(),
             ambient_constructor_candidates=constructor_candidates or None,
             ambient_type_names=type_names,
         )
@@ -648,15 +636,12 @@ def resolve_program(
             exports=export_maps[mid],
             source_text=graph.modules[mid].source_text,
         )
-        if is_entry:
-            entry_agents = dict(resolved.declared_agents)
 
     return ResolvedProgram(
         modules=resolved_modules,
         entry_id=graph.entry_id,
         all_public_funcs=all_public_funcs,
         all_public_types=all_public_types,
-        entry_agents=entry_agents,
         import_sccs=graph.sccs,
         warnings=tuple(all_warnings),
     )

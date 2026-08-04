@@ -23,7 +23,6 @@ from agm.agl.semantics.types import (
     contains_inference_var,
 )
 from agm.agl.typecheck import (
-    AgentType,
     AglTypeError,
     ArrayType,
     BoolType,
@@ -50,7 +49,6 @@ from tests.agl.module_graph import resolve_and_check_entry
 # ---------------------------------------------------------------------------
 
 _CAPS = HostCapabilities(
-    agent_names=frozenset(),
     supports_shell_exec=True,
     codec_kinds={
         "text": frozenset({"text"}),
@@ -103,19 +101,6 @@ def _binding_value_type(cg: CheckedProgram, module_id: ModuleId, name: str) -> T
         if isinstance(item, LetDecl) and simple_let_pattern_name(item.pattern) == name:
             return module.node_types[item.value.node_id]
     raise AssertionError(f"no top-level binding named {name!r} in {module_id}")
-
-
-def _agent_binding_type(cg: CheckedProgram, module_id: ModuleId, name: str) -> Type:
-    """Inferred type of the agent declaration ``agent <name> = ...`` in ``module_id``."""
-    from agm.agl.syntax.nodes import AgentDecl
-
-    module = cg.modules[module_id]
-    for item in module.resolved.program.body.items:
-        if isinstance(item, AgentDecl) and item.name == name:
-            t = module.type_env.get_binding_type(item.node_id)
-            assert t is not None, f"no binding type for agent {name!r} in {module_id}"
-            return t
-    raise AssertionError(f"no agent declaration named {name!r} in {module_id}")
 
 
 # ---------------------------------------------------------------------------
@@ -197,24 +182,6 @@ def test_single_module_program_infers_forward_and_mutual_returns(tmp_path: Path)
     assert signatures["later"].result == IntType()
     assert signatures["is_even"].result == BoolType()
     assert signatures["is_odd"].result == BoolType()
-
-
-@pytest.mark.parametrize(
-    ("binding", "expected"),
-    [
-        ("let value = 1", IntType()),
-        ("var value = 1", IntType()),
-        ("param value: int = 1", IntType()),
-        ("agent value", AgentType()),
-    ],
-)
-def test_candidate_inference_reads_preceding_top_level_binding(
-    binding: str, expected: Type
-) -> None:
-    """An inferred function can capture a source-visible top-level value."""
-    checked = _check(f"{binding}\ndef capture() = value\ncapture()")
-
-    assert checked.function_signatures["capture"].result == expected
 
 
 def test_candidate_inference_reads_a_preceding_destructuring_let_binder() -> None:
@@ -747,33 +714,6 @@ def test_self_ref_type(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 # 19. Agent-typed argument in imported function
 # ---------------------------------------------------------------------------
-
-
-def test_agent_typed_arg_in_imported_function(tmp_path: Path) -> None:
-    """An imported function accepting agent-typed arg can be called from entry."""
-    caps_with_agent = HostCapabilities(
-        agent_names=frozenset({"bot"}),
-        supports_shell_exec=True,
-        codec_kinds={
-            "text": frozenset({"text"}),
-            "json": frozenset(
-                {"json", "record", "enum", "array", "dict", "int", "decimal", "bool"}
-            ),
-        },
-    )
-    modules = {
-        "entry": (
-            'import mylib\nagent bot = "claude"\nlet result: text = mylib::greet(bot)\nresult'
-        ),
-        "mylib": ('def greet(a: agent) -> text = "hello"'),
-    }
-    mg = _make_graph_from_files(tmp_path, modules)
-    rg = resolve_program(mg)
-    cg = check_program(rg, caps_with_agent)
-    # Verify the agent-typed-arg path is exercised: bot must be agent-typed
-    assert _agent_binding_type(cg, ENTRY_ID, "bot") == AgentType()
-    # Verify the greet call returns text
-    assert _binding_value_type(cg, ENTRY_ID, "result") == TextType()
 
 
 # ---------------------------------------------------------------------------

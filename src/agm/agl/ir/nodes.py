@@ -28,7 +28,7 @@ from dataclasses import dataclass
 from typing import TypeAlias
 
 from agm.agl.ir.contracts import ConversionFailureMode, ConversionRecipe
-from agm.agl.ir.ids import AgentId, ContractId, FunctionId, Location, NominalId, SymbolId
+from agm.agl.ir.ids import ContractId, FunctionId, Location, NominalId, SymbolId
 from agm.agl.ir.operations import (
     ArithKind,
     ArithOp,
@@ -45,7 +45,6 @@ from agm.agl.ir.operations import (
 
 __all__ = [
     "AutoTraceField",
-    "IrAgentHandle",
     "IrAnd",
     "IrArith",
     "IrAsk",
@@ -1061,24 +1060,6 @@ class IrCopyValue:
 
 
 @dataclass(frozen=True, slots=True)
-class IrAgentHandle:
-    """IR host-op: evaluate to an AgentValue for one declared agent.
-
-    Emitted for ``AgentDecl`` lowering.  The structured identity keeps same-
-    named scoped declarations distinct; its display name is used only at the
-    host-facing boundary.
-    """
-
-    location: Location
-    agent_id: "AgentId"
-
-    @property
-    def agent_name(self) -> str:
-        """Return the agent's source-facing display name."""
-        return self.agent_id.display_name
-
-
-@dataclass(frozen=True, slots=True)
 class IrAsk:
     """IR host-op: ask(prompt, agent:, on_parse_error:) builtin call.
 
@@ -1214,7 +1195,6 @@ IrExpr = (
     | IrRenderValue
     | IrParseJson
     | IrCopyValue
-    | IrAgentHandle
     | IrAsk
     | IrAskRequest
     | IrExec

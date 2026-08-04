@@ -85,7 +85,6 @@ from tests.agl.module_graph import resolve_and_check_program_ast
 _PATH = Path("/virtual/extern_lowering.agl")
 
 _CAPS = HostCapabilities(
-    agent_names=frozenset(),
     supports_shell_exec=True,
     supports_extern=True,
     codec_kinds={

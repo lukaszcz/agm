@@ -1,5 +1,0 @@
-record Bad
-  a: agent
-  x: int
-def encode(b: Bad) -> json = b as json
-encode

@@ -29,39 +29,11 @@ prevent execution.
 
 ## Agents
 
-**The program owns the set of named agents.** Every named agent a program
-calls must be declared with an `agent` declaration at the entry-module root
-or in a named scope region ([Bindings and scope](bindings-and-scope.md)); a
-call to an undeclared name
-is a static binding error. The host does *not* contribute names and there is
-**no implicit fallback** that makes arbitrary names resolve. Two names need
-no declaration:
-
-- **The default agent** backs the contextual keyword `ask`.
-- **`exec`** denotes the shell executor ([Shell execution](shell-execution.md)).
-
-The host's role is to **supply a backing** — the actual agent that runs — for
-each root declaration and each referenced scoped agent path. An unreferenced
-scoped declaration remains a static member and may warn, but a runtime handle
-for it is materialized only when referenced. A declaration may also carry an
-optional *runner hint*, an
-opaque static string the host may use to launch the agent; the host ignores
-it if it has its own backing, and host configuration for a given name always
-takes precedence over the source hint. The hint is never interpreted by the
-language (no interpolation; see [Bindings and scope](bindings-and-scope.md)).
-
-Because the program owns the names and the host owns the backings, two
-mismatches are **host configuration errors**, reported before anything
-executes:
-
-- a backing supplied for an agent path the program never declares
-  (*registered but undeclared*), and
-- a root declaration or referenced scoped agent for which the host provides
-  neither a dedicated backing nor a default agent to fall back on (*declared
-  but unbacked*).
-
-An `ask` call requires a default agent to be configured, or it is a static
-error. The names `ask` and `exec` can never be declared as agents.
+Each `ask` evaluates an `Agent` enum value that selects the backend command.
+The value may be passed explicitly or supplied by the
+`std/config::default-agent` setting. `AgentCommand` carries a command string;
+the provider variants carry their provider-specific fields. The host dispatches
+the selected value and does not contribute agent names or reconcile a registry.
 
 Per dispatch, an agent receives the rendered prompt, the output contract
 (format instructions plus derived JSON Schema, so schema-capable backends
@@ -118,8 +90,8 @@ values are not chatty agent output, so no lenient recovery applies) and
 validated against the declared type.
 
 The declared type must be JSON-wire-serializable, including for a param whose
-default is always used. Runtime-only values such as `unit`, agents, and
-functions are not valid program param types because the executable always
+default is always used. Runtime-only values such as `unit` and functions are not valid program param
+types because the executable always
 includes external-decoder metadata for every declared param. A
 [recursive](types.md#recursive-types) record or enum param decodes normally,
 subject to the same finite-schema restriction as an agent output type or cast
@@ -140,13 +112,15 @@ key:
 | `log` | `bool` | `false` |
 | `strict-json` | `bool` | `false` (lenient recovery) |
 | `max-iters` | `int` | `0` (off) |
-| `runner` | `text` | host floor runner |
+| `default-agent` | `Agent` | `AgentClaude("sonnet", "medium")` |
 | `log-file` | `Option[text]` | `None` |
 | `timeout` | `Option[text]` | `None` |
 
 Import `std/config` and read or write a setting through a qualified target
-(`std/config::max-iters`); writing zero disables that safety valve. The
-`Option[text]` settings (`log-file`, `timeout`) take a `Some("…")` or `None` value.
+(`std/config::max-iters`); writing zero disables that safety valve.
+`default-agent` is a typed `Agent` value used by `ask` when its `agent` option
+is omitted; there is no runner engine setting. The `Option[text]` settings
+(`log-file`, `timeout`) take a `Some("…")` or `None` value.
 
 ### Precedence
 
@@ -184,20 +158,18 @@ file stem. It supplies param values, not REPL engine-setting overrides.
 
 ### Positional effect
 
-The host applies each effective initial setting before execution. Thus a declared
-`runner`, `log`, or `log-file` default configures the default agent or trace
-service when no CLI/config seed is supplied. Every setting takes effect
+The host applies each effective initial setting before execution. Thus a declared `log` or `log-file` default configures the trace service when
+no CLI/config seed is supplied. Every setting takes effect
 **positionally** thereafter: a write to `std/config::X` governs the statements
 that follow it, in program order, and does not affect statements before it. A
-completed write remains effective if a later expression fails. Writing `runner`,
-`log`, or `log-file` repoints the default agent and the trace destination used by
-subsequent calls. Assigning `Some(path)` to `log-file`
+completed write remains effective if a later expression fails. Writing `log` or
+`log-file` updates the trace destination used by subsequent calls. Assigning
+`Some(path)` to `log-file`
 enables logging; a later `log := false` disables it while retaining the path.
 Writing `strict-json`, `max-iters`, or `timeout` changes subsequent agent-output
 parsing, unbounded loops, or `exec` calls, respectively.
-A host that rejects a `runner` reconfiguration leaves the setting's prior value
-in place. Trace output is best-effort: a filesystem failure disables tracing for
-the rest of the run without rolling back the assigned `log` or `log-file` value.
+Trace output is best-effort: a filesystem failure disables tracing for the rest
+of the run without rolling back the assigned `log` or `log-file` value.
 
 ### Error surface for `timeout`
 

@@ -1220,7 +1220,7 @@ class TestRecursiveTypesAcrossEntries:
         agent = CountingAgent(
             '{"$case": "Node", "value": 1, "left": {"$case": "Leaf"}, "right": {"$case": "Leaf"}}'
         )
-        s = ReplSession(default_agent=agent)
+        s = ReplSession(agent_dispatcher=agent)
         declare = s.eval_entry("enum Tree\n  | Leaf\n  | Node(value: int, left: Tree, right: Tree)")
         assert declare.ok
         asked = s.eval_entry('let t: Tree = ask """build a tree"""')
@@ -1444,7 +1444,7 @@ class TestTypeOf:
 
     def test_type_of_fires_no_agent(self) -> None:
         agent = CountingAgent("RESULT")
-        s = ReplSession(default_agent=agent)
+        s = ReplSession(agent_dispatcher=agent)
         # type_of an agent-calling expression must NOT dispatch.
         assert s.type_of('ask """ask"""') == repr(TextType())
         assert agent.calls == 0
@@ -1862,7 +1862,7 @@ class TestFailureEffects:
 class TestExactlyOnce:
     def test_agent_fires_exactly_once(self) -> None:
         agent = CountingAgent("the-answer")
-        s = ReplSession(default_agent=agent)
+        s = ReplSession(agent_dispatcher=agent)
         r1 = s.eval_entry('let g = ask """say something"""')
         assert r1.ok
         assert agent.calls == 1
@@ -1876,7 +1876,7 @@ class TestExactlyOnce:
         from agm.agl.repl.render import render_entry_result
 
         agent = CountingAgent("the-answer")
-        s = ReplSession(default_agent=agent)
+        s = ReplSession(agent_dispatcher=agent)
         result = s.eval_entry('ask """say something"""')
 
         assert result.ok
@@ -1887,7 +1887,7 @@ class TestExactlyOnce:
         from agm.agl.repl.render import render_entry_result
 
         agent = CountingAgent("the-answer")
-        s = ReplSession(default_agent=agent)
+        s = ReplSession(agent_dispatcher=agent)
         first = s.eval_entry('let txt: text = ask """say something"""')
         second = s.eval_entry("txt")
 
@@ -1899,7 +1899,7 @@ class TestExactlyOnce:
 
     def test_distinct_agent_responses_across_entries(self) -> None:
         agent = CountingAgent("first", "second", "third")
-        s = ReplSession(default_agent=agent)
+        s = ReplSession(agent_dispatcher=agent)
         s.eval_entry('let a = ask """q1"""')
         s.eval_entry('let b = ask """q2"""')
         s.eval_entry('let c = ask """q3"""')
@@ -1909,7 +1909,7 @@ class TestExactlyOnce:
 
     def test_agent_value_dispatch(self) -> None:
         named = CountingAgent("named-reply")
-        s = ReplSession(default_agent=named)
+        s = ReplSession(agent_dispatcher=named)
         r = s.eval_entry(
             'let reviewer = AgentCommand("reviewer")\n'
             'let out = ask("""review this""", agent = reviewer)'
@@ -1926,7 +1926,7 @@ class TestExactlyOnce:
 
 class TestAgentDeclarations:
     def test_agent_value_dispatches_without_a_declaration(self) -> None:
-        s = ReplSession(default_agent=CountingAgent("ok"))
+        s = ReplSession(agent_dispatcher=CountingAgent("ok"))
         r = s.eval_entry(
             'let reviewer = AgentCommand("reviewer")\nask("""look""", agent = reviewer)'
         )
@@ -1941,7 +1941,7 @@ class TestAgentDeclarations:
         assert r.diagnostics
 
     def test_cross_entry_agent_value_resolves(self) -> None:
-        s = ReplSession(default_agent=CountingAgent("done"))
+        s = ReplSession(agent_dispatcher=CountingAgent("done"))
         r1 = s.eval_entry('let helper = AgentCommand("helper")')
         assert r1.ok
         r2 = s.eval_entry('let out = ask("""go""", agent = helper)')
@@ -1950,7 +1950,7 @@ class TestAgentDeclarations:
 
     def test_scoped_declaration_retains_its_handle_across_entries(self) -> None:
         agent = CountingAgent("done")
-        s = ReplSession(default_agent=agent)
+        s = ReplSession(agent_dispatcher=agent)
 
         declared = s.eval_entry('scope Tools\nlet helper = AgentCommand("helper")\nend Tools')
         assert declared.ok, declared.diagnostics
@@ -1965,12 +1965,6 @@ class TestAgentDeclarations:
         assert _text({name: value for name, _typ, value in s.bindings()}["out"]) == "done"
         assert agent.calls == 1
 
-    def test_scoped_legacy_registration_remains_parseable(self) -> None:
-        s = ReplSession()
-        s.register_scoped_agent(("Tools",), "legacy-helper", CountingAgent("done"))
-        result = s.eval_entry("scope Tools\nagent legacy-helper\nend Tools")
-        assert result.ok, result.diagnostics
-
     def test_failed_entry_declaration_does_not_persist(self) -> None:
         # A declaration in an entry that fails to promote must NOT leak into the
         # ambient set: a later call relying on it is still a scope error.
@@ -1982,14 +1976,6 @@ class TestAgentDeclarations:
         r = s.eval_entry('maybe "call"')
         assert not r.ok
         assert r.diagnostics
-
-    def test_unused_declaration_warning_surfaced(self) -> None:
-        # A bare cross-entry ``agent X`` declaration legitimately produces an
-        # "unused" scope warning, routed alongside type-checker warnings.
-        s = ReplSession()
-        r = s.eval_entry("agent solo")
-        assert r.ok
-        assert any("solo" in w.message for w in r.warnings)
 
     def test_type_of_allows_agent_value_call(self) -> None:
         s = ReplSession()
@@ -2248,7 +2234,7 @@ class TestLoadFile:
         agent = CountingAgent("loaded")
         f = tmp_path / "p.agl"
         f.write_text('let g = ask """hi"""\n')
-        s = ReplSession(default_agent=agent)
+        s = ReplSession(agent_dispatcher=agent)
         s.load_file(f)
         assert agent.calls == 1
         # Referencing it later does not re-run.
@@ -2435,7 +2421,7 @@ class TestWarnings:
 class TestCheckOnly:
     def test_check_only_types_expression_without_eval(self) -> None:
         agent = CountingAgent("nope")
-        s = ReplSession(default_agent=agent)
+        s = ReplSession(agent_dispatcher=agent)
         r = s.eval_entry('ask """ask"""', check_only=True)
         assert r.ok
         assert r.kind == "expression"
@@ -2495,28 +2481,6 @@ class TestCheckOnly:
 
 
 class TestRegistrationAndAgents:
-    def test_agents_lists_named_and_ask(self) -> None:
-        s = ReplSession(default_agent=CountingAgent("x"))
-        s.register_agent("alpha", CountingAgent("a"))
-        s.register_agent("beta", CountingAgent("b"))
-        assert s.agents() == ["alpha", "beta", "ask"]
-
-    def test_agents_without_default_excludes_ask(self) -> None:
-        s = ReplSession()
-        s.register_agent("only", CountingAgent("x"))
-        assert s.agents() == ["only"]
-
-    def test_register_agent_reserved_name_rejected(self) -> None:
-        s = ReplSession()
-        with pytest.raises(ValueError):
-            s.register_agent("ask", CountingAgent("x"))
-
-    def test_register_duplicate_agent_rejected(self) -> None:
-        s = ReplSession()
-        s.register_agent("dup", CountingAgent("x"))
-        with pytest.raises(ValueError):
-            s.register_agent("dup", CountingAgent("y"))
-
     def test_register_codec_validation(self) -> None:
         from agm.agl.runtime.codec import JsonCodec
 
@@ -2547,7 +2511,7 @@ class TestContractError:
             def name(self) -> str:
                 return "bad"
 
-        s = ReplSession(default_agent=CountingAgent("ok"))
+        s = ReplSession(agent_dispatcher=CountingAgent("ok"))
         s.register_codec(BadCodec())
         r = s.eval_entry('let x = ask("hi", format = "bad")')
         assert not r.ok
@@ -2612,7 +2576,7 @@ class TestAgentCancellation:
         assert session.eval_entry("2 + 2").ok
 
     def test_declined_agent_aborts_entry_with_diagnostic(self) -> None:
-        s = ReplSession(default_agent=_CancellingAgent())
+        s = ReplSession(agent_dispatcher=_CancellingAgent())
         r = s.eval_entry('let g = ask """do it"""')
         assert not r.ok
         assert r.error is None
@@ -2620,7 +2584,7 @@ class TestAgentCancellation:
         assert "cancelled" in r.diagnostics[0].message.lower()
 
     def test_declined_agent_leaves_bindings_unchanged(self) -> None:
-        s = ReplSession(default_agent=_CancellingAgent())
+        s = ReplSession(agent_dispatcher=_CancellingAgent())
         s.eval_entry("let keep = 7")
         before = _snapshot(s)
         r = s.eval_entry('let g = ask """do it"""')
@@ -2630,7 +2594,7 @@ class TestAgentCancellation:
         assert all(n != "g" for n, _t, _v in s.bindings())
 
     def test_keyboard_interrupt_aborts_entry(self) -> None:
-        s = ReplSession(default_agent=_InterruptAgent())
+        s = ReplSession(agent_dispatcher=_InterruptAgent())
         s.eval_entry("let x = 1")
         before = _snapshot(s)
         r = s.eval_entry('let g = ask """slow"""')
@@ -2639,7 +2603,7 @@ class TestAgentCancellation:
         assert _snapshot(s) == before
 
     def test_cancellation_preserves_prior_assignment(self) -> None:
-        s = ReplSession(default_agent=_CancellingAgent())
+        s = ReplSession(agent_dispatcher=_CancellingAgent())
         s.eval_entry("var v = 1")
         r = s.eval_entry('v := 2\nlet g = ask """x"""')
         assert not r.ok
@@ -2651,14 +2615,14 @@ class TestAgentCancellation:
         # before a cancelled agent call must be promoted, mirroring the
         # partial-effects behavior for runtime raises. Previously cancellation
         # carried no failure span, so every type declaration was dropped.
-        s = ReplSession(default_agent=_CancellingAgent())
+        s = ReplSession(agent_dispatcher=_CancellingAgent())
         r = s.eval_entry('record Box\n  value: int\nlet g = ask """x"""')
         assert not r.ok
         assert s.eval_entry("Box(value = 3)").ok
 
     def test_cancellation_excludes_record_declared_after_call(self) -> None:
         # A type declared after the cancelled call is not promoted.
-        s = ReplSession(default_agent=_CancellingAgent())
+        s = ReplSession(agent_dispatcher=_CancellingAgent())
         r = s.eval_entry('let g = ask """x"""\nrecord After\n  value: int')
         assert not r.ok
         assert not s.eval_entry("After(value: 1)").ok
@@ -2671,7 +2635,7 @@ class TestAgentCancellation:
 
 class TestTraceLogging:
     def test_no_trace_path_writes_nothing(self, tmp_path: Path) -> None:
-        s = ReplSession(default_agent=CountingAgent("ok"))
+        s = ReplSession(agent_dispatcher=CountingAgent("ok"))
         r = s.eval_entry('let g = ask """hi"""')
         assert r.ok
         assert r.trace_path is None
@@ -2680,7 +2644,7 @@ class TestTraceLogging:
         import json
 
         trace = tmp_path / "repl.log"
-        s = ReplSession(default_agent=CountingAgent("reply"), trace_path=trace)
+        s = ReplSession(agent_dispatcher=CountingAgent("reply"), trace_path=trace)
         r = s.eval_entry('let g = ask """ask"""')
         assert r.ok
         assert r.trace_path == trace
@@ -2695,7 +2659,7 @@ class TestTraceLogging:
         import json
 
         trace = tmp_path / "repl.log"
-        s = ReplSession(default_agent=CountingAgent("a", "b"), trace_path=trace)
+        s = ReplSession(agent_dispatcher=CountingAgent("a", "b"), trace_path=trace)
         s.eval_entry('let x = ask """one"""')
         s.eval_entry('let y = ask """two"""')
         records = [json.loads(line) for line in trace.read_text().splitlines() if line]
@@ -2705,7 +2669,7 @@ class TestTraceLogging:
 
     def test_check_only_writes_no_trace(self, tmp_path: Path) -> None:
         trace = tmp_path / "repl.log"
-        s = ReplSession(default_agent=CountingAgent("ok"), trace_path=trace)
+        s = ReplSession(agent_dispatcher=CountingAgent("ok"), trace_path=trace)
         r = s.eval_entry('let g = ask """hi"""', check_only=True)
         assert r.ok
         assert r.trace_path is None
@@ -2715,7 +2679,7 @@ class TestTraceLogging:
         import json
 
         trace = tmp_path / "repl.log"
-        s = ReplSession(default_agent=_CancellingAgent(), trace_path=trace)
+        s = ReplSession(agent_dispatcher=_CancellingAgent(), trace_path=trace)
         r = s.eval_entry('let g = ask """x"""')
         assert not r.ok
         records = [json.loads(line) for line in trace.read_text().splitlines() if line]
@@ -2729,7 +2693,7 @@ class TestTraceLogging:
         from agm.core import log as core_log
 
         trace = tmp_path / "repl.log"
-        s = ReplSession(default_agent=CountingAgent("a", "b"), trace_path=trace)
+        s = ReplSession(agent_dispatcher=CountingAgent("a", "b"), trace_path=trace)
         real_append = core_log.append_jsonl
         calls = {"n": 0}
 
@@ -3547,15 +3511,6 @@ class TestImports:
         ] == [("error", "invalid.agl", 2)]
         assert s.bindings() == []
 
-    def test_agent_decl_in_graph_mode(self, tmp_path: Path) -> None:
-        # Declaring an agent in program context installs it in the entry scope.
-        lib = tmp_path / "mylib.agl"
-        lib.write_text("def id_fn(n: int) -> int = n\n")
-        s = self._make_session_with_root(tmp_path)
-        s.register_agent("helper", CountingAgent("ok"))
-        r = s.eval_entry("open import mylib\nagent helper\nid_fn(7)")
-        assert r.ok, r.diagnostics
-
     def test_agl_raise_in_graph_mode(self, tmp_path: Path) -> None:
         # An AglRaise exception during program evaluation aborts the entry.
         lib = tmp_path / "mylib.agl"
@@ -3750,17 +3705,6 @@ class TestImports:
         r2 = s.eval_entry("open import mylib\nprogram second\nadd(1, 2)")
         assert not r2.ok
         assert "Program name already set" in r2.diagnostics[0].message
-
-    def test_cancellation_in_graph_mode(self, tmp_path: Path) -> None:
-        # AgentCancelled during program execution aborts the entry.
-        lib = tmp_path / "mylib.agl"
-        lib.write_text("def noop(n: int) -> int = n\n")
-        s = self._make_session_with_root(tmp_path)
-        s.register_agent("helper", _CancellingAgent())
-        r = s.eval_entry('import mylib\nagent helper\nnoop(ask("hi", agent = helper))')
-        assert not r.ok
-        assert r.error is None
-        assert r.diagnostics
 
     def test_parse_error_in_imported_module_has_source_label(self, tmp_path: Path) -> None:
         # Regression: parse error in an imported module must surface
@@ -4263,23 +4207,6 @@ class TestFunctionAgentValueEcho:
         assert isinstance(r.value, IrClosureValue)
         rendered = render_value(r.value)
         assert rendered == "<function: int -> int>"
-
-    def test_bare_agent_name_echo_does_not_crash(self) -> None:
-        """A bare agent-name entry echoes the surface form without crashing."""
-        s = ReplSession()
-        s.register_agent("reviewer", CountingAgent("ok"))
-        # Declare the agent in source so it becomes a value binding in scope.
-        s.eval_entry("agent reviewer")
-        r = s.eval_entry("reviewer")
-        assert r.ok
-        assert r.kind == "expression"
-        assert r.value is not None
-        from agm.agl.runtime.render import render_value
-        from agm.agl.semantics.values import AgentValue
-
-        assert isinstance(r.value, AgentValue)
-        rendered = render_value(r.value)
-        assert rendered == "<agent reviewer>"
 
     def test_bindings_after_def_does_not_crash(self) -> None:
         """:bindings() after a ``def`` must not crash (Closure has a surface form)."""

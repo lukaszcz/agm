@@ -62,10 +62,10 @@ A semicolon `;` also separates items in a block; see
 ## Keywords
 
 The following words are **always reserved** and can never be used as
-variable, agent, or function names:
+variable or function names:
 
 ```text
-record enum type param program agent def fn let var for while do until done
+record enum type param program def fn let var for while do until done
 if else case of try catch raise return break continue exception extends builtin extern as as?
 and or not is in to downto by with true false null
 infixl infixr prio
@@ -76,10 +76,8 @@ lexeme. There is no whitespace permitted between `as` and `?`; with
 whitespace, `as` is the cast keyword and `?` starts a separate placeholder
 spelling. `as?` is always reserved and cannot be used as an identifier.
 
-`agent` is reserved (it leads an `agent` declaration) but is accepted
-as a **field name** (record/enum field definitions, named constructor
-arguments, dict shorthand keys, postfix field access, and pattern field keys).
-It cannot be used as a variable binder, pattern binder, or catch binder.
+`agent` is an ordinary identifier, including in binding, pattern, and field
+positions.
 
 `to`, `downto`, and `by` are reserved (they introduce the range tail of a
 `for` clause) but are still accepted as **field names** (record/enum field
@@ -98,7 +96,7 @@ as a field name or an annotated function parameter.
 **Contextual keywords** — `print`, `ask`, and `exec` are NOT reserved; they
 lex as plain `NAME` tokens and are given their built-in meaning during scope
 resolution. They may not be declared with `let`, `var`, or `param`, may not be
-declared as agents or functions, and may not appear as pattern or catch
+declared as functions, and may not appear as pattern or catch
 binders — but they remain legal as field and method names, which live in a
 type's own member namespace. The distinct raw-tail spellings
 `exec!` and `ask!` are reserved for their raw forms and cannot be used as names.

@@ -37,7 +37,6 @@ from typing import TYPE_CHECKING, cast
 from agm.agl.ir.contracts import ContractRequest, DecodeSchema
 from agm.agl.runtime.codec import OutputCodec
 from agm.agl.semantics.types import (
-    AgentType,
     ArrayType,
     BoolType,
     DecimalType,
@@ -186,8 +185,6 @@ def _target_type_for_request(request: ContractRequest) -> Type:
         return BoolType()
     if kind == "json":
         return JsonType()
-    if kind == "agent":
-        return AgentType()
     if kind == "array":
         return ArrayType(JsonType())
     if kind == "dict":

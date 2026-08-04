@@ -1256,22 +1256,6 @@ class ProgramDecl:
 
 
 @dataclass(frozen=True, slots=True)
-class AgentDecl:
-    """``agent NAME [= "runner string"]`` declaration.
-
-    ``runner`` is the optional static runner-command hint (a literal string
-    with NO interpolation); ``None`` for a bare declaration.
-    In AgL, agent names are ordinary value bindings of type ``agent``.
-    """
-
-    name: str
-    runner: str | None
-    span: SourceSpan = dc_field(compare=False)
-    node_id: int = dc_field(compare=False)
-    scope_path: tuple[ScopeSegment, ...] = ()
-
-
-@dataclass(frozen=True, slots=True)
 class BuiltinVarDecl:
     """``builtin var NAME : Type`` declaration — a body-less, runtime-backed,
     MUTABLE binding.
@@ -1326,14 +1310,14 @@ class ScopeRegion:
     node_id: int = dc_field(compare=False)
 
 
-ScopedDeclaration = FuncDef | RecordDef | EnumDef | ExceptionDef | TypeAlias | AgentDecl
+ScopedDeclaration = FuncDef | RecordDef | EnumDef | ExceptionDef | TypeAlias
 
 
 def is_scoped_declaration(node: object) -> TypeGuard[ScopedDeclaration]:
     """Whether *node* is a declaration owned by a non-root named scope."""
-    return isinstance(
-        node, (FuncDef, RecordDef, EnumDef, ExceptionDef, TypeAlias, AgentDecl)
-    ) and bool(node.scope_path)
+    return isinstance(node, (FuncDef, RecordDef, EnumDef, ExceptionDef, TypeAlias)) and bool(
+        node.scope_path
+    )
 
 
 def static_items(items: tuple[Item, ...]) -> Iterator[Item]:
@@ -1384,7 +1368,6 @@ Declaration = (
     | TypeAlias
     | ParamDecl
     | ProgramDecl
-    | AgentDecl
     | BuiltinVarDecl
     | InfixDecl
     | ImportDecl
@@ -1410,7 +1393,6 @@ ScopeItem = (
     | EnumDef
     | ExceptionDef
     | TypeAlias
-    | AgentDecl
     | LetDecl
     | VarDecl
     | ParamDecl

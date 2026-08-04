@@ -555,10 +555,8 @@ def load_revise_config(
 class ExecConfig:
     """Resolved exec-command configuration."""
 
-    runner: str | None
     strict_json: bool
     timeout: float | None
-    agents: dict[str, str]
     log: bool
     log_file: str | None
     # Raw TOML value: only exec/repl may parse it as an AgL Agent literal.
@@ -583,9 +581,7 @@ def load_exec_config(
     - cwd/.agm/config.toml
 
     When ``command_name`` is provided, the ``[exec.<command_name>]`` sub-table
-    is merged over the base ``[exec]`` table.  The name ``agents`` is reserved
-    for the structural ``[exec.agents]`` map and is never treated as a
-    per-command override sub-table.
+    is merged over the base ``[exec]`` table.
     """
     merged = load_merged_config(home=home, proj_dir=proj_dir, cwd=cwd)
     return exec_config_from_merged(merged, command_name=command_name)
@@ -608,13 +604,10 @@ def exec_config_from_merged(
     ``[exec]`` value.  Engine keys use kebab-case names: ``strict-json``,
     ``max-iters``, ``log-file``.
     """
-    # ``agents`` is a reserved structural sub-table, not a workflow override:
-    # selecting it as a command would merge the agent map in as scalar config.
-    selected_command = None if command_name == "agents" else command_name
     exec_table = _select_command_table(
         toml_dict(merged.get("exec")),
         section_name="exec",
-        command_name=selected_command,
+        command_name=command_name,
         require_command=False,
     )
 
@@ -626,19 +619,11 @@ def exec_config_from_merged(
             if key in program_table:
                 effective[key] = program_table[key]
 
-    resolved_runner = _optional_str(effective, "runner")
     resolved_strict_json = _optional_bool(effective, "strict-json")
     resolved_loop_limit = _optional_positive_int(effective, "max-iters")
     resolved_max_call_depth = _optional_positive_int(exec_table, "max-call-depth")
 
     resolved_timeout = _optional_timeout(effective, "timeout")
-
-    agents_raw = exec_table.get("agents")
-    resolved_agents: dict[str, str] = {}
-    if isinstance(agents_raw, dict):
-        for k, v in agents_raw.items():
-            if isinstance(k, str) and isinstance(v, str) and v.strip():
-                resolved_agents[k] = v
 
     resolved_log = _optional_bool(effective, "log")
     resolved_log_file = _optional_str(effective, "log-file")
@@ -648,12 +633,10 @@ def exec_config_from_merged(
     resolved_default_agent = effective.get("default-agent")
 
     return ExecConfig(
-        runner=resolved_runner,
         strict_json=resolved_strict_json,
         default_loop_limit=resolved_loop_limit,
         max_call_depth=resolved_max_call_depth,
         timeout=resolved_timeout,
-        agents=resolved_agents,
         log=resolved_log,
         log_file=resolved_log_file,
         default_agent=resolved_default_agent,

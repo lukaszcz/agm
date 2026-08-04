@@ -139,7 +139,7 @@ def resolve_lib_root(
     return agm_home_dir(home=default_home, env=env) / "lib"
 
 
-_LEGACY_AGENT_TYPE = re.compile(r"(?m)^\s*agent\s*:\s*(?:text|agent)\b")
+_LEGACY_AGENT_FIELD = re.compile(r"(?m)^\s*agent\s*:\s*(?:text|agent)\b")
 
 
 def _has_incompatible_stdlib_surface(stdlib_root: Path) -> bool:
@@ -155,7 +155,7 @@ def _has_incompatible_stdlib_surface(stdlib_root: Path) -> bool:
     if not core.is_file():
         return False
     source = core.read_text(encoding="utf-8")
-    return "ParsePolicy.Abort" in source or _LEGACY_AGENT_TYPE.search(source) is not None
+    return "ParsePolicy.Abort" in source or _LEGACY_AGENT_FIELD.search(source) is not None
 
 
 def resolve_stdlib_root(*, home: Path, env: Mapping[str, str] | None = None) -> Path:
@@ -167,7 +167,7 @@ def resolve_stdlib_root(*, home: Path, env: Mapping[str, str] | None = None) -> 
     Otherwise a user-writable home stdlib wins when present (honouring
     ``AGM_HOME``), then an installation-prefix stdlib, then the repository
     ``stdlib/`` tree for source-checkout workflows. An installed stdlib with
-    legacy constructor syntax or text/opaque agent fields is skipped when a
+    legacy constructor syntax or an outdated ``AgentRequest`` field is skipped when a
     source-checkout stdlib is available. If none exists yet, return the home destination so
     diagnostics mention the path that ``just install`` populates.
     """

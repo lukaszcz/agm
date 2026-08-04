@@ -230,7 +230,7 @@ An agent **transport** failure: the agent could not run. Not eligible for
 `on_parse_error` retries ([Agent calls](agent-calls.md)).
 
 ```text
-agent: text       # the callee name
+agent: Agent      # the selected backend
 cause: text       # "spawn_failure" | "nonzero_exit" | "timeout"
 metadata: json    # host details: exit code, stderr tail, elapsed seconds
 ```
@@ -241,7 +241,7 @@ Structured agent (or typed `exec`) output failed parsing or validation after
 all attempts allowed by the parse policy.
 
 ```text
-agent: text             # callee name ("exec" for shell calls)
+agent: Agent            # selected backend (`exec` uses AgentCommand("exec"))
 target_type: text       # the contract's target type, e.g. "Review"
 expected_schema: json   # the derived JSON Schema
 raw: text               # the last attempt's raw output

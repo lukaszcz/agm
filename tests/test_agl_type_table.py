@@ -35,7 +35,6 @@ from agm.agl.semantics.type_table import (
 )
 from agm.agl.semantics.types import (
     BUILTIN_PRELUDE_TYPES,
-    AgentType,
     ArrayType,
     BoolType,
     BottomType,
@@ -60,7 +59,6 @@ from tests.agl.ir_harness import evaluate_ir_output, make_graph_from_files
 from tests.agl.module_graph import resolve_and_check_entry
 
 _CAPS = HostCapabilities(
-    agent_names=frozenset(),
     supports_shell_exec=True,
     codec_kinds={
         "text": frozenset({"text"}),
@@ -1465,27 +1463,6 @@ class TestComparableTypesTableAware:
         handle = RecordType(name="Point", module_id=ENTRY_ID)
         assert comparable_types(handle, handle, table) is True
 
-    def test_generic_record_agent_field_via_instantiation_not_comparable(self) -> None:
-        # A generic record's field template is a bare type variable; only once
-        # a concrete handle instantiates it with an agent type does the field
-        # actually carry a no-equality type — record_fields substitutes
-        # type_args into the template to expose this.
-        table = TypeTable()
-        table.register(
-            TypeDef(
-                kind="record",
-                name="Box",
-                module_id=ENTRY_ID,
-                type_params=("T",),
-                fields=(("value", TypeVarType("T")),),
-            )
-        )
-        agent_handle = RecordType(name="Box", type_args=(AgentType(),), module_id=ENTRY_ID)
-        assert comparable_types(agent_handle, agent_handle, table) is False
-
-        int_handle = RecordType(name="Box", type_args=(IntType(),), module_id=ENTRY_ID)
-        assert comparable_types(int_handle, int_handle, table) is True
-
     def test_generic_enum_function_variant_via_instantiation_not_comparable(self) -> None:
         table = TypeTable()
         table.register(
@@ -1519,20 +1496,6 @@ class TestComparableTypesTableAware:
             )
         )
         handle = RecordType(name="Wrapper", type_args=(UnitType(),), module_id=ENTRY_ID)
-        assert comparable_types(handle, handle, table) is False
-
-    def test_enum_variant_with_agent_nested_in_dict_field_not_comparable(self) -> None:
-        table = TypeTable()
-        table.register(
-            TypeDef(
-                kind="enum",
-                name="Bag",
-                module_id=ENTRY_ID,
-                type_params=("T",),
-                variants=(("Full", (("byKey", DictType(TypeVarType("T"))),)),),
-            )
-        )
-        handle = EnumType(name="Bag", type_args=(AgentType(),), module_id=ENTRY_ID)
         assert comparable_types(handle, handle, table) is False
 
     def test_exception_with_function_field_not_comparable(self) -> None:
@@ -1728,35 +1691,6 @@ class TestNominalReachesNonData:
         handle = RecordType(name="Point", module_id=ENTRY_ID)
         assert table.nominal_reaches_non_data(handle) is False
 
-    def test_record_with_agent_field_has_no_equality(self) -> None:
-        table = TypeTable()
-        table.register(
-            TypeDef(
-                kind="record",
-                name="Bad",
-                module_id=ENTRY_ID,
-                fields=(("a", AgentType()), ("x", IntType())),
-            )
-        )
-        handle = RecordType(name="Bad", module_id=ENTRY_ID)
-        assert table.nominal_reaches_non_data(handle) is True
-
-    def test_generic_record_answer_follows_its_type_argument(self) -> None:
-        table = TypeTable()
-        table.register(
-            TypeDef(
-                kind="record",
-                name="Box",
-                module_id=ENTRY_ID,
-                type_params=("T",),
-                fields=(("value", TypeVarType("T")),),
-            )
-        )
-        agent_handle = RecordType(name="Box", type_args=(AgentType(),), module_id=ENTRY_ID)
-        int_handle = RecordType(name="Box", type_args=(IntType(),), module_id=ENTRY_ID)
-        assert table.nominal_reaches_non_data(agent_handle) is True
-        assert table.nominal_reaches_non_data(int_handle) is False
-
 
 class TestNominalIsJsonConvertible:
     def test_record_of_scalars_is_convertible(self) -> None:
@@ -1772,35 +1706,6 @@ class TestNominalIsJsonConvertible:
         handle = RecordType(name="Point", module_id=ENTRY_ID)
         assert table.nominal_is_json_convertible(handle) is True
 
-    def test_record_with_agent_field_is_not_convertible(self) -> None:
-        table = TypeTable()
-        table.register(
-            TypeDef(
-                kind="record",
-                name="Bad",
-                module_id=ENTRY_ID,
-                fields=(("a", AgentType()), ("x", IntType())),
-            )
-        )
-        handle = RecordType(name="Bad", module_id=ENTRY_ID)
-        assert table.nominal_is_json_convertible(handle) is False
-
-    def test_generic_record_answer_follows_its_type_argument(self) -> None:
-        table = TypeTable()
-        table.register(
-            TypeDef(
-                kind="record",
-                name="Box",
-                module_id=ENTRY_ID,
-                type_params=("T",),
-                fields=(("value", TypeVarType("T")),),
-            )
-        )
-        agent_handle = RecordType(name="Box", type_args=(AgentType(),), module_id=ENTRY_ID)
-        int_handle = RecordType(name="Box", type_args=(IntType(),), module_id=ENTRY_ID)
-        assert table.nominal_is_json_convertible(agent_handle) is False
-        assert table.nominal_is_json_convertible(int_handle) is True
-
 
 # ---------------------------------------------------------------------------
 # The cast matrix — `cast_classification` and the `as json` rule it applies
@@ -1808,14 +1713,14 @@ class TestNominalIsJsonConvertible:
 
 
 def _bad_record_table() -> TypeTable:
-    """A table with ``Bad(a: agent, x: int)`` and ``Good(x: int)``."""
+    """A table with one JSON-convertible and one non-convertible record."""
     table = TypeTable()
     table.register(
         TypeDef(
             kind="record",
             name="Bad",
             module_id=ENTRY_ID,
-            fields=(("a", AgentType()), ("x", IntType())),
+            fields=(("a", FunctionType(params=(), result=UnitType())), ("x", IntType())),
         )
     )
     table.register(
@@ -1866,9 +1771,6 @@ class TestCastClassification:
 
     def test_unit_source_static_error(self) -> None:
         assert cast_classification(UnitType(), TextType(), TypeTable()) == CastKind.STATIC_ERROR
-
-    def test_agent_target_static_error(self) -> None:
-        assert cast_classification(TextType(), AgentType(), TypeTable()) == CastKind.STATIC_ERROR
 
     def test_array_of_scalars_to_json_total(self) -> None:
         # array[int] is JSON-shaped: not implicitly assignable to json (see
@@ -1956,15 +1858,6 @@ class TestIsJsonConvertible:
         for scalar in (TextType(), JsonType(), BoolType(), IntType(), DecimalType()):
             assert is_json_convertible(scalar, table) is True
 
-    def test_non_data_types_do_not_convert(self) -> None:
-        table = TypeTable()
-        for non_data in (
-            UnitType(),
-            AgentType(),
-            FunctionType(params=(IntType(),), result=IntType()),
-        ):
-            assert is_json_convertible(non_data, table) is False
-
     def test_nested_containers_follow_their_element_type(self) -> None:
         table = _bad_record_table()
         good = RecordType(name="Good", module_id=ENTRY_ID)
@@ -2008,25 +1901,6 @@ class TestIsJsonConvertible:
         concrete = RecordType(name="Box", type_args=(IntType(),), module_id=ENTRY_ID)
         assert is_json_convertible(concrete, table) is True
 
-    def test_phantom_type_parameter_still_rejects_a_type_variable(self) -> None:
-        # The declaration itself never mentions T, so the fixpoint calls the
-        # parameter irrelevant — but the cast is compiled once with type
-        # arguments erased, so a free T at the use site is still refused.
-        table = TypeTable()
-        table.register(
-            TypeDef(
-                kind="record",
-                name="Phantom",
-                module_id=ENTRY_ID,
-                type_params=("T",),
-                fields=(("x", IntType()),),
-            )
-        )
-        handle = RecordType(name="Phantom", type_args=(TypeVarType("T"),), module_id=ENTRY_ID)
-        assert is_json_convertible(handle, table) is False
-        concrete = RecordType(name="Phantom", type_args=(AgentType(),), module_id=ENTRY_ID)
-        assert is_json_convertible(concrete, table) is True
-
 
 class TestJsonCastHint:
     """The hint names ``as json`` only where that cast is what the value needs."""
@@ -2037,23 +1911,18 @@ class TestJsonCastHint:
         for value_type in (ArrayType(elem=IntType()), DictType(value=IntType()), good):
             assert "as json" in json_cast_hint(value_type, JsonType(), table)
 
+    def test_nonconvertible_container_into_json_is_not_hinted(self) -> None:
+        """A cast hint is not offered when no JSON cast can make the value valid."""
+        table = _bad_record_table()
+        bad = RecordType(name="Bad", module_id=ENTRY_ID)
+        assert json_cast_hint(ArrayType(elem=bad), JsonType(), table) == ""
+
     def test_scalar_into_json_is_not_hinted(self) -> None:
         # A scalar is absorbed into a json slot implicitly, so naming the
         # explicit cast would point at a step the value does not need.
         table = TypeTable()
         for scalar in (TextType(), BoolType(), IntType(), DecimalType(), JsonType()):
             assert json_cast_hint(scalar, JsonType(), table) == ""
-
-    def test_value_without_a_json_representation_is_not_hinted(self) -> None:
-        # `as json` does not accept these either, so the hint would be wrong.
-        table = _bad_record_table()
-        for non_data in (
-            UnitType(),
-            AgentType(),
-            FunctionType(params=(IntType(),), result=IntType()),
-            RecordType(name="Bad", module_id=ENTRY_ID),
-        ):
-            assert json_cast_hint(non_data, JsonType(), table) == ""
 
     def test_json_into_another_type_is_not_hinted(self) -> None:
         # The reverse direction: the fix is a cast to the target type, never
@@ -2069,26 +1938,11 @@ class TestJsonRepresentationObstacle:
         good = ArrayType(elem=RecordType(name="Good", module_id=ENTRY_ID))
         assert table.json_representation_obstacle(good) is None
 
-    def test_structural_non_data_leaf_is_named(self) -> None:
-        table = TypeTable()
-        message = table.json_representation_obstacle(ArrayType(elem=AgentType()))
-        assert message is not None
-        assert "agent" in message
-
     def test_structural_non_data_leaf_through_a_dict_is_named(self) -> None:
         table = TypeTable()
         message = table.json_representation_obstacle(DictType(value=ArrayType(elem=UnitType())))
         assert message is not None
         assert "unit" in message
-
-    def test_declaration_field_is_named(self) -> None:
-        table = _bad_record_table()
-        bad = ArrayType(elem=RecordType(name="Bad", module_id=ENTRY_ID))
-        message = table.json_representation_obstacle(bad)
-        assert message is not None
-        assert "'a'" in message
-        assert "Bad" in message
-        assert "agent" in message
 
     def test_culprit_is_reported_through_a_nested_declaration(self) -> None:
         table = _bad_record_table()
@@ -2188,27 +2042,6 @@ class TestJsonRepresentationObstacle:
         assert "'handler'" in message
         assert "Child" in message
 
-    def test_exception_inherits_its_base_field_problem(self) -> None:
-        table = TypeTable()
-        base_key = (ENTRY_ID, (), "Base")
-        table.register(
-            TypeDef(kind="exception", name="Base", module_id=ENTRY_ID, fields=(("a", AgentType()),))
-        )
-        table.register(
-            TypeDef(
-                kind="exception",
-                name="Child",
-                module_id=ENTRY_ID,
-                base=base_key,
-                fields=(("code", IntType()),),
-            )
-        )
-        child = ExceptionType(name="Child", module_id=ENTRY_ID)
-        message = table.json_representation_obstacle(child)
-        assert message is not None
-        assert "'a'" in message
-        assert "Base" in message
-
     def test_type_variable_is_named_when_nothing_else_is_to_blame(self) -> None:
         table = TypeTable()
         message = table.json_representation_obstacle(ArrayType(elem=TypeVarType("T")))
@@ -2218,16 +2051,6 @@ class TestJsonRepresentationObstacle:
     def test_unresolved_inference_variable_has_no_specific_obstacle(self) -> None:
         table = TypeTable()
         assert table.json_representation_obstacle(ArrayType(elem=InferenceVarType(1))) is None
-
-    def test_imported_culprit_is_module_qualified(self) -> None:
-        other = ModuleId(("lib", "shapes"))
-        table = TypeTable()
-        table.register(
-            TypeDef(kind="record", name="Bad", module_id=other, fields=(("a", AgentType()),))
-        )
-        message = table.json_representation_obstacle(RecordType(name="Bad", module_id=other))
-        assert message is not None
-        assert "lib/shapes::Bad" in message
 
 
 # ---------------------------------------------------------------------------

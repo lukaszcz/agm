@@ -493,7 +493,6 @@ class TestValidProgram:
 
         source = "def add(x: int, y: int) -> int = x + y\nlet add1 = add(1, ?)\nadd1(2)"
         capabilities = HostCapabilities(
-            agent_names=frozenset(),
             supports_shell_exec=True,
             codec_kinds={},
         )
@@ -652,8 +651,8 @@ def test_deep_accepts_known_builtin_keys() -> None:
             IrBuiltinLoad(location=LOC, key="max-iters"),
             IrBuiltinStore(
                 location=LOC,
-                key="runner",
-                value=IrConstText(location=LOC, value="codex"),
+                key="log",
+                value=IrConstBool(location=LOC, value=True),
             ),
         )
     )

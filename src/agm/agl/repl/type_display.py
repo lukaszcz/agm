@@ -20,7 +20,7 @@ from agm.agl.typecheck.env import GenericTypeDef
 def format_type_for_repl(typ: Type, table: TypeTable | None) -> str:
     """Return the type-focused REPL display for ``typ``.
 
-    Primitive, container, function, agent, unit, and exception types keep their
+    Primitive, container, function, unit, and exception types keep their
     canonical compact representation.  Records and enums expand to AgL-like
     declarations so a user can see the available fields or constructors at the
     prompt without finding the original declaration.  ``table`` resolves the

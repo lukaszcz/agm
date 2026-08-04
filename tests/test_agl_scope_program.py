@@ -229,17 +229,6 @@ class TestResolvedProgramShape:
         mylib_id = ModuleId.from_path("mylib")
         assert (mylib_id, "foo") in result.all_public_funcs
 
-    def test_entry_agents_populated(self, tmp_path: Path) -> None:
-        """entry_agents maps agent names declared in the entry."""
-        graph = _make_graph_from_files(
-            tmp_path,
-            {
-                "entry": 'agent bot = "claude"\n()',
-            },
-        )
-        result = resolve_program(graph)
-        assert ((), "bot") in result.entry_agents
-
     @pytest.mark.parametrize(
         "modules",
         (
@@ -1092,18 +1081,6 @@ class TestDeclarationOnly:
 
         assert ModuleId.from_path("mylib") in resolve_program(graph).modules
 
-    def test_agent_in_nested_library_scope_region_errors(self, tmp_path: Path) -> None:
-        graph = _make_graph_from_files(
-            tmp_path,
-            {
-                "entry": "open import mylib\n()",
-                "mylib": "scope Team\nscope Review\nend Review\nagent bot\nend Team",
-            },
-        )
-
-        with pytest.raises(AglScopeError, match="agent"):
-            resolve_program(graph)
-
 
 # ---------------------------------------------------------------------------
 # Test: entry-only constructs
@@ -1111,18 +1088,6 @@ class TestDeclarationOnly:
 
 
 class TestEntryOnlyConstructs:
-    def test_agent_in_non_entry_errors(self, tmp_path: Path) -> None:
-        """An 'agent' declaration in a non-entry module is an error."""
-        graph = _make_graph_from_files(
-            tmp_path,
-            {
-                "entry": "open import mylib\n()",
-                "mylib": 'agent bot = "claude"',
-            },
-        )
-        with pytest.raises(AglScopeError, match="agent"):
-            resolve_program(graph)
-
     def test_param_in_non_entry_errors(self, tmp_path: Path) -> None:
         """A 'param' declaration in a non-entry module is an error."""
         graph = _make_graph_from_files(
@@ -1146,17 +1111,6 @@ class TestEntryOnlyConstructs:
         )
         with pytest.raises(AglScopeError, match="program"):
             resolve_program(graph)
-
-    def test_agent_in_entry_allowed(self, tmp_path: Path) -> None:
-        """An 'agent' declaration in the entry module is allowed."""
-        graph = _make_graph_from_files(
-            tmp_path,
-            {
-                "entry": 'agent bot = "claude"\n()',
-            },
-        )
-        result = resolve_program(graph)
-        assert ((), "bot") in result.entry_agents
 
 
 # ---------------------------------------------------------------------------
@@ -2293,42 +2247,6 @@ class TestExceptionDefInGraph:
 
 
 class TestResolveGraphReplSeams:
-    def test_ambient_agents_resolves_undeclared_agent(self, tmp_path: Path) -> None:
-        """ambient_agents lets the entry module use an agent not declared in source."""
-        graph = _make_graph_from_files(
-            tmp_path,
-            {
-                "entry": 'let x = ask("Q", agent = session_bot)\nx',
-            },
-        )
-        # Without ambient_agents, "session_bot" is undeclared → AglScopeError.
-        with pytest.raises(AglScopeError):
-            resolve_program(graph)
-
-        # With ambient_agents, it resolves cleanly.
-        result = resolve_program(graph, ambient_agents=frozenset({"session_bot"}))
-        assert ENTRY_ID in result.modules
-        # The entry has no declared_agents (ambient agents are not declared locally).
-        entry_resolved = result.modules[ENTRY_ID].resolved
-        assert "session_bot" not in entry_resolved.declared_agents
-
-    def test_ambient_agents_kwarg_is_noop_for_clean_graph(self, tmp_path: Path) -> None:
-        """Passing ambient_agents does not perturb a graph that doesn't use the ambient name.
-
-        (Agents are entry-only and library modules are declaration-only, so a non-entry
-        module cannot reference an ambient agent; this asserts the kwarg is a no-op here.)
-        """
-        graph = _make_graph_from_files(
-            tmp_path,
-            {
-                "entry": "open import mylib\n()",
-                "mylib": "def foo() -> int = 42",
-            },
-        )
-        result = resolve_program(graph, ambient_agents=frozenset({"session_bot"}))
-        assert ENTRY_ID in result.modules
-        assert ModuleId.from_path("mylib") in result.modules
-
     def test_entry_parent_scope_binding_visible_in_entry(self, tmp_path: Path) -> None:
         """entry_parent_scope: a name pre-bound in the parent scope is visible in entry."""
         # Build a prior session that binds "x" as a let binding.
@@ -2369,24 +2287,6 @@ class TestResolveGraphReplSeams:
         )
         with pytest.raises(AglScopeError, match="helper"):
             resolve_program(graph, entry_parent_scope=session_scope)
-
-    def test_warnings_aggregated_from_entry_module(self, tmp_path: Path) -> None:
-        """result.warnings aggregates non-fatal scope warnings from the entry module.
-
-        Declaring an agent that is never referenced produces an unused-agent warning
-        in the scope pass; resolve_program must surface it in the top-level warnings tuple.
-        """
-        graph = _make_graph_from_files(
-            tmp_path,
-            {
-                "entry": "agent unused_bot\n()",
-            },
-        )
-        result = resolve_program(graph)
-        # The entry module must have emitted an unused-agent warning.
-        assert len(result.warnings) >= 1
-        messages = [w.message for w in result.warnings]
-        assert any("unused_bot" in m for m in messages)
 
     def test_warnings_aggregated_across_modules(self, tmp_path: Path) -> None:
         """Warnings from non-entry modules are also collected into result.warnings."""

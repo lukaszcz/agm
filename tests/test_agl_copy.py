@@ -19,7 +19,6 @@ from agm.agl.ir.ids import FunctionId, NominalId
 from agm.agl.modules.ids import STD_CORE_ID
 from agm.agl.semantics.copying import deep_copy_value, shallow_copy_value
 from agm.agl.semantics.values import (
-    AgentValue,
     ArrayValue,
     BoolValue,
     ConstructorValue,
@@ -70,14 +69,6 @@ class TestIdentityOnPrimitivesAndOpaqueValues:
             UnitValue(),
         ):
             assert shallow_copy_value(value) is value
-
-    def test_deep_copy_agent_value_is_identity(self) -> None:
-        agent = AgentValue(name="reviewer")
-        assert deep_copy_value(agent) is agent
-
-    def test_shallow_copy_agent_value_is_identity(self) -> None:
-        agent = AgentValue(name="reviewer")
-        assert shallow_copy_value(agent) is agent
 
     def test_deep_copy_constructor_value_is_identity(self) -> None:
         ctor = ConstructorValue(nominal=_NOMINAL, display_name="Box", variant=None)

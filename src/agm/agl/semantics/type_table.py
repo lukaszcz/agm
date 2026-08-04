@@ -54,7 +54,6 @@ from typing import TYPE_CHECKING, Literal, assert_never, cast
 from agm.agl.modules.ids import STD_CORE_ID, ModuleId
 from agm.agl.self_validation import self_validation_enabled
 from agm.agl.semantics.types import (
-    AgentType,
     ArrayType,
     BoolType,
     BottomType,
@@ -723,7 +722,6 @@ class TypeTable:
                 )
             case (
                 ExceptionType()
-                | AgentType()
                 | UnitType()
                 | TextType()
                 | JsonType()
@@ -1003,7 +1001,7 @@ def _first_non_data_leaf(t: Type) -> Type | None:
     handle, whose own fields are a declaration-level question answered by
     :meth:`TypeTable.first_non_data_field` instead.
     """
-    if isinstance(t, (UnitType, AgentType, FunctionType)):
+    if isinstance(t, (UnitType, FunctionType)):
         return t
     if isinstance(t, (RecordType, EnumType, ExceptionType)):
         return None
@@ -1017,7 +1015,7 @@ def _first_non_data_leaf(t: Type) -> Type | None:
 def _reaches_non_data(t: Type, table: TypeTable) -> bool:
     """True if ``t`` is, or transitively contains, a non-data type.
 
-    The non-data types are function, agent, and ``unit``: function and agent
+    The non-data types are function and ``unit``: function and agent
     values are opaque / identity-only, and ``unit`` has a single value carrying
     nothing.  An array, dict, record, enum, or exception that transitively
     holds one is therefore itself affected.  ``t`` is always a finite tree
@@ -1029,7 +1027,7 @@ def _reaches_non_data(t: Type, table: TypeTable) -> bool:
     recursive, but this function never re-enters them.
     """
     match t:
-        case FunctionType() | AgentType() | UnitType():
+        case FunctionType() | UnitType():
             return True
         case ArrayType():
             return _reaches_non_data(t.elem, table)
@@ -1062,15 +1060,14 @@ def comparable_types(left: Type, right: Type, table: TypeTable) -> bool:
     non-``json`` type is a static error.  Records/enums/exceptions compare only
     with their own exact type.
 
-    ``AgentType``, ``FunctionType``, and ``UnitType`` operands are
-    NON-comparable — using ``=``/``!=``/``<`` on them is a static error. Agents
-    have no equality in AgL; function values are opaque.
+    ``FunctionType`` and ``UnitType`` operands are
+    NON-comparable — using ``=``/``!=``/``<`` on them is a static error.
     This rule is **transitive**: an ``array``, ``dict``, ``record``, ``enum``, or
-    ``exception`` that (at any depth) contains a function, agent, or ``unit``
+    ``exception`` that (at any depth) contains a function or ``unit``
     value likewise has no equality and cannot be compared with ``=``/``!=``.
     ``table`` resolves record/enum field shapes for that transitive walk.
     """
-    # Function/agent/unit values — and any container/record/enum that transitively
+    # Function/unit values — and any container/record/enum that transitively
     # holds one — have no value equality.
     if _reaches_non_data(left, table) or _reaches_non_data(right, table):
         return False
@@ -1130,14 +1127,7 @@ def is_json_convertible(t: Type, table: TypeTable) -> bool:
             return table.nominal_is_json_convertible(t) and not any(
                 contains_type_var(arg) for arg in t.type_args
             )
-        case (
-            UnitType()
-            | AgentType()
-            | FunctionType()
-            | BottomType()
-            | TypeVarType()
-            | InferenceVarType()
-        ):
+        case UnitType() | FunctionType() | BottomType() | TypeVarType() | InferenceVarType():
             return False
         case _ as unreachable:  # pragma: no cover
             assert_never(unreachable)
@@ -1173,8 +1163,8 @@ def cast_classification(source: Type, target: Type, table: TypeTable) -> CastKin
     """
     # Bottom is a valid source because a raise expression never reaches the
     # conversion. Other non-data sources and all non-data targets are invalid.
-    if isinstance(source, (UnitType, AgentType, FunctionType)) or isinstance(
-        target, (UnitType, AgentType, FunctionType, BottomType)
+    if isinstance(source, (UnitType, FunctionType)) or isinstance(
+        target, (UnitType, FunctionType, BottomType)
     ):
         return CastKind.STATIC_ERROR
     # ExceptionType as target is not in the matrix
@@ -1199,7 +1189,7 @@ def cast_classification(source: Type, target: Type, table: TypeTable) -> CastKin
     _text_or_json = (TextType, JsonType)
 
     if isinstance(target, TextType):
-        # Every data value renders to text. Non-data sources (unit/agent/function)
+        # Every data value renders to text. Non-data sources (unit/function)
         # are filtered at the top, and json-shaped/exact-type sources are handled by
         # the is_assignable block above, so any source reaching here is a renderable
         # data type (json/bool/int/decimal/array/dict/record/enum/exception).

@@ -13,7 +13,6 @@ Public API
 """
 
 from agm.agl.semantics.types import (
-    AgentType,
     ArrayType,
     BoolType,
     BottomType,
@@ -57,7 +56,6 @@ from agm.agl.typecheck.program import (
 )
 
 __all__ = [
-    "AgentType",
     "AglTypeError",
     "ArrayType",
     "BoolType",

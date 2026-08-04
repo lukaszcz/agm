@@ -122,34 +122,6 @@ def test_exec_default_agent_precedence_is_config_then_cli_then_source(
     assert calls == [("hello", [expected_command])]
 
 
-def test_exec_ignores_malformed_legacy_agent_wiring_for_an_agent_value(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    home = tmp_path / "home"
-    config_dir = home / ".agm"
-    config_dir.mkdir(parents=True)
-    (config_dir / "config.toml").write_text('[exec.agents]\nlegacy = "bad \'quote"\n')
-    program = tmp_path / "program.agl"
-    program.write_text(
-        'agent legacy = "also bad \'quote"\n'
-        'let selected = AgentCommand("value-command")\n'
-        'let answer: text = ask("hello", agent = selected)\n'
-        "print answer\n"
-    )
-    monkeypatch.setattr(
-        exec_command,
-        "current_config_context",
-        lambda: ConfigContext(home=home, proj_dir=None, cwd=tmp_path),
-    )
-    calls = _mock_runner(monkeypatch, [_success("done")])
-
-    result = _invoke(CliRunner(), ["exec", "--no-log", str(program)])
-
-    assert result.exit_code == 0, result.output
-    assert result.output.startswith("done\n")
-    assert calls == [("hello", ["value-command"])]
-
-
 def test_exec_retries_with_the_output_contract_feedback(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

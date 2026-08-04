@@ -1,6 +1,6 @@
 # AgL Type System and Checking
 
-The semantic type model lives in the `semantics` foundation package and is consumed by the typecheck pass. Alongside scalar, container, record, and enum types it carries what the expression-oriented design needs: a unit type for side-effecting expressions, function and agent types, a bottom type for divergence, and rigid type variables for generics. Solver-internal inference variables are structurally distinct from rigid source variables and never escape checked output.
+The semantic type model lives in the `semantics` foundation package and is consumed by the typecheck pass. Alongside scalar, container, record, and enum types it carries what the expression-oriented design needs: a unit type for side-effecting expressions, function types, a bottom type for divergence, and rigid type variables for generics. Solver-internal inference variables are structurally distinct from rigid source variables and never escape checked output.
 
 ## Nominal Types Are Handles; the TypeTable Holds Shapes
 
@@ -10,7 +10,7 @@ Because handles resolve regardless of build order, recursive declarations — sa
 
 ## Whole-Table Analyses
 
-Recursive types make some questions global. `semantics/analyses.py` answers them over the whole table, cached: **inhabitation** (rejecting a declaration that can never produce a finite value), **non-data reachability** (whether `unit`, `agent`, or a function type is reachable from a declaration — named for the fact rather than for either of its two consumers, equality applicability (`comparable_types`) and JSON convertibility (`TypeTable.nominal_is_json_convertible`)), and **finite-schema closure** (whether a type admits a finite JSON schema). The finite-schema result is consulted only at the sites that need a schema — agent/`exec` output targets, fallible cast targets, `param` types, and extern signatures — with a use-site error naming the offending declaration.
+Recursive types make some questions global. `semantics/analyses.py` answers them over the whole table, cached: **inhabitation** (rejecting a declaration that can never produce a finite value), **non-data reachability** (whether `unit` or a function type is reachable from a declaration — named for the fact rather than for either of its two consumers, equality applicability (`comparable_types`) and JSON convertibility (`TypeTable.nominal_is_json_convertible`)), and **finite-schema closure** (whether a type admits a finite JSON schema). The finite-schema result is consulted only at the sites that need a schema — agent/`exec` output targets, fallible cast targets, `param` types, and extern signatures — with a use-site error naming the offending declaration.
 
 `TypeTable.json_representation_obstacle`/`TypeTable.first_non_data_field` (`semantics/type_table.py`) build on non-data reachability to name the culprit field for a rejected `as json` cast, mirroring how `no_finite_schema_message`/`first_infinite_declaration` name the culprit for a finite-schema rejection.
 
@@ -28,7 +28,7 @@ The checker selects the concrete behavior the evaluator later relies on and publ
 
 Blocks preserve the final item's type. Every earlier bare expression is checked in a unit context, so only unit or bottom values may be discarded there; binders and declarations remain valid intermediate items. A trailing binder therefore yields unit (or bottom when its RHS exits). Loop bodies follow the same unit rule; their bindings remain in scope for the post-body `until` clause, while the pre-body `while` guard sees the loop scope before body bindings. The `_` binder is an explicit discard: its RHS is checked without an annotation or inferred binding type.
 
-An `extern def` shares the body-less builtin-`def` signature path, plus extern-only checks (the name must be a valid Python identifier; no function or agent type may occur in the signature); extern calls typecheck like ordinary calls.
+An `extern def` shares the body-less builtin-`def` signature path, plus extern-only checks (the name must be a valid Python identifier; no function type may occur in the signature); extern calls typecheck like ordinary calls.
 
 Checked artifacts contain concrete types and no solver state; a leaked flexible variable is a compiler invariant failure. Enforcing that is a self-check gated by the AgL self-validation toggle ([testing.md](../../testing.md)): each inference region asserts closure as it finalizes, and a call after module checking covers every checked-output side table plus the shared whole-program tables. Sealing the type environment is separate and unconditional — it happens once module checking finishes and licenses memoization: namespace-wide enumerations the environment can be asked for repeatedly downstream — own source type names, writable enum-owner forms, and their blocked variants — are cached once the declaration namespace is frozen, so later passes simply ask the environment instead of hand-threading results. Seeding the REPL's promoted namespace requires a sealed environment.
 

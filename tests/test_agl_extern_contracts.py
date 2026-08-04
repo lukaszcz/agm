@@ -33,10 +33,8 @@ from agm.agl.ir.contracts import (
 from agm.agl.parser import parse_program
 from agm.agl.semantics.type_table import create_seeded_type_table
 from agm.agl.semantics.types import (
-    AgentType,
     FunctionType,
     IntType,
-    TextType,
 )
 from agm.agl.syntax.nodes import ParamKind
 from agm.agl.type_schema import build_extern_contract
@@ -47,7 +45,6 @@ from tests.agl.module_graph import resolve_and_check_program_ast
 _PATH = Path("/virtual/extern_contracts.agl")
 
 _CAPS = HostCapabilities(
-    agent_names=frozenset(),
     supports_shell_exec=True,
     codec_kinds={
         "text": frozenset({"text"}),
@@ -390,28 +387,5 @@ class TestFunctionAgentTypeBan:
             build_extern_contract(sig, create_seeded_type_table())
         except TypeError as exc:
             assert "function" in str(exc).lower()
-        else:
-            raise AssertionError("expected TypeError")
-
-    def test_agent_typed_result_rejected(self) -> None:
-        sig = FunctionSignature(params=(), result=AgentType())
-        try:
-            build_extern_contract(sig, create_seeded_type_table())
-        except TypeError as exc:
-            assert "agent" in str(exc).lower()
-        else:
-            raise AssertionError("expected TypeError")
-
-    def test_agent_typed_param_rejected(self) -> None:
-        sig = FunctionSignature(
-            params=(
-                ParamSpec(name="a", type=AgentType(), kind=ParamKind.STANDARD, has_default=False),
-            ),
-            result=TextType(),
-        )
-        try:
-            build_extern_contract(sig, create_seeded_type_table())
-        except TypeError as exc:
-            assert "agent" in str(exc).lower()
         else:
             raise AssertionError("expected TypeError")

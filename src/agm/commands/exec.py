@@ -27,16 +27,14 @@ Flag notes:
       ``--log-file PATH`` writes to PATH; ``--no-log`` disables it.  At most one
       of these three flags may be given (mutually exclusive).  ``[exec] log =
       true`` in config also enables logging; CLI flags override config.
-    - ``--runner COMMAND`` overrides the default agent runner command from config;
-      when set, it is used for all unnamed agents. ``--agent AGL_LITERAL`` only
-      seeds ``std/config::default-agent`` from one typed constant Agent expression;
-      it does not select a runner yet.
+    - ``--agent AGL_LITERAL`` seeds ``std/config::default-agent`` from one typed
+      constant Agent expression.
     - Every loaded entry and library module opens ``std/core`` by default
       (except ``std/core`` itself). ``--no-stdlib`` disables that automatic
       opening throughout the loaded program. Ordinary imports are qualified by
       default; ``open import`` and ``using`` make selected names bare.
     - A program reads and writes the engine settings (``strict-json``,
-      ``max-iters``, ``runner``, ``default-agent``, ``timeout``, ``log``, ``log-file``) through the
+      ``max-iters``, ``default-agent``, ``timeout``, ``log``, ``log-file``) through the
       ``std/config`` module; a ``std/config::KEY := VALUE`` write takes effect
       from its program point onward and overrides the CLI flag, which overrides
       the config-file layer.  ``--max-call-depth`` remains a host/runtime
@@ -56,7 +54,7 @@ from typing import TYPE_CHECKING, TypeVar
 from agm.agl import PipelineDriver
 from agm.agl.diagnostics import format_diagnostic
 from agm.agl.modules.roots import assemble_roots
-from agm.agl.runtime.agents import AgentFn, value_driven_agent_factory
+from agm.agl.runtime.agents import value_driven_agent_factory
 from agm.agl.runtime.host_settings import HostSettingsPolicy
 from agm.agl.runtime.params import build_engine_config_seeds, raw_option_str
 from agm.agl.semantics.engine_keys import (
@@ -260,19 +258,14 @@ def run(args: ExecArgs) -> None:
     else:
         resolved_timeout = config.timeout
 
-    # Agent enum values own their invocation command.  The legacy declaration,
-    # runner, and [exec.agents] surfaces remain parseable during their removal
-    # transition, but they neither validate nor select value-driven dispatch.
     factory = value_driven_agent_factory(idle_timeout=resolved_timeout)
 
     # ``prepare_program`` was already called above; the same ``PreparedProgram`` is
-    # reused for discovery and the run, so the source is loaded and scoped only
-    # once.  On a source with load/scope errors ``declared_agents`` is ``()`` and
-    # ``run_prepared`` resurfaces the captured diagnostic (exit 1).
+    # reused for discovery and the run, so the source is loaded and scoped only once.
     runtime = PipelineDriver(
         default_loop_limit=resolved_loop_limit,
         default_strict_json=resolved_strict_json,
-        default_agent=factory,
+        agent_dispatcher=factory,
         shell_exec_timeout=resolved_timeout,
         default_call_depth_limit=resolved_call_depth_limit,
     )
@@ -342,19 +335,12 @@ def run(args: ExecArgs) -> None:
     else:
         log_file = prepare_trace_log_from_decision(log_decision, command_name="exec")
 
-    # ``runner`` is retained only as a transitional setting. Typed Agent values
-    # select their own builder command, so a write does not alter dispatch.
-    def _build_runner(_command: str) -> AgentFn:
-        return factory
-
     policy = HostSettingsPolicy(
-        build_runner=_build_runner,
         resolve_trace_path=LiveTracePathResolver(command_name="exec", auto_path=log_file),
     )
 
-    # Seed only settings explicitly controlled by CLI/config.  The runner used
-    # to back agents and the false/none values used by host services are runtime
-    # fallbacks, not seeds: passing them here would suppress a declared
+    # Seed only settings explicitly controlled by CLI/config. Runtime fallbacks
+    # are not seeds: passing them here would suppress a declared
     # ``builtin var`` initializer.  The shared decoder preserves explicit
     # ``None`` values for Option settings such as --no-timeout.
     exec_raw_table = toml_dict(merged_config.get("exec"))
@@ -362,10 +348,6 @@ def run(args: ExecArgs) -> None:
         key for key in ENGINE_KEY_NAMES if key in program_table or key in exec_raw_table
     }
     seed_raw: dict[str, object] = {}
-    if args.runner is not None:
-        seed_raw["runner"] = args.runner
-    elif "runner" in config_engine_keys and config.runner is not None:
-        seed_raw["runner"] = config.runner
     if args.strict_json is not None:
         seed_raw["strict-json"] = args.strict_json
     elif "strict-json" in config_engine_keys:

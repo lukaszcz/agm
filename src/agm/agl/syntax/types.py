@@ -19,10 +19,10 @@ if TYPE_CHECKING:
 
 # The builtin type spellings that lex as a plain ``NAME`` in type position
 # (the parser maps them to primitive/container TypeExpr nodes — see the
-# ``prim_or_name``/``applied_type`` transformers).  ``agent`` is excluded: it is
-# a reserved keyword, not a NAME.  Consumers that classify identifiers without a
-# parse — notably the REPL syntax highlighter — use this set to recognise the
-# builtin types case-faithfully (identifier capitalization carries no meaning).
+# ``prim_or_name``/``applied_type`` transformers). Consumers that classify
+# identifiers without a parse — notably the REPL syntax highlighter — use this
+# set to recognise the builtin types case-faithfully (identifier capitalization
+# carries no meaning).
 BUILTIN_TYPE_NAMES: frozenset[str] = frozenset(
     {"text", "json", "bool", "int", "decimal", "unit", "array", "dict"}
 )
@@ -119,14 +119,6 @@ class UnitT:
 
 
 @dataclass(frozen=True, slots=True)
-class AgentT:
-    """The ``agent`` opaque type.  Agent values are first-class but not JSON-shaped."""
-
-    span: SourceSpan = field(compare=False)
-    node_id: int = field(compare=False)
-
-
-@dataclass(frozen=True, slots=True)
 class FuncT:
     """A function type ``(A, B) -> C`` — positional parameters only in the type.
 
@@ -154,18 +146,7 @@ class AppliedT:
 
 # Closed union of all type-expression nodes.
 TypeExpr = (
-    TextT
-    | JsonT
-    | BoolT
-    | IntT
-    | DecimalT
-    | NameT
-    | ArrayT
-    | DictT
-    | UnitT
-    | AgentT
-    | FuncT
-    | AppliedT
+    TextT | JsonT | BoolT | IntT | DecimalT | NameT | ArrayT | DictT | UnitT | FuncT | AppliedT
 )
 
 
@@ -183,8 +164,6 @@ def render_type_expr(type_expr: TypeExpr, *, parenthesize_function: bool = False
         return "decimal"
     if isinstance(type_expr, UnitT):
         return "unit"
-    if isinstance(type_expr, AgentT):
-        return "agent"
     if isinstance(type_expr, ArrayT):
         return f"array[{render_type_expr(type_expr.elem)}]"
     if isinstance(type_expr, DictT):

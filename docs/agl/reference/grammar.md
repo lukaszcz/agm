@@ -14,7 +14,7 @@ they describe a line break and indentation change, not text written in source.
 
 ```ebnf
 name       ::= NAME | OP_NAME
-field_name ::= NAME | "agent" | "to" | "downto" | "by"
+field_name ::= NAME | "to" | "downto" | "by"
 
 program      ::= module_block EOF
 
@@ -32,7 +32,6 @@ item       ::= import_decl                  (* header position only; scope_item 
              | export_decl                  (* root only; scope_item also permits it *)
              | param_decl                   (* root only *)
              | program_decl                 (* root only *)
-             | agent_decl                   (* entry module root; scope_item also permits it *)
              | infix_decl                   (* root only *)
              | func_def                     (* root only *)
              | builtin_func_def             (* root only *)
@@ -63,7 +62,6 @@ scope_item   ::= scope_region | open_decl
                | builtin_var_def
                | builtin_modifier? record_def | builtin_modifier? enum_def
                | builtin_modifier? exception_def | builtin_func_def
-               | agent_decl
                | param_decl
                | let_decl | var_decl
 ```
@@ -245,7 +243,6 @@ param_marker     ::= "/" | "*" | "@" NAME    (* NAME must be pos, std, or named 
 param_decl       ::= "param" name type_ann? ("=" expr)?
 program_decl     ::= "program" name
 
-agent_decl       ::= "agent" decl_head ("=" STRING)?
 ```
 
 A `param_marker` splits a parameter or field list into **zones**: `/` (≡ `@std`)
@@ -260,9 +257,6 @@ entry is an ordinary name in scope as a type throughout the declaration's body.
 `_` is an unused positional slot and introduces no type name. See
 [Generics](generics.md).
 
-The runner string of an `agent` declaration must be a literal string with no
-`%{…}` interpolation; an interpolation hole is a static error.
-
 ## Type expressions
 
 ```ebnf
@@ -276,7 +270,6 @@ type_expr ::= "unit"
             | qualifier_chain name
             | "array" "[" type_expr "]"
             | "dict" "[" "text" "," type_expr "]"
-            | "agent"
             | func_type
 
 func_type ::= type_atom "->" type_expr
@@ -288,7 +281,6 @@ type_atom ::= "unit" | "text" | "json" | "bool" | "int" | "decimal"
             | qualifier_chain name
             | "array" "[" type_expr "]"
             | "dict" "[" "text" "," type_expr "]"
-            | "agent"
 type_list ::= type_expr ("," type_expr)* ","?
 
 qualifier_chain   ::= "::" qualifier_segment*
@@ -624,8 +616,8 @@ break_expr     ::= "break"
 continue_expr  ::= "continue"
 ```
 
-A bare name atom is resolved by scope and position: it may name a variable,
-an agent, a record constructor, an enum variant, or a generic `def`/constructor
+A bare name atom is resolved by scope and position: it may name a variable, a
+record constructor, an enum variant, or a generic `def`/constructor
 used as a first-class value. The typed postfix form carries explicit type
 arguments to a generic `def` or bare constructor (`id::[int](5)`,
 `some::[int](value = 1)`, `apply::[int, int](…)`), or instantiate a generic

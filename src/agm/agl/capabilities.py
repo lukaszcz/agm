@@ -1,17 +1,13 @@
 """Immutable host-capability catalog for the AgL static pipeline.
 
-``HostCapabilities`` is a frozen, data-only dataclass that describes which
-agents and codecs the host has registered.  It is constructed by
+``HostCapabilities`` is a frozen, data-only dataclass describing the host
+features that affect static checking. It is constructed by
 ``PipelineDriver.run()`` before the static passes execute and is consumed by
-the type checker — the checker never imports agent/codec
-*implementations*, only their capability descriptors.
+the type checker — the checker never imports runtime implementations, only
+capability descriptors.
 
 Design
 ------
-- ``agent_names``: the set of named agents the host can *back* (the registered
-  backings).  This is NOT the set of valid names: name validity is owned by the
-  scope pass — an undeclared named agent is a scope binding error.  The runtime
-  cross-checks ``agent_names`` against the source-declared set.
 - ``codec_kinds``: mapping from codec name → frozenset of semantic type-kind
   strings the codec supports.  Built-in codecs: ``"text"`` (supports
   ``{"text"}``); ``"json"`` (supports
@@ -35,11 +31,6 @@ class HostCapabilities:
 
     Parameters
     ----------
-    agent_names:
-        Names of agents the host can *back* (does not include ``"ask"``
-        or ``"exec"`` — those are built-ins handled separately).  This is the
-        set of host-supplied backings, not the set of valid names: scope owns
-        name validity (an undeclared named agent is a binding error).
     supports_shell_exec:
         When ``True``, the host can execute ``exec`` (shell) calls.  When
         ``False``, any ``exec`` call site is a static error.  ``PipelineDriver``
@@ -56,7 +47,6 @@ class HostCapabilities:
         without the ``"Type"`` suffix (e.g. ``"text"``, ``"json"``, ``"int"``).
     """
 
-    agent_names: frozenset[str] = field(default_factory=frozenset)
     supports_shell_exec: bool = False
     supports_extern: bool = False
     codec_kinds: dict[str, frozenset[str]] = field(default_factory=dict)

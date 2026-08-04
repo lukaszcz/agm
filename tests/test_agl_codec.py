@@ -23,7 +23,7 @@ Covers (per the AgL DSL contract):
 from __future__ import annotations
 
 import itertools
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from decimal import Decimal
 from pathlib import Path
 
@@ -43,14 +43,12 @@ from agm.agl.ir.ids import NominalId
 from agm.agl.modules.ids import ENTRY_ID, ModuleId
 from agm.agl.modules.roots import RootSet
 from agm.agl.parser.parser import parse_program
-from agm.agl.runtime.agents import AgentFn, AgentRegistry
 from agm.agl.runtime.codec import JsonCodec, ParseResult, TextCodec
 from agm.agl.runtime.contract import OutputContract, materialize_contract, materialize_ir_contract
 from agm.agl.runtime.request import AgentRequest
 from agm.agl.semantics.exceptions import AglRaise
 from agm.agl.semantics.type_table import TypeDef, TypeTable
 from agm.agl.semantics.types import (
-    AgentType,
     ArrayType,
     BoolType,
     DecimalType,
@@ -84,7 +82,7 @@ from agm.agl.syntax.nodes import (
 from agm.agl.syntax.spans import SourceSpan
 from agm.agl.type_schema import build_decode_schema, derive_schema
 from agm.agl.typecheck.env import CheckedModule, OutputContractSpec
-from tests._agl_helpers import ambient_agents_for, enum_type, record_type, type_table_for
+from tests._agl_helpers import enum_type, record_type, type_table_for
 from tests.agl.module_graph import resolve_and_check_program_ast
 
 # ---------------------------------------------------------------------------
@@ -262,7 +260,6 @@ def _check_program_with_json(body: tuple[Item, ...]) -> CheckedModule:
         node_id=_nid(),
     )
     caps = HostCapabilities(
-        agent_names=frozenset(),
         codec_kinds={
             "text": frozenset({"text"}),
             "json": frozenset(
@@ -270,7 +267,7 @@ def _check_program_with_json(body: tuple[Item, ...]) -> CheckedModule:
             ),
         },
     )
-    return resolve_and_check_program_ast(program, caps, ambient_agents=ambient_agents_for(program))
+    return resolve_and_check_program_ast(program, caps)
 
 
 class _Bindings(dict[str, object]):
@@ -281,11 +278,10 @@ class _Bindings(dict[str, object]):
 def _run_with_json_codec(
     body: tuple[Item, ...],
     *,
-    named: dict[str, AgentFn] | None = None,
-    default_agent: AgentFn | None = None,
+    agent_dispatcher: Callable[[AgentRequest], str] | None = None,
     strict_json: bool = False,
 ) -> _Bindings:
-    """Build + resolve + check + execute *body* with JsonCodec registered."""
+    """Build, check, and execute *body* with JSON output decoding enabled."""
     from agm.agl.eval.ir_interpreter import IrInterpreter
     from agm.agl.runtime.codec import JsonCodec, OutputCodec, TextCodec
     from agm.agl.runtime.params import _materialize_ir_contracts
@@ -294,40 +290,20 @@ def _run_with_json_codec(
     checked = _check_program_with_json(body)
     text_codec = TextCodec()
     json_codec = JsonCodec()
-    codecs: dict[str, OutputCodec] = {
-        text_codec.name: text_codec,
-        json_codec.name: json_codec,
-    }
-    from agm.agl.ir.ids import AgentId
-
-    def dispatch(request: AgentRequest) -> str:
-        command = request.agent.fields.get("command")
-        if isinstance(command, TextValue):
-            agent = (named or {}).get(command.value, default_agent)
-        else:
-            agent = default_agent
-        assert agent is not None
-        return agent(request)
-
-    registry = AgentRegistry(
-        named={AgentId(name): agent for name, agent in (named or {}).items()},
-        default_agent=default_agent,
-        value_agent=dispatch,
-    )
+    codecs: dict[str, OutputCodec] = {text_codec.name: text_codec, json_codec.name: json_codec}
     executable = lower_compiled_module(
-        compile_checked_module(checked),
-        source_text="<direct-ast>",
-        source_label="<test>",
+        compile_checked_module(checked), source_text="<direct-ast>", source_label="<test>"
     )
     contracts, errors = _materialize_ir_contracts(executable, codecs)
     assert errors == []
-    interp = IrInterpreter(
-        executable,
-        registry=registry,
-        strict_json=strict_json,
-        host_contracts=contracts,
+    return _Bindings(
+        IrInterpreter(
+            executable,
+            agent_dispatcher=agent_dispatcher,
+            strict_json=strict_json,
+            host_contracts=contracts,
+        ).run()
     )
-    return _Bindings(interp.run())
 
 
 # AST statement / expression builders (subset needed for codec tests)
@@ -1726,7 +1702,7 @@ class TestValidationErrorsThroughRuntime:
             _run_with_json_codec(
                 (record_def, let_x),
                 # Valid JSON, but missing the required "severity" field.
-                default_agent=lambda req: '{"title": "Bug"}',
+                agent_dispatcher=lambda req: '{"title": "Bug"}',
             )
         exc = exc_info.value.exc
         assert exc.display_name == "AgentParseError"
@@ -1749,7 +1725,7 @@ class TestValidationErrorsThroughRuntime:
         with pytest.raises(AglRaise) as exc_info:
             _run_with_json_codec(
                 (enum_def, let_r),
-                default_agent=lambda req: '{"$case": "Nope"}',
+                agent_dispatcher=lambda req: '{"$case": "Nope"}',
             )
         exc = exc_info.value.exc
         ve = exc.fields["validation_errors"]
@@ -1806,7 +1782,7 @@ class TestValidationErrorsThroughRuntime:
         )
         let_x = _let("x", retry_call, type_ann=_name_ty("Issue"))
         with pytest.raises(AglRaise):
-            _run_with_json_codec((record_def, let_x), default_agent=agent)
+            _run_with_json_codec((record_def, let_x), agent_dispatcher=agent)
         # Two attempts: first sees no prior errors, retry sees the missing_field.
         assert len(seen) == 2
         assert seen[0] == []
@@ -1983,23 +1959,23 @@ class TestPipelineDriverWireUp:
     def test_json_target_type_accepted_via_direct_ast(self) -> None:
         """A call targeting json type should pass type checking and execute."""
         let_x = _let("x", _ask_call("Get data."), type_ann=_json_ty())
-        scope = _run_with_json_codec((let_x,), default_agent=lambda req: '{"x": 1}')
+        scope = _run_with_json_codec((let_x,), agent_dispatcher=lambda req: '{"x": 1}')
         x = scope.snapshot()["x"]
         assert isinstance(x, JsonValue)
 
     def test_int_target_accepted_via_json_codec(self) -> None:
         let_n = _let("n", _ask_call("Get number."), type_ann=_int_ty())
-        scope = _run_with_json_codec((let_n,), default_agent=lambda req: "42")
+        scope = _run_with_json_codec((let_n,), agent_dispatcher=lambda req: "42")
         assert scope.snapshot()["n"] == IntValue(42)
 
     def test_bool_target_accepted(self) -> None:
         let_b = _let("b", _ask_call("Is it true?"), type_ann=_bool_ty())
-        scope = _run_with_json_codec((let_b,), default_agent=lambda req: "true")
+        scope = _run_with_json_codec((let_b,), agent_dispatcher=lambda req: "true")
         assert scope.snapshot()["b"] == BoolValue(True)
 
     def test_decimal_target_accepted(self) -> None:
         let_d = _let("d", _ask_call("Get ratio."), type_ann=_dec_ty())
-        scope = _run_with_json_codec((let_d,), default_agent=lambda req: "1.5")
+        scope = _run_with_json_codec((let_d,), agent_dispatcher=lambda req: "1.5")
         d = scope.snapshot()["d"]
         assert isinstance(d, DecimalValue)
         assert d.value == Decimal("1.5")
@@ -2019,7 +1995,7 @@ class TestPipelineDriverWireUp:
         )
         scope = _run_with_json_codec(
             (record_def, let_x),
-            default_agent=lambda req: '{"title": "Bug", "severity": 5}',
+            agent_dispatcher=lambda req: '{"title": "Bug", "severity": 5}',
         )
         x = scope.snapshot()["x"]
         assert isinstance(x, RecordValue)
@@ -2040,7 +2016,7 @@ class TestPipelineDriverWireUp:
         )
         scope = _run_with_json_codec(
             (enum_def, let_r),
-            default_agent=lambda req: '{"$case": "Pass"}',
+            agent_dispatcher=lambda req: '{"$case": "Pass"}',
         )
         r = scope.snapshot()["r"]
         assert isinstance(r, EnumValue)
@@ -2052,7 +2028,7 @@ class TestPipelineDriverWireUp:
             _ask_call("List items."),
             type_ann=_array_ty(_text_ty()),
         )
-        scope = _run_with_json_codec((let_xs,), default_agent=lambda req: '["a", "b"]')
+        scope = _run_with_json_codec((let_xs,), agent_dispatcher=lambda req: '["a", "b"]')
         xs = scope.snapshot()["xs"]
         assert isinstance(xs, ArrayValue)
         assert xs.elements == [TextValue("a"), TextValue("b")]
@@ -2063,7 +2039,7 @@ class TestPipelineDriverWireUp:
             _ask_call("Dict."),
             type_ann=_dict_ty(_text_ty()),
         )
-        scope = _run_with_json_codec((let_d,), default_agent=lambda req: '{"k": "v"}')
+        scope = _run_with_json_codec((let_d,), agent_dispatcher=lambda req: '{"k": "v"}')
         d = scope.snapshot()["d"]
         assert isinstance(d, DictValue)
         assert d.entries == {"k": TextValue("v")}
@@ -2083,7 +2059,7 @@ class TestPipelineDriverWireUp:
             _field_def("severity", _int_ty()),
         )
         let_x = _let("x", _ask_call("Fetch."), type_ann=_name_ty("Issue"))
-        _run_with_json_codec((record_def, let_x), default_agent=agent)
+        _run_with_json_codec((record_def, let_x), agent_dispatcher=agent)
         assert received, "agent was not called"
         req = received[0]
         assert req.output_contract is not None
@@ -2102,7 +2078,7 @@ class TestPipelineDriverWireUp:
         let_x = _let("x", _ask_call("Get."), type_ann=_name_ty("Issue"))
         scope = _run_with_json_codec(
             (record_def, let_x),
-            default_agent=lambda req: '```json\n{"title": "Flaky", "severity": 2}\n```',
+            agent_dispatcher=lambda req: '```json\n{"title": "Flaky", "severity": 2}\n```',
         )
         x = scope.snapshot()["x"]
         assert isinstance(x, RecordValue)
@@ -2118,7 +2094,7 @@ class TestPipelineDriverWireUp:
         with pytest.raises(AglRaise) as exc_info:
             _run_with_json_codec(
                 (let_n,),
-                default_agent=lambda req: "```json\n6\n```",
+                agent_dispatcher=lambda req: "```json\n6\n```",
             )
         exc = exc_info.value.exc
         assert exc.display_name == "AgentParseError"
@@ -2129,7 +2105,7 @@ class TestPipelineDriverWireUp:
         with pytest.raises(AglRaise) as exc_info:
             _run_with_json_codec(
                 (let_n,),
-                default_agent=lambda req: "```json\n5\n```",
+                agent_dispatcher=lambda req: "```json\n5\n```",
                 strict_json=True,
             )
         exc = exc_info.value.exc
@@ -2140,7 +2116,7 @@ class TestPipelineDriverWireUp:
         with pytest.raises(AglRaise) as exc_info:
             _run_with_json_codec(
                 (let_n,),
-                default_agent=lambda req: "not json at all",
+                agent_dispatcher=lambda req: "not json at all",
             )
         exc = exc_info.value.exc
         assert exc.display_name == "AgentParseError"
@@ -2152,7 +2128,7 @@ class TestPipelineDriverWireUp:
     def test_agent_parse_error_has_target_type_field(self) -> None:
         let_n = _let("n", _ask_call("Num."), type_ann=_int_ty())
         with pytest.raises(AglRaise) as exc_info:
-            _run_with_json_codec((let_n,), default_agent=lambda req: "bad")
+            _run_with_json_codec((let_n,), agent_dispatcher=lambda req: "bad")
         exc = exc_info.value.exc
         assert exc.display_name == "AgentParseError"
         assert "target_type" in exc.fields
@@ -2160,7 +2136,7 @@ class TestPipelineDriverWireUp:
     def test_decimal_exactness_end_to_end(self) -> None:
         """Decimal stays exact through the full runtime pipeline."""
         let_d = _let("d", _ask_call("Get ratio."), type_ann=_dec_ty())
-        scope = _run_with_json_codec((let_d,), default_agent=lambda req: "1.5")
+        scope = _run_with_json_codec((let_d,), agent_dispatcher=lambda req: "1.5")
         d = scope.snapshot()["d"]
         assert isinstance(d, DecimalValue)
         assert d.value == Decimal("1.5")
@@ -3128,7 +3104,7 @@ class TestRegisterCodec:
     def test_register_codec_accepted(self, capsys: pytest.CaptureFixture[str]) -> None:
         from agm.agl.runtime.codec import TextCodec as TC
 
-        rt = PipelineDriver(default_agent=lambda request: "response")
+        rt = PipelineDriver(agent_dispatcher=lambda request: "response")
 
         class AltTextCodec(TC):
             @property
@@ -3250,7 +3226,7 @@ class TestRegisterCodec:
             received.append(req)
             return "hello"
 
-        rt = PipelineDriver(default_agent=agent)
+        rt = PipelineDriver(agent_dispatcher=agent)
         rt.register_codec(TagCodec())
         #  format: arg takes the codec name as a string; let needs a continuation.
         result = rt.run('let y: text = ask("Q", format = "tagcodec")\ny')
@@ -3300,7 +3276,7 @@ class TestRegisterCodec:
             ) -> ParseResult:
                 return ParseResult.success(IntValue(int(raw)))
 
-        rt = PipelineDriver(default_agent=lambda req: "7")
+        rt = PipelineDriver(agent_dispatcher=lambda req: "7")
         rt.register_codec(IntCodec())
         result = rt.run('let y: int = ask("Q", format = "intcodec")\ny')
         assert result.ok is True
@@ -3347,7 +3323,7 @@ class TestRegisterCodec:
                 seen_parse_targets.append(repr(target_type))
                 return ParseResult.success(IntValue(int(raw)))
 
-        rt = PipelineDriver(default_agent=lambda req: "11")
+        rt = PipelineDriver(agent_dispatcher=lambda req: "11")
         rt.register_codec(LegacyCodec())
         result = rt.run('let y: int = ask("Q", format = "legacy-int")\ny')
 
@@ -3400,7 +3376,7 @@ class TestRegisterCodec:
                     )
                 )
 
-        rt = PipelineDriver(default_agent=lambda req: "12")
+        rt = PipelineDriver(agent_dispatcher=lambda req: "12")
         rt.register_codec(LegacyBoxCodec())
         result = rt.run(
             'record Box[T]\n  value: T\nlet y: Box[int] = ask("Q", format = "legacy-box")\ny.value'
@@ -3444,7 +3420,7 @@ class TestRegisterCodec:
             def parse(self, raw: str) -> ParseResult:
                 return ParseResult.success(TextValue(raw))
 
-        rt = PipelineDriver(default_agent=lambda req: "unused")
+        rt = PipelineDriver(agent_dispatcher=lambda req: "unused")
         rt.register_codec(SchemaTextCodec())
 
         result = rt.run('let y: text = ask("Q", format = "schema-text")\ny', check_only=True)
@@ -3486,7 +3462,7 @@ class TestRegisterCodec:
             entry_path=None,
             roots=roots,
         )
-        rt = PipelineDriver(default_agent=lambda req: "unused")
+        rt = PipelineDriver(agent_dispatcher=lambda req: "unused")
         rt.register_codec(SchemaTextCodec())
 
         result = rt.run_prepared(prepared, check_only=True)
@@ -3690,7 +3666,7 @@ class TestRegisterCodec:
             received.append(req)
             return "3"
 
-        rt = PipelineDriver(default_agent=agent)
+        rt = PipelineDriver(agent_dispatcher=agent)
         rt.register_codec(ArrayIntCodec())
         result = rt.run('let xs: array[int] = ask("Q", format = "array-int-codec")\nxs')
 
@@ -3758,7 +3734,7 @@ class TestRegisterCodec:
                     )
                 )
 
-        rt = PipelineDriver(default_agent=lambda req: "5")
+        rt = PipelineDriver(agent_dispatcher=lambda req: "5")
         rt.register_codec(ShapeCodec())
         result = rt.run('record Box\n  value: int\nlet box: Box = ask("Q", format = "shape")\nbox')
 
@@ -3774,7 +3750,7 @@ class TestRegisterCodec:
         assert seen_parse_type_tables == [None]
 
     def test_custom_codec_ir_placeholder_targets_are_kind_correct(self) -> None:
-        """Legacy custom parse target placeholders are reconstructed from typeless IR."""
+        """Legacy custom-codec placeholders reconstruct their public data types."""
         from agm.agl.runtime.contract import _target_type_for_request
 
         cases = [
@@ -3783,7 +3759,6 @@ class TestRegisterCodec:
             ("decimal", "decimal", DecimalType),
             ("bool", "bool", BoolType),
             ("json", "json", JsonType),
-            ("agent", "agent", AgentType),
             ("array", "array[int]", ArrayType),
             ("dict", "dict[text, int]", DictType),
             ("record", "Issue", RecordType),
@@ -4209,12 +4184,12 @@ class TestRuntimeBuildsCodecKinds:
         #  format: arg takes the codec name as a string; let needs a continuation.
         src = 'let x: text = ask("Q", format = "altcodec")\nx'
 
-        rt_unreg = PipelineDriver(default_agent=lambda req: "ok")
+        rt_unreg = PipelineDriver(agent_dispatcher=lambda req: "ok")
         unreg = rt_unreg.run(src)
         assert unreg.ok is False  # altcodec unknown without registration
         assert any("altcodec" in d.message for d in unreg.diagnostics)
 
-        rt = PipelineDriver(default_agent=lambda req: "ok")
+        rt = PipelineDriver(agent_dispatcher=lambda req: "ok")
         rt.register_codec(AltCodec())
         reg = rt.run(src)
         assert reg.ok is True

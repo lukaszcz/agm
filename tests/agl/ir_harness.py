@@ -11,7 +11,7 @@ from pathlib import Path
 
 from agm.agl.capabilities import HostCapabilities
 from agm.agl.eval.ir_interpreter import IrInterpreter
-from agm.agl.ir.ids import AgentId, SourceId, SymbolId
+from agm.agl.ir.ids import SourceId, SymbolId
 from agm.agl.ir.program import ExecutableProgram, ExternFunctionBody, SourceFile
 from agm.agl.ir.validate import validate_ir
 from agm.agl.lower.lowerer import _LinkState, _Lowerer, builtin_nominals_from_declarations
@@ -21,7 +21,7 @@ from agm.agl.matchcompile.stage import _compile_owner_sites
 from agm.agl.modules.ids import ENTRY_ID, ModuleId
 from agm.agl.modules.loader import ModuleGraph, load_graph
 from agm.agl.modules.roots import RootSet
-from agm.agl.runtime.agents import AgentFn, AgentRegistry
+from agm.agl.runtime.agents import AgentFn
 from agm.agl.runtime.externs import ExternRegistry
 from agm.agl.runtime.request import AgentRequest, AgentResponse
 from agm.agl.scope.program import resolve_program
@@ -178,14 +178,16 @@ def _run_ir(
     param_values: dict[str, Value] | None = None,
     *,
     caps: HostCapabilities | None = None,
-    registry: AgentRegistry | None = None,
+    agent_dispatcher: AgentFn | None = None,
     default_stdlib: bool = True,
 ) -> tuple[dict[str, Value], str]:
     executable = lower_ir(source, caps=caps, default_stdlib=default_stdlib)
     params = _build_ir_param_values(executable, param_values) if param_values else None
     output = io.StringIO()
     with contextlib.redirect_stdout(output):
-        result = IrInterpreter(executable, registry=registry, param_values=params).run()
+        result = IrInterpreter(
+            executable, agent_dispatcher=agent_dispatcher, param_values=params
+        ).run()
     return result, output.getvalue()
 
 
@@ -364,12 +366,9 @@ def evaluate_ir_graph_raises(
     raise AssertionError("IR graph did not raise AglRaise")
 
 
-def agent_caps(agent_names: frozenset[str], *, has_default: bool = False) -> HostCapabilities:
+def agent_caps() -> HostCapabilities:
     base = base_caps()
-    return HostCapabilities(
-        agent_names=agent_names,
-        codec_kinds=base.codec_kinds,
-    )
+    return HostCapabilities(codec_kinds=base.codec_kinds)
 
 
 def _make_scripted_registry(
@@ -377,7 +376,7 @@ def _make_scripted_registry(
     *,
     default_responses: list[str] | None = None,
     call_log: list[tuple[str, str]] | None = None,
-) -> AgentRegistry:
+) -> AgentFn:
     def make_agent(name: str, responses: list[str]) -> AgentFn:
         remaining = iter(responses)
 
@@ -388,7 +387,7 @@ def _make_scripted_registry(
 
         return agent
 
-    named = {AgentId(name): make_agent(name, responses) for name, responses in scripts.items()}
+    named = {name: make_agent(name, responses) for name, responses in scripts.items()}
     default = (
         make_agent("__default__", default_responses) if default_responses is not None else None
     )
@@ -399,9 +398,9 @@ def _make_scripted_registry(
             return default(request)
         command = request.agent.fields["command"]
         assert isinstance(command, TextValue)
-        return named[AgentId(command.value)](request)
+        return named[command.value](request)
 
-    return AgentRegistry(named=named, default_agent=default, value_agent=dispatch)
+    return dispatch
 
 
 def evaluate_ir_with_agents(
@@ -409,12 +408,10 @@ def evaluate_ir_with_agents(
     scripts: dict[str, list[str]],
     *,
     default_responses: list[str] | None = None,
-    agent_names: frozenset[str] | None = None,
-    has_default: bool = False,
 ) -> dict[str, Value]:
-    caps = agent_caps(agent_names or frozenset(scripts), has_default=has_default)
-    registry = _make_scripted_registry(scripts, default_responses=default_responses)
-    result, _ = _run_ir(source, caps=caps, registry=registry)
+    caps = agent_caps()
+    agent_dispatcher = _make_scripted_registry(scripts, default_responses=default_responses)
+    result, _ = _run_ir(source, caps=caps, agent_dispatcher=agent_dispatcher)
     return result
 
 
@@ -423,27 +420,19 @@ def evaluate_ir_raises_with_agents(
     scripts: dict[str, list[str]],
     *,
     default_responses: list[str] | None = None,
-    agent_names: frozenset[str] | None = None,
-    has_default: bool = False,
 ) -> ExceptionValue:
-    caps = agent_caps(agent_names or frozenset(scripts), has_default=has_default)
-    registry = _make_scripted_registry(scripts, default_responses=default_responses)
+    caps = agent_caps()
+    agent_dispatcher = _make_scripted_registry(scripts, default_responses=default_responses)
     try:
-        _run_ir(source, caps=caps, registry=registry)
+        _run_ir(source, caps=caps, agent_dispatcher=agent_dispatcher)
     except AglRaise as exc:
         return exc.exc
     raise AssertionError("IR agent program did not raise AglRaise")
 
 
-def shell_caps(
-    *, agent_names: frozenset[str] = frozenset(), has_default: bool = False
-) -> HostCapabilities:
+def shell_caps() -> HostCapabilities:
     base = base_caps()
-    return HostCapabilities(
-        agent_names=agent_names,
-        supports_shell_exec=True,
-        codec_kinds=base.codec_kinds,
-    )
+    return HostCapabilities(supports_shell_exec=True, codec_kinds=base.codec_kinds)
 
 
 def _scripted_shell(

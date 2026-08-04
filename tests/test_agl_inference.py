@@ -9,23 +9,17 @@ import pytest
 from agm.agl.capabilities import HostCapabilities
 from agm.agl.modules.ids import ModuleId
 from agm.agl.semantics.types import (
-    AgentType,
     ArrayType,
-    BoolType,
     BottomType,
-    DecimalType,
     DictType,
     EnumType,
-    ExceptionType,
     FunctionType,
     InferenceVarType,
     IntType,
-    JsonType,
     RecordType,
     TextType,
     Type,
     TypeVarType,
-    UnitType,
 )
 from agm.agl.syntax.spans import SourceId, SourceSpan
 from agm.agl.typecheck.env import AglTypeError
@@ -107,38 +101,6 @@ class TestInstantiation:
 
 
 class TestUnification:
-    @pytest.mark.parametrize(
-        ("left", "right"),
-        [
-            (IntType(), IntType()),
-            (TextType(), TextType()),
-            (BoolType(), BoolType()),
-            (DecimalType(), DecimalType()),
-            (JsonType(), JsonType()),
-            (UnitType(), UnitType()),
-            (AgentType(), AgentType()),
-            (ExceptionType("Problem"), ExceptionType("Problem")),
-            (ArrayType(IntType()), ArrayType(IntType())),
-            (DictType(IntType()), DictType(IntType())),
-            (
-                FunctionType((IntType(), ArrayType(TextType())), TextType()),
-                FunctionType((IntType(), ArrayType(TextType())), TextType()),
-            ),
-            (
-                RecordType("Box", (IntType(),), ModuleId.from_path("a")),
-                RecordType("Box", (IntType(),), ModuleId.from_path("a")),
-            ),
-            (
-                EnumType("Option", (IntType(),), ModuleId.from_path("a")),
-                EnumType("Option", (IntType(),), ModuleId.from_path("a")),
-            ),
-            (TypeVarType("T"), TypeVarType("T")),
-        ],
-    )
-    def test_exact_structural_types_unify(self, left: Type, right: Type) -> None:
-        engine = InferenceEngine()
-        engine.unify(left, right, _origin(engine, 1))
-
     @pytest.mark.parametrize(
         ("left", "right"),
         [

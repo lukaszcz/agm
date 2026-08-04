@@ -82,7 +82,7 @@ print render(r as json, pretty = true)   # → {
 
 ## Opaque values in interpolation
 
-Function values and agent values render as opaque handles in templates:
+Function values render as opaque handles in templates:
 
 ```agl
 let f = fn(x: int) => x
@@ -90,7 +90,8 @@ print "function is %{f}"   # function is <function: int -> int>
 ```
 
 They still cannot be stored in a `json` slot or used where a JSON-shaped value
-is required.
+is required. `Agent` values are ordinary enum data and render like other enum
+values.
 
 ## Templates in `exec` commands
 

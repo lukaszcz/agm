@@ -1,12 +1,12 @@
 """Implementation of the ``agm repl`` command.
 
 Launches an interactive read-eval-print loop for the AgL workflow language.
-The REPL shares ``agm exec``'s ``[exec]`` configuration (runner / default-agent /
-agents / timeout), so an interactive session evaluates entries with the same agent
-backing a batch ``agm exec`` run would use.
+The REPL shares ``agm exec``'s ``[exec]`` configuration (default-agent and
+timeout), so an interactive session evaluates entries with the same agent
+dispatch backing a batch ``agm exec`` run would use.
 
 The command itself is thin: it resolves configuration the same way ``exec``
-does, builds a runner-backed agent wrapped in a confirming wrapper, constructs a
+does, builds a value-driven dispatcher wrapped in a confirming wrapper, constructs a
 :class:`ReplSession`, and hands control to
 :func:`agm.agl.repl.console.run_console`.  All the interactive logic lives in
 :mod:`agm.agl.repl`.
@@ -26,11 +26,10 @@ from __future__ import annotations
 
 import sys
 
-from agm.agent.runner import parse_command
 from agm.agl.repl import ReplSession
 from agm.agl.repl.agentmode import AgentMode
 from agm.agl.repl.agents import ConfirmingAgent
-from agm.agl.runtime.agents import AgentFn, value_driven_agent_factory
+from agm.agl.runtime.agents import value_driven_agent_factory
 from agm.agl.runtime.host_settings import HostSettingsPolicy
 from agm.agl.runtime.params import build_engine_config_seeds, raw_option_str
 from agm.cli_support.args import ReplArgs
@@ -95,14 +94,6 @@ def run(args: ReplArgs) -> None:
         else prepare_trace_log_from_decision(log_decision, command_name="repl")
     )
 
-    configured_runner = args.runner if args.runner is not None else config.runner
-    if configured_runner is not None:
-        try:
-            parse_command(configured_runner, kind="runner")
-        except ValueError as exc:
-            print(f"Error: {exc}.", file=sys.stderr)
-            raise SystemExit(1) from exc
-
     runner_agent = value_driven_agent_factory(idle_timeout=config.timeout)
 
     # ONE shared agent-mode holder: passed to BOTH the confirming wrapper and the
@@ -117,14 +108,7 @@ def run(args: ReplArgs) -> None:
     confirm_agent_call = make_console_confirm()
     confirming_agent = ConfirmingAgent(runner_agent, agent_mode, confirm=confirm_agent_call)
 
-    def _build_runner(command: str) -> AgentFn:
-        # The legacy runner setting does not select an Agent value's command,
-        # but malformed source writes must remain catchable and roll back.
-        parse_command(command, kind="runner")
-        return confirming_agent
-
     host_settings_policy = HostSettingsPolicy(
-        build_runner=_build_runner,
         resolve_trace_path=LiveTracePathResolver(command_name="repl", auto_path=trace_path),
     )
 
@@ -140,10 +124,6 @@ def run(args: ReplArgs) -> None:
     # setting default.  The raw timeout preserves its configured spelling.
     exec_raw_table = toml_dict(merged_config.get("exec"))
     seed_raw: dict[str, object] = {}
-    if args.runner is not None:
-        seed_raw["runner"] = args.runner
-    elif "runner" in exec_raw_table and config.runner is not None:
-        seed_raw["runner"] = config.runner
     if args.strict_json is not None:
         seed_raw["strict-json"] = args.strict_json
     elif "strict-json" in exec_raw_table:
@@ -180,7 +160,7 @@ def run(args: ReplArgs) -> None:
         strict_json_host_seeded="strict-json" in engine_base,
         default_loop_limit=loop_limit,
         default_call_depth_limit=call_depth_limit,
-        default_agent=confirming_agent,
+        agent_dispatcher=confirming_agent,
         shell_exec_timeout=config.timeout,
         trace_path=trace_path,
         params_config_loader=_params_config_loader,

@@ -106,7 +106,6 @@ from agm.agl.ir.contracts import (
 from agm.agl.ir.ids import NominalId
 from agm.agl.semantics.type_table import TypeTable
 from agm.agl.semantics.types import (
-    AgentType,
     ArrayType,
     BoolType,
     BottomType,
@@ -259,8 +258,6 @@ def _emit_body(typ: Type, type_table: TypeTable, plan: _SchemaPlan) -> dict[str,
         )
     if isinstance(typ, UnitType):
         raise TypeError("UnitType has no JSON Schema; unit is not wire-serialised.")
-    if isinstance(typ, AgentType):
-        raise TypeError("AgentType has no JSON Schema; agent values are not wire-serialised.")
     if isinstance(typ, FunctionType):
         raise TypeError("FunctionType has no JSON Schema; function values are not wire-serialised.")
     if isinstance(typ, BottomType):
@@ -591,7 +588,7 @@ def _emit_decode_body(typ: Type, type_table: TypeTable, plan: "_SchemaPlan") -> 
                 for vname, vfields in variants.items()
             ),
         )
-    # Non-data targets (unit/agent/function/exception/bottom/typevar) are not
+    # Non-data targets (unit/function/exception/bottom/typevar) are not
     # decodable from JSON and are rejected by the checker before lowering.
     raise AssertionError(  # pragma: no cover
         f"build_decode_schema: undecodable type {typ!r}"
@@ -647,7 +644,7 @@ def build_extern_contract(sig: FunctionSignature, type_table: TypeTable) -> Exte
     so a recursive instantiation crosses the boundary as a finite graph of
     ``BoundaryRef`` leaves resolving into :attr:`ExternContract.defs`.
 
-    :raises TypeError: if a function or agent type occurs anywhere in the
+    :raises TypeError: if a function type occurs anywhere in the
         signature, or if any parameter/result type has no finite schema; the
         checker statically rejects both at the extern use site, so these are
         unreachable from source and only exercised by direct invocation.
@@ -756,8 +753,6 @@ def _emit_boundary_body(typ: Type, type_table: TypeTable, plan: "_SchemaPlan") -
         return BoundarySealVar(typ.name)
     if isinstance(typ, InferenceVarType):
         raise TypeError("InferenceVarType is internal and cannot cross the extern boundary.")
-    if isinstance(typ, AgentType):
-        raise TypeError("AgentType cannot cross the extern boundary; banned in extern signatures.")
     if isinstance(typ, FunctionType):
         raise TypeError(
             "FunctionType cannot cross the extern boundary; banned in extern signatures."

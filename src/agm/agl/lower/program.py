@@ -45,7 +45,6 @@ def lower_program(
     _already_linked: frozenset[ModuleId] = frozenset(),
     _entry_source_text: str | None = None,
     contract_payloads: Mapping[int, ContractPayload] | None = None,
-    _eager_scoped_agents: bool = False,
 ) -> ExecutableProgram:
     """Lower a whole-program match-compiled artifact to an
     :class:`~agm.agl.ir.program.ExecutableProgram`.
@@ -179,11 +178,7 @@ def lower_program(
             contract_payloads=contract_payloads,
         )
         module_lowerers[mid] = lowerer
-        lowerer.prealloc_static_symbols(
-            cm.resolved.program.body,
-            public=mid.is_entry,
-            eager_scoped_agents=_eager_scoped_agents,
-        )
+        lowerer.prealloc_static_symbols(cm.resolved.program.body, public=mid.is_entry)
 
     # Step 4: Phase 2 — lower bodies.
     # Library modules first, entry last, so the insertion order of
@@ -203,7 +198,6 @@ def lower_program(
             body,
             top_level=mid.is_entry,
             handles_only=not mid.is_entry,
-            eager_scoped_agents=_eager_scoped_agents,
         )
         executable_modules[mid] = ExecutableModule(
             module_id=mid,

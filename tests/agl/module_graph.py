@@ -72,7 +72,6 @@ from agm.agl.typecheck.program import check_program
 # module. Used as :func:`check_resolved`'s default so most hand-built-AST
 # tests never need to construct one themselves.
 _DEFAULT_CAPABILITIES = HostCapabilities(
-    agent_names=frozenset(),
     supports_shell_exec=True,
     codec_kinds={
         "text": frozenset({"text"}),
@@ -170,7 +169,6 @@ def resolve_entry(
     source: str,
     *,
     parent_scope: ScopeNode | None = None,
-    ambient_agents: frozenset[str] = frozenset(),
     ambient_constructor_candidates: dict[str, tuple[ConstructorRef, ...]] | None = None,
     ambient_type_names: frozenset[str] = frozenset(),
     origin_path: Path | None = None,
@@ -186,10 +184,10 @@ def resolve_entry(
     the module docstring) — so it always mirrors the source the test wrote.
 
     Parameters mirror the entry-scoped parameters of ``resolve_program``:
-    *parent_scope*, *ambient_agents*, *ambient_constructor_candidates*, and
+    *parent_scope*, *ambient_constructor_candidates*, and
     *ambient_type_names* forward to that function's ``entry_parent_scope``,
-    ``ambient_agents``, ``entry_ambient_constructor_candidates``, and
-    ``entry_ambient_type_names`` respectively; *origin_path* forwards to
+    ``entry_ambient_constructor_candidates`` and ``entry_ambient_type_names``
+    respectively; *origin_path* forwards to
     ``build_repl_graph``'s ``path``.
 
     *default_stdlib* controls whether ``std/core`` is imported into the
@@ -207,7 +205,6 @@ def resolve_entry(
     )
     resolved_program = resolve_program(
         graph,
-        ambient_agents=ambient_agents,
         entry_ambient_constructor_candidates=ambient_constructor_candidates,
         entry_ambient_type_names=ambient_type_names,
         entry_parent_scope=parent_scope,
@@ -221,7 +218,6 @@ def resolve_and_check_entry(
     capabilities: HostCapabilities,
     *,
     parent_scope: ScopeNode | None = None,
-    ambient_agents: frozenset[str] = frozenset(),
     ambient_constructor_candidates: dict[str, tuple[ConstructorRef, ...]] | None = None,
     ambient_type_names: frozenset[str] = frozenset(),
     origin_path: Path | None = None,
@@ -248,7 +244,6 @@ def resolve_and_check_entry(
     )
     resolved_program = resolve_program(
         graph,
-        ambient_agents=ambient_agents,
         entry_ambient_constructor_candidates=ambient_constructor_candidates,
         entry_ambient_type_names=ambient_type_names,
         entry_parent_scope=parent_scope,
@@ -352,7 +347,6 @@ def resolve_program_ast(
     *,
     origin_path: Path | None = None,
     parent_scope: ScopeNode | None = None,
-    ambient_agents: frozenset[str] = frozenset(),
     ambient_constructor_candidates: dict[str, tuple[ConstructorRef, ...]] | None = None,
     ambient_type_names: frozenset[str] = frozenset(),
 ) -> ModuleResolution:
@@ -366,7 +360,6 @@ def resolve_program_ast(
     graph = _single_module_graph(program, origin_path=origin_path)
     resolved_program = resolve_program(
         graph,
-        ambient_agents=ambient_agents,
         entry_ambient_constructor_candidates=ambient_constructor_candidates,
         entry_ambient_type_names=ambient_type_names,
         entry_parent_scope=parent_scope,
@@ -379,7 +372,6 @@ def resolve_and_check_program_ast(
     capabilities: HostCapabilities,
     *,
     origin_path: Path | None = None,
-    ambient_agents: frozenset[str] = frozenset(),
     seed_env: TypeEnvironment | None = None,
 ) -> CheckedModule:
     """Resolve and type-check an already-parsed *program* as a single-module graph.
@@ -388,6 +380,6 @@ def resolve_and_check_program_ast(
     this is the right seam over :func:`resolve_and_check_entry`.
     """
     graph = _single_module_graph(program, origin_path=origin_path)
-    resolved_program = resolve_program(graph, ambient_agents=ambient_agents)
+    resolved_program = resolve_program(graph)
     checked_program = check_program(resolved_program, capabilities, entry_seed_env=seed_env)
     return checked_program.modules[graph.entry_id]

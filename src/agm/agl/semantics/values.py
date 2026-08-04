@@ -26,7 +26,7 @@ from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 from typing import TypeAlias
 
-from agm.agl.ir.ids import AgentId, FunctionId, NominalId, SymbolId
+from agm.agl.ir.ids import FunctionId, NominalId, SymbolId
 
 # ---------------------------------------------------------------------------
 # JSON-tree comparison helpers
@@ -158,14 +158,6 @@ UNIT_VALUE: UnitValue = UnitValue()
 VOID_VALUE: UnitValue = UnitValue(printable_in_repl=False)
 
 
-@dataclass(frozen=True, slots=True)
-class AgentValue:
-    """A first-class agent handle — opaque; not renderable or comparable."""
-
-    name: str
-    agent_id: AgentId | None = None
-
-
 # ---------------------------------------------------------------------------
 # Callable value types
 # ---------------------------------------------------------------------------
@@ -178,7 +170,7 @@ class ConstructorValue:
     Carries only the owner/variant identity needed to build a record or enum
     at the call site.  Field order and types (and concreteness) come from the
     call site's checked result type; type arguments are erased — never
-    represented at runtime.  Like ``AgentValue`` it is not renderable or
+    represented at runtime.  It is not renderable or
     comparable by the language.
 
     ``nominal`` is the ``NominalId`` (module + scope path + declared name) of the owning
@@ -501,7 +493,6 @@ Value: TypeAlias = (
     | EnumValue
     | ExceptionValue
     | UnitValue
-    | AgentValue
     | ConstructorValue
     | IrClosureValue
     | IteratorValue
@@ -537,7 +528,6 @@ Frame = dict[SymbolId, Slot]
 __all__ = [
     "UNIT_VALUE",
     "VOID_VALUE",
-    "AgentValue",
     "ArrayValue",
     "BoolValue",
     "Cell",

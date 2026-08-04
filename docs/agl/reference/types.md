@@ -18,7 +18,6 @@ int
 decimal
 array[T]
 dict[text, T]
-agent
 () -> B
 A -> B
 (A, B, …) -> C
@@ -36,7 +35,6 @@ type_expr ::= "unit"
             | qualifier_chain name                            (* qualified type *)
             | "array" "[" type_expr "]"
             | "dict" "[" "text" "," type_expr "]"
-            | "agent"
             | func_type
 
 func_type ::= type_atom "->" type_expr
@@ -48,7 +46,6 @@ type_atom ::= "unit" | "text" | "json" | "bool" | "int" | "decimal"
             | qualifier_chain name
             | "array" "[" type_expr "]"
             | "dict" "[" "text" "," type_expr "]"
-            | "agent"
 type_list       ::= type_expr ("," type_expr)* ","?
 qualifier_chain ::= "::" qualifier_segment* | qualifier_segment+
 qualifier_segment ::= ["/"] NAME ("/" NAME)* "::"
@@ -122,7 +119,7 @@ exactly. A wire number with an integral value (such as `1.0`) satisfies an
 `json` holds any *JSON-shaped* value: `null`, booleans, numbers, text, and
 arrays/dictionaries of JSON-shaped values. The literal `null` has type `json`.
 
-Records, enums, exceptions, functions, and agents are **not** JSON-shaped.
+Records, enums, exceptions, and functions are **not** JSON-shaped.
 
 `null` is not assignable to `text`, `int`, `decimal`, `bool`, records, or
 enums. Use an enum for optionality:
@@ -226,9 +223,8 @@ original. Replacing the copy's own top-level contents does not affect the
 original, but mutating a container reached *through* the copy — one level
 down or deeper — is observed through the original too, because that nested
 container is the same shared object. Every other value kind (`int`,
-`decimal`, `bool`, `text`, `json`, `unit`, `agent`, a function value) is
-returned as-is: primitives are immutable, so there is nothing to detach, and
-`agent`/function values are capability handles, not data. `shallow_copy`
+`decimal`, `bool`, `text`, `json`, `unit`, a function value) is returned as-is:
+primitives are immutable, so there is nothing to detach. `shallow_copy`
 never recurses, so it can never loop and never raises, even on a cyclic
 value.
 
@@ -242,9 +238,9 @@ print(outer)     # [[9, 2]] -- inner is shared, so the mutation is visible
 
 `copy` is deep: every array, dict, record, enum, and exception reachable from
 the value is rebuilt with independently copied contents, all the way down.
-Opaque values reached along the way — `agent` handles and function values —
-are returned as-is, exactly as for `shallow_copy`: a container reachable only
-through a function value's captured environment stays shared after the copy.
+Function values reached along the way are returned as-is, exactly as for
+`shallow_copy`: a container reachable only through a function value's captured
+environment stays shared after the copy.
 A `json` leaf copies as an independent value. **Sharing is preserved**: if
 two fields or array slots pointed at the same array before the copy, they
 still point at the same (new) array after it — a diamond copies to a
@@ -264,17 +260,6 @@ copied[0][0] := 9
 print(pair)     # [[1], [1]]  -- the original is untouched
 print(copied)   # [[9], [9]]  -- both slots still point at the SAME new array
 ```
-
-### `agent`
-
-`agent` is an opaque type for declared agent values. Every `agent`
-declaration introduces a name of this type. Agent values may be stored in
-bindings, passed to functions, and held in arrays, but have **no fields, no
-operators, no JSON encoding, and only opaque rendering**. Rendering or
-interpolating an agent value produces a handle such as `<agent reviewer>`.
-Storing it where a JSON-shaped type is expected is a static error.
-
-See [Agent calls](agent-calls.md) for how agent values are used with `ask`.
 
 ### Function types: `A -> B` and `(A, B, …) -> C`
 
@@ -350,6 +335,14 @@ enum ParsePolicy
 
 `Abort` is the portable default. `Retry(n: N)` permits up to `N`
 corrective retries after the initial attempt.
+
+### `Agent`
+
+`Agent` is a built-in enum describing an agent backend. Its variants are
+`AgentCommand(command)`, `AgentClaude(model, thinking)`,
+`AgentCodex(model, thinking)`, and `AgentPi(provider, model, thinking)`.
+Like every enum, `Agent` values have fields, equality, rendering, and JSON
+casts; see [Agent calls](agent-calls.md) for dispatch behavior.
 
 ### `AgentRequest`
 
@@ -751,7 +744,7 @@ Typing is exact nominal matching with **two** implicit coercions:
    cast (see [Casts and convertibility](#casts-and-convertibility) below).
 4. Equality (`==`, `!=`) and ordering comparisons require both operands to
    have the *same* type after rule 1. Operands whose type is, or transitively
-   contains, a function, agent, or `unit` value are a static error — see
+   contains, a function or `unit` value are a static error — see
    [Values and equality](#values-and-equality) below.
 5. All branches of a `case` expression must have the same type after rule 1.
 
@@ -803,8 +796,8 @@ at runtime; **fallible** ones may raise `CastError`.
 | record `R` | `text`, `json` | fallible — strict JSON parse then field validation |
 | enum `E` | same enum `E` | total (no-op) |
 | enum `E` | `text`, `json` | fallible — strict JSON parse then variant validation |
-| any type | `unit`, `agent`, function type | **static cast error** |
-| `unit`, `agent`, function type | any type | **static cast error** |
+| any type | `unit`, function type | **static cast error** |
+| `unit`, function type | any type | **static cast error** |
 
 Any source–target combination not listed above is a static cast error. In
 particular: `bool as int`, `int as bool`, `bool as decimal`, `decimal as bool`
@@ -812,8 +805,8 @@ are all static errors — booleans never convert to or from numbers.
 
 ### Convertibility to `json`
 
-A type converts to `json` with `as json` iff no **non-data** type — `unit`,
-`agent`, or a function type — is reachable from it:
+A type converts to `json` with `as json` iff no **non-data** type — `unit` or
+a function type — is reachable from it:
 
 - the scalars `text`, `json`, `bool`, `int`, `decimal` always convert;
 - `array[E]`/`dict[text, V]` converts iff `E`/`V` does;
@@ -822,31 +815,13 @@ A type converts to `json` with `as json` iff no **non-data** type — `unit`,
   exception, through its `extends` ancestors and its catchable descendants,
   since a value statically typed as a base may hold a descendant at
   runtime);
-- `unit`, agents, and function values never convert.
+- `unit` and function values never convert.
 
 This makes `array[R] as json`, `dict[text, R] as json`, nested containers
 (`array[array[R]]`, `dict[text, array[R]]`), and a recursive declaration such
 as `record Node(tag: int, children: array[Node])` all convert, exactly as a
 bare `R as json` does — a container converts whenever its element type does,
 with no special case for a nominal element.
-
-A record, enum, or exception with a non-data field is a **static cast error**
-that names the offending field:
-
-<!-- agl-check: error -->
-```agl
-record Bad
-  a: agent
-  x: int
-
-agent reviewer
-
-let bad = Bad(a = reviewer, x = 1)
-print(bad as json)
-# static error: cannot cast 'Bad' to 'json': field 'a' of 'Bad' has type
-# 'agent', which has no JSON representation.
-# `array[Bad] as json` names the same field, with 'array[Bad]' as the source.
-```
 
 A **free type variable never converts**, so `T as json`, `array[T] as json`,
 and `Box[T] as json` are static errors inside a generic `def`: type
@@ -927,8 +902,8 @@ print render(r as json, pretty = true)   # → {
                                           #    }
 ```
 
-A record (or exception) with a field of type `unit`, `agent`, or a function
-type cannot be converted — see [Convertibility to
+A record (or exception) with a field of type `unit` or a function type cannot
+be converted — see [Convertibility to
 `json`](#convertibility-to-json) above for the static error this produces and
 how it names the offending field.
 
@@ -953,13 +928,11 @@ Every **data** type has full value equality (`==` / `!=`):
 - Records and enums compare by type, variant (for enums), and field values.
 - `json` values compare structurally.
 
-**Opaque types** — `agent`, function types, and `unit` — have **no equality**.
-A comparison involving one of these types is a static error. This rule is
-**transitive**: an `array`, `dict`, `record`, `enum`, or `exception` that (at
-any depth) contains a function, agent, or `unit` value likewise has no
-equality and cannot be used with `==`/`!=`. For example, comparing two
-`array[int -> int]` values with `==` is a static error, as is a
-`record` with an `agent` field compared with `==`.
+Function types and `unit` have **no equality**. A comparison involving one of
+these types is a static error. This rule is **transitive**: an `array`, `dict`,
+`record`, `enum`, or `exception` that (at any depth) contains a function or
+`unit` value likewise has no equality and cannot be used with `==`/`!=`. For
+example, comparing two `array[int -> int]` values with `==` is a static error.
 
 See [Expressions](expressions.md) for the operator rules and
 [Pattern matching](pattern-matching.md) for variant tests with `is`.

@@ -6,7 +6,7 @@ A meta-command is any console line whose first non-blank character is ``:`` —
 character.
 
 The meta-command set is implemented here: ``:help``, ``:quit`` /
-``:exit``, ``:reset``, ``:type``, ``:bindings`` / ``:env``, ``:agents``,
+``:exit``, ``:reset``, ``:type``, ``:bindings`` / ``:env``,
 ``:params``, ``:set``, ``:agent``, ``:load``, ``:save``, plus a clean error for
 an unknown ``:command``.  The dispatcher is a registry/table (``_COMMANDS``), so
 the command set is a single source of truth shared by the dispatcher and the
@@ -132,20 +132,6 @@ def _handle_bindings(arg: str, ctx: MetaContext) -> MetaOutcome:
     if not bindings:
         return MetaOutcome(text="No bindings.")
     lines = [format_typed_value(name, typ, value) for name, typ, value in bindings]
-    return MetaOutcome(text="\n".join(lines))
-
-
-def _handle_agents(arg: str, ctx: MetaContext) -> MetaOutcome:
-    """``:agents`` — list available agent names and report the current mode."""
-    del arg
-    names = ctx.session.agents()
-    lines: list[str] = []
-    if names:
-        lines.append("Available agents:")
-        lines.extend(f"  {name}" for name in names)
-    else:
-        lines.append("No agents available (only the default 'ask' agent, if configured).")
-    lines.append(f"Agent-call mode: {ctx.agent_mode.mode}")
     return MetaOutcome(text="\n".join(lines))
 
 
@@ -302,12 +288,6 @@ _COMMANDS: list[MetaCommand] = [
         usage=":bindings / :env",
         summary="List current bindings with types and values.",
         handler=_handle_bindings,
-    ),
-    MetaCommand(
-        names=("agents",),
-        usage=":agents",
-        summary="List available agents and the current agent-call mode.",
-        handler=_handle_agents,
     ),
     MetaCommand(
         names=("params",),

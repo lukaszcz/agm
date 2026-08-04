@@ -11,7 +11,7 @@ an injected *confirm* callback so the wrapper stays UI-free and unit-testable wi
 a fake callback.
 
 Cancellation — a declined confirmation or a Ctrl-C during a live call — raises
-:class:`AgentCancelled`.  The registry (``AgentRegistry.dispatch``) only catches
+:class:`AgentCancelled`. The value dispatcher only catches
 ``AgentCallHostError``, so :class:`AgentCancelled` propagates out of the wrapped
 callable into the session, which stops the current entry while preserving effects
 completed before cancellation.

@@ -18,15 +18,10 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from agm.agent.defaults import DEFAULT_AGENT_RUNNER
 from agm.agl.ir.ids import NominalId
 from agm.agl.modules.ids import STD_CORE_ID
-from agm.agl.modules.roots import RootSet
-from agm.agl.pipeline import PipelineDriver, RunResult
-from agm.agl.runtime.agents import AgentFn
 from agm.agl.runtime.host_settings import HostSettingsPolicy
-from agm.agl.runtime.request import AgentRequest
-from agm.agl.semantics.values import EnumValue, TextValue, Value
+from agm.agl.semantics.values import EnumValue, TextValue
 from agm.cli_support.args import ExecArgs
 from agm.commands import exec as exec_command
 from agm.config.context import ConfigContext
@@ -43,7 +38,6 @@ def _exec_args(
         param_tokens=[],
         strict_json=None,
         max_iters=None,
-        runner=None,
         no_log=no_log,
         log=log,
         log_file=log_file,
@@ -129,68 +123,6 @@ def _ok_run_result() -> MagicMock:
 class TestCommandEngineSeeding:
     """The command passes only explicit host controls into builtin registers."""
 
-    def test_declared_runner_default_is_not_overridden_by_agent_fallback(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-    ) -> None:
-        stdlib_root = _write_command_stdlib(
-            tmp_path, 'builtin var runner: text = "declared-runner"\n'
-        )
-        agl_file = tmp_path / "prog.agl"
-        agl_file.write_text("import std/config\nprint std/config::runner\n", encoding="utf-8")
-        monkeypatch.setattr(exec_command, "resolve_stdlib_root", lambda *, home: stdlib_root)
-        monkeypatch.setattr(
-            exec_command,
-            "current_config_context",
-            lambda: ConfigContext(home=tmp_path, proj_dir=None, cwd=tmp_path),
-        )
-
-        exec_command.run(_exec_args(agl_file))
-
-        assert capsys.readouterr().out == "declared-runner\n"
-
-    def test_configured_runner_remains_an_explicit_host_seed(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-    ) -> None:
-        stdlib_root = _write_command_stdlib(
-            tmp_path, 'builtin var runner: text = "declared-runner"\n'
-        )
-        agl_file = tmp_path / "prog.agl"
-        agl_file.write_text("import std/config\nprint std/config::runner\n", encoding="utf-8")
-        config_dir = tmp_path / ".agm"
-        config_dir.mkdir()
-        (config_dir / "config.toml").write_text('[exec]\nrunner = "configured-runner"\n')
-        monkeypatch.setattr(exec_command, "resolve_stdlib_root", lambda *, home: stdlib_root)
-        monkeypatch.setattr(
-            exec_command,
-            "current_config_context",
-            lambda: ConfigContext(home=tmp_path, proj_dir=None, cwd=tmp_path),
-        )
-
-        exec_command.run(_exec_args(agl_file))
-
-        assert capsys.readouterr().out == "configured-runner\n"
-
-    def test_cli_runner_remains_an_explicit_host_seed(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-    ) -> None:
-        stdlib_root = _write_command_stdlib(
-            tmp_path, 'builtin var runner: text = "declared-runner"\n'
-        )
-        agl_file = tmp_path / "prog.agl"
-        agl_file.write_text("import std/config\nprint std/config::runner\n", encoding="utf-8")
-        args = _exec_args(agl_file)
-        args.runner = "configured-runner"
-        monkeypatch.setattr(exec_command, "resolve_stdlib_root", lambda *, home: stdlib_root)
-        monkeypatch.setattr(
-            exec_command,
-            "current_config_context",
-            lambda: ConfigContext(home=tmp_path, proj_dir=None, cwd=tmp_path),
-        )
-
-        exec_command.run(args)
-
-        assert capsys.readouterr().out == "configured-runner\n"
-
     def test_invalid_config_timeout_does_not_create_a_seed(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
     ) -> None:
@@ -270,12 +202,6 @@ class TestRunnerReconfiguration:
             exec_command.run(_exec_args(agl_file))
 
         assert received == [["claude", "-p", "--model", "sonnet", "--effort", "medium"]]
-
-    def test_legacy_declaration_without_an_override_is_accepted(self, tmp_path: Path) -> None:
-        """Vestigial declarations do not require an exec-agent override."""
-        agl_file = tmp_path / "prog.agl"
-        agl_file.write_text("agent legacy\n()\n")
-        exec_command.run(_exec_args(agl_file))
 
     def test_default_agent_write_does_not_change_explicit_agent_values(
         self, tmp_path: Path
@@ -453,166 +379,18 @@ class TestTraceReconfiguration:
         assert rendered == ["before", "after"]
 
 
-class _RecordingPolicy:
-    """A host policy whose hooks record every reconfiguration request."""
+def test_trace_reconfiguration_disables_logging_after_a_path_failure(tmp_path: Path) -> None:
+    """A trace path failure is best-effort and leaves the trace disabled."""
+    from agm.agl.runtime.host_settings import HostSettingsReconfigurer
+    from agm.agl.runtime.trace import TraceStore
 
-    def __init__(self) -> None:
-        self.runner_commands: list[str] = []
-        self.trace_calls: list[tuple[bool, str | None]] = []
-
-    def build_runner(self, command: str) -> AgentFn:
-        self.runner_commands.append(command)
-        return lambda req: "ok"
-
-    def resolve_trace_path(self, enabled: bool, log_file: str | None) -> Path | None:
-        self.trace_calls.append((enabled, log_file))
-        return None
-
-
-def _run_program_with_policy(
-    source: str, *, policy: HostSettingsPolicy, seed: dict[str, Value] | None = None
-) -> RunResult:
-    rt = PipelineDriver()
-    prepared = rt.prepare_program(
-        source, entry_path=None, roots=RootSet(roots=frozenset({_STDLIB}))
+    trace = TraceStore(path=tmp_path / "trace.jsonl")
+    policy = HostSettingsPolicy(
+        resolve_trace_path=lambda enabled, log_file: (_ for _ in ()).throw(OSError("unwritable"))
     )
-    result = rt.run_prepared(prepared, host_settings_policy=policy, builtin_host_settings=seed)
-    assert isinstance(result, RunResult)
-    return result
 
-
-class TestReconfigureHooks:
-    @pytest.mark.parametrize(
-        ("seed", "expected_command"),
-        (
-            (None, "declared-runner"),
-            ({"default-agent": _command_agent("seeded-runner")}, "seeded-runner"),
-        ),
-        ids=("declared-default", "host-seed"),
+    HostSettingsReconfigurer(trace=trace, policy=policy).reconfigure_trace(
+        enabled=True, log_file=None
     )
-    def test_effective_default_agent_selects_ask_dispatch(
-        self, tmp_path: Path, seed: dict[str, Value] | None, expected_command: str
-    ) -> None:
-        """The effective default-agent value selects the first dispatch."""
-        config_path = tmp_path / "std" / "config.agl"
-        config_path.parent.mkdir()
-        config_path.write_text(
-            "import std/core using Agent\n"
-            'builtin var default-agent: Agent = AgentCommand("declared-runner")\n'
-            'builtin var runner: text = "declared-runner"\n',
-            encoding="utf-8",
-        )
-        (config_path.parent / "core.agl").write_text(
-            (_STDLIB / "std" / "core.agl").read_text(encoding="utf-8"), encoding="utf-8"
-        )
-        dispatched: list[str] = []
 
-        def dispatch(request: AgentRequest) -> str:
-            command = request.agent.fields["command"]
-            assert isinstance(command, TextValue)
-            dispatched.append(command.value)
-            return "ok"
-
-        rt = PipelineDriver(value_agent=dispatch)
-        prepared = rt.prepare_program(
-            'import std/core using ask\nopen import std/config\nask("hi")\n',
-            entry_path=None,
-            roots=RootSet(roots=frozenset({tmp_path})),
-            default_stdlib=False,
-        )
-        result = rt.run_prepared(prepared, builtin_host_settings=seed)
-        assert isinstance(result, RunResult)
-
-        assert result.ok, f"expected success but got: {result.error!r}"
-        assert dispatched == [expected_command]
-
-    def test_hooks_fire_on_host_consumed_writes(self) -> None:
-        recorder = _RecordingPolicy()
-        policy = HostSettingsPolicy(
-            build_runner=recorder.build_runner, resolve_trace_path=recorder.resolve_trace_path
-        )
-        source = (
-            "open import std/config\n"
-            'std/config::runner := "codex"\n'
-            "std/config::log := true\n"
-            'std/config::log-file := Some("out.jsonl")\n'
-            "print 1\n"
-        )
-        result = _run_program_with_policy(source, policy=policy)
-
-        assert result.ok, f"expected success but got: {result.error!r}"
-        assert recorder.runner_commands == [DEFAULT_AGENT_RUNNER, "codex"]
-        # Initialization and both source writes configure the live trace service.
-        assert recorder.trace_calls == [(False, None), (True, None), (True, "out.jsonl")]
-
-    def test_runner_build_value_error_becomes_agl_value_error(self) -> None:
-        def failing_build(command: str) -> AgentFn:
-            if command == "boom":
-                raise ValueError("bad runner command")
-            return lambda req: "ok"
-
-        policy = HostSettingsPolicy(
-            build_runner=failing_build, resolve_trace_path=lambda enabled, log_file: None
-        )
-        source = 'open import std/config\nstd/config::runner := "boom"\nprint 1\n'
-        result = _run_program_with_policy(source, policy=policy)
-
-        assert not result.ok
-        assert result.error is not None
-        assert result.error.type_name == "ValueError"
-
-    def test_failed_runner_reconfigure_rolls_back_register(self) -> None:
-        def failing_build(command: str) -> AgentFn:
-            if command == "boom":
-                raise ValueError(f"cannot build {command}")
-            return lambda req: "ok"
-
-        policy = HostSettingsPolicy(
-            build_runner=failing_build, resolve_trace_path=lambda enabled, log_file: None
-        )
-        source = (
-            "open import std/config\n"
-            "try\n"
-            '  std/config::runner := "boom"\n'
-            "catch Exception as error => ()\n"
-            "let retained = std/config::runner\n"
-            "retained\n"
-        )
-        result = _run_program_with_policy(source, policy=policy)
-
-        assert result.ok
-        assert result.bindings["retained"] == TextValue(DEFAULT_AGENT_RUNNER)
-
-    def test_source_trace_directory_failure_is_best_effort(
-        self,
-        tmp_path: Path,
-        capsys: pytest.CaptureFixture[str],
-    ) -> None:
-        recorder = _RecordingPolicy()
-        recovered_path = tmp_path / "recovered.jsonl"
-        calls = 0
-
-        def fail_then_recover(enabled: bool, log_file: str | None) -> Path | None:
-            nonlocal calls
-            calls += 1
-            if calls != 2:
-                raise OSError("read-only filesystem")
-            return recovered_path
-
-        policy = HostSettingsPolicy(
-            build_runner=recorder.build_runner,
-            resolve_trace_path=fail_then_recover,
-        )
-        result = _run_program_with_policy(
-            "open import std/config\n"
-            'std/config::log-file := Some("nested/one.jsonl")\n'
-            'std/config::log-file := Some("nested/two.jsonl")\n'
-            'std/config::log-file := Some("nested/three.jsonl")\n'
-            "print 1\n",
-            policy=policy,
-        )
-
-        assert result.ok
-        assert result.trace_path is None
-        assert not recovered_path.exists()
-        assert capsys.readouterr().err.count("trace logging disabled") == 1
+    assert trace.path is None

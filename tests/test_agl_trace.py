@@ -35,7 +35,7 @@ def _agent_returning(text: str):
 
 def _agent_runtime(agent: AgentFn, *, strict_json: bool = False) -> PipelineDriver:
     """Build a runtime with an explicit value dispatcher for test agents."""
-    return PipelineDriver(default_strict_json=strict_json, value_agent=agent)
+    return PipelineDriver(default_strict_json=strict_json, agent_dispatcher=agent)
 
 
 def _load_jsonl(path: Path) -> list[dict[str, object]]:
@@ -55,7 +55,6 @@ def _exec_args(
         file=str(agl_file),
         param_tokens=param_tokens or [],
         strict_json=None,
-        runner=None,
         no_log=no_log,
         log_file=log_file,
     )
@@ -784,6 +783,19 @@ class TestTraceStoreProperties:
 
         trace.activate(tmp_path / "recovered.jsonl")
         trace.run_end(ok=True)
+
+        assert trace.path is None
+        assert capsys.readouterr().err.count("trace logging disabled") == 1
+
+    def test_repeated_disable_warns_once(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """A repeated trace failure stays silent after the initial warning."""
+        from agm.agl.runtime.trace import TraceStore
+
+        trace = TraceStore(path=tmp_path / "trace.jsonl")
+        trace.disable(OSError("first failure"))
+        trace.disable(OSError("second failure"))
 
         assert trace.path is None
         assert capsys.readouterr().err.count("trace logging disabled") == 1

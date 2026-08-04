@@ -46,8 +46,8 @@ print(Text::display("ready"))
 
 A region contains nested regions, header `open` and `import` declarations,
 `export` declarations, static declarations (`def`, `extern def`, `record`,
-`enum`, `exception`, `type`, every `builtin` form, and, in an entry module,
-`agent`), `param` declarations, and `let`/`var` bindings. Bare expressions,
+`enum`, `exception`, `type`, every `builtin` form), `param` declarations, and
+`let`/`var` bindings. Bare expressions,
 `:=` assignments, program declarations, and infix declarations are not
 allowed there.
 
@@ -191,7 +191,7 @@ visible by their bare names within that scope; enclosing scopes are considered
 outward, then the module root and imported bare names. `::name` starts at the
 module root, so it bypasses a nearer scoped member.
 
-A static declaration (`def`, a type, an `agent`) is visible throughout its
+A static declaration (`def` or a type) is visible throughout its
 scope regardless of textual order, matching the module root, where a `def` may
 call another declared later in the same file. A `let`, `var`, or `param`
 binding is different: it is visible only to references that follow it
@@ -208,7 +208,7 @@ exposes it to a later reference, just not to an earlier one.
 A scoped `var` is assigned through its path (`A::count := 1`) or, inside its
 region or after an `open`, through its bare name. A scoped `let` is not
 assignable: `:=` on it is the same immutable-binder error a root-level `let`
-raises. Assigning to a path that names a `def`, a type, or an `agent` is
+raises. Assigning to a path that names a `def` or a type is
 likewise rejected as immutable, and a path with no such member is a focused
 error.
 

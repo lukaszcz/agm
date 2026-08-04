@@ -13,7 +13,6 @@ Covers:
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import Protocol
 
@@ -63,7 +62,6 @@ class TestReplArgsParsing:
         assert result.exit_code == 0
         args = recorded_runs[0]
         assert getattr(args, "strict_json") is None
-        assert getattr(args, "runner") is None
         assert getattr(args, "confirm_agents") is False
         assert getattr(args, "quiet") is False
         assert getattr(args, "no_log") is False
@@ -81,10 +79,6 @@ class TestReplArgsParsing:
     def test_no_strict_json_flag(self, runner: CliRunner, recorded_runs: list[object]) -> None:
         assert invoke(runner, ["repl", "--no-strict-json"]).exit_code == 0
         assert getattr(recorded_runs[0], "strict_json") is False
-
-    def test_runner_flag(self, runner: CliRunner, recorded_runs: list[object]) -> None:
-        assert invoke(runner, ["repl", "--runner", "claude -p"]).exit_code == 0
-        assert getattr(recorded_runs[0], "runner") == "claude -p"
 
     def test_agent_flag(self, runner: CliRunner, recorded_runs: list[object]) -> None:
         assert invoke(runner, ["repl", "--agent", 'AgentCommand("echo agent")']).exit_code == 0
@@ -173,7 +167,6 @@ def _isolated_home(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
 def _args(
     *,
     strict_json: bool | None = None,
-    runner: str | None = "echo agent",
     confirm_agents: bool = False,
     quiet: bool = False,
     no_log: bool = False,
@@ -185,7 +178,6 @@ def _args(
     """Build ``ReplArgs`` with sensible defaults, overriding named fields."""
     return ReplArgs(
         strict_json=strict_json,
-        runner=runner,
         confirm_agents=confirm_agents,
         quiet=quiet,
         no_log=no_log,
@@ -206,7 +198,6 @@ class TestReplRun:
         home = _isolated_home(monkeypatch, tmp_path)
         args = ReplArgs(
             strict_json=None,
-            runner="echo agent",
             confirm_agents=False,
             quiet=False,
             no_log=False,
@@ -257,7 +248,6 @@ class TestReplRun:
         agm_dir.mkdir()
         (agm_dir / "config.toml").write_text(
             "[exec]\n"
-            'runner = "configured-runner"\n'
             "strict-json = true\n"
             "max-iters = 3\n"
             'timeout = "2s"\n'
@@ -268,11 +258,10 @@ class TestReplRun:
             repl_command, "prepare_trace_log_from_decision", lambda *args, **kwargs: None
         )
 
-        repl_command.run(_args(runner=None))
+        repl_command.run(_args())
 
         session: ReplSession = fake_console[0]["session"]
         assert set(session._engine_base) == {
-            "runner",
             "strict-json",
             "max-iters",
             "timeout",
@@ -291,12 +280,11 @@ class TestReplRun:
         home = _isolated_home(monkeypatch, tmp_path)
         agm_dir = home / ".agm"
         agm_dir.mkdir()
-        (agm_dir / "config.toml").write_text('[exec]\nrunner = ""\n')
+        (agm_dir / "config.toml").write_text("[exec]\n")
 
-        repl_command.run(_args(runner=None, strict_json=False))
+        repl_command.run(_args(strict_json=False))
 
         session: ReplSession = fake_console[0]["session"]
-        assert "runner" not in session._engine_base
         assert session._engine_base["strict-json"] == BoolValue(False)
 
     def test_history_path_uses_agm_home_override(
@@ -389,7 +377,6 @@ class TestReplRun:
         monkeypatch.setattr(dry_run, "enabled", lambda: True)
         args = ReplArgs(
             strict_json=None,
-            runner="echo agent",
             confirm_agents=False,
             quiet=False,
             no_log=False,
@@ -407,7 +394,6 @@ class TestReplRun:
         _isolated_home(monkeypatch, tmp_path)
         args = ReplArgs(
             strict_json=None,
-            runner="echo agent",
             confirm_agents=False,
             quiet=True,
             no_log=False,
@@ -445,32 +431,12 @@ class TestReplRun:
         (config_dir / "config.toml").write_text('[exec]\ndefault-agent = "not an agent"\n')
 
         with pytest.raises(SystemExit) as exc_info:
-            repl_command.run(_args(runner=None))
+            repl_command.run(_args())
 
         assert exc_info.value.code == 1
         error = capsys.readouterr().err
         assert "default-agent" in error
         assert "not an agent" in error
-        assert fake_console == []
-
-    def test_invalid_runner_exits_1(
-        self,
-        monkeypatch: pytest.MonkeyPatch,
-        tmp_path: Path,
-        fake_console: list[dict[str, object]],
-    ) -> None:
-        _isolated_home(monkeypatch, tmp_path)
-        args = ReplArgs(
-            strict_json=None,
-            runner='broken "quote',  # unbalanced quote → split_command raises
-            confirm_agents=False,
-            quiet=False,
-            no_log=False,
-            log_file=None,
-        )
-        with pytest.raises(SystemExit) as excinfo:
-            repl_command.run(args)
-        assert excinfo.value.code == 1
         assert fake_console == []
 
     def test_invalid_config_exits_1(
@@ -487,7 +453,6 @@ class TestReplRun:
         monkeypatch.setattr(repl_command, "exec_config_from_merged", boom)
         args = ReplArgs(
             strict_json=None,
-            runner=None,
             confirm_agents=False,
             quiet=False,
             no_log=False,
@@ -508,7 +473,7 @@ class TestReplRun:
         home = _isolated_home(monkeypatch, tmp_path)
         agm_dir = home / ".agm"
         agm_dir.mkdir(parents=True, exist_ok=True)
-        (agm_dir / "config.toml").write_text('[exec]\ntimeout = 30\nrunner = "echo agent"\n')
+        (agm_dir / "config.toml").write_text("[exec]\ntimeout = 30\n")
         repl_command.run(_args())
         assert len(fake_console) == 1
 
@@ -523,7 +488,7 @@ class TestReplRun:
         home = _isolated_home(monkeypatch, tmp_path)
         agm_dir = home / ".agm"
         agm_dir.mkdir(parents=True, exist_ok=True)
-        (agm_dir / "config.toml").write_text('[exec]\ntimeout = 0.0000001\nrunner = "echo agent"\n')
+        (agm_dir / "config.toml").write_text("[exec]\ntimeout = 0.0000001\n")
 
         repl_command.run(_args())
         session = fake_console[0]["session"]
@@ -546,7 +511,7 @@ class TestReplRun:
         home = _isolated_home(monkeypatch, tmp_path)
         agm_dir = home / ".agm"
         agm_dir.mkdir(parents=True, exist_ok=True)
-        (agm_dir / "config.toml").write_text('[exec]\ntimeout = "30s"\nrunner = "echo agent"\n')
+        (agm_dir / "config.toml").write_text('[exec]\ntimeout = "30s"\n')
         repl_command.run(_args())
         assert len(fake_console) == 1
 
@@ -668,56 +633,6 @@ class TestReplTrace:
         assert log_file.exists()
         session = fake_console[0]["session"]
         assert isinstance(session, ReplSession)
-
-    def test_source_writes_use_command_host_reconfiguration_policy(
-        self,
-        monkeypatch: pytest.MonkeyPatch,
-        tmp_path: Path,
-        fake_console: list[dict[str, object]],
-    ) -> None:
-        _isolated_home(monkeypatch, tmp_path)
-        repl_command.run(_args())
-        session = fake_console[0]["session"]
-        assert isinstance(session, ReplSession)
-
-        assert session.eval_entry("import std/config").ok
-        assert session.eval_entry('std/config::runner := "echo replacement"').ok
-        live_trace = tmp_path / "live.jsonl"
-        assert session.eval_entry(f'std/config::log-file := Some("{live_trace}")').ok
-        assert session.eval_entry('print "traced"').ok
-        assert session.eval_entry("std/config::log := false").ok
-        assert session.eval_entry('print "disabled"').ok
-        assert session.eval_entry("std/config::log-file := None").ok
-
-        records = [json.loads(line) for line in live_trace.read_text(encoding="utf-8").splitlines()]
-        rendered = [record.get("rendered") for record in records]
-        assert "traced" in rendered
-        assert "disabled" not in rendered
-
-    def test_malformed_source_runner_is_catchable_and_rolls_back(
-        self,
-        monkeypatch: pytest.MonkeyPatch,
-        tmp_path: Path,
-        fake_console: list[dict[str, object]],
-    ) -> None:
-        from agm.agl.semantics.values import BoolValue
-
-        _isolated_home(monkeypatch, tmp_path)
-        repl_command.run(_args())
-        session = fake_console[0]["session"]
-        assert isinstance(session, ReplSession)
-
-        result = session.eval_entry(
-            "import std/config\n"
-            "let previous = std/config::runner\n"
-            "try\n"
-            '  std/config::runner := "\'"\n'
-            "catch Exception as error => ()\n"
-            "std/config::runner == previous"
-        )
-
-        assert result.ok
-        assert result.value == BoolValue(True)
 
     def test_no_log_writes_no_trace(
         self,

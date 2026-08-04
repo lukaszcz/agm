@@ -562,8 +562,8 @@ binder/named-argument separator). Both operands must have the same type after
 `int → decimal` widening. Equality is full value equality
 ([Types](types.md)).
 
-Operands whose type is, or transitively contains, a function, agent, or
-`unit` value are a static error — this applies to bare values as well as to
+Operands whose type is, or transitively contains, a function or `unit` value
+are a static error — this applies to bare values as well as to
 containers (`array`, `dict`), records, enums, or exceptions that hold such
 a type at any depth.
 

@@ -80,7 +80,6 @@ from agm.agl.semantics.type_table import (
 )
 from agm.agl.semantics.types import (
     BUILTIN_PRELUDE_TYPES,
-    AgentType,
     ArrayType,
     BoolType,
     BottomType,
@@ -108,7 +107,6 @@ from agm.agl.semantics.types import (
     substitute,
 )
 from agm.agl.syntax.nodes import (
-    AgentDecl,
     ArrayLit,
     AsPattern,
     AssignStmt,
@@ -461,12 +459,12 @@ def _validate_extern_name(name: str, span: SourceSpan) -> None:
         )
 
 
-def _contains_banned_extern_type(
+def _contains_function_type(
     t: Type, type_table: TypeTable, _seen: frozenset[Type] = frozenset()
 ) -> bool:
-    """Return ``True`` if *t* contains a function or agent type anywhere.
+    """Return ``True`` if *t* contains a function type anywhere.
 
-    The FFI is a pure data boundary: function and agent values can never cross
+    The FFI is a pure data boundary: function values can never cross
     it, so they are static errors anywhere in an extern's parameter or return
     types, including nested inside ``array``/``dict``/record/enum
     instantiations.  Type variables are permitted at any depth — dynamic
@@ -476,30 +474,26 @@ def _contains_banned_extern_type(
     (e.g. a self-referential record) is examined once rather than forever.
     """
     match t:
-        case FunctionType() | AgentType():
+        case FunctionType():
             return True
         case ArrayType():
-            return _contains_banned_extern_type(t.elem, type_table, _seen)
+            return _contains_function_type(t.elem, type_table, _seen)
         case DictType():
-            return _contains_banned_extern_type(t.value, type_table, _seen)
+            return _contains_function_type(t.value, type_table, _seen)
         case RecordType():
             if t in _seen:
                 return False
             seen = _seen | {t}
-            return any(
-                _contains_banned_extern_type(ta, type_table, seen) for ta in t.type_args
-            ) or any(
-                _contains_banned_extern_type(ft, type_table, seen)
+            return any(_contains_function_type(ta, type_table, seen) for ta in t.type_args) or any(
+                _contains_function_type(ft, type_table, seen)
                 for ft in type_table.record_fields(t).values()
             )
         case EnumType():
             if t in _seen:
                 return False
             seen = _seen | {t}
-            return any(
-                _contains_banned_extern_type(ta, type_table, seen) for ta in t.type_args
-            ) or any(
-                _contains_banned_extern_type(ft, type_table, seen)
+            return any(_contains_function_type(ta, type_table, seen) for ta in t.type_args) or any(
+                _contains_function_type(ft, type_table, seen)
                 for vfields in type_table.enum_variants(t).values()
                 for ft in vfields.values()
             )
@@ -508,7 +502,7 @@ def _contains_banned_extern_type(
                 return False
             seen = _seen | {t}
             return any(
-                _contains_banned_extern_type(ft, type_table, seen)
+                _contains_function_type(ft, type_table, seen)
                 for ft in type_table.exception_fields(t).values()
             )
         case (
@@ -700,8 +694,8 @@ class _Checker:
     def _validate_extern_signature(self, node: FuncDef, sig: FunctionSignature) -> None:
         """Reject types that cannot cross the Python boundary in an extern's signature.
 
-        Two kinds are rejected: a function or agent type anywhere (opaque values
-        that can never marshal across the FFI), and a type with no finite schema
+        Two kinds are rejected: a function type anywhere (a value that cannot
+        marshal across the FFI), and a type with no finite schema
         (its recursive instantiations never close, so its boundary schema — like
         its JSON schema — cannot be built). A finite recursive type is allowed:
         it crosses as a ``BoundaryRef`` structure.
@@ -713,7 +707,7 @@ class _Checker:
                 use="an extern parameter type",
                 banned_message=(
                     f"extern function '{node.name}' parameter '{p.name}' has a "
-                    "function or agent type, which cannot cross the Python boundary."
+                    "function type, which cannot cross the Python boundary."
                 ),
             )
         self._reject_uncrossable_extern_type(
@@ -722,7 +716,7 @@ class _Checker:
             use="an extern return type",
             banned_message=(
                 f"extern function '{node.name}' has a return type containing a "
-                "function or agent type, which cannot cross the Python boundary."
+                "function type, which cannot cross the Python boundary."
             ),
         )
 
@@ -733,7 +727,7 @@ class _Checker:
 
         Finite-schema is checked BEFORE the banned-type walk: a type whose
         instantiations never close (growing polymorphic recursion) has an
-        infinite structure, and ``_contains_banned_extern_type`` walks that
+        infinite structure, and ``_contains_function_type`` walks that
         structure — its cycle guard only catches repeated instantiations, not
         ever-growing ones. ``no_finite_schema_message`` works at the
         declaration level and always terminates, so it rejects such a type
@@ -743,7 +737,7 @@ class _Checker:
         message = type_table.no_finite_schema_message(typ, use=use)
         if message is not None:
             raise AglTypeError(message, span=span)
-        if _contains_banned_extern_type(typ, type_table):
+        if _contains_function_type(typ, type_table):
             raise AglTypeError(banned_message, span=span)
 
     def _register_funcdef_signature(
@@ -835,9 +829,6 @@ class _Checker:
         if isinstance(item, BuiltinVarDecl):
             with self._own_type_scope(item):
                 self._check_builtin_var(item)
-            return UnitType()
-        if isinstance(item, AgentDecl):
-            self._env.set_binding_type(item.node_id, AgentType())
             return UnitType()
         if isinstance(item, ParamDecl):
             with self._own_type_scope(item):
@@ -1016,7 +1007,7 @@ class _Checker:
         # decode) at lowering time (see ``type_schema.build_param_decoder``).
         # Reject both kinds of non-decodable type here rather than crashing at
         # lowering: infinite instantiation closures have no finite schema, and
-        # opaque/non-data values (unit, agent, functions, exceptions, …) have no
+        # non-data values (unit, functions, exceptions, …) have no
         # JSON wire representation at all. Text params are taken verbatim.
         if not isinstance(declared_type, TextType):
             message = self._env.type_table.no_finite_schema_message(
@@ -1066,7 +1057,6 @@ class _Checker:
             (
                 ExceptionType,
                 UnitType,
-                AgentType,
                 FunctionType,
                 BottomType,
                 TypeVarType,

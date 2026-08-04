@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from agm.agent.defaults import DEFAULT_AGENT_RUNNER
 from agm.agl.diagnostics import Diagnostic
 
 if TYPE_CHECKING:
@@ -65,7 +64,6 @@ _ENGINE_DEFAULTS: dict[str, object] = {
     "log": False,
     "strict-json": False,
     "max-iters": 0,
-    "runner": DEFAULT_AGENT_RUNNER,
     "log-file": None,
     "timeout": None,
 }
@@ -110,19 +108,18 @@ def build_engine_config_seeds(raw_values: "Mapping[str, object]") -> "dict[str, 
 def build_engine_config_base(raw_values: "Mapping[str, object]") -> "dict[str, Value]":
     """Build the engine config base dict from raw scalar or ``Option`` host values.
 
-    Decodes the six scalar/``Option[text]`` engine keys via
+    Decodes the scalar/``Option[text]`` engine keys via
     :func:`convert_config_value` and materializes the typed ``default-agent``
     fallback separately.
     Keys absent from *raw_values* fall back to the engine defaults
-    (``false``/``false``/``0``/:data:`~agm.agent.defaults.DEFAULT_AGENT_RUNNER`/
-    ``none``/``none``), where zero represents the disabled ``max-iters`` safety
-    valve.
+    (``false``/``false``/``0``/``none``/``none``), where zero represents the
+    disabled ``max-iters`` safety valve.
 
     Each caller is responsible for constructing *raw_values* with its own
     layering (CLI/program/exec config).  This helper performs only the
     decoding step, keeping the layering logic in the callers.
 
-    All engine-key types are built in: six are scalar or ``Option[text]`` and
+    All engine-key types are built in: scalar or ``Option[text]`` and
     ``default-agent`` is the built-in ``Agent`` nominal type. This builds its
     own fresh seeded ``TypeTable`` rather than requiring one from the caller.
     """

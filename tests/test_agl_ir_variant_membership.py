@@ -26,7 +26,6 @@ def _lower(source: str) -> ExecutableProgram:
     from agm.agl.capabilities import HostCapabilities
 
     caps = HostCapabilities(
-        agent_names=frozenset(),
         supports_shell_exec=False,
         codec_kinds={
             "text": frozenset({"text"}),

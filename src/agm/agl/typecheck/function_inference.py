@@ -29,7 +29,6 @@ from agm.agl.semantics.types import (
     substitute,
 )
 from agm.agl.syntax.nodes import (
-    AgentDecl,
     FieldAccess,
     FuncDef,
     LetDecl,
@@ -373,7 +372,7 @@ def _seed_candidate_visible_bindings(
                 session.visible_binding_snapshots[(module.module_id, item.node_id)] = (
                     module.env.snapshot_binding_types()
                 )
-            elif isinstance(item, (AgentDecl, LetDecl, ParamDecl, VarDecl)):
+            elif isinstance(item, (LetDecl, ParamDecl, VarDecl)):
                 if _references_tainted_binding(module, item, tainted):
                     if isinstance(item, LetDecl):
                         # A let site's selected binders are the declaration ids

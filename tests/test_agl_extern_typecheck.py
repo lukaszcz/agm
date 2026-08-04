@@ -6,8 +6,8 @@ for `extern def`:
   defaults, type params, no body to check).
 - extern-specific header checks: Python-identifier/keyword name rule,
   builtin-name collision guard.
-- the function/agent type ban anywhere in an extern's signature (type
-  variables permitted).
+- the function-type ban anywhere in an extern's signature (type variables
+  permitted), while `Agent` enum values cross the boundary as ordinary data.
 - calls to externs type exactly like calls to ordinary declared functions.
 - direct extern call sites (own-module and imported) are recorded in
   ``call_sites`` like ``ask``/``exec`` call sites.
@@ -56,7 +56,6 @@ from tests.agl.module_graph import (
 _PATH = Path("/virtual/extern_typecheck.agl")
 
 _CAPS = HostCapabilities(
-    agent_names=frozenset(),
     supports_shell_exec=True,
     codec_kinds={
         "text": frozenset({"text"}),
@@ -210,26 +209,21 @@ class TestExternCollisionGuard:
 
 
 # ---------------------------------------------------------------------------
-# Function/agent type ban — type variables permitted
+# Function type ban — type variables permitted
 # ---------------------------------------------------------------------------
 
 
-class TestExternFunctionAgentTypeBan:
+class TestExternFunctionTypeBan:
     def test_function_typed_param_rejected(self) -> None:
         err = reject_extern("extern def f(cb: (int) -> int) -> int\n0")
         assert "function" in str(err).lower()
 
-    def test_agent_typed_param_rejected(self) -> None:
-        err = reject_extern("extern def f(a: agent) -> int\n0")
-        assert "agent" in str(err).lower()
+    def test_agent_enum_param_and_return_are_accepted(self) -> None:
+        check_extern(_ASK_BUILTIN_SOURCE + "extern def identity(a: Agent) -> Agent\n0")
 
     def test_function_typed_return_rejected(self) -> None:
         err = reject_extern("extern def f(x: int) -> (int) -> int\n0")
         assert "function" in str(err).lower()
-
-    def test_agent_typed_return_rejected(self) -> None:
-        err = reject_extern("extern def f(x: int) -> agent\n0")
-        assert "agent" in str(err).lower()
 
     def test_function_type_nested_in_array_rejected(self) -> None:
         err = reject_extern("extern def f(cbs: array[(int) -> int]) -> int\n0")
@@ -251,11 +245,6 @@ class TestExternFunctionAgentTypeBan:
         source = "record Box[T]\n  value: int\nextern def f(b: Box[(int) -> int]) -> int\n0"
         err = reject_extern(source)
         assert "function" in str(err).lower()
-
-    def test_agent_type_nested_in_enum_variant_rejected(self) -> None:
-        source = "enum Holder\n  | with-agent(a: agent)\nextern def f(h: Holder) -> int\n0"
-        err = reject_extern(source)
-        assert "agent" in str(err).lower()
 
     def test_function_type_nested_in_exception_field_rejected(self) -> None:
         source = (

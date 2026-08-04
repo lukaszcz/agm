@@ -8,14 +8,12 @@ and re-running the checker is its fallback.
 
 from __future__ import annotations
 
-from dataclasses import replace
 from pathlib import Path
 
 import pytest
 
 from agm.agl.modules.roots import RootSet
 from agm.agl.pipeline import ArtifactProvenanceError, PipelineDriver, PreparedProgram
-from agm.agl.typecheck.program import check_program
 
 
 def _prepare_graph(source: str) -> PreparedProgram:
@@ -55,33 +53,3 @@ def test_program_run_rejects_checked_artifact_from_different_prepared_program(
         runtime.run_prepared(prepared_b, checked=discovery_a.checked)
 
     assert capsys.readouterr().out == ""
-
-
-def test_single_run_accepts_checked_ask_artifacts_across_dispatcher_changes() -> None:
-    checking_runtime = PipelineDriver(default_agent=lambda _request: "result")
-    checking_runtime.register_agent("checker", lambda _request: "result")
-    runtime = PipelineDriver()
-    prepared = runtime.prepare_program('let value = ask "request"\nvalue')
-    assert prepared.resolved is not None
-    checked = check_program(prepared.resolved, checking_runtime.host_environment().capabilities)
-    checked = replace(checked, capabilities=checking_runtime.host_environment().capabilities)
-
-    result = runtime.run_prepared(prepared, checked=checked, check_only=True)
-
-    assert result.ok
-    assert result.error is None
-
-
-def test_program_run_accepts_checked_ask_artifacts_across_dispatcher_changes() -> None:
-    checking_runtime = PipelineDriver(default_agent=lambda _request: "result")
-    checking_runtime.register_agent("checker", lambda _request: "result")
-    runtime = PipelineDriver()
-    prepared = _prepare_graph('let value = ask "request"\nvalue')
-    assert prepared.resolved is not None
-    checked = check_program(prepared.resolved, checking_runtime.host_environment().capabilities)
-    checked = replace(checked, capabilities=checking_runtime.host_environment().capabilities)
-
-    result = runtime.run_prepared(prepared, checked=checked, check_only=True)
-
-    assert result.ok
-    assert result.error is None

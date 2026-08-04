@@ -366,61 +366,8 @@ class TestScopeRegions:
         assert (ENTRY_ID, ("A", "T"), "value") in resolved.declarations
         assert resolved.scope_nodes[("A", "T")].parent is resolved.scope_nodes[("A",)]
 
-    def test_shorthand_declarations_are_members_of_their_declared_scope(self) -> None:
-        resolved = parse_and_resolve(
-            "def A::f() -> int = 0\n"
-            "record A::R()\n"
-            "enum A::E = item\n"
-            "exception A::Failure()\n"
-            "type A::Count = int\n"
-            'agent A::bot = "runner"\n'
-            "()"
-        )
-
-        members = resolved.scope_nodes[("A",)].members
-        assert set(members) == {"f", "R", "E", "Failure", "Count", "bot"}
-        assert all(member.scope_path == ("A",) for member in members.values())
-        assert set(resolved.scope_nodes[("A", "E")].members) == {"item"}
-        assert not resolved.root_scope.members
-
-    @pytest.mark.parametrize(
-        "source",
-        (
-            "def A::f() -> int = 0\nf()",
-            'agent A::bot = "runner"\nbot',
-            "enum A::Choice[T]\n  | picked(value: T)\npicked(value = 1)",
-        ),
-        ids=("function", "agent", "generic-enum-constructor"),
-    )
-    def test_scoped_shorthand_names_do_not_leak_into_root_resolution(self, source: str) -> None:
-        with pytest.raises(AglScopeError, match="not defined"):
-            parse_and_resolve(source)
-
     def test_scoped_enum_variant_yields_to_an_enclosing_scope_member(self) -> None:
         parse_and_resolve("enum A::Choice = picked\ndef A::picked() -> int = 0\n()")
-
-    @pytest.mark.parametrize(
-        "source",
-        (
-            "scope A\nextern def f() -> int\nend A",
-            "extern def A::f() -> int",
-            "scope A\ndef ask() -> int = 0\nend A",
-            "def A::ask() -> int = 0",
-            "scope A\nagent ask\nend A",
-            "agent A::ask",
-        ),
-        ids=(
-            "region-extern",
-            "shorthand-extern",
-            "region-reserved-function",
-            "shorthand-reserved-function",
-            "region-reserved-agent",
-            "shorthand-reserved-agent",
-        ),
-    )
-    def test_scoped_declarations_apply_root_declaration_validation(self, source: str) -> None:
-        with pytest.raises(AglScopeError):
-            parse_and_resolve(source)
 
     def test_scoped_members_resolve_from_their_exact_path(self) -> None:
         resolved = parse_and_resolve("def A::f() -> int = 0\nA::f()")
@@ -629,21 +576,6 @@ class TestScopedParam:
             "scope Deploy\nparam replicas: int\nend Deploy\n()"
         )
         assert set(resolved.scope_nodes[("Deploy",)].members) == {"region", "replicas"}
-
-    @pytest.mark.parametrize(
-        "source",
-        (
-            "scope A\nparam x\nparam x\nend A\n()",
-            "scope A\nlet x = 1\nparam x\nend A\n()",
-            "scope A\ndef x() -> int = 0\nparam x\nend A\n()",
-            "scope A\nrecord x()\nparam x\nend A\n()",
-            "scope A\nagent x\nparam x\nend A\n()",
-        ),
-        ids=("param-vs-param", "param-vs-let", "param-vs-def", "param-vs-type", "param-vs-agent"),
-    )
-    def test_duplicate_at_the_same_path_is_rejected(self, source: str) -> None:
-        err = reject_scope(source)
-        assert "already declared" in err.to_diagnostic().message
 
     def test_earlier_block_cannot_see_a_later_blocks_param(self) -> None:
         with pytest.raises(AglScopeError):
@@ -965,27 +897,6 @@ class TestScopedAssignment:
         ref = resolved.resolution[assign.node_id]
         assert ref.scope_path == ("A",)
         assert ref.mutable is True
-
-    @pytest.mark.parametrize(
-        ("source", "phrase"),
-        (
-            ("scope A\nlet x = 1\nend A\nA::x := 2\n()", "declared with 'let'"),
-            ("scope A\ndef f() -> int = 1\nend A\nA::f := 2\n()", "function (def) binding"),
-            ("scope A\nrecord R(x: int)\nend A\nA::R := 2\n()", "constructor binding"),
-            (
-                'scope A\nagent helper = "h"\nend A\nA::helper := 2\n()',
-                "agent binding",
-            ),
-        ),
-        ids=("let", "def", "type", "agent"),
-    )
-    def test_qualified_assign_to_immutable_member_is_rejected(
-        self, source: str, phrase: str
-    ) -> None:
-        err = reject_scope(source)
-        msg = err.to_diagnostic().message
-        assert phrase in msg
-        assert "immutable" in msg
 
     def test_qualified_assign_to_unknown_member_is_a_focused_error(self) -> None:
         err = reject_scope("scope A\nvar count = 0\nend A\nA::missing := 2\n()")
@@ -1412,24 +1323,6 @@ class TestReservedNames:
         assert line == 1
         assert "print" in msg
 
-    def test_reserve_ask_agent(self) -> None:
-        err = reject_scope("agent ask")
-        _, msg = diag(err)
-        assert "ask" in msg
-        assert "built-in" in msg.lower()
-
-    def test_reserve_exec_agent(self) -> None:
-        err = reject_scope("agent exec")
-        _, msg = diag(err)
-        assert "exec" in msg
-        assert "built-in" in msg.lower()
-
-    def test_reserve_print_agent(self) -> None:
-        err = reject_scope("agent print")
-        _, msg = diag(err)
-        assert "print" in msg
-        assert "built-in" in msg.lower()
-
     def test_reserve_ask_def(self) -> None:
         err = reject_scope("def ask() -> int = 1\nask()")
         _, msg = diag(err)
@@ -1677,13 +1570,6 @@ class TestBuiltinCallClassification:
         assert isinstance(let_node.value, Call)
         assert r.builtin_calls[let_node.value.node_id] == BuiltinKind.ASK
 
-    def test_ask_with_agent_arg_classified(self) -> None:
-        r = parse_and_resolve('agent reviewer\nlet x = ask("Q", agent = reviewer)\nx')
-        let_node = r.program.body.items[1]
-        assert isinstance(let_node, LetDecl)
-        assert isinstance(let_node.value, Call)
-        assert r.builtin_calls[let_node.value.node_id] == BuiltinKind.ASK
-
     def test_ask_request_call_classified(self) -> None:
         r = parse_and_resolve('let x = ask-request::[Review]("Q")\nx')
         let_node = r.program.body.items[0]
@@ -1843,22 +1729,6 @@ class TestPlaceholderCallResolution:
 
 
 class TestCallResolution:
-    def test_call_named_arg_value_resolved(self) -> None:
-        """Named-arg values in a call are resolved."""
-        r = parse_and_resolve('agent reviewer\nlet x = ask("Q", agent = reviewer)\nx')
-        let_node = r.program.body.items[1]
-        assert isinstance(let_node, LetDecl)
-        call = let_node.value
-        assert isinstance(call, Call)
-        # The 'agent:' named arg value (VarRef("reviewer")) must be resolved
-        named = call.named_args[0]
-        assert named.name == "agent"
-        assert isinstance(named.value, VarRef)
-        assert named.value.node_id in r.resolution
-        ref = r.resolution[named.value.node_id]
-        assert ref.name == "reviewer"
-        assert ref.kind == BinderKind.agent_binding
-
     def test_user_call_positional_args_resolved(self) -> None:
         r = parse_and_resolve(
             "def add(a: int, b: int) -> int = a\nlet x = 1\nlet y = 2\nlet z = add(x, y)\nz"
@@ -2159,73 +2029,6 @@ class TestLambdaScoping:
 # ---------------------------------------------------------------------------
 
 
-class TestAgentValueBindings:
-    def test_agent_decl_creates_value_binding(self) -> None:
-        """An agent declaration creates a value binding in the root scope."""
-        r = parse_and_resolve("agent reviewer\n()")
-        assert ((), "reviewer") in r.declared_agents
-        assert "reviewer" in r.root_scope.bindings
-        ref = r.root_scope.bindings["reviewer"]
-        assert ref.kind == BinderKind.agent_binding
-        assert not ref.mutable
-
-    def test_agent_ref_in_ask_named_arg_resolves(self) -> None:
-        """An agent name used as a VarRef in ask(agent:) resolves to the binding."""
-        r = parse_and_resolve('agent reviewer\nlet x = ask("Q", agent = reviewer)\nx')
-        let_node = r.program.body.items[1]
-        assert isinstance(let_node, LetDecl)
-        call = let_node.value
-        assert isinstance(call, Call)
-        named = call.named_args[0]
-        assert isinstance(named.value, VarRef)
-        ref = r.resolution[named.value.node_id]
-        assert ref.kind == BinderKind.agent_binding
-        assert ref.name == "reviewer"
-
-    def test_agent_let_binding_stores_agent_value(self) -> None:
-        """An agent name can be stored in a let binding."""
-        r = parse_and_resolve("agent reviewer\nlet a = reviewer\na")
-        let_a = r.program.body.items[1]
-        assert isinstance(let_a, LetDecl)
-        assert isinstance(let_a.value, VarRef)
-        ref = r.resolution[let_a.value.node_id]
-        assert ref.kind == BinderKind.agent_binding
-
-    def test_agent_ref_marks_as_referenced(self) -> None:
-        """An agent referenced via VarRef counts as 'used' → no unused warning."""
-        r = parse_and_resolve("agent reviewer\nlet a = reviewer\na")
-        assert r.warnings == ()
-
-    def test_declared_but_unused_warns(self) -> None:
-        r = parse_and_resolve("agent unused\n()")
-        assert ((), "unused") in r.declared_agents
-        assert len(r.warnings) == 1
-        warning = r.warnings[0]
-        assert warning.severity == "warning"
-        assert "unused" in warning.message
-        assert warning.line == 1
-
-    def test_scoped_agent_is_retained_and_warned_when_unused(self) -> None:
-        r = parse_and_resolve("scope Tools\nagent unused\nend Tools\n()")
-
-        assert (("Tools",), "unused") in r.declared_agents
-        assert len(r.warnings) == 1
-        assert "unused" in r.warnings[0].message
-
-    def test_agent_not_at_root_rejected(self) -> None:
-        err = reject_scope("if true =>\n  agent late\n| else =>\n  ()\n")
-        line, msg = diag(err)
-        assert line == 2
-        assert "agent" in msg.lower()
-        assert "root" in msg.lower()
-
-    def test_duplicate_agent_rejected(self) -> None:
-        err = reject_scope("agent dup\nagent dup\n()")
-        _, msg = diag(err)
-        assert "dup" in msg
-        assert "already declared" in msg.lower()
-
-
 # ---------------------------------------------------------------------------
 # Do body/until scoping
 # ---------------------------------------------------------------------------
@@ -2377,21 +2180,6 @@ class TestParentScopeSeam:
         ref = entry.resolution[assign_stmt.node_id]
         assert ref.name == "k"
         assert ref.mutable is False
-
-    def test_ambient_agents(self) -> None:
-        """An ambient agent resolves without an in-source declaration."""
-        r = resolve_entry(
-            'let x = ask("Q", agent = session_bot)\nx',
-            ambient_agents=frozenset({"session_bot"}),
-        )
-        let_node = r.program.body.items[0]
-        assert isinstance(let_node, LetDecl)
-        assert isinstance(let_node.value, Call)
-        # ask call is classified as builtin
-        assert r.builtin_calls[let_node.value.node_id] == BuiltinKind.ASK
-        # No declared_agents in program (ambient)
-        assert r.declared_agents == {}
-        assert r.warnings == ()
 
     def test_constructor_binding_with_no_candidates_does_not_error(self) -> None:
         """A constructor_binding from a parent scope with no ambient candidates
@@ -3163,19 +2951,6 @@ class TestDeclaredFunctions:
         r = parse_and_resolve("let x = 1\nx")
         assert r.declared_functions == {}
 
-    def test_def_name_clashes_with_agent_rejected(self) -> None:
-        """A def with the same name as an agent is rejected."""
-        err = reject_scope("agent foo\ndef foo(x: int) -> int = x\nfoo(1)")
-        _, msg = diag(err)
-        assert "foo" in msg
-
-    def test_agent_name_clashes_with_def_rejected(self) -> None:
-        """An agent with the same name as a def is rejected (pre-pass order matters)."""
-        # Both pass through pre-pass; _collect_func_decls checks _declared_agents
-        err = reject_scope("def foo(x: int) -> int = x\nagent foo\nfoo(1)")
-        _, msg = diag(err)
-        assert "foo" in msg
-
 
 # ---------------------------------------------------------------------------
 # Block as expr (covers _resolve_expr for Block nodes)
@@ -3209,49 +2984,6 @@ class TestBlockAsExpr:
 # ---------------------------------------------------------------------------
 # Ambient agent binding edge cases
 # ---------------------------------------------------------------------------
-
-
-class TestAmbientAgentBindingEdgeCases:
-    def test_ambient_agent_already_in_parent_scope_not_redefined(self) -> None:
-        """An ambient agent whose name is already in the parent scope is not redefined."""
-        # Create a session that declares the agent as a var
-        session = parse_and_resolve("let session_bot = 1\nsession_bot")
-        # Pass ambient_agents — the name is already in parent scope via lookup,
-        # so the ambient binding definition is skipped.
-        entry = resolve_entry(
-            "let x = 1\nx",
-            parent_scope=session.root_scope,
-            ambient_agents=frozenset({"session_bot"}),
-        )
-        ref = _ref(entry, "x")
-        assert ref.name == "x"
-        assert ref.kind == BinderKind.let_binding
-
-    def test_ambient_agent_already_declared_locally_skipped(self) -> None:
-        """If an ambient agent name is also declared locally, local takes precedence."""
-        # Declare 'bot' locally AND pass it as ambient — should not double-define.
-        r = resolve_entry(
-            "agent bot\nlet x = bot\nx",
-            ambient_agents=frozenset({"bot"}),
-        )
-        # The local declared_agents entry takes precedence; "bot" resolves as agent_binding.
-        assert _ref(r, "bot").kind == BinderKind.agent_binding
-        assert ((), "bot") in r.declared_agents
-
-    def test_def_name_collides_with_ambient_agent_rejected(self) -> None:
-        """A top-level def whose name matches an ambient agent is rejected.
-
-        Regression test for Fix 1: the guard in _define_function_bindings is
-        reachable because ambient agent bindings are defined BEFORE function
-        bindings, so a def named 'foo' with ambient_agents={'foo'} hits the
-        already-defined check.
-        """
-        with pytest.raises(AglScopeError) as exc_info:
-            resolve_entry(
-                "def foo(x: int) -> int = x\nfoo(1)",
-                ambient_agents=frozenset({"foo"}),
-            )
-        assert "foo" in exc_info.value.to_diagnostic().message
 
 
 # ---------------------------------------------------------------------------
@@ -3602,12 +3334,6 @@ class TestConstructorBindings:
         assert _ref(resolved, "some", occurrence=0).kind == BinderKind.function_binding
         case = resolved.program.body.items[-1]
         assert case.branches[0].pattern.node_id in resolved.pattern_constructor_candidates
-
-    def test_agent_can_share_constructor_spelling(self) -> None:
-        resolved = parse_and_resolve(
-            "enum Option\n  | myagent\nagent myagent\nlet current = myagent\n"
-        )
-        assert _ref(resolved, "myagent").kind == BinderKind.agent_binding
 
     def test_constructor_can_share_existing_def_spelling(self) -> None:
         resolved = parse_and_resolve(

@@ -13,11 +13,8 @@ Public contract exercised here (AgL implementation requirements , the AgL DSL de
 
     runtime = PipelineDriver(
         default_strict_json=False,  # lenient JSON recovery is the default
-        default_agent=fn,           # the built-in `ask` agent (a host callable;
-                                    # `ask` cannot be registered by name)
+        agent_dispatcher=fn,        # fn(request) -> str
     )
-    runtime.register_agent(name, fn)   # fn(request) -> str; request.prompt is the
-                                       # rendered user prompt
     result = runtime.run(source, param_values={...})
 
 RunResult surface asserted:
@@ -111,30 +108,22 @@ def _run_program(
         name: _agent_from_spec(name, spec) for name, spec in scenario.get("agents", {}).items()
     }
     shell = FakeShell(scenario.get("shell", []))
-    kwargs: dict[str, Any] = {}
-    runtime_cfg = scenario.get("runtime", {})
-    if "default_call_depth_limit" in runtime_cfg:
-        kwargs["default_call_depth_limit"] = runtime_cfg["default_call_depth_limit"]
-    if "default_strict_json" in runtime_cfg:
-        kwargs["default_strict_json"] = runtime_cfg["default_strict_json"]
-    if "ask" in agents:
-        kwargs["default_agent"] = agents["ask"]
+    runtime_options: dict[str, Any] = {}
+    runtime_config = scenario.get("runtime", {})
+    if "default_call_depth_limit" in runtime_config:
+        runtime_options["default_call_depth_limit"] = runtime_config["default_call_depth_limit"]
+    if "default_strict_json" in runtime_config:
+        runtime_options["default_strict_json"] = runtime_config["default_strict_json"]
 
-    def dispatch_value_agent(request: Any) -> str:
+    def dispatch_agent(request: Any) -> str:
         agent_value = request.agent
-        if agent_value.variant == "AgentCommand":
-            name = agent_value.fields["command"].value
-        else:
-            name = "ask"
+        command = agent_value.fields.get("command")
+        name = command.value if command is not None else "ask"
         return agents[name](request)
 
     if agents:
-        kwargs["value_agent"] = dispatch_value_agent
-    runtime = PipelineDriver(**kwargs)
-
-    def register_agents(_declarations: tuple[Any, ...]) -> None:
-        """Legacy declarations are vestigial; typed values select dispatch."""
-
+        runtime_options["agent_dispatcher"] = dispatch_agent
+    runtime = PipelineDriver(**runtime_options)
     module_roots = scenario.get("module_roots", [])
     default_stdlib = not scenario.get("no_stdlib", False)
     with unittest.mock.patch("agm.core.process.run_capture_result", side_effect=shell):
@@ -152,25 +141,16 @@ def _run_program(
             prepared = PipelineDriver.prepare_program(
                 source, entry_path=None, roots=roots, default_stdlib=default_stdlib
             )
-            register_agents(prepared.declared_agents)
             result = runtime.run_prepared(prepared, param_values=scenario.get("params", {}))
         elif program.is_relative_to(EXTERNS_PROGRAMS_DIR):
-            # Three branches, in order: `module_roots` above builds a graph from
-            # explicit roots (multi-module fixtures); this branch also runs
-            # through the graph, via `entry_path`, because `extern def` requires
-            # a real file-backed origin so companion resolution can find the
-            # sibling `.py`; every other fixture falls through to the plain,
-            # non-graph `runtime.run` path in the `else` branch below.
             from agm.agl.modules.roots import RootSet
 
             roots = RootSet(roots=frozenset({program.parent.resolve(), REPO_STDLIB_ROOT}))
             prepared = PipelineDriver.prepare_program(
                 source, entry_path=program, roots=roots, default_stdlib=default_stdlib
             )
-            register_agents(prepared.declared_agents)
             result = runtime.run_prepared(prepared, param_values=scenario.get("params", {}))
         else:
-            register_agents(runtime.declared_agents(source, default_stdlib=default_stdlib))
             result = runtime.run(
                 source, param_values=scenario.get("params", {}), default_stdlib=default_stdlib
             )

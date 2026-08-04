@@ -214,7 +214,6 @@ class TmuxLayoutArgs:
 class ExecArgs:
     file: str | None
     strict_json: bool | None
-    runner: str | None
     no_log: bool
     log_file: str | None
     param_tokens: list[str] = field(default_factory=list)
@@ -235,7 +234,6 @@ class ExecArgs:
 @dataclass(slots=True)
 class ReplArgs:
     strict_json: bool | None
-    runner: str | None
     confirm_agents: bool
     quiet: bool
     no_log: bool

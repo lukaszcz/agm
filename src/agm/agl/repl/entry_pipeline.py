@@ -72,8 +72,6 @@ class EntryPipelineCtx(Protocol):
 
     def _ensure_roots(self) -> RootSet: ...
 
-    def _ambient_agents(self, host_env: HostEnvironment) -> frozenset[str]: ...
-
     def _fail(self, diagnostics: list[Diagnostic], warnings: list[Diagnostic]) -> EntryResult: ...
 
     def _build_check_only_result(
@@ -204,7 +202,6 @@ class EntryPipeline:
         try:
             resolved_program = resolve_program(
                 graph,
-                ambient_agents=self._ctx._ambient_agents(host_env),
                 entry_ambient_constructor_candidates=self._ctx._ambient_constructor_candidates,
                 entry_ambient_type_names=self._ctx._ambient_type_names,
                 entry_parent_scope=self._ctx._session_scope,
@@ -317,7 +314,6 @@ class EntryPipeline:
         )
         resolved_program = resolve_program(
             graph,
-            ambient_agents=self._ctx._ambient_agents(host_env),
             entry_ambient_constructor_candidates=self._ctx._ambient_constructor_candidates,
             entry_ambient_type_names=self._ctx._ambient_type_names,
             entry_parent_scope=self._ctx._session_scope,
@@ -565,7 +561,6 @@ class EntryPipeline:
             from agm.agl.runtime.host_settings import HostSettingsReconfigurer
 
             reconfigurer: HostSettingsReconfigurer | None = HostSettingsReconfigurer(
-                registry=host_env.registry,
                 trace=trace,
                 policy=self._ctx._host_settings_policy,
             )
@@ -574,7 +569,7 @@ class EntryPipeline:
         try:
             interp = IrInterpreter(
                 lowered.program,
-                registry=host_env.registry,
+                agent_dispatcher=host_env.agent_dispatcher,
                 strict_json=self._ctx._default_strict_json,
                 loop_limit=self._ctx._default_loop_limit,
                 max_call_depth=self._ctx._default_call_depth_limit,

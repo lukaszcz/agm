@@ -54,11 +54,70 @@ def test_ask_dispatches_each_agent_value(
         "agm.agent.runner.run_prepared_prompt_result",
         lambda _prepared, **_: transport_result,
     )
-    runtime = PipelineDriver(value_agent=value_driven_agent_factory(idle_timeout=None))
+    runtime = PipelineDriver(agent_dispatcher=value_driven_agent_factory(idle_timeout=None))
     result = runtime.run(f'let answer: text = ask("hello", agent = {source})\nanswer')
 
     assert result.ok
     assert captured == [argv]
+
+
+@pytest.mark.parametrize("failure", ["spawn_error", "timed_out", "returncode"])
+def test_agent_transport_failures_become_typed_errors(
+    monkeypatch: pytest.MonkeyPatch, failure: str
+) -> None:
+    result = type(
+        "Result",
+        (),
+        {
+            "spawn_error": "failed" if failure == "spawn_error" else None,
+            "timed_out": failure == "timed_out",
+            "returncode": 2 if failure == "returncode" else None,
+            "stdout": "",
+            "stderr": "error output",
+            "elapsed": 1.0,
+        },
+    )()
+    monkeypatch.setattr(
+        "agm.agent.runner.prepare_rendered_prompt_run", lambda *args, **kwargs: object()
+    )
+    monkeypatch.setattr(
+        "agm.agent.runner.run_prepared_prompt_result", lambda *args, **kwargs: result
+    )
+    runtime = PipelineDriver(agent_dispatcher=value_driven_agent_factory(idle_timeout=None))
+
+    run = runtime.run('let answer: text = ask("hello", agent = AgentCommand("runner"))\nanswer')
+
+    assert not run.ok
+    assert run.error is not None
+    assert run.error.type_name == "AgentCallError"
+
+
+def test_unrecognized_decoded_agent_spec_becomes_a_typed_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A future decoder output cannot leak an unbound-command host failure."""
+    from typing import cast
+
+    from agm.agl.runtime.agents import AgentCallHostError
+    from agm.agl.runtime.request import AgentRequest
+
+    monkeypatch.setattr("agm.agent.spec.decode", lambda _value: object())
+    dispatch = value_driven_agent_factory(idle_timeout=None)
+
+    with pytest.raises(AgentCallHostError) as exc_info:
+        dispatch(AgentRequest(agent=cast(EnumValue, object()), prompt="hello"))
+
+    assert exc_info.value.cause == "invalid_agent"
+
+
+def test_invalid_agent_value_becomes_typed_error() -> None:
+    runtime = PipelineDriver(agent_dispatcher=value_driven_agent_factory(idle_timeout=None))
+
+    run = runtime.run('let answer: text = ask("hello", agent = AgentCommand(""))\nanswer')
+
+    assert not run.ok
+    assert run.error is not None
+    assert run.error.type_name == "AgentCallError"
 
 
 def test_default_agent_value_is_read_at_each_call_and_errors_stay_typed() -> None:
@@ -70,7 +129,7 @@ def test_default_agent_value_is_read_at_each_call_and_errors_stay_typed() -> Non
         requests.append(value)
         return "not an integer"
 
-    runtime = PipelineDriver(value_agent=agent)
+    runtime = PipelineDriver(agent_dispatcher=agent)
     result = runtime.run(
         "import std/config\n"
         'std/config::default-agent := AgentCommand("first")\n'

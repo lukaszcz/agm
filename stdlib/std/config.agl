@@ -1,6 +1,5 @@
 import std/core using Option, Agent
 
-builtin var runner: text = "claude -p"
 builtin var default-agent: Agent = AgentClaude("sonnet", "medium")
 builtin var log: bool = false
 builtin var log-file: Option[text] = Option[text]::None

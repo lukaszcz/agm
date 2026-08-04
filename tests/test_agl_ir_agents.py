@@ -11,7 +11,6 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from agm.agl.ir.ids import AgentId
 from agm.agl.semantics.values import (
     ArrayValue,
     BoolValue,
@@ -233,7 +232,7 @@ def test_unit_typed_ask() -> None:
         calls.append(request)
         return "acknowledged"
 
-    result = PipelineDriver(default_agent=notify).run('ask("Notify!")\n()')
+    result = PipelineDriver(agent_dispatcher=notify).run('ask("Notify!")\n()')
     assert result.ok
     assert len(calls) == 1
 
@@ -340,8 +339,6 @@ result
         source,
         scripts={},
         default_responses=["default response"],
-        agent_names=frozenset(),
-        has_default=True,
     )
     assert ir["result"] == TextValue("default response")
 
@@ -1568,138 +1565,6 @@ def test_validate_contract_request_recursive_decode_unknown_defs_key() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_ir_ask_non_text_prompt_renders_to_string() -> None:
-    """IrAsk: int-valued prompt is render_value'd to text (hand-built IR)."""
-    from agm.agl.eval.ir_interpreter import IrInterpreter
-    from agm.agl.ir.contracts import ContractRequest, ScalarDecode, ScalarKind
-    from agm.agl.ir.ids import ContractId, Location, SourceId, SymbolId
-    from agm.agl.ir.nodes import IrAsk, IrBind, IrConstInt
-    from agm.agl.ir.program import (
-        ExecutableModule,
-        ExecutableProgram,
-        SourceFile,
-        SymbolDescriptor,
-    )
-    from agm.agl.modules.ids import ENTRY_ID
-    from agm.agl.runtime.agents import AgentRegistry
-
-    src_id = SourceId(0)
-    dummy_loc = Location(source_id=src_id, start_offset=0, end_offset=1, start_line=1, start_col=0)
-    cid = ContractId(0)
-    sym = SymbolId(0)
-    req = ContractRequest(
-        codec_name="json",
-        strict_json=None,
-        json_schema=_json.dumps({"type": "integer"}),
-        decode=ScalarDecode(ScalarKind.INT),
-        target_type_label="int",
-        structured_exec=False,
-        format_instructions="",
-        is_unit=False,
-    )
-    # A malformed hand-built IR operand cannot fall back to a legacy agent name.
-    ask_node = IrAsk(
-        location=dummy_loc,
-        # agent expr is intentionally not an Agent enum.
-        agent=IrConstInt(location=dummy_loc, value=0),
-        prompt=IrConstInt(location=dummy_loc, value=42),  # int prompt
-        contract_id=cid,
-        max_attempts=1,
-    )
-    bind_node = IrBind(location=dummy_loc, symbol=sym, value=ask_node)
-    sym_desc = SymbolDescriptor(symbol_id=sym, mutable=False, public_name="result", owner=ENTRY_ID)
-    prog = ExecutableProgram(
-        entry_module=ENTRY_ID,
-        modules={ENTRY_ID: ExecutableModule(module_id=ENTRY_ID, initializers=(bind_node,))},
-        symbols={sym: sym_desc},
-        nominals={},
-        sources={src_id: SourceFile(display_name="<test>", normalized_text="test")},
-        contracts={cid: req},
-    )
-
-    interp = IrInterpreter(prog, registry=AgentRegistry(named={}, default_agent=None))
-    with pytest.raises(TypeError, match="Agent enum"):
-        interp.run()
-
-
-def test_ir_ask_cyclic_prompt_raises_cyclic_value_error() -> None:
-    """IrAsk: a cyclic-array prompt raises the catchable CyclicValueError.
-
-    Reference semantics makes a self-referential array constructible; a
-    non-text prompt is rendered via ``render_value`` (see
-    ``test_ir_ask_non_text_prompt_renders_to_string`` above), and rendering a
-    cyclic value must raise rather than recurse forever, converted to
-    ``AglRaise(CyclicValueError)`` before any agent dispatch happens.
-    """
-    from agm.agl.eval.ir_interpreter import IrInterpreter
-    from agm.agl.ir.contracts import ContractRequest
-    from agm.agl.ir.ids import ContractId, Location, SourceId, SymbolId
-    from agm.agl.ir.nodes import IrAsk, IrBind, IrConstInt, IrIndexSet, IrLoad, IrMakeArray
-    from agm.agl.ir.operations import IndexKind
-    from agm.agl.ir.program import (
-        ExecutableModule,
-        ExecutableProgram,
-        SourceFile,
-        SymbolDescriptor,
-    )
-    from agm.agl.modules.ids import ENTRY_ID
-    from agm.agl.runtime.agents import AgentRegistry
-
-    src_id = SourceId(0)
-    dummy_loc = Location(source_id=src_id, start_offset=0, end_offset=1, start_line=1, start_col=0)
-    cid = ContractId(0)
-    sym_xs = SymbolId(0)
-    req = ContractRequest(
-        codec_name="text",
-        strict_json=None,
-        json_schema=None,
-        decode=None,
-        target_type_label="unit",
-        structured_exec=False,
-        format_instructions="",
-        is_unit=True,
-    )
-    # Build a self-referential array `xs` directly at the IR level: bind
-    # xs = [0], then xs[0] := xs (bypasses the checker, which would never
-    # allow a cycle to be observed this directly).
-    bind_xs = IrBind(
-        location=dummy_loc,
-        symbol=sym_xs,
-        value=IrMakeArray(location=dummy_loc, items=(IrConstInt(location=dummy_loc, value=0),)),
-    )
-    set_node = IrIndexSet(
-        location=dummy_loc,
-        container=IrLoad(location=dummy_loc, symbol=sym_xs),
-        index=IrConstInt(location=dummy_loc, value=0),
-        kind=IndexKind.ARRAY,
-        value=IrLoad(location=dummy_loc, symbol=sym_xs),
-    )
-    ask_node = IrAsk(
-        location=dummy_loc,
-        agent=IrConstInt(location=dummy_loc, value=0),
-        prompt=IrLoad(location=dummy_loc, symbol=sym_xs),
-        contract_id=cid,
-        max_attempts=1,
-    )
-    sym_desc = SymbolDescriptor(symbol_id=sym_xs, mutable=False, public_name=None, owner=ENTRY_ID)
-    prog = ExecutableProgram(
-        entry_module=ENTRY_ID,
-        modules={
-            ENTRY_ID: ExecutableModule(
-                module_id=ENTRY_ID, initializers=(bind_xs, set_node, ask_node)
-            )
-        },
-        symbols={sym_xs: sym_desc},
-        nominals={},
-        sources={src_id: SourceFile(display_name="<test>", normalized_text="test")},
-        contracts={cid: req},
-    )
-    registry = AgentRegistry(named={}, default_agent=None)
-    interp = IrInterpreter(prog, registry=registry)
-    with pytest.raises(TypeError, match="Agent enum"):
-        interp.run()
-
-
 def test_ir_ask_request_unit_contract() -> None:
     """IrAskRequest with is_unit contract -> AgentRequest.target_type is None."""
     source = """\
@@ -1715,136 +1580,6 @@ prompt_text
         scripts={"a": []},
     )
     assert ir["prompt_text"] == TextValue("Do it.")
-
-
-def test_ir_ask_request_non_text_prompt() -> None:
-    """IrAskRequest: int prompt expression is rendered to text (hand-built IR)."""
-    from agm.agl.eval.ir_interpreter import IrInterpreter
-    from agm.agl.ir.contracts import ContractRequest
-    from agm.agl.ir.ids import ContractId, Location, SourceId, SymbolId
-    from agm.agl.ir.nodes import IrAskRequest, IrBind, IrConstInt
-    from agm.agl.ir.program import (
-        ExecutableModule,
-        ExecutableProgram,
-        SourceFile,
-        SymbolDescriptor,
-    )
-    from agm.agl.modules.ids import ENTRY_ID
-    from agm.agl.runtime.agents import AgentRegistry
-
-    src_id = SourceId(0)
-    dummy_loc = Location(source_id=src_id, start_offset=0, end_offset=1, start_line=1, start_col=0)
-    cid = ContractId(0)
-    sym = SymbolId(0)
-    req = ContractRequest(
-        codec_name="text",
-        strict_json=None,
-        json_schema=None,
-        decode=None,
-        target_type_label="text",
-        structured_exec=False,
-        format_instructions="",
-        is_unit=False,
-    )
-    # IrAskRequest with int prompt (bypasses typechecker).
-    ask_req_node = IrAskRequest(
-        location=dummy_loc,
-        agent=IrConstInt(location=dummy_loc, value=0),
-        prompt=IrConstInt(location=dummy_loc, value=7),  # int prompt
-        contract_id=cid,
-        max_attempts=1,
-    )
-    bind_node = IrBind(location=dummy_loc, symbol=sym, value=ask_req_node)
-    sym_desc = SymbolDescriptor(symbol_id=sym, mutable=False, public_name="req", owner=ENTRY_ID)
-    prog = ExecutableProgram(
-        entry_module=ENTRY_ID,
-        modules={ENTRY_ID: ExecutableModule(module_id=ENTRY_ID, initializers=(bind_node,))},
-        symbols={sym: sym_desc},
-        nominals={},
-        sources={src_id: SourceFile(display_name="<test>", normalized_text="test")},
-        contracts={cid: req},
-    )
-    interp = IrInterpreter(prog, registry=AgentRegistry(named={}, default_agent=None))
-    with pytest.raises(TypeError, match="Agent enum"):
-        interp.run()
-
-
-def test_ir_ask_request_cyclic_prompt_raises_cyclic_value_error() -> None:
-    """IrAskRequest: a cyclic-array prompt raises the catchable CyclicValueError.
-
-    Mirrors ``test_ir_ask_cyclic_prompt_raises_cyclic_value_error`` for the
-    ``ask-request`` builtin, which renders a non-text prompt the same way but
-    never dispatches to an agent.
-    """
-    from agm.agl.eval.ir_interpreter import IrInterpreter
-    from agm.agl.ir.contracts import ContractRequest
-    from agm.agl.ir.ids import ContractId, Location, SourceId, SymbolId
-    from agm.agl.ir.nodes import IrAskRequest, IrBind, IrConstInt, IrIndexSet, IrLoad, IrMakeArray
-    from agm.agl.ir.operations import IndexKind
-    from agm.agl.ir.program import (
-        ExecutableModule,
-        ExecutableProgram,
-        SourceFile,
-        SymbolDescriptor,
-    )
-    from agm.agl.modules.ids import ENTRY_ID
-    from agm.agl.runtime.agents import AgentRegistry
-
-    src_id = SourceId(0)
-    dummy_loc = Location(source_id=src_id, start_offset=0, end_offset=1, start_line=1, start_col=0)
-    cid = ContractId(0)
-    sym_xs = SymbolId(0)
-    req = ContractRequest(
-        codec_name="text",
-        strict_json=None,
-        json_schema=None,
-        decode=None,
-        target_type_label="text",
-        structured_exec=False,
-        format_instructions="",
-        is_unit=False,
-    )
-    bind_xs = IrBind(
-        location=dummy_loc,
-        symbol=sym_xs,
-        value=IrMakeArray(location=dummy_loc, items=(IrConstInt(location=dummy_loc, value=0),)),
-    )
-    set_node = IrIndexSet(
-        location=dummy_loc,
-        container=IrLoad(location=dummy_loc, symbol=sym_xs),
-        index=IrConstInt(location=dummy_loc, value=0),
-        kind=IndexKind.ARRAY,
-        value=IrLoad(location=dummy_loc, symbol=sym_xs),
-    )
-    ask_req_node = IrAskRequest(
-        location=dummy_loc,
-        agent=IrConstInt(location=dummy_loc, value=0),
-        prompt=IrLoad(location=dummy_loc, symbol=sym_xs),
-        contract_id=cid,
-        max_attempts=1,
-    )
-    sym_desc = SymbolDescriptor(symbol_id=sym_xs, mutable=False, public_name=None, owner=ENTRY_ID)
-    prog = ExecutableProgram(
-        entry_module=ENTRY_ID,
-        modules={
-            ENTRY_ID: ExecutableModule(
-                module_id=ENTRY_ID, initializers=(bind_xs, set_node, ask_req_node)
-            )
-        },
-        symbols={sym_xs: sym_desc},
-        nominals={},
-        sources={src_id: SourceFile(display_name="<test>", normalized_text="test")},
-        contracts={cid: req},
-    )
-    registry = AgentRegistry(named={}, default_agent=None)
-    interp = IrInterpreter(prog, registry=registry)
-    with pytest.raises(TypeError, match="Agent enum"):
-        interp.run()
-
-
-# ---------------------------------------------------------------------------
-# lowerer.py uncovered branches in _extract_max_attempts
-# ---------------------------------------------------------------------------
 
 
 def test_lower_on_parse_error_abort_gives_one_attempt() -> None:
@@ -2008,66 +1743,6 @@ target
     )
     assert isinstance(ir["target"], EnumValue)
     assert ir["target"].variant == "None"
-
-
-def test_ir_ask_no_errors_when_failed_covers_else_branch() -> None:
-    """IrAsk retry loop: parse fails with no errors/error_msg → last_errors=()."""
-    # Build a contract with text codec — but trick it: use json schema so parse
-    # can fail with neither errors nor error_msg. The simplest: use a valid
-    # json schema but make parse_agent_output return ok=False with empty errors and msg.
-    # The easiest way: use a text codec (always succeeds), so we need the json codec.
-    # We can create a contract where the schema is valid but the text doesn't
-    # extract as ambiguous / no-json (empty errors, no error_msg).
-    # Actually the only path where result.ok=False AND errors=() AND error_msg="" is
-    # when AgentParseResult.failure("") is called. Let's mock parse_agent_output:
-
-    from agm.agl.eval.ir_interpreter import IrInterpreter
-    from agm.agl.ir.contracts import ContractRequest, ScalarDecode, ScalarKind
-    from agm.agl.ir.ids import ContractId, Location, SourceId
-    from agm.agl.ir.nodes import IrAsk, IrConstText
-    from agm.agl.ir.program import ExecutableModule, ExecutableProgram, SourceFile
-    from agm.agl.modules.ids import ENTRY_ID
-    from agm.agl.runtime.agents import AgentRegistry
-    from agm.agl.runtime.request import AgentRequest, AgentResponse
-
-    src_id = SourceId(0)
-    dummy_loc = Location(source_id=src_id, start_offset=0, end_offset=1, start_line=1, start_col=0)
-    cid = ContractId(0)
-    req = ContractRequest(
-        codec_name="json",
-        strict_json=None,
-        json_schema=_json.dumps({"type": "integer"}),
-        decode=ScalarDecode(ScalarKind.INT),
-        target_type_label="int",
-        structured_exec=False,
-        format_instructions="",
-        is_unit=False,
-    )
-    node = IrAsk(
-        location=dummy_loc,
-        agent=IrConstText(location=dummy_loc, value="ask"),
-        prompt=IrConstText(location=dummy_loc, value="test"),
-        contract_id=cid,
-        max_attempts=1,
-    )
-    prog = ExecutableProgram(
-        entry_module=ENTRY_ID,
-        modules={ENTRY_ID: ExecutableModule(module_id=ENTRY_ID, initializers=(node,))},
-        symbols={},
-        nominals={},
-        sources={src_id: SourceFile(display_name="<test>", normalized_text="test")},
-        contracts={cid: req},
-    )
-
-    def _agent_fn(r: AgentRequest) -> AgentResponse:
-        return AgentResponse(content="invalid")
-
-    registry = AgentRegistry(named={AgentId("ask"): _agent_fn}, default_agent=None)
-    interp = IrInterpreter(prog, registry=registry)
-
-    # A text sentinel is malformed IR, not an implicit default-agent request.
-    with pytest.raises(TypeError, match="Agent enum"):
-        interp.run()
 
 
 def test_lower_on_parse_error_self_qualified_retry() -> None:
@@ -2680,3 +2355,59 @@ status
         f"Message mismatch:\n  reference: {ir_first.get('message')!r}\n  actual: {msg!r}"
     )
     assert ir_first.get("field") == first_err.get("field")
+
+
+@pytest.mark.parametrize("request_only", (False, True))
+def test_ir_ask_request_rejects_a_non_agent_value(request_only: bool) -> None:
+    """Malformed IR cannot expose an AgentRequest whose agent is not an Agent value."""
+    from agm.agl.eval.ir_interpreter import IrInterpreter
+    from agm.agl.ir.contracts import ContractRequest
+    from agm.agl.ir.ids import ContractId, Location, SourceId
+    from agm.agl.ir.nodes import IrAsk, IrAskRequest, IrConstInt, IrConstText
+    from agm.agl.ir.program import ExecutableModule, ExecutableProgram, SourceFile
+    from agm.agl.modules.ids import ENTRY_ID
+
+    source_id = SourceId(0)
+    location = Location(
+        source_id=source_id,
+        start_offset=0,
+        end_offset=1,
+        start_line=1,
+        start_col=0,
+    )
+    contract_id = ContractId(0)
+    program = ExecutableProgram(
+        entry_module=ENTRY_ID,
+        modules={
+            ENTRY_ID: ExecutableModule(
+                module_id=ENTRY_ID,
+                initializers=(
+                    (IrAskRequest if request_only else IrAsk)(
+                        location=location,
+                        agent=IrConstInt(location=location, value=1),
+                        prompt=IrConstText(location=location, value="prompt"),
+                        contract_id=contract_id,
+                        max_attempts=1,
+                    ),
+                ),
+            )
+        },
+        symbols={},
+        nominals={},
+        sources={source_id: SourceFile(display_name="<test>", normalized_text="test")},
+        contracts={
+            contract_id: ContractRequest(
+                codec_name="text",
+                strict_json=None,
+                json_schema=None,
+                decode=None,
+                target_type_label="text",
+                structured_exec=False,
+                format_instructions="",
+                is_unit=False,
+            )
+        },
+    )
+
+    with pytest.raises(TypeError, match="Agent enum value"):
+        IrInterpreter(program).run()

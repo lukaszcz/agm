@@ -1399,7 +1399,7 @@ class TestExecCommandShellComplete:
         result = self._complete(["exec", str(agl_file)], "--")
         assert "--msg" in result
         # Built-in exec options are still offered alongside param options.
-        assert "--runner" in result
+        assert "--agent" in result
 
     def test_file_with_ask_offers_param_options(self, tmp_path: Path) -> None:
         """Completion discovers params for normal exec programs using ``ask``."""
@@ -1436,14 +1436,14 @@ class TestExecCommandShellComplete:
         """Unreadable file degrades to standard exec option completion (no crash)."""
         result = self._complete(["exec", "/nonexistent/prog.agl"], "--")
         # Built-in options should still appear.
-        assert "--runner" in result
+        assert "--agent" in result
         # No param options (nothing to discover).
         assert "--count" not in result
 
     def test_no_file_no_command_returns_base_completion(self) -> None:
         """Without FILE or -c, only built-in exec options are offered."""
         result = self._complete(["exec"], "--")
-        assert "--runner" in result
+        assert "--agent" in result
 
 
 class TestExecParamCompletionItems:
@@ -1545,7 +1545,7 @@ class TestExecCommandShellCompleteEdgeCases:
         )
         result = self._complete(["exec", str(agl_file)], "--")
         # Built-in options still returned via base completion.
-        assert "--runner" in result
+        assert "--agent" in result
         # No param-option items.
         assert "--msg" not in result
 

@@ -2,7 +2,7 @@
 
 Covers:
 - CLI wires FILE argument and params, --strict-json/--no-strict-json,
-  --max-iters, --runner, --log-file, --no-log flags into ExecArgs
+  --max-iters, --agent, --log-file, --no-log flags into ExecArgs
 - Missing file exits with code 1 and prints to stderr
 - Unreadable file exits with code 1 and prints error to stderr
 - Valid programs execute through the program pipeline; static failures and uncaught
@@ -136,18 +136,6 @@ class TestExecArgsParsing:
         args = recorded_runs[0]
         assert getattr(args, "max_iters") == 10
 
-    def test_exec_runner_flag(
-        self, runner: CliRunner, tmp_path: Path, recorded_runs: list[object]
-    ) -> None:
-        agl_file = tmp_path / "test.agl"
-        agl_file.write_text("let x = 1\n")
-
-        result = invoke(runner, ["exec", "--runner", "claude -p", str(agl_file)])
-        assert result.exit_code == 0
-
-        args = recorded_runs[0]
-        assert getattr(args, "runner") == "claude -p"
-
     def test_exec_agent_flag(
         self, runner: CliRunner, tmp_path: Path, recorded_runs: list[object]
     ) -> None:
@@ -259,7 +247,6 @@ class TestExecCommandInline:
             param_tokens=param_tokens or [],
             strict_json=None,
             max_iters=None,
-            runner=None,
             no_log=True,
             log_file=None,
         )
@@ -287,7 +274,6 @@ class TestExecCommandInline:
             param_tokens=[],
             strict_json=None,
             max_iters=None,
-            runner=None,
             no_log=True,
             log_file=None,
         )
@@ -353,7 +339,6 @@ class TestExecCommandBehavior:
             param_tokens=[],
             strict_json=None,
             max_iters=None,
-            runner=None,
             no_log=False,
             log_file=None,
         )
@@ -371,7 +356,6 @@ class TestExecCommandBehavior:
             param_tokens=[],
             strict_json=None,
             max_iters=None,
-            runner=None,
             no_log=False,
             log_file=None,
         )
@@ -394,7 +378,6 @@ class TestExecCommandBehavior:
             param_tokens=[],
             strict_json=None,
             max_iters=None,
-            runner=None,
             no_log=False,
             log_file=None,
         )
@@ -419,7 +402,6 @@ class TestExecCommandBehavior:
             param_tokens=[],
             strict_json=None,
             max_iters=None,
-            runner=None,
             no_log=False,
             log_file=None,
         )
@@ -440,7 +422,6 @@ class TestExecCommandBehavior:
             param_tokens=[],
             strict_json=None,
             max_iters=None,
-            runner=None,
             no_log=False,
             log_file=None,
         )
@@ -461,7 +442,6 @@ class TestExecCommandBehavior:
             param_tokens=[],
             strict_json=None,
             max_iters=None,
-            runner=None,
             no_log=False,
             log_file=str(log_path),
         )
@@ -481,7 +461,6 @@ def _exec_args(
         param_tokens=param_tokens or [],
         strict_json=None,
         max_iters=None,
-        runner=None,
         no_log=False,
         log_file=log_file,
     )
@@ -719,7 +698,6 @@ class TestExecCommandWarnings:
             param_tokens=[],
             strict_json=None,
             max_iters=None,
-            runner=None,
             no_log=False,
             log_file=None,
         )
@@ -832,12 +810,10 @@ class TestExecParsesSourceOnce:
 
         def counting_resolve_program(
             graph: ModuleGraph,
-            *,
-            ambient_agents: frozenset[str] = frozenset(),
         ) -> ResolvedProgram:
             nonlocal resolve_program_calls
             resolve_program_calls += 1
-            return real_resolve_program(graph, ambient_agents=ambient_agents)
+            return real_resolve_program(graph)
 
         monkeypatch.setattr(loader_mod, "load_graph", counting_load)
         monkeypatch.setattr(scope_graph_mod, "resolve_program", counting_resolve_program)
@@ -965,7 +941,6 @@ class TestExecCommandExitCodes:
             param_tokens=[],
             strict_json=None,
             max_iters=None,
-            runner=None,
             no_log=False,
             log_file=None,
         )
@@ -982,21 +957,11 @@ class TestExecCommandExitCodes:
             param_tokens=["--msg", "hello"],
             strict_json=None,
             max_iters=None,
-            runner=None,
             no_log=False,
             log_file=None,
         )
         result = exec_command.run(args)
         assert result is None
-
-    def test_param_value_flows_into_std_config_write(self, tmp_path: Path) -> None:
-        """A resolved parameter value can be written into a std/config engine setting."""
-        agl_file = tmp_path / "test.agl"
-        agl_file.write_text(
-            "import std/config\nparam chosen: text\nstd/config::runner := chosen\nprint chosen\n"
-        )
-
-        assert exec_command.run(_exec_args(agl_file, param_tokens=["--chosen", "echo"])) is None
 
     def test_declared_agents_with_std_config_preserve_params(self, tmp_path: Path) -> None:
         agl_file = tmp_path / "test.agl"
@@ -1011,7 +976,6 @@ class TestExecCommandExitCodes:
             param_tokens=["--value", "7"],
             strict_json=None,
             max_iters=None,
-            runner=None,
             no_log=False,
             log_file=None,
         )
@@ -1028,7 +992,6 @@ class TestExecCommandExitCodes:
             param_tokens=[],  # missing 'msg'
             strict_json=None,
             max_iters=None,
-            runner=None,
             no_log=False,
             log_file=None,
         )
@@ -1131,7 +1094,6 @@ class TestExecCommandExitCodes:
             param_tokens=[],
             strict_json=None,
             max_iters=None,
-            runner=None,
             no_log=True,
             log_file=None,
         )
@@ -1167,7 +1129,6 @@ class TestExecCommandExitCodes:
             param_tokens=[],
             strict_json=None,
             max_iters=None,
-            runner=None,
             no_log=False,
             log_file=None,
         )
@@ -1192,7 +1153,6 @@ class TestExecCommandExitCodes:
             param_tokens=[],
             strict_json=None,
             max_iters=None,
-            runner=None,
             no_log=False,
             log_file=None,
         )
@@ -1219,7 +1179,6 @@ class TestExecCommandExitCodes:
             param_tokens=[],
             strict_json=None,
             max_iters=None,
-            runner=None,
             no_log=False,
             log_file=None,
         )
@@ -1242,7 +1201,6 @@ class TestExecCommandExitCodes:
             param_tokens=[],
             strict_json=None,
             max_iters=None,
-            runner=None,
             no_log=False,
             log_file=None,
         )
@@ -1266,7 +1224,7 @@ def _spy_runtime(monkeypatch: pytest.MonkeyPatch) -> dict[str, object]:
             *,
             default_loop_limit: int = 5,
             default_strict_json: bool = False,
-            default_agent: Any | None = None,
+            agent_dispatcher: Any | None = None,
             shell_exec_timeout: float | None = None,
             default_call_depth_limit: int | None = None,
         ) -> None:
@@ -1277,7 +1235,7 @@ def _spy_runtime(monkeypatch: pytest.MonkeyPatch) -> dict[str, object]:
             super().__init__(
                 default_loop_limit=default_loop_limit,
                 default_strict_json=default_strict_json,
-                default_agent=default_agent,
+                agent_dispatcher=agent_dispatcher,
                 shell_exec_timeout=shell_exec_timeout,
                 default_call_depth_limit=default_call_depth_limit,
             )
@@ -1318,7 +1276,6 @@ class TestExecConfigWiring:
             param_tokens=[],
             strict_json=None,
             max_iters=None,
-            runner=None,
             no_log=False,
             log_file=None,
         )
@@ -1349,7 +1306,6 @@ class TestExecConfigWiring:
             param_tokens=[],
             strict_json=False,  # CLI --no-strict-json overrides config true
             max_iters=7,  # CLI --max-iters overrides config 9
-            runner=None,
             no_log=False,
             log_file=None,
         )
@@ -1384,7 +1340,6 @@ class TestExecConfigWiring:
             param_tokens=[],
             strict_json=None,
             max_iters=None,
-            runner=None,
             no_log=False,
             log_file=None,
         )
@@ -1418,7 +1373,6 @@ class TestExecConfigWiring:
                     param_tokens=[],
                     strict_json=None,
                     max_iters=None,
-                    runner=None,
                     no_log=True,
                     log_file=None,
                 )
@@ -1449,15 +1403,15 @@ def _exec_args_with_fallback_runtime(
             *,
             default_loop_limit: int = 5,
             default_strict_json: bool = False,
-            default_agent: AgentFn | None = None,
+            agent_dispatcher: AgentFn | None = None,
             shell_exec_timeout: float | None = None,
             default_call_depth_limit: int | None = None,
         ) -> None:
-            del default_agent
+            del agent_dispatcher
             super().__init__(
                 default_loop_limit=default_loop_limit,
                 default_strict_json=default_strict_json,
-                default_agent=stub_agent,
+                agent_dispatcher=stub_agent,
                 shell_exec_timeout=shell_exec_timeout,
                 default_call_depth_limit=default_call_depth_limit,
             )
@@ -1601,15 +1555,15 @@ class TestDryRunInventory:
                 *,
                 default_loop_limit: int = 5,
                 default_strict_json: bool = False,
-                default_agent: AgentFn | None = None,
+                agent_dispatcher: AgentFn | None = None,
                 shell_exec_timeout: float | None = None,
                 default_call_depth_limit: int | None = None,
             ) -> None:
-                del default_agent
+                del agent_dispatcher
                 super().__init__(
                     default_loop_limit=default_loop_limit,
                     default_strict_json=default_strict_json,
-                    default_agent=spy_agent,
+                    agent_dispatcher=spy_agent,
                     shell_exec_timeout=shell_exec_timeout,
                     default_call_depth_limit=default_call_depth_limit,
                 )
@@ -1677,12 +1631,7 @@ class TestExecFFI:
 
         marker = tmp_path / "marker.txt"
         agl_file = tmp_path / "prog.agl"
-        agl_file.write_text(
-            "import std/config\n"
-            "extern def choose_runner() -> text\n"
-            "std/config::runner := choose_runner()\n"
-            "choose_runner()\n"
-        )
+        agl_file.write_text("extern def choose_runner() -> text\nchoose_runner()\n")
         (tmp_path / "prog.py").write_text(
             f"open({str(marker)!r}, 'a').write('imported')\n"
             "def choose_runner():\n"
@@ -1788,7 +1737,6 @@ class TestJsonParamsCLI:
             param_tokens=['--pt={"x": 1, "y": 2}'],
             strict_json=None,
             max_iters=None,
-            runner=None,
             no_log=False,
             log_file=None,
         )
@@ -1816,7 +1764,6 @@ class TestJsonParamsCLI:
             param_tokens=["--price", "1.5"],
             strict_json=None,
             max_iters=None,
-            runner=None,
             no_log=False,
             log_file=None,
         )
@@ -1844,7 +1791,6 @@ class TestJsonParamsCLI:
             param_tokens=['--tags=["a", "b"]'],
             strict_json=None,
             max_iters=None,
-            runner=None,
             no_log=False,
             log_file=None,
         )
@@ -1874,7 +1820,6 @@ class TestJsonParamsCLI:
             param_tokens=["--pt", "not_json"],
             strict_json=None,
             max_iters=None,
-            runner=None,
             no_log=False,
             log_file=None,
         )
@@ -1905,7 +1850,6 @@ class TestUncaughtExceptionOutputFormat:
             param_tokens=[],
             strict_json=None,
             max_iters=None,
-            runner=None,
             no_log=True,
             log_file=None,
         )
@@ -1941,7 +1885,6 @@ class TestUncaughtExceptionOutputFormat:
             param_tokens=[],
             strict_json=None,
             max_iters=None,
-            runner=None,
             no_log=False,
             log_file=str(log_file),
         )
@@ -1954,51 +1897,6 @@ class TestUncaughtExceptionOutputFormat:
         assert re.search(r"[0-9a-f]{32}", err), (
             f"Expected trace_id (hex string) in stderr, got: {err!r}"
         )
-
-    def test_uncaught_exception_line_only_no_col(
-        self, tmp_path: Path, capsys: "pytest.CaptureFixture[str]"
-    ) -> None:
-        """Exit-2 stderr includes 'line N' when only line is set (col is None)."""
-        from unittest.mock import MagicMock, patch
-
-        from agm.agl.pipeline import RunError, RunResult
-        from agm.commands import exec as exec_command
-
-        agl_file = tmp_path / "prog.agl"
-        agl_file.write_text("let x = 1\nx\n")
-        args = self._exec_args_nolog(agl_file)
-        # Synthesize a RunResult whose error has line set but col=None.
-        fake_result = RunResult(
-            ok=False,
-            diagnostics=[],
-            error=RunError(
-                type_name="SomeError",
-                fields={"message": "oops"},
-                line=5,
-                col=None,
-            ),
-        )
-        with patch("agm.commands.exec.PipelineDriver") as mock_rt:
-            # prepare_program() must return a fake PreparedProgram with no resolved
-            # graph so the static-config-resolution logic does not choke on
-            # MagicMock values.
-            fake_prepared = MagicMock()
-            fake_prepared.resolved = None
-            fake_prepared.declared_agents = ()
-            mock_rt.prepare_program.return_value = fake_prepared
-            mock_rt.return_value.discover_params.return_value = MagicMock(
-                diagnostics=(), warnings=(), params=(), checked=MagicMock(), program_name=None
-            )
-            mock_rt.return_value.preflight_params.return_value = MagicMock(
-                result=RunResult(ok=True, diagnostics=[], error=None), executable=MagicMock()
-            )
-            mock_rt.return_value.run_prepared.return_value = fake_result
-            with pytest.raises(SystemExit) as exc_info:
-                exec_command.run(args)
-        assert exc_info.value.code == 2
-        err = capsys.readouterr().err
-        assert "line 5" in err
-        assert "col" not in err
 
 
 # ---------------------------------------------------------------------------
@@ -2021,7 +1919,6 @@ class TestExecBinaryFileError:
             param_tokens=[],
             strict_json=None,
             max_iters=None,
-            runner=None,
             no_log=True,
             log_file=None,
         )
@@ -2046,7 +1943,6 @@ class TestExecBinaryFileError:
             param_tokens=[],
             strict_json=None,
             max_iters=None,
-            runner=None,
             no_log=True,
             log_file=None,
         )
@@ -2054,55 +1950,6 @@ class TestExecBinaryFileError:
             exec_command.run(args)
         captured = capsys.readouterr()
         assert captured.out == ""
-
-
-# ---------------------------------------------------------------------------
-# Whitespace-only --runner exits 1 with clean error BEFORE any run
-# ---------------------------------------------------------------------------
-
-
-class TestExecVestigialCliRunner:
-    """The retained --runner option does not select typed Agent dispatch."""
-
-    def test_malformed_runner_does_not_block_a_program_without_agent_calls(
-        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
-    ) -> None:
-        program = tmp_path / "prog.agl"
-        program.write_text('print "ran"\n')
-
-        assert exec_command.run(_exec_args_no_log(program, runner='bad "quote')) is None
-        assert capsys.readouterr().out == "ran\n"
-
-
-class TestExecVestigialRunnerSurfaces:
-    """Legacy declaration and runner settings do not select value dispatch."""
-
-    def test_malformed_legacy_runner_values_do_not_block_execution(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-    ) -> None:
-        from agm.config.general import ExecConfig
-
-        config = ExecConfig(
-            runner='bad "quote',
-            strict_json=False,
-            default_loop_limit=5,
-            timeout=None,
-            agents={"ghost": "bad 'quote"},
-            log=False,
-            log_file=None,
-        )
-        monkeypatch.setattr(exec_command, "exec_config_from_merged", lambda *_, **__: config)
-        program = tmp_path / "program.agl"
-        program.write_text('agent legacy = "bad \'quote"\nprint "ran"\n')
-
-        assert exec_command.run(_exec_args_no_log(program)) is None
-        assert "ran" in capsys.readouterr().out
-
-
-# ---------------------------------------------------------------------------
-# per-declared-agent registration + runner precedence
-# (config > source runner hint > default runner)
-# ---------------------------------------------------------------------------
 
 
 def _install_marker_runner(directory: Path, env: dict[str, str], *, name: str, marker: str) -> Path:
@@ -2170,26 +2017,18 @@ class TestExecAgentValues:
             check=False,
         )
 
-    def test_agent_command_ignores_legacy_named_config_override(self, tmp_path: Path) -> None:
+    def test_agent_command_selects_its_own_runner(self, tmp_path: Path) -> None:
         env = dict(os.environ)
         env.setdefault("HOME", str(Path.home()))
         _install_marker_runner(tmp_path / "bin", env, name="value-runner", marker="FROM-VALUE")
-        _install_marker_runner(tmp_path / "bin", env, name="legacy-runner", marker="FROM-LEGACY")
         agl_file = tmp_path / "prog.agl"
         agl_file.write_text(
             'let impl = AgentCommand("value-runner")\nlet x = ask("do it", agent = impl)\nprint x\n'
         )
-        config_dir = tmp_path / ".agm"
-        config_dir.mkdir()
-        (config_dir / "config.toml").write_text(
-            '[exec.agents]\nimpl = "legacy-runner %{PROMPT_FILE}"\n'
-        )
-
         result = self._run_agm_exec([str(agl_file), "--no-log"], env=env, cwd=tmp_path)
 
         assert result.returncode == 0, result.stderr
         assert "FROM-VALUE" in result.stdout
-        assert "FROM-LEGACY" not in result.stdout
 
     def test_agent_command_preserves_prompt_file_substitution(self, tmp_path: Path) -> None:
         env = dict(os.environ)
@@ -2463,11 +2302,9 @@ class TestExecSourceConfigPrecedence:
         from agm.config.general import ExecConfig
 
         low_limit_config = ExecConfig(
-            runner=None,
             strict_json=False,
             default_loop_limit=3,
             timeout=None,
-            agents={},
             log=False,
             log_file=None,
         )
@@ -2597,11 +2434,9 @@ class TestExecSourceConfigPrecedence:
         from agm.config.general import ExecConfig
 
         strict_config = ExecConfig(
-            runner=None,
             strict_json=True,
             default_loop_limit=5,
             timeout=None,
-            agents={},
             log=False,
             log_file=None,
         )
@@ -2657,11 +2492,9 @@ class TestExecSourceConfigPrecedence:
         from agm.config.general import ExecConfig
 
         config_with_timeout = ExecConfig(
-            runner=None,
             strict_json=False,
             default_loop_limit=5,
             timeout=999.0,
-            agents={},
             log=False,
             log_file=None,
         )
@@ -2717,7 +2550,6 @@ class TestExecSourceConfigPrecedence:
                     param_tokens=[],
                     strict_json=None,
                     max_iters=None,
-                    runner=None,
                     no_log=False,
                     log_file=None,
                 )
@@ -2743,32 +2575,11 @@ class TestExecSourceConfigPrecedence:
                 param_tokens=[],
                 strict_json=None,
                 max_iters=None,
-                runner=None,
                 no_log=False,
                 log_file=None,
             )
         )
         assert log_path.exists(), "Expected trace log at source-specified path"
-
-    # ``runner`` writes remain readable compatibility settings. They do not
-    # reconfigure an Agent enum value's independently selected command.
-
-    def test_malformed_source_runner_is_catchable_and_rolls_back(
-        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
-    ) -> None:
-        agl_file = tmp_path / "prog.agl"
-        agl_file.write_text(
-            "import std/config\n"
-            "let previous = std/config::runner\n"
-            "try\n"
-            '  std/config::runner := "\'"\n'
-            "catch Exception as error => ()\n"
-            "print(std/config::runner == previous)\n"
-        )
-
-        exec_command.run(_exec_args_no_log(agl_file))
-
-        assert capsys.readouterr().out == "false\n"
 
 
 def _exec_args_inline_no_log(
@@ -2776,7 +2587,6 @@ def _exec_args_inline_no_log(
     *,
     strict_json: bool | None = None,
     max_iters: int | None = None,
-    runner: str | None = None,
 ) -> ExecArgs:
     """Build a minimal ExecArgs for -c inline exec tests."""
     return ExecArgs(
@@ -2785,7 +2595,6 @@ def _exec_args_inline_no_log(
         param_tokens=[],
         strict_json=strict_json,
         max_iters=max_iters,
-        runner=runner,
         no_log=True,
         log_file=None,
         log=False,
@@ -3048,7 +2857,6 @@ class TestExecCliModulePaths:
             param_tokens=[],
             strict_json=None,
             max_iters=None,
-            runner=None,
             no_log=True,
             log_file=None,
             log=False,
@@ -3081,7 +2889,6 @@ class TestExecCliModulePaths:
             param_tokens=[],
             strict_json=None,
             max_iters=None,
-            runner=None,
             no_log=True,
             log_file=None,
             log=False,
@@ -3110,7 +2917,6 @@ class TestExecCliModulePaths:
             param_tokens=[],
             strict_json=None,
             max_iters=None,
-            runner=None,
             no_log=True,
             log_file=None,
             log=False,
@@ -3151,7 +2957,6 @@ class TestExecCliModulePaths:
             param_tokens=[],
             strict_json=None,
             max_iters=None,
-            runner=None,
             no_log=True,
             log_file=None,
             log=False,
@@ -3205,7 +3010,6 @@ class TestReservedFileStem:
             param_tokens=[],
             strict_json=None,
             max_iters=None,
-            runner=None,
             no_log=True,
             log_file=None,
             log=False,

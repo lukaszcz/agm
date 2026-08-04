@@ -88,12 +88,7 @@ def test_default_agent_initializer_and_qualified_write_are_visible() -> None:
 def test_default_agent_write_does_not_reconfigure_host_services() -> None:
     from agm.agl.runtime.host_settings import HostSettingsPolicy
 
-    runner_commands: list[str] = []
     trace_settings: list[tuple[bool, str | None]] = []
-
-    def build_runner(command: str) -> object:
-        runner_commands.append(command)
-        return lambda _request: "ok"
 
     def resolve_trace_path(enabled: bool, log_file: str | None) -> None:
         trace_settings.append((enabled, log_file))
@@ -101,14 +96,11 @@ def test_default_agent_write_does_not_reconfigure_host_services() -> None:
 
     result = _run(
         'import std/config\nstd/config::default-agent := AgentCommand("command")\n()\n',
-        host_settings_policy=HostSettingsPolicy(
-            build_runner=build_runner, resolve_trace_path=resolve_trace_path
-        ),
+        host_settings_policy=HostSettingsPolicy(resolve_trace_path=resolve_trace_path),
     )
 
     assert result.ok
-    # Startup configures runner and tracing. The register-only write does neither.
-    assert runner_commands == ["claude -p"]
+    # The register-only write does not reconfigure tracing.
     assert trace_settings == [(False, None)]
 
 
@@ -123,7 +115,6 @@ def test_exec_uses_stdlib_default_agent_when_no_host_seed(
             ExecArgs(
                 file=str(program),
                 strict_json=None,
-                runner="ignored-runner",
                 no_log=True,
                 log_file=None,
             )
@@ -205,7 +196,6 @@ def test_exec_agent_source_cli_and_config_precedence(
             ExecArgs(
                 file=str(program),
                 strict_json=None,
-                runner=None,
                 agent=cli_literal,
                 no_log=True,
                 log_file=None,
@@ -235,7 +225,6 @@ def test_exec_rejects_invalid_agent_literal_from_cli(
             ExecArgs(
                 file=str(program),
                 strict_json=None,
-                runner=None,
                 agent=literal,
                 no_log=True,
                 log_file=None,
@@ -276,7 +265,6 @@ def test_exec_rejects_invalid_agent_literal_from_config(
             ExecArgs(
                 file=str(program),
                 strict_json=None,
-                runner=None,
                 no_log=True,
                 log_file=None,
             )

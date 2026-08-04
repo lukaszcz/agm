@@ -1,0 +1,27 @@
+# Agent values are ordinary enum data across JSON casts, nested records, and
+# arrays. `agent` is likewise an ordinary binding and record field name.
+record Team
+  agent: Agent
+  backups: array[Agent]
+
+record Deployment
+  primary: Team
+  teams: array[Team]
+
+let agent = AgentCommand("primary")
+let backup = AgentClaude("sonnet", "medium")
+let direct_json: json = agent as json
+let direct_round_trip: Agent = direct_json as Agent
+print(direct_round_trip == agent)
+
+let agents: array[Agent] = [agent, backup]
+let agents_json: json = agents as json
+let agents_round_trip: array[Agent] = agents_json as array[Agent]
+print(agents_round_trip == agents)
+
+let team = Team(agent = agent, backups = agents)
+let deployment = Deployment(primary = team, teams = [team])
+let deployment_json: json = deployment as json
+let deployment_round_trip: Deployment = deployment_json as Deployment
+print(deployment_round_trip == deployment)
+print(deployment_round_trip.primary.agent == agent)

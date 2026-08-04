@@ -38,7 +38,6 @@ from agm.agl.parser.errors import AglSyntaxError
 from agm.agl.syntax.nodes import ELSE
 from agm.agl.syntax.spans import UNKNOWN_SOURCE, SourceId, SourceSpan
 from agm.agl.syntax.types import (
-    AgentT,
     AppliedT,
     ArrayT,
     BoolT,
@@ -85,7 +84,6 @@ _SCOPED_DECLARATIONS = (
     syntax.EnumDef,
     syntax.ExceptionDef,
     syntax.TypeAlias,
-    syntax.AgentDecl,
     syntax.LetDecl,
     syntax.VarDecl,
     syntax.ParamDecl,
@@ -244,7 +242,6 @@ _ALL_TYPE_EXPRS = (
     ArrayT,
     DictT,
     UnitT,
-    AgentT,
     FuncT,
     AppliedT,
 )
@@ -649,30 +646,6 @@ class AstBuilder(Transformer):
         span = self._span_from_meta(meta)
         return syntax.ProgramDecl(
             name=str(name_tok),
-            span=span,
-            node_id=self._next_id(),
-        )
-
-    def agent_decl(self, meta: Meta, args: _Args) -> syntax.AgentDecl:
-        # Grammar: AGENT name (EQ template)?
-        name, scope_path = self._declaration_head(args)
-        runner_node = next(
-            (a for a in args if isinstance(a, (syntax.StringLit, syntax.Template))),
-            None,
-        )
-        runner: str | None = (
-            None
-            if runner_node is None
-            else _require_literal_string(
-                runner_node,
-                "agent runner string must be a literal string with no interpolation.",
-            ).value
-        )
-        span = self._span_from_meta(meta)
-        return syntax.AgentDecl(
-            name=name,
-            runner=runner,
-            scope_path=scope_path,
             span=span,
             node_id=self._next_id(),
         )
@@ -1250,10 +1223,6 @@ class AstBuilder(Transformer):
             node_id=self._next_id(),
             qualifier=qualifier,
         )
-
-    def agent_type(self, meta: Meta, args: _Args) -> AgentT:
-        """AGENT terminal in type position → AgentT."""
-        return AgentT(span=self._span_from_meta(meta), node_id=self._next_id())
 
     def type_arg_list(self, meta: Meta, args: _Args) -> tuple[TypeExpr, ...]:
         """type_arg_list: type_expr (COMMA type_expr)*"""
@@ -3048,13 +3017,11 @@ def _find_name_token(args: _Args) -> Token:
     """Return the field/key name Token from a ``field_name``-bearing rule.
 
     ``name`` matches ``NAME`` or ``OP_NAME``. ``field_name`` also admits a few
-    keyword tokens: ``AGENT``, ``TO``, ``DOWNTO``, ``BY``. All arrive here as
+    keyword tokens: ``TO``, ``DOWNTO``, ``BY``. All arrive here as
     plain Tokens; callers treat ``str(token)`` as the name string.
     """
     for a in args:
-        if _is_name_token(a) or (
-            isinstance(a, Token) and a.type in ("AGENT", "TO", "DOWNTO", "BY")
-        ):
+        if _is_name_token(a) or (isinstance(a, Token) and a.type in ("TO", "DOWNTO", "BY")):
             return a
     raise AssertionError(f"_find_name_token: no name token found in {args!r}")  # pragma: no cover
 

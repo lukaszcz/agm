@@ -7,6 +7,10 @@ from pathlib import Path
 from agm.agent.prompt_source import PromptSourceOptions, resolve_prompt_source
 from agm.agent.runner import PreparedPromptRun, prepare_prompt_run
 
+# Review workflows deliberately have their own default: their runner selection
+# must not inherit the loop command's configuration.
+DEFAULT_REVIEW_WORKFLOW_RUNNER = "claude -p"
+
 
 def prepare_prompt_pass(
     *,

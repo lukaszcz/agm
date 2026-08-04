@@ -29,14 +29,11 @@ Scope rules
 7. ``def`` declarations are valid at the module root and in named scope
    regions; a pre-pass collects them by path so root and same-scope members
    support mutual recursion.
-8. ``agent`` declarations are valid in entry-module root and named scope
-   regions; a pre-pass collects structured path identities and their value
-   bindings.
 
 Built-in call classification
 -----------------------------
 ``print`` / ``exec`` / ``ask`` are contextual built-ins.  They cannot be
-declared (``let``/``var``/``def``/``param``/``agent``/param/pattern/catch).
+declared (``let``/``var``/``def``/``param``/pattern/catch).
 In **call position** (a ``Call`` whose callee is a bare ``VarRef`` with one
 of these names), the resolver records ``Call.node_id → BuiltinKind`` in the
 ``builtin_calls`` side table and does NOT attempt to resolve the callee as a
@@ -52,7 +49,6 @@ from dataclasses import dataclass, replace
 from functools import partial
 from typing import TYPE_CHECKING, cast
 
-from agm.agl.diagnostics import Diagnostic
 from agm.agl.modules.ids import STD_CONFIG_ID, STD_CORE_ID, ModuleId, spell_declaration
 from agm.agl.scope.imports import (
     NameAtom,
@@ -69,7 +65,6 @@ from agm.agl.scope.imports import (
 )
 from agm.agl.scope.symbols import (
     BUILTIN_CALL_NAMES,
-    AgentKey,
     AglScopeError,
     BinderKind,
     BindingRef,
@@ -109,7 +104,6 @@ if TYPE_CHECKING:
     from agm.agl.scope.imports import ImportEnv
     from agm.agl.syntax.spans import SourceSpan
 from agm.agl.syntax.nodes import (
-    AgentDecl,
     ArrayLit,
     AssignStmt,
     BinaryOp,
@@ -324,14 +318,8 @@ class _Resolver:
         self._root_scope: ScopeNode | None = None
         # Whether we are at the program root (for root-only checks).
         self._at_root: bool = False
-        # Agents keyed by their structured declaration paths.
-        self._declared_agents: dict[AgentKey, AgentDecl] = {}
-        # Ambient agents from the host (not in declared_agents).
-        self._ambient_agents: frozenset[str] = frozenset()
         # Top-level function defs.
         self._declared_functions: dict[str, FuncDef] = {}
-        # Program-declared agent identities referenced as a VarRef.
-        self._referenced_agents: set[AgentKey] = set()
         # Source-declared program name.
         self._program_name: str | None = None
         # Names of all root-level type declarations (RecordDef/EnumDef/TypeAlias).
@@ -349,7 +337,7 @@ class _Resolver:
         # root-only tables can be derived from the same collection without
         # admitting scoped members.
         self._declaration_items: dict[
-            DeclarationKey, FuncDef | RecordDef | EnumDef | ExceptionDef | TypeAlias | AgentDecl
+            DeclarationKey, FuncDef | RecordDef | EnumDef | ExceptionDef | TypeAlias
         ] = {}
         # Seeded with every retained scope path so a fresh entry's collision
         # check (``_ensure_scope_path``, ``_register_declaration``, ``_define``)
@@ -426,7 +414,6 @@ class _Resolver:
         program: Program,
         *,
         parent_scope: ScopeNode | None = None,
-        ambient_agents: frozenset[str] = frozenset(),
         ambient_constructor_candidates: dict[str, tuple[ConstructorRef, ...]] | None = None,
         ambient_type_names: frozenset[str] = frozenset(),
     ) -> ModuleResolution:
@@ -436,11 +423,6 @@ class _Resolver:
         so name lookups fall through to session bindings (incremental REPL
         sessions).  New declarations live in the entry's own root scope and
         shadow parent bindings without a duplicate-declaration error.
-
-        *ambient_agents* are agent names the host already backs.  They count
-        as valid call targets alongside this program's own ``agent``
-        declarations, but never appear in ``ModuleResolution.declared_agents``
-        and never trigger an unused-agent warning.
 
         *ambient_constructor_candidates* carries constructor candidates from
         prior REPL entries so that constructor references to types declared in
@@ -482,16 +464,11 @@ class _Resolver:
         self._validate_non_method_type_params()
         self._validate_extern_backing()
 
-        # Pre-pass 2: collect path-keyed agent declarations before body
-        # resolution; root bindings are installed below and scoped bindings
-        # live in their member layers.
-        self._ambient_agents = ambient_agents
-        self._collect_agent_decls(program)
-        # Pre-pass 3: collect top-level def names for mutual recursion.
+        # Pre-pass 2: collect top-level def names for mutual recursion.
         self._collect_func_decls(program)
-        # Pre-pass 4: collect type-declaration names and validate type_params.
+        # Pre-pass 3: collect type-declaration names and validate type_params.
         self._collect_type_decl_names(program)
-        # Pre-pass 5: collect constructor candidates from RecordDef/EnumDef.
+        # Pre-pass 4: collect constructor candidates from RecordDef/EnumDef.
         self._collect_constructor_candidates(program)
 
         root = ScopeNode(node_id=program.node_id, parent=parent_scope, scope_path=())
@@ -500,10 +477,8 @@ class _Resolver:
         self._scope_nodes = self._build_scope_nodes(root)
         self._at_root = True
 
-        # Define root agents and functions as value bindings; scoped members
-        # are already present in their named-scope layers.
-        self._define_agent_bindings()
-        self._define_ambient_agent_bindings()
+        # Define root functions as value bindings; scoped members are already
+        # present in their named-scope layers.
         self._define_function_bindings()
         # Define constructor bindings in root scope.
         self._define_constructor_bindings()
@@ -522,10 +497,8 @@ class _Resolver:
             root_scope=root,
             declarations=dict(self._declarations),
             scope_nodes=dict(self._scope_nodes),
-            declared_agents=dict(self._declared_agents),
             declared_functions=dict(self._declared_functions),
             program_name=self._program_name,
-            warnings=self._unused_agent_warnings(),
             declared_type_names=frozenset(self._declared_type_names),
             declared_type_paths=frozenset(self._type_paths),
             constructor_candidates={
@@ -567,7 +540,7 @@ class _Resolver:
                 segment.name for segment in item.scope_path
             )
             return
-        if isinstance(item, (FuncDef, RecordDef, EnumDef, ExceptionDef, TypeAlias, AgentDecl)):
+        if isinstance(item, (FuncDef, RecordDef, EnumDef, ExceptionDef, TypeAlias)):
             path = tuple(segment.name for segment in item.scope_path)
             self._ensure_scope_path(path, item.node_id, item.span)
             self._register_declaration(item, path)
@@ -596,7 +569,7 @@ class _Resolver:
 
     def _register_declaration(
         self,
-        item: FuncDef | RecordDef | EnumDef | ExceptionDef | TypeAlias | AgentDecl,
+        item: FuncDef | RecordDef | EnumDef | ExceptionDef | TypeAlias,
         path: ScopePath,
     ) -> None:
         """Register one declaration and its type members at *path*."""
@@ -616,13 +589,7 @@ class _Resolver:
                 )
             self._scope_entity_kinds[key] = "ordinary"
 
-        kind = (
-            BinderKind.constructor_binding
-            if is_type
-            else BinderKind.function_binding
-            if isinstance(item, FuncDef)
-            else BinderKind.agent_binding
-        )
+        kind = BinderKind.constructor_binding if is_type else BinderKind.function_binding
         self._declarations[key] = BindingRef(
             name=item.name,
             mutable=False,
@@ -644,8 +611,6 @@ class _Resolver:
                     )
                 self._scoped_extern_symbols[item.name] = item
             self._validate_type_params(item)
-        elif isinstance(item, AgentDecl):
-            self._validate_agent_decl(item)
         else:
             self._validate_type_params(item)
         if not is_type:
@@ -809,31 +774,15 @@ class _Resolver:
     def _root_declaration_items(
         self,
         declaration_type: type[FuncDef]
-        | type[AgentDecl]
         | type[RecordDef]
         | type[EnumDef]
         | type[ExceptionDef]
         | type[TypeAlias],
-    ) -> Iterator[FuncDef | AgentDecl | RecordDef | EnumDef | ExceptionDef | TypeAlias]:
+    ) -> Iterator[FuncDef | RecordDef | EnumDef | ExceptionDef | TypeAlias]:
         """Yield collected declarations of *declaration_type* at the root path."""
         for (module_id, path, _name), item in self._declaration_items.items():
             if module_id == self._module_id and not path and isinstance(item, declaration_type):
                 yield item
-
-    def _collect_agent_decls(self, program: Program) -> None:
-        """Collect agents from every static scope by declaration identity."""
-        for item in self._declaration_items.values():
-            if isinstance(item, AgentDecl):
-                path = tuple(segment.name for segment in item.scope_path)
-                self._declared_agents[(path, item.name)] = item
-
-    def _validate_agent_decl(self, decl: AgentDecl) -> None:
-        """Apply agent declaration validation independently of its scope path."""
-        if decl.name in _RESERVED_NAMES:
-            raise AglScopeError(
-                f"'{decl.name}' is built-in and cannot be declared as an agent.",
-                span=decl.span,
-            )
 
     def _collect_func_decls(self, program: Program) -> None:
         """Populate the legacy function table from root-path declarations only."""
@@ -1237,69 +1186,9 @@ class _Resolver:
                 ),
             )
 
-    def _define_agent_bindings(self) -> None:
-        """Define root agents; scoped agents already live in scope memberships."""
-        for (_path, name), decl in self._declared_agents.items():
-            if decl.scope_path:
-                continue
-            ref = BindingRef(
-                name=name,
-                mutable=False,
-                decl_span=decl.span,
-                decl_node_id=decl.node_id,
-                kind=BinderKind.agent_binding,
-                module_id=self._module_id,
-            )
-            self._current_scope().define(name, ref)
-
-    def _define_ambient_agent_bindings(self) -> None:
-        """Define ambient agent names as value bindings so VarRefs resolve.
-
-        Ambient agents come from the host (e.g. earlier REPL entries) and are
-        NOT in ``_declared_agents``; they are never reported in
-        ``declared_agents`` and never trigger unused-agent warnings.
-
-        We use a synthetic span pointing to the program root node and the root
-        node_id as the decl_node_id (no real declaration AST node exists).
-        Only define if not already defined (declared agents take precedence).
-        """
-        scope = self._current_scope()
-        for name in self._ambient_agents:
-            if name in scope.bindings:
-                continue  # Already defined by a local agent declaration
-            # Use a sentinel span/node_id — the parent scope may have a real
-            # binding for this name (REPL session), so only add if absent.
-            if scope.lookup(name) is not None:
-                continue
-            # Create a synthetic binding ref for the ambient agent.
-            synthetic_span = SourceSpan(
-                start_line=0,
-                start_col=0,
-                end_line=0,
-                end_col=0,
-                start_offset=0,
-                end_offset=0,
-            )
-            ref = BindingRef(
-                name=name,
-                mutable=False,
-                decl_span=synthetic_span,
-                decl_node_id=-1,
-                kind=BinderKind.agent_binding,
-                module_id=self._module_id,
-            )
-            scope.define(name, ref)
-
     def _define_function_bindings(self) -> None:
         """Define each collected function as a value binding in the current scope."""
         for name, decl in self._declared_functions.items():
-            if name in self._current_scope().bindings:
-                # An ambient agent with the same name as this def was defined
-                # first (_define_ambient_agent_bindings runs before this method).
-                raise AglScopeError(
-                    f"Name '{name}' is already declared in this scope.",
-                    span=decl.span,
-                )
             ref = BindingRef(
                 name=name,
                 mutable=False,
@@ -1309,27 +1198,6 @@ class _Resolver:
                 module_id=self._module_id,
             )
             self._current_scope().define(name, ref)
-
-    # ------------------------------------------------------------------
-    # Unused-agent warnings
-    # ------------------------------------------------------------------
-
-    def _unused_agent_warnings(self) -> tuple[Diagnostic, ...]:
-        """Warn for each program-declared agent never referenced."""
-        warnings: list[Diagnostic] = []
-        for key, decl in self._declared_agents.items():
-            if key not in self._referenced_agents:
-                warnings.append(
-                    Diagnostic(
-                        message=f"agent '{decl.name}' is declared but never called.",
-                        line=decl.span.start_line,
-                        column=decl.span.start_col,
-                        end_line=decl.span.end_line,
-                        end_column=decl.span.end_col,
-                        severity="warning",
-                    )
-                )
-        return tuple(warnings)
 
     def _resolve_builtin_var(self, node: BuiltinVarDecl) -> None:
         """Resolve a standard-library engine setting into a mutable register binding.
@@ -1523,7 +1391,7 @@ class _Resolver:
         """Resolve items in order; each binder adds to the current scope.
 
         This is the core sequencing logic.  Binders (``LetDecl``, ``VarDecl``,
-        ``AssignStmt``) and declarations (``FuncDef``, ``AgentDecl``, etc.) that
+        ``AssignStmt``) and declarations (``FuncDef``, etc.) that
         are not pure expressions are handled first; everything else is treated
         as an expression item.
 
@@ -1533,7 +1401,7 @@ class _Resolver:
           ``TypeAlias``, ``InfixDecl``, ``ImportDecl``, and ``ExportDecl`` are
           allowed at the module root.
           ``LetDecl``, ``VarDecl``, ``AssignStmt``, bare expressions, and
-          entry-only constructs (``AgentDecl``, ``ParamDecl``, ``ProgramDecl``)
+          entry-only constructs (``ParamDecl``, ``ProgramDecl``)
           are rejected with a scope error.
         - Every module root and every region's own item sequence: ``ImportDecl``
           and ``ExportDecl`` must precede all other items *in that same items
@@ -1595,14 +1463,6 @@ class _Resolver:
                 # Placement in the canonical standard-library module is
                 # enforced by the declaration handler.
                 self._resolve_builtin_var(item)
-            elif isinstance(item, AgentDecl):
-                if is_non_entry_root:
-                    raise AglScopeError(
-                        f"'agent' declarations are only allowed in the entry module, "
-                        f"not in library modules (found 'agent {item.name}' here).",
-                        span=item.span,
-                    )
-                self._resolve_agent_decl(item)
             elif isinstance(item, (RecordDef, EnumDef, ExceptionDef, TypeAlias)):
                 self._resolve_type_decl(item)
             elif isinstance(item, LetDecl):
@@ -1927,31 +1787,9 @@ class _Resolver:
 
     def _resolve_scope_region(self, region: ScopeRegion) -> None:
         """Resolve a named region in its member layer."""
-        if not self._is_entry:
-
-            def reject_agent(node: object) -> None:
-                if isinstance(node, AgentDecl):
-                    raise AglScopeError(
-                        "'agent' declarations are only allowed in the entry module, "
-                        f"not in library modules (found 'agent {node.name}' here).",
-                        span=node.span,
-                    )
-
-            walk(region, reject_agent)
         path = self._current_scope().scope_path + (region.segment.name,)
         with self._named_scope(path):
             self._resolve_block_items(cast(tuple[Item, ...], region.items))
-
-    def _resolve_agent_decl(self, node: AgentDecl) -> None:
-        """Reject an unscoped agent declaration nested in an ordinary block."""
-        if node.scope_path:
-            return
-        if not self._at_root:
-            raise AglScopeError(
-                f"'agent' declarations are only allowed at the program root, "
-                f"not inside a nested block (found 'agent {node.name}' here).",
-                span=node.span,
-            )
 
     def _resolve_funcdef(self, node: FuncDef) -> None:
         """Resolve a ``def`` declaration (body + params).
@@ -2416,7 +2254,6 @@ class _Resolver:
         candidates: Collection[ConstructorRef] | None = None,
     ) -> None:
         """Record an ordinary value binding and its constructor metadata."""
-        self._track_agent_reference(ref)
         self._resolution[node.node_id] = ref
         if ref.kind != BinderKind.constructor_binding:
             return
@@ -2449,18 +2286,6 @@ class _Resolver:
         if ref.scope_path and ref.module_id == self._module_id:
             return tuple(self._scoped_constructor_candidates.get((ref.scope_path, name), ()))
         return tuple(self._constructor_candidates.get(name, ()))
-
-    def _track_agent_reference(self, ref: BindingRef) -> None:
-        """Preserve agent usage hidden behind constructor-selected pattern slots."""
-        while ref.kind is BinderKind.pattern_slot:
-            assert ref.slot_id is not None
-            alternative = self._pattern_slots[ref.slot_id].alternative
-            if alternative is None:
-                return
-            ref = alternative
-        agent_key = (ref.scope_path, ref.name)
-        if ref.kind is BinderKind.agent_binding and agent_key in self._declared_agents:
-            self._referenced_agents.add(agent_key)
 
     def _validate_qualifier_chains(self, program: object) -> None:
         """Validate qualifier syntax in the current lexical scope layer."""
@@ -2613,7 +2438,6 @@ class _Resolver:
                 self._constructor_refs[node.node_id] = candidates[0]
                 return True
             return False
-        self._track_agent_reference(ref)
         self._resolution[node.node_id] = ref
         return True
 

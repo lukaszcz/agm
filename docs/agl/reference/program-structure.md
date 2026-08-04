@@ -24,7 +24,6 @@ item          ::= import_decl                     (* header position only *)
              | builtin_modifier? exception_def     (* root only *)
              | param_decl                          (* entry module root only *)
              | program_decl                        (* root only *)
-             | agent_decl                          (* entry module root only *)
              | infix_decl                          (* root only *)
              | builtin_var_def                     (* root only; std/config only *)
              | func_def                            (* root only *)
@@ -82,9 +81,6 @@ region.
   [Modules](modules.md#import-and-export-inside-a-scope-region).
 - **`program` declaration** — the program name used for params config lookup.
   Entry-module only.
-- **`agent` declarations** — the names of the agents the program may call.
-  Entry-module only (see [Modules](modules.md)); they may also be members of a
-  named scope region in an entry module.
 - **`builtin var` declarations** — body-less engine-backed mutable bindings.
   They are reserved to the canonical standard-library `std/config` module;
   entry programs and ordinary libraries cannot declare them. A `builtin var`
@@ -130,7 +126,7 @@ return `void`, and are commonly followed by another expression.
 ## Engine settings
 
 The standard-library module `std/config` exposes the program's engine
-settings — the knobs that control the default agent runner, trace logging,
+settings — the knobs that control the default agent, trace logging,
 JSON strictness, the loop safety valve, and the shell-exec timeout. Each is a
 **mutable binding**; import the module and assign it through a qualified target
 to change a setting:
@@ -140,7 +136,7 @@ import std/config
 
 std/config::max-iters := 10
 std/config::timeout := Some("30s")
-std/config::runner := "claude -p"
+std/config::default-agent := AgentClaude("sonnet", "medium")
 let budget = std/config::max-iters      # settings are readable
 print budget
 ```
@@ -153,7 +149,7 @@ The settings and their types are:
 | `log-file` | `Option[text]` | Path to the trace log file. |
 | `strict-json` | `bool` | Parse agent JSON output strictly. |
 | `max-iters` | `int` | Safety-valve cap for unbounded loops. |
-| `runner` | `text` | Default agent runner command. |
+| `default-agent` | `Agent` | Default value for `ask` calls. |
 | `timeout` | `Option[text]` | Shell-exec timeout. |
 
 A write takes effect **positionally**, exactly like any `var` mutation: it

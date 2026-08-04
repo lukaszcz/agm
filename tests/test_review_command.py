@@ -108,7 +108,7 @@ def test_prepare_review_expands_scope_and_aspects(
     )
 
 
-def test_prepare_review_uses_default_loop_runner(
+def test_prepare_review_does_not_use_loop_runner(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     home = _setup_home(tmp_path)
@@ -121,7 +121,7 @@ def test_prepare_review_uses_default_loop_runner(
 
     prepared = prepare_review(_review_args(runner=None), temp_files=[])
 
-    assert prepared.command == ["loop-runner", "-p"]
+    assert prepared.command == ["claude", "-p"]
 
 
 def test_prepare_review_uses_builtin_runner_when_loop_runner_is_unset(
@@ -743,7 +743,7 @@ def test_revise_stream_callbacks_write_non_empty_chunks(capsys: pytest.CaptureFi
     assert captured.err == "err"
 
 
-def test_prepare_revise_uses_default_loop_runner(
+def test_prepare_revise_does_not_use_loop_runner(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     home = _setup_home(tmp_path)
@@ -758,7 +758,7 @@ def test_prepare_revise_uses_default_loop_runner(
 
     prepared = prepare_revise(_revise_args("review.md", runner=None), temp_files=[])
 
-    assert prepared.command == ["loop-runner", "-p"]
+    assert prepared.command == ["claude", "-p"]
 
 
 def test_review_once_dry_run_prints_configuration(

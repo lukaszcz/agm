@@ -14,7 +14,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Literal
 
-from agm.agl.ir.ids import AgentId, Location
+from agm.agl.ir.ids import Location
 from agm.agl.semantics.values import EnumValue
 
 if TYPE_CHECKING:
@@ -125,8 +125,6 @@ class AgentRequest:
     validation_errors: list[ValidationError] = field(default_factory=list)
     metadata: dict[str, object] = field(default_factory=dict)
     output_contract: "OutputContract | TypelessOutputContract | None" = None
-    # Compatibility identity for the deprecated named-agent registry.
-    agent_id: AgentId | None = None
 
 
 @dataclass(slots=True)

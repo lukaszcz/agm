@@ -41,7 +41,6 @@ from agm.agl.runtime.externs import (
 from agm.agl.runtime.render import render_value
 from agm.agl.semantics.exceptions import AglRaise
 from agm.agl.semantics.values import (
-    AgentValue,
     ArrayValue,
     BoolValue,
     ConstructorValue,
@@ -62,7 +61,6 @@ from tests.agl.module_graph import resolve_and_check_program_ast
 _PATH = Path("/virtual/extern_boundary.agl")
 
 _CAPS = HostCapabilities(
-    agent_names=frozenset(),
     supports_shell_exec=True,
     codec_kinds={
         "text": frozenset({"text"}),
@@ -72,6 +70,14 @@ _CAPS = HostCapabilities(
 
 _BOX = "record Box\n  value: int\n  label: text\n"
 _SHAPE = "enum Shape\n  | circle(radius: decimal)\n  | rect(width: int, height: int)\n"
+_AGENT = (
+    "builtin\n"
+    "enum Agent\n"
+    "  | AgentCommand(command: text)\n"
+    "  | AgentClaude(model: text, thinking: text)\n"
+    "  | AgentCodex(model: text, thinking: text)\n"
+    "  | AgentPi(provider: text, model: text, thinking: text)\n"
+)
 _BAD_THING = "exception BadThing extends Exception\n  detail: text\n"
 
 
@@ -171,6 +177,18 @@ class TestEncodeNominals:
         )
         result = encode_boundary_value(contract.params[0].schema, value, {})
         assert result == {"$case": "rect", "width": 3, "height": 4}
+
+    def test_agent_enum_crosses_the_extern_boundary(self) -> None:
+        contract = build_contract(_AGENT + "extern def echo(agent: Agent) -> Agent\n0", "echo")
+        value = EnumValue(
+            nominal=_nominal(contract.result),
+            display_name="Agent",
+            variant="AgentCommand",
+            fields={"command": TextValue("runner")},
+        )
+        encoded = encode_boundary_value(contract.params[0].schema, value, {})
+        assert encoded == {"$case": "AgentCommand", "command": "runner"}
+        assert decode_boundary_value(contract.result, encoded, {}) == value
 
     def test_enum_variant_with_no_fields(self) -> None:
         contract = build_contract(_SHAPE + "extern def f(s: Shape) -> Shape\n0")
@@ -608,21 +626,25 @@ class TestSealing:
         assert not hasattr(encoded, "_SealedHandle__eq_key")
         assert decode_boundary_value(contract.result, encoded, seals) == original
 
-    def test_handle_equality_keys_cover_all_sealable_value_shapes(self) -> None:
+    def test_handle_equality_keys_cover_agent_enum_and_sealable_value_shapes(self) -> None:
+        """Agent values cross generic extern boundaries as ordinary enum data."""
         contract = build_contract("extern def identity[T](x: T) -> T\n0", fn_name="identity")
-        nominal = NominalId(ENTRY_ID, "Choice")
+        nominal = NominalId(ENTRY_ID, "Agent")
         values = (
             DecimalValue(Decimal("1.5")),
             BoolValue(True),
             JsonValue({"items": [True, 1, Decimal("2"), "x", None]}),
             ArrayValue([IntValue(1)]),
-            EnumValue(nominal=nominal, display_name="Choice", variant="some", fields={}),
+            EnumValue(
+                nominal=nominal,
+                display_name="Agent",
+                variant="AgentCommand",
+                fields={"command": TextValue("runner")},
+            ),
             ExceptionValue(nominal=nominal, display_name="Oops", fields={"msg": TextValue("x")}),
             UnitValue(),
-            AgentValue("runner"),
-            ConstructorValue(nominal=nominal, display_name="Choice", variant="some"),
+            ConstructorValue(nominal=nominal, display_name="Agent", variant="AgentCommand"),
         )
-
         for value in values:
             left = encode_boundary_value(contract.params[0].schema, value, {"T": object()})
             right = encode_boundary_value(contract.params[0].schema, value, {"T": object()})

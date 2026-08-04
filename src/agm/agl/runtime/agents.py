@@ -1,18 +1,12 @@
-"""Value-driven AgL ``Agent`` dispatch.
-
-The legacy registry remains as a compatibility container for the old language
-surface, but ``ask`` dispatches only encoded ``Agent`` enum values through its
-value dispatcher.
-"""
+"""Value-driven AgL ``Agent`` dispatch."""
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable
 from pathlib import Path
 from typing import NoReturn
 
 from agm.agl.ir.builtin_nominals import NO_BUILTIN_DECLARATIONS, BuiltinNominals
-from agm.agl.ir.ids import AgentId
 from agm.agl.runtime.render import render_value
 from agm.agl.runtime.request import AgentRequest, AgentResponse
 from agm.agl.semantics.values import EnumValue, JsonValue, TextValue
@@ -34,70 +28,6 @@ class AgentCallHostError(Exception):
         self.elapsed = elapsed
 
 
-class AgentRegistry:
-    """Compatibility registry plus the dispatcher for typed agent values."""
-
-    def __init__(
-        self,
-        *,
-        named: Mapping[AgentId, AgentFn] | Mapping[str, AgentFn],
-        default_agent: AgentFn | None,
-        value_agent: AgentFn | None = None,
-    ) -> None:
-        self._named = {
-            key if isinstance(key, AgentId) else AgentId(key): fn for key, fn in named.items()
-        }
-        self._default = default_agent
-        self._value_agent = value_agent
-
-    def set_default_agent(self, fn: AgentFn | None) -> None:
-        self._default = fn
-
-    @property
-    def has_default_agent(self) -> bool:
-        """Return whether a callable backs default ``ask`` dispatch."""
-        return self._default is not None
-
-    @property
-    def agent_names(self) -> frozenset[str]:
-        return frozenset(agent.declared_name for agent in self._named if not agent.scope_path)
-
-    @property
-    def agent_ids(self) -> frozenset[AgentId]:
-        return frozenset(self._named)
-
-    def backs(self, agent_id: AgentId) -> bool:
-        return agent_id in self._named
-
-    @property
-    def value_dispatcher(self) -> AgentFn | None:
-        """Return the typed-value dispatcher supplied by the host.
-
-        Named registrations are retained only for compatibility with the old
-        declaration surface. They never select a runner for an encoded
-        ``Agent`` value: an ``AgentCommand`` always dispatches its own command
-        through the value dispatcher or the default value-driven fallback.
-        """
-        return self._value_agent or self._default
-
-    def dispatch(
-        self,
-        agent: EnumValue | AgentId | str,
-        request: AgentRequest,
-        *,
-        nominals: BuiltinNominals = NO_BUILTIN_DECLARATIONS,
-    ) -> AgentResponse:
-        """Compatibility wrapper for legacy registry callers."""
-        if isinstance(agent, (AgentId, str)):
-            identity = agent if isinstance(agent, AgentId) else AgentId(agent)
-            fn = self._named.get(identity) or self._default
-            if fn is None:
-                raise KeyError(f"No agent registered for {identity.display_name!r}")
-            raw = fn(request)
-            return AgentResponse(content=raw) if isinstance(raw, str) else raw
-        return dispatch_agent_value(agent, request, self.value_dispatcher, nominals=nominals)
-
-
 def dispatch_agent_value(
     agent: EnumValue,
     request: AgentRequest,
@@ -105,7 +35,7 @@ def dispatch_agent_value(
     *,
     nominals: BuiltinNominals = NO_BUILTIN_DECLARATIONS,
 ) -> AgentResponse:
-    """Execute an encoded ``Agent`` without consulting named registrations."""
+    """Execute an encoded ``Agent`` through the host dispatcher."""
     agent_label = render_value(agent)
     if dispatcher is None:
         _raise_agent_call_error(
@@ -234,7 +164,7 @@ def value_driven_agent_factory(*, idle_timeout: float | None) -> AgentFn:
                 case AgentPi():
                     command = build_pi(spec)
                 case _:
-                    raise ValueError("unsupported decoded Agent specification")
+                    raise ValueError(f"Unsupported decoded agent spec: {type(spec).__name__}")
         except ValueError as exc:
             raise AgentCallHostError(
                 cause="invalid_agent",
@@ -245,23 +175,6 @@ def value_driven_agent_factory(*, idle_timeout: float | None) -> AgentFn:
         return _run_request(request, command, idle_timeout)
 
     return dispatch
-
-
-def runner_backed_agent_factory(
-    *,
-    default_runner_cmd: str,
-    per_agent_cmds: Mapping[AgentId, str] | Mapping[str, str],
-    idle_timeout: float | None,
-) -> AgentFn:
-    """Build the value-driven dispatcher while retaining the legacy signature.
-
-    ``default_runner_cmd`` and ``per_agent_cmds`` remain accepted during the
-    deprecated declaration/config transition, but cannot override an encoded
-    ``AgentCommand``. Agent enum values are decoded exclusively by their own
-    builders.
-    """
-    del default_runner_cmd, per_agent_cmds
-    return value_driven_agent_factory(idle_timeout=idle_timeout)
 
 
 def _stderr_tail(stderr: str, *, max_chars: int = 500) -> str:

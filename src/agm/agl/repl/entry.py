@@ -58,7 +58,7 @@ class EntryResult:
         contract/unset param).  Empty on success.
     ``warnings``
         Advisory warnings from the lexer and static passes (for example a TAB
-        or unused declared agent), surfaced on every non-parse/scope path.
+        or unused binding), surfaced on every non-parse/scope path.
     ``error``
         The uncaught AgL exception mapped to a ``RunError`` when the entry raised
         during evaluation; ``None`` otherwise.

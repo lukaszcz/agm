@@ -494,7 +494,7 @@ _HELP_TEXTS: dict[str, str] = {
     """),
     "exec": textwrap.dedent("""\
         agm exec [--strict-json|--no-strict-json] [--max-iters N]
-                 [--max-call-depth N] [--runner COMMAND]
+                 [--max-call-depth N] [--agent AGL_LITERAL]
                  [--timeout DURATION|--no-timeout] [--dry-run]
                  [--log|--log-file PATH|--no-log] [--no-log-file]
                  [--no-stdlib] [-I DIR]...
@@ -519,7 +519,7 @@ _HELP_TEXTS: dict[str, str] = {
           --max-iters N         Cap unbounded loops; off by default (CLI > config).
           --max-call-depth N    Override the maximum recursion call depth
                                 (CLI > config).
-          --runner COMMAND      Override the default agent runner command.
+          --agent AGL_LITERAL   Seed std/config::default-agent from an AgL Agent literal.
           --timeout DURATION    Override initial shell-exec and agent idle timeouts;
                                 seed std/config::timeout to some(DURATION). Mutually
                                 exclusive with --no-timeout.
@@ -554,15 +554,15 @@ _HELP_TEXTS: dict[str, str] = {
     """),
     "repl": textwrap.dedent("""\
         agm repl [--strict-json|--no-strict-json] [--max-iters N] [--max-call-depth N]
-                 [--runner COMMAND] [--confirm-agents] [--dry-run] [--no-stdlib]
+                 [--agent AGL_LITERAL] [--confirm-agents] [--dry-run] [--no-stdlib]
                  [--quiet] [--log|--log-file PATH|--no-log]
 
         Start an interactive read-eval-print loop for AgL.  Each entry is
         parsed, type-checked, and evaluated once against a persistent session
         that accumulates bindings, types, and declarations across entries, so
         earlier results stay available and agent calls fire exactly once.  The
-        session reuses the [exec] configuration (runner, per-agent commands,
-        call-depth limit, JSON strictness, timeout).  Like agm exec, it
+        session reuses the [exec] configuration (default agent, call-depth
+        limit, JSON strictness, timeout). Like agm exec, it
         automatically opens std/core throughout each loaded program, so
         standard-library names are available unqualified. Other imports are
         qualified by default; use --no-stdlib to require an explicit std/core
@@ -585,7 +585,7 @@ _HELP_TEXTS: dict[str, str] = {
                                 (source writes > CLI > config).
           --max-call-depth N    Override the maximum recursion call depth
                                 (CLI > config; source pragmas are not applied in the REPL).
-          --runner COMMAND      Override the default agent runner command.
+          --agent AGL_LITERAL   Seed std/config::default-agent from an AgL Agent literal.
           --confirm-agents     Confirm each agent call before dispatching it
                                 (default: fire agent calls without confirming).
           --quiet               Suppress automatic echoing of entry results.
@@ -606,7 +606,7 @@ _HELP_TEXTS: dict[str, str] = {
 
         Exit codes:
           0  The session ended normally (:quit / :exit / Ctrl-D).
-          1  Pre-loop setup failure: invalid [exec] config, --runner, or an
+          1  Pre-loop setup failure: invalid [exec] config or an
              unwritable --log-file (reported before the prompt).
     """),
     "help": textwrap.dedent("""\

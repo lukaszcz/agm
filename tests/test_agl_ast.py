@@ -34,8 +34,6 @@ import pytest
 from agm.agl.syntax import (
     # sentinel
     ELSE,
-    AgentDecl,
-    AgentT,
     AppliedT,
     ArrayLit,
     ArrayT,
@@ -111,7 +109,6 @@ from agm.agl.syntax import (
     Try,
     TypeAlias,
     TypeApply,
-    TypeExpr,
     UnaryNeg,
     UnaryNot,
     UnitLit,
@@ -239,10 +236,6 @@ class TestTypeExprs:
         t = UnitT(span=self._s(), node_id=1)
         assert isinstance(t, UnitT)
 
-    def test_agent_t(self) -> None:
-        t = AgentT(span=self._s(), node_id=1)
-        assert isinstance(t, AgentT)
-
     def test_func_t_no_params(self) -> None:
         result = IntT(span=self._s(), node_id=2)
         t = FuncT(params=(), result=result, span=self._s(), node_id=1)
@@ -298,35 +291,10 @@ class TestTypeExprs:
         t2 = UnitT(span=span(5, 0, 5, 4), node_id=50)
         assert t1 == t2
 
-    def test_agent_t_equality(self) -> None:
-        t1 = AgentT(span=span(1, 0, 1, 5), node_id=1)
-        t2 = AgentT(span=span(3, 0, 3, 5), node_id=30)
-        assert t1 == t2
-
     def test_type_frozen(self) -> None:
         t = TextT(span=span(), node_id=1)
         with pytest.raises((FrozenInstanceError, AttributeError)):
             setattr(t, "span", span())
-
-    def test_type_expr_union_contains_all_types(self) -> None:
-        import typing
-
-        args = typing.get_args(TypeExpr)
-        for tp in (
-            TextT,
-            JsonT,
-            BoolT,
-            IntT,
-            DecimalT,
-            NameT,
-            ArrayT,
-            DictT,
-            UnitT,
-            AgentT,
-            FuncT,
-            AppliedT,
-        ):
-            assert tp in args, f"{tp.__name__} missing from TypeExpr union"
 
 
 # ---------------------------------------------------------------------------
@@ -1296,40 +1264,6 @@ class TestDeclarations:
         assert node.name == "spec"
         assert node.annotation is None
 
-    def test_agent_decl_bare(self) -> None:
-        node = AgentDecl(name="reviewer", runner=None, span=self._s(), node_id=1)
-        assert node.name == "reviewer"
-        assert node.runner is None
-
-    def test_agent_decl_with_runner(self) -> None:
-        node = AgentDecl(name="impl", runner="claude -p", span=self._s(), node_id=1)
-        assert node.name == "impl"
-        assert node.runner == "claude -p"
-
-    def test_agent_decl_equality_ignores_span_and_node_id(self) -> None:
-        a = AgentDecl(name="impl", runner="claude -p", span=span(), node_id=1)
-        b = AgentDecl(name="impl", runner="claude -p", span=span(), node_id=99)
-        assert a == b
-
-    def test_agent_decl_inequality_on_runner(self) -> None:
-        a = AgentDecl(name="impl", runner=None, span=span(), node_id=1)
-        b = AgentDecl(name="impl", runner="claude -p", span=span(), node_id=1)
-        assert a != b
-
-    def test_scope_region_is_an_item_with_a_precise_segment_and_walkable_contents(self) -> None:
-        s = self._s()
-        segment = ScopeSegment(name="Point", span=s, node_id=2)
-        member = AgentDecl(name="reviewer", runner=None, span=s, node_id=3)
-        region = ScopeRegion(segment=segment, items=(member,), span=s, node_id=1)
-
-        assert region.segment is segment
-        assert region.items == (member,)
-        from agm.agl.syntax.visitor import walk
-
-        visited: list[object] = []
-        walk(region, visited.append)
-        assert visited == [region, segment, member]
-
     def test_func_def_is_declaration(self) -> None:
         import typing
 
@@ -1522,7 +1456,6 @@ class TestVisitorWalk:
         """
         s = self._s()
 
-        # --- Type nodes (all 13 must appear) ---
         text_t = TextT(span=s, node_id=100)
         int_t = IntT(span=s, node_id=101)
         bool_t = BoolT(span=s, node_id=102)
@@ -1532,11 +1465,10 @@ class TestVisitorWalk:
         list_t = ArrayT(elem=text_t, span=s, node_id=106)
         dict_t = DictT(value=int_t, span=s, node_id=107)
         unit_t = UnitT(span=s, node_id=108)
-        agent_t = AgentT(span=s, node_id=109)
         func_t = FuncT(params=(int_t, text_t), result=bool_t, span=s, node_id=111)
         applied_t = AppliedT(name="Pair", args=(int_t, text_t), span=s, node_id=112)
 
-        # Declarations — each field uses a different type so all types appear.
+        # Declarations exercise the current type and declaration nodes.
         _no = ParamKind.NAMED_ONLY
         field_int = Param(name="x", type_expr=int_t, kind=_no, default=None, span=s, node_id=200)
         field_bool = Param(
@@ -1584,12 +1516,9 @@ class TestVisitorWalk:
             node_id=2141,
         )
         param_decl = ParamDecl(name="spec", annotation=text_t, default=None, span=s, node_id=215)
-        agent_decl = AgentDecl(name="reviewer", runner=None, span=s, node_id=216)
 
-        # FuncDef — exercises UnitT, AgentT, FuncT via type annotations + Param
         _std = ParamKind.STANDARD
         p_unit = Param(name="u", type_expr=unit_t, kind=_std, default=None, span=s, node_id=218)
-        p_agent = Param(name="a", type_expr=agent_t, kind=_std, default=None, span=s, node_id=219)
         p_receiver = Param(
             name="self",
             type_expr=None,
@@ -1608,7 +1537,7 @@ class TestVisitorWalk:
         )
         func_def = FuncDef(
             name="helper",
-            params=(p_unit, p_agent, p_receiver, p_func),
+            params=(p_unit, p_receiver, p_func),
             return_type=unit_t,
             body=UnitLit(span=s, node_id=222),
             span=s,
@@ -1785,7 +1714,6 @@ class TestVisitorWalk:
                 type_alias,
                 param_decl,
                 input_no_ann,
-                agent_decl,
                 func_def,
                 let_decl,
                 let_with_type,
@@ -1842,28 +1770,6 @@ class TestVisitorWalk:
         for kind in binder_kinds:
             assert kind in kinds, f"Expected {kind.__name__} to be visited"
 
-    def test_walk_visits_all_decl_kinds(self) -> None:
-        from agm.agl.syntax.visitor import walk
-
-        prog = self._build_tree()
-        visited: list[object] = []
-        walk(prog, visited.append)
-        kinds = {type(n) for n in visited}
-
-        decl_kinds = {
-            RecordDef,
-            EnumDef,
-            ExceptionDef,
-            TypeAlias,
-            ParamDecl,
-            Param,
-            VariantDef,
-            AgentDecl,
-            FuncDef,
-        }
-        for kind in decl_kinds:
-            assert kind in kinds, f"Expected {kind.__name__} to be visited"
-
     def test_walk_visits_all_expr_kinds(self) -> None:
         from agm.agl.syntax.visitor import walk
 
@@ -1901,6 +1807,7 @@ class TestVisitorWalk:
             BoolLit,
             NullLit,
             StringLit,
+            AppliedT,
             ArrayLit,
             DictLit,
             DictEntry,
@@ -1909,31 +1816,6 @@ class TestVisitorWalk:
             InterpSegment,
         }
         for kind in expr_kinds:
-            assert kind in kinds, f"Expected {kind.__name__} to be visited"
-
-    def test_walk_visits_all_type_kinds(self) -> None:
-        from agm.agl.syntax.visitor import walk
-
-        prog = self._build_tree()
-        visited: list[object] = []
-        walk(prog, visited.append)
-        kinds = {type(n) for n in visited}
-
-        type_kinds = {
-            TextT,
-            JsonT,
-            BoolT,
-            IntT,
-            DecimalT,
-            NameT,
-            ArrayT,
-            DictT,
-            UnitT,
-            AgentT,
-            FuncT,
-            AppliedT,
-        }
-        for kind in type_kinds:
             assert kind in kinds, f"Expected {kind.__name__} to be visited"
 
     def test_walk_visits_typed_call_type_arg(self) -> None:
@@ -2398,15 +2280,6 @@ class TestVisitorWalk:
 
         assert visited == [p, p_type]
 
-    def test_walk_agent_decl(self) -> None:
-        from agm.agl.syntax.visitor import walk
-
-        node = AgentDecl(name="reviewer", runner=None, span=span(), node_id=1)
-        visited: list[object] = []
-        walk(node, visited.append)
-        # AgentDecl is a leaf — only itself is visited.
-        assert visited == [node]
-
     def test_walk_param_decl_without_annotation(self) -> None:
         from agm.agl.syntax.visitor import walk
 
@@ -2465,14 +2338,6 @@ class TestVisitorWalk:
         from agm.agl.syntax.visitor import walk
 
         node = UnitT(span=span(), node_id=1)
-        visited: list[object] = []
-        walk(node, visited.append)
-        assert visited == [node]
-
-    def test_walk_agent_t_is_leaf(self) -> None:
-        from agm.agl.syntax.visitor import walk
-
-        node = AgentT(span=span(), node_id=1)
         visited: list[object] = []
         walk(node, visited.append)
         assert visited == [node]
@@ -2720,13 +2585,6 @@ class TestUnionAliases:
         args = typing.get_args(AssignTarget)
         assert NameTarget in args
         assert IndexTarget in args
-
-    def test_declaration_union_members(self) -> None:
-        import typing
-
-        args = typing.get_args(Declaration)
-        for cls in (FuncDef, RecordDef, EnumDef, TypeAlias, ParamDecl, AgentDecl):
-            assert cls in args, f"{cls.__name__} missing from Declaration union"
 
     def test_item_contains_declaration_binder_expr(self) -> None:
         import typing

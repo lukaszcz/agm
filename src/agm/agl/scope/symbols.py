@@ -29,7 +29,6 @@ from agm.agl.diagnostics import AglError, Diagnostic
 from agm.agl.modules.ids import ENTRY_ID, ModuleId
 from agm.agl.semantics.types import EnumType
 from agm.agl.syntax.nodes import (
-    AgentDecl,
     EnumDef,
     ExceptionDef,
     FuncDef,
@@ -44,7 +43,6 @@ from agm.agl.syntax.types import AppliedT, ImportMode, NameT
 
 ScopePath = tuple[str, ...]
 BareAtom = str | ScopePath
-AgentKey = tuple[ScopePath, str]
 DeclarationKey = tuple[ModuleId, ScopePath, str]
 
 
@@ -150,8 +148,6 @@ class BinderKind(enum.Enum):
         A variable introduced by a ``case``/``match`` pattern (immutable).
     ``function_binding``
         A top-level ``def`` declaration (immutable value binding).
-    ``agent_binding``
-        An ``agent`` declaration (immutable value binding of type ``agent``).
     ``builtin_var_binding``
         A ``builtin var`` declaration (mutable, engine-backed setting; readable
         and assignable with ``:=``).
@@ -168,7 +164,6 @@ class BinderKind(enum.Enum):
     catch_binder = "catch_binder"
     pattern_binding = "pattern_binding"
     function_binding = "function_binding"
-    agent_binding = "agent_binding"
     param_binding = "param_binding"
     builtin_var_binding = "builtin_var_binding"
     constructor_binding = "constructor_binding"
@@ -184,7 +179,6 @@ _IMMUTABLE_BINDER_PHRASES: dict[BinderKind, str] = {
     BinderKind.catch_binder: "it is a catch binder",
     BinderKind.pattern_binding: "it is a pattern binding",
     BinderKind.function_binding: "it is a function (def) binding",
-    BinderKind.agent_binding: "it is an agent binding",
     BinderKind.param_binding: "it is a parameter binding",
     BinderKind.constructor_binding: "it is a constructor binding",
     BinderKind.loop_var_binding: "it is a for-loop variable binding",
@@ -766,9 +760,6 @@ class ModuleResolution:
     ``root_scope``
         The root ``ScopeNode`` (tree root).  Nested scopes are linked via
         ``ScopeNode.parent``.
-    ``declared_agents``
-        Maps each declared agent's ``(scope_path, name)`` identity to its
-        :class:`AgentDecl` node. Always populated by the resolver.
     ``declared_functions``
         Maps each top-level ``def`` name to its :class:`FuncDef` node.
         Populated in the pre-pass; useful for downstream typecheck and eval.
@@ -777,7 +768,7 @@ class ModuleResolution:
         or ``None`` when undeclared.
     ``warnings``
         Non-fatal scope-pass diagnostics (severity ``"warning"``), e.g. an
-        agent that is declared but never referenced.  Empty by default.
+        Empty by default.
     ``declarations``
         Every named declaration keyed by ``(module_id, scope_path, name)``.
         Root declarations use the empty path just like any other scope.
@@ -823,7 +814,6 @@ class ModuleResolution:
     root_scope: ScopeNode
     declarations: dict[DeclarationKey, BindingRef] = field(default_factory=dict)
     scope_nodes: dict[ScopePath, ScopeNode] = field(default_factory=dict)
-    declared_agents: dict[AgentKey, AgentDecl] = field(default_factory=dict)
     declared_functions: dict[str, FuncDef] = field(default_factory=dict)
     program_name: str | None = None
     warnings: tuple[Diagnostic, ...] = ()

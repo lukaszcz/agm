@@ -22,7 +22,6 @@ Type hierarchy
   (never generic); field shapes and hierarchy (``abstract``, ``base``) live
   in the shared ``TypeTable``.
 - ``UnitType`` — the ``unit`` type (AgL; single value ``()``).
-- ``AgentType`` — the opaque ``agent`` type (AgL).
 - ``FunctionType(params, result)`` — a first-class function type (AgL),
   positional only; named/optional arguments are erased from the value type.
 - ``TypeVarType(name)`` — a rigid type variable bound by an enclosing generic
@@ -282,22 +281,6 @@ class UnitType:
 
 
 @dataclass(frozen=True, slots=True)
-class AgentType:
-    """The opaque ``agent`` type.
-
-    Agent values are first-class capability handles.  They are not
-    JSON-shaped, not renderable, and have no equality operator.
-    """
-
-    @property
-    def kind(self) -> str:
-        return "agent"
-
-    def __repr__(self) -> str:
-        return "agent"
-
-
-@dataclass(frozen=True, slots=True)
 class FunctionType:
     """A first-class function value type.
 
@@ -402,7 +385,6 @@ Type = (
     | EnumType
     | ExceptionType
     | UnitType
-    | AgentType
     | FunctionType
     | BottomType
     | TypeVarType
@@ -605,7 +587,6 @@ def type_children(t: Type) -> tuple[Type, ...]:
             | DecimalType()
             | ExceptionType()
             | UnitType()
-            | AgentType()
             | BottomType()
             | TypeVarType()
             | InferenceVarType()
@@ -654,7 +635,6 @@ def replace_type_children(t: Type, children: tuple[Type, ...]) -> Type:
             | DecimalType()
             | ExceptionType()
             | UnitType()
-            | AgentType()
             | BottomType()
             | TypeVarType()
             | InferenceVarType()
@@ -770,8 +750,8 @@ def is_json_shaped(value_type: Type) -> bool:
     Records, enums, and exceptions are **not** JSON-shaped — to embed one in a
     ``json`` value they must first be rendered to text (e.g. via a ``let`` binding).
 
-    AgL: ``UnitType``, ``AgentType``, and ``FunctionType`` are also NOT
-    JSON-shaped; function and agent values render only as opaque handles.
+    AgL: ``UnitType`` and ``FunctionType`` are also NOT
+    JSON-shaped; function values render only as opaque handles.
 
     Three predicates answer three different questions and must not be
     conflated: this one decides ``json``-slot *inhabitation*,
@@ -789,7 +769,7 @@ def is_json_shaped(value_type: Type) -> bool:
         return is_json_shaped(value_type.value)
     if isinstance(value_type, InferenceVarType):
         return False
-    # RecordType, EnumType, ExceptionType, UnitType, AgentType, FunctionType,
+    # RecordType, EnumType, ExceptionType, UnitType, FunctionType,
     # BottomType, and TypeVarType are not JSON-shaped.
     return False
 
@@ -809,11 +789,10 @@ def is_assignable(value_type: Type, target_type: Type) -> bool:
 
     All other assignments require exact structural equality.
 
-    AgL: ``UnitType``, ``AgentType``, and ``FunctionType`` assignability is
+    AgL: ``UnitType`` and ``FunctionType`` assignability is
     exact-only — no widening and no variance.  The
-    ``value_type == target_type`` check below handles them: ``UnitType`` and
-    ``AgentType`` are parameter-free singletons so equality is trivial;
-    ``FunctionType`` uses structural tuple equality on ``params`` + ``result``.
+    ``value_type == target_type`` check below handles them; ``FunctionType``
+    uses structural tuple equality on ``params`` + ``result``.
 
     AgL: ``BottomType`` (the type of ``raise``) is assignable to any target.
     """

@@ -17,7 +17,7 @@ Supported AST nodes
   Items (top-level and block-level)
     LetDecl, VarDecl, AssignStmt (name target and indexed target)
     Declarations that have no runtime action:
-      RecordDef, EnumDef, TypeAlias, FuncDef, AgentDecl, ParamDecl,
+      RecordDef, EnumDef, TypeAlias, FuncDef, ParamDecl,
       ProgramDecl, ImportDecl, ExportDecl
 
 Any AST node outside this set raises ``NotImplementedError`` with a clear
@@ -43,10 +43,9 @@ from agm.agl.ir.contracts import (
     ConversionFailureMode,
     DecodeSchema,
 )
-from agm.agl.ir.ids import AgentId, ContractId, FunctionId, Location, NominalId, SourceId, SymbolId
+from agm.agl.ir.ids import ContractId, FunctionId, Location, NominalId, SourceId, SymbolId
 from agm.agl.ir.nodes import (
     AutoTraceField,
-    IrAgentHandle,
     IrAnd,
     IrArith,
     IrAsk,
@@ -186,7 +185,6 @@ from agm.agl.semantics.types import (
     UnitType,
 )
 from agm.agl.syntax.nodes import (
-    AgentDecl,
     ArrayLit,
     AssignStmt,
     AssignTarget,
@@ -572,7 +570,7 @@ class _Lowerer:
     # Binder kinds whose values live in evaluation frames and can therefore be
     # captured by a closure.  function_binding is resolved through the function
     # table (via the base frame, which always contains all module-level bindings);
-    # agent_binding/constructor_binding are not frame values in the IR
+    # Constructor bindings are not frame values in the IR.
     # (host prep / constructors are handled elsewhere) so they are not captures here.
     _CAPTURABLE_KINDS = frozenset(
         {
@@ -581,7 +579,6 @@ class _Lowerer:
             BinderKind.param_binding,
             BinderKind.catch_binder,
             BinderKind.pattern_binding,
-            BinderKind.agent_binding,
             BinderKind.loop_var_binding,
         }
     )
@@ -638,7 +635,6 @@ class _Lowerer:
                 | TypeAlias()
                 | ParamDecl()
                 | ProgramDecl()
-                | AgentDecl()
                 | ScopeRegion()
                 | BuiltinVarDecl()
                 | ImportDecl()
@@ -3343,21 +3339,6 @@ class _Lowerer:
                 self._lower_param_decl(param_decl)
                 return None
 
-            case AgentDecl() as agent_decl:
-                sym = self._sym_for_decl(agent_decl.node_id)
-                loc = self._loc(agent_decl.span)
-                return IrBind(
-                    location=loc,
-                    symbol=sym,
-                    value=IrAgentHandle(
-                        location=loc,
-                        agent_id=AgentId(
-                            agent_decl.name,
-                            tuple(segment.name for segment in agent_decl.scope_path),
-                        ),
-                    ),
-                )
-
             case (
                 RecordDef()
                 | EnumDef()
@@ -3570,45 +3551,11 @@ class _Lowerer:
 
         _add_builtin_nominals(self._link.nominals, table)
 
-    def _scoped_agent_is_referenced(self, agent: AgentDecl) -> bool:
-        """Whether a scoped agent needs a runtime handle in this module.
-
-        Whole-program lowering emits scoped handles lazily after agent
-        reconciliation has validated every declaration. REPL lowering opts
-        into eager handles so a promoted scope member remains usable later.
-        """
-        return any(
-            ref.decl_node_id == agent.node_id for ref in self._checked.resolved.resolution.values()
-        )
-
-    def prealloc_static_symbols(
-        self,
-        body: Block,
-        *,
-        public: bool,
-        eager_scoped_agents: bool = False,
-    ) -> None:
-        """Pre-allocate static function symbols and needed agent handles.
-
-        Phase 1 of lowering one module body, run before any body is lowered so
-        mutual recursion resolves. Every module of a program shares this step,
-        exactly as they share :meth:`lower_initializers`; a scope region is
-        transparent here the same way. ``public`` marks the allocated agent
-        handles visible outside their module.
-        """
+    def prealloc_static_symbols(self, body: Block, *, public: bool) -> None:
+        """Pre-allocate static function symbols before lowering module bodies."""
         for item in static_items(body.items):
             if isinstance(item, FuncDef) and not item.is_builtin:
                 self._prealloc_funcdef(item)
-            elif isinstance(item, AgentDecl) and (
-                eager_scoped_agents or not item.scope_path or self._scoped_agent_is_referenced(item)
-            ):
-                self._alloc_sym(
-                    item.node_id,
-                    name=scoped_public_name(item.scope_path, item.name),
-                    mutable=False,
-                    public=public,
-                    owner=self._module_id,
-                )
 
     def lower_initializers(
         self,
@@ -3616,7 +3563,6 @@ class _Lowerer:
         *,
         top_level: bool,
         handles_only: bool = False,
-        eager_scoped_agents: bool = False,
     ) -> tuple[IrExpr, ...]:
         """Lower one module body and publish its initializer origins.
 
@@ -3627,8 +3573,8 @@ class _Lowerer:
         ``static_items``: each of its members gets its own source index, the
         same as a root item, so a region is not one promotable declaration
         group — a binder inside a region completes and promotes independently
-        of its siblings. ``handles_only`` keeps a library module to the items
-        it must expose as runtime handles: functions and needed agents.
+        of its siblings. ``handles_only`` keeps a library module to function
+        initializers, which are the only declarations requiring runtime handles.
         """
         function_initializers: list[IrExpr] = []
         function_origins: list[InitializerOrigin] = []
@@ -3636,14 +3582,7 @@ class _Lowerer:
         other_origins: list[InitializerOrigin] = []
         for source_index, member in enumerate(static_items(body.items)):
             is_function = isinstance(member, FuncDef) and not member.is_builtin
-            if handles_only and not is_function and not isinstance(member, AgentDecl):
-                continue
-            if (
-                isinstance(member, AgentDecl)
-                and member.scope_path
-                and not eager_scoped_agents
-                and not self._scoped_agent_is_referenced(member)
-            ):
+            if handles_only and not is_function:
                 continue
             ir = self.lower_item(member, top_level=top_level)
             if ir is None:
@@ -3667,7 +3606,7 @@ class _Lowerer:
         body = self._checked.resolved.program.body
 
         # Phase 1: pre-allocate static function symbols and IDs for mutual
-        # recursion, plus every needed agent handle before bodies are lowered.
+        # recursion before bodies are lowered.
         self.prealloc_static_symbols(body, public=True)
 
         # Phase 2: lower all items

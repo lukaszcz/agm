@@ -26,8 +26,8 @@ reach that bottom.
 
 Non-data reachability
 ---------------------
-The *non-data* types are exactly ``unit``, ``agent``, and function types:
-opaque handles rather than data. Two independent language rules turn on
+The *non-data* types are exactly ``unit`` and function types. Two
+independent language rules turn on
 whether one of them is reachable from a type — ``=``/``!=`` are undefined for
 such a value (and for anything that transitively contains one), and there is
 no JSON representation for one either — so the underlying fact is computed
@@ -82,7 +82,6 @@ from typing import assert_never
 
 from agm.agl.semantics.type_table import DeclKey, TypeDef, TypeDefKind, TypeTable, decl_key_sort_key
 from agm.agl.semantics.types import (
-    AgentType,
     ArrayType,
     BoolType,
     BottomType,
@@ -296,7 +295,6 @@ def _template_inhabited(
             | IntType()
             | DecimalType()
             | UnitType()
-            | AgentType()
             | BottomType()
         ):
             return True
@@ -314,7 +312,7 @@ class NonDataReachability:
     """Whole-table non-data-reachability fixpoint result.
 
     ``reaches_non_data`` — declarations that unconditionally reach a non-data
-    type (their body contains a function/agent/unit type, or reaches a
+    type (their body contains a function/unit type, or reaches a
     declaration that does, outside of a type-variable position).
     ``relevant_params`` — for every declaration, the subset of its own type
     parameters whose instantiation can affect that answer (see
@@ -331,7 +329,7 @@ def compute_non_data_reachability(table: TypeTable) -> NonDataReachability:
     Two facts are grown together to a least fixpoint, per declaration:
 
     - ``reaches_non_data`` (an unconditional, argument-independent fact): true
-      iff some field/variant-field template contains a function/agent/unit
+      iff some field/variant-field template contains a function/unit
       type, or references a declaration whose own ``reaches_non_data`` is
       already true — at any depth, but never through a bare type-variable
       position (a parameter standing for "whatever the caller instantiates" is
@@ -415,7 +413,7 @@ def field_templates(typedef: TypeDef) -> list[tuple[str, Type]]:
     Unlike :func:`_decl_inhabited`'s enum handling (which groups fields by
     variant, since only ONE variant needs to be fully inhabited), both the
     non-data-reachability and reference-edge fixpoints look at every field of
-    every variant flat: a function/agent/unit anywhere is reachable from some
+    every variant flat: a function/unit anywhere is reachable from some
     value of the declaration, and a reference to another declaration matters,
     regardless of which variant carries it. Names are carried alongside so a
     use-site diagnostic can point at the field responsible.
@@ -432,7 +430,7 @@ def _template_reaches_non_data(
     defs: Mapping[DeclKey, TypeDef],
 ) -> bool:
     match t:
-        case FunctionType() | AgentType() | UnitType():
+        case FunctionType() | UnitType():
             return True
         case ArrayType():
             return _template_reaches_non_data(t.elem, non_data, relevant, defs)
@@ -502,7 +500,6 @@ def _template_relevant_params(
             return result
         case (
             ExceptionType()
-            | AgentType()
             | UnitType()
             | TextType()
             | JsonType()
@@ -637,7 +634,6 @@ def nominal_references(t: Type) -> Iterator[RecordType | EnumType | ExceptionTyp
             | IntType()
             | DecimalType()
             | UnitType()
-            | AgentType()
             | BottomType()
             | TypeVarType()
             | InferenceVarType()
@@ -687,7 +683,6 @@ def nominal_references_for_schema(
             | IntType()
             | DecimalType()
             | UnitType()
-            | AgentType()
             | BottomType()
             | TypeVarType()
             | InferenceVarType()
@@ -868,7 +863,6 @@ def _param_occurrences(
             return merged
         case (
             ExceptionType()
-            | AgentType()
             | UnitType()
             | TextType()
             | JsonType()

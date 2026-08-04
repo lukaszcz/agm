@@ -27,8 +27,7 @@ where `T` is the **target type** — determined from the calling context (see
 below). All parameters after `prompt` are optional and passed by name.
 
 `ask` is a **contextual keyword**: it cannot be declared with `let`, `var`,
-or `param`; it cannot be declared as an agent name; it may not be bound as a
-function value (`let f = ask` is a static error, because `ask`'s type is
+or `param`; it may not be bound as a function value (`let f = ask` is a static error, because `ask`'s type is
 not a fully expressible monomorphic type). It remains legal as a
 record/enum **field name**.
 
@@ -91,11 +90,6 @@ Each variant builds its own argv at dispatch. `AgentCommand` accepts a shell-lik
 command string; the provider variants carry their model and thinking settings.
 `Agent` values are ordinary enum data: they can be stored, passed to functions,
 rendered, inspected, and JSON-encoded like other enum values.
-
-The historical `agent NAME` declaration, optional runner hint, and per-name host
-registry remain parseable only as a compatibility surface during their removal
-transition. They do not select or override the command of an `Agent` enum value.
-New programs should bind `Agent...` constructors with `let` instead.
 
 ### The default agent
 

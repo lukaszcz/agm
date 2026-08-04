@@ -78,8 +78,8 @@ until final is Pass
 | [Program structure](program-structure.md) | Programs, blocks, items, binders, inline forms |
 | [Modules](modules.md) | File-based module system: module identity, import forms, qualified access, visibility, cyclic imports, REPL imports |
 | [Named scopes](scopes.md) | Nestable declaration namespaces, qualifier paths, visibility, and `open` |
-| [Types](types.md) | Built-in types (`unit`, `text`, `int`, `decimal`, `bool`, `json`, `agent`, function types), `record`/`enum`/`type` declarations, standard core types (`Option`, `ExecResult`, `ParsePolicy`), assignability, casts and convertibility (`as`/`as?`), reference semantics, cycles, and copying (`copy`/`shallow_copy`) |
-| [Bindings and scope](bindings-and-scope.md) | `let`, `var`, `:=`, `param`, `builtin var`, `agent`, `def`, lexical scoping, shadowing |
+| [Types](types.md) | Built-in types (`unit`, `text`, `int`, `decimal`, `bool`, `json`, function types), `record`/`enum`/`type` declarations, standard core types (`Option`, `ExecResult`, `ParsePolicy`, `Agent`), assignability, casts and convertibility (`as`/`as?`), reference semantics, cycles, and copying (`copy`/`shallow_copy`) |
+| [Bindings and scope](bindings-and-scope.md) | `let`, `var`, `:=`, `param`, `builtin var`, `def`, lexical scoping, shadowing |
 | [Expressions](expressions.md) | Literals, constructors, calls, operators, `as`/`as?` cast operators, `render`, `parse_json`, `case`/`if` expressions, `unit`-typed forms, expected-type propagation |
 | [Functions](functions.md) | `def` declarations, `fn` lambdas, optional/named arguments, function types, first-class values, recursion and depth limit |
 | [Pattern matching](pattern-matching.md) | Patterns, source priority, exhaustiveness, redundancy |
@@ -102,7 +102,7 @@ strings are literal tokens. Token names in `UPPER_CASE` refer to the lexical
 tokens defined in [Lexical structure](lexical-structure.md).
 
 Throughout the reference, "the host" refers to the runtime environment that
-embeds AgL: it backs the program's declared agents, supplies program params,
+embeds AgL: it dispatches selected `Agent` values, supplies program params,
 executes shell commands, and records traces. Behavior marked *host-configurable*
 has a documented portable default that hosts may override; everything else is
 fixed by the language.

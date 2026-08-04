@@ -153,25 +153,6 @@ def test_a_slot_selected_as_a_constructor_is_callable_in_the_branch_body() -> No
     assert out == "true\n"
 
 
-def test_constructor_selected_slot_preserves_legacy_agent_rejection() -> None:
-    """A matching legacy agent remains opaque rather than becoming ``Agent``."""
-    with pytest.raises(AglTypeError):
-        resolve_and_check_entry(
-            "agent on\n"
-            "enum Flag\n"
-            "  | on\n"
-            "enum Packet\n"
-            "  | packet(flag: Flag)\n"
-            "let item = packet(Flag::on)\n"
-            "case item of\n"
-            '  | packet(on) => ask("question", agent = on)\n',
-            HostCapabilities(
-                agent_names=frozenset({"on"}),
-                codec_kinds={"text": frozenset({"text"})},
-            ),
-        )
-
-
 def test_a_bare_nullary_variant_name_tests_the_variant() -> None:
     ok, out, diagnostics = _run(
         "enum Flag\n"

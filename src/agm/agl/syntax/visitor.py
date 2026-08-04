@@ -29,7 +29,6 @@ from collections.abc import Callable
 from typing import cast
 
 from agm.agl.syntax.nodes import (
-    AgentDecl,
     ArrayLit,
     AsPattern,
     AssignStmt,
@@ -104,7 +103,6 @@ from agm.agl.syntax.nodes import (
     WildcardPattern,
 )
 from agm.agl.syntax.types import (
-    AgentT,
     AppliedT,
     ArrayT,
     BoolT,
@@ -167,7 +165,6 @@ class Visitor:
     def visit_ArrayT(self, node: ArrayT) -> None: ...
     def visit_DictT(self, node: DictT) -> None: ...
     def visit_UnitT(self, node: UnitT) -> None: ...
-    def visit_AgentT(self, node: AgentT) -> None: ...
     def visit_FuncT(self, node: FuncT) -> None: ...
     def visit_AppliedT(self, node: AppliedT) -> None: ...
 
@@ -190,7 +187,6 @@ class Visitor:
     def visit_TypeAlias(self, node: TypeAlias) -> None: ...
     def visit_ParamDecl(self, node: ParamDecl) -> None: ...
     def visit_ProgramDecl(self, node: ProgramDecl) -> None: ...
-    def visit_AgentDecl(self, node: AgentDecl) -> None: ...
     def visit_FuncDef(self, node: FuncDef) -> None: ...
     def visit_BuiltinVarDecl(self, node: BuiltinVarDecl) -> None: ...
     def visit_InfixDecl(self, node: InfixDecl) -> None: ...
@@ -280,7 +276,6 @@ _KNOWN_NODE_TYPES: frozenset[type] = frozenset(
         ArrayT,
         DictT,
         UnitT,
-        AgentT,
         FuncT,
         AppliedT,
         # module system nodes
@@ -301,7 +296,6 @@ _KNOWN_NODE_TYPES: frozenset[type] = frozenset(
         TypeAlias,
         ParamDecl,
         ProgramDecl,
-        AgentDecl,
         FuncDef,
         BuiltinVarDecl,
         InfixDecl,
@@ -406,7 +400,7 @@ def walk(node: object, callback: Callable[[object], None]) -> None:
     elif isinstance(node, DictT):
         walk(node.value, callback)
 
-    elif isinstance(node, (UnitT, AgentT)):
+    elif isinstance(node, UnitT):
         pass  # leaves
 
     elif isinstance(node, FuncT):
@@ -495,10 +489,6 @@ def walk(node: object, callback: Callable[[object], None]) -> None:
 
     elif isinstance(node, ProgramDecl):
         pass  # leaf — name is a plain string
-
-    elif isinstance(node, AgentDecl):
-        for scope_segment in node.scope_path:
-            walk(scope_segment, callback)
 
     elif isinstance(node, FuncDef):
         for scope_segment in node.scope_path:

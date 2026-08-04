@@ -436,6 +436,26 @@ class TestPrepareRuntime:
         assert runtime.log_file is None
         cleanup_runtime(runtime)
 
+    def test_prepare_runtime_validates_interpolated_runner_without_mutating_it(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        home = self._setup_home_with_prompts(tmp_path, ["loop.md", "select.md"])
+        monkeypatch.setenv("HOME", str(home))
+        monkeypatch.setenv("LOOP_RUNNER", "fake-runner")
+        monkeypatch.setattr("shutil.which", lambda executable: "/bin/fake")
+        monkeypatch.chdir(tmp_path)
+
+        tasks_dir_path = tmp_path / ".agent-files" / "tasks"
+        tasks_dir_path.mkdir(parents=True)
+        (tasks_dir_path / "PROGRESS.md").write_text("done\n", encoding="utf-8")
+
+        runtime = prepare_runtime(
+            _make_loop_args(no_log=True, no_selector=True, runner="%{LOOP_RUNNER}")
+        )
+
+        assert runtime.resolved_runner_command == ["%{LOOP_RUNNER}"]
+        cleanup_runtime(runtime)
+
     def test_no_selector_mode_creates_bootstrap_when_no_progress_file(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:

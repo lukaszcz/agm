@@ -1166,6 +1166,34 @@ class TestValidateCommandNotFound:
             validate_command(["nonexistent-command-xyz123"], kind="runner")
         assert exc_info.value.code == 1
 
+    def test_interpolates_executable_without_mutating_command(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        command = ["%{RUNNER_EXECUTABLE}", "--option=%{RUNNER_OPTION}"]
+        monkeypatch.setenv("RUNNER_EXECUTABLE", "fake-runner")
+        monkeypatch.setenv("RUNNER_OPTION", "value")
+        looked_up: list[str] = []
+        monkeypatch.setattr(
+            "shutil.which", lambda executable: looked_up.append(executable) or "/bin/fake"
+        )
+
+        validate_command(command, kind="runner")
+
+        assert looked_up == ["fake-runner"]
+        assert command == ["%{RUNNER_EXECUTABLE}", "--option=%{RUNNER_OPTION}"]
+
+    @pytest.mark.parametrize("executable", ["%{MISSING_RUNNER_EXECUTABLE}", "%{unterminated"])
+    def test_invalid_executable_hole_exits_cleanly(
+        self, executable: str, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        with pytest.raises(SystemExit) as exc_info:
+            validate_command([executable], kind="runner")
+
+        assert exc_info.value.code == 1
+        error = capsys.readouterr().err
+        assert "runner command executable" in error
+        assert "Traceback" not in error
+
 
 class TestCommandWithPromptTarget:
     def test_replaces_percent_percent_placeholder(self) -> None:

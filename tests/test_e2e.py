@@ -8253,6 +8253,35 @@ class TestReviewCommand:
         assert len(saved) == 1
         assert saved[0].read_text() == "review body\n"
 
+    def test_interpolates_runner_executable_from_environment(
+        self, tmp_path: Path, env: dict[str, str]
+    ) -> None:
+        fake_runner = tmp_path / "bin" / "reviewer"
+        fake_runner.parent.mkdir(parents=True)
+        fake_runner.write_text("#!/bin/bash\nprintf 'review body\\n'\n")
+        fake_runner.chmod(fake_runner.stat().st_mode | stat.S_IEXEC)
+        env["PATH"] = f"{fake_runner.parent}:{env['PATH']}"
+        env["REVIEW_RUNNER"] = "reviewer"
+
+        work = tmp_path / "work"
+        work.mkdir()
+
+        result = run_agm(
+            [
+                "review",
+                "--runner",
+                "%{REVIEW_RUNNER}",
+                "--prompt",
+                "review prompt",
+                "--no-review-file",
+            ],
+            env=env,
+            cwd=str(work),
+        )
+
+        assert result.returncode == 0
+        assert "review body" in result.stdout
+
     def test_no_review_file_disables_saving(self, tmp_path: Path, env: dict[str, str]) -> None:
         fake_runner = tmp_path / "bin" / "reviewer"
         fake_runner.parent.mkdir(parents=True)

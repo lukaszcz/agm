@@ -80,9 +80,18 @@ def split_command(command: str, *, kind: str) -> list[str]:
 
 
 def validate_command(command: list[str], *, kind: str) -> None:
-    if shutil.which(command[0]) is None:
+    executable_template = command[0]
+    try:
+        executable = interp(executable_template, os.environ)
+    except InterpolationError as exc:
         print(
-            f"Error: {kind} command {command[0]} is not installed or not in PATH.",
+            f"Error: cannot interpolate {kind} command executable {executable_template!r}: {exc}.",
+            file=sys.stderr,
+        )
+        raise SystemExit(1) from exc
+    if shutil.which(executable) is None:
+        print(
+            f"Error: {kind} command {executable} is not installed or not in PATH.",
             file=sys.stderr,
         )
         raise SystemExit(1)

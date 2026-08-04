@@ -1,0 +1,59 @@
+{
+  "scenarios": [
+    {
+      "name": "array_append_mutates_callers_container",
+      "params": {"mode": "append"},
+      "expect": {"stdout": "[3, 1, 2, 4]\n"}
+    },
+    {
+      "name": "array_insert_mutates_callers_container",
+      "params": {"mode": "insert"},
+      "expect": {"stdout": "[3, 0, 1, 2]\n"}
+    },
+    {
+      "name": "array_sort_mutates_callers_container",
+      "params": {"mode": "sort"},
+      "expect": {"stdout": "[1, 2, 3]\n"}
+    },
+    {
+      "name": "array_clear_mutates_callers_container",
+      "params": {"mode": "clear"},
+      "expect": {"stdout": "[]\n"}
+    },
+    {
+      "name": "dict_update_mutates_callers_container",
+      "params": {"mode": "update"},
+      "expect": {"stdout": "{\"one\": 1, \"two\": 2}\n"}
+    },
+    {
+      "name": "dict_delete_mutates_callers_container",
+      "params": {"mode": "delete"},
+      "expect": {"stdout": "{\"two\": 2}\n"}
+    },
+    {
+      "name": "nested_array_in_record_field_stays_live",
+      "params": {"mode": "nested_record"},
+      "expect": {"stdout": "Batch(values = [1, 2, 3])\n"}
+    },
+    {
+      "name": "same_array_parameters_arrive_as_one_object",
+      "params": {"mode": "aliased_parameters"},
+      "expect": {"stdout": "[1, 2, 3]\n"}
+    },
+    {
+      "name": "explicit_copy_defends_callers_original",
+      "params": {"mode": "explicit_copy"},
+      "expect": {"stdout": "[1, 2]\n"}
+    },
+    {
+      "name": "array_view_is_mutable_sequence_not_list_and_snapshots_detach",
+      "params": {"mode": "snapshot_not_list"},
+      "expect": {"stdout": "[1, 2]\n[9, 2]\n"}
+    },
+    {
+      "name": "dict_view_is_mutable_mapping_not_dict_and_snapshots_detach",
+      "params": {"mode": "snapshot_not_dict"},
+      "expect": {"stdout": "{\"one\": 1}\n{\"one\": 9}\n"}
+    }
+  ]
+}

@@ -1045,6 +1045,30 @@ class TestRedefinition:
         bad = s.eval_entry("let r2 = R(a = 1)")
         assert not bad.ok  # old field 'a' no longer valid
 
+    def test_builtin_agent_redeclaration_preserves_prior_values(self) -> None:
+        declaration = """\
+builtin
+enum Agent
+  | AgentCommand(command: text)
+  | AgentClaude(model: text, thinking: text)
+  | AgentCodex(model: text, thinking: text)
+  | AgentPi(provider: text, model: text, thinking: text)
+"""
+        session = ReplSession(default_stdlib=False)
+        assert session.eval_entry(declaration).ok
+        assert session.eval_entry('let stale = AgentClaude("sonnet", "medium")').ok
+        assert session.eval_entry(declaration).ok
+
+        stale = session.eval_entry("stale")
+        fresh = session.eval_entry('AgentCommand(command = "echo hello")')
+
+        assert stale.ok, stale.diagnostics
+        assert isinstance(stale.value_type, EnumType)
+        assert stale.value_type.name == "Agent"
+        assert fresh.ok, fresh.diagnostics
+        assert isinstance(fresh.value_type, EnumType)
+        assert fresh.value_type.name == "Agent"
+
     def test_record_redefinition_clears_generic_metadata(self) -> None:
         s = ReplSession()
         first = s.eval_entry("record Box[T]\n  x: T")

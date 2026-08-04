@@ -1234,7 +1234,7 @@ def cast_classification(source: Type, target: Type, table: TypeTable) -> CastKin
 # Prelude type shapes — the single source of truth for built-in nominal types
 #
 # These ``TypeDef`` literals are the canonical shapes for AgL's built-in
-# prelude types (``ExecResult``, ``ParsePolicy``, ``OutputContract``,
+# prelude types (``ExecResult``, ``ParsePolicy``, ``Agent``, ``OutputContract``,
 # ``OutputContractOption``, ``AgentRequest``) and the generic ``Option``
 # template.  ``create_seeded_type_table``, the scope resolver's builtin
 # constructor-candidate seeding, ``TypeEnvironment`` init seeding, and builtin
@@ -1261,6 +1261,20 @@ BUILTIN_PRELUDE_TYPE_DEFS: Mapping[str, TypeDef] = {
         variants=(
             ("Abort", ()),
             ("Retry", (("n", IntType()),)),
+        ),
+    ),
+    "Agent": TypeDef(
+        kind="enum",
+        name="Agent",
+        module_id=STD_CORE_ID,
+        variants=(
+            ("AgentCommand", (("command", TextType()),)),
+            ("AgentClaude", (("model", TextType()), ("thinking", TextType()))),
+            ("AgentCodex", (("model", TextType()), ("thinking", TextType()))),
+            (
+                "AgentPi",
+                (("provider", TextType()), ("model", TextType()), ("thinking", TextType())),
+            ),
         ),
     ),
     "OutputContract": TypeDef(
@@ -1531,7 +1545,7 @@ def create_seeded_type_table() -> TypeTable:
     """Return a fresh ``TypeTable`` pre-populated with built-in defs.
 
     Registers ``BUILTIN_PRELUDE_TYPE_DEFS`` (``ExecResult``, ``ParsePolicy``,
-    ``OutputContract``, ``OutputContractOption``, ``AgentRequest``), the
+    ``Agent``, ``OutputContract``, ``OutputContractOption``, ``AgentRequest``), the
     generic ``OPTION_TYPE_DEF``, and ``BUILTIN_EXCEPTION_TYPE_DEFS`` (every
     entry of ``semantics.types.BUILTIN_EXCEPTIONS``).
     """

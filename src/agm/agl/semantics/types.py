@@ -934,6 +934,9 @@ _EXEC_RESULT_TYPE = RecordType(name="ExecResult", module_id=STD_CORE_ID)
 # ``Retry(n: int)`` — retry up to ``n`` times.
 _PARSE_POLICY_TYPE = EnumType(name="ParsePolicy", module_id=STD_CORE_ID)
 
+# ``Agent`` — a plain enum data value that specifies an agent backend.
+_AGENT_TYPE = EnumType(name="Agent", module_id=STD_CORE_ID)
+
 _OPTION_TEXT_TYPE = EnumType(name="Option", type_args=(TextType(),), module_id=STD_CORE_ID)
 
 # Public alias for the ``Option[text]`` type — the single source of truth
@@ -956,6 +959,7 @@ _AGENT_REQUEST_TYPE = RecordType(name="AgentRequest", module_id=STD_CORE_ID)
 BUILTIN_PRELUDE_TYPES: dict[str, Type] = {
     "ExecResult": _EXEC_RESULT_TYPE,
     "ParsePolicy": _PARSE_POLICY_TYPE,
+    "Agent": _AGENT_TYPE,
     "OutputContract": _OUTPUT_CONTRACT_TYPE,
     "OutputContractOption": _OUTPUT_CONTRACT_OPTION_TYPE,
     "AgentRequest": _AGENT_REQUEST_TYPE,

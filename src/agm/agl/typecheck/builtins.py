@@ -13,7 +13,7 @@ from enum import StrEnum
 from typing import Protocol
 
 from agm.agl.capabilities import HostCapabilities
-from agm.agl.diagnostics import Diagnostic
+from agm.agl.diagnostics import Diagnostic, DiagnosticPhase
 from agm.agl.semantics.types import (
     BUILTIN_PRELUDE_TYPES,
     BoolType,
@@ -414,6 +414,7 @@ class BuiltinCallChecker:
                 end_line=obligation.span.end_line,
                 end_column=obligation.span.end_col,
                 severity="warning",
+                phase=DiagnosticPhase.TYPECHECK,
             )
         )
 

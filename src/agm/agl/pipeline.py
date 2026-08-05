@@ -18,7 +18,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, TypeVar
 
-from agm.agl.diagnostics import AglError, Diagnostic
+from agm.agl.diagnostics import AglError, Diagnostic, DiagnosticPhase
 from agm.agl.eval.ir_interpreter import IrInterpreter
 from agm.agl.runtime.agents import AgentFn
 from agm.agl.runtime.params import _materialize_ir_contracts, _prepare_ir_params
@@ -584,7 +584,7 @@ class PipelineDriver:
                 entry_path,
                 roots,
                 None,
-                (Diagnostic(message=f"Scope error: {exc}", line=1),),
+                (Diagnostic(message=f"Scope error: {exc}", line=1, phase=DiagnosticPhase.SCOPE),),
                 warnings,
             )
 
@@ -1095,7 +1095,10 @@ def _run_typecheck_program(
     except AglError as exc:
         return None, (exc.to_diagnostic(),)
     except Exception as exc:
-        return None, (Diagnostic(message=f"Type error: {exc}", line=1),)
+        diagnostic = Diagnostic(
+            message=f"Type error: {exc}", line=1, phase=DiagnosticPhase.TYPECHECK
+        )
+        return None, (diagnostic,)
 
 
 def _run_matchcompile_program(

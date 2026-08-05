@@ -12,7 +12,7 @@ from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 
-from agm.agl.diagnostics import AglError
+from agm.agl.diagnostics import AglError, DiagnosticPhase
 from agm.agl.semantics.types import (
     ArrayType,
     BottomType,
@@ -66,7 +66,13 @@ class InferenceError(AglError):
     ``origins`` identifies precisely the constraints participating in the
     failure.  Consumers can use it for semantic follow-up without recovering
     meaning from rendered diagnostic text.
+
+    Most call sites rewrap this into an :class:`AglTypeError` carrying a
+    checker-authored message; the phase tag classifies the ones that escape
+    the typecheck pass unwrapped.
     """
+
+    phase = DiagnosticPhase.TYPECHECK
 
     def __init__(
         self,

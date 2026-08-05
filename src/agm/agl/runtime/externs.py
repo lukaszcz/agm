@@ -372,6 +372,9 @@ def _array(values: Sequence[object]) -> AglArrayView:
 
 def _dict(values: dict[str, object]) -> AglDictView:
     """Construct the companion representation of a new AgL dict."""
-    return AglDictView(
-        DictValue({key: decode_boundary_value(value) for key, value in values.items()})
-    )
+    entries: dict[str, Value] = {}
+    for key, value in values.items():
+        if not isinstance(key, str):
+            raise TypeError("AgL dict keys must be str")
+        entries[key] = decode_boundary_value(value)
+    return AglDictView(DictValue(entries))

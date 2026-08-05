@@ -80,6 +80,15 @@ class TestValueDirectedBoundary:
         )
         assert exc.fields["python_type"].value == ""
 
+    def test_agl_dict_rejects_non_text_keys(self, tmp_path: Path) -> None:
+        exc = evaluate_ir_raises_with_externs(
+            "extern def f() -> dict[text, int]\nlet _ = f()\n()\n",
+            "from agl import dict as agl_dict\ndef f(): return agl_dict({1: 1})\n",
+            tmp_path,
+        )
+
+        assert exc.fields["python_type"].value == "TypeError"
+
     def test_generic_aliases_need_no_schema_reconciliation(self, tmp_path: Path) -> None:
         source = (
             "extern def add[T, U](a: array[T], b: array[U]) -> unit\n"
@@ -458,6 +467,15 @@ def test_array_sort_without_a_key_still_sorts_by_encoded_value() -> None:
     view.sort(reverse=True)
 
     assert list(view) == [3, 2, 1]
+
+
+def test_array_sort_in_reverse_preserves_equal_key_order() -> None:
+    array_value = ArrayValue([TextValue("first"), TextValue("second"), TextValue("third")])
+    view = AglArrayView(array_value)
+
+    view.sort(key=lambda _: 0, reverse=True)
+
+    assert list(view) == ["first", "second", "third"]
 
 
 def test_array_contains_returns_false_for_an_undecodable_probe() -> None:

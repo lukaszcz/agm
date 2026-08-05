@@ -319,11 +319,10 @@ class AglArrayView(MutableSequence[object]):
 
         *key*, when given, is applied to each element's encoded Python
         representation -- the shape a companion's own ``key=`` callable
-        expects. Elements are paired with their computed key and their
-        original position, then reordered by sorting those pairs (position
-        as the tie-break, for the same stability plain ``list.sort`` gives) --
-        one encode pass per element, and no decode at all, unlike rebuilding
-        every element through an encode-then-decode round trip.
+        expects. Elements are paired with their computed key and original
+        position, then reordered by a stable sort of those keys -- one encode
+        pass per element, and no decode at all, unlike rebuilding every
+        element through an encode-then-decode round trip.
         """
         elements = self._value.elements
         pairs = [
@@ -333,7 +332,7 @@ class AglArrayView(MutableSequence[object]):
             )
             for index, value in enumerate(elements)
         ]
-        pairs.sort(reverse=reverse)
+        pairs.sort(key=lambda pair: pair[0], reverse=reverse)
         elements[:] = [elements[index] for _, index in pairs]
 
     def __iter__(self) -> Iterator[object]:

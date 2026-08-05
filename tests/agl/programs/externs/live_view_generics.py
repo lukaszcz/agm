@@ -1,7 +1,9 @@
 from collections.abc import MutableSequence
 
 
-def reject_other_type_variable(xs: MutableSequence[object], other: MutableSequence[object]) -> None:
+def write_across_type_variables(
+    xs: MutableSequence[object], other: MutableSequence[object]
+) -> None:
     xs[0] = other[0]
 
 
@@ -15,7 +17,7 @@ def mutate(xs: MutableSequence[object], operation: str) -> None:
         xs[0] = last
     elif operation == "duplicate":
         xs[0] = xs[-1]
-    elif operation == "reject":
+    elif operation == "replace":
         xs[0] = "replacement"
     elif operation == "sort":
         xs.sort()

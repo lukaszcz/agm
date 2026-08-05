@@ -441,8 +441,9 @@ target of a fallible `as` or `as?` cast
 ([Expressions](expressions.md#casts-as-and-as)), a non-`text` host `param`
 declaration ([Host environment](host-environment.md#params)), and an `extern
 def` parameter or result ([Python FFI](ffi.md)). The first three derive a
-**finite JSON Schema**; the FFI derives the corresponding finite boundary
-contract.
+**finite JSON Schema**; the FFI requires the same finite closure without
+deriving any schema, since values cross the boundary by their runtime
+representation rather than a derived artifact.
 
 Derivation expands the schema-relevant concrete instantiations reachable from
 the type. Uniform, permutation, and argument-constant recursion do not by

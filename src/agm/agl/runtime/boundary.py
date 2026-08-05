@@ -3,8 +3,7 @@
 from __future__ import annotations
 
 import operator
-from collections.abc import Iterable, Iterator, MutableMapping, MutableSequence
-from contextvars import ContextVar, Token
+from collections.abc import Callable, Iterable, Iterator, MutableMapping, MutableSequence
 from dataclasses import dataclass
 from decimal import Decimal
 from typing import SupportsIndex, cast, overload
@@ -45,25 +44,47 @@ class AglJson:
 
 
 class _AglNominal:
-    """Base implementation shared by synthesized record and exception classes."""
+    """Base implementation shared by synthesized record, exception, and enum-variant classes.
 
-    __slots__ = ()
+    Field values live in one dict slot rather than one Python attribute per
+    field, so construction cost stays flat regardless of nesting depth. Field
+    access falls back to that dict through ``__getattr__``, which Python only
+    consults once ordinary attribute lookup misses; a field whose name
+    collides with an ``_agl_*`` class attribute is then reachable only
+    through that attribute, not dot access.
+    """
+
+    __slots__ = ("_agl_values",)
+    _agl_values: dict[str, object]
     _agl_nominal: NominalId
     _agl_kind: NominalKind
     _agl_fields: tuple[str, ...]
+    _agl_descriptor: NominalDescriptor
     _agl_variant: str
 
     def __init__(self, **fields: object) -> None:
-        expected = self._agl_fields
+        expected = type(self)._agl_fields
         if set(fields) != set(expected):
             raise TypeError(f"expected fields {expected!r}")
-        for name in expected:
-            object.__setattr__(
-                self, name, encode_boundary_value(decode_boundary_value(fields[name]))
-            )
+        object.__setattr__(self, "_agl_values", fields)
+
+    def __getattr__(self, name: str) -> object:
+        try:
+            return self._agl_values[name]
+        except KeyError:
+            raise AttributeError(name) from None
 
     def __setattr__(self, name: str, value: object) -> None:
         raise AttributeError("AgL nominal values are immutable")
+
+    def __eq__(self, other: object) -> bool:
+        if type(other) is not type(self):
+            return NotImplemented
+        return self._agl_values == other._agl_values
+
+    def __hash__(self) -> int:
+        fields = type(self)._agl_fields
+        return hash((type(self), tuple(self._agl_values[name] for name in fields)))
 
     def __repr__(self) -> str:
         return f"{type(self).__name__}(...)"
@@ -80,57 +101,139 @@ def _nominal_class_name(descriptor: NominalDescriptor) -> str:
     return descriptor.display_name.rsplit("::", maxsplit=1)[-1]
 
 
-def synthesize_nominal_classes(
-    descriptors: Iterable[NominalDescriptor],
-) -> tuple[dict[NominalId, type[object]], dict[type[object], NominalDescriptor]]:
-    """Build the per-program Python classes used by extern companions."""
-    by_nominal: dict[NominalId, type[object]] = {}
-    by_type: dict[type[object], NominalDescriptor] = {}
-    for descriptor in descriptors:
-        name = _nominal_class_name(descriptor)
-        if descriptor.kind is NominalKind.ENUM:
-            enum_attrs: dict[str, object] = {"__slots__": (), "_agl_nominal": descriptor.nominal}
-            enum_cls = cast(type[object], type(name, (cast(type[object], _AglEnum),), enum_attrs))
-            by_nominal[descriptor.nominal] = enum_cls
-            by_type[enum_cls] = descriptor
-            for variant in descriptor.variants:
-                variant_attrs: dict[str, object] = {
-                    "__slots__": variant.fields,
-                    "__match_args__": variant.fields,
-                    "_agl_nominal": descriptor.nominal,
-                    "_agl_kind": NominalKind.ENUM,
-                    "_agl_fields": variant.fields,
-                    "_agl_variant": variant.name,
-                }
-                variant_cls = cast(
-                    type[object],
-                    type(
-                        variant.name,
-                        (cast(type[object], _AglNominal), enum_cls),
-                        variant_attrs,
-                    ),
-                )
-                setattr(enum_cls, variant.name, variant_cls)
-                by_type[variant_cls] = descriptor
-            continue
-        class_attrs: dict[str, object] = {
-            "__slots__": descriptor.fields,
-            "__match_args__": descriptor.fields,
-            "_agl_nominal": descriptor.nominal,
-            "_agl_kind": descriptor.kind,
-            "_agl_fields": descriptor.fields,
-        }
-        cls = cast(
+def _nominal_attrs(descriptor: NominalDescriptor, fields: tuple[str, ...]) -> dict[str, object]:
+    """Return the class-level attributes shared by every synthesized nominal shape."""
+    return {
+        "_agl_nominal": descriptor.nominal,
+        "_agl_kind": descriptor.kind,
+        "_agl_fields": fields,
+        "_agl_descriptor": descriptor,
+        "__match_args__": fields,
+    }
+
+
+def _class_namespace(attrs: dict[str, object]) -> dict[str, object]:
+    """Return a synthesized class's namespace dict: no instance ``__dict__`` plus *attrs*."""
+    namespace: dict[str, object] = {"__slots__": ()}
+    namespace.update(attrs)
+    return namespace
+
+
+def _class_members(cls: type[object]) -> dict[str, object]:
+    """Return *cls*'s own namespace as a concretely typed mapping."""
+    return cast(dict[str, object], vars(cls))
+
+
+def _is_agl_nominal_class(value: object) -> bool:
+    """Return whether *value* is itself a synthesized ``_AglNominal`` subclass."""
+    try:
+        return issubclass(cast("type[object]", value), _AglNominal)
+    except TypeError:
+        return False
+
+
+def _update_or_create_nominal(
+    descriptor: NominalDescriptor, name: str, existing_cls: type[object] | None
+) -> type[object]:
+    """Reuse *existing_cls* in place when it is already a plain nominal class.
+
+    Reuse keeps every companion-held reference to the class -- a module
+    global, a closure, a default argument -- valid across a redeclaration
+    (for example, across a REPL ``:reset``) instead of stranding it on a
+    stale class object.
+    """
+    attrs = _nominal_attrs(descriptor, descriptor.fields)
+    if existing_cls is not None and not issubclass(existing_cls, _AglEnum):
+        for attr_name, value in attrs.items():
+            setattr(existing_cls, attr_name, value)
+        return existing_cls
+    return cast(
+        type[object],
+        type(name, (cast(type[object], _AglNominal),), _class_namespace(attrs)),
+    )
+
+
+def _update_or_create_enum(
+    descriptor: NominalDescriptor, name: str, existing_cls: type[object] | None
+) -> type[object]:
+    """Reuse *existing_cls* and its variant classes in place when possible.
+
+    Each surviving variant name is updated in place for the same reason
+    :func:`_update_or_create_nominal` reuses a plain nominal class; a variant
+    absent from *descriptor* is removed from the enum class entirely.
+    """
+    enum_cls: type[object]
+    if existing_cls is not None and issubclass(existing_cls, _AglEnum):
+        enum_cls = existing_cls
+    else:
+        enum_cls = cast(
             type[object],
             type(
                 name,
-                (cast(type[object], _AglNominal),),
-                class_attrs,
+                (cast(type[object], _AglEnum),),
+                _class_namespace({"_agl_nominal": descriptor.nominal}),
             ),
         )
-        by_nominal[descriptor.nominal] = cls
-        by_type[cls] = descriptor
-    return by_nominal, by_type
+
+    live_variants: set[str] = set()
+    for variant in descriptor.variants:
+        live_variants.add(variant.name)
+        attrs = {**_nominal_attrs(descriptor, variant.fields), "_agl_variant": variant.name}
+        existing_variant: object | None = _class_members(enum_cls).get(variant.name)
+        if _is_agl_nominal_class(existing_variant):
+            for attr_name, value in attrs.items():
+                setattr(existing_variant, attr_name, value)
+        else:
+            variant_cls = type(
+                variant.name,
+                (cast(type[object], _AglNominal), enum_cls),
+                _class_namespace(attrs),
+            )
+            setattr(enum_cls, variant.name, variant_cls)
+
+    stale_variants = [
+        attr_name
+        for attr_name, value in _class_members(enum_cls).items()
+        if attr_name not in live_variants and _is_agl_nominal_class(value)
+    ]
+    for stale_name in stale_variants:
+        delattr(enum_cls, stale_name)
+
+    return enum_cls
+
+
+_NOMINAL_CLASSES: dict[NominalId, type[object]] = {}
+
+
+def synthesize_nominal_classes(
+    descriptors: Iterable[NominalDescriptor],
+    existing: dict[NominalId, type[object]] | None = None,
+) -> dict[NominalId, type[object]]:
+    """Materialize or update the per-program Python classes used by extern companions.
+
+    A ``NominalId`` keeps the same class object across repeated calls: when
+    *existing* already holds a class for that identity, this updates its
+    shape in place instead of replacing it, so a class captured by a
+    companion in a module global, a closure, or a default argument stays
+    valid even after the nominal it names is redeclared. The result also
+    becomes the module-level registry :func:`encode_boundary_value` consults
+    for the encode direction; nothing ever removes an entry from it, matching
+    the boundary's one-program-load-per-process contract.
+    """
+    current = existing if existing is not None else {}
+    updated: dict[NominalId, type[object]] = {}
+    for descriptor in descriptors:
+        name = _nominal_class_name(descriptor)
+        if descriptor.kind is NominalKind.ENUM:
+            updated[descriptor.nominal] = _update_or_create_enum(
+                descriptor, name, current.get(descriptor.nominal)
+            )
+        else:
+            updated[descriptor.nominal] = _update_or_create_nominal(
+                descriptor, name, current.get(descriptor.nominal)
+            )
+    _NOMINAL_CLASSES.update(updated)
+    return updated
 
 
 class AglArrayView(MutableSequence[object]):
@@ -189,14 +292,21 @@ class AglArrayView(MutableSequence[object]):
         except BoundaryViolation as exc:
             raise BoundaryTypeError(str(exc)) from exc
 
-    def append(self, value: object) -> None:
-        self.insert(len(self), value)
-
     def extend(self, values: Iterable[object]) -> None:
+        # Mirrors ``MutableSequence.extend``'s own self-aliasing guard: without
+        # it, ``xs.extend(xs)`` (or ``xs += xs``, which routes through
+        # ``__iadd__`` -> ``extend``) would append to the list it is still
+        # iterating and never terminate. Decoding into a plain list first,
+        # rather than feeding a generator straight to ``list.extend``, keeps a
+        # decode failure part-way through from leaving *self* partially
+        # mutated.
+        if values is self:
+            values = list(values)
         try:
-            self._value.elements.extend(decode_boundary_value(value) for value in values)
+            decoded = [decode_boundary_value(value) for value in values]
         except BoundaryViolation as exc:
             raise BoundaryTypeError(str(exc)) from exc
+        self._value.elements.extend(decoded)
 
     def clear(self) -> None:
         self._value.elements.clear()
@@ -204,17 +314,38 @@ class AglArrayView(MutableSequence[object]):
     def reverse(self) -> None:
         self._value.elements.reverse()
 
-    def sort(self, *, reverse: bool = False) -> None:
-        values = [encode_boundary_value(value) for value in self._value.elements]
-        values.sort(reverse=reverse)
-        self._value.elements[:] = [decode_boundary_value(value) for value in values]
+    def sort(self, *, key: Callable[[object], object] | None = None, reverse: bool = False) -> None:
+        """Sort the underlying elements in place.
+
+        *key*, when given, is applied to each element's encoded Python
+        representation -- the shape a companion's own ``key=`` callable
+        expects. Elements are paired with their computed key and their
+        original position, then reordered by sorting those pairs (position
+        as the tie-break, for the same stability plain ``list.sort`` gives) --
+        one encode pass per element, and no decode at all, unlike rebuilding
+        every element through an encode-then-decode round trip.
+        """
+        elements = self._value.elements
+        pairs = [
+            (
+                encode_boundary_value(value) if key is None else key(encode_boundary_value(value)),
+                index,
+            )
+            for index, value in enumerate(elements)
+        ]
+        pairs.sort(reverse=reverse)
+        elements[:] = [elements[index] for _, index in pairs]
 
     def __iter__(self) -> Iterator[object]:
         for value in self._value.elements:
             yield encode_boundary_value(value)
 
     def __contains__(self, value: object) -> bool:
-        return any(encode_boundary_value(item) == value for item in self._value.elements)
+        try:
+            probe = decode_boundary_value(value)
+        except BoundaryViolation:
+            return False
+        return any(probe == item for item in self._value.elements)
 
     def __eq__(self, other: object) -> bool:
         return isinstance(other, AglArrayView) and self._value is other._value
@@ -274,34 +405,13 @@ class AglDictView(MutableMapping[str, object]):
         return render_value(self._value)
 
 
-_NOMINAL_CLASSES: ContextVar[dict[NominalId, type[object]]] = ContextVar(
-    "agl_nominal_classes", default={}
-)
-_NOMINAL_DESCRIPTORS: ContextVar[dict[type[object], NominalDescriptor]] = ContextVar(
-    "agl_nominal_descriptors", default={}
-)
-
-
-def push_nominal_classes(
-    classes: dict[NominalId, type[object]], descriptors: dict[type[object], NominalDescriptor]
-) -> tuple[Token[dict[NominalId, type[object]]], Token[dict[type[object], NominalDescriptor]]]:
-    """Install one registry's nominal mapping for the current extern call."""
-    return _NOMINAL_CLASSES.set(classes), _NOMINAL_DESCRIPTORS.set(descriptors)
-
-
-def pop_nominal_classes(
-    tokens: tuple[
-        Token[dict[NominalId, type[object]]], Token[dict[type[object], NominalDescriptor]]
-    ],
-) -> None:
-    """Restore the nominal mapping that preceded an extern call."""
-    classes, descriptors = tokens
-    _NOMINAL_CLASSES.reset(classes)
-    _NOMINAL_DESCRIPTORS.reset(descriptors)
-
-
 def encode_boundary_value(value: Value) -> object:
-    """Encode an AgL value by its runtime subclass."""
+    """Encode an AgL value by its runtime subclass.
+
+    An ``array``/``dict`` crosses as a live view (mutating it mutates the AgL
+    value), but a ``json`` payload is deep-copied so a companion mutating what
+    it received can never alias the wrapped AgL value.
+    """
     if isinstance(value, UnitValue):
         return None
     if isinstance(value, BoolValue):
@@ -320,7 +430,7 @@ def encode_boundary_value(value: Value) -> object:
         return AglDictView(value)
     if isinstance(value, (RecordValue, EnumValue, ExceptionValue)):
         try:
-            cls = _NOMINAL_CLASSES.get()[value.nominal]
+            cls = _NOMINAL_CLASSES[value.nominal]
         except KeyError as exc:
             raise BoundaryViolation(f"unknown AgL nominal {value.nominal.display_name!r}") from exc
         fields = {name: encode_boundary_value(field) for name, field in value.fields.items()}
@@ -331,7 +441,14 @@ def encode_boundary_value(value: Value) -> object:
 
 
 def decode_boundary_value(obj: object) -> Value:
-    """Decode a Python boundary representation by its concrete type."""
+    """Decode a Python boundary representation by its concrete type.
+
+    A synthesized nominal instance carries its own descriptor on its class
+    (``_agl_descriptor``), so decoding needs no registry lookup: it resolves
+    a nominal purely from ``type(obj)``, which is why a value built at
+    companion import time, on a worker thread, or retained past the call
+    that produced it all decode the same way.
+    """
     if obj is None:
         return UNIT_VALUE
     if isinstance(obj, bool):
@@ -343,41 +460,23 @@ def decode_boundary_value(obj: object) -> Value:
     if isinstance(obj, str):
         return TextValue(obj)
     if isinstance(obj, AglJson):
-        _ensure_acyclic_python_containers(obj.value)
         return JsonValue(obj.value)
     if isinstance(obj, AglArrayView):
         return obj._value
     if isinstance(obj, AglDictView):
         return obj._value
-    descriptor = _NOMINAL_DESCRIPTORS.get().get(type(obj))
-    if descriptor is not None:
+    descriptor = cast(object, getattr(type(obj), "_agl_descriptor", None))
+    if isinstance(descriptor, NominalDescriptor):
         nominal_obj = cast(_AglNominal, obj)
         fields = {
-            name: decode_boundary_value(cast(object, object.__getattribute__(nominal_obj, name)))
-            for name in nominal_obj._agl_fields
+            name: decode_boundary_value(nominal_obj._agl_values[name])
+            for name in type(nominal_obj)._agl_fields
         }
         if descriptor.kind is NominalKind.RECORD:
             return RecordValue(descriptor.nominal, descriptor.display_name, fields)
         if descriptor.kind is NominalKind.EXCEPTION:
             return ExceptionValue(descriptor.nominal, descriptor.display_name, fields)
         return EnumValue(
-            descriptor.nominal, descriptor.display_name, nominal_obj._agl_variant, fields
+            descriptor.nominal, descriptor.display_name, type(nominal_obj)._agl_variant, fields
         )
     raise BoundaryViolation(f"unsupported Python extern value {type(obj).__name__}")
-
-
-def _ensure_acyclic_python_containers(value: object, active: set[int] | None = None) -> None:
-    """Reject a cyclic JSON wrapper without imposing a JSON-shape schema."""
-    if not isinstance(value, (list, dict)):
-        return
-    seen = active if active is not None else set()
-    marker = id(value)
-    if marker in seen:
-        raise BoundaryViolation("cyclic Python return value")
-    seen.add(marker)
-    try:
-        items = value if isinstance(value, list) else value.values()
-        for item in items:
-            _ensure_acyclic_python_containers(item, seen)
-    finally:
-        seen.remove(marker)

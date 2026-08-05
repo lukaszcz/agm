@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from decimal import Decimal
 from pathlib import Path
 
@@ -9,7 +10,7 @@ import pytest
 
 from agm.agl.ir.ids import NominalId
 from agm.agl.ir.program import NominalDescriptor, NominalKind, VariantDescriptor
-from agm.agl.modules.ids import ENTRY_ID
+from agm.agl.modules.ids import ENTRY_ID, ModuleId
 from agm.agl.runtime.boundary import (
     AglArrayView,
     AglDictView,
@@ -18,11 +19,10 @@ from agm.agl.runtime.boundary import (
     BoundaryViolation,
     decode_boundary_value,
     encode_boundary_value,
-    pop_nominal_classes,
-    push_nominal_classes,
     synthesize_nominal_classes,
 )
 from agm.agl.runtime.externs import ExternRegistry
+from agm.agl.runtime.render import render_value
 from agm.agl.semantics.exceptions import AglRaise
 from agm.agl.semantics.values import (
     UNIT_VALUE,
@@ -37,6 +37,7 @@ from agm.agl.semantics.values import (
     JsonValue,
     RecordValue,
     TextValue,
+    Value,
 )
 from tests.agl.ir_harness import evaluate_ir_raises_with_externs, evaluate_ir_with_externs
 
@@ -79,140 +80,6 @@ class TestValueDirectedBoundary:
         )
         assert exc.fields["python_type"].value == ""
 
-
-def test_container_views_cover_mutating_sequence_and_mapping_operations() -> None:
-    array_value = ArrayValue([IntValue(3), IntValue(1), IntValue(2)])
-    array = AglArrayView(array_value)
-    assert array[1:] == [1, 2]
-    assert array[0] == 3
-    array[1:] = [4, 5]
-    del array[1:2]
-    array.insert(1, 2)
-    array.append(0)
-    array.extend([6])
-    array.reverse()
-    array.sort()
-    assert list(array) == [0, 2, 3, 5, 6]
-    assert 2 in array
-    assert array_value.elements == [IntValue(0), IntValue(2), IntValue(3), IntValue(5), IntValue(6)]
-    with pytest.raises(BoundaryTypeError):
-        array[0] = object()
-    with pytest.raises(BoundaryTypeError):
-        array.insert(0, object())
-    with pytest.raises(BoundaryTypeError):
-        array.extend([object()])
-    with pytest.raises(TypeError):
-        array[0:1] = object()
-
-    dict_value = DictValue({"one": IntValue(1), "two": IntValue(2)})
-    mapping = AglDictView(dict_value)
-    assert mapping["one"] == 1
-    assert "two" in mapping
-    with pytest.raises(TypeError):
-        mapping[1] = 1
-    with pytest.raises(BoundaryTypeError):
-        mapping["bad"] = object()
-    assert mapping.popitem() == ("two", 2)
-    del mapping["one"]
-    mapping.clear()
-    assert not mapping
-    assert list(mapping) == []
-    assert array != object()
-    assert mapping != object()
-    assert hash(array) == id(array_value)
-    assert hash(mapping) == id(dict_value)
-    assert repr(array) == "[0, 2, 3, 5, 6]"
-    assert repr(mapping) == "{}"
-    array.clear()
-    assert not array
-
-
-def test_value_mapping_and_synthesized_nominals() -> None:
-    nominal = NominalId(ENTRY_ID, "Box")
-    enum_nominal = NominalId(ENTRY_ID, "Choice")
-    exception_nominal = NominalId(ENTRY_ID, "Problem")
-    descriptors = {
-        nominal: NominalDescriptor(nominal, "Box", NominalKind.RECORD, fields=("value",)),
-        enum_nominal: NominalDescriptor(
-            enum_nominal,
-            "Choice",
-            NominalKind.ENUM,
-            variants=(VariantDescriptor("Some", ("value",)), VariantDescriptor("None", ())),
-        ),
-        exception_nominal: NominalDescriptor(
-            exception_nominal, "Problem", NominalKind.EXCEPTION, fields=("detail",)
-        ),
-    }
-    classes, by_type = synthesize_nominal_classes(descriptors.values())
-    tokens = push_nominal_classes(classes, by_type)
-    try:
-        assert encode_boundary_value(UNIT_VALUE) is None
-        assert encode_boundary_value(BoolValue(True)) is True
-        assert encode_boundary_value(IntValue(1)) == 1
-        assert encode_boundary_value(DecimalValue(Decimal("1.5"))) == Decimal("1.5")
-        assert encode_boundary_value(TextValue("x")) == "x"
-        assert encode_boundary_value(JsonValue(None)) == AglJson(None)
-        assert isinstance(encode_boundary_value(ArrayValue([IntValue(1)])), AglArrayView)
-        assert isinstance(encode_boundary_value(DictValue({"x": IntValue(1)})), AglDictView)
-        assert decode_boundary_value(None) == UNIT_VALUE
-        assert decode_boundary_value(True) == BoolValue(True)
-        assert decode_boundary_value(1) == IntValue(1)
-        assert decode_boundary_value(Decimal("1.5")) == DecimalValue(Decimal("1.5"))
-        assert decode_boundary_value("x") == TextValue("x")
-
-        box = classes[nominal](value=1)
-        assert repr(box) == "Box(...)"
-        with pytest.raises(AttributeError):
-            box.value = 2
-        with pytest.raises(TypeError):
-            classes[nominal]()
-        assert decode_boundary_value(box) == RecordValue(nominal, "Box", {"value": IntValue(1)})
-
-        some = classes[enum_nominal].Some(value=2)
-        assert isinstance(some, classes[enum_nominal])
-        assert decode_boundary_value(some) == EnumValue(
-            enum_nominal, "Choice", "Some", {"value": IntValue(2)}
-        )
-        assert isinstance(
-            encode_boundary_value(EnumValue(enum_nominal, "Choice", "None", {})),
-            getattr(classes[enum_nominal], "None"),
-        )
-        problem = classes[exception_nominal](detail="bad")
-        assert decode_boundary_value(problem) == ExceptionValue(
-            exception_nominal, "Problem", {"detail": TextValue("bad")}
-        )
-        with pytest.raises(BoundaryViolation):
-            encode_boundary_value(RecordValue(NominalId(ENTRY_ID, "Missing"), "Missing", {}))
-        with pytest.raises(BoundaryViolation):
-            encode_boundary_value(AgentValue("agent"))
-        with pytest.raises(BoundaryViolation):
-            decode_boundary_value(object())
-        assert decode_boundary_value(AglJson({"x": []})) == JsonValue({"x": []})
-        cyclic: list[object] = []
-        cyclic.append(cyclic)
-        with pytest.raises(BoundaryViolation):
-            decode_boundary_value(AglJson(cyclic))
-        array_view = AglArrayView(ArrayValue([]))
-        dict_view = AglDictView(DictValue())
-        assert decode_boundary_value(array_view) is array_view._value
-        assert decode_boundary_value(dict_view) is dict_view._value
-    finally:
-        pop_nominal_classes(tokens)
-
-
-def test_registry_wraps_unexpected_decode_errors_as_extern_errors() -> None:
-    nominal = NominalId(ENTRY_ID, "Box")
-    descriptor = NominalDescriptor(nominal, "Box", NominalKind.RECORD, fields=("value",))
-    registry = ExternRegistry()
-    registry.set_nominals({nominal: descriptor})
-    broken = registry._nominal_classes[nominal](value=1)
-    object.__delattr__(broken, "value")
-
-    with pytest.raises(AglRaise) as excinfo:
-        registry.invoke("broken", lambda: broken, (), "trace")
-
-    assert excinfo.value.exc.fields["python_type"] == TextValue("AttributeError")
-
     def test_generic_aliases_need_no_schema_reconciliation(self, tmp_path: Path) -> None:
         source = (
             "extern def add[T, U](a: array[T], b: array[U]) -> unit\n"
@@ -224,18 +91,746 @@ def test_registry_wraps_unexpected_decode_errors_as_extern_errors() -> None:
         result, _ = evaluate_ir_with_externs(source, companion, tmp_path)
         assert result["xs"] == ArrayValue([IntValue(1), IntValue(2)])
 
-    def test_cyclic_json_wrapper_is_rejected_without_recursing_forever(
+    def test_companion_can_construct_nested_nominals_at_import_time(self, tmp_path: Path) -> None:
+        source = (
+            "record Inner\n  x: int\n"
+            "record Outer\n  inner: Inner\n"
+            "extern def default_outer() -> Outer\n"
+            "let result = default_outer()\n"
+            "result\n"
+        )
+        companion = (
+            "from agl import Inner, Outer\n"
+            "DEFAULT = Outer(inner=Inner(x=1))\n"
+            "def default_outer(): return DEFAULT\n"
+        )
+        result, _ = evaluate_ir_with_externs(source, companion, tmp_path)
+        outer = result["result"]
+        assert isinstance(outer, RecordValue)
+        inner = outer.fields["inner"]
+        assert isinstance(inner, RecordValue)
+        assert inner.nominal.declared_name == "Inner"
+        assert inner.fields == {"x": IntValue(1)}
+
+    def test_worker_thread_can_read_and_write_nominal_elements_through_a_view(
         self, tmp_path: Path
     ) -> None:
-        exc = evaluate_ir_raises_with_externs(
-            "extern def f() -> json\nlet _ = f()\n()\n",
-            (
-                "from agl import json\n"
-                "def f():\n"
-                "    value = []\n"
-                "    value.append(value)\n"
-                "    return json(value)\n"
-            ),
-            tmp_path,
+        source = (
+            "record Inner\n  x: int\n"
+            "extern def read_and_write_via_thread(xs: array[Inner]) -> int\n"
+            "var xs = [Inner(x = 5)]\n"
+            "let result = read_and_write_via_thread(xs)\n"
+            "result\n"
         )
+        companion = (
+            "import threading\n"
+            "from agl import Inner\n"
+            "def read_and_write_via_thread(xs):\n"
+            "    box = {}\n"
+            "    def worker():\n"
+            "        box['x'] = xs[0].x\n"
+            "        xs.append(Inner(x=box['x'] + 1))\n"
+            "    thread = threading.Thread(target=worker)\n"
+            "    thread.start()\n"
+            "    thread.join()\n"
+            "    return box['x']\n"
+        )
+        result, _ = evaluate_ir_with_externs(source, companion, tmp_path)
+        assert result["result"] == IntValue(5)
+        inner = NominalId(ENTRY_ID, "Inner")
+        assert result["xs"] == ArrayValue(
+            [
+                RecordValue(inner, "Inner", {"x": IntValue(5)}),
+                RecordValue(inner, "Inner", {"x": IntValue(6)}),
+            ]
+        )
+
+    def test_nominal_elements_support_equality_membership_and_index(self, tmp_path: Path) -> None:
+        source = (
+            "record Box\n  value: int\n"
+            "extern def checks(xs: array[Box]) -> bool\n"
+            "let result = checks([Box(value = 1), Box(value = 2)])\n"
+            "result\n"
+        )
+        companion = (
+            "def checks(xs):\n"
+            "    a = xs[0]\n"
+            "    b = xs[0]\n"
+            "    same_eq = a == b\n"
+            "    same_in = a in xs\n"
+            "    same_index = xs.index(a) == 0\n"
+            "    dedup_ok = len({xs[0], xs[1], xs[0]}) == 2\n"
+            "    return same_eq and same_in and same_index and dedup_ok\n"
+        )
+        result, _ = evaluate_ir_with_externs(source, companion, tmp_path)
+        assert result["result"] == BoolValue(True)
+
+    def test_scope_and_nominal_sharing_a_name_resolves_both(self, tmp_path: Path) -> None:
+        source = (
+            "record Box(value: text)\n"
+            "\n"
+            "scope Box\n"
+            "record Inner(label: text)\n"
+            "end Box\n"
+            "\n"
+            "extern def make_box() -> Box\n"
+            "extern def make_inner() -> Box::Inner\n"
+            "let b = make_box()\n"
+            "let i = make_inner()\n"
+            "b\n"
+        )
+        companion = (
+            "from agl import nominals\n"
+            "def make_box(): return nominals.entry.Box(value='outer')\n"
+            "def make_inner(): return nominals.entry.Box.Inner(label='scoped')\n"
+        )
+        result, _ = evaluate_ir_with_externs(source, companion, tmp_path)
+        assert result["b"].fields == {"value": TextValue("outer")}
+        assert result["i"].fields == {"label": TextValue("scoped")}
+
+    def test_argument_with_no_boundary_representation_becomes_a_catchable_extern_error(
+        self, tmp_path: Path
+    ) -> None:
+        source = "def f(x: int) = x\nextern def id[T](x: T) -> T\nlet _ = id(f)\n()\n"
+        companion = "def id(x): return x\n"
+        exc = evaluate_ir_raises_with_externs(source, companion, tmp_path)
         assert exc.fields["python_type"].value == ""
+
+    def test_companion_exception_message_over_a_cyclic_argument_raises_cyclic_value_error(
+        self, tmp_path: Path
+    ) -> None:
+        source = (
+            "record Node(children: array[Node])\n"
+            "extern def boom(xs: array[Node]) -> unit\n"
+            "let leaf = Node(children = [])\n"
+            "var xs: array[Node] = [leaf]\n"
+            "let n = Node(children = xs)\n"
+            "xs[0] := n\n"
+            "try\n"
+            "  let _ = boom(xs)\n"
+            '  print "unreached"\n'
+            "catch CyclicValueError as e =>\n"
+            '  print "caught: %{e.message}"\n'
+        )
+        companion = "def boom(xs): raise ValueError(xs)\n"
+        _, stdout = evaluate_ir_with_externs(source, companion, tmp_path)
+        assert stdout == "caught: value contains a reference cycle\n"
+
+
+def test_array_view_slice_getitem_returns_encoded_elements() -> None:
+    view = AglArrayView(ArrayValue([IntValue(3), IntValue(1), IntValue(2)]))
+
+    assert view[1:] == [1, 2]
+
+
+def test_array_view_index_getitem_returns_the_encoded_element() -> None:
+    view = AglArrayView(ArrayValue([IntValue(3), IntValue(1), IntValue(2)]))
+
+    assert view[0] == 3
+
+
+def test_array_view_slice_setitem_replaces_a_range_of_elements() -> None:
+    array_value = ArrayValue([IntValue(1), IntValue(2), IntValue(3)])
+    view = AglArrayView(array_value)
+
+    view[1:] = [4, 5]
+
+    assert array_value.elements == [IntValue(1), IntValue(4), IntValue(5)]
+
+
+def test_array_view_index_setitem_with_an_undecodable_value_raises() -> None:
+    view = AglArrayView(ArrayValue([IntValue(1)]))
+
+    with pytest.raises(BoundaryTypeError):
+        view[0] = object()
+
+
+def test_array_view_slice_setitem_with_a_non_iterable_value_raises_type_error() -> None:
+    view = AglArrayView(ArrayValue([IntValue(1)]))
+
+    with pytest.raises(TypeError):
+        view[0:1] = object()
+
+
+def test_array_view_slice_delitem_removes_a_range_of_elements() -> None:
+    array_value = ArrayValue([IntValue(1), IntValue(2), IntValue(3)])
+    view = AglArrayView(array_value)
+
+    del view[1:2]
+
+    assert array_value.elements == [IntValue(1), IntValue(3)]
+
+
+def test_array_view_insert_adds_an_element_at_a_position() -> None:
+    array_value = ArrayValue([IntValue(1), IntValue(3)])
+    view = AglArrayView(array_value)
+
+    view.insert(1, 2)
+
+    assert array_value.elements == [IntValue(1), IntValue(2), IntValue(3)]
+
+
+def test_array_view_insert_with_an_undecodable_value_raises() -> None:
+    view = AglArrayView(ArrayValue([]))
+
+    with pytest.raises(BoundaryTypeError):
+        view.insert(0, object())
+
+
+def test_array_view_append_adds_an_element_at_the_end() -> None:
+    array_value = ArrayValue([IntValue(1)])
+    view = AglArrayView(array_value)
+
+    view.append(2)
+
+    assert array_value.elements == [IntValue(1), IntValue(2)]
+
+
+def test_array_view_extend_appends_the_given_values() -> None:
+    array_value = ArrayValue([IntValue(1)])
+    view = AglArrayView(array_value)
+
+    view.extend([2, 3])
+
+    assert array_value.elements == [IntValue(1), IntValue(2), IntValue(3)]
+
+
+def test_array_view_reverse_reverses_the_element_order() -> None:
+    array_value = ArrayValue([IntValue(1), IntValue(2), IntValue(3)])
+    view = AglArrayView(array_value)
+
+    view.reverse()
+
+    assert list(view) == [3, 2, 1]
+
+
+def test_array_view_sort_orders_elements_ascending_by_default() -> None:
+    array_value = ArrayValue([IntValue(3), IntValue(1), IntValue(2)])
+    view = AglArrayView(array_value)
+
+    view.sort()
+
+    assert list(view) == [1, 2, 3]
+
+
+def test_array_view_iteration_yields_encoded_elements() -> None:
+    view = AglArrayView(ArrayValue([IntValue(1), IntValue(2)]))
+
+    assert list(view) == [1, 2]
+
+
+def test_array_view_contains_returns_true_for_a_present_value() -> None:
+    view = AglArrayView(ArrayValue([IntValue(1), IntValue(2)]))
+
+    assert 2 in view
+
+
+def test_array_view_clear_empties_the_array() -> None:
+    view = AglArrayView(ArrayValue([IntValue(1)]))
+
+    view.clear()
+
+    assert not view
+
+
+def test_array_view_is_not_equal_to_a_non_view_object() -> None:
+    view = AglArrayView(ArrayValue([]))
+
+    assert view != object()
+
+
+def test_array_views_over_the_same_container_compare_equal_and_hash_alike() -> None:
+    array_value = ArrayValue([IntValue(1)])
+
+    assert AglArrayView(array_value) == AglArrayView(array_value)
+    assert hash(AglArrayView(array_value)) == hash(AglArrayView(array_value))
+
+
+def test_array_view_repr_matches_the_rendered_agl_value() -> None:
+    array_value = ArrayValue([IntValue(1), IntValue(2)])
+    view = AglArrayView(array_value)
+
+    assert repr(view) == render_value(array_value)
+
+
+def test_dict_view_getitem_returns_the_encoded_value() -> None:
+    view = AglDictView(DictValue({"one": IntValue(1)}))
+
+    assert view["one"] == 1
+
+
+def test_dict_view_contains_checks_key_membership() -> None:
+    view = AglDictView(DictValue({"two": IntValue(2)}))
+
+    assert "two" in view
+
+
+def test_dict_view_setitem_with_a_non_string_key_raises_type_error() -> None:
+    view = AglDictView(DictValue())
+
+    with pytest.raises(TypeError):
+        view[1] = 1
+
+
+def test_dict_view_setitem_with_an_undecodable_value_raises() -> None:
+    view = AglDictView(DictValue())
+
+    with pytest.raises(BoundaryTypeError):
+        view["bad"] = object()
+
+
+def test_dict_view_popitem_removes_and_returns_the_last_entry() -> None:
+    view = AglDictView(DictValue({"one": IntValue(1), "two": IntValue(2)}))
+
+    assert view.popitem() == ("two", 2)
+
+
+def test_dict_view_delitem_removes_an_entry() -> None:
+    dict_value = DictValue({"one": IntValue(1), "two": IntValue(2)})
+    view = AglDictView(dict_value)
+
+    del view["one"]
+
+    assert dict_value.entries == {"two": IntValue(2)}
+
+
+def test_dict_view_clear_empties_the_mapping() -> None:
+    view = AglDictView(DictValue({"one": IntValue(1)}))
+
+    view.clear()
+
+    assert not view
+    assert list(view) == []
+
+
+def test_dict_view_is_not_equal_to_a_non_view_object() -> None:
+    view = AglDictView(DictValue())
+
+    assert view != object()
+
+
+def test_dict_views_over_the_same_container_compare_equal_and_hash_alike() -> None:
+    dict_value = DictValue({"one": IntValue(1)})
+
+    assert AglDictView(dict_value) == AglDictView(dict_value)
+    assert hash(AglDictView(dict_value)) == hash(AglDictView(dict_value))
+
+
+def test_dict_view_repr_matches_the_rendered_agl_value() -> None:
+    dict_value = DictValue({"one": IntValue(1)})
+    view = AglDictView(dict_value)
+
+    assert repr(view) == render_value(dict_value)
+
+
+def test_array_extend_growing_from_itself_terminates() -> None:
+    array_value = ArrayValue([IntValue(1), IntValue(2)])
+    view = AglArrayView(array_value)
+
+    view.extend(view)
+
+    assert array_value.elements == [IntValue(1), IntValue(2), IntValue(1), IntValue(2)]
+
+
+def test_array_extend_does_not_partially_mutate_on_a_bad_element() -> None:
+    array_value = ArrayValue([IntValue(1)])
+    view = AglArrayView(array_value)
+
+    with pytest.raises(BoundaryTypeError):
+        view.extend([2, 3.5, 4])
+
+    assert array_value.elements == [IntValue(1)]
+
+
+def test_array_sort_accepts_a_key_function() -> None:
+    array_value = ArrayValue([TextValue("ccc"), TextValue("a"), TextValue("bb")])
+    view = AglArrayView(array_value)
+
+    view.sort(key=len)
+
+    assert list(view) == ["a", "bb", "ccc"]
+
+
+def test_array_sort_without_a_key_still_sorts_by_encoded_value() -> None:
+    array_value = ArrayValue([IntValue(3), IntValue(1), IntValue(2)])
+    view = AglArrayView(array_value)
+
+    view.sort(reverse=True)
+
+    assert list(view) == [3, 2, 1]
+
+
+def test_array_contains_returns_false_for_an_undecodable_probe() -> None:
+    array_value = ArrayValue([IntValue(1)])
+    view = AglArrayView(array_value)
+
+    assert object() not in view
+
+
+def _synthesize_box_class() -> tuple[NominalId, type[object]]:
+    """Build a fresh synthesized ``Box`` record class for one test's isolated use."""
+    nominal = NominalId(ENTRY_ID, "Box")
+    descriptor = NominalDescriptor(nominal, "Box", NominalKind.RECORD, fields=("value",))
+    return nominal, synthesize_nominal_classes((descriptor,))[nominal]
+
+
+def _synthesize_choice_classes() -> tuple[NominalId, type[object]]:
+    """Build a fresh synthesized ``Choice`` enum class for one test's isolated use."""
+    nominal = NominalId(ENTRY_ID, "Choice")
+    descriptor = NominalDescriptor(
+        nominal,
+        "Choice",
+        NominalKind.ENUM,
+        variants=(VariantDescriptor("Some", ("value",)), VariantDescriptor("None", ())),
+    )
+    return nominal, synthesize_nominal_classes((descriptor,))[nominal]
+
+
+def _synthesize_problem_class() -> tuple[NominalId, type[object]]:
+    """Build a fresh synthesized ``Problem`` exception class for one test's isolated use."""
+    nominal = NominalId(ENTRY_ID, "Problem")
+    descriptor = NominalDescriptor(nominal, "Problem", NominalKind.EXCEPTION, fields=("detail",))
+    return nominal, synthesize_nominal_classes((descriptor,))[nominal]
+
+
+def test_unit_value_round_trips_through_the_boundary() -> None:
+    assert encode_boundary_value(UNIT_VALUE) is None
+    assert decode_boundary_value(None) == UNIT_VALUE
+
+
+def test_bool_value_round_trips_through_the_boundary() -> None:
+    assert encode_boundary_value(BoolValue(True)) is True
+    assert decode_boundary_value(True) == BoolValue(True)
+
+
+def test_int_value_round_trips_through_the_boundary() -> None:
+    assert encode_boundary_value(IntValue(1)) == 1
+    assert decode_boundary_value(1) == IntValue(1)
+
+
+def test_decimal_value_round_trips_through_the_boundary() -> None:
+    assert encode_boundary_value(DecimalValue(Decimal("1.5"))) == Decimal("1.5")
+    assert decode_boundary_value(Decimal("1.5")) == DecimalValue(Decimal("1.5"))
+
+
+def test_text_value_round_trips_through_the_boundary() -> None:
+    assert encode_boundary_value(TextValue("x")) == "x"
+    assert decode_boundary_value("x") == TextValue("x")
+
+
+def test_encode_boundary_value_wraps_json_in_an_agl_json_object() -> None:
+    assert encode_boundary_value(JsonValue(None)) == AglJson(None)
+
+
+def test_encode_boundary_value_wraps_array_in_a_live_array_view() -> None:
+    assert isinstance(encode_boundary_value(ArrayValue([IntValue(1)])), AglArrayView)
+
+
+def test_encode_boundary_value_wraps_dict_in_a_live_dict_view() -> None:
+    assert isinstance(encode_boundary_value(DictValue({"x": IntValue(1)})), AglDictView)
+
+
+def test_decode_boundary_value_returns_the_array_views_wrapped_value() -> None:
+    array_value = ArrayValue([])
+    view = AglArrayView(array_value)
+
+    assert decode_boundary_value(view) is array_value
+
+
+def test_decode_boundary_value_returns_the_dict_views_wrapped_value() -> None:
+    dict_value = DictValue()
+    view = AglDictView(dict_value)
+
+    assert decode_boundary_value(view) is dict_value
+
+
+def test_encode_boundary_value_rejects_an_unregistered_nominal() -> None:
+    with pytest.raises(BoundaryViolation):
+        encode_boundary_value(RecordValue(NominalId(ENTRY_ID, "Missing"), "Missing", {}))
+
+
+def test_encode_boundary_value_rejects_an_agent_value() -> None:
+    with pytest.raises(BoundaryViolation):
+        encode_boundary_value(AgentValue("agent"))
+
+
+def test_decode_boundary_value_rejects_an_unsupported_python_object() -> None:
+    with pytest.raises(BoundaryViolation):
+        decode_boundary_value(object())
+
+
+def test_synthesized_record_round_trips_through_decode() -> None:
+    nominal, box_cls = _synthesize_box_class()
+
+    box = box_cls(value=1)
+
+    assert decode_boundary_value(box) == RecordValue(nominal, "Box", {"value": IntValue(1)})
+
+
+def test_synthesized_record_instances_are_immutable() -> None:
+    _, box_cls = _synthesize_box_class()
+    box = box_cls(value=1)
+
+    with pytest.raises(AttributeError):
+        box.value = 2
+
+
+def test_synthesized_record_constructor_requires_all_fields() -> None:
+    _, box_cls = _synthesize_box_class()
+
+    with pytest.raises(TypeError):
+        box_cls()
+
+
+def test_synthesized_record_instances_with_equal_fields_are_equal_and_hash_alike() -> None:
+    _, box_cls = _synthesize_box_class()
+
+    assert box_cls(value=1) == box_cls(value=1)
+    assert hash(box_cls(value=1)) == hash(box_cls(value=1))
+
+
+def test_synthesized_record_instances_with_different_fields_are_not_equal() -> None:
+    _, box_cls = _synthesize_box_class()
+
+    assert box_cls(value=1) != box_cls(value=2)
+
+
+def test_synthesized_record_instance_is_not_equal_to_an_unrelated_object() -> None:
+    _, box_cls = _synthesize_box_class()
+
+    assert box_cls(value=1) != object()
+
+
+def test_synthesized_record_instance_raises_on_unknown_field_access() -> None:
+    _, box_cls = _synthesize_box_class()
+    box = box_cls(value=1)
+
+    with pytest.raises(AttributeError):
+        box.missing
+
+
+def test_synthesized_record_repr_identifies_the_type_without_the_field_values() -> None:
+    _, box_cls = _synthesize_box_class()
+
+    assert repr(box_cls(value=1)) == "Box(...)"
+
+
+def test_synthesized_enum_variant_instance_is_an_instance_of_the_enum_class() -> None:
+    _, choice_cls = _synthesize_choice_classes()
+
+    some = choice_cls.Some(value=2)
+
+    assert isinstance(some, choice_cls)
+
+
+def test_synthesized_enum_variant_round_trips_through_decode() -> None:
+    nominal, choice_cls = _synthesize_choice_classes()
+    some = choice_cls.Some(value=2)
+
+    assert decode_boundary_value(some) == EnumValue(
+        nominal, "Choice", "Some", {"value": IntValue(2)}
+    )
+
+
+def test_encoding_an_enum_value_produces_the_matching_variant_class() -> None:
+    nominal, choice_cls = _synthesize_choice_classes()
+
+    encoded = encode_boundary_value(EnumValue(nominal, "Choice", "None", {}))
+
+    assert isinstance(encoded, getattr(choice_cls, "None"))
+
+
+def test_synthesized_exception_round_trips_through_decode() -> None:
+    nominal, problem_cls = _synthesize_problem_class()
+
+    problem = problem_cls(detail="bad")
+
+    assert decode_boundary_value(problem) == ExceptionValue(
+        nominal, "Problem", {"detail": TextValue("bad")}
+    )
+
+
+def test_json_payload_accepts_every_scalar_json_shape() -> None:
+    assert decode_boundary_value(AglJson(None)) == JsonValue(None)
+    assert decode_boundary_value(AglJson(True)) == JsonValue(True)
+    assert decode_boundary_value(AglJson("x")) == JsonValue("x")
+    assert decode_boundary_value(AglJson(3)) == JsonValue(3)
+    assert decode_boundary_value(AglJson(Decimal("2.5"))) == JsonValue(Decimal("2.5"))
+
+
+def test_json_payload_accepts_nested_containers() -> None:
+    assert decode_boundary_value(AglJson({"x": []})) == JsonValue({"x": []})
+
+
+def test_json_payload_crosses_the_boundary_without_copying() -> None:
+    payload = [1, 2]
+
+    value = decode_boundary_value(AglJson(payload))
+
+    assert isinstance(value, JsonValue)
+    assert value.raw is payload
+
+
+def test_json_value_encodes_to_its_own_payload_without_copying() -> None:
+    value = JsonValue([1, 2])
+
+    encoded = encode_boundary_value(value)
+
+    assert isinstance(encoded, AglJson)
+    assert encoded.value is value.raw
+
+
+def test_synthesized_nominals_support_non_python_field_names() -> None:
+    nominal = NominalId(ENTRY_ID, "Prompt")
+    descriptor = NominalDescriptor(
+        nominal, "Prompt", NominalKind.RECORD, fields=("ask-prompt", "count")
+    )
+    classes = synthesize_nominal_classes((descriptor,))
+    prompt = classes[nominal](**{"ask-prompt": "continue", "count": 3})
+
+    assert getattr(prompt, "ask-prompt") == "continue"
+    assert prompt.count == 3
+    assert decode_boundary_value(prompt) == RecordValue(
+        nominal,
+        "Prompt",
+        {"ask-prompt": TextValue("continue"), "count": IntValue(3)},
+    )
+
+
+def test_deep_recursive_nominal_construction_completes_quickly() -> None:
+    nominal = NominalId(ENTRY_ID, "Box")
+    descriptor = NominalDescriptor(nominal, "Box", NominalKind.RECORD, fields=("value", "inner"))
+    classes = synthesize_nominal_classes((descriptor,))
+    box_cls = classes[nominal]
+
+    start = time.monotonic()
+    node: object = None
+    for value in range(300):
+        node = box_cls(value=value, inner=node)
+    decoded = decode_boundary_value(node)
+    elapsed = time.monotonic() - start
+
+    assert elapsed < 2.0
+    depth = 0
+    current: Value = decoded
+    while isinstance(current, RecordValue) and isinstance(current.fields["inner"], RecordValue):
+        depth += 1
+        current = current.fields["inner"]
+    assert depth == 299
+
+
+def test_redeclaring_an_enum_updates_and_prunes_variants_in_place() -> None:
+    nominal = NominalId(ENTRY_ID, "Choice")
+    first = NominalDescriptor(
+        nominal,
+        "Choice",
+        NominalKind.ENUM,
+        variants=(VariantDescriptor("Some", ("value",)), VariantDescriptor("Gone", ())),
+    )
+    classes = synthesize_nominal_classes((first,))
+    enum_cls = classes[nominal]
+    some_cls = enum_cls.Some
+
+    second = NominalDescriptor(
+        nominal,
+        "Choice",
+        NominalKind.ENUM,
+        variants=(VariantDescriptor("Some", ("value", "extra")),),
+    )
+    updated = synthesize_nominal_classes((second,), classes)
+
+    assert updated[nominal] is enum_cls
+    assert enum_cls.Some is some_cls
+    assert some_cls._agl_fields == ("value", "extra")
+    assert not hasattr(enum_cls, "Gone")
+
+
+def test_companion_namespace_keeps_same_named_nominals_distinct() -> None:
+    left = NominalId(ModuleId.from_path("left"), "Box")
+    right = NominalId(ModuleId.from_path("right"), "Box")
+    registry = ExternRegistry()
+    registry.set_nominals(
+        {
+            left: NominalDescriptor(left, "Box", NominalKind.RECORD, fields=("left",)),
+            right: NominalDescriptor(right, "Box", NominalKind.RECORD, fields=("right",)),
+        }
+    )
+
+    agl = registry._agl_module()
+
+    assert not hasattr(agl, "Box")
+    assert agl.nominals.left.Box is registry._nominal_classes[left]
+    assert agl.nominals.right.Box is registry._nominal_classes[right]
+
+
+def test_set_nominals_is_a_no_op_when_nothing_changed() -> None:
+    nominal = NominalId(ENTRY_ID, "Box")
+    descriptor = NominalDescriptor(nominal, "Box", NominalKind.RECORD, fields=("value",))
+    registry = ExternRegistry()
+    registry.set_nominals({nominal: descriptor})
+    before = registry._nominal_classes[nominal]
+
+    registry.set_nominals({nominal: descriptor})
+
+    assert registry._nominal_classes[nominal] is before
+
+
+def test_redeclaring_a_nominal_keeps_default_argument_captured_classes_decodable(
+    tmp_path: Path,
+) -> None:
+    nominal = NominalId(ENTRY_ID, "Box")
+    old = NominalDescriptor(nominal, "Box", NominalKind.RECORD, fields=("old",))
+    new = NominalDescriptor(nominal, "Box", NominalKind.RECORD, fields=("new",))
+    companion = tmp_path / "companion.py"
+    companion.write_text("from agl import Box\ndef make(box_cls=Box):\n    return box_cls(new=2)\n")
+    registry = ExternRegistry()
+    registry.set_nominals({nominal: old})
+    registry.load_companion(ENTRY_ID, companion)
+    before = registry._nominal_classes[nominal]
+
+    registry.set_nominals({nominal: new})
+
+    assert registry._nominal_classes[nominal] is before
+    assert registry.invoke("make", registry.resolve(ENTRY_ID, "make"), (), "trace") == RecordValue(
+        nominal, "Box", {"new": IntValue(2)}
+    )
+
+
+def test_stashed_view_with_nominal_elements_decodes_outside_any_call(tmp_path: Path) -> None:
+    nominal = NominalId(ENTRY_ID, "Inner")
+    descriptor = NominalDescriptor(nominal, "Inner", NominalKind.RECORD, fields=("x",))
+    registry = ExternRegistry()
+    registry.set_nominals({nominal: descriptor})
+    companion = tmp_path / "companion.py"
+    companion.write_text(
+        "STASHED = []\n"
+        "def stash(xs):\n"
+        "    STASHED.append(xs)\n"
+        "def read_stashed():\n"
+        "    return STASHED[0][0]\n"
+    )
+    module = registry.load_companion(ENTRY_ID, companion)
+    inner = registry._nominal_classes[nominal](x=1)
+    array_value = ArrayValue([decode_boundary_value(inner)])
+    registry.invoke("stash", registry.resolve(ENTRY_ID, "stash"), [array_value], "trace")
+
+    # Read the stashed view's nominal element completely outside any `invoke`
+    # call, exactly as a companion callback running later would.
+    read_directly = module.read_stashed
+    assert decode_boundary_value(read_directly()) == RecordValue(
+        nominal, "Inner", {"x": IntValue(1)}
+    )
+
+
+def test_registry_wraps_unexpected_decode_errors_as_extern_errors() -> None:
+    nominal = NominalId(ENTRY_ID, "Box")
+    descriptor = NominalDescriptor(nominal, "Box", NominalKind.RECORD, fields=("value",))
+    registry = ExternRegistry()
+    registry.set_nominals({nominal: descriptor})
+    broken = registry._nominal_classes[nominal](value=1)
+    del broken._agl_values["value"]
+
+    with pytest.raises(AglRaise) as excinfo:
+        registry.invoke("broken", lambda: broken, (), "trace")
+
+    assert excinfo.value.exc.fields["python_type"] == TextValue("KeyError")

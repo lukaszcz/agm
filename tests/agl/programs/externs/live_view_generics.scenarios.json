@@ -1,33 +1,38 @@
 {
   "scenarios": [
     {
-      "name": "reverse_sealed_text_handles_in_callers_live_array",
+      "name": "reverse_text_elements_in_callers_live_array",
       "params": {"mode": "reverse_text"},
       "expect": {"stdout": "[\"three\", \"two\", \"one\"]\n"}
     },
     {
-      "name": "rotate_sealed_record_handles_in_callers_live_array",
+      "name": "rotate_record_elements_in_callers_live_array",
       "params": {"mode": "rotate_record"},
       "expect": {
         "stdout": "[Label(value = \"three\"), Label(value = \"one\"), Label(value = \"two\")]\n"
       }
     },
     {
-      "name": "write_received_sealed_handle_back_at_same_type_variable",
+      "name": "duplicate_last_element_into_first_slot",
       "params": {"mode": "duplicate_text"},
       "expect": {"stdout": "[\"three\", \"two\", \"three\"]\n"}
     },
     {
       "name": "generic_positions_share_ordinary_values",
-      "params": {"mode": "reject_other_type_variable"},
+      "params": {"mode": "write_across_type_variables"},
       "expect": {
         "stdout": "[\"foreign\", Label(value = \"two\")]\n"
       }
     },
     {
       "name": "generic_view_accepts_supported_boundary_values",
-      "params": {"mode": "reject_plain_value"},
+      "params": {"mode": "write_supported_scalar"},
       "expect": {"stdout": "[\"replacement\", \"two\"]\n"}
+    },
+    {
+      "name": "sort_reorders_elements_in_callers_live_array",
+      "params": {"mode": "sort_text"},
+      "expect": {"stdout": "[\"one\", \"three\", \"two\"]\n"}
     }
   ]
 }

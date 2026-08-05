@@ -29,8 +29,6 @@ from agm.agl.runtime.boundary import (
     BoundaryViolation,
     decode_boundary_value,
     encode_boundary_value,
-    pop_nominal_classes,
-    push_nominal_classes,
     synthesize_nominal_classes,
 )
 from agm.agl.semantics.cycles import AglCyclicValue, cyclic_value_raise
@@ -107,18 +105,27 @@ class ExternRegistry:
         self._by_module: dict[ModuleId, ModuleType] = {}
         self._resolved: dict[tuple[ModuleId, str], ExternCallable] = {}
         self._nominal_classes: dict[NominalId, type[object]] = {}
-        self._nominal_descriptors: dict[type[object], NominalDescriptor] = {}
+        self._nominal_by_id: dict[NominalId, NominalDescriptor] = {}
 
     def set_nominals(self, descriptors: dict[NominalId, NominalDescriptor]) -> None:
-        """Materialize this program's companion-visible nominal classes once."""
-        missing = {
+        """Materialize or update this program's companion-visible nominal classes.
+
+        A nominal identity keeps the same Python class object across calls,
+        so a companion reference captured before a redeclaration -- a module
+        global, a closure, a default argument -- stays valid without any
+        rebinding step.
+        """
+        changed = {
             nominal: descriptor
             for nominal, descriptor in descriptors.items()
-            if nominal not in self._nominal_classes
+            if self._nominal_by_id.get(nominal) != descriptor
         }
-        classes, by_type = synthesize_nominal_classes(missing.values())
+        if not changed:
+            return
+
+        classes = synthesize_nominal_classes(changed.values(), self._nominal_classes)
         self._nominal_classes.update(classes)
-        self._nominal_descriptors.update(by_type)
+        self._nominal_by_id.update(changed)
 
     def _agl_module(self) -> ModuleType:
         """Build the temporary ``agl`` module exposed while importing a companion."""
@@ -126,8 +133,18 @@ class ExternRegistry:
         setattr(module, "array", _array)
         setattr(module, "dict", _dict)
         setattr(module, "json", AglJson)
-        for cls in self._nominal_classes.values():
-            setattr(module, cls.__name__, cls)
+        nominals = ModuleType("agl.nominals")
+        setattr(module, "nominals", nominals)
+        leaves: dict[tuple[str, ...], type[object]] = {}
+        names: dict[str, list[type[object]]] = {}
+        for nominal, cls in self._nominal_classes.items():
+            descriptor = self._nominal_by_id[nominal]
+            leaves[_nominal_identity_path(descriptor)] = cls
+            names.setdefault(cls.__name__, []).append(cls)
+        _build_nominal_namespace(nominals, leaves)
+        for name, classes in names.items():
+            if len(classes) == 1 and name not in {"array", "dict", "json", "nominals"}:
+                setattr(module, name, classes[0])
         return module
 
     def load_companion(self, module_id: ModuleId, companion_path: Path) -> ModuleType:
@@ -229,55 +246,102 @@ class ExternRegistry:
         """Cross the boundary for one extern call: encode, call, and decode.
 
         Encodes *args* by their runtime value class, calls *fn*, and decodes
-        its result by Python type. Unsupported return representations and
-        ordinary exceptions raised by *fn* become catchable ``ExternError``
-        values; ``python_type`` is empty for an unsupported representation and
-        otherwise names the Python exception class. A companion repr'ing a
-        cyclic view raises ``AglCyclicValue``, which becomes
-        ``CyclicValueError``. Retained views remain live after the call.
+        its result by Python type. An argument or return value with no
+        boundary representation, and an ordinary exception raised by *fn*,
+        all become catchable ``ExternError`` values; ``python_type`` is empty
+        for an unsupported representation and otherwise names the Python
+        exception class. A companion repr'ing a cyclic view -- while *fn*
+        runs, or while this builds an ``ExternError`` message from an
+        exception *fn* raised -- raises ``AglCyclicValue``, which becomes
+        ``CyclicValueError`` instead. Retained views remain live after the
+        call.
 
         *nominals* resolves the ``ExternError``/``CyclicValueError`` nominal;
         it defaults to the shipped standard library's own identities for a
         caller (e.g. a direct unit test) that invokes without a program.
         """
-        tokens = push_nominal_classes(self._nominal_classes, self._nominal_descriptors)
         try:
             encoded_args = [encode_boundary_value(arg) for arg in args]
+        except BoundaryViolation as exc:
+            raise _extern_error(
+                function_name,
+                f"argument cannot cross the boundary: {exc}",
+                trace_id,
+                python_type="",
+                nominals=nominals,
+            ) from exc
 
+        try:
+            with decimal.localcontext():
+                result = fn(*encoded_args)
+        except AglCyclicValue as exc:
+            raise cyclic_value_raise(trace_id, nominals=nominals) from exc
+        except Exception as exc:
             try:
-                with decimal.localcontext():
-                    result = fn(*encoded_args)
-            except AglCyclicValue as exc:
-                raise cyclic_value_raise(trace_id, nominals=nominals) from exc
-            except Exception as exc:
-                raise _extern_error(
-                    function_name,
-                    str(exc) or type(exc).__name__,
-                    trace_id,
-                    python_type=type(exc).__name__,
-                    nominals=nominals,
-                ) from exc
+                message = str(exc) or type(exc).__name__
+            except AglCyclicValue as cyclic_exc:
+                raise cyclic_value_raise(trace_id, nominals=nominals) from cyclic_exc
+            raise _extern_error(
+                function_name,
+                message,
+                trace_id,
+                python_type=type(exc).__name__,
+                nominals=nominals,
+            ) from exc
 
-            try:
-                return decode_boundary_value(result)
-            except BoundaryViolation as exc:
-                raise _extern_error(
-                    function_name,
-                    f"return value cannot cross the boundary: {exc}",
-                    trace_id,
-                    python_type="",
-                    nominals=nominals,
-                ) from exc
-            except Exception as exc:
-                raise _extern_error(
-                    function_name,
-                    f"return value validation failed: {exc}",
-                    trace_id,
-                    python_type=type(exc).__name__,
-                    nominals=nominals,
-                ) from exc
-        finally:
-            pop_nominal_classes(tokens)
+        try:
+            return decode_boundary_value(result)
+        except BoundaryViolation as exc:
+            raise _extern_error(
+                function_name,
+                f"return value cannot cross the boundary: {exc}",
+                trace_id,
+                python_type="",
+                nominals=nominals,
+            ) from exc
+        except Exception as exc:
+            raise _extern_error(
+                function_name,
+                f"return value validation failed: {exc}",
+                trace_id,
+                python_type=type(exc).__name__,
+                nominals=nominals,
+            ) from exc
+
+
+def _nominal_identity_path(descriptor: NominalDescriptor) -> tuple[str, ...]:
+    """Return a nominal's namespace path, rooted by module (or ``entry``) then scope."""
+    if descriptor.nominal.module_id.is_entry:
+        return ("entry", *descriptor.nominal.scope_path, descriptor.nominal.declared_name)
+    return (
+        *descriptor.nominal.module_id.segments,
+        *descriptor.nominal.scope_path,
+        descriptor.nominal.declared_name,
+    )
+
+
+def _build_nominal_namespace(root: ModuleType, leaves: dict[tuple[str, ...], type[object]]) -> None:
+    """Expose every nominal under its identity path in one order-independent pass.
+
+    A path segment that is itself a nominal's own identity path becomes that
+    nominal's class rather than a plain namespace module, so a scope and a
+    nominal may legally share a name: the class serves as both the leaf
+    value and, for anything nested under it, the namespace container.
+    """
+    containers: dict[tuple[str, ...], object] = {(): root}
+
+    def container_for(path: tuple[str, ...]) -> object:
+        cached = containers.get(path)
+        if cached is not None:
+            return cached
+        leaf = leaves.get(path)
+        node: object = leaf if leaf is not None else ModuleType(f"{root.__name__}.{'.'.join(path)}")
+        setattr(container_for(path[:-1]), path[-1], node)
+        containers[path] = node
+        return node
+
+    for path in leaves:
+        container_for(path)
 
 
 def _extern_error(

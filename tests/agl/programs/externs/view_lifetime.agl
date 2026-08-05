@@ -1,4 +1,8 @@
-# A container view stays usable for the companion's retained reference.
+# A container view stays usable for the companion's retained reference. In
+# "within_call", stash_and_use both stashes and mutates the same array within
+# one call. In "across_calls", stash retains the view during one call and
+# mutate_stashed mutates through it from a later call: the view still reads
+# and writes the caller's array after the first call has returned.
 param mode: text
 
 extern def stash(xs: array[int]) -> unit
@@ -8,4 +12,10 @@ extern def stash_and_use(xs: array[int]) -> unit
 if mode == "within_call" =>
   var xs = [1]
   let _: unit = stash_and_use(xs)
+  print xs
+
+if mode == "across_calls" =>
+  var xs = [1]
+  let _: unit = stash(xs)
+  let _: unit = mutate_stashed()
   print xs

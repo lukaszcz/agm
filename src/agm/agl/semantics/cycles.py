@@ -2,17 +2,20 @@
 
 Reference semantics makes cyclic ``array``/``dict`` values constructible: an
 array or dict can hold a reference back to a container that (transitively)
-contains it. Every walker that recurses through a value's containers — rendering and JSON
-serialization — must detect that re-entry rather than recursing forever. A
-cycle can only ever be closed through an array or a dict: records, enums, and
-exceptions are immutable, so none of them can hold a reference to itself.
-Tracking container identity is therefore enough; no other value kind ever
-needs to join the active set.
+contains it. Every walker that recurses through a value's containers —
+rendering and JSON serialization — must detect that re-entry rather than
+recursing forever. A cycle can only ever be closed through an array or a
+dict: records, enums, and exceptions are immutable, so none of them can hold
+a reference to itself. Tracking container identity is therefore enough; no
+other value kind ever needs to join the active set.
 
 The FFI encoder does not walk array or dict payloads: it produces lazy views,
-so cyclic arguments cross the boundary. A companion's ``repr`` of a view or a
-FFI view may render its value and reach this guard. This module is the
-single shared implementation for ``render_value`` and ``value_to_json_obj``.
+so cyclic arguments cross the boundary. A companion that ``repr``s such a
+view renders its value and reaches this guard. This module is the single
+shared implementation for ``render_value`` and ``value_to_json_obj``.
+Cyclic *Python* payloads are a separate concern with a separate walk in
+``runtime/boundary.py``: they are unrepresentable rather than
+cycle-guarded, and are rejected alongside the rest of the JSON-shape check.
 Equality is unrelated — it is co-inductive (``semantics/values.py``) rather
 than error-raising, and does not use this module.
 """

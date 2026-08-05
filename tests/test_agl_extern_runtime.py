@@ -7,6 +7,8 @@ from pathlib import Path
 
 import pytest
 
+from agm.agl.modules.roots import RootSet
+from agm.agl.pipeline import PipelineDriver
 from agm.agl.semantics.values import (
     UNIT_VALUE,
     BoolValue,
@@ -15,7 +17,16 @@ from agm.agl.semantics.values import (
     IntValue,
     TextValue,
 )
-from tests.agl.ir_harness import evaluate_ir_raises_with_externs, evaluate_ir_with_externs
+from tests.agl.ir_harness import (
+    evaluate_ir_raises_with_externs,
+    evaluate_ir_with_externs,
+    write_companion_file,
+    write_module_file,
+)
+
+
+def _roots(*paths: Path) -> RootSet:
+    return RootSet(roots=frozenset(paths))
 
 
 def test_native_scalars_round_trip_without_a_declared_schema(tmp_path: Path) -> None:
@@ -176,3 +187,44 @@ def test_indirect_extern_default_and_missing_argument_guards(tmp_path: Path) -> 
     assert IrInterpreter(program((10,)), extern_registry=registry).run()["result"] == IntValue(11)
     with pytest.raises(InvalidIrError, match="missing argument"):
         IrInterpreter(program(()), extern_registry=registry).run()
+
+
+def test_dry_run_lists_call_site_without_running_the_extern(tmp_path: Path) -> None:
+    marker = tmp_path / "marker.txt"
+    root = tmp_path / "root"
+    write_module_file(root, "lib/mod", "extern def f(x: int) -> int")
+    write_companion_file(
+        root,
+        "lib/mod",
+        f"open({str(marker)!r}, 'a').write('imported')\n"
+        "def f(x):\n"
+        f"    open({str(marker)!r}, 'a').write('called')\n"
+        "    return x + 1\n",
+    )
+    driver = PipelineDriver()
+    prepared = PipelineDriver.prepare_program(
+        "import lib/mod\nlib/mod::f(1)",
+        entry_path=None,
+        roots=_roots(root),
+        default_stdlib=False,
+    )
+    result = driver.run_prepared(prepared, check_only=True)
+    assert result.ok is True
+    assert [cs.callee for cs in result.call_sites] == ["f"]
+    assert not marker.exists()
+
+
+def test_dry_run_does_not_import_a_broken_companion(tmp_path: Path) -> None:
+    root = tmp_path / "root"
+    write_module_file(root, "lib/mod", "extern def f(x: int) -> int")
+    write_companion_file(root, "lib/mod", "raise RuntimeError('broken')\n")
+    driver = PipelineDriver()
+    prepared = PipelineDriver.prepare_program(
+        "import lib/mod\nlib/mod::f(1)",
+        entry_path=None,
+        roots=_roots(root),
+        default_stdlib=False,
+    )
+    result = driver.run_prepared(prepared, check_only=True)
+    assert result.ok is True
+    assert [cs.callee for cs in result.call_sites] == ["f"]

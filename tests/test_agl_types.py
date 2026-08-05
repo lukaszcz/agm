@@ -4,10 +4,10 @@ Covers ``agm.agl.semantics.types`` and ``agm.agl.typecheck.env`` —
 both import cleanly without depending on the rest of the checker.
 
 Coverage:
-- UnitType / AgentType / FunctionType: kind, repr, structural equality.
-- is_json_shaped: False for all three new types.
-- is_assignable: exact-only for the three new types (positive + negative).
-- comparable_types: False for agent/unit/function; unchanged for scalars.
+- UnitType / FunctionType: kind, repr, structural equality.
+- is_json_shaped: False for both types.
+- is_assignable: exact-only for both types (positive + negative).
+- comparable_types: False for unit/function; unchanged for scalars.
 - TypeEnvironment: prelude types (ExecResult, ParsePolicy) and RecursionError
   exception registered in every fresh env.
 - seed_from: does not duplicate/clobber prelude types.
@@ -76,11 +76,6 @@ class TestUnitType:
         u = UnitType()
         with pytest.raises(Exception):
             setattr(u, "kind", "x")
-
-
-# ---------------------------------------------------------------------------
-# AgentType
-# ---------------------------------------------------------------------------
 
 
 # ---------------------------------------------------------------------------
@@ -661,18 +656,15 @@ class TestInferenceVarType:
         )
         assert compute_finite_closure(finite_table).infinite == frozenset()
 
-    def test_schema_and_extern_walkers_reject_flexible_variables(self) -> None:
+    def test_schema_walkers_reject_flexible_variables(self) -> None:
         from agm.agl.semantics.type_table import create_seeded_type_table
-        from agm.agl.type_schema import build_extern_contract, derive_schema
-        from agm.agl.typecheck.env import FunctionSignature
+        from agm.agl.type_schema import derive_schema
 
         variable = InferenceVarType("T")
         table = create_seeded_type_table()
 
         with pytest.raises(TypeError):
             derive_schema(variable, table)
-        with pytest.raises(TypeError):
-            build_extern_contract(FunctionSignature(params=(), result=variable), table)
 
 
 # ---------------------------------------------------------------------------

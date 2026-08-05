@@ -1,7 +1,5 @@
-# A generic extern (sealed handles at the type-variable position) combined
-# with a `for` loop and a `case` over an ordinary AgL enum built from its
-# result: the companion deduplicates via handle equality without ever
-# inspecting the wrapped values.
+# A generic extern combined with a `for` loop and a `case` over an ordinary
+# AgL enum built from its result.
 enum Verdict
   | High
   | Low

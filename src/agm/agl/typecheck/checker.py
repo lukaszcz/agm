@@ -744,10 +744,10 @@ class _Checker:
         """Reject types that cannot cross the Python boundary in an extern's signature.
 
         Two kinds are rejected: a function type anywhere (a value that cannot
-        marshal across the FFI), and a type with no finite schema
-        (its recursive instantiations never close, so its boundary schema — like
-        its JSON schema — cannot be built). A finite recursive type is allowed:
-        it crosses as a ``BoundaryRef`` structure.
+        marshal across the FFI), and a type with no finite schema (its
+        recursive instantiations never close, so it cannot be represented by
+        the language's finite type machinery). Finite recursive types cross as
+        ordinary recursive Python object graphs.
         """
         for p, spec in zip(node.params, sig.params):
             self._reject_uncrossable_extern_type(

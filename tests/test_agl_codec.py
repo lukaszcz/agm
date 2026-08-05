@@ -54,6 +54,7 @@ from agm.agl.semantics.types import (
     DecimalType,
     DictType,
     EnumType,
+    ExceptionType,
     IntType,
     JsonType,
     RecordType,
@@ -835,6 +836,12 @@ class TestRecursiveSchemaDerivation:
         assert keys[h1] == "X_A_B"
         assert keys[h2] == "X_A_B_2"
         assert keys[h3] == "X_A_B_3"
+
+    def test_assign_defs_keys_displays_non_generic_exception_handles(self) -> None:
+        from agm.agl.type_schema import _assign_defs_keys
+
+        handle = ExceptionType("Problem", module_id=ENTRY_ID)
+        assert _assign_defs_keys((handle,), type_table_for()) == {handle: "Problem"}
 
     def test_defs_key_order_is_deterministic_for_mutually_recursive_hub(self) -> None:
         # Hub has three direct neighbours (Alpha, Mike, Zulu) discovered off

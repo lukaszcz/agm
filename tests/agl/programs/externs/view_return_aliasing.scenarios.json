@@ -1,0 +1,14 @@
+{
+  "scenarios": [
+    {
+      "name": "returning_received_view_keeps_argument_aliased",
+      "params": {"mode": "received"},
+      "expect": {"stdout": "[9, 2]\n[9, 2]\n"}
+    },
+    {
+      "name": "returning_plain_list_creates_independent_container",
+      "params": {"mode": "snapshot"},
+      "expect": {"stdout": "[1, 2]\n[9, 2]\n"}
+    }
+  ]
+}

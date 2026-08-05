@@ -1,90 +1,39 @@
-"""The extern (Python FFI) boundary: sealed handles, value walkers, registry.
+"""Extern companion loading, callable resolution, and invocation.
 
-This is the eval-free runtime service backing ``extern def``:
-
-- :class:`SealedHandle` — the opaque Python-side wrapper for an AgL value at
-  a type-variable position crossing the boundary.
-- :func:`encode_boundary_value` / :func:`decode_boundary_value` — the
-  ``BoundarySchema``-driven walkers that convert a value in each direction,
-  deep-copying so neither side can observe the other's mutations.
-- :class:`ExternRegistry` — imports companion Python modules, resolves their
-  callables, and is the single chokepoint that turns every runtime failure
-  crossing the boundary (a raising callable, a return-contract violation, an
-  argument-conversion failure) into a catchable ``ExternError``.
-
-Companion import and callable resolution are two separate steps
-(:meth:`ExternRegistry.load_companion` then :meth:`ExternRegistry.resolve`)
-so a module's companion is imported exactly once even though it may declare
-several externs.
+This eval-free runtime module owns the extern registry. It imports a
+companion module once, resolves declared callables, and invokes each through
+the value-directed conversion functions in :mod:`agm.agl.runtime.boundary`.
+Container views remain usable after a call returns and continue to reflect
+their underlying AgL containers.
 """
 
 from __future__ import annotations
 
-import copy
 import decimal
 import importlib.util
 import sys
-import weakref
-from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
-from decimal import Decimal
+from collections.abc import Sequence
 from pathlib import Path
-from types import MappingProxyType, ModuleType
-from typing import Protocol, assert_never, cast
+from types import ModuleType
+from typing import Protocol, cast
 
 from agm.agl.diagnostics import AglError
 from agm.agl.ir.builtin_nominals import NO_BUILTIN_DECLARATIONS, BuiltinNominals
-from agm.agl.ir.contracts import (
-    BoundaryArray,
-    BoundaryDict,
-    BoundaryEnum,
-    BoundaryException,
-    BoundaryRecord,
-    BoundaryRef,
-    BoundaryScalar,
-    BoundarySchema,
-    BoundarySealVar,
-    BoundaryUnit,
-    ExternContract,
-    ScalarKind,
-)
+from agm.agl.ir.ids import NominalId
+from agm.agl.ir.program import NominalDescriptor
 from agm.agl.modules.ids import ModuleId
-from agm.agl.runtime.render import render_value
-from agm.agl.runtime.serialize import value_to_json_obj
-from agm.agl.semantics.cycles import AglCyclicValue, cyclic_value_raise, enter_container
-from agm.agl.semantics.exceptions import AglRaise, make_builtin_exception
-from agm.agl.semantics.values import (
-    ArrayValue,
-    BoolValue,
-    ConstructorValue,
-    DecimalValue,
-    DictValue,
-    EnumValue,
-    ExceptionValue,
-    IntValue,
-    IrClosureValue,
-    IteratorValue,
-    JsonValue,
-    RecordValue,
-    TextValue,
-    UnitValue,
-    Value,
+from agm.agl.runtime.boundary import (
+    AglArrayView,
+    AglDictView,
+    AglJson,
+    BoundaryViolation,
+    decode_boundary_value,
+    encode_boundary_value,
+    synthesize_nominal_classes,
 )
-
-# ---------------------------------------------------------------------------
-# Internal exceptions
-# ---------------------------------------------------------------------------
-
-
-class BoundaryViolation(Exception):
-    """Internal signal for a contract violation while crossing the boundary.
-
-    Raised by :func:`encode_boundary_value` / :func:`decode_boundary_value` on
-    any structural mismatch (wrong type, wrong variant, missing/extra/
-    misnamed fields, a missing or mismatched seal, ...).  Caught by
-    :meth:`ExternRegistry.invoke`, which reports it as ``ExternError`` with an
-    empty ``python_type``.
-    """
+from agm.agl.semantics.cycles import AglCyclicValue, cyclic_value_raise
+from agm.agl.semantics.exceptions import AglRaise, make_builtin_exception
+from agm.agl.semantics.values import ArrayValue, DictValue, TextValue, Value
 
 
 class ExternImportError(AglError):
@@ -113,610 +62,6 @@ class ExternResolutionError(AglError):
         )
         self.module_id = module_id
         self.name = name
-
-
-# ---------------------------------------------------------------------------
-# SealedHandle
-# ---------------------------------------------------------------------------
-
-
-@dataclass(frozen=True, slots=True)
-class _SealedPayload:
-    """Registry-private payload for a minted sealed handle."""
-
-    value: Value
-    seal: object
-
-
-_HANDLE_FACTORY_KEY = object()
-
-
-class SealedHandle:
-    """Opaque wrapper for an AgL value at a sealed type-variable position.
-
-    A Python companion may rearrange, count, and compare handles it receives,
-    but cannot inspect or forge them: handles expose no value/seal attributes,
-    and the public constructor rejects companion-created instances.  Only the
-    boundary encoder can mint an instance whose private id resolves in the
-    registry owned by this module.
-
-    ``__eq__``/``__hash__`` mirror the wrapped value's own equality and hash
-    (never equal to a non-handle), so handles compose correctly in Python sets
-    and dicts without exposing the wrapped value on the handle — except for a
-    wrapped array or dict, where the key is the container's **identity**, not
-    its structure (see ``_sealed_value_eq_key``): two handles wrapping equal
-    but distinct arrays are not equal.  ``__repr__`` shows the rendered AgL
-    value as a debugging aid; repr'ing a wrapped value that contains a
-    reference cycle surfaces as the catchable ``CyclicValueError`` at the
-    enclosing extern call, mirroring ``render``/``print`` on a cyclic value.
-    """
-
-    __slots__ = ("__weakref__",)
-
-    def __init__(self, *_args: object, _factory_key: object | None = None) -> None:
-        if _factory_key is not _HANDLE_FACTORY_KEY:
-            raise TypeError("SealedHandle instances can only be minted by the extern boundary")
-
-    def __eq__(self, other: object) -> bool:
-        if not isinstance(other, SealedHandle):
-            return False
-        self_state = _HANDLE_STATE.get(id(self))
-        other_state = _HANDLE_STATE.get(id(other))
-        if self_state is None or other_state is None:
-            return False
-        return self_state.eq_key() == other_state.eq_key()
-
-    def __hash__(self) -> int:
-        state = _HANDLE_STATE.get(id(self))
-        if state is None:
-            raise TypeError("uninitialized sealed handle is not hashable")
-        return hash(state.eq_key())
-
-    def __repr__(self) -> str:
-        state = _HANDLE_STATE.get(id(self))
-        if state is None:
-            return "<sealed handle>"
-        return state.rendered()
-
-
-class _HandleState:
-    """Deferred equality key and repr for a minted sealed handle.
-
-    The wrapped value is already retained by the minting vault, so this holder
-    keeps only a reference to it and derives the structural equality key
-    lazily, on first ``__hash__``/``__eq__``.  A handle that merely crosses
-    the boundary and is passed back — never hashed or compared — therefore
-    pays none of that O(size) work.  The repr, by contrast, is never memoized:
-    ``ArrayValue``/``DictValue`` are mutable in place, so a cached repr could
-    report pre-mutation contents for a handle a companion retains across
-    calls; :meth:`rendered` re-renders the wrapped value on every access.
-    """
-
-    __slots__ = ("_value", "_eq_key", "_has_eq_key")
-
-    def __init__(self, value: Value) -> None:
-        self._value = value
-        self._eq_key: object = None
-        self._has_eq_key = False
-
-    def eq_key(self) -> object:
-        if not self._has_eq_key:
-            self._eq_key = _sealed_value_eq_key(self._value)
-            self._has_eq_key = True
-        return self._eq_key
-
-    def rendered(self) -> str:
-        return render_value(self._value)
-
-
-class _HandleVault:
-    """Per-boundary storage for sealed payloads, kept out of module globals."""
-
-    def __init__(self) -> None:
-        self._payloads: dict[int, _SealedPayload] = {}
-
-    def make(self, value: Value, seal: object) -> SealedHandle:
-        """Mint a sealed handle and retain its payload in this vault."""
-        handle = SealedHandle(_factory_key=_HANDLE_FACTORY_KEY)
-        handle_id = id(handle)
-        self._payloads[handle_id] = _SealedPayload(value=value, seal=seal)
-        _HANDLE_STATE[handle_id] = _HandleState(value)
-        weakref.finalize(handle, _drop_handle_state, self._payloads, handle_id)
-        return handle
-
-    def open(self, handle: SealedHandle) -> _SealedPayload:
-        """Return a minted handle's payload, rejecting handles outside this vault."""
-        payload = self._payloads.get(id(handle))
-        if payload is None:
-            raise BoundaryViolation("sealed handle was not minted by this boundary")
-        return payload
-
-
-_DEFAULT_HANDLE_VAULT = _HandleVault()
-_HANDLE_STATE: dict[int, _HandleState] = {}
-
-
-def _drop_handle_state(payloads: dict[int, _SealedPayload], handle_id: int) -> None:
-    payloads.pop(handle_id, None)
-    _HANDLE_STATE.pop(handle_id, None)
-
-
-def _sealed_value_eq_key(value: Value) -> object:
-    """Return an immutable equality key for a sealed value.
-
-    ``ArrayValue``/``DictValue`` use **object identity**, not a structural
-    walk: reference semantics makes a mutable array/dict cyclic and its
-    payload never stable, so a structural key could both loop forever and go
-    stale the moment the container is mutated. Identity sidesteps both
-    problems, and is sound precisely because ``_HandleState`` retains the
-    wrapped value for as long as the handle — and therefore this key — can be
-    observed, so the ``id()`` can never be reused by an unrelated object while
-    it is still in play. The nominal arms below still recurse into their
-    fields structurally, which is safe because a cycle can only ever be
-    closed through an array or dict.
-    """
-    if isinstance(value, TextValue):
-        return ("text", value.value)
-    if isinstance(value, IntValue):
-        return ("int", value.value)
-    if isinstance(value, DecimalValue):
-        return ("decimal", value.value)
-    if isinstance(value, BoolValue):
-        return ("bool", value.value)
-    if isinstance(value, JsonValue):
-        return ("json", _json_eq_key(value.raw))
-    if isinstance(value, ArrayValue):
-        return ("array", id(value))
-    if isinstance(value, DictValue):
-        return ("dict", id(value))
-    if isinstance(value, RecordValue):
-        return (
-            "record",
-            value.nominal,
-            tuple(sorted((key, _sealed_value_eq_key(item)) for key, item in value.fields.items())),
-        )
-    if isinstance(value, EnumValue):
-        return (
-            "enum",
-            value.nominal,
-            value.variant,
-            tuple(sorted((key, _sealed_value_eq_key(item)) for key, item in value.fields.items())),
-        )
-    if isinstance(value, ExceptionValue):
-        return (
-            "exception",
-            value.nominal,
-            tuple(sorted((key, _sealed_value_eq_key(item)) for key, item in value.fields.items())),
-        )
-    if isinstance(value, UnitValue):
-        return ("unit",)
-    if isinstance(value, ConstructorValue):
-        return ("constructor", value.nominal, value.variant)
-    if isinstance(value, (IrClosureValue, IteratorValue)):
-        return (type(value).__name__, id(value))
-    assert_never(value)  # pragma: no cover
-
-
-def _json_eq_key(obj: object) -> object:
-    """Return an immutable key matching ``JsonValue`` equality/hash semantics."""
-    if isinstance(obj, bool):
-        return ("bool", obj)
-    if isinstance(obj, (int, decimal.Decimal)):
-        return ("number", decimal.Decimal(obj))
-    if isinstance(obj, list):
-        return ("list", tuple(_json_eq_key(item) for item in obj))
-    if isinstance(obj, dict):
-        return ("dict", tuple(sorted((_json_eq_key(k), _json_eq_key(v)) for k, v in obj.items())))
-    return ("scalar", obj)
-
-
-def _typename(obj: object) -> str:
-    """Human-readable type name (AgL value-kind or Python type) for a boundary message."""
-    return type(obj).__name__
-
-
-#: Shared read-only empty ``defs`` table for boundary walks over a self-contained
-#: schema (one with no ``BoundaryRef`` leaf, i.e. no recursive type).
-_NO_DEFS: Mapping[str, BoundarySchema] = MappingProxyType({})
-
-
-# ---------------------------------------------------------------------------
-# Encode: AgL Value -> Python argument
-# ---------------------------------------------------------------------------
-
-
-def encode_boundary_value(
-    schema: BoundarySchema,
-    value: Value,
-    seals: Mapping[str, object],
-    defs: Mapping[str, BoundarySchema] = _NO_DEFS,
-    vault: _HandleVault = _DEFAULT_HANDLE_VAULT,
-    active: "set[int] | None" = None,
-) -> object:
-    """Encode one AgL value crossing an extern boundary as a Python argument.
-
-    Walks *schema* (compiled from the extern's declared parameter/result
-    type) and *value* in lockstep, producing a fresh Python object per the
-    AgL-to-Python type mapping.  Containers and nominal values are rebuilt
-    from scratch and ``json`` leaves are deep-copied, so mutating what Python
-    receives never affects the wrapped AgL value.  A type-variable leaf seals
-    the value in a :class:`SealedHandle` carrying this call's token for that
-    variable (from *seals*, minted once per :meth:`ExternRegistry.invoke`
-    call).  A ``BoundaryRef`` leaf resolves through *defs* (the contract's
-    shared recursive-instantiation bodies), so a recursive value crosses as a
-    finite walk.  A *value* whose runtime shape does not match *schema* raises
-    :class:`BoundaryViolation` (an argument-conversion failure at the call
-    site, reported by :meth:`ExternRegistry.invoke` as ``ExternError``).
-
-    Reference semantics makes a cyclic array/dict constructible; *active*
-    (an active-container-id set, allocated lazily) detects that and raises
-    :class:`~agm.agl.semantics.cycles.AglCyclicValue`, converted by
-    :meth:`ExternRegistry.invoke` into the catchable ``CyclicValueError``.
-    Callers pass no *active* argument — it exists only to thread the walk's
-    own recursive calls.
-    """
-    match schema:
-        case BoundaryScalar(kind=kind):
-            return _encode_scalar(kind, value)
-        case BoundaryUnit():
-            if not isinstance(value, UnitValue):
-                raise BoundaryViolation(f"expected unit, got {_typename(value)}")
-            return None
-        case BoundaryArray(element=elem_schema):
-            if not isinstance(value, ArrayValue):
-                raise BoundaryViolation(f"expected an array value, got {_typename(value)}")
-            active = enter_container(id(value), active)
-            try:
-                return [
-                    encode_boundary_value(elem_schema, e, seals, defs, vault, active)
-                    for e in value.elements
-                ]
-            finally:
-                active.discard(id(value))
-        case BoundaryDict(value=val_schema):
-            if not isinstance(value, DictValue):
-                raise BoundaryViolation(f"expected a dict value, got {_typename(value)}")
-            active = enter_container(id(value), active)
-            try:
-                return {
-                    k: encode_boundary_value(val_schema, v, seals, defs, vault, active)
-                    for k, v in value.entries.items()
-                }
-            finally:
-                active.discard(id(value))
-        case BoundaryRecord(display_name=display_name, fields=fields):
-            if not isinstance(value, RecordValue):
-                raise BoundaryViolation(f"expected record {display_name!r}, got {_typename(value)}")
-            return _encode_boundary_fields(fields, value.fields, seals, defs, vault, active)
-        case BoundaryEnum(display_name=display_name, variants=variants):
-            if not isinstance(value, EnumValue):
-                raise BoundaryViolation(f"expected enum {display_name!r}, got {_typename(value)}")
-            variant = next((v for v in variants if v.name == value.variant), None)
-            if variant is None:
-                raise BoundaryViolation(f"enum {display_name!r}: unknown variant {value.variant!r}")
-            result: dict[str, object] = {"$case": value.variant}
-            result.update(
-                _encode_boundary_fields(variant.fields, value.fields, seals, defs, vault, active)
-            )
-            return result
-        case BoundaryException(display_name=display_name, fields=fields):
-            if not isinstance(value, ExceptionValue):
-                raise BoundaryViolation(
-                    f"expected exception {display_name!r}, got {_typename(value)}"
-                )
-            return _encode_boundary_fields(fields, value.fields, seals, defs, vault, active)
-        case BoundarySealVar(var=var):
-            return vault.make(value, seals[var])
-        case BoundaryRef(key=key):
-            return encode_boundary_value(defs[key], value, seals, defs, vault, active)
-        case _ as unreachable:  # pragma: no cover
-            assert_never(unreachable)
-
-
-def _encode_boundary_fields(
-    fields: tuple[tuple[str, BoundarySchema], ...],
-    values: Mapping[str, Value],
-    seals: Mapping[str, object],
-    defs: Mapping[str, BoundarySchema],
-    vault: _HandleVault,
-    active: "set[int] | None",
-) -> dict[str, object]:
-    """Encode a nominal payload's ordered fields through the boundary schema."""
-    return {
-        fname: encode_boundary_value(fschema, values[fname], seals, defs, vault, active)
-        for fname, fschema in fields
-    }
-
-
-def _encode_scalar(kind: ScalarKind, value: Value) -> object:
-    """Encode one scalar (or opaque json) leaf as its Python argument."""
-    match kind:
-        case ScalarKind.TEXT:
-            if not isinstance(value, TextValue):
-                raise BoundaryViolation(f"expected text, got {_typename(value)}")
-            return value.value
-        case ScalarKind.INT:
-            if not isinstance(value, IntValue):
-                raise BoundaryViolation(f"expected int, got {_typename(value)}")
-            return value.value
-        case ScalarKind.DECIMAL:
-            if not isinstance(value, DecimalValue):
-                raise BoundaryViolation(f"expected decimal, got {_typename(value)}")
-            return value.value
-        case ScalarKind.BOOL:
-            if not isinstance(value, BoolValue):
-                raise BoundaryViolation(f"expected bool, got {_typename(value)}")
-            return value.value
-        case ScalarKind.JSON:
-            if not isinstance(value, JsonValue):
-                raise BoundaryViolation(f"expected json, got {_typename(value)}")
-            return copy.deepcopy(value_to_json_obj(value))
-        case _ as unreachable:  # pragma: no cover
-            assert_never(unreachable)
-
-
-# ---------------------------------------------------------------------------
-# Decode: Python return value -> AgL Value (strict)
-# ---------------------------------------------------------------------------
-
-
-def decode_boundary_value(
-    schema: BoundarySchema,
-    obj: object,
-    seals: Mapping[str, object],
-    defs: Mapping[str, BoundarySchema] = _NO_DEFS,
-    vault: _HandleVault = _DEFAULT_HANDLE_VAULT,
-    active_containers: set[int] | None = None,
-) -> Value:
-    """Strictly decode one Python return value against *schema*.
-
-    Mirrors :func:`encode_boundary_value`'s recursion in the opposite
-    direction, with exactly these tolerances: a Python ``int`` widens to a
-    declared ``decimal``; ``bool`` is rejected where ``int``/``decimal`` is
-    declared (``bool`` is an ``int`` subclass); ``float`` is never accepted;
-    containers must be exact built-in ``list``/``dict`` instances; every nominal shape
-    ``$case`` and its fields) is matched exactly (missing, extra, or
-    misnamed fields and unknown variants are rejected).  A type-variable
-    leaf requires a :class:`SealedHandle` carrying this call's token for
-    that variable — a stale or cross-variable handle is rejected, and so is
-    a raw forged value.  A ``BoundaryRef`` leaf resolves through *defs*, so a
-    recursive return value decodes as a finite walk.  Raises
-    :class:`BoundaryViolation` on any mismatch.
-    """
-    if active_containers is None:
-        active_containers = set()
-
-    match schema:
-        case BoundaryScalar(kind=kind):
-            return _decode_scalar(kind, obj)
-        case BoundaryUnit():
-            if obj is not None:
-                raise BoundaryViolation(f"expected unit (None), got {_typename(obj)}")
-            return UnitValue()
-        case BoundaryArray(element=elem_schema):
-            if type(obj) is not list:
-                raise BoundaryViolation(f"expected a list, got {_typename(obj)}")
-            items = cast(list[object], obj)
-            marker = _enter_python_container(items, active_containers, "array")
-            try:
-                return ArrayValue(
-                    [
-                        decode_boundary_value(elem_schema, e, seals, defs, vault, active_containers)
-                        for e in items
-                    ]
-                )
-            finally:
-                active_containers.remove(marker)
-        case BoundaryDict(value=val_schema):
-            if type(obj) is not dict:
-                raise BoundaryViolation(f"expected a dict, got {_typename(obj)}")
-            mapping = cast(dict[object, object], obj)
-            marker = _enter_python_container(mapping, active_containers, "dict")
-            try:
-                entries: dict[str, Value] = {}
-                for k, v in mapping.items():
-                    if not isinstance(k, str):
-                        raise BoundaryViolation(f"dict key must be str, got {_typename(k)}")
-                    entries[k] = decode_boundary_value(
-                        val_schema, v, seals, defs, vault, active_containers
-                    )
-                return DictValue(entries=entries)
-            finally:
-                active_containers.remove(marker)
-        case BoundaryRecord(nominal=nominal, display_name=display_name, fields=fields):
-            marker = _enter_python_container(obj, active_containers, display_name)
-            try:
-                obj_fields = _expect_object(obj, display_name)
-                _check_exact_fields(display_name, {fname for fname, _ in fields}, obj_fields)
-                record_fields = _decode_boundary_fields(
-                    fields, obj_fields, seals, defs, vault, active_containers
-                )
-                return RecordValue(nominal=nominal, display_name=display_name, fields=record_fields)
-            finally:
-                active_containers.remove(marker)
-        case BoundaryEnum(nominal=nominal, display_name=display_name, variants=variants):
-            marker = _enter_python_container(obj, active_containers, display_name)
-            try:
-                obj_fields = _expect_object(obj, display_name)
-                case_val = obj_fields.get("$case")
-                if not isinstance(case_val, str):
-                    raise BoundaryViolation(
-                        f"enum {display_name!r}: object must have a string '$case' field"
-                    )
-                variant = next((v for v in variants if v.name == case_val), None)
-                if variant is None:
-                    raise BoundaryViolation(f"enum {display_name!r}: unknown variant {case_val!r}")
-                expected = {fname for fname, _ in variant.fields} | {"$case"}
-                _check_exact_fields(f"{display_name}.{case_val}", expected, obj_fields)
-                payload = _decode_boundary_fields(
-                    variant.fields, obj_fields, seals, defs, vault, active_containers
-                )
-                return EnumValue(
-                    nominal=nominal, display_name=display_name, variant=case_val, fields=payload
-                )
-            finally:
-                active_containers.remove(marker)
-        case BoundaryException(nominal=nominal, display_name=display_name, fields=fields):
-            marker = _enter_python_container(obj, active_containers, display_name)
-            try:
-                obj_fields = _expect_object(obj, display_name)
-                _check_exact_fields(display_name, {fname for fname, _ in fields}, obj_fields)
-                exc_fields = _decode_boundary_fields(
-                    fields, obj_fields, seals, defs, vault, active_containers
-                )
-                return ExceptionValue(nominal=nominal, display_name=display_name, fields=exc_fields)
-            finally:
-                active_containers.remove(marker)
-        case BoundarySealVar(var=var):
-            if not isinstance(obj, SealedHandle):
-                raise BoundaryViolation(
-                    f"expected a sealed handle for type variable {var!r}, got {_typename(obj)}"
-                )
-            sealed_payload = vault.open(obj)
-            if sealed_payload.seal is not seals.get(var):
-                raise BoundaryViolation(
-                    f"handle does not carry this call's seal for type variable {var!r}"
-                )
-            return sealed_payload.value
-        case BoundaryRef(key=key):
-            return decode_boundary_value(defs[key], obj, seals, defs, vault, active_containers)
-        case _ as unreachable:  # pragma: no cover
-            assert_never(unreachable)
-
-
-def _expect_object(obj: object, display_name: str) -> dict[str, object]:
-    """Return *obj* as a ``str``-keyed dict, or raise ``BoundaryViolation``."""
-    if type(obj) is not dict:
-        raise BoundaryViolation(f"expected an object for {display_name!r}, got {_typename(obj)}")
-    mapping = cast(dict[object, object], obj)
-    result: dict[str, object] = {}
-    for k, v in mapping.items():
-        if not isinstance(k, str):
-            raise BoundaryViolation(f"{display_name!r}: object key must be str, got {_typename(k)}")
-        result[k] = v
-    return result
-
-
-def _check_exact_fields(
-    display_name: str, expected: set[str], obj_fields: Mapping[str, object]
-) -> None:
-    """Raise ``BoundaryViolation`` unless *obj_fields* has exactly *expected* keys."""
-    actual = set(obj_fields)
-    if actual != expected:
-        raise BoundaryViolation(
-            f"{display_name!r}: field mismatch (expected {sorted(expected)}, got {sorted(actual)})"
-        )
-
-
-def _enter_python_container(obj: object, active: set[int], label: str) -> int:
-    """Mark *obj* as active during decode, rejecting cyclic Python returns.
-
-    The decode-direction counterpart to
-    :func:`~agm.agl.semantics.cycles.enter_container`, which this module also
-    uses for the encode direction. They are deliberately separate: a cycle in
-    a Python value arriving from a companion module is a boundary violation
-    (the companion returned something undecodable), whereas a cycle in an AgL
-    value leaving for Python is the language-level ``CyclicValueError``.
-    """
-    marker = id(obj)
-    if marker in active:
-        raise BoundaryViolation(f"cyclic Python return value at {label}")
-    active.add(marker)
-    return marker
-
-
-def _decode_boundary_fields(
-    fields: tuple[tuple[str, BoundarySchema], ...],
-    obj_fields: Mapping[str, object],
-    seals: Mapping[str, object],
-    defs: Mapping[str, BoundarySchema],
-    vault: _HandleVault,
-    active_containers: set[int],
-) -> dict[str, Value]:
-    """Decode a nominal payload's ordered fields through the boundary schema."""
-    return {
-        fname: decode_boundary_value(
-            fschema, obj_fields[fname], seals, defs, vault, active_containers
-        )
-        for fname, fschema in fields
-    }
-
-
-def _decode_scalar(kind: ScalarKind, obj: object) -> Value:
-    """Strictly decode a Python scalar (or opaque json) into the matching leaf value."""
-    match kind:
-        case ScalarKind.TEXT:
-            if isinstance(obj, str):
-                return TextValue(obj)
-            raise BoundaryViolation(f"expected text (str), got {_typename(obj)}")
-        case ScalarKind.INT:
-            if isinstance(obj, bool):
-                raise BoundaryViolation("expected int, got bool")
-            if isinstance(obj, int):
-                return IntValue(obj)
-            raise BoundaryViolation(f"expected int, got {_typename(obj)}")
-        case ScalarKind.DECIMAL:
-            if isinstance(obj, bool):
-                raise BoundaryViolation("expected decimal, got bool")
-            if isinstance(obj, Decimal):
-                if not obj.is_finite():
-                    raise BoundaryViolation("expected finite decimal")
-                return DecimalValue(obj)
-            if isinstance(obj, int):
-                return DecimalValue(Decimal(obj))
-            raise BoundaryViolation(f"expected decimal, got {_typename(obj)}")
-        case ScalarKind.BOOL:
-            if isinstance(obj, bool):
-                return BoolValue(obj)
-            raise BoundaryViolation(f"expected bool, got {_typename(obj)}")
-        case ScalarKind.JSON:
-            if not _is_json_shaped(obj):
-                raise BoundaryViolation(f"expected a JSON-shaped value, got {_typename(obj)}")
-            try:
-                return JsonValue(copy.deepcopy(obj))
-            except Exception as exc:
-                raise BoundaryViolation(f"could not copy JSON-shaped value: {exc}") from exc
-        case _ as unreachable:  # pragma: no cover
-            assert_never(unreachable)
-
-
-def _is_json_shaped(obj: object, active: set[int] | None = None) -> bool:
-    """Return whether *obj* lies in the closed JSON-shape domain.
-
-    Exact built-in ``dict``/``list`` plus ``str``/``int``/
-    :class:`~decimal.Decimal`/``bool``/``None`` recursively; anything else
-    (a ``float``, a :class:`SealedHandle`, an arbitrary object, or a
-    ``dict``/``list`` subclass) is rejected.
-    """
-    if active is None:
-        active = set()
-    if isinstance(obj, Decimal):
-        return obj.is_finite()
-    if obj is None or isinstance(obj, (bool, str, int)):
-        return True
-    if type(obj) is list:
-        items = cast(list[object], obj)
-        marker = id(items)
-        if marker in active:
-            return False
-        active.add(marker)
-        try:
-            return all(_is_json_shaped(e, active) for e in items)
-        finally:
-            active.remove(marker)
-    if type(obj) is dict:
-        mapping = cast(dict[object, object], obj)
-        marker = id(mapping)
-        if marker in active:
-            return False
-        active.add(marker)
-        try:
-            return all(
-                isinstance(k, str) and _is_json_shaped(v, active) for k, v in mapping.items()
-            )
-        finally:
-            active.remove(marker)
-    return False
 
 
 # ---------------------------------------------------------------------------
@@ -759,6 +104,48 @@ class ExternRegistry:
         self._by_path: dict[Path, ModuleType] = {}
         self._by_module: dict[ModuleId, ModuleType] = {}
         self._resolved: dict[tuple[ModuleId, str], ExternCallable] = {}
+        self._nominal_classes: dict[NominalId, type[object]] = {}
+        self._nominal_by_id: dict[NominalId, NominalDescriptor] = {}
+
+    def set_nominals(self, descriptors: dict[NominalId, NominalDescriptor]) -> None:
+        """Materialize or update this program's companion-visible nominal classes.
+
+        A nominal identity keeps the same Python class object across calls,
+        so a companion reference captured before a redeclaration -- a module
+        global, a closure, a default argument -- stays valid without any
+        rebinding step.
+        """
+        changed = {
+            nominal: descriptor
+            for nominal, descriptor in descriptors.items()
+            if self._nominal_by_id.get(nominal) != descriptor
+        }
+        if not changed:
+            return
+
+        classes = synthesize_nominal_classes(changed.values(), self._nominal_classes)
+        self._nominal_classes.update(classes)
+        self._nominal_by_id.update(changed)
+
+    def _agl_module(self) -> ModuleType:
+        """Build the temporary ``agl`` module exposed while importing a companion."""
+        module = ModuleType("agl")
+        setattr(module, "array", _array)
+        setattr(module, "dict", _dict)
+        setattr(module, "json", AglJson)
+        nominals = ModuleType("agl.nominals")
+        setattr(module, "nominals", nominals)
+        leaves: dict[tuple[str, ...], type[object]] = {}
+        names: dict[str, list[type[object]]] = {}
+        for nominal, cls in self._nominal_classes.items():
+            descriptor = self._nominal_by_id[nominal]
+            leaves[_nominal_identity_path(descriptor)] = cls
+            names.setdefault(cls.__name__, []).append(cls)
+        _build_nominal_namespace(nominals, leaves)
+        for name, classes in names.items():
+            if len(classes) == 1 and name not in {"array", "dict", "json", "nominals"}:
+                setattr(module, name, classes[0])
+        return module
 
     def load_companion(self, module_id: ModuleId, companion_path: Path) -> ModuleType:
         """Import *companion_path* for *module_id*, executing it at most once.
@@ -788,6 +175,8 @@ class ExternRegistry:
         )
         module = importlib.util.module_from_spec(spec)
         sys.modules[synthetic_name] = module
+        previous_agl = sys.modules.get("agl")
+        sys.modules["agl"] = self._agl_module()
         try:
             spec.loader.exec_module(module)
         except Exception as exc:
@@ -796,6 +185,10 @@ class ExternRegistry:
             ) from exc
         finally:
             sys.modules.pop(synthetic_name, None)
+            if previous_agl is None:
+                sys.modules.pop("agl", None)
+            else:
+                sys.modules["agl"] = previous_agl
 
         self._by_path[canonical] = module
         self._bind_module(module_id, module)
@@ -844,56 +237,39 @@ class ExternRegistry:
     def invoke(
         self,
         function_name: str,
-        contract: ExternContract,
         fn: ExternCallable,
         args: Sequence[Value],
         trace_id: str,
         *,
         nominals: BuiltinNominals = NO_BUILTIN_DECLARATIONS,
     ) -> Value:
-        """Cross the boundary for one extern call: encode, call, decode.
+        """Cross the boundary for one extern call: encode, call, and decode.
 
-        Mints a fresh seal token per declared type variable for this call,
-        encodes *args* positionally per *contract*, calls *fn*, and strictly
-        decodes its result.  All three runtime failure classes — *fn*
-        raising, a return-contract violation, and an argument-conversion
-        failure — become ``AglRaise(ExternError)`` here, the single
-        chokepoint. ``python_type`` is
-        the raising Python exception's class name, or empty for a contract
-        violation.
-
-        A cyclic argument is a separate, narrower failure: encoding a cyclic
-        array/dict argument, or a companion repr'ing a sealed handle wrapping
-        one (``SealedHandle.__repr__``, during *fn*), raises
-        ``AglCyclicValue``; both are converted here into the catchable
-        ``CyclicValueError`` rather than being folded into ``ExternError``.
+        Encodes *args* by their runtime value class, calls *fn*, and decodes
+        its result by Python type. An argument or return value with no
+        boundary representation, and an ordinary exception raised by *fn*,
+        all become catchable ``ExternError`` values; ``python_type`` is empty
+        for an unsupported representation and otherwise names the Python
+        exception class. A companion repr'ing a cyclic view -- while *fn*
+        runs, or while this builds an ``ExternError`` message from an
+        exception *fn* raised -- raises ``AglCyclicValue``, which becomes
+        ``CyclicValueError`` instead. Retained views remain live after the
+        call.
 
         *nominals* resolves the ``ExternError``/``CyclicValueError`` nominal;
         it defaults to the shipped standard library's own identities for a
         caller (e.g. a direct unit test) that invokes without a program.
         """
-        seals: dict[str, object] = {var: object() for var in contract.type_params}
-        vault = _HandleVault()
-        # A fresh dict is only needed for a recursive contract (non-empty
-        # ``defs``); the common non-recursive case reuses the shared empty map
-        # rather than allocating one per call.
-        defs: Mapping[str, BoundarySchema] = dict(contract.defs) if contract.defs else _NO_DEFS
-
         try:
-            encoded_args = [
-                encode_boundary_value(param.schema, arg, seals, defs, vault)
-                for param, arg in zip(contract.params, args, strict=True)
-            ]
+            encoded_args = [encode_boundary_value(arg) for arg in args]
         except BoundaryViolation as exc:
             raise _extern_error(
                 function_name,
-                f"argument conversion failed: {exc}",
+                f"argument cannot cross the boundary: {exc}",
                 trace_id,
                 python_type="",
                 nominals=nominals,
             ) from exc
-        except AglCyclicValue as exc:
-            raise cyclic_value_raise(trace_id, nominals=nominals) from exc
 
         try:
             with decimal.localcontext():
@@ -901,20 +277,24 @@ class ExternRegistry:
         except AglCyclicValue as exc:
             raise cyclic_value_raise(trace_id, nominals=nominals) from exc
         except Exception as exc:
+            try:
+                message = str(exc) or type(exc).__name__
+            except AglCyclicValue as cyclic_exc:
+                raise cyclic_value_raise(trace_id, nominals=nominals) from cyclic_exc
             raise _extern_error(
                 function_name,
-                str(exc) or type(exc).__name__,
+                message,
                 trace_id,
                 python_type=type(exc).__name__,
                 nominals=nominals,
             ) from exc
 
         try:
-            return decode_boundary_value(contract.result, result, seals, defs, vault)
+            return decode_boundary_value(result)
         except BoundaryViolation as exc:
             raise _extern_error(
                 function_name,
-                f"return value violates contract: {exc}",
+                f"return value cannot cross the boundary: {exc}",
                 trace_id,
                 python_type="",
                 nominals=nominals,
@@ -927,6 +307,41 @@ class ExternRegistry:
                 python_type=type(exc).__name__,
                 nominals=nominals,
             ) from exc
+
+
+def _nominal_identity_path(descriptor: NominalDescriptor) -> tuple[str, ...]:
+    """Return a nominal's namespace path, rooted by module (or ``entry``) then scope."""
+    if descriptor.nominal.module_id.is_entry:
+        return ("entry", *descriptor.nominal.scope_path, descriptor.nominal.declared_name)
+    return (
+        *descriptor.nominal.module_id.segments,
+        *descriptor.nominal.scope_path,
+        descriptor.nominal.declared_name,
+    )
+
+
+def _build_nominal_namespace(root: ModuleType, leaves: dict[tuple[str, ...], type[object]]) -> None:
+    """Expose every nominal under its identity path in one order-independent pass.
+
+    A path segment that is itself a nominal's own identity path becomes that
+    nominal's class rather than a plain namespace module, so a scope and a
+    nominal may legally share a name: the class serves as both the leaf
+    value and, for anything nested under it, the namespace container.
+    """
+    containers: dict[tuple[str, ...], object] = {(): root}
+
+    def container_for(path: tuple[str, ...]) -> object:
+        cached = containers.get(path)
+        if cached is not None:
+            return cached
+        leaf = leaves.get(path)
+        node: object = leaf if leaf is not None else ModuleType(f"{root.__name__}.{'.'.join(path)}")
+        setattr(container_for(path[:-1]), path[-1], node)
+        containers[path] = node
+        return node
+
+    for path in leaves:
+        container_for(path)
 
 
 def _extern_error(
@@ -948,3 +363,18 @@ def _extern_error(
             python_type=TextValue(python_type),
         )
     )
+
+
+def _array(values: Sequence[object]) -> AglArrayView:
+    """Construct the companion representation of a new AgL array."""
+    return AglArrayView(ArrayValue([decode_boundary_value(value) for value in values]))
+
+
+def _dict(values: dict[str, object]) -> AglDictView:
+    """Construct the companion representation of a new AgL dict."""
+    entries: dict[str, Value] = {}
+    for key, value in values.items():
+        if not isinstance(key, str):
+            raise TypeError("AgL dict keys must be str")
+        entries[key] = decode_boundary_value(value)
+    return AglDictView(DictValue(entries))

@@ -8,9 +8,9 @@ uncaught, terminate the program. There are no sentinel return values.
 
 ## The exception model
 
-Every exception is a value of one of the built-in exception types listed
-below. All of them conceptually extend the abstract base type `Exception`,
-which declares two fields present on every exception:
+Every exception is a value of a concrete built-in or user-declared exception
+type. Every exception type extends the abstract base type `Exception`, which
+declares two fields present on every exception:
 
 ```text
 message: text     # human-readable description
@@ -164,8 +164,9 @@ caught by `catch`; it unwinds to the nearest enclosing function.
 
 Catch patterns:
 
-- `catch SomeError` / `catch SomeError as e` — matches exactly that built-in
-  exception type.
+- `catch SomeError` / `catch SomeError as e` — matches exactly the named
+  exception type, whether built-in or user-declared. It does not match that
+  type's subtypes.
 - `catch _` / `catch _ as e` — matches anything; `e` has type `Exception`.
 - `catch Exception as e` — equivalent to `catch _ as e`.
 
@@ -268,8 +269,8 @@ timed_out: bool
 
 ### `ExternError`
 
-An `extern def` call failed: the companion Python callable raised, or its
-return value did not conform to the extern's declared return type
+An `extern def` call failed: the companion Python callable raised, or returned
+a Python value that has no AgL boundary representation
 ([Python FFI](ffi.md)).
 
 ```text
@@ -412,11 +413,11 @@ The general-purpose user abort; carries only the base fields.
 ### `CyclicValueError`
 
 Raised when rendering (`print`, `render`, string interpolation, REPL echo),
-`as text`, `as json`, or an `extern def` call walks a value with a genuine
-reference cycle. Carries only the base fields. See
-[Cycles](types.md#cycles) for how a cycle arises, which operations raise this
-and which tolerate a cycle instead (`as?`, `copy`), and how equality and
-tracing treat one.
+`as text`, or `as json` encounters a genuine reference cycle. A cyclic array
+or dict can be passed to an `extern def`; this error arises if its companion
+calls Python `repr()` on the corresponding view. Carries only the base fields. See [Cycles](types.md#cycles) for how
+a cycle arises, which operations raise this and which tolerate a cycle instead
+(`as?`, `copy`), and how equality and tracing treat one.
 
 ```text
 (base fields only)
@@ -441,7 +442,7 @@ tracing treat one.
 | Division by zero | `ArithmeticError` |
 | Fallible `as` cast — source does not conform to target type | `CastError` |
 | `parse_json` — input is not well-formed JSON | `JsonParseError` |
-| Rendering, `as text`, `as json`, or an `extern def` call walks a value with a reference cycle | `CyclicValueError` |
+| Rendering, `as text`, or `as json` encounters a reference cycle; or an extern companion `repr()`s the corresponding cyclic view | `CyclicValueError` |
 | `raise` of a constructed or re-raised value | any concrete type |
 
 An exception that reaches the top of the program uncaught terminates the

@@ -1,4 +1,7 @@
-def next_step(n: int) -> dict[str, object]:
+from agl import Step
+
+
+def next_step(n: int) -> Step:
     if n >= 3:
-        return {"$case": "Stop"}
-    return {"$case": "Continue", "amount": n + 1}
+        return Step.Stop()
+    return Step.Continue(amount=n + 1)

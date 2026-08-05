@@ -1,0 +1,74 @@
+# Concrete container arguments cross the Python boundary as live views: Python
+# mutations are visible through the caller's bindings, including a nested
+# record field and aliases. `copy` explicitly gives the caller a snapshot.
+param mode: text
+
+record Batch
+  values: array[int]
+
+extern def mutate_array(xs: array[int], operation: text) -> unit
+extern def mutate_dict(values: dict[text, int], operation: text) -> unit
+extern def mutate_nested(batch: Batch, xs: array[int]) -> unit
+extern def mutate_aliases(a: array[int], b: array[int]) -> unit
+extern def mutate_copy(xs: array[int]) -> unit
+extern def snapshot_not_list(xs: array[int]) -> array[int]
+extern def snapshot_not_dict(values: dict[text, int]) -> dict[text, int]
+
+if mode == "append" =>
+  var xs = [3, 1, 2]
+  let _: unit = mutate_array(xs, "append")
+  print xs
+
+if mode == "insert" =>
+  var xs = [3, 1, 2]
+  let _: unit = mutate_array(xs, "insert")
+  print xs
+
+if mode == "sort" =>
+  var xs = [3, 1, 2]
+  let _: unit = mutate_array(xs, "sort")
+  print xs
+
+if mode == "clear" =>
+  var xs = [3, 1, 2]
+  let _: unit = mutate_array(xs, "clear")
+  print xs
+
+if mode == "update" =>
+  var values: dict[text, int] = {"one": 1}
+  let _: unit = mutate_dict(values, "update")
+  print values
+
+if mode == "delete" =>
+  var values: dict[text, int] = {"one": 1, "two": 2}
+  let _: unit = mutate_dict(values, "delete")
+  print values
+
+if mode == "nested_record" =>
+  let batch = Batch(values = [1, 2])
+  let _: unit = mutate_nested(batch, batch.values)
+  print batch
+
+if mode == "aliased_parameters" =>
+  var xs = [1, 2]
+  let _: unit = mutate_aliases(xs, xs)
+  print xs
+
+if mode == "explicit_copy" =>
+  var xs = [1, 2]
+  let _: unit = mutate_copy(copy(xs))
+  print xs
+
+if mode == "snapshot_not_list" =>
+  var xs = [1, 2]
+  let snapshot = snapshot_not_list(xs)
+  snapshot[0] := 9
+  print xs
+  print snapshot
+
+if mode == "snapshot_not_dict" =>
+  var values: dict[text, int] = {"one": 1}
+  let snapshot = snapshot_not_dict(values)
+  snapshot["one"] := 9
+  print values
+  print snapshot

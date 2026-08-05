@@ -1,0 +1,12 @@
+# Returning a received array view preserves its caller alias, while returning
+# a plain Python list decodes as a separate AgL container.
+param mode: text
+
+extern def return_received(xs: array[int]) -> array[int]
+extern def return_snapshot(xs: array[int]) -> array[int]
+
+var xs = [1, 2]
+let result = if mode == "received" => return_received(xs) else => return_snapshot(xs)
+result[0] := 9
+print xs
+print result

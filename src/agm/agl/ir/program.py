@@ -20,7 +20,7 @@ import enum
 from dataclasses import dataclass, field
 
 from agm.agl.ir.builtin_nominals import NO_BUILTIN_DECLARATIONS, BuiltinNominals
-from agm.agl.ir.contracts import ContractRequest, ExternContract, ParamDecoder
+from agm.agl.ir.contracts import ContractRequest, ParamDecoder
 from agm.agl.ir.ids import ContractId, FunctionId, Location, NominalId, SourceId, SymbolId
 from agm.agl.ir.nodes import IrExpr, IrFunctionParam
 from agm.agl.modules.ids import ModuleId
@@ -147,15 +147,14 @@ class IrFunctionBody:
 class ExternFunctionBody:
     """``extern def`` implementation: crosses into a companion Python module.
 
-    ``name``     — the extern's declared name (identical in AgL and Python;
-                   ``runtime.externs.ExternRegistry`` resolves it positionally).
-    ``contract`` — the compiled boundary contract (per-parameter encode recipe +
-                   strict return decode), built from the checked signature at
-                   lowering.
+    ``name``     — the extern's final declared member name; ``runtime.externs.ExternRegistry``
+                   resolves it in the owning module's companion, then the boundary walkers
+                   pass encoded arguments positionally.
+    The boundary dispatches on runtime values, so an extern retains no type
+    schema after lowering.
     """
 
     name: str
-    contract: ExternContract
 
 
 FunctionImpl = IrFunctionBody | ExternFunctionBody

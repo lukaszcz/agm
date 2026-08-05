@@ -49,12 +49,20 @@ class InterpolationError(ValueError):
     kind: str
     text: str
     offset: int
+    context: str | None
 
     def __init__(self, kind: str, text: str, offset: int) -> None:
         self.kind = kind
         self.text = text
         self.offset = offset
+        # Callers that interpolate several templates in a row set *context* to
+        # say which one failed; the offset alone is ambiguous across them.
+        self.context = None
         super().__init__(f"{kind} {text!r} at offset {offset}")
+
+    def __str__(self) -> str:
+        message = super().__str__()
+        return f"{message} ({self.context})" if self.context else message
 
 
 def _scan(text: str, *, lenient: bool) -> tuple[list[Segment], bool]:

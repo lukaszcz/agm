@@ -8,8 +8,9 @@ The lexical forms — single- and triple-quoted strings, escapes, and the
 triple-quoted dedent rule — are specified in
 [Lexical structure](lexical-structure.md). This chapter specifies what
 interpolation *means*. AgL text literals have their own full lexical escape
-table, including `\n`, `\t`, `\"`, and `\%`; the shared `%{name}` runtime
-interpolation form instead uses only `\%{` to write a literal hole marker.
+table, including `\n`, `\t`, `\"`, and `\%`; the `%{name}` interpolation hole
+— whether written directly in a string literal or evaluated by
+`std/text::interp` — instead uses only `\%{` to write a literal hole marker.
 
 ## Interpolation
 
@@ -39,7 +40,9 @@ print std/text::interp("Hello, \%{name}!", vars)  # Hello, Ada!
 Runtime holes are **name-only**: `%{name}` names a single AgL identifier and
 looks it up in the dictionary. In contrast, a string-literal `%{expr}` hole
 is a compile-time template hole containing an arbitrary expression. The two
-forms share the same interpolation engine for their runtime splicing step.
+forms follow identical rules for splicing text into a hole at runtime: the
+same `%{...}` delimiters, the same `\%{` escape for a literal hole marker,
+and the same error on an unterminated hole.
 Use `\%{` in a runtime template for a literal `%{`; because a normal AgL
 string is itself a compile-time template, write `\\\%{` in source to pass that
 escape to `interp`.

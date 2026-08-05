@@ -777,6 +777,12 @@ class TestPrepareRuntime:
     def test_selector_mode_dry_run_does_not_prepare_runner_prompt(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
     ) -> None:
+        """dry-run must not render the runner prompt before task selection.
+
+        The runner prompt depends on ``TASK_FILE``, which is only known once
+        a task is selected, so dry-run must describe it by source label
+        alone rather than creating a rendered temp file for it.
+        """
         home = self._setup_home_with_prompts(tmp_path, ["select.md"])
         monkeypatch.setenv("HOME", str(home))
         monkeypatch.setattr("shutil.which", lambda _: "/bin/fake")
@@ -784,7 +790,6 @@ class TestPrepareRuntime:
 
         prompt = tmp_path / "prompt.md"
         prompt.write_text("Implement %{TASK_FILE}\n", encoding="utf-8")
-        prepared_sources = _track_prepared_sources(monkeypatch)
         monkeypatch.setattr("agm.commands.loop.step.dry_run.enabled", lambda: True)
 
         runtime = prepare_runtime(
@@ -798,7 +803,7 @@ class TestPrepareRuntime:
         )
         print_dry_run(runtime)
 
-        assert prepared_sources == []
+        assert runtime.temp_files == [], "no rendered prompt file before task selection"
         output = capsys.readouterr().out
         assert "dry-run: prompt [prompt]: prompt.md" in output
         assert "runner prompt: prompt.md" in output
@@ -844,6 +849,138 @@ class TestPrepareRuntime:
                     prompt_file=str(tmp_path / "missing-prompt.md"),
                 )
             )
+
+    def test_selector_mode_accepts_task_file_hole_before_selection(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A legitimate ``%{TASK_FILE}`` hole passes up-front validation.
+
+        ``TASK_FILE`` is only bound after a task is selected, but the
+        up-front check must still treat it as an available name so it does
+        not spuriously reject the common case.
+        """
+        home = self._setup_home_with_prompts(tmp_path, ["select.md"])
+        monkeypatch.setenv("HOME", str(home))
+        monkeypatch.setattr("shutil.which", lambda _: "/bin/fake")
+        monkeypatch.chdir(tmp_path)
+
+        runtime = prepare_runtime(
+            _make_loop_args(
+                no_log=True,
+                no_selector=False,
+                runner="fake-runner",
+                selector="fake-selector",
+                prompt="Implement %{TASK_FILE}",
+            )
+        )
+
+        assert runtime.select_invocation is not None
+        cleanup_runtime(runtime)
+
+    def test_selector_mode_dry_run_rejects_unknown_prompt_hole(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """A typo'd hole must be caught by dry-run, not silently accepted."""
+        home = self._setup_home_with_prompts(tmp_path, ["select.md"])
+        monkeypatch.setenv("HOME", str(home))
+        monkeypatch.setattr("shutil.which", lambda _: "/bin/fake")
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr("agm.commands.loop.step.dry_run.enabled", lambda: True)
+
+        with pytest.raises(SystemExit) as exc_info:
+            run(
+                _make_loop_args(
+                    no_log=True,
+                    no_selector=False,
+                    runner="fake-runner",
+                    selector="fake-selector",
+                    prompt="Fix %{TASK_FILEE}",
+                )
+            )
+
+        assert exc_info.value.code == 1
+        error = capsys.readouterr().err
+        assert "cannot interpolate" in error
+        assert "TASK_FILEE" in error
+
+    def test_selector_mode_dry_run_rejects_unterminated_hole(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """An unterminated ``%{`` needs no environment to detect, and dry-run must too."""
+        home = self._setup_home_with_prompts(tmp_path, ["select.md"])
+        monkeypatch.setenv("HOME", str(home))
+        monkeypatch.setattr("shutil.which", lambda _: "/bin/fake")
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr("agm.commands.loop.step.dry_run.enabled", lambda: True)
+
+        prompt = tmp_path / "prompt.md"
+        prompt.write_text("Fix %{TASK_FILE\n", encoding="utf-8")
+
+        with pytest.raises(SystemExit) as exc_info:
+            run(
+                _make_loop_args(
+                    no_log=True,
+                    no_selector=False,
+                    runner="fake-runner",
+                    selector="fake-selector",
+                    prompt_file=str(prompt),
+                )
+            )
+
+        assert exc_info.value.code == 1
+        error = capsys.readouterr().err
+        assert "cannot interpolate" in error
+
+    def test_selector_mode_rejects_typo_prompt_hole_before_selector_runs(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A bad template must fail before the selector agent ever runs.
+
+        Reproduces the reported bug: without up-front validation, the
+        selector agent (which per the shipped select.md prompt mutates
+        PROGRESS.md) would run first, and only the subsequent render would
+        fail.
+        """
+        home = self._setup_home_with_prompts(tmp_path, ["select.md"])
+        monkeypatch.setenv("HOME", str(home))
+        monkeypatch.setattr("shutil.which", lambda _: "/bin/fake")
+        monkeypatch.chdir(tmp_path)
+
+        task_file = tmp_path / ".agent-files" / "tasks" / "task-1.md"
+        task_file.parent.mkdir(parents=True)
+        task_file.write_text("task\n", encoding="utf-8")
+
+        selector_calls: list[list[str]] = []
+
+        def fake_run_command(
+            command: list[str],
+            target: Path,
+            *,
+            env: dict[str, str],
+            stdout_callback: object = None,
+            stderr_callback: object = None,
+            idle_timeout: float | None = None,
+        ) -> str:
+            selector_calls.append(command)
+            return "task-1.md\n"
+
+        monkeypatch.setattr("agm.commands.loop.step.run_prompt_command", fake_run_command)
+
+        with pytest.raises(SystemExit) as exc_info:
+            run(
+                _make_loop_args(
+                    no_log=True,
+                    no_selector=False,
+                    runner="fake-runner",
+                    selector="fake-selector",
+                    prompt="Fix %{TASK_FILEE}",
+                )
+            )
+
+        assert exc_info.value.code == 1
+        assert selector_calls == [], (
+            "selector command must not run before the prompt template is validated"
+        )
 
 
 # ===========================================================================

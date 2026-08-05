@@ -37,7 +37,9 @@ required.
 - any roots declared under `[modules] roots` in any config layer,
 - any roots added with `-I`/`--module-path`.
 
-The independently loaded `[modules] lib_root` and `roots` settings do not interpolate `%{VAR}`.
+The independently loaded `[modules] lib_root` and `roots` settings expand `%{VAR}` the same
+leniently as other path-valued settings; see
+[Path-valued settings](config.md#path-valued-settings) for the exact rule.
 
 Set `AGM_HOME` to relocate the entire `~/.agm` directory (config, prompts, sandbox settings, global library, and stdlib); set `AGM_STDLIB` to point only the standard-library root elsewhere.
 
@@ -157,14 +159,11 @@ do not start a runner.
 
 ### Runner command interpolation
 
-Runner command arguments for both `agm exec` and `agm repl` use strict `%{name}`
-interpolation from the process environment overlaid with `PROMPT_FILE`, which wins on
-conflicts. Names are AgL identifiers (for example, `%{log-file}`). `%%` is an alias for
-`%{PROMPT_FILE}`; either inserts the prompt path verbatim without recursively interpolating it.
-`\%{` writes a literal `%{`; a bare `%`, `$VAR`, and `${VAR}` are
-literal text, and shell-style interpolation is unsupported. Unknown, invalid, or
-unterminated holes are errors. Command strings are shlex-split before interpolation, so
-quote or otherwise protect `\%{` so its backslash reaches the argv element. A prompt-file
+Runner command arguments for both `agm exec` and `agm repl` interpolate `%{name}` holes
+strictly from the process environment overlaid with `PROMPT_FILE`, which wins on
+conflicts — unlike `agm loop`'s runner and selector, no workflow-specific variables are
+added. See [Runner command interpolation](agents.md#runner-command-interpolation) for the
+shared `%%`/`PROMPT_FILE` alias, `\%{` escape, and shlex-split rules. A prompt-file
 placeholder places the rendered prompt file at that position; otherwise AGM appends
 `@<path>`. In a source `agent` hint, spell the placeholder as `\%{PROMPT_FILE}` so it
 remains literal text for the host runner.

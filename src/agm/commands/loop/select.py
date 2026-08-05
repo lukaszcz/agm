@@ -78,7 +78,7 @@ def run(args: LoopSelectArgs) -> None:
             dry_run.print_labeled_command(
                 invocation.command_kind,
                 command_with_prompt_target_or_exit(
-                    invocation.command, invocation.effective_prompt_file
+                    invocation.command, invocation.effective_prompt_file, env
                 ),
             )
             return

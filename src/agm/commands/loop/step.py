@@ -25,7 +25,12 @@ from agm.agent.loop import (
     tasks_dir,
     use_selector_mode,
 )
-from agm.agent.prompt import preprocess_prompt_file, prompt_source_label, require_prompt_file
+from agm.agent.prompt import (
+    preprocess_prompt_file,
+    prompt_source_label,
+    require_prompt_file,
+    validate_prompt_template,
+)
 from agm.agent.runner import (
     append_extra_prompt,
     cleanup_temp_files,
@@ -112,8 +117,19 @@ def prepare_runtime(args: LoopArgs) -> LoopStepRuntime:
     _require_prompt_source(prompt_source)
 
     resolved_runner_command = runner_command(args)
-    validate_command(resolved_runner_command, kind="runner")
+    validate_command(resolved_runner_command, kind="runner", env=env)
     selector_mode = use_selector_mode(args)
+    if selector_mode and prompt_source is not None:
+        # In selector mode the explicit runner prompt is only fully rendered
+        # after a task is selected (TASK_FILE is withheld from `env` until
+        # then, see loop_env), so a malformed template or unknown hole would
+        # otherwise surface only after the selector agent has already run —
+        # too late, since the selector may itself mutate PROGRESS.md. Neither
+        # class of error actually needs TASK_FILE's real value to detect, so
+        # validate structure and hole names up front against everything that
+        # will be available at render time, without rendering or writing
+        # anything.
+        validate_prompt_template(prompt_source, variables={**env, "TASK_FILE": ""})
     implement_prompt_file: Path | None = None
     select_invocation: PreparedSelectInvocation | None = None
     if selector_mode:
@@ -259,6 +275,7 @@ def print_dry_run(runtime: LoopStepRuntime) -> None:
             command_with_prompt_target_or_exit(
                 runtime.resolved_runner_command,
                 runtime.bootstrap_prompt.effective_file,
+                runtime.env,
             ),
         )
 
@@ -269,6 +286,7 @@ def print_dry_run(runtime: LoopStepRuntime) -> None:
             command_with_prompt_target_or_exit(
                 runtime.resolved_runner_command,
                 runtime.loop_prompt.effective_file,
+                runtime.env,
             ),
         )
         dry_run.print_operation(
@@ -286,6 +304,7 @@ def print_dry_run(runtime: LoopStepRuntime) -> None:
         command_with_prompt_target_or_exit(
             runtime.select_invocation.command,
             runtime.select_invocation.effective_prompt_file,
+            runtime.env,
         ),
     )
     if runtime.prompt_source is not None:

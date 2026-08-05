@@ -36,7 +36,7 @@ When expansion changes a file's content, AGM writes a temporary prompt file; oth
 
 ## Prompt file path
 
-AGM passes the resolved prompt file path to the runner or selector command. By default it appends `@<path>`. Use `%%` or `%{PROMPT_FILE}` in either command to place the path at a specific position; either prevents the suffix and inserts the path verbatim without recursively interpolating it. Command arguments use strict `%{name}` interpolation from the process environment overlaid with `PROMPT_FILE`, which wins on conflicts. Names are AgL identifiers (for example, `%{log-file}`). `%%` is an alias for `%{PROMPT_FILE}`; `\%{` writes a literal `%{`; a bare `%`, `$VAR`, and `${VAR}` are literal text, and shell-style interpolation is unsupported. Unknown, invalid, or unterminated holes are errors. Command strings are shlex-split before interpolation, so quote or otherwise protect `\%{` so its backslash reaches the argv element.
+AGM passes the resolved prompt file path to the runner or selector command. By default it appends `@<path>`. Use `%%` or `%{PROMPT_FILE}` in either command to place the path at a specific position; either prevents the suffix and inserts the path verbatim without recursively interpolating it. Runner and selector command arguments interpolate the same `%{name}` holes as the prompt they accompany (see [Prompt interpolation](#prompt-interpolation) above), further overlaid with `PROMPT_FILE`, which wins on conflicts. Command strings are shlex-split before interpolation, so quote or otherwise protect `\%{` so its backslash reaches the argv element.
 
 Timeout:
 

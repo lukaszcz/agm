@@ -53,6 +53,25 @@ def interp_or_exit(
         _exit_interp_error(exc, what)
 
 
+def validate_prompt_template(
+    source: str | Path,
+    *,
+    variables: Mapping[str, str],
+    label: str | None = None,
+) -> None:
+    """Validate a prompt template's holes without rendering or writing it.
+
+    Splits *source* (inline text, or a file path that must already exist)
+    and checks every hole name against *variables*, reporting a malformed
+    template or an unavailable hole the same way full interpolation would.
+    The rendered text is discarded — callers use this to catch a broken
+    template before doing side-effecting work such as invoking an agent.
+    """
+    content = source if isinstance(source, str) else source.read_text(encoding="utf-8")
+    what = label if label is not None else prompt_source_label(source)
+    interp_or_exit(split_or_exit(content, what=what), variables, what=what)
+
+
 def expand_prompt_env_vars(
     content: str,
     *,

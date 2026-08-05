@@ -48,21 +48,25 @@ _CONFIG_PATH_FIELDS: dict[str, list[str]] = {
         "selector_prompt_file",
         "extra_prompt_file",
         "extra_selector_prompt_file",
+        "log-file",
     ],
     "review": [
         "prompt_file",
         "extra_prompt_file",
         "review_file",
+        "log-file",
     ],
     "revise": [
         "prompt_file",
         "extra_prompt_file",
+        "log-file",
     ],
     "refine": [
         "review_prompt_file",
         "extra_review_prompt_file",
         "revise_prompt_file",
         "extra_revise_prompt_file",
+        "log-file",
     ],
 }
 
@@ -317,6 +321,9 @@ def _resolve_config_file_paths(config: TomlDict, config_dir: Path, cwd: Path) ->
     resolved = dict(config)
     for section_name, section in resolved.items():
         if isinstance(section, dict):
+            # Every known section lists "log-file" explicitly; unknown/program
+            # sections fall back to just "log-file" since that's the only
+            # path-like field they carry.
             fields = _CONFIG_PATH_FIELDS.get(section_name, ["log-file"])
             resolved[section_name] = _resolve_section_paths(
                 toml_dict(section),
@@ -324,24 +331,6 @@ def _resolve_config_file_paths(config: TomlDict, config_dir: Path, cwd: Path) ->
                 config_dir,
                 cwd,
                 sentinels=_CONFIG_PATH_SENTINELS.get(section_name, {}),
-            )
-    # Program sections and known sections both carry log files. Anchoring is
-    # idempotent, so this shared sweep needs no section-name skip-list.
-    for section_name, section in resolved.items():
-        if isinstance(section, dict) and "log-file" in section:
-            log_file = section["log-file"]
-            unresolved_fields = (
-                {"log-file"}
-                if isinstance(log_file, str) and interp_preserving(log_file, os.environ)[1]
-                else set()
-            )
-            resolved[section_name] = _anchor_section_paths(
-                toml_dict(section),
-                ["log-file"],
-                config_dir,
-                cwd,
-                sentinels={},
-                unresolved_fields=unresolved_fields,
             )
     return resolved
 

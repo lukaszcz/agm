@@ -751,7 +751,7 @@ def test_load_refine_config_max_steps_unlimited(tmp_path: Path) -> None:
     assert refine.no_max_steps is False
 
 
-def test_config_path_interpolation_runs_once_before_repeated_log_file_anchoring(
+def test_config_path_interpolation_runs_once_and_resolves_program_log_file(
     tmp_path: Path,
 ) -> None:
     home = tmp_path / "home"
@@ -769,3 +769,91 @@ def test_config_path_interpolation_runs_once_before_repeated_log_file_anchoring(
 
     assert merged["loop"]["prompt_file"] == str(config_dir / "%{PROMPT_DIR}" / "prompt.md")
     assert merged["program"]["log-file"] == str(tmp_path / "program.log")
+
+
+def test_exec_log_file_expands_tilde_and_interpolates(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Pins the pre-existing [exec] log-file behavior: tilde expansion and
+    ``%{name}`` interpolation both apply, same as every other path field."""
+    home_dir = tmp_path / "user-home"
+    home_dir.mkdir()
+    monkeypatch.setenv("HOME", str(home_dir))
+    monkeypatch.setenv("LOG_SUBDIR", "logs")
+
+    home = tmp_path / "home"
+    (home / ".agm").mkdir(parents=True)
+    (home / ".agm" / "config.toml").write_text('[exec]\nlog-file = "~/%{LOG_SUBDIR}/agm.log"\n')
+
+    cwd = tmp_path / "work"
+    cwd.mkdir()
+
+    merged = load_merged_config(home=home, proj_dir=None, cwd=cwd)
+
+    assert merged["exec"]["log-file"] == str(home_dir / "logs" / "agm.log")
+
+
+def test_review_log_file_expands_tilde(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression test: [review]'s log-file field previously skipped tilde
+    expansion because it was only ever anchored, never interpolated/expanded,
+    by the removed second sweep in ``_resolve_config_file_paths``."""
+    home_dir = tmp_path / "user-home"
+    home_dir.mkdir()
+    monkeypatch.setenv("HOME", str(home_dir))
+
+    home = tmp_path / "home"
+    (home / ".agm").mkdir(parents=True)
+    (home / ".agm" / "config.toml").write_text('[review]\nlog-file = "~/agm.log"\n')
+
+    cwd = tmp_path / "work"
+    cwd.mkdir()
+
+    merged = load_merged_config(home=home, proj_dir=None, cwd=cwd)
+
+    assert merged["review"]["log-file"] == str(home_dir / "agm.log")
+
+
+def test_review_log_file_interpolates_env_vars(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression test: [review]'s log-file field previously skipped
+    ``%{name}`` interpolation entirely for the same reason as the tilde case
+    above."""
+    monkeypatch.setenv("SOMEVAR", "/opt/logs")
+
+    home = tmp_path / "home"
+    (home / ".agm").mkdir(parents=True)
+    (home / ".agm" / "config.toml").write_text('[review]\nlog-file = "%{SOMEVAR}/agm.log"\n')
+
+    cwd = tmp_path / "work"
+    cwd.mkdir()
+
+    merged = load_merged_config(home=home, proj_dir=None, cwd=cwd)
+
+    assert merged["review"]["log-file"] == "/opt/logs/agm.log"
+
+
+def test_review_log_file_unresolved_hole_stays_verbatim_and_does_not_raise(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The lenient miss policy for config path fields applies to [review]'s
+    log-file just like every other path field: an unresolved ``%{...}`` hole
+    is left verbatim and loading never raises."""
+    monkeypatch.delenv("MISSING", raising=False)
+
+    home = tmp_path / "home"
+    (home / ".agm").mkdir(parents=True)
+    (home / ".agm" / "config.toml").write_text('[review]\nlog-file = "%{MISSING}/agm.log"\n')
+
+    cwd = tmp_path / "work"
+    cwd.mkdir()
+
+    merged = load_merged_config(home=home, proj_dir=None, cwd=cwd)
+
+    assert merged["review"]["log-file"] == "%{MISSING}/agm.log"

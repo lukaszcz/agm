@@ -261,27 +261,23 @@ _HELP_TEXTS: dict[str, str] = {
           ``--extra-selector-prompt-file`` are mutually exclusive.
 
         Prompt interpolation:
-          AGM expands ``%{name}`` holes before passing a prompt to the
-          runner or selector. A name is an AgL identifier (for example,
-          ``%{log-file}``). ``\\%{`` writes a literal ``%{`` and a bare ``%``
-          is literal. ``$VAR`` and ``${VAR}`` are plain literal text.
-          An unknown variable, invalid hole name, or unterminated ``%{`` is
-          an error. Variables are the full process environment overlaid with
-          AGM values, which win on conflicts:
+          AGM expands ``%{name}`` holes before passing prompt or command
+          text to the runner or selector. A name is an AgL identifier (for
+          example, ``%{log-file}``). ``\\%{`` writes a literal ``%{`` and a
+          bare ``%`` is literal. ``$VAR`` and ``${VAR}`` are plain literal
+          text. An unknown variable, invalid hole name, or unterminated
+          ``%{`` is an error. Prompt-content variables are the full process
+          environment overlaid with AGM values, which win on conflicts:
             TASKS_DIR  the resolved tasks directory path, in every loop prompt
             TASK_FILE  the selected task path, only in a selector-mode runner
                        prompt after task selection
           When expansion changes a file, AGM writes a temporary prompt file;
           otherwise it uses the original file. Runner and selector command
-          arguments use strict interpolation from the process environment
-          overlaid with ``PROMPT_FILE``, which wins on conflicts. Names are
-          AgL identifiers (for example, ``%{log-file}``). ``%%`` is its
-          ``PROMPT_FILE`` alias; ``\\%{`` writes a literal ``%{``; a bare
-          ``%``, ``$VAR``, and ``${VAR}`` are literal text, and shell-style
-          interpolation is unsupported. Unknown, invalid, or unterminated
-          holes are errors. Command strings are shlex-split before
-          interpolation, so quote or otherwise protect ``\\%{`` so its
-          backslash reaches the argv element.
+          arguments interpolate the same holes as the prompt they accompany,
+          further overlaid with ``PROMPT_FILE``, which wins on conflicts.
+          ``%%`` is its ``PROMPT_FILE`` alias. Command strings are
+          shlex-split before interpolation, so quote or otherwise protect
+          ``\\%{`` so its backslash reaches the argv element.
 
           ``agm loop step`` performs a single loop iteration using the same
           runner, selector, and logging behavior as ``agm loop run``.
@@ -393,11 +389,10 @@ _HELP_TEXTS: dict[str, str] = {
         Create missing project and workspace config.toml files under the project
         config directory.
 
-        General-config path-valued settings expand ``%{VAR}`` from the process
-        environment and a leading ``~``; unresolved or malformed holes remain
-        literal because one config file serves every command. Independently
-        loaded ``[modules] lib_root`` and ``roots`` do not interpolate
-        ``%{VAR}``.
+        General-config path-valued settings, including the independently
+        loaded ``[modules] lib_root`` and ``roots``, expand ``%{VAR}`` from
+        the process environment and a leading ``~``; unresolved or malformed
+        holes remain literal because one config file serves every command.
 
         To apply the environment to the current shell:
           eval "$(agm config env)"

@@ -10,7 +10,7 @@ Prompts are resolved from inline text or a file and preprocessed to expand envir
 
 ## Runner Resolution
 
-Loop runner and selector resolution uses explicit CLI arguments, per-command config, base config, then the loop's built-in runner floor. Review and revise resolve their runner independently from their own CLI/config values and their review-workflow default; they never read `[loop]`. The same command-local precedence resolves timeouts.
+Loop, review, and revise each resolve their runner from explicit CLI arguments, then their own config section (a `[<section>.<command-name>]` sub-table layered over the base `[loop]`/`[review]`/`[revise]` table), then a shared built-in runner floor. Each command reads only its own section, so review and revise never inherit `[loop]`'s runner. Loop's selector and timeout resolve through the same precedence, without a floor.
 
 ## Loop
 
@@ -29,8 +29,9 @@ These share prompt-preprocessing that merges scope, aspects, and other context i
 ## Code Entry Points
 
 - `src/agm/agent/spec.py` — host agent specs, each building its own backend argv. A pure data leaf; decoding an AgL `Agent` value into one lives on the AgL side, in `agl/runtime/agents.py`.
+- `src/agm/agent/defaults.py` — the built-in runner floor (`DEFAULT_AGENT_RUNNER`) shared by loop, review, and revise.
 - `src/agm/agent/runner.py` — runner command parsing, prompt attachment, prepared argv handling, subprocess execution with idle timeout, the run-result structure.
 - `src/agm/agent/prompt.py`, `prompt_source.py`, `response.py`, `output.py` — prompt preparation, source resolution, completion detection, and output formatting.
-- `src/agm/agent/loop.py` — loop runner/selector/timeout resolution and the loop default runner.
-- `src/agm/agent/review/` — the review, revise, and refine workflow implementations, their independent default runner, and prompt preprocessing.
+- `src/agm/agent/loop.py` — loop runner/selector/timeout resolution.
+- `src/agm/agent/review/` — the review, revise, and refine workflow implementations and prompt preprocessing.
 - `src/agm/commands/loop/`, `review.py`, `revise.py`, `refine.py` — the commands that drive these workflows.

@@ -56,8 +56,9 @@ def raw_option_str(
     return None
 
 
-# The SINGLE owner of the engine-key defaults: the IR evaluator seeds its
-# registers from engine_default_settings rather than carrying a table of its own.
+# The SINGLE owner of the host-side engine-key defaults: the IR evaluator seeds
+# its registers from engine_default_settings rather than carrying a table of its
+# own.  ``default-agent`` has no host-side default (see engine_default_settings).
 _ENGINE_DEFAULTS: dict[str, object] = {
     "log": False,
     "strict-json": False,
@@ -65,20 +66,6 @@ _ENGINE_DEFAULTS: dict[str, object] = {
     "log-file": None,
     "timeout": None,
 }
-
-
-def _default_agent_value() -> "Value":
-    """Return the fallback ``AgentClaude`` value for incomplete stdlib test roots."""
-    from agm.agl.ir.ids import NominalId
-    from agm.agl.modules.ids import STD_CORE_ID
-    from agm.agl.semantics.values import EnumValue, TextValue
-
-    return EnumValue(
-        nominal=NominalId(STD_CORE_ID, "Agent"),
-        display_name="Agent",
-        variant="AgentClaude",
-        fields={"model": TextValue("sonnet"), "thinking": TextValue("medium")},
-    )
 
 
 def build_engine_config_seeds(raw_values: "Mapping[str, object]") -> "dict[str, Value]":
@@ -104,20 +91,18 @@ def build_engine_config_seeds(raw_values: "Mapping[str, object]") -> "dict[str, 
 
 
 def engine_default_settings() -> "dict[str, Value]":
-    """Build the typed engine-default value for every engine key.
+    """Build the typed engine-default value for every scalar/``Option[text]`` engine key.
 
-    Decodes the scalar/``Option[text]`` engine keys via
-    :func:`convert_config_value` (``false``/``false``/``0``/``none``/``none``,
-    where zero represents the disabled ``max-iters`` safety valve) and
-    materializes the typed ``default-agent`` fallback separately.
+    Decodes the keys in :data:`_ENGINE_DEFAULTS` via :func:`convert_config_value`
+    (``false``/``false``/``0``/``none``/``none``, where zero represents the
+    disabled ``max-iters`` safety valve), building its own fresh seeded
+    ``TypeTable`` rather than requiring one from the caller.
 
-    All engine-key types are built in: scalar or ``Option[text]`` and
-    ``default-agent`` is the built-in ``Agent`` nominal type. This builds its
-    own fresh seeded ``TypeTable`` rather than requiring one from the caller.
+    ``default-agent`` is an ``Agent`` value rather than a scalar or
+    ``Option[text]`` one and has no host-side default: it comes from the
+    ``std/config`` ``builtin var`` declaration like any other declared default.
     """
-    decoded = build_engine_config_seeds(_ENGINE_DEFAULTS)
-    decoded["default-agent"] = _default_agent_value()
-    return decoded
+    return build_engine_config_seeds(_ENGINE_DEFAULTS)
 
 
 def decode_param_value(decoder: "ParamDecoder", raw: object) -> "Value":

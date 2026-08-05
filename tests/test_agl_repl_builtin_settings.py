@@ -117,6 +117,16 @@ class TestCrossEntryPersistence:
         assert value.variant == "Some"
         assert value.fields["value"] == TextValue("trace.jsonl")
 
+    def test_default_agent_write_persists_two_entries_later(self) -> None:
+        s = _session()
+        _ok(s, "import std/config")
+        _ok(s, 'std/config::default-agent := AgentCommand("scripted")')
+        _ok(s, "let unrelated = 1")
+        value = _read(s, "default-agent")
+        assert isinstance(value, EnumValue)
+        assert value.variant == "AgentCommand"
+        assert value.fields["command"] == TextValue("scripted")
+
 
 # ---------------------------------------------------------------------------
 # Runtime-live effect carry-forward
@@ -196,6 +206,22 @@ class TestDefaultsAndSeeding:
 
         _ok(s, "import std/config")
         assert _read(s, "strict-json") == BoolValue(False)
+
+    def test_unwritten_default_agent_declaration_survives_later_entries(self) -> None:
+        """An unseeded, unwritten ``default-agent`` keeps its declared value.
+
+        ``std/config`` is linked once, so only the first entry carries its
+        ``builtin var`` initializer; later entries must read the value the
+        session carried forward rather than losing it or inventing one.
+        """
+        s = _session()
+        _ok(s, "import std/config")
+        _ok(s, "let unrelated = 1")
+
+        value = _read(s, "default-agent")
+
+        assert isinstance(value, EnumValue)
+        assert value.variant == "AgentClaude"
 
     def test_host_timeout_seed_round_trips_without_disabling_live_timeout(self) -> None:
         s = ReplSession(stdlib_root=_STDLIB_ROOT, shell_exec_timeout=0.0000001)

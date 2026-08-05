@@ -219,9 +219,9 @@ def _call_custom_codec_parse(
 
 
 # Engine-key defaults, built on first use.  The evaluator owns no default of its
-# own for the host-consumed engine settings — the host runtime does — so it seeds
-# its registers from the host and falls back to these.  They are fixed data, so
-# they are built once and shared.
+# own: a register falls back to the ``builtin var`` declaration's initializer and
+# then to these host-runtime values.  They are fixed data, so they are built once
+# and shared.
 _ENGINE_DEFAULT_SETTINGS: dict[str, Value] = {}
 
 
@@ -479,9 +479,12 @@ class IrInterpreter:
         self._apply_config_effect("timeout", timeout_setting)
 
         # Host-consumed registers use the host seed when one is provided and
-        # otherwise the ``builtin var`` declaration's default.
+        # otherwise the ``builtin var`` declaration's default. A key with
+        # neither gets no register at all rather than a fabricated value;
+        # reading it is then a hard error (see ``_load_builtin_setting``).
+        effective = {**defaults, **seed}
         self._builtin_host_settings = {
-            key: seed.get(key, defaults[key]) for key in HOST_CONSUMED_ENGINE_KEYS
+            key: effective[key] for key in HOST_CONSUMED_ENGINE_KEYS if key in effective
         }
         if self._host_reconfigurer is not None:
             self._reconfigure_host_service()
@@ -540,12 +543,13 @@ class IrInterpreter:
 
     @property
     def builtin_host_settings(self) -> dict[str, Value]:
-        """Current host-consumed register values, including ``default-agent``.
+        """Current host-consumed register values.
 
-        A snapshot copy of the register that backs the host-consumed ``builtin
-        var`` engine settings, reflecting any writes made during the run.  Hosts
-        that persist settings across runs (the REPL) read this back after a
-        successful run to seed the next run.
+        A snapshot copy of the registers backing the host-consumed ``builtin
+        var`` engine settings, reflecting any writes made during the run.  A key
+        with neither a host seed nor a declared default is absent.  Hosts that
+        persist settings across runs (the REPL) read this back after a run to
+        seed the next one.
         """
         return dict(self._builtin_host_settings)
 
@@ -1616,8 +1620,12 @@ class IrInterpreter:
     def _load_builtin_setting(self, key: str) -> Value:
         """Return the current value of the ``builtin var`` engine setting *key*.
 
-        The three runtime-live keys read the live interpreter fields; the four
+        The runtime-live keys read the live interpreter fields; the
         host-consumed keys read their register in ``_builtin_host_settings``.
+        A host-consumed key with neither a host seed nor a declared default has
+        no register, and no value to produce.
+
+        :raises InvalidIrError: if *key* has no host-consumed register.
         """
         if key == "strict-json":
             return BoolValue(self._strict_json)
@@ -1625,6 +1633,11 @@ class IrInterpreter:
             return IntValue(0 if self._loop_limit is None else self._loop_limit)
         if key == "timeout":
             return self._timeout_setting
+        if key not in self._builtin_host_settings:
+            raise InvalidIrError(
+                f"builtin var {key!r} has no host-consumed register value: it was neither "
+                "seeded by the host nor given a declaration default"
+            )
         return self._builtin_host_settings[key]
 
     def _store_builtin_setting(self, key: str, value: Value) -> None:

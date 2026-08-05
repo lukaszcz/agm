@@ -275,6 +275,20 @@ class _Bindings(dict[str, object]):
         return self
 
 
+# The hand-built program in ``_check_program_with_json`` declares its own
+# ``Agent`` enum (scoped to the entry module, not ``std/core``) and never loads
+# ``std/config``, so the bare ``ask(...)`` calls built by ``_ask_call`` have no
+# declared ``default-agent`` to read. ``_run_with_json_codec`` seeds one — its
+# concrete variant is irrelevant, since every ``agent_dispatcher`` in this file
+# ignores ``request.agent`` and responds from the prompt alone.
+_TEST_DEFAULT_AGENT = EnumValue(
+    nominal=NominalId(ENTRY_ID, "Agent"),
+    display_name="Agent",
+    variant="AgentCommand",
+    fields={"command": TextValue("")},
+)
+
+
 def _run_with_json_codec(
     body: tuple[Item, ...],
     *,
@@ -302,6 +316,7 @@ def _run_with_json_codec(
             agent_dispatcher=agent_dispatcher,
             strict_json=strict_json,
             host_contracts=contracts,
+            builtin_host_settings={"default-agent": _TEST_DEFAULT_AGENT},
         ).run()
     )
 
@@ -335,7 +350,8 @@ def _ask_call(
     """Build an ``ask(text)`` call expression using the default agent.
 
     ``strict_json=True`` adds ``strict_json = true`` as a named argument.
-    The caller supplies the agent function as ``default_agent`` when running.
+    The omitted agent argument reads the ``default-agent`` engine setting, which
+    ``_run_with_json_codec`` seeds with :data:`_TEST_DEFAULT_AGENT`.
     """
     named_args: list[ast.NamedArg] = []
     if strict_json is not None:
@@ -2120,10 +2136,9 @@ class TestPipelineDriverWireUp:
             )
         exc = exc_info.value.exc
         assert exc.display_name == "AgentParseError"
-        # AgentParseError preserves the default Agent enum value.
+        # AgentParseError preserves the (seeded) default Agent enum value.
         agent = exc.fields.get("agent")
-        assert isinstance(agent, EnumValue)
-        assert agent.variant == "AgentClaude"
+        assert agent == _TEST_DEFAULT_AGENT
 
     def test_agent_parse_error_has_target_type_field(self) -> None:
         let_n = _let("n", _ask_call("Num."), type_ann=_int_ty())

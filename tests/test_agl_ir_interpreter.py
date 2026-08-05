@@ -39,6 +39,7 @@ from agm.agl.ir import (
     IrAssign,
     IrBind,
     IrBlock,
+    IrBuiltinLoad,
     IrBuiltinStore,
     IrCapture,
     IrCoerce,
@@ -2511,3 +2512,18 @@ class TestIrExec:
             with pytest.raises(AglRaise) as exc_info:
                 IrInterpreter(prog).run()
         assert exc_info.value.exc.display_name == "ExecError"
+
+
+class TestHostConsumedSettingRegister:
+    """A host-consumed ``builtin var`` register with no seed and no declaration.
+
+    ``default-agent`` is declared by the shipped ``std/config`` module, not by
+    the interpreter itself; a hand-built program that reads it without either
+    a host seed or that declaration has no value to produce.
+    """
+
+    def test_reading_an_unseeded_undeclared_setting_raises_invalid_ir_error(self) -> None:
+        program = _make_program((IrBuiltinLoad(_LOC, "default-agent"),))
+
+        with pytest.raises(InvalidIrError):
+            IrInterpreter(program).run()

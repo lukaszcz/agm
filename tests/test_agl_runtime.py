@@ -1751,18 +1751,24 @@ class TestMaterializeContractMissingCodec:
 
 
 # ---------------------------------------------------------------------------
-# The engine runner default tracks the shared agent floor
+# params.py — host engine seeds and engine-key defaults
 # ---------------------------------------------------------------------------
 
 
-class TestEngineRunnerDefault:
-    """AgL's engine default must stay the runner AGM would actually invoke."""
+class TestEngineSettingDefaults:
+    """The host side owns defaults only for the keys it can actually decode."""
 
     def test_unknown_engine_seed_is_rejected(self) -> None:
         from agm.agl.runtime.params import build_engine_config_seeds
 
         with pytest.raises(ValueError, match="unknown engine key"):
             build_engine_config_seeds({"unknown": True})
+
+    def test_engine_default_settings_has_no_default_agent_floor(self) -> None:
+        """``default-agent`` is declared by ``std/config``, not fabricated by the host."""
+        from agm.agl.runtime.params import engine_default_settings
+
+        assert "default-agent" not in engine_default_settings()
 
 
 # ---------------------------------------------------------------------------

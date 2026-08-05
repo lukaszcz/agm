@@ -115,28 +115,33 @@ def prepare_runtime(args: LoopArgs) -> LoopStepRuntime:
 
     prompt_source = loop_prompt_source(args)
     _require_prompt_source(prompt_source)
+    resolved_extra_prompt_source = extra_prompt_source(args)
+    _require_prompt_source(resolved_extra_prompt_source, label="extra prompt")
 
     resolved_runner_command = runner_command(args)
     validate_command(resolved_runner_command, kind="runner", env=env)
     selector_mode = use_selector_mode(args)
-    if selector_mode and prompt_source is not None:
-        # In selector mode the explicit runner prompt is only fully rendered
-        # after a task is selected (TASK_FILE is withheld from `env` until
-        # then, see loop_env), so a malformed template or unknown hole would
-        # otherwise surface only after the selector agent has already run —
-        # too late, since the selector may itself mutate PROGRESS.md. Neither
-        # class of error actually needs TASK_FILE's real value to detect, so
-        # validate structure and hole names up front against everything that
-        # will be available at render time, without rendering or writing
-        # anything.
-        validate_prompt_template(prompt_source, variables={**env, "TASK_FILE": ""})
     implement_prompt_file: Path | None = None
     select_invocation: PreparedSelectInvocation | None = None
     if selector_mode:
-        select_invocation = prepare_select_invocation(args, temp_files=temp_files, env=env)
+        # Runner prompts are rendered only after selection, but their
+        # structure and names can be checked before the selector makes any
+        # side effects. TASK_FILE's eventual value is immaterial here.
         if prompt_source is None:
             implement_prompt_file = prompt_file("implement.md")
             require_prompt_file(implement_prompt_file)
+            runner_prompt_source: str | Path = implement_prompt_file
+        else:
+            runner_prompt_source = prompt_source
+        runner_variables = {**env, "TASK_FILE": ""}
+        validate_prompt_template(runner_prompt_source, variables=runner_variables)
+        if resolved_extra_prompt_source is not None:
+            validate_prompt_template(
+                resolved_extra_prompt_source,
+                variables=runner_variables,
+                label="extra prompt",
+            )
+        select_invocation = prepare_select_invocation(args, temp_files=temp_files, env=env)
 
     loop_prompt: PreparedPrompt | None = None
     if prompt_source is not None and not selector_mode:
@@ -173,8 +178,6 @@ def prepare_runtime(args: LoopArgs) -> LoopStepRuntime:
                 idle_timeout=resolved_timeout(args),
             )
 
-    resolved_extra_prompt_source = extra_prompt_source(args)
-    _require_prompt_source(resolved_extra_prompt_source, label="extra prompt")
     resolved_extra_selector_prompt_source = extra_selector_prompt_source(args)
 
     # Apply extra selector prompt to the selector invocation

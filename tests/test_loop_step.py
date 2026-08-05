@@ -903,6 +903,52 @@ class TestPrepareRuntime:
         assert "cannot interpolate" in error
         assert "TASK_FILEE" in error
 
+    @pytest.mark.parametrize(
+        ("implement_prompt", "extra_prompt"),
+        [
+            ("Fix %{TASK_FILEE}", None),
+            ("Fix %{TASK_FILE}", "Additional context: %{TASK_FILEE}"),
+        ],
+        ids=["default-runner-prompt", "extra-runner-prompt"],
+    )
+    def test_selector_mode_validates_deferred_runner_prompts_before_selection(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        implement_prompt: str,
+        extra_prompt: str | None,
+    ) -> None:
+        """Malformed deferred runner prompts cannot start the selector."""
+        home = self._setup_home_with_prompts(tmp_path, ["select.md", "implement.md"])
+        (home / ".agm" / "prompts" / "implement.md").write_text(implement_prompt, encoding="utf-8")
+        monkeypatch.setenv("HOME", str(home))
+        monkeypatch.setattr("shutil.which", lambda _: "/bin/fake")
+        monkeypatch.chdir(tmp_path)
+
+        selector_prepared = False
+
+        def fail_if_selector_is_prepared(*args: object, **kwargs: object) -> None:
+            nonlocal selector_prepared
+            selector_prepared = True
+            raise AssertionError("the selector must not be prepared")
+
+        monkeypatch.setattr(
+            "agm.commands.loop.step.prepare_select_invocation", fail_if_selector_is_prepared
+        )
+
+        with pytest.raises(SystemExit):
+            prepare_runtime(
+                _make_loop_args(
+                    no_log=True,
+                    no_selector=False,
+                    runner="fake-runner",
+                    selector="fake-selector",
+                    extra_prompt=extra_prompt,
+                )
+            )
+
+        assert not selector_prepared
+
     def test_selector_mode_dry_run_rejects_unterminated_hole(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
     ) -> None:

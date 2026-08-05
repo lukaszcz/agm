@@ -104,7 +104,7 @@ def test_agent_command_preserves_prompt_file_substitution() -> None:
 
     command = AgentCommand("runner --input=%{PROMPT_FILE} --copy=%%").argv()
 
-    assert command_with_prompt_target(command, Path("prompt.md")) == [
+    assert command_with_prompt_target(command, Path("prompt.md"), {}) == [
         "runner",
         "--input=prompt.md",
         "--copy=prompt.md",
@@ -116,7 +116,7 @@ def test_agent_command_appends_prompt_file_without_placeholder() -> None:
 
     command = AgentCommand("runner --quiet").argv()
 
-    assert command_with_prompt_target(command, Path("prompt.md")) == [
+    assert command_with_prompt_target(command, Path("prompt.md"), {}) == [
         "runner",
         "--quiet",
         "@prompt.md",

@@ -37,6 +37,10 @@ required.
 - any roots declared under `[modules] roots` in any config layer,
 - any roots added with `-I`/`--module-path`.
 
+The independently loaded `[modules] lib_root` and `roots` settings expand `%{VAR}` the same
+leniently as other path-valued settings; see
+[Path-valued settings](config.md#path-valued-settings) for the exact rule.
+
 Set `AGM_HOME` to relocate the entire `~/.agm` directory (config, prompts, sandbox settings, global library, and stdlib); set `AGM_STDLIB` to point only the standard-library root elsewhere.
 
 A module name that resolves to exactly one file across all roots succeeds; zero files,
@@ -134,6 +138,20 @@ let answer: text = ask("Summarize")
 `AgentCommand(command)`, `AgentClaude(model, thinking)`,
 `AgentCodex(model, thinking)`, and `AgentPi(provider, model, thinking)` each
 build their own argv; use an `Agent` value or `default-agent` to select one.
+
+### Agent command interpolation
+
+The argv an `Agent` value builds — the command string of an `AgentCommand`, and the
+provider variants' fixed flags — interpolates `%{name}` holes strictly from the process
+environment overlaid with `PROMPT_FILE`, which wins on conflicts. Unlike `agm loop`'s
+runner and selector, no workflow-specific variables are added. See
+[Runner command interpolation](agents.md#runner-command-interpolation) for the shared
+`%%`/`PROMPT_FILE` alias, `\%{` escape, and shlex-split rules. A prompt-file placeholder
+places the rendered prompt file at that position; otherwise AGM appends `@<path>`.
+Because an AgL text literal interpolates `%{…}` itself, spell the placeholder as
+`\%{PROMPT_FILE}` inside `AgentCommand("…")` so it reaches the host as literal text. An
+unresolvable hole fails the call with a catchable `AgentCallError` whose `cause` is
+`"spawn_failure"`.
 
 ### Configuration
 

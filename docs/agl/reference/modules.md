@@ -245,6 +245,13 @@ disables that automatic opening throughout the loaded program; an explicit
 `import std/core` or `open import std/core` always follows the ordinary import
 rules.
 
+## Standard library modules
+
+- `std/core` declares the automatically opened core types, exceptions, and built-ins.
+- `std/config` exposes the host engine settings as `builtin var` bindings.
+- `std/text` exposes `interp(template, vars) -> text` for name-only runtime
+  interpolation; see [Strings and interpolation](strings-and-interpolation.md#runtime-interpolation).
+
 ## Library modules and cycles
 
 Imported modules are declaration-only: they may contain imports, exports,

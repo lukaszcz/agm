@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
-import sys
 from dataclasses import dataclass
 from pathlib import Path
 
 from agm.agent.defaults import DEFAULT_AGENT_RUNNER
 from agm.agent.output import step_header_text as step_header_text
 from agm.agent.prompt import dry_run_prompt_text as dry_run_prompt_text
-from agm.agent.prompt import preprocess_prompt_file
+from agm.agent.prompt import preprocess_prompt_file, require_prompt_file
 from agm.agent.prompt_source import PromptSourceOptions, resolve_prompt_source
 from agm.agent.response import is_complete_output as is_complete_output
 from agm.agent.response import last_response_line
@@ -184,7 +183,7 @@ def prepare_select_invocation(
     if resolved_command is None:
         resolved_command = resolved_runner_command
         command_kind = "runner"
-    validate_command(resolved_command, kind=command_kind)
+    validate_command(resolved_command, kind=command_kind, env=env)
 
     resolved_selector_prompt_source = selector_prompt_source(args)
     if resolved_selector_prompt_source is not None:
@@ -197,12 +196,7 @@ def prepare_select_invocation(
         effective_prompt_file = resolved.effective_file
     else:
         source_prompt_file = prompt_file("select.md")
-        if not is_file(source_prompt_file):
-            print(
-                f"Error: prompt file not found: {display_path(source_prompt_file)}",
-                file=sys.stderr,
-            )
-            raise SystemExit(1)
+        require_prompt_file(source_prompt_file)
         effective_prompt_file = preprocess_prompt_file(
             source_prompt_file,
             temp_files=temp_files,

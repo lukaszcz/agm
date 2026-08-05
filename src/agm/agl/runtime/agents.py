@@ -96,6 +96,7 @@ def _run_request(
         prepare_rendered_prompt_run,
         run_prepared_prompt_result,
     )
+    from agm.util.interp import InterpolationError
 
     parts = [request.prompt]
     if request.output_contract is not None and request.output_contract.format_instructions:
@@ -114,6 +115,13 @@ def _run_request(
             "\n\n".join(parts), runner=command, temp_files=temp_files, env=clone_env()
         )
         result = run_prepared_prompt_result(prepared, idle_timeout=idle_timeout)
+    except InterpolationError as exc:
+        raise AgentCallHostError(
+            cause="spawn_failure",
+            exit_code=None,
+            stderr_tail=str(exc),
+            elapsed=0.0,
+        ) from exc
     finally:
         cleanup_temp_files(temp_files)
     if result.spawn_error is not None:

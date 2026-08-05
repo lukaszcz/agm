@@ -108,6 +108,34 @@ class TestLoadExecConfig:
         assert cfg.log is True
         assert cfg.log_file == str(log_path)
 
+    def test_escaped_log_file_interpolation_is_not_reapplied(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("NAME", "expanded")
+        home = tmp_path / "home"
+        config_dir = home / ".agm"
+        literal_dir = config_dir / "%{NAME}"
+        literal_dir.mkdir(parents=True)
+        (literal_dir / "base.jsonl").touch()
+        (literal_dir / "nested.jsonl").touch()
+        (config_dir / "config.toml").write_text(
+            "\n".join(
+                [
+                    "[exec]",
+                    'log-file = "\\\\%{NAME}/base.jsonl"',
+                    "",
+                    "[exec.myflow]",
+                    'log-file = "\\\\%{NAME}/nested.jsonl"',
+                ]
+            )
+        )
+
+        base = load_exec_config(home=home, proj_dir=None, cwd=tmp_path)
+        nested = load_exec_config(home=home, proj_dir=None, cwd=tmp_path, command_name="myflow")
+
+        assert base.log_file == str(literal_dir / "base.jsonl")
+        assert nested.log_file == str(literal_dir / "nested.jsonl")
+
 
 class TestProgramConfig:
     def test_load_program_config_from_toml(self, tmp_path: Path) -> None:

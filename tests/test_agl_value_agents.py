@@ -76,6 +76,35 @@ def test_unrecognized_agent_variant_becomes_a_typed_error() -> None:
     assert exc_info.value.cause == "invalid_agent"
 
 
+def test_unresolvable_command_hole_becomes_a_typed_error() -> None:
+    """A host interpolation hole the environment cannot fill fails as a spawn failure."""
+    from agm.agl.runtime.agents import AgentCallHostError
+    from agm.agl.runtime.request import AgentRequest
+
+    agent = agent_value("AgentCommand", command="runner --flag=%{AGM_NO_SUCH_VARIABLE}")
+    dispatch = value_driven_agent_factory(idle_timeout=None)
+
+    with pytest.raises(AgentCallHostError) as exc_info:
+        dispatch(AgentRequest(agent=agent, prompt="hello"))
+
+    assert exc_info.value.cause == "spawn_failure"
+
+
+def test_escaped_command_hole_reaches_the_host_interpolator() -> None:
+    """`\\%{` in AgL source passes the hole through for the host to resolve."""
+    runtime = PipelineDriver(agent_dispatcher=value_driven_agent_factory(idle_timeout=None))
+
+    run = runtime.run(
+        'let answer: text = ask("hello", '
+        'agent = AgentCommand("runner --flag=\\%{AGM_NO_SUCH_VARIABLE}"))\nanswer'
+    )
+
+    assert not run.ok
+    assert run.error is not None
+    assert run.error.type_name == "AgentCallError"
+    assert run.error.fields["cause"] == "spawn_failure"
+
+
 def test_invalid_agent_value_becomes_typed_error() -> None:
     runtime = PipelineDriver(agent_dispatcher=value_driven_agent_factory(idle_timeout=None))
 

@@ -148,8 +148,8 @@ def first(prog: Program) -> object:
 
 
 def assert_raw_tail_name_span(error: AglSyntaxError, source: str) -> None:
-    """Assert that a raw-tail reservation error covers its reserved name."""
-    assert "reserved for raw-tail calls" in str(error)
+    """Assert that a misplaced raw-tail error covers its raw name."""
+    assert "raw-tail forms" in str(error)
     span = error.span
     assert span is not None
     name = next(name for name in ("exec!", "ask!") if name in source)
@@ -3219,7 +3219,7 @@ class TestSyntaxErrorFromLarkDirect:
         assert "cannot be empty" in str(err)
 
     def test_empty_raw_tail_falls_back_when_stack_has_no_raw_callee(self) -> None:
-        """A parse stack without a ``raw_callee`` subtree yields the generic name."""
+        """A parse stack without a raw-tail name yields the generic name."""
         import types
 
         from lark.exceptions import UnexpectedToken
@@ -3229,7 +3229,13 @@ class TestSyntaxErrorFromLarkDirect:
         token = Token("RAW_TAIL_END", "", start_pos=5, line=1, column=6)
         exc = UnexpectedToken(token, expected={"RAW_FRAGMENT"})
         exc.interactive_parser = types.SimpleNamespace(
-            parser_state=types.SimpleNamespace(value_stack=[])
+            parser_state=types.SimpleNamespace(
+                value_stack=[
+                    types.SimpleNamespace(
+                        data="dotted_raw_head", children=[Token("NAME", "receiver")]
+                    )
+                ]
+            )
         )
         err = syntax_error_from_lark(exc)
         assert "raw-tail form" in str(err)
@@ -4279,6 +4285,49 @@ class TestRawTailCalls:
     def test_desugars_to_equivalent_call(self, raw_source: str, call_source: str) -> None:
         assert first(parse(raw_source)) == first(parse(call_source))
 
+    @pytest.mark.parametrize(
+        ("raw_source", "call_source"),
+        (
+            ("ag.ask! Summarize %{subject}", 'ag.ask("Summarize %{subject}")'),
+            (
+                "ag.ask!\n  Review %{subject} carefully",
+                'ag.ask("""Review %{subject} carefully""")',
+            ),
+            (
+                "ag.ask!::[Review] Summarize %{subject}",
+                'ag.ask::[Review]("Summarize %{subject}")',
+            ),
+            (
+                "agents[0].ask! Continue %{subject}",
+                'agents[0].ask("Continue %{subject}")',
+            ),
+            (
+                "print agents[0].ask! Continue %{subject}",
+                'print agents[0].ask("Continue %{subject}")',
+            ),
+            (
+                "print make_agent().ask! Continue %{subject}",
+                'print make_agent().ask("Continue %{subject}")',
+            ),
+            (
+                "print fleet.current[0].ask! Continue %{subject}",
+                'print fleet.current[0].ask("Continue %{subject}")',
+            ),
+            (
+                "print ag.ask! Summarize %{subject}",
+                'print ag.ask("Summarize %{subject}")',
+            ),
+            (
+                "print ag.ask!::[Review]\n  Review %{subject} carefully",
+                'print ag.ask::[Review]("""Review %{subject} carefully""")',
+            ),
+        ),
+    )
+    def test_dotted_raw_tail_desugars_to_equivalent_method_call(
+        self, raw_source: str, call_source: str
+    ) -> None:
+        assert first(parse(raw_source)) == first(parse(call_source))
+
     def test_is_allowed_at_each_line_final_position(self) -> None:
         source = """\
 exec! true
@@ -4344,6 +4393,8 @@ print exec! true
         (
             ("1 + exec!", (1, 5, 1, 10)),
             ("1 + exec! true", (1, 5, 1, 10)),
+            ("1 + ag.ask! true", (1, 8, 1, 12)),
+            ("1 + print ag.ask! true", (1, 14, 1, 18)),
             ("if true => exec! date | else => 0", (1, 12, 1, 17)),
             ("case true of true => exec! date | false => 0", (1, 22, 1, 27)),
             ("try exec! date catch _ => 0", (1, 5, 1, 10)),
@@ -4393,6 +4444,11 @@ print exec! true
             parse_program("let x: array[int] = exec!::[array[int]]\nnext")
         assert "exec!" in str(exc_info.value)
 
+    def test_empty_dotted_raw_tail_names_its_member(self) -> None:
+        with pytest.raises(AglSyntaxError) as exc_info:
+            parse_program("agent.ask!")
+        assert "ask!" in str(exc_info.value)
+
     @pytest.mark.parametrize(
         "source",
         ("let x = 1\n  exec! echo hi", "print 1\n  exec! echo hi"),
@@ -4417,7 +4473,7 @@ print exec! true
 
     @pytest.mark.parametrize("declaration", ("record", "exception"))
     @pytest.mark.parametrize("marker", ("/", "*", "@named"))
-    def test_nominal_marker_preserves_raw_field_reservation(
+    def test_nominal_marker_rejects_raw_tail_as_a_field_definition(
         self, declaration: str, marker: str
     ) -> None:
         source = f"{declaration} R\n  x: int\n  {marker}\n  exec!: int"
@@ -4470,6 +4526,62 @@ print exec! true
         assert isinstance(raw_call.callee, VarRef)
         assert isinstance(raw_call.args[0], StringLit)
         assert raw_call.callee.node_id < raw_call.args[0].node_id < raw_call.node_id
+
+    def test_dotted_raw_tail_member_span_and_node_ids_precede_its_payload(self) -> None:
+        raw_call = first(parse("ag.ask!::[Review] payload"))
+        assert isinstance(raw_call, Call)
+        assert isinstance(raw_call.callee, FieldAccess)
+        assert isinstance(raw_call.args[0], StringLit)
+        member = raw_call.callee
+        assert (
+            member.span.start_line,
+            member.span.start_col,
+            member.span.end_line,
+            member.span.end_col,
+            member.span.start_offset,
+            member.span.end_offset,
+        ) == (1, 1, 1, 8, 0, 7)
+        assert member.obj.node_id < member.node_id < raw_call.type_args[0].node_id
+        assert raw_call.type_args[0].node_id < raw_call.args[0].node_id < raw_call.node_id
+
+    def test_juxtaposed_dotted_raw_tail_preserves_postfix_component_spans_and_ids(self) -> None:
+        print_call = first(parse("print a.b().c[0].ask! x"))
+        assert isinstance(print_call, Call)
+        raw_call = print_call.args[0]
+        assert isinstance(raw_call, Call)
+        assert isinstance(raw_call.callee, FieldAccess)
+        assert isinstance(raw_call.args[0], StringLit)
+        ask = raw_call.callee
+        assert isinstance(ask.obj, IndexAccess)
+        indexed = ask.obj
+        assert isinstance(indexed.obj, FieldAccess)
+        member_c = indexed.obj
+        assert isinstance(member_c.obj, Call)
+        call_b = member_c.obj
+        assert isinstance(call_b.callee, FieldAccess)
+        member_b = call_b.callee
+        assert isinstance(member_b.obj, VarRef)
+        root = member_b.obj
+        assert isinstance(indexed.index, IntLit)
+
+        assert [
+            (node.span.start_offset, node.span.end_offset)
+            for node in (root, member_b, call_b, member_c, indexed.index, indexed, ask)
+        ] == [(6, 7), (6, 9), (6, 11), (6, 13), (14, 15), (6, 16), (6, 21)]
+        node_ids = [
+            root.node_id,
+            member_b.node_id,
+            call_b.node_id,
+            member_c.node_id,
+            indexed.index.node_id,
+            indexed.node_id,
+            ask.node_id,
+            raw_call.args[0].node_id,
+            raw_call.node_id,
+            print_call.node_id,
+        ]
+        assert node_ids == sorted(node_ids)
+        assert len(node_ids) == len(set(node_ids))
 
     def test_interpolated_raw_text_precedes_its_interpolation_node_ids(self) -> None:
         raw_call = first(parse("exec! before %{value}"))

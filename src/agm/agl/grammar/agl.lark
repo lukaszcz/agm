@@ -121,7 +121,7 @@ _sep: _NEWLINE | SEMICOLON
 // The single criterion for where a raw-tail form may appear: a line-final
 // expression position, where a raw payload cannot swallow a grammar-visible
 // continuation marker.  Every such position spells it as ``line_final_expr``.
-?raw_tail_form: raw_call | raw_juxt
+?raw_tail_form: raw_call | dotted_raw_call | raw_juxt
 ?line_final_expr: raw_tail_form | expr
 
 // ---------------------------------------------------------------------------
@@ -623,12 +623,15 @@ juxt: postfix juxt_arg -> juxt_call
     | postfix
 
 // juxt_arg: a restricted atom optionally followed by field/index suffixes.
-juxt_arg: juxt_atom juxt_suffix*
+juxt_arg: juxt_atom juxt_arg_tail
+juxt_arg_tail:                                          -> juxt_suffixes_empty
+             | juxt_postfix_suffix juxt_arg_tail      -> juxt_postfix_tail
+             | DOT juxt_field_name juxt_arg_tail      -> juxt_field_tail
+juxt_field_name: field_name
 
-juxt_suffix: DOT field_name       -> juxt_field_suffix
-           | INDEX_LSQB expr RSQB -> juxt_index_suffix
-           | LPAR arg_list? RPAR -> juxt_call_suffix
-           | type_args LPAR arg_list? RPAR -> juxt_typed_call_suffix
+juxt_postfix_suffix: INDEX_LSQB expr RSQB -> juxt_index_suffix
+                   | LPAR arg_list? RPAR -> juxt_call_suffix
+                   | type_args LPAR arg_list? RPAR -> juxt_typed_call_suffix
 
 // juxt_atom: the simple (no-paren, no-unary-minus) primaries allowed as juxt arg.
 // Qualified refs are valid juxt arguments; the lexer pre-merges qualifiers
@@ -771,8 +774,16 @@ template: TEMPLATE_START template_segment* TEMPLATE_END
 template_segment: STRING_FRAGMENT    -> tmpl_text
                 | interp             -> tmpl_interp
 
-raw_juxt: postfix raw_call -> juxt_call
+raw_juxt: postfix raw_call                                      -> juxt_call
+        | postfix raw_juxt_dotted_receiver type_args? raw_tail -> dotted_raw_juxt
 raw_call: raw_callee type_args? raw_tail
+dotted_raw_call: dotted_raw_head type_args? raw_tail
+dotted_raw_head: postfix DOT RAW_TAIL_NAME
+raw_juxt_dotted_receiver: juxt_atom raw_juxt_tail
+raw_juxt_tail: juxt_postfix_suffix raw_juxt_tail -> raw_juxt_postfix_tail
+             | DOT raw_juxt_member               -> raw_juxt_final_tail
+raw_juxt_member: RAW_TAIL_NAME                -> raw_juxt_terminal
+               | juxt_field_name raw_juxt_tail -> raw_juxt_member_field
 raw_callee: RAW_TAIL_NAME
 raw_tail: RAW_TAIL_START (raw_text | interp)+ RAW_TAIL_END
 raw_text: RAW_FRAGMENT

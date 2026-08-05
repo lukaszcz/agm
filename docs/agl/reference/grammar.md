@@ -511,15 +511,20 @@ A `STRING` pattern may not contain interpolation.
 ## Raw-tail calls
 
 ```ebnf
-raw_call  ::= ("exec!" | "ask!") type_args? raw_tail
-type_args ::= "::" "[" type_expr ("," type_expr)* "]"
-raw_tail  ::= inline_raw_tail | block_raw_tail
+raw_call        ::= raw_callee type_args? raw_tail
+dotted_raw_call ::= postfix "." raw_callee type_args? raw_tail
+raw_callee      ::= "exec!" | "ask!"
+type_args       ::= "::" "[" type_expr ("," type_expr)* "]"
+raw_tail        ::= inline_raw_tail | block_raw_tail
 ```
 
-The optional `type_args` group is recognized only when its `::` is immediately
-adjacent to the raw name: `exec!::[T]` and `ask!::[T]`. Whitespace before the
-`::` makes it payload text instead, so `exec! ::[T]` and `ask! ::[T]` have no
-type arguments.
+A raw tail may start a call directly or follow a runtime member projection.
+`receiver.ask! payload` is equivalent to `receiver.ask(payload)`, including
+normal field-then-method resolution. The optional `type_args` group is
+recognized only when its `::` is immediately adjacent to the raw name:
+`exec!::[T]` and `receiver.ask!::[T]`. Whitespace before the `::` makes it
+payload text instead, so `ask! ::[T]` and `receiver.ask! ::[T]` have no type
+arguments.
 
 An inline raw tail is all text from its first non-whitespace character through
 the end of the line, except that trailing spaces and tabs are removed. A block
@@ -533,9 +538,9 @@ a block with at least one nonblank line. Raw text is tokenized as fragments and
 A raw call is valid only where the grammar guarantees that nothing else follows
 on its line: as a block item; as a `let`, `var`, or assignment RHS; as an
 inline `def` body; as a `return` operand at a block-item or function-body tail;
-or as the final single-argument juxtaposition argument. It is not valid inside
-brackets, branch/catch inline bodies, or another inline expression. Use the
-ordinary call form there.
+or as the final single-argument juxtaposition argument (for example,
+`print receiver.ask! prompt`). It is not valid inside brackets, branch/catch
+inline bodies, or another inline expression. Use the ordinary call form there.
 
 ```agl
 let path = "."

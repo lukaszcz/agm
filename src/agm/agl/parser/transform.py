@@ -68,6 +68,13 @@ class _RawPlaceholder:
 
 
 @dataclass(frozen=True, slots=True)
+class _DottedRawCallee:
+    """A member callee built before its raw-tail type arguments and payload."""
+
+    callee: syntax.FieldAccess
+
+
+@dataclass(frozen=True, slots=True)
 class _ScopePath:
     """Transformer-internal path retaining each segment's span."""
 
@@ -182,8 +189,35 @@ _RawNamed: TypeAlias = syntax.NamedArg | _RawNamedArg
 _RawArgLists: TypeAlias = tuple[list[_RawPosArg], list[_RawNamed]]
 _ArgLists: TypeAlias = tuple[list[syntax.Expr], list[syntax.NamedArg]]
 _JuxtCall: TypeAlias = tuple[tuple[TypeExpr, ...], _ArgLists]
-_JuxtSuffix: TypeAlias = tuple[str, str] | tuple[str, syntax.Expr] | tuple[str, _JuxtCall]
 _RawItem: TypeAlias = syntax.Item | _RawInfixChain
+
+
+@dataclass(frozen=True, slots=True)
+class _JuxtSuffix:
+    """A deferred juxtaposition postfix operation allocated in source order."""
+
+    kind: str
+    value: str | syntax.Expr | _JuxtCall
+    span: SourceSpan
+    node_id: int
+
+
+@dataclass(frozen=True, slots=True)
+class _JuxtField:
+    """A juxtaposition field token and its already allocated node id."""
+
+    name: str
+    span: SourceSpan
+    node_id: int
+
+
+@dataclass(frozen=True, slots=True)
+class _RawJuxtMember:
+    """The suffixes and final raw-tail name of a juxtaposed member receiver."""
+
+    suffixes: tuple[_JuxtSuffix, ...]
+    raw_name: Token
+    node_id: int
 
 
 # Zone ordering for marker validation (strictly increasing).
@@ -1473,33 +1507,70 @@ class AstBuilder(Transformer):
         )
 
     def juxt_arg(self, meta: Meta, args: _Args) -> syntax.Expr:
-        """juxt_arg: juxt_atom juxt_suffix*
+        """juxt_arg: juxt_atom juxt_arg_tail
 
         Builds the restricted postfix chain allowed by single-arg call sugar,
         such as ``print res.stdout``, ``print xs[0]``, and
         ``f Opt::Some(x = 1)`` and ``f Opt[int]::None()``.
         """
         non_tokens = [a for a in args if a is not None and not isinstance(a, Token)]
-        assert non_tokens, "juxt_arg: no base atom"
-        result = cast(syntax.Expr, non_tokens[0])
-        for suffix_obj in non_tokens[1:]:
-            kind, value = cast(_JuxtSuffix, suffix_obj)
-            if kind == "field":
+        assert len(non_tokens) == 2, "juxt_arg: expected a base atom and suffixes"
+        return self._apply_juxt_suffixes(
+            cast(syntax.Expr, non_tokens[0]),
+            cast(tuple[_JuxtSuffix, ...], non_tokens[1]),
+            meta,
+        )
+
+    def juxt_suffixes_empty(self, meta: Meta, args: _Args) -> tuple[_JuxtSuffix, ...]:
+        """Represent the end of a juxtaposition postfix chain."""
+        del meta, args
+        return ()
+
+    def juxt_postfix_tail(self, meta: Meta, args: _Args) -> tuple[_JuxtSuffix, ...]:
+        """Prepend a non-member postfix suffix to a juxtaposition chain."""
+        del meta
+        suffix, tail = cast(tuple[_JuxtSuffix, tuple[_JuxtSuffix, ...]], tuple(args))
+        return (suffix, *tail)
+
+    def juxt_field_name(self, meta: Meta, args: _Args) -> _JuxtField:
+        """Allocate a juxtaposition field before later postfix payloads are read."""
+        del meta
+        field = _find_name_token(args)
+        return _JuxtField(
+            name=str(field), span=self._span_from_token(field), node_id=self._next_id()
+        )
+
+    def juxt_field_tail(self, meta: Meta, args: _Args) -> tuple[_JuxtSuffix, ...]:
+        """Prepend a member projection to a juxtaposition postfix chain."""
+        del meta
+        field = next(arg for arg in args if isinstance(arg, _JuxtField))
+        tail = next(arg for arg in args if isinstance(arg, tuple))
+        return (
+            _JuxtSuffix("field", field.name, field.span, field.node_id),
+            *cast(tuple[_JuxtSuffix, ...], tail),
+        )
+
+    def _apply_juxt_suffixes(
+        self, result: syntax.Expr, suffixes: Iterable[_JuxtSuffix], meta: Meta
+    ) -> syntax.Expr:
+        """Apply deferred juxtaposition postfix operations to ``result``."""
+        for suffix in suffixes:
+            if suffix.kind == "field":
                 result = syntax.FieldAccess(
                     obj=result,
-                    field=cast(str, value),
+                    field=cast(str, suffix.value),
                     span=self._span_from_meta(meta),
-                    node_id=self._next_id(),
+                    node_id=suffix.node_id,
                 )
-            elif kind == "index":
+            elif suffix.kind == "index":
                 result = syntax.IndexAccess(
                     obj=result,
-                    index=cast(syntax.Expr, value),
+                    index=cast(syntax.Expr, suffix.value),
                     span=self._span_from_meta(meta),
-                    node_id=self._next_id(),
+                    node_id=suffix.node_id,
                 )
             else:
-                type_args_val, arg_lists = cast(_JuxtCall, value)
+                type_args_val, arg_lists = cast(_JuxtCall, suffix.value)
                 pos_args, named_args = arg_lists
                 result = syntax.Call(
                     callee=result,
@@ -1507,19 +1578,47 @@ class AstBuilder(Transformer):
                     named_args=tuple(named_args),
                     type_args=type_args_val,
                     span=self._span_from_meta(meta),
-                    node_id=self._next_id(),
+                    node_id=suffix.node_id,
                 )
         return result
 
-    def juxt_field_suffix(self, meta: Meta, args: _Args) -> _JuxtSuffix:
-        """juxt_suffix: DOT field_name -> juxt_field_suffix."""
-        field_tok = _find_name_token(args)
-        return ("field", str(field_tok))
+    def _apply_raw_juxt_suffixes(
+        self, result: syntax.Expr, suffixes: Iterable[_JuxtSuffix]
+    ) -> syntax.Expr:
+        """Apply source-ordered postfix operations to a raw-member receiver."""
+        for suffix in suffixes:
+            span = _span_covering(result.span, suffix.span)
+            if suffix.kind == "field":
+                result = syntax.FieldAccess(
+                    obj=result,
+                    field=cast(str, suffix.value),
+                    span=span,
+                    node_id=suffix.node_id,
+                )
+            elif suffix.kind == "index":
+                result = syntax.IndexAccess(
+                    obj=result,
+                    index=cast(syntax.Expr, suffix.value),
+                    span=span,
+                    node_id=suffix.node_id,
+                )
+            else:
+                type_args_val, arg_lists = cast(_JuxtCall, suffix.value)
+                pos_args, named_args = arg_lists
+                result = syntax.Call(
+                    callee=result,
+                    args=tuple(pos_args),
+                    named_args=tuple(named_args),
+                    type_args=type_args_val,
+                    span=span,
+                    node_id=suffix.node_id,
+                )
+        return result
 
     def juxt_index_suffix(self, meta: Meta, args: _Args) -> _JuxtSuffix:
-        """juxt_suffix: INDEX_LSQB expr RSQB -> juxt_index_suffix."""
+        """juxt_postfix_suffix: INDEX_LSQB expr RSQB -> juxt_index_suffix."""
         index_expr = cast(syntax.Expr, next(a for a in args if _is_expr_node(a)))
-        return ("index", index_expr)
+        return _JuxtSuffix("index", index_expr, self._span_from_meta(meta), self._next_id())
 
     def _juxt_finalized_arg_lists(self, meta: Meta, args: _Args) -> _ArgLists:
         """Validate and finalize the raw arg-list under a juxtaposition call suffix."""
@@ -1533,12 +1632,22 @@ class AstBuilder(Transformer):
         return ([], [])
 
     def juxt_call_suffix(self, meta: Meta, args: _Args) -> _JuxtSuffix:
-        """juxt_suffix: LPAR arg_list? RPAR -> juxt_call_suffix."""
-        return ("call", ((), self._juxt_finalized_arg_lists(meta, args)))
+        """juxt_postfix_suffix: LPAR arg_list? RPAR -> juxt_call_suffix."""
+        return _JuxtSuffix(
+            "call",
+            ((), self._juxt_finalized_arg_lists(meta, args)),
+            self._span_from_meta(meta),
+            self._next_id(),
+        )
 
     def juxt_typed_call_suffix(self, meta: Meta, args: _Args) -> _JuxtSuffix:
-        """juxt_suffix: DCOLON LSQB type_arg_list RSQB LPAR arg_list? RPAR."""
-        return ("typed_call", (_find_type_args(args), self._juxt_finalized_arg_lists(meta, args)))
+        """juxt_postfix_suffix: type_args LPAR arg_list? RPAR."""
+        return _JuxtSuffix(
+            "typed_call",
+            (_find_type_args(args), self._juxt_finalized_arg_lists(meta, args)),
+            self._span_from_meta(meta),
+            self._next_id(),
+        )
 
     def type_apply(self, meta: Meta, args: _Args) -> syntax.TypeApply:
         """Apply explicit type arguments to a value without calling it."""
@@ -2892,6 +3001,100 @@ class AstBuilder(Transformer):
     def raw_call(self, meta: Meta, args: _Args) -> syntax.Call:
         """Desugar a raw-tail form to its registered builtin call."""
         callee = next(arg for arg in args if isinstance(arg, syntax.VarRef))
+        return self._build_raw_call(meta, args, callee)
+
+    def dotted_raw_head(self, meta: Meta, args: _Args) -> _DottedRawCallee:
+        """Build a direct dotted member callee before its raw payload."""
+        del meta
+        return self._build_dotted_raw_callee(args)
+
+    def raw_juxt_terminal(self, meta: Meta, args: _Args) -> _RawJuxtMember:
+        """Capture the raw-tail name terminating a juxtaposed postfix chain."""
+        del meta
+        raw_name = next(
+            arg for arg in args if isinstance(arg, Token) and arg.type == "RAW_TAIL_NAME"
+        )
+        return _RawJuxtMember(suffixes=(), raw_name=raw_name, node_id=self._next_id())
+
+    def raw_juxt_postfix_tail(self, meta: Meta, args: _Args) -> _RawJuxtMember:
+        """Prepend a non-member postfix suffix to a raw-member receiver."""
+        del meta
+        suffix, member = cast(tuple[_JuxtSuffix, _RawJuxtMember], tuple(args))
+        return _RawJuxtMember(
+            suffixes=(suffix, *member.suffixes), raw_name=member.raw_name, node_id=member.node_id
+        )
+
+    def raw_juxt_final_tail(self, meta: Meta, args: _Args) -> _RawJuxtMember:
+        """Pass through the final raw-tail member after its separating dot."""
+        del meta
+        return next(arg for arg in args if isinstance(arg, _RawJuxtMember))
+
+    def raw_juxt_member_field(self, meta: Meta, args: _Args) -> _RawJuxtMember:
+        """Prepend a regular member before the final raw-tail member."""
+        del meta
+        field = next(arg for arg in args if isinstance(arg, _JuxtField))
+        member = next(arg for arg in args if isinstance(arg, _RawJuxtMember))
+        return _RawJuxtMember(
+            suffixes=(
+                _JuxtSuffix("field", field.name, field.span, field.node_id),
+                *member.suffixes,
+            ),
+            raw_name=member.raw_name,
+            node_id=member.node_id,
+        )
+
+    def raw_juxt_dotted_receiver(self, meta: Meta, args: _Args) -> _DottedRawCallee:
+        """Build a postfix receiver and its final raw-tail member projection."""
+        del meta
+        receiver = cast(syntax.Expr, args[0])
+        member = next(arg for arg in args if isinstance(arg, _RawJuxtMember))
+        receiver = self._apply_raw_juxt_suffixes(receiver, member.suffixes)
+        raw_name_span = self._span_from_token(member.raw_name)
+        return _DottedRawCallee(
+            syntax.FieldAccess(
+                obj=receiver,
+                field=RAW_TAIL_BUILTINS[str(member.raw_name)],
+                span=_span_covering(receiver.span, raw_name_span),
+                node_id=member.node_id,
+            )
+        )
+
+    def _build_dotted_raw_callee(self, args: _Args) -> _DottedRawCallee:
+        """Build a member callee with the source span through its raw name."""
+        receiver = cast(syntax.Expr, args[0])
+        raw_name = next(
+            arg for arg in args if isinstance(arg, Token) and arg.type == "RAW_TAIL_NAME"
+        )
+        raw_name_span = self._span_from_token(raw_name)
+        return _DottedRawCallee(
+            syntax.FieldAccess(
+                obj=receiver,
+                field=RAW_TAIL_BUILTINS[str(raw_name)],
+                span=_span_covering(receiver.span, raw_name_span),
+                node_id=self._next_id(),
+            )
+        )
+
+    def dotted_raw_call(self, meta: Meta, args: _Args) -> syntax.Call:
+        """Desugar ``receiver.name! payload`` to a member call."""
+        callee = next(arg.callee for arg in args if isinstance(arg, _DottedRawCallee))
+        return self._build_raw_call(meta, args, callee)
+
+    def dotted_raw_juxt(self, meta: Meta, args: _Args) -> syntax.Call:
+        """Desugar ``callee receiver.name! payload`` at a line-final position."""
+        callee = next(cast(syntax.Expr, arg) for arg in args if _is_expr_node(arg))
+        dotted_callee = next(arg.callee for arg in args if isinstance(arg, _DottedRawCallee))
+        raw_call = self._build_raw_call(meta, args, dotted_callee)
+        return syntax.Call(
+            callee=callee,
+            args=(raw_call,),
+            named_args=(),
+            span=self._span_from_meta(meta),
+            node_id=self._next_id(),
+        )
+
+    def _build_raw_call(self, meta: Meta, args: _Args, callee: syntax.Expr) -> syntax.Call:
+        """Build a call from a raw-tail payload and its already-desugared callee."""
         payload = next(arg for arg in args if isinstance(arg, (syntax.StringLit, syntax.Template)))
         return syntax.Call(
             callee=callee,

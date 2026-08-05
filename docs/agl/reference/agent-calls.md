@@ -68,8 +68,10 @@ let r: Review = ask("Review %{artifact}", agent = reviewer)
 `ask!` writes a prompt directly after the keyword. Inline form consumes the
 rest of its line; block form consumes one dedented, newline-joined prompt.
 It desugars to the same call as `ask(<template>)`, so explicit type arguments
-and target-type inference work exactly as for `ask`. Type arguments must touch
-the name (`ask!::[T]`); in `ask! ::[T]`, the spaced `::[T]` is prompt payload:
+and target-type inference work exactly as for `ask`. It may also follow an
+`Agent` projection: `reviewer.ask!` desugars to `reviewer.ask(<template>)`.
+Type arguments must touch the raw name (`ask!::[T]` or
+`reviewer.ask!::[T]`); in `ask! ::[T]`, the spaced `::[T]` is prompt payload:
 
 ```agl
 record Review
@@ -84,10 +86,11 @@ let review: Review = ask!::[Review]
 Raw-tail prompt text is verbatim except for `%{expr}` interpolation and
 trailing spaces and tabs in an inline prompt; `\%{` writes a literal `%{`.
 A raw call needs a nonempty inline prompt or a block with at least one nonblank
-line. `ask!` always uses the configured default agent and default parsing
-options. Use `ask(...)` when selecting an agent with `agent =` or when setting
-`format`, `strict_json`, or `on_parse_error`; it is also the form to use
-outside a raw-tail line-final position.
+line. A bare `ask!` uses the configured default agent and default parsing
+options; `reviewer.ask!` uses its receiver. Use `ask(...)` or
+`reviewer.ask(...)` when setting `format`, `strict_json`, or `on_parse_error`;
+the parenthesized forms are also available outside a raw-tail line-final
+position.
 
 ## Agents as values
 

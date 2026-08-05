@@ -1,0 +1,16 @@
+# A raw tail after a member projection invokes that member with its payload.
+record Review
+  summary: text
+
+param subject: text
+let ag = AgentCommand("raw")
+
+print ag.ask! Summarize %{subject}.
+
+let block: Review = ag.ask!::[Review]
+  Review %{subject} and identify the key change.
+print block.summary
+
+let agents = [AgentCommand("chain")]
+let chained: text = agents[0].ask! Continue %{subject}.
+print chained

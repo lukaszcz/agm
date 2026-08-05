@@ -5103,6 +5103,17 @@ class TestFieldAccess:
         error = reject_type(source)
         assert "field" in str(error).lower() and "method" in str(error).lower()
 
+    def test_dotted_raw_tail_unknown_member_is_a_member_error(self) -> None:
+        error = reject_type('let value = AgentCommand("worker")\nvalue.exec! echo hello')
+        assert "field" in str(error).lower() and "method" in str(error).lower()
+        assert error.span is not None
+        assert (
+            error.span.start_line,
+            error.span.start_col,
+            error.span.end_line,
+            error.span.end_col,
+        ) == (2, 1, 2, 12)
+
     def test_member_access_on_bare_type_variable_still_raises(self) -> None:
         error = reject_type("def get[T](value: T) -> int = value.member")
         assert "type variable" in str(error).lower()

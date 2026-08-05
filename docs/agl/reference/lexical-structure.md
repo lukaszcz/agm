@@ -314,15 +314,17 @@ semantics are covered in [Strings and interpolation](strings-and-interpolation.m
 
 ## Raw-tail forms
 
-`exec!` and `ask!` begin raw-tail calls. The lexer emits a `RAW_TAIL_NAME`,
-then `RAW_TAIL_START`, one or more `RAW_FRAGMENT` and interpolation-token
-runs, and `RAW_TAIL_END`. Optional type arguments must be byte-adjacent to the
-name: `exec!::[T]` and `ask!::[T]`. In `exec! ::[T]` or `ask! ::[T]`, the
-spaced `::[T]` instead begins the payload. The payload is either the rest of
-that line or a following indented block. In both cases it is one template: its
-text is verbatim except that `%{expr}` interpolates and `\%{` is a literal
-`%{`. Inline payloads discard trailing spaces and tabs; block payloads drop the
-blank lines that trail the last content line.
+`exec!` and `ask!` begin raw-tail calls, either directly or after a `.`
+projection: `receiver.ask! prompt`. The lexer emits a `RAW_TAIL_NAME`, then
+`RAW_TAIL_START`, one or more `RAW_FRAGMENT` and interpolation-token runs, and
+`RAW_TAIL_END`. Optional type arguments must be byte-adjacent to the raw name:
+`ask!::[T]` and `receiver.ask!::[T]`. In `ask! ::[T]` or
+`receiver.ask! ::[T]`, the spaced `::[T]` instead begins the payload. The
+payload is either the rest of that line or a following indented block. In both
+cases it is one template: its text is verbatim except that `%{expr}`
+interpolates and `\%{` is a literal `%{`. Inline payloads discard trailing
+spaces and tabs; block payloads drop the blank lines that trail the last
+content line.
 
 A raw-tail call requires a nonempty inline payload or a block with at least one
 nonblank line. It is only recognized at bracket depth zero and must occupy a

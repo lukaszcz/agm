@@ -35,9 +35,11 @@ With named arguments, parentheses are required.
 `exec!` writes the command directly after the keyword rather than inside a
 string template. The inline form takes the rest of its line; the block form
 collects one dedented, newline-joined shell script. Both produce the same call
-as `exec(<template>)` and accept explicit type arguments. Type arguments must
-touch the name (`exec!::[T]`); in `exec! ::[T]`, the spaced `::[T]` is command
-payload:
+as `exec(<template>)` and accept explicit type arguments. Like every raw-tail
+name, `exec!` may follow a projection: `target.exec! command` is
+`target.exec(command)` and uses ordinary member resolution. Type arguments
+must touch the name (`exec!::[T]`); in `exec! ::[T]`, the spaced `::[T]` is
+command payload:
 
 ```agl
 let directory = "."

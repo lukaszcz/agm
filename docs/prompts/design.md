@@ -1,7 +1,7 @@
 
-${PROBLEM}
+%{PROBLEM}
 
-Your task is to create a design document for the above. Save the design to ${DESIGN_FILE}.
+Your task is to create a design document for the above. Save the design to %{DESIGN_FILE}.
 
 This is a deep research task. Search the web, investigate precedents and related designs. Read relevant research literature.
 

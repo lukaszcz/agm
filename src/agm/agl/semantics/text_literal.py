@@ -5,8 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Final
 
-INTERP_TRIGGER: Final[str] = "%"
-INTERP_OPEN: Final[str] = f"{INTERP_TRIGGER}{{"
+from agm.util.interp import INTERP_OPEN, INTERP_TRIGGER
 
 # Each pair is (escape character, decoded literal character).  The pairs are
 # bijective, so the encoder below can be derived from the same declaration.

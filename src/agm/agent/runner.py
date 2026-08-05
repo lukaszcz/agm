@@ -2,24 +2,41 @@
 
 from __future__ import annotations
 
+import os
 import shlex
 import shutil
 import sys
-from collections.abc import Callable
+from collections import ChainMap
+from collections.abc import Callable, MutableMapping
 from dataclasses import dataclass
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 
-from agm.agent.prompt import expand_prompt_env_vars, preprocess_prompt_file
+from agm.agent.prompt import (
+    expand_prompt_env_vars,
+    preprocess_prompt_file,
+    require_prompt_file,
+)
 from agm.core import dry_run
-from agm.core.fs import is_file
-from agm.core.path import display_path
 from agm.core.process import ProcessCaptureResult, run_capture, run_capture_result
+from agm.util.interp import (
+    Hole,
+    InterpolationError,
+    Literal,
+    Segment,
+    interp_segments,
+    split_template,
+)
 
 # Shell convention: exit code 127 means the command could not be found or
 # executed.  Treated as a fatal runner-configuration error (see
 # :func:`run_prompt_command`) so the loop does not retry a missing runner.
 _RUNNER_NOT_FOUND_EXIT = 127
+
+# The variable a runner command uses to name the prepared prompt file, and its
+# shorthand alias.
+PROMPT_FILE_VAR = "PROMPT_FILE"
+PROMPT_FILE_ALIAS = "%%"
 
 
 @dataclass(slots=True)
@@ -77,33 +94,96 @@ def split_command(command: str, *, kind: str) -> list[str]:
         raise SystemExit(1) from exc
 
 
-def validate_command(command: list[str], *, kind: str) -> None:
-    if shutil.which(command[0]) is None:
+def _split_command_element(text: str) -> list[Segment]:
+    """Split a command element, expanding the ``%%`` alias into a real hole.
+
+    Resolving the alias during the split rather than substituting it into the
+    rendered output keeps it subject to the same variable lookup as
+    ``%{PROMPT_FILE}``, and keeps an interpolated value that happens to contain
+    ``%%`` from being rewritten.
+    """
+    segments: list[Segment] = []
+    for segment in split_template(text):
+        if isinstance(segment, Hole):
+            segments.append(segment)
+            continue
+        for index, part in enumerate(segment.text.split(PROMPT_FILE_ALIAS)):
+            if index:
+                segments.append(Hole(PROMPT_FILE_VAR))
+            if part:
+                segments.append(Literal(part))
+    return segments
+
+
+def _targets_prompt_file(segments: list[Segment]) -> bool:
+    return any(
+        isinstance(segment, Hole) and segment.name == PROMPT_FILE_VAR for segment in segments
+    )
+
+
+def validate_command(command: list[str], *, kind: str, env: MutableMapping[str, str]) -> None:
+    """Preflight-check a runner/selector command.
+
+    *env* must be the same mapping the command will eventually be run with
+    (see ``command_with_prompt_target``), so a hole that resolves at run time
+    (e.g. ``%{TASKS_DIR}``) does not spuriously fail here.
+    """
+    what = f"{kind} command executable {command[0]!r}"
+    variables = ChainMap({PROMPT_FILE_VAR: str(Path(""))}, env)
+    try:
+        segments = _split_command_element(command[0])
+        # The prompt file does not exist yet; binding a placeholder still validates
+        # every other hole strictly, but leaves the executable unresolvable.
+        executable = interp_segments(segments, variables)
+    except InterpolationError as exc:
+        print(f"Error: cannot interpolate {what}: {exc}.", file=sys.stderr)
+        raise SystemExit(1) from exc
+    if _targets_prompt_file(segments):
+        return
+    if shutil.which(executable) is None:
         print(
-            f"Error: {kind} command {command[0]} is not installed or not in PATH.",
+            f"Error: {kind} command {executable} is not installed or not in PATH.",
             file=sys.stderr,
         )
         raise SystemExit(1)
 
 
-def command_with_prompt_target(command: list[str], target: Path) -> list[str]:
-    prompt_path = str(target)
-    # Separate from AgL's trigger in ``agm.agl.lexer.scanner``.
-    placeholders = ("%%", "%{PROMPT_FILE}")
-    replaced_command: list[str] = []
-    replaced = False
+def command_with_prompt_target(
+    command: list[str], target: Path, env: MutableMapping[str, str]
+) -> list[str]:
+    """Interpolate *command* against *env*, binding ``PROMPT_FILE``/``%%`` to *target*.
+
+    *env* must be the same mapping the child process will actually receive
+    (see ``run_capture``'s ``env`` argument) so argv holes and the spawned
+    process resolve names identically.
+    """
+    variables = ChainMap({PROMPT_FILE_VAR: str(target)}, env)
+    interpolated: list[str] = []
+    targeted = False
 
     for arg in command:
-        updated = arg
-        for placeholder in placeholders:
-            if placeholder in updated:
-                updated = updated.replace(placeholder, prompt_path)
-                replaced = True
-        replaced_command.append(updated)
+        try:
+            segments = _split_command_element(arg)
+            targeted = targeted or _targets_prompt_file(segments)
+            interpolated.append(interp_segments(segments, variables))
+        except InterpolationError as exc:
+            exc.context = f"in command element {arg!r}"
+            raise
 
-    if replaced:
-        return replaced_command
-    return [*command, f"@{target}"]
+    if targeted:
+        return interpolated
+    return [*interpolated, f"@{target}"]
+
+
+def command_with_prompt_target_or_exit(
+    command: list[str], target: Path, env: MutableMapping[str, str]
+) -> list[str]:
+    """Attach a prompt target, reporting interpolation failures as CLI errors."""
+    try:
+        return command_with_prompt_target(command, target, env)
+    except InterpolationError as exc:
+        print(f"Error: cannot interpolate runner command: {exc}.", file=sys.stderr)
+        raise SystemExit(1) from exc
 
 
 def prepare_prompt_from_source(
@@ -123,12 +203,7 @@ def prepare_prompt_from_source(
         return ResolvedPrompt(source=source, effective_file=temp_path)
 
     source_path = source
-    if not is_file(source_path):
-        print(
-            f"Error: prompt file not found: {display_path(source_path)}",
-            file=sys.stderr,
-        )
-        raise SystemExit(1)
+    require_prompt_file(source_path)
     effective = preprocess_prompt_file(source_path, temp_files=temp_files, env=env)
     return ResolvedPrompt(source=source_path, effective_file=effective)
 
@@ -147,13 +222,10 @@ def append_extra_prompt(
         extra_content = expand_prompt_env_vars(extra_source, env=env)
     else:
         extra_path = extra_source
-        if not is_file(extra_path):
-            print(
-                f"Error: extra prompt file not found: {display_path(extra_path)}",
-                file=sys.stderr,
-            )
-            raise SystemExit(1)
-        extra_content = expand_prompt_env_vars(extra_path.read_text(encoding="utf-8"), env=env)
+        require_prompt_file(extra_path, label="extra prompt")
+        extra_content = expand_prompt_env_vars(
+            extra_path.read_text(encoding="utf-8"), env=env, source=extra_path
+        )
     combined = original_content + "\n" + extra_content
     with NamedTemporaryFile("w", encoding="utf-8", delete=False, suffix=".md") as handle:
         handle.write(combined)
@@ -174,7 +246,7 @@ def prepare_prompt_run(
     """Prepare command and prompt files for a prompt-driven agent invocation."""
 
     command = split_command(runner, kind=kind)
-    validate_command(command, kind=kind)
+    validate_command(command, kind=kind, env=env)
     resolved = prepare_prompt_from_source(prompt_source, temp_files=temp_files, env=env)
     effective_file = resolved.effective_file
     if extra_prompt_source is not None:
@@ -213,14 +285,26 @@ def run_prompt_command(
         if stderr_callback is not None:
             stderr_callback(chunk)
 
-    returncode, stdout, stderr = run_capture(
-        command_with_prompt_target(command, target),
-        env=env,
-        stdout_callback=handle_stdout,
-        stderr_callback=handle_stderr,
-        isolate_process_group=True,
-        idle_timeout=idle_timeout,
-    )
+    try:
+        returncode, stdout, stderr = run_capture(
+            command_with_prompt_target_or_exit(command, target, env),
+            env=env,
+            stdout_callback=handle_stdout,
+            stderr_callback=handle_stderr,
+            isolate_process_group=True,
+            idle_timeout=idle_timeout,
+        )
+    except OSError as exc:
+        # The executable-not-found/not-in-PATH check in ``validate_command`` is
+        # deferred for prompt-targeting commands (the prompt file does not exist
+        # at preflight time), so a spawn failure can still surface here — report
+        # it the same clean way rather than letting the raw OSError escape.
+        runner_name = command[0] if command else ""
+        print(
+            f"Error: runner command {runner_name!r} could not be run: {exc}.",
+            file=sys.stderr,
+        )
+        raise SystemExit(1) from exc
 
     # Exit code 127 is the shell's "command not found" convention: the resolved
     # runner command could not be found or executed.  This is a fatal
@@ -258,7 +342,9 @@ def run_prepared_prompt(
     if dry_run.enabled():
         dry_run.print_labeled_command(
             "agent",
-            command_with_prompt_target(prepared.command, prepared.effective_file),
+            command_with_prompt_target_or_exit(
+                prepared.command, prepared.effective_file, prepared.env
+            ),
         )
         return ""
     return run_prompt_command(
@@ -291,7 +377,7 @@ def prepare_rendered_prompt_run(
 
     - Does **not** call ``expand_prompt_env_vars``: AgL interpolation has
       already produced the final text and interpolated values may legitimately
-      contain ``$NAME``/``${NAME}`` syntax.
+      contain ``$NAME``, ``${NAME}``, or ``%{name}`` syntax.
     - Does **not** call ``validate_command``: that helper prints to stderr and
       raises ``SystemExit``, bypassing the ``AgentCallError`` structured path.
       Executable-not-found is instead represented in the ``PromptRunResult``
@@ -321,8 +407,12 @@ def run_prepared_prompt_result(
     **never prints to stderr** and **never raises SystemExit**.  All outcomes
     are represented in the returned :class:`PromptRunResult`.
     """
+    # An empty ``prepared.env`` means the child inherits ``os.environ`` (see the
+    # ``env=None`` passed to ``run_capture_result`` below); interpolate argv
+    # holes against the same effective mapping so both agree on variable values.
+    child_env = prepared.env if prepared.env else os.environ
     capture: ProcessCaptureResult = run_capture_result(
-        command_with_prompt_target(prepared.command, prepared.effective_file),
+        command_with_prompt_target(prepared.command, prepared.effective_file, child_env),
         env=prepared.env if prepared.env else None,
         idle_timeout=idle_timeout,
         isolate_process_group=True,

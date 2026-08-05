@@ -6,6 +6,20 @@
 | `agm revise [COMMAND] [--runner COMMAND] [--prompt TEXT\|--prompt-file PATH] [--extra-prompt TEXT\|--extra-prompt-file PATH] REVIEW_FILE` | Run the revision prompt |
 | `agm refine [COMMAND] [--max-steps N\|unlimited] [--no-max-steps] [--runner COMMAND] [--reviewer COMMAND] [--reviser COMMAND] [--scope REVIEW_SCOPE] [--aspects REVIEW_ASPECTS] [--review-prompt TEXT\|--review-prompt-file PATH] [--extra-review-prompt TEXT\|--extra-review-prompt-file PATH] [--revise-prompt TEXT\|--revise-prompt-file PATH] [--extra-revise-prompt TEXT\|--extra-revise-prompt-file PATH] [--save-review\|--no-save-review] [--review-file FILE\|auto\|none] [--log-file PATH\|--no-log]` | Run review/revise refinement cycles |
 
+## Prompt interpolation
+
+These workflows expand `%{name}` holes in prompt content before running an agent. A name is an AgL identifier, so `%{log-file}` is valid. `\%{` writes a literal `%{`, and a bare `%` is literal. `$VAR` and `${VAR}` are plain literal text; shell-style interpolation is not supported.
+
+Expansion is strict: an unknown variable, invalid hole name, or unterminated `%{` is an error. Variables come from the full process environment overlaid with the workflow variables below, which win on conflicts:
+
+- `agm review` provides `REVIEW_SCOPE` and `REVIEW_ASPECTS` to its primary and extra prompts.
+- `agm revise` provides `REVIEW_FILE` to its primary and extra prompts.
+- `agm refine` provides `REVIEW_SCOPE` and `REVIEW_ASPECTS` to each review prompt, then `REVIEW_FILE` to the corresponding revise prompts.
+
+## Runner command interpolation
+
+Runner command arguments for `review`, `revise`, and `refine` (including `refine`'s reviewer and reviser) interpolate the same `%{name}` holes as the prompt they accompany (see [Prompt interpolation](#prompt-interpolation) above), further overlaid with `PROMPT_FILE`, which wins on conflicts. `%%` is an alias for `%{PROMPT_FILE}`; either inserts the prompt path verbatim without recursively interpolating it. Command strings are shlex-split before interpolation, so quote or otherwise protect `\%{` so its backslash reaches the argv element. A placeholder places the prompt file at that position; otherwise AGM appends `@<path>`.
+
 `agm review` runs the review prompt with `REVIEW_SCOPE` and `REVIEW_ASPECTS` available during prompt
 preprocessing. The default prompt is `review.md`. Review output is saved to
 `.agent-files/review-YYYYMMDD-HHMMSS-microseconds.md` by default. Use `--review-file FILE` to choose

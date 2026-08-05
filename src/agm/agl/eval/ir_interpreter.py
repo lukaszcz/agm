@@ -1196,13 +1196,15 @@ class IrInterpreter:
                     raise self._index_failure(e)
 
             case IrRenderTemplate(segments=segs):
+                # The lexer has already applied the shared ``%{...}`` surface
+                # rules, so splicing here is plain concatenation.
                 parts: list[str] = []
                 for seg in segs:
                     match seg:
-                        case IrTemplateText(text=t):
-                            parts.append(t)
-                        case IrTemplateValue(value=v_expr):
-                            parts.append(self._render_or_raise(self._eval(v_expr)))
+                        case IrTemplateText(text=text):
+                            parts.append(text)
+                        case IrTemplateValue(value=value_expr):
+                            parts.append(self._render_or_raise(self._eval(value_expr)))
                         case _ as unreachable_seg:  # pragma: no cover
                             assert_never(unreachable_seg)
                 return TextValue("".join(parts))

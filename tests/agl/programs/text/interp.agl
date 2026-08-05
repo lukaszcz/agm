@@ -1,0 +1,43 @@
+# Runtime interpolation comes from std/text rather than template expression
+# interpolation. Percent holes in the arguments below are escaped once for the
+# surrounding AgL template, then interpreted by the extern.
+import std/text
+
+param mode: text
+param bad_template: text
+
+let vars = {
+  "name": "Ada",
+  "place": "Earth",
+  "log-file": "runtime.log",
+  "a+b": "sum",
+}
+
+if mode == "basic" =>
+  print(std/text::interp("hello \%{name}", vars))
+  print(std/text::interp("\%{name} @ \%{place}", vars))
+  print(std/text::interp("\%{name}\%{place}", vars))
+  print(std/text::interp("literal", vars))
+  print(std/text::interp("", vars))
+
+if mode == "exotic" =>
+  print(std/text::interp("\%{log-file}: \%{a+b}", vars))
+  print(std/text::interp("escaped \\\%{name} and 100%", vars))
+
+if mode == "functions" =>
+  let direct = std/text::interp
+  let with_vars = std/text::interp(?, vars)
+  print(direct("first \%{name}", vars))
+  print(with_vars("partial \%{place}"))
+
+if mode == "missing" =>
+  let result = try
+    std/text::interp("\%{absent}", vars)
+  catch ExternError => "missing caught"
+  print(result)
+
+if mode == "malformed" =>
+  let result = try
+    std/text::interp(bad_template, vars)
+  catch ExternError => "malformed caught"
+  print(result)

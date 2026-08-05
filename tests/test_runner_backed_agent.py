@@ -8,7 +8,7 @@ Covers:
   - §7.8 corrective feedback exact wording
   - AgentCallError mapping: cause=spawn_failure/nonzero_exit/timeout + metadata fields
   - exit-0 empty stdout = valid empty response
-  - verbatim prompt preservation ($NAME/${NAME} not expanded)
+  - verbatim prompt preservation ($NAME/${NAME}/%{name} not expanded)
 - PipelineDriver: fallback from runner config, default_agent from runner config
 - CLI-level fake-runner binary integration test
 """
@@ -123,7 +123,7 @@ class TestPrepareRenderedPromptRun:
         """The prompt is written without env-var expansion."""
         from agm.agent.runner import prepare_rendered_prompt_run
 
-        prompt = "Value is $NAME and ${OTHER}"
+        prompt = "Value is $NAME and ${OTHER} and %{name}"
         temp_files: list[Path] = []
         result = prepare_rendered_prompt_run(prompt, runner="echo", temp_files=temp_files, env={})
         content = result.effective_file.read_text(encoding="utf-8")
@@ -719,6 +719,19 @@ class TestRunnerBackedAgentFailureMapping:
                 factory_fn(AgentRequest(agent="ask", prompt="hi"))
         assert exc_info.value.cause == "spawn_failure"
 
+    def test_bad_runner_interpolation_raises_agent_call_host_error(self) -> None:
+        from agm.agl.runtime import AgentRequest
+        from agm.agl.runtime.agents import AgentCallHostError, runner_backed_agent_factory
+
+        factory_fn = runner_backed_agent_factory(
+            default_runner_cmd="runner --flag=%{TYPO}", per_agent_cmds={}, idle_timeout=None
+        )
+
+        with pytest.raises(AgentCallHostError) as exc_info:
+            factory_fn(AgentRequest(agent="ask", prompt="hi"))
+
+        assert exc_info.value.cause == "spawn_failure"
+
     def test_timeout_raises_agent_call_host_error(self) -> None:
         from agm.agent.runner import PreparedPromptRun
         from agm.agl.runtime import AgentRequest
@@ -1023,14 +1036,15 @@ class TestRunnerMessageComposition:
         text = self._call_factory(prompt="Do X.", attempt=0)
         assert "Your previous response did not match" not in text
 
-    def test_verbatim_dollar_name_not_expanded(self) -> None:
-        """$NAME and ${NAME} in the rendered prompt are NOT expanded (§9.5)."""
+    def test_verbatim_interpolation_syntax_is_not_expanded(self) -> None:
+        """Interpolation-like rendered text remains verbatim (§9.5)."""
         text = self._call_factory(
-            prompt="Value is $NAME and ${OTHER}",
+            prompt="Value is $NAME and ${OTHER} and %{name}",
             attempt=0,
         )
         assert "$NAME" in text
         assert "${OTHER}" in text
+        assert "%{name}" in text
 
     def test_format_instructions_precede_retry_feedback(self) -> None:
         """Order: prompt → format_instructions → retry feedback."""

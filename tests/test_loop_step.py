@@ -9,7 +9,7 @@ import pytest
 
 from agm.agent.loop import PreparedSelectInvocation
 from agm.agent.loop import dry_run_prompt_text as next_dry_run_prompt_text
-from agm.agent.runner import ResolvedPrompt
+from agm.agent.runner import ResolvedPrompt, prepare_prompt_from_source
 from agm.cli_support.args import LoopArgs, LoopSelectArgs
 from agm.commands.loop.run import run as loop_run
 from agm.commands.loop.select import _print_dry_run_prompt as next_print_dry_run_prompt
@@ -37,6 +37,27 @@ from agm.core.log import (
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+def _track_prepared_sources(
+    monkeypatch: pytest.MonkeyPatch, *, only: Path | None = None
+) -> list[str | Path]:
+    """Record prompt sources passed to ``prepare_prompt_from_source``.
+
+    Preparation still happens for real; *only* narrows recording to one source.
+    """
+    original_prepare = prepare_prompt_from_source
+    prepared_sources: list[str | Path] = []
+
+    def track_prepare(
+        source: str | Path, *, temp_files: list[Path], env: dict[str, str]
+    ) -> ResolvedPrompt:
+        if only is None or source == only:
+            prepared_sources.append(source)
+        return original_prepare(source, temp_files=temp_files, env=env)
+
+    monkeypatch.setattr("agm.commands.loop.step.prepare_prompt_from_source", track_prepare)
+    return prepared_sources
 
 
 def _make_loop_args(
@@ -123,7 +144,7 @@ def _make_runtime(
     select_invocation: PreparedSelectInvocation | None = None,
     implement_prompt_file: Path | None = None,
     loop_prompt: PreparedPrompt | None = None,
-    resolved_prompt: ResolvedPrompt | None = None,
+    prompt_source: str | Path | None = None,
     bootstrap_prompt: PreparedPrompt | None = None,
     log_file: Path | None = None,
     runner_command: list[str] | None = None,
@@ -149,7 +170,7 @@ def _make_runtime(
         select_invocation=select_invocation,
         implement_prompt_file=implement_prompt_file,
         loop_prompt=loop_prompt,
-        resolved_prompt=resolved_prompt,
+        prompt_source=prompt_source,
         bootstrap_prompt=bootstrap_prompt,
         extra_prompt_source=extra_prompt_source,
         log_file=log_file,
@@ -436,6 +457,26 @@ class TestPrepareRuntime:
         assert runtime.log_file is None
         cleanup_runtime(runtime)
 
+    def test_prepare_runtime_validates_interpolated_runner_without_mutating_it(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        home = self._setup_home_with_prompts(tmp_path, ["loop.md", "select.md"])
+        monkeypatch.setenv("HOME", str(home))
+        monkeypatch.setenv("LOOP_RUNNER", "fake-runner")
+        monkeypatch.setattr("shutil.which", lambda executable: "/bin/fake")
+        monkeypatch.chdir(tmp_path)
+
+        tasks_dir_path = tmp_path / ".agent-files" / "tasks"
+        tasks_dir_path.mkdir(parents=True)
+        (tasks_dir_path / "PROGRESS.md").write_text("done\n", encoding="utf-8")
+
+        runtime = prepare_runtime(
+            _make_loop_args(no_log=True, no_selector=True, runner="%{LOOP_RUNNER}")
+        )
+
+        assert runtime.resolved_runner_command == ["%{LOOP_RUNNER}"]
+        cleanup_runtime(runtime)
+
     def test_no_selector_mode_creates_bootstrap_when_no_progress_file(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -494,7 +535,7 @@ class TestPrepareRuntime:
         )
         runtime = prepare_runtime(args)
 
-        assert runtime.resolved_prompt is not None
+        assert runtime.prompt_source is not None
         assert runtime.loop_prompt is not None
         cleanup_runtime(runtime)
 
@@ -585,7 +626,7 @@ class TestPrepareRuntime:
         )
         runtime = prepare_runtime(args)
         assert runtime.implement_prompt_file is None
-        assert runtime.resolved_prompt is not None
+        assert runtime.prompt_source is not None
         cleanup_runtime(runtime)
 
     def test_prepare_runtime_selector_mode_no_implement_with_explicit_prompt(
@@ -611,7 +652,7 @@ class TestPrepareRuntime:
         # When explicit prompt is set, implement.md is not required
         assert runtime.select_invocation is not None
         assert runtime.implement_prompt_file is None
-        assert runtime.resolved_prompt is not None
+        assert runtime.prompt_source is not None
         cleanup_runtime(runtime)
 
     def test_dry_run_skips_bootstrap_prompt_execution(
@@ -650,6 +691,342 @@ class TestPrepareRuntime:
         assert runtime.bootstrap_prompt is not None
         assert run_calls == [], "run_prompt_command must not be called in dry-run mode"
         cleanup_runtime(runtime)
+
+    def test_selector_mode_prepares_explicit_prompt_once_after_selecting_task(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        home = self._setup_home_with_prompts(tmp_path, ["select.md"])
+        monkeypatch.setenv("HOME", str(home))
+        monkeypatch.setattr("shutil.which", lambda _: "/bin/fake")
+        monkeypatch.chdir(tmp_path)
+
+        task_file = tmp_path / ".agent-files" / "tasks" / "task-1.md"
+        task_file.parent.mkdir(parents=True)
+        task_file.write_text("task\n", encoding="utf-8")
+        prompt = tmp_path / "prompt.md"
+        prompt.write_text("Implement %{TASK_FILE}\n", encoding="utf-8")
+
+        prepared_sources = _track_prepared_sources(monkeypatch, only=prompt)
+        targets: list[Path] = []
+
+        def fake_run_command(
+            command: list[str],
+            target: Path,
+            *,
+            env: dict[str, str],
+            stdout_callback: object = None,
+            stderr_callback: object = None,
+            idle_timeout: float | None = None,
+        ) -> str:
+            if command == ["fake-selector"]:
+                return "task-1.md\n"
+            targets.append(target)
+            return "runner output\n"
+
+        monkeypatch.setattr("agm.commands.loop.step.run_prompt_command", fake_run_command)
+
+        runtime = prepare_runtime(
+            _make_loop_args(
+                no_log=True,
+                no_selector=False,
+                runner="fake-runner",
+                selector="fake-selector",
+                prompt_file=str(prompt),
+            )
+        )
+        execute_single_step(runtime, step_number=1)
+
+        assert prepared_sources == [prompt]
+        assert targets[0].read_text(encoding="utf-8") == f"Implement {task_file}\n"
+        cleanup_runtime(runtime)
+
+    def test_non_selector_mode_rejects_task_file_hole(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        home = self._setup_home_with_prompts(tmp_path, ["select.md"])
+        monkeypatch.setenv("HOME", str(home))
+        monkeypatch.setattr("shutil.which", lambda _: "/bin/fake")
+        monkeypatch.chdir(tmp_path)
+
+        tasks_dir = tmp_path / ".agent-files" / "tasks"
+        tasks_dir.mkdir(parents=True)
+        (tasks_dir / "PROGRESS.md").write_text("progress\n", encoding="utf-8")
+        prompt = tmp_path / "prompt.md"
+        prompt.write_text("Implement %{TASK_FILE}\n", encoding="utf-8")
+
+        prepared_sources = _track_prepared_sources(monkeypatch, only=prompt)
+
+        with pytest.raises(SystemExit):
+            prepare_runtime(
+                _make_loop_args(
+                    no_log=True,
+                    no_selector=True,
+                    runner="fake-runner",
+                    prompt_file=str(prompt),
+                )
+            )
+
+        assert prepared_sources == [prompt]
+        error = capsys.readouterr().err
+        assert "prompt.md" in error
+        assert "TASK_FILE" in error
+
+    def test_selector_mode_dry_run_does_not_prepare_runner_prompt(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """dry-run must not render the runner prompt before task selection.
+
+        The runner prompt depends on ``TASK_FILE``, which is only known once
+        a task is selected, so dry-run must describe it by source label
+        alone rather than creating a rendered temp file for it.
+        """
+        home = self._setup_home_with_prompts(tmp_path, ["select.md"])
+        monkeypatch.setenv("HOME", str(home))
+        monkeypatch.setattr("shutil.which", lambda _: "/bin/fake")
+        monkeypatch.chdir(tmp_path)
+
+        prompt = tmp_path / "prompt.md"
+        prompt.write_text("Implement %{TASK_FILE}\n", encoding="utf-8")
+        monkeypatch.setattr("agm.commands.loop.step.dry_run.enabled", lambda: True)
+
+        runtime = prepare_runtime(
+            _make_loop_args(
+                no_log=True,
+                no_selector=False,
+                runner="fake-runner",
+                selector="fake-selector",
+                prompt_file=str(prompt),
+            )
+        )
+        print_dry_run(runtime)
+
+        assert runtime.temp_files == [], "no rendered prompt file before task selection"
+        output = capsys.readouterr().out
+        assert "dry-run: prompt [prompt]: prompt.md" in output
+        assert "runner prompt: prompt.md" in output
+        cleanup_runtime(runtime)
+
+    def test_selector_mode_dry_run_validates_extra_prompt_file_before_selection(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        home = self._setup_home_with_prompts(tmp_path, ["select.md", "implement.md"])
+        monkeypatch.setenv("HOME", str(home))
+        monkeypatch.setattr("shutil.which", lambda _: "/bin/fake")
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr("agm.commands.loop.step.dry_run.enabled", lambda: True)
+
+        with pytest.raises(SystemExit) as exc_info:
+            run(
+                _make_loop_args(
+                    no_log=True,
+                    no_selector=False,
+                    runner="fake-runner",
+                    selector="fake-selector",
+                    extra_prompt_file=str(tmp_path / "missing-extra.md"),
+                )
+            )
+
+        assert exc_info.value.code == 1
+
+    def test_selector_mode_validates_missing_explicit_prompt_before_selection(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        home = self._setup_home_with_prompts(tmp_path, ["select.md"])
+        monkeypatch.setenv("HOME", str(home))
+        monkeypatch.setattr("shutil.which", lambda _: "/bin/fake")
+        monkeypatch.chdir(tmp_path)
+
+        with pytest.raises(SystemExit):
+            prepare_runtime(
+                _make_loop_args(
+                    no_log=True,
+                    no_selector=False,
+                    runner="fake-runner",
+                    selector="fake-selector",
+                    prompt_file=str(tmp_path / "missing-prompt.md"),
+                )
+            )
+
+    def test_selector_mode_accepts_task_file_hole_before_selection(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A legitimate ``%{TASK_FILE}`` hole passes up-front validation.
+
+        ``TASK_FILE`` is only bound after a task is selected, but the
+        up-front check must still treat it as an available name so it does
+        not spuriously reject the common case.
+        """
+        home = self._setup_home_with_prompts(tmp_path, ["select.md"])
+        monkeypatch.setenv("HOME", str(home))
+        monkeypatch.setattr("shutil.which", lambda _: "/bin/fake")
+        monkeypatch.chdir(tmp_path)
+
+        runtime = prepare_runtime(
+            _make_loop_args(
+                no_log=True,
+                no_selector=False,
+                runner="fake-runner",
+                selector="fake-selector",
+                prompt="Implement %{TASK_FILE}",
+            )
+        )
+
+        assert runtime.select_invocation is not None
+        cleanup_runtime(runtime)
+
+    def test_selector_mode_dry_run_rejects_unknown_prompt_hole(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """A typo'd hole must be caught by dry-run, not silently accepted."""
+        home = self._setup_home_with_prompts(tmp_path, ["select.md"])
+        monkeypatch.setenv("HOME", str(home))
+        monkeypatch.setattr("shutil.which", lambda _: "/bin/fake")
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr("agm.commands.loop.step.dry_run.enabled", lambda: True)
+
+        with pytest.raises(SystemExit) as exc_info:
+            run(
+                _make_loop_args(
+                    no_log=True,
+                    no_selector=False,
+                    runner="fake-runner",
+                    selector="fake-selector",
+                    prompt="Fix %{TASK_FILEE}",
+                )
+            )
+
+        assert exc_info.value.code == 1
+        error = capsys.readouterr().err
+        assert "cannot interpolate" in error
+        assert "TASK_FILEE" in error
+
+    @pytest.mark.parametrize(
+        ("implement_prompt", "extra_prompt"),
+        [
+            ("Fix %{TASK_FILEE}", None),
+            ("Fix %{TASK_FILE}", "Additional context: %{TASK_FILEE}"),
+        ],
+        ids=["default-runner-prompt", "extra-runner-prompt"],
+    )
+    def test_selector_mode_validates_deferred_runner_prompts_before_selection(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        implement_prompt: str,
+        extra_prompt: str | None,
+    ) -> None:
+        """Malformed deferred runner prompts cannot start the selector."""
+        home = self._setup_home_with_prompts(tmp_path, ["select.md", "implement.md"])
+        (home / ".agm" / "prompts" / "implement.md").write_text(implement_prompt, encoding="utf-8")
+        monkeypatch.setenv("HOME", str(home))
+        monkeypatch.setattr("shutil.which", lambda _: "/bin/fake")
+        monkeypatch.chdir(tmp_path)
+
+        selector_prepared = False
+
+        def fail_if_selector_is_prepared(*args: object, **kwargs: object) -> None:
+            nonlocal selector_prepared
+            selector_prepared = True
+            raise AssertionError("the selector must not be prepared")
+
+        monkeypatch.setattr(
+            "agm.commands.loop.step.prepare_select_invocation", fail_if_selector_is_prepared
+        )
+
+        with pytest.raises(SystemExit):
+            prepare_runtime(
+                _make_loop_args(
+                    no_log=True,
+                    no_selector=False,
+                    runner="fake-runner",
+                    selector="fake-selector",
+                    extra_prompt=extra_prompt,
+                )
+            )
+
+        assert not selector_prepared
+
+    def test_selector_mode_dry_run_rejects_unterminated_hole(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """An unterminated ``%{`` needs no environment to detect, and dry-run must too."""
+        home = self._setup_home_with_prompts(tmp_path, ["select.md"])
+        monkeypatch.setenv("HOME", str(home))
+        monkeypatch.setattr("shutil.which", lambda _: "/bin/fake")
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr("agm.commands.loop.step.dry_run.enabled", lambda: True)
+
+        prompt = tmp_path / "prompt.md"
+        prompt.write_text("Fix %{TASK_FILE\n", encoding="utf-8")
+
+        with pytest.raises(SystemExit) as exc_info:
+            run(
+                _make_loop_args(
+                    no_log=True,
+                    no_selector=False,
+                    runner="fake-runner",
+                    selector="fake-selector",
+                    prompt_file=str(prompt),
+                )
+            )
+
+        assert exc_info.value.code == 1
+        error = capsys.readouterr().err
+        assert "cannot interpolate" in error
+
+    def test_selector_mode_rejects_typo_prompt_hole_before_selector_runs(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A bad template must fail before the selector agent ever runs.
+
+        Reproduces the reported bug: without up-front validation, the
+        selector agent (which per the shipped select.md prompt mutates
+        PROGRESS.md) would run first, and only the subsequent render would
+        fail.
+        """
+        home = self._setup_home_with_prompts(tmp_path, ["select.md"])
+        monkeypatch.setenv("HOME", str(home))
+        monkeypatch.setattr("shutil.which", lambda _: "/bin/fake")
+        monkeypatch.chdir(tmp_path)
+
+        task_file = tmp_path / ".agent-files" / "tasks" / "task-1.md"
+        task_file.parent.mkdir(parents=True)
+        task_file.write_text("task\n", encoding="utf-8")
+
+        selector_calls: list[list[str]] = []
+
+        def fake_run_command(
+            command: list[str],
+            target: Path,
+            *,
+            env: dict[str, str],
+            stdout_callback: object = None,
+            stderr_callback: object = None,
+            idle_timeout: float | None = None,
+        ) -> str:
+            selector_calls.append(command)
+            return "task-1.md\n"
+
+        monkeypatch.setattr("agm.commands.loop.step.run_prompt_command", fake_run_command)
+
+        with pytest.raises(SystemExit) as exc_info:
+            run(
+                _make_loop_args(
+                    no_log=True,
+                    no_selector=False,
+                    runner="fake-runner",
+                    selector="fake-selector",
+                    prompt="Fix %{TASK_FILEE}",
+                )
+            )
+
+        assert exc_info.value.code == 1
+        assert selector_calls == [], (
+            "selector command must not run before the prompt template is validated"
+        )
 
 
 # ===========================================================================
@@ -820,7 +1197,7 @@ class TestExecuteSingleStep:
         task_file.write_text("do task\n", encoding="utf-8")
 
         implement_file = tmp_path / "implement.md"
-        implement_file.write_text("implement @${TASK_FILE}\n", encoding="utf-8")
+        implement_file.write_text("implement @%{TASK_FILE}\n", encoding="utf-8")
 
         invocation = PreparedSelectInvocation(
             source_prompt_file=prompt_file,
@@ -879,7 +1256,7 @@ class TestExecuteSingleStep:
         task_file.write_text("do task\n", encoding="utf-8")
 
         implement_file = tmp_path / "implement.md"
-        implement_file.write_text("Implement the task at ${TASK_FILE}.\n", encoding="utf-8")
+        implement_file.write_text("Implement the task at %{TASK_FILE}.\n", encoding="utf-8")
 
         invocation = PreparedSelectInvocation(
             source_prompt_file=prompt_file,
@@ -924,11 +1301,11 @@ class TestExecuteSingleStep:
         runner_target = all_targets[1]
         expanded_content = runner_target.read_text(encoding="utf-8")
         assert str(task_file) in expanded_content
-        assert "${TASK_FILE}" not in expanded_content
+        assert "%{TASK_FILE}" not in expanded_content
         # TASK_FILE is in runner env
         assert all_envs[1]["TASK_FILE"] == str(task_file)
 
-    def test_selector_mode_explicit_prompt_re_prepares_with_task_file_env(
+    def test_selector_mode_explicit_prompt_prepares_with_task_file_env(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         task_file = tmp_path / "tasks" / "task-1.md"
@@ -939,7 +1316,7 @@ class TestExecuteSingleStep:
         prompt_file.write_text("select\n", encoding="utf-8")
 
         custom_prompt = tmp_path / "custom-prompt.md"
-        custom_prompt.write_text("Do $TASK_FILE with $TASKS_DIR\n", encoding="utf-8")
+        custom_prompt.write_text("Do %{TASK_FILE} with %{TASKS_DIR}\n", encoding="utf-8")
 
         invocation = PreparedSelectInvocation(
             source_prompt_file=prompt_file,
@@ -949,11 +1326,10 @@ class TestExecuteSingleStep:
             runner_command=["fake-runner"],
             selector_command=["fake-selector"],
         )
-        resolved_prompt = ResolvedPrompt(source=custom_prompt, effective_file=custom_prompt)
         runtime = _make_runtime(
             tmp_path,
             select_invocation=invocation,
-            resolved_prompt=resolved_prompt,
+            prompt_source=custom_prompt,
             loop_prompt=None,
         )
 
@@ -980,7 +1356,7 @@ class TestExecuteSingleStep:
         # Real selector_result: "task-1.md" found in tasks_dir → returns Path.
         execute_single_step(runtime, step_number=1)
 
-        # Explicit prompt is re-prepared with TASK_FILE env
+        # Explicit prompt is prepared with TASK_FILE in its environment.
         assert len(all_targets) == 2
         runner_content = all_targets[1].read_text(encoding="utf-8")
         assert str(task_file) in runner_content
@@ -1009,7 +1385,7 @@ class TestExecuteSingleStep:
             tmp_path,
             select_invocation=invocation,
             loop_prompt=None,
-            # Neither implement_prompt_file nor resolved_prompt set
+            # Neither an implementation prompt nor an explicit prompt is set.
         )
 
         all_targets: list[Path] = []
@@ -1050,7 +1426,7 @@ class TestExecuteSingleStep:
         task_file.write_text("do task\n", encoding="utf-8")
 
         implement_file = tmp_path / "implement.md"
-        implement_file.write_text("implement @${TASK_FILE}\n", encoding="utf-8")
+        implement_file.write_text("implement @%{TASK_FILE}\n", encoding="utf-8")
 
         invocation = PreparedSelectInvocation(
             source_prompt_file=prompt_file,
@@ -1647,13 +2023,23 @@ def _dry_run_selector_implement_prompt(tmp_path: Path) -> LoopStepRuntime:
 
 
 def _dry_run_selector_explicit_prompt(tmp_path: Path) -> LoopStepRuntime:
-    resolved_file = tmp_path / "custom-prompt.md"
-    resolved_file.write_text("custom\n", encoding="utf-8")
-    rp = ResolvedPrompt(source=resolved_file, effective_file=resolved_file)
+    prompt_source = tmp_path / "custom-prompt.md"
+    prompt_source.write_text("custom\n", encoding="utf-8")
     return _make_runtime(
         tmp_path,
         select_invocation=_make_selector_invocation(tmp_path),
-        resolved_prompt=rp,
+        prompt_source=prompt_source,
+        loop_prompt=None,
+        runner_command=["runner"],
+        env={},
+    )
+
+
+def _dry_run_selector_inline_prompt(tmp_path: Path) -> LoopStepRuntime:
+    return _make_runtime(
+        tmp_path,
+        select_invocation=_make_selector_invocation(tmp_path),
+        prompt_source="custom %{TASK_FILE}",
         loop_prompt=None,
         runner_command=["runner"],
         env={},
@@ -1670,12 +2056,16 @@ def _dry_run_no_selector_log_file(tmp_path: Path) -> LoopStepRuntime:
 
 
 def _dry_run_no_selector_explicit_prompt(tmp_path: Path) -> LoopStepRuntime:
-    rp = ResolvedPrompt(source="inline text", effective_file=tmp_path / "inline.md")
+    inline_prompt = tmp_path / "inline.md"
+    inline_prompt.write_text("inline text\n", encoding="utf-8")
     return _make_runtime(
         tmp_path,
         runner_command=["runner"],
         env={},
-        resolved_prompt=rp,
+        prompt_source="inline text",
+        loop_prompt=PreparedPrompt(
+            label="prompt", source_file=inline_prompt, effective_file=inline_prompt
+        ),
     )
 
 
@@ -1709,6 +2099,11 @@ class TestPrintDryRunFull:
                 _dry_run_selector_explicit_prompt,
                 ["custom-prompt"],
                 id="selector_explicit_prompt",
+            ),
+            pytest.param(
+                _dry_run_selector_inline_prompt,
+                ["prompt [prompt]: inline prompt"],
+                id="selector_inline_prompt",
             ),
             pytest.param(
                 _dry_run_no_selector_log_file,
@@ -1835,11 +2230,11 @@ class TestExecuteSingleStepSelectorStringResult:
         assert call_count == 2
 
 
-class TestExecuteSingleStepWithResolvedPrompt:
-    def test_selector_mode_uses_resolved_prompt_for_runner_target(
+class TestExecuteSingleStepWithPromptSource:
+    def test_selector_mode_uses_prompt_source_for_runner_target(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """When runtime has resolved_prompt and loop_prompt, runner uses loop_prompt."""
+        """An explicit prompt source is prepared after task selection."""
         prompt = tmp_path / "select.md"
         prompt.write_text("select\n", encoding="utf-8")
         invocation = PreparedSelectInvocation(
@@ -1851,19 +2246,11 @@ class TestExecuteSingleStepWithResolvedPrompt:
             selector_command=["fake-selector"],
         )
 
-        resolved_file = tmp_path / "resolved.md"
-        resolved_file.write_text("resolved\n", encoding="utf-8")
-        loop_file = tmp_path / "loop.md"
-        loop_file.write_text("loop\n", encoding="utf-8")
-
-        resolved_prompt = ResolvedPrompt(source="inline", effective_file=resolved_file)
-        loop_prompt = PreparedPrompt(label="loop", source_file=loop_file, effective_file=loop_file)
-
         runtime = _make_runtime(
             tmp_path,
             select_invocation=invocation,
-            loop_prompt=loop_prompt,
-            resolved_prompt=resolved_prompt,
+            prompt_source="inline",
+            loop_prompt=None,
             runner_command=["fake-runner"],
             env={},
         )
@@ -1895,9 +2282,8 @@ class TestExecuteSingleStepWithResolvedPrompt:
         # Real selector_result: "task-1.md" found in tasks_dir → returns Path.
         result = execute_single_step(runtime, step_number=1)
         assert result is False
-        # Prompt is re-prepared from original source with TASK_FILE in env,
-        # so the target is a new temp file (not the original loop_file)
-        assert run_targets[-1] != loop_file
+        # The inline source is prepared with TASK_FILE in its environment.
+        assert run_targets[-1].read_text(encoding="utf-8") == "inline"
         # TASK_FILE env var should be set for the runner
         assert "TASK_FILE" in run_envs[-1]
 
@@ -1906,7 +2292,7 @@ class TestExecuteSingleStepExpandsTaskFileInPrompt:
     def test_task_file_expanded_in_prompt_file(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """When a prompt file contains ${TASK_FILE}, it is expanded after task selection."""
+        """When a prompt file contains %{TASK_FILE}, it is expanded after task selection."""
         select_prompt = tmp_path / "select.md"
         select_prompt.write_text("select\n", encoding="utf-8")
         invocation = PreparedSelectInvocation(
@@ -1918,21 +2304,15 @@ class TestExecuteSingleStepExpandsTaskFileInPrompt:
             selector_command=["fake-selector"],
         )
 
-        # Prompt file with ${TASK_FILE} placeholder
+        # Prompt file with %{TASK_FILE} placeholder
         prompt_file_path = tmp_path / "loop.md"
-        prompt_file_path.write_text("Work on ${TASK_FILE}\n", encoding="utf-8")
-
-        # Simulate how prepare_runtime builds resolved_prompt + loop_prompt
-        resolved_prompt = ResolvedPrompt(source=prompt_file_path, effective_file=prompt_file_path)
-        loop_prompt = PreparedPrompt(
-            label="loop", source_file=prompt_file_path, effective_file=prompt_file_path
-        )
+        prompt_file_path.write_text("Work on %{TASK_FILE}\n", encoding="utf-8")
 
         runtime = _make_runtime(
             tmp_path,
             select_invocation=invocation,
-            loop_prompt=loop_prompt,
-            resolved_prompt=resolved_prompt,
+            prompt_source=prompt_file_path,
+            loop_prompt=None,
             runner_command=["fake-runner"],
             env={},
         )
@@ -1963,16 +2343,16 @@ class TestExecuteSingleStepExpandsTaskFileInPrompt:
         result = execute_single_step(runtime, step_number=1)
         assert result is False
         # The runner target should be a new file with TASK_FILE expanded,
-        # not the original prompt file that still has ${TASK_FILE}
+        # not the original prompt file that still has %{TASK_FILE}
         runner_target = run_targets[-1]
         content = runner_target.read_text(encoding="utf-8")
-        assert "${TASK_FILE}" not in content
+        assert "%{TASK_FILE}" not in content
         assert str(task_file) in content
 
     def test_task_file_expanded_in_inline_prompt(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """When inline prompt text contains ${TASK_FILE}, it is expanded after task selection."""
+        """When inline prompt text contains %{TASK_FILE}, it is expanded after task selection."""
         select_prompt = tmp_path / "select.md"
         select_prompt.write_text("select\n", encoding="utf-8")
         invocation = PreparedSelectInvocation(
@@ -1984,21 +2364,16 @@ class TestExecuteSingleStepExpandsTaskFileInPrompt:
             selector_command=["fake-selector"],
         )
 
-        # Inline prompt text with ${TASK_FILE} placeholder
-        inline_text = "Work on ${TASK_FILE}\n"
+        # Inline prompt text with %{TASK_FILE} placeholder
+        inline_text = "Work on %{TASK_FILE}\n"
         from agm.agent.loop import loop_env
 
         env_no_task = loop_env(tmp_path / "tasks")
-        resolved_prompt = ResolvedPrompt(source=inline_text, effective_file=tmp_path / "stub")
-        loop_prompt = PreparedPrompt(
-            label="loop", source_file=tmp_path / "stub", effective_file=tmp_path / "stub"
-        )
-
         runtime = _make_runtime(
             tmp_path,
             select_invocation=invocation,
-            loop_prompt=loop_prompt,
-            resolved_prompt=resolved_prompt,
+            prompt_source=inline_text,
+            loop_prompt=None,
             runner_command=["fake-runner"],
             env=env_no_task,
         )
@@ -2031,7 +2406,7 @@ class TestExecuteSingleStepExpandsTaskFileInPrompt:
         # The runner target content should have TASK_FILE expanded
         runner_target = run_targets[-1]
         content = runner_target.read_text(encoding="utf-8")
-        assert "${TASK_FILE}" not in content
+        assert "%{TASK_FILE}" not in content
         assert str(task_file) in content
 
 
@@ -2099,7 +2474,7 @@ class TestPrepareRuntimeExtraPromptSource:
         prompt_dir = home / ".agm" / "prompts"
         prompt_dir.mkdir(parents=True)
         (prompt_dir / "loop.md").write_text("# loop1", encoding="utf-8")
-        (prompt_dir / "select.md").write_text("select $TASKS_DIR1", encoding="utf-8")
+        (prompt_dir / "select.md").write_text("select %{TASKS_DIR}1", encoding="utf-8")
         (prompt_dir / "implement.md").write_text("# implement1", encoding="utf-8")
         monkeypatch.setenv("HOME", str(home))
         monkeypatch.setattr("shutil.which", lambda _: "/bin/fake")
@@ -2135,7 +2510,7 @@ class TestExecuteSingleStepWithExtraPrompt:
         prompt_file.write_text("select1", encoding="utf-8")
 
         implement_file = tmp_path / "implement.md"
-        implement_file.write_text("implement @${TASK_FILE}1", encoding="utf-8")
+        implement_file.write_text("implement @%{TASK_FILE}1", encoding="utf-8")
 
         invocation = PreparedSelectInvocation(
             source_prompt_file=prompt_file,
@@ -2181,7 +2556,7 @@ class TestExecuteSingleStepWithExtraPrompt:
     def test_extra_prompt_appended_to_runner_target_in_implement_mode(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """With resolved_prompt and extra_prompt_source, extra is appended."""
+        """With an explicit prompt source, extra content is appended."""
         task_file = tmp_path / "tasks" / "task-1.md"
         task_file.parent.mkdir(parents=True, exist_ok=True)
         task_file.write_text("do task1", encoding="utf-8")
@@ -2190,7 +2565,7 @@ class TestExecuteSingleStepWithExtraPrompt:
         prompt_file.write_text("select1", encoding="utf-8")
 
         custom_prompt = tmp_path / "custom-prompt.md"
-        custom_prompt.write_text("Do $TASK_FILE stuff", encoding="utf-8")
+        custom_prompt.write_text("Do %{TASK_FILE} stuff", encoding="utf-8")
 
         invocation = PreparedSelectInvocation(
             source_prompt_file=prompt_file,
@@ -2200,11 +2575,10 @@ class TestExecuteSingleStepWithExtraPrompt:
             runner_command=["fake-runner"],
             selector_command=["fake-selector"],
         )
-        resolved_prompt = ResolvedPrompt(source=custom_prompt, effective_file=custom_prompt)
         runtime = _make_runtime(
             tmp_path,
             select_invocation=invocation,
-            resolved_prompt=resolved_prompt,
+            prompt_source=custom_prompt,
             loop_prompt=None,
             extra_prompt_source="APPENDED EXTRA",
         )

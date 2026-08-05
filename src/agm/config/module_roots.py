@@ -35,6 +35,7 @@ from agm.config.general import (
 )
 from agm.core.env import resolve_env
 from agm.core.toml import load_toml_file, toml_dict
+from agm.util.interp import interp_preserving
 
 
 @dataclass(frozen=True)
@@ -91,14 +92,14 @@ def load_module_roots(
         # lib_root: last layer that sets it wins
         lib_root_raw = table.get("lib_root")
         if isinstance(lib_root_raw, str) and lib_root_raw.strip():
-            lib_root = (lib_root_raw, origin_dir)
+            lib_root = (interp_preserving(lib_root_raw, os.environ)[0], origin_dir)
 
         # roots: accumulated across layers
         roots_raw = table.get("roots")
         if isinstance(roots_raw, list):
             for item in roots_raw:
                 if isinstance(item, str) and item.strip():
-                    extra.append((item, origin_dir))
+                    extra.append((interp_preserving(item, os.environ)[0], origin_dir))
 
     return ModuleRootsConfig(lib_root=lib_root, extra=tuple(extra))
 

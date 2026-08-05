@@ -21,6 +21,7 @@ from agm.core.toml import (
     toml_dict,
 )
 from agm.project.layout import project_config_dir
+from agm.util.interp import interp_preserving
 
 
 class ConfigCommandNotFound(ValueError):
@@ -32,8 +33,8 @@ class ConfigCommandNotFound(ValueError):
         super().__init__(f"{section_name} subcommand {command_name!r} is not defined in config")
 
 
-# Known path-like fields per config section.  Values for these fields are
-# expanded (env vars, ~) and resolved against the config file's directory
+# Known path-like fields per config section. Values interpolate ``%{name}``
+# environment variables, expand ``~``, and resolve against the config file's directory
 # before merging, so that relative paths are always interpreted relative to
 # the config file that defines them.  When the config-dir-resolved path does
 # not exist, cwd is used as a fallback.
@@ -47,21 +48,25 @@ _CONFIG_PATH_FIELDS: dict[str, list[str]] = {
         "selector_prompt_file",
         "extra_prompt_file",
         "extra_selector_prompt_file",
+        "log-file",
     ],
     "review": [
         "prompt_file",
         "extra_prompt_file",
         "review_file",
+        "log-file",
     ],
     "revise": [
         "prompt_file",
         "extra_prompt_file",
+        "log-file",
     ],
     "refine": [
         "review_prompt_file",
         "extra_review_prompt_file",
         "revise_prompt_file",
         "extra_revise_prompt_file",
+        "log-file",
     ],
 }
 
@@ -241,6 +246,52 @@ class RefineConfig:
     save_review: bool
 
 
+def _interpolate_and_expand_section_paths(
+    section: TomlDict,
+    fields: list[str],
+) -> tuple[TomlDict, set[str]]:
+    resolved = dict(section)
+    unresolved_fields: set[str] = set()
+    for field in fields:
+        value = resolved.get(field)
+        if not isinstance(value, str) or not value.strip():
+            continue
+        interpolated, unresolved = interp_preserving(value, os.environ)
+        resolved[field] = os.path.expanduser(interpolated)
+        if unresolved:
+            unresolved_fields.add(field)
+    return resolved, unresolved_fields
+
+
+def _anchor_section_paths(
+    section: TomlDict,
+    fields: list[str],
+    config_dir: Path,
+    cwd: Path,
+    *,
+    sentinels: dict[str, set[str]],
+    unresolved_fields: set[str],
+) -> TomlDict:
+    resolved = dict(section)
+    for field in fields:
+        value = resolved.get(field)
+        if not isinstance(value, str) or not value.strip():
+            continue
+        # Values with unresolved holes are not usable paths, so leave them
+        # unanchored. Interpolation has already run exactly once above.
+        if field in unresolved_fields or value in sentinels.get(field, set()):
+            continue
+        path = Path(value)
+        if path.is_absolute():
+            continue
+        config_resolved = (config_dir / path).resolve()
+        if config_resolved.exists():
+            resolved[field] = str(config_resolved)
+        else:
+            resolved[field] = str((cwd / path).resolve())
+    return resolved
+
+
 def _resolve_section_paths(
     section: TomlDict,
     fields: list[str],
@@ -249,57 +300,37 @@ def _resolve_section_paths(
     *,
     sentinels: dict[str, set[str]],
 ) -> TomlDict:
-    resolved = dict(section)
-    for field in fields:
-        value = resolved.get(field)
-        if not isinstance(value, str) or not value.strip():
-            continue
-        expanded = os.path.expanduser(os.path.expandvars(value))
-        if expanded in sentinels.get(field, set()):
-            resolved[field] = expanded
-            continue
-        path = Path(expanded)
-        if path.is_absolute():
-            resolved[field] = expanded
-            continue
-        config_resolved = (config_dir / path).resolve()
-        if config_resolved.exists():
-            resolved[field] = str(config_resolved)
-        else:
-            resolved[field] = str((cwd / path).resolve())
+    expanded, unresolved_fields = _interpolate_and_expand_section_paths(section, fields)
+    resolved = _anchor_section_paths(
+        expanded,
+        fields,
+        config_dir,
+        cwd,
+        sentinels=sentinels,
+        unresolved_fields=unresolved_fields,
+    )
     for key, value in resolved.items():
         if isinstance(value, dict) and key not in fields:
             resolved[key] = _resolve_section_paths(
-                toml_dict(value),
-                fields,
-                config_dir,
-                cwd,
-                sentinels=sentinels,
+                toml_dict(value), fields, config_dir, cwd, sentinels=sentinels
             )
     return resolved
 
 
 def _resolve_config_file_paths(config: TomlDict, config_dir: Path, cwd: Path) -> TomlDict:
     resolved = dict(config)
-    for section_name, fields in _CONFIG_PATH_FIELDS.items():
-        section = resolved.get(section_name)
+    for section_name, section in resolved.items():
         if isinstance(section, dict):
+            # Every known section lists "log-file" explicitly; unknown/program
+            # sections fall back to just "log-file" since that's the only
+            # path-like field they carry.
+            fields = _CONFIG_PATH_FIELDS.get(section_name, ["log-file"])
             resolved[section_name] = _resolve_section_paths(
                 toml_dict(section),
                 fields,
                 config_dir,
                 cwd,
                 sentinels=_CONFIG_PATH_SENTINELS.get(section_name, {}),
-            )
-    # Resolve log-file in any top-level section that contains that key.
-    # AGM's own sections don't carry a top-level log-file key (exec's is already
-    # handled above and is idempotent on the now-absolute value), so they are
-    # naturally skipped.  For program sections the path is anchored to the
-    # config-file directory, matching [exec].log-file behaviour.
-    for section_name, section in resolved.items():
-        if isinstance(section, dict) and "log-file" in section:
-            resolved[section_name] = _resolve_section_paths(
-                toml_dict(section), ["log-file"], config_dir, cwd, sentinels={}
             )
     return resolved
 

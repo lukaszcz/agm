@@ -37,6 +37,10 @@ required.
 - any roots declared under `[modules] roots` in any config layer,
 - any roots added with `-I`/`--module-path`.
 
+The independently loaded `[modules] lib_root` and `roots` settings expand `%{VAR}` the same
+leniently as other path-valued settings; see
+[Path-valued settings](config.md#path-valued-settings) for the exact rule.
+
 Set `AGM_HOME` to relocate the entire `~/.agm` directory (config, prompts, sandbox settings, global library, and stdlib); set `AGM_STDLIB` to point only the standard-library root elsewhere.
 
 A module name that resolves to exactly one file across all roots succeeds; zero files,
@@ -90,7 +94,8 @@ like any other static error.
   `[exec] max-call-depth` config; the canonical default is 256). Exceeding it
   raises `RecursionError`.
 - `--runner COMMAND`: Override the default agent runner command (backs `ask` and any
-  declared agent without its own command). See [runner precedence](#agents-and-runner-precedence).
+  declared agent without its own command). See [runner command interpolation](#runner-command-interpolation)
+  and [runner precedence](#agents-and-runner-precedence).
 - `--log` / `--log-file PATH` / `--no-log`: Control trace logging, which is **off by
   default**. `--log` enables it with an auto-generated timestamped path under
   `.agent-files/`; `--log-file PATH` writes a structured JSONL trace to `PATH`;
@@ -150,9 +155,18 @@ default runner; their identity is their scope path and name, not a flattened
 configuration key. Because the default runner is always the floor (rung 7),
 every root or referenced scoped agent resolves under `agm exec` even with no
 config and no source hint. Unreferenced scoped declarations remain static and
-do not start a runner. Runner configuration runner strings support the `%%` /
-`%{PROMPT_FILE}` placeholders for the rendered prompt-file path. In a source
-`agent` hint, spell the latter as `\%{PROMPT_FILE}` so it remains literal text.
+do not start a runner.
+
+### Runner command interpolation
+
+Runner command arguments for both `agm exec` and `agm repl` interpolate `%{name}` holes
+strictly from the process environment overlaid with `PROMPT_FILE`, which wins on
+conflicts — unlike `agm loop`'s runner and selector, no workflow-specific variables are
+added. See [Runner command interpolation](agents.md#runner-command-interpolation) for the
+shared `%%`/`PROMPT_FILE` alias, `\%{` escape, and shlex-split rules. A prompt-file
+placeholder places the rendered prompt file at that position; otherwise AGM appends
+`@<path>`. In a source `agent` hint, spell the placeholder as `\%{PROMPT_FILE}` so it
+remains literal text for the host runner.
 
 ### Configuration
 
@@ -363,7 +377,9 @@ Meta-commands begin with a leading `:` (which never collides with AgL syntax):
 
 - `--strict-json` / `--no-strict-json`: Set JSON-codec strictness for agent output
   (lenient recovery is the default), as for `agm exec`.
-- `--max-iters N`, `--max-call-depth N`, `--runner COMMAND`: As for `agm exec`.
+- `--max-iters N`, `--max-call-depth N`: As for `agm exec`.
+- `--runner COMMAND`: As for `agm exec`, including the strict [runner command
+  interpolation](#runner-command-interpolation) contract.
 - `--confirm-agents`: Start in confirm mode, asking before each agent call (the default
   is auto; see [Agent-call confirmation](#agent-call-confirmation)).
 - `--quiet`: Suppress the automatic echoing of entry results.

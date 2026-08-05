@@ -275,6 +275,7 @@ def runner_backed_agent_factory(
             prepare_rendered_prompt_run,
             run_prepared_prompt_result,
         )
+        from agm.util.interp import InterpolationError
 
         # 1. Resolve the runner command for this agent.
         agent_id = request.agent_id if request.agent_id is not None else AgentId(request.agent)
@@ -317,6 +318,13 @@ def runner_backed_agent_factory(
 
             # 4. Run and collect structured result.
             run_result = run_prepared_prompt_result(prepared, idle_timeout=idle_timeout)
+        except InterpolationError as exc:
+            raise AgentCallHostError(
+                cause="spawn_failure",
+                exit_code=None,
+                stderr_tail=str(exc),
+                elapsed=0.0,
+            ) from exc
         finally:
             cleanup_temp_files(temp_files)
 

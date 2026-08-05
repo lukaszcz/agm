@@ -289,28 +289,6 @@ BoundarySchema = (
 )
 
 
-def _reconcile_container_view_member_schema(
-    existing: BoundarySchema, incoming: BoundarySchema
-) -> BoundarySchema | None:
-    """Choose one shared container-view member schema, or reject an incompatible pair.
-
-    Used for both array element schemas and dict value schemas. Equal schemas
-    retain their representation. A direct type-variable seal is less specific
-    than a non-variable schema, so the latter represents both aliases.
-    Distinct variable schemas and distinct non-variable schemas have no common
-    representation.
-    """
-    if existing == incoming:
-        return existing
-    if isinstance(existing, BoundarySealVar):
-        if isinstance(incoming, BoundarySealVar):
-            return None
-        return incoming
-    if isinstance(incoming, BoundarySealVar):
-        return existing
-    return None
-
-
 @dataclass(frozen=True, slots=True)
 class ExternParamSchema:
     """One extern parameter's boundary schema."""

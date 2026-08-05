@@ -12,7 +12,7 @@ view. Sealed-handle opacity is a public FFI API property, not a sandbox or
 security boundary for an unsandboxed Python companion. Nominal values are
 rebuilt and ``json`` values are deep-copied. Each :class:`BoundaryScope`
 carries one call's seals, recursive definitions, sealed-handle vault, and view
-memo; its views are revoked when the call ends.
+memo; when the call ends its views are revoked and its vault is released.
 """
 
 from __future__ import annotations
@@ -36,8 +36,8 @@ from decimal import Decimal
 from types import MappingProxyType
 from typing import (
     Callable,
+    Generic,
     Protocol,
-    Self,
     SupportsIndex,
     TypeVar,
     assert_never,
@@ -59,7 +59,6 @@ from agm.agl.ir.contracts import (
     BoundaryUnit,
     BoundaryVariantShape,
     ScalarKind,
-    _reconcile_container_view_member_schema,
 )
 from agm.agl.runtime.render import render_value
 from agm.agl.runtime.serialize import value_to_json_obj
@@ -99,7 +98,7 @@ class BoundaryViolation(Exception):
 
 
 class BoundaryTypeError(TypeError):
-    """A value written through a boundary view violates its element schema."""
+    """A value written through a boundary view violates its member schema."""
 
 
 class BoundaryViewRevoked(RuntimeError):
@@ -189,9 +188,11 @@ class SealedHandle:
 class _HandleState:
     """Deferred equality key and repr for a minted sealed handle.
 
-    The wrapped value is already retained by the minting vault, so this holder
-    keeps only a reference to it and derives the structural equality key
-    lazily, on first ``__hash__``/``__eq__``.  A handle that merely crosses
+    This holder keeps a reference to the wrapped value — outliving the
+    minting vault, which is released when the call ends — and derives the
+    structural equality key lazily, on first ``__hash__``/``__eq__``, so a
+    handle a companion retains still compares and renders.  A handle that
+    merely crosses
     the boundary and is passed back — never hashed or compared — therefore
     pays none of that O(size) work.  The repr, by contrast, is never memoized:
     ``ArrayValue``/``DictValue`` are mutable in place, so a cached repr could
@@ -237,6 +238,10 @@ class _HandleVault:
         if payload is None:
             raise BoundaryViolation("sealed handle was not minted by this boundary")
         return payload
+
+    def release(self) -> None:
+        """Drop every payload minted here, once no handle can be opened again."""
+        self._payloads.clear()
 
 
 _HANDLE_STATE: dict[int, _HandleState] = {}
@@ -327,6 +332,9 @@ def _typename(obj: object) -> str:
 #: schema (one with no ``BoundaryRef`` leaf, i.e. no recursive type).
 _NO_DEFS: Mapping[str, BoundarySchema] = MappingProxyType({})
 
+_ContainerValue = TypeVar("_ContainerValue", ArrayValue, DictValue)
+_View = TypeVar("_View", "AglArrayView", "AglDictView")
+
 
 class BoundaryScope:
     """One call's seals, definitions, handle vault, compatible-view memo, and live flag."""
@@ -347,26 +355,28 @@ class BoundaryScope:
 
     def array_view(self, value: ArrayValue, element_schema: BoundarySchema) -> AglArrayView:
         """Return this scope's view for *value*, or reconcile a compatible element schema."""
-        element_schema = _resolve_boundary_ref(element_schema, self)
-        marker = id(value)
-        cached = self._array_views.get(marker)
-        if cached is not None:
-            cached._reconcile_element_schema(element_schema)
-            return cached
-        view = AglArrayView(self, value, element_schema)
-        self._array_views[marker] = view
-        return view
+        return self._container_view(self._array_views, value, element_schema, AglArrayView)
 
     def dict_view(self, value: DictValue, value_schema: BoundarySchema) -> AglDictView:
         """Return this scope's view for *value*, or reconcile a compatible value schema."""
-        value_schema = _resolve_boundary_ref(value_schema, self)
+        return self._container_view(self._dict_views, value, value_schema, AglDictView)
+
+    def _container_view(
+        self,
+        memo: dict[int, _View],
+        value: _ContainerValue,
+        member_schema: BoundarySchema,
+        view_cls: Callable[[BoundaryScope, _ContainerValue, BoundarySchema], _View],
+    ) -> _View:
+        """Memoize one live view per container identity for the duration of this call."""
+        member_schema = _resolve_boundary_ref(member_schema, self)
         marker = id(value)
-        cached = self._dict_views.get(marker)
+        cached = memo.get(marker)
         if cached is not None:
-            cached._reconcile_value_schema(value_schema)
+            cached._reconcile_member_schema(member_schema)
             return cached
-        view = AglDictView(self, value, value_schema)
-        self._dict_views[marker] = view
+        view = view_cls(self, value, member_schema)
+        memo[marker] = view
         return view
 
     def revoke(self) -> None:
@@ -375,6 +385,9 @@ class BoundaryScope:
         self._array_views.clear()
         self._dict_views.clear()
         self._reconciled_defs.clear()
+        # Releasing the vault drops this call's sealed AgL values, which a
+        # companion-retained handle would otherwise pin for the process's life.
+        self._vault.release()
 
     def begin_reconciled_schema(self) -> BoundaryRef:
         """Reserve a call-local reference for one recursively merged schema."""
@@ -403,49 +416,90 @@ class _LiveIterator(Iterator[_IteratorItem]):
 
 
 class _AglArrayViewIterator(Iterator[object]):
-    """A live array iterator that reads each not-yet-reached position lazily."""
+    """A live array iterator that reads each not-yet-reached position lazily.
 
-    def __init__(self, view: AglArrayView) -> None:
+    *step* is ``1`` for forward iteration and ``-1`` for reverse.  Both walk
+    until the next index leaves the array's current bounds, so elements a
+    companion appends or removes mid-iteration are observed.
+    """
+
+    def __init__(self, view: AglArrayView, step: int) -> None:
         self._view = view
-        self._index = 0
+        self._step = step
+        self._index = 0 if step > 0 else len(view._value.elements) - 1
 
     def __next__(self) -> object:
         _check_view_live(self._view._scope)
-        if self._index >= len(self._view._value.elements):
+        if not 0 <= self._index < len(self._view._value.elements):
             raise StopIteration
         value = self._view[self._index]
-        self._index += 1
+        self._index += self._step
         return value
 
 
-class _AglArrayViewReverseIterator(Iterator[object]):
-    """A live reverse array iterator that reads each position lazily."""
+class _BoundaryContainerView(Generic[_ContainerValue]):
+    """Shared scope, schema, and identity plumbing for a live container view.
 
-    def __init__(self, view: AglArrayView) -> None:
-        self._view = view
-        self._index = len(view._value.elements) - 1
+    Subclasses add the Python container surface (sequence or mapping) and set
+    :attr:`_member_label` to name their member position — the array element or
+    the dict value — in an alias-conflict message.  Every public method checks
+    liveness, so the helpers here do not repeat that check.
+    """
 
-    def __next__(self) -> object:
-        _check_view_live(self._view._scope)
-        if self._index < 0:
-            raise StopIteration
-        value = self._view[self._index]
-        self._index -= 1
-        return value
+    __slots__ = ("_scope", "_value", "_member_schema", "_encoded_member_schemas")
 
-
-class AglArrayView(MutableSequence[object]):
-    """A live Python sequence view of an AgL array value."""
-
-    __slots__ = ("_scope", "_value", "_element_schema", "_encoded_element_schemas")
+    _member_label: str
+    _value: _ContainerValue
 
     def __init__(
-        self, scope: BoundaryScope, value: ArrayValue, element_schema: BoundarySchema
+        self, scope: BoundaryScope, value: _ContainerValue, member_schema: BoundarySchema
     ) -> None:
         self._scope = scope
         self._value = value
-        self._element_schema = _resolve_boundary_ref(element_schema, scope)
-        self._encoded_element_schemas = {self._element_schema}
+        self._member_schema = _resolve_boundary_ref(member_schema, scope)
+        self._encoded_member_schemas = {self._member_schema}
+
+    def _reconcile_member_schema(self, member_schema: BoundarySchema) -> None:
+        """Record and adopt a compatible encoding schema without changing view identity."""
+        _check_view_live(self._scope)
+        reconciled = _reconcile_view_schema(self._member_schema, member_schema, self._scope)
+        if reconciled is None:
+            raise BoundaryViolation(f"aliased view has incompatible {self._member_label} schemas")
+        self._encoded_member_schemas.add(member_schema)
+        self._member_schema = reconciled
+
+    def _accepts_decoded_member_schema(self, member_schema: BoundarySchema) -> bool:
+        """Return whether this view may cross back at the requested schema."""
+        _check_view_live(self._scope)
+        return _view_schema_accepts_decode(
+            self._member_schema, member_schema, self._encoded_member_schemas, self._scope
+        )
+
+    def _encode(self, value: Value) -> object:
+        return _encode_boundary_value(self._member_schema, value, self._scope)
+
+    def _decode(self, value: object) -> Value:
+        return _decode_boundary_write(self._member_schema, value, self._scope)
+
+    def __eq__(self, other: object) -> bool:
+        _check_view_live(self._scope)
+        return self is other
+
+    def __hash__(self) -> int:
+        _check_view_live(self._scope)
+        return object.__hash__(self)
+
+    def __repr__(self) -> str:
+        _check_view_live(self._scope)
+        return render_value(self._value)
+
+
+class AglArrayView(_BoundaryContainerView[ArrayValue], MutableSequence[object]):
+    """A live Python sequence view of an AgL array value."""
+
+    __slots__ = ()
+
+    _member_label = "array element"
 
     def __len__(self) -> int:
         _check_view_live(self._scope)
@@ -537,86 +591,35 @@ class AglArrayView(MutableSequence[object]):
         _check_view_live(self._scope)
         self._value.elements.reverse()
 
-    def __iadd__(self, values: Iterable[object]) -> Self:
-        self.extend(values)
-        return self
-
     def sort(self, *, key: Callable[[object], object] | None = None, reverse: bool = False) -> None:
         _check_view_live(self._scope)
-        pairs = [(self._encode(value), value) for value in self._value.elements]
-        keys = [key(encoded) if key is not None else encoded for encoded, _ in pairs]
-        for index in range(1, len(pairs)):
-            pair = pairs[index]
-            sort_key = keys[index]
-            position = index
-            while position > 0 and _sorts_before(sort_key, keys[position - 1], reverse):
-                pairs[position] = pairs[position - 1]
-                keys[position] = keys[position - 1]
-                position -= 1
-            pairs[position] = pair
-            keys[position] = sort_key
-        self._value.elements[:] = [value for _, value in pairs]
+
+        def sort_key(value: Value) -> _SupportsLessThan:
+            encoded = self._encode(value)
+            return cast(_SupportsLessThan, key(encoded) if key is not None else encoded)
+
+        # Sorting into a fresh list leaves the AgL array untouched if a key
+        # function or a comparison raises.
+        self._value.elements[:] = sorted(self._value.elements, key=sort_key, reverse=reverse)
 
     def __iter__(self) -> Iterator[object]:
         _check_view_live(self._scope)
-        return _AglArrayViewIterator(self)
+        return _AglArrayViewIterator(self, 1)
 
     def __reversed__(self) -> Iterator[object]:
         _check_view_live(self._scope)
-        return _AglArrayViewReverseIterator(self)
-
-    def __eq__(self, other: object) -> bool:
-        _check_view_live(self._scope)
-        return self is other
-
-    def __hash__(self) -> int:
-        _check_view_live(self._scope)
-        return object.__hash__(self)
-
-    def __repr__(self) -> str:
-        _check_view_live(self._scope)
-        return render_value(self._value)
-
-    def _reconcile_element_schema(self, element_schema: BoundarySchema) -> None:
-        """Record and adopt a compatible encoding schema without changing view identity."""
-        _check_view_live(self._scope)
-        reconciled = _reconcile_view_schema(self._element_schema, element_schema, self._scope)
-        if reconciled is None:
-            raise BoundaryViolation("aliased array has incompatible element schemas")
-        self._encoded_element_schemas.add(element_schema)
-        self._element_schema = reconciled
-
-    def _accepts_decoded_element_schema(self, element_schema: BoundarySchema) -> bool:
-        """Return whether this view may cross back at the requested schema."""
-        _check_view_live(self._scope)
-        return _view_schema_accepts_decode(
-            self._element_schema, element_schema, self._encoded_element_schemas, self._scope
-        )
-
-    def _encode(self, value: Value) -> object:
-        _check_view_live(self._scope)
-        return _encode_boundary_value(self._element_schema, value, self._scope)
-
-    def _decode(self, value: object) -> Value:
-        _check_view_live(self._scope)
-        return _decode_boundary_write(self._element_schema, value, self._scope)
+        return _AglArrayViewIterator(self, -1)
 
 
 _MISSING = object()
 
 
-class AglDictView(MutableMapping[str, object]):
+class AglDictView(_BoundaryContainerView[DictValue], MutableMapping[str, object]):
     """A live Python mapping view of an AgL dict value."""
 
-    __slots__ = ("_scope", "_value", "_value_schema", "_encoded_value_schemas")
+    __slots__ = ()
 
-    def __init__(
-        self, scope: BoundaryScope, value: DictValue, value_schema: BoundarySchema
-    ) -> None:
-        self._scope = scope
-        self._value = value
-        self._value_schema = _resolve_boundary_ref(value_schema, scope)
-        self._encoded_value_schemas = {self._value_schema}
+    _member_label = "dict value"
 
     def __getitem__(self, key: str) -> object:
         _check_view_live(self._scope)
@@ -632,6 +635,14 @@ class AglDictView(MutableMapping[str, object]):
         _check_view_live(self._scope)
         self._check_key(key)
         del self._value.entries[key]
+
+    def __contains__(self, key: object) -> bool:
+        # ``Mapping.__contains__`` would probe through ``__getitem__``, so a
+        # membership test would encode the value — minting a sealed handle or
+        # a nested view that is thrown away immediately.
+        _check_view_live(self._scope)
+        self._check_key(key)
+        return key in self._value.entries
 
     def __iter__(self) -> Iterator[str]:
         _check_view_live(self._scope)
@@ -686,50 +697,38 @@ class AglDictView(MutableMapping[str, object]):
         key, value = self._value.entries.popitem()
         return key, self._encode(value)
 
-    def __eq__(self, other: object) -> bool:
-        _check_view_live(self._scope)
-        return self is other
-
-    def __hash__(self) -> int:
-        _check_view_live(self._scope)
-        return object.__hash__(self)
-
-    def __repr__(self) -> str:
-        _check_view_live(self._scope)
-        return render_value(self._value)
-
-    def _reconcile_value_schema(self, value_schema: BoundarySchema) -> None:
-        """Record and adopt a compatible encoding schema without changing view identity."""
-        _check_view_live(self._scope)
-        reconciled = _reconcile_view_schema(self._value_schema, value_schema, self._scope)
-        if reconciled is None:
-            raise BoundaryViolation("aliased dict has incompatible value schemas")
-        self._encoded_value_schemas.add(value_schema)
-        self._value_schema = reconciled
-
-    def _accepts_decoded_value_schema(self, value_schema: BoundarySchema) -> bool:
-        """Return whether this view may cross back at the requested schema."""
-        _check_view_live(self._scope)
-        return _view_schema_accepts_decode(
-            self._value_schema, value_schema, self._encoded_value_schemas, self._scope
-        )
-
-    def _encode(self, value: Value) -> object:
-        _check_view_live(self._scope)
-        return _encode_boundary_value(self._value_schema, value, self._scope)
-
-    def _decode(self, value: object) -> Value:
-        _check_view_live(self._scope)
-        return _decode_boundary_write(self._value_schema, value, self._scope)
-
     @staticmethod
     def _check_key(key: object) -> None:
         if not isinstance(key, str):
             raise TypeError("dict view keys must be str")
 
 
+def _reconcile_container_view_member_schema(
+    existing: BoundarySchema, incoming: BoundarySchema
+) -> BoundarySchema | None:
+    """Choose one shared container-view member schema, or reject an incompatible pair.
+
+    Used for both array element schemas and dict value schemas. Equal schemas
+    retain their representation. A direct type-variable seal is less specific
+    than a non-variable schema, so the latter represents both aliases.
+    Distinct variable schemas and distinct non-variable schemas have no common
+    representation.
+    """
+    if existing == incoming:
+        return existing
+    if isinstance(existing, BoundarySealVar):
+        if isinstance(incoming, BoundarySealVar):
+            return None
+        return incoming
+    if isinstance(incoming, BoundarySealVar):
+        return existing
+    return None
+
+
 def _resolve_boundary_ref(schema: BoundarySchema, scope: BoundaryScope) -> BoundarySchema:
     """Resolve a finite ``BoundaryRef`` chain through this call's definitions."""
+    if not isinstance(schema, BoundaryRef):
+        return schema
     seen: set[str] = set()
     while isinstance(schema, BoundaryRef):
         key = schema.key
@@ -981,13 +980,6 @@ def _view_schema_accepts_decode(
     )
 
 
-def _sorts_before(left: object, right: object, reverse: bool) -> bool:
-    """Compare two encoded sort keys, preserving Python comparison behavior."""
-    if reverse:
-        return cast(_SupportsLessThan, right) < left
-    return cast(_SupportsLessThan, left) < right
-
-
 def _check_view_live(scope: BoundaryScope) -> None:
     """Raise when a view's enclosing extern call has ended."""
     if not scope.live:
@@ -1151,7 +1143,7 @@ def _decode_boundary_value(
             if isinstance(obj, AglArrayView):
                 if obj._scope is not scope:
                     raise BoundaryViolation("array view belongs to another boundary scope")
-                if not obj._accepts_decoded_element_schema(
+                if not obj._accepts_decoded_member_schema(
                     _resolve_boundary_ref(elem_schema, scope)
                 ):
                     raise BoundaryViolation("array view schema does not match its return schema")
@@ -1173,7 +1165,7 @@ def _decode_boundary_value(
             if isinstance(obj, AglDictView):
                 if obj._scope is not scope:
                     raise BoundaryViolation("dict view belongs to another boundary scope")
-                if not obj._accepts_decoded_value_schema(_resolve_boundary_ref(val_schema, scope)):
+                if not obj._accepts_decoded_member_schema(_resolve_boundary_ref(val_schema, scope)):
                     raise BoundaryViolation("dict view schema does not match its return schema")
                 return obj._value
             if type(obj) is not dict:

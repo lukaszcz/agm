@@ -31,5 +31,5 @@ Every callable lives in one `functions` table; a descriptor's `impl` is either a
 
 - `src/agm/agl/eval/` — the interpreter, frame model, host dispatch, and conversion execution.
 - `src/agm/agl/semantics/copying.py` — the shared `copy`/`shallow_copy` value walks.
-- `src/agm/agl/runtime/externs.py` — the extern registry and companion loading.
+- `src/agm/agl/runtime/externs.py` — the extern registry and companion loading; `src/agm/agl/runtime/boundary.py` — boundary conversion, sealed handles, and live container views.
 - Tests: `tests/test_agl_ir_*.py` (the IR semantics suite), `tests/test_agl_convert.py`, `tests/test_agl_extern_*.py`.

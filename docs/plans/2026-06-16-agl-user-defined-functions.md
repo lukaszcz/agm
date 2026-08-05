@@ -263,7 +263,7 @@ callables.
 ### D10 — `exec` and `print` exact signatures
 
 - `print` — accepts one positional argument of any type, yields `unit`. Keeps
-  current console+trace behavior. (Named render override like `%{x as bullets}`
+  current console+trace behavior. (Named render override like `${x as bullets}`
   stays a template feature, unaffected.)
 - `exec` — **one context-typed built-in with two effective forms, selected by
   the target type** (owner decision). `exec(command: text, …) -> T`, `T` from
@@ -331,7 +331,7 @@ enum Review
   | Fail(issues: list[text])
 
 agent reviewer
-agent planner = "claude -p \%{PROMPT_FILE}"
+agent planner = "claude -p %{PROMPT_FILE}"
 
 # user function — expression body
 def classify(n: int) -> text =
@@ -341,8 +341,8 @@ def classify(n: int) -> text =
 
 # block body: let-continuation, last expression is the result
 def summarize(doc: text, limit: int = 3) -> text =
-  let head = ask "Summarize: %{doc}"
-  let tagged = "[%{limit}] %{head}"
+  let head = ask "Summarize: ${doc}"
+  let tagged = "[${limit}] ${head}"
   tagged
 
 # recursion (top-level def, mutually recursive set)
@@ -353,7 +353,7 @@ def fact(n: int) -> int =
 print review                                  # one arg, sugar
 print(classify(-4))                           # compound arg ⇒ parens
 let s = ask "Hello?"                           # default agent
-let r: Review = ask("Review %{a}", agent: reviewer, on_parse_error: Retry(n: 2))
+let r: Review = ask("Review ${a}", agent: reviewer, on_parse_error: Retry(n: 2))
 let res = exec "ls -la"                        # res : ExecResult (default; never raises)
 print(res.stdout)
 if res.exit_code != 0 => print("command failed")

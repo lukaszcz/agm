@@ -11,7 +11,7 @@ no external design note is required to interpret it.
 ## 1. Goal
 
 Make shell execution and agent prompting ergonomic. Today a shell command or a prompt must be
-spelled as a string argument (`exec("ls -lh")`, `ask("Summarize %{topic}")`). This plan
+spelled as a string argument (`exec("ls -lh")`, `ask("Summarize ${topic}")`). This plan
 introduces **raw-tail forms** — `exec!` and `ask!` — whose payload text extends to the end of the
 line or over a following indented block, verbatim except for AgL interpolation:
 
@@ -35,7 +35,7 @@ let r: Review = ask!::[Review]
 ```
 
 Because shell's `$` must pass through verbatim, AgL's interpolation trigger changes **globally**
-from the former dollar-brace trigger to `%{expr}` — in ordinary strings and in raw-tail text alike, with identical
+from `${expr}` to `%{expr}` — in ordinary strings and in raw-tail text alike, with identical
 semantics everywhere.
 
 The existing `exec` and `ask` builtins are **not changed in any way**: the call forms, the
@@ -65,11 +65,11 @@ semantics. `exec!` and `ask!` are pure surface sugar that desugars to `exec(<tem
   (mirroring today's lone-`$` rule), so `printf '%s'`, `date +%Y`, and `100%` are unaffected. In
   ordinary strings the escape `\%` yields a literal `%` (replacing `\$`); `\$` ceases to be a valid
   escape (a bare `$` needs no escape). Rationale: shell text must be verbatim for **all** dollar
-  literal shell forms (`$VAR`, `"${var}"`, `$(...)`, `$1`), and `%{` is rare in shell, prose, and prompts; the
+  forms (`$VAR`, `"${var}"`, `$(...)`, `$1`), and `%{` is rare in shell, prose, and prompts; the
   collision moves to a sequence that almost never occurs and fails loudly (unknown-name scope
   error) when it does. Rejected: `$$` doubling (taxes every shell dollar, Make-style pain, diverges
-  from string escape rules) and keeping a dollar-brace trigger with lone-`$` literal (silently captures
-  the literal shellcheck-style `"${var}"`).
+  from string escape rules) and keeping `${` with lone-`$` literal (silently captures
+  shellcheck-style `"${var}"`).
 - **D2 — Raw-tail forms are distinct `<name>!` keywords; the base builtins are untouched.** The
   two forms are never mixed: after `exec!`/`ask!` (and an optional `::[T]` type-arg group)
   *everything* is verbatim payload — parentheses, quotes, `#`, `;`, `$` included — so there is no
@@ -116,7 +116,7 @@ semantics. `exec!` and `ask!` are pure surface sugar that desugars to `exec(<tem
 
 - In string templates (single- and triple-quoted, both quote styles) and in raw-tail text,
   `%{expr}` embeds an expression. Semantics (expression checking, uniform rendering, single-line
-  restriction inside the braces) are unchanged from the prior trigger — only the trigger character
+  restriction inside the braces) are unchanged from today's `${expr}` — only the trigger character
   changes.
 - A `%` not followed by `{` is literal content everywhere.
 - In strings: `\%` is a valid escape producing `%`; `\$` is removed from the escape table (unknown
@@ -265,7 +265,7 @@ flows through the ordinary pipeline. Covered by REPL e2e tests.
 All migration is mechanical and lands with stage S1 (interpolation) — the raw-tail forms
 themselves require no migration since `exec` and `ask` are untouched.
 
-- The former dollar-brace trigger → `%{` in `tests/**/*.agl` (~266 occurrences across ~74 files) and in AgL snippets embedded
+- `${` → `%{` in `tests/**/*.agl` (~266 occurrences across ~74 files) and in AgL snippets embedded
   in `tests/**/*.py` (~235 occurrences across ~25 files — each verified to be AgL source, not
   Python/shell, before rewriting).
 - `\$` → `$` (escape no longer valid, `$` needs none) wherever it appears in AgL sources and in
@@ -310,7 +310,7 @@ Write failing tests first at each stage; group by behavior, not by plan stage. A
 Each stage follows TDD, ends with `just check` green, and is committed separately.
 
 1. **S1 — interpolation switch + migration.** Scanner trigger and escape-table change, rendering
-   quote-escape change, full migration from the former trigger to `%{` and from `\$` to `$` in tests and docs, reference-doc updates
+   quote-escape change, full `${`→`%{` / `\$` migration of tests and docs, reference-doc updates
    for interpolation (§9).
 2. **S2 — raw-tail lexer mode.** Registry (both keywords), tokens, trigger rules, inline and block
    scanning, dedent, escapes, lexical diagnostics.
@@ -353,7 +353,7 @@ Each stage follows TDD, ends with `just check` green, and is committed separatel
 - **Layout interaction**: shell keywords (`done`, `else`) or arbitrary prompt prose at the start
   of block lines must never reach the layout pass — guaranteed structurally by scanning blocks
   wholly inside the raw-tail mode; covered by dedicated lexer tests.
-- **`tests/**/*.py` migration precision**: former dollar-brace-trigger occurrences in Python test files must be verified
+- **`tests/**/*.py` migration precision**: `${` occurrences in Python test files must be verified
   as AgL snippets (not Python f-string braces or shell fixtures) before rewriting; done file by
   file, backed by the full suite.
 - **Rendering round-trip**: the render quote-escape switch (`\$`→`\%`) changes expected outputs in

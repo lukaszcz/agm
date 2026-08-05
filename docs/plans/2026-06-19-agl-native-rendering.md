@@ -49,12 +49,12 @@ These were confirmed with the owner one-by-one and frame the implementation.
 
 | # | Decision |
 |---|----------|
-| D1 | **Global scope.** The single renderer `render_value` becomes AgL-native at *every* output site: `print`, REPL echo, template/`%{…}` interpolation (agent prompts **and** `exec` commands), and the `as text` cast. JSON is reachable only via `as json`. |
+| D1 | **Global scope.** The single renderer `render_value` becomes AgL-native at *every* output site: `print`, REPL echo, template/`${…}` interpolation (agent prompts **and** `exec` commands), and the `as text` cast. JSON is reachable only via `as json`. |
 | D2 | **Single-line / compact layout.** AgL-form values render on one line: `Issue(title: "x", severity: 3, author: Author(name: "Ada"))`; lists and dicts inline too. No injected newlines. |
 | D3 | **Enums render qualified.** `Outcome.Partial(left: 2)`; nullary variant as `Outcome.Done` (no parens). Keeps the type name always visible (parity with records) and is unambiguous under variant-name collisions. |
 | D4 | **Dict keys are always quoted.** `{"origin": "static", "retries": 3}`. This is always valid AgL, avoids coupling the runtime renderer to lexer/keyword rules, and applies only to the AgL `dict` type (`json` retains JSON rendering). |
 | D5 | **Exceptions render record-style with *all* fields, including `trace_id`.** `CastError(message: "…", trace_id: "…")`. No special-casing in the renderer; fully faithful to runtime state. |
-| D6 | **Text: top-level verbatim, nested quoted.** `print("hi")` -> `hi`; `print(R(t: "hi"))` -> `R(t: "hi")`. Nested `text` is emitted as a fully-escaped AgL string literal (JSON escape set **plus `\%`** so `%{` cannot read as interpolation). The REPL echo additionally quotes top-level `text` (preserving today's `render_value_repl` behavior). |
+| D6 | **Text: top-level verbatim, nested quoted.** `print("hi")` -> `hi`; `print(R(t: "hi"))` -> `R(t: "hi")`. Nested `text` is emitted as a fully-escaped AgL string literal (JSON escape set **plus `\$`** so `${` cannot read as interpolation). The REPL echo additionally quotes top-level `text` (preserving today's `render_value_repl` behavior). |
 | D7 | **Fields render in declaration order**, not construction-argument order, for records, enums, and exceptions — canonical, deterministic output independent of how the value was constructed. Nominal rendering requires an authoritative read-only type lookup. An unknown type, wrong nominal kind/variant, or runtime/declaration field-set mismatch is an internal invariant error; the renderer never falls back or silently omits fields. |
 | D8 | **JSON layout is unchanged** (the `as json` path stays 2-space pretty-printed, multi-line). This feature only *adds* the AgL form; the existing JSON serializer and its tests are left intact. |
 | D9 | **A nested `json`-typed value renders compact** (single-line) so the enclosing AgL value stays single-line (D2); a *top-level* `json` value stays pretty-printed (D8). This top-level-vs-nested split mirrors the text rule in D6. |
@@ -108,9 +108,9 @@ CastError(message: "cannot parse \"x\" as int", trace_id: "evt-7", source_type: 
 
 `render.py` already has `_quote_text` producing a double-quoted surface form
 with the JSON escape set and `\uXXXX` for control chars. It will be extended to
-also escape `%` as `\%`, and reused for **both** nested `text` and the
+also escape `$` as `\$`, and reused for **both** nested `text` and the
 top-level REPL-echo case so the two never diverge. (This slightly changes the
-REPL echo of a string containing `%`, e.g. `"a%{b}"` now echoes `"a\%{b}"`;
+REPL echo of a string containing `$`, e.g. `"a${b}"` now echoes `"a\${b}"`;
 that is the correct, round-trippable form and the corresponding REPL test will
 be updated.)
 
@@ -236,7 +236,7 @@ Following TDD: write failing tests first, then implement.
   record/enum/exception → `json` cases and `as?` coverage; confirm their exact
   existing structural JSON encodings. Add interpreter-level tests that `print`,
   template interpolation, and `exec`/prompt interpolation all emit AgL form,
-  and that `%{x as json}` emits JSON for every structured data kind.
+  and that `${x as json}` emits JSON for every structured data kind.
 
 ### M3 — REPL echo wiring (`repl/render.py`)
 
@@ -283,7 +283,7 @@ Following TDD: write failing tests first, then implement.
 - Nominal values do not become implicitly assignable to `json`; structural JSON
   conversion requires `as json`.
 - Existing prompts or shell commands that require JSON must opt in with
-  `%{value as json}`; M2/M4 update affected tests, fixtures, and examples.
+  `${value as json}`; M2/M4 update affected tests, fixtures, and examples.
 
 ## Risks
 

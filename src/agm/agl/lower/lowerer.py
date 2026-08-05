@@ -3129,6 +3129,13 @@ class _Lowerer:
         else:
             agent_ir = IrBuiltinLoad(location=loc, key="default-agent")
 
+        # ask-request neither dispatches nor parses output — it builds an
+        # AgentRequest whose contract fields are fixed constants — so it needs
+        # neither a retry count nor an output contract, and steps 3 and 4 below
+        # apply to ``ask`` alone.
+        if is_request:
+            return IrAskRequest(location=loc, agent=agent_ir, prompt=prompt_ir)
+
         # 3. Determine max_attempts from the on_parse_error named arg.
         max_attempts = self._extract_max_attempts(call_node)
 
@@ -3170,14 +3177,6 @@ class _Lowerer:
 
         contract_id = self._alloc_contract(contract_req)
 
-        if is_request:
-            return IrAskRequest(
-                location=loc,
-                agent=agent_ir,
-                prompt=prompt_ir,
-                contract_id=contract_id,
-                max_attempts=max_attempts,
-            )
         return IrAsk(
             location=loc,
             agent=agent_ir,

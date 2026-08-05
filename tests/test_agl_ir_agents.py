@@ -1327,84 +1327,6 @@ def test_enum_known_case_with_additional_props_error() -> None:
     assert any(e.category == "unknown_field" for e in result.errors)
 
 
-# ---------------------------------------------------------------------------
-# validate.py IrAskRequest deep validation
-# ---------------------------------------------------------------------------
-
-
-def test_validate_ir_ask_request_missing_contract() -> None:
-    """validate_ir: IrAskRequest referencing missing contract_id → InvalidIrError."""
-
-    from agm.agl.ir.ids import ContractId, Location, SourceId
-    from agm.agl.ir.nodes import IrAskRequest, IrConstText
-    from agm.agl.ir.program import ExecutableModule, ExecutableProgram, SourceFile
-    from agm.agl.ir.validate import InvalidIrError, validate_ir
-    from agm.agl.modules.ids import ENTRY_ID
-
-    src_id = SourceId(0)
-    dummy_loc = Location(source_id=src_id, start_offset=0, end_offset=1, start_line=1, start_col=0)
-    bad_cid = ContractId(999)
-    node = IrAskRequest(
-        location=dummy_loc,
-        agent=IrConstText(location=dummy_loc, value="ask"),
-        prompt=IrConstText(location=dummy_loc, value="test"),
-        contract_id=bad_cid,
-        max_attempts=1,
-    )
-    prog = ExecutableProgram(
-        entry_module=ENTRY_ID,
-        modules={ENTRY_ID: ExecutableModule(module_id=ENTRY_ID, initializers=(node,))},
-        symbols={},
-        nominals={},
-        sources={src_id: SourceFile(display_name="<test>", normalized_text="test")},
-        contracts={},  # No contracts!
-    )
-    with pytest.raises(InvalidIrError, match="contract_id"):
-        validate_ir(prog, deep=True)
-
-
-def test_validate_ir_ask_request_max_attempts_zero() -> None:
-    """validate_ir: IrAskRequest with max_attempts=0 → InvalidIrError."""
-
-    from agm.agl.ir.contracts import ContractRequest
-    from agm.agl.ir.ids import ContractId, Location, SourceId
-    from agm.agl.ir.nodes import IrAskRequest, IrConstText
-    from agm.agl.ir.program import ExecutableModule, ExecutableProgram, SourceFile
-    from agm.agl.ir.validate import InvalidIrError, validate_ir
-    from agm.agl.modules.ids import ENTRY_ID
-
-    src_id = SourceId(0)
-    dummy_loc = Location(source_id=src_id, start_offset=0, end_offset=1, start_line=1, start_col=0)
-    cid = ContractId(0)
-    req = ContractRequest(
-        codec_name="text",
-        strict_json=None,
-        json_schema=None,
-        decode=None,
-        target_type_label="text",
-        structured_exec=False,
-        format_instructions="",
-        is_unit=False,
-    )
-    node = IrAskRequest(
-        location=dummy_loc,
-        agent=IrConstText(location=dummy_loc, value="ask"),
-        prompt=IrConstText(location=dummy_loc, value="test"),
-        contract_id=cid,
-        max_attempts=0,  # invalid!
-    )
-    prog = ExecutableProgram(
-        entry_module=ENTRY_ID,
-        modules={ENTRY_ID: ExecutableModule(module_id=ENTRY_ID, initializers=(node,))},
-        symbols={},
-        nominals={},
-        sources={src_id: SourceFile(display_name="<test>", normalized_text="test")},
-        contracts={cid: req},
-    )
-    with pytest.raises(InvalidIrError, match="max_attempts"):
-        validate_ir(prog, deep=True)
-
-
 def test_validate_contract_request_json_missing_decode() -> None:
     """validate.py: json codec with json_schema set but decode=None → InvalidIrError."""
 
@@ -1729,10 +1651,9 @@ def test_validate_ir_ask_deep_valid_contract() -> None:
     validate_ir(prog, deep=True)
 
 
-def test_validate_ir_ask_request_deep_valid_contract() -> None:
-    """validate_ir: IrAskRequest with valid contract passes deep validation (671->exit)."""
-    from agm.agl.ir.contracts import ContractRequest
-    from agm.agl.ir.ids import ContractId, Location, SourceId
+def test_validate_ir_ask_request_deep_valid_without_a_contract() -> None:
+    """validate_ir: a well-formed IrAskRequest passes deep validation without a contract."""
+    from agm.agl.ir.ids import Location, SourceId
     from agm.agl.ir.nodes import IrAskRequest, IrConstText
     from agm.agl.ir.program import ExecutableModule, ExecutableProgram, SourceFile
     from agm.agl.ir.validate import validate_ir
@@ -1740,23 +1661,10 @@ def test_validate_ir_ask_request_deep_valid_contract() -> None:
 
     src_id = SourceId(0)
     dummy_loc = Location(source_id=src_id, start_offset=0, end_offset=1, start_line=1, start_col=0)
-    cid = ContractId(0)
-    req = ContractRequest(
-        codec_name="text",
-        strict_json=None,
-        json_schema=None,
-        decode=None,
-        target_type_label="text",
-        structured_exec=False,
-        format_instructions="",
-        is_unit=False,
-    )
     node = IrAskRequest(
         location=dummy_loc,
         agent=IrConstText(location=dummy_loc, value="ask"),
         prompt=IrConstText(location=dummy_loc, value="test"),
-        contract_id=cid,
-        max_attempts=1,
     )
     prog = ExecutableProgram(
         entry_module=ENTRY_ID,
@@ -1764,14 +1672,13 @@ def test_validate_ir_ask_request_deep_valid_contract() -> None:
         symbols={},
         nominals={},
         sources={src_id: SourceFile(display_name="<test>", normalized_text="test")},
-        contracts={cid: req},
+        contracts={},  # ask-request allocates no contract, and deep validation needs none.
     )
-    # Should pass without error (covers the deep valid path 671->exit).
     validate_ir(prog, deep=True)
 
 
 def test_ir_ask_request_has_a_text_target() -> None:
-    """ask-request always records its fixed text output contract."""
+    """ask-request always reports the fixed text target on its request record."""
     source = """\
 let a = AgentCommand("a")
 let req = ask-request("Do it.", agent = a)
@@ -1833,36 +1740,6 @@ def test_validate_ir_ask_shallow_does_not_check_contracts() -> None:
         contracts={},  # Missing contract, but deep=False skips checks.
     )
     # deep=False → skips contract_id check (covers 656->exit branch).
-    validate_ir(prog, deep=False)
-
-
-def test_validate_ir_ask_request_shallow_does_not_check_contracts() -> None:
-    """validate_ir: IrAskRequest in shallow validation skips contract checks (671->exit)."""
-    from agm.agl.ir.ids import ContractId, Location, SourceId
-    from agm.agl.ir.nodes import IrAskRequest, IrConstText
-    from agm.agl.ir.program import ExecutableModule, ExecutableProgram, SourceFile
-    from agm.agl.ir.validate import validate_ir
-    from agm.agl.modules.ids import ENTRY_ID
-
-    src_id = SourceId(0)
-    dummy_loc = Location(source_id=src_id, start_offset=0, end_offset=1, start_line=1, start_col=0)
-    bad_cid = ContractId(999)
-    node = IrAskRequest(
-        location=dummy_loc,
-        agent=IrConstText(location=dummy_loc, value="ask"),
-        prompt=IrConstText(location=dummy_loc, value="test"),
-        contract_id=bad_cid,
-        max_attempts=1,
-    )
-    prog = ExecutableProgram(
-        entry_module=ENTRY_ID,
-        modules={ENTRY_ID: ExecutableModule(module_id=ENTRY_ID, initializers=(node,))},
-        symbols={},
-        nominals={},
-        sources={src_id: SourceFile(display_name="<test>", normalized_text="test")},
-        contracts={},  # Missing contract, but deep=False skips checks.
-    )
-    # deep=False → skips contract_id check (covers 671->exit branch).
     validate_ir(prog, deep=False)
 
 
@@ -2419,27 +2296,24 @@ def test_ir_ask_request_rejects_a_non_agent_value(request_only: bool) -> None:
         start_line=1,
         start_col=0,
     )
-    contract_id = ContractId(0)
-    program = ExecutableProgram(
-        entry_module=ENTRY_ID,
-        modules={
-            ENTRY_ID: ExecutableModule(
-                module_id=ENTRY_ID,
-                initializers=(
-                    (IrAskRequest if request_only else IrAsk)(
-                        location=location,
-                        agent=IrConstInt(location=location, value=1),
-                        prompt=IrConstText(location=location, value="prompt"),
-                        contract_id=contract_id,
-                        max_attempts=1,
-                    ),
-                ),
-            )
-        },
-        symbols={},
-        nominals={},
-        sources={source_id: SourceFile(display_name="<test>", normalized_text="test")},
-        contracts={
+    node: IrAsk | IrAskRequest
+    if request_only:
+        node = IrAskRequest(
+            location=location,
+            agent=IrConstInt(location=location, value=1),
+            prompt=IrConstText(location=location, value="prompt"),
+        )
+        contracts: dict[ContractId, ContractRequest] = {}
+    else:
+        contract_id = ContractId(0)
+        node = IrAsk(
+            location=location,
+            agent=IrConstInt(location=location, value=1),
+            prompt=IrConstText(location=location, value="prompt"),
+            contract_id=contract_id,
+            max_attempts=1,
+        )
+        contracts = {
             contract_id: ContractRequest(
                 codec_name="text",
                 strict_json=None,
@@ -2450,7 +2324,16 @@ def test_ir_ask_request_rejects_a_non_agent_value(request_only: bool) -> None:
                 format_instructions="",
                 is_unit=False,
             )
+        }
+    program = ExecutableProgram(
+        entry_module=ENTRY_ID,
+        modules={
+            ENTRY_ID: ExecutableModule(module_id=ENTRY_ID, initializers=(node,)),
         },
+        symbols={},
+        nominals={},
+        sources={source_id: SourceFile(display_name="<test>", normalized_text="test")},
+        contracts=contracts,
     )
 
     with pytest.raises(TypeError, match="Agent enum value"):

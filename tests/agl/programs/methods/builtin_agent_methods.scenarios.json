@@ -27,6 +27,14 @@
         "stdout_contains": ["AgentCommand", "request"],
         "calls": {}
       }
+    },
+    {
+      "name": "ask_request_free_function_uses_explicit_agent_without_dispatch",
+      "params": {"mode": "free"},
+      "expect": {
+        "stdout_contains": ["AgentCommand", "request", "Prepare a count."],
+        "calls": {}
+      }
     }
   ]
 }

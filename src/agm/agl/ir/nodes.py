@@ -1081,15 +1081,16 @@ class IrAsk:
 class IrAskRequest:
     """IR host-op: ask-request(prompt, agent:) builtin call.
 
-    Builds the AgentRequest record value WITHOUT dispatching the agent.
-    Side-effect-free.
+    Builds the AgentRequest record value WITHOUT dispatching the agent. Only
+    ``agent`` and ``prompt`` are evaluated; the record's contract fields are
+    fixed constants describing a text request. So, unlike ``IrAsk`` and
+    ``IrExec``, this node carries no contract id and no retry count — there is
+    nothing to dispatch and no output to parse.
     """
 
     location: Location
     agent: "IrExpr"
     prompt: "IrExpr"
-    contract_id: "ContractId"
-    max_attempts: int
 
 
 @dataclass(frozen=True, slots=True)

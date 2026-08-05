@@ -271,9 +271,10 @@ class BuiltinCallChecker:
                 "ask-request does not accept type arguments; it always builds a text request.",
                 span=node.span,
             )
-        # This reuses prompt and Agent argument type validation. The fixed text
-        # contract keeps lowering and request construction on the ordinary ask
-        # contract path without exposing ask's parse-shaping options.
+        # This reuses prompt and Agent argument type validation, without exposing
+        # ask's parse-shaping options. The obligation still records the fixed text
+        # target so the call site is reported like any other agent call site;
+        # lowering builds the request record itself and allocates no contract.
         named = self._validate_ask_like_arguments(
             node,
             "ask-request",

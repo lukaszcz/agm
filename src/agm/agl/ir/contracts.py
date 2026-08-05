@@ -371,7 +371,7 @@ class ConversionRecipe:
 
 
 # ---------------------------------------------------------------------------
-# Contract request — per-call ask/ask-request descriptor
+# Contract request — per-call ask/exec descriptor
 # ---------------------------------------------------------------------------
 
 
@@ -392,7 +392,7 @@ class ContractPayload:
 
 @dataclass(frozen=True, slots=True)
 class ContractRequest:
-    """Typeless contract descriptor for an ask/ask-request call site.
+    """Typeless contract descriptor for an ask or exec call site.
 
     Built at lowering while checker types are available; evaluated WITHOUT any
     checker ``Type``.  The evaluator parses agent output using only this descriptor.
@@ -418,11 +418,8 @@ class ContractRequest:
     ``format_instructions`` — pre-computed format instructions string (empty for
                               text codec and unit-typed asks).
     ``is_unit``             — ``True`` when the target type is ``unit`` (unit
-                              target); the evaluator dispatches the agent call but
-                              skips output parsing and returns ``UnitValue``
-                              immediately.  For ``ask-request`` the result is always
-                              an ``AgentRequest`` record, never unit — ``is_unit``
-                              is always ``False`` for ``ask-request`` call sites.
+                              target); the evaluator dispatches the call but skips
+                              output parsing and returns ``UnitValue`` immediately.
     ``defs``                — ``$defs`` table for a recursive target type (empty
                               for a non-recursive one, see ``DecodePlan``); ``()``
                               for the text codec.

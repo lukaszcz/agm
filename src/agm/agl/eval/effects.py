@@ -316,7 +316,6 @@ class EffectHandlers:
         _node: IrAskRequest,
         agent_expr: IrExpr,
         prompt_expr: IrExpr,
-        contract_id: ContractId,
     ) -> Value:
         """Handle IrAskRequest: build AgentRequest record without dispatching."""
         request_agent = self._ctx._eval(agent_expr)

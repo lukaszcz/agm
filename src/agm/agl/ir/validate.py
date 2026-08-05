@@ -1105,20 +1105,10 @@ def _validate_expr_node(node: IrExpr, ctx: _Context) -> None:
                         f"IrAsk has max_attempts={node.max_attempts!r} (must be >= 1)"
                     )
 
-        case IrAskRequest(agent=agent_expr, prompt=prompt_expr, contract_id=contract_id):
+        case IrAskRequest(agent=agent_expr, prompt=prompt_expr):
             _validate_location(node.location, ctx)
             _validate_expr(agent_expr, ctx)
             _validate_expr(prompt_expr, ctx)
-            if ctx.deep:
-                if contract_id not in ctx.program.contracts:
-                    raise InvalidIrError(
-                        f"IrAskRequest references contract_id={contract_id!r}"
-                        " which is not in program.contracts"
-                    )
-                if node.max_attempts < 1:
-                    raise InvalidIrError(
-                        f"IrAskRequest has max_attempts={node.max_attempts!r} (must be >= 1)"
-                    )
 
         case IrExec(command=command_expr, contract_id=contract_id):
             _validate_location(node.location, ctx)

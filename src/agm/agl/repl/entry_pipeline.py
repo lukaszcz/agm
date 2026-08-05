@@ -28,6 +28,7 @@ if TYPE_CHECKING:
     from agm.agl.modules.ids import ModuleId
     from agm.agl.modules.loader import LoadedModule
     from agm.agl.modules.roots import RootSet
+    from agm.agl.pipeline import RunError
     from agm.agl.runtime.host_settings import HostSettingsPolicy
     from agm.agl.runtime.trace import TraceStore
     from agm.agl.runtime.types import HostEnvironment
@@ -531,6 +532,11 @@ class EntryPipeline:
             mid: lm.companion_path for mid, lm in self._ctx._loaded_lib_modules.items()
         }
         companion_paths.update({mid: lm.companion_path for mid, lm in new_modules.items()})
+        # Lowering allocates into the persistent image, so every way this entry
+        # can fail from here on rolls back against one of these snapshots: an
+        # entry rejected before anything is promoted discards its whole link
+        # delta, while one that partially ran keeps that delta and rolls back
+        # only the nominals of the declarations that did not complete.
         link_snapshot = self._ctx._link_image.snapshot_state()
         nominal_snapshot = self._ctx._link_image.snapshot_nominals()
         builtin_nominal_snapshot = self._ctx._link_image.snapshot_builtin_nominals()
@@ -548,12 +554,9 @@ class EntryPipeline:
             nominals=lowered.program.nominals,
         )
         if extern_diagnostics:
-            self._restore_unpromoted_entry_nominals(
-                orig_program,
-                frozenset(),
-                nominal_snapshot,
-                builtin_nominal_snapshot,
-            )
+            # A pre-execution rejection: nothing ran and nothing promoted, so
+            # the node-id range stays available to the next entry.
+            self._ctx._link_image.restore_state(link_snapshot)
             return self._ctx._fail(extern_diagnostics, warnings)
         ir_params = {
             param.symbol: param_values[param.public_name]
@@ -613,10 +616,10 @@ class EntryPipeline:
                 span=exc.span,
             )
             trace.run_end(ok=False)
-            # Lowering allocates into the persistent image before interpreter
-            # construction can reject a declared setting default. Nothing has
-            # run, so discard that complete link delta, but still consume the
-            # parsed node-id range before a later entry is accepted.
+            # A rejected declared setting default likewise promotes nothing, so
+            # the same discard applies -- but this entry is reported as a run
+            # that raised, so it consumes its node-id range like every other
+            # entry that reached the interpreter.
             self._ctx._link_image.restore_state(link_snapshot)
             self._ctx._advance_node_ids(new_next_id)
             kind, name = self._ctx._classify(orig_program)
@@ -643,16 +646,57 @@ class EntryPipeline:
             },
         )
 
-        def completed_declaration_ids() -> frozenset[int]:
-            # The entry frame is always populated by the closure pre-pass
-            # before params run (see ``IrInterpreter.run``), so a declaration
-            # completed before a failing param default stays promoted. The
-            # promotion plan itself is conservative: it excludes params whose
-            # symbols were not installed and applies the declaration-dependency
-            # fixpoint.
-            return lowered.promotion_plan.completed_declaration_ids(
+        def promote(*, partial: bool, promoted_declaration_ids: frozenset[int]) -> tuple[str, ...]:
+            return self._ctx._promote_ir_state(
+                text=text,
+                program=orig_program,
+                checked=checked,
+                next_start_id=new_next_id,
+                entry_program_name=entry_program_name,
+                entry_active_config=entry_active_config,
+                partial=partial,
+                promoted_declaration_ids=promoted_declaration_ids,
+            )
+
+        def partial_failure(
+            *, diagnostics: list[Diagnostic], error: "RunError | None"
+        ) -> EntryResult:
+            """Keep what this entry completed, drop what it did not, and report.
+
+            The entry frame is always populated by the closure pre-pass before
+            params run (see ``IrInterpreter.run``), so a declaration completed
+            before a failing param default stays promoted. The promotion plan
+            itself is conservative: it excludes params whose symbols were not
+            installed and applies the declaration-dependency fixpoint. Only the
+            declarations left unpromoted have their nominals rolled back --
+            unlike a rejected entry, this one keeps a partial link delta, so the
+            image cannot simply be restored wholesale.
+            """
+            trace.run_end(ok=False)
+            self._persist_interpreter_settings(interp, trace)
+            promoted = lowered.promotion_plan.completed_declaration_ids(
                 len(interp.module_initializer_values.get(lowered.program.entry_module, ())),
                 interp.entry_param_symbols_installed,
+            )
+            installed = promote(partial=True, promoted_declaration_ids=promoted)
+            self._restore_unpromoted_entry_nominals(
+                orig_program,
+                promoted,
+                nominal_snapshot,
+                builtin_nominal_snapshot,
+            )
+            kind, name = self._ctx._classify(orig_program)
+            return EntryResult(
+                kind=kind,
+                name=name,
+                value=None,
+                value_type=None,
+                diagnostics=diagnostics,
+                warnings=warnings,
+                error=error,
+                ok=False,
+                trace_path=self._ctx._trace_path,
+                installed=installed,
             )
 
         try:
@@ -665,87 +709,21 @@ class EntryPipeline:
                 trace_id=str(error.fields.get("trace_id", "")),
                 span=exc.span,
             )
-            trace.run_end(ok=False)
-            self._persist_interpreter_settings(interp, trace)
-            promoted = completed_declaration_ids()
-            installed = self._ctx._promote_ir_state(
-                text=text,
-                program=orig_program,
-                checked=checked,
-                next_start_id=new_next_id,
-                entry_program_name=entry_program_name,
-                entry_active_config=entry_active_config,
-                partial=True,
-                promoted_declaration_ids=promoted,
-            )
-            self._restore_unpromoted_entry_nominals(
-                orig_program,
-                promoted,
-                nominal_snapshot,
-                builtin_nominal_snapshot,
-            )
-            kind, name = self._ctx._classify(orig_program)
-            return EntryResult(
-                kind=kind,
-                name=name,
-                value=None,
-                value_type=None,
-                diagnostics=[],
-                warnings=warnings,
-                error=error,
-                ok=False,
-                trace_path=self._ctx._trace_path,
-                installed=installed,
-            )
+            return partial_failure(diagnostics=[], error=error)
         except (AgentCancelled, KeyboardInterrupt) as exc:
             cancellation_message = (
                 "Agent call cancelled — entry aborted."
                 if isinstance(exc, AgentCancelled)
                 else "Entry interrupted — entry aborted."
             )
-            trace.run_end(ok=False)
-            self._persist_interpreter_settings(interp, trace)
-            promoted = completed_declaration_ids()
-            installed = self._ctx._promote_ir_state(
-                text=text,
-                program=orig_program,
-                checked=checked,
-                next_start_id=new_next_id,
-                entry_program_name=entry_program_name,
-                entry_active_config=entry_active_config,
-                partial=True,
-                promoted_declaration_ids=promoted,
-            )
-            self._restore_unpromoted_entry_nominals(
-                orig_program,
-                promoted,
-                nominal_snapshot,
-                builtin_nominal_snapshot,
-            )
-            kind, name = self._ctx._classify(orig_program)
-            return EntryResult(
-                kind=kind,
-                name=name,
-                value=None,
-                value_type=None,
-                diagnostics=[Diagnostic(message=cancellation_message, line=1)],
-                warnings=warnings,
-                error=None,
-                ok=False,
-                trace_path=self._ctx._trace_path,
-                installed=installed,
+            return partial_failure(
+                diagnostics=[Diagnostic(message=cancellation_message, line=1)], error=None
             )
         trace.run_end(ok=True)
         # Setting writes are ordinary non-transactional mutations: persist all
         # effects that completed, on success or before a later runtime failure.
         self._persist_interpreter_settings(interp, trace)
-        self._ctx._promote_ir_state(
-            text=text,
-            program=orig_program,
-            checked=checked,
-            next_start_id=new_next_id,
-            entry_program_name=entry_program_name,
-            entry_active_config=entry_active_config,
+        promote(
             partial=False,
             promoted_declaration_ids=lowered.promotion_plan.completed_declaration_ids(
                 len(lowered.program.modules[lowered.program.entry_module].initializers),

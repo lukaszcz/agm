@@ -3462,6 +3462,29 @@ class TestImports:
         assert {name for name, _typ, _value in session.bindings()} == {"fresh"}
         assert session._session_scope.bindings["fresh"].decl_node_id >= next_node_id
 
+    def test_companion_import_failure_rolls_back_link_image(self, tmp_path: Path) -> None:
+        """A rejected entry leaves no linked declarations, however it was rejected.
+
+        A failing companion import rejects the entry after lowering has already
+        allocated into the persistent image, exactly as a failing setting
+        bootstrap does, so both discard the same complete link delta.
+        """
+        from agm.agl.lower import LinkImage
+
+        (tmp_path / "broken.agl").write_text("extern def f() -> int\n")
+        (tmp_path / "broken.py").write_text("raise RuntimeError('boom')\n")
+        s = self._make_session_with_root(tmp_path)
+
+        failed = s.eval_entry("open import broken\ndef helper() -> int\n  7\nlet stale = helper()")
+
+        assert not failed.ok
+        assert s._link_image == LinkImage()
+
+        succeeded = s.eval_entry("def helper() -> int\n  1\nhelper()")
+
+        assert succeeded.ok, succeeded.diagnostics
+        assert _int(succeeded.value) == 1
+
     def test_runtime_failure_does_not_mark_module_linked(self, tmp_path: Path) -> None:
         # Regression: when an entry imports a previously unseen
         # module and then raises at runtime, the module must NOT be marked as

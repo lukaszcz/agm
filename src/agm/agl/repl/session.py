@@ -147,7 +147,6 @@ class ReplSession:
 
         self._default_strict_json = default_strict_json
         self._default_stdlib = default_stdlib
-        self._shell_exec_timeout = shell_exec_timeout
         # ``_engine_base`` is the single seed representation for all six engine
         # keys, supplied by the host command (commands/repl.py). Fold the two
         # scalar constructor arguments that would otherwise seed
@@ -190,6 +189,13 @@ class ReplSession:
         # persists.
         self._persisted_host_settings: dict[str, Value] = self._host_settings_seed()
         self._persisted_timeout_setting = self._timeout_seed()
+        # The session's live timeout follows the same normalized seed the
+        # driver receives below rather than the raw argument. Its only reader
+        # (:mod:`agm.agl.repl.entry_pipeline`) consults it just when
+        # ``_persisted_timeout_setting`` is ``None``, which the fold above
+        # allows only when the raw argument was ``None`` too, so the two agree
+        # wherever this field is observable.
+        self._shell_exec_timeout = self._resolve_timeout_seed(self._persisted_timeout_setting)
         self._host_settings_policy = host_settings_policy
         # Trace destination: when set, each evaluated entry opens a fresh
         # ``TraceStore`` (its own ``run_id``) appending JSONL records to this one
@@ -201,12 +207,21 @@ class ReplSession:
         self._params_config_loader = params_config_loader
 
         # Internal runtime owns the registrations + host-environment assembly.
+        # The three live engine settings below come from the normalized
+        # ``_engine_base`` rather than the raw constructor scalars -- for
+        # ``strict-json`` from its seed directly, since that key is never
+        # folded in -- so the driver can never disagree with the session about
+        # a setting the host seeded through ``engine_base``.
         self._runtime = PipelineDriver(
-            default_strict_json=default_strict_json,
-            default_loop_limit=default_loop_limit,
+            default_strict_json=(
+                self._initial_strict_json
+                if self._persisted_strict_json is None
+                else self._persisted_strict_json.value
+            ),
+            default_loop_limit=self._default_loop_limit,
             default_call_depth_limit=default_call_depth_limit,
             agent_dispatcher=agent_dispatcher,
-            shell_exec_timeout=shell_exec_timeout,
+            shell_exec_timeout=self._shell_exec_timeout,
         )
         # Reuse the driver's resolved (default-applied) limit for the per-entry
         # interpreters this session builds directly, so the canonical default
@@ -553,6 +568,24 @@ class ReplSession:
         assert seed is None or isinstance(seed, EnumValue)
         return seed
 
+    @staticmethod
+    def _resolve_timeout_seed(seed: "EnumValue | None") -> float | None:
+        """Unwrap a ``timeout`` seed (``Option[text]``) into seconds, or ``None``.
+
+        ``None`` covers both an absent seed and an explicit ``None`` variant (a
+        host or declared "no timeout" control). Shared by construction and
+        :meth:`_reset_live_engine_settings` so a timeout ``Option`` is unwrapped
+        in exactly one place.
+        """
+        from agm.agl.semantics.values import TextValue
+        from agm.core.parse import parse_timeout
+
+        if seed is None or seed.variant != "Some":
+            return None
+        timeout_value = seed.fields["value"]
+        assert isinstance(timeout_value, TextValue)
+        return parse_timeout(timeout_value.value)
+
     def _host_settings_seed(self) -> "dict[str, Value]":
         """Return the effective seed for each host-consumed (log/log-file/default-agent) key.
 
@@ -616,8 +649,7 @@ class ReplSession:
         host-seeded ``0`` (an explicit disable) rather than collapsing it the
         way a declared ``0`` is collapsed here.
         """
-        from agm.agl.semantics.values import IntValue, TextValue
-        from agm.core.parse import parse_timeout
+        from agm.agl.semantics.values import IntValue
 
         strict_seed = self._strict_json_seed()
         strict_json = self._initial_strict_json if strict_seed is None else strict_seed.value
@@ -629,12 +661,7 @@ class ReplSession:
             declared_fallback = declared_limit.value or None
         loop_limit = self._resolve_loop_limit(fallback=declared_fallback)
 
-        timeout_seed = self._timeout_seed()
-        shell_exec_timeout = None
-        if timeout_seed is not None and timeout_seed.variant == "Some":
-            timeout_value = timeout_seed.fields["value"]
-            assert isinstance(timeout_value, TextValue)
-            shell_exec_timeout = parse_timeout(timeout_value.value)
+        shell_exec_timeout = self._resolve_timeout_seed(self._timeout_seed())
         return strict_json, loop_limit, shell_exec_timeout
 
     def _update_engine_settings(

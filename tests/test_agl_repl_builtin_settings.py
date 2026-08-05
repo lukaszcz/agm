@@ -405,6 +405,71 @@ class TestMaxItersEngineBaseSeed:
         assert s._default_loop_limit == 5
 
 
+class TestDriverConstructionUnification:
+    """The internal ``PipelineDriver`` is built from the normalized ``_engine_base``.
+
+    ``ReplSession`` receives the three runtime-live engine settings through
+    two channels: the typed ``engine_base`` seed mapping and the scalar
+    constructor arguments (``default_strict_json``/``default_loop_limit``/
+    ``shell_exec_timeout``). Each test below deliberately makes the two
+    channels disagree and asserts that the internal driver (``s._runtime``)
+    follows ``engine_base``, not the disagreeing scalar -- the single source
+    of truth the session itself already uses for its own live fields.
+    """
+
+    def test_max_iters_engine_base_seed_reaches_the_driver_over_a_disagreeing_argument(
+        self,
+    ) -> None:
+        s = ReplSession(
+            stdlib_root=_STDLIB_ROOT,
+            default_loop_limit=30,
+            engine_base=build_engine_config_seeds({"max-iters": 5}),
+        )
+        assert s._runtime.default_loop_limit == 5
+
+    def test_timeout_engine_base_seed_reaches_the_driver_over_a_disagreeing_argument(
+        self,
+    ) -> None:
+        s = ReplSession(
+            stdlib_root=_STDLIB_ROOT,
+            shell_exec_timeout=30.0,
+            engine_base=build_engine_config_seeds({"timeout": "5s"}),
+        )
+        assert s._runtime.shell_exec_timeout == 5.0
+        # The session's own live field agrees with the driver it built.
+        assert s._shell_exec_timeout == 5.0
+
+    def test_timeout_seeded_as_none_reaches_the_driver_over_a_disagreeing_argument(
+        self,
+    ) -> None:
+        # An explicit empty ``Option`` (a "no timeout" host control) must win
+        # over a disagreeing non-``None`` scalar, same as every other case.
+        s = ReplSession(
+            stdlib_root=_STDLIB_ROOT,
+            shell_exec_timeout=30.0,
+            engine_base=build_engine_config_seeds({"timeout": None}),
+        )
+        assert s._runtime.shell_exec_timeout is None
+        assert s._shell_exec_timeout is None
+
+    def test_strict_json_engine_base_seed_reaches_the_driver_over_a_disagreeing_argument(
+        self,
+    ) -> None:
+        s = ReplSession(
+            stdlib_root=_STDLIB_ROOT,
+            default_strict_json=True,
+            engine_base=build_engine_config_seeds({"strict-json": False}),
+        )
+        assert s._runtime.default_strict_json is False
+
+    def test_strict_json_argument_reaches_the_driver_when_unseeded(self) -> None:
+        # ``strict-json`` is never folded into ``_engine_base`` (a bare
+        # ``False`` must stay a driver floor), so an unseeded session's driver
+        # still floors on the raw constructor argument.
+        s = ReplSession(stdlib_root=_STDLIB_ROOT, default_strict_json=True)
+        assert s._runtime.default_strict_json is True
+
+
 class TestMaxItersRegisterIsolation:
     """A ``max-iters`` host seed never leaks into the host-consumed settings register.
 

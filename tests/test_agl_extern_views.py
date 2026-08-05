@@ -7,7 +7,6 @@ from pathlib import Path
 
 import pytest
 
-from agm.agl.capabilities import HostCapabilities
 from agm.agl.ir.contracts import (
     BoundaryArray,
     BoundaryDict,
@@ -23,7 +22,6 @@ from agm.agl.ir.contracts import (
     ScalarKind,
 )
 from agm.agl.ir.ids import NominalId
-from agm.agl.parser import parse_program
 from agm.agl.runtime.boundary import (
     AglArrayView,
     AglDictView,
@@ -49,25 +47,14 @@ from agm.agl.semantics.values import (
     RecordValue,
     TextValue,
 )
-from agm.agl.type_schema import build_extern_contract
-from tests.agl.module_graph import resolve_and_check_program_ast
+from tests.agl.module_graph import build_extern_contract_from_source
 
 _PATH = Path("/virtual/extern_views.agl")
-_CAPS = HostCapabilities(
-    agent_names=frozenset(),
-    has_default_agent=True,
-    supports_shell_exec=True,
-    codec_kinds={
-        "text": frozenset({"text"}),
-        "json": frozenset({"json", "record", "enum", "array", "dict", "int", "decimal", "bool"}),
-    },
-)
 
 
 def build_contract(source: str, fn_name: str = "f") -> ExternContract:
-    """Compile an extern contract from a real checked AgL signature."""
-    checked = resolve_and_check_program_ast(parse_program(source), _CAPS, origin_path=_PATH)
-    return build_extern_contract(checked.function_signatures[fn_name], checked.type_env.type_table)
+    """Compile *fn_name*'s boundary contract from real checked AgL source."""
+    return build_extern_contract_from_source(source, origin_path=_PATH, fn_name=fn_name)
 
 
 def _nominal(schema: BoundarySchema) -> NominalId:

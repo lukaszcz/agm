@@ -18,17 +18,7 @@ from decimal import Decimal
 from pathlib import Path
 
 import pytest
-from agm.agl.runtime.boundary import (
-    AglArrayView,
-    AglDictView,
-    BoundaryScope,
-    BoundaryViolation,
-    SealedHandle,
-    decode_boundary_value,
-    encode_boundary_value,
-)
 
-from agm.agl.capabilities import HostCapabilities
 from agm.agl.eval._decimal import AGL_DECIMAL_CONTEXT
 from agm.agl.ir.contracts import (
     BoundaryEnum,
@@ -39,7 +29,15 @@ from agm.agl.ir.contracts import (
 )
 from agm.agl.ir.ids import FunctionId, NominalId
 from agm.agl.modules.ids import ENTRY_ID
-from agm.agl.parser import parse_program
+from agm.agl.runtime.boundary import (
+    AglArrayView,
+    AglDictView,
+    BoundaryScope,
+    BoundaryViolation,
+    SealedHandle,
+    decode_boundary_value,
+    encode_boundary_value,
+)
 from agm.agl.runtime.externs import ExternRegistry
 from agm.agl.runtime.render import render_value
 from agm.agl.semantics.exceptions import AglRaise
@@ -60,20 +58,9 @@ from agm.agl.semantics.values import (
     UnitValue,
     Value,
 )
-from agm.agl.type_schema import build_extern_contract
-from tests.agl.module_graph import resolve_and_check_program_ast
+from tests.agl.module_graph import build_extern_contract_from_source
 
 _PATH = Path("/virtual/extern_boundary.agl")
-
-_CAPS = HostCapabilities(
-    agent_names=frozenset(),
-    has_default_agent=True,
-    supports_shell_exec=True,
-    codec_kinds={
-        "text": frozenset({"text"}),
-        "json": frozenset({"json", "record", "enum", "array", "dict", "int", "decimal", "bool"}),
-    },
-)
 
 _BOX = "record Box\n  value: int\n  label: text\n"
 _SHAPE = "enum Shape\n  | circle(radius: decimal)\n  | rect(width: int, height: int)\n"
@@ -84,19 +71,8 @@ _BAD_THING_WITH_ARRAY = "exception BadThingWithArray extends Exception\n  items:
 
 
 def build_contract(source: str, fn_name: str = "f") -> ExternContract:
-    """Parse + resolve (file-backed) + check *source*, compiling ``fn_name``'s contract.
-
-    Uses ``resolve_and_check_program_ast``'s hand-built single-module graph
-    rather than a real loaded one: *_PATH* is a virtual, non-existent file.
-    This module drives the boundary walkers directly against real Python
-    callables, "not files" (see the module docstring), independent of
-    whether a companion ``.py`` file exists on disk -- the module loader's
-    own concern, covered separately by ``test_agl_extern_syntax.py`` and the
-    real-graph tests in ``test_agl_extern_lowering.py``/``test_agl_extern_runtime.py``.
-    """
-    cp = resolve_and_check_program_ast(parse_program(source), _CAPS, origin_path=_PATH)
-    sig = cp.function_signatures[fn_name]
-    return build_extern_contract(sig, cp.type_env.type_table)
+    """Compile *fn_name*'s boundary contract from real checked AgL source."""
+    return build_extern_contract_from_source(source, origin_path=_PATH, fn_name=fn_name)
 
 
 def _nominal(schema: BoundarySchema) -> NominalId:

@@ -53,15 +53,18 @@ import dataclasses
 from pathlib import Path
 
 from agm.agl.capabilities import HostCapabilities
+from agm.agl.ir.contracts import ExternContract
 from agm.agl.modules.ids import ENTRY_ID, STD_CORE_ID, ModuleId
 from agm.agl.modules.loader import LoadedModule, ModuleGraph, build_repl_graph
 from agm.agl.modules.roots import RootSet
+from agm.agl.parser import parse_program
 from agm.agl.parser.parser import parse_program_seeded
 from agm.agl.scope import ModuleResolution
 from agm.agl.scope.program import resolve_program
 from agm.agl.scope.symbols import ConstructorRef, ScopeNode
 from agm.agl.syntax.nodes import ExportDecl, ImportDecl, Program, static_items
 from agm.agl.syntax.spans import SourceId
+from agm.agl.type_schema import build_extern_contract
 from agm.agl.typecheck import CheckedModule
 from agm.agl.typecheck.checker import _check_prepared_module
 from agm.agl.typecheck.env import TypeEnvironment
@@ -392,3 +395,21 @@ def resolve_and_check_program_ast(
     resolved_program = resolve_program(graph, ambient_agents=ambient_agents)
     checked_program = check_program(resolved_program, capabilities, entry_seed_env=seed_env)
     return checked_program.modules[graph.entry_id]
+
+
+def build_extern_contract_from_source(
+    source: str, *, origin_path: Path, fn_name: str = "f"
+) -> ExternContract:
+    """Compile one ``extern def``'s boundary contract from real checked AgL source.
+
+    Builds the hand-built single-module graph of :func:`resolve_and_check_program_ast`,
+    so *origin_path* is a virtual, non-existent file: a contract is derived
+    from the checked signature alone and never depends on a companion ``.py``
+    existing on disk. Companion resolution and loading is the module loader's
+    own concern, covered by ``test_agl_extern_syntax.py`` and the real-graph
+    tests in ``test_agl_extern_lowering.py``/``test_agl_extern_runtime.py``.
+    """
+    checked = resolve_and_check_program_ast(
+        parse_program(source), _DEFAULT_CAPABILITIES, origin_path=origin_path
+    )
+    return build_extern_contract(checked.function_signatures[fn_name], checked.type_env.type_table)

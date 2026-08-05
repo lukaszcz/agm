@@ -251,9 +251,10 @@ def _host_seeded_session(
 ) -> ReplSession:
     """Build a session with explicit host seeds ONLY for the given keys.
 
-    ``max-iters`` is seeded through ``default_loop_limit`` (a driver argument,
-    not ``engine_base``) because that is the only place the session ever reads
-    a host max-iters control from -- see ``ReplSession._host_seed``.
+    ``max-iters`` is seeded through the ``default_loop_limit`` driver
+    argument; ``engine_base["max-iters"]`` is the other channel, exercised by
+    ``TestMaxItersEngineBaseSeed`` below. ``ReplSession.__init__`` folds both
+    into the same ``_engine_base`` entry.
     """
     raw: dict[str, object] = {}
     if strict_json is not None:
@@ -369,6 +370,105 @@ class TestResetHostSeedPrecedence:
         value = _read(s, "default-agent")
         assert isinstance(value, EnumValue)
         assert value.fields["command"] == TextValue("host")
+
+
+class TestMaxItersEngineBaseSeed:
+    """``engine_base['max-iters']`` is a first-class host seed, like every other key.
+
+    An explicit ``engine_base["max-iters"]`` counts as a host seed exactly
+    like a ``default_loop_limit`` argument does, and wins when the two
+    disagree -- both fold into the same mapping (``ReplSession.__init__``).
+    """
+
+    def test_engine_base_seed_survives_a_source_write_across_reset(self) -> None:
+        s = ReplSession(
+            stdlib_root=_STDLIB_ROOT,
+            engine_base=build_engine_config_seeds({"max-iters": 5}),
+        )
+        _ok(s, "import std/config")
+        _ok(s, "std/config::max-iters := 9")
+        s.reset()
+        _ok(s, "import std/config")
+        assert _read(s, "max-iters") == IntValue(5)
+
+    def test_engine_base_seed_wins_over_the_default_loop_limit_argument(self) -> None:
+        # The two seed channels deliberately disagree: an explicit
+        # ``engine_base`` entry must win, mirroring every other key's
+        # seed-over-driver-argument precedence (``TestResetSeedWinsOverDriverArgument``).
+        s = ReplSession(
+            stdlib_root=_STDLIB_ROOT,
+            default_loop_limit=30,
+            engine_base=build_engine_config_seeds({"max-iters": 5}),
+        )
+        assert s._default_loop_limit == 5
+        s.reset()
+        assert s._default_loop_limit == 5
+
+
+class TestMaxItersRegisterIsolation:
+    """A ``max-iters`` host seed never leaks into the host-consumed settings register.
+
+    ``max-iters`` is a runtime-live key: normalizing it into ``_engine_base``
+    must not let it reach ``_persisted_host_settings`` (the register mapping
+    fed to the interpreter as ``builtin_host_settings`` for
+    log/log-file/default-agent), or the interpreter would receive a
+    register value it never reads a max-iters control from.
+    """
+
+    def test_default_loop_limit_seed_is_absent_from_the_host_settings_register(self) -> None:
+        s = ReplSession(stdlib_root=_STDLIB_ROOT, default_loop_limit=5)
+        assert "max-iters" not in s._persisted_host_settings
+        s.reset()
+        assert "max-iters" not in s._persisted_host_settings
+
+    def test_engine_base_seed_is_absent_from_the_host_settings_register(self) -> None:
+        s = ReplSession(
+            stdlib_root=_STDLIB_ROOT,
+            engine_base=build_engine_config_seeds({"max-iters": 5}),
+        )
+        assert "max-iters" not in s._persisted_host_settings
+        s.reset()
+        assert "max-iters" not in s._persisted_host_settings
+
+
+class TestExplicitZeroLoopLimit:
+    """A host ``default_loop_limit=0`` is an explicit "disable the safety valve" control.
+
+    Unlike the *declared* ``max-iters = 0`` default that ``:reset`` collapses
+    to ``None`` (``test_reset_keeps_a_declared_zero_max_iters_disabled``
+    below), a host ``0`` keeps its exact value across construction and
+    ``:reset``: collapsing it would let a declared nonzero default reassert
+    itself and silently undo the host's explicit disable.
+    """
+
+    def test_zero_survives_construction_and_reset_with_no_declared_default(self) -> None:
+        s = ReplSession(stdlib_root=_STDLIB_ROOT, default_loop_limit=0)
+        assert s._default_loop_limit == 0
+        s.reset()
+        assert s._default_loop_limit == 0
+
+    def test_zero_disables_the_loop_cap_despite_a_declared_nonzero_default(
+        self, tmp_path: Path
+    ) -> None:
+        stdlib_root = tmp_path / "stdlib"
+        config_path = stdlib_root / "std" / "config.agl"
+        config_path.parent.mkdir(parents=True)
+        config_path.write_text("builtin var max-iters: int = 3\n", encoding="utf-8")
+        (config_path.parent / "core.agl").write_text(
+            (_STDLIB_ROOT / "std" / "core.agl").read_text(encoding="utf-8"), encoding="utf-8"
+        )
+        s = ReplSession(stdlib_root=stdlib_root, default_stdlib=False, default_loop_limit=0)
+        _ok(s, "import std/config")
+        s.reset()
+        assert s._default_loop_limit == 0
+
+        _ok(s, "import std/config")
+        # A loop well past the declared cap of 3 must run to completion: the
+        # host's explicit 0 disables the safety valve outright rather than
+        # falling through to the declared default.
+        result = s.eval_entry("var i = 0\ndo\n  i := i + 1\nuntil i >= 10\ni")
+        assert result.ok, f"entry failed: {result.diagnostics} {result.error}"
+        assert result.value == IntValue(10)
 
 
 class TestResetDeclaredDefaultPrecedence:

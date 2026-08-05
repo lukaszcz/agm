@@ -138,26 +138,43 @@ class ReplSession:
 
         from agm.agl.lower import LinkImage
         from agm.agl.pipeline import PipelineDriver
+        from agm.agl.runtime.option import some_value
         from agm.agl.scope.symbols import ScopeNode
+        from agm.agl.semantics.values import IntValue, TextValue
         from agm.agl.typecheck.env import TypeEnvironment
         from agm.config.module_roots import resolve_stdlib_root
+        from agm.core.parse import format_timeout
 
         self._default_strict_json = default_strict_json
-        self._default_loop_limit = default_loop_limit
         self._default_stdlib = default_stdlib
         self._shell_exec_timeout = shell_exec_timeout
-        # The [exec] engine base for all seven engine keys, provided by the host
-        # command (commands/repl.py). Supplies the runner/default-agent/log/
-        # log-file base values (the four host-consumed keys) for the session
-        # register seed.
+        # ``_engine_base`` is the single seed representation for all six engine
+        # keys, supplied by the host command (commands/repl.py). Fold the two
+        # scalar constructor arguments that would otherwise seed
+        # ``max-iters``/``timeout`` through a side channel into it, but only
+        # where the host did not seed the key directly: an explicit
+        # ``engine_base`` entry keeps the precedence a seed has over a driver
+        # argument for every other key. Presence, not truthiness, is what makes
+        # a key host-seeded (see :meth:`_has_host_seed`), so a false
+        # ``strict-json`` seed still counts as a host control.
+        # ``default_strict_json`` is deliberately NOT folded in: a bare
+        # ``False`` must stay a driver floor (``_initial_strict_json`` below),
+        # or no declared ``std/config`` default could ever be recorded for it.
         self._engine_base: dict[str, Value] = dict(engine_base) if engine_base is not None else {}
-        # Capture initial engine defaults for :reset to restore. A false
-        # strict-json value is still an explicit host control -- presence in
-        # ``_engine_base``, not truthiness, is what makes a key host-seeded;
-        # see ``_host_seed``.
-        self._initial_loop_limit = default_loop_limit
+        if "max-iters" not in self._engine_base and default_loop_limit is not None:
+            self._engine_base["max-iters"] = IntValue(default_loop_limit)
+        if "timeout" not in self._engine_base and shell_exec_timeout is not None:
+            self._engine_base["timeout"] = some_value(TextValue(format_timeout(shell_exec_timeout)))
+        # The live per-entry loop cap follows the normalized seed, so an
+        # explicit ``engine_base["max-iters"]`` wins over a differing
+        # ``default_loop_limit`` from the first entry onward, not only after
+        # :reset. No declared default can exist yet, hence ``fallback=None``.
+        self._default_loop_limit: int | None = self._resolve_loop_limit(fallback=None)
+        # Driver floor applied only when NEITHER a host seed NOR a declared
+        # ``std/config`` default exists for ``strict-json``; unlike
+        # ``max-iters``/``timeout`` it is never promoted into ``_engine_base``
+        # (see :meth:`_reset_live_engine_settings`).
         self._initial_strict_json = default_strict_json
-        self._initial_shell_exec_timeout = shell_exec_timeout
         # Effective declaration defaults learned when an entry loads ``std/config``.
         # These survive :reset so a bare later entry still starts with the same
         # setting values, while explicit host seeds in ``_engine_base`` retain
@@ -166,8 +183,8 @@ class ReplSession:
         # :meth:`reset` reapplies once declarations have populated this dict.
         self._declared_engine_defaults: dict[str, Value] = {}
         self._persisted_strict_json = self._strict_json_seed()
-        # Persisted register values for the four host-consumed engine settings
-        # (runner/default-agent/log/log-file). Seeded from explicit host values,
+        # Persisted register values for the three host-consumed engine settings
+        # (default-agent/log/log-file). Seeded from explicit host values,
         # threaded into every entry's interpreter, and read
         # back after a successful entry so a ``std/config::KEY := VALUE`` write
         # persists.
@@ -503,30 +520,11 @@ class ReplSession:
     def _host_seed(self, key: str) -> "Value | None":
         """Return the explicit host control for *key*, if the host supplied one.
 
-        A host-consumed key (log/log-file/default-agent) and strict-json read
-        straight from the ``_engine_base`` seed the host command supplied.
-        Timeout additionally falls back to a value synthesized from the
-        driver's ``shell_exec_timeout`` argument when the host did not seed it
-        directly, round-tripping through the same ``Option[text]`` spelling a
-        source write would use. Max-iters is seeded only through the driver's
-        ``default_loop_limit`` argument: unlike every other key, its
-        ``_engine_base`` entry (if any) is never consulted here.  The session
-        never seeds max-iters into an interpreter either (see
-        ``EntryPipeline``), so that driver argument is the only host floor the
-        evaluator ever sees for it.
+        ``_engine_base`` is the single seed representation, so every key reads
+        straight from it with no per-key special case: the constructor folds
+        ``default_loop_limit`` and ``shell_exec_timeout`` into it rather than
+        leaving them to be consulted separately here.
         """
-        from agm.agl.runtime.option import some_value
-        from agm.agl.semantics.values import IntValue, TextValue
-        from agm.core.parse import format_timeout
-
-        if key == "max-iters":
-            if self._initial_loop_limit is None:
-                return None
-            return IntValue(self._initial_loop_limit)
-        if key == "timeout" and "timeout" not in self._engine_base:
-            if self._initial_shell_exec_timeout is None:
-                return None
-            return some_value(TextValue(format_timeout(self._initial_shell_exec_timeout)))
         return self._engine_base.get(key)
 
     def _effective_seed(self, key: str) -> "Value | None":
@@ -558,16 +556,17 @@ class ReplSession:
     def _host_settings_seed(self) -> "dict[str, Value]":
         """Return the effective seed for each host-consumed (log/log-file/default-agent) key.
 
-        A missing key must stay absent until the interpreter has evaluated the
-        `builtin var` declaration's default; filling it with a host-side floor
-        here would incorrectly override that declared default.
+        Host seeds win over remembered declared defaults (the shared
+        precedence), and the merge is then filtered to the host-consumed keys:
+        ``_engine_base`` also carries the runtime-live keys
+        (``strict-json``/``max-iters``/``timeout``), which have no register and
+        must never enter this seed. A key with neither a seed nor a remembered
+        default stays absent until the interpreter has evaluated the ``builtin
+        var`` declaration's default; filling it with a host-side floor here
+        would incorrectly override that declared default.
         """
-        result: dict[str, Value] = {}
-        for key in HOST_CONSUMED_ENGINE_KEYS:
-            seed = self._effective_seed(key)
-            if seed is not None:
-                result[key] = seed
-        return result
+        merged = {**self._declared_engine_defaults, **self._engine_base}
+        return {key: value for key, value in merged.items() if key in HOST_CONSUMED_ENGINE_KEYS}
 
     def _record_declared_engine_defaults(
         self, declared_keys: frozenset[str], effective_values: "Mapping[str, Value]"
@@ -587,17 +586,35 @@ class ReplSession:
 
     def _has_host_seed(self, key: str) -> bool:
         """Return whether *key* has an explicit host control over its declaration."""
-        return self._host_seed(key) is not None
+        return key in self._engine_base
+
+    def _resolve_loop_limit(self, *, fallback: int | None) -> int | None:
+        """Return the effective max-iters cap: the host seed if there is one, else *fallback*.
+
+        Shared by construction (``fallback=None``, since no declared default
+        can exist yet) and :meth:`_reset_live_engine_settings` (``fallback`` =
+        the remembered declared default, 0-collapsed by that caller), so the
+        host-seed-wins precedence is expressed once. A host-seeded ``0`` is
+        returned as an explicit ``0`` rather than collapsed to ``None``: it
+        means "cap disabled", and ``None`` would instead let a declared nonzero
+        default reassert itself when the next interpreter is built.
+        """
+        from agm.agl.semantics.values import IntValue
+
+        loop_seed = self._host_seed("max-iters")
+        if loop_seed is None:
+            return fallback
+        assert isinstance(loop_seed, IntValue)
+        return loop_seed.value
 
     def _reset_live_engine_settings(self) -> tuple[bool, int | None, float | None]:
         """Return the reset values for settings backed by interpreter fields.
 
         Strict-json and timeout reapply the shared host-seed-else-declared-
         default precedence via :meth:`_strict_json_seed` / :meth:`_timeout_seed`.
-        Max-iters keeps its own asymmetric rule (see :meth:`_host_seed`): its
-        host floor is the driver's ``default_loop_limit`` argument, never
-        ``_engine_base``, so it is read directly rather than through
-        :meth:`_effective_seed`.
+        Max-iters reapplies it via :meth:`_resolve_loop_limit`, which keeps a
+        host-seeded ``0`` (an explicit disable) rather than collapsing it the
+        way a declared ``0`` is collapsed here.
         """
         from agm.agl.semantics.values import IntValue, TextValue
         from agm.core.parse import parse_timeout
@@ -605,12 +622,12 @@ class ReplSession:
         strict_seed = self._strict_json_seed()
         strict_json = self._initial_strict_json if strict_seed is None else strict_seed.value
 
-        loop_limit = self._initial_loop_limit
-        if loop_limit is None:
-            declared_limit = self._declared_engine_defaults.get("max-iters")
-            if declared_limit is not None:
-                assert isinstance(declared_limit, IntValue)
-                loop_limit = declared_limit.value or None
+        declared_limit = self._declared_engine_defaults.get("max-iters")
+        declared_fallback = None
+        if declared_limit is not None:
+            assert isinstance(declared_limit, IntValue)
+            declared_fallback = declared_limit.value or None
+        loop_limit = self._resolve_loop_limit(fallback=declared_fallback)
 
         timeout_seed = self._timeout_seed()
         shell_exec_timeout = None
@@ -1384,12 +1401,12 @@ class ReplSession:
         self._source_log = []
         self._ambient_constructor_candidates = {}
         self._ambient_type_names = frozenset()
-        # Re-seed the host-consumed registers so a prior ``std/config::runner``
-        # (etc.) write does not bleed past :reset. ``_declared_engine_defaults``
-        # is now populated (if ``std/config`` was ever loaded), so these calls
-        # apply the same host-seed-else-declared-default precedence used at
-        # construction, this time landing on the declared branch where no host
-        # seed exists.
+        # Re-seed the host-consumed registers so a prior
+        # ``std/config::default-agent`` (etc.) write does not bleed past
+        # :reset. ``_declared_engine_defaults`` is now populated (if
+        # ``std/config`` was ever loaded), so these calls apply the same
+        # host-seed-else-declared-default precedence used at construction, this
+        # time landing on the declared branch where no host seed exists.
         self._persisted_host_settings = self._host_settings_seed()
         self._persisted_strict_json = self._strict_json_seed()
         self._persisted_timeout_setting = self._timeout_seed()

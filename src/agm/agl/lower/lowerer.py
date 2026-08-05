@@ -257,7 +257,6 @@ from agm.agl.syntax.nodes import (
 )
 from agm.agl.syntax.spans import SourceSpan
 from agm.agl.type_schema import (
-    build_extern_contract,
     build_format_instructions,
     build_param_decoder,
     derive_schema_and_decode,
@@ -899,7 +898,7 @@ class _Lowerer:
         fn_id = self._link.fn_node_to_id[funcdef.node_id]
         fn_sym = self._link.fn_node_to_sym[funcdef.node_id]
 
-        ir_params, sig, _param_decl_ids, param_labels, result_label = self._lower_declared_params(
+        ir_params, _sig, _param_decl_ids, param_labels, result_label = self._lower_declared_params(
             funcdef, fn_id
         )
 
@@ -910,7 +909,6 @@ class _Lowerer:
             params=ir_params,
             impl=ExternFunctionBody(
                 name=funcdef.name,
-                contract=build_extern_contract(sig, self._type_table),
             ),
             param_labels=param_labels,
             result_label=result_label,

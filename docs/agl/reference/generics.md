@@ -339,6 +339,11 @@ the body cannot branch on the actual type. (Once a type parameter is *applied*
 inside a known constructor — e.g. a `Box[T]` value — the surrounding structure
 is fully usable; only the bare `T` payload is opaque.)
 
+This language-internal guarantee does not extend to a Python companion behind
+`extern def`. The FFI passes the ordinary runtime representation at a generic
+position and trusts the companion to preserve parametricity; see [Python
+FFI](ffi.md#generics-and-trust).
+
 ## Invariance
 
 Type arguments are **invariant**: an applied type matches another only when

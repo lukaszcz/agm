@@ -10,7 +10,6 @@ def show(xs: list[object]) -> int:
 
 
 def identity(x: object) -> object:
-    """Return `x` unchanged, but repr it first (forces the sealed handle to
-    render its wrapped AgL value, which detects a reference cycle)."""
+    """Return `x` unchanged after rendering its boundary representation."""
     repr(x)
     return x

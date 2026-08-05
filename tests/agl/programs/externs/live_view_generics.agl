@@ -1,7 +1,6 @@
-# Generic array elements cross the Python boundary as sealed handles, while the
-# array itself remains a live mutable view. A companion may rearrange received
-# handles but may not replace one with a handle sealed for another type variable,
-# an ordinary Python value, or sort them.
+# Generic array elements cross as their ordinary runtime values while the array
+# itself remains a live mutable view. Parametricity is the companion's
+# obligation.
 param mode: text
 
 record Label

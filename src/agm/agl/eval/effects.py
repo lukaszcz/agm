@@ -116,7 +116,6 @@ class EffectHandlers:
         trace_id = self._ctx._trace.new_event_id()
         return self._ctx._extern_registry.invoke(
             extern.name,
-            extern.contract,
             fn,
             args,
             trace_id,

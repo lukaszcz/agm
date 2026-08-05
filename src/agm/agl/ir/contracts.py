@@ -3,10 +3,7 @@
 This module holds closed tagged-data descriptors that the lowerer compiles
 while checker types are still available, and that the evaluator executes
 WITHOUT any checker ``Type``.  It defines the cast/conversion descriptors
-(``ConversionRecipe`` and the ``DecodeSchema`` union) and the extern boundary
-contract (``BoundarySchema`` and ``ExternContract``).  The boundary walkers
-that consume the contract at runtime live in ``runtime.boundary``
-(``encode_boundary_value`` / ``decode_boundary_value``).
+(``ConversionRecipe`` and the ``DecodeSchema`` union).
 
 Dependency rule: ``agm.agl.ir`` imports
 only stdlib + ``ir.ids`` / ``ir.operations`` + ``modules.ids``.  It imports
@@ -23,17 +20,6 @@ from agm.agl.ir.ids import NominalId
 
 __all__ = [
     "ArrayDecode",
-    "BoundaryArray",
-    "BoundaryDict",
-    "BoundaryEnum",
-    "BoundaryException",
-    "BoundaryRecord",
-    "BoundaryRef",
-    "BoundaryScalar",
-    "BoundarySchema",
-    "BoundarySealVar",
-    "BoundaryUnit",
-    "BoundaryVariantShape",
     "ContractPayload",
     "ContractRequest",
     "ConversionFailureMode",
@@ -43,8 +29,6 @@ __all__ = [
     "DecodeSchema",
     "DictDecode",
     "EnumDecode",
-    "ExternContract",
-    "ExternParamSchema",
     "ParamDecoder",
     "RecordDecode",
     "RefDecode",
@@ -173,154 +157,6 @@ class ParamDecoder:
     decode: DecodeSchema
     defs: "tuple[tuple[str, DecodeSchema], ...]" = ()
     text_verbatim: bool = False
-
-
-# ---------------------------------------------------------------------------
-# Boundary schema — typeless shape of one value crossing the extern (Python
-# FFI) boundary.  One schema serves both directions: encoding an outbound
-# argument and strictly decoding an inbound return value walk the same
-# nodes; the ``runtime.boundary`` walker owns the direction. Recursive
-# instantiations are shared via ``BoundaryRef`` into ``ExternContract.defs``.
-# ---------------------------------------------------------------------------
-
-
-@dataclass(frozen=True, slots=True)
-class BoundaryScalar:
-    """A scalar (or opaque json) leaf crossing the boundary unchanged."""
-
-    kind: ScalarKind
-
-
-@dataclass(frozen=True, slots=True)
-class BoundaryUnit:
-    """``unit`` crosses the boundary as Python ``None``."""
-
-
-@dataclass(frozen=True, slots=True)
-class BoundaryArray:
-    """An ``array[T]`` crossing as one live Python sequence view of its elements."""
-
-    element: "BoundarySchema"
-
-
-@dataclass(frozen=True, slots=True)
-class BoundaryDict:
-    """A ``dict[text, V]`` crossing as one live Python mapping view of its values."""
-
-    value: "BoundarySchema"
-
-
-@dataclass(frozen=True, slots=True)
-class BoundaryRecord:
-    """A record crossing as a field dict, in declaration order."""
-
-    nominal: NominalId
-    display_name: str
-    fields: "tuple[tuple[str, BoundarySchema], ...]"
-
-
-@dataclass(frozen=True, slots=True)
-class BoundaryVariantShape:
-    """One enum variant: its ``$case`` name and ordered field schemas."""
-
-    name: str
-    fields: "tuple[tuple[str, BoundarySchema], ...]"
-
-
-@dataclass(frozen=True, slots=True)
-class BoundaryEnum:
-    """An enum crossing as a ``{"$case": ..., ...fields}`` dict."""
-
-    nominal: NominalId
-    display_name: str
-    variants: tuple[BoundaryVariantShape, ...]
-
-
-@dataclass(frozen=True, slots=True)
-class BoundaryException:
-    """An exception crossing as a field dict, decoding into an exception value.
-
-    Distinct from ``BoundaryRecord``: an exception is not a record type, and
-    decoding it constructs an exception value rather than a plain record.
-    """
-
-    nominal: NominalId
-    display_name: str
-    fields: "tuple[tuple[str, BoundarySchema], ...]"
-
-
-@dataclass(frozen=True, slots=True)
-class BoundarySealVar:
-    """A type-variable position: the runtime seals/unseals here.
-
-    ``var`` is the declared type-parameter name (unique within one contract).
-    """
-
-    var: str
-
-
-@dataclass(frozen=True, slots=True)
-class BoundaryRef:
-    """A reference to a recursive instantiation's schema in ``ExternContract.defs``.
-
-    A recursive record, enum, or exception instantiation is emitted once under
-    a ``defs`` key from the shared recursion plan. For records and enums, that
-    key matches the corresponding JSON Schema ``$defs`` key; exceptions have
-    no JSON Schema. Every occurrence — including inside its own fields —
-    becomes a ``BoundaryRef`` instead of being inlined, so the boundary schema
-    stays finite for recursive types.
-    """
-
-    key: str
-
-
-#: Closed union of boundary-schema nodes.  Dispatch with a structural
-#: ``match`` whose final arm is ``assert_never``.
-BoundarySchema = (
-    BoundaryScalar
-    | BoundaryUnit
-    | BoundaryArray
-    | BoundaryDict
-    | BoundaryRecord
-    | BoundaryEnum
-    | BoundaryException
-    | BoundarySealVar
-    | BoundaryRef
-)
-
-
-@dataclass(frozen=True, slots=True)
-class ExternParamSchema:
-    """One extern parameter's boundary schema."""
-
-    schema: BoundarySchema
-
-
-@dataclass(frozen=True, slots=True)
-class ExternContract:
-    """Typeless boundary contract for one ``extern def``.
-
-    Built at lowering from the checked ``FunctionSignature`` while checker
-    types are still available; the runtime encodes arguments and decodes the
-    return value using only this descriptor, without any checker ``Type``.
-
-    ``params``       — one schema per declared parameter, in declaration order.
-    ``result``       — the boundary schema for the return value.
-    ``type_params``  — the extern's declared type-parameter names, in
-                        declaration order; each name may appear as a
-                        ``BoundarySealVar`` leaf somewhere in ``params``/
-                        ``result``.
-    ``defs``         — the shared boundary-schema bodies for every recursive
-                        instantiation reachable from ``params``/``result``,
-                        keyed exactly as the corresponding JSON ``$defs``
-                        entries; every ``BoundaryRef`` leaf resolves here.
-                        Empty when no parameter or result type is recursive.
-    """
-
-    params: tuple[ExternParamSchema, ...]
-    result: BoundarySchema
-    type_params: tuple[str, ...]
-    defs: "tuple[tuple[str, BoundarySchema], ...]" = ()
 
 
 # ---------------------------------------------------------------------------

@@ -528,15 +528,6 @@ class EntryPipeline:
             mid: lm.companion_path for mid, lm in self._ctx._loaded_lib_modules.items()
         }
         companion_paths.update({mid: lm.companion_path for mid, lm in new_modules.items()})
-        extern_diagnostics = _wire_extern_registry(
-            checked=checked_program,
-            capabilities=host_env.capabilities,
-            registry=host_env.extern_registry,
-            companion_paths=companion_paths,
-        )
-        if extern_diagnostics:
-            return self._ctx._fail(extern_diagnostics, warnings)
-
         nominal_snapshot = self._ctx._link_image.snapshot_nominals()
         builtin_nominal_snapshot = self._ctx._link_image.snapshot_builtin_nominals()
         lowered = lower_repl_program(
@@ -545,6 +536,21 @@ class EntryPipeline:
             source_text=text,
             contract_payloads=contract_payloads,
         )
+        extern_diagnostics = _wire_extern_registry(
+            checked=checked_program,
+            capabilities=host_env.capabilities,
+            registry=host_env.extern_registry,
+            companion_paths=companion_paths,
+            nominals=lowered.program.nominals,
+        )
+        if extern_diagnostics:
+            self._restore_unpromoted_entry_nominals(
+                orig_program,
+                frozenset(),
+                nominal_snapshot,
+                builtin_nominal_snapshot,
+            )
+            return self._ctx._fail(extern_diagnostics, warnings)
         ir_params = {
             param.symbol: param_values[param.public_name]
             for param in lowered.program.params

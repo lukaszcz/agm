@@ -909,7 +909,7 @@ BUILTIN_EXCEPTIONS: dict[str, ExceptionType] = {
     # Reference semantics makes cyclic array/dict values constructible; raised
     # when rendering or JSON conversion re-enters a container already on its
     # path. Extern array/dict arguments cross as lazy views; repr of a view or
-    # sealed handle that reaches a cycle raises this exception instead.
+    # FFI view rendering that reaches a cycle raises this exception instead.
     "CyclicValueError": ExceptionType(name="CyclicValueError", module_id=STD_CORE_ID),
 }
 

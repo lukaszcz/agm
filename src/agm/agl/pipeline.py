@@ -20,7 +20,8 @@ from typing import TYPE_CHECKING, TypeVar
 
 from agm.agl.diagnostics import AglError, Diagnostic
 from agm.agl.eval.ir_interpreter import IrInterpreter
-from agm.agl.ir.ids import AgentId
+from agm.agl.ir.ids import AgentId, NominalId
+from agm.agl.ir.program import NominalDescriptor
 from agm.agl.runtime.agents import AgentFn
 from agm.agl.runtime.params import _materialize_ir_contracts, _prepare_ir_params
 from agm.agl.runtime.types import (
@@ -800,6 +801,7 @@ class PipelineDriver:
         capabilities: "HostCapabilities",
         host_env: HostEnvironment,
         prepared: PreparedProgram,
+        nominals: "Mapping[NominalId, NominalDescriptor]",
         on_failure: "Callable[[list[Diagnostic]], _ResultT]",
     ) -> "_ResultT | None":
         """Import and resolve every extern companion, or build a failure result.
@@ -813,6 +815,7 @@ class PipelineDriver:
             capabilities=capabilities,
             registry=host_env.extern_registry,
             companion_paths=prepared.companion_paths,
+            nominals=nominals,
         )
         if extern_diagnostics:
             return on_failure(extern_diagnostics)
@@ -1021,6 +1024,11 @@ class PipelineDriver:
                     None,
                 )
 
+        if executable is None:
+            from agm.agl.lower import lower_program
+
+            executable = lower_program(compiled, contract_payloads=contract_payloads)
+
         if not check_only:
             # Extern (Python FFI) companions: import and resolve every declared
             # extern up front, gated by capability — fail-fast, before evaluation,
@@ -1032,6 +1040,7 @@ class PipelineDriver:
                 capabilities=capabilities,
                 host_env=host_env,
                 prepared=prepared,
+                nominals=executable.nominals,
                 on_failure=lambda extern_diagnostics: RunResult(
                     ok=False,
                     diagnostics=extern_diagnostics,
@@ -1041,14 +1050,6 @@ class PipelineDriver:
             )
             if run_failure is not None:
                 return run_failure, None
-
-        if executable is None:
-            from agm.agl.lower import lower_program
-
-            executable = lower_program(
-                compiled,
-                contract_payloads=contract_payloads,
-            )
 
         return (
             self._execute_ir(
@@ -1321,6 +1322,7 @@ def _wire_extern_registry(
     capabilities: "HostCapabilities",
     registry: "ExternRegistry",
     companion_paths: "Mapping[ModuleId, Path | None]",
+    nominals: "Mapping[NominalId, NominalDescriptor] | None" = None,
 ) -> list[Diagnostic]:
     """Import every companion and resolve every declared extern, up front.
 
@@ -1353,6 +1355,8 @@ def _wire_extern_registry(
             )
         ]
     declarations = _extern_declarations(checked)
+    if nominals is not None:
+        registry.set_nominals(dict(nominals))
 
     diagnostics: list[Diagnostic] = []
     loaded_modules: set["ModuleId"] = set()

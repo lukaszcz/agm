@@ -269,8 +269,8 @@ timed_out: bool
 
 ### `ExternError`
 
-An `extern def` call failed: the companion Python callable raised, or its
-return value did not conform to the extern's declared return type
+An `extern def` call failed: the companion Python callable raised, or returned
+a Python value that has no AgL boundary representation
 ([Python FFI](ffi.md)).
 
 ```text
@@ -415,8 +415,7 @@ The general-purpose user abort; carries only the base fields.
 Raised when rendering (`print`, `render`, string interpolation, REPL echo),
 `as text`, or `as json` encounters a genuine reference cycle. A cyclic array
 or dict can be passed to an `extern def`; this error arises if its companion
-calls Python `repr()` on the corresponding view or a sealed handle containing
-the cycle. Carries only the base fields. See [Cycles](types.md#cycles) for how
+calls Python `repr()` on the corresponding view. Carries only the base fields. See [Cycles](types.md#cycles) for how
 a cycle arises, which operations raise this and which tolerate a cycle instead
 (`as?`, `copy`), and how equality and tracing treat one.
 
@@ -443,7 +442,7 @@ a cycle arises, which operations raise this and which tolerate a cycle instead
 | Division by zero | `ArithmeticError` |
 | Fallible `as` cast — source does not conform to target type | `CastError` |
 | `parse_json` — input is not well-formed JSON | `JsonParseError` |
-| Rendering, `as text`, or `as json` encounters a reference cycle; or an extern companion `repr()`s the corresponding cyclic view or sealed handle | `CyclicValueError` |
+| Rendering, `as text`, or `as json` encounters a reference cycle; or an extern companion `repr()`s the corresponding cyclic view | `CyclicValueError` |
 | `raise` of a constructed or re-raised value | any concrete type |
 
 An exception that reaches the top of the program uncaught terminates the

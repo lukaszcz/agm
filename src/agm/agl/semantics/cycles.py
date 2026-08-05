@@ -11,7 +11,7 @@ needs to join the active set.
 
 The FFI encoder does not walk array or dict payloads: it produces lazy views,
 so cyclic arguments cross the boundary. A companion's ``repr`` of a view or a
-sealed handle may render its value and reach this guard. This module is the
+FFI view may render its value and reach this guard. This module is the
 single shared implementation for ``render_value`` and ``value_to_json_obj``.
 Equality is unrelated — it is co-inductive (``semantics/values.py``) rather
 than error-raising, and does not use this module.

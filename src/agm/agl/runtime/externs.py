@@ -2,8 +2,9 @@
 
 This eval-free runtime module owns the extern registry. It imports a
 companion module once, resolves declared callables, and invokes each through
-the boundary walkers in :mod:`agm.agl.runtime.boundary`, revoking each call's
-live container views after its result has crossed back into AgL.
+the value-directed conversion functions in :mod:`agm.agl.runtime.boundary`.
+Container views remain usable after a call returns and continue to reflect
+their underlying AgL containers.
 """
 
 from __future__ import annotations
@@ -18,17 +19,23 @@ from typing import Protocol, cast
 
 from agm.agl.diagnostics import AglError
 from agm.agl.ir.builtin_nominals import NO_BUILTIN_DECLARATIONS, BuiltinNominals
-from agm.agl.ir.contracts import ExternContract
+from agm.agl.ir.ids import NominalId
+from agm.agl.ir.program import NominalDescriptor
 from agm.agl.modules.ids import ModuleId
 from agm.agl.runtime.boundary import (
-    BoundaryScope,
+    AglArrayView,
+    AglDictView,
+    AglJson,
     BoundaryViolation,
     decode_boundary_value,
     encode_boundary_value,
+    pop_nominal_classes,
+    push_nominal_classes,
+    synthesize_nominal_classes,
 )
 from agm.agl.semantics.cycles import AglCyclicValue, cyclic_value_raise
 from agm.agl.semantics.exceptions import AglRaise, make_builtin_exception
-from agm.agl.semantics.values import TextValue, Value
+from agm.agl.semantics.values import ArrayValue, DictValue, TextValue, Value
 
 
 class ExternImportError(AglError):
@@ -99,6 +106,29 @@ class ExternRegistry:
         self._by_path: dict[Path, ModuleType] = {}
         self._by_module: dict[ModuleId, ModuleType] = {}
         self._resolved: dict[tuple[ModuleId, str], ExternCallable] = {}
+        self._nominal_classes: dict[NominalId, type[object]] = {}
+        self._nominal_descriptors: dict[type[object], NominalDescriptor] = {}
+
+    def set_nominals(self, descriptors: dict[NominalId, NominalDescriptor]) -> None:
+        """Materialize this program's companion-visible nominal classes once."""
+        missing = {
+            nominal: descriptor
+            for nominal, descriptor in descriptors.items()
+            if nominal not in self._nominal_classes
+        }
+        classes, by_type = synthesize_nominal_classes(missing.values())
+        self._nominal_classes.update(classes)
+        self._nominal_descriptors.update(by_type)
+
+    def _agl_module(self) -> ModuleType:
+        """Build the temporary ``agl`` module exposed while importing a companion."""
+        module = ModuleType("agl")
+        setattr(module, "array", _array)
+        setattr(module, "dict", _dict)
+        setattr(module, "json", AglJson)
+        for cls in self._nominal_classes.values():
+            setattr(module, cls.__name__, cls)
+        return module
 
     def load_companion(self, module_id: ModuleId, companion_path: Path) -> ModuleType:
         """Import *companion_path* for *module_id*, executing it at most once.
@@ -128,6 +158,8 @@ class ExternRegistry:
         )
         module = importlib.util.module_from_spec(spec)
         sys.modules[synthetic_name] = module
+        previous_agl = sys.modules.get("agl")
+        sys.modules["agl"] = self._agl_module()
         try:
             spec.loader.exec_module(module)
         except Exception as exc:
@@ -136,6 +168,10 @@ class ExternRegistry:
             ) from exc
         finally:
             sys.modules.pop(synthetic_name, None)
+            if previous_agl is None:
+                sys.modules.pop("agl", None)
+            else:
+                sys.modules["agl"] = previous_agl
 
         self._by_path[canonical] = module
         self._bind_module(module_id, module)
@@ -184,52 +220,29 @@ class ExternRegistry:
     def invoke(
         self,
         function_name: str,
-        contract: ExternContract,
         fn: ExternCallable,
         args: Sequence[Value],
         trace_id: str,
         *,
         nominals: BuiltinNominals = NO_BUILTIN_DECLARATIONS,
     ) -> Value:
-        """Cross the boundary for one extern call: encode, call, decode, revoke.
+        """Cross the boundary for one extern call: encode, call, and decode.
 
-        Mints a fresh seal token per declared type variable for this call,
-        encodes *args* positionally per *contract*, calls *fn*, and strictly
-        decodes its result. A matching result view preserves its received AgL
-        container before the scope is revoked. Argument and result contract
-        violations, and ordinary exceptions raised by *fn*, become catchable
-        ``ExternError`` values; ``python_type`` is empty for a contract
-        violation and otherwise names the Python exception class.
-
-        A companion repr'ing a sealed handle or view over a cyclic container
-        during *fn* raises ``AglCyclicValue``; that becomes the catchable
-        ``CyclicValueError`` rather than ``ExternError``. The scope is revoked
-        on every exit path, so companion-retained views cannot outlive the
-        call.
+        Encodes *args* by their runtime value class, calls *fn*, and decodes
+        its result by Python type. Unsupported return representations and
+        ordinary exceptions raised by *fn* become catchable ``ExternError``
+        values; ``python_type`` is empty for an unsupported representation and
+        otherwise names the Python exception class. A companion repr'ing a
+        cyclic view raises ``AglCyclicValue``, which becomes
+        ``CyclicValueError``. Retained views remain live after the call.
 
         *nominals* resolves the ``ExternError``/``CyclicValueError`` nominal;
         it defaults to the shipped standard library's own identities for a
         caller (e.g. a direct unit test) that invokes without a program.
         """
-        scope = BoundaryScope(
-            seals={var: object() for var in contract.type_params},
-            defs=dict(contract.defs) if contract.defs else None,
-        )
-
+        tokens = push_nominal_classes(self._nominal_classes, self._nominal_descriptors)
         try:
-            try:
-                encoded_args = [
-                    encode_boundary_value(param.schema, arg, scope)
-                    for param, arg in zip(contract.params, args, strict=True)
-                ]
-            except BoundaryViolation as exc:
-                raise _extern_error(
-                    function_name,
-                    f"argument conversion failed: {exc}",
-                    trace_id,
-                    python_type="",
-                    nominals=nominals,
-                ) from exc
+            encoded_args = [encode_boundary_value(arg) for arg in args]
 
             try:
                 with decimal.localcontext():
@@ -246,11 +259,11 @@ class ExternRegistry:
                 ) from exc
 
             try:
-                return decode_boundary_value(contract.result, result, scope)
+                return decode_boundary_value(result)
             except BoundaryViolation as exc:
                 raise _extern_error(
                     function_name,
-                    f"return value violates contract: {exc}",
+                    f"return value cannot cross the boundary: {exc}",
                     trace_id,
                     python_type="",
                     nominals=nominals,
@@ -264,7 +277,7 @@ class ExternRegistry:
                     nominals=nominals,
                 ) from exc
         finally:
-            scope.revoke()
+            pop_nominal_classes(tokens)
 
 
 def _extern_error(
@@ -285,4 +298,16 @@ def _extern_error(
             function=TextValue(function_name),
             python_type=TextValue(python_type),
         )
+    )
+
+
+def _array(values: Sequence[object]) -> AglArrayView:
+    """Construct the companion representation of a new AgL array."""
+    return AglArrayView(ArrayValue([decode_boundary_value(value) for value in values]))
+
+
+def _dict(values: dict[str, object]) -> AglDictView:
+    """Construct the companion representation of a new AgL dict."""
+    return AglDictView(
+        DictValue({key: decode_boundary_value(value) for key, value in values.items()})
     )

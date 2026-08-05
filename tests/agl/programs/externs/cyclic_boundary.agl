@@ -1,7 +1,7 @@
 # A cyclic array crosses the Python FFI boundary as a lazy live view. `count`
 # can inspect the outer array without walking into its cyclic `Node`, while
 # `show` detects the cycle when its companion renders that view. `identity`
-# seals its argument opaquely, and rendering that sealed handle likewise
+# passes its argument through directly, and rendering the corresponding view likewise
 # detects the cycle. Both rendering failures are catchable `CyclicValueError`
 # values rather than `ExternError`. `mode` selects how `xs` is built: "cycle"
 # closes a genuine reference cycle through it, "acyclic" leaves it as an

@@ -46,22 +46,11 @@ from typing import TypeVar, assert_never
 
 from agm.agl.ir.contracts import (
     ArrayDecode,
-    BoundaryArray,
-    BoundaryDict,
-    BoundaryEnum,
-    BoundaryException,
-    BoundaryRecord,
-    BoundaryRef,
-    BoundaryScalar,
-    BoundarySchema,
-    BoundarySealVar,
-    BoundaryUnit,
     ContractRequest,
     ConversionStrategy,
     DecodeSchema,
     DictDecode,
     EnumDecode,
-    ExternContract,
     RecordDecode,
     RefDecode,
     ScalarDecode,
@@ -412,7 +401,7 @@ def _check_ref_chain(
     """Ensure a chain of ``$defs`` refs reaches a non-ref body without cycling.
 
     *follow* returns the next key when its argument is itself a ref node
-    (``RefDecode``/``BoundaryRef``), or ``None`` at a concrete body where the
+    (``RefDecode``), or ``None`` at a concrete body where the
     chain terminates.  A key absent from *defs* or revisited (a cycle) is an
     IR invariant violation; *ref_kind* and *key_noun* name the schema flavour
     and its defs-key wording in the message.
@@ -430,116 +419,6 @@ def _check_ref_chain(
         if next_key is None:
             return
         current = next_key
-
-
-# ---------------------------------------------------------------------------
-# Extern boundary contract checks (deep tier)
-# ---------------------------------------------------------------------------
-
-
-def _check_boundary_schema_nominals(
-    schema: BoundarySchema, defs: "Mapping[str, BoundarySchema]", ctx: _Context
-) -> None:
-    """Deep tier: every nominal referenced by a boundary schema must be registered.
-
-    Never re-enters a ``BoundaryRef`` target — each ``defs`` body is walked once
-    by :func:`_validate_extern_contract`; a ref only checks its chain resolves.
-    """
-    match schema:
-        case BoundaryScalar() | BoundaryUnit() | BoundarySealVar():
-            return
-        case BoundaryRef(key=key):
-            _check_ref_chain(
-                key,
-                defs,
-                lambda t: t.key if isinstance(t, BoundaryRef) else None,
-                ref_kind="BoundarySchema BoundaryRef",
-                key_noun="defs key",
-            )
-        case BoundaryArray(element=element):
-            _check_boundary_schema_nominals(element, defs, ctx)
-        case BoundaryDict(value=value_schema):
-            _check_boundary_schema_nominals(value_schema, defs, ctx)
-        case BoundaryRecord(nominal=nominal, fields=fields):
-            _check_nominal_in_table(nominal, ctx)
-            for _fname, fschema in fields:
-                _check_boundary_schema_nominals(fschema, defs, ctx)
-        case BoundaryEnum(nominal=nominal, variants=variants):
-            _check_nominal_in_table(nominal, ctx)
-            for variant in variants:
-                for _fname, fschema in variant.fields:
-                    _check_boundary_schema_nominals(fschema, defs, ctx)
-        case BoundaryException(nominal=nominal, fields=fields):
-            _check_nominal_in_table(nominal, ctx)
-            for _fname, fschema in fields:
-                _check_boundary_schema_nominals(fschema, defs, ctx)
-        case _ as unreachable:  # pragma: no cover
-            assert_never(unreachable)
-
-
-def _collect_boundary_seal_vars(schema: BoundarySchema, out: set[str]) -> None:
-    """Collect every ``BoundarySealVar.var`` name appearing directly in *schema*.
-
-    Does not follow a ``BoundaryRef`` — every ``defs`` body is scanned for seal
-    vars separately by :func:`_validate_extern_contract`.
-    """
-    match schema:
-        case BoundaryScalar() | BoundaryUnit() | BoundaryRef():
-            return
-        case BoundarySealVar(var=var):
-            out.add(var)
-        case BoundaryArray(element=element):
-            _collect_boundary_seal_vars(element, out)
-        case BoundaryDict(value=value_schema):
-            _collect_boundary_seal_vars(value_schema, out)
-        case BoundaryRecord(fields=fields):
-            for _fname, fschema in fields:
-                _collect_boundary_seal_vars(fschema, out)
-        case BoundaryEnum(variants=variants):
-            for variant in variants:
-                for _fname, fschema in variant.fields:
-                    _collect_boundary_seal_vars(fschema, out)
-        case BoundaryException(fields=fields):
-            for _fname, fschema in fields:
-                _collect_boundary_seal_vars(fschema, out)
-        case _ as unreachable:  # pragma: no cover
-            assert_never(unreachable)
-
-
-def _validate_extern_contract(fn_key: FunctionId, contract: ExternContract, ctx: _Context) -> None:
-    """Validate one extern's boundary contract (deep tier).
-
-    Every nominal referenced by a param/result schema (or a shared ``defs``
-    body) must be registered, every ``BoundaryRef`` must resolve to a body in
-    ``defs`` without cycling, and every type-variable position
-    (``BoundarySealVar``) must name one of the contract's declared
-    ``type_params``.
-    """
-    seen_keys: set[str] = set()
-    for key, _entry in contract.defs:
-        if key in seen_keys:
-            raise InvalidIrError(
-                f"FunctionDescriptor for {fn_key!r}: contract has duplicate defs key {key!r}"
-            )
-        seen_keys.add(key)
-    defs_map = dict(contract.defs)
-
-    seal_vars: set[str] = set()
-    for param_schema in contract.params:
-        _check_boundary_schema_nominals(param_schema.schema, defs_map, ctx)
-        _collect_boundary_seal_vars(param_schema.schema, seal_vars)
-    _check_boundary_schema_nominals(contract.result, defs_map, ctx)
-    _collect_boundary_seal_vars(contract.result, seal_vars)
-    for _key, entry in contract.defs:
-        _check_boundary_schema_nominals(entry, defs_map, ctx)
-        _collect_boundary_seal_vars(entry, seal_vars)
-    unknown = seal_vars - set(contract.type_params)
-    if unknown:
-        raise InvalidIrError(
-            f"FunctionDescriptor for {fn_key!r}: contract references type"
-            f" variable(s) {sorted(unknown)!r} not declared in type_params"
-            f" {contract.type_params!r}"
-        )
 
 
 def _resolve_callable_params(
@@ -1230,14 +1109,8 @@ def _validate_program_tables(ctx: _Context) -> None:
         match fn_desc.impl:
             case IrFunctionBody(body=body):
                 _validate_expr(body, ctx)
-            case ExternFunctionBody(contract=contract):
-                if len(fn_desc.params) != len(contract.params):
-                    raise InvalidIrError(
-                        f"FunctionDescriptor for {fn_key!r} has {len(fn_desc.params)}"
-                        f" IR params but its contract has {len(contract.params)}"
-                        " boundary params"
-                    )
-                _validate_extern_contract(fn_key, contract, ctx)
+            case ExternFunctionBody():
+                pass
             case other:  # pragma: no cover
                 assert_never(other)
 

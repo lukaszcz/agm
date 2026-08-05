@@ -1,5 +1,4 @@
-# A container view can be used while its extern call is active, but a view
-# retained by the companion becomes invalid after that call returns.
+# A container view stays usable for the companion's retained reference.
 param mode: text
 
 extern def stash(xs: array[int]) -> unit
@@ -9,13 +8,4 @@ extern def stash_and_use(xs: array[int]) -> unit
 if mode == "within_call" =>
   var xs = [1]
   let _: unit = stash_and_use(xs)
-  print xs
-
-if mode == "after_return" =>
-  var xs = [1]
-  let _: unit = stash(xs)
-  try
-    let _: unit = mutate_stashed()
-  catch ExternError as e =>
-    print e.python_type
   print xs

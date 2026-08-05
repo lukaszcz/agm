@@ -698,9 +698,9 @@ class _Checker:
 
         Two kinds are rejected: a function or agent type anywhere (opaque values
         that can never marshal across the FFI), and a type with no finite schema
-        (its recursive instantiations never close, so its boundary schema — like
-        its JSON schema — cannot be built). A finite recursive type is allowed:
-        it crosses as a ``BoundaryRef`` structure.
+        (its recursive instantiations never close, so it cannot be represented
+        by the language's finite type machinery). Finite recursive types cross
+        as ordinary recursive Python object graphs.
         """
         for p, spec in zip(node.params, sig.params):
             self._reject_uncrossable_extern_type(

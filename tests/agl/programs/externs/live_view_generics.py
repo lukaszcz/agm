@@ -16,6 +16,6 @@ def mutate(xs: MutableSequence[object], operation: str) -> None:
     elif operation == "duplicate":
         xs[0] = xs[-1]
     elif operation == "reject":
-        xs[0] = "not a sealed handle"
+        xs[0] = "replacement"
     elif operation == "sort":
         xs.sort()

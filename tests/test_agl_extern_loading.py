@@ -266,6 +266,37 @@ class TestExternRegistryLoadAndResolve:
         registry.load_companion(mid, py_path)
         assert set(sys.path) == before
         assert not any(name.startswith("agm_agl_extern_companion__") for name in sys.modules)
+        assert "agl" not in sys.modules
+
+    def test_failed_companion_import_also_removes_agl_module(self, tmp_path: Path) -> None:
+        import sys
+
+        py_path = tmp_path / "mod.py"
+        py_path.write_text("raise RuntimeError('boom')\n")
+        registry = ExternRegistry()
+
+        with pytest.raises(ExternImportError):
+            registry.load_companion(ModuleId.from_path("lib/mod"), py_path)
+
+        assert "agl" not in sys.modules
+
+    def test_companion_import_restores_an_existing_agl_module(self, tmp_path: Path) -> None:
+        import sys
+        from types import ModuleType
+
+        py_path = tmp_path / "mod.py"
+        py_path.write_text("def f(x): return x\n")
+        existing = ModuleType("agl")
+        previous = sys.modules.get("agl")
+        sys.modules["agl"] = existing
+        try:
+            ExternRegistry().load_companion(ModuleId.from_path("lib/mod"), py_path)
+            assert sys.modules["agl"] is existing
+        finally:
+            if previous is None:
+                sys.modules.pop("agl", None)
+            else:
+                sys.modules["agl"] = previous
 
     def test_resolve_before_load_companion_is_a_programming_error(self) -> None:
         registry = ExternRegistry()

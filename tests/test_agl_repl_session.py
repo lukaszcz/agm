@@ -4022,6 +4022,22 @@ class TestExternRepl:
         assert "companion" in result.diagnostics[0].message.lower()
         assert result.diagnostics[0].line == 1
 
+    def test_companion_import_failure_leaves_the_repl_entry_unsuccessful(
+        self, tmp_path: Path
+    ) -> None:
+        self._write_extern_lib(
+            tmp_path,
+            "broken",
+            "extern def f() -> int\n",
+            "raise RuntimeError('boom')\n",
+        )
+        session = self._make_session_with_root(tmp_path)
+
+        result = session.eval_entry("open import broken\nf()")
+
+        assert not result.ok
+        assert result.diagnostics
+
     # -- One extern registry per session: a companion imports exactly once --
 
     def test_companion_imports_exactly_once_across_entries_and_imports(

@@ -268,6 +268,7 @@ def _prepare_extern_program(
 
     executable = lower_ir(source, caps=caps or extern_caps(), origin_path=entry_path)
     registry = ExternRegistry()
+    registry.set_nominals(executable.nominals)
     loaded: set[ModuleId] = set()
     for desc in executable.functions.values():
         if not isinstance(desc.impl, ExternFunctionBody) or desc.module_id in loaded:

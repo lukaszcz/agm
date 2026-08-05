@@ -153,7 +153,7 @@ binding that reaches it.
 See [Bindings and Scope](bindings-and-scope.md) for the `:=` indexed-assignment
 rules, and [Foreign Function Interface](ffi.md) for boundary behavior. Arrays
 and dicts cross the FFI as live views; immutable kinds cross as independent
-values, and a bare type-variable value crosses as a sealed handle. Use
+values. Use
 `copy` or `shallow_copy` before the call, or an explicit `as json` cast, when
 a boundary snapshot is needed. (`as json` builds an independent container
 snapshot — see [Casts and convertibility](#casts-and-convertibility) below —
@@ -182,8 +182,8 @@ Rendering (`print`, `render`, string interpolation, REPL echo), `as text`,
 and `as json` walk a value's containers and therefore raise the catchable
 `CyclicValueError` ([Exceptions](exceptions.md#cyclicvalueerror)) if the walk
 re-enters a container already on its own path. An `extern def` call can pass a
-cyclic array or dict as a live view; rendering that view or a sealed handle
-over the cyclic value in its companion raises `CyclicValueError`. `as?` never
+cyclic array or dict as a live view; rendering that view in its companion
+raises `CyclicValueError`. `as?` never
 raises: it predicts whether the corresponding `as` would succeed, so `as?
 text` and `as? json` on a cyclic value evaluate to `false` instead. `copy` is
 the exception: it is the one deep, structure-rebuilding walk that traverses a

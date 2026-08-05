@@ -259,6 +259,26 @@ class TestExternFunctionAgentTypeBan:
         err = reject_extern(source)
         assert "function" in str(err).lower()
 
+    def test_recursive_exception_signature_is_walked_once(self) -> None:
+        check_extern(
+            "exception Loop extends Exception\n  children: array[Loop]\n"
+            "extern def f(value: Loop) -> int\n0"
+        )
+
+    def test_growing_generic_signature_is_rejected_before_the_type_walk(self) -> None:
+        source = (
+            "record Pair[A, B]\n"
+            "  first: A\n"
+            "  second: B\n"
+            "enum Perfect[T]\n"
+            "  | Single(value: T)\n"
+            "  | Succ(next: Perfect[Pair[T, T]])\n"
+            "extern def f(value: Perfect[int]) -> int\n"
+            "0"
+        )
+        err = reject_extern(source)
+        assert "no finite json schema" in str(err).lower()
+
     def test_type_variables_permitted(self) -> None:
         check_extern("extern def id[T](x: T) -> T\nid(1)")
 

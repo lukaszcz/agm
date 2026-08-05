@@ -1859,7 +1859,7 @@ class TestUncaughtExceptionOutputFormat:
     ) -> None:
         """Exit-2 stderr must include the source line number of the raise site."""
         agl_file = tmp_path / "prog.agl"
-        # Force an uncaught AgentParseError from an exec call on line 1.
+        # Force an uncaught ExecError from an exec call on line 1.
         agl_file.write_text('let x: int = exec "echo not-an-int"\nx\n')
         with pytest.raises(SystemExit) as exc_info:
             exec_command.run(self._exec_args_nolog(agl_file))

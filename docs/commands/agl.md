@@ -92,7 +92,7 @@ like any other static error.
 - `--agent AGL_LITERAL`: Seed `std/config::default-agent` with one constant `Agent`
   expression, for example `AgentClaude("sonnet", "medium")`. The literal is parsed and
   typechecked before execution; it overrides `[<program>]`/`[exec]` configuration. It
-  It selects the value used by `ask` calls that omit `agent`.
+  selects the value used by `ask` calls that omit `agent`.
 - `--log` / `--log-file PATH` / `--no-log`: Control trace logging, which is **off by
   default**. `--log` enables it with an auto-generated timestamped path under
   `.agent-files/`; `--log-file PATH` writes a structured JSONL trace to `PATH`;
@@ -151,8 +151,8 @@ log = false                 # trace logging off by default; set true to enable
 
 ```
 
-`[exec.<command>]` sub-tables provide per-command overrides of the base `[exec]`
-settings.
+A top-level `[<program>]` table provides per-program overrides of `[exec]`
+engine settings and supplies that program's param values.
 
 #### Source-level engine settings (`std/config`)
 

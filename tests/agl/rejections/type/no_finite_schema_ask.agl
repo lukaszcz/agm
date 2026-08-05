@@ -6,5 +6,5 @@ enum Perfect[T]
   | Single(value: T)
   | Succ(next: Perfect[Pair[T, T]])
 
-let x = ask-request::[Perfect[int]]("Q")
+let x = ask::[Perfect[int]]("Q")
 x

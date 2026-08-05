@@ -237,11 +237,11 @@ metadata: json    # host details: exit code, stderr tail, elapsed seconds
 
 ### `AgentParseError`
 
-Structured agent (or typed `exec`) output failed parsing or validation after
-all attempts allowed by the parse policy.
+Structured agent output failed parsing or validation after all attempts
+allowed by the parse policy.
 
 ```text
-agent: Agent            # selected backend (`exec` uses AgentCommand("exec"))
+agent: Agent            # selected backend
 target_type: text       # the contract's target type, e.g. "Review"
 expected_schema: json   # the derived JSON Schema
 raw: text               # the last attempt's raw output

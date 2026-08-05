@@ -2283,10 +2283,9 @@ class TestAsk:
 
 
 class TestAskRequest:
-    """``ask-request`` is the side-effect-free twin of ``ask``: it builds the
-    ``AgentRequest`` that ``ask`` would dispatch, without invoking the agent."""
+    """``ask-request`` builds a first-attempt text request without dispatching."""
 
-    def test_default_target_is_text(self) -> None:
+    def test_builds_a_text_contract(self) -> None:
         r = accept_type('ask-request("Q")')
         call = r.resolved.program.body.items[0]
         assert isinstance(call, Call)
@@ -2294,120 +2293,63 @@ class TestAskRequest:
         assert spec.target_type == TextType()
         assert spec.codec_name == "text"
 
-    def test_explicit_type_arg_drives_contract(self) -> None:
-        r = accept_type('record R\n  x: int\nask-request::[R]("Q")')
-        call = r.resolved.program.body.items[1]
-        assert isinstance(call, Call)
-        spec = r.contract_specs[call.node_id]
-        assert spec.codec_name == "json"
-        assert spec.target_type == r.type_env.get_type("R")
-
-    def test_unit_target_has_no_contract(self) -> None:
-        r = accept_type('ask-request::[unit]("Q")')
-        call = r.resolved.program.body.items[0]
-        assert isinstance(call, Call)
-        assert call.node_id not in r.contract_specs
-        option_type = r.type_env.get_type("OutputContractOption")
-        assert isinstance(option_type, EnumType)
-        assert r.type_env.type_table.enum_variants(option_type) == {
-            "None": {},
-            "Some": {"value": r.type_env.get_type("OutputContract")},
-        }
-
-    @pytest.mark.parametrize(
-        "option",
-        ('format = "text"', "strict_json = true", "on_parse_error = Abort()"),
-    )
-    def test_unit_target_rejects_parse_options(self, option: str) -> None:
-        err = reject_type(f'ask-request::[unit]("Q", {option})')
-        assert "unit" in str(err)
-        assert "no output contract" in str(err)
-
     def test_returns_agent_request_type(self) -> None:
-        r = accept_type('let r = ask-request::[text]("Q")\nr')
+        r = accept_type('let r: AgentRequest = ask-request("Q")\nr')
         decl = r.resolved.program.body.items[0]
         assert isinstance(decl, LetDecl)
         binding_type = r.type_env.get_binding_type(decl.pattern.node_id)
         assert binding_type == r.type_env.get_type("AgentRequest")
 
-    def test_contextual_expected_type_ignored(self) -> None:
-        # Unlike ``ask``, the target type is NOT inferred from context: a
-        # contextual ``AgentRequest`` annotation does NOT make ask-request target
-        # AgentRequest; the explicit ``::[int]`` drives the contract instead.
-        r = accept_type('let r: AgentRequest = ask-request::[int]("Q")\nr')
-        decl = r.resolved.program.body.items[0]
-        assert isinstance(decl, LetDecl)
-        call = decl.value
-        assert isinstance(call, Call)
-        spec = r.contract_specs[call.node_id]
-        assert spec.target_type == IntType()
-        assert spec.codec_name == "json"
-        assert r.node_types[call.node_id] == r.type_env.get_type("AgentRequest")
-
-    def test_no_prompt_raises(self) -> None:
-        err = reject_type("ask-request::[text]()")
-        assert "prompt" in str(err).lower() or "argument" in str(err).lower()
-
-    def test_too_many_positional_raises(self) -> None:
-        err = reject_type('ask-request::[text]("a", "b")')
-        assert "positional" in str(err).lower() or "argument" in str(err).lower()
-
-    def test_too_many_type_args_raises(self) -> None:
-        # ask-request with more than one explicit type argument is rejected.
-        err = reject_type('ask-request::[int, text]("Q")')
-        assert "type argument" in str(err).lower() or "got 2" in str(err)
-
-    def test_unknown_named_arg_raises(self) -> None:
-        err = reject_type('ask-request::[text]("Q", bogus = 1)')
-        assert "bogus" in str(err) or "argument" in str(err).lower()
-
-    def test_function_target_rejected(self) -> None:
-        err = reject_type('ask-request::[(int) -> int]("Q")')
-        assert "function" in str(err).lower() or "agent" in str(err).lower()
-
-    def test_agent_target_rejected(self) -> None:
-        err = reject_type('ask-request::[agent]("Q")')
-        assert "function" in str(err).lower() or "agent" in str(err).lower()
-
     def test_with_explicit_agent(self) -> None:
         r = accept_type(
-            'let reviewer = AgentCommand("reviewer")\nask-request::[text]("Q", agent = reviewer)'
+            'let reviewer = AgentCommand("reviewer")\nask-request("Q", agent = reviewer)'
         )
         assert r.resolved.program is not None
 
     def test_wrong_agent_type_raises(self) -> None:
-        err = reject_type('let x = "no"\nask-request::[text]("Q", agent = x)')
+        err = reject_type('let x = "no"\nask-request("Q", agent = x)')
         assert "agent" in str(err).lower()
 
-    def test_strict_json_option(self) -> None:
-        r = accept_type('ask-request::[int]("Q", format = "json", strict_json = true)')
-        call = r.resolved.program.body.items[0]
-        assert isinstance(call, Call)
-        spec = r.contract_specs[call.node_id]
-        assert spec.strict_json is True
+    def test_no_prompt_raises(self) -> None:
+        err = reject_type("ask-request()")
+        assert "prompt" in str(err).lower() or "argument" in str(err).lower()
 
-    def test_on_parse_error_policy_recorded(self) -> None:
-        r = accept_type('ask-request::[int]("Q", on_parse_error = Retry(n = 3))')
-        assert len(r.call_sites) == 1
-        cs = r.call_sites[0]
-        assert cs.callee == "ask-request"
-        assert cs.parse_policy == "retry[3]"
+    def test_too_many_positional_raises(self) -> None:
+        err = reject_type('ask-request("a", "b")')
+        assert "positional" in str(err).lower() or "argument" in str(err).lower()
+
+    def test_unknown_named_arg_raises(self) -> None:
+        err = reject_type('ask-request("Q", bogus = 1)')
+        assert "bogus" in str(err) or "argument" in str(err).lower()
+
+    @pytest.mark.parametrize(
+        "call",
+        (
+            'ask-request::[int]("Q")',
+            'ask-request("Q", format = "json")',
+            'ask-request("Q", strict_json = true)',
+            'ask-request("Q", on_parse_error = Retry(n = 1))',
+            'let agent = AgentCommand("worker")\nagent.ask-request::[int]("Q")',
+            'let agent = AgentCommand("worker")\nagent.ask-request("Q", strict_json = true)',
+        ),
+    )
+    def test_rejects_type_arguments_and_parse_options(self, call: str) -> None:
+        err = reject_type(call)
+        assert "ask-request" in str(err)
+        assert "accept" in str(err).lower()
 
     def test_call_site_record(self) -> None:
-        r = accept_type('ask-request::[text]("Q")')
+        r = accept_type('ask-request("Q")')
         assert len(r.call_sites) == 1
         cs = r.call_sites[0]
         assert cs.callee == "ask-request"
+        assert cs.target_type == TextType()
+        assert cs.codec_name == "text"
         assert cs.parse_policy == "default"
-        assert cs.line == 1
-
-    def test_unknown_type_in_type_arg_raises(self) -> None:
-        err = reject_type('ask-request::[NoSuchType]("Q")')
-        assert "unknown type" in str(err).lower()
 
     def test_does_not_require_default_agent(self) -> None:
         # ask-request never dispatches, so it works without a default agent.
-        r = accept_type('ask-request::[text]("Q")', capabilities=no_agent_caps())
+        r = accept_type('ask-request("Q")', capabilities=no_agent_caps())
         call = r.resolved.program.body.items[0]
         assert isinstance(call, Call)
         assert r.contract_specs[call.node_id].target_type == TextType()
@@ -9154,10 +9096,6 @@ class TestGenerics:
         err = reject_type('exec::[text, int]("ls")')
         assert "type argument" in str(err).lower()
 
-    def test_d3_ask_request_with_type_var_rejected(self) -> None:
-        err = reject_type("def req[T](p: text) -> AgentRequest = ask-request::[T](p)")
-        assert "type variable" in str(err).lower() or "cannot" in str(err).lower()
-
     def test_d3_ask_with_array_of_T_rejected(self) -> None:
         # array[T] as target also contains a type var
         err = reject_type("def fetch[T](p: text) -> array[T] = ask::[array[T]](p)")
@@ -9210,12 +9148,12 @@ class TestGenerics:
             "  request: AgentRequest\n"
             "def select[T](first: T, second: T) -> T = first\n"
             'let bundle = Bundle(answer = select(ask("answer"), 1), '
-            'request = ask-request::[int]("request"))\n'
+            'request = ask-request("request"))\n'
             "bundle"
         )
         assert [site.callee for site in result.call_sites] == ["ask", "ask-request"]
-        assert [site.target_type for site in result.call_sites] == [IntType(), IntType()]
-        assert [site.codec_name for site in result.call_sites] == ["json", "json"]
+        assert [site.target_type for site in result.call_sites] == [IntType(), TextType()]
+        assert [site.codec_name for site in result.call_sites] == ["json", "text"]
 
     def test_later_solved_builtin_target_rejects_unserializable_type(self) -> None:
         err = reject_type(
@@ -10829,12 +10767,6 @@ class TestNoFiniteSchemaUseSites:
         assert "perfect[int]" in msg
         assert "agent output type" in msg
         assert "no finite json schema" in msg
-
-    def test_ask_request_growing_type_rejected(self) -> None:
-        err = reject_type(_GROWING_TYPE_SRC + 'ask-request::[Perfect[int]]("Q")')
-        msg = str(err).lower()
-        assert "perfect[int]" in msg
-        assert "agent output type" in msg
 
     def test_exec_growing_type_rejected(self) -> None:
         err = reject_type(_GROWING_TYPE_SRC + 'exec::[Perfect[int]]("cmd")')

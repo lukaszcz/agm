@@ -348,12 +348,12 @@ for the operation; see [Agent calls](agent-calls.md) for dispatch behavior.
 
 ### `AgentRequest`
 
-`AgentRequest` is the first-attempt request that the matching `ask` call would
-dispatch to its agent (see [Agent calls](agent-calls.md)):
+`AgentRequest` is the first-attempt text request that `ask-request` builds
+without dispatching an agent (see [Agent calls](agent-calls.md)):
 
 ```text
 record AgentRequest
-  agent:               text
+  agent:               Agent
   prompt:              text
   target_type:         Option[text]
   format_instructions: Option[text]
@@ -363,10 +363,10 @@ record AgentRequest
   metadata:            json
 ```
 
-`target_type` is `None` for a `unit` response target and `Some("Review")`,
-`Some("text")`, etc. otherwise. `format_instructions` and `json_schema` are
-`None` when no such contract data applies. `previous_error` is `None` for
-`ask-request` because it constructs only the first-attempt request.
+`target_type` is always `Some("text")`; `format_instructions` and
+`json_schema` are `None` because `ask-request` has a fixed text contract.
+`previous_error` is `None` because it constructs only the first-attempt
+request.
 
 ## Members of nominal types
 

@@ -332,16 +332,6 @@ class EffectHandlers:
 
         prompt_text = self._text_of(self._ctx._eval(prompt_expr))
 
-        contract = self._ctx._program.contracts[contract_id]
-
-        json_schema_value: Value
-        if contract.json_schema is None:
-            json_schema_value = none_value()
-        else:
-            json_schema_value = some_value(
-                JsonValue(cast(object, json.loads(contract.json_schema)))
-            )
-
         agent_request_nominal = self._ctx._program.builtin_nominals.nominal("AgentRequest")
         return RecordValue(
             nominal=agent_request_nominal,
@@ -349,20 +339,16 @@ class EffectHandlers:
             fields={
                 "agent": request_agent,
                 "prompt": TextValue(prompt_text),
-                "target_type": none_value()
-                if contract.is_unit
-                else some_value(TextValue(contract.target_type_label)),
-                "format_instructions": none_value()
-                if not contract.format_instructions
-                else some_value(TextValue(contract.format_instructions)),
-                "json_schema": json_schema_value,
+                "target_type": some_value(TextValue("text")),
+                "format_instructions": none_value(),
+                "json_schema": none_value(),
                 "attempt": IntValue(0),
                 "previous_error": none_value(),
                 "metadata": JsonValue(
                     {
-                        "codec_name": contract.codec_name,
-                        "strict_json": contract.strict_json,
-                        "structured_exec": contract.structured_exec,
+                        "codec_name": "text",
+                        "strict_json": None,
+                        "structured_exec": False,
                     }
                 ),
             },

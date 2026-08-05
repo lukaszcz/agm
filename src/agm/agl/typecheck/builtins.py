@@ -262,38 +262,39 @@ class BuiltinCallChecker:
     # --- ask-request ---
 
     def check_ask_request(self, node: Call, *, receiver: bool = False) -> Type:
-        """Type-check ``ask-request(prompt, ...)`` — the side-effect-free twin of ``ask``.
-
-        Like ``ask`` it builds an output contract from a target type and the
-        parse-shaping named args (``format`` / ``strict_json`` /
-        ``on_parse_error``), and accepts an ``agent:`` named arg. But it never
-        dispatches to the agent: it yields the ``AgentRequest`` record that the
-        corresponding ``ask`` call would pass to the value dispatcher on
-        its first attempt.
-
-        The target type is taken from the explicit type argument
-        (``ask-request::[Review](...)``) when present, and defaults to ``text``
-        otherwise (``ask-request(...)``).  Because the result type is fixed to
-        ``AgentRequest``, the contextual ``expected`` type is ignored — unlike
-        ``ask``, the target type is not inferred from context.
-        """
+        """Type-check the fixed-text, side-effect-free ``ask-request`` builder."""
         agent_request_type = self._ctx._env.get_type("AgentRequest")
         assert agent_request_type is not None, "AgentRequest prelude type missing"
 
-        # Target type: explicit type argument, else text default.
-        explicit = self._resolve_explicit_target(node, "ask-request")
-        target_type = explicit if explicit is not None else TextType()
-        self._reject_type_var_target(target_type, node.span)
+        if node.type_args:
+            raise AglTypeError(
+                "ask-request does not accept type arguments; it always builds a text request.",
+                span=node.span,
+            )
+        allowed_named = frozenset() if receiver else frozenset({"agent"})
+        for named_arg in node.named_args:
+            if named_arg.name not in allowed_named:
+                raise AglTypeError(
+                    f"ask-request does not accept argument '{named_arg.name}'.", span=named_arg.span
+                )
 
-        # Build the same output contract spec an ``ask`` call would, so the
-        # materialized contract (and thus the returned request) matches exactly.
-        # ``ask-request`` never dispatches, so a missing ``agent:`` is allowed.
-        self._register_ask_like_obligation(
-            node,
-            target_type=target_type,
-            result_type=agent_request_type,
-            kind=BuiltinObligationKind.ASK_REQUEST,
-            receiver=receiver,
+        # This reuses prompt and Agent argument type validation. The fixed text
+        # contract keeps lowering and request construction on the ordinary ask
+        # contract path without exposing ask's parse-shaping options.
+        named = self._validate_ask_like_arguments(node, "ask-request", receiver=receiver)
+        self._ctx._register_builtin_obligation(
+            PendingBuiltinObligation(
+                node_id=node.node_id,
+                target_type=TextType(),
+                result_type=agent_request_type,
+                span=node.span,
+                kind=BuiltinObligationKind.ASK_REQUEST,
+                format_name=None,
+                strict_json=None,
+                parse_policy="default",
+                parse_option_spans=(),
+                has_agent_argument="agent" in named,
+            )
         )
         return agent_request_type
 
@@ -515,7 +516,8 @@ class BuiltinCallChecker:
         ``explicit_builtin_targets`` side table, keyed by ``node.node_id`` —
         the lowerer's authoritative source for a call's explicit target type,
         needed by ``print``/``render`` whose own checked result type discards
-        it (see ``CheckedModule.explicit_builtin_targets``).
+        it (see ``CheckedModule.explicit_builtin_targets``). ``ask-request``
+        has no output target and therefore does not use this helper.
         """
         if not node.type_args:
             return None
@@ -532,7 +534,7 @@ class BuiltinCallChecker:
         return resolved
 
     def _reject_type_var_target(self, target_type: Type, span: SourceSpan) -> None:
-        """an ask/exec/ask-request target type may not contain a type variable.
+        """An ask/exec target type may not contain a type variable.
 
         Applied to the final resolved target — whether it came from an explicit
         ``::[…]`` argument or was inferred from the contextual expected type
@@ -551,10 +553,10 @@ class BuiltinCallChecker:
     ) -> None:
         """Reject *target_type* if lowering will schema-compile it but cannot.
 
-        Shared by ``ask``/``ask-request`` finalization and
-        ``exec``. The lowerer derives schema/decode metadata only for the
-        built-in JSON codec, so custom codecs are responsible for their own
-        output format and parsing behavior. Text (and unit/structured-exec)
+        Shared by ``ask`` finalization and ``exec``. The lowerer derives
+        schema/decode metadata only for the built-in JSON codec, so custom
+        codecs are responsible for their own output format and parsing behavior.
+        Text (and unit/structured-exec)
         outputs do not build a schema.
         """
         if codec_name != "json":

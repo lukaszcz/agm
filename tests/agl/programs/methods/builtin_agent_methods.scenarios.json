@@ -21,7 +21,7 @@
       }
     },
     {
-      "name": "typed_ask_request_uses_receiver_without_dispatch",
+      "name": "ask_request_uses_receiver_without_dispatch",
       "params": {"mode": "request"},
       "expect": {
         "stdout_contains": ["AgentCommand", "request"],

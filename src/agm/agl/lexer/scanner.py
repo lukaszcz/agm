@@ -1207,7 +1207,7 @@ class _Scanner:
             yield self._make_token(ASSIGN, ":=", start_pos, start_line, start_col)
             return
         # "::" is DCOLON (type-argument introducer for typed calls, e.g.
-        # ask-request::[Review](...)); bare ":" is COLON.  Maximal munch:
+        # ask::[Review](...)); bare ":" is COLON.  Maximal munch:
         # check the next character before falling back to the single-char op.
         if ch == ":" and self._peek() == ":":
             self._advance()

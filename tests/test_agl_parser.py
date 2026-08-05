@@ -1821,10 +1821,10 @@ class TestTypedCalls:
     """``callee::[Type](args)`` desugars to a Call with static type_args."""
 
     def test_typed_call_basic(self) -> None:
-        call = first(parse('ask-request::[Review]("p")'))
+        call = first(parse('ask::[Review]("p")'))
         assert isinstance(call, Call)
         assert isinstance(call.callee, VarRef)
-        assert call.callee.name == "ask-request"
+        assert call.callee.name == "ask"
         assert len(call.args) == 1
         assert call.named_args == ()
         assert len(call.type_args) == 1
@@ -1832,12 +1832,12 @@ class TestTypedCalls:
         assert call.type_args[0].name == "Review"
 
     def test_typed_call_type_brackets_survive_index_bracket_remap(self) -> None:
-        call = first(parse('ask-request::[Review]("p")'))
+        call = first(parse('ask::[Review]("p")'))
         assert isinstance(call, Call)
         assert isinstance(call.type_args[0], NameT)
         assert call.type_args[0].name == "Review"
 
-        generic = first(parse('ask-request::[array[Review]]("p")'))
+        generic = first(parse('ask::[array[Review]]("p")'))
         assert isinstance(generic, Call)
         assert isinstance(generic.type_args[0], ArrayT)
         assert isinstance(generic.type_args[0].elem, NameT)
@@ -1850,26 +1850,26 @@ class TestTypedCalls:
         assert call.type_args == ()
 
     def test_typed_call_primitive_type(self) -> None:
-        call = first(parse('ask-request::[text]("p")'))
+        call = first(parse('ask::[text]("p")'))
         assert isinstance(call, Call)
         assert isinstance(call.type_args[0], TextT)
 
     def test_typed_call_generic_type(self) -> None:
-        call = first(parse('ask-request::[array[Review]]("p")'))
+        call = first(parse('ask::[array[Review]]("p")'))
         assert isinstance(call, Call)
         assert isinstance(call.type_args[0], ArrayT)
         assert isinstance(call.type_args[0].elem, NameT)
         assert call.type_args[0].elem.name == "Review"
 
     def test_typed_call_dict_type(self) -> None:
-        call = first(parse('ask-request::[dict[text, Review]]("p")'))
+        call = first(parse('ask::[dict[text, Review]]("p")'))
         assert isinstance(call, Call)
         assert isinstance(call.type_args[0], DictT)
         assert isinstance(call.type_args[0].value, NameT)
         assert call.type_args[0].value.name == "Review"
 
     def test_typed_call_with_named_args(self) -> None:
-        call = first(parse('ask-request::[Review]("p", agent = reviewer)'))
+        call = first(parse('ask::[Review]("p", agent = reviewer)'))
         assert isinstance(call, Call)
         assert len(call.named_args) == 1
         assert call.named_args[0].name == "agent"
@@ -1877,13 +1877,13 @@ class TestTypedCalls:
 
     def test_typed_call_no_args(self) -> None:
         # An empty arg list is syntactically valid (the checker rejects it).
-        call = first(parse("ask-request::[Review]()"))
+        call = first(parse("ask::[Review]()"))
         assert isinstance(call, Call)
         assert call.args == ()
         assert len(call.type_args) == 1
 
     def test_typed_call_trailing_comma(self) -> None:
-        call = first(parse('ask-request::[Review]("p",)'))
+        call = first(parse('ask::[Review]("p",)'))
         assert isinstance(call, Call)
         assert len(call.args) == 1
 
@@ -1940,9 +1940,9 @@ class TestTypedCalls:
         assert isinstance(expr.type_args[0], IntT)
 
     def test_dcolon_without_type_brackets_is_not_a_call(self) -> None:
-        # ``ask-request::`` with no ``[...]`` is rejected.
+        # ``ask::`` with no ``[...]`` is rejected.
         with pytest.raises(AglSyntaxError):
-            parse('ask-request::"p"')
+            parse('ask::"p"')
 
 
 # ---------------------------------------------------------------------------

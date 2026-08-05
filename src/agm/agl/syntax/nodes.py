@@ -413,7 +413,7 @@ class Call:
     (which desugars to ``Call(callee=f, args=(x,), named_args=())``.
 
     ``type_args`` is set by the typed-call syntax ``callee::[T](args)``
-    (e.g. ``ask-request::[Review](...)``); it is ``()`` for ordinary calls.
+    (e.g. ``ask::[Review](...)``); it is ``()`` for ordinary calls.
     The type arguments are static ``TypeExpr`` values resolved by the type checker —
     they are never evaluated at runtime.
     """

@@ -1571,7 +1571,7 @@ class TestBuiltinCallClassification:
         assert r.builtin_calls[let_node.value.node_id] == BuiltinKind.ASK
 
     def test_ask_request_call_classified(self) -> None:
-        r = parse_and_resolve('let x = ask-request::[Review]("Q")\nx')
+        r = parse_and_resolve('let x = ask-request("Q")\nx')
         let_node = r.program.body.items[0]
         assert isinstance(let_node, LetDecl)
         assert isinstance(let_node.value, Call)
@@ -1587,7 +1587,7 @@ class TestBuiltinCallClassification:
     def test_ask_request_callee_resolves_to_its_builtin_declaration(self) -> None:
         """A bare ``ask-request`` callee resolves like any other reference —
         to std/core's own ``builtin def`` — before the call is classified."""
-        r = parse_and_resolve('let x = ask-request::[text]("Q")\nx')
+        r = parse_and_resolve('let x = ask-request("Q")\nx')
         let_node = r.program.body.items[0]
         assert isinstance(let_node, LetDecl)
         call = let_node.value

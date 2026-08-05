@@ -406,6 +406,13 @@ prompt_text
     assert req.nominal == NO_BUILTIN_DECLARATIONS.nominal("AgentRequest")
     assert isinstance(req.fields["agent"], EnumValue)
     assert req.fields["agent"].variant == "AgentCommand"
+    assert isinstance(req.fields["target_type"], EnumValue)
+    assert req.fields["target_type"].variant == "Some"
+    assert req.fields["target_type"].fields["value"] == TextValue("text")
+    assert isinstance(req.fields["format_instructions"], EnumValue)
+    assert req.fields["format_instructions"].variant == "None"
+    assert isinstance(req.fields["json_schema"], EnumValue)
+    assert req.fields["json_schema"].variant == "None"
 
 
 # ---------------------------------------------------------------------------
@@ -649,11 +656,11 @@ def test_validate_contract_request_json_missing_schema() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_ask_request_typed_builds_record() -> None:
-    """ask-request with explicit type argument builds AgentRequest record."""
+def test_ask_request_builds_a_text_request_record() -> None:
+    """ask-request builds its fixed text-contract AgentRequest record."""
     source = """\
 let worker = AgentCommand("worker")
-let req = ask-request::[int]("Give me a number.", agent = worker)
+let req = ask-request("Give me a number.", agent = worker)
 let prompt_text: text = req.prompt
 prompt_text
 """
@@ -1601,8 +1608,8 @@ def test_validate_contract_request_recursive_decode_unknown_defs_key() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_ir_ask_request_unit_contract() -> None:
-    """IrAskRequest with is_unit contract -> AgentRequest.target_type is None."""
+def test_ir_ask_request_text_contract() -> None:
+    """IrAskRequest builds an AgentRequest with its fixed text contract."""
     source = """\
 let a = AgentCommand("a")
 let req = ask-request("Do it.", agent = a)
@@ -1763,11 +1770,11 @@ def test_validate_ir_ask_request_deep_valid_contract() -> None:
     validate_ir(prog, deep=True)
 
 
-def test_ir_ask_request_unit_typed() -> None:
-    """IrAskRequest with is_unit=True contract -> target_type=None in record."""
+def test_ir_ask_request_has_a_text_target() -> None:
+    """ask-request always records its fixed text output contract."""
     source = """\
 let a = AgentCommand("a")
-let req = ask-request::[unit]("Do it.", agent = a)
+let req = ask-request("Do it.", agent = a)
 let target = req.target_type
 target
 """
@@ -1778,7 +1785,8 @@ target
         scripts={"a": []},
     )
     assert isinstance(ir["target"], EnumValue)
-    assert ir["target"].variant == "None"
+    assert ir["target"].variant == "Some"
+    assert ir["target"].fields["value"] == TextValue("text")
 
 
 def test_lower_on_parse_error_self_qualified_retry() -> None:

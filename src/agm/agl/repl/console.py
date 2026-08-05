@@ -6,7 +6,7 @@ in :mod:`agm.agl.repl` is UI-free.  It provides:
 - :class:`AglPromptLexer` — syntax highlighting that drives the *real* AgL lexer
   (:func:`agm.agl.lexer.tokenize`) so colours track the grammar exactly;
 - :class:`AglCompleter` — completion fed from live session state (keywords,
-  bindings, agents, meta-command names);
+  bindings, meta-command names);
 - :func:`is_incomplete` — the multiline continuation predicate (delegates to the
   parser's structured incompleteness signal);
 - :func:`build_prompt_session` — a configured ``PromptSession`` with history,

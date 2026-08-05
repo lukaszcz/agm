@@ -253,7 +253,7 @@ class TestOperators:
 
     def test_dcolon(self) -> None:
         # ``::`` is the type-argument introducer for typed calls
-        # (``ask-request::[Review](...)``); maximal munch wins over two COLONs.
+        # (``ask::[Review](...)``); maximal munch wins over two COLONs.
         assert tok("::") == [("DCOLON", "::")]
 
     def test_dcolon_maximal_munch_before_colon(self) -> None:
@@ -265,8 +265,8 @@ class TestOperators:
     def test_dcolon_not_part_of_identifier(self) -> None:
         # ``::`` breaks an identifier scan (``:`` is a stop character), so a
         # ``name::`` tail does not glue into the identifier.
-        assert tok("ask-request::[Review]") == [
-            ("NAME", "ask-request"),
+        assert tok("ask::[Review]") == [
+            ("NAME", "ask"),
             ("DCOLON", "::"),
             ("LSQB", "["),
             ("NAME", "Review"),

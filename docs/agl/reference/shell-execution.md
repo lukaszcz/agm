@@ -146,8 +146,7 @@ let data: dict[text, int] = exec(           # JSON parsed; raises on nonzero
 )
 ```
 
-A nonzero exit raises `ExecError`, and unparseable output raises
-`AgentParseError` (with agent name `"exec"`).
+A nonzero exit and unparseable output both raise `ExecError`.
 
 ### Unit form — target is `unit`
 
@@ -191,21 +190,18 @@ invalid for a `unit` target.
 **Retries re-run the command.** Unlike an `ask` retry — which sends
 corrective feedback to the same conversation — an `exec` retry executes the
 command again; each invocation is traced separately. If every attempt fails
-to parse, `AgentParseError` is raised with agent name `"exec"`.
+to parse, `ExecError` is raised.
 
 ## Exceptions
 
-`ExecError` (a failing or timed-out command in parsed or unit form) and
-`AgentParseError` (unparseable output from a succeeding command) are distinct
-and independently catchable:
+`ExecError` covers a failing, timed-out, or unparseable shell command in the
+parsed or unit form:
 
 ```agl
 try
   let data: dict[text, int] = exec "compute-stats --json"
 catch ExecError as e =>
   print "command failed (%{e.exit_code}): %{e.stderr}"
-catch AgentParseError as e =>
-  print "not valid JSON: %{e.raw}"
 ```
 
 In the structured form, `ExecError` is raised for a spawn failure (the shell

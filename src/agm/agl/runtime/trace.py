@@ -223,8 +223,8 @@ class TraceStore:
 
         Returns a fresh id even when logging is disabled (no record written) so
         callers can always thread a valid ``trace_id`` through — mirroring
-        ``agent_call_attempt`` so a typed-exec ``AgentParseError`` can link to
-        the ``exec_command`` record.
+        ``agent_call_attempt`` so an ``ExecError`` can link to the
+        ``exec_command`` record.
         """
         trace_id = new_trace_id()
         if self._path is None:

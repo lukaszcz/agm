@@ -17,5 +17,5 @@ if
       let response = agents[0].ask("Use the defaults.")
       print(response)
   | else =>
-      let request = agents[1].ask-request::[int]("Prepare a count.")
+      let request = agents[1].ask-request("Prepare a count.")
       print(request.agent)

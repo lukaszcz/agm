@@ -181,7 +181,7 @@ operand and is unaffected.
 A type-owning chain segment may carry type arguments, as in
 `Option[int]::Some`; type arguments on a plain scope segment are a static
 error. The type-argument form `callee::[T]` and typed-call form
-`callee::[T](args)` (e.g. `ask-request::[Review](…)`) instead apply to the
+`callee::[T](args)` (e.g. `ask::[Review](…)`) instead apply to the
 complete callee and are not qualifier segments.
 ## Identifiers
 
@@ -235,7 +235,7 @@ variables, functions, and constructors.
 
 | Token | Start | Used for |
 | ----- | ----- | -------- |
-| `NAME` | a letter (any Unicode letter, not just ASCII) or `_` | Every kind of name: types, constructors, variables, fields, agents, functions, parameters, type parameters |
+| `NAME` | a letter (any Unicode letter, not just ASCII) or `_` | Every kind of name: types, constructors, variables, fields, functions, parameters, type parameters |
 | `OP_NAME` | an operator-name character | Variables, functions, constructors, and other grammar positions that accept a name |
 
 **Capitalization carries no syntactic or semantic meaning.** The case of an

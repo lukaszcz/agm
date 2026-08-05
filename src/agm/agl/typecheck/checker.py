@@ -248,6 +248,22 @@ _ExternTargets = tuple[_ExternTarget, ...]
 
 
 @dataclass(frozen=True, slots=True)
+class _SelectedBuiltinMethod:
+    """A call-only host method (``ask``/``ask-request``) selected by member access.
+
+    Such a method has no first-class function value: only the member-call path
+    can consume the selection, and its own builtin rule owns the call's type
+    arguments and result. Deliberately not a ``Type``, so that member access
+    returns ``Type | _SelectedBuiltinMethod`` and the type checker itself makes
+    every consumer say which of the two it accepts. Non-call positions route
+    through :meth:`_Checker._require_field_access_type`, which rejects the
+    selection; nothing publishes it as a node type.
+    """
+
+    name: str
+
+
+@dataclass(frozen=True, slots=True)
 class PendingExternCallObligation:
     """Syntax-derived extern inventory metadata awaiting region finalization."""
 
@@ -1530,9 +1546,9 @@ class _Checker:
         if isinstance(expr, IsTest):
             return self._check_is_test(expr)
         if isinstance(expr, FieldAccess):
-            field_type = self._check_field_access(expr, expected=expected)
-            self._reject_builtin_method_value(expr)
-            return field_type
+            return self._require_field_access_type(
+                expr, self._check_field_access(expr, expected=expected)
+            )
         if isinstance(expr, RecordUpdate):
             return self._check_record_update(expr, expected=expected)
         if _is_index_like(expr):
@@ -1862,9 +1878,10 @@ class _Checker:
                 return typ
 
         if isinstance(node.expr, FieldAccess):
-            typ = self._check_specialized_field_access(node.expr, type_args=node.type_args)
-            self._reject_builtin_method_value(node.expr)
-            return typ
+            return self._require_field_access_type(
+                node.expr,
+                self._check_specialized_field_access(node.expr, type_args=node.type_args),
+            )
 
         if not isinstance(node.expr, VarRef):
             raise AglTypeError(
@@ -2949,14 +2966,20 @@ class _Checker:
             )
         else:
             callee_type = self._check_field_access(field_access, expected=None)
-            self._record_node_type(field_access.node_id, callee_type)
-        method = self._method_selections.get(field_access.node_id)
-        if method is not None and method.is_builtin:
-            # Header validation admits only ``ask`` and ``ask-request`` as
-            # builtin methods (the two entries in the canonical table above).
-            if method.name == "ask":
+            if not isinstance(callee_type, _SelectedBuiltinMethod):
+                self._record_node_type(field_access.node_id, callee_type)
+        if isinstance(callee_type, _SelectedBuiltinMethod):
+            # The record is always present: ``_resolve_call`` classifies every
+            # member call whose field spells a built-in name, speculatively,
+            # because scope cannot yet know which method the name selects. And
+            # it is always one of these two kinds, because header validation
+            # (``_register_funcdef_signature``) admits no other builtin method.
+            kind = self._resolved.builtin_calls[node.node_id]
+            if kind == BuiltinKind.ASK:
                 return self._builtins.check_ask(node, expected=expected, receiver=True)
+            # ASK_REQUEST
             return self._builtins.check_ask_request(node, receiver=True)
+        method = self._method_selections.get(field_access.node_id)
         if method is None:
             return self._check_value_call(
                 node, expected=expected, hole_indices={}, callee_type=callee_type
@@ -3040,8 +3063,12 @@ class _Checker:
             # ``_check_specialized_field_access`` (see its docstring for why the
             # specialization must be published on the inner node here too).
             if isinstance(node.callee, FieldAccess) and node.type_args:
-                callee_type = self._check_specialized_field_access(
-                    node.callee, type_args=node.type_args
+                # A partial member call (``p.f::[T](?)``) allocates a bound
+                # closure value, so a selected built-in method is rejected
+                # here exactly as any other non-call use of it would be.
+                callee_type = self._require_field_access_type(
+                    node.callee,
+                    self._check_specialized_field_access(node.callee, type_args=node.type_args),
                 )
             else:
                 callee_type = self._check_expr(node.callee, expected=None)
@@ -4097,7 +4124,7 @@ class _Checker:
 
     def _check_specialized_field_access(
         self, field_access: FieldAccess, *, type_args: tuple[TypeExpr, ...]
-    ) -> Type:
+    ) -> Type | _SelectedBuiltinMethod:
         """Check a member access carrying explicit type arguments and publish its type.
 
         This is reached both from value-position ``expr::[T]`` (``TypeApply``) and from
@@ -4107,19 +4134,32 @@ class _Checker:
         specialized member's type must be recorded on the inner ``FieldAccess`` node
         itself, not only returned to the immediate caller: partial lowering and
         direct-call argument coercion both read the callee's type straight off that
-        node rather than off the outer node wrapping it.
+        node rather than off the outer node wrapping it. A selected built-in method
+        publishes nothing here, because neither consumer can observe it: a partial
+        application of one is rejected outright, and its member call lowers through
+        the builtin route (receiver operand plus arguments), never through the
+        value-call route that reads the callee node's type.
         """
         typ = self._check_field_access(field_access, type_args=type_args)
-        self._record_node_type(field_access.node_id, typ)
+        if not isinstance(typ, _SelectedBuiltinMethod):
+            self._record_node_type(field_access.node_id, typ)
         return typ
 
-    def _reject_builtin_method_value(self, node: FieldAccess) -> None:
-        """Reject a selected host method outside direct call position."""
-        method = self._method_selections.get(node.node_id)
-        if method is not None and method.is_builtin:
+    def _require_field_access_type(
+        self, node: FieldAccess, typ: Type | _SelectedBuiltinMethod
+    ) -> Type:
+        """Narrow a checked field access to a plain ``Type``.
+
+        Every non-call position routes its ``_check_field_access``/
+        ``_check_specialized_field_access`` result through here: a selected
+        built-in method (``ask``/``ask-request``) is call-only, so reaching
+        this helper with one is always an error.
+        """
+        if isinstance(typ, _SelectedBuiltinMethod):
             raise AglTypeError(
-                f"Built-in function '{method.name}' cannot be used as a value.", span=node.span
+                f"Built-in function '{typ.name}' cannot be used as a value.", span=node.span
             )
+        return typ
 
     def _check_field_access(
         self,
@@ -4127,7 +4167,7 @@ class _Checker:
         expected: Type | None = None,
         *,
         type_args: tuple[TypeExpr, ...] | None = None,
-    ) -> Type:
+    ) -> Type | _SelectedBuiltinMethod:
         obj_type = self._check_expr(node.obj, expected=None)
         if self._candidate_session is not None and contains_inference_var(obj_type):
             return self._active_inference_engine().fresh("member result")
@@ -4170,8 +4210,9 @@ class _Checker:
                         # Host methods are call-only and their dispatch-specific
                         # checker owns explicit type arguments and result typing.
                         # Do not freshen the declared generic result merely to
-                        # discover the selected method.
-                        return FunctionType(params=(), result=method.signature.result)
+                        # discover the selected method; return the selection
+                        # itself rather than a fabricated function type.
+                        return _SelectedBuiltinMethod(name=method.name)
                     bound = self._bound_method_type(
                         method, obj_type, type_args=type_args, expected=expected, span=node.span
                     )

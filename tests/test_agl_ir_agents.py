@@ -21,6 +21,7 @@ from agm.agl.semantics.values import (
     TextValue,
 )
 from tests.agl.ir_harness import (
+    evaluate_ir,
     evaluate_ir_raises_with_agents,
     evaluate_ir_with_agents,
 )
@@ -64,6 +65,55 @@ request
         variant="AgentCommand",
         fields={"command": TextValue("worker")},
     )
+
+
+def test_user_declared_method_named_ask_dispatches_as_an_ordinary_method() -> None:
+    """A field access naming ``ask`` is only a *speculative* builtin route.
+
+    The receiver here is a user record, not ``Agent``, so the selected method
+    is the ordinary one declared below; it must run as a plain method call
+    rather than dispatching through agent machinery (which would need a
+    scripted agent response to avoid erroring).
+    """
+    source = """\
+record Greeter
+  name: text
+
+def Greeter::ask(self, prompt: text) -> text = "%{self.name}: %{prompt}"
+
+let g = Greeter(name = "g")
+let reply = g.ask("hi")
+reply
+"""
+    ir = evaluate_ir(source)
+
+    assert ir["reply"] == TextValue("g: hi")
+
+
+def test_user_declared_method_named_ask_works_as_a_value_and_partially_applied() -> None:
+    """An ordinary ``ask``/``ask-request`` method keeps its first-class forms.
+
+    Both allocate a bound closure over the receiver, the shape a builtin method
+    never has, so the speculative builtin route must not capture either one.
+    """
+    source = """\
+record Greeter
+  name: text
+
+def Greeter::ask[T](self, prompt: T) -> T = prompt
+def Greeter::ask-request(self, prompt: text) -> text = "%{self.name}: %{prompt}"
+
+let g = Greeter(name = "g")
+let bound = g.ask-request
+let partial = g.ask::[text](?)
+let greeting = bound("hi")
+let echoed = partial("there")
+()
+"""
+    ir = evaluate_ir(source)
+
+    assert ir["greeting"] == TextValue("g: hi")
+    assert ir["echoed"] == TextValue("there")
 
 
 # ---------------------------------------------------------------------------

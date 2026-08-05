@@ -2355,6 +2355,76 @@ class TestAskRequest:
 
 
 # ---------------------------------------------------------------------------
+# built-in Agent methods (``a.ask`` / ``a.ask-request``) outside call position
+# ---------------------------------------------------------------------------
+
+# A user type declaring the two built-in method names itself: ``ask`` generic so
+# the ``::[T]`` spellings are available on it, ``ask-request`` monomorphic so the
+# un-specialized spellings are available without type-argument inference.
+_USER_ASK_METHODS = (
+    "record Greeter\n"
+    "  name: text\n"
+    "def Greeter::ask[T](self, prompt: T) -> T = prompt\n"
+    "def Greeter::ask-request(self, prompt: text) -> text = self.name\n"
+    'let g = Greeter(name = "g")\n'
+)
+
+
+class TestBuiltinAgentMethodSelection:
+    """A selected built-in Agent method is call-only: every non-call use of the
+    selection is a type error, in each spelling that would otherwise produce a
+    function value. A field-access callee whose field name matches
+    ``ask``/``ask-request`` is only a *speculative* builtin route (the resolver
+    cannot know which meaning it is until the checker selects a method), so an
+    ordinary user-declared method of the same name must still behave as a plain
+    method in every position, value and partial positions included."""
+
+    @pytest.mark.parametrize("method", ("ask", "ask-request"))
+    @pytest.mark.parametrize(
+        "use",
+        (
+            "let f = worker.{method}\nf",
+            "print(worker.{method})",
+            "worker.{method}(?)",
+            "worker.{method}::[text](?)",
+        ),
+        ids=("let-bound", "call-argument", "partial-call", "specialized-partial-call"),
+    )
+    def test_non_call_use_of_a_builtin_method_is_rejected(self, use: str, method: str) -> None:
+        err = reject_type(
+            'let worker = AgentCommand("worker")\n' + use.format(method=method) + "\n"
+        )
+        message = err.to_diagnostic().message.lower()
+        assert "built-in" in message
+        assert "value" in message
+
+    @pytest.mark.parametrize(
+        "use",
+        (
+            'g.ask("hi")',
+            'g.ask-request("hi")',
+            "g.ask::[int](1)",
+            "let f = g.ask::[int]\nf",
+            "let f = g.ask-request\nf",
+            "let f = g.ask::[int](?)\nf",
+            "let f = g.ask-request(?)\nf",
+        ),
+        ids=(
+            "call",
+            "call-request",
+            "specialized-call",
+            "specialized-value",
+            "value",
+            "specialized-partial-call",
+            "partial-call",
+        ),
+    )
+    def test_user_methods_named_after_a_builtin_stay_ordinary_methods(self, use: str) -> None:
+        r = accept_type(_USER_ASK_METHODS + use + "\n")
+        assert r.resolved.program is not None
+
+
+# ---------------------------------------------------------------------------
 # exec() builtin
 # ---------------------------------------------------------------------------
 

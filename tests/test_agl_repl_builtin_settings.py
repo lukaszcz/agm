@@ -20,8 +20,10 @@ from pathlib import Path
 from agm.agl.repl import EntryResult, ReplSession
 from agm.agl.runtime.agents import AgentFn
 from agm.agl.runtime.host_settings import HostSettingsPolicy
+from agm.agl.runtime.params import build_engine_config_seeds
 from agm.agl.runtime.request import AgentRequest, AgentResponse
 from agm.agl.semantics.values import BoolValue, EnumValue, IntValue, TextValue, Value
+from agm.cli_support.engine_seeds import parse_default_agent_literal
 
 _STDLIB_ROOT = Path(__file__).resolve().parents[1] / "stdlib"
 
@@ -175,8 +177,6 @@ class TestDefaultsAndSeeding:
     def test_explicit_false_strict_json_seed_overrides_and_survives_reset(
         self, tmp_path: Path
     ) -> None:
-        from agm.agl.runtime.params import build_engine_config_seeds
-
         stdlib_root = tmp_path / "stdlib"
         config_path = stdlib_root / "std" / "config.agl"
         config_path.parent.mkdir(parents=True)
@@ -237,6 +237,264 @@ class TestDefaultsAndSeeding:
         value = _ok(s, "import std/config\nstd/config::timeout").value
         assert isinstance(value, EnumValue)
         assert value.fields["value"] == TextValue("0.0000001s")
+
+
+def _host_seeded_session(
+    stdlib_root: Path,
+    *,
+    strict_json: bool | None = None,
+    max_iters: int | None = None,
+    timeout: str | None = None,
+    log: bool | None = None,
+    log_file: str | None = None,
+    default_agent: str | None = None,
+) -> ReplSession:
+    """Build a session with explicit host seeds ONLY for the given keys.
+
+    ``max-iters`` is seeded through ``default_loop_limit`` (a driver argument,
+    not ``engine_base``) because that is the only place the session ever reads
+    a host max-iters control from -- see ``ReplSession._host_seed``.
+    """
+    raw: dict[str, object] = {}
+    if strict_json is not None:
+        raw["strict-json"] = strict_json
+    if timeout is not None:
+        raw["timeout"] = timeout
+    if log is not None:
+        raw["log"] = log
+    if log_file is not None:
+        raw["log-file"] = log_file
+    engine_base = build_engine_config_seeds(raw)
+    if default_agent is not None:
+        engine_base["default-agent"] = parse_default_agent_literal(default_agent, source="test")
+    return ReplSession(
+        stdlib_root=stdlib_root,
+        default_strict_json=strict_json if strict_json is not None else False,
+        default_loop_limit=max_iters,
+        engine_base=engine_base,
+    )
+
+
+def _declared_defaults_session(tmp_path: Path) -> ReplSession:
+    """Build a session whose ``std/config`` declares a distinct default per key.
+
+    No key is host-seeded, so every key's effective value comes from the
+    ``builtin var`` initializer evaluated the first time an entry imports
+    ``std/config``.
+    """
+    stdlib_root = tmp_path / "stdlib"
+    config_path = stdlib_root / "std" / "config.agl"
+    config_path.parent.mkdir(parents=True)
+    config_path.write_text(
+        "open import std/core\n"
+        'builtin var default-agent: Agent = AgentCommand("declared")\n'
+        "builtin var strict-json: bool = true\n"
+        "builtin var max-iters: int = 3\n"
+        'builtin var timeout: Option[text] = Option[text]::Some("2s")\n'
+        "builtin var log: bool = true\n"
+        'builtin var log-file: Option[text] = Option[text]::Some("declared.jsonl")\n',
+        encoding="utf-8",
+    )
+    (config_path.parent / "core.agl").write_text(
+        (_STDLIB_ROOT / "std" / "core.agl").read_text(encoding="utf-8"), encoding="utf-8"
+    )
+    return ReplSession(stdlib_root=stdlib_root)
+
+
+class TestResetHostSeedPrecedence:
+    """A host-seeded key's ``:reset`` restores the host seed, discarding a source write.
+
+    ``strict-json`` (including a falsy ``False`` host seed) is pinned in
+    :class:`TestDefaultsAndSeeding` above; this class covers the remaining
+    five keys.
+    """
+
+    def test_max_iters_host_seed_survives_a_source_write(self) -> None:
+        s = _host_seeded_session(_STDLIB_ROOT, max_iters=5)
+        _ok(s, "import std/config")
+        _ok(s, "std/config::max-iters := 9")
+        s.reset()
+        _ok(s, "import std/config")
+        assert _read(s, "max-iters") == IntValue(5)
+
+    def test_timeout_engine_base_host_seed_survives_a_source_write(self) -> None:
+        # The host seed arrives through ``engine_base`` (e.g. CLI/config), not
+        # through the ``shell_exec_timeout`` driver argument.
+        s = _host_seeded_session(_STDLIB_ROOT, timeout="3s")
+        _ok(s, "import std/config")
+        _ok(s, 'std/config::timeout := Some("99s")')
+        s.reset()
+        _ok(s, "import std/config")
+        value = _read(s, "timeout")
+        assert isinstance(value, EnumValue)
+        assert value.fields["value"] == TextValue("3s")
+
+    def test_timeout_driver_synthesized_host_seed_survives_a_source_write(self) -> None:
+        # No ``engine_base["timeout"]``: the host seed is synthesized from the
+        # ``shell_exec_timeout`` driver argument instead.
+        s = ReplSession(stdlib_root=_STDLIB_ROOT, shell_exec_timeout=0.0000001)
+        _ok(s, "import std/config")
+        _ok(s, 'std/config::timeout := Some("99s")')
+        s.reset()
+        _ok(s, "import std/config")
+        value = _read(s, "timeout")
+        assert isinstance(value, EnumValue)
+        assert value.fields["value"] == TextValue("0.0000001s")
+        assert s._shell_exec_timeout == 0.0000001
+
+    def test_log_host_seed_survives_a_source_write(self) -> None:
+        s = _host_seeded_session(_STDLIB_ROOT, log=True)
+        _ok(s, "import std/config")
+        _ok(s, "std/config::log := false")
+        s.reset()
+        _ok(s, "import std/config")
+        assert _read(s, "log") == BoolValue(True)
+
+    def test_log_file_host_seed_survives_a_source_write(self) -> None:
+        s = _host_seeded_session(_STDLIB_ROOT, log_file="host.jsonl")
+        _ok(s, "import std/config")
+        _ok(s, 'std/config::log-file := Some("written.jsonl")')
+        s.reset()
+        _ok(s, "import std/config")
+        value = _read(s, "log-file")
+        assert isinstance(value, EnumValue)
+        assert value.fields["value"] == TextValue("host.jsonl")
+
+    def test_default_agent_host_seed_survives_a_source_write(self) -> None:
+        s = _host_seeded_session(_STDLIB_ROOT, default_agent='AgentCommand("host")')
+        _ok(s, "import std/config")
+        _ok(s, 'std/config::default-agent := AgentCommand("written")')
+        s.reset()
+        _ok(s, "import std/config")
+        value = _read(s, "default-agent")
+        assert isinstance(value, EnumValue)
+        assert value.fields["command"] == TextValue("host")
+
+
+class TestResetDeclaredDefaultPrecedence:
+    """An unseeded key's ``:reset`` restores ``std/config``'s declared default.
+
+    Each test writes a value that differs from BOTH the declared default and
+    any host-side floor, so a wrong precedence (falling through to a host
+    floor instead of the declaration) would be caught.
+    """
+
+    def test_strict_json_declared_default_survives_a_source_write(self, tmp_path: Path) -> None:
+        s = _declared_defaults_session(tmp_path)
+        _ok(s, "import std/config")
+        _ok(s, "std/config::strict-json := false")
+        s.reset()
+        _ok(s, "import std/config")
+        assert _read(s, "strict-json") == BoolValue(True)
+
+    def test_max_iters_declared_default_survives_a_source_write(self, tmp_path: Path) -> None:
+        s = _declared_defaults_session(tmp_path)
+        _ok(s, "import std/config")
+        _ok(s, "std/config::max-iters := 99")
+        s.reset()
+        _ok(s, "import std/config")
+        assert _read(s, "max-iters") == IntValue(3)
+
+    def test_timeout_declared_default_survives_a_source_write(self, tmp_path: Path) -> None:
+        s = _declared_defaults_session(tmp_path)
+        _ok(s, "import std/config")
+        _ok(s, 'std/config::timeout := Some("99s")')
+        s.reset()
+        _ok(s, "import std/config")
+        value = _read(s, "timeout")
+        assert isinstance(value, EnumValue)
+        assert value.fields["value"] == TextValue("2s")
+
+    def test_log_declared_default_survives_a_source_write(self, tmp_path: Path) -> None:
+        s = _declared_defaults_session(tmp_path)
+        _ok(s, "import std/config")
+        _ok(s, "std/config::log := false")
+        s.reset()
+        _ok(s, "import std/config")
+        assert _read(s, "log") == BoolValue(True)
+
+    def test_log_file_declared_default_survives_a_source_write(self, tmp_path: Path) -> None:
+        s = _declared_defaults_session(tmp_path)
+        _ok(s, "import std/config")
+        _ok(s, 'std/config::log-file := Some("written.jsonl")')
+        s.reset()
+        _ok(s, "import std/config")
+        value = _read(s, "log-file")
+        assert isinstance(value, EnumValue)
+        assert value.fields["value"] == TextValue("declared.jsonl")
+
+    def test_default_agent_declared_default_survives_a_source_write(self, tmp_path: Path) -> None:
+        s = _declared_defaults_session(tmp_path)
+        _ok(s, "import std/config")
+        _ok(s, 'std/config::default-agent := AgentCommand("written")')
+        s.reset()
+        _ok(s, "import std/config")
+        value = _read(s, "default-agent")
+        assert isinstance(value, EnumValue)
+        assert value.fields["command"] == TextValue("declared")
+
+
+class TestResetSeedWinsOverDriverArgument:
+    """``:reset`` restores the seed value, not the ``ReplSession`` driver argument.
+
+    ``strict-json`` and ``timeout`` reach the session twice: once as an explicit
+    seed value and once as a driver argument (``default_strict_json`` /
+    ``shell_exec_timeout``) that is only a fallback for an unseeded key.  The
+    hosting command derives both from the same resolved configuration, so they
+    agree there; these tests deliberately make them disagree to pin which one
+    ``:reset`` restores.  The seed must win, so that a reset session's live
+    interpreter setting agrees with the register a later entry reads.
+
+    The timeout cases observe ``_shell_exec_timeout`` directly, and immediately
+    after the reset: a seeded timeout register is what every following entry is
+    seeded from, so it would mask a stale live field on the next entry.
+    """
+
+    def test_strict_json_seed_wins_over_the_driver_argument(self) -> None:
+        s = ReplSession(
+            stdlib_root=_STDLIB_ROOT,
+            default_strict_json=True,
+            engine_base=build_engine_config_seeds({"strict-json": False}),
+        )
+        _ok(s, "import std/config")
+        assert _read(s, "strict-json") == BoolValue(False)
+        _ok(s, "std/config::strict-json := true")
+        s.reset()
+        _ok(s, "import std/config")
+        assert _read(s, "strict-json") == BoolValue(False)
+
+    def test_timeout_seed_wins_over_the_driver_argument(self) -> None:
+        s = ReplSession(
+            stdlib_root=_STDLIB_ROOT,
+            shell_exec_timeout=30.0,
+            engine_base=build_engine_config_seeds({"timeout": "5s"}),
+        )
+        _ok(s, "import std/config")
+        _ok(s, 'std/config::timeout := Some("99s")')
+        s.reset()
+        assert s._shell_exec_timeout == 5.0
+        _ok(s, "import std/config")
+        value = _read(s, "timeout")
+        assert isinstance(value, EnumValue)
+        assert value.fields["value"] == TextValue("5s")
+
+    def test_timeout_seeded_as_none_disables_the_timeout_across_reset(self) -> None:
+        # An empty ``Option`` is an explicit "no timeout" control, so it must
+        # not fall back to the ``shell_exec_timeout`` driver argument.
+        s = ReplSession(
+            stdlib_root=_STDLIB_ROOT,
+            shell_exec_timeout=30.0,
+            engine_base=build_engine_config_seeds({"timeout": None}),
+        )
+        _ok(s, "import std/config")
+        assert s._shell_exec_timeout is None
+        _ok(s, 'std/config::timeout := Some("99s")')
+        s.reset()
+        assert s._shell_exec_timeout is None
+        _ok(s, "import std/config")
+        value = _read(s, "timeout")
+        assert isinstance(value, EnumValue)
+        assert value.variant == "None"
 
 
 # ---------------------------------------------------------------------------

@@ -135,7 +135,6 @@ def run(args: ReplArgs) -> None:
 
     session = ReplSession(
         default_strict_json=strict_json,
-        strict_json_host_seeded="strict-json" in engine_base,
         default_loop_limit=loop_limit,
         default_call_depth_limit=call_depth_limit,
         agent_dispatcher=confirming_agent,

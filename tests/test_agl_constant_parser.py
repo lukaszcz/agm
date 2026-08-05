@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import pytest
 
-from agm.agl.constant import ConstantExpressionError, parse_constant
 from agm.agl.semantics.types import (
     BUILTIN_PRELUDE_TYPES,
     OPTION_TEXT_TYPE,
@@ -13,6 +12,7 @@ from agm.agl.semantics.types import (
     Type,
 )
 from agm.agl.semantics.values import EnumValue, IntValue, TextValue, Value
+from agm.cli_support.agl_constant import ConstantExpressionError, parse_constant
 
 
 @pytest.mark.parametrize(
@@ -90,7 +90,11 @@ def test_parse_constant_constructs_stdlib_core_enum() -> None:
         ("AgentClaude(", BUILTIN_PRELUDE_TYPES["Agent"], "parse error"),
         ("true", TextType(), "type error"),
         ('(fn(value: text) -> text => value)("value")', TextType(), "non-constant expression"),
-        ("unbound", TextType(), "non-constant expression"),
+        ("unbound", TextType(), "scope error"),
+        # A raw tail parses standalone but not once wrapped for checking; the
+        # resulting parse diagnostic carries no phase and must not be
+        # advertised as a type error.
+        ("exec! echo hello", TextType(), "static error"),
     ),
 )
 def test_parse_constant_rejections_identify_the_input(

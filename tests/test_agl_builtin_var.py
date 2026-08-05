@@ -12,7 +12,6 @@ from typing import cast
 
 import pytest
 
-from agm.agl.constant import is_constant_expression
 from agm.agl.ir.ids import NominalId
 from agm.agl.modules.ids import STD_CORE_ID
 from agm.agl.modules.roots import RootSet
@@ -21,6 +20,7 @@ from agm.agl.pipeline import PipelineDriver, RunResult
 from agm.agl.runtime.option import some_value
 from agm.agl.semantics.values import BoolValue, EnumValue, IntValue, TextValue, Value
 from agm.agl.syntax import BuiltinVarDecl, Call, Expr, VarRef, walk
+from agm.agl.syntax.constants import is_constant_expression
 
 _STDLIB = Path(__file__).resolve().parent.parent / "stdlib"
 

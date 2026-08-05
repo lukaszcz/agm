@@ -26,5 +26,5 @@ Scope-region headers become nested single-segment `ScopeRegion` nodes, with each
 
 - `src/agm/agl/lexer/` — the indentation-aware lexer; `tokens.py` is the token-contract source of truth.
 - `src/agm/agl/grammar/` and `src/agm/agl/parser/` — the Lark grammar and the AST builder.
-- `src/agm/agl/syntax/` — the AST dataclasses, including canonical scope regions, type nodes, source-id-stamped spans, and lexical advisories.
+- `src/agm/agl/syntax/` — the AST dataclasses, including canonical scope regions, type nodes, source-id-stamped spans, lexical advisories, and the constant-expression predicate (`constants.py`) the typechecker uses for `builtin var` defaults.
 - Tests: `tests/test_agl_lexer.py`, `tests/test_agl_parser.py`, `tests/test_agl_ast.py`.

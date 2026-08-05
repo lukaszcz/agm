@@ -44,7 +44,7 @@ def parse_default_agent_literal(literal: object, *, source: str) -> "Value":
             f"expected a non-empty AgL Agent literal, got {literal!r}"
         )
 
-    from agm.agl.constant import ConstantExpressionError, parse_constant
+    from agm.cli_support.agl_constant import ConstantExpressionError, parse_constant
 
     expected_type = get_engine_key_type("default-agent")
     assert expected_type is not None

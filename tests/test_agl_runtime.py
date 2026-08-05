@@ -38,7 +38,9 @@ if TYPE_CHECKING:
 _STDLIB_ROOT = pathlib.Path(__file__).resolve().parents[1] / "stdlib"
 
 
-class TestPipelineDriverConstructor:
+class TestOperatorProgramsRunEndToEnd:
+    """Operator declaration, application, and `is`-test dispatch through a full run."""
+
     def test_operator_name_bindings_run_end_to_end(
         self, capsys: pytest.CaptureFixture[str]
     ) -> None:

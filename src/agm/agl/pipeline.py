@@ -958,42 +958,9 @@ class PipelineDriver:
         )
 
     @property
-    def default_strict_json(self) -> bool:
-        """Whether strict JSON parsing is the default."""
-        return self._default_strict_json
-
-    @property
-    def default_loop_limit(self) -> int | None:
-        """Default max-iters valve (``None`` means off) for unguarded loops."""
-        return self._default_loop_limit
-
-    @property
-    def shell_exec_timeout(self) -> float | None:
-        """Idle timeout in seconds for ``exec`` shell calls (``None`` = no timeout)."""
-        return self._shell_exec_timeout
-
-    @property
     def default_call_depth_limit(self) -> int:
         """Maximum call depth for recursive functions."""
         return self._default_call_depth_limit
-
-    def update_defaults(
-        self,
-        *,
-        strict_json: bool,
-        loop_limit: int | None,
-        shell_exec_timeout: float | None,
-    ) -> None:
-        """Update the live engine defaults in place without losing registrations.
-
-        Called by ``ReplSession`` after a successful entry, to carry that entry's
-        engine settings — which a ``std/config`` write may have changed mid-entry
-        — into the entries that follow. Only the three eval-consumed settings are
-        updated.
-        """
-        self._default_strict_json = strict_json
-        self._default_loop_limit = loop_limit
-        self._shell_exec_timeout = shell_exec_timeout
 
     def reset_extern_registry(self) -> None:
         """Replace the cached extern registry with a fresh, empty one.

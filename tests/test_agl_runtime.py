@@ -39,22 +39,6 @@ _STDLIB_ROOT = pathlib.Path(__file__).resolve().parents[1] / "stdlib"
 
 
 class TestPipelineDriverConstructor:
-    def test_default_constructor_uses_documented_defaults(self) -> None:
-        rt = PipelineDriver()
-        # Documented constructor defaults.
-        # The max-iters valve defaults to OFF (None): unbounded loops run until
-        # they self-terminate; an explicit max-iters turns the valve on.
-        assert rt.default_loop_limit is None
-        assert rt.default_strict_json is False
-
-    def test_default_loop_limit_kwarg_is_observable(self) -> None:
-        rt = PipelineDriver(default_loop_limit=10)
-        assert rt.default_loop_limit == 10
-
-    def test_default_strict_json_kwarg_is_observable(self) -> None:
-        rt = PipelineDriver(default_strict_json=True)
-        assert rt.default_strict_json is True
-
     def test_operator_name_bindings_run_end_to_end(
         self, capsys: pytest.CaptureFixture[str]
     ) -> None:
@@ -698,20 +682,6 @@ class TestTokenConstants:
         assert tokens.KW_TRUE == "true"
         assert tokens.KW_FALSE == "false"
         assert tokens.KW_NULL == "null"
-
-
-class TestPipelineDriverProperties:
-    def test_default_loop_limit_property(self) -> None:
-        rt = PipelineDriver(default_loop_limit=7)
-        assert rt.default_loop_limit == 7
-
-    def test_default_strict_json_property(self) -> None:
-        rt = PipelineDriver(default_strict_json=True)
-        assert rt.default_strict_json is True
-
-    def test_default_strict_json_property_false(self) -> None:
-        rt = PipelineDriver(default_strict_json=False)
-        assert rt.default_strict_json is False
 
 
 class TestResetExternRegistry:
@@ -2300,18 +2270,6 @@ class TestExhaustivenessErrorSurfaces:
         assert "Fail" in result.diagnostics[0].message
         assert result.warnings == []
         assert capsys.readouterr().out == ""
-
-
-class TestShellExecTimeoutProperty:
-    """shell_exec_timeout is a readable constructor parameter."""
-
-    def test_default_shell_exec_timeout_is_none(self) -> None:
-        rt = PipelineDriver()
-        assert rt.shell_exec_timeout is None
-
-    def test_shell_exec_timeout_kwarg_is_observable(self) -> None:
-        rt = PipelineDriver(shell_exec_timeout=30.0)
-        assert rt.shell_exec_timeout == 30.0
 
 
 # Permission-based tests: chmod 0o444 has no effect for root, who can write

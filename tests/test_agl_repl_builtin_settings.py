@@ -405,43 +405,25 @@ class TestMaxItersEngineBaseSeed:
         assert s._default_loop_limit == 5
 
 
-class TestDriverConstructionUnification:
-    """The internal ``PipelineDriver`` is built from the normalized ``_engine_base``.
+class TestTimeoutSeedWinsOverDriverArgument:
+    """An ``engine_base['timeout']`` seed wins over a disagreeing ``shell_exec_timeout``.
 
-    ``ReplSession`` receives the three runtime-live engine settings through
-    two channels: the typed ``engine_base`` seed mapping and the scalar
-    constructor arguments (``default_strict_json``/``default_loop_limit``/
-    ``shell_exec_timeout``). Each test below deliberately makes the two
-    channels disagree and asserts that the internal driver (``s._runtime``)
-    follows ``engine_base``, not the disagreeing scalar -- the single source
-    of truth the session itself already uses for its own live fields.
+    ``shell_exec_timeout`` reaches the session twice: once as the typed
+    ``engine_base`` seed mapping and once as the raw constructor argument,
+    which is only a fallback for an unseeded key. These tests deliberately
+    make the two disagree and pin that the session's own live field
+    (``_shell_exec_timeout``) follows the seed, not the disagreeing argument.
     """
 
-    def test_max_iters_engine_base_seed_reaches_the_driver_over_a_disagreeing_argument(
-        self,
-    ) -> None:
-        s = ReplSession(
-            stdlib_root=_STDLIB_ROOT,
-            default_loop_limit=30,
-            engine_base=build_engine_config_seeds({"max-iters": 5}),
-        )
-        assert s._runtime.default_loop_limit == 5
-
-    def test_timeout_engine_base_seed_reaches_the_driver_over_a_disagreeing_argument(
-        self,
-    ) -> None:
+    def test_engine_base_seed_wins_over_the_shell_exec_timeout_argument(self) -> None:
         s = ReplSession(
             stdlib_root=_STDLIB_ROOT,
             shell_exec_timeout=30.0,
             engine_base=build_engine_config_seeds({"timeout": "5s"}),
         )
-        assert s._runtime.shell_exec_timeout == 5.0
-        # The session's own live field agrees with the driver it built.
         assert s._shell_exec_timeout == 5.0
 
-    def test_timeout_seeded_as_none_reaches_the_driver_over_a_disagreeing_argument(
-        self,
-    ) -> None:
+    def test_engine_base_seed_of_none_wins_over_the_shell_exec_timeout_argument(self) -> None:
         # An explicit empty ``Option`` (a "no timeout" host control) must win
         # over a disagreeing non-``None`` scalar, same as every other case.
         s = ReplSession(
@@ -449,25 +431,62 @@ class TestDriverConstructionUnification:
             shell_exec_timeout=30.0,
             engine_base=build_engine_config_seeds({"timeout": None}),
         )
-        assert s._runtime.shell_exec_timeout is None
         assert s._shell_exec_timeout is None
 
-    def test_strict_json_engine_base_seed_reaches_the_driver_over_a_disagreeing_argument(
+
+class TestSeedGovernsRuntimeEffectOverDriverArgument:
+    """A disagreeing seed governs what an entry actually does, not just what it reads.
+
+    ``strict-json`` and ``max-iters`` reach the session through both the typed
+    ``engine_base`` seed mapping and a raw constructor argument. The seed wins,
+    and these tests observe that where a user does: the JSON parsing mode an
+    ``ask`` reply is held to, and the iteration cap an unguarded loop is cut off
+    at. Each case first pins the disagreeing argument's own effect on a session
+    that has no seed, so the seeded case demonstrably discriminates between the
+    two channels.
+    """
+
+    def test_lenient_seed_keeps_a_fenced_reply_parseable_despite_a_strict_json_argument(
         self,
     ) -> None:
+        # No seed: the argument alone makes the fenced reply unparseable.
+        argument_only = ReplSession(
+            stdlib_root=_STDLIB_ROOT,
+            agent_dispatcher=_FencedAgent(),
+            default_strict_json=True,
+        )
+        strict_result = argument_only.eval_entry('let a: int = ask """how many"""')
+        assert not strict_result.ok
+        assert strict_result.error is not None
+        assert "AgentParseError" in strict_result.error.type_name
+
+        # The same argument, now contradicted by a lenient seed: the reply parses.
         s = ReplSession(
             stdlib_root=_STDLIB_ROOT,
+            agent_dispatcher=_FencedAgent(),
             default_strict_json=True,
             engine_base=build_engine_config_seeds({"strict-json": False}),
         )
-        assert s._runtime.default_strict_json is False
+        assert _ok(s, 'let a: int = ask """how many"""').value == IntValue(42)
 
-    def test_strict_json_argument_reaches_the_driver_when_unseeded(self) -> None:
-        # ``strict-json`` is never folded into ``_engine_base`` (a bare
-        # ``False`` must stay a driver floor), so an unseeded session's driver
-        # still floors on the raw constructor argument.
-        s = ReplSession(stdlib_root=_STDLIB_ROOT, default_strict_json=True)
-        assert s._runtime.default_strict_json is True
+    def test_engine_base_cap_stops_a_loop_the_default_loop_limit_argument_would_allow(
+        self,
+    ) -> None:
+        loop = "var i = 0\ndo\n  i := i + 1\nuntil i >= 10\ni"
+        # No seed: the argument's cap is loose enough for the loop to finish.
+        argument_only = ReplSession(stdlib_root=_STDLIB_ROOT, default_loop_limit=30)
+        assert _ok(argument_only, loop).value == IntValue(10)
+
+        # The same argument, now contradicted by a tighter seed: the loop is cut off.
+        s = ReplSession(
+            stdlib_root=_STDLIB_ROOT,
+            default_loop_limit=30,
+            engine_base=build_engine_config_seeds({"max-iters": 5}),
+        )
+        result = s.eval_entry(loop)
+        assert not result.ok
+        assert result.error is not None
+        assert "MaxIterationsExceeded" in result.error.type_name
 
 
 class TestMaxItersRegisterIsolation:

@@ -12,38 +12,11 @@ from typer.main import get_command
 import agm.cli as cli
 import agm.commands.exec as exec_command
 from agm.config.context import ConfigContext
+from tests.conftest import FakeAgentTransport
 
 
 def _invoke(runner: CliRunner, argv: list[str]):
     return runner.invoke(get_command(cli.app), argv, prog_name="agm", catch_exceptions=False)
-
-
-def _mock_runner(
-    monkeypatch: pytest.MonkeyPatch, responses: list[SimpleNamespace]
-) -> list[tuple[str, list[str]]]:
-    calls: list[tuple[str, list[str]]] = []
-
-    def prepare(prompt: str, *, runner: list[str], **_: object) -> object:
-        calls.append((prompt, runner))
-        return object()
-
-    monkeypatch.setattr("agm.agent.runner.prepare_rendered_prompt_run", prepare)
-    monkeypatch.setattr(
-        "agm.agent.runner.run_prepared_prompt_result",
-        lambda _prepared, **_: responses.pop(0),
-    )
-    return calls
-
-
-def _success(text: str) -> SimpleNamespace:
-    return SimpleNamespace(
-        spawn_error=None,
-        timed_out=False,
-        returncode=0,
-        stdout=text,
-        stderr="",
-        elapsed=0.0,
-    )
 
 
 @pytest.mark.parametrize(
@@ -66,19 +39,19 @@ def _success(text: str) -> SimpleNamespace:
 )
 def test_exec_dispatches_each_agent_value_through_its_builder(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
+    fake_agent_transport: FakeAgentTransport,
     agent: str,
     expected_argv: list[str],
 ) -> None:
     program = tmp_path / "program.agl"
     program.write_text(f'let answer: text = ask("hello", agent = {agent})\nprint answer\n')
-    calls = _mock_runner(monkeypatch, [_success("done")])
+    fake_agent_transport.queue(fake_agent_transport.success("done"))
 
     result = _invoke(CliRunner(), ["exec", "--no-log", str(program)])
 
     assert result.exit_code == 0, result.output
     assert result.output == "done\n"
-    assert calls == [("hello", expected_argv)]
+    assert fake_agent_transport.calls == [("hello", expected_argv)]
 
 
 @pytest.mark.parametrize(
@@ -92,6 +65,7 @@ def test_exec_dispatches_each_agent_value_through_its_builder(
 def test_exec_default_agent_precedence_is_config_then_cli_then_source(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    fake_agent_transport: FakeAgentTransport,
     cli_agent: str | None,
     source_agent: str | None,
     expected_command: str,
@@ -110,7 +84,7 @@ def test_exec_default_agent_precedence_is_config_then_cli_then_source(
         "current_config_context",
         lambda: ConfigContext(home=home, proj_dir=None, cwd=tmp_path),
     )
-    calls = _mock_runner(monkeypatch, [_success("done")])
+    fake_agent_transport.queue(fake_agent_transport.success("done"))
     argv = ["exec", "--no-log"]
     if cli_agent is not None:
         argv.extend(["--agent", cli_agent])
@@ -119,11 +93,11 @@ def test_exec_default_agent_precedence_is_config_then_cli_then_source(
     result = _invoke(CliRunner(), argv)
 
     assert result.exit_code == 0, result.output
-    assert calls == [("hello", [expected_command])]
+    assert fake_agent_transport.calls == [("hello", [expected_command])]
 
 
 def test_exec_retries_with_the_output_contract_feedback(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, fake_agent_transport: FakeAgentTransport
 ) -> None:
     program = tmp_path / "program.agl"
     program.write_text(
@@ -131,36 +105,28 @@ def test_exec_retries_with_the_output_contract_feedback(
         "on_parse_error = Retry(n = 1))\n"
         "print answer\n"
     )
-    calls = _mock_runner(monkeypatch, [_success("not an integer"), _success("7")])
+    fake_agent_transport.queue(
+        fake_agent_transport.success("not an integer"), fake_agent_transport.success("7")
+    )
 
     result = _invoke(CliRunner(), ["exec", "--no-log", str(program)])
 
     assert result.exit_code == 0, result.output
     assert result.output == "7\n"
-    assert [argv for _, argv in calls] == [["mock"], ["mock"]]
-    assert "previous response did not match" in calls[1][0].lower()
+    assert [argv for _, argv in fake_agent_transport.calls] == [["mock"], ["mock"]]
+    assert "previous response did not match" in fake_agent_transport.calls[1][0].lower()
 
 
 @pytest.mark.parametrize(
     ("result", "caught_type"),
     [
-        (
-            SimpleNamespace(
-                spawn_error="missing executable",
-                timed_out=False,
-                returncode=None,
-                stdout="",
-                stderr="",
-                elapsed=0.0,
-            ),
-            "AgentCallError",
-        ),
-        (_success("not an integer"), "AgentParseError"),
+        (FakeAgentTransport.failure(spawn_error="missing executable"), "AgentCallError"),
+        (FakeAgentTransport.success("not an integer"), "AgentParseError"),
     ],
 )
 def test_exec_typed_agent_errors_retain_the_selected_agent_value(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
+    fake_agent_transport: FakeAgentTransport,
     result: SimpleNamespace,
     caught_type: str,
 ) -> None:
@@ -172,7 +138,7 @@ def test_exec_typed_agent_errors_retain_the_selected_agent_value(
         f"catch {caught_type} as error =>\n"
         "  print render(error.agent)\n"
     )
-    _mock_runner(monkeypatch, [result])
+    fake_agent_transport.queue(result)
 
     invocation = _invoke(CliRunner(), ["exec", "--no-log", str(program)])
 

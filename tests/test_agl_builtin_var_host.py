@@ -11,20 +11,17 @@ a recording policy for the reconfiguration hooks.
 from __future__ import annotations
 
 import json
-import shlex
 from datetime import datetime, timedelta
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
-from agm.agl.ir.ids import NominalId
-from agm.agl.modules.ids import STD_CORE_ID
 from agm.agl.runtime.host_settings import HostSettingsPolicy
-from agm.agl.semantics.values import EnumValue, TextValue
 from agm.cli_support.args import ExecArgs
 from agm.commands import exec as exec_command
 from agm.config.context import ConfigContext
+from tests.conftest import FakeAgentTransport
 
 _STDLIB = Path(__file__).resolve().parent.parent / "stdlib"
 
@@ -70,34 +67,6 @@ def _trace_kinds_and_prints(path: Path) -> tuple[list[str], list[str]]:
     return kinds, rendered
 
 
-def _patch_runner(received_cmds: list[list[str]]) -> object:
-    """Context manager stack that records the runner command of every dispatch."""
-    from agm.agent.runner import PreparedPromptRun
-
-    def fake_prepare(
-        rendered_prompt: str, *, runner: str | list[str], temp_files: object, env: object
-    ) -> object:
-        command = shlex.split(runner) if isinstance(runner, str) else runner
-        received_cmds.append(command)
-        return PreparedPromptRun(
-            command=command,
-            effective_file=Path("/tmp/p.md"),
-            env={},
-            temp_files=[],
-        )
-
-    return patch("agm.agent.runner.prepare_rendered_prompt_run", side_effect=fake_prepare)
-
-
-def _command_agent(command: str) -> EnumValue:
-    return EnumValue(
-        nominal=NominalId(STD_CORE_ID, "Agent"),
-        display_name="Agent",
-        variant="AgentCommand",
-        fields={"command": TextValue(command)},
-    )
-
-
 def _write_command_stdlib(root: Path, config: str) -> Path:
     """Create the minimal stdlib needed to exercise the real exec command."""
     stdlib_root = root / "stdlib"
@@ -112,12 +81,6 @@ def _write_command_stdlib(root: Path, config: str) -> Path:
         (_STDLIB / "std" / "core.agl").read_text(encoding="utf-8"), encoding="utf-8"
     )
     return stdlib_root
-
-
-def _ok_run_result() -> MagicMock:
-    return MagicMock(
-        returncode=0, stdout="ok", stderr="", elapsed=0.1, timed_out=False, spawn_error=None
-    )
 
 
 class TestCommandEngineSeeding:
@@ -169,7 +132,9 @@ class TestCommandEngineSeeding:
 
 
 class TestRunnerReconfiguration:
-    def test_default_agent_write_reconfigures_ask(self, tmp_path: Path) -> None:
+    def test_default_agent_write_reconfigures_ask(
+        self, tmp_path: Path, fake_agent_transport: FakeAgentTransport
+    ) -> None:
         """A ``default-agent :=`` selects the following ``ask`` dispatch."""
         agl_file = tmp_path / "prog.agl"
         agl_file.write_text(
@@ -178,33 +143,25 @@ class TestRunnerReconfiguration:
             'ask("hi")\n'
         )
 
-        received: list[list[str]] = []
-        with (
-            _patch_runner(received),
-            patch("agm.agent.runner.run_prepared_prompt_result", return_value=_ok_run_result()),
-            patch("agm.agent.runner.cleanup_temp_files"),
-        ):
-            exec_command.run(_exec_args(agl_file))
+        exec_command.run(_exec_args(agl_file))
 
-        assert received == [["codex-runner"]]
+        assert [argv for _, argv in fake_agent_transport.calls] == [["codex-runner"]]
 
-    def test_no_default_agent_write_uses_the_stdlib_default_agent(self, tmp_path: Path) -> None:
+    def test_no_default_agent_write_uses_the_stdlib_default_agent(
+        self, tmp_path: Path, fake_agent_transport: FakeAgentTransport
+    ) -> None:
         """The stdlib initializer supplies the default AgentClaude value."""
         agl_file = tmp_path / "prog.agl"
         agl_file.write_text('ask("hi")\n')
 
-        received: list[list[str]] = []
-        with (
-            _patch_runner(received),
-            patch("agm.agent.runner.run_prepared_prompt_result", return_value=_ok_run_result()),
-            patch("agm.agent.runner.cleanup_temp_files"),
-        ):
-            exec_command.run(_exec_args(agl_file))
+        exec_command.run(_exec_args(agl_file))
 
-        assert received == [["claude", "-p", "--model", "sonnet", "--effort", "medium"]]
+        assert [argv for _, argv in fake_agent_transport.calls] == [
+            ["claude", "-p", "--model", "sonnet", "--effort", "medium"]
+        ]
 
     def test_default_agent_write_does_not_change_explicit_agent_values(
-        self, tmp_path: Path
+        self, tmp_path: Path, fake_agent_transport: FakeAgentTransport
     ) -> None:
         agl_file = tmp_path / "prog.agl"
         agl_file.write_text(
@@ -215,15 +172,12 @@ class TestRunnerReconfiguration:
             'ask("two")\n'
         )
 
-        received: list[list[str]] = []
-        with (
-            _patch_runner(received),
-            patch("agm.agent.runner.run_prepared_prompt_result", return_value=_ok_run_result()),
-            patch("agm.agent.runner.cleanup_temp_files"),
-        ):
-            exec_command.run(_exec_args(agl_file))
+        exec_command.run(_exec_args(agl_file))
 
-        assert received == [["fixed-runner"], ["new-runner"]]
+        assert [argv for _, argv in fake_agent_transport.calls] == [
+            ["fixed-runner"],
+            ["new-runner"],
+        ]
 
 
 class TestTraceReconfiguration:

@@ -12,8 +12,6 @@ from typing import cast
 
 import pytest
 
-from agm.agl.ir.ids import NominalId
-from agm.agl.modules.ids import STD_CORE_ID
 from agm.agl.modules.roots import RootSet
 from agm.agl.parser import parse_program
 from agm.agl.pipeline import PipelineDriver, RunResult
@@ -21,6 +19,7 @@ from agm.agl.runtime.option import some_value
 from agm.agl.semantics.values import BoolValue, EnumValue, IntValue, TextValue, Value
 from agm.agl.syntax import BuiltinVarDecl, Call, Expr, VarRef, walk
 from agm.agl.syntax.constants import is_constant_expression
+from tests._agl_helpers import agent_value
 
 _STDLIB = Path(__file__).resolve().parent.parent / "stdlib"
 
@@ -188,12 +187,7 @@ class TestBuiltinVarDefaults:
             'builtin var default-agent: Agent = AgentCommand("declared")',
             tmp_path,
             builtin_host_settings={
-                "default-agent": EnumValue(
-                    nominal=NominalId(STD_CORE_ID, "Agent"),
-                    display_name="Agent",
-                    variant="AgentCommand",
-                    fields={"command": TextValue("seeded")},
-                )
+                "default-agent": agent_value("AgentCommand", command="seeded"),
             },
         )
 

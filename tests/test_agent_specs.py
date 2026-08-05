@@ -7,32 +7,25 @@ from pathlib import Path
 import pytest
 
 from agm.agent.spec import AgentClaude, AgentCodex, AgentCommand, AgentPi, AgentSpec
-from agm.agl.ir.ids import NominalId
-from agm.agl.modules.ids import STD_CORE_ID
 from agm.agl.runtime.agents import decode_agent_value
-from agm.agl.semantics.values import EnumValue, IntValue, TextValue
-
-
-def _value(variant: str, **fields: str) -> EnumValue:
-    return EnumValue(
-        nominal=NominalId(STD_CORE_ID, "Agent"),
-        display_name="Agent",
-        variant=variant,
-        fields={name: TextValue(field) for name, field in fields.items()},
-    )
+from agm.agl.semantics.values import EnumValue, IntValue
+from tests._agl_helpers import agent_value
 
 
 @pytest.mark.parametrize(
     ("value", "expected"),
     [
         (
-            _value("AgentCommand", command="agent --prompt %{PROMPT_FILE}"),
+            agent_value("AgentCommand", command="agent --prompt %{PROMPT_FILE}"),
             AgentCommand("agent --prompt %{PROMPT_FILE}"),
         ),
-        (_value("AgentClaude", model="sonnet", thinking="high"), AgentClaude("sonnet", "high")),
-        (_value("AgentCodex", model="o3", thinking="high"), AgentCodex("o3", "high")),
         (
-            _value("AgentPi", provider="openai", model="gpt", thinking="high"),
+            agent_value("AgentClaude", model="sonnet", thinking="high"),
+            AgentClaude("sonnet", "high"),
+        ),
+        (agent_value("AgentCodex", model="o3", thinking="high"), AgentCodex("o3", "high")),
+        (
+            agent_value("AgentPi", provider="openai", model="gpt", thinking="high"),
             AgentPi("openai", "gpt", "high"),
         ),
     ],
@@ -43,11 +36,11 @@ def test_decode_round_trips_runtime_agent_enum(value: EnumValue, expected: Agent
 
 def test_decode_rejects_unknown_variant() -> None:
     with pytest.raises(ValueError):
-        decode_agent_value(_value("Other", command="runner"))
+        decode_agent_value(agent_value("Other", command="runner"))
 
 
 def test_decode_rejects_non_text_payload_field() -> None:
-    value = _value("AgentCommand", command="runner")
+    value = agent_value("AgentCommand", command="runner")
     value.fields["command"] = IntValue(1)
 
     with pytest.raises(ValueError):

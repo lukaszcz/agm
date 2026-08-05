@@ -7,6 +7,8 @@ import pytest
 from agm.agl import PipelineDriver
 from agm.agl.runtime.agents import value_driven_agent_factory
 from agm.agl.semantics.values import EnumValue
+from tests._agl_helpers import agent_value
+from tests.conftest import FakeAgentTransport
 
 
 @pytest.mark.parametrize(
@@ -28,60 +30,28 @@ from agm.agl.semantics.values import EnumValue
     ],
 )
 def test_ask_dispatches_each_agent_value(
-    monkeypatch: pytest.MonkeyPatch, source: str, argv: list[str]
+    fake_agent_transport: FakeAgentTransport, source: str, argv: list[str]
 ) -> None:
-    captured: list[list[str]] = []
-
-    def prepare(prompt: str, *, runner: list[str], **_: object) -> object:
-        assert prompt == "hello"
-        captured.append(runner)
-        return object()
-
-    monkeypatch.setattr("agm.agent.runner.prepare_rendered_prompt_run", prepare)
-    transport_result = type(
-        "Result",
-        (),
-        {
-            "spawn_error": None,
-            "timed_out": False,
-            "returncode": 0,
-            "stdout": "ok",
-            "stderr": "",
-            "elapsed": 0.0,
-        },
-    )()
-    monkeypatch.setattr(
-        "agm.agent.runner.run_prepared_prompt_result",
-        lambda _prepared, **_: transport_result,
-    )
+    fake_agent_transport.queue(fake_agent_transport.success("ok"))
     runtime = PipelineDriver(agent_dispatcher=value_driven_agent_factory(idle_timeout=None))
     result = runtime.run(f'let answer: text = ask("hello", agent = {source})\nanswer')
 
     assert result.ok
-    assert captured == [argv]
+    assert fake_agent_transport.calls == [("hello", argv)]
 
 
 @pytest.mark.parametrize("failure", ["spawn_error", "timed_out", "returncode"])
 def test_agent_transport_failures_become_typed_errors(
-    monkeypatch: pytest.MonkeyPatch, failure: str
+    fake_agent_transport: FakeAgentTransport, failure: str
 ) -> None:
-    result = type(
-        "Result",
-        (),
-        {
-            "spawn_error": "failed" if failure == "spawn_error" else None,
-            "timed_out": failure == "timed_out",
-            "returncode": 2 if failure == "returncode" else None,
-            "stdout": "",
-            "stderr": "error output",
-            "elapsed": 1.0,
-        },
-    )()
-    monkeypatch.setattr(
-        "agm.agent.runner.prepare_rendered_prompt_run", lambda *args, **kwargs: object()
-    )
-    monkeypatch.setattr(
-        "agm.agent.runner.run_prepared_prompt_result", lambda *args, **kwargs: result
+    fake_agent_transport.queue(
+        fake_agent_transport.failure(
+            spawn_error="failed" if failure == "spawn_error" else None,
+            timed_out=failure == "timed_out",
+            returncode=2 if failure == "returncode" else None,
+            stderr="error output",
+            elapsed=1.0,
+        )
     )
     runtime = PipelineDriver(agent_dispatcher=value_driven_agent_factory(idle_timeout=None))
 
@@ -94,17 +64,10 @@ def test_agent_transport_failures_become_typed_errors(
 
 def test_unrecognized_agent_variant_becomes_a_typed_error() -> None:
     """An Agent variant with no host builder cannot leak an untyped host failure."""
-    from agm.agl.ir.ids import NominalId
-    from agm.agl.modules.ids import STD_CORE_ID
     from agm.agl.runtime.agents import AgentCallHostError
     from agm.agl.runtime.request import AgentRequest
 
-    unknown = EnumValue(
-        nominal=NominalId(STD_CORE_ID, "Agent"),
-        display_name="Agent",
-        variant="AgentFuture",
-        fields={},
-    )
+    unknown = agent_value("AgentFuture")
     dispatch = value_driven_agent_factory(idle_timeout=None)
 
     with pytest.raises(AgentCallHostError) as exc_info:

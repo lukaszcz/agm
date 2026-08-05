@@ -14,21 +14,9 @@ from agm.agl.semantics.values import EnumValue, TextValue, Value
 from agm.cli_support.args import ExecArgs
 from agm.commands import exec as exec_command
 from agm.config.context import ConfigContext
+from tests._agl_helpers import agent_value
 
 _STDLIB = Path(__file__).resolve().parent.parent / "stdlib"
-
-
-def _agent(variant: str, **fields: str) -> EnumValue:
-    """Return the expected runtime representation of an ``Agent`` value."""
-    from agm.agl.ir.ids import NominalId
-    from agm.agl.modules.ids import STD_CORE_ID
-
-    return EnumValue(
-        nominal=NominalId(STD_CORE_ID, "Agent"),
-        display_name="Agent",
-        variant=variant,
-        fields={name: TextValue(value) for name, value in fields.items()},
-    )
 
 
 def _run(
@@ -81,8 +69,10 @@ def test_default_agent_initializer_and_qualified_write_are_visible() -> None:
     )
 
     assert result.ok
-    assert result.bindings["initial"] == _agent("AgentClaude", model="sonnet", thinking="medium")
-    assert result.bindings["updated"] == _agent("AgentCommand", command="command")
+    assert result.bindings["initial"] == agent_value(
+        "AgentClaude", model="sonnet", thinking="medium"
+    )
+    assert result.bindings["updated"] == agent_value("AgentCommand", command="command")
 
 
 def test_default_agent_write_does_not_reconfigure_host_services() -> None:
@@ -132,12 +122,12 @@ def test_host_seed_overrides_initializer_until_source_write() -> None:
         'std/config::default-agent := AgentPi("openai", "gpt", "high")\n'
         "let written = std/config::default-agent\n"
         "written\n",
-        seed={"default-agent": _agent("AgentCodex", model="o3", thinking="medium")},
+        seed={"default-agent": agent_value("AgentCodex", model="o3", thinking="medium")},
     )
 
     assert result.ok
-    assert result.bindings["seeded"] == _agent("AgentCodex", model="o3", thinking="medium")
-    assert result.bindings["written"] == _agent(
+    assert result.bindings["seeded"] == agent_value("AgentCodex", model="o3", thinking="medium")
+    assert result.bindings["written"] == agent_value(
         "AgentPi", provider="openai", model="gpt", thinking="high"
     )
 
@@ -149,19 +139,19 @@ def test_host_seed_overrides_initializer_until_source_write() -> None:
             'AgentCommand("config")',
             None,
             None,
-            _agent("AgentCommand", command="config"),
+            agent_value("AgentCommand", command="config"),
         ),
         (
             'AgentCommand("config")',
             'AgentCodex("o3", "medium")',
             None,
-            _agent("AgentCodex", model="o3", thinking="medium"),
+            agent_value("AgentCodex", model="o3", thinking="medium"),
         ),
         (
             'AgentCommand("config")',
             'AgentCodex("o3", "medium")',
             'AgentPi("openai", "gpt", "high")',
-            _agent("AgentPi", provider="openai", model="gpt", thinking="high"),
+            agent_value("AgentPi", provider="openai", model="gpt", thinking="high"),
         ),
     ),
 )

@@ -10,12 +10,10 @@ from __future__ import annotations
 
 import pytest
 
-from agm.agl.ir.ids import NominalId
-from agm.agl.modules.ids import STD_CORE_ID
 from agm.agl.repl.agentmode import AgentMode
 from agm.agl.repl.agents import AgentCancelled, ConfirmingAgent
 from agm.agl.runtime.request import AgentRequest, AgentResponse
-from agm.agl.semantics.values import EnumValue, TextValue
+from tests._agl_helpers import agent_value
 
 
 class RecordingAgent:
@@ -41,17 +39,8 @@ class InterruptingAgent:
         raise KeyboardInterrupt
 
 
-def _agent(command: str) -> EnumValue:
-    return EnumValue(
-        nominal=NominalId(STD_CORE_ID, "Agent"),
-        display_name="Agent",
-        variant="AgentCommand",
-        fields={"command": TextValue(command)},
-    )
-
-
 def _request(agent: str = "ask", prompt: str = "hi") -> AgentRequest:
-    return AgentRequest(agent=_agent(agent), prompt=prompt)
+    return AgentRequest(agent=agent_value("AgentCommand", command=agent), prompt=prompt)
 
 
 class ScriptedConfirm:

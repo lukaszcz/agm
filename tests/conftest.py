@@ -6,7 +6,9 @@ import os
 import shutil
 import signal
 from collections.abc import Generator
+from dataclasses import dataclass, field
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -170,3 +172,87 @@ def env(tmp_path: Path) -> dict[str, str]:
     fake_home.mkdir()
     e["HOME"] = str(fake_home)
     return e
+
+
+@dataclass(slots=True)
+class FakeAgentTransport:
+    """Records dispatched agent runs and stubs their transport result.
+
+    Every dispatched ``(prompt, runner argv)`` pair is recorded on ``calls``.
+    Queue responses built with :meth:`success` / :meth:`failure` via
+    :meth:`queue` to script what consecutive dispatches return, in order.  A
+    transport that was never scripted answers every dispatch with a placeholder
+    success; once scripted, a dispatch past the last queued response fails the
+    test rather than inventing one.
+    """
+
+    calls: list[tuple[str, list[str]]] = field(default_factory=list)
+    _responses: list[object] = field(default_factory=list)
+    _scripted: bool = False
+
+    def queue(self, *responses: object) -> None:
+        """Append *responses* to the FIFO consumed one-per-dispatch."""
+        self._scripted = True
+        self._responses.extend(responses)
+
+    @staticmethod
+    def success(stdout: str = "ok") -> SimpleNamespace:
+        """Build a successful transport result carrying *stdout*."""
+        return SimpleNamespace(
+            spawn_error=None, timed_out=False, returncode=0, stdout=stdout, stderr="", elapsed=0.0
+        )
+
+    @staticmethod
+    def failure(
+        *,
+        spawn_error: str | None = None,
+        timed_out: bool = False,
+        returncode: int | None = None,
+        stdout: str = "",
+        stderr: str = "",
+        elapsed: float = 0.0,
+    ) -> SimpleNamespace:
+        """Build a failing transport result: spawn error, timeout, or bad exit code."""
+        return SimpleNamespace(
+            spawn_error=spawn_error,
+            timed_out=timed_out,
+            returncode=returncode,
+            stdout=stdout,
+            stderr=stderr,
+            elapsed=elapsed,
+        )
+
+    def _next_response(self) -> object:
+        if self._responses:
+            return self._responses.pop(0)
+        if self._scripted:
+            raise AssertionError("agent dispatched more times than there were queued responses")
+        return self.success()
+
+
+@pytest.fixture()
+def fake_agent_transport(monkeypatch: pytest.MonkeyPatch) -> FakeAgentTransport:
+    """Stub the ``agm.agent.runner`` prepare/run seam that every agent dispatch uses.
+
+    Replaces ``prepare_rendered_prompt_run`` and ``run_prepared_prompt_result``
+    so no real subprocess is spawned, regardless of whether the dispatch is
+    driven through the ``agm exec`` CLI, ``exec_command.run``, or a bare
+    ``PipelineDriver`` — all three route through the same seam. See
+    :class:`FakeAgentTransport` for recording/queuing behavior.
+    """
+    from agm.agent.runner import PreparedPromptRun
+
+    transport = FakeAgentTransport()
+
+    def prepare(prompt: str, *, runner: list[str], **_: object) -> PreparedPromptRun:
+        transport.calls.append((prompt, runner))
+        return PreparedPromptRun(
+            command=runner, effective_file=Path("/dev/null"), env={}, temp_files=[]
+        )
+
+    monkeypatch.setattr("agm.agent.runner.prepare_rendered_prompt_run", prepare)
+    monkeypatch.setattr(
+        "agm.agent.runner.run_prepared_prompt_result",
+        lambda _prepared, **_: transport._next_response(),
+    )
+    return transport

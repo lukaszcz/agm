@@ -20,16 +20,22 @@ field and variant shapes exactly as specified.
 handle and its matching ``TypeDef`` together, in one call, for tests that
 need both (the handle to pass to the function under test, the ``TypeDef`` to
 pass to ``type_table_for``).
+
+``agent_value`` builds a runtime ``std/core::Agent`` enum value directly, for
+tests that need one as an expected value, a seeded host setting, or a request
+payload without going through source parsing.
 """
 
 from __future__ import annotations
 
 import dataclasses
 
+from agm.agl.ir.ids import NominalId
 from agm.agl.ir.nodes import IrBind, IrExpr, IrSequence
-from agm.agl.modules.ids import ENTRY_ID, ModuleId
+from agm.agl.modules.ids import ENTRY_ID, STD_CORE_ID, ModuleId
 from agm.agl.semantics.type_table import TypeDef, TypeTable, create_seeded_type_table
 from agm.agl.semantics.types import EnumType, RecordType, Type
+from agm.agl.semantics.values import EnumValue, TextValue
 
 
 def let_root_capture(initializer: IrExpr) -> IrBind:
@@ -118,3 +124,18 @@ def enum_type(
         variants=tuple((vname, tuple(vfields.items())) for vname, vfields in variants.items()),
     )
     return typedef.handle(type_args), typedef
+
+
+def agent_value(variant: str, **fields: str) -> EnumValue:
+    """Build the runtime ``std/core::Agent`` enum value for *variant*.
+
+    Each keyword becomes a text-valued field, matching every ``Agent``
+    variant's payload shape (``command``, ``model``/``thinking``, etc.); pass
+    none for a variant with no payload.
+    """
+    return EnumValue(
+        nominal=NominalId(STD_CORE_ID, "Agent"),
+        display_name="Agent",
+        variant=variant,
+        fields={name: TextValue(value) for name, value in fields.items()},
+    )

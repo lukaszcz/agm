@@ -31,9 +31,8 @@ from agm.agl.repl.agentmode import AgentMode
 from agm.agl.repl.agents import ConfirmingAgent
 from agm.agl.runtime.agents import value_driven_agent_factory
 from agm.agl.runtime.host_settings import HostSettingsPolicy
-from agm.agl.runtime.params import build_engine_config_seeds, raw_option_str
 from agm.cli_support.args import ReplArgs
-from agm.commands.exec import check_max_iters, parse_default_agent_literal
+from agm.cli_support.engine_seeds import build_host_engine_seeds, check_max_iters
 from agm.config.context import current_config_context
 from agm.config.general import (
     agm_home_dir,
@@ -122,38 +121,17 @@ def run(args: ReplArgs) -> None:
     # Seed only explicit CLI/config controls.  Agent and trace-service
     # fallbacks remain absent so a ``builtin var`` initializer can provide the
     # setting default.  The raw timeout preserves its configured spelling.
-    exec_raw_table = toml_dict(merged_config.get("exec"))
-    seed_raw: dict[str, object] = {}
-    if args.strict_json is not None:
-        seed_raw["strict-json"] = args.strict_json
-    elif "strict-json" in exec_raw_table:
-        seed_raw["strict-json"] = strict_json
-    if args.max_iters is not None:
-        seed_raw["max-iters"] = args.max_iters
-    elif "max-iters" in exec_raw_table and loop_limit is not None:
-        seed_raw["max-iters"] = loop_limit
-    raw_timeout = raw_option_str(exec_raw_table, {}, "timeout")
-    if raw_timeout is not None:
-        seed_raw["timeout"] = raw_timeout
-    if args.no_log or args.log or args.log_file is not None:
-        seed_raw["log"] = log_decision.enabled
-    elif "log" in exec_raw_table or "log-file" in exec_raw_table:
-        seed_raw["log"] = log_decision.enabled
-    if args.log_file is not None:
-        seed_raw["log-file"] = args.log_file
-    elif "log-file" in exec_raw_table and config.log_file is not None:
-        seed_raw["log-file"] = config.log_file
-    engine_base = build_engine_config_seeds(seed_raw)
-    default_agent_literal = args.agent if args.agent is not None else config.default_agent
-    if default_agent_literal is not None:
-        default_agent_source = "--agent" if args.agent is not None else "[exec] configuration"
-        try:
-            engine_base["default-agent"] = parse_default_agent_literal(
-                default_agent_literal, source=default_agent_source
-            )
-        except ValueError as exc:
-            print(f"Error: {exc}", file=sys.stderr)
-            raise SystemExit(1) from exc
+    engine_base = build_host_engine_seeds(
+        config=config,
+        primary_table=toml_dict(merged_config.get("exec")),
+        log_enabled=log_decision.enabled,
+        strict_json=args.strict_json,
+        max_iters=args.max_iters,
+        log=args.log,
+        no_log=args.no_log,
+        log_file=args.log_file,
+        agent=args.agent,
+    )
 
     session = ReplSession(
         default_strict_json=strict_json,

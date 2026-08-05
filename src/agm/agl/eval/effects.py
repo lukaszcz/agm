@@ -175,7 +175,6 @@ class EffectHandlers:
         *,
         message: str,
         agent: Value,
-        agent_name: str,
         last_raw: str | None,
         last_normalized: str | None,
         last_errors: tuple[ReqValidationError, ...],
@@ -219,8 +218,6 @@ class EffectHandlers:
             raise TypeError(
                 f"IrAsk agent must evaluate to an Agent enum value, got {type(agent_val).__name__}"
             )
-        dispatch_agent = agent_val
-        request_agent = agent_val
         agent_name = render_value(agent_val)
 
         prompt_text = self._text_of(self._ctx._eval(prompt_expr))
@@ -230,11 +227,11 @@ class EffectHandlers:
         # Unit-typed ask: dispatch once, no output parsing.
         if contract.is_unit:
             request = AgentRequest(
-                agent=request_agent,
+                agent=agent_val,
                 prompt=prompt_text,
                 output_contract=None,
             )
-            self._dispatch_agent(dispatch_agent, request, _node)
+            self._dispatch_agent(agent_val, request, _node)
             return VOID_VALUE
 
         effective_strict = (
@@ -270,14 +267,14 @@ class EffectHandlers:
                 span=_node.location,
             )
             request = AgentRequest(
-                agent=request_agent,
+                agent=agent_val,
                 prompt=prompt_text,
                 attempt=attempt,
                 previous_invalid_output=last_raw,
                 validation_errors=list(last_errors),
                 output_contract=output_contract,
             )
-            response = self._dispatch_agent(dispatch_agent, request, _node)
+            response = self._dispatch_agent(agent_val, request, _node)
             raw = response.content
 
             result = self._ctx._parse_host_output(
@@ -305,8 +302,7 @@ class EffectHandlers:
                 f"{contract.target_type_label} after {max_attempts} attempt(s). "
                 f"Last output: {last_raw!r}"
             ),
-            agent=request_agent,
-            agent_name=agent_name,
+            agent=agent_val,
             last_raw=last_raw,
             last_normalized=last_normalized,
             last_errors=last_errors,
@@ -358,6 +354,37 @@ class EffectHandlers:
     # Exec call helper
     # ------------------------------------------------------------------
 
+    def _raise_exec_error(
+        self,
+        message: str,
+        *,
+        command: str,
+        exit_code: int,
+        stdout: str,
+        stderr: str,
+        timed_out: bool = False,
+        trace_id: str | None = None,
+    ) -> NoReturn:
+        """Raise the builtin ``ExecError`` carrying one shell invocation's outcome.
+
+        Every ``exec`` failure — spawn, timeout, non-zero exit, and typed-output
+        parse failure — reports through this one shape.  *trace_id* reuses an
+        already-minted event id; otherwise a fresh one is minted here.
+        """
+        raise AglRaise(
+            _make_exc_value(
+                "ExecError",
+                message,
+                nominals=self._ctx._program.builtin_nominals,
+                trace_id=trace_id if trace_id is not None else self._ctx._trace.new_event_id(),
+                command=TextValue(command),
+                exit_code=IntValue(exit_code),
+                stdout=TextValue(stdout),
+                stderr=TextValue(stderr),
+                timed_out=BoolValue(timed_out),
+            )
+        )
+
     def _raise_exec_parse_error(
         self, *, command: str, last_raw: str | None, last_errors: tuple[ReqValidationError, ...]
     ) -> NoReturn:
@@ -368,21 +395,12 @@ class EffectHandlers:
         as an agent parse failure would violate that exception's typed shape.
         """
         detail = "; ".join(error.message for error in last_errors)
-        message = (
-            f"exec output failed to parse: {detail}" if detail else "exec output failed to parse"
-        )
-        raise AglRaise(
-            _make_exc_value(
-                "ExecError",
-                message,
-                nominals=self._ctx._program.builtin_nominals,
-                trace_id=self._ctx._trace.new_event_id(),
-                command=TextValue(command),
-                exit_code=IntValue(0),
-                stdout=TextValue(last_raw or ""),
-                stderr=TextValue(detail),
-                timed_out=BoolValue(False),
-            )
+        self._raise_exec_error(
+            f"exec output failed to parse: {detail}" if detail else "exec output failed to parse",
+            command=command,
+            exit_code=0,
+            stdout=last_raw or "",
+            stderr=detail,
         )
 
     def _run_exec_shell(self, cmd: str, location: Location) -> tuple[str, str, int | None]:
@@ -410,18 +428,13 @@ class EffectHandlers:
                 timed_out=False,
                 span=location,
             )
-            raise AglRaise(
-                _make_exc_value(
-                    "ExecError",
-                    f"Failed to spawn shell: {spawn_error}",
-                    nominals=self._ctx._program.builtin_nominals,
-                    trace_id=trace_id,
-                    command=TextValue(cmd),
-                    exit_code=IntValue(-1),
-                    stdout=TextValue(""),
-                    stderr=TextValue(spawn_error),
-                    timed_out=BoolValue(False),
-                )
+            self._raise_exec_error(
+                f"Failed to spawn shell: {spawn_error}",
+                command=cmd,
+                exit_code=-1,
+                stdout="",
+                stderr=spawn_error,
+                trace_id=trace_id,
             )
         if result.timed_out:
             exit_code = result.returncode if result.returncode is not None else -1
@@ -434,18 +447,13 @@ class EffectHandlers:
                 timed_out=True,
                 span=location,
             )
-            raise AglRaise(
-                _make_exc_value(
-                    "ExecError",
-                    f"Shell command timed out (idle timeout exceeded): {cmd!r}",
-                    nominals=self._ctx._program.builtin_nominals,
-                    trace_id=self._ctx._trace.new_event_id(),
-                    command=TextValue(cmd),
-                    exit_code=IntValue(exit_code),
-                    stdout=TextValue(result.stdout.rstrip("\n")),
-                    stderr=TextValue(result.stderr.rstrip("\n")),
-                    timed_out=BoolValue(True),
-                )
+            self._raise_exec_error(
+                f"Shell command timed out (idle timeout exceeded): {cmd!r}",
+                command=cmd,
+                exit_code=exit_code,
+                stdout=result.stdout.rstrip("\n"),
+                stderr=result.stderr.rstrip("\n"),
+                timed_out=True,
             )
         self._ctx._trace.exec_command(
             command=cmd,
@@ -491,18 +499,12 @@ class EffectHandlers:
 
         # 4. Non-zero exit raises ExecError (for text/typed execs)
         if returncode is not None and returncode != 0:
-            raise AglRaise(
-                _make_exc_value(
-                    "ExecError",
-                    f"Shell command exited with code {returncode}: {cmd!r}",
-                    nominals=self._ctx._program.builtin_nominals,
-                    trace_id=self._ctx._trace.new_event_id(),
-                    command=TextValue(cmd),
-                    exit_code=IntValue(returncode),
-                    stdout=TextValue(stdout.rstrip("\n")),
-                    stderr=TextValue(stderr.rstrip("\n")),
-                    timed_out=BoolValue(False),
-                )
+            self._raise_exec_error(
+                f"Shell command exited with code {returncode}: {cmd!r}",
+                command=cmd,
+                exit_code=returncode,
+                stdout=stdout.rstrip("\n"),
+                stderr=stderr.rstrip("\n"),
             )
 
         # 5. Unit contract: successful output is deliberately discarded.

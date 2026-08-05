@@ -321,33 +321,30 @@ def _self_param() -> ParamSpec:
     )
 
 
+def _as_agent_method(signature: FunctionSignature) -> FunctionSignature:
+    """Rebind a root builtin signature as an ``Agent`` method.
+
+    The receiver supplies the agent, so its ``agent`` parameter is replaced by
+    the positional-only ``self``.  Deriving the method form keeps it in step
+    with the root form, whose parameters the stdlib method headers must match.
+    """
+    return replace(
+        signature,
+        params=(
+            _self_param(),
+            *(param for param in signature.params if param.name != "agent"),
+        ),
+    )
+
+
 def _builtin_function_signature(name: str, *, is_method: bool = False) -> FunctionSignature | None:
     t = TypeVarType("T")
     if is_method:
-        match name:
-            case "ask":
-                return FunctionSignature(
-                    params=(
-                        _self_param(),
-                        _std_param("prompt", TextType()),
-                        _std_param("format", TextType(), has_default=True),
-                        _std_param("strict_json", BoolType(), has_default=True),
-                        _std_param(
-                            "on_parse_error",
-                            EnumType(name="ParsePolicy"),
-                            has_default=True,
-                        ),
-                    ),
-                    result=t,
-                    type_params=("T",),
-                )
-            case "ask-request":
-                return FunctionSignature(
-                    params=(_self_param(), _std_param("prompt", TextType())),
-                    result=RecordType(name="AgentRequest"),
-                )
-            case _:
-                return None
+        if name not in ("ask", "ask-request"):
+            return None
+        root = _builtin_function_signature(name)
+        assert root is not None
+        return _as_agent_method(root)
     match name:
         case "print":
             return FunctionSignature(

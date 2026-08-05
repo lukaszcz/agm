@@ -49,20 +49,16 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
-from typing import TYPE_CHECKING, TypeVar
+from typing import TypeVar
 
 from agm.agl import PipelineDriver
 from agm.agl.diagnostics import format_diagnostic
 from agm.agl.modules.roots import assemble_roots
 from agm.agl.runtime.agents import value_driven_agent_factory
 from agm.agl.runtime.host_settings import HostSettingsPolicy
-from agm.agl.runtime.params import build_engine_config_seeds, raw_option_str
-from agm.agl.semantics.engine_keys import (
-    ENGINE_KEY_NAMES,
-    RESERVED_PROGRAM_NAMES,
-    get_engine_key_type,
-)
+from agm.agl.semantics.engine_keys import ENGINE_KEY_NAMES, RESERVED_PROGRAM_NAMES
 from agm.cli_support.args import ExecArgs
+from agm.cli_support.engine_seeds import build_host_engine_seeds, check_max_iters
 from agm.cli_support.exec_params import (
     check_param_collisions,
     parse_param_tokens,
@@ -86,45 +82,12 @@ from agm.core.parse import parse_timeout
 from agm.core.toml import toml_dict
 from agm.parser import exit_with_usage_error
 
-if TYPE_CHECKING:
-    from agm.agl.semantics.values import Value
-
 _T = TypeVar("_T")
 
 
 def _first(*values: _T | None) -> _T | None:
     """Return the first non-None value, or None if all are None."""
     return next((v for v in values if v is not None), None)
-
-
-def parse_default_agent_literal(literal: object, *, source: str) -> Value:
-    """Parse a host-supplied ``Agent`` literal into a typed AgL value."""
-    if not isinstance(literal, str) or not literal.strip():
-        raise ValueError(
-            f"invalid default-agent literal from {source}: "
-            f"expected a non-empty AgL Agent literal, got {literal!r}"
-        )
-
-    from agm.agl.constant import ConstantExpressionError, parse_constant
-
-    expected_type = get_engine_key_type("default-agent")
-    assert expected_type is not None
-    try:
-        return parse_constant(literal, expected_type)
-    except ConstantExpressionError as exc:
-        raise ValueError(f"invalid default-agent literal from {source}: {exc}") from exc
-
-
-def check_max_iters(max_iters: int | None) -> None:
-    """Reject a non-positive ``--max-iters`` before anything runs.
-
-    The ``max-iters`` safety valve counts iterations, so zero and negatives are
-    meaningless; ``None`` means the flag was not given.  Shared by ``agm exec``
-    and ``agm repl``, which take the flag with identical semantics.
-    """
-    if max_iters is not None and max_iters <= 0:
-        print("Error: --max-iters must be a positive integer", file=sys.stderr)
-        raise SystemExit(1)
 
 
 def run(args: ExecArgs) -> None:
@@ -343,48 +306,21 @@ def run(args: ExecArgs) -> None:
     # are not seeds: passing them here would suppress a declared
     # ``builtin var`` initializer.  The shared decoder preserves explicit
     # ``None`` values for Option settings such as --no-timeout.
-    exec_raw_table = toml_dict(merged_config.get("exec"))
-    config_engine_keys = {
-        key for key in ENGINE_KEY_NAMES if key in program_table or key in exec_raw_table
-    }
-    seed_raw: dict[str, object] = {}
-    if args.strict_json is not None:
-        seed_raw["strict-json"] = args.strict_json
-    elif "strict-json" in config_engine_keys:
-        seed_raw["strict-json"] = config.strict_json
-    if args.max_iters is not None:
-        seed_raw["max-iters"] = args.max_iters
-    elif "max-iters" in config_engine_keys and config.default_loop_limit is not None:
-        seed_raw["max-iters"] = config.default_loop_limit
-    if args.timeout is not None:
-        seed_raw["timeout"] = args.timeout
-    elif args.no_timeout:
-        seed_raw["timeout"] = None
-    elif "timeout" in config_engine_keys:
-        raw_timeout = raw_option_str(program_table, exec_raw_table, "timeout")
-        if raw_timeout is not None:
-            seed_raw["timeout"] = raw_timeout
-    if args.no_log or args.log or args.log_file is not None:
-        seed_raw["log"] = log_decision.enabled
-    elif "log" in config_engine_keys or "log-file" in config_engine_keys:
-        seed_raw["log"] = log_decision.enabled
-    if args.log_file is not None:
-        seed_raw["log-file"] = args.log_file
-    elif args.no_log_file:
-        seed_raw["log-file"] = None
-    elif "log-file" in config_engine_keys and config.log_file is not None:
-        seed_raw["log-file"] = config.log_file
-    builtin_host_settings = build_engine_config_seeds(seed_raw)
-    default_agent_literal = _first(args.agent, config.default_agent)
-    if default_agent_literal is not None:
-        default_agent_source = "--agent" if args.agent is not None else "[exec] configuration"
-        try:
-            builtin_host_settings["default-agent"] = parse_default_agent_literal(
-                default_agent_literal, source=default_agent_source
-            )
-        except ValueError as exc:
-            print(f"Error: {exc}", file=sys.stderr)
-            raise SystemExit(1) from exc
+    builtin_host_settings = build_host_engine_seeds(
+        config=config,
+        primary_table=program_table,
+        fallback_table=toml_dict(merged_config.get("exec")),
+        log_enabled=log_decision.enabled,
+        strict_json=args.strict_json,
+        max_iters=args.max_iters,
+        log=args.log,
+        no_log=args.no_log,
+        log_file=args.log_file,
+        agent=args.agent,
+        timeout=args.timeout,
+        no_timeout=args.no_timeout,
+        no_log_file=args.no_log_file,
+    )
 
     # Reuse the ``PreparedProgram`` from above — no second parse/scope of the source.
     # Pass the already-computed compiled from discovery and the program the

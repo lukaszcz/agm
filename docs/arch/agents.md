@@ -28,7 +28,7 @@ These share prompt-preprocessing that merges scope, aspects, and other context i
 
 ## Code Entry Points
 
-- `src/agm/agent/spec.py` — decoded AgL agent specs and pure backend argv builders.
+- `src/agm/agent/spec.py` — host agent specs, each building its own backend argv. A pure data leaf; decoding an AgL `Agent` value into one lives on the AgL side, in `agl/runtime/agents.py`.
 - `src/agm/agent/runner.py` — runner command parsing, prompt attachment, prepared argv handling, subprocess execution with idle timeout, the run-result structure.
 - `src/agm/agent/prompt.py`, `prompt_source.py`, `response.py`, `output.py` — prompt preparation, source resolution, completion detection, and output formatting.
 - `src/agm/agent/loop.py` — loop runner/selector/timeout resolution and the loop default runner.

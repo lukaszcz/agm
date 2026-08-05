@@ -63,6 +63,9 @@ def parse_constant(source: str, expected_type: Type) -> Value:
             f"Invalid AgL constant {source!r}: expected exactly one expression."
         )
 
+    # The standard library is opened: a constant expression may name any
+    # constructor its declared type comes from, including ``std/core`` ones such
+    # as ``Option``'s, not only the builtin prelude's.
     driver = PipelineDriver()
     prepared = driver.prepare_program(
         f"let constant_value: {expected_type!r} = (\n{source}\n)\nconstant_value",

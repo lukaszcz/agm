@@ -19,10 +19,10 @@ if TYPE_CHECKING:
     from agm.agl.semantics.values import Value
 
 __all__ = [
-    "build_engine_config_base",
     "build_engine_config_seeds",
     "convert_config_value",
     "convert_param_value",
+    "engine_default_settings",
     "raw_option_str",
 ]
 
@@ -56,10 +56,8 @@ def raw_option_str(
     return None
 
 
-# Engine defaults for build_engine_config_base when a key is absent from
-# raw_values.  This is the SINGLE owner of the engine-key defaults: both the
-# REPL session and the IR evaluator seed their registers from
-# build_engine_config_base rather than carrying a table of their own.
+# The SINGLE owner of the engine-key defaults: the IR evaluator seeds its
+# registers from engine_default_settings rather than carrying a table of its own.
 _ENGINE_DEFAULTS: dict[str, object] = {
     "log": False,
     "strict-json": False,
@@ -105,30 +103,19 @@ def build_engine_config_seeds(raw_values: "Mapping[str, object]") -> "dict[str, 
     return result
 
 
-def build_engine_config_base(raw_values: "Mapping[str, object]") -> "dict[str, Value]":
-    """Build the engine config base dict from raw scalar or ``Option`` host values.
+def engine_default_settings() -> "dict[str, Value]":
+    """Build the typed engine-default value for every engine key.
 
     Decodes the scalar/``Option[text]`` engine keys via
-    :func:`convert_config_value` and materializes the typed ``default-agent``
-    fallback separately.
-    Keys absent from *raw_values* fall back to the engine defaults
-    (``false``/``false``/``0``/``none``/``none``), where zero represents the
-    disabled ``max-iters`` safety valve.
-
-    Each caller is responsible for constructing *raw_values* with its own
-    layering (CLI/program/exec config).  This helper performs only the
-    decoding step, keeping the layering logic in the callers.
+    :func:`convert_config_value` (``false``/``false``/``0``/``none``/``none``,
+    where zero represents the disabled ``max-iters`` safety valve) and
+    materializes the typed ``default-agent`` fallback separately.
 
     All engine-key types are built in: scalar or ``Option[text]`` and
     ``default-agent`` is the built-in ``Agent`` nominal type. This builds its
     own fresh seeded ``TypeTable`` rather than requiring one from the caller.
     """
-    decoded = build_engine_config_seeds(
-        {
-            key_name: raw_values.get(key_name, default_raw)
-            for key_name, default_raw in _ENGINE_DEFAULTS.items()
-        }
-    )
+    decoded = build_engine_config_seeds(_ENGINE_DEFAULTS)
     decoded["default-agent"] = _default_agent_value()
     return decoded
 

@@ -1,16 +1,18 @@
 """Typed host-side specifications and command builders for AgL agents.
 
-The builders return argv lists only.  Dispatch supplies that argv to the shared
-prompt preparation and process-execution helpers in :mod:`agm.agent.runner`.
+A pure host data leaf: each specification knows only how to build its own argv.
+Decoding a runtime ``Agent`` enum value into one of these specifications lives on
+the AgL side, in :mod:`agm.agl.runtime.agents`.  Dispatch supplies the built argv
+to the shared prompt preparation and process-execution helpers in
+:mod:`agm.agent.runner`.
 """
 
 from __future__ import annotations
 
-import shlex
 from dataclasses import dataclass
 from typing import TypeAlias
 
-from agm.agl.semantics.values import EnumValue, TextValue
+from agm.agent.runner import parse_command
 
 __all__ = [
     "AgentClaude",
@@ -18,11 +20,6 @@ __all__ = [
     "AgentCommand",
     "AgentPi",
     "AgentSpec",
-    "build_claude",
-    "build_codex",
-    "build_command",
-    "build_pi",
-    "decode",
 ]
 
 
@@ -32,6 +29,15 @@ class AgentCommand:
 
     command: str
 
+    def argv(self) -> list[str]:
+        """Split the configured command, retaining its prompt-file semantics.
+
+        Placeholder substitution or appending the prompt-file argument is
+        performed later by :func:`agm.agent.runner.command_with_prompt_target`,
+        exactly as for configured runner commands.
+        """
+        return parse_command(self.command, kind="agent")
+
 
 @dataclass(frozen=True, slots=True)
 class AgentClaude:
@@ -40,6 +46,10 @@ class AgentClaude:
     model: str
     thinking: str
 
+    def argv(self) -> list[str]:
+        """Build the argv for a one-shot Claude prompt invocation."""
+        return ["claude", "-p", *_flag("--model", self.model), *_flag("--effort", self.thinking)]
+
 
 @dataclass(frozen=True, slots=True)
 class AgentCodex:
@@ -47,6 +57,13 @@ class AgentCodex:
 
     model: str
     thinking: str
+
+    def argv(self) -> list[str]:
+        """Build the argv for a one-shot Codex prompt invocation."""
+        command = ["codex", "exec", *_flag("--model", self.model)]
+        if self.thinking:
+            command.extend(("-c", f"model_reasoning_effort={self.thinking}"))
+        return command
 
 
 @dataclass(frozen=True, slots=True)
@@ -57,77 +74,20 @@ class AgentPi:
     model: str
     thinking: str
 
+    def argv(self) -> list[str]:
+        """Build the argv for a one-shot Pi prompt invocation."""
+        return [
+            "pi",
+            "-p",
+            *_flag("--provider", self.provider),
+            *_flag("--model", self.model),
+            *_flag("--thinking", self.thinking),
+        ]
+
 
 AgentSpec: TypeAlias = AgentCommand | AgentClaude | AgentCodex | AgentPi
 
 
-def decode(value: EnumValue) -> AgentSpec:
-    """Decode a runtime ``Agent`` enum value into its host-side specification."""
-    match value.variant:
-        case "AgentCommand":
-            return AgentCommand(_text_field(value, "command"))
-        case "AgentClaude":
-            return AgentClaude(_text_field(value, "model"), _text_field(value, "thinking"))
-        case "AgentCodex":
-            return AgentCodex(_text_field(value, "model"), _text_field(value, "thinking"))
-        case "AgentPi":
-            return AgentPi(
-                _text_field(value, "provider"),
-                _text_field(value, "model"),
-                _text_field(value, "thinking"),
-            )
-        case variant:
-            raise ValueError(f"unsupported Agent variant: {variant}")
-
-
-def build_command(agent: AgentCommand) -> list[str]:
-    """Build an ``AgentCommand`` argv, retaining its prompt-file semantics.
-
-    Placeholder substitution or appending the prompt-file argument is performed
-    later by :func:`agm.agent.runner.command_with_prompt_target`, exactly as for
-    configured runner commands.
-    """
-    command = shlex.split(agent.command)
-    if not command:
-        raise ValueError("agent command is empty")
-    return command
-
-
-def build_claude(agent: AgentClaude) -> list[str]:
-    """Build the argv for a one-shot Claude prompt invocation."""
-    command = ["claude", "-p"]
-    if agent.model:
-        command.extend(("--model", agent.model))
-    if agent.thinking:
-        command.extend(("--effort", agent.thinking))
-    return command
-
-
-def build_codex(agent: AgentCodex) -> list[str]:
-    """Build the argv for a one-shot Codex prompt invocation."""
-    command = ["codex", "exec"]
-    if agent.model:
-        command.extend(("--model", agent.model))
-    if agent.thinking:
-        command.extend(("-c", f"model_reasoning_effort={agent.thinking}"))
-    return command
-
-
-def build_pi(agent: AgentPi) -> list[str]:
-    """Build the argv for a one-shot Pi prompt invocation."""
-    command = ["pi", "-p"]
-    if agent.provider:
-        command.extend(("--provider", agent.provider))
-    if agent.model:
-        command.extend(("--model", agent.model))
-    if agent.thinking:
-        command.extend(("--thinking", agent.thinking))
-    return command
-
-
-def _text_field(value: EnumValue, name: str) -> str:
-    """Read a text payload field from a typechecked runtime enum value."""
-    field = value.fields[name]
-    if not isinstance(field, TextValue):
-        raise ValueError(f"Agent field {name!r} must be text")
-    return field.value
+def _flag(flag: str, value: str) -> tuple[str, ...]:
+    """Return the flag/value pair, or nothing when the setting is unset."""
+    return (flag, value) if value else ()

@@ -132,7 +132,7 @@ from agm.agl.runtime.codec import ParseResult, _parse_contract_output
 from agm.agl.runtime.convert import StrictJsonParseError, parse_json_strict
 from agm.agl.runtime.externs import ExternRegistry
 from agm.agl.runtime.option import none_value, some_value
-from agm.agl.runtime.params import build_engine_config_base
+from agm.agl.runtime.params import engine_default_settings
 from agm.agl.runtime.render import render_value
 from agm.agl.runtime.serialize import value_to_json_obj
 from agm.agl.runtime.trace import TraceStore, noop_trace
@@ -160,7 +160,11 @@ from agm.agl.semantics.values import (
     TextValue,
     Value,
 )
-from agm.config.engine_keys import HOST_CONSUMED_ENGINE_KEYS, RUNTIME_LIVE_ENGINE_KEYS
+from agm.config.engine_keys import (
+    HOST_CONSUMED_ENGINE_KEYS,
+    HOST_RECONFIGURING_ENGINE_KEYS,
+    RUNTIME_LIVE_ENGINE_KEYS,
+)
 from agm.core.parse import format_timeout as _format_timeout
 from agm.core.parse import parse_timeout as _parse_timeout
 
@@ -224,7 +228,7 @@ _ENGINE_DEFAULT_SETTINGS: dict[str, Value] = {}
 def _engine_default_settings() -> Mapping[str, Value]:
     """Return the host runtime's engine-key defaults."""
     if not _ENGINE_DEFAULT_SETTINGS:
-        _ENGINE_DEFAULT_SETTINGS.update(build_engine_config_base({}))
+        _ENGINE_DEFAULT_SETTINGS.update(engine_default_settings())
     return _ENGINE_DEFAULT_SETTINGS
 
 
@@ -445,37 +449,31 @@ class IrInterpreter:
         # must not suppress a declaration default.  Bootstrap through the same
         # effect path as a source write so host-invalid declared values become
         # normal AgL runtime errors.
-        strict_default = seed.get("strict-json", defaults["strict-json"])
-        assert isinstance(strict_default, BoolValue)
-        strict_setting = (
-            seed["strict-json"]
-            if "strict-json" in seed
-            else BoolValue(strict_json or strict_default.value)
-        )
+        strict_setting = seed.get("strict-json")
+        if strict_setting is None:
+            strict_default = defaults["strict-json"]
+            assert isinstance(strict_default, BoolValue)
+            strict_setting = BoolValue(strict_json or strict_default.value)
         assert isinstance(strict_setting, BoolValue)
         self._apply_config_effect("strict-json", strict_setting)
 
-        max_iters_default = seed.get("max-iters", defaults["max-iters"])
-        assert isinstance(max_iters_default, IntValue)
-        max_iters_setting = (
-            seed["max-iters"]
-            if "max-iters" in seed
-            else IntValue(loop_limit if loop_limit is not None else max_iters_default.value)
-        )
+        max_iters_setting = seed.get("max-iters")
+        if max_iters_setting is None:
+            max_iters_default = defaults["max-iters"]
+            assert isinstance(max_iters_default, IntValue)
+            max_iters_setting = IntValue(
+                loop_limit if loop_limit is not None else max_iters_default.value
+            )
         assert isinstance(max_iters_setting, IntValue)
         self._apply_config_effect("max-iters", max_iters_setting)
 
-        timeout_default = seed.get("timeout", defaults["timeout"])
-        assert isinstance(timeout_default, EnumValue)
-        timeout_setting = (
-            seed["timeout"]
-            if "timeout" in seed
-            else (
+        timeout_setting = seed.get("timeout")
+        if timeout_setting is None:
+            timeout_setting = (
                 some_value(TextValue(_format_timeout(shell_exec_timeout)))
                 if shell_exec_timeout is not None
-                else timeout_default
+                else defaults["timeout"]
             )
-        )
         assert isinstance(timeout_setting, EnumValue)
         self._timeout_setting = timeout_setting
         self._apply_config_effect("timeout", timeout_setting)
@@ -486,7 +484,7 @@ class IrInterpreter:
             key: seed.get(key, defaults[key]) for key in HOST_CONSUMED_ENGINE_KEYS
         }
         if self._host_reconfigurer is not None:
-            self._reconfigure_host_service("log")
+            self._reconfigure_host_service()
         self._host_contracts: Mapping[ContractId, OutputContract] = (
             host_contracts if host_contracts is not None else {}
         )
@@ -1651,15 +1649,15 @@ class IrInterpreter:
             assert isinstance(value, EnumValue)
             if value.variant == "Some":
                 self._builtin_host_settings["log"] = BoolValue(True)
-        if self._host_reconfigurer is None or key == "default-agent":
+        if self._host_reconfigurer is None or key not in HOST_RECONFIGURING_ENGINE_KEYS:
             return
         try:
-            self._reconfigure_host_service(key)
+            self._reconfigure_host_service()
         except Exception:
             self._builtin_host_settings = previous
             raise
 
-    def _reconfigure_host_service(self, key: str) -> None:
+    def _reconfigure_host_service(self) -> None:
         """Reflect a host-consumed register write into the live host service.
 
         ``log``/``log-file`` recompute the trace destination from the current

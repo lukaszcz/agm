@@ -1551,43 +1551,20 @@ class AstBuilder(Transformer):
         )
 
     def _apply_juxt_suffixes(
-        self, result: syntax.Expr, suffixes: Iterable[_JuxtSuffix], meta: Meta
+        self, result: syntax.Expr, suffixes: Iterable[_JuxtSuffix], meta: Meta | None = None
     ) -> syntax.Expr:
-        """Apply deferred juxtaposition postfix operations to ``result``."""
-        for suffix in suffixes:
-            if suffix.kind == "field":
-                result = syntax.FieldAccess(
-                    obj=result,
-                    field=cast(str, suffix.value),
-                    span=self._span_from_meta(meta),
-                    node_id=suffix.node_id,
-                )
-            elif suffix.kind == "index":
-                result = syntax.IndexAccess(
-                    obj=result,
-                    index=cast(syntax.Expr, suffix.value),
-                    span=self._span_from_meta(meta),
-                    node_id=suffix.node_id,
-                )
-            else:
-                type_args_val, arg_lists = cast(_JuxtCall, suffix.value)
-                pos_args, named_args = arg_lists
-                result = syntax.Call(
-                    callee=result,
-                    args=tuple(pos_args),
-                    named_args=tuple(named_args),
-                    type_args=type_args_val,
-                    span=self._span_from_meta(meta),
-                    node_id=suffix.node_id,
-                )
-        return result
+        """Apply deferred juxtaposition postfix operations to ``result``.
 
-    def _apply_raw_juxt_suffixes(
-        self, result: syntax.Expr, suffixes: Iterable[_JuxtSuffix]
-    ) -> syntax.Expr:
-        """Apply source-ordered postfix operations to a raw-member receiver."""
+        A supplied *meta* spans the whole juxtaposition chain.  Omitting it
+        selects source-ordered spans covering only the receiver and the applied
+        suffix, which is what a raw-member receiver needs.
+        """
         for suffix in suffixes:
-            span = _span_covering(result.span, suffix.span)
+            span = (
+                self._span_from_meta(meta)
+                if meta is not None
+                else _span_covering(result.span, suffix.span)
+            )
             if suffix.kind == "field":
                 result = syntax.FieldAccess(
                     obj=result,
@@ -3004,9 +2981,21 @@ class AstBuilder(Transformer):
         return self._build_raw_call(meta, args, callee)
 
     def dotted_raw_head(self, meta: Meta, args: _Args) -> _DottedRawCallee:
-        """Build a direct dotted member callee before its raw payload."""
+        """Build a direct dotted member callee, spanning through its raw name."""
         del meta
-        return self._build_dotted_raw_callee(args)
+        receiver = cast(syntax.Expr, args[0])
+        raw_name = next(
+            arg for arg in args if isinstance(arg, Token) and arg.type == "RAW_TAIL_NAME"
+        )
+        raw_name_span = self._span_from_token(raw_name)
+        return _DottedRawCallee(
+            syntax.FieldAccess(
+                obj=receiver,
+                field=RAW_TAIL_BUILTINS[str(raw_name)],
+                span=_span_covering(receiver.span, raw_name_span),
+                node_id=self._next_id(),
+            )
+        )
 
     def raw_juxt_terminal(self, meta: Meta, args: _Args) -> _RawJuxtMember:
         """Capture the raw-tail name terminating a juxtaposed postfix chain."""
@@ -3048,7 +3037,7 @@ class AstBuilder(Transformer):
         del meta
         receiver = cast(syntax.Expr, args[0])
         member = next(arg for arg in args if isinstance(arg, _RawJuxtMember))
-        receiver = self._apply_raw_juxt_suffixes(receiver, member.suffixes)
+        receiver = self._apply_juxt_suffixes(receiver, member.suffixes)
         raw_name_span = self._span_from_token(member.raw_name)
         return _DottedRawCallee(
             syntax.FieldAccess(
@@ -3056,22 +3045,6 @@ class AstBuilder(Transformer):
                 field=RAW_TAIL_BUILTINS[str(member.raw_name)],
                 span=_span_covering(receiver.span, raw_name_span),
                 node_id=member.node_id,
-            )
-        )
-
-    def _build_dotted_raw_callee(self, args: _Args) -> _DottedRawCallee:
-        """Build a member callee with the source span through its raw name."""
-        receiver = cast(syntax.Expr, args[0])
-        raw_name = next(
-            arg for arg in args if isinstance(arg, Token) and arg.type == "RAW_TAIL_NAME"
-        )
-        raw_name_span = self._span_from_token(raw_name)
-        return _DottedRawCallee(
-            syntax.FieldAccess(
-                obj=receiver,
-                field=RAW_TAIL_BUILTINS[str(raw_name)],
-                span=_span_covering(receiver.span, raw_name_span),
-                node_id=self._next_id(),
             )
         )
 

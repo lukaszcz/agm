@@ -24,5 +24,5 @@ Help text and the command overview live in `parser.py`, separate from the wiring
 - `src/agm/parser.py` holds help texts and path-based help/overview resolution.
 - `src/agm/completion.py` provides dynamic shell completions.
 - `src/agm/commands/` contains the implementations; its directory layout mirrors the CLI command tree.
-- `src/agm/cli_support/args.py` defines the typed per-command argument containers; `src/agm/cli_support/exec_params.py` discovers AgL program parameters for `agm exec` option wiring.
+- `src/agm/cli_support/args.py` defines the typed per-command argument containers; `src/agm/cli_support/exec_params.py` discovers AgL program parameters for `agm exec` option wiring; `src/agm/cli_support/engine_seeds.py` resolves the CLI-over-config engine settings that `agm exec` and `agm repl` both seed the AgL engine with.
 - `docs/commands/` is the authoritative user-facing reference for command syntax and behavior (one page per command area; start at `docs/commands/index.md`).

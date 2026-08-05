@@ -2336,7 +2336,6 @@ class TestAskRequest:
     def test_rejects_type_arguments_and_parse_options(self, call: str) -> None:
         err = reject_type(call)
         assert "ask-request" in str(err)
-        assert "accept" in str(err).lower()
 
     def test_call_site_record(self) -> None:
         r = accept_type('ask-request("Q")')

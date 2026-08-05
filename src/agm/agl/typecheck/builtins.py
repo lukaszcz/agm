@@ -271,17 +271,14 @@ class BuiltinCallChecker:
                 "ask-request does not accept type arguments; it always builds a text request.",
                 span=node.span,
             )
-        allowed_named = frozenset() if receiver else frozenset({"agent"})
-        for named_arg in node.named_args:
-            if named_arg.name not in allowed_named:
-                raise AglTypeError(
-                    f"ask-request does not accept argument '{named_arg.name}'.", span=named_arg.span
-                )
-
         # This reuses prompt and Agent argument type validation. The fixed text
         # contract keeps lowering and request construction on the ordinary ask
         # contract path without exposing ask's parse-shaping options.
-        named = self._validate_ask_like_arguments(node, "ask-request", receiver=receiver)
+        named = self._validate_ask_like_arguments(
+            node,
+            "ask-request",
+            allowed_named=frozenset() if receiver else frozenset({"agent"}),
+        )
         self._ctx._register_builtin_obligation(
             PendingBuiltinObligation(
                 node_id=node.node_id,
@@ -309,7 +306,11 @@ class BuiltinCallChecker:
     ) -> None:
         """Check target-independent syntax, then queue contract materialization."""
         callee = kind.value
-        named = self._validate_ask_like_arguments(node, callee, receiver=receiver)
+        named = self._validate_ask_like_arguments(
+            node,
+            callee,
+            allowed_named=self._ASK_ALLOWED_NAMED_ARGS - ({"agent"} if receiver else set()),
+        )
         format_name, strict_json, parse_policy = self._parse_options(named)
         self._ctx._register_builtin_obligation(
             PendingBuiltinObligation(
@@ -327,15 +328,15 @@ class BuiltinCallChecker:
         )
 
     def _validate_ask_like_arguments(
-        self, node: Call, callee: str, *, receiver: bool
+        self, node: Call, callee: str, *, allowed_named: frozenset[str]
     ) -> dict[str, NamedArg]:
-        """Check syntax and value arguments that do not need the target type."""
+        """Check syntax and value arguments that do not need the target type.
+
+        *allowed_named* is the caller's permitted named-argument set: ``ask``
+        offers its parse-shaping options, ``ask-request`` only ``agent``, and a
+        receiver call drops ``agent`` because the receiver already supplies it.
+        """
         named = {na.name: na for na in node.named_args}
-        allowed_named = (
-            frozenset()
-            if receiver and callee == BuiltinObligationKind.ASK_REQUEST.value
-            else self._ASK_ALLOWED_NAMED_ARGS - ({"agent"} if receiver else set())
-        )
         for arg_name, na in named.items():
             if arg_name not in allowed_named:
                 raise AglTypeError(f"{callee}: unknown argument '{arg_name}'.", span=na.span)

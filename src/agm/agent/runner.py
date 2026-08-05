@@ -281,7 +281,7 @@ def cleanup_temp_files(temp_files: list[Path]) -> None:
 def prepare_rendered_prompt_run(
     rendered_prompt: str,
     *,
-    runner: str | list[str],
+    runner: list[str],
     temp_files: list[Path],
     env: dict[str, str],
 ) -> PreparedPromptRun:
@@ -299,9 +299,7 @@ def prepare_rendered_prompt_run(
     - Accepts an already-tokenized argv from an agent command builder, avoiding
       a string round-trip before the prepared invocation is run.
     """
-    command = (
-        runner.copy() if isinstance(runner, list) else split_command(runner, kind="exec-runner")
-    )
+    command = runner.copy()
     with NamedTemporaryFile("w", encoding="utf-8", delete=False, suffix=".md") as handle:
         handle.write(rendered_prompt)
         temp_path = Path(handle.name)

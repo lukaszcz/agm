@@ -4,13 +4,16 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from pathlib import Path
-from typing import NoReturn
+from typing import TYPE_CHECKING, NoReturn
 
 from agm.agl.ir.builtin_nominals import NO_BUILTIN_DECLARATIONS, BuiltinNominals
 from agm.agl.runtime.render import render_value
 from agm.agl.runtime.request import AgentRequest, AgentResponse
 from agm.agl.semantics.values import EnumValue, JsonValue, TextValue
 from agm.core.env import clone_env
+
+if TYPE_CHECKING:
+    from agm.agent.spec import AgentSpec
 
 AgentFn = Callable[[AgentRequest], AgentResponse | str]
 
@@ -85,7 +88,7 @@ def _raise_agent_call_error(
 
 
 def _run_request(
-    request: AgentRequest, command: str | list[str], idle_timeout: float | None
+    request: AgentRequest, command: list[str], idle_timeout: float | None
 ) -> AgentResponse:
     """Compose a request and run already-built argv through the shared runner seam."""
     from agm.agent.runner import (
@@ -137,34 +140,41 @@ def _run_request(
     return AgentResponse(content=result.stdout, metadata={"elapsed": result.elapsed})
 
 
+def decode_agent_value(value: EnumValue) -> "AgentSpec":
+    """Decode a runtime ``Agent`` enum value into its host-side specification."""
+    from agm.agent.spec import AgentClaude, AgentCodex, AgentCommand, AgentPi
+
+    match value.variant:
+        case "AgentCommand":
+            return AgentCommand(_text_field(value, "command"))
+        case "AgentClaude":
+            return AgentClaude(_text_field(value, "model"), _text_field(value, "thinking"))
+        case "AgentCodex":
+            return AgentCodex(_text_field(value, "model"), _text_field(value, "thinking"))
+        case "AgentPi":
+            return AgentPi(
+                _text_field(value, "provider"),
+                _text_field(value, "model"),
+                _text_field(value, "thinking"),
+            )
+        case variant:
+            raise ValueError(f"unsupported Agent variant: {variant}")
+
+
+def _text_field(value: EnumValue, name: str) -> str:
+    """Read a text payload field from a typechecked runtime enum value."""
+    field = value.fields[name]
+    if not isinstance(field, TextValue):
+        raise ValueError(f"Agent field {name!r} must be text")
+    return field.value
+
+
 def value_driven_agent_factory(*, idle_timeout: float | None) -> AgentFn:
     """Return a dispatcher which builds an invocation from ``request.agent``."""
-    from agm.agent.spec import (
-        AgentClaude,
-        AgentCodex,
-        AgentCommand,
-        AgentPi,
-        build_claude,
-        build_codex,
-        build_command,
-        build_pi,
-        decode,
-    )
 
     def dispatch(request: AgentRequest) -> AgentResponse:
         try:
-            spec = decode(request.agent)
-            match spec:
-                case AgentCommand():
-                    command = build_command(spec)
-                case AgentClaude():
-                    command = build_claude(spec)
-                case AgentCodex():
-                    command = build_codex(spec)
-                case AgentPi():
-                    command = build_pi(spec)
-                case _:
-                    raise ValueError(f"Unsupported decoded agent spec: {type(spec).__name__}")
+            command = decode_agent_value(request.agent).argv()
         except ValueError as exc:
             raise AgentCallHostError(
                 cause="invalid_agent",

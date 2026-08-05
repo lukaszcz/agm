@@ -92,20 +92,23 @@ def test_agent_transport_failures_become_typed_errors(
     assert run.error.type_name == "AgentCallError"
 
 
-def test_unrecognized_decoded_agent_spec_becomes_a_typed_error(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A future decoder output cannot leak an unbound-command host failure."""
-    from typing import cast
-
+def test_unrecognized_agent_variant_becomes_a_typed_error() -> None:
+    """An Agent variant with no host builder cannot leak an untyped host failure."""
+    from agm.agl.ir.ids import NominalId
+    from agm.agl.modules.ids import STD_CORE_ID
     from agm.agl.runtime.agents import AgentCallHostError
     from agm.agl.runtime.request import AgentRequest
 
-    monkeypatch.setattr("agm.agent.spec.decode", lambda _value: object())
+    unknown = EnumValue(
+        nominal=NominalId(STD_CORE_ID, "Agent"),
+        display_name="Agent",
+        variant="AgentFuture",
+        fields={},
+    )
     dispatch = value_driven_agent_factory(idle_timeout=None)
 
     with pytest.raises(AgentCallHostError) as exc_info:
-        dispatch(AgentRequest(agent=cast(EnumValue, object()), prompt="hello"))
+        dispatch(AgentRequest(agent=unknown, prompt="hello"))
 
     assert exc_info.value.cause == "invalid_agent"
 

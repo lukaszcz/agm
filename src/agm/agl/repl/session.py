@@ -560,11 +560,13 @@ class ReplSession:
         """Return whether *key* has an explicit host control over its declaration."""
         if key in HOST_CONSUMED_ENGINE_KEYS:
             return key in self._engine_base
-        return {
-            "strict-json": self._initial_strict_json_is_host_seed,
-            "max-iters": self._initial_loop_limit is not None,
-            "timeout": self._build_timeout_setting_base() is not None,
-        }[key]
+        match key:
+            case "strict-json":
+                return self._initial_strict_json_is_host_seed
+            case "max-iters":
+                return self._initial_loop_limit is not None
+            case _:
+                return self._build_timeout_setting_base() is not None
 
     def _build_reset_strict_json_setting(self) -> "BoolValue | None":
         """Return the host seed or remembered declaration default for strict-json."""

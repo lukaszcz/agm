@@ -425,14 +425,16 @@ def run_capture(
     interrupt_cleanup_cmd: list[str] | None = None,
     stdout_callback: Callable[[str], None] | None = None,
     stderr_callback: Callable[[str], None] | None = None,
+    timeout_callback: Callable[[str], None] | None = None,
     isolate_process_group: bool = False,
     idle_timeout: float | None = None,
 ) -> tuple[int, str, str]:
     """Run a command and capture stdout/stderr.
 
-    This is a compatibility adapter over :func:`_run_capture_result_impl`.  On idle-timeout
-    it prints a diagnostic to stderr and raises ``SystemExit(124)`` — matching the
-    original behaviour.  Spawn errors re-raise the *original* exception object so callers
+    This is a compatibility adapter over :func:`_run_capture_result_impl`. On idle-timeout
+    it reports a diagnostic through *timeout_callback* (or stderr when omitted) and raises
+    ``SystemExit(124)`` — matching the original behaviour. Spawn errors re-raise the
+    *original* exception object so callers
     get faithful exception types with all attributes intact:
     - ``OSError`` subclasses (``FileNotFoundError``, ``PermissionError``,
       ``OSError(ENOEXEC)``, etc.) are re-raised with ``errno``/``filename`` intact.
@@ -454,10 +456,11 @@ def run_capture(
     if spawn_exc is not None:
         raise spawn_exc
     if result.timed_out:
-        print(
-            f"Idle timeout ({idle_timeout}s) exceeded, process terminated.",
-            file=sys.stderr,
-        )
+        message = f"Idle timeout ({idle_timeout}s) exceeded, process terminated.\n"
+        if timeout_callback is None:
+            print(message, end="", file=sys.stderr)
+        else:
+            timeout_callback(message)
         raise SystemExit(124)
     rc = result.returncode if result.returncode is not None else 1
     return rc, result.stdout, result.stderr

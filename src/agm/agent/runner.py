@@ -22,6 +22,14 @@ from agm.core.process import ProcessCaptureResult, run_capture, run_capture_resu
 _RUNNER_NOT_FOUND_EXIT = 127
 
 
+class AgentCallTimeout(Exception):
+    """An agent invocation exceeded its configured idle timeout."""
+
+    def __init__(self, idle_timeout: float | None) -> None:
+        self.idle_timeout = idle_timeout
+        super().__init__(f"agent call timed out after {idle_timeout}s of inactivity")
+
+
 @dataclass(slots=True)
 class ResolvedPrompt:
     """Resolved prompt source: either inline text or a file path."""
@@ -213,14 +221,28 @@ def run_prompt_command(
         if stderr_callback is not None:
             stderr_callback(chunk)
 
-    returncode, stdout, stderr = run_capture(
-        command_with_prompt_target(command, target),
-        env=env,
-        stdout_callback=handle_stdout,
-        stderr_callback=handle_stderr,
-        isolate_process_group=True,
-        idle_timeout=idle_timeout,
-    )
+    def handle_timeout(message: str) -> None:
+        handle_stderr(message)
+        if stderr_callback is None:
+            print(message, end="", file=sys.stderr)
+
+    try:
+        returncode, stdout, stderr = run_capture(
+            command_with_prompt_target(command, target),
+            env=env,
+            stdout_callback=handle_stdout,
+            stderr_callback=handle_stderr,
+            timeout_callback=handle_timeout,
+            isolate_process_group=True,
+            idle_timeout=idle_timeout,
+        )
+    except SystemExit as exc:
+        # ``run_capture`` predates structured process results and represents an
+        # idle timeout as SystemExit(124). At the agent boundary this is only a
+        # failed invocation; callers such as ``agm loop`` decide whether to retry.
+        if exc.code == 124:
+            raise AgentCallTimeout(idle_timeout) from exc
+        raise
 
     # Exit code 127 is the shell's "command not found" convention: the resolved
     # runner command could not be found or executed.  This is a fatal

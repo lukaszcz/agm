@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sys
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -27,6 +28,7 @@ from agm.agent.loop import (
 )
 from agm.agent.prompt import preprocess_prompt_file
 from agm.agent.runner import (
+    AgentCallTimeout,
     ResolvedPrompt,
     append_extra_prompt,
     cleanup_temp_files,
@@ -72,6 +74,29 @@ def _write_stream(chunk: str, *, stderr: bool = False) -> None:
     stream = sys.stderr if stderr else sys.stdout
     stream.write(chunk)
     stream.flush()
+
+
+def _run_agent_call(
+    command: list[str],
+    target: Path,
+    *,
+    env: dict[str, str],
+    stdout_callback: Callable[[str], None] | None = None,
+    stderr_callback: Callable[[str], None] | None = None,
+    idle_timeout: float | None,
+) -> str | None:
+    """Run one agent call, treating a timeout as a failed invocation."""
+    try:
+        return run_prompt_command(
+            command,
+            target,
+            env=env,
+            stdout_callback=stdout_callback,
+            stderr_callback=stderr_callback,
+            idle_timeout=idle_timeout,
+        )
+    except AgentCallTimeout:
+        return None
 
 
 def _prepare_prompt(
@@ -156,7 +181,7 @@ def prepare_runtime(args: LoopArgs) -> LoopStepRuntime:
             env=env,
         )
         if not dry_run.enabled():
-            run_prompt_command(
+            _run_agent_call(
                 resolved_runner_command,
                 bootstrap_prompt.effective_file,
                 env=env,
@@ -328,7 +353,7 @@ def execute_single_step(runtime: LoopStepRuntime, *, step_number: int) -> bool:
 
     if runtime.select_invocation is None:
         assert runtime.loop_prompt is not None
-        output = run_prompt_command(
+        output = _run_agent_call(
             runtime.resolved_runner_command,
             runtime.loop_prompt.effective_file,
             env=runtime.env,
@@ -336,13 +361,15 @@ def execute_single_step(runtime: LoopStepRuntime, *, step_number: int) -> bool:
             stderr_callback=stderr_callback,
             idle_timeout=runtime.idle_timeout,
         )
+        if output is None:
+            return False
         if is_complete_output(output):
             print("\nCompleted.")
             return True
         return False
 
     while True:
-        selector_output = run_prompt_command(
+        selector_output = _run_agent_call(
             runtime.select_invocation.command,
             runtime.select_invocation.effective_prompt_file,
             env=runtime.env,
@@ -350,6 +377,8 @@ def execute_single_step(runtime: LoopStepRuntime, *, step_number: int) -> bool:
             stderr_callback=stderr_callback,
             idle_timeout=runtime.idle_timeout,
         )
+        if selector_output is None:
+            continue
         next_task = selector_result(selector_output, tasks_dir=runtime.resolved_tasks_dir)
         if next_task is None:
             print("\nCompleted.")
@@ -397,7 +426,7 @@ def execute_single_step(runtime: LoopStepRuntime, *, step_number: int) -> bool:
         runner_env = runtime.env
         runner_target = next_task
 
-    run_prompt_command(
+    _run_agent_call(
         runtime.resolved_runner_command,
         runner_target,
         env=runner_env,

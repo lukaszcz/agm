@@ -307,6 +307,22 @@ class TestRunCaptureResultEmbeddedNullByte:
         assert result.stderr == ""
 
 
+class TestRunCaptureIdleTimeout:
+    def test_idle_timeout_is_reported_through_callback(self) -> None:
+        messages: list[str] = []
+
+        with pytest.raises(SystemExit) as exc_info:
+            run_capture(
+                [sys.executable, "-c", "import time; time.sleep(60)"],
+                idle_timeout=0.2,
+                isolate_process_group=True,
+                timeout_callback=messages.append,
+            )
+
+        assert exc_info.value.code == 124
+        assert messages == ["Idle timeout (0.2s) exceeded, process terminated.\n"]
+
+
 class TestRunCaptureResultIdleTimeout:
     """Idle timeout fires: timed_out=True, returncode reflects kill, no SystemExit raised."""
 

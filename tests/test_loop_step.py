@@ -9,7 +9,7 @@ import pytest
 
 from agm.agent.loop import PreparedSelectInvocation
 from agm.agent.loop import dry_run_prompt_text as next_dry_run_prompt_text
-from agm.agent.runner import ResolvedPrompt
+from agm.agent.runner import AgentCallTimeout, ResolvedPrompt
 from agm.cli_support.args import LoopArgs, LoopSelectArgs
 from agm.commands.loop.run import run as loop_run
 from agm.commands.loop.select import _print_dry_run_prompt as next_print_dry_run_prompt
@@ -451,8 +451,11 @@ class TestPrepareRuntime:
             target: Path,
             *,
             env: dict[str, str],
+            stdout_callback: object = None,
+            stderr_callback: object = None,
             idle_timeout: float | None = None,
         ) -> str:
+            del stdout_callback, stderr_callback
             run_calls.append(command)
             run_targets.append(target)
             return ""
@@ -468,6 +471,23 @@ class TestPrepareRuntime:
         # bootstrap runner was invoked with the runner command targeting the bootstrap prompt
         assert run_calls == [["fake-runner"]]
         assert run_targets == [runtime.bootstrap_prompt.effective_file]
+        cleanup_runtime(runtime)
+
+    def test_bootstrap_timeout_does_not_abort_runtime_preparation(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        home = self._setup_home_with_prompts(tmp_path, ["loop.md", "select.md"])
+        monkeypatch.setenv("HOME", str(home))
+        monkeypatch.setattr("shutil.which", lambda _: "/bin/fake")
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr(
+            "agm.commands.loop.step.run_prompt_command",
+            lambda *args, **kwargs: (_ for _ in ()).throw(AgentCallTimeout(1.0)),
+        )
+
+        runtime = prepare_runtime(_make_loop_args(no_log=True, no_selector=True))
+
+        assert runtime.bootstrap_prompt is not None
         cleanup_runtime(runtime)
 
     def test_prepare_runtime_uses_explicit_prompt_file(
@@ -717,6 +737,23 @@ class TestExecuteSingleStep:
         result = execute_single_step(runtime, step_number=1)
         assert result is False
 
+    def test_no_selector_timeout_is_logged_and_leaves_iteration_incomplete(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        log_file = tmp_path / "loop.log"
+        runtime = _make_runtime(tmp_path, log_file=log_file)
+
+        def fake_run_command(*args: object, **kwargs: object) -> str:
+            stderr_callback = kwargs["stderr_callback"]
+            assert callable(stderr_callback)
+            stderr_callback("Idle timeout (1.0s) exceeded, process terminated.\n")
+            raise AgentCallTimeout(1.0)
+
+        monkeypatch.setattr("agm.commands.loop.step.run_prompt_command", fake_run_command)
+
+        assert execute_single_step(runtime, step_number=1) is False
+        assert "Idle timeout" in log_file.read_text(encoding="utf-8")
+
     def test_no_selector_passes_callbacks_to_run_command(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -810,6 +847,35 @@ class TestExecuteSingleStep:
         result = execute_single_step(runtime, step_number=1)
         assert result is True
 
+    def test_selector_timeout_is_retried_within_the_step(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        prompt_file = tmp_path / "select.md"
+        prompt_file.write_text("select a task\n", encoding="utf-8")
+        invocation = PreparedSelectInvocation(
+            source_prompt_file=prompt_file,
+            effective_prompt_file=prompt_file,
+            command=["fake-selector"],
+            command_kind="selector",
+            runner_command=["fake-runner"],
+            selector_command=["fake-selector"],
+        )
+        runtime = _make_runtime(tmp_path, select_invocation=invocation, loop_prompt=None)
+        calls = 0
+
+        def fake_run_command(*args: object, **kwargs: object) -> str:
+            del args, kwargs
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                raise AgentCallTimeout(1.0)
+            return "COMPLETE\n"
+
+        monkeypatch.setattr("agm.commands.loop.step.run_prompt_command", fake_run_command)
+
+        assert execute_single_step(runtime, step_number=1) is True
+        assert calls == 2
+
     def test_selector_mode_returns_false_and_runs_runner_for_task_file(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -868,6 +934,34 @@ class TestExecuteSingleStep:
         assert all_targets[1] != task_file
         expanded_text = all_targets[1].read_text(encoding="utf-8")
         assert "TASK_FILE" in expanded_text or str(task_file) in expanded_text
+
+    def test_runner_timeout_leaves_selector_iteration_incomplete(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        prompt_file = tmp_path / "select.md"
+        prompt_file.write_text("select a task\n", encoding="utf-8")
+        task_file = tmp_path / "tasks" / "task.md"
+        task_file.parent.mkdir(parents=True)
+        task_file.write_text("task\n", encoding="utf-8")
+        invocation = PreparedSelectInvocation(
+            source_prompt_file=prompt_file,
+            effective_prompt_file=prompt_file,
+            command=["fake-selector"],
+            command_kind="selector",
+            runner_command=["fake-runner"],
+            selector_command=["fake-selector"],
+        )
+        runtime = _make_runtime(tmp_path, select_invocation=invocation, loop_prompt=None)
+
+        def fake_run_command(command: list[str], *args: object, **kwargs: object) -> str:
+            del args, kwargs
+            if command == ["fake-selector"]:
+                return "task.md\n"
+            raise AgentCallTimeout(1.0)
+
+        monkeypatch.setattr("agm.commands.loop.step.run_prompt_command", fake_run_command)
+
+        assert execute_single_step(runtime, step_number=1) is False
 
     def test_selector_mode_implement_prompt_expands_task_file_env_var(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -1379,6 +1473,29 @@ class TestNextRun:
 
         out, _ = capsys.readouterr()
         assert "task-1.md" in out
+
+    def test_timeout_returns_without_terminating_select_command(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        home = tmp_path / "home"
+        monkeypatch.setenv("HOME", str(home))
+        monkeypatch.chdir(tmp_path)
+        invocation = self._make_invocation(tmp_path)
+        monkeypatch.setattr("agm.commands.loop.select.use_selector_mode", lambda args: True)
+        monkeypatch.setattr(
+            "agm.commands.loop.select.prepare_select_invocation",
+            lambda args, temp_files, env: invocation,
+        )
+        monkeypatch.setattr("agm.commands.loop.select.dry_run.enabled", lambda: False)
+        monkeypatch.setattr("agm.commands.loop.select.tasks_dir", lambda args: tmp_path / "tasks")
+        monkeypatch.setattr("agm.commands.loop.select.loop_env", lambda d: {})
+        monkeypatch.setattr("agm.commands.loop.select.cleanup_temp_files", lambda files: None)
+        monkeypatch.setattr(
+            "agm.commands.loop.select.run_prompt_command",
+            lambda *args, **kwargs: (_ for _ in ()).throw(AgentCallTimeout(1.0)),
+        )
+
+        next_run(_make_loop_select_args())
 
     def test_keyboard_interrupt_exits_130(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

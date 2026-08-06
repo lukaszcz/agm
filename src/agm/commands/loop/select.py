@@ -15,6 +15,7 @@ from agm.agent.loop import (
     use_selector_mode,
 )
 from agm.agent.runner import (
+    AgentCallTimeout,
     append_extra_prompt,
     cleanup_temp_files,
     command_with_prompt_target,
@@ -81,15 +82,16 @@ def run(args: LoopSelectArgs) -> None:
             )
             return
 
-        print(
-            run_prompt_command(
+        try:
+            output = run_prompt_command(
                 invocation.command,
                 invocation.effective_prompt_file,
                 env=env,
                 idle_timeout=timeout,
-            ),
-            end="",
-        )
+            )
+        except AgentCallTimeout:
+            return
+        print(output, end="")
     except KeyboardInterrupt:
         print("\nInterrupted")
         raise SystemExit(130)

@@ -4,7 +4,7 @@ AGM runs real coding agents (claude, codex, and configurable runners) as subproc
 
 ## Agent Runner
 
-An agent invocation is a subprocess that receives a prompt and produces output. The runner module parses a configured runner command, validates the executable exists, attaches the prompt (either by appending a prompt-file reference or substituting a placeholder), and runs it with output capture. It tracks an *idle timeout* — if the process produces no output for a configured duration it is terminated — and returns a structured result carrying return code, captured streams, elapsed time, and timeout/spawn-error status.
+An agent invocation is a subprocess that receives a prompt and produces output. The runner module parses a configured runner command, validates the executable exists, attaches the prompt (either by appending a prompt-file reference or substituting a placeholder), and runs it with output capture. It tracks an *idle timeout* — if the process produces no output for a configured duration the current agent process is terminated and that invocation fails; workflow control remains with the caller. Structured results carry return code, captured streams, elapsed time, and timeout/spawn-error status.
 
 Prompts are resolved from inline text or a file and preprocessed to expand environment variables, writing a temporary prompt file when substitution changes the content. Normal runs clean these files up; dry runs retain them so the printed prompt path can be inspected. Completion is detected by inspecting the agent's final output for a completion marker.
 
@@ -14,7 +14,7 @@ Which runner (and which selector, for loops) is used is resolved by precedence: 
 
 ## Loop
 
-The `loop` command group drives iterative agent work over a set of tasks. A *selector* chooses the next task and a *runner* works it; `loop run` drives the full cycle, `loop step` performs a single iteration, and `loop select` performs selection only. Prompts are preprocessed per step and step output is logged with headers and timestamps.
+The `loop` command group drives iterative agent work over a set of tasks. A *selector* chooses the next task and a *runner* works it; `loop run` drives the full cycle, `loop step` performs a single iteration, and `loop select` performs selection only. A timed-out call is retried or leaves its iteration incomplete rather than terminating the loop. Prompts are preprocessed per step and step output is logged with headers and timestamps.
 
 ## Review, Revise, Refine
 

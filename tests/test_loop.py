@@ -19,6 +19,7 @@ from agm.agent.loop import (
     use_selector_mode,
 )
 from agm.agent.runner import (
+    AgentCallTimeout,
     command_with_prompt_target,
     prepare_prompt_from_source,
     run_prompt_command,
@@ -1251,6 +1252,72 @@ class TestRunCommandOutputAssembly:
         assert "stdout chunk" in result
         assert "stderr chunk" in result
 
+    def test_run_command_converts_timeout_to_agent_call_failure(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """The compatibility process helper's timeout exit is not exposed to loops."""
+        target = tmp_path / "prompt.md"
+        target.write_text("test", encoding="utf-8")
+
+        timeout_messages: list[str] = []
+
+        def fake_run_capture(*args: object, **kwargs: object) -> tuple[int, str, str]:
+            del args
+            timeout_callback = kwargs["timeout_callback"]
+            assert callable(timeout_callback)
+            timeout_callback("Idle timeout (1.0s) exceeded, process terminated.\n")
+            raise SystemExit(124)
+
+        monkeypatch.setattr("agm.agent.runner.run_capture", fake_run_capture)
+
+        with pytest.raises(AgentCallTimeout):
+            run_prompt_command(
+                ["cmd"],
+                target,
+                env={},
+                stderr_callback=timeout_messages.append,
+                idle_timeout=1.0,
+            )
+        assert timeout_messages == ["Idle timeout (1.0s) exceeded, process terminated.\n"]
+
+    def test_run_command_prints_timeout_when_no_stderr_callback(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        target = tmp_path / "prompt.md"
+        target.write_text("test", encoding="utf-8")
+
+        def fake_run_capture(*args: object, **kwargs: object) -> tuple[int, str, str]:
+            del args
+            timeout_callback = kwargs["timeout_callback"]
+            assert callable(timeout_callback)
+            timeout_callback("Idle timeout (1.0s) exceeded, process terminated.\n")
+            raise SystemExit(124)
+
+        monkeypatch.setattr("agm.agent.runner.run_capture", fake_run_capture)
+
+        with pytest.raises(AgentCallTimeout):
+            run_prompt_command(["cmd"], target, env={}, idle_timeout=1.0)
+        assert "Idle timeout" in capsys.readouterr().err
+
+    def test_run_command_propagates_non_timeout_system_exit(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        target = tmp_path / "prompt.md"
+        target.write_text("test", encoding="utf-8")
+
+        def fake_run_capture(*args: object, **kwargs: object) -> tuple[int, str, str]:
+            del args, kwargs
+            raise SystemExit(1)
+
+        monkeypatch.setattr("agm.agent.runner.run_capture", fake_run_capture)
+
+        with pytest.raises(SystemExit) as exc_info:
+            run_prompt_command(["cmd"], target, env={})
+        assert exc_info.value.code == 1
+
     def test_run_command_returns_stdout_when_no_callbacks(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
@@ -1293,6 +1360,7 @@ class TestRunCommandExit127Fatal:
             env: dict[str, str],
             stdout_callback: Any = None,
             stderr_callback: Any = None,
+            timeout_callback: Any = None,
             isolate_process_group: bool = False,
             idle_timeout: float | None = None,
         ) -> tuple[int, str, str]:
@@ -1323,6 +1391,7 @@ class TestRunCommandExit127Fatal:
             env: dict[str, str],
             stdout_callback: Any = None,
             stderr_callback: Any = None,
+            timeout_callback: Any = None,
             isolate_process_group: bool = False,
             idle_timeout: float | None = None,
         ) -> tuple[int, str, str]:
@@ -1349,6 +1418,7 @@ class TestRunCommandExit127Fatal:
             env: dict[str, str],
             stdout_callback: Any = None,
             stderr_callback: Any = None,
+            timeout_callback: Any = None,
             isolate_process_group: bool = False,
             idle_timeout: float | None = None,
         ) -> tuple[int, str, str]:
@@ -1375,6 +1445,7 @@ class TestRunCommandExit127Fatal:
             env: dict[str, str],
             stdout_callback: Any = None,
             stderr_callback: Any = None,
+            timeout_callback: Any = None,
             isolate_process_group: bool = False,
             idle_timeout: float | None = None,
         ) -> tuple[int, str, str]:
@@ -1424,6 +1495,7 @@ class TestRunCommandOutputAssemblyFull:
             env: dict[str, str],
             stdout_callback: Any = None,
             stderr_callback: Any = None,
+            timeout_callback: Any = None,
             isolate_process_group: bool = False,
             idle_timeout: float | None = None,
         ) -> tuple[int, str, str]:
@@ -1452,6 +1524,7 @@ class TestRunCommandOutputAssemblyFull:
             env: dict[str, str],
             stdout_callback: Any = None,
             stderr_callback: Any = None,
+            timeout_callback: Any = None,
             isolate_process_group: bool = False,
             idle_timeout: float | None = None,
         ) -> tuple[int, str, str]:
@@ -1475,6 +1548,7 @@ class TestRunCommandOutputAssemblyFull:
             env: dict[str, str],
             stdout_callback: Any = None,
             stderr_callback: Any = None,
+            timeout_callback: Any = None,
             isolate_process_group: bool = False,
             idle_timeout: float | None = None,
         ) -> tuple[int, str, str]:
@@ -1536,6 +1610,7 @@ class TestRunCommandStderrCallback:
             env: dict[str, str],
             stdout_callback: Any = None,
             stderr_callback: Any = None,
+            timeout_callback: Any = None,
             isolate_process_group: bool = False,
             idle_timeout: float | None = None,
         ) -> tuple[int, str, str]:
@@ -2287,6 +2362,62 @@ class TestLoopRunIntegration:
     run_capture).  No real agent is ever invoked.
     """
 
+    def test_timeout_fails_only_the_call_then_continues_loop(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A timed-out call does not terminate the loop's later iterations."""
+        home = _setup_home_with_prompts(tmp_path, ["loop.md", "select.md"])
+        monkeypatch.setenv("HOME", str(home))
+        monkeypatch.setattr("shutil.which", _which_always_found)
+        monkeypatch.chdir(tmp_path)
+
+        tasks_dir_path = tmp_path / ".agent-files" / "tasks"
+        tasks_dir_path.mkdir(parents=True)
+        (tasks_dir_path / "PROGRESS.md").write_text("done\n", encoding="utf-8")
+
+        call_count = 0
+
+        def fake_run_command(
+            command: list[str],
+            target: Path,
+            *,
+            env: dict[str, str],
+            stdout_callback: object = None,
+            stderr_callback: object = None,
+            idle_timeout: float | None = None,
+        ) -> str:
+            del command, target, env, stdout_callback, stderr_callback, idle_timeout
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                raise AgentCallTimeout(1.0)
+            return "COMPLETE\n"
+
+        monkeypatch.setattr("agm.commands.loop.step.run_prompt_command", fake_run_command)
+
+        args = LoopArgs(
+            command_name=None,
+            runner="fake-runner",
+            runner_args=[],
+            selector=None,
+            no_selector=True,
+            tasks_dir=None,
+            no_log=True,
+            log_file=None,
+            prompt=None,
+            prompt_file=None,
+            selector_prompt=None,
+            selector_prompt_file=None,
+            extra_prompt=None,
+            extra_prompt_file=None,
+            extra_selector_prompt=None,
+            extra_selector_prompt_file=None,
+            timeout=1.0,
+        )
+        loop_run(args)
+
+        assert call_count == 2
+
     def test_non_selector_two_iterations_ending_complete(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -2448,6 +2579,7 @@ class TestLoopRunIntegration:
             env: dict[str, str],
             stdout_callback: object = None,
             stderr_callback: object = None,
+            timeout_callback: object = None,
             isolate_process_group: bool = False,
             idle_timeout: float | None = None,
         ) -> tuple[int, str, str]:

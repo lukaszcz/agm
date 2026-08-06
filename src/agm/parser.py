@@ -175,8 +175,10 @@ _HELP_TEXTS: dict[str, str] = {
           command prefix. [loop] no_selector = true disables the selector and
           switches to no-selector mode. [loop] tasks_dir = ".agent-files/tasks"
           sets the tasks directory checked for ``PROGRESS.md`` and task files.
-          [loop] timeout = "30m" sets an idle timeout that kills the runner
-          process tree when no output is received for the given duration.
+          [loop] timeout = "30m" sets an idle timeout that kills the current
+          runner process tree when no output is received for the given duration.
+          It fails that invocation only; the loop or command continues, with a
+          diagnostic on stderr and in the loop log.
           Accepts seconds (plain number or ``Ns``), minutes (``Nm``), or
           hours (``Nh``). Disabled by default. ``--timeout DURATION``
           overrides the config value.

@@ -810,8 +810,13 @@ def _prepare_module_environment(
     # Seed from the REPL session type env first (for the entry module in REPL
     # program context).  Program tables override on collision, so the entry's own types
     # and function signatures always shadow any session binding with the same name.
+    # ``type_table`` here is the SAME shared instance the type pre-pass
+    # (``_build_program_type_table``) already seeded from this same
+    # ``entry_seed_env`` and then advanced with this entry's own declarations,
+    # so re-merging its name index now would regress it onto a name this
+    # entry just redeclared (see ``TypeEnvironment.seed_from``).
     if mid.is_entry and entry_seed_env is not None:
-        env.seed_from(entry_seed_env)
+        env.seed_from(entry_seed_env, merge_type_table=False)
 
     # Seed env with the module's own fully-resolved types so they're
     # accessible by bare name (no qualifier needed within the module).

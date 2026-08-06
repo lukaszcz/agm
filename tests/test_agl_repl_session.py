@@ -40,6 +40,7 @@ from agm.agl.semantics.values import (
     ArrayValue,
     BoolValue,
     IntValue,
+    RecordValue,
     TextValue,
     UnitValue,
 )
@@ -835,13 +836,13 @@ class TestCrossEntryScopeCollision:
         assert still_reachable.ok, still_reachable.diagnostics
         assert still_reachable.value == IntValue(2)
 
-    def test_stale_retained_type_path_reports_a_diagnostic_not_a_crash(self) -> None:
-        """A member reference into a since-invalidated retained type path fails cleanly.
+    def test_type_declared_at_a_retained_scopes_path_keeps_the_scopes_own_members(self) -> None:
+        """A type declared at a path a scope previously occupied does not disturb it.
 
-        A type declared at a path a scope previously occupied leaves that path
-        in the retained type table; a later reference through it into a name
-        the type does not own must be a normal diagnostic, not an internal
-        crash.
+        Scope paths are namespaces, independent of whichever declaration (if
+        any) occupies that path as a nominal type: a record declared at
+        ``A::B`` shares the namespace position with a function ``A::B::q``
+        declared there earlier, rather than colliding with or displacing it.
         """
         s = ReplSession()
         assert s.eval_entry("scope A\nscope B\ndef q() -> int = 2\nend B\nend A").ok
@@ -849,7 +850,21 @@ class TestCrossEntryScopeCollision:
 
         result = s.eval_entry("A::B::q()")
 
+        assert result.ok, result.diagnostics
+        assert result.value == IntValue(2)
+
+    def test_unknown_member_of_a_retained_type_path_reports_a_diagnostic_not_a_crash(
+        self,
+    ) -> None:
+        """A qualified reference into a retained type path for a name the type
+        does not own must be a normal diagnostic, not an internal crash."""
+        s = ReplSession()
+        assert s.eval_entry("record A::B()").ok
+
+        result = s.eval_entry("A::B::x")
+
         assert not result.ok
+        assert any("not a member of 'A::B'" in d.message for d in result.diagnostics)
 
 
 # ---------------------------------------------------------------------------
@@ -1096,6 +1111,47 @@ enum Agent
         assert not use.ok
         assert any("does not take type arguments" in d.message for d in use.diagnostics)
 
+    def test_redeclaring_a_generic_record_as_non_generic_gives_the_name_to_the_new_one(
+        self,
+    ) -> None:
+        """A bare construction after the redeclaration builds the NEW record.
+
+        The construction itself must work rather than crash, and the value it
+        builds must belong to the newest declaration: comparing it with a
+        value of the superseded generic declaration is a type error, because
+        the two declarations are unrelated types.
+        """
+        s = ReplSession()
+        assert s.eval_entry("record Box[T]\n  x: T").ok
+        assert s.eval_entry("let old = Box(x = 1)").ok
+        assert s.eval_entry("record Box\n  x: int").ok
+
+        result = s.eval_entry("let fresh = Box(x = 1)")
+        cross = s.eval_entry("old == fresh")
+
+        assert result.ok, result.diagnostics
+        assert isinstance(result.value, RecordValue)
+        assert result.value.display_name == "Box"
+        assert result.value.fields == {"x": IntValue(1)}
+        assert not cross.ok
+
+    def test_redeclaring_a_record_as_an_enum_reports_a_diagnostic_not_a_crash(self) -> None:
+        """A record's construction spelling does not outlive its declaration.
+
+        Once the name belongs to an enum, the record form it used to accept
+        is reported as a diagnostic rather than routed into the enum's
+        variant-constructor path, which has no variant to build.
+        """
+        s = ReplSession()
+        assert s.eval_entry("record R(a: int)").ok
+        assert s.eval_entry("enum R\n  | V(b: int)").ok
+
+        stale = s.eval_entry("R(a = 3)")
+        fresh = s.eval_entry("R::V(b = 4)")
+
+        assert not stale.ok
+        assert fresh.ok, fresh.diagnostics
+
     def test_redeclaring_an_opened_enum_drops_its_stale_bare_variant(self) -> None:
         """A local ``open`` recorded before the enum is redeclared must not
         resurrect a variant the redeclaration's fresh member layer dropped."""
@@ -1111,9 +1167,15 @@ enum Agent
         assert fresh.ok, fresh.diagnostics
 
     def test_failed_record_redefinition_restores_previous_methods(self) -> None:
+        """A failed entry that would have redeclared a type changes nothing.
+
+        The previous declaration, its methods, and a binding built against it
+        all remain in effect exactly as before the failed entry.
+        """
         session = ReplSession()
         assert session.eval_entry("record R(value: int)").ok
         assert session.eval_entry("def R::get(self) -> int = self.value").ok
+        assert session.eval_entry("let existing = R(value = 7)").ok
 
         failed = session.eval_entry(
             'let stop: int = raise Abort(message = "stop")\nrecord R(value: text)'
@@ -1123,6 +1185,35 @@ enum Agent
         result = session.eval_entry("R(value = 42).get()")
         assert result.ok, result.diagnostics
         assert result.value == IntValue(42)
+        existing_method = session.eval_entry("existing.get()")
+        assert existing_method.ok, existing_method.diagnostics
+        assert existing_method.value == IntValue(7)
+
+    def test_unpromoted_redeclaration_leaves_the_previous_declaration_owning_the_name(
+        self,
+    ) -> None:
+        """A redeclaration the entry never promoted does not keep the name.
+
+        The previous declaration owns the name afterwards, so a later method
+        declaration is checked against ITS members: a method colliding with a
+        field it has is rejected, and one named after a field only the
+        rolled-back declaration had is accepted and callable.
+        """
+        session = ReplSession()
+        assert session.eval_entry("record R(a: int)").ok
+
+        failed = session.eval_entry(
+            'let stop: int = raise Abort(message = "stop")\nrecord R(b: int)'
+        )
+
+        assert not failed.ok
+        collides = session.eval_entry("def R::a(self) -> int = 1")
+        allowed = session.eval_entry("def R::b(self) -> int = 2")
+        call = session.eval_entry("R(a = 1).b()")
+        assert not collides.ok
+        assert allowed.ok, allowed.diagnostics
+        assert call.ok, call.diagnostics
+        assert call.value == IntValue(2)
 
 
 # ---------------------------------------------------------------------------
@@ -1167,46 +1258,137 @@ class TestRecursiveTypesAcrossEntries:
         stale = s.eval_entry('let bad = Category(name = "root", subcategories = [])')
         assert not stale.ok
 
-    def test_type_redefinition_invalidation_detects_nested_nominal_types(self) -> None:
-        from agm.agl.semantics.types import (
-            ArrayType,
-            DictType,
-            ExceptionType,
-            FunctionType,
-            RecordType,
-            TextType,
-        )
+    def test_binding_before_redeclaration_keeps_reading_old_fields_and_rendering(self) -> None:
+        """A record redeclaration is supersession, not invalidation.
 
-        identities = frozenset({((), "R")})
-
-        assert ReplSession._type_mentions_entry_nominal(ExceptionType("R"), identities)
-        assert ReplSession._type_mentions_entry_nominal(ArrayType(RecordType("R")), identities)
-        assert ReplSession._type_mentions_entry_nominal(DictType(RecordType("R")), identities)
-        assert ReplSession._type_mentions_entry_nominal(
-            FunctionType((RecordType("R"),), TextType()), identities
-        )
-        assert ReplSession._type_mentions_entry_nominal(
-            FunctionType((), RecordType("R")), identities
-        )
-        assert not ReplSession._type_mentions_entry_nominal(TextType(), identities)
-
-    def test_record_redefinition_invalidates_old_nominal_values(self) -> None:
+        A binding built against the old declaration keeps reading its own
+        (old) fields and rendering the same way, while a new construction
+        under the same name uses the new shape; accessing a field the old
+        declaration never had still fails, exactly as it always would.
+        """
         s = ReplSession()
         assert s.eval_entry("record R\n  old: int").ok
         assert s.eval_entry("let stale = R(old = 1)").ok
+        old_render = s.eval_entry("stale")
+        assert old_render.ok
         assert s.eval_entry("record R\n  fresh: int").ok
 
-        result = s.eval_entry("stale.fresh")
+        old_field = s.eval_entry("stale.old")
+        old_render_after = s.eval_entry("stale")
+        fresh = s.eval_entry("R(fresh = 2)")
+        missing_field = s.eval_entry("stale.fresh")
 
-        assert not result.ok
+        assert old_field.ok, old_field.diagnostics
+        assert old_field.value == IntValue(1)
+        assert old_render_after.ok
+        assert old_render_after.value == old_render.value
+        assert fresh.ok, fresh.diagnostics
+        assert not missing_field.ok
 
-    def test_scoped_record_redefinition_invalidates_dependent_scoped_function(self) -> None:
-        """A redefined scoped type invalidates dependent retained scope members too.
+    def test_old_declarations_methods_still_resolve_new_declaration_starts_with_none(
+        self,
+    ) -> None:
+        s = ReplSession()
+        assert s.eval_entry("record R(value: int)").ok
+        assert s.eval_entry("def R::get(self) -> int = self.value").ok
+        assert s.eval_entry("let old = R(value = 1)").ok
+        assert s.eval_entry("record R(value: text)").ok
 
-        Mirrors ``test_record_redefinition_invalidates_old_nominal_values`` at
-        root scope: a scoped function returning a redefined scoped record must
-        stop resolving cleanly, instead of surviving with a stale runtime
-        layout that no longer matches its (new) static field set.
+        old_method = s.eval_entry("old.get()")
+        new_method = s.eval_entry('R(value = "x").get()')
+
+        assert old_method.ok, old_method.diagnostics
+        assert old_method.value == IntValue(1)
+        assert not new_method.ok
+
+    def test_old_and_new_typed_values_are_never_comparable(self) -> None:
+        """Two values of the same (old) declaration compare equal; across
+        declarations, equality is a static type error even when both share
+        one display name — the two are unrelated nominal types."""
+        s = ReplSession()
+        assert s.eval_entry("record R(value: int)").ok
+        assert s.eval_entry("let a = R(value = 1)").ok
+        assert s.eval_entry("let b = R(value = 1)").ok
+        assert s.eval_entry("record R(value: int)").ok
+        assert s.eval_entry("let c = R(value = 1)").ok
+
+        same_old = s.eval_entry("a == b")
+        cross = s.eval_entry("a == c")
+
+        assert same_old.ok, same_old.diagnostics
+        assert same_old.value == BoolValue(True)
+        assert not cross.ok
+
+    def test_catch_clause_matches_the_declaration_in_scope_where_it_is_written(self) -> None:
+        s = ReplSession()
+        assert s.eval_entry("exception E extends Exception()").ok
+        assert s.eval_entry('let old_exc = E(message = "old")').ok
+        assert s.eval_entry(
+            'def catch_only_old() -> text = try raise old_exc catch E as e => "caught-old"'
+        ).ok
+        assert s.eval_entry("exception E extends Exception()").ok
+        assert s.eval_entry('let new_exc = E(message = "new")').ok
+
+        # A ``catch E`` written after the redeclaration binds the new E: it
+        # catches a freshly raised new-E value but not the retained old one.
+        catches_new = s.eval_entry('try raise new_exc catch E as e => "caught-new-clause"')
+        does_not_catch_old = s.eval_entry('try raise old_exc catch E as e => "caught-new-clause"')
+        # A ``catch E`` compiled before the redeclaration keeps matching only
+        # the old E, unaffected by the redeclaration that came afterward.
+        still_catches_old = s.eval_entry("catch_only_old()")
+
+        assert catches_new.ok, catches_new.diagnostics
+        assert catches_new.value == TextValue("caught-new-clause")
+        assert not does_not_catch_old.ok
+        assert does_not_catch_old.error is not None
+        assert does_not_catch_old.error.type_name == "E"
+        assert still_catches_old.ok, still_catches_old.diagnostics
+        assert still_catches_old.value == TextValue("caught-old")
+
+    def test_enum_variant_on_an_old_typed_value_survives_redeclaration(self) -> None:
+        s = ReplSession()
+        assert s.eval_entry("enum Color\n  | Red(shade: int)\n  | Green").ok
+        assert s.eval_entry("let old = Color::Red(shade = 1)").ok
+        assert s.eval_entry("enum Color\n  | Blue").ok
+
+        old_match = s.eval_entry("case old of\n  | Red(shade) => shade\n  | Green() => 0")
+        fresh = s.eval_entry("Color::Blue")
+        cross_match = s.eval_entry("case old of\n  | Blue() => 1\n  | Green() => 0")
+
+        assert old_match.ok, old_match.diagnostics
+        assert old_match.value == IntValue(1)
+        assert fresh.ok, fresh.diagnostics
+        assert not cross_match.ok
+
+    def test_type_qualified_variant_pattern_names_the_newest_enum_declaration(self) -> None:
+        """A qualifier is a type name, so it names the newest declaration.
+
+        A bare constructor pattern follows the subject's own declaration and
+        keeps destructuring a value built before the redeclaration, but a
+        pattern that spells the enum out qualifies against the enum the name
+        means now — which is not the subject's — and is rejected.
+        """
+        s = ReplSession()
+        assert s.eval_entry("enum E\n  | A(x: int)").ok
+        assert s.eval_entry("let old = E::A(x = 1)").ok
+        assert s.eval_entry("enum E\n  | A(x: int)").ok
+
+        bare = s.eval_entry("case old of\n  | A(x) => x")
+        qualified = s.eval_entry("case old of\n  | E::A(x) => x")
+        fresh = s.eval_entry("case E::A(x = 2) of\n  | E::A(x) => x")
+
+        assert bare.ok, bare.diagnostics
+        assert bare.value == IntValue(1)
+        assert not qualified.ok
+        assert fresh.ok, fresh.diagnostics
+        assert fresh.value == IntValue(2)
+
+    def test_scoped_binding_before_redeclaration_keeps_using_its_old_declaration(self) -> None:
+        """A scoped record redeclaration supersedes rather than invalidates.
+
+        A scoped function returning a scoped record built before the record
+        is redeclared keeps returning a value of the OLD declaration —
+        readable through its own (old) field — after the redeclaration.
         """
         s = ReplSession()
         assert s.eval_entry("scope A\nrecord R(n: int)\nend A").ok
@@ -1216,9 +1398,14 @@ class TestRecursiveTypesAcrossEntries:
         assert call.value == IntValue(1)
         assert s.eval_entry("scope A\nrecord R(m: text)\nend A").ok
 
-        result = s.eval_entry("A::make().m")
+        still_old = s.eval_entry("A::make().n")
+        missing_new_field = s.eval_entry("A::make().m")
+        fresh = s.eval_entry('let fresh: A::R = A::R("hi")')
 
-        assert not result.ok
+        assert still_old.ok, still_old.diagnostics
+        assert still_old.value == IntValue(1)
+        assert not missing_new_field.ok
+        assert fresh.ok, fresh.diagnostics
 
     def test_ask_with_recursive_output_type_does_not_crash(self) -> None:
         """The REPL's contract-preview path (make_contract) handles a recursive ask target.

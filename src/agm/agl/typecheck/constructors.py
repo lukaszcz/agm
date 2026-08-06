@@ -586,6 +586,17 @@ class ConstructorChecker:
                 )
             owner = candidate
         if ref.variant is None:
+            if isinstance(owner, EnumType):
+                # An enum is constructed through a variant, so a bare-name
+                # constructor spelling never denotes one. The two can meet
+                # when a name is redeclared under a different kind and a
+                # constructor reference to the record or exception it used to
+                # name is still reachable.
+                raise AglTypeError(
+                    f"'{ref.owner_name}' is an enum type; name one of its variants to "
+                    "construct it.",
+                    span=span,
+                )
             return owner
         if not isinstance(owner, EnumType):
             if isinstance(owner, (RecordType, ExceptionType)) and ref.variant == ref.owner_name:

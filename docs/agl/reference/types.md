@@ -377,11 +377,26 @@ available on every value of that type wherever the value is used, so calling it
 does not require an import of the module that declared the type. See
 [Methods](functions.md#methods) for declaration and call syntax.
 
-In the REPL, redeclaring a record, enum, or exception drops every method
-previously declared on it, even when the redeclaration repeats an identical
-shape; the methods must be declared again. A failed entry that would have
-redeclared the type changes nothing — the previous declaration and its
-methods remain in effect.
+In the REPL, redeclaring a record, enum, or exception starts a new
+declaration rather than changing the existing one: a name always resolves to
+its most recently declared owner, but a value built before the redeclaration
+keeps working against the declaration it was built from — its fields or
+variants, its methods, and equality with other values of that same
+declaration are all unaffected. The new declaration starts with no methods of
+its own; declare them again to use them on values of the new declaration.
+
+The two declarations are unrelated types that happen to share a name, and
+they are written and displayed identically: neither is usable where the other
+is expected, and comparing values across them is a type error. Every spelling
+that names the type — a constructor call, a type annotation, a `catch`
+clause, a type-qualified constructor pattern — means the declaration in
+effect where it is written, so one written after the redeclaration does not
+apply to an earlier value. A bare variant pattern is directed by the value
+being matched instead, so an earlier value can still be destructured.
+
+A failed entry that would have redeclared the type changes nothing — the
+previous declaration, its methods, and every binding built from it remain in
+effect.
 
 ## Record types
 

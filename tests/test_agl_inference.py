@@ -111,18 +111,36 @@ class TestUnification:
             (FunctionType((IntType(),), IntType()), FunctionType((), IntType())),
             (TypeVarType("T"), TypeVarType("U")),
             (
-                RecordType("Box", (IntType(),), ModuleId.from_path("one")),
-                RecordType("Box", (IntType(),), ModuleId.from_path("two")),
+                RecordType("Box", (IntType(),), ModuleId.from_path("one"), decl_id=1),
+                RecordType("Box", (IntType(),), ModuleId.from_path("two"), decl_id=2),
             ),
             (RecordType("Box", (IntType(),)), EnumType("Box", (IntType(),))),
             (EnumType("Box", (IntType(),)), EnumType("Box", (IntType(), TextType()))),
-            (EnumType("One", (IntType(),)), EnumType("Two", (IntType(),))),
+            (EnumType("One", (IntType(),), decl_id=1), EnumType("Two", (IntType(),), decl_id=2)),
         ],
     )
     def test_shape_and_identity_mismatches_fail(self, left: Type, right: Type) -> None:
         engine = InferenceEngine()
         with pytest.raises(InferenceError):
             engine.unify(left, right, _origin(engine, 1))
+
+    def test_unification_does_not_unify_two_same_named_declarations(self) -> None:
+        # Two distinct declarations sharing one name path (a REPL
+        # redeclaration mints a fresh identity for the same name, so the two
+        # coexist) must never unify with each other, even though name and
+        # module agree -- only ``decl_id`` distinguishes them.
+        engine = InferenceEngine()
+        old_box = RecordType("Box", (IntType(),), decl_id=1)
+        new_box = RecordType("Box", (IntType(),), decl_id=2)
+
+        with pytest.raises(InferenceError):
+            engine.unify(old_box, new_box, _origin(engine, 1))
+
+        old_option = EnumType("Option", (IntType(),), decl_id=1)
+        new_option = EnumType("Option", (IntType(),), decl_id=2)
+
+        with pytest.raises(InferenceError):
+            engine.unify(old_option, new_option, _origin(engine, 2))
 
     def test_flexible_variables_merge_and_solve_to_a_rigid(self) -> None:
         engine = InferenceEngine()
@@ -315,7 +333,9 @@ class TestContextCompletion:
             FunctionType((variable,), IntType()), FunctionType((), IntType()), _origin(engine, 4)
         )
         engine.complete_from_context(
-            RecordType("Box", (variable,)), RecordType("Other", (IntType(),)), _origin(engine, 5)
+            RecordType("Box", (variable,), decl_id=1),
+            RecordType("Other", (IntType(),), decl_id=2),
+            _origin(engine, 5),
         )
         engine.complete_from_context(
             EnumType("Option", (variable,)),
@@ -326,8 +346,8 @@ class TestContextCompletion:
             _origin(engine, 6),
         )
         engine.complete_from_context(
-            EnumType("One", (engine.fresh("V"),)),
-            EnumType("Two", (IntType(),)),
+            EnumType("One", (engine.fresh("V"),), decl_id=1),
+            EnumType("Two", (IntType(),), decl_id=2),
             _origin(engine, 7),
         )
 

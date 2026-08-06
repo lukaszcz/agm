@@ -30,6 +30,17 @@ from agm.agl.semantics.types import (
 from agm.agl.syntax.spans import SourceSpan
 
 
+def _same_nominal_declaration(left: RecordType | EnumType, right: RecordType | EnumType) -> bool:
+    """Return whether *left* and *right* name the same record/enum declaration.
+
+    A nominal handle's identity is the declaration it names, never its
+    spelling: two declarations sharing one name path (a REPL redeclaration
+    mints a fresh identity for the same name) are unrelated types, and one
+    declaration reached through two names is a single type.
+    """
+    return left.decl_id == right.decl_id
+
+
 class ConstraintRole(StrEnum):
     """The semantic source of an equality or contextual constraint."""
 
@@ -252,12 +263,12 @@ class InferenceEngine:
             self._unify(left.result, right.result, origin, evidence)
             return
         if isinstance(left, RecordType) and isinstance(right, RecordType):
-            if left.name != right.name or left.module_id != right.module_id:
+            if not _same_nominal_declaration(left, right):
                 self._raise_mismatch(left, right, origin, evidence)
             self._unify_nominal_args(left.type_args, right.type_args, left, right, origin, evidence)
             return
         if isinstance(left, EnumType) and isinstance(right, EnumType):
-            if left.name != right.name or left.module_id != right.module_id:
+            if not _same_nominal_declaration(left, right):
                 self._raise_mismatch(left, right, origin, evidence)
             self._unify_nominal_args(left.type_args, right.type_args, left, right, origin, evidence)
             return
@@ -328,11 +339,11 @@ class InferenceEngine:
             self._complete(inferred.result, context.result, origin)
             return
         if isinstance(inferred, RecordType) and isinstance(context, RecordType):
-            if inferred.name == context.name and inferred.module_id == context.module_id:
+            if _same_nominal_declaration(inferred, context):
                 self._complete_nominal_args(inferred.type_args, context.type_args, origin)
             return
         if isinstance(inferred, EnumType) and isinstance(context, EnumType):
-            if inferred.name == context.name and inferred.module_id == context.module_id:
+            if _same_nominal_declaration(inferred, context):
                 self._complete_nominal_args(inferred.type_args, context.type_args, origin)
             return
 

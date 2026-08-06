@@ -312,8 +312,11 @@ class TypeTable:
         Registering a new identity under a name path that another identity
         already occupies does not remove the older declaration — it stays
         registered, and retrievable by its own identity — but repoints the
-        name index (:meth:`get`) at the newer one: a name is a pointer to the
-        newest declaration bearing it, not the declaration itself.
+        name index (:meth:`get`) at the registered one: a name is a pointer
+        to the declaration that most recently claimed it, not the
+        declaration itself. Registering an already-registered identity
+        reclaims its name path the same way, which is how a caller restores
+        a name to a declaration that a since-discarded one took over.
         """
         if self_validation_enabled() and typedef.decl_node_id == NO_DECL_ID:
             raise AssertionError(
@@ -321,9 +324,9 @@ class TypeTable:
             )
         decl_id = typedef.decl_node_id
         existing = self._defs.get(decl_id)
+        self._name_index[(typedef.module_id, typedef.scope_path, typedef.name)] = decl_id
         if existing is None:
             self._defs[decl_id] = typedef
-            self._name_index[(typedef.module_id, typedef.scope_path, typedef.name)] = decl_id
             self._non_data_caps = None
             self._finite_closure = None
             return
@@ -1055,10 +1058,14 @@ class TypeTable:
         under the same identity is overwritten, and *other*'s name index
         entries overwrite this table's own — mirroring the last-write-wins
         semantics already used to seed the embedded type dict (``_types``).
-        A name redeclared with a different shape in the environment being
-        seeded is always subsequently rebuilt by the type builder's
-        unregister-then-rebuild dance, so a transient overwrite here is never
-        left stale in a way that affects final behavior.
+        Callers that seed the SAME live table from the SAME source more than
+        once within one check (see
+        :meth:`~agm.agl.typecheck.env.TypeEnvironment.seed_from`'s
+        ``merge_type_table``) must skip a second, now-stale call instead of
+        relying on this method to detect it — a later declaration under a
+        name path this table already binds to a different identity is
+        expected to take the name over unconditionally, so there is no
+        general way to tell that apart from a stale re-seed here.
 
         Skips the write (and the resulting cache invalidation) entirely when
         the incoming def is identical to the one already registered under

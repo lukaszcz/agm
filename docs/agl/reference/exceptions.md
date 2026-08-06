@@ -166,7 +166,11 @@ Catch patterns:
 
 - `catch SomeError` / `catch SomeError as e` — matches exactly the named
   exception type, whether built-in or user-declared. It does not match that
-  type's subtypes.
+  type's subtypes. `SomeError` names whichever declaration of that name is in
+  scope where the `catch` clause is written; in the REPL, a name that is
+  later redeclared keeps naming its original declaration in a `catch` clause
+  written before the redeclaration, while a `catch` clause written afterward
+  names the new one.
 - `catch _` / `catch _ as e` — matches anything; `e` has type `Exception`.
 - `catch Exception as e` — equivalent to `catch _ as e`.
 

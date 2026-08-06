@@ -911,6 +911,33 @@ class TestRecursiveSchemaDerivation:
         assert isinstance(defs, dict)
         assert list(defs.keys()) == ["Hub", "Alpha", "Mike", "Zulu"]
 
+    def test_recursive_declarations_sharing_a_name_get_distinct_correct_defs_entries(
+        self,
+    ) -> None:
+        # Two distinct declarations sharing one name path (a REPL
+        # redeclaration mints a fresh decl_id for the same name, so the two
+        # coexist) must never be conflated into one $defs entry, and each
+        # entry's body must reflect its OWN declaration, not the other's.
+        # ``_instantiation_sort_key`` disambiguates by decl_id specifically so
+        # this stays deterministic rather than depending on which of the two
+        # equally-keyed handles happens to sort first.
+        old_id = next_decl_id()
+        new_id = next_decl_id()
+        old_self = RecordType("R", module_id=ENTRY_ID, decl_id=old_id)
+        new_self = RecordType("R", module_id=ENTRY_ID, decl_id=new_id)
+        old_r, old_r_def = record_type("R", {"old_next": old_self}, decl_id=old_id)
+        new_r, new_r_def = record_type("R", {"new_next": new_self}, decl_id=new_id)
+        hub, hub_def = record_type("Hub", {"old": old_r, "new": new_r})
+        table = type_table_for(hub_def, old_r_def, new_r_def)
+
+        schema = derive_schema(hub, table)
+
+        defs = schema["$defs"]
+        assert isinstance(defs, dict)
+        assert set(defs) == {"R", "R_2"}
+        assert defs["R"]["required"] == ["old_next"]
+        assert defs["R_2"]["required"] == ["new_next"]
+
 
 # ---------------------------------------------------------------------------
 # 1b-bis. RefDecode/DecodePlan emission — mirrors TestRecursiveSchemaDerivation's

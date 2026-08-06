@@ -272,18 +272,6 @@ class ReplSession:
         self._entry_pipeline = EntryPipeline(self)
 
     @staticmethod
-    def _type_mentions_entry_nominal(
-        typ: "Type", identities: frozenset[tuple[tuple[str, ...], str]]
-    ) -> bool:
-        """Return whether *typ* contains an entry nominal with one of *identities*."""
-        from agm.agl.semantics.types import iter_nominal_types
-
-        return any(
-            nominal.module_id.is_entry and (nominal.scope_path, nominal.name) in identities
-            for nominal in iter_nominal_types(typ)
-        )
-
-    @staticmethod
     def _assert_checked_state_closed(checked: "CheckedModule") -> None:
         """Assert that a checked entry satisfies the shared lowering boundary."""
         from agm.agl.typecheck.env import assert_checked_module_closed
@@ -900,41 +888,13 @@ class ReplSession:
         unpromoted_type_names = {
             "::".join((*path, name)) for path, name in unpromoted_type_identities
         }
-        stale_binding_names: set[str] = set()
-        stale_binding_node_ids: set[int] = set()
         if promoted_type_identities:
-            for name, ref in self._session_scope.bindings.items():
-                typ = self._type_env.resolve_binding(ref)
-                if typ is not None and self._type_mentions_entry_nominal(
-                    typ, promoted_type_identities
-                ):
-                    stale_binding_names.add(name)
-                    stale_binding_node_ids.add(ref.decl_node_id)
-            for name in stale_binding_names:
-                self._session_scope.bindings.pop(name, None)
-            # A redefined type can also be mentioned by a retained named-scope
-            # member (e.g. ``A::make() -> A::R``), not just a root binding;
-            # walk every session scope node's members the same way so a stale
-            # scoped value/function is invalidated rather than surviving with a
-            # runtime layout that no longer matches its (new) static type.
-            for path, node in self._session_scope_nodes.items():
-                if not path:
-                    continue
-                stale_member_names: set[str] = set()
-                for name, ref in node.members.items():
-                    typ = self._type_env.resolve_binding(ref)
-                    if typ is not None and self._type_mentions_entry_nominal(
-                        typ, promoted_type_identities
-                    ):
-                        stale_member_names.add(name)
-                        stale_binding_node_ids.add(ref.decl_node_id)
-                for name in stale_member_names:
-                    node.members.pop(name, None)
-            self._declared_params = {
-                name: (typ, decl_node_id)
-                for name, (typ, decl_node_id) in self._declared_params.items()
-                if not self._type_mentions_entry_nominal(typ, promoted_type_identities)
-            }
+            # A promoted type declaration supersedes any earlier ambient
+            # constructor candidate sharing its name path: retained bindings
+            # and scope members keep resolving through their own (possibly
+            # superseded) declaration identity, so only the ambient bare-name
+            # candidate table -- which drives how a FRESH constructor
+            # reference resolves -- needs to move onto the newest owner here.
             self._ambient_constructor_candidates = {
                 cname: tuple(
                     ref
@@ -988,17 +948,13 @@ class ReplSession:
                 parent=self._session_scope_nodes[path[:-1]],
                 scope_path=path,
             )
-        for path, name in promoted_type_identities:
-            self._session_scope_nodes[(*path, name)].clear_members()
         for path, node in checked.resolved.scope_nodes.items():
             session_node = self._session_scope_nodes.get(path)
             if session_node is None:
                 continue
             for name, ref in node.members.items():
-                if (
-                    (ref.scope_path, ref.name) not in unpromoted_type_identities
-                    and ref.decl_node_id not in stale_binding_node_ids
-                    and _is_promoted(ref.decl_node_id)
+                if (ref.scope_path, ref.name) not in unpromoted_type_identities and _is_promoted(
+                    ref.decl_node_id
                 ):
                     if ref.decl_node_id in entry_declaration_node_ids:
                         displaced_param_keys.add(resolved_public_name(path, name))
@@ -1013,7 +969,7 @@ class ReplSession:
             for path, name in promoted_type_identities
         )
 
-        if not partial and not stale_binding_node_ids:
+        if not partial:
             # The checked environment already includes the prior sealed session
             # state and is itself sealed at the checked-output boundary. Reuse it
             # directly instead of copying the accumulated session a second time.
@@ -1025,20 +981,18 @@ class ReplSession:
             # leaves the session's still-sealed ``self._type_env`` untouched.
             new_type_env = TypeEnvironment()
             new_type_env.seed_from(checked.type_env)
-            if partial and unpromoted_type_names:
+            if unpromoted_type_names:
                 new_type_env.restore_type_names_from(previous_type_env, unpromoted_type_names)
-            if partial:
-                unpromoted_function_names = (
-                    item.name
-                    for item in entry_declarations
-                    if isinstance(item, FuncDef) and item.node_id not in promoted_declaration_ids
-                )
-                new_type_env.restore_binding_metadata_from(
-                    previous_type_env,
-                    entry_binding_node_ids - promoted_binding_node_ids,
-                    unpromoted_function_names,
-                )
-            new_type_env.remove_binding_types(stale_binding_node_ids)
+            unpromoted_function_names = (
+                item.name
+                for item in entry_declarations
+                if isinstance(item, FuncDef) and item.node_id not in promoted_declaration_ids
+            )
+            new_type_env.restore_binding_metadata_from(
+                previous_type_env,
+                entry_binding_node_ids - promoted_binding_node_ids,
+                unpromoted_function_names,
+            )
             new_type_env.seal()
             self._type_env = new_type_env
 

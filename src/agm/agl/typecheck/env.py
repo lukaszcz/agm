@@ -850,20 +850,43 @@ class TypeEnvironment:
         self._types[name] = typ
 
     def unregister_name(self, name: str) -> None:
-        """Remove a user *name* from the type, alias, and type-table namespaces.
+        """Remove a user *name* from the tables that only ever expose ONE definition.
 
-        Used by the type-builder when an incremental-session entry redeclares a
-        *seeded* name — either with a different kind (e.g. a seeded ``record R``
-        redefined as ``type R = int``) or a different shape (e.g. ``record R``
-        redefined with different fields).  Type handles, aliases, generic
-        templates, constructor metadata, and alias parameter metadata live in
-        separate tables, so a cross-kind redefinition would otherwise leave a
-        stale entry in another table and make ``get_type`` disagree with
-        annotation/constructor resolution.  Dropping the name from all
-        namespaces before the new declaration is registered keeps them mutually
-        consistent, and lets the type table's dual-write ``register`` calls
-        treat every registration as a fresh one rather than a conflicting
-        re-registration of the same key.
+        Used by the type-builder before registering a redeclared name —
+        whether it redeclares under a different kind (e.g. a seeded
+        ``record R`` redefined as ``type R = int``) or a different shape
+        (e.g. ``record R`` redefined with different fields). ``_types``,
+        alias targets/params, and generic templates are each keyed by NAME
+        alone with exactly one slot per name path, and each answers a "what
+        does this name mean right now" question — the newest declaration's
+        answer, and nothing else, must ever be reachable through them. A
+        redeclaration that does not itself repopulate a slot (e.g. a
+        previously generic ``Box`` redeclared as a plain record never writes
+        ``_generic_types["Box"]`` again) would otherwise leave the superseded
+        declaration's answer live in a table the new one never touches, and
+        make ``get_type`` disagree with annotation/constructor resolution.
+        Dropping the name from these namespaces before the new declaration is
+        registered keeps them consistent with that single-newest-answer rule.
+
+        Constructor signatures and field-kind metadata (``_constructor_sigs``/
+        ``_constructor_field_kinds``) are deliberately NOT cleared here even
+        though they are also name-keyed: unlike the tables above, a caller
+        that queries them by owner name and variant is always resolving a
+        SPECIFIC declaration's own field/variant it already holds a handle or
+        pattern binder for (a record's fields, one enum variant), not asking
+        "what does this bare name mean now" — so a variant the newest
+        declaration does not redeclare (an enum's dropped variant, a
+        redeclared-non-generic record's stale constructor signature that no
+        code path reaches once ``_generic_types`` no longer names it generic)
+        must stay reachable for an OLDER-typed retained value, while every key
+        the newest declaration DOES define is naturally overwritten by its own
+        registration regardless.
+
+        The shared ``type_table`` is likewise NOT touched here: it is keyed
+        by declaration identity, not name, and its own ``register`` call
+        retains a superseded declaration under its own identity while
+        repointing the name index at the newest one — exactly the behavior
+        this method's callers rely on for the identity-keyed table.
 
         Built-in exception names and built-in prelude type names are never
         removed: they are non-shadowable (rejected earlier by
@@ -877,15 +900,6 @@ class TypeEnvironment:
         self._alias_targets.pop(name, None)
         self._generic_types.pop(name, None)
         self._alias_type_params.pop(name, None)
-        scope_path, declared_name = _split_scoped_type_name(name)
-        nominal_key = (self._module_id, scope_path, declared_name)
-        for key in tuple(self._constructor_sigs):
-            if key[0] == nominal_key:
-                self._constructor_sigs.pop(key, None)
-        for key in tuple(self._constructor_field_kinds):
-            if key[0] == nominal_key:
-                self._constructor_field_kinds.pop(key, None)
-        self._type_table.unregister_name(self._module_id, declared_name, scope_path)
 
     def register_alias(
         self, name: str, target_expr: object, *, type_params: tuple[str, ...] = ()
@@ -2435,7 +2449,7 @@ class TypeEnvironment:
 
     # --- Seeding support ---
 
-    def seed_from(self, other: TypeEnvironment) -> None:
+    def seed_from(self, other: TypeEnvironment, *, merge_type_table: bool = True) -> None:
         """Copy *other*'s user-declared types, aliases, and binding types in.
 
         Used to pre-populate a fresh environment with a session's accumulated
@@ -2444,12 +2458,24 @@ class TypeEnvironment:
         and are not copied from the source.  Binding types are keyed by
         globally-unique ``decl_node_id`` so they never collide across entries.
 
-        Also merges *other*'s ``type_table`` entries in: *other* is treated as
-        authoritative, so an entry under a key already present in this
-        environment's table is overwritten (last-write-wins). For names present
-        in *other*'s type namespace, stale metadata in this environment is
-        cleared before copying so cross-kind REPL redefinitions do not leave old
+        Also merges *other*'s ``type_table`` entries in, unless
+        *merge_type_table* is ``False``: *other* is treated as authoritative,
+        so an entry under a key already present in this environment's table
+        is overwritten (last-write-wins). For names present in *other*'s type
+        namespace, stale metadata in this environment is cleared before
+        copying so cross-kind REPL redefinitions do not leave old
         generic/constructor/alias tables behind. See :meth:`TypeTable.merge_from`.
+
+        *merge_type_table* is ``False`` for a caller whose ``_type_table`` IS
+        *other*'s prior seeding target (the SAME shared instance, not a
+        separate table merged from it) — a program check that seeds its
+        entry module's environment more than once within one ``check_program``
+        run. By the second seeding, this table has already registered the
+        current entry's own fresh declarations on top of what *other* (a
+        snapshot from BEFORE this entry ran) knows, so re-merging *other*'s
+        name index would regress a name this entry just redeclared back onto
+        its superseded owner; every other table this method copies is
+        per-environment state that a second seeding still needs.
         """
         self._assert_mutable()
         if not other.is_sealed:
@@ -2473,7 +2499,8 @@ class TypeEnvironment:
         }
         for name in incoming_type_names:
             self.unregister_name(name)
-        self._type_table.merge_from(other._type_table)
+        if merge_type_table:
+            self._type_table.merge_from(other._type_table)
         for name, typ in other._types.items():
             if name not in builtin:
                 self._types[name] = typ

@@ -3928,11 +3928,14 @@ class _Checker:
                     )
                 if not isinstance(local_enum, EnumType):
                     raise AglTypeError(f"'{local_owner}' is not a known enum type.", span=span)
-                same_generic_owner = (
-                    local_enum.module_id == enum_type.module_id
-                    and local_enum.scope_path == enum_type.scope_path
-                    and local_enum.name == enum_type.name
-                    and all(isinstance(arg, TypeVarType) for arg in local_enum.type_args)
+                # A generic enum's bare name denotes its uninstantiated
+                # template, which legitimately qualifies any instantiation of
+                # the SAME declaration. Identity is the declaration, never the
+                # name: two declarations sharing one name path (a REPL
+                # redeclaration) are unrelated enums, so the qualifier must
+                # not reach across them.
+                same_generic_owner = local_enum.decl_id == enum_type.decl_id and all(
+                    isinstance(arg, TypeVarType) for arg in local_enum.type_args
                 )
                 if local_enum != enum_type and not same_generic_owner:
                     raise AglTypeError(

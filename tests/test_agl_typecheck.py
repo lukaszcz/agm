@@ -959,13 +959,22 @@ class TestTypeEnvironment:
 
         env.unregister_name("Foo")
 
+        # The single-slot "what does this bare name mean now" tables drop
+        # Foo's entry: a redeclaration under this name owns the only answer
+        # they may ever give.
         assert env.get_type("Foo") is None
         assert env.get_alias_type_params("Foo") == ()
         assert env.get_generic_type("Foo") is None
-        assert env.get_constructor_signature("Foo", None) is None
-        assert env.get_constructor_signature("Foo", "Some") is None
-        assert env.get_constructor_field_kinds("Foo", None) is None
-        assert env.get_constructor_field_kinds("Foo", "Some") is None
+        # Constructor signatures and field kinds are untouched: they answer
+        # "what shape does this SPECIFIC owner/variant have", which stays
+        # correct for a retained value of Foo's superseded declaration even
+        # after the name "Foo" itself is redeclared — a key the redeclaration
+        # does define is overwritten by its own registration regardless (see
+        # ``TypeEnvironment.unregister_name``).
+        assert env.get_constructor_signature("Foo", None) is not None
+        assert env.get_constructor_signature("Foo", "Some") is not None
+        assert env.get_constructor_field_kinds("Foo", None) is not None
+        assert env.get_constructor_field_kinds("Foo", "Some") is not None
         assert env.get_constructor_signature("Bar", None) == bar_sig
         assert env.get_constructor_field_kinds("Bar", None) == ()
 
@@ -11253,8 +11262,8 @@ class TestGenericNominalModuleId:
             "Both had module_id=ENTRY_ID before the fix."
         )
 
-    def test_generic_completion_respects_different_module_ids(self) -> None:
-        """Contextual generic completion respects nominal module identity."""
+    def test_generic_completion_respects_different_declarations(self) -> None:
+        """Contextual generic completion respects nominal declaration identity."""
         from agm.agl.modules.ids import ModuleId
         from agm.agl.typecheck.inference import ConstraintRole, InferenceEngine
 
@@ -11262,11 +11271,12 @@ class TestGenericNominalModuleId:
         lib_b = ModuleId.from_path("libB")
         engine = InferenceEngine()
         inferred = engine.instantiate(
-            ("T",), (RecordType("Box", type_args=(TypeVarType("T"),), module_id=lib_a),)
+            ("T",),
+            (RecordType("Box", type_args=(TypeVarType("T"),), module_id=lib_a, decl_id=1),),
         ).templates[0]
         engine.complete_from_context(
             inferred,
-            RecordType("Box", type_args=(IntType(),), module_id=lib_b),
+            RecordType("Box", type_args=(IntType(),), module_id=lib_b, decl_id=2),
             engine.origin(mk_span(), role=ConstraintRole.EXPECTED_RESULT, subject="Box"),
         )
         assert isinstance(inferred, RecordType)

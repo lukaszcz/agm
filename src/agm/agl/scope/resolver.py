@@ -43,7 +43,7 @@ normal binding.  A bare ``VarRef("print")`` (not in call position) raises
 
 from __future__ import annotations
 
-from collections.abc import Collection, Iterable, Iterator, Mapping
+from collections.abc import Callable, Collection, Iterable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from functools import partial
@@ -213,6 +213,29 @@ _RESERVED_NAMES: frozenset[str] = frozenset(_BUILTIN_CALL_NAMES)
 def _scope_path_sort_key(path: ScopePath) -> tuple[int, ScopePath]:
     """Order scope paths by depth, then lexical spelling."""
     return (len(path), path)
+
+
+def _supersedes(candidate: ConstructorRef, cref: ConstructorRef) -> bool:
+    """Whether *cref* is a later declaration of *candidate*'s own name path.
+
+    An ambient candidate seeded from an earlier REPL entry names the very
+    path this entry's own declaration now owns, so a fresh constructor
+    reference must reach the newest declaration rather than the one the
+    session happened to seed first.  Only a full name path (module, scope
+    path, and owner name) identifies the same owner; two distinct owners
+    never share one, so genuine constructor overloading — two types' same
+    named variant, or one name declared in different modules — is untouched.
+    A built-in seeded without a declaration node carries no identity to
+    supersede or be superseded by, and the same declaration contributed
+    twice (over two overlapping import routes) is not a later one.
+    """
+    return (
+        candidate.owner_decl_node_id != cref.owner_decl_node_id
+        and _BUILTIN_CONSTRUCTOR_NODE_ID
+        not in (candidate.owner_decl_node_id, cref.owner_decl_node_id)
+        and (candidate.owner_module_id, candidate.owner_path, candidate.owner_name)
+        == (cref.owner_module_id, cref.owner_path, cref.owner_name)
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -967,39 +990,68 @@ class _Resolver:
         scope_path: ScopePath = (),
         inject_bare: bool = True,
     ) -> None:
-        """Add *cref* to the candidates list for *ctor_key*.
+        """Add *cref* to the candidates list for *ctor_key*, superseding a stale owner.
 
-        Skips the entry if another candidate with the same ``owner_name`` is
-        already present (duplicate type declaration — the type-builder pass will
-        raise a clear "already declared" error for that; we must not conflate it
-        with genuine constructor overloading across distinct types).
+        A candidate that *cref* supersedes (see :func:`_supersedes`) is
+        replaced in place; otherwise a candidate already claiming this
+        spelling keeps it and *cref* is dropped.  The spelling is claimed by
+        another candidate with the same owner name in the same module
+        (a duplicate type declaration — the type-builder pass raises a clear
+        "already declared" error for that; we must not conflate it with
+        genuine constructor overloading across distinct types), by the same
+        owner at the same path in the scoped table, and, in the bare table,
+        by a host-seeded built-in of the same name.
         """
         scoped_key = (scope_path, ctor_key)
-        scoped_existing = self._scoped_constructor_candidates.get(scoped_key, [])
-        if not any(
-            (candidate.owner_module_id, candidate.owner_path, candidate.owner_name)
-            == (cref.owner_module_id, cref.owner_path, cref.owner_name)
-            for candidate in scoped_existing
-        ):
-            scoped_existing.append(cref)
-            self._scoped_constructor_candidates[scoped_key] = scoped_existing
+        self._scoped_constructor_candidates[scoped_key] = self._place_candidate(
+            self._scoped_constructor_candidates.get(scoped_key, []),
+            cref,
+            claims_spelling=lambda candidate: (
+                (
+                    candidate.owner_module_id,
+                    candidate.owner_path,
+                    candidate.owner_name,
+                )
+                == (cref.owner_module_id, cref.owner_path, cref.owner_name)
+            ),
+        )
         if not inject_bare:
             return
-        existing = self._constructor_candidates.get(ctor_key, [])
-        if any(
-            (c.owner_module_id, c.owner_name) == (cref.owner_module_id, cref.owner_name)
-            or (
-                (
-                    c.owner_decl_node_id == _BUILTIN_CONSTRUCTOR_NODE_ID
-                    or cref.owner_decl_node_id == _BUILTIN_CONSTRUCTOR_NODE_ID
+        self._constructor_candidates[ctor_key] = self._place_candidate(
+            self._constructor_candidates.get(ctor_key, []),
+            cref,
+            claims_spelling=lambda candidate: (
+                (candidate.owner_module_id, candidate.owner_name)
+                == (cref.owner_module_id, cref.owner_name)
+                or (
+                    (
+                        candidate.owner_decl_node_id == _BUILTIN_CONSTRUCTOR_NODE_ID
+                        or cref.owner_decl_node_id == _BUILTIN_CONSTRUCTOR_NODE_ID
+                    )
+                    and candidate.owner_name == cref.owner_name
                 )
-                and c.owner_name == cref.owner_name
-            )
-            for c in existing
-        ):
-            return
-        existing.append(cref)
-        self._constructor_candidates[ctor_key] = existing
+            ),
+        )
+
+    @staticmethod
+    def _place_candidate(
+        existing: list[ConstructorRef],
+        cref: ConstructorRef,
+        *,
+        claims_spelling: Callable[[ConstructorRef], bool],
+    ) -> list[ConstructorRef]:
+        """Return *existing* with *cref* superseding, yielding to, or joining it.
+
+        Replacement happens in place so candidate order — which decides the
+        representative binding and the reported one on an ambiguity — does
+        not depend on when a declaration was superseded.
+        """
+        for index, candidate in enumerate(existing):
+            if _supersedes(candidate, cref):
+                return [*existing[:index], cref, *existing[index + 1 :]]
+        if any(claims_spelling(candidate) for candidate in existing):
+            return existing
+        return [*existing, cref]
 
     def _alias_target_lookup(
         self, name: str, qualifier: QualifierChain | None, *, scope_path: ScopePath = ()

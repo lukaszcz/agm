@@ -405,13 +405,21 @@ def _direct_neighbours(handle: Instantiation, type_table: TypeTable) -> frozense
 
 
 def _instantiation_sort_key(handle: Instantiation) -> tuple[object, ...]:
-    """Deterministic sort key for :func:`~agm.util.graph.sccs` — never Python object identity."""
+    """Deterministic sort key for :func:`~agm.util.graph.sccs` — never Python object identity.
+
+    Ends in ``decl_id``: two distinct declarations can share every other
+    component (a REPL redeclaration mints a fresh identity for the same name
+    path), and without a final tiebreak their relative order would fall back
+    to a frozenset's hash-randomized iteration order — nondeterministic
+    across process runs, unlike every other component here.
+    """
     type_args = handle.type_args if isinstance(handle, (RecordType, EnumType)) else ()
     return (
         handle.module_id.segments,
         handle.scope_path,
         handle.name,
         tuple(repr(arg) for arg in type_args),
+        handle.decl_id,
     )
 
 

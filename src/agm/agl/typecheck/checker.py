@@ -2126,9 +2126,7 @@ class _Checker:
             self._record_side_table_addition(
                 "pattern_constructor_owners", self._pattern_constructor_owners, node_id
             )
-            self._pattern_constructor_owners[node_id] = NominalId(
-                owner_type.module_id, owner_type.name
-            )
+            self._pattern_constructor_owners[node_id] = NominalId(owner_type.decl_id)
 
     def _record_constructor_call_binding(self, node_id: int, binding: dict[str, Expr]) -> None:
         """Store a region-owned constructor-call argument binding."""

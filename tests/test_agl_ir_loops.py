@@ -47,6 +47,7 @@ from agm.agl.ir.program import (
     SourceFile,
     SymbolDescriptor,
 )
+from agm.agl.ir.reserved_nominals import require_reserved_nominal_id
 from agm.agl.ir.validate import validate_ir
 from agm.agl.modules.ids import ENTRY_ID, STD_CORE_ID
 from agm.agl.semantics.exceptions import AglRaise
@@ -92,12 +93,15 @@ def _make_minimal_program(
     from agm.agl.semantics.type_table import create_seeded_type_table
     from agm.agl.semantics.types import BUILTIN_EXCEPTIONS
 
-    max_iter_nominal = NominalId(STD_CORE_ID, "MaxIterationsExceeded")
+    max_iter_nominal = NominalId(require_reserved_nominal_id("MaxIterationsExceeded"))
     exc_type = BUILTIN_EXCEPTIONS["MaxIterationsExceeded"]
     exc_fields = create_seeded_type_table().exception_fields(exc_type)
     nominals = {
         max_iter_nominal: NominalDescriptor(
             nominal=max_iter_nominal,
+            module_id=STD_CORE_ID,
+            scope_path=(),
+            declared_name="MaxIterationsExceeded",
             display_name="MaxIterationsExceeded",
             kind=NominalKind.EXCEPTION,
             fields=tuple(exc_fields.keys()),

@@ -18,7 +18,7 @@ from agm.agl.ir.validate import InvalidIrError, validate_ir
 from agm.agl.modules.ids import ENTRY_ID
 from agm.agl.semantics.values import BoolValue
 from tests._agl_helpers import let_root_capture
-from tests.agl.ir_harness import evaluate_ir, lower_ir
+from tests.agl.ir_harness import evaluate_ir, lower_ir, nominal_id_for
 
 
 def _lower(source: str) -> ExecutableProgram:
@@ -127,7 +127,7 @@ let r = c is not Blue
             let_root_capture(node).value, IrVariantIs
         ):
             vi = let_root_capture(node).value
-            assert vi.nominal == NominalId(ENTRY_ID, "Color")
+            assert vi.nominal == nominal_id_for(prog, "Color")
             assert vi.variant == "Blue"
             assert vi.negated is True
             found = True
@@ -157,7 +157,7 @@ def test_validate_cheap_tier_skips_nominal_checks_for_ir_variant_is() -> None:
     loc = Location(source_id=SourceId(0), start_offset=0, end_offset=1, start_line=1, start_col=0)
     node = IrVariantIs(
         location=loc,
-        nominal=NominalId(ENTRY_ID, "Ghost"),  # not registered — ignored when deep=False
+        nominal=NominalId(1),  # not registered — ignored when deep=False
         variant="Red",
         value=IrConstInt(loc, 1),
         negated=False,
@@ -170,7 +170,7 @@ def test_validate_rejects_ir_variant_is_with_unknown_nominal() -> None:
     loc = Location(source_id=SourceId(0), start_offset=0, end_offset=1, start_line=1, start_col=0)
     node = IrVariantIs(
         location=loc,
-        nominal=NominalId(ENTRY_ID, "Ghost"),
+        nominal=NominalId(2),
         variant="Red",
         value=IrConstInt(loc, 1),
         negated=False,
@@ -182,9 +182,12 @@ def test_validate_rejects_ir_variant_is_with_unknown_nominal() -> None:
 def test_validate_rejects_ir_variant_is_with_unknown_variant() -> None:
     """Validator rejects IrVariantIs whose variant is absent from the descriptor."""
     loc = Location(source_id=SourceId(0), start_offset=0, end_offset=1, start_line=1, start_col=0)
-    nominal_id = NominalId(ENTRY_ID, "Color")
+    nominal_id = NominalId(3)
     desc = NominalDescriptor(
         nominal=nominal_id,
+        module_id=ENTRY_ID,
+        scope_path=(),
+        declared_name="Color",
         display_name="Color",
         kind=NominalKind.ENUM,
         fields=(),

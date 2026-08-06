@@ -40,6 +40,7 @@ from agm.agl.ir.contracts import (
     ScalarKind,
 )
 from agm.agl.ir.ids import NominalId
+from agm.agl.ir.reserved_nominals import require_reserved_nominal_id
 from agm.agl.modules.ids import ENTRY_ID, ModuleId
 from agm.agl.modules.roots import RootSet
 from agm.agl.parser.parser import parse_program
@@ -289,7 +290,7 @@ class _Bindings(dict[str, object]):
 # concrete variant is irrelevant, since every ``agent_dispatcher`` in this file
 # ignores ``request.agent`` and responds from the prompt alone.
 _TEST_DEFAULT_AGENT = EnumValue(
-    nominal=NominalId(ENTRY_ID, "Agent"),
+    nominal=NominalId(require_reserved_nominal_id("Agent")),
     display_name="Agent",
     variant="AgentCommand",
     fields={"command": TextValue("")},
@@ -934,7 +935,7 @@ class TestRecursiveDecodeDerivation:
         tree, tree_def = _tree_type_and_def()
         plan = build_decode_schema(tree, type_table_for(tree_def))
         tree_body = EnumDecode(
-            nominal=NominalId(ENTRY_ID, "Tree"),
+            nominal=NominalId(tree.decl_id),
             display_name="Tree",
             variants=(
                 VariantDecode(name="Leaf", fields=()),
@@ -972,7 +973,7 @@ class TestRecursiveDecodeDerivation:
         )
         plan = build_decode_schema(category, type_table_for(category_def))
         category_body = RecordDecode(
-            nominal=NominalId(ENTRY_ID, "Category"),
+            nominal=NominalId(category.decl_id),
             display_name="Category",
             fields=(
                 ("name", ScalarDecode(ScalarKind.TEXT)),
@@ -995,7 +996,7 @@ class TestRecursiveDecodeDerivation:
         wrapper, wrapper_def = record_type("Wrapper", {"root": tree, "label": TextType()})
         plan = build_decode_schema(wrapper, type_table_for(wrapper_def, tree_def))
         assert plan.root == RecordDecode(
-            nominal=NominalId(ENTRY_ID, "Wrapper"),
+            nominal=NominalId(wrapper.decl_id),
             display_name="Wrapper",
             fields=(
                 ("root", RefDecode("Tree")),
@@ -1024,10 +1025,10 @@ class TestRecursiveDecodeDerivation:
         )
         plan = build_decode_schema(a, type_table_for(a_def, b_def))
         a_body = RecordDecode(
-            nominal=NominalId(ENTRY_ID, "A"), display_name="A", fields=(("b", RefDecode("B")),)
+            nominal=NominalId(a.decl_id), display_name="A", fields=(("b", RefDecode("B")),)
         )
         b_body = EnumDecode(
-            nominal=NominalId(ENTRY_ID, "B"),
+            nominal=NominalId(b.decl_id),
             display_name="B",
             variants=(
                 VariantDecode(name="Nil", fields=()),
@@ -1084,13 +1085,13 @@ class TestRecursiveDecodeDerivation:
         plan = build_decode_schema(outer, type_table_for(outer_def, inner_def))
         assert plan == DecodePlan(
             root=RecordDecode(
-                nominal=NominalId(ENTRY_ID, "Outer"),
+                nominal=NominalId(outer.decl_id),
                 display_name="Outer",
                 fields=(
                     (
                         "inner",
                         RecordDecode(
-                            nominal=NominalId(ENTRY_ID, "Inner"),
+                            nominal=NominalId(inner.decl_id),
                             display_name="Inner",
                             fields=(("x", ScalarDecode(ScalarKind.INT)),),
                         ),
@@ -2543,11 +2544,10 @@ class TestDecodeValueErrorBranches:
     def test_record_type_got_non_dict(self) -> None:
         from agm.agl.ir.contracts import RecordDecode, ScalarDecode, ScalarKind
         from agm.agl.ir.ids import NominalId
-        from agm.agl.modules.ids import ENTRY_ID
         from agm.agl.runtime.convert import decode_value
 
         schema = RecordDecode(
-            nominal=NominalId(ENTRY_ID, "R"),
+            nominal=NominalId(1),
             display_name="R",
             fields=(("x", ScalarDecode(kind=ScalarKind.INT)),),
         )
@@ -2557,11 +2557,10 @@ class TestDecodeValueErrorBranches:
     def test_record_missing_field(self) -> None:
         from agm.agl.ir.contracts import RecordDecode, ScalarDecode, ScalarKind
         from agm.agl.ir.ids import NominalId
-        from agm.agl.modules.ids import ENTRY_ID
         from agm.agl.runtime.convert import decode_value
 
         schema = RecordDecode(
-            nominal=NominalId(ENTRY_ID, "R"),
+            nominal=NominalId(1),
             display_name="R",
             fields=(("x", ScalarDecode(kind=ScalarKind.INT)),),
         )
@@ -2571,11 +2570,10 @@ class TestDecodeValueErrorBranches:
     def test_enum_type_got_non_dict(self) -> None:
         from agm.agl.ir.contracts import EnumDecode, VariantDecode
         from agm.agl.ir.ids import NominalId
-        from agm.agl.modules.ids import ENTRY_ID
         from agm.agl.runtime.convert import decode_value
 
         schema = EnumDecode(
-            nominal=NominalId(ENTRY_ID, "E"),
+            nominal=NominalId(1),
             display_name="E",
             variants=(VariantDecode(name="A", fields=()),),
         )
@@ -2585,11 +2583,10 @@ class TestDecodeValueErrorBranches:
     def test_enum_missing_case_tag(self) -> None:
         from agm.agl.ir.contracts import EnumDecode, VariantDecode
         from agm.agl.ir.ids import NominalId
-        from agm.agl.modules.ids import ENTRY_ID
         from agm.agl.runtime.convert import decode_value
 
         schema = EnumDecode(
-            nominal=NominalId(ENTRY_ID, "E"),
+            nominal=NominalId(1),
             display_name="E",
             variants=(VariantDecode(name="A", fields=()),),
         )
@@ -2599,11 +2596,10 @@ class TestDecodeValueErrorBranches:
     def test_enum_unknown_variant(self) -> None:
         from agm.agl.ir.contracts import EnumDecode, VariantDecode
         from agm.agl.ir.ids import NominalId
-        from agm.agl.modules.ids import ENTRY_ID
         from agm.agl.runtime.convert import decode_value
 
         schema = EnumDecode(
-            nominal=NominalId(ENTRY_ID, "E"),
+            nominal=NominalId(1),
             display_name="E",
             variants=(VariantDecode(name="A", fields=()),),
         )
@@ -2613,11 +2609,10 @@ class TestDecodeValueErrorBranches:
     def test_enum_missing_payload_field(self) -> None:
         from agm.agl.ir.contracts import EnumDecode, ScalarDecode, ScalarKind, VariantDecode
         from agm.agl.ir.ids import NominalId
-        from agm.agl.modules.ids import ENTRY_ID
         from agm.agl.runtime.convert import decode_value
 
         schema = EnumDecode(
-            nominal=NominalId(ENTRY_ID, "E"),
+            nominal=NominalId(1),
             display_name="E",
             variants=(
                 VariantDecode(
@@ -3461,9 +3456,10 @@ class TestRegisterCodec:
 
             def parse(self, raw: str, target_type: Type) -> ParseResult:
                 seen_parse_targets.append(target_type)
+                assert isinstance(target_type, RecordType)
                 return ParseResult.success(
                     RecordValue(
-                        nominal=NominalId(ENTRY_ID, "Box"),
+                        nominal=NominalId(target_type.decl_id),
                         display_name="Box",
                         fields={"value": IntValue(int(raw))},
                     )
@@ -3476,13 +3472,13 @@ class TestRegisterCodec:
         )
 
         assert result.ok is True
+        assert isinstance(seen_parse_targets[0], RecordType)
         assert result.bindings["y"] == RecordValue(
-            nominal=NominalId(ENTRY_ID, "Box"),
+            nominal=NominalId(seen_parse_targets[0].decl_id),
             display_name="Box",
             fields={"value": IntValue(12)},
         )
         assert len(seen_parse_targets) == 1
-        assert isinstance(seen_parse_targets[0], RecordType)
         assert seen_parse_targets[0].name == "Box"
         assert seen_parse_targets[0].type_args == (IntType(),)
 
@@ -3821,7 +3817,7 @@ class TestRegisterCodec:
                 seen_parse_type_tables.append(type_table)
                 return ParseResult.success(
                     RecordValue(
-                        nominal=NominalId(ENTRY_ID, target_type.name),
+                        nominal=NominalId(target_type.decl_id),
                         display_name=target_type.name,
                         fields={"value": IntValue(int(raw))},
                     )
@@ -3832,8 +3828,9 @@ class TestRegisterCodec:
         result = rt.run('record Box\n  value: int\nlet box: Box = ask("Q", format = "shape")\nbox')
 
         assert result.ok is True
+        assert isinstance(seen_parse_type[0], RecordType)
         assert result.bindings["box"] == RecordValue(
-            nominal=NominalId(ENTRY_ID, "Box"),
+            nominal=NominalId(seen_parse_type[0].decl_id),
             display_name="Box",
             fields={"value": IntValue(5)},
         )

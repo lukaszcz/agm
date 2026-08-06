@@ -1708,7 +1708,7 @@ class IrInterpreter:
             if config_value.value < 0:
                 raise AglRaise(
                     _make_exc_value(
-                        "ValueError",
+                        "TypeError",
                         "invalid max-iters: expected a non-negative integer",
                         nominals=self._program.builtin_nominals,
                         trace_id=self._trace.new_event_id(),
@@ -1729,7 +1729,7 @@ class IrInterpreter:
                 except ValueError as exc:
                     raise AglRaise(
                         _make_exc_value(
-                            "ValueError",
+                            "TypeError",
                             f"invalid timeout: {exc}",
                             nominals=self._program.builtin_nominals,
                             trace_id=self._trace.new_event_id(),

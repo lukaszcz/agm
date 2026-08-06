@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import itertools
 import time
 from decimal import Decimal
 from pathlib import Path
@@ -39,7 +40,12 @@ from agm.agl.semantics.values import (
     TextValue,
     Value,
 )
-from tests.agl.ir_harness import evaluate_ir_raises_with_externs, evaluate_ir_with_externs
+from tests.agl.ir_harness import (
+    _prepare_extern_program,
+    evaluate_ir_raises_with_externs,
+    evaluate_ir_with_externs,
+    nominal_id_for,
+)
 
 
 class TestValueDirectedBoundary:
@@ -132,7 +138,8 @@ class TestValueDirectedBoundary:
         assert isinstance(outer, RecordValue)
         inner = outer.fields["inner"]
         assert isinstance(inner, RecordValue)
-        assert inner.nominal.declared_name == "Inner"
+        executable, _ = _prepare_extern_program(source, companion, tmp_path)
+        assert inner.nominal == nominal_id_for(executable, "Inner")
         assert inner.fields == {"x": IntValue(1)}
 
     def test_worker_thread_can_read_and_write_nominal_elements_through_a_view(
@@ -160,7 +167,8 @@ class TestValueDirectedBoundary:
         )
         result, _ = evaluate_ir_with_externs(source, companion, tmp_path)
         assert result["result"] == IntValue(5)
-        inner = NominalId(ENTRY_ID, "Inner")
+        executable, _ = _prepare_extern_program(source, companion, tmp_path)
+        inner = nominal_id_for(executable, "Inner")
         assert result["xs"] == ArrayValue(
             [
                 RecordValue(inner, "Inner", {"x": IntValue(5)}),
@@ -499,20 +507,51 @@ def test_array_contains_returns_false_for_an_undecodable_probe() -> None:
     assert object() not in view
 
 
+#: Identity generator for this module's registry-level tests. The synthesized
+#: class registry (``boundary._NOMINAL_CLASSES``) is process-global, keyed by
+#: ``NominalId``, and never drops an entry -- and a ``NominalId`` is opaque, so
+#: it carries no module or name to keep two nominals apart. Every identity
+#: minted here is therefore distinct from every other one AND far above the
+#: declaration node ids a really-lowered program allocates, so no test can
+#: silently inherit (or clobber) another's synthesized class.
+_next_test_nominal = itertools.count(9_000_000)
+
+#: An identity nothing ever registers a class for, at the top of this module's
+#: range. Kept out of ``_next_test_nominal``'s reach so "unregistered" stays
+#: true however many nominals the tests below synthesize, in any order.
+_UNREGISTERED_NOMINAL = NominalId(9_999_999)
+
+
+def _fresh_nominal() -> NominalId:
+    """Return an identity no other test in this module uses."""
+    return NominalId(next(_next_test_nominal))
+
+
 def _synthesize_box_class() -> tuple[NominalId, type[object]]:
     """Build a fresh synthesized ``Box`` record class for one test's isolated use."""
-    nominal = NominalId(ENTRY_ID, "Box")
-    descriptor = NominalDescriptor(nominal, "Box", NominalKind.RECORD, fields=("value",))
+    nominal = _fresh_nominal()
+    descriptor = NominalDescriptor(
+        nominal=nominal,
+        module_id=ENTRY_ID,
+        scope_path=(),
+        declared_name="Box",
+        display_name="Box",
+        kind=NominalKind.RECORD,
+        fields=("value",),
+    )
     return nominal, synthesize_nominal_classes((descriptor,))[nominal]
 
 
 def _synthesize_choice_classes() -> tuple[NominalId, type[object]]:
     """Build a fresh synthesized ``Choice`` enum class for one test's isolated use."""
-    nominal = NominalId(ENTRY_ID, "Choice")
+    nominal = _fresh_nominal()
     descriptor = NominalDescriptor(
-        nominal,
-        "Choice",
-        NominalKind.ENUM,
+        nominal=nominal,
+        module_id=ENTRY_ID,
+        scope_path=(),
+        declared_name="Choice",
+        display_name="Choice",
+        kind=NominalKind.ENUM,
         variants=(VariantDescriptor("Some", ("value",)), VariantDescriptor("None", ())),
     )
     return nominal, synthesize_nominal_classes((descriptor,))[nominal]
@@ -520,8 +559,16 @@ def _synthesize_choice_classes() -> tuple[NominalId, type[object]]:
 
 def _synthesize_problem_class() -> tuple[NominalId, type[object]]:
     """Build a fresh synthesized ``Problem`` exception class for one test's isolated use."""
-    nominal = NominalId(ENTRY_ID, "Problem")
-    descriptor = NominalDescriptor(nominal, "Problem", NominalKind.EXCEPTION, fields=("detail",))
+    nominal = _fresh_nominal()
+    descriptor = NominalDescriptor(
+        nominal=nominal,
+        module_id=ENTRY_ID,
+        scope_path=(),
+        declared_name="Problem",
+        display_name="Problem",
+        kind=NominalKind.EXCEPTION,
+        fields=("detail",),
+    )
     return nominal, synthesize_nominal_classes((descriptor,))[nominal]
 
 
@@ -577,13 +624,24 @@ def test_decode_boundary_value_returns_the_dict_views_wrapped_value() -> None:
 
 
 def test_encode_boundary_value_rejects_an_unregistered_nominal() -> None:
+    """An identity with no synthesized class cannot cross, whatever else was synthesized.
+
+    Regression test: the synthesized class registry is process-global and
+    keyed by the now-opaque ``NominalId``, so a nominal that reuses another
+    test's identity silently inherits its class and encodes instead of being
+    rejected. Synthesizing the module's other shapes first pins that this
+    identity stays unregistered regardless of test order.
+    """
+    _synthesize_box_class()
+    _synthesize_choice_classes()
+    _synthesize_problem_class()
     with pytest.raises(BoundaryViolation):
-        encode_boundary_value(RecordValue(NominalId(ENTRY_ID, "Missing"), "Missing", {}))
+        encode_boundary_value(RecordValue(_UNREGISTERED_NOMINAL, "Missing", {}))
 
 
 def test_encode_boundary_value_rejects_a_constructor_value() -> None:
     with pytest.raises(BoundaryViolation):
-        encode_boundary_value(ConstructorValue(NominalId(ENTRY_ID, "Choice"), "Choice", "Some"))
+        encode_boundary_value(ConstructorValue(_fresh_nominal(), "Choice", "Some"))
 
 
 def test_decode_boundary_value_rejects_an_unsupported_python_object() -> None:
@@ -713,9 +771,15 @@ def test_json_value_encodes_to_its_own_payload_without_copying() -> None:
 
 
 def test_synthesized_nominals_support_non_python_field_names() -> None:
-    nominal = NominalId(ENTRY_ID, "Prompt")
+    nominal = _fresh_nominal()
     descriptor = NominalDescriptor(
-        nominal, "Prompt", NominalKind.RECORD, fields=("ask-prompt", "count")
+        nominal=nominal,
+        module_id=ENTRY_ID,
+        scope_path=(),
+        declared_name="Prompt",
+        display_name="Prompt",
+        kind=NominalKind.RECORD,
+        fields=("ask-prompt", "count"),
     )
     classes = synthesize_nominal_classes((descriptor,))
     prompt = classes[nominal](**{"ask-prompt": "continue", "count": 3})
@@ -730,8 +794,16 @@ def test_synthesized_nominals_support_non_python_field_names() -> None:
 
 
 def test_deep_recursive_nominal_construction_completes_quickly() -> None:
-    nominal = NominalId(ENTRY_ID, "Box")
-    descriptor = NominalDescriptor(nominal, "Box", NominalKind.RECORD, fields=("value", "inner"))
+    nominal = _fresh_nominal()
+    descriptor = NominalDescriptor(
+        nominal=nominal,
+        module_id=ENTRY_ID,
+        scope_path=(),
+        declared_name="Box",
+        display_name="Box",
+        kind=NominalKind.RECORD,
+        fields=("value", "inner"),
+    )
     classes = synthesize_nominal_classes((descriptor,))
     box_cls = classes[nominal]
 
@@ -752,11 +824,14 @@ def test_deep_recursive_nominal_construction_completes_quickly() -> None:
 
 
 def test_redeclaring_an_enum_updates_and_prunes_variants_in_place() -> None:
-    nominal = NominalId(ENTRY_ID, "Choice")
+    nominal = _fresh_nominal()
     first = NominalDescriptor(
-        nominal,
-        "Choice",
-        NominalKind.ENUM,
+        nominal=nominal,
+        module_id=ENTRY_ID,
+        scope_path=(),
+        declared_name="Choice",
+        display_name="Choice",
+        kind=NominalKind.ENUM,
         variants=(VariantDescriptor("Some", ("value",)), VariantDescriptor("Gone", ())),
     )
     classes = synthesize_nominal_classes((first,))
@@ -764,9 +839,12 @@ def test_redeclaring_an_enum_updates_and_prunes_variants_in_place() -> None:
     some_cls = enum_cls.Some
 
     second = NominalDescriptor(
-        nominal,
-        "Choice",
-        NominalKind.ENUM,
+        nominal=nominal,
+        module_id=ENTRY_ID,
+        scope_path=(),
+        declared_name="Choice",
+        display_name="Choice",
+        kind=NominalKind.ENUM,
         variants=(VariantDescriptor("Some", ("value", "extra")),),
     )
     updated = synthesize_nominal_classes((second,), classes)
@@ -778,13 +856,29 @@ def test_redeclaring_an_enum_updates_and_prunes_variants_in_place() -> None:
 
 
 def test_companion_namespace_keeps_same_named_nominals_distinct() -> None:
-    left = NominalId(ModuleId.from_path("left"), "Box")
-    right = NominalId(ModuleId.from_path("right"), "Box")
+    left = _fresh_nominal()
+    right = _fresh_nominal()
     registry = ExternRegistry()
     registry.set_nominals(
         {
-            left: NominalDescriptor(left, "Box", NominalKind.RECORD, fields=("left",)),
-            right: NominalDescriptor(right, "Box", NominalKind.RECORD, fields=("right",)),
+            left: NominalDescriptor(
+                nominal=left,
+                module_id=ModuleId.from_path("left"),
+                scope_path=(),
+                declared_name="Box",
+                display_name="Box",
+                kind=NominalKind.RECORD,
+                fields=("left",),
+            ),
+            right: NominalDescriptor(
+                nominal=right,
+                module_id=ModuleId.from_path("right"),
+                scope_path=(),
+                declared_name="Box",
+                display_name="Box",
+                kind=NominalKind.RECORD,
+                fields=("right",),
+            ),
         }
     )
 
@@ -796,8 +890,16 @@ def test_companion_namespace_keeps_same_named_nominals_distinct() -> None:
 
 
 def test_set_nominals_is_a_no_op_when_nothing_changed() -> None:
-    nominal = NominalId(ENTRY_ID, "Box")
-    descriptor = NominalDescriptor(nominal, "Box", NominalKind.RECORD, fields=("value",))
+    nominal = _fresh_nominal()
+    descriptor = NominalDescriptor(
+        nominal=nominal,
+        module_id=ENTRY_ID,
+        scope_path=(),
+        declared_name="Box",
+        display_name="Box",
+        kind=NominalKind.RECORD,
+        fields=("value",),
+    )
     registry = ExternRegistry()
     registry.set_nominals({nominal: descriptor})
     before = registry._nominal_classes[nominal]
@@ -810,9 +912,25 @@ def test_set_nominals_is_a_no_op_when_nothing_changed() -> None:
 def test_redeclaring_a_nominal_keeps_default_argument_captured_classes_decodable(
     tmp_path: Path,
 ) -> None:
-    nominal = NominalId(ENTRY_ID, "Box")
-    old = NominalDescriptor(nominal, "Box", NominalKind.RECORD, fields=("old",))
-    new = NominalDescriptor(nominal, "Box", NominalKind.RECORD, fields=("new",))
+    nominal = _fresh_nominal()
+    old = NominalDescriptor(
+        nominal=nominal,
+        module_id=ENTRY_ID,
+        scope_path=(),
+        declared_name="Box",
+        display_name="Box",
+        kind=NominalKind.RECORD,
+        fields=("old",),
+    )
+    new = NominalDescriptor(
+        nominal=nominal,
+        module_id=ENTRY_ID,
+        scope_path=(),
+        declared_name="Box",
+        display_name="Box",
+        kind=NominalKind.RECORD,
+        fields=("new",),
+    )
     companion = tmp_path / "companion.py"
     companion.write_text("from agl import Box\ndef make(box_cls=Box):\n    return box_cls(new=2)\n")
     registry = ExternRegistry()
@@ -829,8 +947,16 @@ def test_redeclaring_a_nominal_keeps_default_argument_captured_classes_decodable
 
 
 def test_stashed_view_with_nominal_elements_decodes_outside_any_call(tmp_path: Path) -> None:
-    nominal = NominalId(ENTRY_ID, "Inner")
-    descriptor = NominalDescriptor(nominal, "Inner", NominalKind.RECORD, fields=("x",))
+    nominal = _fresh_nominal()
+    descriptor = NominalDescriptor(
+        nominal=nominal,
+        module_id=ENTRY_ID,
+        scope_path=(),
+        declared_name="Inner",
+        display_name="Inner",
+        kind=NominalKind.RECORD,
+        fields=("x",),
+    )
     registry = ExternRegistry()
     registry.set_nominals({nominal: descriptor})
     companion = tmp_path / "companion.py"
@@ -855,8 +981,16 @@ def test_stashed_view_with_nominal_elements_decodes_outside_any_call(tmp_path: P
 
 
 def test_registry_wraps_unexpected_decode_errors_as_extern_errors() -> None:
-    nominal = NominalId(ENTRY_ID, "Box")
-    descriptor = NominalDescriptor(nominal, "Box", NominalKind.RECORD, fields=("value",))
+    nominal = _fresh_nominal()
+    descriptor = NominalDescriptor(
+        nominal=nominal,
+        module_id=ENTRY_ID,
+        scope_path=(),
+        declared_name="Box",
+        display_name="Box",
+        kind=NominalKind.RECORD,
+        fields=("value",),
+    )
     registry = ExternRegistry()
     registry.set_nominals({nominal: descriptor})
     broken = registry._nominal_classes[nominal](value=1)

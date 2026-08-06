@@ -12,8 +12,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from agm.agl.modules.ids import ModuleId
-
 __all__ = [
     "ContractId",
     "FunctionId",
@@ -77,30 +75,19 @@ class ContractId:
 
 @dataclass(frozen=True, slots=True)
 class NominalId:
-    """Identity key for a named nominal type (record, enum, or exception).
+    """Opaque identity key for a named nominal type (record, enum, or exception).
 
-    Allocated by the linker.  Equality and hash are by field values
-    (``module_id`` + ``scope_path`` + ``declared_name``), making two
-    descriptors from the same declaration path structurally equal. Scope paths
-    remain tuples rather than encoded name strings.
-
+    ``value`` is the identity of the declaration that introduced the type —
+    an AST node id, or a reserved id for a host-known type with no source
+    declaration (see ``ir.reserved_nominals``). It carries no spelling or
+    module of its own: a nominal's declaring module, scope path, and declared
+    name live on its ``NominalDescriptor`` (``ir.program``), and a runtime
+    value carries its own display spelling directly (``RecordValue``/
+    ``EnumValue``/``ExceptionValue.display_name``) rather than deriving it
+    from this id.
     """
 
-    module_id: ModuleId
-    declared_name: str
-    scope_path: tuple[str, ...] = ()
-
-    @property
-    def display_name(self) -> str:
-        """Return the source spelling for diagnostics and host-minted values.
-
-        The one shared "spell this nominal" helper: every host-minted value
-        (a raised built-in exception, a structured ``exec`` result, an
-        ``ask-request`` payload, ...) presents this instead of its bare
-        ``declared_name``, so a scoped declaration reports itself the same
-        way a source-constructed value already does.
-        """
-        return "::".join((*self.scope_path, self.declared_name))
+    value: int
 
 
 # ---------------------------------------------------------------------------

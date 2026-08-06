@@ -271,7 +271,7 @@ def test_boolean_and_enum_decompositions_partition_complete_finite_domains() -> 
         "case value of | red() => 1 | blue() => 2 | _ as remaining => 3"
     )
     enum_type = cast(EnumConstructor, head_constructors(enum_matrix, 0)[0]).enum_type
-    nominal = NominalId(enum_type.module_id, enum_type.name)
+    nominal = NominalId(enum_type.decl_id)
     subjects = tuple(
         EnumValue(nominal, enum_type.name, variant, {}) for variant in ("red", "green", "blue")
     )
@@ -339,11 +339,11 @@ def test_record_decompositions_partition_partial_and_nested_patterns() -> None:
     )
     outer = head_constructors(matrix, 0)[0]
     assert isinstance(outer, RecordConstructor)
-    outer_nominal = NominalId(outer.record_type.module_id, outer.record_type.name)
+    outer_nominal = NominalId(outer.record_type.decl_id)
     outer_result = specialize(matrix, 0, outer, allocator)
     inner = head_constructors(outer_result.matrix, 0)[0]
     assert isinstance(inner, RecordConstructor)
-    inner_nominal = NominalId(inner.record_type.module_id, inner.record_type.name)
+    inner_nominal = NominalId(inner.record_type.decl_id)
 
     subjects = (
         RecordValue(
@@ -410,11 +410,11 @@ def test_nested_enum_and_literal_decomposition_preserves_first_match_actions() -
     envelope_heads = _constructor_by_variant(matrix, 0)
     wrapped = envelope_heads["wrapped"]
     empty = envelope_heads["empty"]
-    envelope_nominal = NominalId(wrapped.enum_type.module_id, wrapped.enum_type.name)
+    envelope_nominal = NominalId(wrapped.enum_type.decl_id)
     wrapped_cell = cast(ConstructorCell, matrix.rows[0].cells[0])
     payload_cell = cast(ConstructorCell, wrapped_cell.arguments[0])
     payload_type = cast(EnumConstructor, payload_cell.constructor).enum_type
-    payload_nominal = NominalId(payload_type.module_id, payload_type.name)
+    payload_nominal = NominalId(payload_type.decl_id)
 
     def payload(variant: str, value: Value) -> EnumValue:
         return EnumValue(payload_nominal, payload_type.name, variant, {"value": value})

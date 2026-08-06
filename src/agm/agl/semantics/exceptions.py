@@ -31,8 +31,9 @@ def make_builtin_exception(
     The exception's nominal is ``nominals.nominal(type_name)`` — the caller's
     built-in nominal table, so the value carries the identity that table
     resolves for *type_name* rather than a hardcoded one. ``display_name``
-    is derived from that same nominal (``NominalId.display_name``), so a
-    scoped declaration reports its own spelling instead of the bare name.
+    is ``nominals.display_name(type_name)``, the same table's declared
+    spelling, so a scoped declaration reports its own spelling instead of the
+    bare name.
     ``trace_id`` is minted by the *caller's* evaluator (per-evaluator identity).
     Extra keyword arguments become additional fields beyond ``message`` and
     ``trace_id``.
@@ -42,10 +43,9 @@ def make_builtin_exception(
         "trace_id": TextValue(trace_id),
     }
     fields.update(extra)
-    nominal = nominals.nominal(type_name)
     return ExceptionValue(
-        nominal=nominal,
-        display_name=nominal.display_name,
+        nominal=nominals.nominal(type_name),
+        display_name=nominals.display_name(type_name),
         fields=fields,
     )
 

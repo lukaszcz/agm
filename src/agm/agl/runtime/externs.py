@@ -311,12 +311,12 @@ class ExternRegistry:
 
 def _nominal_identity_path(descriptor: NominalDescriptor) -> tuple[str, ...]:
     """Return a nominal's namespace path, rooted by module (or ``entry``) then scope."""
-    if descriptor.nominal.module_id.is_entry:
-        return ("entry", *descriptor.nominal.scope_path, descriptor.nominal.declared_name)
+    if descriptor.module_id.is_entry:
+        return ("entry", *descriptor.scope_path, descriptor.declared_name)
     return (
-        *descriptor.nominal.module_id.segments,
-        *descriptor.nominal.scope_path,
-        descriptor.nominal.declared_name,
+        *descriptor.module_id.segments,
+        *descriptor.scope_path,
+        descriptor.declared_name,
     )
 
 

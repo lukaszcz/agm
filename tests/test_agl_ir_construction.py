@@ -27,7 +27,7 @@ from agm.agl.ir.program import (
     VariantDescriptor,
 )
 from agm.agl.ir.validate import InvalidIrError
-from agm.agl.modules.ids import ENTRY_ID, STD_CORE_ID
+from agm.agl.modules.ids import ENTRY_ID
 from agm.agl.semantics.values import (
     BoolValue,
     ConstructorValue,
@@ -39,7 +39,7 @@ from agm.agl.semantics.values import (
     TextValue,
 )
 from tests._agl_helpers import let_root_capture
-from tests.agl.ir_harness import evaluate_ir, lower_ir
+from tests.agl.ir_harness import evaluate_ir, lower_ir, nominal_id_for
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -82,7 +82,8 @@ let p = Point(x = 3, y = 4)
     assert p.fields["x"] == IntValue(3)
     assert p.fields["y"] == IntValue(4)
     assert p.display_name == "Point"
-    assert p.nominal.declared_name == "Point"
+    prog = lower_ir(source)
+    assert p.nominal == nominal_id_for(prog, "Point")
 
 
 def test_record_field_access_now_unblocked() -> None:
@@ -223,34 +224,29 @@ let ne = c1 != c2
 
 
 def test_enum_inequality_different_nominals() -> None:
-    """Two enum values from different nominals produce different NominalIds ( property).
+    """Two enum values from different nominals produce different NominalIds.
 
     We cannot compare them with != in AgL (the checker requires same type for ==).
     Instead we verify that evaluation produces EnumValues with different nominals.
+
+    NominalId is an opaque per-declaration handle unique within a single
+    ``ExecutableProgram`` (see ``agm.agl.ir.ids.NominalId``), not a globally
+    comparable name+module key, so both enums are declared in the same
+    program to keep this identity check meaningful.
     """
-    source_a = """\
+    source = """\
 enum ColorA | Red
-let c = ColorA::Red()
-()
-"""
-    source_b = """\
 enum ColorB | Red
-let c = ColorB::Red()
+let ca = ColorA::Red()
+let cb = ColorB::Red()
 ()
 """
-    ir_a = evaluate_ir(source_a)
-    ir_b = evaluate_ir(source_b)
-    ca = ir_a["c"]
-    cb = ir_b["c"]
+    ir = evaluate_ir(source)
+    ca = ir["ca"]
+    cb = ir["cb"]
     assert isinstance(ca, EnumValue)
     assert isinstance(cb, EnumValue)
     assert ca.nominal != cb.nominal, "Different enum types must have different NominalIds"
-    # IR values should also have distinct nominals
-    ia = ir_a["c"]
-    ib = ir_b["c"]
-    assert isinstance(ia, EnumValue)
-    assert isinstance(ib, EnumValue)
-    assert ia.nominal != ib.nominal
 
 
 def test_enum_variant_field_coercion() -> None:
@@ -513,7 +509,7 @@ let p = Point(x = 3, y = 4)
         ):
             mr = let_root_capture(node).value
             assert mr.display_name == "Point"
-            assert mr.nominal.declared_name == "Point"
+            assert prog.nominals[mr.nominal].declared_name == "Point"
             assert len(mr.fields) == 2
             assert mr.fields[0][0] == "x"
             assert mr.fields[1][0] == "y"
@@ -621,7 +617,7 @@ let mk = Pt
             mc = let_root_capture(node).value
             assert mc.display_name == "Pt"
             assert mc.variant is None
-            assert mc.nominal.declared_name == "Pt"
+            assert prog.nominals[mc.nominal].declared_name == "Pt"
             found = True
     assert found, "Expected IrBind(value=IrMakeConstructor) in initializers"
 
@@ -641,7 +637,7 @@ let p = Point(x = 1, y = 2)
 ()
 """
     prog = _lower(source)
-    nominal_id = NominalId(ENTRY_ID, "Point")
+    nominal_id = nominal_id_for(prog, "Point")
     assert nominal_id in prog.nominals, "Expected NominalId for Point in program.nominals"
     desc = prog.nominals[nominal_id]
     assert desc.kind == NominalKind.RECORD
@@ -656,7 +652,7 @@ enum Color | Red | Blue(shade: int)
 ()
 """
     prog = _lower(source)
-    nominal_id = NominalId(ENTRY_ID, "Color")
+    nominal_id = nominal_id_for(prog, "Color")
     assert nominal_id in prog.nominals
     desc = prog.nominals[nominal_id]
     assert desc.kind == NominalKind.ENUM
@@ -671,7 +667,7 @@ def test_nominals_table_contains_builtin_exception_fields() -> None:
     """program.nominals includes ArithmeticError with its declared fields in order."""
     source = "()"
     prog = _lower(source)
-    nominal_id = NominalId(STD_CORE_ID, "ArithmeticError")
+    nominal_id = nominal_id_for(prog, "ArithmeticError")
     assert nominal_id in prog.nominals
     desc = prog.nominals[nominal_id]
     assert desc.kind == NominalKind.EXCEPTION
@@ -693,7 +689,7 @@ def test_nominals_table_contains_builtin_exceptions() -> None:
         "AgentParseError",
     ]
     for name in builtin_names:
-        nominal_id = NominalId(STD_CORE_ID, name)
+        nominal_id = nominal_id_for(prog, name)
         assert nominal_id in prog.nominals, f"Expected built-in {name!r} in program.nominals"
         desc = prog.nominals[nominal_id]
         assert desc.kind == NominalKind.EXCEPTION
@@ -728,7 +724,7 @@ def test_validate_rejects_ir_make_record_with_unknown_nominal() -> None:
 
     sid = SourceId(0)
     loc = Location(source_id=sid, start_offset=0, end_offset=1, start_line=1, start_col=0)
-    unknown_nominal = NominalId(ENTRY_ID, "Ghost")
+    unknown_nominal = NominalId(1)
     node = IrMakeRecord(
         location=loc,
         nominal=unknown_nominal,
@@ -761,9 +757,12 @@ def test_validate_rejects_ir_make_enum_with_unknown_variant() -> None:
 
     sid = SourceId(0)
     loc = Location(source_id=sid, start_offset=0, end_offset=1, start_line=1, start_col=0)
-    nominal_id = NominalId(ENTRY_ID, "Color")
+    nominal_id = NominalId(1)
     desc = NominalDescriptor(
         nominal=nominal_id,
+        module_id=ENTRY_ID,
+        scope_path=(),
+        declared_name="Color",
         display_name="Color",
         kind=NominalKind.ENUM,
         fields=(),
@@ -802,9 +801,12 @@ def test_validate_accepts_valid_ir_make_record() -> None:
 
     sid = SourceId(0)
     loc = Location(source_id=sid, start_offset=0, end_offset=1, start_line=1, start_col=0)
-    nominal_id = NominalId(ENTRY_ID, "Pt")
+    nominal_id = NominalId(1)
     desc = NominalDescriptor(
         nominal=nominal_id,
+        module_id=ENTRY_ID,
+        scope_path=(),
+        declared_name="Pt",
         display_name="Pt",
         kind=NominalKind.RECORD,
         fields=("x",),
@@ -835,9 +837,12 @@ def test_validate_accepts_valid_ir_make_record() -> None:
 
 def test_nominal_descriptor_record_defaults() -> None:
     """NominalDescriptor for a record has variants=() by default."""
-    nom = NominalId(ENTRY_ID, "Foo")
+    nom = NominalId(1)
     desc = NominalDescriptor(
         nominal=nom,
+        module_id=ENTRY_ID,
+        scope_path=(),
+        declared_name="Foo",
         display_name="Foo",
         kind=NominalKind.RECORD,
         fields=("x", "y"),
@@ -848,13 +853,16 @@ def test_nominal_descriptor_record_defaults() -> None:
 
 def test_nominal_descriptor_enum_with_variants() -> None:
     """NominalDescriptor for an enum carries VariantDescriptor objects."""
-    nom = NominalId(ENTRY_ID, "Shape")
+    nom = NominalId(2)
     variants = (
         VariantDescriptor(name="Circle", fields=("radius",)),
         VariantDescriptor(name="Square", fields=("side",)),
     )
     desc = NominalDescriptor(
         nominal=nom,
+        module_id=ENTRY_ID,
+        scope_path=(),
+        declared_name="Shape",
         display_name="Shape",
         kind=NominalKind.ENUM,
         fields=(),
@@ -871,7 +879,7 @@ def test_ir_make_record_node_frozen() -> None:
 
     sid = SourceId(0)
     loc = Location(source_id=sid, start_offset=0, end_offset=1, start_line=1, start_col=0)
-    nom = NominalId(ENTRY_ID, "Pt")
+    nom = NominalId(1)
     node = IrMakeRecord(location=loc, nominal=nom, display_name="Pt", fields=())
     with pytest.raises(dataclasses.FrozenInstanceError):
         setattr(node, "display_name", "Other")
@@ -908,7 +916,7 @@ def test_validate_non_deep_accepts_unknown_nominal_in_ir_make_record() -> None:
     loc = Location(source_id=sid, start_offset=0, end_offset=1, start_line=1, start_col=0)
     node = IrMakeRecord(
         location=loc,
-        nominal=NominalId(ENTRY_ID, "Ghost"),
+        nominal=NominalId(1),
         display_name="Ghost",
         fields=(),
     )
@@ -934,7 +942,7 @@ def test_validate_non_deep_accepts_unknown_nominal_in_ir_make_enum() -> None:
     loc = Location(source_id=sid, start_offset=0, end_offset=1, start_line=1, start_col=0)
     node = IrMakeEnum(
         location=loc,
-        nominal=NominalId(ENTRY_ID, "Ghost"),
+        nominal=NominalId(1),
         display_name="Ghost",
         variant="Purple",
         fields=(),
@@ -961,7 +969,7 @@ def test_validate_non_deep_accepts_unknown_nominal_in_ir_make_exception() -> Non
     loc = Location(source_id=sid, start_offset=0, end_offset=1, start_line=1, start_col=0)
     node = IrMakeException(
         location=loc,
-        nominal=NominalId(STD_CORE_ID, "Ghost"),
+        nominal=NominalId(1),
         display_name="Ghost",
         fields=(("trace_id", AutoTraceField()),),
     )
@@ -987,7 +995,7 @@ def test_validate_non_deep_accepts_ir_make_constructor_with_unknown_nominal() ->
     loc = Location(source_id=sid, start_offset=0, end_offset=1, start_line=1, start_col=0)
     node = IrMakeConstructor(
         location=loc,
-        nominal=NominalId(ENTRY_ID, "Ghost"),
+        nominal=NominalId(1),
         display_name="Ghost",
         variant="Missing",
     )
@@ -1027,10 +1035,13 @@ def test_validate_check_enum_variant_skips_when_nominal_not_in_table() -> None:
 
     sid = SourceId(0)
     loc = Location(source_id=sid, start_offset=0, end_offset=1, start_line=1, start_col=0)
-    nominal_id = NominalId(ENTRY_ID, "Pt")
+    nominal_id = NominalId(1)
     # Register nominal as RECORD (kind != ENUM) — variant check is skipped
     desc = NominalDescriptor(
         nominal=nominal_id,
+        module_id=ENTRY_ID,
+        scope_path=(),
+        declared_name="Pt",
         display_name="Pt",
         kind=NominalKind.RECORD,
         fields=("x",),

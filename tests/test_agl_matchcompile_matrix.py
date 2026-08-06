@@ -307,7 +307,7 @@ def test_paper_decomposition_partition_preserves_first_match_actions() -> None:
     pair_result = specialize(matrix, 0, pair, allocator)
     defaulted = default_matrix(matrix, 0)
     enum_type = cast(EnumType, matrix.occurrences[0].type)
-    nominal = NominalId(enum_type.module_id, enum_type.name)
+    nominal = NominalId(enum_type.decl_id)
 
     for left in (False, True):
         for right in (False, True):

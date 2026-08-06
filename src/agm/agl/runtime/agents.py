@@ -69,7 +69,7 @@ def _raise_agent_call_error(
     raise AglRaise(
         ExceptionValue(
             nominal=nominal,
-            display_name=nominal.display_name,
+            display_name=nominals.display_name("AgentCallError"),
             fields={
                 "message": TextValue(f"Agent {agent_label!r} failed: {error.cause}"),
                 "trace_id": TextValue(new_trace_id()),

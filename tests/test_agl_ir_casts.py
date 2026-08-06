@@ -327,8 +327,9 @@ def test_golden_decimal_to_int_strategy() -> None:
 # JSON-Schema validation on the real cast path, so they are exercised directly.
 # ---------------------------------------------------------------------------
 
-_RED = NominalId(ENTRY_ID, "Color")
-_FOO = NominalId(ENTRY_ID, "Foo")
+_RED = NominalId(1)
+_FOO = NominalId(2)
+_TREE = NominalId(3)
 
 
 def test_decode_scalar_success_branches() -> None:
@@ -513,7 +514,7 @@ def test_validate_rejects_decode_with_unregistered_nominal() -> None:
         target_label="Ghost",
         json_schema="{}",
         decode=ArrayDecode(
-            RecordDecode(NominalId(ENTRY_ID, "Ghost"), "Ghost", ()),
+            RecordDecode(NominalId(4), "Ghost", ()),
         ),
     )
     with pytest.raises(InvalidIrError, match="not in program.nominals"):
@@ -523,7 +524,7 @@ def test_validate_rejects_decode_with_unregistered_nominal() -> None:
 def _tree_decode_defs() -> tuple[tuple[str, EnumDecode], ...]:
     """A self-recursive `Tree` decode $defs table (matches the recursive e2e programs)."""
     tree_body = EnumDecode(
-        nominal=NominalId(ENTRY_ID, "Tree"),
+        nominal=_TREE,
         display_name="Tree",
         variants=(
             VariantDecode("Leaf", ()),
@@ -554,7 +555,7 @@ def test_validate_accepts_recursive_recipe_with_matching_defs() -> None:
     )
     from agm.agl.ir.validate import validate_ir
 
-    tree_nominal = NominalId(ENTRY_ID, "Tree")
+    tree_nominal = _TREE
     recipe = ConversionRecipe(
         strategy=ConversionStrategy.DECODE_JSON,
         source_label="json",
@@ -578,6 +579,9 @@ def test_validate_accepts_recursive_recipe_with_matching_defs() -> None:
         nominals={
             tree_nominal: NominalDescriptor(
                 nominal=tree_nominal,
+                module_id=ENTRY_ID,
+                scope_path=(),
+                declared_name="Tree",
                 display_name="Tree",
                 kind=NominalKind.ENUM,
                 variants=(

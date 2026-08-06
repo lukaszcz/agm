@@ -453,7 +453,7 @@ def encode_boundary_value(value: Value) -> object:
         try:
             cls = _NOMINAL_CLASSES[value.nominal]
         except KeyError as exc:
-            raise BoundaryViolation(f"unknown AgL nominal {value.nominal.display_name!r}") from exc
+            raise BoundaryViolation(f"unknown AgL nominal {value.display_name!r}") from exc
         fields = {name: encode_boundary_value(field) for name, field in value.fields.items()}
         if isinstance(value, EnumValue):
             cls = getattr(cls, value.variant)

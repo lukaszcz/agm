@@ -23,7 +23,6 @@ import pytest
 from agm.agl import AglError, PipelineDriver, SourceSpan
 from agm.agl.diagnostics import Diagnostic, format_diagnostic, format_diagnostic_location
 from agm.agl.ir.ids import NominalId
-from agm.agl.modules.ids import ENTRY_ID, STD_CORE_ID
 from agm.agl.pipeline import RunResult
 from agm.agl.runtime import AgentRequest
 from agm.agl.runtime.contract import OutputContract
@@ -371,7 +370,7 @@ class TestUncaughtAgentCallErrorSpan:
 
         def agent(req: AgentRequest) -> str:
             exc_val = ExceptionValue(
-                nominal=NominalId(ENTRY_ID, "CustomError"),
+                nominal=NominalId(1),
                 display_name="CustomError",
                 fields={"message": TextValue("boom")},
             )
@@ -820,7 +819,7 @@ class TestDecimalSerialization:
         from agm.agl.semantics.values import DecimalValue, ExceptionValue, TextValue
 
         exc = ExceptionValue(
-            nominal=NominalId(ENTRY_ID, "ValidationError"),
+            nominal=NominalId(1),
             display_name="ValidationError",
             fields={
                 "message": TextValue("bad"),
@@ -1275,7 +1274,7 @@ class TestRenderValue:
         from agm.agl.semantics.values import IntValue, RecordValue, TextValue
 
         v = RecordValue(
-            nominal=NominalId(ENTRY_ID, "Issue"),
+            nominal=NominalId(1),
             display_name="Issue",
             fields={"title": TextValue("Missing tests"), "severity": IntValue(3)},
         )
@@ -1286,7 +1285,7 @@ class TestRenderValue:
         from agm.agl.runtime.render import render_value
         from agm.agl.semantics.values import RecordValue
 
-        v = RecordValue(nominal=NominalId(ENTRY_ID, "Empty"), display_name="Empty", fields={})
+        v = RecordValue(nominal=NominalId(1), display_name="Empty", fields={})
         assert render_value(v) == "Empty()"
 
     def test_record_nested_record(self) -> None:
@@ -1295,12 +1294,12 @@ class TestRenderValue:
         from agm.agl.semantics.values import BoolValue, RecordValue, TextValue
 
         author = RecordValue(
-            nominal=NominalId(ENTRY_ID, "Author"),
+            nominal=NominalId(1),
             display_name="Author",
             fields={"name": TextValue("Ada"), "active": BoolValue(True)},
         )
         issue = RecordValue(
-            nominal=NominalId(ENTRY_ID, "Issue"),
+            nominal=NominalId(2),
             display_name="Issue",
             fields={"title": TextValue("Missing tests"), "author": author},
         )
@@ -1313,7 +1312,7 @@ class TestRenderValue:
         from agm.agl.semantics.values import ArrayValue, IntValue, RecordValue, TextValue
 
         v = RecordValue(
-            nominal=NominalId(ENTRY_ID, "Issue"),
+            nominal=NominalId(1),
             display_name="Issue",
             fields={
                 "title": TextValue("Missing tests"),
@@ -1334,7 +1333,7 @@ class TestRenderValue:
         from agm.agl.semantics.values import EnumValue, IntValue
 
         v = EnumValue(
-            nominal=NominalId(ENTRY_ID, "Outcome"),
+            nominal=NominalId(1),
             display_name="Outcome",
             variant="Partial",
             fields={"left": IntValue(2)},
@@ -1347,7 +1346,7 @@ class TestRenderValue:
         from agm.agl.semantics.values import EnumValue
 
         v = EnumValue(
-            nominal=NominalId(ENTRY_ID, "Outcome"),
+            nominal=NominalId(1),
             display_name="Outcome",
             variant="Done",
             fields={},
@@ -1360,7 +1359,7 @@ class TestRenderValue:
         from agm.agl.semantics.values import EnumValue, IntValue
 
         v = EnumValue(
-            nominal=NominalId(ENTRY_ID, "E"),
+            nominal=NominalId(1),
             display_name="E",
             variant="V",
             fields={"a": IntValue(1), "b": IntValue(2), "c": IntValue(3)},
@@ -1377,7 +1376,7 @@ class TestRenderValue:
         from agm.agl.semantics.values import ExceptionValue, TextValue
 
         v = ExceptionValue(
-            nominal=NominalId(STD_CORE_ID, "CastError"),
+            nominal=NominalId(1),
             display_name="CastError",
             fields={
                 "message": TextValue('cannot parse "x" as int'),
@@ -1400,7 +1399,7 @@ class TestRenderValue:
         from agm.agl.semantics.values import ExceptionValue, TextValue
 
         v = ExceptionValue(
-            nominal=NominalId(ENTRY_ID, "Abort"),
+            nominal=NominalId(1),
             display_name="Abort",
             fields={
                 "message": TextValue("fatal"),
@@ -1474,7 +1473,7 @@ class TestRenderValue:
         from agm.agl.semantics.values import JsonValue, RecordValue
 
         v = RecordValue(
-            nominal=NominalId(ENTRY_ID, "R"),
+            nominal=NominalId(1),
             display_name="R",
             fields={"data": JsonValue({"a": 1, "b": 2})},
         )
@@ -1505,7 +1504,7 @@ class TestRenderValue:
         from agm.agl.semantics.values import IntValue, RecordValue, TextValue
 
         v = RecordValue(
-            nominal=NominalId(ENTRY_ID, "Issue"),
+            nominal=NominalId(1),
             display_name="Issue",
             fields={"title": TextValue("Missing tests"), "severity": IntValue(3)},
         )
@@ -1519,7 +1518,7 @@ class TestRenderValue:
         from agm.agl.semantics.values import ArrayValue, IntValue, RecordValue, TextValue
 
         v = RecordValue(
-            nominal=NominalId(ENTRY_ID, "Issue"),
+            nominal=NominalId(1),
             display_name="Issue",
             fields={
                 "title": TextValue("Missing tests"),
@@ -1608,9 +1607,7 @@ class TestSerialize:
         from agm.agl.semantics.values import IntValue, RecordValue
 
         result = value_to_json_obj(
-            RecordValue(
-                nominal=NominalId(ENTRY_ID, "R"), display_name="R", fields={"x": IntValue(5)}
-            )
+            RecordValue(nominal=NominalId(1), display_name="R", fields={"x": IntValue(5)})
         )
         assert result == {"x": 5}
 
@@ -1620,7 +1617,7 @@ class TestSerialize:
 
         result = value_to_json_obj(
             EnumValue(
-                nominal=NominalId(ENTRY_ID, "E"),
+                nominal=NominalId(1),
                 display_name="E",
                 variant="A",
                 fields={"msg": TextValue("hi")},
@@ -1638,7 +1635,7 @@ class TestSerialize:
         from agm.agl.semantics.values import EnumValue
 
         result = value_to_json_obj(
-            EnumValue(nominal=NominalId(ENTRY_ID, "E"), display_name="E", variant="Done", fields={})
+            EnumValue(nominal=NominalId(1), display_name="E", variant="Done", fields={})
         )
         assert result == {"$case": "Done"}
 
@@ -1648,7 +1645,7 @@ class TestSerialize:
 
         result = value_to_json_obj(
             ExceptionValue(
-                nominal=NominalId(ENTRY_ID, "Err"),
+                nominal=NominalId(1),
                 display_name="Err",
                 fields={"message": TextValue("oops")},
             )
@@ -1827,7 +1824,7 @@ class TestRuntimeErrorPaths:
         def bad_agent(req: object) -> str:
             raise AglRaise(
                 ExceptionValue(
-                    nominal=NominalId(ENTRY_ID, "Abort"),
+                    nominal=NominalId(1),
                     display_name="Abort",
                     fields={"message": TextValue("stopped"), "trace_id": TextValue("")},
                 )
@@ -1945,7 +1942,7 @@ class TestRuntimeErrorPaths:
         )
 
         exc_val = ExceptionValue(
-            nominal=NominalId(STD_CORE_ID, "AgentParseError"),
+            nominal=NominalId(1),
             display_name="AgentParseError",
             fields={
                 "message": TextValue("failed"),
@@ -1960,16 +1957,14 @@ class TestRuntimeErrorPaths:
                 "list_val": ArrayValue(elements=[IntValue(1)]),
                 "dict_val": DictValue(entries={"x": IntValue(2)}),
                 "rec_val": RecordValue(
-                    nominal=NominalId(ENTRY_ID, "R"),
+                    nominal=NominalId(2),
                     display_name="R",
                     fields={"f": TextValue("v")},
                 ),
                 "enum_val": EnumValue(
-                    nominal=NominalId(ENTRY_ID, "E"), display_name="E", variant="V", fields={}
+                    nominal=NominalId(3), display_name="E", variant="V", fields={}
                 ),
-                "exc_val": ExceptionValue(
-                    nominal=NominalId(ENTRY_ID, "Inner"), display_name="Inner", fields={}
-                ),
+                "exc_val": ExceptionValue(nominal=NominalId(4), display_name="Inner", fields={}),
                 "none_val": JsonValue(None),
             },
         )
@@ -2028,7 +2023,7 @@ class TestRuntimeErrorPaths:
 
         def bad_execute(self: IrInterpreter) -> dict[str, object]:
             exc_val = ExceptionValue(
-                nominal=NominalId(ENTRY_ID, "Abort"),
+                nominal=NominalId(1),
                 display_name="Abort",
                 fields={"message": TextValue("fatal"), "trace_id": TextValue("")},
             )
@@ -2650,14 +2645,10 @@ class TestSerializeV2OpaqueValues:
         assert exc_info.value.kind == "unit"
 
     def test_constructor_value_raises(self) -> None:
-        from agm.agl.ir.ids import NominalId
-        from agm.agl.modules.ids import ENTRY_ID
         from agm.agl.runtime.serialize import AglNonDataValue, value_to_json_obj
         from agm.agl.semantics.values import ConstructorValue
 
-        ctor = ConstructorValue(
-            nominal=NominalId(ENTRY_ID, "Box"), display_name="Box", variant=None
-        )
+        ctor = ConstructorValue(nominal=NominalId(1), display_name="Box", variant=None)
         with pytest.raises(AglNonDataValue) as exc_info:
             value_to_json_obj(ctor)
         assert exc_info.value.kind == "constructor"

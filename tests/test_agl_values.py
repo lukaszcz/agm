@@ -217,9 +217,9 @@ def test_values_equal_diamond_short_circuit_bounded_calls(
     fails fast rather than hanging even if the fast path regresses.
     """
     import agm.agl.semantics.values as values_module
-    from agm.agl.semantics.values import IntValue, RecordValue, Value
+    from agm.agl.semantics.values import IntValue, NominalId, RecordValue, Value
 
-    nominal = _make_nominal("mod/example", "diamond")
+    nominal = NominalId(1)
     depth = 32
     node: RecordValue = RecordValue(nominal=nominal, display_name="T", fields={"tag": IntValue(0)})
     for i in range(1, depth + 1):
@@ -269,27 +269,18 @@ def test_dict_value_eq_terminates_on_cyclic_dicts() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _make_nominal(module_slash_path: str, name: str) -> "object":
-    from agm.agl.ir.ids import NominalId
-    from agm.agl.modules.ids import ModuleId
-
-    return NominalId(ModuleId.from_path(module_slash_path), name)
-
-
 def test_record_value_eq() -> None:
     """RecordValue equality considers nominal identity and fields.
 
     Two records with same nominal+fields but different display_name are equal;
-    same declared_name in different modules are NOT equal.
+    a record with a distinct nominal identity (standing in for "same declared_name
+    in a different module" and "different declared_name") is NOT equal.
     """
-    from agm.agl.modules.ids import ModuleId
     from agm.agl.semantics.values import IntValue, NominalId, RecordValue
 
-    mod_a = ModuleId.from_path("mymod")
-    mod_b = ModuleId.from_path("other")
-    nom_foo_a = NominalId(mod_a, "Foo")
-    nom_foo_b = NominalId(mod_b, "Foo")
-    nom_bar_a = NominalId(mod_a, "Bar")
+    nom_foo_a = NominalId(1)
+    nom_foo_b = NominalId(2)
+    nom_bar_a = NominalId(3)
 
     r1 = RecordValue(nominal=nom_foo_a, display_name="Foo", fields={"x": IntValue(1)})
     r2 = RecordValue(nominal=nom_foo_a, display_name="Foo", fields={"x": IntValue(1)})
@@ -313,13 +304,10 @@ def test_record_value_eq() -> None:
 
 def test_constructor_value_eq_and_hash() -> None:
     """ConstructorValue equality considers nominal+variant; display_name excluded."""
-    from agm.agl.modules.ids import ModuleId
     from agm.agl.semantics.values import ConstructorValue, NominalId
 
-    mod_a = ModuleId.from_path("mymod")
-    mod_b = ModuleId.from_path("other")
-    nom_a = NominalId(mod_a, "Box")
-    nom_b = NominalId(mod_b, "Box")
+    nom_a = NominalId(1)
+    nom_b = NominalId(2)
 
     c1 = ConstructorValue(nominal=nom_a, display_name="Box", variant=None)
     c2 = ConstructorValue(nominal=nom_a, display_name="Box", variant=None)
@@ -339,10 +327,9 @@ def test_constructor_value_eq_and_hash() -> None:
 
 def test_record_value_eq_with_json_payload() -> None:
     """RecordValue equality is consistent with JsonValue eq (numerically equal payloads)."""
-    from agm.agl.modules.ids import ModuleId
     from agm.agl.semantics.values import JsonValue, NominalId, RecordValue
 
-    nom = NominalId(ModuleId.from_path("m"), "R")
+    nom = NominalId(1)
     r1 = RecordValue(nominal=nom, display_name="R", fields={"v": JsonValue(1)})
     r2 = RecordValue(nominal=nom, display_name="R", fields={"v": JsonValue(decimal.Decimal("1"))})
     # JsonValue(1) == JsonValue(Decimal("1")), so records are equal.
@@ -359,14 +346,11 @@ def test_enum_value_eq() -> None:
 
     display_name is excluded from eq.
     """
-    from agm.agl.modules.ids import ModuleId
     from agm.agl.semantics.values import EnumValue, NominalId
 
-    mod = ModuleId.from_path("m")
-    mod2 = ModuleId.from_path("other")
-    nom_color = NominalId(mod, "Color")
-    nom_shape = NominalId(mod, "Shape")
-    nom_color_other = NominalId(mod2, "Color")
+    nom_color = NominalId(1)
+    nom_shape = NominalId(2)
+    nom_color_other = NominalId(3)
 
     e1 = EnumValue(nominal=nom_color, display_name="Color", variant="Red", fields={})
     e2 = EnumValue(nominal=nom_color, display_name="Color", variant="Red", fields={})
@@ -394,14 +378,13 @@ def test_enum_value_eq() -> None:
 def test_exception_value_eq() -> None:
     """ExceptionValue equality considers nominal identity and fields.
 
-    display_name is excluded from eq. Built-in exceptions use STD_CORE_ID.
+    display_name is excluded from eq.
     """
-    from agm.agl.modules.ids import STD_CORE_ID, ModuleId
     from agm.agl.semantics.values import ExceptionValue, NominalId, TextValue
 
-    nom_err = NominalId(STD_CORE_ID, "Err")
-    nom_err2 = NominalId(STD_CORE_ID, "Err2")
-    nom_err_other = NominalId(ModuleId.from_path("mymod"), "Err")
+    nom_err = NominalId(1)
+    nom_err2 = NominalId(2)
+    nom_err_other = NominalId(3)
 
     ex1 = ExceptionValue(nominal=nom_err, display_name="Err", fields={"message": TextValue("oops")})
     ex2 = ExceptionValue(nominal=nom_err, display_name="Err", fields={"message": TextValue("oops")})
@@ -425,17 +408,16 @@ def test_exception_value_eq() -> None:
 
 
 def test_builtin_exception_value_uses_std_core_id() -> None:
-    """Built-in exception values carry NominalId(STD_CORE_ID, name)."""
-    from agm.agl.modules.ids import STD_CORE_ID
+    """Built-in exception values carry the reserved NominalId for their name."""
+    from agm.agl.ir.reserved_nominals import require_reserved_nominal_id
     from agm.agl.semantics.values import ExceptionValue, NominalId, TextValue
 
     exc = ExceptionValue(
-        nominal=NominalId(STD_CORE_ID, "AgentParseError"),
+        nominal=NominalId(require_reserved_nominal_id("AgentParseError")),
         display_name="AgentParseError",
         fields={"message": TextValue("fail"), "trace_id": TextValue("")},
     )
-    assert exc.nominal.module_id is STD_CORE_ID
-    assert exc.nominal.declared_name == "AgentParseError"
+    assert exc.nominal == NominalId(require_reserved_nominal_id("AgentParseError"))
     assert exc.display_name == "AgentParseError"
 
 
@@ -497,7 +479,6 @@ def test_array_dict_record_enum_exception_are_genuinely_unhashable() -> None:
 
 def test_array_dict_record_enum_exception_hash_raises() -> None:
     """Every mutable-payload value type raises TypeError on hash() — never a stable hash."""
-    from agm.agl.modules.ids import STD_CORE_ID, ModuleId
     from agm.agl.semantics.values import (
         ArrayValue,
         DictValue,
@@ -509,14 +490,14 @@ def test_array_dict_record_enum_exception_hash_raises() -> None:
         TextValue,
     )
 
-    nom = NominalId(ModuleId.from_path("m"), "Foo")
+    nom = NominalId(1)
     values: tuple[object, ...] = (
         ArrayValue(elements=[IntValue(1)]),
         DictValue(entries={"a": IntValue(1)}),
         RecordValue(nominal=nom, display_name="Foo", fields={"x": IntValue(1)}),
         EnumValue(nominal=nom, display_name="Foo", variant="Bar", fields={}),
         ExceptionValue(
-            nominal=NominalId(STD_CORE_ID, "Err"),
+            nominal=NominalId(2),
             display_name="Err",
             fields={"message": TextValue("oops")},
         ),

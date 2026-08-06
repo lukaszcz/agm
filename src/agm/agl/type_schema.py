@@ -543,7 +543,7 @@ def _emit_decode_body(typ: Type, type_table: TypeTable, plan: "_SchemaPlan") -> 
     if isinstance(typ, RecordType):
         fields = type_table.record_fields(typ)
         return RecordDecode(
-            nominal=NominalId(typ.module_id, typ.name, typ.scope_path),
+            nominal=NominalId(typ.decl_id),
             display_name="::".join((*typ.scope_path, typ.name)),
             fields=tuple(
                 (fname, _emit_decode(ftype, type_table, plan)) for fname, ftype in fields.items()
@@ -552,7 +552,7 @@ def _emit_decode_body(typ: Type, type_table: TypeTable, plan: "_SchemaPlan") -> 
     if isinstance(typ, EnumType):
         variants = type_table.enum_variants(typ)
         return EnumDecode(
-            nominal=NominalId(typ.module_id, typ.name, typ.scope_path),
+            nominal=NominalId(typ.decl_id),
             display_name="::".join((*typ.scope_path, typ.name)),
             variants=tuple(
                 VariantDecode(

@@ -21,7 +21,7 @@ import pytest
 
 from agm.agl.capabilities import HostCapabilities
 from agm.agl.ir.contracts import ConversionFailureMode, ConversionStrategy
-from agm.agl.ir.ids import SymbolId
+from agm.agl.ir.ids import NominalId, SymbolId
 from agm.agl.ir.nodes import (
     AutoTraceField,
     IrArith,
@@ -294,7 +294,7 @@ def test_root_and_scoped_functions_with_same_name_do_not_collide_in_public_names
 
 
 def test_lowering_preserves_scoped_nominal_identity_for_generic_and_enum_types() -> None:
-    from agm.agl.ir.ids import NominalId
+    from tests.agl.ir_harness import nominal_id_for
 
     source = """
 record Token()
@@ -310,10 +310,10 @@ case flag of | Left::Flag::on => box.value
 
     program = _lower(source)
 
-    assert NominalId(ENTRY_ID, "Token") in program.nominals
-    assert NominalId(ENTRY_ID, "Token", ("Left",)) in program.nominals
-    assert NominalId(ENTRY_ID, "Box", ("Left",)) in program.nominals
-    assert NominalId(ENTRY_ID, "Flag", ("Left",)) in program.nominals
+    assert nominal_id_for(program, "Token") in program.nominals
+    assert nominal_id_for(program, "Left::Token") in program.nominals
+    assert nominal_id_for(program, "Left::Box") in program.nominals
+    assert nominal_id_for(program, "Left::Flag") in program.nominals
 
 
 def test_lowering_registers_a_generic_enum_nominal_with_enum_kind() -> None:
@@ -324,12 +324,12 @@ def test_lowering_registers_a_generic_enum_nominal_with_enum_kind() -> None:
     ``_Lowerer._build_nominals`` for a generic *enum* -- ``all_generic_types()``
     otherwise only ever yields a record in this file's other fixtures.
     """
-    from agm.agl.ir.ids import NominalId
     from agm.agl.ir.program import NominalKind
+    from tests.agl.ir_harness import nominal_id_for
 
     source = "enum Box[T]\n  | empty\n  | full(value: T)\nlet b: Box[int] = full(value = 1)\n()"
     program = _lower(source)
-    nominal_id = NominalId(ENTRY_ID, "Box")
+    nominal_id = nominal_id_for(program, "Box")
     assert nominal_id in program.nominals
     assert program.nominals[nominal_id].kind == NominalKind.ENUM
 
@@ -1108,13 +1108,12 @@ class TestNominalsEmpty:
         Even an empty program populates nominals with all built-in prelude
         records/enums and exceptions. User-declared records/enums are added on top.
         """
-        from agm.agl.ir.ids import NominalId
         from agm.agl.ir.program import NominalKind
-        from agm.agl.modules.ids import STD_CORE_ID
         from agm.agl.semantics.types import BUILTIN_EXCEPTIONS, BUILTIN_PRELUDE_TYPES
+        from tests.agl.ir_harness import nominal_id_for
 
         prog = _lower("()")
-        nominal_names = {desc.nominal.declared_name for desc in prog.nominals.values()}
+        nominal_names = {desc.declared_name for desc in prog.nominals.values()}
         for builtin_name in BUILTIN_PRELUDE_TYPES:
             assert builtin_name in nominal_names, (
                 f"Built-in prelude type {builtin_name!r} missing from program.nominals"
@@ -1124,9 +1123,9 @@ class TestNominalsEmpty:
                 f"Built-in exception {builtin_name!r} missing from program.nominals"
             )
 
-        assert prog.nominals[NominalId(STD_CORE_ID, "ExecResult")].kind is NominalKind.RECORD
-        assert prog.nominals[NominalId(STD_CORE_ID, "ParsePolicy")].kind is NominalKind.ENUM
-        assert prog.nominals[NominalId(STD_CORE_ID, "Abort")].kind is NominalKind.EXCEPTION
+        assert prog.nominals[nominal_id_for(prog, "ExecResult")].kind is NominalKind.RECORD
+        assert prog.nominals[nominal_id_for(prog, "ParsePolicy")].kind is NominalKind.ENUM
+        assert prog.nominals[nominal_id_for(prog, "Abort")].kind is NominalKind.EXCEPTION
 
     def test_user_exception_nominal_stamped_with_declaring_module_id(self) -> None:
         """A user-declared exception's nominal is stamped with its real module_id.
@@ -1134,8 +1133,8 @@ class TestNominalsEmpty:
         Declares the exception before a record so ``_build_nominals``' loop
         continues past the exception branch onto another declaration.
         """
-        from agm.agl.ir.ids import NominalId
         from agm.agl.ir.program import NominalKind
+        from tests.agl.ir_harness import nominal_id_for
 
         source = (
             "exception Boom extends Exception\n"
@@ -1148,7 +1147,7 @@ class TestNominalsEmpty:
             "p"
         )
         prog = _lower(source)
-        boom_nominal = NominalId(ENTRY_ID, "Boom")
+        boom_nominal = nominal_id_for(prog, "Boom")
         assert boom_nominal in prog.nominals
         descriptor = prog.nominals[boom_nominal]
         assert descriptor.kind is NominalKind.EXCEPTION
@@ -1157,12 +1156,10 @@ class TestNominalsEmpty:
     def test_type_alias_does_not_create_spurious_nominal(self) -> None:
         """A type alias does NOT register a spurious NominalId in program.nominals.
 
-        ``type Foo = Record`` must not create NominalId(..., "Foo") — only the
-        canonical declaration NominalId(..., "Record") must exist.  Same for
-        enum aliases.
+        ``type Foo = Record`` must not create a descriptor for ``Foo`` — only
+        the canonical declaration for ``Record`` must exist.  Same for enum
+        aliases.
         """
-        from agm.agl.ir.ids import NominalId
-
         source = (
             "record Point\n"
             "  x: int\n"
@@ -1183,7 +1180,6 @@ class TestNominalsEmpty:
         prog = _lower(source)
 
         nominal_names = {desc.display_name for desc in prog.nominals.values()}
-        nominal_ids = set(prog.nominals.keys())
 
         # The canonical record and enum nominals must be present
         assert "Point" in nominal_names, "NominalId for 'Point' must be registered"
@@ -1193,14 +1189,14 @@ class TestNominalsEmpty:
         assert "PointAlias" not in nominal_names, (
             "Record alias 'PointAlias' must NOT register a spurious nominal descriptor"
         )
-        assert NominalId(ENTRY_ID, "PointAlias") not in nominal_ids, (
-            "NominalId(ENTRY_ID, 'PointAlias') must NOT appear in program.nominals"
+        assert not any(desc.declared_name == "PointAlias" for desc in prog.nominals.values()), (
+            "No descriptor for 'PointAlias' must appear in program.nominals"
         )
         assert "ColorAlias" not in nominal_names, (
             "Enum alias 'ColorAlias' must NOT register a spurious nominal descriptor"
         )
-        assert NominalId(ENTRY_ID, "ColorAlias") not in nominal_ids, (
-            "NominalId(ENTRY_ID, 'ColorAlias') must NOT appear in program.nominals"
+        assert not any(desc.declared_name == "ColorAlias" for desc in prog.nominals.values()), (
+            "No descriptor for 'ColorAlias' must appear in program.nominals"
         )
 
 
@@ -1236,11 +1232,12 @@ class TestBuiltinNominalsTable:
         library's own ``RangeError``: the declaration is what drives the
         table's answer, not a shared name.
         """
-        from agm.agl.ir.ids import NominalId
-
         source = "builtin exception RangeError extends Exception()\n()\n"
+        checked = _check(source, default_stdlib=False)
+        typedef = checked.type_env.type_table.get(ENTRY_ID, "RangeError")
+        assert typedef is not None
         prog = _lower(source, default_stdlib=False)
-        assert prog.builtin_nominals.nominal("RangeError") == NominalId(ENTRY_ID, "RangeError")
+        assert prog.builtin_nominals.nominal("RangeError") == NominalId(typedef.decl_node_id)
 
     def test_scoped_declared_builtin_type_resolves_to_its_own_declared_path(self) -> None:
         """A SCOPED ``builtin`` declaration's own path drives the table's answer.
@@ -1253,13 +1250,11 @@ class TestBuiltinNominalsTable:
         already declares a root ``RangeError``, so this compiles with
         ``default_stdlib=False``.
         """
-        from agm.agl.ir.ids import NominalId
+        from tests.agl.ir_harness import nominal_id_for
 
         source = "scope A\nbuiltin exception RangeError extends Exception()\nend A\n()\n"
         prog = _lower(source, default_stdlib=False)
-        assert prog.builtin_nominals.nominal("RangeError") == NominalId(
-            ENTRY_ID, "RangeError", ("A",)
-        )
+        assert prog.builtin_nominals.nominal("RangeError") == nominal_id_for(prog, "A::RangeError")
 
     def test_range_error_raised_at_runtime_carries_the_table_nominal(self) -> None:
         """A ``for`` loop with a non-positive step raises ``RangeError`` with the table's nominal.
@@ -1290,8 +1285,7 @@ class TestBuiltinNominalsTable:
         ``default_stdlib=False``: that is what makes "nothing declared at
         the root" true here.
         """
-        from agm.agl.ir.ids import NominalId
-        from tests.agl.ir_harness import evaluate_ir_raises
+        from tests.agl.ir_harness import evaluate_ir_raises, lower_ir, nominal_id_for
 
         source = (
             "scope A\n"
@@ -1302,9 +1296,10 @@ class TestBuiltinNominalsTable:
             "  ()\n"
             "done\n"
         )
+        program = lower_ir(source, default_stdlib=False)
         exc = evaluate_ir_raises(source, default_stdlib=False)
         assert exc.display_name == "A::RangeError"
-        assert exc.nominal == NominalId(ENTRY_ID, "RangeError", ("A",))
+        assert exc.nominal == nominal_id_for(program, "A::RangeError")
 
     def test_max_iterations_exceeded_raised_at_runtime_carries_the_table_nominal(self) -> None:
         """A ``do[n]`` loop exhausted at its bound carries the table's nominal."""
@@ -1314,6 +1309,51 @@ class TestBuiltinNominalsTable:
         exc = evaluate_ir_raises("var dummy = 0\ndo[3]\n  dummy := 1\nuntil false\n")
         assert exc.display_name == "MaxIterationsExceeded"
         assert exc.nominal == NO_BUILTIN_DECLARATIONS.nominal("MaxIterationsExceeded")
+
+    @pytest.mark.parametrize(
+        ("source", "default_stdlib"),
+        [
+            ("()\n", True),
+            ("()\n", False),
+            ("builtin exception RangeError extends Exception()\n()\n", False),
+            ("scope A\nbuiltin exception RangeError extends Exception()\nend A\n()\n", False),
+            (
+                "scope A\n"
+                "builtin record ExecResult\n"
+                "  stdout: text\n"
+                "  exit_code: int\n"
+                "  stderr: text\n"
+                "  timed_out: bool\n"
+                "end A\n"
+                "()\n",
+                False,
+            ),
+        ],
+        ids=["stdlib", "no-stdlib", "root-builtin", "scoped-builtin", "scoped-builtin-record"],
+    )
+    def test_every_host_minted_identity_has_a_matching_descriptor(
+        self, source: str, default_stdlib: bool
+    ) -> None:
+        """Whatever a program declares, every host-minted identity is describable.
+
+        The host stamps ``builtin_nominals.nominal(name)`` on the values it
+        mints and spells them with ``builtin_nominals.display_name(name)``.
+        Both must agree with the linked program's own descriptor table, or a
+        host-minted value would carry an identity the evaluator, the extern
+        boundary, and rendering cannot resolve. Covers the four arrangements
+        that mint identities by different routes: the shipped standard
+        library's declarations, no declarations at all, a program's own root
+        ``builtin`` declaration, and a scoped one.
+        """
+        from agm.agl.semantics.types import BUILTIN_EXCEPTIONS, BUILTIN_PRELUDE_TYPES
+        from tests.agl.ir_harness import lower_ir
+
+        program = lower_ir(source, default_stdlib=default_stdlib)
+        for name in (*BUILTIN_PRELUDE_TYPES, *BUILTIN_EXCEPTIONS):
+            descriptor = program.nominals.get(program.builtin_nominals.nominal(name))
+            assert descriptor is not None, f"no descriptor for host-minted {name!r}"
+            assert descriptor.declared_name == name
+            assert descriptor.display_name == program.builtin_nominals.display_name(name)
 
 
 # ---------------------------------------------------------------------------
@@ -1492,7 +1532,11 @@ class TestIrFieldLowering:
         unit_lit = UnitLit(span=span, node_id=fake_node_id + 1)
         field_access = FieldAccess(obj=unit_lit, field="myfield", span=span, node_id=fake_node_id)
 
-        checked.node_types[unit_lit.node_id] = RecordType("Point")
+        point_typedef = checked.type_env.type_table.get(ENTRY_ID, "Point")
+        assert point_typedef is not None
+        checked.node_types[unit_lit.node_id] = RecordType(
+            "Point", decl_id=point_typedef.decl_node_id
+        )
         lowerer = _make_lowerer(checked, source)
         result = lowerer.lower_expr(field_access)
 
@@ -1502,6 +1546,7 @@ class TestIrFieldLowering:
 
     def test_abstract_exception_field_access_uses_upper_bound_mode(self) -> None:
         """Field access on abstract Exception records a static upper bound."""
+        from agm.agl.ir.reserved_nominals import require_reserved_nominal_id
         from agm.agl.modules.ids import STD_CORE_ID
         from agm.agl.syntax.nodes import FieldAccess, UnitLit
         from agm.agl.syntax.spans import UNKNOWN_SOURCE, SourceSpan
@@ -1521,7 +1566,9 @@ class TestIrFieldLowering:
         unit_lit = UnitLit(span=span, node_id=fake_node_id + 1)
         field_access = FieldAccess(obj=unit_lit, field="message", span=span, node_id=fake_node_id)
 
-        checked.node_types[unit_lit.node_id] = ExceptionType("Exception", STD_CORE_ID)
+        checked.node_types[unit_lit.node_id] = ExceptionType(
+            "Exception", STD_CORE_ID, decl_id=require_reserved_nominal_id("Exception")
+        )
         lowerer = _make_lowerer(checked, source)
         result = lowerer.lower_expr(field_access)
 
@@ -2249,12 +2296,11 @@ class TestLowerGraph:
         """Type alias does not register a spurious NominalId in lower_program.
 
         A program with ``type Foo = Point`` (where Point is a record) must NOT
-        create a ``NominalId(mid, "Foo")`` entry in ``program.nominals``.
-        Only the canonical declaration site ``NominalId(mid, "Point")`` must exist.
+        create a descriptor for ``Foo`` in ``program.nominals``. Only the
+        canonical declaration site for ``Point`` must exist.
         """
         import os
 
-        from agm.agl.ir.ids import NominalId
         from agm.agl.lower.program import lower_program
         from agm.agl.modules.ids import ModuleId
         from agm.agl.modules.loader import load_graph
@@ -2300,7 +2346,6 @@ class TestLowerGraph:
         prog = lower_program(_compiled_checked(cg))
 
         nominal_names = {desc.display_name for desc in prog.nominals.values()}
-        nominal_ids = set(prog.nominals.keys())
 
         # Canonical record and enum nominals must be present
         assert "Point" in nominal_names, "NominalId for 'Point' must be registered"
@@ -2310,16 +2355,16 @@ class TestLowerGraph:
         assert "PointAlias" not in nominal_names, (
             "Record alias 'PointAlias' must NOT register a spurious nominal descriptor"
         )
-        assert NominalId(lib_mid, "PointAlias") not in nominal_ids, (
-            "NominalId(lib_mid, 'PointAlias') must NOT appear in program.nominals"
+        assert not any(desc.declared_name == "PointAlias" for desc in prog.nominals.values()), (
+            "No descriptor for 'PointAlias' must appear in program.nominals"
         )
 
         # Enum alias must NOT register a spurious nominal (exercises EnumType guard in graph.py)
         assert "ColorAlias" not in nominal_names, (
             "Enum alias 'ColorAlias' must NOT register a spurious nominal descriptor"
         )
-        assert NominalId(lib_mid, "ColorAlias") not in nominal_ids, (
-            "NominalId(lib_mid, 'ColorAlias') must NOT appear in program.nominals"
+        assert not any(desc.declared_name == "ColorAlias" for desc in prog.nominals.values()), (
+            "No descriptor for 'ColorAlias' must appear in program.nominals"
         )
 
 
@@ -3735,9 +3780,10 @@ class TestRangeForDesugar:
 
     def test_step_guard_raises_range_error_ir(self) -> None:
         """The step guard IrMakeException has nominal RangeError, message+trace_id fields."""
-        from agm.agl.modules.ids import STD_CORE_ID
+        from tests.agl.ir_harness import nominal_id_for
 
         source = "for i in 1 to 5 do\n  ()\ndone\n"
+        program = _lower(source)
         node = _get_loop_ir(source)
         assert isinstance(node, IrSequence)
         guard_if = node.items[3]
@@ -3746,8 +3792,7 @@ class TestRangeForDesugar:
         assert isinstance(raise_node, IrRaise)
         exc = raise_node.exc
         assert isinstance(exc, IrMakeException)
-        assert exc.nominal.module_id == STD_CORE_ID
-        assert exc.nominal.declared_name == "RangeError"
+        assert exc.nominal == nominal_id_for(program, "RangeError")
         assert exc.display_name == "RangeError"
         fields_dict = dict(exc.fields)
         assert set(fields_dict.keys()) == {"message", "trace_id"}

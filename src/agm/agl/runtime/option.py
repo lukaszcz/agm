@@ -8,10 +8,10 @@ value shape (nominal, variant names, fields) is spelled out exactly once.
 from __future__ import annotations
 
 from agm.agl.ir.ids import NominalId
-from agm.agl.modules.ids import STD_CORE_ID
+from agm.agl.ir.reserved_nominals import require_reserved_nominal_id
 from agm.agl.semantics.values import EnumValue, Value
 
-_OPTION_NOMINAL = NominalId(STD_CORE_ID, "Option")
+_OPTION_NOMINAL = NominalId(require_reserved_nominal_id("Option"))
 
 
 def some_value(value: Value) -> EnumValue:

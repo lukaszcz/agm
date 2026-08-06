@@ -98,8 +98,15 @@ class VariantDescriptor:
 class NominalDescriptor:
     """Descriptor for a named nominal type (record, enum, or exception).
 
-    ``nominal``      — the ``NominalId`` key for this descriptor.
-    ``display_name`` — user-facing type name.
+    ``nominal``      — the ``NominalId`` key for this descriptor: an opaque
+                       handle carrying no spelling or module of its own (see
+                       ``ir.ids.NominalId``).
+    ``module_id``    — the module that declares this nominal.
+    ``scope_path``   — the declaration's scope path within its module.
+    ``declared_name``— the bare name the declaration was written under (no
+                       scope prefix).
+    ``display_name`` — the scoped source spelling (``scope_path`` joined with
+                       ``declared_name``); used for diagnostics and rendering.
     ``kind``         — RECORD, ENUM, or EXCEPTION.
     ``fields``       — declared field names in declaration order (names only;
                        used for RECORD and EXCEPTION; ``()`` for ENUM which
@@ -113,6 +120,9 @@ class NominalDescriptor:
     """
 
     nominal: NominalId
+    module_id: ModuleId
+    scope_path: tuple[str, ...]
+    declared_name: str
     display_name: str
     kind: NominalKind
     fields: tuple[str, ...] = ()

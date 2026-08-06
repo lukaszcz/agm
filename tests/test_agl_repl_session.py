@@ -3376,10 +3376,12 @@ class TestImports:
 
         r2 = s.eval_entry("let z: decimal = 1 / 0\nrecord R\n  y: int")
         assert not r2.ok
-        from agm.agl.ir.ids import NominalId
-        from agm.agl.modules.ids import ENTRY_ID
-
-        assert s._link_image._state.nominals[NominalId(ENTRY_ID, "R")].fields == ("x",)
+        # The rolled-back redeclaration leaves NO descriptor of its own behind:
+        # each declaration owns a distinct identity, so a surviving second "R"
+        # descriptor would mean the rollback dropped nothing.
+        nominals = s._link_image._state.nominals
+        surviving = [desc for desc in nominals.values() if desc.display_name == "R"]
+        assert [desc.fields for desc in surviving] == [("x",)]
 
         r3 = s.eval_entry("let f = R\nlet v = f(1)\nv.x")
 

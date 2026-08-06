@@ -46,8 +46,8 @@ import itertools
 
 from agm.agl.ir.ids import NominalId
 from agm.agl.ir.nodes import IrBind, IrExpr, IrSequence
-from agm.agl.ir.reserved_nominals import NO_DECL_ID
-from agm.agl.modules.ids import ENTRY_ID, STD_CORE_ID, ModuleId
+from agm.agl.ir.reserved_nominals import NO_DECL_ID, require_reserved_nominal_id
+from agm.agl.modules.ids import ENTRY_ID, ModuleId
 from agm.agl.semantics.type_table import TypeDef, TypeTable, create_seeded_type_table
 from agm.agl.semantics.types import EnumType, ExceptionType, RecordType, Type, transform_type
 from agm.agl.semantics.values import EnumValue, TextValue
@@ -188,7 +188,7 @@ def agent_value(variant: str, **fields: str) -> EnumValue:
     none for a variant with no payload.
     """
     return EnumValue(
-        nominal=NominalId(STD_CORE_ID, "Agent"),
+        nominal=NominalId(require_reserved_nominal_id("Agent")),
         display_name="Agent",
         variant=variant,
         fields={name: TextValue(value) for name, value in fields.items()},

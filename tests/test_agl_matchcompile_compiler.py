@@ -208,8 +208,7 @@ def _branch_matches(constructor: object, value: Value) -> bool:
     if isinstance(constructor, EnumConstructor):
         return (
             isinstance(value, EnumValue)
-            and value.nominal.module_id == constructor.enum_type.module_id
-            and value.nominal.declared_name == constructor.enum_type.name
+            and value.nominal.value == constructor.enum_type.decl_id
             and value.variant == constructor.variant
         )
     raise AssertionError("finite generated tests only use boolean and enum constructors")
@@ -385,9 +384,9 @@ def _nested_pair_value(
     left: str,
     right: str,
 ) -> EnumValue:
-    bit_nominal = NominalId(bit_type.module_id, bit_type.name)
+    bit_nominal = NominalId(bit_type.decl_id)
     return EnumValue(
-        NominalId(pair_type.module_id, pair_type.name),
+        NominalId(pair_type.decl_id),
         pair_type.name,
         "pair",
         {
@@ -732,7 +731,7 @@ def test_qba_reordering_preserves_source_priority_for_every_pair_value() -> None
     )
     root = cast(DecisionDecompose, compiled.root)
     pair = cast(EnumConstructor, root.constructor)
-    nominal = NominalId(pair.enum_type.module_id, pair.enum_type.name)
+    nominal = NominalId(pair.enum_type.decl_id)
 
     for left, right in itertools.product((False, True), repeat=2):
         value = EnumValue(
@@ -761,7 +760,7 @@ def test_generated_finite_matrices_match_reference_reachability_and_failure() ->
         )
         checked, case, compiled = _compile(source)
         pair_type = cast(EnumType, compiled.normalized.root.type)
-        nominal = NominalId(pair_type.module_id, pair_type.name)
+        nominal = NominalId(pair_type.decl_id)
         expected_actions: set[int] = set()
         unmatched = False
         for left, right in itertools.product((False, True), repeat=2):
@@ -827,7 +826,7 @@ def test_generated_nested_multi_column_matrices_match_the_reference() -> None:
                 for left, right in itertools.product(("zero", "one"), repeat=2)
             ),
             EnumValue(
-                NominalId(pair_type.module_id, pair_type.name),
+                NominalId(pair_type.decl_id),
                 pair_type.name,
                 "missing",
                 {},

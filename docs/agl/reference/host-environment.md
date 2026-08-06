@@ -167,7 +167,10 @@ completed write remains effective if a later expression fails. Writing `log` or
 `Some(path)` to `log-file`
 enables logging; a later `log := false` disables it while retaining the path.
 Writing `strict-json`, `max-iters`, or `timeout` changes subsequent agent-output
-parsing, unbounded loops, or `exec` calls, respectively.
+parsing, unbounded loops, or `exec` calls, respectively. A write the engine
+cannot accept — a negative `max-iters`, or a `timeout` whose text is not a
+duration — raises the catchable `TypeError`
+([Exceptions](exceptions.md#typeerror)) and leaves the setting unchanged.
 Trace output is best-effort: a filesystem failure disables tracing for the rest
 of the run without rolling back the assigned `log` or `log-file` value.
 
@@ -176,7 +179,9 @@ of the run without rolling back the assigned `log` or `log-file` value.
 - A bad `--timeout`, `[<program>].timeout`, or `[exec].timeout` value is caught
   before execution (exit 1 pre-execution error).
 - A bad duration in `std/config::timeout := Some("…")` is evaluated at runtime;
-  a bad value raises a runtime error (exit 2).
+  a bad value raises the catchable `TypeError`
+  ([Exceptions](exceptions.md#typeerror)), terminating the run (exit 2) when
+  uncaught.
 - A CLI, `[<program>]`, or `[exec]` timeout initially seeds both shell execution
   and agent idle timeout. A source write to the `timeout` setting changes only
   the **shell-exec** timeout; agent idle timeout cannot be changed mid-program.

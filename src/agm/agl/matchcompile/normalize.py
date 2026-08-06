@@ -396,11 +396,7 @@ def normalize_pattern(
             # Compare checker-published nominal identity; normalization does not
             # re-select the constructor from scope candidates.
             selected_owner = checked.pattern_constructor_owner_for(pattern.node_id)
-            if (
-                selected_owner is None
-                or selected_owner.module_id != subject_type.module_id
-                or selected_owner.declared_name != subject_type.name
-            ):
+            if selected_owner is None or selected_owner.value != subject_type.decl_id:
                 raise MatchCompileInvariantError(
                     "invalid final constructor classification: published nominal owner disagrees "
                     "with the checked occurrence type"

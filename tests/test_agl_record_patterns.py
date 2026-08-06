@@ -104,7 +104,11 @@ def test_generic_record_alias_pattern_uses_concrete_field_type_and_selected_cons
     constructor = checked.pattern_constructor_ref_for(let.pattern.node_id)
     assert constructor is not None
     assert constructor.owner_name == "Alias"
-    assert checked.pattern_constructor_owner_for(let.pattern.node_id) == NominalId(ENTRY_ID, "Box")
+    box_typedef = checked.type_env.type_table.get(ENTRY_ID, "Box")
+    assert box_typedef is not None
+    assert checked.pattern_constructor_owner_for(let.pattern.node_id) == NominalId(
+        box_typedef.decl_node_id
+    )
 
 
 def test_generic_record_patterns_publish_owner_without_type_arguments() -> None:
@@ -123,9 +127,12 @@ def test_generic_record_patterns_publish_owner_without_type_arguments() -> None:
         if isinstance(item, LetDecl) and isinstance(item.pattern, ConstructorPattern)
     ]
     assert len(pattern_lets) == 2
+    box_typedef = checked.type_env.type_table.get(ENTRY_ID, "Box")
+    assert box_typedef is not None
+    expected = NominalId(box_typedef.decl_node_id)
     assert [checked.pattern_constructor_owner_for(let.pattern.node_id) for let in pattern_lets] == [
-        NominalId(ENTRY_ID, "Box"),
-        NominalId(ENTRY_ID, "Box"),
+        expected,
+        expected,
     ]
 
 

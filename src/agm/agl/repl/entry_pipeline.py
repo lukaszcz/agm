@@ -1013,7 +1013,6 @@ class EntryPipeline:
     ) -> None:
         """Rollback nominal metadata whose declaration did not complete."""
         from agm.agl.ir.ids import NominalId
-        from agm.agl.modules.ids import ENTRY_ID
         from agm.agl.syntax.nodes import EnumDef, ExceptionDef, RecordDef, ScopeRegion
 
         def type_declarations(
@@ -1030,10 +1029,11 @@ class EntryPipeline:
             for item in type_declarations(program.body.items)
             if item.node_id not in promoted_declaration_ids
         )
-        nominal_ids = tuple(
-            NominalId(ENTRY_ID, item.name, tuple(segment.name for segment in item.scope_path))
-            for item in unpromoted
-        )
+        # An entry-module declaration's identity is always its own AST node id
+        # (never a reserved id: only a `std/core`-root declaration can adopt
+        # one, and the entry module is never `std/core` — see
+        # `typecheck.builder._decl_identity`).
+        nominal_ids = tuple(NominalId(item.node_id) for item in unpromoted)
         self._ctx._link_image.restore_nominals(nominal_snapshot, nominal_ids)
         self._ctx._link_image.restore_builtin_nominals(
             builtin_nominal_snapshot,

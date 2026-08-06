@@ -125,11 +125,10 @@ class TestRenderEntryResult:
 
     def test_expression_echo_pretty_prints_structured_values(self) -> None:
         from agm.agl.ir.ids import NominalId
-        from agm.agl.modules.ids import ENTRY_ID
         from agm.agl.semantics.values import ArrayValue, IntValue, RecordValue
 
         value = RecordValue(
-            nominal=NominalId(ENTRY_ID, "Box"),
+            nominal=NominalId(1),
             display_name="Box",
             fields={"items": ArrayValue([IntValue(1), IntValue(2)])},
         )

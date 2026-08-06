@@ -173,8 +173,8 @@ class ConstructorValue:
     represented at runtime.  It is not renderable or
     comparable by the language.
 
-    ``nominal`` is the ``NominalId`` (module + scope path + declared name) of the owning
-    type.  ``display_name`` is the user-facing name for rendering.  ``variant``
+    ``nominal`` is the opaque ``NominalId`` of the owning type.
+    ``display_name`` is the user-facing name for rendering.  ``variant``
     is the enum variant name, or ``None`` for a record constructor.
 
     Equality and hash are by ``(nominal, variant)``; ``display_name`` is
@@ -244,7 +244,7 @@ class DictValue:
 class RecordValue:
     """A record-typed value.
 
-    ``nominal`` is the ``NominalId`` (module + scope path + declared name) — the identity
+    ``nominal`` is the opaque ``NominalId`` — the identity
     key.  ``display_name`` is the user-facing name for rendering and
     diagnostics; it is excluded from equality.  ``fields`` holds
     the record's field values.
@@ -270,7 +270,7 @@ class RecordValue:
 class EnumValue:
     """An enum-typed value: the active variant name plus any payload fields.
 
-    ``nominal`` is the ``NominalId`` (module + scope path + declared name) — the identity
+    ``nominal`` is the opaque ``NominalId`` — the identity
     key.  ``display_name`` is the user-facing name for rendering and
     diagnostics; it is excluded from equality.  ``variant`` is the
     active variant name.  ``fields`` holds the variant's payload field values.
@@ -296,11 +296,11 @@ class EnumValue:
 class ExceptionValue:
     """A built-in AgL exception value.
 
-    ``nominal`` is the ``NominalId`` (module + scope path + declared name) — the identity
+    ``nominal`` is the opaque ``NominalId`` — the identity
     key.  A built-in exception a program declares nothing of its own for uses
-    ``NominalId(STD_CORE_ID, name)`` — the shipped standard library's own
-    identity; one the program redeclares as its own ``builtin exception``
-    uses that declaration's identity instead.
+    its reserved identity (see ``ir.reserved_nominals``) — the shipped
+    standard library's own identity; one the program redeclares as its own
+    ``builtin exception`` uses that declaration's identity instead.
     ``display_name`` is the user-facing exception class name (e.g.
     ``"AgentParseError"``); it is excluded from equality.
     ``fields`` maps the exception's declared field names to their values.

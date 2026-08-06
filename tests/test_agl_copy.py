@@ -16,7 +16,6 @@ from __future__ import annotations
 import decimal
 
 from agm.agl.ir.ids import FunctionId, NominalId
-from agm.agl.modules.ids import STD_CORE_ID
 from agm.agl.semantics.copying import deep_copy_value, shallow_copy_value
 from agm.agl.semantics.values import (
     ArrayValue,
@@ -35,7 +34,7 @@ from agm.agl.semantics.values import (
     Value,
 )
 
-_NOMINAL = NominalId(STD_CORE_ID, "Box")
+_NOMINAL = NominalId(1)
 
 
 def _record(fields: dict[str, Value]) -> RecordValue:

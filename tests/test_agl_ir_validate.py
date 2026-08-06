@@ -91,7 +91,7 @@ SYM0 = SymbolId(value=0)
 SYM1 = SymbolId(value=1)
 SYM_MUT = SymbolId(value=2)
 FN0 = FunctionId(value=0)
-NOM0 = NominalId(module_id=MOD_A, declared_name="Foo")
+NOM0 = NominalId(0)
 
 SOURCE_TEXT = "let x = 1"  # 9 characters
 
@@ -155,7 +155,14 @@ def _make_program(
     functions: "dict[FunctionId, FunctionDescriptor] | None" = None,
 ) -> ExecutableProgram:
     """Build a valid base program; callers override individual tables."""
-    nom_desc = NominalDescriptor(nominal=NOM0, display_name="Foo", kind=NominalKind.RECORD)
+    nom_desc = NominalDescriptor(
+        nominal=NOM0,
+        module_id=MOD_A,
+        scope_path=(),
+        declared_name="Foo",
+        display_name="Foo",
+        kind=NominalKind.RECORD,
+    )
     sf = _source_file()
     em = ExecutableModule(module_id=MOD_A, initializers=initializers)
     return ExecutableProgram(
@@ -203,7 +210,7 @@ def _int(v: int = 0) -> IrConstInt:
 
 
 def test_case_arm_cannot_bind_multiple_fields_to_one_symbol() -> None:
-    enum_nominal = NominalId(module_id=MOD_A, declared_name="Pair")
+    enum_nominal = NominalId(11)
     program = _make_program(
         initializers=(
             IrCase(
@@ -227,6 +234,9 @@ def test_case_arm_cannot_bind_multiple_fields_to_one_symbol() -> None:
         nominals={
             enum_nominal: NominalDescriptor(
                 nominal=enum_nominal,
+                module_id=MOD_A,
+                scope_path=(),
+                declared_name="Pair",
                 display_name="Pair",
                 kind=NominalKind.ENUM,
                 variants=(VariantDescriptor("Both", ("left", "right")),),
@@ -239,7 +249,7 @@ def test_case_arm_cannot_bind_multiple_fields_to_one_symbol() -> None:
 
 
 def test_case_rejects_closure_capture_outside_payload_dominance() -> None:
-    enum_nominal = NominalId(module_id=MOD_A, declared_name="Payload")
+    enum_nominal = NominalId(12)
     closure = _make_closure(FN0, captures=(IrCapture(symbol=SYM1, by_cell=False),))
     program = _make_program(
         initializers=(
@@ -270,6 +280,9 @@ def test_case_rejects_closure_capture_outside_payload_dominance() -> None:
         nominals={
             enum_nominal: NominalDescriptor(
                 nominal=enum_nominal,
+                module_id=MOD_A,
+                scope_path=(),
+                declared_name="Payload",
                 display_name="Payload",
                 kind=NominalKind.ENUM,
                 variants=(VariantDescriptor("Empty", ()), VariantDescriptor("Full", ("value",))),
@@ -302,7 +315,7 @@ def test_private_synthetic_temporary_may_be_loaded_outside_any_case() -> None:
 
 
 def test_case_arm_cannot_bind_a_private_source_symbol() -> None:
-    enum_nominal = NominalId(module_id=MOD_A, declared_name="Box")
+    enum_nominal = NominalId(13)
     program = _make_program(
         initializers=(
             IrCase(
@@ -322,6 +335,9 @@ def test_case_arm_cannot_bind_a_private_source_symbol() -> None:
         nominals={
             enum_nominal: NominalDescriptor(
                 nominal=enum_nominal,
+                module_id=MOD_A,
+                scope_path=(),
+                declared_name="Box",
                 display_name="Box",
                 kind=NominalKind.ENUM,
                 variants=(VariantDescriptor("Box", ("value",)),),
@@ -378,7 +394,7 @@ def test_case_without_default_requires_default_for_open_literal_domain() -> None
 
 
 def test_case_without_default_requires_complete_enum_domain() -> None:
-    enum_nominal = NominalId(module_id=MOD_A, declared_name="Result")
+    enum_nominal = NominalId(14)
     program = _make_program(
         initializers=(
             IrCase(
@@ -397,6 +413,9 @@ def test_case_without_default_requires_complete_enum_domain() -> None:
         nominals={
             enum_nominal: NominalDescriptor(
                 nominal=enum_nominal,
+                module_id=MOD_A,
+                scope_path=(),
+                declared_name="Result",
                 display_name="Result",
                 kind=NominalKind.ENUM,
                 variants=(VariantDescriptor("Ok", ()), VariantDescriptor("Error", ())),
@@ -409,7 +428,7 @@ def test_case_without_default_requires_complete_enum_domain() -> None:
 
 
 def test_case_without_default_allows_complete_enum_domain() -> None:
-    enum_nominal = NominalId(module_id=MOD_A, declared_name="Result")
+    enum_nominal = NominalId(15)
     program = _make_program(
         initializers=(
             IrCase(
@@ -433,6 +452,9 @@ def test_case_without_default_allows_complete_enum_domain() -> None:
         nominals={
             enum_nominal: NominalDescriptor(
                 nominal=enum_nominal,
+                module_id=MOD_A,
+                scope_path=(),
+                declared_name="Result",
                 display_name="Result",
                 kind=NominalKind.ENUM,
                 variants=(VariantDescriptor("Ok", ()), VariantDescriptor("Error", ())),
@@ -745,9 +767,12 @@ class TestDeepTierSymbolDescriptor:
 class TestDeepTierNominalDescriptor:
     def test_nominal_key_mismatch(self) -> None:
         """NominalDescriptor.nominal must equal its dict key."""
-        nom_wrong = NominalId(module_id=MOD_A, declared_name="Bar")
+        nom_wrong = NominalId(16)
         nom_desc = NominalDescriptor(
             nominal=nom_wrong,  # key will be NOM0 — mismatch
+            module_id=MOD_A,
+            scope_path=(),
+            declared_name="Foo",
             display_name="Foo",
             kind=NominalKind.RECORD,
         )
@@ -756,8 +781,15 @@ class TestDeepTierNominalDescriptor:
             validate_ir(prog)
 
     def test_nominal_key_mismatch_skipped_when_shallow(self) -> None:
-        nom_wrong = NominalId(module_id=MOD_A, declared_name="Bar")
-        nom_desc = NominalDescriptor(nominal=nom_wrong, display_name="Foo", kind=NominalKind.RECORD)
+        nom_wrong = NominalId(17)
+        nom_desc = NominalDescriptor(
+            nominal=nom_wrong,
+            module_id=MOD_A,
+            scope_path=(),
+            declared_name="Foo",
+            display_name="Foo",
+            kind=NominalKind.RECORD,
+        )
         prog = _make_program(nominals={NOM0: nom_desc})
         validate_ir(prog, deep=False)
 
@@ -1195,12 +1227,18 @@ class TestIrFieldValidation:
         (
             NominalDescriptor(
                 nominal=NOM0,
+                module_id=MOD_A,
+                scope_path=(),
+                declared_name="Foo",
                 display_name="Foo",
                 kind=NominalKind.RECORD,
                 fields=("x",),
             ),
             NominalDescriptor(
                 nominal=NOM0,
+                module_id=MOD_A,
+                scope_path=(),
+                declared_name="Foo",
                 display_name="Foo",
                 kind=NominalKind.ENUM,
                 variants=(VariantDescriptor("some", ("x",)),),
@@ -1221,12 +1259,18 @@ class TestIrFieldValidation:
         (
             NominalDescriptor(
                 nominal=NOM0,
+                module_id=MOD_A,
+                scope_path=(),
+                declared_name="Foo",
                 display_name="Foo",
                 kind=NominalKind.RECORD,
                 fields=("x",),
             ),
             NominalDescriptor(
                 nominal=NOM0,
+                module_id=MOD_A,
+                scope_path=(),
+                declared_name="Foo",
                 display_name="Foo",
                 kind=NominalKind.ENUM,
                 variants=(VariantDescriptor("some", ("x",)),),
@@ -1275,6 +1319,9 @@ class TestIrFieldValidation:
             nominals={
                 NOM0: NominalDescriptor(
                     nominal=NOM0,
+                    module_id=MOD_A,
+                    scope_path=(),
+                    declared_name="Foo",
                     display_name="Foo",
                     kind=NominalKind.RECORD,
                     fields=("x",),
@@ -1972,7 +2019,14 @@ class TestIrExecValidation:
 
         em = ExecutableModule(module_id=MOD_A, initializers=(node,))  # type: ignore[arg-type]
         sf = SourceFile(display_name="main.agl", normalized_text='exec("x")\n()')
-        nom_desc = NominalDescriptor(nominal=NOM0, display_name="Foo", kind=NominalKind.RECORD)
+        nom_desc = NominalDescriptor(
+            nominal=NOM0,
+            module_id=MOD_A,
+            scope_path=(),
+            declared_name="Foo",
+            display_name="Foo",
+            kind=NominalKind.RECORD,
+        )
         return ExecutableProgram(
             entry_module=MOD_A,
             modules={MOD_A: em},

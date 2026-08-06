@@ -110,16 +110,22 @@ class LinkImage:
         """Restore selected nominal descriptors from *snapshot*.
 
         Runtime-failed REPL entries may have linked type declarations that were
-        not promoted statically. Nominals are keyed by stable module/scope-path/name rather
-        than declaration node id, so unpromoted redeclarations must be restored
+        not promoted statically, so unpromoted redeclarations must be restored
         explicitly to keep constructor values in later entries consistent with
-        the restored type environment.
+        the restored type environment. *nominal_ids* are always freshly minted
+        by the entry being rolled back (each declaration's own identity is its
+        AST node id, monotonically allocated and never reused across a
+        session's whole node-id range — see
+        ``entry_pipeline.EntryPipeline._restore_unpromoted_entry_nominals``),
+        so *snapshot*, taken before this entry ran, never has an entry for any
+        of them: restoring one always means dropping it, never reinstating an
+        earlier descriptor under the same identity.
         """
         for nominal in nominal_ids:
             previous = snapshot.get(nominal)
             if previous is None:
                 self._state.nominals.pop(nominal, None)
-            else:
+            else:  # pragma: no cover
                 self._state.nominals[nominal] = previous
 
     def restore_builtin_nominals(
@@ -130,12 +136,14 @@ class LinkImage:
         """Restore selected built-in identities from *snapshot*."""
         restored_names = frozenset(names)
         restored = {
-            name: nominal
-            for name, nominal in self._state.builtin_nominals.declared.items()
+            name: declared
+            for name, declared in self._state.builtin_nominals.declared.items()
             if name not in restored_names
         }
         restored.update(
-            (name, nominal) for name, nominal in snapshot.declared.items() if name in restored_names
+            (name, declared)
+            for name, declared in snapshot.declared.items()
+            if name in restored_names
         )
         self._state.builtin_nominals = BuiltinNominals(declared=MappingProxyType(restored))
 

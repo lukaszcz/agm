@@ -11,7 +11,7 @@ from pathlib import Path
 
 from agm.agl.capabilities import HostCapabilities
 from agm.agl.eval.ir_interpreter import IrInterpreter
-from agm.agl.ir.ids import SourceId, SymbolId
+from agm.agl.ir.ids import NominalId, SourceId, SymbolId
 from agm.agl.ir.program import ExecutableProgram, ExternFunctionBody, SourceFile
 from agm.agl.ir.validate import validate_ir
 from agm.agl.lower.lowerer import _LinkState, _Lowerer, builtin_nominals_from_declarations
@@ -121,6 +121,27 @@ def lower_compiled_module(
     if self_validation_enabled():
         validate_ir(program)
     return program
+
+
+def nominal_id_for(program: ExecutableProgram, display_name: str) -> NominalId:
+    """Return the ``NominalId`` a lowered *program* uses for *display_name*.
+
+    Nominal identity is an opaque per-declaration handle (see
+    ``agm.agl.ir.ids.NominalId``), so a test asserting against lowered IR
+    output cannot construct the expected id from a name and scope path: it
+    looks the identity up from the program's own ``nominals`` table by the
+    declaration's scoped source spelling (``NominalDescriptor.display_name``).
+    Raises ``AssertionError`` if no descriptor carries that spelling, or if
+    more than one does (ambiguous).
+    """
+    matches = [
+        nominal for nominal, desc in program.nominals.items() if desc.display_name == display_name
+    ]
+    assert matches, f"no nominal with display_name {display_name!r} in program.nominals"
+    assert len(matches) == 1, (
+        f"ambiguous display_name {display_name!r}: {len(matches)} nominals match"
+    )
+    return matches[0]
 
 
 def _roots(*paths: Path) -> RootSet:

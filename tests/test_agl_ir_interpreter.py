@@ -83,7 +83,7 @@ from agm.agl.ir import (
     VariantDescriptor,
 )
 from agm.agl.ir.ids import NominalId
-from agm.agl.modules.ids import ENTRY_ID, STD_CORE_ID
+from agm.agl.modules.ids import ENTRY_ID
 from agm.agl.semantics.values import (
     VOID_VALUE,
     ArrayValue,
@@ -891,7 +891,7 @@ class TestDefensiveErrors:
             (
                 IrVariantIs(
                     _LOC,
-                    nominal=NominalId(ENTRY_ID, "Color"),
+                    nominal=NominalId(1),
                     variant="Red",
                     value=IrConstInt(_LOC, 1),
                     negated=False,
@@ -926,7 +926,7 @@ class TestIrField:
         """
         rec_sym, rec_desc = _let_sym(0, "rec")
         out_sym, out_desc = _let_sym(1, "out")
-        nominal = NominalId(ENTRY_ID, "Point")
+        nominal = NominalId(2)
         make_record = IrMakeRecord(
             location=_LOC,
             nominal=nominal,
@@ -954,6 +954,9 @@ class TestIrField:
             nominals={
                 nominal: NominalDescriptor(
                     nominal=nominal,
+                    module_id=ENTRY_ID,
+                    scope_path=(),
+                    declared_name="Point",
                     display_name="Point",
                     kind=NominalKind.RECORD,
                     fields=("x", "y"),
@@ -979,13 +982,13 @@ class TestIrField:
                 "x",
                 x_val=3,
                 y_val=4,
-                expected_nominal=NominalId(ENTRY_ID, "Other"),
+                expected_nominal=NominalId(3),
             )
 
     def _run_with_exception_field(self, field: str, mode: IrFieldMode) -> Value:
         """Project *field* from a concrete exception using *mode*."""
-        exception_nominal = NominalId(STD_CORE_ID, "Abort")
-        base_nominal = NominalId(STD_CORE_ID, "Exception")
+        exception_nominal = NominalId(4)
+        base_nominal = NominalId(5)
         rec_sym, rec_desc = _let_sym(0, "exc")
         out_sym, out_desc = _let_sym(1, "out")
         prog = _make_program(
@@ -1036,7 +1039,7 @@ class TestIrField:
         """IrField uses the same nominal projection contract for enum payloads."""
         enum_sym, enum_desc = _let_sym(0, "wrapped")
         out_sym, out_desc = _let_sym(1, "out")
-        nominal = NominalId(ENTRY_ID, "Wrapper")
+        nominal = NominalId(6)
         prog = _make_program(
             (
                 IrBind(
@@ -1060,6 +1063,9 @@ class TestIrField:
             nominals={
                 nominal: NominalDescriptor(
                     nominal=nominal,
+                    module_id=ENTRY_ID,
+                    scope_path=(),
+                    declared_name="Wrapper",
                     display_name="Wrapper",
                     kind=NominalKind.ENUM,
                     variants=(VariantDescriptor("wrap", ("value",)),),
@@ -1079,7 +1085,7 @@ class TestIrField:
                     IrField(
                         _LOC,
                         value=IrLoad(_LOC, SymbolId(0)),
-                        nominal=NominalId(ENTRY_ID, "Point"),
+                        nominal=NominalId(7),
                         field="x",
                     ),
                 ),
@@ -1109,7 +1115,7 @@ class TestIrUpdateRecord:
         """IrUpdateRecord copies the record with listed fields replaced."""
         rec_sym, rec_desc = _let_sym(0, "rec")
         out_sym, out_desc = _let_sym(1, "out")
-        nominal = NominalId(ENTRY_ID, "Point")
+        nominal = NominalId(8)
         make_record = IrMakeRecord(
             location=_LOC,
             nominal=nominal,
@@ -1136,6 +1142,9 @@ class TestIrUpdateRecord:
             nominals={
                 nominal: NominalDescriptor(
                     nominal=nominal,
+                    module_id=ENTRY_ID,
+                    scope_path=(),
+                    declared_name="Point",
                     display_name="Point",
                     kind=NominalKind.RECORD,
                     fields=("x", "y"),
@@ -1511,7 +1520,7 @@ class TestFunctionEvaluation:
                 raise_loc,
                 IrMakeException(
                     raise_loc,
-                    NominalId(ENTRY_ID, "Abort"),
+                    NominalId(9),
                     "Abort",
                     (("message", IrConstText(raise_loc, "boom")),),
                 ),
@@ -2282,7 +2291,7 @@ class TestIrExec:
             command_loc,
             IrMakeException(
                 command_loc,
-                NominalId(ENTRY_ID, "Abort"),
+                NominalId(10),
                 "Abort",
                 (("message", IrConstText(command_loc, "boom")),),
             ),

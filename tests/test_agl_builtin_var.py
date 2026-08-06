@@ -351,6 +351,54 @@ class TestStdConfigQualified:
         assert result.ok
         assert result.bindings["i"] == IntValue(6)
 
+    def test_negative_max_iters_raises_catchable_type_error(self) -> None:
+        """Assigning a negative ``max-iters`` raises a catchable built-in exception.
+
+        Regression test: the live engine-setting effect used to build this
+        exception under an undeclared name (``"ValueError"``, never a real
+        AgL built-in exception), which happened to work only because nominal
+        identity was previously name-keyed with no validation. It now raises
+        the declared ``TypeError``.
+        """
+        result = _run_program("open import std/config\nstd/config::max-iters := -1\nprint 1")
+        assert not result.ok
+        assert result.error is not None
+        assert result.error.type_name == "TypeError"
+
+        caught = _run_program(
+            "open import std/config\n"
+            "let caught = try\n"
+            "    std/config::max-iters := -1\n"
+            "    false\n"
+            "  catch TypeError as e =>\n"
+            "    true\n"
+        )
+        assert caught.ok, caught.diagnostics
+        assert caught.bindings["caught"] == BoolValue(True)
+
+    def test_invalid_timeout_raises_catchable_type_error(self) -> None:
+        """Assigning an unparseable ``timeout`` raises a catchable built-in exception.
+
+        Regression test: see ``test_negative_max_iters_raises_catchable_type_error``.
+        """
+        result = _run_program(
+            'open import std/config\nstd/config::timeout := Some("not-a-timeout")\nprint 1'
+        )
+        assert not result.ok
+        assert result.error is not None
+        assert result.error.type_name == "TypeError"
+
+        caught = _run_program(
+            "open import std/config\n"
+            "let caught = try\n"
+            '    std/config::timeout := Some("not-a-timeout")\n'
+            "    false\n"
+            "  catch TypeError as e =>\n"
+            "    true\n"
+        )
+        assert caught.ok, caught.diagnostics
+        assert caught.bindings["caught"] == BoolValue(True)
+
     def test_log_file_some_round_trips(self) -> None:
         result = _run_program(
             "open import std/config\n"

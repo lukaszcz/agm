@@ -329,6 +329,10 @@ operation: text    # the operator, e.g. "/"
 
 ### `TypeError`
 
+Raised by an engine-setting write the host cannot accept — a negative
+`max-iters`, or a `timeout` whose text is not a duration ([Host
+environment](host-environment.md#engine-settings)).
+
 ```text
 (base fields only)
 ```
@@ -364,10 +368,12 @@ name: text
 operation: text
 ```
 
-`TypeError`, `UndefinedVariableError`, and `ImmutableBindingError` are
-prevented statically in normal programs — type errors, reads of undefined
-names, and `:=` on immutable bindings are all static errors — but the types
-exist, are catchable, and may be constructed and raised explicitly.
+`UndefinedVariableError` and `ImmutableBindingError` are prevented statically
+in normal programs — reads of undefined names and `:=` on immutable bindings
+are both static errors — but the types exist, are catchable, and may be
+constructed and raised explicitly. So is a type error, which is why
+`TypeError` reaches a running program only from an engine-setting write whose
+value the host rejects.
 
 ### `CastError`
 
@@ -440,6 +446,7 @@ a cycle arises, which operations raise this and which tolerate a cycle instead
 | Call-depth limit exceeded | `RecursionError` |
 | Explicit `raise MatchError(...)` | `MatchError` |
 | Division by zero | `ArithmeticError` |
+| Engine-setting write the host rejects (negative `max-iters`, unparseable `timeout`) | `TypeError` |
 | Fallible `as` cast — source does not conform to target type | `CastError` |
 | `parse_json` — input is not well-formed JSON | `JsonParseError` |
 | Rendering, `as text`, or `as json` encounters a reference cycle; or an extern companion `repr()`s the corresponding cyclic view | `CyclicValueError` |

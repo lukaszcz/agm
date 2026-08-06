@@ -15,7 +15,7 @@ permitted in this package.
 
 from __future__ import annotations
 
-from agm.agl.ir.builtin_nominals import NO_BUILTIN_DECLARATIONS, BuiltinNominals
+from agm.agl.ir.builtin_nominals import NO_BUILTIN_DECLARATIONS, BuiltinNominals, DeclaredNominal
 from agm.agl.ir.contracts import (
     ArrayDecode,
     ConversionFailureMode,
@@ -156,6 +156,7 @@ __all__ = [
     "ConversionFailureMode",
     "ConversionRecipe",
     "ConversionStrategy",
+    "DeclaredNominal",
     "DecodeSchema",
     "DictDecode",
     "DryRunEntry",

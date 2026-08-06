@@ -329,7 +329,7 @@ class EffectHandlers:
         agent_request_nominal = self._ctx._program.builtin_nominals.nominal("AgentRequest")
         return RecordValue(
             nominal=agent_request_nominal,
-            display_name=agent_request_nominal.display_name,
+            display_name=self._ctx._program.builtin_nominals.display_name("AgentRequest"),
             fields={
                 "agent": request_agent,
                 "prompt": TextValue(prompt_text),
@@ -486,7 +486,7 @@ class EffectHandlers:
             exec_result_nominal = self._ctx._program.builtin_nominals.nominal("ExecResult")
             return RecordValue(
                 nominal=exec_result_nominal,
-                display_name=exec_result_nominal.display_name,
+                display_name=self._ctx._program.builtin_nominals.display_name("ExecResult"),
                 fields={
                     "stdout": TextValue(stdout.rstrip("\n")),
                     "exit_code": IntValue(actual_exit_code),

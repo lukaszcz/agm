@@ -719,7 +719,7 @@ def test_ir_try_handler_binding_stored_in_frame() -> None:
     loc = _DUMMY_LOC
     exc_sym = SymbolId(0)
     result_sym = SymbolId(1)
-    exc_nominal = NominalId(STD_CORE_ID, "Abort")
+    exc_nominal = NominalId(1)
 
     exc_node = IrMakeException(
         location=loc,
@@ -748,6 +748,9 @@ def test_ir_try_handler_binding_stored_in_frame() -> None:
     nominals = {
         exc_nominal: NominalDescriptor(
             nominal=exc_nominal,
+            module_id=STD_CORE_ID,
+            scope_path=(),
+            declared_name="Abort",
             display_name="Abort",
             kind=NominalKind.EXCEPTION,
             fields=("message", "trace_id"),
@@ -773,7 +776,7 @@ def test_ir_try_handler_binding_stored_in_frame() -> None:
 def test_validate_ir_try_handler_nominal_missing() -> None:
     """Negative validate: IrTry handler with nominal missing from program.nominals."""
     loc = _DUMMY_LOC
-    missing_nominal = NominalId(STD_CORE_ID, "NonExistentError")
+    missing_nominal = NominalId(2)
     handler = IrCatchHandler(
         nominal=missing_nominal,
         display_name="NonExistentError",
@@ -786,14 +789,14 @@ def test_validate_ir_try_handler_nominal_missing() -> None:
         handlers=(handler,),
     )
     prog = _make_program((ir_try,))
-    with pytest.raises(InvalidIrError, match="NonExistentError"):
+    with pytest.raises(InvalidIrError, match="not in program.nominals"):
         validate_ir(prog, deep=True)
 
 
 def test_validate_ir_try_handler_symbol_missing() -> None:
     """Negative validate: IrTry handler with symbol not in program.symbols."""
     loc = _DUMMY_LOC
-    exc_nominal = NominalId(STD_CORE_ID, "Abort")
+    exc_nominal = NominalId(3)
     orphan_sym = SymbolId(999)
     handler = IrCatchHandler(
         nominal=exc_nominal,
@@ -809,6 +812,9 @@ def test_validate_ir_try_handler_symbol_missing() -> None:
     nominals = {
         exc_nominal: NominalDescriptor(
             nominal=exc_nominal,
+            module_id=STD_CORE_ID,
+            scope_path=(),
+            declared_name="Abort",
             display_name="Abort",
             kind=NominalKind.EXCEPTION,
             fields=("message", "trace_id"),
@@ -843,7 +849,7 @@ def test_validate_ir_return_cheap_ok() -> None:
 def test_validate_ir_try_cheap_ok() -> None:
     """Validate IrTry without deep: location + body only, no nominal/symbol cross-ref."""
     loc = _DUMMY_LOC
-    exc_nominal = NominalId(STD_CORE_ID, "Abort")
+    exc_nominal = NominalId(4)
     handler = IrCatchHandler(
         nominal=exc_nominal,
         display_name="Abort",

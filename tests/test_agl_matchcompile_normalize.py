@@ -11,6 +11,7 @@ import pytest
 
 from agm.agl.capabilities import HostCapabilities
 from agm.agl.ir.ids import NominalId
+from agm.agl.ir.reserved_nominals import NO_DECL_ID
 from agm.agl.matchcompile.model import (
     BinderAssignment,
     BoolConstructor,
@@ -238,7 +239,7 @@ def test_record_signature_and_pattern_normalization_use_canonical_nominal_identi
     constructor_ref = checked.pattern_constructor_ref_for(constructor_pattern.node_id)
     assert constructor_ref is not None
     assert checked.pattern_constructor_owner_for(constructor_pattern.node_id) == NominalId(
-        ENTRY_ID, "Outer"
+        subject_type.decl_id
     )
     with pytest.raises(MatchCompileInvariantError, match="missing final constructor"):
         normalize_case(
@@ -251,7 +252,7 @@ def test_record_signature_and_pattern_normalization_use_canonical_nominal_identi
             replace(
                 checked,
                 pattern_constructor_owners={
-                    constructor_pattern.node_id: NominalId(ENTRY_ID, "Inner")
+                    constructor_pattern.node_id: NominalId(inner.constructor.record_type.decl_id)
                 },
             ),
         )
@@ -860,10 +861,11 @@ def test_malformed_checked_constructor_metadata_raise_invariants() -> None:
     with pytest.raises(MatchCompileInvariantError, match="non-enum"):
         normalize_case(case, non_enum)
 
+    missing_enum_type = EnumType("Missing")
     missing_type = replace(
         checked,
-        node_types={**checked.node_types, case.subject.node_id: EnumType("Missing")},
-        pattern_constructor_owners={pattern.node_id: NominalId(ENTRY_ID, "Missing")},
+        node_types={**checked.node_types, case.subject.node_id: missing_enum_type},
+        pattern_constructor_owners={pattern.node_id: NominalId(missing_enum_type.decl_id)},
     )
     with pytest.raises(MatchCompileInvariantError, match="cannot resolve enum signature"):
         normalize_case(case, missing_type)
@@ -872,9 +874,11 @@ def test_malformed_checked_constructor_metadata_raise_invariants() -> None:
     with pytest.raises(MatchCompileInvariantError, match="unknown variant"):
         normalize_case(_replace_case_pattern(case, unknown_variant), checked)
 
+    choice_type = checked.node_types[case.subject.node_id]
+    assert isinstance(choice_type, EnumType)
     constructor_ref = checked.pattern_constructor_ref_for(pattern.node_id)
     assert constructor_ref is not None
-    assert checked.pattern_constructor_owner_for(pattern.node_id) == NominalId(ENTRY_ID, "Choice")
+    assert checked.pattern_constructor_owner_for(pattern.node_id) == NominalId(choice_type.decl_id)
     with pytest.raises(MatchCompileInvariantError, match="invalid final constructor"):
         normalize_case(
             case,
@@ -890,7 +894,7 @@ def test_malformed_checked_constructor_metadata_raise_invariants() -> None:
             case,
             replace(
                 checked,
-                pattern_constructor_owners={pattern.node_id: NominalId(ENTRY_ID, "Other")},
+                pattern_constructor_owners={pattern.node_id: NominalId(NO_DECL_ID)},
             ),
         )
 
@@ -940,7 +944,7 @@ def test_source_reference_matcher_preserves_priority_and_partial_constructor_fie
     case = _only_case(checked.resolved.program)
     enum_type = checked.node_types[case.subject.node_id]
     assert isinstance(enum_type, EnumType)
-    nominal = NominalId(enum_type.module_id, enum_type.name)
+    nominal = NominalId(enum_type.decl_id)
 
     assert (
         reference_action(

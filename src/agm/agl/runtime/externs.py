@@ -31,6 +31,7 @@ from agm.agl.runtime.boundary import (
     encode_boundary_value,
     synthesize_nominal_classes,
 )
+from agm.agl.self_validation import self_validation_enabled
 from agm.agl.semantics.cycles import AglCyclicValue, cyclic_value_raise
 from agm.agl.semantics.exceptions import AglRaise, make_builtin_exception
 from agm.agl.semantics.values import ArrayValue, DictValue, TextValue, Value
@@ -108,27 +109,51 @@ class ExternRegistry:
         self._nominal_by_id: dict[NominalId, NominalDescriptor] = {}
 
     def set_nominals(self, descriptors: dict[NominalId, NominalDescriptor]) -> None:
-        """Materialize or update this program's companion-visible nominal classes.
+        """Materialize this program's companion-visible nominal classes, insert-only.
 
-        A nominal identity keeps the same Python class object across calls,
-        so a companion reference captured before a redeclaration -- a module
-        global, a closure, a default argument -- stays valid without any
-        rebinding step.
+        A nominal identity's layout is fixed at its declaration, so a class
+        is synthesized for an identity at most once -- the first call that
+        carries it. A companion reference captured before a later
+        redeclaration -- a module global, a closure, a default argument --
+        therefore stays valid, still denoting the declaration it was
+        captured from, rather than following the redeclaration.
+
+        The per-identity descriptor snapshot is refreshed on every call
+        regardless, because ``NominalDescriptor.bears_name_path`` -- whether
+        this identity is the one its name path currently resolves to -- can
+        flip from one call to the next as a later declaration supersedes it;
+        :meth:`_agl_module` consults that snapshot to decide which identity a
+        companion's bare/dotted nominal lookup resolves to at import time.
         """
-        changed = {
-            nominal: descriptor
-            for nominal, descriptor in descriptors.items()
-            if self._nominal_by_id.get(nominal) != descriptor
-        }
-        if not changed:
-            return
+        if self_validation_enabled():
+            for nominal, descriptor in descriptors.items():
+                previous = self._nominal_by_id.get(nominal)
+                if previous is not None and previous != descriptor:
+                    raise AssertionError(
+                        f"nominal {nominal!r} re-registered with a different shape: "
+                        f"{previous!r} -> {descriptor!r}"
+                    )
 
-        classes = synthesize_nominal_classes(changed.values(), self._nominal_classes)
-        self._nominal_classes.update(classes)
-        self._nominal_by_id.update(changed)
+        new_ids = descriptors.keys() - self._nominal_classes.keys()
+        if new_ids:
+            classes = synthesize_nominal_classes(
+                (descriptors[nominal] for nominal in new_ids), self._nominal_classes
+            )
+            self._nominal_classes.update(classes)
+        self._nominal_by_id.update(descriptors)
 
     def _agl_module(self) -> ModuleType:
-        """Build the temporary ``agl`` module exposed while importing a companion."""
+        """Build the temporary ``agl`` module exposed while importing a companion.
+
+        Only identities that currently bear their own name path
+        (``NominalDescriptor.bears_name_path``) are exposed: a superseded
+        declaration and a declaration from an unpromoted REPL entry share
+        their name path with the declaration that now owns it, so including
+        them would make ``leaves`` collide on that path and would leave a
+        stale identity reachable by a fresh companion import. Which identity
+        wins is therefore decided by the type table's name index (threaded
+        through ``bears_name_path``), never by insertion order.
+        """
         module = ModuleType("agl")
         setattr(module, "array", _array)
         setattr(module, "dict", _dict)
@@ -136,12 +161,14 @@ class ExternRegistry:
         nominals = ModuleType("agl.nominals")
         setattr(module, "nominals", nominals)
         leaves: dict[tuple[str, ...], type[object]] = {}
-        names: dict[str, list[type[object]]] = {}
         for nominal, cls in self._nominal_classes.items():
             descriptor = self._nominal_by_id[nominal]
-            leaves[_nominal_identity_path(descriptor)] = cls
-            names.setdefault(cls.__name__, []).append(cls)
+            if descriptor.bears_name_path:
+                leaves[_nominal_identity_path(descriptor)] = cls
         _build_nominal_namespace(nominals, leaves)
+        names: dict[str, list[type[object]]] = {}
+        for cls in leaves.values():
+            names.setdefault(cls.__name__, []).append(cls)
         for name, classes in names.items():
             if len(classes) == 1 and name not in {"array", "dict", "json", "nominals"}:
                 setattr(module, name, classes[0])

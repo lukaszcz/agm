@@ -136,89 +136,54 @@ def _class_namespace(attrs: dict[str, object]) -> dict[str, object]:
     return namespace
 
 
-def _class_members(cls: type[object]) -> dict[str, object]:
-    """Return *cls*'s own namespace as a concretely typed mapping."""
-    return cast(dict[str, object], vars(cls))
+def _create_nominal(descriptor: NominalDescriptor, name: str) -> type[object]:
+    """Create the synthesized class for one record or exception declaration.
 
-
-def _is_agl_nominal_class(value: object) -> bool:
-    """Return whether *value* is itself a synthesized ``_AglNominal`` subclass."""
-    try:
-        return issubclass(cast("type[object]", value), _AglNominal)
-    except TypeError:
-        return False
-
-
-def _update_or_create_nominal(
-    descriptor: NominalDescriptor, name: str, existing_cls: type[object] | None
-) -> type[object]:
-    """Reuse *existing_cls* in place when it is already a plain nominal class.
-
-    Reuse keeps every companion-held reference to the class -- a module
-    global, a closure, a default argument -- valid across a redeclaration
-    (for example, across a REPL ``:reset``) instead of stranding it on a
-    stale class object.
+    Called at most once per identity (see :func:`synthesize_nominal_classes`):
+    an identity's layout is fixed at its declaration, so there is never a
+    reason to build a second class for the same ``NominalId``.
     """
     attrs = _nominal_attrs(descriptor, descriptor.fields)
-    if existing_cls is not None and not issubclass(existing_cls, _AglEnum):
-        for attr_name, value in attrs.items():
-            setattr(existing_cls, attr_name, value)
-        return existing_cls
     return cast(
         type[object],
         type(name, (cast(type[object], _AglNominal),), _class_namespace(attrs)),
     )
 
 
-def _update_or_create_enum(
-    descriptor: NominalDescriptor, name: str, existing_cls: type[object] | None
-) -> type[object]:
-    """Reuse *existing_cls* and its variant classes in place when possible.
+def _create_enum(descriptor: NominalDescriptor, name: str) -> type[object]:
+    """Create the synthesized enum class and its nested variant classes.
 
-    Each surviving variant name is updated in place for the same reason
-    :func:`_update_or_create_nominal` reuses a plain nominal class; a variant
-    absent from *descriptor* is removed from the enum class entirely.
+    Called at most once per identity, for the same reason as :func:`_create_nominal`.
     """
-    enum_cls: type[object]
-    if existing_cls is not None and issubclass(existing_cls, _AglEnum):
-        enum_cls = existing_cls
-    else:
-        enum_cls = cast(
-            type[object],
-            type(
-                name,
-                (cast(type[object], _AglEnum),),
-                _class_namespace({"_agl_nominal": descriptor.nominal}),
-            ),
-        )
-
-    live_variants: set[str] = set()
+    enum_cls = cast(
+        type[object],
+        type(
+            name,
+            (cast(type[object], _AglEnum),),
+            _class_namespace({"_agl_nominal": descriptor.nominal}),
+        ),
+    )
     for variant in descriptor.variants:
-        live_variants.add(variant.name)
         attrs = {**_nominal_attrs(descriptor, variant.fields), "_agl_variant": variant.name}
-        existing_variant: object | None = _class_members(enum_cls).get(variant.name)
-        if _is_agl_nominal_class(existing_variant):
-            for attr_name, value in attrs.items():
-                setattr(existing_variant, attr_name, value)
-        else:
-            variant_cls = type(
-                variant.name,
-                (cast(type[object], _AglNominal), enum_cls),
-                _class_namespace(attrs),
-            )
-            setattr(enum_cls, variant.name, variant_cls)
-
-    stale_variants = [
-        attr_name
-        for attr_name, value in _class_members(enum_cls).items()
-        if attr_name not in live_variants and _is_agl_nominal_class(value)
-    ]
-    for stale_name in stale_variants:
-        delattr(enum_cls, stale_name)
-
+        variant_cls = type(
+            variant.name,
+            (cast(type[object], _AglNominal), enum_cls),
+            _class_namespace(attrs),
+        )
+        setattr(enum_cls, variant.name, variant_cls)
     return enum_cls
 
 
+#: Every identity a class has been synthesized for, keyed by ``NominalId``:
+#: the encode direction's only registry, so it must outlive any single
+#: caller's own class table. Nothing is ever removed. Within one program
+#: image an entry can never go stale either, because a redeclaration always
+#: mints a fresh identity of its own rather than reshaping an existing one.
+#: Across images -- a fresh registry for a new program, or for a REPL after
+#: ``:reset`` -- identity numbering restarts, so the same ``NominalId`` can
+#: name a different declaration; the new image's own synthesis then takes
+#: the entry over, matching the boundary's one-live-program-per-process
+#: contract.
 _NOMINAL_CLASSES: dict[NominalId, type[object]] = {}
 
 
@@ -226,31 +191,34 @@ def synthesize_nominal_classes(
     descriptors: Iterable[NominalDescriptor],
     existing: dict[NominalId, type[object]] | None = None,
 ) -> dict[NominalId, type[object]]:
-    """Materialize or update the per-program Python classes used by extern companions.
+    """Materialize the per-program Python classes used by extern companions, insert-only.
 
-    A ``NominalId`` keeps the same class object across repeated calls: when
-    *existing* already holds a class for that identity, this updates its
-    shape in place instead of replacing it, so a class captured by a
-    companion in a module global, a closure, or a default argument stays
-    valid even after the nominal it names is redeclared. The result also
-    becomes the module-level registry :func:`encode_boundary_value` consults
-    for the encode direction; nothing ever removes an entry from it, matching
-    the boundary's one-program-load-per-process contract.
+    A ``NominalId``'s layout is fixed at its declaration, so a class is
+    synthesized for an identity at most once: when *existing* already holds
+    a class for that identity, this reuses it unchanged rather than
+    re-shaping it. A class a companion captured in a module global, a
+    closure, or a default argument therefore keeps denoting the declaration
+    it was captured from, permanently -- even after that declaration's name
+    path is later reassigned to a fresh identity with a class of its own.
+    The result also feeds the module-level registry
+    :func:`encode_boundary_value` consults for the encode direction; see
+    :data:`_NOMINAL_CLASSES` for its lifetime.
     """
     current = existing if existing is not None else {}
-    updated: dict[NominalId, type[object]] = {}
+    result: dict[NominalId, type[object]] = {}
     for descriptor in descriptors:
+        reused = current.get(descriptor.nominal)
+        if reused is not None:
+            result[descriptor.nominal] = reused
+            continue
         name = _nominal_class_name(descriptor)
-        if descriptor.kind is NominalKind.ENUM:
-            updated[descriptor.nominal] = _update_or_create_enum(
-                descriptor, name, current.get(descriptor.nominal)
-            )
-        else:
-            updated[descriptor.nominal] = _update_or_create_nominal(
-                descriptor, name, current.get(descriptor.nominal)
-            )
-    _NOMINAL_CLASSES.update(updated)
-    return updated
+        result[descriptor.nominal] = (
+            _create_enum(descriptor, name)
+            if descriptor.kind is NominalKind.ENUM
+            else _create_nominal(descriptor, name)
+        )
+    _NOMINAL_CLASSES.update(result)
+    return result
 
 
 class AglArrayView(MutableSequence[object]):

@@ -352,6 +352,20 @@ class TypeTable:
         """
         return self._defs.get(decl_id)
 
+    def is_current(self, typedef: TypeDef) -> bool:
+        """Return whether *typedef*'s identity is the one its name path currently resolves to.
+
+        Answers "does this identity currently bear its name path?" via the
+        name index (see the class and module docstrings) rather than via
+        insertion order: a superseded declaration and a declaration from an
+        unpromoted REPL entry both remain registered under their own
+        identity (:meth:`get_by_id` still reaches them), but neither one is
+        what :meth:`get` resolves their shared name path to any more, so
+        this returns ``False`` for both.
+        """
+        key = (typedef.module_id, typedef.scope_path, typedef.name)
+        return self._name_index.get(key) == typedef.decl_node_id
+
     def _put_method(self, decl_id: DeclId, method: MethodDef) -> None:
         """Write *method* into *decl_id*'s direct map, invalidating caches on change.
 

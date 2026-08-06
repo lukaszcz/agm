@@ -823,7 +823,15 @@ def test_deep_recursive_nominal_construction_completes_quickly() -> None:
     assert depth == 299
 
 
-def test_redeclaring_an_enum_updates_and_prunes_variants_in_place() -> None:
+def test_synthesizing_an_already_present_identity_reuses_its_class_unchanged() -> None:
+    """A ``NominalId``'s layout is fixed at its declaration: a class, once
+    synthesized for an identity, is reused verbatim on every later call that
+    carries the same identity again -- never re-shaped in place. A real
+    lowering mints a fresh identity for a redeclaration rather than repeating
+    one (the test below covers that shape), but the insert-only contract
+    itself holds regardless of what a second descriptor for the same identity
+    claims.
+    """
     nominal = _fresh_nominal()
     first = NominalDescriptor(
         nominal=nominal,
@@ -847,12 +855,12 @@ def test_redeclaring_an_enum_updates_and_prunes_variants_in_place() -> None:
         kind=NominalKind.ENUM,
         variants=(VariantDescriptor("Some", ("value", "extra")),),
     )
-    updated = synthesize_nominal_classes((second,), classes)
+    reused = synthesize_nominal_classes((second,), classes)
 
-    assert updated[nominal] is enum_cls
+    assert reused[nominal] is enum_cls
     assert enum_cls.Some is some_cls
-    assert some_cls._agl_fields == ("value", "extra")
-    assert not hasattr(enum_cls, "Gone")
+    assert some_cls._agl_fields == ("value",)
+    assert hasattr(enum_cls, "Gone")
 
 
 def test_companion_namespace_keeps_same_named_nominals_distinct() -> None:
@@ -889,7 +897,49 @@ def test_companion_namespace_keeps_same_named_nominals_distinct() -> None:
     assert agl.nominals.right.Box is registry._nominal_classes[right]
 
 
-def test_set_nominals_is_a_no_op_when_nothing_changed() -> None:
+def test_companion_namespace_resolves_a_shared_name_path_to_the_current_bearer() -> None:
+    """Which identity a shared name path resolves to is decided by
+    ``NominalDescriptor.bears_name_path``, never by the order the classes were
+    synthesized in. The superseded identity is registered LAST here, so a
+    namespace built in insertion order alone would hand a companion importing
+    now the stale class under both spellings.
+    """
+    current = _fresh_nominal()
+    superseded = _fresh_nominal()
+    bearer = NominalDescriptor(
+        nominal=current,
+        module_id=ENTRY_ID,
+        scope_path=(),
+        declared_name="Box",
+        display_name="Box",
+        kind=NominalKind.RECORD,
+        fields=("new",),
+    )
+    registry = ExternRegistry()
+    registry.set_nominals({current: bearer})
+    registry.set_nominals(
+        {
+            current: bearer,
+            superseded: NominalDescriptor(
+                nominal=superseded,
+                module_id=ENTRY_ID,
+                scope_path=(),
+                declared_name="Box",
+                display_name="Box",
+                kind=NominalKind.RECORD,
+                fields=("old",),
+                bears_name_path=False,
+            ),
+        }
+    )
+
+    agl = registry._agl_module()
+
+    assert agl.Box is registry._nominal_classes[current]
+    assert agl.nominals.entry.Box is registry._nominal_classes[current]
+
+
+def test_re_registering_the_same_identity_reuses_its_synthesized_class() -> None:
     nominal = _fresh_nominal()
     descriptor = NominalDescriptor(
         nominal=nominal,
@@ -909,12 +959,20 @@ def test_set_nominals_is_a_no_op_when_nothing_changed() -> None:
     assert registry._nominal_classes[nominal] is before
 
 
-def test_redeclaring_a_nominal_keeps_default_argument_captured_classes_decodable(
+def test_redeclaring_a_nominal_keeps_default_argument_captured_classes_on_the_old_shape(
     tmp_path: Path,
 ) -> None:
-    nominal = _fresh_nominal()
+    """A redeclaration lowers to two DISTINCT identities sharing one name
+    path, never to the same ``NominalId`` twice. The class a companion
+    captured by default argument before the redeclaration keeps constructing
+    and recognizing the OLD identity's shape; it is never migrated to the new
+    one. A companion importing afterward instead sees the new declaration
+    under both its bare name and its ``nominals`` path.
+    """
+    old_nominal = _fresh_nominal()
+    new_nominal = _fresh_nominal()
     old = NominalDescriptor(
-        nominal=nominal,
+        nominal=old_nominal,
         module_id=ENTRY_ID,
         scope_path=(),
         declared_name="Box",
@@ -923,7 +981,7 @@ def test_redeclaring_a_nominal_keeps_default_argument_captured_classes_decodable
         fields=("old",),
     )
     new = NominalDescriptor(
-        nominal=nominal,
+        nominal=new_nominal,
         module_id=ENTRY_ID,
         scope_path=(),
         declared_name="Box",
@@ -932,18 +990,35 @@ def test_redeclaring_a_nominal_keeps_default_argument_captured_classes_decodable
         fields=("new",),
     )
     companion = tmp_path / "companion.py"
-    companion.write_text("from agl import Box\ndef make(box_cls=Box):\n    return box_cls(new=2)\n")
+    companion.write_text("from agl import Box\ndef make(box_cls=Box):\n    return box_cls(old=2)\n")
     registry = ExternRegistry()
-    registry.set_nominals({nominal: old})
+    registry.set_nominals({old_nominal: old})
     registry.load_companion(ENTRY_ID, companion)
-    before = registry._nominal_classes[nominal]
+    before = registry._nominal_classes[old_nominal]
 
-    registry.set_nominals({nominal: new})
-
-    assert registry._nominal_classes[nominal] is before
-    assert registry.invoke("make", registry.resolve(ENTRY_ID, "make"), (), "trace") == RecordValue(
-        nominal, "Box", {"new": IntValue(2)}
+    # A real lowering re-derives every descriptor on every call, so the old
+    # identity's own snapshot is refreshed too -- no longer bearing the name
+    # path the new identity now claims.
+    old_superseded = NominalDescriptor(
+        nominal=old_nominal,
+        module_id=ENTRY_ID,
+        scope_path=(),
+        declared_name="Box",
+        display_name="Box",
+        kind=NominalKind.RECORD,
+        fields=("old",),
+        bears_name_path=False,
     )
+    registry.set_nominals({old_nominal: old_superseded, new_nominal: new})
+
+    assert registry._nominal_classes[old_nominal] is before
+    assert registry.invoke("make", registry.resolve(ENTRY_ID, "make"), (), "trace") == RecordValue(
+        old_nominal, "Box", {"old": IntValue(2)}
+    )
+
+    agl = registry._agl_module()
+    assert agl.Box is registry._nominal_classes[new_nominal]
+    assert agl.nominals.entry.Box is registry._nominal_classes[new_nominal]
 
 
 def test_stashed_view_with_nominal_elements_decodes_outside_any_call(tmp_path: Path) -> None:

@@ -114,6 +114,20 @@ class NominalDescriptor:
     ``variants``     — for ENUM: ordered tuple of ``VariantDescriptor`` objects
                        (one per variant, in declaration order).  ``()`` for
                        RECORD and EXCEPTION.
+    ``bears_name_path`` — whether this identity is the one its
+                       ``(module_id, scope_path, declared_name)`` path
+                       currently resolves to, per the type table's name
+                       index. A superseded declaration, and a declaration
+                       from an unpromoted REPL entry, both remain in
+                       ``ExecutableProgram.nominals`` (it is derived from
+                       every declaration the type table retains, not just
+                       the live ones) with this ``False`` — metadata about
+                       the identity's current standing, not part of its
+                       shape, so it is excluded from equality/hashing
+                       (``compare=False``) the same way ``TypeDef.is_builtin``
+                       is: two snapshots of the same identity taken before
+                       and after a later redeclaration must still compare
+                       equal.
 
     Safe defaults for ``fields`` and ``variants`` are ``()`` so construction sites
     can omit them when the descriptor does not need nominal details.
@@ -127,6 +141,7 @@ class NominalDescriptor:
     kind: NominalKind
     fields: tuple[str, ...] = ()
     variants: tuple[VariantDescriptor, ...] = ()
+    bears_name_path: bool = field(default=True, compare=False)
 
 
 # ---------------------------------------------------------------------------

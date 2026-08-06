@@ -93,10 +93,18 @@ def lower_program(
 
     # Step 2: Build nominals from the authoritative TypeTable declarations.
     # Aliases do not have a TypeDef, so this also excludes their transparent
-    # source spellings without comparing concatenated scope names.
+    # source spellings without comparing concatenated scope names. ``entries()``
+    # yields every declaration the table retains -- including a superseded one
+    # and one from an unpromoted REPL entry -- so each descriptor also records
+    # whether its identity currently bears its own name path, via the same
+    # name index ``TypeTable.get`` itself resolves through: an authoritative,
+    # order-independent answer to "which declaration does this name mean now?"
+    # that the extern boundary later uses to resolve a companion's bare/dotted
+    # nominal lookup.
     for typedef in type_table.entries():
         nominal = NominalId(typedef.decl_node_id)
         display_name = "::".join((*typedef.scope_path, typedef.name))
+        bears_name_path = type_table.is_current(typedef)
         if typedef.kind == "record":
             link.nominals[nominal] = NominalDescriptor(
                 nominal=nominal,
@@ -107,6 +115,7 @@ def lower_program(
                 kind=NominalKind.RECORD,
                 fields=tuple(name for name, _ in typedef.fields),
                 variants=(),
+                bears_name_path=bears_name_path,
             )
         elif typedef.kind == "enum":
             link.nominals[nominal] = NominalDescriptor(
@@ -121,6 +130,7 @@ def lower_program(
                     VariantDescriptor(name, tuple(field for field, _ in fields))
                     for name, fields in typedef.variants
                 ),
+                bears_name_path=bears_name_path,
             )
         else:
             handle = typedef.handle()
@@ -134,6 +144,7 @@ def lower_program(
                 kind=NominalKind.EXCEPTION,
                 fields=tuple(type_table.exception_fields(handle).keys()),
                 variants=(),
+                bears_name_path=bears_name_path,
             )
 
     _add_builtin_nominals(link.nominals, type_table)
@@ -142,6 +153,10 @@ def lower_program(
     # identity erases type arguments, so register each generic template once.
     # Field/variant NAMES are read directly off the registered TypeDef (never
     # instantiated — a generic template has no concrete type_args).
+    # ``bears_name_path`` compares the identity being registered against the
+    # one ``generic_typedef``'s NAME lookup landed on, which is exactly the
+    # name-index answer ``TypeTable.is_current`` gives for a non-generic
+    # declaration above.
     for cm in checked.modules.values():
         for name, generic in cm.type_env.all_generic_types().items():
             typ = generic.template
@@ -150,6 +165,7 @@ def lower_program(
             assert generic_typedef is not None, (
                 f"compiler bug: generic type {name!r} has no TypeDef registered"
             )
+            bears_name_path = generic_typedef.decl_node_id == typ.decl_id
             if isinstance(typ, RecordType):
                 link.nominals[nominal] = NominalDescriptor(
                     nominal=nominal,
@@ -159,6 +175,7 @@ def lower_program(
                     display_name="::".join((*typ.scope_path, typ.name)),
                     kind=NominalKind.RECORD,
                     fields=tuple(fname for fname, _ in generic_typedef.fields),
+                    bears_name_path=bears_name_path,
                 )
             else:
                 link.nominals[nominal] = NominalDescriptor(
@@ -172,6 +189,7 @@ def lower_program(
                         VariantDescriptor(vname, tuple(fname for fname, _ in vfields))
                         for vname, vfields in generic_typedef.variants
                     ),
+                    bears_name_path=bears_name_path,
                 )
 
     # Step 3: Phase 1 — pre-allocate FunctionId + symbol for every static

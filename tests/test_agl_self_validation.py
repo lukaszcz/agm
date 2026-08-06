@@ -1,12 +1,13 @@
 """AgL's invariant self-checks are optional and gated by a single flag.
 
 The checks re-verify artifacts the compiler itself just produced — the
-typechecker's own closed-output boundary, match compilation, and the structural
-validation of the lowered IR — and never change a result, so they are disabled
-in normal execution.  The test suite enables them globally (see
-``tests/conftest.py``); these tests pin the gating contract and confirm the
-production path — validation disabled — trusts the checker, the compiler, and
-the lowerer without re-checking any of them.
+typechecker's own closed-output boundary, match compilation, the structural
+validation of the lowered IR, and the extern registry's one-shape-per-nominal-
+identity premise — and never change a result, so they are disabled in normal
+execution.  The test suite enables them globally (see ``tests/conftest.py``);
+these tests pin the gating contract and confirm the production path —
+validation disabled — trusts the checker, the compiler, the lowerer, and the
+registry without re-checking any of them.
 """
 
 from __future__ import annotations
@@ -16,6 +17,8 @@ from pathlib import Path
 
 import pytest
 
+from agm.agl.ir.ids import NominalId
+from agm.agl.ir.program import NominalDescriptor, NominalKind
 from agm.agl.ir.validate import InvalidIrError, validate_ir
 from agm.agl.lower import LinkImage, lower_program, lower_repl_program
 from agm.agl.lower.lowerer import _LinkState
@@ -23,6 +26,7 @@ from agm.agl.matchcompile import MatchCompiledProgram, compile_program_matches
 from agm.agl.matchcompile.normalize import MatchCompileInvariantError
 from agm.agl.modules.ids import ENTRY_ID
 from agm.agl.repl import ReplSession
+from agm.agl.runtime.externs import ExternRegistry
 from agm.agl.scope.program import resolve_program
 from agm.agl.self_validation import self_validation_enabled
 from agm.agl.semantics.type_table import TypeDef, TypeTable
@@ -300,6 +304,83 @@ def test_enabled_validation_rejects_a_conflicting_typedef_re_registration() -> N
             TypeDef(
                 kind="record", name="Box", module_id=ENTRY_ID, type_params=("T",), decl_node_id=1
             )
+        )
+
+
+def test_disabled_validation_accepts_a_set_nominals_re_registration_with_a_different_shape(
+    self_validation_disabled: None,
+) -> None:
+    """A ``NominalId``'s layout is fixed at its declaration, so ``set_nominals``
+    only ever expects one shape per identity. With the flag off (the
+    production path), a call that repeats an identity under a different
+    shape is silently accepted rather than raising -- there is nothing to
+    reconcile it against, since the already-synthesized class is reused
+    unchanged either way.
+    """
+    nominal = NominalId(8_100_001)
+    registry = ExternRegistry()
+    registry.set_nominals(
+        {
+            nominal: NominalDescriptor(
+                nominal=nominal,
+                module_id=ENTRY_ID,
+                scope_path=(),
+                declared_name="Box",
+                display_name="Box",
+                kind=NominalKind.RECORD,
+                fields=("value",),
+            )
+        }
+    )
+
+    registry.set_nominals(
+        {
+            nominal: NominalDescriptor(
+                nominal=nominal,
+                module_id=ENTRY_ID,
+                scope_path=(),
+                declared_name="Box",
+                display_name="Box",
+                kind=NominalKind.RECORD,
+                fields=("other",),
+            )
+        }
+    )
+
+    assert registry._nominal_classes[nominal]._agl_fields == ("value",)
+
+
+def test_enabled_validation_rejects_a_conflicting_set_nominals_re_registration() -> None:
+    """With the flag on (the suite default), a genuinely conflicting re-registration is caught."""
+    nominal = NominalId(8_100_002)
+    registry = ExternRegistry()
+    registry.set_nominals(
+        {
+            nominal: NominalDescriptor(
+                nominal=nominal,
+                module_id=ENTRY_ID,
+                scope_path=(),
+                declared_name="Box",
+                display_name="Box",
+                kind=NominalKind.RECORD,
+                fields=("value",),
+            )
+        }
+    )
+
+    with pytest.raises(AssertionError, match="different shape"):
+        registry.set_nominals(
+            {
+                nominal: NominalDescriptor(
+                    nominal=nominal,
+                    module_id=ENTRY_ID,
+                    scope_path=(),
+                    declared_name="Box",
+                    display_name="Box",
+                    kind=NominalKind.RECORD,
+                    fields=("other",),
+                )
+            }
         )
 
 

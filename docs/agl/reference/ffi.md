@@ -113,6 +113,14 @@ LeftBox = nominals.left.Box
 RightBox = nominals.right.Box
 ```
 
+A class denotes the declaration it was imported for, permanently. Redeclaring
+a record, enum, or exception — for example across incremental REPL entries —
+never changes the shape of a class a companion already imported: it keeps
+constructing and recognizing values of the declaration it was captured from,
+whether held in a module global, a closure, or a default argument. A
+companion that imports afterward instead sees the redeclaration, under both
+its bare name and its `nominals` path.
+
 AgL records are immutable, so assigning a synthesized nominal field raises
 `AttributeError`. Fields are encoded eagerly when a nominal object is built:
 a nested array or dict field is therefore already a live view, while replacing

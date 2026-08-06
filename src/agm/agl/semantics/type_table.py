@@ -694,6 +694,25 @@ class TypeTable:
                 result = typedef
         return result
 
+    def builtin_declarations(self) -> Mapping[str, TypeDef]:
+        """Return every bare name's currently live registered ``builtin`` declaration.
+
+        The all-names counterpart of :meth:`builtin_declaration`: for each
+        bare name that has at least one registered, non-orphaned ``builtin``
+        declaration, the entry is the exact same declaration
+        :meth:`builtin_declaration` would return for that name alone (same
+        forward-scan, last-match-wins tie-break; same orphan skip). Building
+        the host's minting table from this instead of an independent scan is
+        how the host and the checker are kept from ever disagreeing about
+        which declaration a built-in name denotes (see
+        ``lower.lowerer.builtin_nominals_from_declarations``).
+        """
+        result: dict[str, TypeDef] = {}
+        for decl_id, typedef in self._defs.items():
+            if typedef.is_builtin and decl_id not in self._orphaned:
+                result[typedef.name] = typedef
+        return result
+
     def nominal_reaches_non_data(self, handle: RecordType | EnumType | ExceptionType) -> bool:
         """Return ``True`` if a non-data type is reachable from *handle* (cycle-safe).
 

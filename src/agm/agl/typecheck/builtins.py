@@ -14,11 +14,17 @@ from typing import Protocol
 
 from agm.agl.capabilities import HostCapabilities
 from agm.agl.diagnostics import Diagnostic, DiagnosticPhase
+from agm.agl.ir.reserved_nominals import reserved_nominal_id
+from agm.agl.scope.symbols import ConstructorRef
+from agm.agl.semantics.analyses import nominal_references
 from agm.agl.semantics.types import (
     BUILTIN_PRELUDE_TYPES,
     BoolType,
+    EnumType,
+    ExceptionType,
     FunctionType,
     JsonType,
+    RecordType,
     TextType,
     Type,
     UnitType,
@@ -139,6 +145,8 @@ class BuiltinCheckCtx(Protocol):
 
     def _register_builtin_obligation(self, obligation: PendingBuiltinObligation) -> None: ...
 
+    def _constructor_ref_for(self, node_id: int) -> ConstructorRef | None: ...
+
 
 # ---------------------------------------------------------------------------
 # Collaborator class
@@ -243,7 +251,10 @@ class BuiltinCallChecker:
 
     # --- ask ---
 
-    def check_ask(self, node: Call, *, expected: Type | None, receiver: bool = False) -> Type:
+    def check_ask(
+        self, node: Call, *, expected: Type | None, receiver_type: Type | None = None
+    ) -> Type:
+        """Type-check ``ask``. *receiver_type* is set only for ``x.ask(...)``."""
         # Target type: explicit type argument overrides context.
         explicit = self._resolve_explicit_target(node, "ask")
         target_type: Type = (
@@ -255,16 +266,15 @@ class BuiltinCallChecker:
             target_type=target_type,
             result_type=target_type,
             kind=BuiltinObligationKind.ASK,
-            receiver=receiver,
+            receiver_type=receiver_type,
         )
         return target_type
 
     # --- ask-request ---
 
-    def check_ask_request(self, node: Call, *, receiver: bool = False) -> Type:
+    def check_ask_request(self, node: Call, *, receiver_type: Type | None = None) -> Type:
         """Type-check the fixed-text, side-effect-free ``ask-request`` builder."""
-        agent_request_type = self._ctx._env.get_type("AgentRequest")
-        assert agent_request_type is not None, "AgentRequest prelude type missing"
+        agent_request_type = self._resolve_host_record_contract("AgentRequest", span=node.span)
 
         if node.type_args:
             raise AglTypeError(
@@ -278,7 +288,8 @@ class BuiltinCallChecker:
         named = self._validate_ask_like_arguments(
             node,
             "ask-request",
-            allowed_named=frozenset() if receiver else frozenset({"agent"}),
+            allowed_named=frozenset() if receiver_type is not None else frozenset({"agent"}),
+            receiver_type=receiver_type,
         )
         self._ctx._register_builtin_obligation(
             PendingBuiltinObligation(
@@ -303,14 +314,16 @@ class BuiltinCallChecker:
         target_type: Type,
         result_type: Type,
         kind: BuiltinObligationKind,
-        receiver: bool,
+        receiver_type: Type | None,
     ) -> None:
         """Check target-independent syntax, then queue contract materialization."""
         callee = kind.value
         named = self._validate_ask_like_arguments(
             node,
             callee,
-            allowed_named=self._ASK_ALLOWED_NAMED_ARGS - ({"agent"} if receiver else set()),
+            allowed_named=self._ASK_ALLOWED_NAMED_ARGS
+            - ({"agent"} if receiver_type is not None else set()),
+            receiver_type=receiver_type,
         )
         format_name, strict_json, parse_policy = self._parse_options(named)
         self._ctx._register_builtin_obligation(
@@ -329,13 +342,33 @@ class BuiltinCallChecker:
         )
 
     def _validate_ask_like_arguments(
-        self, node: Call, callee: str, *, allowed_named: frozenset[str]
+        self,
+        node: Call,
+        callee: str,
+        *,
+        allowed_named: frozenset[str],
+        receiver_type: Type | None = None,
     ) -> dict[str, NamedArg]:
         """Check syntax and value arguments that do not need the target type.
 
         *allowed_named* is the caller's permitted named-argument set: ``ask``
         offers its parse-shaping options, ``ask-request`` only ``agent``, and a
         receiver call drops ``agent`` because the receiver already supplies it.
+
+        Every ``ask``/``ask-request`` call resolves the ``AgentRequest``
+        contract unconditionally, whether or not ``agent`` is itself supplied:
+        the host builds an ``AgentRequest`` (directly for ``ask-request``, via
+        its retry machinery for ``ask``) either way, filling a missing
+        ``agent`` from the canonical default agent, so the contract must be
+        host-coherent (:meth:`_resolve_host_record_contract`) regardless.
+
+        The agent the request is built with is that resolved contract's own
+        ``agent`` FIELD type -- the type the value is actually stored as --
+        rather than an independently resolved ``Agent`` type, so the two can
+        never name different declarations of the same bare name. That single
+        expected type governs both ways of supplying the agent: the ``agent``
+        named argument, and *receiver_type* for a receiver call
+        (``x.ask(...)``), whose receiver IS the agent.
         """
         named = {na.name: na for na in node.named_args}
         for arg_name, na in named.items():
@@ -349,14 +382,16 @@ class BuiltinCallChecker:
             )
         prompt_type = self._ctx._check_expr(node.args[0], expected=TextType())
         self._ctx._assert_assignable_from(prompt_type, TextType(), node.args[0].span, node.args[0])
+        agent_request_type = self._resolve_host_record_contract("AgentRequest", span=node.span)
+        expected_agent_type = self._ctx._env.type_table.record_fields(agent_request_type)["agent"]
+        if receiver_type is not None:
+            self._ctx._assert_assignable_from(receiver_type, expected_agent_type, node.span, node)
         if "agent" in named:
             agent_na = named["agent"]
-            agent_type = self._ctx._check_expr(
-                agent_na.value, expected=BUILTIN_PRELUDE_TYPES["Agent"]
-            )
+            agent_type = self._ctx._check_expr(agent_na.value, expected=expected_agent_type)
             self._ctx._assert_assignable_from(
                 agent_type,
-                BUILTIN_PRELUDE_TYPES["Agent"],
+                expected_agent_type,
                 agent_na.value.span,
                 agent_na.value,
             )
@@ -448,7 +483,7 @@ class BuiltinCallChecker:
         elif expected is not None:
             target_type = expected
         else:
-            target_type = self._exec_result_type()
+            target_type = self._builtin_contract_type("ExecResult")
         self._reject_type_var_target(target_type, node.span)
         named = {na.name: na for na in node.named_args}
         for arg_name, na in named.items():
@@ -477,24 +512,109 @@ class BuiltinCallChecker:
         )
         return target_type
 
-    def _exec_result_type(self) -> Type:
-        """Return the ``ExecResult`` type this program's own declaration names.
+    def _builtin_contract_type(self, name: str) -> RecordType | EnumType | ExceptionType:
+        """Return the type this program's own ``builtin`` declaration of *name* names.
 
-        ``exec``'s default (unannotated) target type, and the identity
-        ``_finalize_exec`` recognizes for a structured result, are both the
-        type a program's own ``builtin record ExecResult`` declaration
-        names — at whatever scope path it is written, so a scoped
-        declaration is recognized at its own path rather than the root. A
-        program loaded without the standard library declares no such
-        ``builtin`` of its own, so this falls back to the seeded canonical
-        (root) handle, which is always registered.
+        The single source of truth every checker-side resolution of a
+        host-contract built-in nominal (``ExecResult``, ``AgentRequest``,
+        ``Agent``, ``ParsePolicy``) goes through: a program's own ``builtin
+        record``/``builtin enum`` declaration of *name* — at whatever scope
+        path it is written, so a scoped declaration is recognized at its own
+        path rather than the root — when the shared ``TypeTable`` has one
+        registered; the seeded canonical (root) handle otherwise. A program
+        loaded without the standard library declares no such ``builtin`` of
+        its own for a name it does not itself define, so that case falls
+        back to the seeded canonical handle, which is always registered.
+        This is also exactly the declaration the host's own minting table
+        (``lower.lowerer.builtin_nominals_from_declarations``) is derived
+        from, so a call's static type and the identity the host actually
+        mints can never disagree.
         """
-        declared = self._ctx._env.type_table.builtin_declaration("ExecResult")
+        declared = self._ctx._env.type_table.builtin_declaration(name)
         if declared is not None:
             return declared.handle()
-        exec_result_type = self._ctx._env.get_type("ExecResult")
-        assert exec_result_type is not None
-        return exec_result_type
+        canonical = BUILTIN_PRELUDE_TYPES.get(name)
+        assert isinstance(canonical, (RecordType, EnumType, ExceptionType)), (
+            f"{name!r} has no canonical builtin prelude type"
+        )
+        return canonical
+
+    def _resolve_host_record_contract(self, name: str, *, span: SourceSpan) -> RecordType:
+        """Resolve *name*'s host record contract, rejecting it if incoherent.
+
+        Wraps :meth:`_builtin_contract_type` for the two RECORD contracts a
+        host call mints directly (``AgentRequest``, ``ExecResult``) with the
+        one coherence check every such resolution needs
+        (:meth:`_check_host_contract_coherent`). *name* always names a
+        ``builtin record`` in the canonical prelude, so the resolved handle is
+        always a ``RecordType``.
+        """
+        contract_type = self._builtin_contract_type(name)
+        assert isinstance(contract_type, RecordType), f"{name!r} is not a builtin record contract"
+        self._check_host_contract_coherent(contract_type, span=span)
+        return contract_type
+
+    def check_caught_exception_contract(self, exc_type: ExceptionType, *, span: SourceSpan) -> None:
+        """Reject a ``catch`` clause naming an incoherent host exception contract.
+
+        A ``builtin exception`` is raised by the host, which fills its fields
+        itself — ``AgentCallError``/``AgentParseError`` carry an ``agent``
+        field the host always fills with the standard ``Agent``. Catching one
+        is the only way a program reads such a field, so this is where a
+        host-raised exception's contract is held to the same requirement a
+        host-minted record's is (:meth:`_check_host_contract_coherent`). An
+        ordinary, non-``builtin`` exception is never host-raised: its fields
+        always hold whatever the source that constructed it put there, so it
+        carries no requirement of its own and is skipped.
+        """
+        typedef = self._ctx._env.type_table.get_by_id(exc_type.decl_id)
+        if typedef is not None and typedef.is_builtin:
+            self._check_host_contract_coherent(exc_type, span=span)
+
+    def _check_host_contract_coherent(
+        self, contract_type: RecordType | ExceptionType, *, span: SourceSpan
+    ) -> None:
+        """Reject *contract_type* if the host cannot produce a value of its shape.
+
+        The host produces a value of *contract_type* itself — a record a
+        built-in call mints (``ask-request``, ``ask``, ``exec``) or an
+        exception it raises — filling every nominal-typed field with a value
+        that carries a fixed, host-known identity (the canonical ``Agent`` for
+        ``AgentRequest.agent`` and ``AgentCallError.agent``, the canonical
+        ``Option`` for ``AgentRequest``'s ``Option``-typed fields — see
+        ``eval/effects.py``, ``runtime/agents.py`` and ``runtime/option.py``)
+        — never whatever declaration *contract_type*'s own field type happens
+        to name. When a field's type does not itself carry that fixed
+        identity — checked recursively through type arguments, so
+        ``Option[text]``'s own ``Option`` is checked too — the checker would
+        type the field one way while the host produces another, so such a
+        contract is rejected here (an ordinary, user-facing static error)
+        rather than left to crash the evaluator.
+        """
+        table = self._ctx._env.type_table
+        field_types = (
+            table.record_fields(contract_type)
+            if isinstance(contract_type, RecordType)
+            else table.exception_fields(contract_type)
+        )
+        for field_name, field_type in field_types.items():
+            for nominal in nominal_references(field_type):
+                # A name with no reserved identity at all (``reserved_id is
+                # None``) is also incoherent: ``!=`` against ``None`` is
+                # always true, so it is rejected here exactly like a name
+                # that has one but whose declaration doesn't carry it.
+                reserved_id = reserved_nominal_id(nominal.name)
+                if nominal.decl_id != reserved_id:
+                    raise AglTypeError(
+                        f"{contract_type.name}'s field '{field_name}' is typed "
+                        f"'{field_type!r}', which names this program's own "
+                        f"'{nominal.name}' declaration rather than the standard one. "
+                        f"{contract_type.name} is produced directly by the host, which "
+                        f"always fills '{field_name}' with the standard "
+                        f"'{nominal.name}' identity, so this contract cannot be used "
+                        "here.",
+                        span=span,
+                    )
 
     # --- shared explicit-target resolver for --
 
@@ -653,13 +773,19 @@ class BuiltinCallChecker:
         else:
             # ``ExecResult`` is identified as the type the program's own
             # `builtin record ExecResult` declaration names (see
-            # `_exec_result_type`), so a scoped declaration is recognized at
-            # its own path rather than the root canonical one.
-            is_structured = target_type == self._exec_result_type()
+            # `_builtin_contract_type`), so a scoped declaration is
+            # recognized at its own path rather than the root canonical one.
+            is_structured = target_type == self._builtin_contract_type("ExecResult")
             if not is_structured:
                 spec = self._record_parsed_contract(obligation, use="an exec output type")
                 self._append_call_site(obligation, spec.codec_name, obligation.parse_policy)
                 return
+            # ``exec`` will mint an ``ExecResult`` record directly: apply the
+            # same host-coherence check as ``ask``/``ask-request`` (currently
+            # vacuous, since none of ``ExecResult``'s own fields are nominal,
+            # but applied uniformly so a future field cannot regress silently).
+            assert isinstance(target_type, RecordType)
+            self._check_host_contract_coherent(target_type, span=obligation.span)
             if obligation.has_parse_shaping_option:
                 option_name, offending_span = obligation.first_parse_option()
                 raise AglTypeError(
@@ -675,36 +801,80 @@ class BuiltinCallChecker:
     # --- on_parse_error policy extraction ---
 
     def _extract_parse_policy_str(self, arg: Expr, span: SourceSpan) -> str:
-        """Extract a static ``ParsePolicy`` constructor as an inventory string."""
+        """Extract a static ``ParsePolicy`` constructor as an inventory string.
+
+        *arg* must actually RESOLVE (through the same constructor-identity
+        mechanism ordinary expression-checking uses,
+        :meth:`BuiltinCheckCtx._constructor_ref_for`) to a genuine
+        constructor — not merely share a constructor's bare spelling. A local
+        binding that shadows the name (``let Abort = ParsePolicy::Retry(n =
+        3)``) resolves to that binding, not any constructor, so
+        ``_constructor_ref_for`` returns ``None`` for it and it is rejected
+        here exactly like any other non-constructor expression, matching how
+        the surrounding checker treats a shadowed constructor name everywhere
+        else (e.g. ``_check_builtin_var``'s constant-expression check).
+        """
         if isinstance(arg, Call) and isinstance(arg.callee, VarRef):
-            if not self._is_parse_policy_qualifier(arg.callee):
+            callee = arg.callee
+            if not self._accepts_as_parse_policy_constructor(callee):
                 raise AglTypeError(
                     "'on_parse_error' must be a static ParsePolicy constructor "
                     "(Abort or Retry(n: <int>)).",
                     span=span,
                 )
-            return self._extract_parse_policy_variant(arg.callee.name, arg.named_args, span)
+            return self._extract_parse_policy_variant(callee.name, arg.named_args, span)
         # Bare VarRef: ``Abort`` or ``ParsePolicy::Abort`` (no parens) is also accepted.
-        if isinstance(arg, VarRef) and arg.name == "Abort" and self._is_parse_policy_qualifier(arg):
+        if (
+            isinstance(arg, VarRef)
+            and arg.name == "Abort"
+            and self._accepts_as_parse_policy_constructor(arg)
+        ):
             return "abort"
         raise AglTypeError(
             "'on_parse_error' must be a static ParsePolicy constructor (Abort or Retry(n: <int>)).",
             span=span,
         )
 
-    @staticmethod
-    def _is_parse_policy_qualifier(ref: VarRef) -> bool:
-        """Return whether *ref* uses an accepted ParsePolicy qualifier spelling."""
+    def _accepts_as_parse_policy_constructor(self, ref: VarRef) -> bool:
+        """Whether *ref* denotes an accepted ``ParsePolicy`` constructor spelling.
+
+        Resolves *ref* through :meth:`BuiltinCheckCtx._constructor_ref_for` so
+        a local binding that shadows the name is never mistaken for the
+        constructor it shadows.
+
+        Unqualified (and current-module-anchored, ``::Retry``) spellings are
+        accepted whenever they resolve to ANY constructor — not necessarily
+        one this program's own ``ParsePolicy`` declares. The built-in
+        ``Abort`` EXCEPTION and ``ParsePolicy``'s nullary ``Abort`` variant
+        share that one bare root spelling, and ordinary name resolution picks
+        one of them (the exception, today); accepting either is unambiguous
+        in this position, since only a ``ParsePolicy`` constructor is ever a
+        legal ``on_parse_error`` value, and it preserves the unqualified
+        spelling's existing leniency while still closing the actual
+        shadowing hole (a binding that resolves to no constructor at all).
+
+        A qualified spelling (other than the current-module anchor) must
+        instead resolve to the exact constructor of this program's own
+        ``ParsePolicy`` (:meth:`_builtin_contract_type`) that its final
+        segment names — the bare root ``ParsePolicy::`` prefix when the
+        program declares none of its own, or that declaration's own scope
+        path (e.g. ``A::ParsePolicy::``) when it does — so a scoped
+        ``ParsePolicy`` is recognized at its own path exactly like the root
+        one, and an unrelated same-named constructor is rejected. A qualifier
+        segment carrying an explicit type argument (``ParsePolicy[int]::``)
+        is never accepted, regardless of what it would otherwise resolve to:
+        ``ParsePolicy`` is not generic, so a type argument there can only be
+        a mistake.
+        """
         chain = ref.qualifier
-        return (
-            chain is None
-            or chain.anchor is QualifierAnchor.CURRENT_MODULE
-            or (
-                len(chain.segments) == 1
-                and chain.segments[0].type_args is None
-                and chain.segments[0].name == "ParsePolicy"
-            )
-        )
+        if chain is None or chain.anchor is QualifierAnchor.CURRENT_MODULE:
+            return self._ctx._constructor_ref_for(ref.node_id) is not None
+        if any(segment.type_args is not None for segment in chain.segments):
+            return False
+        parse_policy_type = self._builtin_contract_type("ParsePolicy")
+        assert isinstance(parse_policy_type, EnumType), "ParsePolicy is always an enum contract"
+        ctor_ref = self._ctx._constructor_ref_for(ref.node_id)
+        return ctor_ref is not None and ctor_ref.matches(parse_policy_type, ref.name)
 
     def _extract_parse_policy_variant(
         self, name: str, named_args: tuple[NamedArg, ...], span: SourceSpan

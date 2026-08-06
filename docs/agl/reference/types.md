@@ -524,6 +524,35 @@ The `builtin` modifier behaves like a decorator on a type declaration: it may
 sit on the same line as the `record`, `enum`, or `exception` keyword or on the
 line directly above it (the newline after the modifier is insignificant).
 
+A `builtin` type declaration also names the type the host produces values of
+under that name: an unannotated `exec` returns that program's
+`builtin record ExecResult`, `ask-request` builds its
+`builtin record AgentRequest`, and a built-in exception the host raises is its
+`builtin exception` of that name. Such a value carries that declaration's own
+path, so it renders under that path and a `catch` clause naming the declaration
+matches it. A name the program declares no `builtin` for keeps the standard
+core type described in [Standard core types](#standard-core-types).
+
+The host fills the fields of such a value itself, always with standard
+values, so any field of one whose type is itself a nominal type must keep the
+standard identity for that name — including a nominal nested inside a type
+argument, such as the `Option` in `AgentRequest`'s `target_type:
+Option[text]`. The fields subject to this are `AgentRequest`'s `agent: Agent`
+and its `Option`-typed fields, and the `agent: Agent` field of the built-in
+exceptions `AgentCallError` and `AgentParseError`; `ExecResult` has no
+nominal field. So a program may declare its own `builtin enum Agent`, or —
+without the standard library — its own `Option`, and it may separately
+declare a `builtin record AgentRequest` or a `builtin exception
+AgentCallError`; but writing both so that the redeclaration is what the
+contract's own field resolves to makes the pair unusable together. That is
+reported where the contract is used: at an `ask`/`ask-request` call for
+`AgentRequest`, and at a `catch` clause naming the exception.
+
+The agent an `ask`/`ask-request` dispatches to must likewise be a standard
+`Agent`, whether it is supplied as the `agent` argument or as the receiver of
+`agent.ask(...)` / `agent.ask-request(...)`. A value of a program's own
+differently-scoped `Agent` is an ordinary type mismatch there.
+
 ## Recursive types
 
 A record, enum, or exception may reference its own type, directly or through

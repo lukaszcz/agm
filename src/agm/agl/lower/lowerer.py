@@ -252,7 +252,6 @@ from agm.agl.syntax.nodes import (
     scoped_public_name,
     simple_let_pattern_name,
     static_items,
-    static_type_items,
 )
 from agm.agl.syntax.spans import SourceSpan
 from agm.agl.type_schema import (
@@ -336,38 +335,32 @@ def _add_builtin_nominals(
 def builtin_nominals_from_declarations(
     modules: Mapping[ModuleId, CheckedModule],
 ) -> BuiltinNominals:
-    """Return the built-in nominal table for every ``builtin`` declaration in *modules*.
+    """Return the built-in nominal table for every currently-resolved ``builtin`` declaration.
 
-    Maps each ``builtin`` record/enum/exception declaration's bare name to a
+    Maps each bare name with a live ``builtin`` declaration to a
     ``DeclaredNominal`` pairing its own identity with its declared source
-    spelling. The identity is read straight off the checker's own ``TypeDef``
-    for the declaration (``TypeDef.decl_node_id``) rather than recomputed, so
-    it always agrees with the checker — including a ``std/core``-root
-    reserved name, whose ``TypeDef`` already carries the reserved identity
-    rather than an AST node id. A name this compile unit does not declare is
-    simply absent — the resulting table then answers it with the shipped
+    spelling, read straight off :meth:`~agm.agl.semantics.type_table.TypeTable.builtin_declarations`
+    -- the SAME resolution (same forward-scan, last-match-wins tie-break,
+    same orphan skip) the checker itself queries
+    (:meth:`~agm.agl.semantics.type_table.TypeTable.builtin_declaration`) to
+    type a host call (e.g. ``exec``'s default result type) against a
+    program's own declaration, rather than an independent walk of *modules*'
+    ASTs with its own separate tie-break -- so the two can never disagree
+    about which declaration a built-in name denotes. Every per-module
+    ``TypeEnvironment`` in a checked program graph shares one ``TypeTable``
+    instance, so any one module's env reaches it. A name no module declares
+    is simply absent -- the resulting table then answers it with the shipped
     standard library's own identity (see
     :meth:`~agm.agl.ir.builtin_nominals.BuiltinNominals.nominal`).
     """
-    declared: dict[str, DeclaredNominal] = {}
-    for module_id, checked_module in modules.items():
-        type_table = checked_module.type_env.type_table
-        for item in static_type_items(checked_module.resolved.program.body.items):
-            if isinstance(item, TypeAlias) or not item.is_builtin:
-                continue
-            # ``item.name`` is always bare here: ``static_type_items`` yields
-            # raw parser nodes (never the joined-name copies
-            # ``_TypeBuilder._static_type_items`` builds for its own internal
-            # name tables), so there is no "A::B::name" spelling to strip.
-            scope_path = tuple(segment.name for segment in item.scope_path)
-            typedef = type_table.get(module_id, item.name, scope_path)
-            assert typedef is not None, (
-                f"compiler bug: builtin declaration {item.name!r} has no TypeDef registered"
-            )
-            declared[item.name] = DeclaredNominal(
-                nominal=NominalId(typedef.decl_node_id),
-                display_name="::".join((*scope_path, item.name)),
-            )
+    type_table = next(iter(modules.values())).type_env.type_table
+    declared = {
+        name: DeclaredNominal(
+            nominal=NominalId(typedef.decl_node_id),
+            display_name="::".join((*typedef.scope_path, typedef.name)),
+        )
+        for name, typedef in type_table.builtin_declarations().items()
+    }
     return BuiltinNominals(declared=declared)
 
 

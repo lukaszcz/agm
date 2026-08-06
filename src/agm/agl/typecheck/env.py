@@ -20,6 +20,7 @@ from typing import Literal, cast
 
 from agm.agl.diagnostics import AglError, Diagnostic, DiagnosticPhase
 from agm.agl.ir.ids import NominalId
+from agm.agl.ir.reserved_nominals import NO_DECL_ID, require_reserved_nominal_id
 from agm.agl.modules.ids import ENTRY_ID, STD_CORE_ID, ModuleId, spell_declaration
 from agm.agl.scope.imports import (
     ImportEnv,
@@ -85,6 +86,29 @@ def _split_scoped_type_name(name: str) -> tuple[ScopePath, str]:
     """Split a source spelling only at the environment's UI boundary."""
     *scope_path, declared_name = name.split("::")
     return tuple(scope_path), declared_name
+
+
+def _is_own_builtin_declaration(name: str, typ: Type) -> bool:
+    """Return whether *typ* is a program's own ``builtin`` declaration of reserved *name*.
+
+    A canonical binding for a built-in exception or prelude type name carries
+    that name's fixed reserved identity (``ir.reserved_nominals``); a
+    program's own ``builtin`` declaration of the same name -- root or scoped,
+    anywhere other than ``std/core``'s own root -- instead carries its own
+    declaration identity, which never equals the reserved one (see
+    ``typecheck.builder._decl_identity``). *name* is always one of the
+    reserved names, so it always has a reserved identity to compare against.
+
+    ``NO_DECL_ID`` is excluded too: it is the identity a handle carries when
+    none is attached at all, never a real declaration's, so a binding
+    carrying it is neither the canonical one nor a program's own and must not
+    displace the canonical default.
+    """
+    if not isinstance(typ, (RecordType, EnumType, ExceptionType)):
+        return False
+    if typ.decl_id == NO_DECL_ID:
+        return False
+    return typ.decl_id != require_reserved_nominal_id(name)
 
 
 def _type_path_atom(path: ScopePath) -> NameAtom:
@@ -2455,8 +2479,14 @@ class TypeEnvironment:
         Used to pre-populate a fresh environment with a session's accumulated
         state before checking a new entry.  Built-in exception types and
         built-in prelude types are already present in every fresh environment
-        and are not copied from the source.  Binding types are keyed by
-        globally-unique ``decl_node_id`` so they never collide across entries.
+        and are not copied from the source -- UNLESS *other*'s own binding for
+        one is a program's own ``builtin`` declaration rather than the
+        canonical one (:func:`_is_own_builtin_declaration`), which must carry
+        forward exactly like any other declared name so a later entry's
+        ``catch``/host-call resolution keeps agreeing with the identity the
+        host has been minting since the declaring entry.  Binding types are
+        keyed by globally-unique ``decl_node_id`` so they never collide across
+        entries.
 
         Also merges *other*'s ``type_table`` entries in, unless
         *merge_type_table* is ``False``: *other* is treated as authoritative,
@@ -2502,7 +2532,7 @@ class TypeEnvironment:
         if merge_type_table:
             self._type_table.merge_from(other._type_table)
         for name, typ in other._types.items():
-            if name not in builtin:
+            if name not in builtin or _is_own_builtin_declaration(name, typ):
                 self._types[name] = typ
         self._alias_targets.update(other._alias_targets)
         self._binding_types = other._binding_types.fork()
@@ -2524,6 +2554,16 @@ class TypeEnvironment:
         checked-entry metadata and restore the previous session definition when
         one existed.
 
+        *names* comes from this entry's OWN declarations (see the REPL's
+        promotion bookkeeping), so a reserved built-in exception/prelude name
+        can appear in it only when this entry itself wrote a ``builtin``
+        declaration of that name — the reserved names are non-shadowable
+        other than by one. That declaration is rolled back exactly like any
+        other unpromoted one below: no special-casing is needed, and none is
+        applied, unlike :meth:`seed_from`, which instead has to tell a
+        program's own carried-forward declaration apart from the canonical
+        default it must not clobber.
+
         The shared ``type_table`` is keyed by declaration identity, not name,
         so the unpromoted declaration stays registered under its own identity
         exactly as a superseded one does — the link image derives its nominal
@@ -2538,10 +2578,7 @@ class TypeEnvironment:
         ``register`` below reclaiming its name.
         """
         self._assert_mutable()
-        builtin = frozenset(BUILTIN_EXCEPTIONS) | BUILTIN_PRELUDE_TYPE_NAMES
         for name in names:
-            if name in builtin:
-                continue
             self.unregister_name(name)
             scope_path, declared_name = _split_scoped_type_name(name)
             # Read the unpromoted declaration before ``register`` repoints the

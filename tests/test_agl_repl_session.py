@@ -979,6 +979,51 @@ class TestStdlib:
 
 _EXEC_RESULT_FIELDS = "  stdout: text\n  exit_code: int\n  stderr: text\n  timed_out: bool\n"
 
+_AGENT_VARIANTS = (
+    "  | AgentCommand(command: text)\n"
+    "  | AgentClaude(model: text, thinking: text)\n"
+    "  | AgentCodex(model: text, thinking: text)\n"
+    "  | AgentPi(provider: text, model: text, thinking: text)\n"
+)
+
+_AGENT_REQUEST_FIELDS = (
+    "  agent: Agent\n"
+    "  prompt: text\n"
+    "  target_type: Option[text]\n"
+    "  format_instructions: Option[text]\n"
+    "  json_schema: Option[json]\n"
+    "  attempt: int\n"
+    "  previous_error: Option[text]\n"
+    "  metadata: json\n"
+)
+
+_PARSE_POLICY_VARIANTS = "  | Abort\n  | Retry(n: int)\n"
+
+# A plain (non-``builtin``) ``Option`` declaration, shaped like the standard
+# library's own, for arrangements that declare their own host-contract types
+# without loading the standard library: ``AgentRequest``'s canonical shape
+# uses ``Option``-typed fields, and ``Option`` itself is an ordinary type the
+# standard library happens to define -- never a ``builtin`` name of its own --
+# so a program without the standard library must supply an equivalent one.
+_OPTION_DECL = "enum Option[T] =\n  | None\n  | Some(value: T)\n"
+
+
+def _session_with_import_root(root: Path) -> ReplSession:
+    """Create a ``ReplSession`` with *root* as the only module search root."""
+    from agm.agl.modules.roots import assemble_roots
+
+    roots = assemble_roots(
+        invocation_root=root,
+        stdlib_root=Path(__file__).resolve().parents[1] / "stdlib",
+        lib_root=None,
+        configured=[],
+        cli=[],
+        cwd=root,
+    )
+    s = ReplSession()
+    s._roots = roots  # inject roots directly
+    return s
+
 
 class TestBuiltinIdentityAcrossEntries:
     """A REPL session's shared ``TypeTable`` accumulates ``builtin`` declarations
@@ -1043,6 +1088,842 @@ class TestBuiltinIdentityAcrossEntries:
         assert result.ok, result.diagnostics
         assert isinstance(result.value_type, RecordType)
         assert result.value_type.scope_path == ("B",)
+
+    def test_unpromoted_builtin_exception_declaration_does_not_type_a_later_catch_clause(
+        self,
+    ) -> None:
+        """A ROOT ``builtin exception`` declaration the entry never promoted
+        must not steer a later ``catch`` clause or the host's raise identity
+        -- the exception-shaped counterpart of
+        ``TestRedefinition.test_unpromoted_builtin_declaration_does_not_type_a_later_host_call``.
+        Its own rollback path (``TypeEnvironment.restore_type_names_from``)
+        must not skip a reserved name just because such a name is normally
+        non-shadowable: it can appear among an entry's own unpromoted names
+        only when that entry itself wrote the ``builtin`` declaration.
+
+        Declared without the standard library and at ROOT: a root reserved
+        name always conflicts with the standard library's own root
+        declaration once loaded (see
+        ``TestBuiltinIdentityWithStandardLibrary``), and a SCOPED name is
+        never in ``restore_type_names_from``'s reserved-name set to begin
+        with (it is keyed by the joined ``scope::name`` spelling, never the
+        bare reserved one), so only a root declaration without the standard
+        library actually exercises the skip this audit fixed.
+        """
+        s = ReplSession(default_stdlib=False)
+        failed = s.eval_entry(
+            'let stop: int = raise Abort(message = "stop")\n'
+            "builtin exception RangeError extends Exception()"
+        )
+        assert not failed.ok
+        # A RUNTIME (partial-promotion) failure, not a static rejection --
+        # confirms this actually reached `restore_type_names_from` rather
+        # than failing before any declaration could even be checked.
+        assert failed.error is not None
+
+        result = s.eval_entry(
+            "let step = 0\n"
+            "try\n"
+            "  for i in 1 to 5 by step do\n"
+            "    ()\n"
+            "  done\n"
+            "catch RangeError as error =>\n"
+            "  ()"
+        )
+        assert result.ok, result.diagnostics
+        assert result.error is None
+
+    def test_unpromoted_builtin_record_declaration_does_not_displace_the_live_one(
+        self,
+    ) -> None:
+        """An entry that redeclares a ROOT ``builtin record`` and then fails at
+        runtime must leave the session's EARLIER declaration of that name in
+        force: a later host call keeps minting the identity values already in
+        the session carry, so comparing an old value against a fresh one is
+        still a comparison of one type against itself.
+
+        This is the rollback direction ``restore_type_names_from`` owns.
+        Skipping a reserved bare name there instead leaves the unpromoted
+        redeclaration holding the name, and the session then reports two
+        identically-spelled ``ExecResult`` types as incomparable.
+        """
+        s = ReplSession(default_stdlib=False)
+        declare = s.eval_entry(
+            f"builtin record ExecResult\n{_EXEC_RESULT_FIELDS}"
+            "builtin def exec(command: text) -> ExecResult\n"
+            "builtin\nexception Exception\n  *\n  message: text\n  trace_id: text\n"
+            "builtin exception Abort extends Exception()\n"
+        )
+        assert declare.ok, declare.diagnostics
+        original = s.eval_entry(
+            'let a = ExecResult(stdout = "hi", exit_code = 0, stderr = "", timed_out = false)'
+        )
+        assert original.ok, original.diagnostics
+        assert isinstance(original.value_type, RecordType)
+
+        failed = s.eval_entry(
+            'let stop: int = raise Abort(message = "stop")\n'
+            f"builtin record ExecResult\n{_EXEC_RESULT_FIELDS}"
+        )
+        assert not failed.ok
+        # A RUNTIME (partial-promotion) failure, so the redeclaration was
+        # checked and then rolled back rather than rejected outright.
+        assert failed.error is not None
+
+        shell = FakeShell(stdout="hi")
+        with patch("agm.core.process.run_capture_result", side_effect=shell):
+            minted = s.eval_entry('let b = exec("echo hi")')
+        assert minted.ok, minted.diagnostics
+        assert isinstance(minted.value_type, RecordType)
+        assert minted.value_type.decl_id == original.value_type.decl_id
+
+        equal = s.eval_entry("a == b")
+        assert equal.ok, equal.diagnostics
+        assert equal.value == BoolValue(True)
+
+
+# ---------------------------------------------------------------------------
+# Builtin identity vs. the standard library's own canonical declarations
+# ---------------------------------------------------------------------------
+
+
+class TestBuiltinIdentityWithStandardLibrary:
+    """A program's own ``builtin`` declaration of a reserved name must win the
+    bare-name resolution the checker and the host both use, even though the
+    standard library's own root declaration of the same name is ALSO
+    registered in the shared ``TypeTable`` once the default standard library
+    is loaded. Before the fix, the checker's and the host's independent
+    resolutions disagreed whenever both were present: the checker picked the
+    program's own declaration (a forward scan that sees it registered last)
+    while the host picked whichever module's AST happened to be walked last
+    -- silently falling back to the standard library's own identity even
+    though the checker was typing calls against the program's own one.
+
+    A ROOT ``builtin`` declaration of a reserved name is always rejected once
+    the standard library is loaded (``validate_builtin_declaration_uniqueness``
+    keys uniqueness on scope path + name alone, so a root declaration
+    unconditionally collides with the standard library's own root one, in
+    any module); every scenario below that needs a root declaration to
+    succeed therefore runs without the standard library, and the "declared
+    with the standard library" arrangement is instead covered by the
+    dedicated rejection test, which applies identically to every ``builtin``
+    kind since they all share that one uniqueness check.
+    """
+
+    def test_root_builtin_declaration_conflicts_with_the_standard_librarys_own(
+        self,
+    ) -> None:
+        """A root ``builtin`` declaration of a reserved name always collides
+        with the standard library's own root declaration of it -- a
+        pre-existing invariant this fix leaves untouched, so "declared at
+        root with the standard library loaded" is a rejection, not a
+        success, for every ``builtin`` kind (record/enum/exception share one
+        uniqueness namespace)."""
+        s = ReplSession()
+        declare = s.eval_entry(f"builtin record ExecResult\n{_EXEC_RESULT_FIELDS}")
+        assert not declare.ok
+        assert any("ExecResult" in d.message for d in declare.diagnostics)
+
+    def test_scoped_builtin_record_declared_with_stdlib_types_and_mints_consistently(
+        self,
+    ) -> None:
+        """The reported crash: with the scoped declaration losing the
+        bare-name race, ``a.field`` raised an internal nominal-mismatch error
+        and ``a == b`` was wrongly ``False`` even though ``a`` and ``b`` name
+        the identical declaration."""
+        s = ReplSession()
+        declare = s.eval_entry(f"scope A\nbuiltin record ExecResult\n{_EXEC_RESULT_FIELDS}end A\n")
+        assert declare.ok, declare.diagnostics
+
+        shell = FakeShell(stdout="hi")
+        with patch("agm.core.process.run_capture_result", side_effect=shell):
+            result = s.eval_entry('let a = exec("echo hi")')
+        assert result.ok, result.diagnostics
+        assert isinstance(result.value_type, RecordType)
+        assert result.value_type.scope_path == ("A",)
+
+        ctor = s.eval_entry(
+            'let b = A::ExecResult(stdout = "hi", exit_code = 0, stderr = "", timed_out = false)'
+        )
+        assert ctor.ok, ctor.diagnostics
+        equal = s.eval_entry("let c = a == b")
+        assert equal.ok, equal.diagnostics
+        assert equal.value == BoolValue(True)
+
+        field = s.eval_entry("a.exit_code")
+        assert field.ok, field.diagnostics
+        assert field.value == IntValue(0)
+
+    def test_root_builtin_record_declared_without_stdlib_types_and_mints_consistently(
+        self,
+    ) -> None:
+        s = ReplSession(default_stdlib=False)
+        declare = s.eval_entry(
+            f"builtin record ExecResult\n{_EXEC_RESULT_FIELDS}"
+            "builtin def exec(command: text) -> ExecResult\n"
+        )
+        assert declare.ok, declare.diagnostics
+
+        shell = FakeShell(stdout="hi")
+        with patch("agm.core.process.run_capture_result", side_effect=shell):
+            result = s.eval_entry('let a = exec("echo hi")')
+        assert result.ok, result.diagnostics
+        assert isinstance(result.value_type, RecordType)
+        assert result.value_type.scope_path == ()
+
+        ctor = s.eval_entry(
+            'let b = ExecResult(stdout = "hi", exit_code = 0, stderr = "", timed_out = false)'
+        )
+        assert ctor.ok, ctor.diagnostics
+        equal = s.eval_entry("a == b")
+        assert equal.ok, equal.diagnostics
+        assert equal.value == BoolValue(True)
+
+    def test_scoped_builtin_exception_declared_with_stdlib_is_caught_by_its_own_identity(
+        self,
+    ) -> None:
+        """The ``builtin exception`` counterpart of the scoped-record repro
+        above. ``catch`` names an exception type by ordinary LEXICAL name
+        resolution (unlike ``exec``'s bare-name-anywhere default type), so
+        the catching ``def`` is declared inside the same scope as the
+        declaration -- exactly like the shipped standard library's own
+        exception-catching code would be -- while the RAISED value's
+        identity still comes from the host's scope-agnostic bare-name mint,
+        which is what this fix keeps in agreement with it."""
+        s = ReplSession()
+        declare = s.eval_entry(
+            "scope A\n"
+            "builtin exception RangeError extends Exception()\n"
+            "def trigger(step: int) -> unit =\n"
+            "  try\n"
+            "    for i in 1 to 5 by step do\n"
+            "      ()\n"
+            "    done\n"
+            "  catch RangeError as error =>\n"
+            "    ()\n"
+            "end A\n"
+        )
+        assert declare.ok, declare.diagnostics
+
+        result = s.eval_entry("A::trigger(0)")
+        assert result.ok, result.diagnostics
+        assert result.error is None
+
+    def test_later_entry_builtin_declaration_does_not_retype_an_earlier_hosts_mint(
+        self,
+    ) -> None:
+        """A value the host minted BEFORE a program declared its own
+        ``builtin record`` keeps its own (canonical) identity; only a mint
+        AFTER the declaration picks up the program's own one, and the two
+        are unrelated nominal types -- the same supersession semantics an
+        ordinary record redeclaration already has."""
+        s = ReplSession()
+        shell = FakeShell(stdout="hi")
+        with patch("agm.core.process.run_capture_result", side_effect=shell):
+            before = s.eval_entry('let a = exec("echo hi")')
+        assert before.ok, before.diagnostics
+        assert isinstance(before.value_type, RecordType)
+        before_decl_id = before.value_type.decl_id
+
+        declare = s.eval_entry(f"scope A\nbuiltin record ExecResult\n{_EXEC_RESULT_FIELDS}end A\n")
+        assert declare.ok, declare.diagnostics
+
+        with patch("agm.core.process.run_capture_result", side_effect=shell):
+            after = s.eval_entry('let b = exec("echo hi")')
+        assert after.ok, after.diagnostics
+        assert isinstance(after.value_type, RecordType)
+        assert after.value_type.decl_id != before_decl_id
+        assert after.value_type.scope_path == ("A",)
+
+        still_reads_old_field = s.eval_entry("a.exit_code")
+        cross = s.eval_entry("a == b")
+        assert still_reads_old_field.ok, still_reads_old_field.diagnostics
+        assert still_reads_old_field.value == IntValue(0)
+        assert not cross.ok  # unrelated nominal types: a static error, not False
+
+
+# ---------------------------------------------------------------------------
+# Builtin identity across imported library modules
+# ---------------------------------------------------------------------------
+
+
+class TestBuiltinIdentityAcrossModules:
+    """A ``builtin`` declaration inside an imported library module must type
+    and mint through the exact same shared ``TypeTable`` resolution as one
+    written directly in the entry: the host and the checker both read
+    whichever declaration the table's bare-name resolution currently
+    answers with, regardless of which module wrote it. Every declaration
+    below is scoped: an unscoped one would collide with the standard
+    library's own root declaration (see
+    ``TestBuiltinIdentityWithStandardLibrary``), and two unscoped
+    declarations from different modules would collide with EACH OTHER --
+    ``validate_builtin_declaration_uniqueness`` keys uniqueness on scope path
+    + name only, ignoring which module a declaration came from.
+    """
+
+    def _make_session_with_root(self, root: Path) -> ReplSession:
+        """Create a ReplSession with *root* as the only module search root."""
+        return _session_with_import_root(root)
+
+    def test_builtin_declared_in_an_imported_library_module_types_and_mints_consistently(
+        self, tmp_path: Path
+    ) -> None:
+        (tmp_path / "lib.agl").write_text(
+            f"scope Lib\nbuiltin record ExecResult\n{_EXEC_RESULT_FIELDS}end Lib\n"
+        )
+        s = self._make_session_with_root(tmp_path)
+        declare = s.eval_entry("import lib")
+        assert declare.ok, declare.diagnostics
+
+        shell = FakeShell(stdout="hi")
+        with patch("agm.core.process.run_capture_result", side_effect=shell):
+            result = s.eval_entry('let a = exec("echo hi")')
+        assert result.ok, result.diagnostics
+        assert isinstance(result.value_type, RecordType)
+        assert isinstance(result.value, RecordValue)
+        assert result.value.nominal.value == result.value_type.decl_id
+
+        ctor = s.eval_entry(
+            'let b = lib::Lib::ExecResult(stdout = "hi", exit_code = 0, stderr = "", '
+            "timed_out = false)"
+        )
+        assert ctor.ok, ctor.diagnostics
+        equal = s.eval_entry("a == b")
+        assert equal.ok, equal.diagnostics
+        assert equal.value == BoolValue(True)
+
+    def test_two_modules_declaring_the_same_bare_builtin_name_still_agree_on_identity(
+        self, tmp_path: Path
+    ) -> None:
+        """Two imported modules, each with their own scoped ``builtin record
+        ExecResult`` (at different scope paths, so neither collides with the
+        other), leave the shared ``TypeTable``'s bare-name tie-break to pick
+        a winner (last-registered, unaffected by this fix -- see
+        ``TypeTable.builtin_declaration``); what this fix guarantees is that
+        the checker and the host agree on whichever declaration that is, not
+        which declaration wins."""
+        (tmp_path / "lib_a.agl").write_text(
+            f"scope X\nbuiltin record ExecResult\n{_EXEC_RESULT_FIELDS}end X\n"
+        )
+        (tmp_path / "lib_b.agl").write_text(
+            f"scope Y\nbuiltin record ExecResult\n{_EXEC_RESULT_FIELDS}end Y\n"
+        )
+        s = self._make_session_with_root(tmp_path)
+        declare = s.eval_entry("import lib_a\nimport lib_b")
+        assert declare.ok, declare.diagnostics
+
+        shell = FakeShell(stdout="hi")
+        with patch("agm.core.process.run_capture_result", side_effect=shell):
+            result = s.eval_entry('let a = exec("echo hi")')
+        assert result.ok, result.diagnostics
+        assert isinstance(result.value_type, RecordType)
+        assert isinstance(result.value, RecordValue)
+        assert result.value.nominal.value == result.value_type.decl_id
+
+
+# ---------------------------------------------------------------------------
+# Builtin identity for the other host-contract nominals: ``AgentRequest``
+# (``ask-request``'s result), ``Agent`` (the ``agent`` argument to
+# ``ask``/``ask-request``), and ``ParsePolicy`` (``on_parse_error``).
+#
+# Every one of these resolutions goes through a program's own ``builtin``
+# declaration of the name (``BuiltinCallChecker._builtin_contract_type``), so
+# the identity a host call is typed against is always the identity the host
+# actually mints. The classes below are the direct counterparts of
+# ``TestBuiltinIdentity*`` above, covering the same arrangements
+# (root/scoped, with/without the standard library, same-entry/earlier-entry/
+# imported-module declarations, and the no-declaration-at-all regression)
+# for each of the three.
+# ---------------------------------------------------------------------------
+
+
+class TestAgentRequestBuiltinIdentity:
+    """``ask-request``'s result type (``BuiltinCallChecker.check_ask_request``)."""
+
+    def test_scoped_agent_request_declared_with_stdlib_types_and_mints_consistently(self) -> None:
+        """The reported crash: with the scoped declaration losing the
+        bare-name race, ``q.prompt`` raised an internal nominal-mismatch
+        error even though ``q`` was minted against that very declaration."""
+        s = ReplSession()
+        declare = s.eval_entry(
+            f"scope A\nbuiltin\nrecord AgentRequest\n{_AGENT_REQUEST_FIELDS}end A\n"
+        )
+        assert declare.ok, declare.diagnostics
+
+        result = s.eval_entry('let q = ask-request("hi")')
+        assert result.ok, result.diagnostics
+        assert isinstance(result.value_type, RecordType)
+        assert result.value_type.scope_path == ("A",)
+
+        field = s.eval_entry("q.prompt")
+        assert field.ok, field.diagnostics
+        assert field.value == TextValue("hi")
+
+    def test_agent_request_declared_in_the_same_entry_as_the_ask_request_call(self) -> None:
+        s = ReplSession()
+        result = s.eval_entry(
+            f"scope A\nbuiltin\nrecord AgentRequest\n{_AGENT_REQUEST_FIELDS}end A\n"
+            'let q = ask-request("hi")'
+        )
+        assert result.ok, result.diagnostics
+        assert isinstance(result.value_type, RecordType)
+        assert result.value_type.scope_path == ("A",)
+
+    def test_scoped_agent_and_agent_request_declared_together_with_agent_omitted_rejected(
+        self,
+    ) -> None:
+        """Both ``Agent`` and ``AgentRequest`` declared together at the same
+        scope, with the ``agent`` argument OMITTED entirely: the host still
+        fills the field from the canonical default agent regardless, into a
+        field statically typed as this scope's own ``Agent`` -- the contract
+        is incoherent whether or not a value is explicitly supplied for the
+        argument that field holds."""
+        s = ReplSession()
+        declare = s.eval_entry(
+            f"scope A\nbuiltin\nenum Agent\n{_AGENT_VARIANTS}"
+            f"builtin\nrecord AgentRequest\n{_AGENT_REQUEST_FIELDS}end A\n"
+        )
+        assert declare.ok, declare.diagnostics
+
+        result = s.eval_entry('let q = ask-request("hi")')
+        assert not result.ok
+        assert any("AgentRequest" in d.message and "agent" in d.message for d in result.diagnostics)
+
+    def test_root_agent_request_declared_without_stdlib_rejected_as_incoherent(self) -> None:
+        """Without the standard library, a root ``AgentRequest`` whose own
+        ``agent`` field types to this program's own root ``Agent`` (the only
+        ``Agent`` there is here, since nothing seeds a canonical one without
+        the standard library) is an incoherent contract: the host always
+        fills that field with the standard ``Agent`` identity, never
+        whatever declaration the contract's own field type happens to name,
+        so the call is rejected rather than minting a value whose identity
+        disagrees with its static field type."""
+        s = ReplSession(default_stdlib=False)
+        declare = s.eval_entry(
+            f"{_OPTION_DECL}"
+            f"builtin\nenum Agent\n{_AGENT_VARIANTS}"
+            f"builtin\nrecord AgentRequest\n{_AGENT_REQUEST_FIELDS}"
+            'builtin def ask-request(prompt: text, agent: Agent = AgentCommand(command = "noop")) '
+            "-> AgentRequest\n"
+        )
+        assert declare.ok, declare.diagnostics
+
+        # No standard library, so ``std/config::default-agent`` -- the
+        # ``agent`` parameter's canonical default -- was never declared;
+        # supplying ``agent`` explicitly is unrelated to the fix under test.
+        result = s.eval_entry('let q = ask-request("hi", agent = AgentCommand(command = "noop"))')
+        assert not result.ok
+        assert any("AgentRequest" in d.message and "agent" in d.message for d in result.diagnostics)
+
+    def test_ask_request_without_any_program_declaration_types_as_canonical_agent_request(
+        self,
+    ) -> None:
+        """Regression: a program that declares none of its own builtin types
+        keeps ``ask-request``'s canonical (root) ``AgentRequest`` identity
+        exactly as before this fix."""
+        s = ReplSession()
+        result = s.eval_entry('let q = ask-request("hi")')
+        assert result.ok, result.diagnostics
+        assert isinstance(result.value_type, RecordType)
+        assert result.value_type.scope_path == ()
+
+        field = s.eval_entry("q.prompt")
+        assert field.ok, field.diagnostics
+        assert field.value == TextValue("hi")
+
+    def test_agent_request_declared_in_an_imported_library_module_types_and_mints_consistently(
+        self, tmp_path: Path
+    ) -> None:
+        (tmp_path / "lib.agl").write_text(
+            f"scope Lib\nbuiltin record AgentRequest\n{_AGENT_REQUEST_FIELDS}end Lib\n"
+        )
+        s = _session_with_import_root(tmp_path)
+        declare = s.eval_entry("import lib")
+        assert declare.ok, declare.diagnostics
+
+        result = s.eval_entry('let q = ask-request("hi")')
+        assert result.ok, result.diagnostics
+        assert isinstance(result.value_type, RecordType)
+        assert result.value_type.scope_path == ("Lib",)
+
+        field = s.eval_entry("q.prompt")
+        assert field.ok, field.diagnostics
+        assert field.value == TextValue("hi")
+
+
+class TestAgentArgumentBuiltinIdentity:
+    """The ``agent`` argument to ``ask``/``ask-request``
+    (``BuiltinCallChecker._validate_ask_like_arguments``)."""
+
+    def test_scoped_agent_value_rejected_as_ask_request_agent_argument(self) -> None:
+        """A value of the program's own scoped ``Agent`` is rejected as the
+        ``agent`` argument to ``ask-request``.
+
+        Only ``Agent`` is redeclared here (matching the reported repro
+        exactly), not ``AgentRequest``, so ``AgentRequest``'s own ``agent``
+        field keeps its canonical (root) static field type: the value's
+        differently-scoped ``Agent`` is an ordinary static type mismatch
+        against it, restoring the clean, pre-existing diagnostic instead of
+        the internal crash that accepting the mismatched value used to lead
+        to at evaluation.
+        """
+        s = ReplSession()
+        declare = s.eval_entry(f"scope A\nbuiltin\nenum Agent\n{_AGENT_VARIANTS}end A\n")
+        assert declare.ok, declare.diagnostics
+
+        g = s.eval_entry('let g = A::Agent::AgentCommand("echo")')
+        assert g.ok, g.diagnostics
+
+        result = s.eval_entry('let q = ask-request("hi", agent = g)')
+        assert not result.ok
+        assert any("A::Agent" in d.message for d in result.diagnostics)
+
+    def test_scoped_agent_and_agent_request_declared_together_rejected_as_incoherent(
+        self,
+    ) -> None:
+        """A program that redeclares BOTH ``Agent`` and ``AgentRequest`` at
+        the same scope gets an incoherent contract: ``AgentRequest.agent``
+        resolves to that same scoped ``Agent``, not the standard identity the
+        host actually fills the field with, so the call is rejected rather
+        than minting a field whose static type disagrees with its value."""
+        s = ReplSession()
+        declare = s.eval_entry(
+            f"scope A\nbuiltin\nenum Agent\n{_AGENT_VARIANTS}"
+            f"builtin\nrecord AgentRequest\n{_AGENT_REQUEST_FIELDS}end A\n"
+        )
+        assert declare.ok, declare.diagnostics
+
+        g = s.eval_entry('let g = A::Agent::AgentCommand("echo")')
+        assert g.ok, g.diagnostics
+
+        result = s.eval_entry('let q = ask-request("hi", agent = g)')
+        assert not result.ok
+        assert any("AgentRequest" in d.message and "agent" in d.message for d in result.diagnostics)
+
+    def test_scoped_agent_value_rejected_as_ask_agent_argument(self) -> None:
+        """``ask`` shares ``_validate_ask_like_arguments`` with ``ask-request``,
+        so it rejects the same scoped ``Agent`` value the same way; checked
+        only (an actual agent dispatch is out of scope here)."""
+        s = ReplSession()
+        declare = s.eval_entry(f"scope A\nbuiltin\nenum Agent\n{_AGENT_VARIANTS}end A\n")
+        assert declare.ok, declare.diagnostics
+
+        g = s.eval_entry('let g = A::Agent::AgentCommand("echo")')
+        assert g.ok, g.diagnostics
+
+        result = s.eval_entry('ask("hi", agent = g)', check_only=True)
+        assert not result.ok
+        assert any("A::Agent" in d.message for d in result.diagnostics)
+
+    def test_root_agent_value_without_stdlib_rejected_as_ask_request_agent_argument(self) -> None:
+        """Without the standard library, a root ``AgentRequest`` whose own
+        ``agent`` field types to this program's own root ``Agent`` is
+        incoherent regardless of which value is supplied for ``agent``: the
+        contract itself is rejected before its argument is even checked."""
+        s = ReplSession(default_stdlib=False)
+        declare = s.eval_entry(
+            f"{_OPTION_DECL}"
+            f"builtin\nenum Agent\n{_AGENT_VARIANTS}"
+            f"builtin\nrecord AgentRequest\n{_AGENT_REQUEST_FIELDS}"
+            'builtin def ask-request(prompt: text, agent: Agent = AgentCommand(command = "noop")) '
+            "-> AgentRequest\n"
+        )
+        assert declare.ok, declare.diagnostics
+
+        g = s.eval_entry('let g = AgentClaude("sonnet", "medium")')
+        assert g.ok, g.diagnostics
+
+        result = s.eval_entry('let q = ask-request("hi", agent = g)')
+        assert not result.ok
+        assert any("AgentRequest" in d.message and "agent" in d.message for d in result.diagnostics)
+
+    def test_unrelated_value_is_still_rejected_as_the_agent_argument(self) -> None:
+        """Regression: passing a value of an unrelated type as ``agent`` is
+        still a static rejection -- the shape-mismatch direction of this fix,
+        confirmed with the program's own scoped ``Agent`` also live."""
+        s = ReplSession()
+        declare = s.eval_entry(f"scope A\nbuiltin\nenum Agent\n{_AGENT_VARIANTS}end A\n")
+        assert declare.ok, declare.diagnostics
+
+        not_agent = s.eval_entry("enum NotAgent\n  | X")
+        assert not_agent.ok, not_agent.diagnostics
+
+        result = s.eval_entry('ask-request("hi", agent = NotAgent::X)', check_only=True)
+        assert not result.ok
+        assert any("NotAgent" in d.message for d in result.diagnostics)
+
+    def test_agent_declared_in_an_imported_library_module_rejected_as_agent_argument(
+        self, tmp_path: Path
+    ) -> None:
+        """Only ``Agent`` is declared by the library module here (not
+        ``AgentRequest``), so -- as in
+        ``test_scoped_agent_value_rejected_as_ask_request_agent_argument``
+        above -- the value's own (differently-scoped) ``Agent`` is an
+        ordinary static type mismatch against ``AgentRequest``'s canonical
+        field type."""
+        (tmp_path / "lib.agl").write_text(
+            f"scope Lib\nbuiltin enum Agent\n{_AGENT_VARIANTS}end Lib\n"
+        )
+        s = _session_with_import_root(tmp_path)
+        declare = s.eval_entry("import lib")
+        assert declare.ok, declare.diagnostics
+
+        g = s.eval_entry('let g = lib::Lib::Agent::AgentCommand("echo")')
+        assert g.ok, g.diagnostics
+
+        result = s.eval_entry('let q = ask-request("hi", agent = g)')
+        assert not result.ok
+        assert any("Lib::Agent" in d.message for d in result.diagnostics)
+
+    def test_scoped_agent_receiver_rejected_as_ask_request_receiver(self) -> None:
+        """The receiver of ``x.ask-request(...)`` IS the agent the host stores
+        in ``AgentRequest.agent``, so it is held to the same identity
+        requirement as the ``agent`` named argument. Reaching evaluation with
+        a differently-scoped ``Agent`` receiver instead mints a request whose
+        ``agent`` field value disagrees with its static type, which an
+        exhaustive ``case q.agent of`` then cannot dispatch."""
+        s = ReplSession()
+        declare = s.eval_entry(
+            f"scope A\nbuiltin\nenum Agent\n{_AGENT_VARIANTS}"
+            "builtin def Agent::ask-request(self, prompt: text) -> AgentRequest\n"
+            "end A\n"
+        )
+        assert declare.ok, declare.diagnostics
+
+        g = s.eval_entry('let g = A::Agent::AgentCommand("echo")')
+        assert g.ok, g.diagnostics
+
+        result = s.eval_entry('let q = g.ask-request("hi")')
+        assert not result.ok
+        assert any("A::Agent" in d.message for d in result.diagnostics)
+
+    def test_canonical_agent_receiver_still_builds_a_request(self) -> None:
+        """Regression: the ordinary receiver form still works and still mints
+        a request whose ``agent`` field is readable."""
+        s = ReplSession()
+        result = s.eval_entry('let q = AgentCommand("echo").ask-request("hi")')
+        assert result.ok, result.diagnostics
+        field = s.eval_entry("q.prompt")
+        assert field.ok, field.diagnostics
+        assert field.value == TextValue("hi")
+
+
+class TestHostRaisedExceptionContractIdentity:
+    """A ``builtin exception`` the host raises carries the same requirement a
+    host-minted record does: the host fills its nominal-typed fields with
+    standard identities, so a program's own redeclaration of one of those
+    names cannot be what such a field resolves to."""
+
+    _AGENT_CALL_ERROR = (
+        "builtin\nexception AgentCallError extends Exception\n"
+        "  *\n  agent: Agent\n  cause: text\n  metadata: json\n"
+    )
+
+    def test_scoped_agent_and_agent_call_error_declared_together_rejected(self) -> None:
+        """``AgentCallError.agent`` resolving to a sibling scoped ``Agent``
+        makes the caught value's ``agent`` field statically that scoped enum
+        while the host always raises with the standard one -- rejected at the
+        ``catch`` clause rather than left to fail dispatching a ``case`` over
+        the field at evaluation."""
+        s = ReplSession()
+        declare = s.eval_entry(
+            f"scope A\nbuiltin\nenum Agent\n{_AGENT_VARIANTS}{self._AGENT_CALL_ERROR}"
+            "def trigger() -> text =\n"
+            "  try\n"
+            '    ask("hi")\n'
+            "  catch AgentCallError as e =>\n"
+            "    case e.agent of\n"
+            "      | AgentCommand(command) => command\n"
+            "      | AgentClaude(model, thinking) => model\n"
+            "      | AgentCodex(model, thinking) => model\n"
+            "      | AgentPi(provider, model, thinking) => model\n"
+            "end A\n"
+        )
+        assert not declare.ok
+        assert any(
+            "AgentCallError" in d.message and "agent" in d.message for d in declare.diagnostics
+        )
+
+    def test_scoped_agent_call_error_over_the_standard_agent_is_still_caught(self) -> None:
+        """Regression: with nothing shadowing ``Agent``, the same scoped
+        ``builtin exception AgentCallError`` keeps the standard identity in
+        its own ``agent`` field, so it is caught by its own declaration and
+        its field is dispatched over successfully."""
+        s = ReplSession()
+        declare = s.eval_entry(
+            f"scope A\n{self._AGENT_CALL_ERROR}"
+            "def trigger() -> text =\n"
+            "  try\n"
+            '    ask("hi")\n'
+            "  catch AgentCallError as e =>\n"
+            "    case e.agent of\n"
+            "      | AgentCommand(command) => command\n"
+            "      | AgentClaude(model, thinking) => model\n"
+            "      | AgentCodex(model, thinking) => model\n"
+            "      | AgentPi(provider, model, thinking) => model\n"
+            "end A\n"
+        )
+        assert declare.ok, declare.diagnostics
+
+        result = s.eval_entry("A::trigger()")
+        assert result.ok, result.diagnostics
+        assert result.error is None
+        assert isinstance(result.value, TextValue)
+
+
+class TestParsePolicyBuiltinIdentity:
+    """``on_parse_error``'s static ``ParsePolicy`` constructor recognition
+    (``BuiltinCallChecker._extract_parse_policy_str`` /
+    ``_accepts_as_parse_policy_constructor``)."""
+
+    def test_scoped_parse_policy_constructor_accepted_by_exec(self) -> None:
+        """The reported rejection: a static constructor of the program's own
+        scoped ``ParsePolicy``, written at its own qualified path
+        (``A::ParsePolicy::Retry``), was rejected because the qualifier
+        check only ever accepted the bare root spelling."""
+        s = ReplSession()
+        declare = s.eval_entry(
+            f"scope A\nbuiltin\nenum ParsePolicy =\n{_PARSE_POLICY_VARIANTS}end A\n"
+        )
+        assert declare.ok, declare.diagnostics
+
+        shell = FakeShell(stdout="2")
+        with patch("agm.core.process.run_capture_result", side_effect=shell):
+            result = s.eval_entry(
+                'let r = exec::[int]("echo hi", on_parse_error = A::ParsePolicy::Retry(n = 2))'
+            )
+        assert result.ok, result.diagnostics
+        assert result.value == IntValue(2)
+
+    def test_scoped_parse_policy_abort_constructor_accepted_by_exec(self) -> None:
+        s = ReplSession()
+        declare = s.eval_entry(
+            f"scope A\nbuiltin\nenum ParsePolicy =\n{_PARSE_POLICY_VARIANTS}end A\n"
+        )
+        assert declare.ok, declare.diagnostics
+
+        shell = FakeShell(stdout="2")
+        with patch("agm.core.process.run_capture_result", side_effect=shell):
+            result = s.eval_entry(
+                'let r = exec::[int]("echo hi", on_parse_error = A::ParsePolicy::Abort)'
+            )
+        assert result.ok, result.diagnostics
+        assert result.value == IntValue(2)
+
+    def test_root_parse_policy_without_stdlib_accepted_by_exec(self) -> None:
+        s = ReplSession(default_stdlib=False)
+        declare = s.eval_entry(
+            f"builtin\nrecord ExecResult\n{_EXEC_RESULT_FIELDS}"
+            f"builtin\nenum ParsePolicy =\n{_PARSE_POLICY_VARIANTS}"
+            "builtin def exec(command: text) -> ExecResult\n"
+        )
+        assert declare.ok, declare.diagnostics
+
+        shell = FakeShell(stdout="2")
+        with patch("agm.core.process.run_capture_result", side_effect=shell):
+            result = s.eval_entry('let r = exec::[int]("echo hi", on_parse_error = Retry(n = 2))')
+        assert result.ok, result.diagnostics
+        assert result.value == IntValue(2)
+
+    def test_on_parse_error_without_any_program_declaration_still_accepts_canonical_forms(
+        self,
+    ) -> None:
+        """Regression: a program that declares none of its own builtin types
+        keeps every canonical ``on_parse_error`` spelling accepted exactly as
+        before this fix."""
+        s = ReplSession()
+        shell = FakeShell(stdout="2")
+        with patch("agm.core.process.run_capture_result", side_effect=shell):
+            bare = s.eval_entry('let a = exec::[int]("echo hi", on_parse_error = Retry(n = 2))')
+        assert bare.ok, bare.diagnostics
+        with patch("agm.core.process.run_capture_result", side_effect=shell):
+            qualified = s.eval_entry(
+                'let b = exec::[int]("echo hi", on_parse_error = ParsePolicy::Abort)'
+            )
+        assert qualified.ok, qualified.diagnostics
+
+    def test_on_parse_error_rejects_a_local_binding_shadowing_abort(self) -> None:
+        """The reported bug: a local ``let Abort = ...`` binding shadows the
+        ``ParsePolicy::Abort`` constructor's bare spelling, so the checker
+        must resolve ``on_parse_error``'s value through real name
+        resolution rather than matching the raw spelling ``Abort`` -- a
+        shadowing local binding is not a constructor at all and is rejected
+        exactly like any other non-constructor expression there."""
+        s = ReplSession()
+        result = s.eval_entry(
+            "let Abort = ParsePolicy::Retry(n = 3)\n"
+            'let n: int = exec::[int]("echo 7", on_parse_error = Abort)\nn',
+            check_only=True,
+        )
+        assert not result.ok
+        assert any("on_parse_error" in d.message for d in result.diagnostics)
+
+    def test_on_parse_error_rejects_a_local_binding_shadowing_abort_call_form(self) -> None:
+        """The call-form (``Abort()``) counterpart of the shadowing bug:
+        it bypassed real resolution the same way the bare-spelling form
+        did, and is rejected the same way."""
+        s = ReplSession()
+        result = s.eval_entry(
+            "let Abort = ParsePolicy::Retry(n = 3)\n"
+            'let n: int = exec::[int]("echo 7", on_parse_error = Abort())\nn',
+            check_only=True,
+        )
+        assert not result.ok
+        assert any("on_parse_error" in d.message for d in result.diagnostics)
+
+    def test_on_parse_error_rejects_a_local_binding_shadowing_retry(self) -> None:
+        """The ``Retry`` counterpart: a local binding shadowing ``Retry``'s
+        bare spelling is rejected rather than silently reinterpreted as a
+        ``ParsePolicy::Retry`` call spelled the same way."""
+        s = ReplSession()
+        result = s.eval_entry(
+            'let Retry = 5\nlet n: int = exec::[int]("echo 7", on_parse_error = Retry(n = 3))\nn',
+            check_only=True,
+        )
+        assert not result.ok
+        assert any("on_parse_error" in d.message for d in result.diagnostics)
+
+    def test_on_parse_error_rejects_a_qualifier_naming_an_unrelated_enum(self) -> None:
+        """Regression: an unrelated enum's constructor is still rejected as
+        ``on_parse_error``, with the program's own scoped ``ParsePolicy``
+        also live -- the shape-mismatch direction of this fix."""
+        s = ReplSession()
+        declare = s.eval_entry(
+            f"scope A\nbuiltin\nenum ParsePolicy =\n{_PARSE_POLICY_VARIANTS}end A\n"
+        )
+        assert declare.ok, declare.diagnostics
+        not_policy = s.eval_entry("enum NotPolicy\n  | Abort")
+        assert not_policy.ok, not_policy.diagnostics
+
+        result = s.eval_entry(
+            'let n: int = exec::[int]("ls", on_parse_error = NotPolicy::Abort())', check_only=True
+        )
+        assert not result.ok
+        assert any("ParsePolicy" in d.message for d in result.diagnostics)
+
+    def test_parse_policy_declared_in_an_imported_library_module_accepted_by_exec(
+        self, tmp_path: Path
+    ) -> None:
+        """``open import`` brings ``Lib::ParsePolicy`` into scope at its own
+        path without the module route prefix -- the qualifier spelling this
+        fix recognizes (a module-route-qualified spelling like
+        ``lib::Lib::ParsePolicy::Retry`` is outside this fix's scope, exactly
+        as it was for the canonical ``ParsePolicy`` before it: an on_parse_error
+        constructor was never recognized through an import route prefix)."""
+        (tmp_path / "lib.agl").write_text(
+            f"scope Lib\nbuiltin enum ParsePolicy =\n{_PARSE_POLICY_VARIANTS}end Lib\n"
+        )
+        s = _session_with_import_root(tmp_path)
+        declare = s.eval_entry("open import lib")
+        assert declare.ok, declare.diagnostics
+
+        shell = FakeShell(stdout="2")
+        with patch("agm.core.process.run_capture_result", side_effect=shell):
+            result = s.eval_entry(
+                'let r = exec::[int]("echo hi", on_parse_error = Lib::ParsePolicy::Retry(n = 2))'
+            )
+        assert result.ok, result.diagnostics
+        assert result.value == IntValue(2)
 
 
 # ---------------------------------------------------------------------------

@@ -10,7 +10,8 @@ Coverage:
 - comparable_types: False for unit/function; unchanged for scalars.
 - TypeEnvironment: prelude types (ExecResult, ParsePolicy) and RecursionError
   exception registered in every fresh env.
-- seed_from: does not duplicate/clobber prelude types.
+- seed_from: does not duplicate/clobber prelude types, but carries a
+  program's own ``builtin`` declaration of one forward across entries.
 - unregister_name: leaves prelude + exception names intact.
 """
 
@@ -409,12 +410,15 @@ class TestSeedFrom:
         assert isinstance(target.get_type("ExecResult"), RecordType)
         assert isinstance(target.get_type("ParsePolicy"), EnumType)
 
-    def test_seed_does_not_overwrite_prelude(self) -> None:
-        # If source somehow had a different ExecResult, seed_from must NOT
-        # copy it (prelude names are excluded from the copy loop).
+    def test_seed_does_not_overwrite_prelude_with_a_bare_no_identity_binding(self) -> None:
+        # A binding carrying NO_DECL_ID (never a real declaration's identity —
+        # see ir.reserved_nominals) is not a program's own ``builtin``
+        # declaration, so seed_from must not let it displace the canonical
+        # prelude binding target already carries.
         source = TypeEnvironment()
-        # Manually inject a different type under the prelude name in source._types.
-        # We reach inside _types to simulate a hypothetical collision.
+        # Manually inject a bare, identity-less type under the prelude name in
+        # source._types. We reach inside _types to simulate a hypothetical
+        # collision that carries no declaration identity of its own.
         getattr(source, "_types")["ExecResult"] = RecordType(name="ExecResult")
         source.seal()
         target = TypeEnvironment()
@@ -423,6 +427,36 @@ class TestSeedFrom:
         t = target.get_type("ExecResult")
         assert isinstance(t, RecordType)
         assert "stdout" in target.type_table.record_fields(t)  # original prelude has stdout
+
+    def test_seed_does_not_overwrite_prelude_with_a_non_nominal_binding(self) -> None:
+        # A non-nominal type (no ``decl_id`` at all) can never be a program's
+        # own ``builtin`` declaration either; seed_from must recognize that
+        # without crashing and keep the canonical prelude binding.
+        source = TypeEnvironment()
+        getattr(source, "_types")["ExecResult"] = TextType()
+        source.seal()
+        target = TypeEnvironment()
+        target.seed_from(source)
+        t = target.get_type("ExecResult")
+        assert isinstance(t, RecordType)
+        assert "stdout" in target.type_table.record_fields(t)
+
+    def test_seed_carries_forward_a_programs_own_prelude_declaration(self) -> None:
+        # A program's own ``builtin record ExecResult`` declaration carries
+        # its own (non-reserved) declaration identity, distinguishing it from
+        # the canonical prelude binding every fresh environment starts with.
+        # seed_from must carry it forward across entries exactly like any
+        # other declared name, so a later entry keeps typing host calls
+        # against the SAME declaration the earlier entry's own established —
+        # never silently falling back to the canonical one just because the
+        # name is normally non-shadowable.
+        source = TypeEnvironment()
+        own_declaration = RecordType(name="ExecResult", decl_id=999)
+        getattr(source, "_types")["ExecResult"] = own_declaration
+        source.seal()
+        target = TypeEnvironment()
+        target.seed_from(source)
+        assert target.get_type("ExecResult") == own_declaration
 
     def test_seed_copies_user_types(self) -> None:
         source = TypeEnvironment()

@@ -259,9 +259,15 @@ class _SelectedBuiltinMethod:
     every consumer say which of the two it accepts. Non-call positions route
     through :meth:`_Checker._require_field_access_type`, which rejects the
     selection; nothing publishes it as a node type.
+
+    ``receiver_type`` is the checked type of the object the method was
+    selected from. The receiver IS the agent a receiver-form ``ask``/
+    ``ask-request`` dispatches to, so the built-in rule needs it to hold the
+    receiver to the same requirement as an explicit ``agent`` argument.
     """
 
     name: str
+    receiver_type: Type
 
 
 @dataclass(frozen=True, slots=True)
@@ -2973,9 +2979,11 @@ class _Checker:
             # (``_register_funcdef_signature``) admits no other builtin method.
             kind = self._resolved.builtin_calls[node.node_id]
             if kind == BuiltinKind.ASK:
-                return self._builtins.check_ask(node, expected=expected, receiver=True)
+                return self._builtins.check_ask(
+                    node, expected=expected, receiver_type=callee_type.receiver_type
+                )
             # ASK_REQUEST
-            return self._builtins.check_ask_request(node, receiver=True)
+            return self._builtins.check_ask_request(node, receiver_type=callee_type.receiver_type)
         method = self._method_selections.get(field_access.node_id)
         if method is None:
             return self._check_value_call(
@@ -3397,6 +3405,7 @@ class _Checker:
                     span=clause.span,
                 )
             exc_type = resolved
+            self._builtins.check_caught_exception_contract(exc_type, span=clause.span)
         if clause.binding is not None:
             self._env.set_binding_type(clause.node_id, exc_type)
         return self._check_expr(clause.body, expected=expected)
@@ -4212,7 +4221,7 @@ class _Checker:
                         # Do not freshen the declared generic result merely to
                         # discover the selected method; return the selection
                         # itself rather than a fabricated function type.
-                        return _SelectedBuiltinMethod(name=method.name)
+                        return _SelectedBuiltinMethod(name=method.name, receiver_type=obj_type)
                     bound = self._bound_method_type(
                         method, obj_type, type_args=type_args, expected=expected, span=node.span
                     )

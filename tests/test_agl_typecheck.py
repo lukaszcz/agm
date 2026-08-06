@@ -6639,6 +6639,14 @@ class TestParsePolicy:
         err = reject_type('let n: int = ask("Q", on_parse_error = Retry())\nn')
         assert "on_parse_error" in str(err).lower() or "Retry" in str(err)
 
+    def test_on_parse_error_unrelated_unqualified_constructor_raises(self) -> None:
+        """An unqualified call to a real, resolvable constructor that is
+        simply not ``ParsePolicy::Abort``/``Retry`` is still rejected --
+        genuine constructor identity is required, not merely that SOME
+        constructor resolves."""
+        err = reject_type('record Foo()\nlet n: int = ask("Q", on_parse_error = Foo())\nn')
+        assert "on_parse_error" in str(err).lower() or "ParsePolicy" in str(err)
+
     def test_on_parse_error_wrong_qualifier_raises(self) -> None:
         # 'Other' is not a declared type name, so this fails at scope time.
         err = reject_any('let n: int = ask("Q", on_parse_error = Other::Abort())\nn')
@@ -6649,6 +6657,293 @@ class TestParsePolicy:
         r = accept_type('ask("Q", on_parse_error = Abort())')
         assert len(r.warnings) == 1
         assert "on_parse_error" in r.warnings[0].message
+
+    def test_on_parse_error_qualifier_with_type_args_rejected(self) -> None:
+        """A qualifier segment carrying an explicit type argument
+        (``ParsePolicy[int]::``) is never an accepted ``on_parse_error``
+        spelling, regardless of what it would otherwise resolve to."""
+        err = reject_type('let n: int = ask("Q", on_parse_error = ParsePolicy[int]::Abort())\nn')
+        assert "on_parse_error" in str(err).lower() or "ParsePolicy" in str(err)
+
+
+# ---------------------------------------------------------------------------
+# Builtin identity for the host-contract nominals other than ``ExecResult``:
+# ``Agent`` (the agent an ``ask``/``ask-request`` dispatches to, supplied as
+# the ``agent`` argument or as the receiver), ``AgentRequest``
+# (``ask-request``'s result), the host-raised built-in exceptions carrying an
+# ``Agent``-typed field, and ``ParsePolicy`` (``on_parse_error``). Each
+# resolves against a program's own ``builtin`` declaration of the name, and
+# each host contract whose own fields are nominal must keep the standard
+# identity in them, since that is what the host fills them with.
+# ---------------------------------------------------------------------------
+
+_AGENT_VARIANTS_TC = (
+    "  | AgentCommand(command: text)\n"
+    "  | AgentClaude(model: text, thinking: text)\n"
+    "  | AgentCodex(model: text, thinking: text)\n"
+    "  | AgentPi(provider: text, model: text, thinking: text)\n"
+)
+
+_AGENT_REQUEST_FIELDS_TC = (
+    "  agent: Agent\n"
+    "  prompt: text\n"
+    "  target_type: Option[text]\n"
+    "  format_instructions: Option[text]\n"
+    "  json_schema: Option[json]\n"
+    "  attempt: int\n"
+    "  previous_error: Option[text]\n"
+    "  metadata: json\n"
+)
+
+_PARSE_POLICY_VARIANTS_TC = "  | Abort\n  | Retry(n: int)\n"
+
+
+class TestHostContractBuiltinIdentity:
+    def test_scoped_agent_value_rejected_as_ask_request_agent_argument(self) -> None:
+        """A value of the program's own scoped ``Agent`` is an ordinary
+        static type mismatch against ``AgentRequest``'s canonical ``agent``
+        field type (only ``Agent`` is redeclared here, not ``AgentRequest``,
+        so that field keeps its canonical static type)."""
+        err = reject_type(
+            f"scope A\nbuiltin enum Agent\n{_AGENT_VARIANTS_TC}end A\n"
+            'let g = A::Agent::AgentCommand("x")\n'
+            'ask-request("hi", agent = g)\n'
+        )
+        assert "A::Agent" in err.to_diagnostic().message
+
+    def test_unrelated_type_still_rejected_as_agent_argument_with_a_scoped_agent_live(
+        self,
+    ) -> None:
+        err = reject_type(
+            f"scope A\nbuiltin enum Agent\n{_AGENT_VARIANTS_TC}end A\n"
+            "enum NotAgent\n  | X\n"
+            'ask-request("hi", agent = NotAgent::X)\n'
+        )
+        assert "NotAgent" in err.to_diagnostic().message
+
+    def test_scoped_agent_request_result_type_names_the_scoped_declaration(self) -> None:
+        r = accept_type(
+            f"scope A\nbuiltin record AgentRequest\n{_AGENT_REQUEST_FIELDS_TC}"
+            'def make() -> A::AgentRequest = ask-request("hi")\n'
+            "end A\n()\n"
+        )
+        assert r.resolved.program is not None
+
+    def test_agent_request_declared_without_stdlib_naming_its_own_option_rejected(self) -> None:
+        """Without the standard library, a program that declares its own
+        ``enum Option[T]`` and its own ``builtin record AgentRequest`` (whose
+        ``agent`` field resolves the canonical ``Agent`` -- nothing of its
+        own shadows that bare name here) is still rejected: ``target_type``
+        nests this program's own ``Option`` inside ``Option[text]``, and the
+        host always fills that field with the standard ``Option`` identity,
+        never this program's own declaration."""
+        err = reject_type(
+            "enum Option[T] =\n"
+            "  | None\n"
+            "  | Some(value: T)\n"
+            f"builtin record AgentRequest\n{_AGENT_REQUEST_FIELDS_TC}"
+            "builtin def ask-request(prompt: text, "
+            'agent: Agent = AgentCommand(command = "noop")) -> AgentRequest\n'
+            'ask-request("hi", agent = AgentCommand(command = "noop"))\n',
+            default_stdlib=False,
+        )
+        assert "target_type" in err.to_diagnostic().message
+        assert "Option" in err.to_diagnostic().message
+
+    def test_scoped_agent_request_naming_a_scoped_option_rejected(self) -> None:
+        """With the standard library loaded, a scoped ``AgentRequest`` whose
+        ``target_type``/``format_instructions``/``previous_error`` fields
+        resolve a SIBLING scoped ``Option`` (shadowing ``std/core::Option``
+        the same way a sibling scoped ``Agent`` shadows the canonical one)
+        is rejected the same way, even though its ``agent`` field -- nothing
+        shadows ``Agent`` here -- still resolves the canonical identity:
+        the coherence check recurses into a field type's own type
+        arguments, not just its own top-level nominal."""
+        err = reject_type(
+            "scope A\n"
+            "enum Option[T] =\n"
+            "  | None\n"
+            "  | Some(value: T)\n"
+            f"builtin record AgentRequest\n{_AGENT_REQUEST_FIELDS_TC}"
+            'let q = ask-request("hi")\n'
+            "end A\n()\n"
+        )
+        assert "target_type" in err.to_diagnostic().message
+        assert "Option" in err.to_diagnostic().message
+
+    def test_scoped_parse_policy_constructor_accepted_by_on_parse_error(self) -> None:
+        r = accept_type(
+            f"scope A\nbuiltin enum ParsePolicy =\n{_PARSE_POLICY_VARIANTS_TC}"
+            'let n: int = exec::[int]("ls", on_parse_error = A::ParsePolicy::Retry(n = 5))\n'
+            "end A\n()\n"
+        )
+        assert r.resolved.program is not None
+
+    def test_scoped_parse_policy_abort_accepted_by_on_parse_error(self) -> None:
+        r = accept_type(
+            f"scope A\nbuiltin enum ParsePolicy =\n{_PARSE_POLICY_VARIANTS_TC}"
+            'let n: int = exec::[int]("ls", on_parse_error = A::ParsePolicy::Abort)\n'
+            "end A\n()\n"
+        )
+        assert r.resolved.program is not None
+
+    def test_on_parse_error_rejects_unrelated_qualifier_with_a_scoped_parse_policy_live(
+        self,
+    ) -> None:
+        err = reject_type(
+            f"scope A\nbuiltin enum ParsePolicy =\n{_PARSE_POLICY_VARIANTS_TC}end A\n"
+            "enum NotPolicy\n  | Abort\n"
+            'let n: int = exec::[int]("ls", on_parse_error = NotPolicy::Abort())\n'
+        )
+        assert "on_parse_error" in str(err).lower() or "ParsePolicy" in str(err)
+
+    def test_scoped_builtin_ask_request_signature_mentioning_sibling_types_typechecks(
+        self,
+    ) -> None:
+        """A scoped ``builtin def ask-request`` whose signature mentions its
+        own sibling ``Agent``/``AgentRequest`` types validates once re-rooted
+        onto the canonical (root) contract -- the ask-request analogue of
+        ``test_scoped_builtin_def_signature_naming_a_scoped_sibling_type_typechecks``."""
+        r = accept_type(
+            "scope A\n"
+            f"builtin enum Agent\n{_AGENT_VARIANTS_TC}"
+            f"builtin record AgentRequest\n{_AGENT_REQUEST_FIELDS_TC}"
+            'builtin def ask-request(prompt: text, agent: Agent = AgentCommand(command = "x")) '
+            "-> AgentRequest\n"
+            "end A\n()\n"
+        )
+        assert r.resolved.program is not None
+
+    def test_scoped_builtin_ask_request_with_wrong_result_type_rejected(self) -> None:
+        """The wrong-shape counterpart: a scoped ``builtin def ask-request``
+        whose result type does not match the canonical ``AgentRequest``
+        contract is still rejected."""
+        err = reject_type(
+            "scope A\n"
+            f"builtin enum Agent\n{_AGENT_VARIANTS_TC}"
+            f"builtin record AgentRequest\n{_AGENT_REQUEST_FIELDS_TC}"
+            'builtin def ask-request(prompt: text, agent: Agent = AgentCommand(command = "x")) '
+            "-> Agent\n"
+            "end A\n()\n"
+        )
+        assert "ask-request" in err.to_diagnostic().message
+
+    def test_scoped_agent_receiver_rejected_for_ask_request(self) -> None:
+        """The RECEIVER form supplies the value the host stores in
+        ``AgentRequest.agent`` exactly as the ``agent`` named argument does,
+        so a receiver of the program's own scoped ``Agent`` is rejected the
+        same way -- the host fills that field with the standard identity, so
+        accepting the receiver would mint a field whose value disagrees with
+        its static type."""
+        err = reject_type(
+            "scope A\n"
+            f"builtin enum Agent\n{_AGENT_VARIANTS_TC}"
+            "builtin def Agent::ask-request(self, prompt: text) -> AgentRequest\n"
+            'let g = Agent::AgentCommand("x")\n'
+            'let q = g.ask-request("hi")\n'
+            "end A\n()\n"
+        )
+        assert "A::Agent" in err.to_diagnostic().message
+
+    def test_scoped_agent_receiver_rejected_for_ask(self) -> None:
+        """The ``ask`` counterpart of the receiver form."""
+        err = reject_type(
+            "scope A\n"
+            f"builtin enum Agent\n{_AGENT_VARIANTS_TC}"
+            "builtin def Agent::ask[T](\n"
+            "  self,\n"
+            "  prompt: text,\n"
+            '  format: text = "",\n'
+            "  strict_json: bool = false,\n"
+            "  on_parse_error: ParsePolicy = ParsePolicy::Abort,\n"
+            ") -> T\n"
+            'let g = Agent::AgentCommand("x")\n'
+            'let r: text = g.ask("hi")\n'
+            "end A\n()\n"
+        )
+        assert "A::Agent" in err.to_diagnostic().message
+
+    def test_canonical_agent_receiver_still_accepted(self) -> None:
+        """Regression: the ordinary receiver form, with nothing redeclared,
+        is unaffected."""
+        r = accept_type('let r: text = AgentCommand("echo").ask("hi")\n()\n')
+        assert r.resolved.program is not None
+
+    def test_scoped_builtin_agent_call_error_naming_a_scoped_agent_rejected(self) -> None:
+        """A ``builtin exception`` the host RAISES is minted with host-fixed
+        field values exactly like a host-minted record, so its own nominal
+        field types face the same requirement: ``AgentCallError.agent`` is
+        always filled with the standard ``Agent``, and a sibling scoped
+        ``Agent`` naming that field makes the contract unusable at the
+        ``catch`` clause that types the caught value."""
+        err = reject_type(
+            "scope A\n"
+            f"builtin enum Agent\n{_AGENT_VARIANTS_TC}"
+            "builtin exception AgentCallError extends Exception\n"
+            "  *\n  agent: Agent\n  cause: text\n  metadata: json\n"
+            "def trigger() -> text =\n"
+            "  try\n"
+            '    ask("hi")\n'
+            "  catch AgentCallError as e =>\n"
+            "    render(e.agent)\n"
+            "end A\n()\n"
+        )
+        assert "AgentCallError" in err.to_diagnostic().message
+        assert "agent" in err.to_diagnostic().message
+
+    def test_scoped_builtin_exception_without_nominal_fields_still_caught(self) -> None:
+        """Regression: a ``builtin exception`` whose fields are all scalar
+        carries no identity requirement of its own and is still catchable at
+        its own scoped declaration."""
+        r = accept_type(
+            "scope A\n"
+            "builtin exception RangeError extends Exception()\n"
+            "def trigger(step: int) -> unit =\n"
+            "  try\n"
+            "    for i in 1 to 5 by step do\n"
+            "      ()\n"
+            "    done\n"
+            "  catch RangeError as e =>\n"
+            "    ()\n"
+            "end A\n()\n"
+        )
+        assert r.resolved.program is not None
+
+    def test_scoped_builtin_agent_call_error_over_the_canonical_agent_still_caught(self) -> None:
+        """Regression: the same scoped ``builtin exception AgentCallError``
+        with nothing shadowing ``Agent`` keeps the standard identity in its
+        own ``agent`` field, so it stays catchable and its field stays
+        readable."""
+        r = accept_type(
+            "scope A\n"
+            "builtin exception AgentCallError extends Exception\n"
+            "  *\n  agent: Agent\n  cause: text\n  metadata: json\n"
+            "def trigger() -> text =\n"
+            "  try\n"
+            '    ask("hi")\n'
+            "  catch AgentCallError as e =>\n"
+            "    render(e.agent)\n"
+            "end A\n()\n"
+        )
+        assert r.resolved.program is not None
+
+    def test_user_exception_naming_a_scoped_agent_is_not_a_host_contract(self) -> None:
+        """Regression: an ordinary (non-``builtin``) exception is never
+        host-minted, so a field of it may name any declaration the program
+        likes -- the requirement is on host contracts only."""
+        r = accept_type(
+            "scope A\n"
+            f"builtin enum Agent\n{_AGENT_VARIANTS_TC}"
+            "exception MyError extends Exception\n"
+            "  *\n  agent: Agent\n"
+            "def trigger() -> text =\n"
+            "  try\n"
+            '    raise MyError(message = "x", agent = Agent::AgentCommand("y"))\n'
+            "  catch MyError as e =>\n"
+            "    render(e.agent)\n"
+            "end A\n()\n"
+        )
+        assert r.resolved.program is not None
 
 
 # ---------------------------------------------------------------------------

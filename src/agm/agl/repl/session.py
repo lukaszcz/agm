@@ -341,9 +341,9 @@ class ReplSession:
         so the caller keeps the original failure result.
 
         This is a REPL-only convenience (the language is unchanged): typing a
-        type is not a value expression, so previously it surfaced ``'X' is not
-        defined.``.  Like :meth:`type_of`, this never evaluates, promotes,
-        advances the node-id counter, or mutates session state.  The parse uses
+        type is not a value expression, so without it the entry would surface
+        ``'X' is not defined.``.  Like :meth:`type_of`, this never evaluates,
+        promotes, advances the node-id counter, or mutates session state.  The parse uses
         throwaway node ids; only the resolved :class:`Type` or generic type
         definition display is kept.
         """
@@ -868,7 +868,7 @@ class ReplSession:
         def _is_promoted(node_id: int) -> bool:
             return node_id not in entry_declaration_node_ids or node_id in promoted_declaration_ids
 
-        def type_identity(
+        def type_name_path(
             item: RecordDef | EnumDef | ExceptionDef | TypeAlias,
         ) -> tuple[tuple[str, ...], str]:
             return tuple(segment.name for segment in item.scope_path), item.name
@@ -878,17 +878,17 @@ class ReplSession:
             for item in entry_declarations
             if isinstance(item, (RecordDef, EnumDef, ExceptionDef, TypeAlias))
         )
-        entry_type_identities = frozenset(type_identity(item) for item in entry_type_items)
-        promoted_type_identities = frozenset(
-            type_identity(item)
+        entry_type_name_paths = frozenset(type_name_path(item) for item in entry_type_items)
+        promoted_type_name_paths = frozenset(
+            type_name_path(item)
             for item in entry_type_items
             if item.node_id in promoted_declaration_ids
         )
-        unpromoted_type_identities = entry_type_identities - promoted_type_identities
+        unpromoted_type_name_paths = entry_type_name_paths - promoted_type_name_paths
         unpromoted_type_names = {
-            "::".join((*path, name)) for path, name in unpromoted_type_identities
+            "::".join((*path, name)) for path, name in unpromoted_type_name_paths
         }
-        if promoted_type_identities:
+        if promoted_type_name_paths:
             # A promoted type declaration supersedes any earlier ambient
             # constructor candidate sharing its name path: retained bindings
             # and scope members keep resolving through their own (possibly
@@ -899,7 +899,7 @@ class ReplSession:
                 cname: tuple(
                     ref
                     for ref in crefs
-                    if (ref.owner_path, ref.owner_name) not in promoted_type_identities
+                    if (ref.owner_path, ref.owner_name) not in promoted_type_name_paths
                 )
                 for cname, crefs in self._ambient_constructor_candidates.items()
             }
@@ -928,7 +928,7 @@ class ReplSession:
                 checked,
                 promoted_binding_node_ids=promoted_binding_node_ids,
                 promoted_type_names=frozenset(
-                    name for path, name in promoted_type_identities if not path
+                    name for path, name in promoted_type_name_paths if not path
                 ),
             )
             if partial
@@ -941,7 +941,7 @@ class ReplSession:
         for path, node in checked.resolved.scope_nodes.items():
             if not path or path in self._session_scope_nodes:
                 continue
-            if path in {(*scope_path, name) for scope_path, name in unpromoted_type_identities}:
+            if path in {(*scope_path, name) for scope_path, name in unpromoted_type_name_paths}:
                 continue
             self._session_scope_nodes[path] = ScopeNode(
                 node_id=node.node_id,
@@ -953,20 +953,20 @@ class ReplSession:
             if session_node is None:
                 continue
             for name, ref in node.members.items():
-                if (ref.scope_path, ref.name) not in unpromoted_type_identities and _is_promoted(
+                if (ref.scope_path, ref.name) not in unpromoted_type_name_paths and _is_promoted(
                     ref.decl_node_id
                 ):
                     if ref.decl_node_id in entry_declaration_node_ids:
                         displaced_param_keys.add(resolved_public_name(path, name))
                     session_node.register_member(name, ref)
         alias_targets = {
-            type_identity(item): render_type_expr(item.type_expr)
+            type_name_path(item): render_type_expr(item.type_expr)
             for item in entry_type_items
             if isinstance(item, TypeAlias) and item.node_id in promoted_declaration_ids
         }
         self._session_type_paths.update(
             ((*path, name), alias_targets.get((path, name)))
-            for path, name in promoted_type_identities
+            for path, name in promoted_type_name_paths
         )
 
         if not partial:
@@ -996,13 +996,13 @@ class ReplSession:
             new_type_env.seal()
             self._type_env = new_type_env
 
-        if promoted_type_identities:
+        if promoted_type_name_paths:
             promoted_candidates: dict[str, tuple[ConstructorRef, ...]] = {}
             for (_path, cname), crefs in checked.resolved.constructor_candidates_by_path.items():
                 selected = tuple(
                     ref
                     for ref in crefs
-                    if (ref.owner_path, ref.owner_name) in promoted_type_identities
+                    if (ref.owner_path, ref.owner_name) in promoted_type_name_paths
                 )
                 if selected:
                     promoted_candidates[cname] = (*promoted_candidates.get(cname, ()), *selected)
@@ -1012,7 +1012,7 @@ class ReplSession:
                     *crefs,
                 )
             self._ambient_type_names |= frozenset(
-                name for path, name in promoted_type_identities if not path
+                name for path, name in promoted_type_name_paths if not path
             )
         for key in displaced_param_keys:
             self._declared_params.pop(key, None)

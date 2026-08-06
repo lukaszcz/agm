@@ -278,6 +278,37 @@ class TestFreshImportSeesTheCurrentDeclaration:
         assert r.ok, r.diagnostics
         assert r.value == TextValue("Other,Some")
 
+    def test_fresh_import_does_not_see_a_never_promoted_declaration(self, tmp_path: Path) -> None:
+        """A declaration from a failed entry is not a name the boundary offers.
+
+        Its name never reached the session, so exposing a class for it would
+        let a companion construct values of a type the session cannot name.
+        """
+        _write_extern_lib(
+            tmp_path,
+            "visible_nominals",
+            "extern def visible() -> text\n",
+            (
+                "from agl import nominals\n"
+                "def visible():\n"
+                "    return ','.join(\n"
+                "        sorted(n for n in vars(nominals.entry) if not n.startswith('_'))\n"
+                "    )\n"
+            ),
+        )
+        s = _make_session_with_root(tmp_path)
+        assert s.eval_entry("record Kept\n  value: int").ok
+        failed = s.eval_entry(
+            'let stop: int = raise Abort(message = "stop")\nrecord Ghost\n  value: int'
+        )
+        assert not failed.ok
+
+        assert s.eval_entry("open import visible_nominals").ok
+        r = s.eval_entry("visible()")
+
+        assert r.ok, r.diagnostics
+        assert r.value == TextValue("Kept")
+
 
 # ---------------------------------------------------------------------------
 # Encoding and decoding both directions across the boundary, for both the

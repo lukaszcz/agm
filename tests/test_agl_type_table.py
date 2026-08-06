@@ -1780,7 +1780,7 @@ class TestBuiltinSeeding:
 
 class TestEnvTypeHasMatchingTableDefSingleModule:
     """Every type registered in the env has a matching ``TypeDef`` in the
-    shared table (the only place shapes live now that handles carry none)."""
+    shared table (the only place shapes live, since handles carry none)."""
 
     def test_non_generic_record(self) -> None:
         checked = _check("record Point\n  x: int\n  y: int\nlet p = Point(x = 1, y = 2)\np")

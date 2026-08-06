@@ -888,12 +888,12 @@ class TestParamBindingInvariant:
 
 
 # ---------------------------------------------------------------------------
-# CARRY-IN 1 — capabilities built from registrations
+# Capabilities built from registrations
 # ---------------------------------------------------------------------------
 
 
 class TestCapabilitiesBuiltFromRegistrations:
-    """CARRY-IN 1: PipelineDriver.run builds HostCapabilities from codec/renderer registries."""
+    """PipelineDriver.run builds HostCapabilities from codec/renderer registries."""
 
     def test_default_runtime_has_text_and_json_codecs(self) -> None:
         """Built-in text + json codecs are always present."""

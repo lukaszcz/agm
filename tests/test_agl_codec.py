@@ -2986,16 +2986,16 @@ class TestValidationMappingCoverage:
 
 
 # ---------------------------------------------------------------------------
-# 18. CARRY-IN 2 — schema reuse: make_contract no longer takes TypeEnvironment
+# 18. Schema reuse: make_contract takes no TypeEnvironment
 # ---------------------------------------------------------------------------
 
 
 class TestMakeContractNoTypeEnv:
-    """CARRY-IN 2: make_contract signature drops the unused TypeEnvironment param."""
+    """make_contract's signature carries no TypeEnvironment parameter."""
 
     def test_text_codec_make_contract_no_env(self) -> None:
         codec = TextCodec()
-        # make_contract now takes only type_ref — no env argument.
+        # make_contract takes only type_ref — no env argument.
         contract = codec.make_contract(TextType())
         assert contract.codec is codec
 
@@ -3151,12 +3151,12 @@ class TestSchemaPrecomputedInParse:
 
 
 # ---------------------------------------------------------------------------
-# 19. CARRY-IN 1 — supported_kinds property on codecs
+# 19. supported_kinds property on codecs
 # ---------------------------------------------------------------------------
 
 
 class TestCodecSupportedKinds:
-    """CARRY-IN 1: codecs expose supported_kinds; runtime builds caps from them."""
+    """Codecs expose supported_kinds; the runtime builds capabilities from them."""
 
     def test_text_codec_supported_kinds(self) -> None:
         codec = TextCodec()
@@ -3202,12 +3202,12 @@ class TestCodecSupportedKinds:
 
 
 # ---------------------------------------------------------------------------
-# 20. CARRY-IN 1 — register_codec public API
+# 20. register_codec public API
 # ---------------------------------------------------------------------------
 
 
 class TestRegisterCodec:
-    """CARRY-IN 1: register_codec adds a custom codec to the runtime."""
+    """register_codec adds a custom codec to the runtime."""
 
     def _make_custom_codec(self) -> TextCodec:
         """A minimal custom codec (reuses TextCodec but with a different name for testing)."""

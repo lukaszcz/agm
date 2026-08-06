@@ -1768,7 +1768,8 @@ class TestBuiltinDeclarationUniqueness:
 
 
 class TestBuiltinTypeModuleIdentity:
-    """A ``builtin`` declaration's nominal identity is its declaring module.
+    """A ``builtin`` declaration is a declaration of its own, homed in the
+    module that writes it.
 
     These root declarations use names already provided at the root by
     ``std/core``, so they run with ``default_stdlib=False``. The shipped

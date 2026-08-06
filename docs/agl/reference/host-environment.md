@@ -53,10 +53,10 @@ The built-in codecs are `text` and `json`. Hosts may register additional
 codecs (selectable per call with `format`). Built-in names are reserved;
 duplicate registrations are host configuration errors.
 
-Each registration declares which type kinds it supports, and the
-type-checker validates every `format` option against this **capability
-catalog** before execution — an unsupported codec/type combination is a
-static error, not a runtime surprise.
+Each registration declares which type kinds it supports, and every
+`format` option is validated against this **capability catalog** before
+execution — an unsupported codec/type combination is a static error, not a
+runtime surprise.
 
 ## Params
 

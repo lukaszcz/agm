@@ -354,11 +354,10 @@ class TestStdConfigQualified:
     def test_negative_max_iters_raises_catchable_type_error(self) -> None:
         """Assigning a negative ``max-iters`` raises a catchable built-in exception.
 
-        Regression test: the live engine-setting effect used to build this
-        exception under an undeclared name (``"ValueError"``, never a real
-        AgL built-in exception), which happened to work only because nominal
-        identity was previously name-keyed with no validation. It now raises
-        the declared ``TypeError``.
+        Regression test: the live engine-setting effect built this exception
+        under an undeclared name (``"ValueError"``, never a real AgL built-in
+        exception), which went unnoticed because nothing validated the name.
+        The declared ``TypeError`` is what must be raised.
         """
         result = _run_program("open import std/config\nstd/config::max-iters := -1\nprint 1")
         assert not result.ok

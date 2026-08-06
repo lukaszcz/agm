@@ -2778,10 +2778,11 @@ class _Lowerer:
 
     def _lower_catch_clause(self, clause: "CatchClause") -> IrCatchHandler:
         """Lower a ``CatchClause`` to an ``IrCatchHandler``."""
-        # Determine nominal + display_name.  ``nominal`` must name the resolved
-        # exception's *real* module-qualified identity (built-in, entry, or a
-        # library module for a cross-module exception) because specific catches
-        # match exactly by ``ExceptionValue.nominal`` at runtime.
+        # Determine nominal + display_name.  ``nominal`` must carry the resolved
+        # exception's own declaration identity (``decl_id`` — the reserved
+        # identity for a built-in, or the declaring AST node for an entry or
+        # library exception) because specific catches match exactly by
+        # ``ExceptionValue.nominal`` at runtime.
         exc_type = clause.exc_type
         if exc_type is None or exc_type == "_" or exc_type == "Exception":
             nominal: NominalId | None = None

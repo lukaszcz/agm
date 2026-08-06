@@ -151,8 +151,8 @@ def _handle_set(arg: str, ctx: MetaContext) -> MetaOutcome:
     """``:set echo on|off`` — toggle result echoing.
 
     Only ``echo on|off`` is supported.  Input-setting via ``:set name=value``
-    is no longer available: params are resolved eagerly from config or
-    defaults when declared.
+    is not offered: params are resolved eagerly from config or defaults when
+    declared.
     """
     echo_outcome = _try_set_echo(arg, ctx)
     if echo_outcome is not None:

@@ -678,8 +678,13 @@ class TestInferenceVarType:
 
 
 class TestGenericNominalIdentity:
-    """RecordType/EnumType handles carry no field/variant data; identity is
-    purely ``(module_id, name, type_args)``."""
+    """RecordType/EnumType handles carry no field/variant data, so equality
+    compares only their resolution metadata (``decl_id``, ``module_id``,
+    ``scope_path``, ``name``) and their ``type_args``.
+
+    Every handle here is built without a ``decl_id``, so each case isolates
+    one of the other components; declaration identity itself is covered by
+    :class:`TestNominalEquality` and ``test_agl_type_table.py``."""
 
     def test_record_identity_by_name_and_type_args(self) -> None:
         r1 = RecordType("Box", type_args=(IntType(),))
@@ -694,7 +699,7 @@ class TestGenericNominalIdentity:
     def test_record_no_type_args_identity(self) -> None:
         r1 = RecordType("R")
         r2 = RecordType("R")
-        assert r1 == r2  # name-based, no type_args
+        assert r1 == r2  # every component matches, and neither has type_args
 
     def test_record_consistent_hash(self) -> None:
         r1 = RecordType("Box", type_args=(IntType(),))
@@ -957,7 +962,10 @@ class TestNewExceptions:
 
 
 class TestNominalEquality:
-    """RecordType/EnumType are handles: identity is (module_id, name, type_args) only."""
+    """RecordType/EnumType are handles carrying no shape of their own, so
+    equality compares their declaration identity (``decl_id``) alongside the
+    ``(module_id, scope_path, name, type_args)`` that resolve and display
+    them."""
 
     def _mod(self, name: str) -> "ModuleId":
         from agm.agl.modules.ids import ModuleId
@@ -977,6 +985,34 @@ class TestNominalEquality:
         e1 = EnumType(name="Color")
         e2 = EnumType(name="Color")
         assert e1 == e2
+
+    def test_record_different_declaration_not_equal(self) -> None:
+        """Two declarations of one name in one module are distinct types."""
+        from agm.agl.semantics.types import RecordType
+
+        r1 = RecordType(name="Point", decl_id=11)
+        r2 = RecordType(name="Point", decl_id=12)
+        assert r1 != r2
+        assert len({r1, r2}) == 2
+
+    def test_enum_different_declaration_not_equal(self) -> None:
+        """Two declarations of one name in one module are distinct types."""
+        from agm.agl.semantics.types import EnumType
+
+        e1 = EnumType(name="Color", decl_id=11)
+        e2 = EnumType(name="Color", decl_id=12)
+        assert e1 != e2
+        assert len({e1, e2}) == 2
+
+    def test_exception_different_declaration_not_equal(self) -> None:
+        """Exceptions carry no type arguments, so identity is all that separates
+        two declarations sharing a name."""
+        from agm.agl.semantics.types import ExceptionType
+
+        x1 = ExceptionType(name="Boom", decl_id=11)
+        x2 = ExceptionType(name="Boom", decl_id=12)
+        assert x1 != x2
+        assert len({x1, x2}) == 2
 
     def test_record_different_module_not_equal(self) -> None:
         from agm.agl.semantics.types import RecordType

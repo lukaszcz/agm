@@ -292,25 +292,41 @@ def test_module_id_on_enum_type_default_entry_id() -> None:
 
 
 def test_distinct_module_qualified_type_identity() -> None:
-    """RecordType('Color', {}, module_id=mid_foo) != RecordType('Color', {}, module_id=mid_bar)."""
+    """Same-named record handles owned by two modules are distinct types.
+
+    Distinct regardless of declaration identity: the declaring module is a
+    component of a handle's own equality, so the two stay unequal both when
+    they are stamped with one shared identity and when each carries its own.
+    """
     mid_foo = ModuleId.from_path("foo")
     mid_bar = ModuleId.from_path("bar")
-    rt_foo = RecordType("Color", module_id=mid_foo)
-    rt_bar = RecordType("Color", module_id=mid_bar)
-    assert rt_foo != rt_bar, "Same-name record types from different modules must be distinct types"
+    assert RecordType("Color", module_id=mid_foo, decl_id=1) != RecordType(
+        "Color", module_id=mid_bar, decl_id=1
+    ), "Same-name record types from different modules must be distinct types"
+    assert RecordType("Color", module_id=mid_foo, decl_id=1) != RecordType(
+        "Color", module_id=mid_bar, decl_id=2
+    )
 
 
 # ---------------------------------------------------------------------------
-# 4. Same module_id, same structure → equal types
+# 4. Same module_id, same declaration → equal types
 # ---------------------------------------------------------------------------
 
 
 def test_same_module_same_type_identity() -> None:
-    """Two RecordType instances with identical name+fields+module_id are equal."""
+    """Two handles naming one declaration are the same type; two are not.
+
+    A nominal type is its declaration, so two handles agreeing on name,
+    module, and declaration identity are interchangeable, while two
+    declarations of one name in one module stay distinct types.
+    """
     mid = ModuleId.from_path("mylib")
-    rt1 = RecordType("Point", module_id=mid)
-    rt2 = RecordType("Point", module_id=mid)
-    assert rt1 == rt2
+    assert RecordType("Point", module_id=mid, decl_id=7) == RecordType(
+        "Point", module_id=mid, decl_id=7
+    )
+    assert RecordType("Point", module_id=mid, decl_id=7) != RecordType(
+        "Point", module_id=mid, decl_id=8
+    )
 
 
 # ---------------------------------------------------------------------------

@@ -261,6 +261,10 @@ class TypeTable:
         # Name path -> the identity of the newest declaration registered
         # under it. A name lookup (get) always resolves through this index.
         self._name_index: dict[DeclKey, DeclId] = {}
+        # Identities of declarations that never took effect (see :meth:`orphan`).
+        # Retained in ``_defs`` so their linked descriptors stay derivable, but
+        # excluded from every query about what the session actually declares.
+        self._orphaned: set[DeclId] = set()
         self._record_fields_cache: dict[DeclId, dict[RecordType, Mapping[str, Type]]] = {}
         self._enum_variants_cache: dict[
             DeclId, dict[EnumType, Mapping[str, Mapping[str, Type]]]
@@ -351,6 +355,42 @@ class TypeTable:
         currently points a shared name path at.
         """
         return self._defs.get(decl_id)
+
+    def orphan(self, decl_id: DeclId) -> None:
+        """Record that *decl_id*'s declaration never took effect, and release its name.
+
+        For a declaration an incremental entry failed before promoting (see
+        :meth:`~agm.agl.typecheck.env.TypeEnvironment.restore_type_names_from`).
+        No value of one can exist — a later item of the same entry could not
+        have promoted either — so nothing may resolve to it and no
+        whole-table query about what the session declares may answer with it
+        (:meth:`builtin_declaration`, and the exception descendant scan behind
+        member-conflict diagnostics).
+
+        This is emphatically NOT what a redeclaration does: a SUPERSEDED
+        declaration stays live here, because values built from it survive and
+        its own members still constrain what may be declared around it. Only
+        a caller that knows a declaration never took effect may orphan it.
+
+        The declaration itself stays registered under its own identity. The
+        link image's nominal descriptors are DERIVED from this table on every
+        lowering (``lower.program``), so a declaration that vanished outright
+        would strand the descriptor the failed entry already linked, leaving
+        it claiming a name path it no longer holds. Releasing the name
+        instead lets the next lowering correct that descriptor.
+
+        *decl_id* must be registered.
+        """
+        typedef = self._defs[decl_id]
+        self._orphaned.add(decl_id)
+        key = (typedef.module_id, typedef.scope_path, typedef.name)
+        if self._name_index.get(key) == decl_id:
+            del self._name_index[key]
+        self._invalidate_cache_for(decl_id)
+
+    def is_orphaned(self, decl_id: DeclId) -> bool:
+        """Return whether *decl_id* was orphaned (see :meth:`orphan`)."""
+        return decl_id in self._orphaned
 
     def is_current(self, typedef: TypeDef) -> bool:
         """Return whether *typedef*'s identity is the one its name path currently resolves to.
@@ -609,9 +649,9 @@ class TypeTable:
     def exception_def(self, handle: ExceptionType) -> TypeDef:
         """Return the registered ``TypeDef`` for *handle*.
 
-        Used to read exception hierarchy metadata (``abstract``, ``base``)
-        that ``ExceptionType`` itself no longer carries. Raises ``KeyError``/
-        ``AssertionError`` under the same conditions as
+        Used to read exception hierarchy metadata (``abstract``, ``base``),
+        which lives here rather than on the ``ExceptionType`` handle. Raises
+        ``KeyError``/``AssertionError`` under the same conditions as
         :meth:`exception_fields`.
         """
         return self._require_exception_def(handle.decl_id, caller="exception_def")
@@ -639,16 +679,18 @@ class TypeTable:
         not itself a declaration.
 
         Builtin declarations are unique by complete scoped name, so a compile
-        unit may contain several paths with this bare name. This legacy
-        bare-name lookup is used only by host contracts that have one matching
-        builtin type; the last registered declaration is the current contract
+        unit may contain several paths with this bare name. This bare-name
+        lookup is used only by host contracts that have one matching builtin
+        type; the last registered declaration is the current contract
         declaration. REPL accumulation can likewise retain older paths;
         ``_defs`` never moves an existing entry, so a forward scan's last
-        match is the newest one.
+        match is the newest one. An orphaned declaration (:meth:`orphan`) is
+        skipped: it never took effect, so it must not become the contract a
+        later entry's host call is typed against.
         """
         result: TypeDef | None = None
-        for typedef in self._defs.values():
-            if typedef.is_builtin and typedef.name == name:
+        for decl_id, typedef in self._defs.items():
+            if typedef.is_builtin and typedef.name == name and decl_id not in self._orphaned:
                 result = typedef
         return result
 
@@ -1042,6 +1084,10 @@ class TypeTable:
             self._invalidate_cache_for(decl_id)
         for name_key, decl_id in other._name_index.items():
             self._name_index[name_key] = decl_id
+        # Orphan status travels with the declaration: a session seeds a fresh
+        # table from its accumulated one on every entry, so a declaration
+        # orphaned once must stay orphaned for the rest of the session.
+        self._orphaned |= other._orphaned
         for decl_id, methods in other._methods.items():
             for method in methods.values():
                 self._put_method(decl_id, method)

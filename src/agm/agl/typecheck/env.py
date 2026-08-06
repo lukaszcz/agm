@@ -203,8 +203,8 @@ class ConstructorSignature:
 class AglTypeError(AglError):
     """A fatal static type error.
 
-    Raised by the type checker on the first type violation (Q4: first-error
-    abort).  Carries an optional ``SourceSpan`` for source location.
+    Raised by the type checker on the first type violation.  Carries an
+    optional ``SourceSpan`` for source location.
     """
 
     phase = DiagnosticPhase.TYPECHECK
@@ -2524,14 +2524,18 @@ class TypeEnvironment:
         checked-entry metadata and restore the previous session definition when
         one existed.
 
-        Only the NAME-keyed tables below need restoring. The shared
-        ``type_table`` is keyed by declaration identity, not name, so an
-        unpromoted redeclaration is retained under its own identity exactly
-        as a superseded one is, while the previous declaration's identity,
-        methods, and base chain were never touched by the redeclaration and
-        so need no restoring — only ``register`` below, which repoints the
-        name index (:meth:`TypeTable.get`) back at that surviving declaration
-        and thereby takes the unpromoted one out of name resolution.
+        The shared ``type_table`` is keyed by declaration identity, not name,
+        so the unpromoted declaration stays registered under its own identity
+        exactly as a superseded one does — the link image derives its nominal
+        descriptors from this table on every lowering and needs the entry to
+        correct the descriptor the failed entry already linked. What does
+        need saying is that the declaration never took effect
+        (:meth:`TypeTable.orphan`): unlike a superseded declaration, whose
+        surviving values keep its members meaningful, an unpromoted one must
+        answer no whole-table query about what the session declares. The
+        previous declaration's own identity, methods, and base chain were
+        never touched by the redeclaration, so restoring it is just
+        ``register`` below reclaiming its name.
         """
         self._assert_mutable()
         builtin = frozenset(BUILTIN_EXCEPTIONS) | BUILTIN_PRELUDE_TYPE_NAMES
@@ -2540,9 +2544,16 @@ class TypeEnvironment:
                 continue
             self.unregister_name(name)
             scope_path, declared_name = _split_scoped_type_name(name)
+            # Read the unpromoted declaration before ``register`` repoints the
+            # name index at the survivor; the seeded table resolves this name
+            # to the checked entry's own declaration, which is the one being
+            # rolled back.
+            unpromoted = self._type_table.get(self._module_id, declared_name, scope_path)
             typedef = other._type_table.get(other._module_id, declared_name, scope_path)
             if typedef is not None:
                 self._type_table.register(typedef)
+            if unpromoted is not None:
+                self._type_table.orphan(unpromoted.decl_node_id)
             if name in other._types:
                 self._types[name] = other._types[name]
             if name in other._alias_targets:

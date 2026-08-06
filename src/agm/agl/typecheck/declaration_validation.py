@@ -132,6 +132,10 @@ def _descendant_index(type_table: TypeTable) -> dict[DeclId, tuple[DeclId, ...]]
         if typedef.kind != "exception":
             continue
         candidate_id = typedef.decl_node_id
+        if type_table.is_orphaned(candidate_id):
+            # A declaration an incremental entry never promoted: it has no
+            # values and no name, so its members constrain nothing.
+            continue
         for depth, base in enumerate(type_table.ancestor_defs(candidate_id)):
             found.setdefault(base.decl_node_id, []).append((depth, candidate_id))
     result: dict[DeclId, tuple[DeclId, ...]] = {}

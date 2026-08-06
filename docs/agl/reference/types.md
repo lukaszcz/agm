@@ -595,10 +595,10 @@ always pass through a named `record`, `enum`, or `exception`.
 
 ## Module- and scope-qualified type identity
 
-Record types and enum types are identified by their **defining module, scope
-path, and name**. Two types with the same name are distinct when they come
-from different modules or different named scopes, including a module root and
-a scope in that same module:
+Every `record`, `enum`, and `exception` declaration introduces its own type,
+named by its **defining module, scope path, and name**. Two types with the
+same name are distinct when they come from different modules or different
+named scopes, including a module root and a scope in that same module:
 
 <!-- agl-check: fragment -->
 ```agl
@@ -623,6 +623,10 @@ let p: foo::Point = foo::Point(x = 0, y = 0)
 
 This is **deep nominal identity**: two `Point` types from different modules or
 scope paths are never interchangeable regardless of structural similarity.
+Because a type is its declaration rather than its name, declaring one name
+twice — which only the REPL allows — yields two distinct types sharing a
+module, scope path, and name; see [Members of nominal
+types](#members-of-nominal-types) for how that is resolved.
 
 ### Qualified type references
 

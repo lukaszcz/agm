@@ -1215,6 +1215,58 @@ enum Agent
         assert call.ok, call.diagnostics
         assert call.value == IntValue(2)
 
+    def test_unpromoted_exception_is_not_a_member_conflict_for_a_later_method(self) -> None:
+        """A never-promoted exception cannot make a later method collide.
+
+        A retained SUPERSEDED declaration still owns its own members, because
+        values built from it survive; a declaration the entry never promoted
+        has no values and no name, so a method named after one of its fields
+        must be accepted rather than rejected against a type the session
+        cannot even name.
+        """
+        session = ReplSession()
+        assert session.eval_entry("exception Base extends Exception\n  a: int").ok
+
+        failed = session.eval_entry(
+            'let stop: int = raise Abort(message = "stop")\nexception Ghost extends Base\n  b: int'
+        )
+        assert not failed.ok
+        assert not session.eval_entry('Ghost(a = 1, b = 2, message = "x")').ok
+
+        method = session.eval_entry("def Base::b(self) -> int = self.a")
+
+        assert method.ok, method.diagnostics
+        call = session.eval_entry('Base(a = 7, message = "m").b()')
+        assert call.ok, call.diagnostics
+        assert call.value == IntValue(7)
+
+    def test_unpromoted_builtin_declaration_does_not_type_a_later_host_call(self) -> None:
+        """A never-promoted ``builtin`` declaration must not steer a later entry.
+
+        The bare-name scan that types an unannotated ``exec()`` reads the
+        newest registered ``builtin ExecResult`` declaration; a declaration
+        the entry never promoted is not one, so the call keeps the type the
+        surviving declaration gives it — the same one the host actually mints.
+        """
+        session = ReplSession(default_stdlib=False)
+        declared = session.eval_entry(
+            f"builtin record ExecResult\n{_EXEC_RESULT_FIELDS}"
+            "builtin def exec(command: text) -> ExecResult\n"
+        )
+        assert declared.ok, declared.diagnostics
+
+        failed = session.eval_entry(
+            'let stop: int = raise Abort(message = "stop")\n'
+            f"scope Ghost\nbuiltin record ExecResult\n{_EXEC_RESULT_FIELDS}end Ghost"
+        )
+        assert not failed.ok
+
+        call = session.eval_entry('exec("echo hi")', check_only=True)
+
+        assert call.ok, call.diagnostics
+        assert isinstance(call.value_type, RecordType)
+        assert call.value_type.scope_path == ()
+
 
 # ---------------------------------------------------------------------------
 # Recursive types across entries

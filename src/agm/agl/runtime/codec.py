@@ -720,7 +720,7 @@ class JsonCodec:
         Single source of truth for ``HostCapabilities.codec_kinds["json"]``,
         avoiding a duplicated literal at the host-environment assembly site.
         Matches ``_JSON_CODEC_KINDS`` (kept in this module as a local constant
-        to drive ``supports_type``; the runtime no longer duplicates it).
+        to drive ``supports_type``, and read from here by the runtime).
         """
         return _JSON_CODEC_KINDS
 
@@ -799,7 +799,7 @@ class JsonCodec:
         if schema is None or decode is None:
             raise ValueError(
                 "JsonCodec.parse requires an explicit schema and decode walk; "
-                "it no longer derives them from a checker Type. Pass the "
+                "it does not derive them from a checker Type. Pass the "
                 "contract-carried json_schema/decode (see ContractRequest)."
             )
         effective_defs = _coerce_decode_defs(defs)

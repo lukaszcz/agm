@@ -38,7 +38,7 @@ lookup, so a reference reached after the binder's own registration finds it
 regardless of selection form, even though the `open` came first. After the
 walk, filtered local selections are validated against the completed tree, so
 an unknown `using` or `hiding` path is rejected even when no reference forced
-a lookup. A cross-module `open`'s contribution is snapshotted eagerly, as before: an
+a lookup. A cross-module `open`'s contribution is snapshotted eagerly: an
 imported module's public members are complete before the walk starts, so
 there is nothing to defer.
 

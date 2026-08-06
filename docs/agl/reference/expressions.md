@@ -829,7 +829,7 @@ let result: decimal =
 
 ## Expected-type propagation
 
-The checker propagates an expected type top-down where it helps:
+An expected type propagates top-down where it helps:
 
 | Context | Propagated expectation |
 | ------- | ---------------------- |

@@ -13,14 +13,14 @@ Type hierarchy
 - ``DecimalType`` — the ``decimal`` primitive (exact fixed-point).
 - ``ArrayType(elem)`` — ``array[T]``.
 - ``DictType(value)`` — ``dict[text, V]`` (keys are always ``text`` in AgL).
-- ``RecordType(name, type_args, module_id)`` — a ``record`` nominal type
-  handle; field shapes live in the shared ``TypeTable``
-  (``semantics.type_table``), keyed by ``(module_id, scope_path, name)``.
-- ``EnumType(name, type_args, module_id)`` — an ``enum`` nominal type handle;
-  variant shapes live in the shared ``TypeTable``.
-- ``ExceptionType(name, module_id)`` — an exception nominal type handle
-  (never generic); field shapes and hierarchy (``abstract``, ``base``) live
-  in the shared ``TypeTable``.
+- ``RecordType(name, type_args, module_id, decl_id)`` — a ``record`` nominal
+  type handle whose identity is ``decl_id``; field shapes live in the shared
+  ``TypeTable`` (``semantics.type_table``), keyed by declaration identity.
+- ``EnumType(name, type_args, module_id, decl_id)`` — an ``enum`` nominal type
+  handle; variant shapes live in the shared ``TypeTable``.
+- ``ExceptionType(name, module_id, decl_id)`` — an exception nominal type
+  handle (never generic); field shapes and hierarchy (``abstract``, ``base``)
+  live in the shared ``TypeTable``.
 - ``UnitType`` — the ``unit`` type (AgL; single value ``()``).
 - ``FunctionType(params, result)`` — a first-class function type (AgL),
   positional only; named/optional arguments are erased from the value type.

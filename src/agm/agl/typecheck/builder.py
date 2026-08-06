@@ -176,8 +176,8 @@ class _TypeBuilder:
         (:meth:`collect_shells_only`); phase 2 resolves each declaration's
         body, in source order, with no dependency ordering (see the module
         docstring); a final post-pass (:meth:`_finalize_exceptions`)
-        validates own-vs-inherited exception field duplication now that every
-        exception's flattened field set is buildable.
+        validates own-vs-inherited exception field duplication, which needs
+        every exception's flattened field set to be buildable.
 
         Inhabitation is checked once, whole-program, ahead of every module's
         body resolution (:func:`~agm.agl.semantics.analyses.compute_uninhabited`

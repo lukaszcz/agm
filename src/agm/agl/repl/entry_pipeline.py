@@ -1017,9 +1017,11 @@ class EntryPipeline:
         An ordinary unpromoted record/enum/exception declaration needs no
         nominal rollback of its own, because the link image's descriptors are
         rebuilt from the shared type table on every entry rather than being
-        authoritative state; the name-keyed tables the session resolves
-        through are what goes back to the surviving declaration. A ``builtin``
-        declaration is the one exception, because its identity ALSO lives in
+        authoritative state; marking the declaration as never having taken
+        effect (``TypeTable.orphan``) and restoring the session's own type
+        namespace are what put the surviving declaration back in reach. A
+        ``builtin`` declaration is the one exception, because its identity
+        ALSO lives in
         ``BuiltinNominals.declared`` -- a bare-name-keyed override that
         accumulates across entries and that every host-minting site consults
         directly -- so an orphaned entry left there would still steer every

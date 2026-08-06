@@ -112,9 +112,11 @@ class LinkImage:
         and that table retains an unpromoted declaration under its own
         identity exactly as it retains a superseded one -- so dropping a
         descriptor here would simply be re-added by the next entry. What
-        actually takes the declaration out of reach is name-keyed: the type
-        table's name index and the environment's type namespace both go back
-        to the declaration that survived.
+        actually takes the declaration out of reach is the type table marking
+        it as never having taken effect (``TypeTable.orphan``), which releases
+        its name and excludes it from every whole-table query about what the
+        session declares, alongside the environment's own type namespace going
+        back to the declaration that survived.
 
         :attr:`BuiltinNominals.declared` is the one piece of nominal state
         that is name-keyed AND authoritative -- a BARE-NAME override every

@@ -273,32 +273,30 @@ def test_record_value_eq() -> None:
     """RecordValue equality considers nominal identity and fields.
 
     Two records with same nominal+fields but different display_name are equal;
-    a record with a distinct nominal identity (standing in for "same declared_name
-    in a different module" and "different declared_name") is NOT equal.
+    a record naming a different declaration is NOT equal, whether or not the
+    two declarations are displayed under the same spelling.
     """
     from agm.agl.semantics.values import IntValue, NominalId, RecordValue
 
-    nom_foo_a = NominalId(1)
-    nom_foo_b = NominalId(2)
-    nom_bar_a = NominalId(3)
+    nom_a = NominalId(1)
+    nom_b = NominalId(2)
+    nom_c = NominalId(3)
 
-    r1 = RecordValue(nominal=nom_foo_a, display_name="Foo", fields={"x": IntValue(1)})
-    r2 = RecordValue(nominal=nom_foo_a, display_name="Foo", fields={"x": IntValue(1)})
+    r1 = RecordValue(nominal=nom_a, display_name="Foo", fields={"x": IntValue(1)})
+    r2 = RecordValue(nominal=nom_a, display_name="Foo", fields={"x": IntValue(1)})
     # Same nominal + fields, different display_name → still equal (display_name excluded from eq).
-    r_diff_display = RecordValue(
-        nominal=nom_foo_a, display_name="AliasName", fields={"x": IntValue(1)}
-    )
-    # Different module → not equal.
-    r3 = RecordValue(nominal=nom_foo_b, display_name="Foo", fields={"x": IntValue(1)})
-    # Different name → not equal.
-    r4 = RecordValue(nominal=nom_bar_a, display_name="Bar", fields={"x": IntValue(1)})
+    r_diff_display = RecordValue(nominal=nom_a, display_name="AliasName", fields={"x": IntValue(1)})
+    # Another declaration displayed under the same spelling → not equal.
+    r3 = RecordValue(nominal=nom_b, display_name="Foo", fields={"x": IntValue(1)})
+    # Another declaration displayed under a different spelling → not equal.
+    r4 = RecordValue(nominal=nom_c, display_name="Bar", fields={"x": IntValue(1)})
     # Same nominal, different fields → not equal.
-    r5 = RecordValue(nominal=nom_foo_a, display_name="Foo", fields={"x": IntValue(2)})
+    r5 = RecordValue(nominal=nom_a, display_name="Foo", fields={"x": IntValue(2)})
 
     assert r1 == r2
     assert r1 == r_diff_display  # display_name excluded from eq
-    assert r1 != r3  # different module
-    assert r1 != r4  # different name
+    assert r1 != r3  # different declaration, same spelling
+    assert r1 != r4  # different declaration, different spelling
     assert r1 != r5  # different fields
 
 
@@ -313,7 +311,7 @@ def test_constructor_value_eq_and_hash() -> None:
     c2 = ConstructorValue(nominal=nom_a, display_name="Box", variant=None)
     # Same nominal + variant, different display_name → still equal.
     c_diff_display = ConstructorValue(nominal=nom_a, display_name="Alias", variant=None)
-    # Different module → not equal.
+    # Another declaration displayed under the same spelling → not equal.
     c3 = ConstructorValue(nominal=nom_b, display_name="Box", variant=None)
     # Different variant → not equal.
     c4 = ConstructorValue(nominal=nom_a, display_name="Box", variant="Wrap")
@@ -321,7 +319,7 @@ def test_constructor_value_eq_and_hash() -> None:
     assert c1 == c2
     assert hash(c1) == hash(c2)
     assert c1 == c_diff_display  # display_name excluded from eq
-    assert c1 != c3  # different module
+    assert c1 != c3  # different declaration
     assert c1 != c4  # different variant
 
 
@@ -358,9 +356,9 @@ def test_enum_value_eq() -> None:
     e_diff_disp = EnumValue(nominal=nom_color, display_name="MyColor", variant="Red", fields={})
     # Different variant → not equal.
     e3 = EnumValue(nominal=nom_color, display_name="Color", variant="Blue", fields={})
-    # Different name → not equal.
+    # Another declaration displayed under a different spelling → not equal.
     e4 = EnumValue(nominal=nom_shape, display_name="Shape", variant="Red", fields={})
-    # Different module → not equal.
+    # Another declaration displayed under the same spelling → not equal.
     e5 = EnumValue(nominal=nom_color_other, display_name="Color", variant="Red", fields={})
 
     assert e1 == e2
@@ -392,11 +390,11 @@ def test_exception_value_eq() -> None:
     ex_diff_disp = ExceptionValue(
         nominal=nom_err, display_name="ErrAlias", fields={"message": TextValue("oops")}
     )
-    # Different declared_name → not equal.
+    # Another declaration displayed under a different spelling → not equal.
     ex3 = ExceptionValue(
         nominal=nom_err2, display_name="Err2", fields={"message": TextValue("oops")}
     )
-    # Same name but different module → not equal.
+    # Another declaration displayed under the same spelling → not equal.
     ex4 = ExceptionValue(
         nominal=nom_err_other, display_name="Err", fields={"message": TextValue("oops")}
     )

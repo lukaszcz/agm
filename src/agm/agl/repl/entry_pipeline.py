@@ -21,8 +21,7 @@ if TYPE_CHECKING:
     from agm.agl.eval.ir_interpreter import IrInterpreter
     from agm.agl.ir.builtin_nominals import BuiltinNominals
     from agm.agl.ir.contracts import ContractPayload
-    from agm.agl.ir.ids import NominalId, SymbolId
-    from agm.agl.ir.program import NominalDescriptor
+    from agm.agl.ir.ids import SymbolId
     from agm.agl.lower import LinkImage
     from agm.agl.matchcompile import MatchCompiledProgram
     from agm.agl.modules.ids import ModuleId
@@ -536,9 +535,12 @@ class EntryPipeline:
         # can fail from here on rolls back against one of these snapshots: an
         # entry rejected before anything is promoted discards its whole link
         # delta, while one that partially ran keeps that delta and rolls back
-        # only the nominals of the declarations that did not complete.
+        # only the one piece of nominal state that is both name-keyed and
+        # authoritative: a ``builtin`` declaration's host-mint override (see
+        # ``_restore_unpromoted_entry_builtin_nominals``). Linked nominal
+        # descriptors need no rollback because lowering rebuilds them from
+        # the shared type table on every entry.
         link_snapshot = self._ctx._link_image.snapshot_state()
-        nominal_snapshot = self._ctx._link_image.snapshot_nominals()
         builtin_nominal_snapshot = self._ctx._link_image.snapshot_builtin_nominals()
         lowered = lower_repl_program(
             compiled,
@@ -667,10 +669,11 @@ class EntryPipeline:
             params run (see ``IrInterpreter.run``), so a declaration completed
             before a failing param default stays promoted. The promotion plan
             itself is conservative: it excludes params whose symbols were not
-            installed and applies the declaration-dependency fixpoint. Only the
-            declarations left unpromoted have their nominals rolled back --
-            unlike a rejected entry, this one keeps a partial link delta, so the
-            image cannot simply be restored wholesale.
+            installed and applies the declaration-dependency fixpoint. Unlike a
+            rejected entry, this one keeps a partial link delta rather than
+            being restored wholesale, so the only nominal state it rolls back
+            is a ``builtin`` declaration's bare-name host-mint override, which
+            later host mints would otherwise keep consulting.
             """
             trace.run_end(ok=False)
             self._persist_interpreter_settings(interp, trace)
@@ -679,10 +682,9 @@ class EntryPipeline:
                 interp.entry_param_symbols_installed,
             )
             installed = promote(partial=True, promoted_declaration_ids=promoted)
-            self._restore_unpromoted_entry_nominals(
+            self._restore_unpromoted_entry_builtin_nominals(
                 orig_program,
                 promoted,
-                nominal_snapshot,
                 builtin_nominal_snapshot,
             )
             kind, name = self._ctx._classify(orig_program)
@@ -1004,15 +1006,26 @@ class EntryPipeline:
         if not trace.disabled:
             self._ctx._trace_path = trace.path
 
-    def _restore_unpromoted_entry_nominals(
+    def _restore_unpromoted_entry_builtin_nominals(
         self,
         program: Program,
         promoted_declaration_ids: frozenset[int],
-        nominal_snapshot: Mapping["NominalId", "NominalDescriptor"],
         builtin_nominal_snapshot: "BuiltinNominals",
     ) -> None:
-        """Rollback nominal metadata whose declaration did not complete."""
-        from agm.agl.ir.ids import NominalId
+        """Roll back host-mint overrides for this entry's unpromoted ``builtin`` declarations.
+
+        An ordinary unpromoted record/enum/exception declaration needs no
+        nominal rollback of its own, because the link image's descriptors are
+        rebuilt from the shared type table on every entry rather than being
+        authoritative state; the name-keyed tables the session resolves
+        through are what goes back to the surviving declaration. A ``builtin``
+        declaration is the one exception, because its identity ALSO lives in
+        ``BuiltinNominals.declared`` -- a bare-name-keyed override that
+        accumulates across entries and that every host-minting site consults
+        directly -- so an orphaned entry left there would still steer every
+        later host mint of that name at the identity this entry never
+        promoted. See ``LinkImage.restore_builtin_nominals``.
+        """
         from agm.agl.syntax.nodes import EnumDef, ExceptionDef, RecordDef, ScopeRegion
 
         def type_declarations(
@@ -1024,18 +1037,11 @@ class EntryPipeline:
                 elif isinstance(item, (RecordDef, EnumDef, ExceptionDef)):
                     yield item
 
-        unpromoted = tuple(
-            item
+        unpromoted_builtin_names = (
+            item.name
             for item in type_declarations(program.body.items)
-            if item.node_id not in promoted_declaration_ids
+            if item.node_id not in promoted_declaration_ids and item.is_builtin
         )
-        # An entry-module declaration's identity is always its own AST node id
-        # (never a reserved id: only a `std/core`-root declaration can adopt
-        # one, and the entry module is never `std/core` — see
-        # `typecheck.builder._decl_identity`).
-        nominal_ids = tuple(NominalId(item.node_id) for item in unpromoted)
-        self._ctx._link_image.restore_nominals(nominal_snapshot, nominal_ids)
         self._ctx._link_image.restore_builtin_nominals(
-            builtin_nominal_snapshot,
-            (item.name for item in unpromoted if item.is_builtin),
+            builtin_nominal_snapshot, unpromoted_builtin_names
         )

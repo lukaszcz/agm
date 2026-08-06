@@ -352,41 +352,6 @@ class TypeTable:
         """
         return self._defs.get(decl_id)
 
-    def unregister(self, decl_id: DeclId) -> None:
-        """Remove the registered def for *decl_id*, if present.
-
-        Used when a declaration is about to be redefined (e.g. an incremental
-        REPL entry redeclaring an earlier record under the same name with a
-        different shape): dropping the stale entry first means the new
-        declaration's :meth:`register` call is always a fresh registration,
-        never a conflicting one. Also drops any cached substitutions for
-        handles naming this identity. Only repoints the name index away from
-        *decl_id* when the index still points at it — an older, already
-        superseded declaration's removal must never disturb a name path a
-        newer declaration now owns.
-        """
-        typedef = self._defs.pop(decl_id, None)
-        if typedef is None:
-            return
-        name_key = (typedef.module_id, typedef.scope_path, typedef.name)
-        if self._name_index.get(name_key) == decl_id:
-            del self._name_index[name_key]
-        self._methods.pop(decl_id, None)
-        self._invalidate_cache_for(decl_id)
-
-    def unregister_name(
-        self, module_id: ModuleId, name: str, scope_path: tuple[str, ...] = ()
-    ) -> None:
-        """Remove the newest registered def for a name path, if present.
-
-        A name-based entry point over :meth:`unregister`, for a caller (the
-        type builder, redeclaring a source name) that only has the name path
-        in hand, not the declaration identity it currently resolves to.
-        """
-        decl_id = self._name_index.get((module_id, scope_path, name))
-        if decl_id is not None:
-            self.unregister(decl_id)
-
     def _put_method(self, decl_id: DeclId, method: MethodDef) -> None:
         """Write *method* into *decl_id*'s direct map, invalidating caches on change.
 
@@ -408,22 +373,6 @@ class TypeTable:
         neither frontend package is imported here.
         """
         self._put_method(owner.decl_id, method)
-
-    def restore_methods_from(
-        self,
-        other: "TypeTable",
-        module_id: ModuleId,
-        name: str,
-        scope_path: tuple[str, ...] = (),
-    ) -> None:
-        """Restore one nominal owner's direct method map from *other*."""
-        decl_id = other._name_index.get((module_id, scope_path, name))
-        if decl_id is None:
-            return
-        methods = other._methods.get(decl_id)
-        if methods is not None:
-            self._methods[decl_id] = dict(methods)
-            self._exception_methods_cache.clear()
 
     def methods_for(self, owner: NominalOwner) -> Mapping[str, MethodDef]:
         """Return methods available on *owner*, including exception bases.
@@ -517,8 +466,8 @@ class TypeTable:
         Memoized per handle: ``RecordType`` equality/hash cover ``decl_id``
         and ``type_args``, so the same handle always maps to the same
         substituted mapping object. The memo is bucketed by ``decl_id`` so a single
-        identity's invalidation (:meth:`unregister`, :meth:`merge_from`)
-        never has to scan entries for other identities.
+        identity's invalidation (:meth:`merge_from`) never has to scan entries
+        for other identities.
 
         Raises ``KeyError`` if no ``TypeDef`` is registered for the handle's
         ``decl_id`` — every valid handle is expected to have one.

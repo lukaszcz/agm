@@ -3556,64 +3556,6 @@ class TestImports:
         assert not s._loaded_lib_modules
         assert not s._accumulated_imports
 
-    def test_runtime_failure_restores_unpromoted_type_nominal(self, tmp_path: Path) -> None:
-        s = self._make_session_with_root(tmp_path)
-        r1 = s.eval_entry("record R\n  x: int")
-        assert r1.ok, r1.diagnostics
-
-        r2 = s.eval_entry("let z: decimal = 1 / 0\nrecord R\n  y: int")
-        assert not r2.ok
-        # The rolled-back redeclaration leaves NO descriptor of its own behind:
-        # each declaration owns a distinct identity, so a surviving second "R"
-        # descriptor would mean the rollback dropped nothing.
-        nominals = s._link_image._state.nominals
-        surviving = [desc for desc in nominals.values() if desc.display_name == "R"]
-        assert [desc.fields for desc in surviving] == [("x",)]
-
-        r3 = s.eval_entry("let f = R\nlet v = f(1)\nv.x")
-
-        assert r3.ok, r3.diagnostics
-        assert _int(r3.value) == 1
-
-    def test_runtime_failure_restores_unpromoted_builtin_nominal_identity(self) -> None:
-        s = ReplSession(default_stdlib=False)
-
-        failed = s.eval_entry(
-            "let z: decimal = 1 / 0\n"
-            "scope Failed\n"
-            "builtin exception RangeError extends Exception()\n"
-            "end Failed"
-        )
-        assert not failed.ok
-
-        caught = s.eval_entry(
-            "let step = 0\n"
-            "try\n"
-            "  for i in 1 to 5 by step do\n"
-            "    ()\n"
-            "  done\n"
-            "catch RangeError as error =>\n"
-            "  ()"
-        )
-
-        assert caught.ok, caught.diagnostics
-
-    def test_runtime_failure_restores_previous_builtin_nominal_identity(self) -> None:
-        s = ReplSession(default_stdlib=False)
-        declared = s.eval_entry("builtin exception RangeError extends Exception()")
-        assert declared.ok, declared.diagnostics
-        previous = s._link_image._state.builtin_nominals.nominal("RangeError")
-
-        failed = s.eval_entry(
-            "let z: decimal = 1 / 0\n"
-            "scope Failed\n"
-            "builtin exception RangeError extends Exception()\n"
-            "end Failed"
-        )
-
-        assert not failed.ok
-        assert s._link_image._state.builtin_nominals.nominal("RangeError") == previous
-
     def test_interpreter_initialization_failure_rolls_back_link_image(self, tmp_path: Path) -> None:
         """A failed setting bootstrap leaves no linked declarations but consumes node ids."""
         from agm.agl.lower import LinkImage
@@ -4155,6 +4097,144 @@ class TestImports:
 
         assert r.ok, r.diagnostics
         assert _int(r.value) == 3
+
+
+# ---------------------------------------------------------------------------
+# Unpromoted nominal declarations: a declaration a partially failed entry
+# never promotes drops out of name resolution -- the previous declaration
+# (or its absence) stays in effect for every later entry exactly as before
+# the failed entry -- except a ``builtin`` declaration's host-mint override,
+# which is bare-name keyed and consulted directly by every later host mint,
+# so it is rolled back explicitly.
+# ---------------------------------------------------------------------------
+
+
+class TestUnpromotedNominalRollback:
+    def test_runtime_failure_leaves_the_previous_record_declaration_in_effect(self) -> None:
+        s = ReplSession()
+        assert s.eval_entry("record R\n  x: int").ok
+
+        failed = s.eval_entry("let z: decimal = 1 / 0\nrecord R\n  y: int")
+        assert not failed.ok
+
+        construct = s.eval_entry("let f = R\nlet v = f(1)\nv.x")
+        match = s.eval_entry("case R(x = 2) of\n  | R(x) => x")
+
+        assert construct.ok, construct.diagnostics
+        assert construct.value == IntValue(1)
+        assert match.ok, match.diagnostics
+        assert match.value == IntValue(2)
+
+    def test_runtime_failure_leaves_the_previous_enum_declaration_in_effect(self) -> None:
+        s = ReplSession()
+        assert s.eval_entry("enum Color\n  | Red\n  | Green").ok
+
+        failed = s.eval_entry("let z: decimal = 1 / 0\nenum Color\n  | Blue")
+        assert not failed.ok
+
+        construct = s.eval_entry("Color::Red")
+        match = s.eval_entry("case Color::Green of\n  | Red => 0\n  | Green => 1")
+        stale_variant = s.eval_entry("Color::Blue")
+
+        assert construct.ok, construct.diagnostics
+        assert match.ok, match.diagnostics
+        assert match.value == IntValue(1)
+        assert not stale_variant.ok
+
+    def test_runtime_failure_leaves_the_previous_exception_declaration_in_effect(self) -> None:
+        s = ReplSession()
+        assert s.eval_entry("exception E extends Exception\n  code: int").ok
+
+        failed = s.eval_entry(
+            "let z: decimal = 1 / 0\nexception E extends Exception\n  label: text"
+        )
+        assert not failed.ok
+
+        caught = s.eval_entry('try raise E(message = "boom", code = 1) catch E as e => e.code')
+        stale_field = s.eval_entry('try raise E(message = "boom", label = "x") catch E as e => 0')
+
+        assert caught.ok, caught.diagnostics
+        assert caught.value == IntValue(1)
+        assert not stale_field.ok
+
+    def test_runtime_failure_leaves_a_first_declaration_entirely_undeclared(self) -> None:
+        """A declaration with no PREVIOUS declaration to fall back to is simply
+        absent -- not resurrected in some intermediate state -- once its own
+        entry fails before promoting it."""
+        s = ReplSession()
+
+        failed = s.eval_entry("let z: decimal = 1 / 0\nrecord R\n  x: int")
+        assert not failed.ok
+
+        use = s.eval_entry("R(x = 1)")
+
+        assert not use.ok
+
+    def test_runtime_failure_restores_unpromoted_builtin_nominal_identity(self) -> None:
+        """A ``builtin`` declaration's host-mint override is the one exception
+        to the rule above: unlike an ordinary nominal descriptor, it is a
+        bare-name override every host-minting site consults directly, so it
+        alone still needs rollback -- proven here by a later host mint (no
+        earlier declaration exists) falling back to the canonical identity
+        and still being catchable."""
+        s = ReplSession(default_stdlib=False)
+
+        failed = s.eval_entry(
+            "let z: decimal = 1 / 0\n"
+            "scope Failed\n"
+            "builtin exception RangeError extends Exception()\n"
+            "end Failed"
+        )
+        assert not failed.ok
+
+        caught = s.eval_entry(
+            "let step = 0\n"
+            "try\n"
+            "  for i in 1 to 5 by step do\n"
+            "    ()\n"
+            "  done\n"
+            "catch RangeError as error =>\n"
+            "  ()"
+        )
+
+        assert caught.ok, caught.diagnostics
+
+    def test_runtime_failure_restores_previous_builtin_nominal_identity(self) -> None:
+        """The same override, but with an earlier declaration already in
+        effect: the rollback must restore THAT declaration's own spelling
+        rather than leaving the failed, scoped redeclaration's spelling live.
+
+        A later ``catch RangeError`` cannot itself observe which identity is
+        live here: the standard-library exception namespace always reseeds a
+        recognized name like ``RangeError`` fresh in every later entry (see
+        ``TypeEnvironment.seed_from``'s ``BUILTIN_EXCEPTIONS`` exclusion), so
+        a catch clause resolves to the canonical identity regardless of any
+        program declaration, in every entry but the declaring one itself.
+        What the rollback controls is which spelling a fresh host mint
+        raises under (``BuiltinNominals.display_name``, baked into the raised
+        value's ``display_name`` at the mint site) -- a later entry's
+        uncaught error reports the identity the mint actually used, which is
+        exactly the previously-declared, unscoped ``"RangeError"`` when the
+        rollback restores it, or the failed entry's own scoped
+        ``"Failed::RangeError"`` when it does not.
+        """
+        s = ReplSession(default_stdlib=False)
+        declared = s.eval_entry("builtin exception RangeError extends Exception()")
+        assert declared.ok, declared.diagnostics
+
+        failed = s.eval_entry(
+            "let z: decimal = 1 / 0\n"
+            "scope Failed\n"
+            "builtin exception RangeError extends Exception()\n"
+            "end Failed"
+        )
+        assert not failed.ok
+
+        raised = s.eval_entry("let step = 0\nfor i in 1 to 5 by step do\n  ()\ndone")
+
+        assert not raised.ok
+        assert raised.error is not None
+        assert raised.error.type_name == "RangeError"
 
 
 # ---------------------------------------------------------------------------

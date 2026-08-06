@@ -2523,6 +2523,15 @@ class TypeEnvironment:
         the failure are promoted. For each unpromoted type name, remove the
         checked-entry metadata and restore the previous session definition when
         one existed.
+
+        Only the NAME-keyed tables below need restoring. The shared
+        ``type_table`` is keyed by declaration identity, not name, so an
+        unpromoted redeclaration is retained under its own identity exactly
+        as a superseded one is, while the previous declaration's identity,
+        methods, and base chain were never touched by the redeclaration and
+        so need no restoring — only ``register`` below, which repoints the
+        name index (:meth:`TypeTable.get`) back at that surviving declaration
+        and thereby takes the unpromoted one out of name resolution.
         """
         self._assert_mutable()
         builtin = frozenset(BUILTIN_EXCEPTIONS) | BUILTIN_PRELUDE_TYPE_NAMES
@@ -2534,9 +2543,6 @@ class TypeEnvironment:
             typedef = other._type_table.get(other._module_id, declared_name, scope_path)
             if typedef is not None:
                 self._type_table.register(typedef)
-                self._type_table.restore_methods_from(
-                    other._type_table, other._module_id, declared_name, scope_path
-                )
             if name in other._types:
                 self._types[name] = other._types[name]
             if name in other._alias_targets:

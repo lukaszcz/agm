@@ -299,6 +299,14 @@ def test_record_signatures_keep_modules_and_generic_instantiations_distinct() ->
 
 
 def test_record_signature_cache_preserves_identity_and_invalidates_redeclarations() -> None:
+    """Internal robustness guard: a declaration's shape is immutable once
+    registered in production (a redeclaration always mints a fresh identity,
+    never rewrites an existing one -- see ``TypeTable.register``), so the only
+    still-live way to change a def under an existing identity is
+    ``merge_from`` treating another table as authoritative. This proves the
+    signature cache is keyed by declaration VALUE, not identity alone, using
+    that path.
+    """
     table = TypeTable()
     box_id = next_decl_id()
     first_def = TypeDef(
@@ -315,10 +323,9 @@ def test_record_signature_cache_preserves_identity_and_invalidates_redeclaration
 
     assert original is signature_for_type(handle, table)
 
-    # Redeclared with a different shape under the same declaration identity,
-    # so the very same handle must stop resolving to the cached signature.
-    table.unregister(box_id)
-    table.register(replace(first_def, fields=(("label", TextType()),)))
+    source = TypeTable()
+    source.register(replace(first_def, fields=(("label", TextType()),)))
+    table.merge_from(source)
 
     redeclared = signature_for_type(handle, table)
     assert isinstance(redeclared, ClosedSignature)
@@ -332,7 +339,12 @@ def test_record_signature_cache_preserves_identity_and_invalidates_redeclaration
 def test_scoped_record_signature_cache_invalidates_on_its_own_redeclaration() -> None:
     """A cached signature is keyed by the declaration its handle names, not by
     whatever root declaration happens to share the bare name, so redeclaring
-    the scoped type alone still invalidates it."""
+    the scoped type alone still invalidates it.
+
+    Internal robustness guard, same as the root-declaration case above: uses
+    ``merge_from`` to change a def under an existing identity, the only path
+    still live for that in production.
+    """
     table = TypeTable()
     table.register(
         TypeDef(
@@ -358,8 +370,9 @@ def test_scoped_record_signature_cache_invalidates_on_its_own_redeclaration() ->
     original = signature_for_type(handle, table)
     assert original is signature_for_type(handle, table)
 
-    table.unregister(scoped_id)
-    table.register(replace(scoped_def, fields=(("label", TextType()),)))
+    source = TypeTable()
+    source.register(replace(scoped_def, fields=(("label", TextType()),)))
+    table.merge_from(source)
 
     redeclared = signature_for_type(handle, table)
     assert isinstance(redeclared, ClosedSignature)

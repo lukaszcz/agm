@@ -9,8 +9,8 @@ from typing import TYPE_CHECKING, cast
 
 from agm.agl.ir.builtin_nominals import BuiltinNominals
 from agm.agl.ir.contracts import ContractPayload
-from agm.agl.ir.ids import NominalId, SymbolId
-from agm.agl.ir.program import ExecutableProgram, NominalDescriptor
+from agm.agl.ir.ids import SymbolId
+from agm.agl.ir.program import ExecutableProgram
 from agm.agl.lower.lowerer import InitializerOrigin, _LinkState
 from agm.agl.matchcompile import MatchCompiledProgram
 from agm.agl.modules.ids import ModuleId
@@ -94,46 +94,39 @@ class LinkImage:
         """Restore a previously snapshotted incremental linker state."""
         self._state = snapshot
 
-    def snapshot_nominals(self) -> dict[NominalId, NominalDescriptor]:
-        """Return a rollback snapshot of persistent nominal descriptors."""
-        return dict(self._state.nominals)
-
     def snapshot_builtin_nominals(self) -> BuiltinNominals:
         """Return a rollback snapshot of host-minted built-in identities."""
         return self._state.builtin_nominals
-
-    def restore_nominals(
-        self,
-        snapshot: Mapping[NominalId, NominalDescriptor],
-        nominal_ids: Iterable[NominalId],
-    ) -> None:
-        """Restore selected nominal descriptors from *snapshot*.
-
-        Runtime-failed REPL entries may have linked type declarations that were
-        not promoted statically, so unpromoted redeclarations must be restored
-        explicitly to keep constructor values in later entries consistent with
-        the restored type environment. *nominal_ids* are always freshly minted
-        by the entry being rolled back (each declaration's own identity is its
-        AST node id, monotonically allocated and never reused across a
-        session's whole node-id range — see
-        ``entry_pipeline.EntryPipeline._restore_unpromoted_entry_nominals``),
-        so *snapshot*, taken before this entry ran, never has an entry for any
-        of them: restoring one always means dropping it, never reinstating an
-        earlier descriptor under the same identity.
-        """
-        for nominal in nominal_ids:
-            previous = snapshot.get(nominal)
-            if previous is None:
-                self._state.nominals.pop(nominal, None)
-            else:  # pragma: no cover
-                self._state.nominals[nominal] = previous
 
     def restore_builtin_nominals(
         self,
         snapshot: BuiltinNominals,
         names: Iterable[str],
     ) -> None:
-        """Restore selected built-in identities from *snapshot*."""
+        """Restore selected built-in identities from *snapshot*.
+
+        This is the only nominal state a partially failed entry rolls back.
+        ``_LinkState.nominals`` needs none of its own because it is DERIVED,
+        not authoritative: every lowering call rebuilds it from the shared
+        ``TypeTable``'s registered declarations (``lower.program``, step 2),
+        and that table retains an unpromoted declaration under its own
+        identity exactly as it retains a superseded one -- so dropping a
+        descriptor here would simply be re-added by the next entry. What
+        actually takes the declaration out of reach is name-keyed: the type
+        table's name index and the environment's type namespace both go back
+        to the declaration that survived.
+
+        :attr:`BuiltinNominals.declared` is the one piece of nominal state
+        that is name-keyed AND authoritative -- a BARE-NAME override every
+        host-minting site consults directly
+        (:meth:`BuiltinNominals.nominal`/:meth:`BuiltinNominals.display_name`),
+        accumulated across entries rather than rebuilt -- so an orphaned entry
+        left here would keep steering every later host mint of that name at
+        the identity this entry never promoted. *names* are always freshly
+        declared by the entry being rolled back, so restoring one always means
+        dropping it back to whatever (or nothing) *snapshot* had, never
+        reinstating a stale value under a name another entry still owns.
+        """
         restored_names = frozenset(names)
         restored = {
             name: declared

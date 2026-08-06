@@ -494,7 +494,17 @@ class TestExceptionAccessors:
         second = table.exception_fields(handle)
         assert first is second
 
-    def test_exception_fields_cache_updates_when_base_is_redefined(self) -> None:
+    def test_exception_fields_cache_updates_when_a_base_def_is_overwritten(self) -> None:
+        """A cached descendant mapping follows a changed base declaration.
+
+        A declaration's shape is immutable once registered (a redeclaration
+        always mints a fresh identity -- see ``TypeTable.register``), so
+        ``merge_from`` treating another table as authoritative is the one path
+        that changes a def under an existing identity. Flattened exception
+        caches are keyed by descendant, not by the base that changed, so this
+        proves they are dropped wholesale rather than only for the identity
+        whose def moved.
+        """
         table = TypeTable()
         table.register(
             TypeDef(
@@ -518,8 +528,8 @@ class TestExceptionAccessors:
         child = ExceptionType(name="Child", module_id=ENTRY_ID, decl_id=700012)
         assert dict(table.exception_fields(child)) == {"old": IntType(), "own": TextType()}
 
-        table.unregister_name(ENTRY_ID, "Base")
-        table.register(
+        source = TypeTable()
+        source.register(
             TypeDef(
                 kind="exception",
                 name="Base",
@@ -528,10 +538,16 @@ class TestExceptionAccessors:
                 decl_node_id=700013,
             )
         )
+        table.merge_from(source)
 
         assert dict(table.exception_fields(child)) == {"new": BoolType(), "own": TextType()}
 
-    def test_exception_field_kinds_cache_updates_when_base_is_redefined(self) -> None:
+    def test_exception_field_kinds_cache_updates_when_a_base_def_is_overwritten(self) -> None:
+        """The field-kinds memo follows a changed base the same way.
+
+        Same authoritative-``merge_from`` path as the field mapping above,
+        against the separate ``exception_field_kinds`` memo.
+        """
         table = TypeTable()
         table.register(
             TypeDef(
@@ -557,8 +573,8 @@ class TestExceptionAccessors:
         child = ExceptionType(name="Child", module_id=ENTRY_ID, decl_id=700012)
         assert table.exception_field_kinds(child) == (("old", "standard"), ("own", "named_only"))
 
-        table.unregister_name(ENTRY_ID, "Base")
-        table.register(
+        source = TypeTable()
+        source.register(
             TypeDef(
                 kind="exception",
                 name="Base",
@@ -568,6 +584,7 @@ class TestExceptionAccessors:
                 decl_node_id=700013,
             )
         )
+        table.merge_from(source)
 
         assert table.exception_field_kinds(child) == (
             ("new", "positional_only"),
@@ -844,50 +861,6 @@ class TestMethodRegistry:
 
         assert table.lookup_method(point, "missing") is None
 
-    def test_unregister_and_reregister_discards_stale_exception_methods_and_cache(self) -> None:
-        table = TypeTable()
-        base = ExceptionType(name="Base", module_id=ENTRY_ID, decl_id=700013)
-        child = ExceptionType(name="Child", module_id=ENTRY_ID, decl_id=700012)
-        table.register(
-            TypeDef(kind="exception", name="Base", module_id=ENTRY_ID, decl_node_id=700013)
-        )
-        table.register(
-            TypeDef(
-                kind="exception",
-                name="Child",
-                module_id=ENTRY_ID,
-                base=700013,
-                decl_node_id=700012,
-            )
-        )
-        old = MethodDef(
-            module_id=ENTRY_ID,
-            scope_path=("Base",),
-            name="message",
-            decl_node_id=1,
-            signature=FunctionType(params=(base,), result=TextType()),
-            receiver_type_param_arity=0,
-        )
-        table.register_method(base, old)
-        assert table.lookup_method(child, "message") == old
-
-        table.unregister_name(ENTRY_ID, "Base")
-        table.register(
-            TypeDef(kind="exception", name="Base", module_id=ENTRY_ID, decl_node_id=700013)
-        )
-        replacement = MethodDef(
-            module_id=ENTRY_ID,
-            scope_path=("Base",),
-            name="status",
-            decl_node_id=2,
-            signature=FunctionType(params=(base,), result=IntType()),
-            receiver_type_param_arity=0,
-        )
-        table.register_method(base, replacement)
-
-        assert table.lookup_method(child, "message") is None
-        assert table.lookup_method(child, "status") == replacement
-
     def test_merge_from_overwrites_method_entries_and_invalidates_exception_lookup_cache(
         self,
     ) -> None:
@@ -965,6 +938,56 @@ class TestMethodRegistry:
         assert dict(target.methods_for(fault)) == before == {"status": method}
         assert target.lookup_method(fault, "status") == method
 
+    def test_merge_from_drops_inherited_methods_of_an_overwritten_base_def(self) -> None:
+        """An overwritten base def takes its own methods, and the memo, with it.
+
+        The authoritative table carries no method for that identity, so
+        nothing re-registers one: only dropping the base's direct map AND the
+        flattened descendant memo can stop the inherited entry from still
+        answering.
+        """
+        base = ExceptionType(name="Base", module_id=ENTRY_ID, decl_id=700013)
+        child = ExceptionType(name="Child", module_id=ENTRY_ID, decl_id=700012)
+        target = TypeTable()
+        target.register(
+            TypeDef(kind="exception", name="Base", module_id=ENTRY_ID, decl_node_id=700013)
+        )
+        target.register(
+            TypeDef(
+                kind="exception",
+                name="Child",
+                module_id=ENTRY_ID,
+                base=700013,
+                decl_node_id=700012,
+            )
+        )
+        target.register_method(
+            base,
+            MethodDef(
+                module_id=ENTRY_ID,
+                scope_path=("Base",),
+                name="message",
+                decl_node_id=1,
+                signature=FunctionType(params=(base,), result=TextType()),
+                receiver_type_param_arity=0,
+            ),
+        )
+        assert target.lookup_method(child, "message") is not None
+
+        source = TypeTable()
+        source.register(
+            TypeDef(
+                kind="exception",
+                name="Base",
+                module_id=ENTRY_ID,
+                fields=(("code", IntType()),),
+                decl_node_id=700013,
+            )
+        )
+        target.merge_from(source)
+
+        assert target.lookup_method(child, "message") is None
+
     def test_generic_owner_records_receiver_type_parameter_arity(self) -> None:
         table = TypeTable()
         box = RecordType(
@@ -994,12 +1017,6 @@ class TestMethodRegistry:
         )
         assert found == get
         assert found.receiver_type_param_arity == 1
-
-    def test_restore_methods_from_a_name_never_registered_in_the_source_is_a_no_op(self) -> None:
-        target = TypeTable()
-        source = TypeTable()
-        target.restore_methods_from(source, ENTRY_ID, "Ghost")
-        assert dict(target.methods_for(RecordType(name="Ghost", module_id=ENTRY_ID))) == {}
 
 
 # ---------------------------------------------------------------------------
@@ -1166,34 +1183,6 @@ class TestExceptionFieldKinds:
         handle = ExceptionType(name="A", module_id=ENTRY_ID, decl_id=700014)
         with pytest.raises(AssertionError, match="cyclic exception base chain"):
             table.exception_field_kinds(handle)
-
-    def test_unregister_invalidates_cached_field_kinds(self) -> None:
-        table = TypeTable()
-        table.register(
-            TypeDef(
-                kind="exception",
-                name="Boom",
-                module_id=ENTRY_ID,
-                fields=(("code", IntType()),),
-                field_kinds=(ParamKind.NAMED_ONLY.value,),
-                decl_node_id=700003,
-            )
-        )
-        handle = ExceptionType(name="Boom", module_id=ENTRY_ID, decl_id=700003)
-        assert table.exception_field_kinds(handle) == (("code", ParamKind.NAMED_ONLY.value),)
-
-        table.unregister_name(ENTRY_ID, "Boom")
-        table.register(
-            TypeDef(
-                kind="exception",
-                name="Boom",
-                module_id=ENTRY_ID,
-                fields=(("code", IntType()),),
-                field_kinds=(ParamKind.STANDARD.value,),
-                decl_node_id=700003,
-            )
-        )
-        assert table.exception_field_kinds(handle) == (("code", ParamKind.STANDARD.value),)
 
 
 # ---------------------------------------------------------------------------
@@ -1567,129 +1556,6 @@ class TestSupersession:
 
 
 # ---------------------------------------------------------------------------
-# unregister()
-# ---------------------------------------------------------------------------
-
-
-class TestUnregister:
-    def test_unregister_removes_the_def(self) -> None:
-        table = TypeTable()
-        table.register(
-            TypeDef(
-                kind="record",
-                name="Point",
-                module_id=ENTRY_ID,
-                fields=(("x", IntType()),),
-                decl_node_id=700000,
-            )
-        )
-        table.unregister_name(ENTRY_ID, "Point")
-        assert table.get(ENTRY_ID, "Point") is None
-
-    def test_unregister_missing_key_is_a_no_op(self) -> None:
-        table = TypeTable()
-        table.unregister_name(ENTRY_ID, "Nope")  # must not raise
-        assert table.get(ENTRY_ID, "Nope") is None
-
-    def test_unregister_missing_identity_is_a_no_op(self) -> None:
-        table = TypeTable()
-        table.unregister(999_999)  # never registered; must not raise
-        assert table.get_by_id(999_999) is None
-
-    def test_unregister_of_a_superseded_identity_leaves_the_name_index_untouched(self) -> None:
-        table = TypeTable()
-        old_def = TypeDef(kind="record", name="Point", module_id=ENTRY_ID, decl_node_id=700400)
-        new_def = TypeDef(kind="record", name="Point", module_id=ENTRY_ID, decl_node_id=700401)
-        table.register(old_def)
-        table.register(new_def)
-
-        # The old identity is already superseded (the name index points at
-        # new_def), so removing it by its own identity must not disturb the
-        # name path the newer declaration now owns.
-        table.unregister(700400)
-
-        assert table.get_by_id(700400) is None
-        assert table.get(ENTRY_ID, "Point") == new_def
-
-    def test_unregister_then_register_allows_a_different_shape(self) -> None:
-        table = TypeTable()
-        table.register(
-            TypeDef(
-                kind="record",
-                name="Point",
-                module_id=ENTRY_ID,
-                fields=(("x", IntType()),),
-                decl_node_id=700000,
-            )
-        )
-        table.unregister_name(ENTRY_ID, "Point")
-        new_def = TypeDef(
-            kind="record",
-            name="Point",
-            module_id=ENTRY_ID,
-            fields=(("x", TextType()),),
-            decl_node_id=700000,
-        )
-        table.register(new_def)  # would raise if the old entry were still present
-        assert table.get(ENTRY_ID, "Point") == new_def
-
-    def test_unregister_invalidates_cached_substitution(self) -> None:
-        table = TypeTable()
-        table.register(
-            TypeDef(
-                kind="record",
-                name="Point",
-                module_id=ENTRY_ID,
-                fields=(("x", IntType()),),
-                decl_node_id=700000,
-            )
-        )
-        handle = RecordType(name="Point", module_id=ENTRY_ID, decl_id=700000)
-        assert dict(table.record_fields(handle)) == {"x": IntType()}
-
-        table.unregister_name(ENTRY_ID, "Point")
-        table.register(
-            TypeDef(
-                kind="record",
-                name="Point",
-                module_id=ENTRY_ID,
-                fields=(("x", TextType()),),
-                decl_node_id=700000,
-            )
-        )
-        assert dict(table.record_fields(handle)) == {"x": TextType()}
-
-    def test_unregister_invalidates_cached_enum_substitution(self) -> None:
-        table = TypeTable()
-        table.register(
-            TypeDef(
-                kind="enum",
-                name="Color",
-                module_id=ENTRY_ID,
-                variants=(("Red", ()),),
-                decl_node_id=700001,
-            )
-        )
-        handle = EnumType(name="Color", module_id=ENTRY_ID, decl_id=700001)
-        assert {v: dict(f) for v, f in table.enum_variants(handle).items()} == {"Red": {}}
-
-        table.unregister_name(ENTRY_ID, "Color")
-        table.register(
-            TypeDef(
-                kind="enum",
-                name="Color",
-                module_id=ENTRY_ID,
-                variants=(("Red", ()), ("Blue", ())),
-                decl_node_id=700001,
-            )
-        )
-        assert {v: dict(f) for v, f in table.enum_variants(handle).items()} == {
-            "Red": {},
-            "Blue": {},
-        }
-
-
-# ---------------------------------------------------------------------------
 # entries() / merge_from()
 # ---------------------------------------------------------------------------
 
@@ -1834,6 +1700,37 @@ class TestEntriesAndMerge:
         target.merge_from(source)
 
         assert dict(target.record_fields(handle)) == {"a": IntType()}
+
+    def test_merge_from_invalidates_stale_cached_enum_substitution(self) -> None:
+        # The enum memo is bucketed by identity separately from the record
+        # one, so an authoritative overwrite has to drop it on its own.
+        source = TypeTable()
+        source.register(
+            TypeDef(
+                kind="enum",
+                name="Color",
+                module_id=ENTRY_ID,
+                variants=(("Red", ()), ("Blue", ())),
+                decl_node_id=700023,
+            )
+        )
+
+        target = TypeTable()
+        target.register(
+            TypeDef(
+                kind="enum",
+                name="Color",
+                module_id=ENTRY_ID,
+                variants=(("Red", ()),),
+                decl_node_id=700023,
+            )
+        )
+        handle = EnumType(name="Color", module_id=ENTRY_ID, decl_id=700023)
+        assert set(target.enum_variants(handle)) == {"Red"}
+
+        target.merge_from(source)
+
+        assert set(target.enum_variants(handle)) == {"Red", "Blue"}
 
 
 # ---------------------------------------------------------------------------
@@ -3388,11 +3285,14 @@ class TestFiniteClosure:
         assert perfect_id in result.infinite
         assert result.successors[perfect_id] == frozenset({perfect_id, pair_id})
 
-    def test_caches_result_and_invalidates_on_register(self) -> None:
+    def test_caches_result_and_invalidates_on_a_new_declaration(self) -> None:
+        # A redeclaration always mints a fresh identity (the old one is
+        # retained, never mutated in place -- see ``TypeTable.register``), so
+        # the cache must be invalidated by an ordinary new registration, not
+        # merely by a change under an existing identity.
         table = TypeTable()
         table.register(_pair_def())
         assert table.has_finite_closure(ENTRY_ID, "Pair") is True
-        table.unregister_name(ENTRY_ID, "Pair")
         table.register(
             TypeDef(
                 kind="record",
@@ -3407,11 +3307,11 @@ class TestFiniteClosure:
                             "Pair",
                             type_args=(ArrayType(TypeVarType("T")),),
                             module_id=ENTRY_ID,
-                            decl_id=700200,
+                            decl_id=700201,
                         ),
                     ),
                 ),
-                decl_node_id=700200,
+                decl_node_id=700201,
             )
         )
         assert table.has_finite_closure(ENTRY_ID, "Pair") is False

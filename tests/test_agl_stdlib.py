@@ -31,6 +31,7 @@ from agm.agl.typecheck.checker import (
 )
 from agm.agl.typecheck.env import AglTypeError, FunctionSignature, ParamSpec
 from agm.agl.typecheck.program import check_program
+from tests._agl_helpers import strip_decl_ids
 
 _ROOTS = RootSet(frozenset({Path(__file__).resolve().parents[1] / "stdlib"}))
 _CAPS = HostCapabilities()
@@ -103,7 +104,8 @@ def test_stdlib_ask_signature_is_context_inferred_with_optional_arguments() -> N
     assert params[0].name == "prompt" and params[0].type == TextType() and not params[0].has_default
     assert (
         params[1].name == "agent"
-        and params[1].type == EnumType("Agent", module_id=ModuleId.from_path("std/core"))
+        and strip_decl_ids(params[1].type)
+        == EnumType("Agent", module_id=ModuleId.from_path("std/core"))
         and params[1].has_default
     )
     assert params[2].name == "format" and params[2].type == TextType() and params[2].has_default

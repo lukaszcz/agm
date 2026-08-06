@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import pytest
 
+from agm.agl.ir.reserved_nominals import NO_DECL_ID
 from agm.agl.modules.ids import ENTRY_ID, STD_CORE_ID, ModuleId
 from agm.agl.pipeline import PipelineDriver
 from agm.agl.semantics.engine_keys import ENGINE_KEY_NAMES, get_engine_key_type
@@ -36,6 +37,7 @@ from agm.agl.semantics.types import (
     UnitType,
 )
 from agm.agl.syntax import FuncDef
+from tests._agl_helpers import strip_decl_ids
 
 
 @pytest.mark.parametrize(
@@ -151,6 +153,14 @@ def _round_trip(type_: Type, preamble: str = "") -> None:
         item for item in entry_module.resolved.program.body.items if isinstance(item, FuncDef)
     )
     resolved_type = entry_module.type_env.get_binding_type(func_def.params[0].node_id)
+    assert resolved_type is not None
+    # A hand-written nominal literal (no declaration identity attached) can
+    # only ever assert the round trip's SHAPE, since it has no way to predict
+    # the real declaration identity the checker assigns; a literal that
+    # already names a real identity (a built-in prelude/std type) is compared
+    # exactly, including identity.
+    if isinstance(type_, (RecordType, EnumType, ExceptionType)) and type_.decl_id == NO_DECL_ID:
+        resolved_type = strip_decl_ids(resolved_type)
     assert resolved_type == type_
 
 

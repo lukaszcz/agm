@@ -885,7 +885,7 @@ class TypeEnvironment:
         for key in tuple(self._constructor_field_kinds):
             if key[0] == nominal_key:
                 self._constructor_field_kinds.pop(key, None)
-        self._type_table.unregister(self._module_id, declared_name, scope_path)
+        self._type_table.unregister_name(self._module_id, declared_name, scope_path)
 
     def register_alias(
         self, name: str, target_expr: object, *, type_params: tuple[str, ...] = ()

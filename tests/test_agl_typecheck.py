@@ -129,7 +129,7 @@ from agm.agl.typecheck.env import (
     OutputContractSpec,
 )
 from agm.agl.typecheck.function_inference import resolve_function_header
-from tests._agl_helpers import all_node_ids
+from tests._agl_helpers import all_node_ids, strip_decl_ids
 from tests.agl.module_graph import check_resolved, resolve_and_check_entry, resolve_entry
 
 # ---------------------------------------------------------------------------
@@ -389,34 +389,45 @@ class TestComparableTypes:
 
     def test_record_with_function_field_not_comparable(self) -> None:
         ft = FunctionType(params=(), result=IntType())
-        rt = RecordType(name="R")
-        typedef = TypeDef(kind="record", name="R", module_id=rt.module_id, fields=(("f", ft),))
+        typedef = TypeDef(
+            kind="record", name="R", module_id=ENTRY_ID, fields=(("f", ft),), decl_node_id=1
+        )
+        rt = typedef.handle()
         assert not comparable_types(rt, rt, _table_for(typedef))
 
     def test_enum_with_function_field_not_comparable(self) -> None:
         ft = FunctionType(params=(), result=IntType())
-        et = EnumType(name="E")
         typedef = TypeDef(
-            kind="enum", name="E", module_id=et.module_id, variants=(("A", (("fn", ft),)),)
+            kind="enum",
+            name="E",
+            module_id=ENTRY_ID,
+            variants=(("A", (("fn", ft),)),),
+            decl_node_id=1,
         )
+        et = typedef.handle()
         assert not comparable_types(et, et, _table_for(typedef))
 
     def test_exception_with_function_field_not_comparable(self) -> None:
         ft = FunctionType(params=(), result=IntType())
-        et = ExceptionType(name="E")
         typedef = TypeDef(
-            kind="exception", name="E", module_id=et.module_id, fields=(("handler", ft),)
+            kind="exception",
+            name="E",
+            module_id=ENTRY_ID,
+            fields=(("handler", ft),),
+            decl_node_id=1,
         )
+        et = typedef.handle()
         assert not comparable_types(et, et, _table_for(typedef))
 
     def test_record_with_only_scalars_comparable(self) -> None:
-        rt = RecordType(name="R")
         typedef = TypeDef(
             kind="record",
             name="R",
-            module_id=rt.module_id,
+            module_id=ENTRY_ID,
             fields=(("x", IntType()), ("y", TextType())),
+            decl_node_id=1,
         )
+        rt = typedef.handle()
         assert comparable_types(rt, rt, _table_for(typedef))
 
     def test_array_of_int_comparable(self) -> None:
@@ -842,7 +853,13 @@ class TestTypeEnvironment:
         previous = TypeEnvironment()
         restored = RecordType(name="Restored")
         previous.type_table.register(
-            TypeDef(kind="record", name="Restored", module_id=ENTRY_ID, fields=(("x", IntType()),))
+            TypeDef(
+                kind="record",
+                name="Restored",
+                module_id=ENTRY_ID,
+                fields=(("x", IntType()),),
+                decl_node_id=1,
+            )
         )
         previous.register_type("Restored", restored)
         previous.register_alias("Restored", IntT(span=mk_span(), node_id=1), type_params=("T",))
@@ -1597,6 +1614,26 @@ class TestScopedBuiltinTypes:
         )
         assert r.resolved.program is not None
 
+    def test_builtin_exception_extending_an_out_of_region_same_named_base_is_rejected(self) -> None:
+        """Only a base that re-roots onto the canonical (``std/core``, path
+        ``()``) frame names the canonical hierarchy root. An unrelated
+        exception that merely shares the name ``Exception``, declared outside
+        the ``builtin`` declaration's own region, is a different type, so the
+        shape check must still reject it."""
+        err = reject_type(
+            "scope A\n"
+            "exception Exception\n"
+            "  *\n"
+            "  message: text\n"
+            "scope B\n"
+            "builtin exception Abort extends Exception()\n"
+            "end B\n"
+            "end A\n"
+            "()\n",
+            default_stdlib=False,
+        )
+        assert "Abort" in err.to_diagnostic().message
+
     def test_scoped_builtin_record_field_naming_a_sibling_scoped_nominal_typechecks(self) -> None:
         """A record field referencing another builtin type declared in the
         same region resolves under that region's scope path too, and must
@@ -2103,9 +2140,11 @@ class TestAsk:
         (value_field,) = nested.named
         assert isinstance(value_field.pattern, AsPattern)
 
-        assert checked.let_matched_types[let.node_id] == EnumType("Pair")
+        assert strip_decl_ids(checked.let_matched_types[let.node_id]) == EnumType("Pair")
         assert checked.type_env.get_binding_type(left.node_id) == IntType()
-        assert checked.type_env.get_binding_type(right.node_id) == EnumType("Option", (IntType(),))
+        assert strip_decl_ids(checked.type_env.get_binding_type(right.node_id)) == EnumType(
+            "Option", (IntType(),)
+        )
         assert checked.type_env.get_binding_type(value_field.pattern.node_id) == IntType()
         assert checked.pattern_binding_for(left.node_id).kind is BinderKind.let_binding
         assert checked.pattern_constructor_ref_for(pattern.node_id) is not None
@@ -2123,7 +2162,9 @@ class TestAsk:
         assert isinstance(let.pattern, ConstructorPattern)
         field = let.pattern.named[0].pattern
         assert isinstance(field, VarPattern)
-        assert checked.let_matched_types[let.node_id] == EnumType("Option", (IntType(),))
+        assert strip_decl_ids(checked.let_matched_types[let.node_id]) == EnumType(
+            "Option", (IntType(),)
+        )
         assert checked.type_env.get_binding_type(field.node_id) == IntType()
 
         reject_type("let _: array[int] = []")
@@ -3723,7 +3764,7 @@ class TestFuncDef:
             "recurse"
         )
 
-        assert checked.function_signatures["recurse"].result == EnumType("Node")
+        assert strip_decl_ids(checked.function_signatures["recurse"].result) == EnumType("Node")
 
     @pytest.mark.parametrize("body", ("recurse().value", "recurse()[0]"))
     def test_direct_recursive_unknown_shape_requires_annotation(self, body: str) -> None:
@@ -4253,10 +4294,10 @@ class TestPartialConstructorAndValueCalls:
             and isinstance(item.value, Call)
         }
         point_type = RecordType("Point", module_id=ModuleId.from_path("mylib"))
-        assert entry.node_types[calls["make"].node_id] == FunctionType(
+        assert strip_decl_ids(entry.node_types[calls["make"].node_id]) == FunctionType(
             params=(IntType(),), result=point_type
         )
-        assert entry.node_types[calls["make_open"].node_id] == FunctionType(
+        assert strip_decl_ids(entry.node_types[calls["make_open"].node_id]) == FunctionType(
             params=(IntType(),), result=point_type
         )
         box_text_type = RecordType(
@@ -4264,11 +4305,11 @@ class TestPartialConstructorAndValueCalls:
             type_args=(TextType(),),
             module_id=ModuleId.from_path("mylib"),
         )
-        assert entry.node_types[calls["make_box"].node_id] == FunctionType(
+        assert strip_decl_ids(entry.node_types[calls["make_box"].node_id]) == FunctionType(
             params=(TextType(),),
             result=box_text_type,
         )
-        assert entry.node_types[calls["make_box_open"].node_id] == FunctionType(
+        assert strip_decl_ids(entry.node_types[calls["make_box_open"].node_id]) == FunctionType(
             params=(TextType(),),
             result=box_text_type,
         )
@@ -5139,7 +5180,9 @@ class TestFieldAccess:
         )
 
         result = checked.resolved.program.body.items[-1]
-        assert checked.node_types[result.node_id] == RecordType("Box", (DecimalType(),))
+        assert strip_decl_ids(checked.node_types[result.node_id]) == RecordType(
+            "Box", (DecimalType(),)
+        )
 
     def test_generic_method_value_type_apply_specializes_own_type_args(self) -> None:
         checked = accept_type(
@@ -5152,7 +5195,9 @@ class TestFieldAccess:
         )
 
         result = checked.resolved.program.body.items[-1]
-        assert checked.node_types[result.node_id] == RecordType("Box", (DecimalType(),))
+        assert strip_decl_ids(checked.node_types[result.node_id]) == RecordType(
+            "Box", (DecimalType(),)
+        )
 
     def test_generic_method_value_infers_own_type_args_from_expected_type(self) -> None:
         accept_type(
@@ -5217,7 +5262,9 @@ class TestFieldAccess:
         )
         convert_def = checked.resolved.program.body.items[-1]
         result = cast(FuncDef, convert_def).body
-        assert checked.node_types[result.node_id] == RecordType("Box", (TextType(),))
+        assert strip_decl_ids(checked.node_types[result.node_id]) == RecordType(
+            "Box", (TextType(),)
+        )
 
     def test_generic_method_renamed_caller_type_param_behaves_identically(self) -> None:
         """Renaming the caller's own type parameter must change nothing.
@@ -5233,7 +5280,9 @@ class TestFieldAccess:
         )
         convert_def = checked.resolved.program.body.items[-1]
         result = cast(FuncDef, convert_def).body
-        assert checked.node_types[result.node_id] == RecordType("Box", (TextType(),))
+        assert strip_decl_ids(checked.node_types[result.node_id]) == RecordType(
+            "Box", (TextType(),)
+        )
 
     def test_generic_method_explicit_type_args_accept_caller_type_param_sharing_name(
         self,
@@ -5247,7 +5296,9 @@ class TestFieldAccess:
         )
         convert_def = checked.resolved.program.body.items[-1]
         result = cast(FuncDef, convert_def).body
-        assert checked.node_types[result.node_id] == RecordType("Box", (TextType(),))
+        assert strip_decl_ids(checked.node_types[result.node_id]) == RecordType(
+            "Box", (TextType(),)
+        )
 
     def test_generic_method_qualified_and_member_spellings_agree(self) -> None:
         """``Box::map(b, g)`` and ``b.map(g)`` must specialize identically."""
@@ -5262,7 +5313,9 @@ class TestFieldAccess:
         member_def, qualified_def = checked.resolved.program.body.items[-2:]
         member_result = cast(FuncDef, member_def).body
         qualified_result = cast(FuncDef, qualified_def).body
-        assert checked.node_types[member_result.node_id] == RecordType("Box", (TextType(),))
+        assert strip_decl_ids(checked.node_types[member_result.node_id]) == RecordType(
+            "Box", (TextType(),)
+        )
         assert (
             checked.node_types[qualified_result.node_id]
             == checked.node_types[member_result.node_id]
@@ -5994,7 +6047,7 @@ class TestBareConstructorTypeApply:
         prog = r.resolved.program
         f_ref = prog.body.items[-1]
         assert isinstance(f_ref, VarRef)
-        assert r.node_types[f_ref.node_id] == FunctionType(
+        assert strip_decl_ids(r.node_types[f_ref.node_id]) == FunctionType(
             params=(IntType(),), result=EnumType("Option", type_args=(IntType(),))
         )
 
@@ -6003,7 +6056,9 @@ class TestBareConstructorTypeApply:
         prog = r.resolved.program
         z_ref = prog.body.items[-1]
         assert isinstance(z_ref, VarRef)
-        assert r.node_types[z_ref.node_id] == EnumType("Option", type_args=(IntType(),))
+        assert strip_decl_ids(r.node_types[z_ref.node_id]) == EnumType(
+            "Option", type_args=(IntType(),)
+        )
 
     def test_bare_payload_constructor_callable(self) -> None:
         # `some::[int]` applied positionally yields the constructed enum value.
@@ -6011,7 +6066,9 @@ class TestBareConstructorTypeApply:
         prog = r.resolved.program
         v_ref = prog.body.items[-1]
         assert isinstance(v_ref, VarRef)
-        assert r.node_types[v_ref.node_id] == EnumType("Option", type_args=(IntType(),))
+        assert strip_decl_ids(r.node_types[v_ref.node_id]) == EnumType(
+            "Option", type_args=(IntType(),)
+        )
 
     def test_bare_nullary_constructor_used_in_context(self) -> None:
         r = accept_type(self._OPT + "let z: Option[int] = none::[int]\nz")
@@ -6022,7 +6079,7 @@ class TestBareConstructorTypeApply:
         prog = r.resolved.program
         f_ref = prog.body.items[-1]
         assert isinstance(f_ref, VarRef)
-        assert r.node_types[f_ref.node_id] == FunctionType(
+        assert strip_decl_ids(r.node_types[f_ref.node_id]) == FunctionType(
             params=(IntType(),), result=EnumType("Option", type_args=(IntType(),))
         )
 
@@ -6031,7 +6088,9 @@ class TestBareConstructorTypeApply:
         prog = r.resolved.program
         z_ref = prog.body.items[-1]
         assert isinstance(z_ref, VarRef)
-        assert r.node_types[z_ref.node_id] == EnumType("Option", type_args=(IntType(),))
+        assert strip_decl_ids(r.node_types[z_ref.node_id]) == EnumType(
+            "Option", type_args=(IntType(),)
+        )
 
     def test_qualified_payload_constructor_callable(self) -> None:
         r = accept_type(self._OPT + "let v = (Option[int]::some)(7)\nv")
@@ -6059,7 +6118,7 @@ class TestBareConstructorTypeApply:
         prog = r.resolved.program
         f_ref = prog.body.items[-1]
         assert isinstance(f_ref, VarRef)
-        assert r.node_types[f_ref.node_id] == FunctionType(
+        assert strip_decl_ids(r.node_types[f_ref.node_id]) == FunctionType(
             params=(IntType(),), result=RecordType("Box", type_args=(IntType(),))
         )
 
@@ -6273,9 +6332,9 @@ class TestProvisionalContainerLiterals:
         assert isinstance(bundle, LetDecl)
         assert checked.type_env.get_binding_type(xs.pattern.node_id) == ArrayType(IntType())
         assert checked.type_env.get_binding_type(values.pattern.node_id) == DictType(IntType())
-        assert checked.type_env.get_binding_type(bundle.pattern.node_id) == RecordType(
-            "Bundle", (IntType(),)
-        )
+        assert strip_decl_ids(
+            checked.type_env.get_binding_type(bundle.pattern.node_id)
+        ) == RecordType("Bundle", (IntType(),))
         self._assert_finalized(checked)
 
     def test_empty_literals_are_solved_by_expected_container_types(self) -> None:
@@ -6314,8 +6373,12 @@ class TestProvisionalContainerLiterals:
         option_int = EnumType("Option", (IntType(),))
         assert isinstance(xs, LetDecl)
         assert isinstance(values, LetDecl)
-        assert checked.type_env.get_binding_type(xs.pattern.node_id) == ArrayType(option_int)
-        assert checked.type_env.get_binding_type(values.pattern.node_id) == DictType(option_int)
+        assert strip_decl_ids(checked.type_env.get_binding_type(xs.pattern.node_id)) == ArrayType(
+            option_int
+        )
+        assert strip_decl_ids(
+            checked.type_env.get_binding_type(values.pattern.node_id)
+        ) == DictType(option_int)
         self._assert_finalized(checked)
 
     def test_branches_unify_provisional_generic_values(self) -> None:
@@ -6327,7 +6390,9 @@ class TestProvisionalContainerLiterals:
             "if choose_none => none else => some(value = 1)"
         )
         branch = checked.resolved.program.body.items[-1]
-        assert checked.node_types[branch.node_id] == EnumType("Option", (IntType(),))
+        assert strip_decl_ids(checked.node_types[branch.node_id]) == EnumType(
+            "Option", (IntType(),)
+        )
         self._assert_finalized(checked)
 
     @pytest.mark.parametrize(
@@ -6427,7 +6492,7 @@ class TestTypeDeclarations:
         )
         value = checked.resolved.program.body.items[-2]
         assert isinstance(value, LetDecl)
-        assert checked.type_env.get_binding_type(value.pattern.node_id) == EnumType(
+        assert strip_decl_ids(checked.type_env.get_binding_type(value.pattern.node_id)) == EnumType(
             "Option", (IntType(),)
         )
 
@@ -6960,7 +7025,9 @@ class TestMisc:
         assert isinstance(record_pattern, AsPattern)
         assert isinstance(scalar_pattern, AsPattern)
         assert isinstance(checked.type_env.get_binding_type(enum_pattern.node_id), EnumType)
-        assert checked.type_env.get_binding_type(record_pattern.node_id) == RecordType("Point")
+        assert strip_decl_ids(
+            checked.type_env.get_binding_type(record_pattern.node_id)
+        ) == RecordType("Point")
         assert checked.type_env.get_binding_type(scalar_pattern.node_id) == IntType()
 
     def test_case_empty_branches_wildcard(self) -> None:
@@ -8159,9 +8226,8 @@ class TestMethodHeaders:
         )
         signature = checked.type_env.get_function_signature("radius", scope_path=("Point",))
         assert signature is not None
-        assert signature.params[0] == ParamSpec(
-            "self", RecordType("Point"), ParamKind.POSITIONAL_ONLY, False
-        )
+        receiver = replace(signature.params[0], type=strip_decl_ids(signature.params[0].type))
+        assert receiver == ParamSpec("self", RecordType("Point"), ParamKind.POSITIONAL_ONLY, False)
 
     def test_generic_owner_builds_receiver_from_leading_method_slot(self) -> None:
         checked = accept_type(
@@ -8172,7 +8238,7 @@ class TestMethodHeaders:
         )
         signature = checked.type_env.get_function_signature("get", scope_path=("Box",))
         assert signature is not None
-        assert signature.params[0].type == RecordType("Box", (TypeVarType("E"),))
+        assert strip_decl_ids(signature.params[0].type) == RecordType("Box", (TypeVarType("E"),))
         assert signature.params[0].kind is ParamKind.POSITIONAL_ONLY
 
     @pytest.mark.parametrize(
@@ -8215,9 +8281,11 @@ class TestMethodHeaders:
             "let outcome: Outcome[int, text] = Outcome::value(v = 1)\n"
             "Outcome::tag(outcome)"
         )
-        method = checked.type_env.type_table.lookup_method(
-            EnumType("Outcome", (IntType(), TextType())), "tag"
-        )
+        outcome_decl = checked.resolved.program.body.items[2]
+        assert isinstance(outcome_decl, LetDecl)
+        outcome_type = checked.type_env.get_binding_type(outcome_decl.pattern.node_id)
+        assert isinstance(outcome_type, EnumType)
+        method = checked.type_env.type_table.lookup_method(outcome_type, "tag")
         assert method is not None
         assert method.receiver_type_param_arity == 2
 
@@ -8252,7 +8320,7 @@ class TestMethodHeaders:
         )
         assert function.params[0].name == "self"
         assert params[0].kind is ParamKind.POSITIONAL_ONLY
-        assert params[0].type == RecordType("Point")
+        assert strip_decl_ids(params[0].type) == RecordType("Point")
 
 
 # ---------------------------------------------------------------------------
@@ -8320,7 +8388,7 @@ class TestGenericTypeDef:
 
     def test_instantiate_nominal_record(self) -> None:
         env = TypeEnvironment()
-        template = RecordType("Box", type_args=(TypeVarType("T"),))
+        template = RecordType("Box", type_args=(TypeVarType("T"),), decl_id=1)
         gdef = GenericTypeDef(kind="record", type_params=("T",), template=template)
         env.register_generic_type("Box", gdef)
         env.type_table.register(
@@ -8330,6 +8398,7 @@ class TestGenericTypeDef:
                 module_id=template.module_id,
                 type_params=("T",),
                 fields=(("value", TypeVarType("T")),),
+                decl_node_id=1,
             )
         )
         result = env.instantiate_nominal("Box", (IntType(),))
@@ -8340,7 +8409,7 @@ class TestGenericTypeDef:
 
     def test_instantiate_nominal_enum(self) -> None:
         env = TypeEnvironment()
-        template = EnumType("Option", type_args=(TypeVarType("T"),))
+        template = EnumType("Option", type_args=(TypeVarType("T"),), decl_id=1)
         gdef = GenericTypeDef(kind="enum", type_params=("T",), template=template)
         env.register_generic_type("Option", gdef)
         env.type_table.register(
@@ -8350,6 +8419,7 @@ class TestGenericTypeDef:
                 module_id=template.module_id,
                 type_params=("T",),
                 variants=(("Some", (("value", TypeVarType("T")),)), ("None", ())),
+                decl_node_id=1,
             )
         )
         result = env.instantiate_nominal("Option", (TextType(),))
@@ -8369,10 +8439,12 @@ class TestGenericTypeDef:
 
     def test_instantiate_zero_field_record(self) -> None:
         env = TypeEnvironment()
-        template = RecordType("Marker")
+        template = RecordType("Marker", decl_id=1)
         gdef = GenericTypeDef(kind="record", type_params=(), template=template)
         env.register_generic_type("Marker", gdef)
-        env.type_table.register(TypeDef(kind="record", name="Marker", module_id=template.module_id))
+        env.type_table.register(
+            TypeDef(kind="record", name="Marker", module_id=template.module_id, decl_node_id=1)
+        )
         result = env.instantiate_nominal("Marker", ())
         assert isinstance(result, RecordType)
         assert env.type_table.record_fields(result) == {}
@@ -8527,7 +8599,7 @@ class TestResolveTypeExprTypeVars:
 
         env = TypeEnvironment()
         sp = mk_span()
-        template = RecordType("Box", type_args=(TypeVarType("T"),))
+        template = RecordType("Box", type_args=(TypeVarType("T"),), decl_id=1)
         gdef = GenericTypeDef(kind="record", type_params=("T",), template=template)
         env.register_generic_type("Box", gdef)
         env.type_table.register(
@@ -8537,6 +8609,7 @@ class TestResolveTypeExprTypeVars:
                 module_id=template.module_id,
                 type_params=("T",),
                 fields=(("value", TypeVarType("T")),),
+                decl_node_id=1,
             )
         )
         result = env.resolve_type_expr(
@@ -8811,9 +8884,9 @@ class TestGenericFunctionInferenceRegions:
         assert isinstance(nested, LetDecl)
         assert isinstance(values, LetDecl)
         assert checked.type_env.get_binding_type(nested.pattern.node_id) == IntType()
-        assert checked.type_env.get_binding_type(values.pattern.node_id) == RecordType(
-            "Duo", (IntType(), TextType())
-        )
+        assert strip_decl_ids(
+            checked.type_env.get_binding_type(values.pattern.node_id)
+        ) == RecordType("Duo", (IntType(), TextType()))
         self._assert_finalized(checked)
 
     def test_generic_body_can_solve_a_fresh_occurrence_to_a_rigid_variable(self) -> None:
@@ -10955,7 +11028,7 @@ class TestNoFiniteSchemaUseSites:
         r = accept_type(_TREE_SRC + 'ask::[Tree]("Q")')
         call = r.resolved.program.body.items[-1]
         assert isinstance(call, Call)
-        assert r.contract_specs[call.node_id].target_type == EnumType(name="Tree")
+        assert strip_decl_ids(r.contract_specs[call.node_id].target_type) == EnumType(name="Tree")
 
     def test_exec_finite_recursive_type_accepted(self) -> None:
         r = accept_type(_TREE_SRC + 'exec::[Tree]("cmd")')

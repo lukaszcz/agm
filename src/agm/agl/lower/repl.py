@@ -334,9 +334,9 @@ def _declaration_dependencies(
             for _, field_type in fields:
                 dependencies.update(_nominal_dependencies(field_type, type_declaration_ids))
         if typedef.base is not None:
-            base_module, _base_path, base_name = typedef.base
-            if base_module.is_entry:
-                dependencies.update(type_declaration_ids.get(base_name, frozenset()))
+            base_typedef = checked.type_env.type_table.get_by_id(typedef.base)
+            if base_typedef is not None and base_typedef.module_id.is_entry:
+                dependencies.update(type_declaration_ids.get(base_typedef.name, frozenset()))
     return frozenset(dependencies)
 
 

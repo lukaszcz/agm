@@ -43,6 +43,7 @@ from agm.agl.semantics.values import (
     TextValue,
     UnitValue,
 )
+from tests._agl_helpers import strip_decl_ids
 from tests._process_helpers import FakeShell
 
 # ---------------------------------------------------------------------------
@@ -1316,12 +1317,12 @@ class TestEchoData:
         assert live.ok, live.diagnostics
         assert live.kind == "binding"
         assert live.name is None
-        assert live.value_type == RecordType("Pair")
+        assert strip_decl_ids(live.value_type) == RecordType("Pair")
         assert render_entry_result(live, echo=True) == ": Pair = Pair(\n  left = 2,\n  right = 3\n)"
         assert checked.ok, checked.diagnostics
         assert checked.kind == "binding"
         assert checked.name is None
-        assert checked.value_type == RecordType("Pair")
+        assert strip_decl_ids(checked.value_type) == RecordType("Pair")
         assert (
             render_entry_result(checked, echo=True, check_only=True)
             == ": record Pair\n  left: int\n  right: int"
@@ -1344,7 +1345,7 @@ class TestEchoData:
         assert constructor.ok, constructor.diagnostics
         assert constructor.kind == "binding"
         assert constructor.name is None
-        assert constructor.value_type == RecordType("Pair")
+        assert strip_decl_ids(constructor.value_type) == RecordType("Pair")
         assert (
             render_entry_result(constructor, echo=True)
             == ": Pair = Pair(\n  left = 2,\n  right = 3\n)"

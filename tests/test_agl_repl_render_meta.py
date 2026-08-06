@@ -525,8 +525,8 @@ class TestType:
         from agm.agl.semantics.types import RecordType
 
         table = TypeTable()
-        table.register(TypeDef(kind="record", name="Empty", module_id=ENTRY_ID))
-        assert format_type_for_repl(RecordType(name="Empty"), table) == "record Empty()"
+        table.register(TypeDef(kind="record", name="Empty", module_id=ENTRY_ID, decl_node_id=1))
+        assert format_type_for_repl(RecordType(name="Empty", decl_id=1), table) == "record Empty()"
 
     def test_type_empty_arg_gives_usage(self) -> None:
         outcome = meta_mod.dispatch_meta(":type", _session_ctx())

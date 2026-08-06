@@ -14,6 +14,7 @@ from agm.agl.scope.symbols import BinderKind
 from agm.agl.semantics.types import EnumType, IntType, RecordType
 from agm.agl.syntax.nodes import AsPattern, Case, ConstructorPattern, FuncDef, LetDecl, VarPattern
 from agm.agl.typecheck import AglTypeError, CheckedProgram, check_program
+from tests._agl_helpers import strip_decl_ids
 from tests.agl.ir_harness import make_graph_from_files
 from tests.agl.module_graph import resolve_and_check_entry
 
@@ -69,7 +70,7 @@ def test_record_patterns_bind_positional_named_named_only_nested_and_as_in_case_
     assert isinstance(label, VarPattern)
     assert checked.type_env.get_binding_type(first.node_id) == IntType()
     assert checked.type_env.get_binding_type(label.node_id).kind == "text"
-    assert checked.type_env.get_binding_type(nested.node_id) == RecordType("Inner")
+    assert strip_decl_ids(checked.type_env.get_binding_type(nested.node_id)) == RecordType("Inner")
     assert checked.pattern_binding_for(first.node_id).kind is BinderKind.let_binding
     assert checked.pattern_constructor_ref_for(let.pattern.node_id) is not None
 
@@ -134,7 +135,7 @@ def test_simple_let_name_binds_even_when_it_matches_a_nullary_constructor() -> N
     assert isinstance(let, LetDecl)
     assert isinstance(let.pattern, VarPattern)
     assert checked.pattern_classifications[let.pattern.node_id] is None
-    assert checked.type_env.get_binding_type(let.pattern.node_id) == EnumType("Opt")
+    assert strip_decl_ids(checked.type_env.get_binding_type(let.pattern.node_id)) == EnumType("Opt")
 
 
 def test_record_patterns_support_imported_and_qualified_alias_spellings(tmp_path: Path) -> None:

@@ -45,7 +45,7 @@ from __future__ import annotations
 from collections.abc import Iterator, Mapping
 from dataclasses import replace
 
-from agm.agl.ir.reserved_nominals import reserved_nominal_id
+from agm.agl.ir.reserved_nominals import NO_DECL_ID, reserved_nominal_id
 from agm.agl.modules.ids import ENTRY_ID, STD_CORE_ID, ModuleId
 from agm.agl.semantics.type_table import (
     BUILTIN_EXCEPTION_TYPE_DEFS,
@@ -445,21 +445,23 @@ class _TypeBuilder:
         """Resolve and register an exception's own ``TypeDef`` (no ordering).
 
         Reuses the record-path field resolution and duplicate-own-field
-        check.  ``base`` is resolved to a ``(module_id, scope_path, name)`` key — no
-        ordering is required to do so, since only the base's *identity* (not
-        its shape) is needed here.  Own-vs-inherited field duplication and
-        constructor-callability are checked later, once every exception's
-        shape is buildable (see :meth:`_finalize_exceptions`).
+        check.  ``base`` is resolved to the base declaration's own identity —
+        no ordering is required to do so, since only the base's *identity*
+        (not its shape) is needed here.  Own-vs-inherited field duplication
+        and constructor-callability are checked later, once every
+        exception's shape is buildable (see :meth:`_finalize_exceptions`).
         """
-        base_key: tuple[ModuleId, tuple[str, ...], str] | None = None
+        base_id: int | None = None
+        base_type: ExceptionType | None = None
         if stmt.base is not None:
-            base_type = self._env.resolve_named_type(stmt.base)
-            if not isinstance(base_type, ExceptionType):
+            resolved_base = self._env.resolve_named_type(stmt.base)
+            if not isinstance(resolved_base, ExceptionType):
                 raise AglTypeError(
                     f"Exception '{stmt.name}' extends unknown exception '{stmt.base}'.",
                     span=stmt.span,
                 )
-            base_key = (base_type.module_id, base_type.scope_path, base_type.name)
+            base_type = resolved_base
+            base_id = resolved_base.decl_id
         fields: dict[str, Type] = {}
         seen_fields: dict[str, SourceSpan] = {}
         for fd in stmt.fields:
@@ -492,12 +494,14 @@ class _TypeBuilder:
             scope_path=scope_path,
             fields=tuple(fields.items()),
             abstract=stmt.base is None,
-            base=base_key,
+            base=base_id,
             field_kinds=tuple(fd.kind.value for fd in stmt.fields),
             is_builtin=stmt.is_builtin,
             decl_node_id=_decl_identity(module_id, scope_path, bare_name, stmt.node_id),
         )
-        self._validate_builtin_shape(stmt, typedef, BUILTIN_EXCEPTION_TYPE_DEFS)
+        self._validate_builtin_shape(
+            stmt, typedef, BUILTIN_EXCEPTION_TYPE_DEFS, base_type=base_type
+        )
         self._env.type_table.register(typedef)
 
     def _finalize_exceptions(self) -> None:
@@ -517,16 +521,11 @@ class _TypeBuilder:
             if item.base is None:
                 continue
             module_id = self._module_id
-            typedef = self._env.type_table.exception_def(
-                ExceptionType(
-                    name=_bare_name(item.name),
-                    module_id=module_id,
-                    scope_path=tuple(segment.name for segment in item.scope_path),
-                )
-            )
+            scope_path = tuple(segment.name for segment in item.scope_path)
+            typedef = self._env.type_table.get(module_id, _bare_name(item.name), scope_path)
+            assert typedef is not None, "compiler bug: exception is not registered"
             assert typedef.base is not None
-            base_module, base_scope_path, base_name = typedef.base
-            base_typedef = self._env.type_table.get(base_module, base_name, base_scope_path)
+            base_typedef = self._env.type_table.get_by_id(typedef.base)
             assert base_typedef is not None, (
                 f"compiler bug: exception base {typedef.base!r} has no registered TypeDef"
             )
@@ -545,6 +544,8 @@ class _TypeBuilder:
         stmt: RecordDef | EnumDef | ExceptionDef,
         typedef: TypeDef,
         expected_defs: Mapping[str, TypeDef],
+        *,
+        base_type: ExceptionType | None = None,
     ) -> None:
         """Check a ``builtin`` declaration's shape against its canonical definition.
 
@@ -565,20 +566,25 @@ class _TypeBuilder:
         Exception`` root — still compares equal to the canonical shape.
         *bare_name* is always present in *expected_defs* here:
         ``_register_name`` already validated it against this same
-        kind-appropriate table during phase 1.
+        kind-appropriate table during phase 1. *base_type* is the already
+        resolved ``extends`` target handle (an exception's own; ``None``
+        for a record/enum or a hierarchy root), passed through to
+        :meth:`_reroot_typedef` so it can normalize ``typedef.base`` — a bare
+        declaration identity, which carries no module/path of its own to
+        re-root.
         """
         if not stmt.is_builtin:
             return
         bare_name = _bare_name(stmt.name)
         expected = expected_defs[bare_name]
-        if self._reroot_typedef(typedef) != expected:
+        if self._reroot_typedef(typedef, base_type) != expected:
             raise AglTypeError(
                 f"Builtin type '{stmt.name}' has an invalid definition.",
                 span=stmt.span,
             )
 
     @staticmethod
-    def _reroot_typedef(typedef: TypeDef) -> TypeDef:
+    def _reroot_typedef(typedef: TypeDef, base_type: ExceptionType | None) -> TypeDef:
         """Re-root *typedef* onto the canonical (``std/core``) frame, for comparison.
 
         *typedef.scope_path* is dropped and *typedef.module_id* is mapped onto
@@ -589,12 +595,28 @@ class _TypeBuilder:
         when a program loads without the standard library) still needs its
         module mapped. The same scope-path stripping and module mapping is
         also applied, via :func:`~agm.agl.semantics.types.reroot_type`, to
-        every nominal reference embedded in its fields, variant fields, and
-        (for an exception) its ``extends`` base key: each of those resolves
-        under the declaration's own scope path and module exactly when it
-        names a sibling member of the same region, matching how the canonical
-        shape names its own siblings; a reference naming a type from another
-        module is left alone, so a genuine mismatch is still rejected.
+        every nominal reference embedded in its fields and variant fields:
+        each of those resolves under the declaration's own scope path and
+        module exactly when it names a sibling member of the same region,
+        matching how the canonical shape names its own siblings; a reference
+        naming a type from another module is left alone, so a genuine
+        mismatch is still rejected.
+
+        ``base`` (for an exception) is a bare declaration identity, not a
+        handle, so it cannot be re-rooted the same way directly — *base_type*
+        is the ORIGINAL resolved ``ExceptionType`` handle *typedef.base* was
+        minted from (``None`` exactly when *typedef.base* is ``None``), which
+        carries the module/scope path/name :func:`reroot_type` needs. Every
+        canonical shape spells its base at ``std/core``'s root, so only a
+        handle that re-roots onto that exact frame can name one: its
+        ``decl_id`` is then read back off (the reserved identity for a
+        reserved name), while a handle left at another module or another
+        scope path names a different declaration and is normalized to
+        ``NO_DECL_ID``, which no canonical base identity ever equals. Reading
+        the identity off the re-rooted handle rather than looking the base up
+        also keeps this independent of whether the base's own ``TypeDef`` is
+        registered yet — the whole-program pre-pass resolves bodies in name
+        order, not source order.
         """
         prefix = typedef.scope_path
         declaring_module = typedef.module_id
@@ -610,12 +632,15 @@ class _TypeBuilder:
         )
         base = typedef.base
         if base is not None:
-            base_module, base_path, base_name = base
-            if base_path[: len(prefix)] == prefix:
-                base_path = base_path[len(prefix) :]
-            if base_module == declaring_module:
-                base_module = STD_CORE_ID
-            base = (base_module, base_path, base_name)
+            assert base_type is not None, (
+                "compiler bug: exception has a base identity but no resolved base handle"
+            )
+            rerooted_base = _reroot(base_type)
+            assert isinstance(rerooted_base, ExceptionType)
+            names_canonical_frame = (
+                rerooted_base.module_id == STD_CORE_ID and rerooted_base.scope_path == ()
+            )
+            base = rerooted_base.decl_id if names_canonical_frame else NO_DECL_ID
         return replace(
             typedef,
             scope_path=(),

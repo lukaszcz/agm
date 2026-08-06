@@ -66,10 +66,12 @@ from agm.agl.scope.symbols import ModuleResolution
 from agm.agl.self_validation import self_validation_enabled
 from agm.agl.semantics.analyses import compute_uninhabited, uninhabitable_message
 from agm.agl.semantics.type_table import (
+    DeclId,
     DeclKey,
+    TypeDef,
     TypeTable,
     create_seeded_type_table,
-    decl_key_sort_key,
+    decl_def_sort_key,
 )
 from agm.agl.semantics.types import EnumType, ExceptionType, RecordType, Type
 from agm.agl.syntax.nodes import (
@@ -327,7 +329,8 @@ def _collect_all_type_keys(
     never present here because ``_collect_shells_only`` rejects them earlier.
 
     This set is the fixed order in which Step C below resolves every
-    declaration's body (sorted by :func:`decl_key_sort_key`). It is LARGER
+    declaration's body (sorted by name path, see
+    :func:`~agm.agl.semantics.type_table.decl_def_sort_key`). It is LARGER
     than ``program_type_table`` during the shell-collection step because
     aliases are not yet resolved to shells there — the program table is only
     populated with record/enum shells and is updated with alias resolutions
@@ -368,16 +371,20 @@ def _find_type_decl_span(resolved: ResolvedProgram, key: DeclKey) -> SourceSpan 
 
 
 def _raise_first_uninhabited(
-    uninhabited: frozenset[tuple[ModuleId, tuple[str, ...], str]],
+    uninhabited: frozenset[DeclId],
     type_table: TypeTable,
     resolved: ResolvedProgram,
 ) -> None:
-    """Raise ``AglTypeError`` for the first uninhabited key, sorted deterministically."""
-    mid, scope_path, name = sorted(uninhabited, key=decl_key_sort_key)[0]
-    typedef = type_table.get(mid, name, scope_path)
-    assert typedef is not None
-    span = _find_type_decl_span(resolved, (mid, scope_path, name))
-    raise AglTypeError(uninhabitable_message(typedef.kind, name), span=span)
+    """Raise ``AglTypeError`` for the first uninhabited declaration, sorted deterministically."""
+    typedefs: list[TypeDef] = []
+    for decl_id in uninhabited:
+        typedef = type_table.get_by_id(decl_id)
+        assert typedef is not None
+        typedefs.append(typedef)
+    typedef = sorted(typedefs, key=decl_def_sort_key)[0]
+    key = (typedef.module_id, typedef.scope_path, typedef.name)
+    span = _find_type_decl_span(resolved, key)
+    raise AglTypeError(uninhabitable_message(typedef.kind, typedef.name), span=span)
 
 
 def _build_program_type_table(
@@ -420,7 +427,9 @@ def _build_program_type_table(
     Step C: Once every body is resolved, run the inhabitation fixpoint
             (:func:`~agm.agl.semantics.analyses.compute_uninhabited`) over the
             whole shared table and reject the first uninhabited declaration
-            (sorted by :func:`decl_key_sort_key`), at its declaration span.
+            (sorted by declaration name, see
+            :func:`~agm.agl.semantics.type_table.decl_def_sort_key`), at its
+            declaration span.
 
     Cross-module type cycles are allowed (a cycle may span any modules, the
     same as same-module mutual recursion) as long as the declarations

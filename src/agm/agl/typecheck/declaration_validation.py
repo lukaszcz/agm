@@ -8,7 +8,7 @@ from typing import Literal
 
 from agm.agl.modules.ids import ModuleId, spell_declaration
 from agm.agl.scope.symbols import ModuleResolution
-from agm.agl.semantics.type_table import DeclKey, TypeTable, qualified_decl_name
+from agm.agl.semantics.type_table import DeclId, TypeTable, qualified_decl_name
 from agm.agl.syntax.nodes import (
     EnumDef,
     ExceptionDef,
@@ -43,24 +43,24 @@ class _MemberIndex:
     to, which are exactly the owners whose members need checking.
     """
 
-    members: dict[DeclKey, dict[str, list[_MemberDeclaration]]] = field(default_factory=dict)
-    declared: set[DeclKey] = field(default_factory=set)
+    members: dict[DeclId, dict[str, list[_MemberDeclaration]]] = field(default_factory=dict)
+    declared: set[DeclId] = field(default_factory=set)
 
-    def members_of(self, key: DeclKey) -> Mapping[str, list[_MemberDeclaration]]:
-        """Return *key*'s member namespace, empty for an owner never indexed."""
-        return self.members.get(key, {})
+    def members_of(self, owner_id: DeclId) -> Mapping[str, list[_MemberDeclaration]]:
+        """Return *owner_id*'s member namespace, empty for an owner never indexed."""
+        return self.members.get(owner_id, {})
 
 
-def _index_registered_owner(index: _MemberIndex, type_table: TypeTable, key: DeclKey) -> None:
+def _index_registered_owner(index: _MemberIndex, type_table: TypeTable, owner_id: DeclId) -> None:
     """Index an owner outside this compile unit from its registered declaration."""
-    if key in index.members:
+    if owner_id in index.members:
         return
-    typedef = type_table.get(key[0], key[2], key[1])
+    typedef = type_table.get_by_id(owner_id)
     assert typedef is not None, "compiler bug: related owner is not registered"
-    members = index.members.setdefault(key, {})
+    members = index.members.setdefault(owner_id, {})
     for field_name, _field_type in typedef.fields:
         members.setdefault(field_name, []).append(_MemberDeclaration("field", None))
-    for method_name in type_table.declared_methods(key):
+    for method_name in type_table.declared_methods(owner_id):
         members.setdefault(method_name, []).append(_MemberDeclaration("method", None))
 
 
@@ -69,16 +69,18 @@ def _member_declarations(
 ) -> _MemberIndex:
     """Collect source and retained-owner fields plus scope-classified methods."""
     index = _MemberIndex()
-    owner_keys: dict[tuple[ModuleId, tuple[str, ...]], DeclKey] = {}
+    owner_ids: dict[tuple[ModuleId, tuple[str, ...]], DeclId] = {}
     for module_id, resolved in modules.items():
         for item in static_type_items(resolved.program.body.items):
             if isinstance(item, TypeAlias):
                 continue
             declared_path = tuple(segment.name for segment in item.scope_path)
-            key = (module_id, declared_path, item.name)
-            owner_keys[module_id, (*declared_path, item.name)] = key
-            index.declared.add(key)
-            members = index.members.setdefault(key, {})
+            typedef = type_table.get(module_id, item.name, declared_path)
+            assert typedef is not None, "compiler bug: declared type is not registered"
+            decl_owner_id = typedef.decl_node_id
+            owner_ids[module_id, (*declared_path, item.name)] = decl_owner_id
+            index.declared.add(decl_owner_id)
+            members = index.members.setdefault(decl_owner_id, {})
             if isinstance(item, (RecordDef, ExceptionDef)):
                 for source_field in item.fields:
                     members.setdefault(source_field.name, []).append(
@@ -88,17 +90,17 @@ def _member_declarations(
             owner_path = resolved.receiver_owner_for(module_id, function)
             if owner_path is None:
                 continue
-            owner_key = owner_keys.get((module_id, owner_path))
-            if owner_key is None:
+            method_owner_id = owner_ids.get((module_id, owner_path))
+            if method_owner_id is None:
                 # A method on an owner retained from an earlier REPL entry: its
                 # members come from the registry, without source spans.
                 typedef = type_table.get(module_id, owner_path[-1], owner_path[:-1])
                 assert typedef is not None, "compiler bug: method owner is not registered"
-                owner_key = (typedef.module_id, typedef.scope_path, typedef.name)
-                owner_keys[module_id, owner_path] = owner_key
-                _index_registered_owner(index, type_table, owner_key)
-            index.declared.add(owner_key)
-            same_named = index.members.setdefault(owner_key, {}).setdefault(function.name, [])
+                method_owner_id = typedef.decl_node_id
+                owner_ids[module_id, owner_path] = method_owner_id
+                _index_registered_owner(index, type_table, method_owner_id)
+            index.declared.add(method_owner_id)
+            same_named = index.members.setdefault(method_owner_id, {}).setdefault(function.name, [])
             # This declaration supersedes its own earlier registration on a
             # retained owner; the owner's fields stay, since only a
             # redeclaration of the type itself can replace those.
@@ -111,7 +113,7 @@ def _member_declarations(
     return index
 
 
-def _descendant_index(type_table: TypeTable) -> dict[DeclKey, tuple[DeclKey, ...]]:
+def _descendant_index(type_table: TypeTable) -> dict[DeclId, tuple[DeclId, ...]]:
     """Map every registered exception to its descendants, nearest first.
 
     The inverse of ``TypeTable.ancestor_defs``: a base declaration needs it to
@@ -125,22 +127,21 @@ def _descendant_index(type_table: TypeTable) -> dict[DeclKey, tuple[DeclKey, ...
     chain, and ``entries()`` yields declarations in registration order, so
     descendants at equal depth keep a deterministic relative order.
     """
-    found: dict[DeclKey, list[tuple[int, DeclKey]]] = {}
+    found: dict[DeclId, list[tuple[int, DeclId]]] = {}
     for typedef in type_table.entries():
         if typedef.kind != "exception":
             continue
-        candidate_key = (typedef.module_id, typedef.scope_path, typedef.name)
-        for depth, base in enumerate(type_table.ancestor_defs(candidate_key)):
-            base_key = (base.module_id, base.scope_path, base.name)
-            found.setdefault(base_key, []).append((depth, candidate_key))
-    result: dict[DeclKey, tuple[DeclKey, ...]] = {}
-    for base_key, entries in found.items():
+        candidate_id = typedef.decl_node_id
+        for depth, base in enumerate(type_table.ancestor_defs(candidate_id)):
+            found.setdefault(base.decl_node_id, []).append((depth, candidate_id))
+    result: dict[DeclId, tuple[DeclId, ...]] = {}
+    for base_id, entries in found.items():
         entries.sort(key=_descendant_entry_depth)
-        result[base_key] = tuple(candidate for _depth, candidate in entries)
+        result[base_id] = tuple(candidate for _depth, candidate in entries)
     return result
 
 
-def _descendant_entry_depth(entry: tuple[int, DeclKey]) -> int:
+def _descendant_entry_depth(entry: tuple[int, DeclId]) -> int:
     """Order a ``_descendant_index`` entry by its distance from the queried base."""
     return entry[0]
 
@@ -148,25 +149,23 @@ def _descendant_entry_depth(entry: tuple[int, DeclKey]) -> int:
 def _relatives(
     index: _MemberIndex,
     type_table: TypeTable,
-    descendant_index: Mapping[DeclKey, tuple[DeclKey, ...]],
-    key: DeclKey,
+    descendant_index: Mapping[DeclId, tuple[DeclId, ...]],
+    owner_id: DeclId,
 ) -> tuple[
-    tuple[DeclKey, ...],
-    tuple[DeclKey, ...],
+    tuple[DeclId, ...],
+    tuple[DeclId, ...],
 ]:
-    """Return *key*'s indexed exception ancestors and unchecked descendants.
+    """Return *owner_id*'s indexed exception ancestors and unchecked descendants.
 
     A descendant this compile unit also declares is skipped: its own ancestor
     scan already covers the pair, so reporting it from both ends would make the
     diagnostic depend on iteration order.
     """
-    ancestors = tuple(
-        (base.module_id, base.scope_path, base.name) for base in type_table.ancestor_defs(key)
-    )
+    ancestors = tuple(base.decl_node_id for base in type_table.ancestor_defs(owner_id))
     descendants = tuple(
-        descendant_key
-        for descendant_key in descendant_index.get(key, ())
-        if descendant_key not in index.declared
+        descendant_id
+        for descendant_id in descendant_index.get(owner_id, ())
+        if descendant_id not in index.declared
     )
     for relative in (*ancestors, *descendants):
         _index_registered_owner(index, type_table, relative)
@@ -174,8 +173,8 @@ def _relatives(
 
 
 def _related_member(
-    index: _MemberIndex, related: tuple[DeclKey, ...], name: str
-) -> tuple[DeclKey, _MemberDeclaration] | None:
+    index: _MemberIndex, related: tuple[DeclId, ...], name: str
+) -> tuple[DeclId, _MemberDeclaration] | None:
     """Find the nearest related owner that already declares *name*."""
     for relative in related:
         members = index.members_of(relative).get(name)
@@ -185,14 +184,15 @@ def _related_member(
 
 
 def _raise_collision(
-    key: DeclKey,
+    type_table: TypeTable,
+    owner_id: DeclId,
     name: str,
     declared: _MemberDeclaration,
-    conflicting_key: DeclKey,
+    conflicting_id: DeclId,
     conflicting: _MemberDeclaration,
 ) -> None:
     """Report the later direct declaration or the more-specific descendant."""
-    if key == conflicting_key:
+    if owner_id == conflicting_id:
         # A retained owner's registration supplies members without source
         # spans. Its later-entry method is necessarily the one to diagnose.
         if declared.span is None:
@@ -203,14 +203,19 @@ def _raise_collision(
             if declared.span.start_offset < conflicting.span.start_offset:
                 declared, conflicting = conflicting, declared
 
+    owner_typedef = type_table.get_by_id(owner_id)
+    conflicting_typedef = type_table.get_by_id(conflicting_id)
+    assert owner_typedef is not None and conflicting_typedef is not None, (
+        "compiler bug: collision owner is not registered"
+    )
     related = (
         ()
         if conflicting.span is None
         else ((f"{conflicting.kind} '{name}' is declared here", conflicting.span),)
     )
     raise AglTypeError(
-        f"{declared.kind.capitalize()} '{qualified_decl_name(key)}::{name}' conflicts with "
-        f"{conflicting.kind} '{name}' of '{qualified_decl_name(conflicting_key)}'.",
+        f"{declared.kind.capitalize()} '{qualified_decl_name(owner_typedef)}::{name}' conflicts "
+        f"with {conflicting.kind} '{name}' of '{qualified_decl_name(conflicting_typedef)}'.",
         span=declared.span,
         related=related,
     )
@@ -294,19 +299,34 @@ def validate_method_declaration_collisions(
     """
     index = _member_declarations(modules, type_table)
     descendant_index = _descendant_index(type_table)
-    for key in sorted(index.declared, key=_owner_sort_key):
-        ancestors, descendants = _relatives(index, type_table, descendant_index, key)
-        for name, same_named_members in index.members[key].items():
+
+    def _sort_key(owner_id: DeclId) -> tuple[tuple[str, ...], tuple[str, ...], str]:
+        return _owner_sort_key(type_table, owner_id)
+
+    for owner_id in sorted(index.declared, key=_sort_key):
+        ancestors, descendants = _relatives(index, type_table, descendant_index, owner_id)
+        for name, same_named_members in index.members[owner_id].items():
             if len(same_named_members) > 1:
-                _raise_collision(key, name, same_named_members[0], key, same_named_members[1])
+                _raise_collision(
+                    type_table,
+                    owner_id,
+                    name,
+                    same_named_members[0],
+                    owner_id,
+                    same_named_members[1],
+                )
 
             member = same_named_members[0]
             for related in (ancestors, descendants):
                 conflict = _related_member(index, related, name)
                 if conflict is not None:
-                    _raise_collision(key, name, member, *conflict)
+                    _raise_collision(type_table, owner_id, name, member, *conflict)
 
 
-def _owner_sort_key(key: DeclKey) -> tuple[tuple[str, ...], tuple[str, ...], str]:
+def _owner_sort_key(
+    type_table: TypeTable, owner_id: DeclId
+) -> tuple[tuple[str, ...], tuple[str, ...], str]:
     """Order owners deterministically so a program reports one stable collision."""
-    return (key[0].segments, key[1], key[2])
+    typedef = type_table.get_by_id(owner_id)
+    assert typedef is not None, "compiler bug: collision owner is not registered"
+    return (typedef.module_id.segments, typedef.scope_path, typedef.name)

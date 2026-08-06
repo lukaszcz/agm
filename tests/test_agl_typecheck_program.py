@@ -41,6 +41,7 @@ from agm.agl.typecheck import (
     assert_checked_program_closed,
     check_program,
 )
+from tests._agl_helpers import strip_decl_ids
 from tests.agl.ir_harness import make_graph_from_files as _make_graph_from_files
 from tests.agl.module_graph import resolve_and_check_entry
 
@@ -383,7 +384,9 @@ def test_check_program_basic(tmp_path: Path) -> None:
     cg = _check_program(tmp_path, modules)
     assert ENTRY_ID in cg.modules
     mylib_id = ModuleId.from_path("mylib")
-    assert _binding_value_type(cg, ENTRY_ID, "p") == RecordType("Point", module_id=mylib_id)
+    assert strip_decl_ids(_binding_value_type(cg, ENTRY_ID, "p")) == RecordType(
+        "Point", module_id=mylib_id
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -430,7 +433,9 @@ def test_qualified_type_ref_in_annotation(tmp_path: Path) -> None:
     cg = _check_program(tmp_path, modules)
     # Pin the specific binding type — not any(t == point_type) over all nodes,
     # which could pass spuriously via an intermediate call node of the same type.
-    assert _binding_value_type(cg, ENTRY_ID, "p") == RecordType("Point", module_id=mylib_id)
+    assert strip_decl_ids(_binding_value_type(cg, ENTRY_ID, "p")) == RecordType(
+        "Point", module_id=mylib_id
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -446,7 +451,9 @@ def test_qualified_type_ref_in_constructor(tmp_path: Path) -> None:
     }
     mylib_id = ModuleId.from_path("mylib")
     cg = _check_program(tmp_path, modules)
-    assert _binding_value_type(cg, ENTRY_ID, "c") == EnumType("Color", module_id=mylib_id)
+    assert strip_decl_ids(_binding_value_type(cg, ENTRY_ID, "c")) == EnumType(
+        "Color", module_id=mylib_id
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -467,7 +474,9 @@ def test_qualified_type_ref_in_cast(tmp_path: Path) -> None:
     }
     mylib_id = ModuleId.from_path("mylib")
     cg = _check_program(tmp_path, modules)
-    assert _binding_value_type(cg, ENTRY_ID, "p") == RecordType("Point", module_id=mylib_id)
+    assert strip_decl_ids(_binding_value_type(cg, ENTRY_ID, "p")) == RecordType(
+        "Point", module_id=mylib_id
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -490,7 +499,9 @@ def test_qualified_type_ref_in_constructor_pattern(tmp_path: Path) -> None:
     mylib_id = ModuleId.from_path("mylib")
     cg = _check_program(tmp_path, modules)
     # Pin c's binding type as mylib::Color — not an any(TextType) scan over "red"/"blue".
-    assert _binding_value_type(cg, ENTRY_ID, "c") == EnumType("Color", module_id=mylib_id)
+    assert strip_decl_ids(_binding_value_type(cg, ENTRY_ID, "c")) == EnumType(
+        "Color", module_id=mylib_id
+    )
 
 
 @pytest.mark.parametrize(
@@ -540,7 +551,9 @@ def test_unqualified_open_import_type(tmp_path: Path) -> None:
     }
     mylib_id = ModuleId.from_path("mylib")
     cg = _check_program(tmp_path, modules)
-    assert _binding_value_type(cg, ENTRY_ID, "p") == RecordType("Point", module_id=mylib_id)
+    assert strip_decl_ids(_binding_value_type(cg, ENTRY_ID, "p")) == RecordType(
+        "Point", module_id=mylib_id
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -686,7 +699,9 @@ def test_enum_variant_qualification(tmp_path: Path) -> None:
     color_type = cg.program_type_table[(mylib_id, "Color")]
     assert isinstance(color_type, EnumType)
     assert color_type.module_id == mylib_id
-    assert _binding_value_type(cg, ENTRY_ID, "c") == EnumType("Color", module_id=mylib_id)
+    assert strip_decl_ids(_binding_value_type(cg, ENTRY_ID, "c")) == EnumType(
+        "Color", module_id=mylib_id
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -708,7 +723,9 @@ def test_self_ref_type(tmp_path: Path) -> None:
     }
     mylib_id = ModuleId.from_path("mylib")
     cg = _check_program(tmp_path, modules)
-    assert _binding_value_type(cg, ENTRY_ID, "p") == RecordType("Point", module_id=mylib_id)
+    assert strip_decl_ids(_binding_value_type(cg, ENTRY_ID, "p")) == RecordType(
+        "Point", module_id=mylib_id
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -739,7 +756,9 @@ def test_unqualified_constructor_from_open_import(tmp_path: Path) -> None:
     assert isinstance(color_type, EnumType)
     assert color_type.module_id == mylib_id
     # Pin c's binding type: must be mylib::Color, not ENTRY_ID::Color
-    assert _binding_value_type(cg, ENTRY_ID, "c") == EnumType("Color", module_id=mylib_id)
+    assert strip_decl_ids(_binding_value_type(cg, ENTRY_ID, "c")) == EnumType(
+        "Color", module_id=mylib_id
+    )
 
 
 def test_bare_constructor_uses_its_open_imported_owner_module(tmp_path: Path) -> None:
@@ -754,10 +773,10 @@ def test_bare_constructor_uses_its_open_imported_owner_module(tmp_path: Path) ->
 
     checked = _check_program(tmp_path, modules)
 
-    assert _binding_value_type(checked, ENTRY_ID, "left") == EnumType(
+    assert strip_decl_ids(_binding_value_type(checked, ENTRY_ID, "left")) == EnumType(
         "Choice", module_id=ModuleId.from_path("first")
     )
-    assert _binding_value_type(checked, ENTRY_ID, "right") == EnumType(
+    assert strip_decl_ids(_binding_value_type(checked, ENTRY_ID, "right")) == EnumType(
         "Choice", module_id=ModuleId.from_path("second")
     )
 
@@ -771,7 +790,7 @@ def test_generic_bare_constructor_uses_its_open_imported_owner_module(tmp_path: 
 
     checked = _check_program(tmp_path, modules)
 
-    assert _binding_value_type(checked, ENTRY_ID, "left") == EnumType(
+    assert strip_decl_ids(_binding_value_type(checked, ENTRY_ID, "left")) == EnumType(
         "Choice", (IntType(),), module_id=ModuleId.from_path("first")
     )
 
@@ -862,7 +881,9 @@ def test_later_module_alias_available_to_entry_type_body(tmp_path: Path) -> None
             "zzz": "type Alias = int",
         },
     )
-    assert _binding_value_type(cg, ENTRY_ID, "b") == RecordType("Box", module_id=ENTRY_ID)
+    assert strip_decl_ids(_binding_value_type(cg, ENTRY_ID, "b")) == RecordType(
+        "Box", module_id=ENTRY_ID
+    )
 
 
 def test_later_module_alias_available_to_entry_type_body_via_open_import(
@@ -876,7 +897,9 @@ def test_later_module_alias_available_to_entry_type_body_via_open_import(
             "zzz": "type Alias = int",
         },
     )
-    assert _binding_value_type(cg, ENTRY_ID, "b") == RecordType("Box", module_id=ENTRY_ID)
+    assert strip_decl_ids(_binding_value_type(cg, ENTRY_ID, "b")) == RecordType(
+        "Box", module_id=ENTRY_ID
+    )
 
 
 def test_imported_generic_alias_to_enum_constructs_variant(tmp_path: Path) -> None:
@@ -889,7 +912,7 @@ def test_imported_generic_alias_to_enum_constructs_variant(tmp_path: Path) -> No
         },
     )
 
-    assert _binding_value_type(checked, ENTRY_ID, "value") == EnumType(
+    assert strip_decl_ids(_binding_value_type(checked, ENTRY_ID, "value")) == EnumType(
         "Option", (IntType(),), module_id=ModuleId.from_path("lib")
     )
 
@@ -904,7 +927,7 @@ def test_imported_generic_alias_to_record_constructs_transparently(tmp_path: Pat
         },
     )
 
-    assert _binding_value_type(checked, ENTRY_ID, "box") == RecordType(
+    assert strip_decl_ids(_binding_value_type(checked, ENTRY_ID, "box")) == RecordType(
         "Box", (IntType(),), module_id=ModuleId.from_path("lib")
     )
 
@@ -918,7 +941,7 @@ def test_imported_generic_alias_preserves_constructor_constraints(tmp_path: Path
         },
     )
 
-    assert _binding_value_type(checked, ENTRY_ID, "box") == RecordType(
+    assert strip_decl_ids(_binding_value_type(checked, ENTRY_ID, "box")) == RecordType(
         "Box", (ArrayType(IntType()),), module_id=ModuleId.from_path("lib")
     )
 
@@ -977,7 +1000,9 @@ def test_local_alias_of_record_remains_constructible(tmp_path: Path) -> None:
         },
     )
 
-    assert _binding_value_type(checked, ENTRY_ID, "p") == RecordType("Point", module_id=ENTRY_ID)
+    assert strip_decl_ids(_binding_value_type(checked, ENTRY_ID, "p")) == RecordType(
+        "Point", module_id=ENTRY_ID
+    )
 
 
 def test_open_imported_alias_of_enum_is_a_type_name_not_a_value(tmp_path: Path) -> None:
@@ -1043,7 +1068,7 @@ def test_imported_generic_alias_to_record_is_a_constructor_value(tmp_path: Path)
         },
     )
 
-    assert _binding_value_type(checked, ENTRY_ID, "factory") == FunctionType(
+    assert strip_decl_ids(_binding_value_type(checked, ENTRY_ID, "factory")) == FunctionType(
         (IntType(),), RecordType("Box", (IntType(),), module_id=ModuleId.from_path("lib"))
     )
 
@@ -1059,7 +1084,9 @@ def test_later_module_parameterized_alias_available_to_entry_type_body(
             "zzz": "type Alias[T] = array[T]",
         },
     )
-    assert _binding_value_type(cg, ENTRY_ID, "b") == RecordType("Box", module_id=ENTRY_ID)
+    assert strip_decl_ids(_binding_value_type(cg, ENTRY_ID, "b")) == RecordType(
+        "Box", module_id=ENTRY_ID
+    )
 
 
 def test_later_module_parameterized_alias_available_via_open_import(
@@ -1073,7 +1100,9 @@ def test_later_module_parameterized_alias_available_via_open_import(
             "zzz": "type Alias[T] = array[T]",
         },
     )
-    assert _binding_value_type(cg, ENTRY_ID, "b") == RecordType("Box", module_id=ENTRY_ID)
+    assert strip_decl_ids(_binding_value_type(cg, ENTRY_ID, "b")) == RecordType(
+        "Box", module_id=ENTRY_ID
+    )
 
 
 def test_later_module_parameterized_alias_bare_reference_is_rejected(
@@ -1214,7 +1243,9 @@ def test_module_qualified_record_constructor(tmp_path: Path) -> None:
     }
     mylib_id = ModuleId.from_path("mylib")
     cg = _check_program(tmp_path, modules)
-    assert _binding_value_type(cg, ENTRY_ID, "p") == RecordType("Point", module_id=mylib_id)
+    assert strip_decl_ids(_binding_value_type(cg, ENTRY_ID, "p")) == RecordType(
+        "Point", module_id=mylib_id
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1232,7 +1263,9 @@ def test_self_ref_type_graph_mode(tmp_path: Path) -> None:
     }
     mylib_id = ModuleId.from_path("mylib")
     cg = _check_program(tmp_path, modules)
-    assert _binding_value_type(cg, ENTRY_ID, "p") == RecordType("Point", module_id=mylib_id)
+    assert strip_decl_ids(_binding_value_type(cg, ENTRY_ID, "p")) == RecordType(
+        "Point", module_id=mylib_id
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1448,7 +1481,9 @@ def test_open_imported_enum_variant_unqualified_bare(tmp_path: Path) -> None:
     }
     mylib_id = ModuleId.from_path("mylib")
     cg = _check_program(tmp_path, modules)
-    assert _binding_value_type(cg, ENTRY_ID, "c") == EnumType("Color", module_id=mylib_id)
+    assert strip_decl_ids(_binding_value_type(cg, ENTRY_ID, "c")) == EnumType(
+        "Color", module_id=mylib_id
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1522,7 +1557,9 @@ def test_open_import_non_enum_type_skipped_in_variant_lookup(tmp_path: Path) -> 
     }
     mylib_id = ModuleId.from_path("mylib")
     cg = _check_program(tmp_path, modules)
-    assert _binding_value_type(cg, ENTRY_ID, "c") == EnumType("Color", module_id=mylib_id)
+    assert strip_decl_ids(_binding_value_type(cg, ENTRY_ID, "c")) == EnumType(
+        "Color", module_id=mylib_id
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1543,7 +1580,9 @@ def test_open_import_dedup_in_variant_lookup(tmp_path: Path) -> None:
     }
     mylib_id = ModuleId.from_path("mylib")
     cg = _check_program(tmp_path, modules)
-    assert _binding_value_type(cg, ENTRY_ID, "x") == EnumType("Color", module_id=mylib_id)
+    assert strip_decl_ids(_binding_value_type(cg, ENTRY_ID, "x")) == EnumType(
+        "Color", module_id=mylib_id
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1610,7 +1649,7 @@ def test_cross_module_generic_record_field_access(tmp_path: Path) -> None:
         },
     )
 
-    assert _binding_value_type(checked, ENTRY_ID, "box") == RecordType(
+    assert strip_decl_ids(_binding_value_type(checked, ENTRY_ID, "box")) == RecordType(
         "Box", type_args=(IntType(),), module_id=ModuleId.from_path("lib")
     )
 
@@ -1866,7 +1905,9 @@ def test_type_expr_deps_self_ref_qualifier(tmp_path: Path) -> None:
     }
     mylib_id = ModuleId.from_path("mylib")
     cg = _check_program(tmp_path, modules)
-    assert _binding_value_type(cg, ENTRY_ID, "p") == RecordType("Wrapper", module_id=mylib_id)
+    assert strip_decl_ids(_binding_value_type(cg, ENTRY_ID, "p")) == RecordType(
+        "Wrapper", module_id=mylib_id
+    )
 
 
 def test_type_expr_deps_qualified_field(tmp_path: Path) -> None:
@@ -1883,7 +1924,9 @@ def test_type_expr_deps_qualified_field(tmp_path: Path) -> None:
     }
     mylib_id = ModuleId.from_path("mylib")
     cg = _check_program(tmp_path, modules)
-    assert _binding_value_type(cg, ENTRY_ID, "p") == RecordType("Wrapper", module_id=mylib_id)
+    assert strip_decl_ids(_binding_value_type(cg, ENTRY_ID, "p")) == RecordType(
+        "Wrapper", module_id=mylib_id
+    )
 
 
 def test_type_expr_deps_unqualified_open_import_field(tmp_path: Path) -> None:
@@ -1901,7 +1944,9 @@ def test_type_expr_deps_unqualified_open_import_field(tmp_path: Path) -> None:
     }
     mylib_id = ModuleId.from_path("mylib")
     cg = _check_program(tmp_path, modules)
-    assert _binding_value_type(cg, ENTRY_ID, "p") == RecordType("Wrapper", module_id=mylib_id)
+    assert strip_decl_ids(_binding_value_type(cg, ENTRY_ID, "p")) == RecordType(
+        "Wrapper", module_id=mylib_id
+    )
 
 
 def test_type_expr_deps_array_field(tmp_path: Path) -> None:
@@ -1918,7 +1963,9 @@ def test_type_expr_deps_array_field(tmp_path: Path) -> None:
     }
     mylib_id = ModuleId.from_path("mylib")
     cg = _check_program(tmp_path, modules)
-    assert _binding_value_type(cg, ENTRY_ID, "p") == RecordType("Wrapper", module_id=mylib_id)
+    assert strip_decl_ids(_binding_value_type(cg, ENTRY_ID, "p")) == RecordType(
+        "Wrapper", module_id=mylib_id
+    )
 
 
 def test_type_expr_deps_dict_field(tmp_path: Path) -> None:
@@ -1935,7 +1982,9 @@ def test_type_expr_deps_dict_field(tmp_path: Path) -> None:
     }
     mylib_id = ModuleId.from_path("mylib")
     cg = _check_program(tmp_path, modules)
-    assert _binding_value_type(cg, ENTRY_ID, "p") == RecordType("Wrapper", module_id=mylib_id)
+    assert strip_decl_ids(_binding_value_type(cg, ENTRY_ID, "p")) == RecordType(
+        "Wrapper", module_id=mylib_id
+    )
 
 
 def test_type_expr_deps_alias_to_cross_module(tmp_path: Path) -> None:
@@ -2040,7 +2089,9 @@ def test_type_alias_with_cross_module_dep_creates_dep(tmp_path: Path) -> None:
     }
     mylib_id = ModuleId.from_path("mylib")
     cg = _check_program(tmp_path, modules)
-    assert _binding_value_type(cg, ENTRY_ID, "w") == RecordType("Wrapper", module_id=mylib_id)
+    assert strip_decl_ids(_binding_value_type(cg, ENTRY_ID, "w")) == RecordType(
+        "Wrapper", module_id=mylib_id
+    )
 
 
 def test_type_expr_deps_func_field(tmp_path: Path) -> None:
@@ -2062,7 +2113,9 @@ def test_type_expr_deps_func_field(tmp_path: Path) -> None:
     }
     mylib_id = ModuleId.from_path("mylib")
     cg = _check_program(tmp_path, modules)
-    assert _binding_value_type(cg, ENTRY_ID, "p") == RecordType("Wrapper", module_id=mylib_id)
+    assert strip_decl_ids(_binding_value_type(cg, ENTRY_ID, "p")) == RecordType(
+        "Wrapper", module_id=mylib_id
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -2082,7 +2135,9 @@ def test_type_expr_deps_self_ref_to_builtin(tmp_path: Path) -> None:
     }
     mylib_id = ModuleId.from_path("mylib")
     cg = _check_program(tmp_path, modules)
-    assert _binding_value_type(cg, ENTRY_ID, "w") == RecordType("Wrapper", module_id=mylib_id)
+    assert strip_decl_ids(_binding_value_type(cg, ENTRY_ID, "w")) == RecordType(
+        "Wrapper", module_id=mylib_id
+    )
 
 
 def test_type_expr_deps_open_import_to_builtin_variant(tmp_path: Path) -> None:
@@ -2096,7 +2151,9 @@ def test_type_expr_deps_open_import_to_builtin_variant(tmp_path: Path) -> None:
     }
     mylib_id = ModuleId.from_path("mylib")
     cg = _check_program(tmp_path, modules)
-    assert _binding_value_type(cg, ENTRY_ID, "w") == RecordType("Wrapper", module_id=mylib_id)
+    assert strip_decl_ids(_binding_value_type(cg, ENTRY_ID, "w")) == RecordType(
+        "Wrapper", module_id=mylib_id
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -2713,7 +2770,7 @@ def test_cross_module_generic_constructor_call_explicit_type_args(tmp_path: Path
         "entry": "import lib\nlet r = lib::Box::[int](value = 1)\nr",
     }
     cg = _check_program(tmp_path, modules)
-    assert _binding_value_type(cg, ENTRY_ID, "r") == RecordType(
+    assert strip_decl_ids(_binding_value_type(cg, ENTRY_ID, "r")) == RecordType(
         "Box", module_id=lib_id, type_args=(IntType(),)
     )
 
@@ -2726,7 +2783,7 @@ def test_cross_module_generic_constructor_call_inferred_type_args(tmp_path: Path
         "entry": "import lib\nlet r = lib::Box(value = 1)\nr",
     }
     cg = _check_program(tmp_path, modules)
-    assert _binding_value_type(cg, ENTRY_ID, "r") == RecordType(
+    assert strip_decl_ids(_binding_value_type(cg, ENTRY_ID, "r")) == RecordType(
         "Box", module_id=lib_id, type_args=(IntType(),)
     )
 
@@ -2761,13 +2818,13 @@ def test_imported_generic_constructor_values_use_later_sibling_evidence(tmp_path
     checked = _check_program(tmp_path, modules)
     box_type = RecordType("Box", module_id=lib_id, type_args=(IntType(),))
     option_type = EnumType("Option", module_id=lib_id, type_args=(IntType(),))
-    assert _binding_value_type(checked, ENTRY_ID, "b") == box_type
-    assert _binding_value_type(checked, ENTRY_ID, "p") == option_type
-    assert _binding_value_type(checked, ENTRY_ID, "n") == option_type
-    assert _binding_value_type(checked, ENTRY_ID, "point") == FunctionType(
+    assert strip_decl_ids(_binding_value_type(checked, ENTRY_ID, "b")) == box_type
+    assert strip_decl_ids(_binding_value_type(checked, ENTRY_ID, "p")) == option_type
+    assert strip_decl_ids(_binding_value_type(checked, ENTRY_ID, "n")) == option_type
+    assert strip_decl_ids(_binding_value_type(checked, ENTRY_ID, "point")) == FunctionType(
         params=(IntType(),), result=RecordType("Point", module_id=lib_id)
     )
-    assert _binding_value_type(checked, ENTRY_ID, "explicit") == FunctionType(
+    assert strip_decl_ids(_binding_value_type(checked, ENTRY_ID, "explicit")) == FunctionType(
         params=(IntType(),), result=box_type
     )
 
@@ -2795,7 +2852,7 @@ def test_open_imported_generic_constructor_value_uses_later_sibling_evidence(
         ),
     }
     checked = _check_program(tmp_path, modules)
-    assert _binding_value_type(checked, ENTRY_ID, "result") == RecordType(
+    assert strip_decl_ids(_binding_value_type(checked, ENTRY_ID, "result")) == RecordType(
         "Box", module_id=lib_id, type_args=(IntType(),)
     )
 
@@ -2807,7 +2864,7 @@ def test_open_imported_generic_type_in_annotation(tmp_path: Path) -> None:
         "entry": "open import lib\nlet x: Box[int] = Box(value = 1)\nx",
     }
     cg = _check_program(tmp_path, modules)
-    assert _binding_value_type(cg, ENTRY_ID, "x") == RecordType(
+    assert strip_decl_ids(_binding_value_type(cg, ENTRY_ID, "x")) == RecordType(
         "Box", module_id=lib_id, type_args=(IntType(),)
     )
 
@@ -2819,7 +2876,7 @@ def test_qualified_generic_type_in_annotation(tmp_path: Path) -> None:
         "entry": "import lib\nlet x: lib::Box[int] = lib::Box(value = 1)\nx",
     }
     cg = _check_program(tmp_path, modules)
-    assert _binding_value_type(cg, ENTRY_ID, "x") == RecordType(
+    assert strip_decl_ids(_binding_value_type(cg, ENTRY_ID, "x")) == RecordType(
         "Box", module_id=lib_id, type_args=(IntType(),)
     )
 
@@ -2834,7 +2891,7 @@ def test_qualified_imported_generic_type_in_type_definition(tmp_path: Path) -> N
     cg = _check_program(tmp_path, modules)
 
     wrapped = cg.program_type_table[(ModuleId.from_path("wrapper"), "Wrapped")]
-    assert wrapped == EnumType("Wrapped", module_id=ModuleId.from_path("wrapper"))
+    assert strip_decl_ids(wrapped) == EnumType("Wrapped", module_id=ModuleId.from_path("wrapper"))
 
 
 def test_open_imported_generic_type_in_type_definition(tmp_path: Path) -> None:
@@ -2847,7 +2904,7 @@ def test_open_imported_generic_type_in_type_definition(tmp_path: Path) -> None:
     cg = _check_program(tmp_path, modules)
 
     wrapped = cg.program_type_table[(ModuleId.from_path("wrapper"), "Wrapped")]
-    assert wrapped == RecordType("Wrapped", module_id=ModuleId.from_path("wrapper"))
+    assert strip_decl_ids(wrapped) == RecordType("Wrapped", module_id=ModuleId.from_path("wrapper"))
 
 
 def test_earlier_sorting_module_field_references_later_module_generic(tmp_path: Path) -> None:
@@ -2872,7 +2929,7 @@ def test_earlier_sorting_module_field_references_later_module_generic(tmp_path: 
     holder = cg.program_type_table[(a_id, "Holder")]
     assert isinstance(holder, RecordType) and holder.module_id == a_id
     type_table = cg.modules[a_id].type_env.type_table
-    assert type_table.record_fields(holder)["b"] == RecordType(
+    assert strip_decl_ids(type_table.record_fields(holder)["b"]) == RecordType(
         "Box", type_args=(IntType(),), module_id=lib_id
     )
 
@@ -2941,7 +2998,7 @@ def test_cross_module_qualified_generic_enum_explicit_type_args(tmp_path: Path) 
         "entry": "import lib\nlet r = lib::Option[int]::some(value = 1)\nr",
     }
     cg = _check_program(tmp_path, modules)
-    assert _binding_value_type(cg, ENTRY_ID, "r") == EnumType(
+    assert strip_decl_ids(_binding_value_type(cg, ENTRY_ID, "r")) == EnumType(
         "Option", module_id=lib_id, type_args=(IntType(),)
     )
 
@@ -2953,7 +3010,7 @@ def test_cross_module_qualified_generic_nullary_constructor_as_value(tmp_path: P
         "entry": "import lib\nlet n: lib::Option[int] = lib::Option::none\nn",
     }
     cg = _check_program(tmp_path, modules)
-    assert _binding_value_type(cg, ENTRY_ID, "n") == EnumType(
+    assert strip_decl_ids(_binding_value_type(cg, ENTRY_ID, "n")) == EnumType(
         "Option", module_id=lib_id, type_args=(IntType(),)
     )
 
@@ -2972,7 +3029,7 @@ def test_open_imported_generic_constructor_payload_type_apply_as_value(tmp_path:
         "entry": "open import lib\nlet f = some::[int]\nf",
     }
     cg = _check_program(tmp_path, modules)
-    assert _binding_value_type(cg, ENTRY_ID, "f") == FunctionType(
+    assert strip_decl_ids(_binding_value_type(cg, ENTRY_ID, "f")) == FunctionType(
         (IntType(),), EnumType("Choice", module_id=lib_id, type_args=(IntType(),))
     )
 
@@ -2988,7 +3045,7 @@ def test_open_imported_generic_constructor_nullary_type_apply_as_value(tmp_path:
         "entry": "open import lib\nlet z = none::[int]\nz",
     }
     cg = _check_program(tmp_path, modules)
-    assert _binding_value_type(cg, ENTRY_ID, "z") == EnumType(
+    assert strip_decl_ids(_binding_value_type(cg, ENTRY_ID, "z")) == EnumType(
         "Choice", module_id=lib_id, type_args=(IntType(),)
     )
 
@@ -3162,7 +3219,7 @@ def test_imported_parameterized_alias_in_type_definition(tmp_path: Path) -> None
 
     cg = _check_program(tmp_path, modules)
 
-    assert cg.program_type_table[(wrapper_id, "Wrapped")] == RecordType(
+    assert strip_decl_ids(cg.program_type_table[(wrapper_id, "Wrapped")]) == RecordType(
         "Wrapped", module_id=wrapper_id
     )
 
@@ -3204,7 +3261,7 @@ def test_open_imported_parameterized_alias_in_type_definition(tmp_path: Path) ->
 
     cg = _check_program(tmp_path, modules)
 
-    assert cg.program_type_table[(wrapper_id, "Wrapped")] == RecordType(
+    assert strip_decl_ids(cg.program_type_table[(wrapper_id, "Wrapped")]) == RecordType(
         "Wrapped", module_id=wrapper_id
     )
 
@@ -3462,7 +3519,7 @@ def test_imported_generic_occurrences_are_fresh_and_checked_output_is_closed(
     )
 
     app_id = ModuleId.from_path("app")
-    assert _binding_value_type(graph, ENTRY_ID, "values") == RecordType(
+    assert strip_decl_ids(_binding_value_type(graph, ENTRY_ID, "values")) == RecordType(
         "Pair", module_id=app_id, type_args=(IntType(), TextType())
     )
     for module in graph.modules.values():
@@ -3556,11 +3613,16 @@ def test_cross_module_method_header_registers_on_the_shared_type_table(tmp_path:
 
     shapes_id = ModuleId.from_path("shapes")
     table = checked.modules[ENTRY_ID].type_env.type_table
-    method = table.lookup_method(RecordType("Point", module_id=shapes_id), "radius")
+    # Methods are keyed by declaration identity, so the owner handle passed to
+    # lookup_method must carry Point's real decl_id, not a hand-written literal's
+    # default NO_DECL_ID — fetch it from the table's registered TypeDef first.
+    point_typedef = table.get(shapes_id, "Point")
+    assert point_typedef is not None
+    method = table.lookup_method(point_typedef.handle(), "radius")
     assert method is not None
     assert method.module_id == shapes_id
     assert method.scope_path == ("Point",)
-    assert method.signature == FunctionType(
+    assert strip_decl_ids(method.signature) == FunctionType(
         params=(RecordType("Point", module_id=shapes_id),), result=IntType()
     )
 
@@ -3604,7 +3666,9 @@ def test_mutually_recursive_method_headers_are_available_before_body_checking(
     )
 
     table = checked.modules[ENTRY_ID].type_env.type_table
-    assert set(table.methods_for(RecordType("Counter"))) == {"even", "odd"}
+    counter_typedef = table.get(ENTRY_ID, "Counter")
+    assert counter_typedef is not None
+    assert set(table.methods_for(counter_typedef.handle())) == {"even", "odd"}
 
 
 def test_import_scc_infers_mutually_recursive_method_returns_and_registers_final_signatures(
@@ -3630,15 +3694,20 @@ def test_import_scc_infers_mutually_recursive_method_returns_and_registers_final
         },
     )
 
+    a_id = ModuleId.from_path("a")
+    b_id = ModuleId.from_path("b")
     table = checked.modules[ENTRY_ID].type_env.type_table
-    a_method = table.lookup_method(RecordType("A", module_id=ModuleId.from_path("a")), "from_b")
-    b_method = table.lookup_method(RecordType("B", module_id=ModuleId.from_path("b")), "from_a")
+    a_typedef = table.get(a_id, "A")
+    b_typedef = table.get(b_id, "B")
+    assert a_typedef is not None and b_typedef is not None
+    a_method = table.lookup_method(a_typedef.handle(), "from_b")
+    b_method = table.lookup_method(b_typedef.handle(), "from_a")
     assert a_method is not None and b_method is not None
-    assert a_method.signature == FunctionType(
-        params=(RecordType("A", module_id=ModuleId.from_path("a")), IntType()), result=IntType()
+    assert strip_decl_ids(a_method.signature) == FunctionType(
+        params=(RecordType("A", module_id=a_id), IntType()), result=IntType()
     )
-    assert b_method.signature == FunctionType(
-        params=(RecordType("B", module_id=ModuleId.from_path("b")), IntType()), result=IntType()
+    assert strip_decl_ids(b_method.signature) == FunctionType(
+        params=(RecordType("B", module_id=b_id), IntType()), result=IntType()
     )
 
 
@@ -3674,7 +3743,9 @@ def test_unannotated_function_infers_result_through_a_member_call_in_either_sour
     checked = _check(source)
 
     assert checked.function_signatures["use"].result == IntType()
-    method = checked.type_env.type_table.lookup_method(RecordType("Box"), "twice")
+    box_type = checked.type_env.get_type("Box")
+    assert box_type is not None
+    method = checked.type_env.type_table.lookup_method(box_type, "twice")
     assert method is not None
     assert method.signature.result == IntType()
 
@@ -3692,8 +3763,10 @@ def test_unannotated_methods_are_mutually_recursive_through_member_calls() -> No
     )
 
     table = checked.type_env.type_table
-    even = table.lookup_method(RecordType("Counter"), "is_even")
-    odd = table.lookup_method(RecordType("Counter"), "is_odd")
+    counter_type = checked.type_env.get_type("Counter")
+    assert counter_type is not None
+    even = table.lookup_method(counter_type, "is_even")
+    odd = table.lookup_method(counter_type, "is_odd")
     assert even is not None and odd is not None
     assert even.signature.result == BoolType()
     assert odd.signature.result == BoolType()
@@ -3709,7 +3782,9 @@ def test_unannotated_method_infers_result_through_a_forward_referenced_function(
         "Box(n = 3).describe()"
     )
 
-    method = checked.type_env.type_table.lookup_method(RecordType("Box"), "describe")
+    box_type = checked.type_env.get_type("Box")
+    assert box_type is not None
+    method = checked.type_env.type_table.lookup_method(box_type, "describe")
     assert method is not None
     assert method.signature.result == IntType()
     assert checked.function_signatures["helper"].result == IntType()

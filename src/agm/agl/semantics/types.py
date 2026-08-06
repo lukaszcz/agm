@@ -165,26 +165,27 @@ class RecordType:
     """A ``record`` nominal type handle.
 
     A ``RecordType`` carries no field data — it is a lightweight handle whose
-    identity is ``(module_id, scope_path, name, type_args)``. Field types are looked up
-    by handle in the shared ``TypeTable`` (``semantics.type_table.TypeTable
-    .record_fields``).  ``type_args`` holds the resolved type arguments for a
-    generic instantiation (empty tuple for non-generic records).
-    ``module_id`` is the owning module (defaults to ``ENTRY_ID`` so existing
-    module paths and built-in/prelude types are unaffected).
+    identity is the declaration it names (``decl_id``), plus ``type_args`` for
+    a generic instantiation. Field types are looked up by handle in the
+    shared ``TypeTable`` (``semantics.type_table.TypeTable.record_fields``).
+    ``type_args`` holds the resolved type arguments for a generic
+    instantiation (empty tuple for non-generic records). ``module_id`` is the
+    owning module (defaults to ``ENTRY_ID`` so existing module paths and
+    built-in/prelude types are unaffected).
 
     ``decl_id`` is the identity of the declaration this handle names, or
-    ``NO_DECL_ID`` when no declaration identity is attached. It is metadata
-    about which declaration is meant rather than part of the type's shape, so
-    it is excluded from equality/hashing (``compare=False``);
-    ``name``/``module_id``/``scope_path`` remain what resolution and display
-    use.
+    ``NO_DECL_ID`` when no declaration identity is attached. It participates
+    in equality/hashing alongside ``type_args``, so two declarations sharing
+    one name path are distinct types; ``name``/``module_id``/``scope_path``
+    remain in equality too — they are consistent with ``decl_id`` for every
+    real declaration — and are what resolution and display use.
     """
 
     name: str
     type_args: tuple[Type, ...] = ()
     module_id: ModuleId = field(default_factory=lambda: ENTRY_ID)
     scope_path: tuple[str, ...] = ()
-    decl_id: int = field(default=NO_DECL_ID, compare=False)
+    decl_id: int = NO_DECL_ID
 
     @property
     def kind(self) -> str:
@@ -204,26 +205,27 @@ class EnumType:
     """An ``enum`` nominal type handle.
 
     An ``EnumType`` carries no variant data — it is a lightweight handle
-    whose identity is ``(module_id, scope_path, name, type_args)``. Variant shapes are
-    looked up by handle in the shared ``TypeTable``
+    whose identity is the declaration it names (``decl_id``), plus
+    ``type_args`` for a generic instantiation. Variant shapes are looked up
+    by handle in the shared ``TypeTable``
     (``semantics.type_table.TypeTable.enum_variants``).  ``type_args`` holds
     the resolved type arguments for a generic instantiation (empty tuple for
     non-generic enums).  ``module_id`` is the owning module (defaults to
     ``ENTRY_ID``).
 
     ``decl_id`` is the identity of the declaration this handle names, or
-    ``NO_DECL_ID`` when no declaration identity is attached. It is metadata
-    about which declaration is meant rather than part of the type's shape, so
-    it is excluded from equality/hashing (``compare=False``);
-    ``name``/``module_id``/``scope_path`` remain what resolution and display
-    use.
+    ``NO_DECL_ID`` when no declaration identity is attached. It participates
+    in equality/hashing alongside ``type_args``, so two declarations sharing
+    one name path are distinct types; ``name``/``module_id``/``scope_path``
+    remain in equality too — they are consistent with ``decl_id`` for every
+    real declaration — and are what resolution and display use.
     """
 
     name: str
     type_args: tuple[Type, ...] = ()
     module_id: ModuleId = field(default_factory=lambda: ENTRY_ID)
     scope_path: tuple[str, ...] = ()
-    decl_id: int = field(default=NO_DECL_ID, compare=False)
+    decl_id: int = NO_DECL_ID
 
     @property
     def kind(self) -> str:
@@ -243,16 +245,16 @@ class ExceptionType:
     """An exception nominal type handle.
 
     An ``ExceptionType`` carries no field data — it is a lightweight handle
-    whose identity is ``(module_id, scope_path, name)``; exceptions are never generic, so
-    there is no ``type_args`` component (unlike ``RecordType``/``EnumType``).
-    Field shapes and hierarchy metadata (``abstract``, ``base``) are looked
-    up by handle in the shared ``TypeTable``
-    (``semantics.type_table.TypeTable.exception_fields``/``exception_def``).
-    ``module_id`` is the owning module (defaults to ``ENTRY_ID``, like
-    ``RecordType``/``EnumType``); a built-in exception's declaring module is
-    the shipped standard library's own module (``STD_CORE_ID``) unless a
-    program declares its own ``builtin exception`` of that name, in which
-    case it carries that program's module instead.
+    whose identity is the declaration it names (``decl_id``); exceptions are
+    never generic, so there is no ``type_args`` component (unlike
+    ``RecordType``/``EnumType``). Field shapes and hierarchy metadata
+    (``abstract``, ``base``) are looked up by handle in the shared
+    ``TypeTable`` (``semantics.type_table.TypeTable.exception_fields``/
+    ``exception_def``). ``module_id`` is the owning module (defaults to
+    ``ENTRY_ID``, like ``RecordType``/``EnumType``); a built-in exception's
+    declaring module is the shipped standard library's own module
+    (``STD_CORE_ID``) unless a program declares its own ``builtin exception``
+    of that name, in which case it carries that program's module instead.
 
     The abstract ``Exception`` root is the ``TypeDef`` registered under name
     ``"Exception"`` with ``abstract=True`` and only ``message``/``trace_id``
@@ -260,17 +262,16 @@ class ExceptionType:
     is the catch-all form.
 
     ``decl_id`` is the identity of the declaration this handle names, or
-    ``NO_DECL_ID`` when no declaration identity is attached. It is metadata
-    about which declaration is meant rather than part of the type's shape, so
-    it is excluded from equality/hashing (``compare=False``);
-    ``name``/``module_id``/``scope_path`` remain what resolution and display
-    use.
+    ``NO_DECL_ID`` when no declaration identity is attached. It participates
+    in equality/hashing; ``name``/``module_id``/``scope_path`` remain in
+    equality too — they are consistent with ``decl_id`` for every real
+    declaration — and are what resolution and display use.
     """
 
     name: str
     module_id: ModuleId = field(default_factory=lambda: ENTRY_ID)
     scope_path: tuple[str, ...] = ()
-    decl_id: int = field(default=NO_DECL_ID, compare=False)
+    decl_id: int = NO_DECL_ID
 
     @property
     def kind(self) -> str:

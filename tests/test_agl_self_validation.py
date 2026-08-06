@@ -293,10 +293,14 @@ def test_disabled_validation_accepts_a_re_registered_typedef_that_actually_confl
 def test_enabled_validation_rejects_a_conflicting_typedef_re_registration() -> None:
     """With the flag on (the suite default), a genuinely conflicting redefinition is caught."""
     table = TypeTable()
-    table.register(TypeDef(kind="record", name="Box", module_id=ENTRY_ID))
+    table.register(TypeDef(kind="record", name="Box", module_id=ENTRY_ID, decl_node_id=1))
 
     with pytest.raises(AssertionError, match="conflicting TypeDef registration"):
-        table.register(TypeDef(kind="record", name="Box", module_id=ENTRY_ID, type_params=("T",)))
+        table.register(
+            TypeDef(
+                kind="record", name="Box", module_id=ENTRY_ID, type_params=("T",), decl_node_id=1
+            )
+        )
 
 
 def test_closed_output_covers_explicit_builtin_targets() -> None:

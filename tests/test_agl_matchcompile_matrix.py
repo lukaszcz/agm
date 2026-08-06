@@ -57,6 +57,7 @@ from agm.agl.semantics.values import BoolValue, EnumValue
 from agm.agl.syntax.nodes import Case
 from agm.agl.syntax.visitor import walk
 from agm.agl.typecheck import CheckedModule, check_program
+from tests._agl_helpers import strip_decl_ids
 from tests.agl.ir_harness import make_graph_from_files
 from tests.agl.match_reference import matrix_action, reference_action
 from tests.agl.module_graph import resolve_and_check_entry
@@ -172,12 +173,12 @@ def test_record_specialization_and_validation_use_field_bearing_nominal_machiner
     matrix = matrix_from_normalized(normalized)
     head = head_constructors(matrix, 0)[0]
     assert isinstance(head, RecordConstructor)
-    assert head.record_type == RecordType("Outer")
+    assert strip_decl_ids(head.record_type) == RecordType("Outer")
     allocator = OccurrenceAllocator.for_case(normalized)
 
     specialized = specialize(matrix, 0, head, allocator).matrix
 
-    assert [occurrence.type for occurrence in specialized.occurrences] == [
+    assert [strip_decl_ids(occurrence.type) for occurrence in specialized.occurrences] == [
         RecordType("Inner"),
         BoolType(),
     ]
@@ -227,7 +228,7 @@ def test_record_compilation_validates_field_occurrences_and_reconstructs_witness
     issue = compiled.issues[0]
     assert isinstance(issue, NonExhaustiveIssue)
     assert isinstance(issue.witness, RecordWitness)
-    assert issue.witness.record_type == RecordType("Box")
+    assert strip_decl_ids(issue.witness.record_type) == RecordType("Box")
     assert [field.name for field in issue.witness.fields] == ["value"]
     assert render_witness(issue.witness) == "Box(value = a int value other than 1)"
 

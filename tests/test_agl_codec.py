@@ -83,7 +83,13 @@ from agm.agl.syntax.nodes import (
 from agm.agl.syntax.spans import SourceSpan
 from agm.agl.type_schema import build_decode_schema, derive_schema
 from agm.agl.typecheck.env import CheckedModule, OutputContractSpec
-from tests._agl_helpers import enum_type, record_type, type_table_for
+from tests._agl_helpers import (
+    enum_type,
+    next_decl_id,
+    record_type,
+    strip_decl_ids,
+    type_table_for,
+)
 from tests.agl.module_graph import resolve_and_check_program_ast
 
 # ---------------------------------------------------------------------------
@@ -592,13 +598,15 @@ _TREE_DEFS_BODY: dict[str, object] = {
 
 def _tree_type_and_def() -> tuple[EnumType, TypeDef]:
     """``enum Tree | Leaf | Node(value: int, left: Tree, right: Tree)``."""
-    tree_ref = EnumType(name="Tree")
+    tree_id = next_decl_id()
+    tree_ref = EnumType(name="Tree", decl_id=tree_id)
     return enum_type(
         "Tree",
         {
             "Leaf": {},
             "Node": {"value": IntType(), "left": tree_ref, "right": tree_ref},
         },
+        decl_id=tree_id,
     )
 
 
@@ -613,9 +621,14 @@ class TestRecursiveSchemaDerivation:
         assert schema == {"$ref": "#/$defs/Tree", "$defs": {"Tree": _TREE_DEFS_BODY}}
 
     def test_array_guarded_recursive_record_is_ref_with_defs(self) -> None:
+        category_id = next_decl_id()
         category, category_def = record_type(
             "Category",
-            {"name": TextType(), "subcategories": ArrayType(RecordType(name="Category"))},
+            {
+                "name": TextType(),
+                "subcategories": ArrayType(RecordType(name="Category", decl_id=category_id)),
+            },
+            decl_id=category_id,
         )
         schema = derive_schema(category, type_table_for(category_def))
         assert schema == {
@@ -657,8 +670,12 @@ class TestRecursiveSchemaDerivation:
     def test_mutual_record_enum_pair_gets_two_defs_entries(self) -> None:
         # record A { b: B } / enum B { Nil, Cons(a: A) }: A and B form one
         # mutual cycle, so BOTH get their own `$defs` entry.
-        a, a_def = record_type("A", {"b": EnumType(name="B")})
-        b, b_def = enum_type("B", {"Nil": {}, "Cons": {"a": RecordType(name="A")}})
+        a_id = next_decl_id()
+        b_id = next_decl_id()
+        a, a_def = record_type("A", {"b": EnumType(name="B", decl_id=b_id)}, decl_id=a_id)
+        b, b_def = enum_type(
+            "B", {"Nil": {}, "Cons": {"a": RecordType(name="A", decl_id=a_id)}}, decl_id=b_id
+        )
         schema = derive_schema(a, type_table_for(a_def, b_def))
         assert schema == {
             "$ref": "#/$defs/A",
@@ -694,6 +711,7 @@ class TestRecursiveSchemaDerivation:
     def test_generic_instantiations_get_distinct_keys(self) -> None:
         # Tree[int] and Tree[text] — two distinct concrete instantiations of
         # the SAME generic declaration — get distinct, non-colliding keys.
+        tree_id = next_decl_id()
         tree_def = TypeDef(
             kind="enum",
             name="Tree",
@@ -705,14 +723,21 @@ class TestRecursiveSchemaDerivation:
                     "Node",
                     (
                         ("value", TypeVarType("T")),
-                        ("left", EnumType(name="Tree", type_args=(TypeVarType("T"),))),
-                        ("right", EnumType(name="Tree", type_args=(TypeVarType("T"),))),
+                        (
+                            "left",
+                            EnumType(name="Tree", type_args=(TypeVarType("T"),), decl_id=tree_id),
+                        ),
+                        (
+                            "right",
+                            EnumType(name="Tree", type_args=(TypeVarType("T"),), decl_id=tree_id),
+                        ),
                     ),
                 ),
             ),
+            decl_node_id=tree_id,
         )
-        tree_int = EnumType(name="Tree", type_args=(IntType(),))
-        tree_text = EnumType(name="Tree", type_args=(TextType(),))
+        tree_int = EnumType(name="Tree", type_args=(IntType(),), decl_id=tree_id)
+        tree_text = EnumType(name="Tree", type_args=(TextType(),), decl_id=tree_id)
         wrapper, wrapper_def = record_type("Holder", {"a": tree_int, "b": tree_text})
         schema = derive_schema(wrapper, type_table_for(wrapper_def, tree_def))
         defs = schema["$defs"]
@@ -726,15 +751,25 @@ class TestRecursiveSchemaDerivation:
     def test_cross_module_same_name_gets_qualified_keys(self) -> None:
         mod_a = ModuleId.from_path("mod_a")
         mod_b = ModuleId.from_path("mod_b")
+        tree_a_id = next_decl_id()
         tree_a, tree_a_def = enum_type(
             "Tree",
-            {"Leaf": {}, "Node": {"next": EnumType(name="Tree", module_id=mod_a)}},
+            {
+                "Leaf": {},
+                "Node": {"next": EnumType(name="Tree", module_id=mod_a, decl_id=tree_a_id)},
+            },
             module_id=mod_a,
+            decl_id=tree_a_id,
         )
+        tree_b_id = next_decl_id()
         tree_b, tree_b_def = enum_type(
             "Tree",
-            {"Leaf": {}, "Node": {"next": EnumType(name="Tree", module_id=mod_b)}},
+            {
+                "Leaf": {},
+                "Node": {"next": EnumType(name="Tree", module_id=mod_b, decl_id=tree_b_id)},
+            },
             module_id=mod_b,
+            decl_id=tree_b_id,
         )
         wrapper, wrapper_def = record_type("Holder", {"a": tree_a, "b": tree_b})
         schema = derive_schema(wrapper, type_table_for(wrapper_def, tree_a_def, tree_b_def))
@@ -755,14 +790,18 @@ class TestRecursiveSchemaDerivation:
         assert "$defs" not in schema
 
     def test_phantom_recursive_argument_growth_refs_same_defs_entry(self) -> None:
-        recursive = RecordType("R", type_args=(ArrayType(TypeVarType("T")),), module_id=ENTRY_ID)
-        root = RecordType("R", type_args=(IntType(),), module_id=ENTRY_ID)
+        r_id = next_decl_id()
+        recursive = RecordType(
+            "R", type_args=(ArrayType(TypeVarType("T")),), module_id=ENTRY_ID, decl_id=r_id
+        )
+        root = RecordType("R", type_args=(IntType(),), module_id=ENTRY_ID, decl_id=r_id)
         r_def = TypeDef(
             kind="record",
             name="R",
             module_id=ENTRY_ID,
             type_params=("T",),
             fields=(("children", ArrayType(recursive)),),
+            decl_node_id=r_id,
         )
         schema = derive_schema(root, type_table_for(r_def))
         assert schema == {
@@ -778,12 +817,15 @@ class TestRecursiveSchemaDerivation:
         }
 
     def test_raises_for_infinite_closure_root(self) -> None:
+        pair_id = next_decl_id()
+        perfect_id = next_decl_id()
         pair_def = TypeDef(
             kind="record",
             name="Pair",
             module_id=ENTRY_ID,
             type_params=("A", "B"),
             fields=(("first", TypeVarType("A")), ("second", TypeVarType("B"))),
+            decl_node_id=pair_id,
         )
         perfect_def = TypeDef(
             kind="enum",
@@ -803,16 +845,19 @@ class TestRecursiveSchemaDerivation:
                                     RecordType(
                                         name="Pair",
                                         type_args=(TypeVarType("T"), TypeVarType("T")),
+                                        decl_id=pair_id,
                                     ),
                                 ),
+                                decl_id=perfect_id,
                             ),
                         ),
                     ),
                 ),
             ),
+            decl_node_id=perfect_id,
         )
         table = type_table_for(pair_def, perfect_def)
-        perfect_int = EnumType(name="Perfect", type_args=(IntType(),))
+        perfect_int = EnumType(name="Perfect", type_args=(IntType(),), decl_id=perfect_id)
         with pytest.raises(TypeError, match="no finite schema"):
             derive_schema(perfect_int, table)
 
@@ -853,11 +898,12 @@ class TestRecursiveSchemaDerivation:
         # PYTHONHASHSEED. Field order is deliberately NOT alphabetical, so a
         # test that only reproduced field order would not catch a
         # frozenset-iteration-order regression.
-        hub_handle = RecordType("Hub", module_id=ENTRY_ID)
+        hub_id = next_decl_id()
+        hub_handle = RecordType("Hub", module_id=ENTRY_ID, decl_id=hub_id)
         alpha, alpha_def = record_type("Alpha", {"back": hub_handle})
         mike, mike_def = record_type("Mike", {"back": hub_handle})
         zulu, zulu_def = record_type("Zulu", {"back": hub_handle})
-        hub, hub_def = record_type("Hub", {"a": zulu, "b": alpha, "c": mike})
+        hub, hub_def = record_type("Hub", {"a": zulu, "b": alpha, "c": mike}, decl_id=hub_id)
         table = type_table_for(hub_def, alpha_def, mike_def, zulu_def)
         schema = derive_schema(hub, table)
         defs = schema["$defs"]
@@ -915,9 +961,14 @@ class TestRecursiveDecodeDerivation:
         )
         from agm.agl.ir.ids import NominalId
 
+        category_id = next_decl_id()
         category, category_def = record_type(
             "Category",
-            {"name": TextType(), "subcategories": ArrayType(RecordType(name="Category"))},
+            {
+                "name": TextType(),
+                "subcategories": ArrayType(RecordType(name="Category", decl_id=category_id)),
+            },
+            decl_id=category_id,
         )
         plan = build_decode_schema(category, type_table_for(category_def))
         category_body = RecordDecode(
@@ -965,8 +1016,12 @@ class TestRecursiveDecodeDerivation:
         )
         from agm.agl.ir.ids import NominalId
 
-        a, a_def = record_type("A", {"b": EnumType(name="B")})
-        b, b_def = enum_type("B", {"Nil": {}, "Cons": {"a": RecordType(name="A")}})
+        a_id = next_decl_id()
+        b_id = next_decl_id()
+        a, a_def = record_type("A", {"b": EnumType(name="B", decl_id=b_id)}, decl_id=a_id)
+        b, b_def = enum_type(
+            "B", {"Nil": {}, "Cons": {"a": RecordType(name="A", decl_id=a_id)}}, decl_id=b_id
+        )
         plan = build_decode_schema(a, type_table_for(a_def, b_def))
         a_body = RecordDecode(
             nominal=NominalId(ENTRY_ID, "A"), display_name="A", fields=(("b", RefDecode("B")),)
@@ -982,6 +1037,7 @@ class TestRecursiveDecodeDerivation:
         assert plan == DecodePlan(root=RefDecode("A"), defs=(("A", a_body), ("B", b_body)))
 
     def test_generic_instantiations_get_distinct_keys_matching_schema(self) -> None:
+        tree_id = next_decl_id()
         tree_def = TypeDef(
             kind="enum",
             name="Tree",
@@ -993,14 +1049,21 @@ class TestRecursiveDecodeDerivation:
                     "Node",
                     (
                         ("value", TypeVarType("T")),
-                        ("left", EnumType(name="Tree", type_args=(TypeVarType("T"),))),
-                        ("right", EnumType(name="Tree", type_args=(TypeVarType("T"),))),
+                        (
+                            "left",
+                            EnumType(name="Tree", type_args=(TypeVarType("T"),), decl_id=tree_id),
+                        ),
+                        (
+                            "right",
+                            EnumType(name="Tree", type_args=(TypeVarType("T"),), decl_id=tree_id),
+                        ),
                     ),
                 ),
             ),
+            decl_node_id=tree_id,
         )
-        tree_int = EnumType(name="Tree", type_args=(IntType(),))
-        tree_text = EnumType(name="Tree", type_args=(TextType(),))
+        tree_int = EnumType(name="Tree", type_args=(IntType(),), decl_id=tree_id)
+        tree_text = EnumType(name="Tree", type_args=(TextType(),), decl_id=tree_id)
         wrapper, wrapper_def = record_type("Holder", {"a": tree_int, "b": tree_text})
         table = type_table_for(wrapper_def, tree_def)
         schema = derive_schema(wrapper, table)
@@ -1038,12 +1101,15 @@ class TestRecursiveDecodeDerivation:
         )
 
     def test_raises_for_infinite_closure_root(self) -> None:
+        pair_id = next_decl_id()
+        perfect_id = next_decl_id()
         pair_def = TypeDef(
             kind="record",
             name="Pair",
             module_id=ENTRY_ID,
             type_params=("A", "B"),
             fields=(("first", TypeVarType("A")), ("second", TypeVarType("B"))),
+            decl_node_id=pair_id,
         )
         perfect_def = TypeDef(
             kind="enum",
@@ -1063,16 +1129,19 @@ class TestRecursiveDecodeDerivation:
                                     RecordType(
                                         name="Pair",
                                         type_args=(TypeVarType("T"), TypeVarType("T")),
+                                        decl_id=pair_id,
                                     ),
                                 ),
+                                decl_id=perfect_id,
                             ),
                         ),
                     ),
                 ),
             ),
+            decl_node_id=perfect_id,
         )
         table = type_table_for(pair_def, perfect_def)
-        perfect_int = EnumType(name="Perfect", type_args=(IntType(),))
+        perfect_int = EnumType(name="Perfect", type_args=(IntType(),), decl_id=perfect_id)
         with pytest.raises(TypeError, match="no finite schema"):
             build_decode_schema(perfect_int, table)
 
@@ -2620,12 +2689,14 @@ class TestSchemaExceptionType:
     def test_record_containing_exception_type_raises_type_error(self) -> None:
         from agm.agl.semantics.types import EXCEPTION_BASE, ExceptionType
 
-        boom = ExceptionType(name="Boom")
+        boom_id = next_decl_id()
+        boom = ExceptionType(name="Boom", decl_id=boom_id)
         boom_def = TypeDef(
             kind="exception",
             name="Boom",
             module_id=ENTRY_ID,
-            base=(EXCEPTION_BASE.module_id, EXCEPTION_BASE.name),
+            base=EXCEPTION_BASE.decl_id,
+            decl_node_id=boom_id,
         )
         box, box_def = record_type("Box", {"boom": boom})
         with pytest.raises(TypeError, match="ExceptionType"):
@@ -3766,8 +3837,8 @@ class TestRegisterCodec:
             display_name="Box",
             fields={"value": IntValue(5)},
         )
-        assert seen_contract_type == [RecordType("Box")]
-        assert seen_parse_type == [RecordType("Box")]
+        assert [strip_decl_ids(t) for t in seen_contract_type] == [RecordType("Box")]
+        assert [strip_decl_ids(t) for t in seen_parse_type] == [RecordType("Box")]
         assert seen_contract_fields == [{"value": IntType()}]
         assert seen_parse_type_tables == [None]
 

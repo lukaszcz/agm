@@ -637,6 +637,7 @@ class TestInferenceVarType:
                 name="Value",
                 module_id=ENTRY_ID,
                 fields=(("value", InferenceVarType("T")),),
+                decl_node_id=1,
             )
         )
         assert compute_uninhabited(table) == frozenset()
@@ -650,8 +651,12 @@ class TestInferenceVarType:
                 type_params=("T",),
                 fields=(
                     ("direct", TypeVarType("T")),
-                    ("next", RecordType("Box", type_args=(InferenceVarType("T"),))),
+                    (
+                        "next",
+                        RecordType("Box", type_args=(InferenceVarType("T"),), decl_id=1),
+                    ),
                 ),
+                decl_node_id=1,
             )
         )
         assert compute_finite_closure(finite_table).infinite == frozenset()

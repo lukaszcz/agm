@@ -29,6 +29,7 @@ from agm.agl.typecheck.inference import (
     InferenceEngine,
     InferenceError,
 )
+from tests._agl_helpers import strip_decl_ids
 from tests.agl.module_graph import resolve_and_check_entry
 
 
@@ -369,7 +370,7 @@ def test_method_with_inferred_return_uses_receiver_header_type() -> None:
     signature = checked.type_env.get_function_signature("get", scope_path=("Box",))
     assert signature is not None
     assert signature.result == TypeVarType("E")
-    assert signature.params[0].type == RecordType("Box", (TypeVarType("E"),))
+    assert strip_decl_ids(signature.params[0].type) == RecordType("Box", (TypeVarType("E"),))
 
 
 def test_bound_generic_method_pins_receiver_and_inferrs_own_type_parameter() -> None:
@@ -384,7 +385,7 @@ def test_bound_generic_method_pins_receiver_and_inferrs_own_type_parameter() -> 
     )
 
     result = checked.resolved.program.body.items[-1]
-    assert checked.node_types[result.node_id] == RecordType("Box", (TextType(),))
+    assert strip_decl_ids(checked.node_types[result.node_id]) == RecordType("Box", (TextType(),))
 
 
 def test_bound_generic_method_accepts_explicit_own_type_parameter() -> None:
@@ -399,7 +400,7 @@ def test_bound_generic_method_accepts_explicit_own_type_parameter() -> None:
     )
 
     result = checked.resolved.program.body.items[-1]
-    assert checked.node_types[result.node_id] == RecordType("Box", (TextType(),))
+    assert strip_decl_ids(checked.node_types[result.node_id]) == RecordType("Box", (TextType(),))
 
 
 class TestFinalizationAndProvenance:

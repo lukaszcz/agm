@@ -246,14 +246,22 @@ def _build_record_signature(record_type: RecordType, table: TypeTable) -> Closed
 
 
 def _nominal_signature(nominal_type: EnumType | RecordType, table: TypeTable) -> ClosedSignature:
-    """Return a declaration-sensitive closed signature for a nominal type."""
+    """Return a declaration-sensitive closed signature for a nominal type.
+
+    Memoized per ``(handle, its declaration)``: pairing the handle with the
+    ``TypeDef`` it NAMES — looked up by the handle's own declaration identity,
+    never by its bare name — is what makes a redeclaration of exactly that
+    declaration invalidate the entry, without an unrelated declaration
+    sharing the name affecting it either way. A handle naming no registered
+    declaration has nothing to key an entry on, so it is built uncached.
+    """
 
     def build() -> ClosedSignature:
         if isinstance(nominal_type, EnumType):
             return _build_enum_signature(nominal_type, table)
         return _build_record_signature(nominal_type, table)
 
-    typedef = table.get(nominal_type.module_id, nominal_type.name)
+    typedef = table.get_by_id(nominal_type.decl_id)
     if typedef is None:
         return build()
     cache = _NOMINAL_SIGNATURES.get(table)

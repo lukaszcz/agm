@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import sys
 from collections.abc import Callable
+from contextlib import contextmanager, redirect_stderr
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Iterator, TextIO, cast
 
 from agm.agent.loop import (
     PreparedSelectInvocation,
@@ -68,6 +70,25 @@ class LoopStepRuntime:
     idle_timeout: float | None
 
 
+class _DiagnosticLog:
+    """Mirror diagnostics to the terminal and the loop log."""
+
+    def __init__(self, stream: TextIO, log_file: Path | None) -> None:
+        self._stream = stream
+        self._log_file = log_file
+
+    def write(self, text: str) -> int:
+        self._stream.write(text)
+        append_log(self._log_file, text)
+        return len(text)
+
+
+@contextmanager
+def _record_diagnostics(log_file: Path | None) -> Iterator[None]:
+    with redirect_stderr(cast(TextIO, _DiagnosticLog(sys.stderr, log_file))):
+        yield
+
+
 def _write_stream(chunk: str, *, stderr: bool = False) -> None:
     if not chunk:
         return
@@ -97,6 +118,13 @@ def _run_agent_call(
         )
     except AgentCallTimeout:
         return None
+    except (OSError, ValueError) as exc:
+        message = f"Error: agent call failed: {exc}\n"
+        if stderr_callback is None:
+            print(message, end="", file=sys.stderr)
+        else:
+            stderr_callback(message)
+        raise
 
 
 def _prepare_prompt(
@@ -121,7 +149,7 @@ def _print_dry_run_prompt(label: str, prompt_text: str) -> None:
     print(f"dry-run: prompt [{label}]: {prompt_text}")
 
 
-def prepare_runtime(args: LoopArgs) -> LoopStepRuntime:
+def _prepare_runtime(args: LoopArgs, *, log_file: Path | None) -> LoopStepRuntime:
     temp_files: list[Path] = []
     resolved_tasks_dir = tasks_dir(args)
     resolved_progress_file = progress_file(args)
@@ -211,13 +239,6 @@ def prepare_runtime(args: LoopArgs) -> LoopStepRuntime:
         )
         loop_prompt.effective_file = new_effective
 
-    log_file = resolve_log_file(
-        command_name="loop",
-        enabled=not args.no_log,
-        log_file=args.log_file,
-    )
-    prepare_log_file(log_file)
-
     timeout = resolved_timeout(args)
 
     return LoopStepRuntime(
@@ -235,6 +256,18 @@ def prepare_runtime(args: LoopArgs) -> LoopStepRuntime:
         log_file=log_file,
         idle_timeout=timeout,
     )
+
+
+def prepare_runtime(args: LoopArgs) -> LoopStepRuntime:
+    """Prepare a loop runtime while recording all setup diagnostics."""
+    log_file = resolve_log_file(
+        command_name="loop",
+        enabled=not args.no_log,
+        log_file=args.log_file,
+    )
+    prepare_log_file(log_file)
+    with _record_diagnostics(log_file):
+        return _prepare_runtime(args, log_file=log_file)
 
 
 def print_dry_run(runtime: LoopStepRuntime) -> None:
@@ -364,7 +397,9 @@ def execute_single_step(runtime: LoopStepRuntime, *, step_number: int) -> bool:
         if output is None:
             return False
         if is_complete_output(output):
-            print("\nCompleted.")
+            completion = "\nCompleted.\n"
+            print(completion, end="")
+            append_log(runtime.log_file, completion)
             return True
         return False
 
@@ -381,7 +416,9 @@ def execute_single_step(runtime: LoopStepRuntime, *, step_number: int) -> bool:
             continue
         next_task = selector_result(selector_output, tasks_dir=runtime.resolved_tasks_dir)
         if next_task is None:
-            print("\nCompleted.")
+            completion = "\nCompleted.\n"
+            print(completion, end="")
+            append_log(runtime.log_file, completion)
             return True
         if isinstance(next_task, Path):
             break
@@ -390,6 +427,22 @@ def execute_single_step(runtime: LoopStepRuntime, *, step_number: int) -> bool:
     append_log(runtime.log_file, "\n" + selected_task_output)
     _write_stream("\n" + selected_task_output)
 
+    with _record_diagnostics(runtime.log_file):
+        runner_env, runner_target = _runner_target(runtime, next_task)
+
+    _run_agent_call(
+        runtime.resolved_runner_command,
+        runner_target,
+        env=runner_env,
+        stdout_callback=stdout_callback,
+        stderr_callback=stderr_callback,
+        idle_timeout=runtime.idle_timeout,
+    )
+    return False
+
+
+def _runner_target(runtime: LoopStepRuntime, next_task: Path) -> tuple[dict[str, str], Path]:
+    """Build the selected task's runner environment and prompt target."""
     if runtime.resolved_prompt is not None:
         runner_env = loop_env(runtime.resolved_tasks_dir, task_file=next_task)
         # Re-prepare the prompt from the original source so that env vars
@@ -408,7 +461,9 @@ def execute_single_step(runtime: LoopStepRuntime, *, step_number: int) -> bool:
                 temp_files=runtime.temp_files,
                 env=runner_env,
             )
-    elif runtime.implement_prompt_file is not None:
+        return runner_env, runner_target
+
+    if runtime.implement_prompt_file is not None:
         runner_env = loop_env(runtime.resolved_tasks_dir, task_file=next_task)
         runner_target = preprocess_prompt_file(
             runtime.implement_prompt_file,
@@ -422,19 +477,9 @@ def execute_single_step(runtime: LoopStepRuntime, *, step_number: int) -> bool:
                 temp_files=runtime.temp_files,
                 env=runner_env,
             )
-    else:
-        runner_env = runtime.env
-        runner_target = next_task
+        return runner_env, runner_target
 
-    _run_agent_call(
-        runtime.resolved_runner_command,
-        runner_target,
-        env=runner_env,
-        stdout_callback=stdout_callback,
-        stderr_callback=stderr_callback,
-        idle_timeout=runtime.idle_timeout,
-    )
-    return False
+    return runtime.env, next_task
 
 
 def cleanup_runtime(runtime: LoopStepRuntime) -> None:
@@ -451,7 +496,10 @@ def run(args: LoopArgs) -> None:
         print_startup(runtime)
         execute_single_step(runtime, step_number=1)
     except KeyboardInterrupt:
-        print("\nInterrupted")
+        message = "\nInterrupted\n"
+        print(message, end="")
+        if runtime is not None:
+            append_log(runtime.log_file, message)
         raise SystemExit(130)
     finally:
         if runtime is not None:

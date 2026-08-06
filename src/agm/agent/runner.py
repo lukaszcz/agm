@@ -258,7 +258,9 @@ def run_prompt_command(
         if stderr:
             stderr_tail = stderr if len(stderr) <= 500 else stderr[-500:]
             msg = f"{msg}\n{stderr_tail}"
-        print(msg, file=sys.stderr)
+        handle_stderr(msg + "\n")
+        if stderr_callback is None:
+            print(msg, file=sys.stderr)
         raise SystemExit(1)
 
     if ordered_output:

@@ -177,8 +177,8 @@ _HELP_TEXTS: dict[str, str] = {
           sets the tasks directory checked for ``PROGRESS.md`` and task files.
           [loop] timeout = "30m" sets an idle timeout that kills the current
           runner process tree when no output is received for the given duration.
-          It fails that invocation only; the loop or command continues, with a
-          diagnostic on stderr and in the loop log.
+          It fails that invocation only; the loop or command continues. When
+          logging is enabled, loop diagnostics are recorded in the loop log.
           Accepts seconds (plain number or ``Ns``), minutes (``Nm``), or
           hours (``Nh``). Disabled by default. ``--timeout DURATION``
           overrides the config value.

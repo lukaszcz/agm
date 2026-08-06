@@ -1349,7 +1349,7 @@ class TestRunCommandExit127Fatal:
     """
 
     def test_exit_127_raises_system_exit_1(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
         target = tmp_path / "prompt.md"
         target.write_text("prompt", encoding="utf-8")
@@ -1367,14 +1367,19 @@ class TestRunCommandExit127Fatal:
             return (127, "", "command not found")
 
         monkeypatch.setattr("agm.agent.runner.run_capture", fake_run_capture)
+        diagnostics: list[str] = []
 
         with pytest.raises(SystemExit) as exc_info:
-            run_prompt_command(["claude", "-p"], target, env={})
+            run_prompt_command(
+                ["claude", "-p"],
+                target,
+                env={},
+                stderr_callback=diagnostics.append,
+            )
         assert exc_info.value.code == 1
-        captured = capsys.readouterr()
-        assert "could not be found or executed" in captured.err
-        assert "claude" in captured.err
-        assert "127" in captured.err
+        assert diagnostics and "could not be found or executed" in diagnostics[0]
+        assert "claude" in diagnostics[0]
+        assert "127" in diagnostics[0]
 
     def test_exit_127_includes_stderr_tail_in_message(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]

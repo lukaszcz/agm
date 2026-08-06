@@ -43,7 +43,8 @@ Prompt file path:
 
 Timeout:
 
-- `--timeout DURATION` sets an idle timeout that kills the current agent process tree when no output is received for the given duration; it fails that invocation only, not the loop or command, and records a diagnostic on stderr and in the loop log
+- `--timeout DURATION` sets an idle timeout that kills the current agent process tree when no output is received for the given duration; it fails that invocation only, not the loop or command
+- when logging is enabled, all loop diagnostics — including setup failures, agent failures, timeouts, interruption, and completion — are written to stderr and the loop log
 - accepts seconds (plain number or `Ns`), minutes (`Nm`), or hours (`Nh`)
 - disabled by default
 - also configurable via `[loop] timeout` in `config.toml`

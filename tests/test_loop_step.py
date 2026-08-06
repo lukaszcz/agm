@@ -490,6 +490,31 @@ class TestPrepareRuntime:
         assert runtime.bootstrap_prompt is not None
         cleanup_runtime(runtime)
 
+    def test_bootstrap_failure_is_logged_before_it_propagates(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        home = self._setup_home_with_prompts(tmp_path, ["loop.md", "select.md"])
+        monkeypatch.setenv("HOME", str(home))
+        monkeypatch.setattr("shutil.which", lambda _: "/bin/fake")
+        monkeypatch.chdir(tmp_path)
+        log_file = tmp_path / "loop.log"
+        monkeypatch.setattr(
+            "agm.commands.loop.step.run_prompt_command",
+            lambda *args, **kwargs: (_ for _ in ()).throw(OSError("runner disappeared")),
+        )
+
+        with pytest.raises(OSError):
+            prepare_runtime(
+                _make_loop_args(
+                    no_log=False,
+                    log_file=str(log_file),
+                    no_selector=True,
+                    runner="fake-runner",
+                )
+            )
+
+        assert "Error: agent call failed" in log_file.read_text(encoding="utf-8")
+
     def test_prepare_runtime_uses_explicit_prompt_file(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -753,6 +778,21 @@ class TestExecuteSingleStep:
 
         assert execute_single_step(runtime, step_number=1) is False
         assert "Idle timeout" in log_file.read_text(encoding="utf-8")
+
+    def test_agent_failure_is_logged_before_it_propagates(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        log_file = tmp_path / "loop.log"
+        runtime = _make_runtime(tmp_path, log_file=log_file)
+        monkeypatch.setattr(
+            "agm.commands.loop.step.run_prompt_command",
+            lambda *args, **kwargs: (_ for _ in ()).throw(OSError("runner disappeared")),
+        )
+
+        with pytest.raises(OSError):
+            execute_single_step(runtime, step_number=1)
+
+        assert "Error: agent call failed" in log_file.read_text(encoding="utf-8")
 
     def test_no_selector_passes_callbacks_to_run_command(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -1289,6 +1329,19 @@ class TestStepRun:
             run(args)
         assert exc_info.value.code == 130
 
+    def test_keyboard_interrupt_during_setup_exits_130(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(
+            "agm.commands.loop.step.prepare_runtime",
+            lambda args: (_ for _ in ()).throw(KeyboardInterrupt),
+        )
+
+        with pytest.raises(SystemExit) as exc_info:
+            run(_make_loop_args())
+
+        assert exc_info.value.code == 130
+
     def test_cleanup_is_called_even_on_exception(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -1654,6 +1707,19 @@ class TestLoopRun:
             loop_run(args)
         assert exc_info.value.code == 130
 
+    def test_keyboard_interrupt_during_setup_exits_130(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(
+            "agm.commands.loop.run.step_command.prepare_runtime",
+            lambda args: (_ for _ in ()).throw(KeyboardInterrupt),
+        )
+
+        with pytest.raises(SystemExit) as exc_info:
+            loop_run(_make_loop_args())
+
+        assert exc_info.value.code == 130
+
     def test_cleanup_is_called_even_on_exception(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -1897,6 +1963,29 @@ class TestPrepareRuntimeMissingPromptFiles:
         with pytest.raises(SystemExit) as exc_info:
             prepare_runtime(args)
         assert exc_info.value.code == 1
+
+    def test_records_setup_diagnostic_in_log(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        home = tmp_path / "home"
+        (home / ".agm" / "prompts").mkdir(parents=True)
+        (home / ".agm" / "prompts" / "loop.md").write_text("loop", encoding="utf-8")
+        monkeypatch.setenv("HOME", str(home))
+        monkeypatch.setattr("shutil.which", lambda _: "/bin/fake")
+        monkeypatch.chdir(tmp_path)
+        log_file = tmp_path / "loop.log"
+
+        with pytest.raises(SystemExit):
+            prepare_runtime(
+                _make_loop_args(
+                    no_log=False,
+                    log_file=str(log_file),
+                    no_selector=True,
+                    runner="fake-runner",
+                )
+            )
+
+        assert "Error: prompt file not found" in log_file.read_text(encoding="utf-8")
 
 
 class TestExecuteSingleStepSelectorStringResult:

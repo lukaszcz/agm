@@ -14,7 +14,7 @@ Which runner (and which selector, for loops) is used is resolved by precedence: 
 
 ## Loop
 
-The `loop` command group drives iterative agent work over a set of tasks. A *selector* chooses the next task and a *runner* works it; `loop run` drives the full cycle, `loop step` performs a single iteration, and `loop select` performs selection only. A timed-out call is retried or leaves its iteration incomplete rather than terminating the loop. Prompts are preprocessed per step and step output is logged with headers and timestamps.
+The `loop` command group drives iterative agent work over a set of tasks. A *selector* chooses the next task and a *runner* works it; `loop run` drives the full cycle, `loop step` performs a single iteration, and `loop select` performs selection only. A timed-out call is retried or leaves its iteration incomplete rather than terminating the loop. When enabled, the loop log receives step output and all loop diagnostics, including setup failures, timeouts, interruption, and completion.
 
 ## Review, Revise, Refine
 
